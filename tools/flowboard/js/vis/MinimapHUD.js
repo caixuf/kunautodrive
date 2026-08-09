@@ -18,6 +18,7 @@ import {
   strokePolyline,
   worldToEgoCanvas,
 } from './math/MapProjection.js';
+import { selectCurrentMotionSegment } from './math/Trajectory.js';
 
 const W = 220;   // canvas 物理像素宽（px）
 const H = 160;   // canvas 物理像素高（px）
@@ -89,7 +90,8 @@ export function createMinimapHUD(container) {
         pxPerMeter: Math.min(W, H) / (2 * _range),
       });
 
-    strokePolyline(ctx, store.trajectoryPath,
+    const activePath = selectCurrentMotionSegment(store.trajectoryPath, ego);
+    strokePolyline(ctx, activePath,
       (x, y) => toCanvas(x, y, cx, cy, h), '#58a6ff', 1.5, [4, 3]);
 
     // ── NPC 实体（车头朝上坐标系：相对 ego 中心）──

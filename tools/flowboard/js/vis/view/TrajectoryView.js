@@ -13,6 +13,7 @@
  */
 
 import { worldToThree, forwardENU } from '../math/Coord.js';
+import { selectCurrentMotionSegment } from '../math/Trajectory.js';
 
 const TRAJ_GROUND_OFFSET = 0.08;
 const MAX_PLAN_POINTS   = 64;             // 后端轨迹点上限
@@ -192,8 +193,12 @@ export function createTrajectoryView(scene) {
      * 避免"车偏离轨迹点>10m"时误截断整条轨迹。 */
     if (raw3d.length >= 1) {
       const [tx0, ty0, tz0] = worldToThree(frontX, frontY, egoZ);
-      raw3d[0].set(tx0, ty0, tz0);
-      raw3d[0].v = trajPath[0][2] || 0;
+      const dx = tx0 - raw3d[0].x;
+      const dz = tz0 - raw3d[0].z;
+      if (dx * dx + dz * dz < 25) {
+        raw3d[0].set(tx0, ty0, tz0);
+        raw3d[0].v = trajPath[0][2] || 0;
+      }
     }
     if (raw3d.length < 2) return [];
 
@@ -433,7 +438,8 @@ export function createTrajectoryView(scene) {
     _lastFrameT = now;
 
     /* 1. 构建平滑曲线点 */
-    const points = _buildSmoothPoints(trajPath, ego);
+    const activePath = selectCurrentMotionSegment(trajPath, ego);
+    const points = _buildSmoothPoints(activePath, ego);
     if (points.length < 2) { clear(); return; }
 
     /* 取起点颜色作为固定色（辉光/箭头用） */

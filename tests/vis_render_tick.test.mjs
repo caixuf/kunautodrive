@@ -15,9 +15,33 @@
 import { createSceneDirector } from '../tools/flowboard/js/vis/director/SceneDirector.js';
 import * as ViewRegistry from '../tools/flowboard/js/vis/core/ViewRegistry.js';
 import { worldToThree, headingToRotationY } from '../tools/flowboard/js/vis/math/Coord.js';
+import { selectCurrentMotionSegment } from '../tools/flowboard/js/vis/math/Trajectory.js';
 import { ok, eq, done } from './test-utils.mjs';
 
 console.log('=== vis/ 单帧 tick 冒烟 ===\n');
+
+{
+  const maneuver = [
+    [0, 0, 2.5], [2, 0, 2.5], [4, 1, 0],
+    [3, 1.5, -2], [2, 2, -2], [2, 2, 0],
+    [3, 3, 2.5], [5, 4, 2.5],
+  ];
+  const forward = selectCurrentMotionSegment(maneuver, { x: 1.8, y: 0 });
+  ok('掉头轨迹不跨越前进/倒车换挡点',
+    forward.length >= 2 && forward.every(p => (p[2] || 0) >= 0));
+  const reverse = selectCurrentMotionSegment(maneuver, { x: 2.1, y: 2 });
+  ok('掉头轨迹只显示当前倒车段',
+    reverse.length >= 2 && reverse.every(p => (p[2] || 0) <= 0));
+  const overlappingReverse = selectCurrentMotionSegment(maneuver,
+    { x: 2, y: 0, heading: 0, vx: -2, vy: 0 });
+  ok('轨迹交叉处按车辆实际行进方向选择倒车段',
+    overlappingReverse.every(p => (p[2] || 0) <= 0));
+  const boundary = selectCurrentMotionSegment(
+    [[0, 0, 2], [1, 0, 0], [1, 0, -2], [0, 0, -2]],
+    { x: 0.9, y: 0, heading: 0, vx: 2, vy: 0 });
+  ok('行进中不会把换挡零速点误选为下一段',
+    boundary.length >= 2 && boundary.every(p => (p[2] || 0) >= 0));
+}
 
 // ── 工具：构造罐头 frame ──
 

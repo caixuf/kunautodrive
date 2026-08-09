@@ -17,6 +17,7 @@
 import { safeCall, reportDiag } from './utils.js';
 import { _dr, tickDeadReckon } from './vis/core/DeadReckon.js';
 import { init3DScene, resize3D } from './vis/main.js';
+import { selectCurrentMotionSegment } from './vis/math/Trajectory.js';
 import {
   drawRoadNetwork2D,
   strokePolyline,
@@ -252,7 +253,8 @@ export function draw2D() {
 
   // ── LiDAR point cloud ──
   if (Array.isArray(scn.trajectory_path)) {
-    strokePolyline(ctx, scn.trajectory_path, project, '#58a6ff', 2, [5, 4]);
+    const path = selectCurrentMotionSegment(scn.trajectory_path, scn.ego);
+    strokePolyline(ctx, path, project, '#58a6ff', 2, [5, 4]);
   }
   if (scn && scn.lidar && scn.lidar.length) {
     scn.lidar.forEach(function (pt) {
