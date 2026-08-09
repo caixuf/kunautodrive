@@ -94,6 +94,15 @@ int transport_publish(Transport* t, const char* topic,
                       const void* data, uint32_t size);
 
 /**
+ * 发布异步借用 buffer。LOCAL 路由零拷贝入队；IPC/REMOTE 路由完成同步复制后释放。
+ * 成功后所有权转移，失败时调用者仍持有 buffer。
+ */
+int transport_publish_loaned(Transport* t, const char* topic,
+                             void* data, uint32_t size,
+                             void (*release_fn)(void*, void*),
+                             void* release_user_data);
+
+/**
  * 订阅 topic（自动发现发布者并建立最优通道）。
  * 回调签名与 message_bus 一致。
  */

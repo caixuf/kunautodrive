@@ -242,7 +242,7 @@ int bag_writer_write(BagWriter* w, const Message* msg) {
     *dst++ = tlen;
     if (tlen > 0) { memcpy(dst, msg->topic, tlen); dst += tlen; }
     memcpy(dst, &dsize, 4);              dst += 4;
-    if (dsize > 0) memcpy(dst, msg->data, dsize);
+    if (dsize > 0) memcpy(dst, message_bus_message_data(msg), dsize);
     size_t written = rec_size;
 
     /* Handle ring wrap: if record spans the end, it must fit in one chunk.

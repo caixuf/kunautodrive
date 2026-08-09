@@ -72,7 +72,7 @@ static void pub_on_topic(const Message* msg, void* user_data) {
 
     int rc = ipc_channel_publish(bridge->ipc,
                                   msg->topic, msg->sender,
-                                  msg->data, msg->data_size);
+                                  message_bus_message_data(msg), msg->data_size);
     if (rc == 0) {
         entry->stats.forwarded++;
         entry->stats.bytes        += msg->data_size;

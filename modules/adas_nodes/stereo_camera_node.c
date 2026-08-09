@@ -143,6 +143,11 @@ static struct {
     TaskBase taskbase;
 } g;
 
+static void release_loaned_frame(void* data, void* user_data) {
+    (void)user_data;
+    free(data);
+}
+
 /* ── 硬件适配点：读取一帧立体数据（左图 + 深度图） ───────────
  *
  * ⚠ 这是硬件适配点。社区用户按自己双目硬件方案改本函数即可，无需动其它代码。
@@ -292,9 +297,6 @@ static int stereo_execute(TaskBase* task) {
     pthread_setname_np(pthread_self(), "stereo_reader");
     long period_us = 1000000L / (g.fps > 0 ? g.fps : 10);
 
-    /* StereoFrame 序列化后固定 44828 字节，线程栈上分配（默认 8MB 栈无压力） */
-    uint8_t buf[44828];
-
     while (!task->should_stop) {
         usleep((unsigned long)period_us);
         if (task->should_stop) break;
@@ -308,10 +310,23 @@ static int stereo_execute(TaskBase* task) {
         g.frames_captured++;
 
         /* 序列化 + 发布到 sensor/stereo */
+        uint8_t* buf = (uint8_t*)malloc(44828);
+        if (!buf) {
+            g.frames_failed++;
+            LOG_ERROR("stereo_camera", "loaned frame allocation failed");
+            continue;
+        }
         size_t len = 0;
         if (StereoFrame_serialize(&frame, buf, &len) == 0 && len > 0) {
-            transport_publish(g.transport, "sensor/stereo", buf, (uint32_t)len);
-            g.stereo_published++;
+            int rc = transport_publish_loaned(g.transport, "sensor/stereo",
+                                               buf, (uint32_t)len,
+                                               release_loaned_frame, NULL);
+            if (rc == 0) {
+                g.stereo_published++;
+            } else {
+                free(buf);
+                g.frames_failed++;
+            }
             /* 周期性日志（相机低频，每 30 帧打一次） */
             if (g.stereo_published % 30 == 1) {
                 LOG_INFO("stereo_camera", "stereo #%lu %dx%d jpeg=%uB depth=%u "
@@ -324,6 +339,7 @@ static int stereo_execute(TaskBase* task) {
                          (unsigned long)g.frames_failed);
             }
         } else {
+            free(buf);
             g.frames_failed++;
             LOG_ERROR("stereo_camera", "StereoFrame_serialize failed (len=%zu)", len);
         }
@@ -349,10 +365,10 @@ static int stereo_camera_init(MessageBus* bus, Transport* transport,
                               DiscoveryManager* discovery, Scheduler* scheduler,
                               const char* params_json) {
     (void)bus;
-    g.scheduler = scheduler;
     memset(&g, 0, sizeof(g));
     g.transport = transport;
     g.discovery = discovery;
+    g.scheduler = scheduler;
 
     /* 默认参数 */
     g.enabled      = 1;
@@ -406,6 +422,7 @@ static int stereo_camera_init(MessageBus* bus, Transport* transport,
      * (StereoFrame, type_id=0x669200d2, STEREOFRAME_TYPE_ID) */
     discovery_advertise(discovery, "sensor/stereo", STEREOFRAME_TYPE_ID,
                         CAP_PUBLISHER, (double)g.fps);
+    transport_advertise(transport, "sensor/stereo", STEREOFRAME_TYPE_ID);
 
     /* 托管模式：初始化嵌入的 TaskBase 并挂上 vtable。s_plugin.taskbase 在
      * 静态初始化里已指向 &g.taskbase，故此处只需填好其内容。max_frequency_hz

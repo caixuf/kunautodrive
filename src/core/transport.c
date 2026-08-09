@@ -240,18 +240,36 @@ int transport_publish(Transport* t, const char* topic,
     int ret = message_bus_publish(t->bus, topic, "transport", data, size);
 
     /* If we have an IPC publisher channel, also push to shared memory */
+    int route_ret = 0;
     pthread_mutex_lock(&t->mutex);
     for (int i = 0; i < t->route_count; i++) {
         if (strcmp(t->routes[i].topic, topic) == 0) {
             if (t->routes[i].ipc_channel && t->routes[i].is_publisher) {
-                ipc_channel_publish(t->routes[i].ipc_channel, topic, "transport",
-                                    data, size);
+                route_ret = ipc_channel_publish(t->routes[i].ipc_channel, topic,
+                                                "transport", data, size);
             }
             break;
         }
     }
     pthread_mutex_unlock(&t->mutex);
 
+    return ret != 0 ? ret : route_ret;
+}
+
+int transport_publish_loaned(Transport* t, const char* topic,
+                             void* data, uint32_t size,
+                             void (*release_fn)(void*, void*),
+                             void* release_user_data) {
+    if (!t || !topic || !data || size == 0 || !release_fn)
+        return ERR_INVALID_PARAM;
+
+    if (transport_route_type(t, topic) == ROUTE_LOCAL) {
+        return message_bus_publish_loaned(t->bus, topic, "transport", data, size,
+                                          release_fn, release_user_data);
+    }
+
+    int ret = transport_publish(t, topic, data, size);
+    if (ret == 0) release_fn(data, release_user_data);
     return ret;
 }
 

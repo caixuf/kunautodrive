@@ -13,6 +13,11 @@ message_bus_subscribe(bus, "topic", callback, user_data);
 message_bus_publish_zero_copy(bus, "topic", "sender", &data, sizeof(data));
 message_bus_subscribe_zero_copy(bus, "topic", zc_callback, user_data);
 
+// 异步 loaned buffer（大帧；成功后所有权转移）
+transport_publish_loaned(transport, "sensor/stereo", buffer, size,
+                         release_buffer, release_ctx);
+const void* payload = message_bus_message_data(msg);
+
 // 请求/应答
 message_bus_register_service(bus, "service", handler, user_data);
 message_bus_request(bus, "service", "sender", &req, sizeof(req), &reply, 2000);

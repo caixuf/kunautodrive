@@ -158,7 +158,9 @@ static void on_stereo(const Message* msg, void* user_data) {
     if (!msg || !g.enabled) return;
 
     StereoFrame frame;
-    if (StereoFrame_deserialize(&frame, (const uint8_t*)msg->data, msg->data_size) != 0) {
+    if (StereoFrame_deserialize(&frame,
+                                (const uint8_t*)message_bus_message_data(msg),
+                                msg->data_size) != 0) {
         LOG_WARN("traversability", "StereoFrame deserialize failed (size=%u)", msg->data_size);
         return;
     }

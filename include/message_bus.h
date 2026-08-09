@@ -23,6 +23,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <string.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -69,11 +70,33 @@ typedef struct Message {
 
     uint8_t     data[MSG_BUS_MAX_DATA_SIZE];      /**< 负载数据 */
 
+    /* 异步 loaned payload：非 NULL 时 payload 由外部 buffer 提供，data[] 未填充。
+     * 订阅者必须通过 message_bus_message_data() 读取。仅总线内部管理生命周期。 */
+    const uint8_t* _loaned_data;
+    void (*_loaned_release)(void* data, void* user_data);
+    void* _loaned_release_ctx;
+
     /* ── 内部使用：空闲 Message 池链指针 ─────────────────────
      * 仅当消息处于空闲池中时有意义；入队/分发/序列化期间不使用。
      * 复用已消费的 64KB Message 块，避免每消息 malloc/free 一次 64KB。*/
     struct Message* _pool_next;
 } Message;
+
+static inline const void* message_bus_message_data(const Message* msg) {
+    return msg && msg->_loaned_data ? msg->_loaned_data : (msg ? msg->data : NULL);
+}
+
+/** Materialize a Message for storage beyond the current callback. */
+static inline void message_bus_copy_message(Message* dst, const Message* src) {
+    if (!dst || !src) return;
+    *dst = *src;
+    if (src->_loaned_data && src->data_size <= MSG_BUS_MAX_DATA_SIZE) {
+        memcpy(dst->data, src->_loaned_data, src->data_size);
+    }
+    dst->_loaned_data = NULL;
+    dst->_loaned_release = NULL;
+    dst->_loaned_release_ctx = NULL;
+}
 
 /* ── 回调类型 ────────────────────────────────────────────── */
 
@@ -121,6 +144,16 @@ void message_bus_destroy(MessageBus* bus);
  */
 int message_bus_publish(MessageBus* bus, const char* topic, const char* sender,
                         const void* data, uint32_t size);
+
+/**
+ * 异步借用发布。总线不复制 payload，分发完成后调用 release_fn。
+ * 成功返回后 payload 所有权转移给总线；失败时仍由调用者负责释放。
+ * 订阅回调须使用 message_bus_message_data()，不可直接假定 msg->data 有效。
+ */
+int message_bus_publish_loaned(MessageBus* bus, const char* topic,
+                               const char* sender, void* data, uint32_t size,
+                               void (*release_fn)(void*, void*),
+                               void* release_user_data);
 
 /**
  * 订阅主题

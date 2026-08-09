@@ -279,7 +279,7 @@ private:
     static void on_message(const Message* msg, void* user_data) {
         auto* self = static_cast<BusAwaitableT*>(user_data);
         if (!self->ctl_->try_fire(AwaitStatus::Ready)) return;
-        self->received_msg_ = *msg;
+        message_bus_copy_message(&self->received_msg_, msg);
         self->exec_->post_ready(self->handle_);
     }
 
@@ -493,7 +493,7 @@ private:
     static void on_message(const Message* msg, void* user_data) {
         auto* self = static_cast<WhenAnyBusAwaitableT*>(user_data);
         if (!self->ctl_->try_fire(AwaitStatus::Ready)) return;
-        self->received_msg_ = *msg;
+        message_bus_copy_message(&self->received_msg_, msg);
         self->exec_->post_ready(self->handle_);
     }
 
@@ -775,7 +775,7 @@ private:
             std::lock_guard<std::mutex> lk(self->mtx_);
             for (auto& [t, slot] : self->slots_) {
                 if (t == msg->topic) {
-                    slot.msg = *msg;
+                    message_bus_copy_message(&slot.msg, msg);
                     slot.has = true;  /* 覆盖旧值：depth=1 drop_oldest */
                     break;
                 }

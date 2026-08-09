@@ -63,15 +63,20 @@ void net_transport_get_stats(NetworkTransport* t, NetTransportStats* stats) {
 static std::string serialize_frame(const Message* msg) {
     uint32_t payload = sizeof(Message);
     uint32_t net_len = htonl(payload);
+    Message wire;
+    message_bus_copy_message(&wire, msg);
     std::string frame;
     frame.append((const char*)&net_len, 4);
-    frame.append((const char*)msg, sizeof(Message));
+    frame.append((const char*)&wire, sizeof(Message));
     return frame;
 }
 
 static bool deserialize_frame(const uint8_t* data, size_t len, Message* msg) {
     if (len < sizeof(Message)) return false;
     memcpy(msg, data, sizeof(Message));
+    msg->_loaned_data = nullptr;
+    msg->_loaned_release = nullptr;
+    msg->_loaned_release_ctx = nullptr;
     return true;
 }
 

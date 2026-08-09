@@ -51,25 +51,28 @@ FlowEngine 不做算法，只做算法的"插座"。
 | **消息驱动 select_for** | ✅ 已接入 | control/planning/fusion 用 `select_for` 替代 sleep_us polling |
 | **Req/Reply** | ✅ 已接入 | safety_control 注册 `safety/status` 服务，control 每 5s 查询 |
 | **Choreo 调度** | ⚠️ 部分接入 | 默认 pipeline 已启用 `mode: choreo`；节点由 `node_start_managed()` 注册，输入 topic 已绑定 Choreo trigger。节点执行循环仍以 `select_for`/队列轮询为主，尚未全面改为 `scheduler_choreo_wait()` 数据驱动 |
-| **零拷贝** | ⚠️ 核心可用 | Message Bus 零拷贝发布/订阅已由 `bus_demo` 和 benchmark 使用；ADAS 主流水线尚未接入 `message_bus_publish_zero_copy()`，跨进程 Transport 仍按各通道协议传输 |
+| **零拷贝** | ✅ Stereo 已接入 | `sensor/stereo` 单进程路由使用异步 loaned buffer；IPC/REMOTE 自动回退为复制传输。同步 `publish_zero_copy` 仍仅用于短回调 |
 
 ### 零拷贝接入边界
 
-当前 `message_bus_publish_zero_copy()` 是**发布者线程内同步回调**，借用指针只在
+`message_bus_publish_zero_copy()` 是**发布者线程内同步回调**，借用指针只在
 回调返回前有效，并且为普通订阅者仍会再发布一份拷贝。它不能直接替换异步
 Transport，也不适合让感知算法在发布者线程中执行。
 
+生产节点使用 `transport_publish_loaned()`：payload 进入异步总线时不复制，
+所有订阅回调返回后由总线执行 release callback；IPC/REMOTE 路由先完成通道
+复制再释放。订阅者统一通过 `message_bus_message_data()` 取 payload。
+
 | Topic | 单帧规模 | 结论 |
 |-------|----------|------|
-| `sensor/stereo` | 固定约 44 KB | 首选候选；需先实现引用计数/loaned buffer 异步队列，并保留 `--multi` IPC fallback，再接 stereo_vision/traversability |
+| `sensor/stereo` | 固定约 44 KB | 已接入；stereo_camera loaned 发布，stereo_vision/traversability 异步消费，`--multi` 保留 IPC fallback |
 | `scene/frame` | 最高约 64 KB | 不直接接入；订阅者多且包含 JSON 解析，同步回调会阻塞 FlowSim |
 | `sensor/lidar` | 当前 `LidarFrame` 仅约 24 B | 暂无收益；升级为真实点云契约后重新评估 |
 | 控制、定位、GPS 等 | 数十至数百 B | 拷贝成本远低于调度和序列化成本，不接入 |
 
-因此生产链路的下一步不是把现有 API 机械替换到节点中，而是增加异步
-loaned-message 所有权模型：发布者提交 buffer、队列持有引用、最后一个消费者
-释放；单进程走引用传递，多进程仍走 IPC 序列化/共享内存。没有生命周期门禁
-前禁止让节点保存 `ZeroCopyCallback.data`。
+禁止节点保存 `message_bus_message_data()` 返回的指针；其生命周期仅覆盖当前
+订阅回调。新增 loaned topic 时必须同时验证 QoS 丢弃、shutdown 清队列和
+IPC fallback 的释放路径。
 
 ## 接入步骤
 

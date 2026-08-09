@@ -39,7 +39,7 @@ int message_buffer_push(MessageBuffer* mb, const Message* msg) {
     pthread_mutex_lock(&mb->mutex);
 
     /* Store at head position (circular) */
-    mb->buffer[mb->head] = *msg;
+    message_bus_copy_message(&mb->buffer[mb->head], msg);
     mb->head = (mb->head + 1) % mb->capacity;
     if (mb->count < mb->capacity) mb->count++;
 

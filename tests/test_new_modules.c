@@ -188,6 +188,65 @@ static void test_bus_zero_copy_basic(void) {
     PASS();
 }
 
+typedef struct {
+    pthread_mutex_t m;
+    int delivered;
+    int released;
+    int value;
+    Message retained;
+} LoanedCounter;
+
+static void loaned_bus_cb(const Message* msg, void* ud) {
+    LoanedCounter* c = (LoanedCounter*)ud;
+    int value = 0;
+    memcpy(&value, message_bus_message_data(msg), sizeof(value));
+    pthread_mutex_lock(&c->m);
+    message_bus_copy_message(&c->retained, msg);
+    c->value = value;
+    c->delivered++;
+    pthread_mutex_unlock(&c->m);
+}
+
+static void loaned_release_cb(void* data, void* ud) {
+    LoanedCounter* c = (LoanedCounter*)ud;
+    free(data);
+    pthread_mutex_lock(&c->m);
+    c->released++;
+    pthread_mutex_unlock(&c->m);
+}
+
+static void test_bus_loaned_async(void) {
+    TEST("bus async loaned payload");
+    MessageBus* bus = message_bus_create("test_loaned");
+    LoanedCounter c = { .m = PTHREAD_MUTEX_INITIALIZER };
+    message_bus_subscribe(bus, "t/loaned", loaned_bus_cb, &c);
+
+    int* value = (int*)malloc(sizeof(*value));
+    ASSERT(value != NULL, "loaned allocation failed");
+    *value = 73;
+    ASSERT(message_bus_publish_loaned(bus, "t/loaned", "tester",
+                                     value, sizeof(*value),
+                                     loaned_release_cb, &c) == 0,
+           "loaned publish failed");
+    usleep(50000);
+
+    pthread_mutex_lock(&c.m);
+    int delivered = c.delivered;
+    int released = c.released;
+    int received = c.value;
+    int retained = 0;
+    memcpy(&retained, message_bus_message_data(&c.retained), sizeof(retained));
+    pthread_mutex_unlock(&c.m);
+    ASSERT(delivered == 1, "loaned: expected 1 delivery, got %d", delivered);
+    ASSERT(released == 1, "loaned: expected 1 release, got %d", released);
+    ASSERT(received == 73, "loaned: expected payload 73, got %d", received);
+    ASSERT(retained == 73, "loaned: retained copy expected 73, got %d", retained);
+    ASSERT(c.retained._loaned_data == NULL, "loaned: retained copy must own payload");
+
+    message_bus_destroy(bus);
+    PASS();
+}
+
 static void echo_service_handler(const Message* req, Message* reply, void* user_data) {
     (void)user_data;
     snprintf(reply->topic, 64, "%s", req->topic);
@@ -753,6 +812,7 @@ int main(void) {
     test_bus_list_topics();
     test_bus_remap();
     test_bus_zero_copy_basic();
+    test_bus_loaned_async();
     test_bus_req_reply();
 
     /* ── Task Manager ───────────────────────── */

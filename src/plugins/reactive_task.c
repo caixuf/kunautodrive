@@ -61,7 +61,7 @@ static void reactive_on_message(TaskBase* base, const void* raw_msg) {
     const Message* msg = (const Message*)raw_msg;
 
     pthread_mutex_lock(&task->result_mutex);
-    task->pending  = *msg;   /* copy */
+    message_bus_copy_message(&task->pending, msg);
     task->has_msg  = true;
     pthread_cond_signal(&task->result_cond);
     pthread_mutex_unlock(&task->result_mutex);

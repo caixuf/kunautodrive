@@ -55,7 +55,8 @@ ProtobufCMessage* msg_parse_to_pb(const Message* msg,
     }
 
     /* Unpack */
-    return protobuf_c_message_unpack(descriptor, NULL, msg->data_size, msg->data);
+    return protobuf_c_message_unpack(descriptor, NULL, msg->data_size,
+                                     message_bus_message_data(msg));
 }
 
 bool msg_validate_pb_type(const Message* msg,

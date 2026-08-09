@@ -122,7 +122,7 @@ static inline int typed_deserialize_checked(const Message* msg,
         return -1;  /* type_id mismatch */
     }
     if (msg->data_size < expected_sz) return -1;
-    return deser_fn(dst, msg->data, msg->data_size);
+    return deser_fn(dst, message_bus_message_data(msg), msg->data_size);
 }
 
 /* ── 运行时 topic→type 映射（实现在 typed_topic.c 中） ── */

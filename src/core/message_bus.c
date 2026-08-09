@@ -148,8 +148,20 @@ static Message* msg_pool_take(MsgPool* p) {
         p->head = m->_pool_next;
         p->count--;
     }
+
     pthread_mutex_unlock(&p->mutex);
     return m;
+}
+
+static void msg_release_loaned(Message* msg) {
+    if (msg && msg->_loaned_data && msg->_loaned_release) {
+        msg->_loaned_release((void*)msg->_loaned_data, msg->_loaned_release_ctx);
+    }
+    if (msg) {
+        msg->_loaned_data = NULL;
+        msg->_loaned_release = NULL;
+        msg->_loaned_release_ctx = NULL;
+    }
 }
 
 /* ── Per-topic latency ring buffer (for p50/p99) ─────── */
@@ -353,6 +365,7 @@ static void rb_destroy(RingBuffer* rb) {
     pthread_mutex_lock(&rb->mutex);
     for (uint32_t i = 0; i < rb->count; i++) {
         uint32_t idx = (rb->tail + i) % MSG_BUS_QUEUE_SIZE;
+        msg_release_loaned(rb->msgs[idx]);
         free(rb->msgs[idx]);
         rb->msgs[idx] = NULL;
     }
@@ -401,6 +414,7 @@ static bool rb_evict_oldest_topic(RingBuffer* rb, MsgPool* pool, const char* top
              * 只清空该槽并推进 tail，绝不能 free —— 否则会 free 掉仍在
              * tail+1 存活的指针，造成 UAF / double-free。 */
             rb->msgs[rb->tail] = NULL;
+            msg_release_loaned(to_free);
             msg_pool_push(pool, to_free);   /* 归还池而非 free，避免 64KB 分配 */
             rb->tail = (rb->tail + 1) % MSG_BUS_QUEUE_SIZE;
             rb->count--;
@@ -597,7 +611,7 @@ retry_snapshot:
             ReplySlot* slot = &bus->reply_slots[i];
             pthread_mutex_lock(&slot->mutex);
             if (slot->req_id == msg->msg_id && !slot->done) {
-                slot->reply = *msg;
+                message_bus_copy_message(&slot->reply, msg);
                 slot->done  = true;
                 pthread_cond_signal(&slot->cond);
                 pthread_mutex_unlock(&slot->mutex);
@@ -662,6 +676,7 @@ static void* dispatch_thread_fn(void* arg) {
             msg_pool_push(&bus->pool, msg);
         } else {
             dispatch_message(bus, msg, tid);
+            msg_release_loaned(msg);
             msg_pool_push(&bus->pool, msg);
         }
     }
@@ -915,6 +930,9 @@ int message_bus_publish(MessageBus* bus, const char* topic, const char* sender,
     msg->type_id      = 0;
     msg->schema_version = 0;
     msg->endian_marker  = 0;
+    msg->_loaned_data = NULL;
+    msg->_loaned_release = NULL;
+    msg->_loaned_release_ctx = NULL;
     if (data && size > 0) memcpy(msg->data, data, size);
 
     int ret = rb_push(shard_for(bus->shards, msg->msg_id), msg);
@@ -958,6 +976,146 @@ int message_bus_publish(MessageBus* bus, const char* topic, const char* sender,
     }
 
     return ret;
+}
+
+int message_bus_publish_loaned(MessageBus* bus, const char* topic,
+                               const char* sender, void* data, uint32_t size,
+                               void (*release_fn)(void*, void*),
+                               void* release_user_data) {
+    if (!bus || !topic || !data || size == 0 || !release_fn)
+        return ERR_INVALID_PARAM;
+    if (size > MSG_BUS_MAX_DATA_SIZE) return ERR_OVERFLOW;
+
+    char resolved_topic[MSG_BUS_MAX_TOPIC_LEN];
+    snprintf(resolved_topic, sizeof(resolved_topic), "%s", topic);
+    if (atomic_load(&bus->remap_active)) {
+        pthread_mutex_lock(&bus->remap_mutex);
+        for (int i = 0; i < bus->remap_count; i++) {
+            if (bus->remaps[i].active &&
+                strcmp(bus->remaps[i].from, topic) == 0) {
+                snprintf(resolved_topic, sizeof(resolved_topic), "%s",
+                         bus->remaps[i].to);
+                break;
+            }
+        }
+        pthread_mutex_unlock(&bus->remap_mutex);
+    }
+
+    int ti = -1;
+    int tc = atomic_load_explicit(&bus->topic_count, memory_order_acquire);
+    for (int i = 0; i < tc && i < BUS_MAX_TOPIC_ENTRIES; i++) {
+        if (strcmp(bus->topic_entries[i].topic, resolved_topic) == 0) {
+            ti = i;
+            break;
+        }
+    }
+    if (ti < 0) {
+        pthread_mutex_lock(&bus->topic_mutex);
+        tc = atomic_load(&bus->topic_count);
+        for (int i = 0; i < tc; i++) {
+            if (strcmp(bus->topic_entries[i].topic, resolved_topic) == 0) {
+                ti = i;
+                break;
+            }
+        }
+        if (ti < 0 && tc < BUS_MAX_TOPIC_ENTRIES) {
+            ti = tc;
+            memset(&bus->topic_entries[ti], 0, sizeof(bus->topic_entries[ti]));
+            snprintf(bus->topic_entries[ti].topic, MSG_BUS_MAX_TOPIC_LEN, "%s",
+                     resolved_topic);
+            bus->topic_entries[ti].active = true;
+            bus->topic_entries[ti].qos.policy = QOS_DROP_OLDEST;
+            bus->topic_entries[ti].stats.subscriber_count =
+                (uint32_t)count_active_subscribers(bus, resolved_topic);
+            atomic_store(&bus->topic_entries[ti].depth_eff, MSG_BUS_QUEUE_SIZE);
+            atomic_store(&bus->topic_entries[ti].qos_flags, 0u);
+            atomic_store_explicit(&bus->topic_count, tc + 1, memory_order_release);
+        }
+        pthread_mutex_unlock(&bus->topic_mutex);
+    }
+
+    typeof(bus->topic_entries[0])* e =
+        ti >= 0 ? &bus->topic_entries[ti] : NULL;
+    if (e) {
+        uint32_t depth = atomic_load(&e->depth_eff);
+        uint32_t qf = atomic_load(&e->qos_flags);
+        if (atomic_load(&e->pending_count) >= depth) {
+            QosPolicy policy = (qf & QOS_FLAG_RELIABLE) ? QOS_BLOCK
+                : (qf & QOS_FLAG_DROP_LATEST) ? QOS_DROP_LATEST
+                : (qf & QOS_FLAG_BLOCK) ? QOS_BLOCK : QOS_DROP_OLDEST;
+            if (policy == QOS_DROP_OLDEST) {
+                if (rb_evict_oldest_topic_all(bus->shards, &bus->pool,
+                                              MSG_BUS_DISPATCH_THREADS,
+                                              resolved_topic)) {
+                    if (atomic_load(&e->pending_count) > 0)
+                        atomic_fetch_sub(&e->pending_count, 1);
+                    atomic_fetch_add(&e->drop_count, 1);
+                }
+            } else if (policy == QOS_DROP_LATEST) {
+                atomic_fetch_add(&e->drop_count, 1);
+                atomic_fetch_add(&bus->stat_dropped, 1);
+                release_fn(data, release_user_data);
+                return 0;
+            } else {
+                int max_waits = (qf & QOS_FLAG_RELIABLE) ? 5000 : 1000;
+                int waits = 0;
+                while (atomic_load(&e->pending_count) >= depth &&
+                       waits++ < max_waits) {
+                    usleep(1000);
+                }
+                if (atomic_load(&e->pending_count) >= depth) {
+                    atomic_fetch_add(&e->drop_count, 1);
+                    atomic_fetch_add(&bus->stat_dropped, 1);
+                    release_fn(data, release_user_data);
+                    return 0;
+                }
+            }
+        }
+    }
+
+    Message* msg = msg_alloc(bus);
+    if (!msg) return ERR_NOMEM;
+    snprintf(msg->topic, MSG_BUS_MAX_TOPIC_LEN, "%s", resolved_topic);
+    snprintf(msg->sender, MSG_BUS_MAX_SENDER_LEN, "%s", sender ? sender : "");
+    msg->msg_id = atomic_fetch_add(&bus->msg_id_counter, 1);
+    msg->type = MSG_TYPE_PUBLISH;
+    msg->timestamp_us = clock_now_monotonic_wall_us();
+    msg->topic_idx = ti;
+    msg->data_size = size;
+    msg->type_id = 0;
+    msg->schema_version = 0;
+    msg->endian_marker = 0;
+    msg->_loaned_data = (const uint8_t*)data;
+    msg->_loaned_release = release_fn;
+    msg->_loaned_release_ctx = release_user_data;
+    uint64_t msg_ts = msg->timestamp_us;
+
+    int ret = rb_push(shard_for(bus->shards, msg->msg_id), msg);
+    if (ret != 0) {
+        msg->_loaned_data = NULL;
+        msg->_loaned_release = NULL;
+        msg->_loaned_release_ctx = NULL;
+        msg_pool_push(&bus->pool, msg);
+        atomic_fetch_add(&bus->stat_dropped, 1);
+        return ret;
+    }
+    atomic_fetch_add(&bus->stat_published, 1);
+    if (e) {
+        atomic_fetch_add(&e->pending_count, 1);
+        atomic_fetch_add(&e->pub_count, 1);
+        atomic_store(&e->last_publish_us, msg_ts);
+        uint64_t prev = atomic_exchange(&e->prev_publish_us, msg_ts);
+        if (prev != 0 && msg_ts > prev) {
+            uint64_t elapsed = msg_ts - prev;
+            if (elapsed > 500) {
+                uint64_t instant_mhz = (uint64_t)(1000000000.0 / (double)elapsed);
+                uint64_t cur = atomic_load(&e->freq_mhz);
+                atomic_store(&e->freq_mhz,
+                             cur == 0 ? instant_mhz : (cur * 8 + instant_mhz * 2) / 10);
+            }
+        }
+    }
+    return 0;
 }
 
 int message_bus_subscribe(MessageBus* bus, const char* topic,
@@ -1112,6 +1270,9 @@ int message_bus_request(MessageBus* bus, const char* topic, const char* sender,
     req->type_id      = 0;
     req->schema_version = 0;
     req->endian_marker  = 0;
+    req->_loaned_data = NULL;
+    req->_loaned_release = NULL;
+    req->_loaned_release_ctx = NULL;
     if (data && size > 0) memcpy(req->data, data, size);
 
     if (rb_push(shard_for(bus->shards, req_id), req) != 0) {
@@ -1447,7 +1608,10 @@ int message_bus_peek_latest(MessageBus* bus, const char* topic, Message* out) {
         }
     }
     int ret = ERR_NOT_FOUND;
-    if (latest) { *out = *latest; ret = 0; }
+    if (latest) {
+        message_bus_copy_message(out, latest);
+        ret = 0;
+    }
 
     for (int s = MSG_BUS_DISPATCH_THREADS - 1; s >= 0; s--)
         pthread_mutex_unlock(&bus->shards[s].mutex);
