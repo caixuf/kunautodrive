@@ -26,6 +26,7 @@
 #include "scenario_loader.h"
 #include "road_geometry.h"
 #include "clock_service.h"
+#include "platform_paths.h"
 #include "coroutine_task.h"
 #include "logger.h"
 #include <cjson/cJSON.h>
@@ -288,18 +289,24 @@ static void on_control_cmd(const Message* msg, void* user_data) {
  * 失败返回空字符串，调用方按 roads=nullptr 降级（NPC AI 用横向距离判车道）。 */
 
 static std::string convert_scenario_to_xodr(const std::string& scenario_path) {
-    /* 输出到 /tmp，文件名用场景 basename 避免并发场景冲突 */
+    /* 输出到统一运行时临时目录，文件名用场景 basename 避免并发场景冲突。 */
     const char* slash = strrchr(scenario_path.c_str(), '/');
-    std::string base = slash ? slash + 1 : scenario_path;
+    const char* backslash = strrchr(scenario_path.c_str(), '\\');
+    const char* separator = slash;
+    if (!separator || (backslash && backslash > separator)) separator = backslash;
+    std::string base = flow_path_basename(scenario_path.c_str());
     /* 去掉 .json 后缀 */
     if (base.size() > 5 && base.compare(base.size() - 5, 5, ".json") == 0) {
         base.resize(base.size() - 5);
     }
-    std::string xodr_path = "/tmp/flowsim_" + base + ".xodr";
+    char xodr_buf[1024];
+    std::string xodr_name = "flowsim_" + base + ".xodr";
+    if (flow_temp_path(xodr_buf, sizeof(xodr_buf), xodr_name.c_str()) != 0) return "";
+    std::string xodr_path = xodr_buf;
 
     /* json_to_xodr.py 候选路径：场景目录上级的 tools/ + /workspace/tools/ */
     std::string scenario_dir;
-    if (slash) scenario_dir.assign(scenario_path.c_str(), slash);
+    if (separator) scenario_dir.assign(scenario_path.c_str(), separator);
     std::vector<std::string> candidates = {
         scenario_dir + "/../tools/json_to_xodr.py",
         "/workspace/tools/json_to_xodr.py",
@@ -313,16 +320,44 @@ static std::string convert_scenario_to_xodr(const std::string& scenario_path) {
         /* 构造命令：python3 <tool> <scenario> -o <xodr>
          * stderr 落到 /tmp/flowsim_xodr_err.log，失败时读回并打印根因
          * （直接 >/dev/null 会把 python traceback 吞掉，无从排查）。 */
-        const char* err_log = "/tmp/flowsim_xodr_err.log";
-        std::string cmd = "python3 \"";
+        char err_log_buf[1024];
+        if (flow_temp_path(err_log_buf, sizeof(err_log_buf), "flowsim_xodr_err.log") != 0)
+            continue;
+        const char* err_log = err_log_buf;
+        const char* python = getenv("FLOWENGINE_PYTHON");
+        if (!python || !python[0]) {
+    #if defined(_WIN32)
+            python = "python";
+    #else
+            python = "python3";
+    #endif
+        }
+    #if defined(_WIN32)
+        /* cmd.exe requires an extra outer quote when the executable itself is
+         * quoted (Python is commonly installed under a path with spaces). */
+        std::string cmd = "\"\"";
+    #else
+        std::string cmd = "\"";
+    #endif
+        cmd += python;
+        cmd += "\" \"";
         cmd += tool;
         cmd += "\" \"";
         cmd += scenario_path;
         cmd += "\" -o \"";
         cmd += xodr_path;
-        cmd += "\" >/dev/null 2>\"";
+        cmd += "\" >";
+    #if defined(_WIN32)
+        cmd += "NUL";
+    #else
+        cmd += "/dev/null";
+    #endif
+        cmd += " 2>\"";
         cmd += err_log;
         cmd += "\"";
+    #if defined(_WIN32)
+        cmd += "\"";
+    #endif
         int rc = system(cmd.c_str());
         if (rc == 0 && stat(xodr_path.c_str(), &st) == 0 && st.st_size > 0) {
             LOG_INFO("flowsim", "json_to_xodr: %s → %s (via %s)",

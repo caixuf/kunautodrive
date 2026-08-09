@@ -35,6 +35,9 @@
 #include <unistd.h>
 #include <time.h>
 #include <sys/stat.h>
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 /* ── subnormal(denormal) 字面量兜底 ─────────────────────────
  * glibc strtod 对 subnormal（<~2.2e-308）科学计数数字存在已知断言 bug
@@ -86,15 +89,23 @@ static void sanitize_subnormal_literals(char* s) {
     }
 }
 
-/* cJSON_Parse 包装：解析前先钳掉 subnormal 字面量，防 strtod 断言崩溃。 */
-static cJSON* monitor_cJSON_Parse(const char* json) {
-    if (!json) return NULL;
-    char* buf = strdup(json);
+/* cJSON_Parse 包装：解析前先钳掉 subnormal 字面量，防 strtod 断言崩溃。
+ * Topic payload is a counted binary buffer, so callers handling a Message must
+ * use the length-aware variant instead of assuming a trailing NUL. */
+static cJSON* monitor_cJSON_ParseLength(const char* json, size_t len) {
+    if (!json || len == 0) return NULL;
+    char* buf = (char*)malloc(len + 1);
     if (!buf) return NULL;
+    memcpy(buf, json, len);
+    buf[len] = '\0';
     sanitize_subnormal_literals(buf);
     cJSON* r = cJSON_Parse(buf);
     free(buf);
     return r;
+}
+
+static cJSON* monitor_cJSON_Parse(const char* json) {
+    return json ? monitor_cJSON_ParseLength(json, strlen(json)) : NULL;
 }
 
 /* ── 节点本地状态 ───────────────────────────────────────────── */
@@ -453,8 +464,15 @@ static void on_scene_frame(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
     const char* d = (const char*)msg->data;
-    cJSON* root = monitor_cJSON_Parse(d);
-    if (!root) return;
+    cJSON* root = monitor_cJSON_ParseLength(d, msg->data_size);
+    if (!root) {
+        static int parse_warn_count = 0;
+        if (parse_warn_count++ < 3) {
+            LOG_WARN("monitor", "scene/frame JSON parse failed (size=%u)",
+                     (unsigned)msg->data_size);
+        }
+        return;
+    }
 
     cJSON* scenario_name = cJSON_GetObjectItemCaseSensitive(root, "scenario_name");
     if (cJSON_IsString(scenario_name) && scenario_name->valuestring) {
@@ -1404,7 +1422,19 @@ static void export_dashboard_json(void) {
     if (jf) {
         fprintf(jf, "%s", json_str);
         fclose(jf);
+#if defined(_WIN32)
+        /* POSIX rename() replaces an existing destination atomically, but the
+         * MSVCRT variant does not.  Without MOVEFILE_REPLACE_EXISTING the first
+         * snapshot remains forever and FlowBoard/file fallback shows stale 3D. */
+        if (!MoveFileExA(tmp_path, g.state_file,
+                         MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            LOG_WARN("monitor", "state file replace failed (%lu)",
+                     (unsigned long)GetLastError());
+            remove(tmp_path);
+        }
+#else
         rename(tmp_path, g.state_file);
+#endif
     }
 
     /* Publish via IPC dashboard bridge for flowmond.

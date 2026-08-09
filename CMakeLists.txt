@@ -460,6 +460,21 @@ set(PLUGIN_SOURCES
     src/plugins/example_task.c
 )
 
+# PE/COFF 没有 ELF 的宿主符号 interposition。若 param_registry.c 被静态链接
+# 到 launcher 和每个节点 DLL，每个映像都会得到独立的 g_params[]，导致节点
+# 注册的参数对 flowctl 不可见。Windows 使用一个小型共享运行库作为参数状态的
+# 唯一实例；其它平台继续依赖现有静态核心/扁平命名空间行为，保持零变化。
+if(WIN32)
+    list(REMOVE_ITEM CORE_SOURCES src/core/param_registry.c)
+    add_library(flowengine_param_runtime SHARED src/core/param_registry.c)
+    target_link_libraries(flowengine_param_runtime Threads::Threads)
+    if(MSVC)
+        set_target_properties(flowengine_param_runtime PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    else()
+        target_link_options(flowengine_param_runtime PRIVATE -Wl,--export-all-symbols)
+    endif()
+endif()
+
 # 创建核心静态库 (核心 + 算法)
 add_library(flowengine_core STATIC ${CORE_SOURCES} ${ALGORITHM_SOURCES})
 target_include_directories(flowengine_core PUBLIC
@@ -473,7 +488,7 @@ target_link_libraries(flowengine_core
     ${CJSON_LIBRARIES}
 )
 if(WIN32)
-    target_link_libraries(flowengine_core ws2_32 psapi)
+    target_link_libraries(flowengine_core flowengine_param_runtime ws2_32 psapi)
 endif()
 target_include_directories(flowengine_core PUBLIC
     ${CJSON_INCLUDE_DIRS}

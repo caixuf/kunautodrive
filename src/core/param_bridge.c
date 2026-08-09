@@ -15,24 +15,41 @@
 #include <errno.h>
 #include <pthread.h>
 #include <sys/socket.h>
-#include <sys/un.h>
 #include <poll.h>
-
+#if defined(_WIN32)
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#else
+#include <sys/un.h>
+#endif
 /* ── 服务端 ───────────────────────────────────────────────── */
 
 struct ParamBridgeServer {
     int       fd;
+#if !defined(_WIN32)
     char      path[108];      /* sockaddr_un.sun_path 容量 */
+#endif
     pthread_t thread;
     volatile int running;
 };
 
+#if defined(_WIN32)
+static int resolve_tcp_port(void) {
+    const char* env = getenv(PARAM_BRIDGE_PORT_ENV);
+    if (!env || !env[0]) return PARAM_BRIDGE_DEFAULT_PORT;
+    int port = atoi(env);
+    return (port > 0 && port <= 65535) ? port : PARAM_BRIDGE_DEFAULT_PORT;
+}
+#endif
+
+#if !defined(_WIN32)
 static const char* resolve_sock_path(const char* sock_path) {
     if (sock_path && sock_path[0]) return sock_path;
     const char* env = getenv(PARAM_BRIDGE_SOCK_ENV);
     if (env && env[0]) return env;
     return PARAM_BRIDGE_DEFAULT_SOCK;
 }
+#endif
 
 /* 按参数实际类型分派 set，并把结果格式化成响应里的 value。 */
 static int apply_set(const ParamEntry* e, const char* val_str,
@@ -192,22 +209,36 @@ static void handle_request(int cfd, char* req) {
     write_all(cfd, resp, strlen(resp));
 }
 
+static int wait_readable(int fd, int timeout_ms) {
+#if defined(_WIN32)
+    fd_set read_set;
+    FD_ZERO(&read_set);
+    FD_SET((SOCKET)fd, &read_set);
+    struct timeval timeout = {
+        .tv_sec = timeout_ms / 1000,
+        .tv_usec = (timeout_ms % 1000) * 1000
+    };
+    return select(0, &read_set, NULL, NULL, &timeout);
+#else
+    struct pollfd pfd = { .fd = fd, .events = POLLIN, .revents = 0 };
+    return poll(&pfd, 1, timeout_ms);
+#endif
+}
+
 static void* server_loop(void* arg) {
     ParamBridgeServer* s = (ParamBridgeServer*)arg;
 
     while (s->running) {
         /* poll 而非裸 accept：让 running 标志能在 100ms 内被看到，
          * 否则 stop() 要等到下一个客户端连上才能退出。 */
-        struct pollfd pfd = { .fd = s->fd, .events = POLLIN, .revents = 0 };
-        int pr = poll(&pfd, 1, 100);
+        int pr = wait_readable(s->fd, 100);
         if (pr <= 0) continue;
 
         int cfd = accept(s->fd, NULL, NULL);
         if (cfd < 0) continue;
 
         /* 单条请求、短连接。加读超时防止客户端连上不发数据把服务线程挂住。 */
-        struct pollfd cp = { .fd = cfd, .events = POLLIN, .revents = 0 };
-        if (poll(&cp, 1, 1000) > 0) {
+        if (wait_readable(cfd, 1000) > 0) {
             char req[PARAM_BRIDGE_MAX_LINE];
             ssize_t n = read(cfd, req, sizeof(req) - 1);
             if (n > 0) {
@@ -225,7 +256,28 @@ static void* server_loop(void* arg) {
 ParamBridgeServer* param_bridge_server_start(const char* sock_path) {
 #if defined(_WIN32)
     (void)sock_path;
-    return NULL;
+    ParamBridgeServer* s = (ParamBridgeServer*)calloc(1, sizeof(*s));
+    if (!s) return NULL;
+    s->fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s->fd < 0) { free(s); return NULL; }
+
+    int reuse = 1;
+    setsockopt(s->fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)resolve_tcp_port());
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(s->fd, (struct sockaddr*)&addr, sizeof(addr)) < 0 ||
+        listen(s->fd, 4) < 0) {
+        close(s->fd); free(s); return NULL;
+    }
+
+    s->running = 1;
+    if (pthread_create(&s->thread, NULL, server_loop, s) != 0) {
+        close(s->fd); free(s); return NULL;
+    }
+    return s;
 #else
     const char* path = resolve_sock_path(sock_path);
 
@@ -262,7 +314,9 @@ void param_bridge_server_stop(ParamBridgeServer* s) {
     s->running = 0;
     pthread_join(s->thread, NULL);
     close(s->fd);
+#if !defined(_WIN32)
     unlink(s->path);
+#endif
     free(s);
 }
 
@@ -272,8 +326,49 @@ int param_bridge_client_request(const char* request, char* out, size_t out_size)
     if (!request || !out || out_size == 0) return ERR_INVALID_PARAM;
     out[0] = '\0';
 #if defined(_WIN32)
-    snprintf(out, out_size, "param bridge is not available on native Windows yet");
-    return ERR_NOT_FOUND;
+    int fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (fd < 0) return ERR_IO;
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)resolve_tcp_port());
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        close(fd);
+        snprintf(out, out_size,
+                 "no running FlowEngine process at 127.0.0.1:%d (start flow_launcher first)",
+                 resolve_tcp_port());
+        return ERR_NOT_FOUND;
+    }
+
+    char line[PARAM_BRIDGE_MAX_LINE];
+    int len = snprintf(line, sizeof(line), "%s\n", request);
+    if (write(fd, line, (size_t)len) != len) { close(fd); return ERR_IO; }
+    size_t total = 0;
+    for (;;) {
+        ssize_t n = read(fd, out + total, out_size - total - 1);
+        if (n < 0) { close(fd); return ERR_IO; }
+        if (n == 0) break;
+        total += (size_t)n;
+        if (total >= out_size - 1) break;
+    }
+    close(fd);
+    out[total] = '\0';
+    while (total > 0 && (out[total - 1] == '\n' || out[total - 1] == '\r'))
+        out[--total] = '\0';
+    if (!strncmp(out, "OK", 2)) {
+        size_t skip = (out[2] == ' ') ? 3 : 2;
+        memmove(out, out + skip, total - skip + 1);
+        return ERR_OK;
+    }
+    if (!strncmp(out, "ERR", 3)) {
+        int code = ERR_INVALID_PARAM;
+        char msg[PARAM_BRIDGE_MAX_LINE] = {0};
+        if (sscanf(out, "ERR %d %[^\n]", &code, msg) >= 2)
+            snprintf(out, out_size, "%s", msg);
+        return code;
+    }
+    return ERR_IO;
 #else
 
     const char* path = resolve_sock_path(NULL);

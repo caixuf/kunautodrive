@@ -1550,6 +1550,33 @@ void monitor_server_inject_remote_stats(MonitorServer* ms, const StatsPacket* pk
     pthread_mutex_unlock(&ms->freshness_mutex);
 }
 
+void monitor_server_get_remote_stats_summary(MonitorServer* ms,
+                                             uint32_t* topic_count,
+                                             uint64_t* publish_count,
+                                             uint64_t* deliver_count,
+                                             uint64_t* drop_count) {
+    uint32_t topics = 0;
+    uint64_t published = 0, delivered = 0, dropped = 0;
+    if (ms) {
+        pthread_mutex_lock(&ms->remote_mutex);
+        for (int r = 0; r < ms->remote_count; r++) {
+            const RemoteSource* src = &ms->remote[r];
+            if (!src->valid) continue;
+            topics += src->pkt.topic_count;
+            for (uint32_t i = 0; i < src->pkt.topic_count; i++) {
+                published += src->pkt.topics[i].publish_count;
+                delivered += src->pkt.topics[i].deliver_count;
+                dropped += src->pkt.topics[i].drop_count;
+            }
+        }
+        pthread_mutex_unlock(&ms->remote_mutex);
+    }
+    if (topic_count) *topic_count = topics;
+    if (publish_count) *publish_count = published;
+    if (deliver_count) *deliver_count = delivered;
+    if (drop_count) *drop_count = dropped;
+}
+
 void monitor_server_inject_dashboard_json(MonitorServer* ms,
                                           const char* json, size_t len) {
     if (!ms || !json || len == 0) return;

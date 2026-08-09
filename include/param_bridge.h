@@ -10,7 +10,7 @@
  * 只能改 pipeline.json 重启进程，"边跑边调"做不到。本模块补上这条通道。
  *
  * 架构：
- *   flowctl ── LIST/GET/SET 行协议 ──► AF_UNIX ──► flow_launcher 内的服务线程
+ *   flowctl ── LIST/GET/SET 行协议 ──► local socket ──► flow_launcher 服务线程
  *                                                  └─► param_set_*() → 节点逐帧
  *                                                      param_get_float() 读到新值
  *
@@ -49,6 +49,8 @@ extern "C" {
 /** 默认 socket 路径。可用环境变量 FLOW_PARAM_SOCK 覆盖（多实例并行调试用）。 */
 #define PARAM_BRIDGE_DEFAULT_SOCK  "/tmp/flow_param.sock"
 #define PARAM_BRIDGE_SOCK_ENV      "FLOW_PARAM_SOCK"
+#define PARAM_BRIDGE_DEFAULT_PORT  18776
+#define PARAM_BRIDGE_PORT_ENV      "FLOW_PARAM_PORT"
 
 /** 单条请求/响应上限。LIST 响应按需分块写，不受此限。 */
 #define PARAM_BRIDGE_MAX_LINE      512

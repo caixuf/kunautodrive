@@ -78,6 +78,18 @@ find_library(FLOWENGINE_CORE
 )
 message(STATUS "libflowengine_core: ${FLOWENGINE_CORE}")
 
+if(WIN32)
+    find_library(FLOWENGINE_PARAM_RUNTIME
+        NAMES flowengine_param_runtime
+        HINTS
+            ${FLOWENGINE_BUILD}/lib
+            ${FLOWENGINE_BUILD}/lib/Release
+            ${FLOWENGINE_BUILD}/lib/Debug
+        REQUIRED
+    )
+    message(STATUS "flowengine_param_runtime: ${FLOWENGINE_PARAM_RUNTIME}")
+endif()
+
 # scheduler_cpp: 提供 net_transport_start / net_transport_bridge_topic /
 # net_transport_unbridge_topic 等 C++ transport 符号。所有节点 .so 在 init
 # 阶段调用 transport API，dlopen RTLD_NOW 模式会立即解析这些符号，未链接 →
@@ -108,13 +120,13 @@ endif()
 # 故这两个库名不存在，替换为 c++（libc++）。
 if(WIN32)
     if(MSVC)
-        set(NODE_LINK_LIBS ${FLOWENGINE_CORE} ${SCHEDULER_CPP} ws2_32)
+        set(NODE_LINK_LIBS ${FLOWENGINE_CORE} ${FLOWENGINE_PARAM_RUNTIME} ${SCHEDULER_CPP} ws2_32)
         set(NODE_CXX_RT "")
     else()
         # MinGW (POSIX threads): every plugin links libscheduler_cpp.a (C++),
         # including pure-C nodes linked with gcc — must pull libstdc++ always.
         # (Linux puts stdc++/atomic in NODE_LINK_LIBS for the same reason.)
-        set(NODE_LINK_LIBS ${FLOWENGINE_CORE} ${SCHEDULER_CPP} ws2_32 pthread stdc++ atomic)
+        set(NODE_LINK_LIBS ${FLOWENGINE_CORE} ${FLOWENGINE_PARAM_RUNTIME} ${SCHEDULER_CPP} ws2_32 pthread stdc++ atomic)
         set(NODE_CXX_RT stdc++ atomic)
     endif()
     # flowengine_core was compiled with ZLIB; all node DLLs that pull in core must link it
@@ -288,7 +300,16 @@ set(ESMINI_RMLIB_INCLUDE
     "${ESMINI_ROOT}/EnvironmentSimulator/Libraries/esminiRMLib"
     "${FLOW_ROOT}/include"
 )
-if(APPLE)
+if(WIN32)
+    # Native MinGW build produced by scripts/demo.ps1.  Link the import library;
+    # the matching DLL is copied beside the node plugins for runtime loading.
+    find_library(ESMINI_RMLIB
+        NAMES esminiRMLib libesminiRMLib
+        HINTS "${FLOWENGINE_BUILD}/esmini/EnvironmentSimulator/Libraries/esminiRMLib"
+              "${ESMINI_ROOT}/build/EnvironmentSimulator/Libraries/esminiRMLib"
+              "${FLOW_ROOT}/lib"
+    )
+elseif(APPLE)
     # macOS：预构建为 Mach-O .dylib，显式优先 .dylib，避免误命中 Linux 的 .so
     find_library(ESMINI_RMLIB
         NAMES esminiRMLib.dylib esminiRMLib
@@ -313,7 +334,12 @@ if(ESMINI_RMLIB)
     if(_ESMINI_FILE_TOOL)
         execute_process(COMMAND ${_ESMINI_FILE_TOOL} "${ESMINI_RMLIB}"
             OUTPUT_VARIABLE _esmini_file_out ERROR_QUIET)
-        if(APPLE)
+        if(WIN32)
+            if(NOT _esmini_file_out MATCHES "archive|DLL|PE32")
+                message(FATAL_ERROR
+                    "esminiRMLib at ${ESMINI_RMLIB} is not a Windows import library.")
+            endif()
+        elseif(APPLE)
             if(NOT _esmini_file_out MATCHES "Mach-O")
                 message(FATAL_ERROR
                     "esminiRMLib at ${ESMINI_RMLIB} is NOT Mach-O (macOS 需要 Mach-O).\n"

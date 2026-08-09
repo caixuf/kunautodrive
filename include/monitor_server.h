@@ -33,6 +33,13 @@ void monitor_server_destroy(MonitorServer* ms);
  */
 void monitor_server_inject_remote_stats(MonitorServer* ms, const StatsPacket* pkt);
 
+/** Aggregate the latest remote packets for daemon status reporting. */
+void monitor_server_get_remote_stats_summary(MonitorServer* ms,
+                                             uint32_t* topic_count,
+                                             uint64_t* publish_count,
+                                             uint64_t* deliver_count,
+                                             uint64_t* drop_count);
+
 /**
  * 注入来自其他进程的完整 dashboard JSON（跨进程 IPC dashboard bridge）。
  * 线程安全；由 flowmond IPC 接收线程调用。

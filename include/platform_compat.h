@@ -203,9 +203,8 @@ static inline struct tm* flow_win_localtime_r(const time_t* t, struct tm* out) {
 
 static inline int flow_win_setenv(const char* name, const char* value, int overwrite) {
     if (!overwrite) {
-        size_t len = 0;
-        getenv_s(&len, NULL, 0, name);
-        if (len > 0) return 0;
+        const char* existing = getenv(name);
+        if (existing) return 0;
     }
     return _putenv_s(name, value ? value : "");
 }

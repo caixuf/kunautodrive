@@ -172,12 +172,26 @@ void default_log_callback(LogLevel level, const char* message);
 
 /* ── State file path (shared by e2e, flowctl, dashboard) ── */
 
+#include "platform_paths.h"
+
 #define FLOWENGINE_DEFAULT_STATE_FILE "/tmp/flow_topology.json"
 
 /** Get the state file path from FLOWENGINE_STATE_FILE env, or default */
 static inline const char* flowengine_state_file(void) {
     const char* env = getenv("FLOWENGINE_STATE_FILE");
-    return env ? env : FLOWENGINE_DEFAULT_STATE_FILE;
+    if (env && env[0]) return env;
+#if defined(_WIN32)
+    static char path[512];
+    static int initialized = 0;
+    if (!initialized) {
+        if (flow_temp_path(path, sizeof(path), "flow_topology.json") != 0)
+            snprintf(path, sizeof(path), "%s", FLOWENGINE_DEFAULT_STATE_FILE);
+        initialized = 1;
+    }
+    return path;
+#else
+    return FLOWENGINE_DEFAULT_STATE_FILE;
+#endif
 }
 
 #ifdef __cplusplus

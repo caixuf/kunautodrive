@@ -163,7 +163,7 @@ static void* dashboard_bridge_reconnect_fn(void* arg) {
  * 减少不必要的 stat+fopen+fread 开销。IPC 断开后自动恢复 5Hz 轮询。 */
 static void* dashboard_file_watcher_fn(void* arg) {
     MonitorServer* ms = (MonitorServer*)arg;
-    const char* path = "/tmp/flow_topology.json";
+    const char* path = flowengine_state_file();
     uint64_t last_mtime = 0;
     while (g_running) {
         /* IPC 正常时低频巡检，断开后恢复 5Hz */
@@ -331,7 +331,7 @@ int main(int argc, char** argv) {
     /* ── 文件桥接: 轮询 /tmp/flow_topology.json (standalone 兼容回退) ── */
     pthread_t file_watcher_thread;
     pthread_create(&file_watcher_thread, NULL, dashboard_file_watcher_fn, ms);
-    LOG_INFO("flowmond", "file bridge: watching %s", "/tmp/flow_topology.json");
+    LOG_INFO("flowmond", "file bridge: watching %s", flowengine_state_file());
 
     /* ── 告警规则 ── */
     AlertRule rules[] = {
@@ -351,9 +351,17 @@ int main(int argc, char** argv) {
         int nt = message_bus_get_all_topic_stats(bus, tstats, 32);
         const TopologyGraph* topo = discovery_get_topology(dm);
 
-        printf("[flowmond] topics=%d nodes=%u pub=%lu del=%lu drop=%lu\n",
-               nt, topo ? topo->node_count : 0,
-               (unsigned long)pub, (unsigned long)del, (unsigned long)drop);
+        uint32_t remote_topics = 0;
+        uint64_t remote_pub = 0, remote_del = 0, remote_drop = 0;
+        monitor_server_get_remote_stats_summary(ms, &remote_topics,
+                                                &remote_pub, &remote_del, &remote_drop);
+
+        printf("[flowmond] topics=%u (local=%d remote=%u) nodes=%u pub=%lu del=%lu drop=%lu\n",
+               (unsigned)(nt + remote_topics), nt, (unsigned)remote_topics,
+               topo ? topo->node_count : 0,
+               (unsigned long)(pub + remote_pub),
+               (unsigned long)(del + remote_del),
+               (unsigned long)(drop + remote_drop));
     }
 
     /* ── 清理 ── */
