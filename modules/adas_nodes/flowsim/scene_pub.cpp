@@ -406,6 +406,8 @@ char* build_scene_frame_json(const EntityPool& pool,
         default: light_str = "day";   break;
     }
     cJSON_AddStringToObject(root, "lighting", light_str);
+    cJSON_AddStringToObject(root, "weather", cfg.weather.c_str());
+    cJSON_AddNumberToObject(root, "visibility_m", cfg.visibility_m);
 
     /* road_network JSON 缓存：道路网络在仿真过程中不变，首次构建后缓存为
      * 字符串，后续帧用 cJSON_AddRawToObject 复用（strdup 开销远小于全网采样）。

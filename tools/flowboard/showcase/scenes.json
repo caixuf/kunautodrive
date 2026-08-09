@@ -13,6 +13,9 @@
         "description": "综合直路+S弯场景：3000m 双向 4 车道，前 350m/后 700m 直道（两端物理掉头），中段缓 S 弯（峰值横向约 ±35m，min R≳500m）。NPC 用旧格式世界 x/y（已按 s/l 投影到中心线），vx 符号+vy=0 保留对向约定；flowsim 在 roads_loaded 时把 x/y 当世界坐标 snap 到路网。",
         "random_seed": 137,
         "duration_s": 0,
+        "lighting": "day",
+        "weather": "clear",
+        "visibility_m": 1000,
         "ego": {
           "x": 20.0,
           "y": 1.75,

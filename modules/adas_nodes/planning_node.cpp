@@ -185,6 +185,7 @@ struct PlanningContext {
     int    tl_state[TL_CACHE_MAX];     /* TrafficLightState */
     int    tl_count{0};
     volatile int has_traffic_lights{0};
+    double environment_speed_factor{1.0};
 
     int tid{0};  /* scheduler task id */
 
@@ -1379,6 +1380,29 @@ static void on_traffic_lights(const Message* msg, void* user_data) {
         g.tl_lane_offset[i] = c.lane_offset[i];
         g.tl_state[i]       = c.state[i];
     }
+
+}
+
+static void on_environment_state(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg) return;
+    cJSON* root = cJSON_Parse((const char*)msg->data);
+    if (!root) return;
+    cJSON* visibility = cJSON_GetObjectItemCaseSensitive(root, "visibility_m");
+    cJSON* weather = cJSON_GetObjectItemCaseSensitive(root, "weather");
+    double factor = 1.0;
+    if (cJSON_IsNumber(visibility)) {
+        if (visibility->valuedouble < 50.0) factor = 0.4;
+        else if (visibility->valuedouble < 100.0) factor = 0.55;
+        else if (visibility->valuedouble < 200.0) factor = 0.7;
+    }
+    if (cJSON_IsString(weather) &&
+        (strcmp(weather->valuestring, "rain") == 0 ||
+         strcmp(weather->valuestring, "snow") == 0)) {
+        factor = std::min(factor, 0.75);
+    }
+    g.environment_speed_factor = factor;
+    cJSON_Delete(root);
 }
 
 /* ── 协程任务 ────────────────────────────────────────────────── */
@@ -1558,6 +1582,11 @@ protected:
                     speed_clamp_warn++;
                 }
                 command_speed = g.cfg_max_speed;
+            }
+            const double environment_max_speed =
+                g.cfg_max_speed * g.environment_speed_factor;
+            if (command_speed > environment_max_speed) {
+                command_speed = environment_max_speed;
             }
 
             /* §5a: 掉头后重置 route_target_speed
@@ -2129,7 +2158,8 @@ protected:
                  *
                  * 加速度/减速度限制由 control 侧 PID 和 safety_control 负责，
                  * planning 不应在此处"帮倒忙"。 */
-                if (command_speed > g.cfg_max_speed) command_speed = g.cfg_max_speed;
+                if (command_speed > environment_max_speed)
+                    command_speed = environment_max_speed;
                 if (command_speed < 0.0) command_speed = 0.0;
 
                 /* ── 红绿灯速度 override 已删除（planning 重生 M1）──
@@ -2337,6 +2367,11 @@ protected:
             }
 
 publish_trajectory:
+            for (int i = 0; i < n_pts; i++) {
+                if (points[i].v > environment_max_speed) {
+                    points[i].v = (float)environment_max_speed;
+                }
+            }
             /* ── 发布二进制 Trajectory ── */
             Trajectory traj;
             memset(&traj, 0, sizeof(traj));
@@ -2573,6 +2608,7 @@ static const char* s_inputs[]  = {
     TOPIC_ROAD_GEOMETRY,
     TOPIC_ROAD_REF_PATH,
     TOPIC_ROAD_TRAFFIC_LIGHTS,
+    "environment/state",
     TOPIC_SCENE_FRAME,
     TOPIC_PLANNING_BEHAVIOR,
     TOPIC_NAVIGATION_PATH,
@@ -2689,6 +2725,7 @@ static int planning_init(MessageBus* bus, Transport* transport,
     transport_subscribe(transport, TOPIC_ROAD_GEOMETRY, on_road_geometry, nullptr);
     transport_subscribe(transport, TOPIC_ROAD_REF_PATH, on_road_ref_path, nullptr);
     transport_subscribe(transport, TOPIC_ROAD_TRAFFIC_LIGHTS, on_traffic_lights, nullptr);
+    transport_subscribe(transport, "environment/state", on_environment_state, nullptr);
     transport_subscribe(transport, TOPIC_SCENE_FRAME, on_scene_frame, nullptr);
     transport_subscribe(transport, TOPIC_PLANNING_BEHAVIOR, on_planning_behavior, nullptr);
     transport_subscribe(transport, TOPIC_NAVIGATION_PATH, on_navigation_path, nullptr);

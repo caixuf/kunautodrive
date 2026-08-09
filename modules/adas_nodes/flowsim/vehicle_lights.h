@@ -39,6 +39,7 @@ namespace lights {
     constexpr uint8_t HAZARD         = 0x04;  // bit 2
     constexpr uint8_t HIGH_BEAM      = 0x08;  // bit 3  (保留位)
     constexpr uint8_t LOW_BEAM       = 0x10;  // bit 4
+    constexpr uint8_t FOG            = 0x80;  // bit 7
     // bit 5 (HIGH_MOUNT 0x20) / bit 6 (REVERSE 0x40) / bit 7 (FOG 0x80)
     // 未实现，位值不删以保持协议位编号稳定（前端 LIGHT_REVERSE 仍按 0x40 测试）。
 }
@@ -60,6 +61,7 @@ struct VehicleLights {
     void set_turn_right(bool on) { set_bit(lights::TURN_RIGHT, on); }
     void set_hazard(bool on)     { set_bit(lights::HAZARD, on); }
     void set_low_beam(bool on)   { set_bit(lights::LOW_BEAM, on); }
+    void set_fog(bool on)        { set_bit(lights::FOG, on); }
 
     void clear() { mask = 0; }
 

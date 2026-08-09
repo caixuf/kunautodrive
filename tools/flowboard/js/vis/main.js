@@ -26,11 +26,22 @@ let _renderer = null;
 let _composer = null;
 let _cameraRig = null;
 let _lights = null;
+let _lastEnvironmentKey = '';
 let _skyEnv = null;
 let _director = null;
 let _ready = false;
 let _lastTopoData = null;
 let _statsView = null;
+
+function _syncEnvironment(store) {
+  if (!_skyEnv || !store) return;
+  const env = store.env || {};
+  const environmentKey = `${env.lighting || 'day'}|${env.weather || 'clear'}`;
+  if (environmentKey === _lastEnvironmentKey) return;
+  _skyEnv.setTimeOfDay(env.lighting === 'day' ? 'noon' : env.lighting);
+  _skyEnv.setWeather(env.weather || 'clear');
+  _lastEnvironmentKey = environmentKey;
+}
 let _minimap = null;
 
 /* ── 性能档位（Performance Tier）──
@@ -162,6 +173,7 @@ export function init3DScene(canvas) {
   // 初始化后立即触发一次相机更新，确保第一帧就能看到场景
   try {
     const store = _director.getStore();
+    _syncEnvironment(store);
     const roadGroup = store.isViaduct
       ? _director.getViaductView().getGroup()
       : _director.getRoadView().getRoadGroup();
@@ -251,6 +263,7 @@ function _startRenderLoop() {
     try {
       const now = performance.now();
       const store = _director.getStore();
+      _syncEnvironment(store);
       const roadGroup = store.isViaduct
         ? _director.getViaductView().getGroup()
         : _director.getRoadView().getRoadGroup();

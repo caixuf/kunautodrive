@@ -765,7 +765,12 @@ HTML inline `onclick` 全部改走 `window.flowboard.X()`，集中式重命名�
 ### 为什么可行
 
 3D 渲染（`SceneDirector`）完全数据驱动，只消费一帧 `metrics.scene`
-（`road_network` + `ego` + `entities` + `construction_zones` + `lighting`）。
+（`road_network` + `ego` + `entities` + `construction_zones` + `lighting` +
+`weather` + `visibility_m`）。FlowBoard 场景标题栏可切换白天/黄昏/夜晚及
+晴/阴/雨/雪/雾；设置经 `/api/environment` 写入 flowsim，flowsim 再发布
+权威 `environment/state`。感知模型按能见度降低 camera 有效信息量，planning
+按雨雪/低能见度降低轨迹速度，车辆在黄昏、夜间、雨雪和雾天自动开启近光灯，
+浓雾自动开启雾灯。
 而每个 `scenarios/*.json` 已携带 `road_network` / `ego` / `actors` /
 `traffic_lights` / `construction_zones`——与后端 flowsim 运行时发布的 scene 帧
 **同源**。因此把「静态场景定义」转成「一帧快照」即可复用整条渲染链路。

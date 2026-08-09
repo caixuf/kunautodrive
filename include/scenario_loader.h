@@ -354,6 +354,8 @@ typedef struct {
     int               construction_zone_count;
     /* ── 中凯路场景新增（Task 3 + Task 4）── */
     ScenarioLighting  lighting;        /**< 全局光照模式（day/night/dusk，默认 day） */
+    char              weather[16];     /**< clear/rain/snow/overcast/fog */
+    double            visibility_m;    /**< 权威能见度（m，默认 1000） */
     ScenarioScript    scripts[SCENARIO_MAX_SCRIPTS]; /**< 顶层 scenarios[] 工况脚本数组 */
     int               script_count;
     /* ── 编舞循环（FlowSim v2 新增）── */

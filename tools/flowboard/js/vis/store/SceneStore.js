@@ -27,7 +27,9 @@ export function createSceneStore() {
     // ── 环境配置 ──
     env: {
       isNight: false,
-      lighting: 0,            // 场景配置的 lighting 模式
+      lighting: 'day',
+      weather: 'clear',
+      visibilityM: 1000,
     },
 
     // ── 性能档位 ──

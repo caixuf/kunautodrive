@@ -853,6 +853,11 @@ function updateAll() {
     _lastDomUpdateMs = now;
     safeCall('metrics', updateMetrics);
     safeCall('frames', updateFrames);
+    var sceneEnv = (topoData.metrics || {}).scene || {};
+    var lightingSelect = document.getElementById('env-lighting');
+    var weatherSelect = document.getElementById('env-weather');
+    if (lightingSelect && sceneEnv.lighting) lightingSelect.value = sceneEnv.lighting;
+    if (weatherSelect && sceneEnv.weather) weatherSelect.value = sceneEnv.weather;
   }
 
   // 表格（topicStats / processTopics）：节流 1Hz，且只在 analyze 工作区更新
@@ -1656,6 +1661,22 @@ async function startTraining() {
   }
 }
 
+async function setEnvironment() {
+  var lighting = document.getElementById('env-lighting').value;
+  var weather = document.getElementById('env-weather').value;
+  var visibility = {clear:1000, overcast:500, rain:180, snow:120, fog:60}[weather] || 1000;
+  try {
+    var r = await fetch(serverUrl + '/api/environment', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({lighting:lighting, weather:weather, visibility_m:visibility})
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+  } catch (e) {
+    console.error('[environment] update failed', e);
+  }
+}
+
 async function promoteTrainingModel(name) {
   try {
     var r = await fetch(serverUrl+'/api/training/promote', {
@@ -2116,6 +2137,7 @@ window.flowboard = {
   syncTrainingForm: syncTrainingForm,
   refreshTrainingStatus: refreshTrainingStatus,
   startTraining: startTraining,
+  setEnvironment: setEnvironment,
   promoteTrainingModel: promoteTrainingModel,
   // ops
   openOpsModal: openOpsModal,

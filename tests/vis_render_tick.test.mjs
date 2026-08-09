@@ -49,6 +49,9 @@ function makeFlatFrame() {
   return {
     metrics: {
       scene: {
+        lighting: 'night',
+        weather: 'fog',
+        visibility_m: 60,
         road_network: {
           edges: [{
             id: 0,
@@ -181,6 +184,8 @@ function makeParkingExamFrame() {
 
     const store = director.getStore();
     ok('tick 后 store.ego 存在', !!store.ego);
+    ok('环境时段透传到 store', store.env.lighting === 'night');
+    ok('天气透传到 store', store.env.weather === 'fog' && store.env.visibilityM === 60);
     const tree = ViewRegistry.get('tree');
     ok('行道树双侧实例已构建', tree?.getStats?.().trees > 0);
     ok('精细行道树保持 3 draw calls', tree?.getStats?.().drawCalls === 3);

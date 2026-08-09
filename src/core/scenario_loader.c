@@ -409,6 +409,22 @@ ScenarioConfig* scenario_load(const char* path) {
         else
             sc->lighting = SCENARIO_LIGHT_DAY;
     }
+    strncpy(sc->weather, "clear", sizeof(sc->weather) - 1);
+    sc->visibility_m = 1000.0;
+    cJSON* jweather = cJSON_GetObjectItemCaseSensitive(root, "weather");
+    if (cJSON_IsString(jweather) && jweather->valuestring) {
+        const char* value = jweather->valuestring;
+        if (strcmp(value, "rain") == 0 || strcmp(value, "snow") == 0 ||
+            strcmp(value, "overcast") == 0 || strcmp(value, "fog") == 0 ||
+            strcmp(value, "clear") == 0) {
+            strncpy(sc->weather, value, sizeof(sc->weather) - 1);
+        }
+    }
+    cJSON* jvisibility = cJSON_GetObjectItemCaseSensitive(root, "visibility_m");
+    if (cJSON_IsNumber(jvisibility) && jvisibility->valuedouble >= 10.0 &&
+        jvisibility->valuedouble <= 5000.0) {
+        sc->visibility_m = jvisibility->valuedouble;
+    }
 
     /* scenarios[]（可选，Task 3）：顶层工况脚本数组。
      * 每项含 name / label / trigger{type,value} / actor_overrides[{...}]。
@@ -657,6 +673,8 @@ char* scenario_to_json(const ScenarioConfig* scenario) {
         default:                   light_str = "day";   break;
     }
     cJSON_AddStringToObject(root, "lighting", light_str);
+    cJSON_AddStringToObject(root, "weather", scenario->weather);
+    cJSON_AddNumberToObject(root, "visibility_m", scenario->visibility_m);
 
     /* scenarios[]（Task 3）*/
     cJSON* jscripts = cJSON_CreateArray();

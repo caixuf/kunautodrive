@@ -954,6 +954,9 @@ static const char* TEST_SCENARIO_BASIC =
     "  \"description\": \"unit test fixture\",\n"
     "  \"random_seed\": 42,\n"
     "  \"duration_s\": 60.0,\n"
+    "  \"lighting\": \"night\",\n"
+    "  \"weather\": \"fog\",\n"
+    "  \"visibility_m\": 60.0,\n"
     "  \"ego\": {\"x\": 0.0, \"y\": -1.75, \"heading\": 0.0, \"init_speed\": 5.0},\n"
     "  \"actors\": [\n"
     "    {\"id\": 0, \"type\": \"car\", \"x\": 35.0, \"y\": -1.75, \"vx\": 7.0, \"vy\": 0.0, \"len\": 4.6, \"wid\": 2.0},\n"
@@ -1020,6 +1023,11 @@ static void test_scenario_load_basic(void) {
            "ego.y should be -1.75 (got %.2f)", sc->ego.y);
     ASSERT(fabs(sc->ego.init_speed - 5.0) < 0.01,
            "ego.init_speed should be 5.0 (got %.2f)", sc->ego.init_speed);
+
+    TEST("scenario environment state");
+    ASSERT(sc->lighting == SCENARIO_LIGHT_NIGHT, "lighting should be night");
+    ASSERT(strcmp(sc->weather, "fog") == 0, "weather should be fog");
+    ASSERT(fabs(sc->visibility_m - 60.0) < 0.01, "visibility should be 60m");
 
     TEST("scenario pass_criteria no_collision");
     ASSERT(sc->criteria.no_collision, "no_collision should be true");

@@ -40,7 +40,7 @@ public:
      * @param ego         ego Entity（index 0）
      * @param sim_time_s  仿真时间（秒），用于判断昼夜
      */
-    static void update_ego_lights(Entity& ego, double sim_time_s);
+    static void update_ego_lights(Entity& ego, bool low_visibility, bool foggy);
 
     /**
      * 更新 NPC 车灯。在 npc_ai tick 之后调用。
@@ -52,7 +52,7 @@ public:
      *   - 其余状态 → 转向灯灭（刹车灯仍由 brake 字段驱动）
      * @param npc  NPC Entity
      */
-    static void update_npc_lights(Entity& npc);
+    static void update_npc_lights(Entity& npc, bool low_visibility, bool foggy);
 
     /**
      * 更新所有车辆实体的车灯。遍历 EntityPool，对每个 is_vehicle() 的实体
@@ -60,7 +60,7 @@ public:
      * @param pool        实体池
      * @param sim_time_s  仿真时间（秒）
      */
-    static void update_all_lights(EntityPool& pool, double sim_time_s);
+    static void update_all_lights(EntityPool& pool, bool low_visibility, bool foggy);
 };
 
 }  // namespace flowsim

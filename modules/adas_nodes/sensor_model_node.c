@@ -51,6 +51,7 @@ static struct {
     double lidar_max_range_m;
     double obs_noise_std_m;
     int enable_simple_occlusion;
+    double camera_visibility_factor;
 
     /* 真实 GPS 传感器格式接入：可选 NMEA 0183 日志回放 */
     char     gps_nmea_file[256];
@@ -140,6 +141,22 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
         snprintf(key, sizeof(key), "oy%d", i);
         if ((j = cJSON_GetObjectItemCaseSensitive(root, key)) && cJSON_IsNumber(j))
             g.obs_y[i] = j->valuedouble;
+    }
+
+    cJSON_Delete(root);
+}
+
+static void on_environment_state(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg) return;
+    cJSON* root = cJSON_Parse((const char*)msg->data);
+    if (!root) return;
+    cJSON* visibility = cJSON_GetObjectItemCaseSensitive(root, "visibility_m");
+    if (cJSON_IsNumber(visibility)) {
+        double factor = visibility->valuedouble / 200.0;
+        if (factor < 0.1) factor = 0.1;
+        if (factor > 1.0) factor = 1.0;
+        g.camera_visibility_factor = factor;
     }
     cJSON_Delete(root);
 }
@@ -239,7 +256,8 @@ static int sensor_model_execute(TaskBase* task) {
         /* camera channel is reserved for future richer payloads; keep heartbeat-style frame. */
         if (g.frame_id % 3 == 0) {
             LidarFrame cam = lidar;
-            cam.intensity = 0.5f;
+            cam.intensity = (float)(0.5 * g.camera_visibility_factor);
+            cam.point_count = (uint32_t)(cam.point_count * g.camera_visibility_factor);
             Message cmsg;
             msg_init_typed(&cmsg, "sensor/camera", "sensor_model",
                            LIDARFRAME_TYPE_ID, LIDARFRAME_SCHEMA_VERSION,
@@ -261,7 +279,7 @@ static const TaskInterface sensor_model_vtable = {
     .execute = sensor_model_execute,
 };
 
-static const char* s_inputs[] = {"vehicle/state", NULL};
+static const char* s_inputs[] = {"vehicle/state", "environment/state", NULL};
 static const char* s_outputs[] = {"sensor/lidar", "sensor/gps", "sensor/camera", NULL};
 
 static NodePlugin s_plugin;
@@ -280,6 +298,7 @@ static int sensor_model_init(MessageBus* bus, Transport* transport,
     g.lidar_fov_deg = 120.0;
     g.lidar_max_range_m = 60.0;
     g.obs_noise_std_m = 0.08;
+    g.camera_visibility_factor = 1.0;
     g.enable_simple_occlusion = 1;
 
     if (params_json) {
@@ -316,6 +335,7 @@ static int sensor_model_init(MessageBus* bus, Transport* transport,
     srand(42u);
 
     transport_subscribe(transport, "vehicle/state", on_vehicle_state, NULL);
+    transport_subscribe(transport, "environment/state", on_environment_state, NULL);
 
     discovery_advertise(discovery, "vehicle/state", 0x1C0E5A7Eu, CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, "sensor/lidar", LIDARFRAME_TYPE_ID, CAP_PUBLISHER, 20.0);

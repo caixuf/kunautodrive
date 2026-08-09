@@ -31,6 +31,7 @@ const WEATHER_MODES = {
   rain:    { rainRate: 8000,  snowRate: 0,     skyTint: 0x8899aa, fogDensityMul: 2.5,  sunIntensityMul: 0.4 },
   snow:    { rainRate: 0,     snowRate: 3000,  skyTint: 0xccddee, fogDensityMul: 2.0,  sunIntensityMul: 0.5 },
   overcast:{ rainRate: 0,     snowRate: 0,     skyTint: 0x999999, fogDensityMul: 3.0,  sunIntensityMul: 0.3 },
+  fog:     { rainRate: 0,     snowRate: 0,     skyTint: 0xc8d0d2, fogDensityMul: 12.0, sunIntensityMul: 0.2 },
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -119,13 +120,15 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
       positions[i * 3]     = (Math.random() - 0.5) * RAIN_AREA;
       positions[i * 3 + 1] = Math.random() * RAIN_HEIGHT;
       positions[i * 3 + 2] = (Math.random() - 0.5) * RAIN_AREA;
-      velocities[i] = 15 + Math.random() * 10;  // 15-25 m/s
+      velocities[i] = _weather === 'snow'
+        ? 1.0 + Math.random() * 2.0
+        : 15 + Math.random() * 10;
     }
     geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
 
     const mat = new THREE.PointsMaterial({
-      color: 0xaaccff,
-      size: 0.15,
+      color: _weather === 'snow' ? 0xffffff : 0xaaccff,
+      size: _weather === 'snow' ? 0.35 : 0.15,
       transparent: true,
       opacity: 0.5,
       blending: THREE.AdditiveBlending,
@@ -192,10 +195,10 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
     }
 
     // 雨
-    const rainRate = w.rainRate;
-    if (rainRate !== rainCount) {
-      rainCount = rainRate;
-      _buildRainMesh(rainRate);
+    const precipitationRate = w.rainRate || w.snowRate;
+    if (precipitationRate !== rainCount) {
+      rainCount = precipitationRate;
+      _buildRainMesh(precipitationRate);
     }
   }
 

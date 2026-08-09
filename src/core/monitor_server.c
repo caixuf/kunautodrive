@@ -846,6 +846,55 @@ static bool dispatch_request(int fd, MonitorServer* ms,
             close(fd);
             return false;
         }
+        if (strcmp(path, "/api/environment") == 0) {
+            char* body = read_post_body(fd, req, req_len, 1024);
+            cJSON* root = body ? cJSON_Parse(body) : NULL;
+            cJSON* lighting = root
+                ? cJSON_GetObjectItemCaseSensitive(root, "lighting") : NULL;
+            cJSON* weather = root
+                ? cJSON_GetObjectItemCaseSensitive(root, "weather") : NULL;
+            cJSON* visibility = root
+                ? cJSON_GetObjectItemCaseSensitive(root, "visibility_m") : NULL;
+            bool valid_light = cJSON_IsString(lighting) &&
+                (strcmp(lighting->valuestring, "day") == 0 ||
+                 strcmp(lighting->valuestring, "dusk") == 0 ||
+                 strcmp(lighting->valuestring, "night") == 0);
+            bool valid_weather = cJSON_IsString(weather) &&
+                (strcmp(weather->valuestring, "clear") == 0 ||
+                 strcmp(weather->valuestring, "rain") == 0 ||
+                 strcmp(weather->valuestring, "snow") == 0 ||
+                 strcmp(weather->valuestring, "overcast") == 0 ||
+                 strcmp(weather->valuestring, "fog") == 0);
+            bool valid_visibility = cJSON_IsNumber(visibility) &&
+                visibility->valuedouble >= 10.0 && visibility->valuedouble <= 5000.0;
+            if (valid_light && valid_weather && valid_visibility) {
+                char* normalized = cJSON_PrintUnformatted(root);
+                char tmp_path[] = "/tmp/flow_environment.json.tmp.XXXXXX";
+                int tmp_fd = normalized ? mkstemp(tmp_path) : -1;
+                FILE* f = tmp_fd >= 0 ? fdopen(tmp_fd, "w") : NULL;
+                bool written = f && fputs(normalized, f) != EOF &&
+                               fflush(f) == 0;
+                if (f && fclose(f) != 0) written = false;
+                if (tmp_fd >= 0 && !f) close(tmp_fd);
+                bool installed = written &&
+                    rename(tmp_path, "/tmp/flow_environment.json") == 0;
+                if (installed) {
+                    send_response(fd, "200 OK", "application/json", "{\"ok\":true}");
+                } else {
+                    if (tmp_fd >= 0) unlink(tmp_path);
+                    send_response(fd, "500 Internal Server Error", "application/json",
+                                  "{\"ok\":false,\"error\":\"write failed\"}");
+                }
+                free(normalized);
+            } else {
+                send_response(fd, "400 Bad Request", "application/json",
+                              "{\"ok\":false,\"error\":\"invalid environment\"}");
+            }
+            cJSON_Delete(root);
+            free(body);
+            close(fd);
+            return false;
+        }
         if (strcmp(path, "/api/training/start") == 0 ||
             strcmp(path, "/api/training/promote") == 0) {
             char* body = read_post_body(fd, req, req_len, 8192);

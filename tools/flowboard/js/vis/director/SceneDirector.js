@@ -159,6 +159,12 @@ export function createSceneDirector(scene) {
     if (Object.prototype.hasOwnProperty.call(frame, 'scenario_name')) {
       store.scenarioName = frame.scenario_name || '';
     }
+    if (typeof frame.lighting === 'string') {
+      store.env.lighting = frame.lighting;
+      store.env.isNight = frame.lighting === 'night';
+    }
+    if (typeof frame.weather === 'string') store.env.weather = frame.weather;
+    if (Number.isFinite(frame.visibility_m)) store.env.visibilityM = frame.visibility_m;
 
     if (rn && !skipRoad) {
       const hash = roadNetworkHash(rn);

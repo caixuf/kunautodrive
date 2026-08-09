@@ -5,7 +5,6 @@
  */
 
 #include "VehicleActor.h"
-#include <cmath>
 
 namespace flowsim {
 
@@ -17,21 +16,14 @@ static constexpr double SPEED_REVERSE_THRESHOLD = 0.5;  // m/s，低于此速度
  * sim_time_s 是仿真秒数，取模 86400 得到当天时间。
  * 18:00-06:00（64800s - 21600s 跨午夜）开近光灯。
  * 场景无真实昼夜循环时，这个逻辑可被 config 覆盖。 */
-static bool is_night(double sim_time_s) {
-    double time_of_day = std::fmod(sim_time_s, 86400.0);
-    if (time_of_day < 0) time_of_day += 86400.0;
-    return time_of_day >= 64800.0 || time_of_day < 21600.0;  // 18:00~06:00
-}
-
-void VehicleActor::update_ego_lights(Entity& ego, double sim_time_s) {
+void VehicleActor::update_ego_lights(Entity& ego, bool low_visibility, bool foggy) {
     /* 注意：ego.lights 的 turn_signal / hazard 已在 flowsim_node 主循环中
      * 从 ControlCmd（决策下发）设置，此处不覆盖、不清除。VehicleActor 只补充
      * 非决策类灯光：夜间近光灯、倒车灯等。 */
 
     /* 近光灯：夜间自动开启 */
-    if (is_night(sim_time_s)) {
-        ego.lights.set_low_beam(true);
-    }
+    ego.lights.set_low_beam(low_visibility);
+    ego.lights.set_fog(foggy);
 
     /* 转向灯兜底：当 ControlCmd 未下发任何转向意图（无 left/right/hazard 任一位）
      * 且 ego 处于巡航空档（不是停止/倒车）时，按 steer 自动打转向灯。
@@ -60,7 +52,7 @@ void VehicleActor::update_ego_lights(Entity& ego, double sim_time_s) {
      * 刹车灯不占 lights 位：VehicleView 直接读 ego.brake > 0.1 判断。 */
 }
 
-void VehicleActor::update_npc_lights(Entity& npc) {
+void VehicleActor::update_npc_lights(Entity& npc, bool low_visibility, bool foggy) {
     /* NPC 车灯根据 AI 状态派生。先清空再按状态设置。
      * 刹车灯同样由 VehicleView 读 npc.brake 字段直接驱动，不占 lights 位。 */
     npc.lights.clear();
@@ -103,20 +95,19 @@ void VehicleActor::update_npc_lights(Entity& npc) {
             }
             break;
     }
-
-    /* 夜间近光灯（NPC 也开）—— 用 ego 的 sim_time 判断不适用此处，
-     * update_all_lights 会传 sim_time。简化：NPC 暂不判昼夜，只 ego 判。 */
+    npc.lights.set_low_beam(low_visibility);
+    npc.lights.set_fog(foggy);
 }
 
-void VehicleActor::update_all_lights(EntityPool& pool, double sim_time_s) {
+void VehicleActor::update_all_lights(EntityPool& pool, bool low_visibility, bool foggy) {
     for (int i = 0; i < pool.size(); ++i) {
         Entity& e = pool[i];
         if (!e.active || !e.is_vehicle()) continue;
 
         if (e.type == EntityType::Ego) {
-            update_ego_lights(e, sim_time_s);
+            update_ego_lights(e, low_visibility, foggy);
         } else {
-            update_npc_lights(e);
+            update_npc_lights(e, low_visibility, foggy);
         }
     }
 }

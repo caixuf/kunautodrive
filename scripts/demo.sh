@@ -388,7 +388,7 @@ cleanup() {
   # 保留拓扑文件供评估器/evaluator 事后分析（不删除）
   [ -f "$JSON_FILE" ] && cp "$JSON_FILE" "${JSON_FILE%.json}_$(date +%Y%m%d_%H%M%S).json" 2>/dev/null || true
   # 退出游戏模式（flowsim 恢复正常 control_node 驱动）
-  rm -f /tmp/game_mode /tmp/game_input.json 2>/dev/null || true
+  rm -f /tmp/game_mode /tmp/game_input.json /tmp/flow_environment.json 2>/dev/null || true
   cleanup_pipeline_tmp
 
   echo ""
@@ -409,7 +409,7 @@ trap 'cleanup; exit 143' TERM
 
 # ── Start flow_launcher with pipeline ───────────────────────
 echo "───[2/4] Starting pipeline (flowsim→sensor_model→perception→fusion→planning→control→monitor)..."
-rm -f "$JSON_FILE"
+rm -f "$JSON_FILE" /tmp/flow_environment.json
 cd "$ROOT"  # run from root so build/lib/ paths resolve
 
 LAUNCHER_ARGS=("$PIPELINE")

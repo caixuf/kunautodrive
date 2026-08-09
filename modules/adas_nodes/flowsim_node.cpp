@@ -85,6 +85,8 @@ namespace {
 #define CONTROL_CMD_TYPE_ID         0x2D95C6D2u
 /* scene/frame 是 FlowSim v2 新增 topic，无历史兼容负担，独立 type ID */
 #define SCENE_FRAME_TYPE_ID         0x5CE4E011u
+#define ENVIRONMENT_STATE_TYPE_ID   0xE17A0E01u
+#define TOPIC_ENVIRONMENT_STATE     "environment/state"
 
 /* ego 车辆几何（与 sim_world_node EGO_LEN_M/EGO_WID_M 一致） */
 #define EGO_LEN_M   4.6
@@ -1518,6 +1520,31 @@ protected:
              * 读 {throttle, brake, steer}（flowmond POST /api/game/control
              * 写入，浏览器键盘 → HTTP）当控制指令，绕过 control_node。
              * 同时刷新 last_control_cmd_us 避免 FSAFE 误触发。 */
+            if ((g.cycle % 30u) == 0u) {
+                FILE* ef = fopen("/tmp/flow_environment.json", "r");
+                if (ef) {
+                    char ebuf[512] = {0};
+                    size_t en = fread(ebuf, 1, sizeof(ebuf) - 1, ef);
+                    fclose(ef);
+                    cJSON* ej = en > 0 ? cJSON_Parse(ebuf) : nullptr;
+                    if (ej) {
+                        cJSON* jl = cJSON_GetObjectItemCaseSensitive(ej, "lighting");
+                        cJSON* jw = cJSON_GetObjectItemCaseSensitive(ej, "weather");
+                        cJSON* jv = cJSON_GetObjectItemCaseSensitive(ej, "visibility_m");
+                        if (cJSON_IsString(jl)) {
+                            if (strcmp(jl->valuestring, "night") == 0)
+                                g.scene_pub_cfg.lighting = SCENARIO_LIGHT_NIGHT;
+                            else if (strcmp(jl->valuestring, "dusk") == 0)
+                                g.scene_pub_cfg.lighting = SCENARIO_LIGHT_DUSK;
+                            else
+                                g.scene_pub_cfg.lighting = SCENARIO_LIGHT_DAY;
+                        }
+                        if (cJSON_IsString(jw)) g.scene_pub_cfg.weather = jw->valuestring;
+                        if (cJSON_IsNumber(jv)) g.scene_pub_cfg.visibility_m = jv->valuedouble;
+                        cJSON_Delete(ej);
+                    }
+                }
+            }
             if (access("/tmp/game_mode", F_OK) == 0) {
                 FILE* gf = fopen("/tmp/game_input.json", "r");
                 if (gf) {
@@ -1906,7 +1933,14 @@ protected:
              * 从 ego 的 steer/brake/speed 和 NPC 的 ai_state 派生车灯位掩码，
              * 写入 Entity.lights。scene_pub 序列化为 JSON "lights" 字段传给前端。
              * 在 scene_pub 之前调用，确保当前帧 lights 已更新。 */
-            flowsim::VehicleActor::update_all_lights(g.pool, sim_time_s);
+            const bool dark = g.scene_pub_cfg.lighting != SCENARIO_LIGHT_DAY;
+            const bool weather_lights =
+                g.scene_pub_cfg.weather == "rain" || g.scene_pub_cfg.weather == "snow" ||
+                g.scene_pub_cfg.weather == "fog" || g.scene_pub_cfg.visibility_m < 200.0;
+            const bool foggy =
+                g.scene_pub_cfg.weather == "fog" || g.scene_pub_cfg.visibility_m < 100.0;
+            flowsim::VehicleActor::update_all_lights(
+                g.pool, dark || weather_lights, foggy);
 
             /* ── Step 6: 推进逻辑时钟 ── */
             clock_advance_us(FLOWSIM_DT_US);
@@ -1922,6 +1956,22 @@ protected:
             publish_ref_path();
             publish_traffic_lights();
             publish_vehicle_state(sim_time_us);
+            if ((g.cycle % 30u) == 0u) {
+                cJSON* env = cJSON_CreateObject();
+                const char* lighting = g.scene_pub_cfg.lighting == SCENARIO_LIGHT_NIGHT
+                    ? "night" : (g.scene_pub_cfg.lighting == SCENARIO_LIGHT_DUSK ? "dusk" : "day");
+                cJSON_AddStringToObject(env, "lighting", lighting);
+                cJSON_AddStringToObject(env, "weather", g.scene_pub_cfg.weather.c_str());
+                cJSON_AddNumberToObject(env, "visibility_m", g.scene_pub_cfg.visibility_m);
+                char* env_json = cJSON_PrintUnformatted(env);
+                if (env_json) {
+                    transport_publish(g.transport, TOPIC_ENVIRONMENT_STATE,
+                                      (const uint8_t*)env_json,
+                                      (uint32_t)strlen(env_json) + 1);
+                    free(env_json);
+                }
+                cJSON_Delete(env);
+            }
             /* scene/frame：完整场景帧 60Hz 给 3D 前端（Phase 2.2） */
             flowsim::publish_scene_frame(g.transport, g.pool, g.scene_pub_cfg,
                                          sim_time_us, g.cycle);
@@ -2069,7 +2119,8 @@ static const char* s_inputs[]  = { TOPIC_CONTROL_CMD, nullptr };
 static const char* s_outputs[] = {
     TOPIC_VEHICLE_STATE, TOPIC_ROAD_GEOMETRY, TOPIC_ROAD_TRAFFIC_LIGHTS,
     TOPIC_ROAD_REF_PATH,
-    TOPIC_SIM_TICK, TOPIC_SIM_COLLISION, TOPIC_SCENE_FRAME, nullptr
+    TOPIC_SIM_TICK, TOPIC_SIM_COLLISION, TOPIC_SCENE_FRAME,
+    TOPIC_ENVIRONMENT_STATE, nullptr
 };
 
 extern NodePlugin s_plugin;
@@ -2088,6 +2139,9 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
      * 清空 → scenario_load 跳过 → 默认空场景（actors=0，NPC 全灭，
      * 2026-08-03 实测回归）。重复 init 时这里同样先清旧状态再解析。 */
     reset_runtime_state();
+    /* Operator overrides are scoped to one simulator run.  Other launch paths
+     * do not pass through demo.sh cleanup, so FlowSim owns the reset too. */
+    remove("/tmp/flow_environment.json");
 
     /* 默认 AI 配置（与 Phase 1 测试一致） */
     g.ai_cfg.lane_width = 3.5;
@@ -2259,6 +2313,9 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
     /* scene/frame：60Hz 完整场景帧，给 3D 前端用（Phase 2.2 新增） */
     transport_advertise(transport, TOPIC_SCENE_FRAME,         SCENE_FRAME_TYPE_ID);
     discovery_advertise(discovery, TOPIC_SCENE_FRAME,         SCENE_FRAME_TYPE_ID, CAP_PUBLISHER, 20.0);
+    transport_advertise(transport, TOPIC_ENVIRONMENT_STATE,   ENVIRONMENT_STATE_TYPE_ID);
+    discovery_advertise(discovery, TOPIC_ENVIRONMENT_STATE,   ENVIRONMENT_STATE_TYPE_ID,
+                        CAP_PUBLISHER, 2.0);
 
     /* 填充 scene_pub_cfg：roads_loaded 之后才有 esmini 网络指针 */
     g.scene_pub_cfg.curve_start_x  = g.curve_start_x;
@@ -2271,6 +2328,8 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
     /* Task 4：把场景 JSON 的 lighting 字段透传到 scene/frame topic，
      * 前端 scene3d.js 据此调整 AmbientLight/DirectionalLight/Bloom 阈值。 */
     g.scene_pub_cfg.lighting       = (int)g.scenario->lighting;
+    g.scene_pub_cfg.weather        = g.scenario->weather;
+    g.scene_pub_cfg.visibility_m   = g.scenario->visibility_m;
     g.scene_pub_cfg.scenario_name  = g.scenario->name;
     /* 道路类型：从 road_network.edges[0].type 提取（如 viaduct_highway），
      * 用于前端识别场景类型并选择对应的渲染模式。 */

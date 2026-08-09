@@ -102,6 +102,12 @@ static void validate_json(const char* json_str, const EntityPool& pool) {
     cJSON* cycle = cJSON_GetObjectItemCaseSensitive(root, "cycle");
     CHECK(cycle && cJSON_IsNumber(cycle), "cycle is number");
     CHECK(cycle && approx(cycle->valuedouble, 246.0), "cycle == 246");
+    cJSON* weather = cJSON_GetObjectItemCaseSensitive(root, "weather");
+    cJSON* visibility = cJSON_GetObjectItemCaseSensitive(root, "visibility_m");
+    CHECK(weather && cJSON_IsString(weather) &&
+          strcmp(weather->valuestring, "rain") == 0, "weather == rain");
+    CHECK(visibility && approx(visibility->valuedouble, 180.0),
+          "visibility_m == 180");
 
     /* road_network */
     cJSON* rn = cJSON_GetObjectItemCaseSensitive(root, "road_network");
@@ -250,6 +256,8 @@ int main() {
     cfg.lane_width = 3.5;
     cfg.lane_count = 2;
     cfg.roads = nullptr;
+    cfg.weather = "rain";
+    cfg.visibility_m = 180.0;
 
     char* json = build_scene_frame_json(pool, cfg, 12345678, 246);
     CHECK(json != nullptr, "build_scene_frame_json returns non-null");

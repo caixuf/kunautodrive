@@ -171,6 +171,9 @@ static struct {
     char   scene_ego_json[4096];        /* ego 实体 JSON（含 lights/brake/vx/vy，~1.5KB 实测） */
     char   scene_construction_json[1024]; /* construction_zones（施工区几何，后端单一事实源，透传给前端） */
     char   scene_scenario_name[64]; /* 场景语义名，供前端选择专属设施 */
+    char   scene_lighting[16];
+    char   scene_weather[16];
+    double scene_visibility_m;
 
 #define MAX_SAMPLES 200  /* samples 环形缓冲长度：50ms 采样 × 200 = 10s 窗口 */
     /* ── samples 环形缓冲：最近 ~10s 的 ego 快照 ── */
@@ -460,6 +463,18 @@ static void on_scene_frame(const Message* msg, void* user_data) {
                  scenario_name->valuestring);
         pthread_mutex_unlock(&g.scene_frame_mutex);
     }
+    cJSON* lighting = cJSON_GetObjectItemCaseSensitive(root, "lighting");
+    cJSON* weather = cJSON_GetObjectItemCaseSensitive(root, "weather");
+    cJSON* visibility = cJSON_GetObjectItemCaseSensitive(root, "visibility_m");
+    pthread_mutex_lock(&g.scene_frame_mutex);
+    if (cJSON_IsString(lighting)) {
+        snprintf(g.scene_lighting, sizeof(g.scene_lighting), "%s", lighting->valuestring);
+    }
+    if (cJSON_IsString(weather)) {
+        snprintf(g.scene_weather, sizeof(g.scene_weather), "%s", weather->valuestring);
+    }
+    if (cJSON_IsNumber(visibility)) g.scene_visibility_m = visibility->valuedouble;
+    pthread_mutex_unlock(&g.scene_frame_mutex);
 
     /* 缓存 road_network */
     cJSON* rn = cJSON_GetObjectItem(root, "road_network");
@@ -1136,6 +1151,14 @@ static void export_dashboard_json(void) {
         if (scenario_name[0] != '\0') {
             cJSON_AddStringToObject(scene, "scenario_name", scenario_name);
         }
+        pthread_mutex_lock(&g.scene_frame_mutex);
+        cJSON_AddStringToObject(scene, "lighting",
+                                g.scene_lighting[0] ? g.scene_lighting : "day");
+        cJSON_AddStringToObject(scene, "weather",
+                                g.scene_weather[0] ? g.scene_weather : "clear");
+        cJSON_AddNumberToObject(scene, "visibility_m",
+                               g.scene_visibility_m > 0.0 ? g.scene_visibility_m : 1000.0);
+        pthread_mutex_unlock(&g.scene_frame_mutex);
     }
 
     /* 施工区（后端单一事实源）：从 scene/frame 缓存透传给前端。
