@@ -338,14 +338,18 @@ def promote_gate(artifact_dir: Path, force: bool = False) -> list[str]:
     # 影子 MAE 只衡量"像不像 teacher"，不衡量"能不能用"。模型会倒车/横漂/冲路沿/
     # 撞车时，必须由 eval_closed_loop.py 的闭环场景判定 FAIL。缺失/过期/覆盖不全
     # 均按 require 拒绝（无法判定 ≠ 通过）。
+    # ONNX teacher 当前只输出 target_speed，不直接产生 throttle/brake/steer，
+    # 因而不适用执行量模型的自行车闭环门禁；它仍必须通过真实 demo 影子门禁。
+    manifest = load_manifest(artifact_dir)
+    requires_closed_loop = manifest.get("backend") != "onnx"
     closed_path = artifact_dir / "closed_loop_eval.json"
-    if not closed_path.exists():
+    if requires_closed_loop and not closed_path.exists():
         errors.append(
             f"missing {closed_path.name} — 未做闭环安全评估。先跑 "
             f"`python3 tools/train_e2e/eval_closed_loop.py --model {artifact_dir.name}/model.txt "
             f"--output {artifact_dir.name}/closed_loop_eval.json`"
         )
-    else:
+    elif requires_closed_loop:
         try:
             closed = json.loads(closed_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:

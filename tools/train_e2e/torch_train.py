@@ -87,6 +87,32 @@ def normalize(rows: list[list[float]], mean: list[float], scale: list[float]) ->
     return [[(row[i] - mean[i]) / scale[i] for i in range(len(row))] for row in rows]
 
 
+def build_temporal_windows(features: list[list[float]], labels: list[list[float]],
+                           window: int) -> tuple[list[list[float]], list[list[float]]]:
+    if window <= 1:
+        return features, labels
+    if len(features) < window:
+        raise SystemExit(
+            f"error: too few samples ({len(features)}) for temporal window {window}"
+        )
+    windowed_x = []
+    windowed_y = []
+    for end in range(window - 1, len(features)):
+        start = end - window + 1
+        windowed_x.append([value for row in features[start:end + 1] for value in row])
+        windowed_y.append(labels[end])
+    return windowed_x, windowed_y
+
+
+def validate_runtime_input_dim(in_dim: int) -> None:
+    supported = {4, 16, 23, 80, 115}
+    if in_dim not in supported:
+        raise SystemExit(
+            f"error: ONNX input dimension {in_dim} is not supported by inference_node "
+            f"(supported: {sorted(supported)})"
+        )
+
+
 def load_init_checkpoint(torch, init_from: Path) -> dict:
     manifest_path = init_from / "manifest.json"
     if not manifest_path.exists():
@@ -100,7 +126,8 @@ def load_init_checkpoint(torch, init_from: Path) -> dict:
     return torch.load(model_path, map_location="cpu")
 
 
-def validate_init_checkpoint(checkpoint: dict, feature_names: list[str], label_names: list[str], hidden: list[int]) -> None:
+def validate_init_checkpoint(checkpoint: dict, feature_names: list[str], label_names: list[str],
+                             hidden: list[int], window: int) -> None:
     if checkpoint.get("feature_names") != feature_names:
         raise SystemExit("error: init artifact feature_names do not match the target dataset")
     if checkpoint.get("label_names") != label_names:
@@ -114,6 +141,8 @@ def validate_init_checkpoint(checkpoint: dict, feature_names: list[str], label_n
         ckpt_hidden = [ckpt_hidden]
     if ckpt_hidden != hidden:
         raise SystemExit("error: init artifact hidden size does not match --hidden")
+    if int(checkpoint.get("window", 0)) != window:
+        raise SystemExit("error: init artifact temporal window does not match --window")
 
 
 def parse_hidden(spec: str) -> list[int]:
@@ -170,17 +199,10 @@ def main() -> int:
     feature_names = dataset_meta.get("feature_names", FEATURE_NAMES_V1)
     label_names = dataset_meta.get("label_names", LABEL_NAMES)
 
-    # 时序窗口：拼接连续 N 帧（需样本按时间排序，同 temporal_train.build_windows）
+    # 时序窗口：拼接连续 N 帧，标签取窗口最后一帧。
     if args.window > 1:
-        sys.path.insert(0, str(Path(__file__).parent))
-        from temporal_train import build_windows  # noqa: E402
-        features, labels = build_windows(
-            [{"features": f} for f in features], feat_dim=len(feature_names))
-        # build_windows 的 Y 是标签窗口拼接？直接取每窗最后帧的标签
-        labels = [y[-len(label_names):] for y in labels]
-        in_dim = len(features[0])
-    else:
-        in_dim = len(feature_names)
+        features, labels = build_temporal_windows(features, labels, args.window)
+    in_dim = len(features[0])
 
     x_mean, x_scale = column_stats(features)
     y_mean, y_scale = column_stats(labels)
@@ -191,10 +213,10 @@ def main() -> int:
     y_tensor = torch.tensor(y_norm, dtype=torch.float32).to(device)
 
     hidden = parse_hidden(args.hidden)
-    model = build_mlp(nn, in_dim, hidden, len(LABEL_NAMES)).to(device)
+    model = build_mlp(nn, in_dim, hidden, len(label_names)).to(device)
     if args.init_from:
         init_checkpoint = load_init_checkpoint(torch, Path(args.init_from))
-        validate_init_checkpoint(init_checkpoint, feature_names, label_names, hidden)
+        validate_init_checkpoint(init_checkpoint, feature_names, label_names, hidden, args.window)
         model.load_state_dict(init_checkpoint["state_dict"])
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     loss_fn = nn.MSELoss()
@@ -225,6 +247,7 @@ def main() -> int:
 
     # ONNX 导出（C 侧 onnx_backend 影子推理用）
     if args.export_onnx:
+        validate_runtime_input_dim(in_dim)
         try:
             import onnx
         except ModuleNotFoundError:

@@ -11,7 +11,7 @@
   - 远处占位 = ego+500（无车时）
 
 用法:
-  python3 tools/train_e2e/synth_data.py --output /tmp/synth.jsonl --count 250
+  python3 tools/train_e2e/synth_data.py --output /tmp/synth.jsonl
   # 网格密度: 速度×距离×前车速度
   python3 tools/train_e2e/synth_data.py --dense
 """

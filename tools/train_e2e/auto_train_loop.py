@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import random
 import shutil
 import subprocess
@@ -193,7 +192,7 @@ def stage_closed_loop(model: Path, run_dir: Path) -> dict:
         return {"overall": "ERROR"}
     d = json.loads(out_json.read_text())
     # 提取三场景结果
-    result = {"overall": d.get("overall", "?"),
+    result = {"overall": d.get("evaluator_result", "?"),
               "scenarios": d.get("scenarios", {})}
     print(f"  → {result['overall']}", flush=True)
     # DAgger 回灌：模型犯错帧 → 累积数据集（供下轮训练）。
@@ -217,50 +216,26 @@ def stage_promote(run_dir: Path) -> bool:
     if not eval_json.exists():
         return False
     d = json.loads(eval_json.read_text())
-    if d.get("overall") != "PASS":
+    if d.get("evaluator_result") != "PASS":
         return False
     # 闭环 PASS → 复制到 best 目录（候选模型，供后续影子评估/promote）
     best_dir = ROOT / "models" / "auto_train_best"
     best_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(run_dir / "model" / "model.txt", best_dir / "model.txt")
+    shutil.copyfile(run_dir / "model" / "manifest.json", best_dir / "manifest.json")
     shutil.copyfile(eval_json, best_dir / "closed_loop_eval.json")
-    # 影子评估：让 inference_node 加载模型真跑 45s，生成 shadow_eval.json
-    # （promote 门禁要求）。临时 pipeline 注入 model_path。
-    import tempfile
-    pipeline = json.loads((ROOT / "config" / "pipeline.json").read_text())
-    for proc in pipeline.get("processes", []):
-        if "inference" in proc.get("name", ""):
-            params = json.loads(proc.get("params") or "{}")
-            params["model_path"] = str(best_dir / "model.txt")
-            proc["params"] = json.dumps(params, ensure_ascii=False)
-    fd, tmp = tempfile.mkstemp(prefix="pipeline_auto_", suffix=".json", dir="/tmp")
-    with os.fdopen(fd, "w") as fh:
-        json.dump(pipeline, fh, indent=2)
-    env = {"FLOW_PIPELINE": tmp}
-    COLLECT_FILE.unlink(missing_ok=True)
-    rc = run(["bash", "scripts/demo.sh", "--no-browser", "45"], timeout=180)
-    # 读影子 sidecar → shadow_eval.json
-    sidecar = Path("/tmp/flow_tiny_inference.json")
-    if sidecar.exists():
-        s = json.loads(sidecar.read_text())
-        shadow_eval = {
-            "schema": "flowengine.shadow_eval.v1",
-            "shadow_speed_mae": s.get("shadow_speed_mae"),
-            "shadow_speed_rmse": s.get("shadow_speed_rmse"),
-            "shadow_n": s.get("shadow_n"),
-            "model": "auto_train_best",
-        }
-        (best_dir / "shadow_eval.json").write_text(json.dumps(shadow_eval, indent=2))
-        print(f"  影子评估 MAE={shadow_eval['shadow_speed_mae']:.2f} n={shadow_eval['shadow_n']}",
-              flush=True)
-        # promote 到 runtime
-        rc2 = run(["python3", "tools/modelctl.py", "promote",
-                   "models/auto_train_best", "--force"])
-        if rc2 == 0:
-            print(f"  ★ promote 成功 → C runtime", flush=True)
-            return True
-    print("  ★ 闭环 PASS，但影子评估/promote 未完成", flush=True)
-    return True
+    # 复用统一编排：重跑闭环、真实 demo 影子评估，再走无 --force 的门禁晋级。
+    rc = run([
+        "python3", "tools/learning_loop.py",
+        "--eval-only", str(best_dir),
+        "--eval-duration", "45",
+        "--promote",
+    ], timeout=240)
+    if rc == 0:
+        print("  ★ 影子评估及 promote 成功 → C runtime", flush=True)
+        return True
+    print("  ★ 闭环 PASS，但影子评估或 promote 门禁拒绝", flush=True)
+    return False
 
 
 def main() -> int:

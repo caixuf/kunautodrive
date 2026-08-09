@@ -15,6 +15,20 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class E2ETrainingToolsTest(unittest.TestCase):
+    def test_torch_temporal_windows_keep_current_label(self):
+        sys.path.insert(0, str(ROOT / "tools/train_e2e"))
+        from torch_train import build_temporal_windows, validate_runtime_input_dim
+
+        features = [[1.0], [2.0], [3.0], [4.0]]
+        labels = [[10.0], [20.0], [30.0], [40.0]]
+        windowed_x, windowed_y = build_temporal_windows(features, labels, 3)
+
+        self.assertEqual(windowed_x, [[1.0, 2.0, 3.0], [2.0, 3.0, 4.0]])
+        self.assertEqual(windowed_y, [[30.0], [40.0]])
+        validate_runtime_input_dim(115)
+        with self.assertRaises(SystemExit):
+            validate_runtime_input_dim(69)
+
     def test_export_train_and_eval_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)

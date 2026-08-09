@@ -3,7 +3,7 @@
 
 一条命令跑完 采集 → 训练 → 影子评估 → （可选）晋级：
 
-    python3 tools/learning_loop.py                        # collect 60s + train tiny + shadow eval 45s
+    python3 tools/learning_loop.py                        # collect + train + closed-loop + shadow eval
     python3 tools/learning_loop.py --collect 90 --backend temporal
     python3 tools/learning_loop.py --skip-collect --input /tmp/flow_train_samples.jsonl
     python3 tools/learning_loop.py --promote              # 影子评估达标后自动 modelctl promote
@@ -11,10 +11,11 @@
 只做编排，不写新训练代码：
   Stage 0 采集   → scripts/demo.sh（data_recorder_node 写 /tmp/flow_train_samples.jsonl）
   Stage 1 训练   → tools/train_demo_model.py（tiny / torch / temporal backend）
-  Stage 2 影子   → 临时 pipeline 注入候选 model_path（FLOW_PIPELINE），
+  Stage 2 闭环   → eval_closed_loop.py 场景矩阵安全门禁
+  Stage 3 影子   → 临时 pipeline 注入候选 model_path（FLOW_PIPELINE），
                    ci/evaluators/demo_evaluator.py 真跑评分，
                    inference_node 落盘 /tmp/flow_tiny_inference.json（含累计 MAE/RMSE）
-  Stage 3 晋级   → tools/modelctl.py promote（门禁读 shadow_eval.json，见 modelctl）
+  Stage 4 晋级   → tools/modelctl.py promote（同时读取闭环与影子门禁）
 
 产物目录（runs/ 每次一个 run，模型 artifact 仍在 models/<name>/）：
   runs/loop_<ts>/
@@ -84,7 +85,28 @@ def stage_train(backend: str, name: str, input_path: Path,
     return run(cmd)
 
 
-# ── Stage 2: 影子评估 ─────────────────────────────────────────
+# ── Stage 2: 纯仿真闭环安全评估 ──────────────────────────────
+
+def stage_closed_loop(model_dir: Path) -> int:
+    manifest = json.loads((model_dir / "manifest.json").read_text(encoding="utf-8"))
+    backend = manifest.get("backend")
+    if backend == "onnx":
+        log("closed-loop", "ONNX target-speed 模型不输出执行量，闭环执行量门禁不适用")
+        return 0
+    if backend != "tiny_mlp":
+        log("closed-loop", f"backend={manifest.get('backend')!r} 不支持内置闭环评估")
+        return 1
+    model_file = model_dir / manifest.get("model_path", "model.txt")
+    output = model_dir / "closed_loop_eval.json"
+    return run([
+        sys.executable,
+        "tools/train_e2e/eval_closed_loop.py",
+        "--model", str(model_file),
+        "--output", str(output),
+    ])
+
+
+# ── Stage 3: 影子评估 ─────────────────────────────────────────
 
 def build_shadow_pipeline(model_file: Path) -> Path:
     """复制 config/pipeline.json，把 inference 节点 model_path 换成候选模型。
@@ -115,7 +137,7 @@ def stage_shadow_eval(model_dir: Path, duration: int, run_dir: Path,
     if not model_file.exists():
         log("shadow", f"model file missing: {model_file}")
         return 1, {}
-    if manifest.get("backend") != "tiny_mlp":
+    if manifest.get("backend") not in ("tiny_mlp", "onnx"):
         log("shadow", f"backend={manifest.get('backend')!r} 不能进 C runtime 影子评估，"
                       "torch 模型请用 tools/train_e2e/torch_sidecar.py")
         return 1, {}
@@ -163,7 +185,7 @@ def stage_shadow_eval(model_dir: Path, duration: int, run_dir: Path,
     return (0 if rc == 0 else 1), result
 
 
-# ── Stage 3: 晋级 ─────────────────────────────────────────────
+# ── Stage 4: 晋级 ─────────────────────────────────────────────
 
 def stage_promote(model_dir: Path) -> int:
     return run([sys.executable, "tools/modelctl.py", "promote", str(model_dir)])
@@ -217,6 +239,10 @@ def main() -> int:
         summary["name"] = model_dir.name
         summary["model_dir"] = str(model_dir)
         summary["stages"]["collect"] = summary["stages"]["train"] = "skipped(eval-only)"
+        crc = stage_closed_loop(model_dir)
+        summary["stages"]["closed_loop"] = "ok" if crc == 0 else "failed"
+        if crc != 0:
+            return finish(2)
         rc, shadow = stage_shadow_eval(model_dir, args.eval_duration, run_dir, args.scenario)
         summary["stages"]["shadow_eval"] = "ok" if rc == 0 else "failed"
         summary["shadow"] = shadow
@@ -246,7 +272,14 @@ def main() -> int:
     summary["stages"]["train"] = "ok"
     summary["model_dir"] = str(model_dir)
 
-    # Stage 2
+    # Stage 2：模型先在快速闭环仿真中证明不会碰撞/出路/卡死。
+    crc = stage_closed_loop(model_dir)
+    summary["stages"]["closed_loop"] = "ok" if crc == 0 else "failed"
+    if crc != 0:
+        log("closed-loop", "闭环安全评估未通过 —— 不启动昂贵的 demo 影子评估")
+        return finish(2)
+
+    # Stage 3
     rc, shadow = stage_shadow_eval(model_dir, args.eval_duration, run_dir, args.scenario)
     summary["stages"]["shadow_eval"] = "ok" if rc == 0 else "failed"
     summary["shadow"] = shadow

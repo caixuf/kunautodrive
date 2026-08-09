@@ -7,7 +7,7 @@
 ## TL;DR（新手先跑这 4 条）
 
 ```bash
-# 1) 一键跑闭环：采集 -> 训练 -> 影子评估
+# 1) 一键跑闭环：采集 -> 训练 -> 闭环安全评估 -> 影子评估
 python3 tools/learning_loop.py --collect 30 --eval-duration 30
 
 # 2) 看模型与 runtime 当前状态
@@ -23,7 +23,8 @@ bash share/flowengine/scripts/quickstart.sh 15
 
 常看目录：
 - `runs/loop_<timestamp>/`：每次闭环运行的评估与汇总
-- `models/<name>/`：训练产物（含 `manifest.json`、`model.txt`、`shadow_eval.json`）
+- `models/<name>/`：训练产物（含 `manifest.json`、`model.txt`、
+  `closed_loop_eval.json`、`shadow_eval.json`）
 
 ## 为什么不内置大模型训练框架
 
@@ -53,18 +54,18 @@ bash share/flowengine/scripts/quickstart.sh 15
 
 ## 数据契约 (三方一致)
 
-当前**默认使用 v3**（59 维特征、多隐层 MLP、5 维输出）。v1/v2 保持向后兼容。
+当前执行量模型默认使用 v3（23 维/帧、5 帧窗口、多隐层 MLP、5 维输出）。
+PyTorch teacher 模型使用同一份 v3 单帧或可配置时序窗口，输出 `target_speed`。
+v1/v2 保持向后兼容。
 
-### v3 特征（59 维，每帧）
+### v3 特征（23 维，每帧）
 
-由 `tools/train_e2e/feature_schema.py` 统一构建，包含四个部分：
+由 `tools/train_e2e/feature_schema.py` 统一构建：
 
 | 组 | 维度 | 说明 |
 |----|------|------|
 | v2 基础 | 16 | ego_v, ego_y, ego_heading, ego_yaw_rate + 前方 2 个障碍物(x,y,vx,type,confidence) + control(brake,emergency_stop) |
-| 感知统计 | 6 | lidar_point_count, lidar_front_density, lidar_clutter_ratio, perception_obj_count, perception_max_conf, perception_mean_conf |
 | 场景上下文 | 7 | tl_state, tl_distance, road_curvature, road_speed_limit, lane_count, lane_width, ego_lane_offset |
-| 障碍物全貌 | 30 | 类型分布(5)、距离分布(5)、速度分布(5)、前后左右间距(5)、后方来车(5)、左右车道占用(5) |
 
 ### v3 输出（5 维）
 
@@ -193,8 +194,9 @@ bash scripts/demo.sh --no-browser 12
 `tools/learning_loop.py` 已把 Phase 2 的关键步骤串起来：
 - Stage 0 采集（`demo.sh` + `data_recorder_node`）
 - Stage 1 训练（`train_demo_model.py`）
-- Stage 2 影子评估（`ci/evaluators/demo_evaluator.py` + inference sidecar）
-- Stage 3 晋级（`modelctl promote` gate）
+- Stage 2 闭环安全评估（`eval_closed_loop.py`，碰撞/出路/卡死即阻断）
+- Stage 3 影子评估（`ci/evaluators/demo_evaluator.py` + inference sidecar）
+- Stage 4 晋级（`modelctl promote` gate，不使用 `--force` 绕过）
 
 常用命令：
 
@@ -205,7 +207,7 @@ python3 tools/learning_loop.py --collect 30 --eval-duration 30
 # 跳过采集，使用已有样本
 python3 tools/learning_loop.py --skip-collect --input /tmp/flow_train_samples.jsonl
 
-# 只做影子评估（刷新 models/<name>/shadow_eval.json）
+# 重跑闭环安全评估和影子评估
 python3 tools/learning_loop.py --eval-only <name_or_dir> --eval-duration 30
 
 # 影子评估后自动晋级

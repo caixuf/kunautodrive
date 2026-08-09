@@ -79,7 +79,7 @@ def main() -> int:
         "created_unix_ms": int(time.time() * 1000),
         "model_format": "flowengine-tinymlp-v3",
         "model_path": "model.txt",
-        "backend": "temporal_mlp",
+        "backend": "tiny_mlp",
         "input_schema": {
             "features": dataset_meta.get("feature_names", ["temporal_window_features"]),
         },
