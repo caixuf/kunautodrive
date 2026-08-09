@@ -23,7 +23,7 @@ FlowEngine 不做算法，只做算法的"插座"。
 │  ┌─────────────────────────────────────────────┐  │
 │  │     中间件能力（2026-07-29 已接入）         │  │
 │  │  degrade_ladder │ backpressure │ select_for │  │
-│  │  Req/Reply      │ heartbeat    │ Choreo(待) │  │
+│  │  Req/Reply      │ heartbeat    │ Choreo触发 │  │
 │  └─────────────────────────────────────────────┘  │
 │       │         │         │         │             │
 │       ▼         ▼         ▼         ▼             │
@@ -40,7 +40,7 @@ FlowEngine 不做算法，只做算法的"插座"。
    └──────────────────────────────────────────┘
 ```
 
-## 中间件使用现状（2026-07-29）
+## 中间件使用现状（2026-08-09）
 
 | 能力 | 状态 | 详情 |
 |------|------|------|
@@ -50,8 +50,8 @@ FlowEngine 不做算法，只做算法的"插座"。
 | **反压检测** | ✅ 已接入 | control/safety_control 发布前检查 `topic_is_full` |
 | **消息驱动 select_for** | ✅ 已接入 | control/planning/fusion 用 `select_for` 替代 sleep_us polling |
 | **Req/Reply** | ✅ 已接入 | safety_control 注册 `safety/status` 服务，control 每 5s 查询 |
-| **Choreo 调度** | ❌ 未启用 | 调度器 DAG 编排已实现，节点仍走 polling 模式 |
-| **零拷贝** | ❌ 未启用 | `publish_zero_copy` 存在但无节点使用 |
+| **Choreo 调度** | ⚠️ 部分接入 | 默认 pipeline 已启用 `mode: choreo`；节点由 `node_start_managed()` 注册，输入 topic 已绑定 Choreo trigger。节点执行循环仍以 `select_for`/队列轮询为主，尚未全面改为 `scheduler_choreo_wait()` 数据驱动 |
+| **零拷贝** | ⚠️ 核心可用 | Message Bus 零拷贝发布/订阅已由 `bus_demo` 和 benchmark 使用；ADAS 主流水线尚未接入 `message_bus_publish_zero_copy()`，跨进程 Transport 仍按各通道协议传输 |
 
 ## 接入步骤
 
