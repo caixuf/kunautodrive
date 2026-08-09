@@ -50,7 +50,7 @@ var topoData = {nodes:[], metrics:{}};
 var frames = [];
 var paused = false;
 var frameCount = 0;
-var serverUrl = 'http://127.0.0.1:8800';
+var serverUrl = defaultServerUrl();
 var eventSource = null;
 var selectedNode = null;
 var reconnectTimer = null;
@@ -97,14 +97,26 @@ function setConnStatus(cls, text) {
   el.className = 'pill pill-'+cls; el.textContent = text;
 }
 
+function defaultServerUrl() {
+  if (/^https?:$/.test(window.location.protocol)) return window.location.origin;
+  return 'http://127.0.0.1:8800';
+}
+
 function normalizeServerUrl(raw) {
   var url = (raw || '').trim();
-  if (!url) return 'http://127.0.0.1:8800';
+  if (!url) return defaultServerUrl();
   if (!/^https?:\/\//i.test(url)) url = 'http://' + url;
-  // Windows 本机部署下优先 IPv4，规避部分环境 localhost 走 ::1 导致连接不稳。
-  url = url.replace(/^https?:\/\/localhost(?=[:\/]|$)/i, function(m) {
-    return m.toLowerCase().startsWith('https') ? 'https://127.0.0.1' : 'http://127.0.0.1'; // exempt
-  });
+  try {
+    var target = new URL(url);
+    var current = new URL(window.location.href);
+    var loopback = function(host) {
+      return host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+    };
+    if (loopback(target.hostname) && loopback(current.hostname) &&
+        target.port === current.port && target.protocol === current.protocol) {
+      return current.origin;
+    }
+  } catch (_) {}
   return url;
 }
 
@@ -1899,6 +1911,8 @@ document.addEventListener('keydown', function(e) {
 });
 
 function initAll() {
+  var urlInput = document.getElementById('url');
+  if (urlInput) urlInput.value = serverUrl;
   switchWorkspace(workspaceMode || 'observe');
   // 1. Initialize D3 topology graph
   initTopo();

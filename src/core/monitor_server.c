@@ -805,7 +805,8 @@ static bool dispatch_request(int fd, MonitorServer* ms,
     /* CORS preflight */
     if (strcmp(method, "OPTIONS") == 0) {
         const char* cors = "HTTP/1.1 204\r\nAccess-Control-Allow-Origin: *\r\n"
-            "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\r\n";
+            "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
+            "Access-Control-Allow-Headers: Content-Type\r\n\r\n";
         ssize_t w = write(fd, cors, strlen(cors));
         (void)w;
         close(fd);
