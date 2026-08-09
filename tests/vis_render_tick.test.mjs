@@ -32,7 +32,7 @@ function makeFlatFrame() {
             lanes: 4,
             lane_width: 3.5,
             length: 1000,
-            nodes: [[0, 0, 0], [200, 0, 0], [400, 0, 0], [600, 0, 0], [800, 0, 0], [1000, 0, 0]]
+            nodes: [[0, 0, 0], [1000, 0, 0]]
           }]
         },
         ego: { x: 100, y: 0, heading: 0, speed: 20, z: 0, steer: 0, brake: 0, throttle: 0.3, lights: 0, vx: 20, vy: 0 },
@@ -157,6 +157,9 @@ function makeParkingExamFrame() {
 
     const store = director.getStore();
     ok('tick 后 store.ego 存在', !!store.ego);
+    const tree = ViewRegistry.get('tree');
+    ok('行道树双侧实例已构建', tree?.getStats?.().trees > 0);
+    ok('精细行道树保持 3 draw calls', tree?.getStats?.().drawCalls === 3);
     if (store.ego) {
       ok('ego.x 约为 100', Math.abs(store.ego._simX - 100) < 5);
 
