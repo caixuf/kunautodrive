@@ -170,6 +170,7 @@ static struct {
                                           *   前端 3D 场景只剩 ego。扩到 64KB 足够 30+ 实体。 */
     char   scene_ego_json[4096];        /* ego 实体 JSON（含 lights/brake/vx/vy，~1.5KB 实测） */
     char   scene_construction_json[1024]; /* construction_zones（施工区几何，后端单一事实源，透传给前端） */
+    char   scene_scenario_name[64]; /* 场景语义名，供前端选择专属设施 */
 
 #define MAX_SAMPLES 200  /* samples 环形缓冲长度：50ms 采样 × 200 = 10s 窗口 */
     /* ── samples 环形缓冲：最近 ~10s 的 ego 快照 ── */
@@ -451,6 +452,14 @@ static void on_scene_frame(const Message* msg, void* user_data) {
     const char* d = (const char*)msg->data;
     cJSON* root = monitor_cJSON_Parse(d);
     if (!root) return;
+
+    cJSON* scenario_name = cJSON_GetObjectItemCaseSensitive(root, "scenario_name");
+    if (cJSON_IsString(scenario_name) && scenario_name->valuestring) {
+        pthread_mutex_lock(&g.scene_frame_mutex);
+        snprintf(g.scene_scenario_name, sizeof(g.scene_scenario_name), "%s",
+                 scenario_name->valuestring);
+        pthread_mutex_unlock(&g.scene_frame_mutex);
+    }
 
     /* 缓存 road_network */
     cJSON* rn = cJSON_GetObjectItem(root, "road_network");
@@ -1115,6 +1124,17 @@ static void export_dashboard_json(void) {
                          rn_snap_len, rn_snap);
                 rn_parse_warn++;
             }
+
+        }
+    }
+
+    if (g.has_scene_frame) {
+        char scenario_name[sizeof(g.scene_scenario_name)];
+        pthread_mutex_lock(&g.scene_frame_mutex);
+        snprintf(scenario_name, sizeof(scenario_name), "%s", g.scene_scenario_name);
+        pthread_mutex_unlock(&g.scene_frame_mutex);
+        if (scenario_name[0] != '\0') {
+            cJSON_AddStringToObject(scene, "scenario_name", scenario_name);
         }
     }
 

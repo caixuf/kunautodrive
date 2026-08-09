@@ -87,6 +87,7 @@ struct ScenePubConfig {
      * 2=dusk（黄昏）。每帧发布给前端，vis/main.js 据此调整 AmbientLight 等。
      * 来源：scenario_loader 解析 JSON 顶层 "lighting" 字段。 */
     int lighting{0};
+    std::string scenario_name;
 
     /* ── 道路类型（FlowSim v2 新格式） ──
      * 从 road_network.edges[0].type 提取（如 viaduct_highway/urban/ramp_curve），

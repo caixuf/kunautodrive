@@ -394,6 +394,7 @@ char* build_scene_frame_json(const EntityPool& pool,
 
     cJSON_AddNumberToObject(root, "t_us", (double)sim_time_us);
     cJSON_AddNumberToObject(root, "cycle", (double)cycle);
+    cJSON_AddStringToObject(root, "scenario_name", cfg.scenario_name.c_str());
 
     /* lighting（Task 4）：day/night/dusk。前端 vis/main.js 据此切换光照参数。
      * 整数编码与 ScenarioLighting 枚举一致：0=day, 1=night, 2=dusk。

@@ -13,6 +13,7 @@ export function createSceneStore() {
     roadHash: '',             // 用于 diff 检测
     isViaduct: false,         // 是否高架模式
     viaductVisLength: 0,      // 高架段实际建造长度（米），用于 wrap 周期；0 = 未建
+    scenarioName: '',
 
     // ── ego ──
     ego: null,                // { x, y, heading, speed, steer, brake, throttle, lights, vx, vy, length, width }
@@ -41,7 +42,16 @@ export function createSceneStore() {
 /** 计算 road_network 的 hash，用于 diff 检测 */
 export function roadNetworkHash(rn) {
   if (!rn || !rn.edges) return '';
-  return rn.edges.map(e => `${e.id||0}_${e.lanes||0}_${e.length||0}`).join('|');
+  return JSON.stringify(rn.edges.map(e => ({
+    id: e.id ?? 0,
+    name: e.name ?? '',
+    type: e.type ?? '',
+    lanes: e.lanes ?? 0,
+    lane_width: e.lane_width ?? 0,
+    length: e.length ?? e.length_m ?? 0,
+    one_way: e.one_way ?? false,
+    nodes: e.nodes ?? [],
+  })));
 }
 
 /**

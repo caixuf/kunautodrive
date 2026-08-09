@@ -98,6 +98,29 @@ function makeMultiLaneFrame() {
   };
 }
 
+function makeParkingExamFrame() {
+  return {
+    metrics: {
+      scene: {
+        road_network: {
+          edges: [{
+            id: 0, type: 'urban', name: 'parking_exam_road',
+            lanes: 4, lane_width: 3.5, length: 500,
+            nodes: [[0, 0, 0], [500, 0, 0]],
+          }],
+        },
+        ego: { x: 100, y: -1.75, heading: 0, speed: 3, z: 0 },
+        entities: [
+          { id: 101, type: 'car', x: 130, y: -8.75, heading: 0, speed: 0 },
+          { id: 102, type: 'car', x: 150, y: -8.75, heading: 0, speed: 0 },
+          { id: 9, type: 'tl', x: 250, y: 8.5, stop_x: 248, stop_y: -1.75,
+            heading: 0, speed: 0, state: 'red' },
+        ],
+      },
+    },
+  };
+}
+
 // ── 测试 1: 平路场景 director 构建 + tick ──
 
 {
@@ -279,10 +302,24 @@ function makeMultiLaneFrame() {
   }
 }
 
-// ── 测试 4: 连续 tick 稳定性（防止第二帧崩） ──
+// ── 测试 4: 泊车/驾考设施 ──
 
 {
-  console.log('--- 4. 连续 tick 稳定性 ---');
+  console.log('--- 4. 泊车/驾考设施 ---');
+  ViewRegistry.clear();
+  const scene = globalThis.THREE.Scene();
+  const director = createSceneDirector(scene);
+  director.update(makeParkingExamFrame());
+  director.tickAnimation(4000);
+  const facility = ViewRegistry.get('roadFacility');
+  ok('设施视图已注册', !!facility);
+  ok('停车线/斑马线实例已构建', facility?.getStats?.().marks > 20);
+}
+
+// ── 测试 5: 连续 tick 稳定性（防止第二帧崩） ──
+
+{
+  console.log('--- 5. 连续 tick 稳定性 ---');
   ViewRegistry.clear();
   const scene = globalThis.THREE.Scene();
   const director = createSceneDirector(scene);

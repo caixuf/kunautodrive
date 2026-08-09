@@ -26,6 +26,7 @@ import { createLabelView } from '../view/LabelView.js';
 import { createPerceptionView } from '../view/PerceptionView.js';
 import { createEffectView } from '../view/EffectView.js';
 import { createTrajectoryView } from '../view/TrajectoryView.js';
+import { createRoadFacilityView } from '../view/RoadFacilityView.js';
 import {
   tickDeadReckon, _dr,
   updateEntityDeadReckon, tickEntityDeadReckon, getEntitySmooth,
@@ -70,6 +71,7 @@ ViewRegistry.register('label',        createLabelView);
 ViewRegistry.register('perception',   createPerceptionView);
 ViewRegistry.register('effect',       createEffectView);
 ViewRegistry.register('trajectory',   createTrajectoryView);
+ViewRegistry.register('roadFacility', createRoadFacilityView);
 
 export function createSceneDirector(scene) {
   const store = createSceneStore();
@@ -103,7 +105,7 @@ export function createSceneDirector(scene) {
    * 不再保留 9 个顶层 const —— ViewRegistry 是单一事实来源，避免双份引用。 */
   for (const [layerName, viewNames] of [
     ['env',   ['ground', 'viaduct']],
-    ['road',  ['road', 'streetlight', 'barrier', 'connector', 'tree', 'construction']],
+    ['road',  ['road', 'streetlight', 'barrier', 'connector', 'tree', 'construction', 'roadFacility']],
     ['agent', ['vehicle', 'label', 'perception', 'effect', 'trajectory']],
     ['infra', ['trafficLight', 'etcGate']],
   ]) {
@@ -154,6 +156,9 @@ export function createSceneDirector(scene) {
     for (const w of v.warnings) _warnOnce(w.key, w.msg);
 
     const { frame, rn, skipRoad, skipEgo, skipEntities } = v;
+    if (Object.prototype.hasOwnProperty.call(frame, 'scenario_name')) {
+      store.scenarioName = frame.scenario_name || '';
+    }
 
     if (rn && !skipRoad) {
       const hash = roadNetworkHash(rn);
@@ -339,6 +344,9 @@ export function createSceneDirector(scene) {
           progress: e.progress || 0,
           remain_s: e.remain_s || 0,
           parked: e.parked || false,
+          stop_x: e.stop_x,
+          stop_y: e.stop_y,
+          lane_offset: e.lane_offset,
         };
         /* 流畅专题：把真值喂进多实体 dead reckon Map。tickAnimation 每帧
          * 会用平滑后的 x/y/heading/speed 覆盖上面的真值，让 NPC 在 SSE

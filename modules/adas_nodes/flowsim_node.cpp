@@ -2271,6 +2271,7 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
     /* Task 4：把场景 JSON 的 lighting 字段透传到 scene/frame topic，
      * 前端 scene3d.js 据此调整 AmbientLight/DirectionalLight/Bloom 阈值。 */
     g.scene_pub_cfg.lighting       = (int)g.scenario->lighting;
+    g.scene_pub_cfg.scenario_name  = g.scenario->name;
     /* 道路类型：从 road_network.edges[0].type 提取（如 viaduct_highway），
      * 用于前端识别场景类型并选择对应的渲染模式。 */
     if (g.scenario->road.type[0]) {

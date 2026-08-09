@@ -333,6 +333,7 @@ tools/flowboard/js/
         ├── StreetlightView.js # 路灯（InstancedMesh 静态 build）
         ├── BarrierView.js    # 护栏（InstancedMesh 静态 build）
         ├── ConstructionView.js # 施工区（静态 build，黄黑锥桶/围挡）
+        ├── RoadFacilityView.js # 场景设施（停车位/斑马线/导向箭头/驾考桩杆，2 个实例化 draw call）
         ├── TreeView.js       # 树（InstancedMesh 静态 build）
         ├── BuildingView.js   # 建筑/楼宇（静态 build，单独 build 不入 Layer 树）
         ├── VehicleLights.js  # 纯函数：车灯位掩码 → 状态（零 THREE 依赖）
@@ -417,14 +418,14 @@ SceneDirector 构造时建 4-Layer 树，View 全部挂到对应层（映射见
 ```
 root
 ├── env     (ground, viaduct)                            — 环境层
-├── road    (road, streetlight, barrier, connector, tree, construction) — 道路层
+├── road    (road, streetlight, barrier, connector, tree, construction, roadFacility) — 道路层
 ├── agent   (vehicle, label, perception, effect, trajectory)  — 智能体层（含 NPC 标签 + 感知标注 + 特效/轨迹）
 └── infra   (trafficLight, etcGate)                      — 路侧设施层
 ```
 
-**16 个 View 注册**（`ViewRegistry.register`）：road/ground/vehicle/connector/
+**17 个 View 注册**（`ViewRegistry.register`）：road/ground/vehicle/connector/
 trafficLight/etcGate/viaduct/streetlight/barrier/construction/tree/building/
-label/perception/effect/trajectory。其中 15 个挂入 4-Layer 树；`building` 单独
+roadFacility/label/perception/effect/trajectory。其中 16 个挂入 4-Layer 树；`building` 单独
 `build` 不入层。旧的 `mapOverlay` 已更名为 `MinimapHUD`（Canvas 2D HUD，独立于
 Layer 树）。
 
