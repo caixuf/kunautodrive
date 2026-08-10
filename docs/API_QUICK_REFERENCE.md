@@ -59,6 +59,7 @@ Scheduler* sched = scheduler_create(&(SchedulerConfig){
 scheduler_set_choreo_bus(sched, bus);
 scheduler_register_task(sched, task, "name");
 scheduler_set_params(sched, tid, TASK_PRIORITY_CRITICAL, 0x01, 10.0);
+scheduler_set_execution_budget(sched, tid, 5000);  // 5 ms per dispatch
 
 // Choreo
 scheduler_choreo_trigger_on(sched, tid, "topic");
@@ -67,8 +68,21 @@ scheduler_choreo_wait(sched, tid, 500000);
 // 监控
 scheduler_get_latency(sched, tid);
 scheduler_get_rate_control(sched, tid);
+SchedulerTaskStats task_stats;
+scheduler_get_task_stats(sched, tid, &task_stats);
 scheduler_start(sched);
 ```
+
+`scheduler_run_loop()` dispatches CRITICAL → HIGH → NORMAL → LOW, with
+round-robin fairness inside each priority band. A budget records overruns
+after a callback returns (it never forcibly preempts C code). When a LOW task
+exceeds its budget, its next eligible dispatch is shed; higher-priority tasks
+are only observed, never shed. Choreo tasks which execute after
+`scheduler_choreo_wait()` should call
+`scheduler_record_execution(sched, tid, elapsed_us)` once their callback
+finishes, enabling the same accounting and one-trigger low-priority shedding.
+`ResourceQuota` remains a hard opt-in cap; denied dispatches are reported in
+`SchedulerTaskStats.quota_denied_count`.
 
 ## State Machine
 

@@ -83,8 +83,8 @@ LatencyStats latency_tracker_stats(LatencyTracker* lt);
 /* ── Resource Quota ───────────────────────────────────────── */
 
 typedef struct {
-    uint64_t  max_cpu_time_us;      /**< Max CPU time per execution burst */
-    uint64_t  max_execution_count;  /**< Max total executions (-1 = unlimited) */
+    uint64_t  max_cpu_time_us;      /**< Max cumulative scheduled execution time */
+    uint64_t  max_execution_count;  /**< Max total executions (0 = unlimited) */
     size_t    max_memory_bytes;     /**< Max heap allocation (0 = unlimited) */
 } ResourceQuota;
 
@@ -100,6 +100,28 @@ void resource_usage_init(ResourceUsage* ru, const ResourceQuota* quota);
 
 /** Check if a resource has exceeded its quota. */
 bool resource_usage_check(const ResourceUsage* ru);
+
+/* ── Dispatch budget and overload accounting ─────────────── */
+
+/**
+ * Per-task scheduler dispatch statistics.
+ *
+ * Execution duration is monotonic wall time around a scheduler dispatch, not
+ * process CPU time.  A budget is observational: a running C callback is never
+ * preempted.  After a LOW-priority task exceeds its budget, the scheduler
+ * skips one subsequent eligible dispatch/Choreo trigger to contain repeated
+ * overload.  NORMAL/HIGH/CRITICAL tasks are never shed by this mechanism.
+ */
+typedef struct {
+    uint64_t  execution_budget_us;  /**< Per-dispatch budget (0 = disabled) */
+    uint64_t  dispatch_count;       /**< Completed dispatches accounted */
+    uint64_t  total_execution_us;   /**< Sum of completed dispatch durations */
+    uint64_t  last_execution_us;    /**< Most recent completed dispatch */
+    uint64_t  max_execution_us;     /**< Longest completed dispatch */
+    uint64_t  budget_overrun_count; /**< Dispatches exceeding the budget */
+    uint64_t  shed_count;           /**< LOW-priority dispatches/triggers skipped */
+    uint64_t  quota_denied_count;   /**< Dispatches/triggers denied by ResourceQuota */
+} SchedulerTaskStats;
 
 /* ── Scheduler Configuration ──────────────────────────────── */
 
@@ -133,13 +155,14 @@ Scheduler* scheduler_create(const SchedulerConfig* config);
 /** Destroy scheduler (must be stopped first). */
 void scheduler_destroy(Scheduler* scheduler);
 
-/** Start the scheduler (creates worker threads). */
+/** Start scheduler monitoring; scheduler_run_loop() creates worker threads. */
 int scheduler_start(Scheduler* sched);
 
 /**
  * Run loop: creates worker threads and runs registered tasks in a
- * round-robin fashion. Each worker picks tasks, applies RateControl
- * gating, measures latency, and calls task->execute().
+ * priority-aware round-robin fashion. Each worker selects CRITICAL through
+ * LOW tasks, applies RateControl and ResourceQuota gating, measures latency,
+ * and calls task->execute().
  *
  * Blocks until scheduler_stop() is called from another thread.
  * Call this instead of scheduler_start() when you want the scheduler
@@ -154,7 +177,7 @@ int scheduler_run_loop(Scheduler* sched);
 /** Set the message bus for choreo trigger routing. */
 void scheduler_set_choreo_bus(Scheduler* sched, MessageBus* bus);
 
-/** Stop the scheduler (joins worker threads). */
+/** Stop the scheduler and join its monitor and worker threads. */
 void scheduler_stop(Scheduler* sched);
 
 /** Register a task with the scheduler. Returns internal task ID. */
@@ -177,6 +200,31 @@ int scheduler_set_params(Scheduler* sched, int task_id,
 /** Set resource quota for a registered task. */
 int scheduler_set_quota(Scheduler* sched, int task_id,
                         const ResourceQuota* quota);
+
+/**
+ * Set a wall-time budget for one scheduler dispatch (0 disables it).
+ *
+ * The budget is accounted after a callback returns, so it cannot preempt a
+ * non-cooperative callback.  Its containment action is intentionally limited
+ * to the next LOW-priority dispatch/Choreo trigger; critical control work is
+ * recorded but never dropped.
+ */
+int scheduler_set_execution_budget(Scheduler* sched, int task_id,
+                                   uint64_t budget_us);
+
+/**
+ * Account an execution performed outside scheduler_run_loop().
+ *
+ * Choreo tasks that call scheduler_choreo_wait() and execute their own work
+ * should call this once per completed callback to receive budget accounting
+ * and low-priority trigger shedding.
+ */
+int scheduler_record_execution(Scheduler* sched, int task_id,
+                               uint64_t elapsed_us);
+
+/** Copy a task's budget, overrun, shedding, and dispatch statistics. */
+void scheduler_get_task_stats(Scheduler* sched, int task_id,
+                              SchedulerTaskStats* stats);
 
 /** Get the latency tracker for a registered task. */
 LatencyTracker* scheduler_get_latency(Scheduler* sched, int task_id);

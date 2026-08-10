@@ -916,8 +916,11 @@ set_source_files_properties(tests/test_modules.c PROPERTIES LANGUAGE CXX)
 target_link_libraries(test_modules flowengine_core scheduler_cpp)
 add_dependencies(test_modules msg_codegen)
 target_include_directories(test_modules PRIVATE ${GEN_DIR})
-
 add_test(NAME unit_tests COMMAND test_modules)
+
+add_executable(test_scheduler_overload tests/test_scheduler_overload.c)
+target_link_libraries(test_scheduler_overload flowengine_core)
+add_test(NAME scheduler_overload_tests COMMAND test_scheduler_overload)
 set_tests_properties(unit_tests PROPERTIES TIMEOUT 10)
 
 # ── 新增模块单元测试（Task Manager / IPC / Discovery / Bag / FlowRegistry）──

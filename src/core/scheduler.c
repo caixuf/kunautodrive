@@ -137,8 +137,11 @@ typedef struct {
     LatencyTracker  latency;
     RateControl     rate_control;
     ResourceUsage   resource;
+    SchedulerTaskStats runtime_stats;
     bool            active;
     atomic_bool     executing;           /**< 执行中 claim（防止同 task 多 worker 并发） */
+    bool            shed_next_low_dispatch; /**< Budget overrun: shed one LOW dispatch */
+    uint64_t        last_reported_overruns;
 
     /* Choreo mode */
     char            trigger_topic[64];   /**< 触发的 topic（空=无） */
@@ -156,6 +159,10 @@ struct Scheduler {
     bool             running;
     pthread_t*       workers;
     uint32_t         worker_count;
+    pthread_mutex_t  worker_mutex;    /**< Serializes worker joins */
+    pthread_cond_t   worker_cv;       /**< Waits for an in-progress worker join */
+    bool             workers_creating;
+    bool             workers_joining;
     pthread_t        monitor_thread;   /**< 监控线程 ID，用于安全 join */
     bool             monitor_active;   /**< 监控线程是否活跃 */
     pthread_mutex_t  monitor_mutex;   /**< monitor 线程可取消等待的互斥锁 */
@@ -164,6 +171,79 @@ struct Scheduler {
     /* Choreo: topic → task mapping for trigger routing */
     MessageBus*      choreo_bus;         /**< 用于注册触发回调的总线 */
 };
+
+static TaskPriority entry_priority(const SchedTaskEntry* entry) {
+    if (!entry || !entry->task) return TASK_PRIORITY_NORMAL;
+    TaskPriority priority = entry->task->config.priority;
+    return priority >= TASK_PRIORITY_LOW && priority <= TASK_PRIORITY_CRITICAL
+        ? priority : TASK_PRIORITY_NORMAL;
+}
+
+/* sched->mutex must be held.  A dispatch can only be contained after it
+ * returns; forcibly stopping an arbitrary node callback is not safe. */
+static void record_execution_locked(SchedTaskEntry* entry, uint64_t elapsed_us) {
+    SchedulerTaskStats* stats = &entry->runtime_stats;
+    stats->dispatch_count++;
+    stats->total_execution_us += elapsed_us;
+    stats->last_execution_us = elapsed_us;
+    if (elapsed_us > stats->max_execution_us)
+        stats->max_execution_us = elapsed_us;
+
+    entry->resource.execution_count++;
+    entry->resource.cpu_time_used_us += elapsed_us;
+
+    if (stats->execution_budget_us > 0 &&
+        elapsed_us > stats->execution_budget_us) {
+        stats->budget_overrun_count++;
+        if (entry_priority(entry) == TASK_PRIORITY_LOW)
+            entry->shed_next_low_dispatch = true;
+    }
+}
+
+/* sched->mutex must be held. */
+static bool consume_low_priority_shed_locked(SchedTaskEntry* entry) {
+    if (!entry->shed_next_low_dispatch ||
+        entry_priority(entry) != TASK_PRIORITY_LOW) {
+        return false;
+    }
+    entry->shed_next_low_dispatch = false;
+    entry->runtime_stats.shed_count++;
+    return true;
+}
+
+/* Exactly one caller owns a worker join/free sequence.  scheduler_stop() and
+ * the thread blocked in scheduler_run_loop() may race at shutdown. */
+static void scheduler_join_workers(Scheduler* sched) {
+    pthread_t* workers;
+    uint32_t worker_count;
+
+    pthread_mutex_lock(&sched->worker_mutex);
+    while (sched->workers_creating || sched->workers_joining) {
+        pthread_cond_wait(&sched->worker_cv, &sched->worker_mutex);
+    }
+    if (!sched->workers) {
+        pthread_mutex_unlock(&sched->worker_mutex);
+        return;
+    }
+    sched->workers_joining = true;
+    workers = sched->workers;
+    worker_count = sched->worker_count;
+    pthread_mutex_unlock(&sched->worker_mutex);
+
+    for (uint32_t i = 0; i < worker_count; i++) {
+        pthread_join(workers[i], NULL);
+    }
+    free(workers);
+
+    pthread_mutex_lock(&sched->worker_mutex);
+    if (sched->workers == workers) {
+        sched->workers = NULL;
+        sched->worker_count = 0;
+    }
+    sched->workers_joining = false;
+    pthread_cond_broadcast(&sched->worker_cv);
+    pthread_mutex_unlock(&sched->worker_mutex);
+}
 
 Scheduler* scheduler_create(const SchedulerConfig* config) {
     Scheduler* s = (Scheduler*)calloc(1, sizeof(Scheduler));
@@ -181,6 +261,8 @@ Scheduler* scheduler_create(const SchedulerConfig* config) {
     }
 
     pthread_mutex_init(&s->mutex, NULL);
+    pthread_mutex_init(&s->worker_mutex, NULL);
+    pthread_cond_init(&s->worker_cv, NULL);
     pthread_mutex_init(&s->monitor_mutex, NULL);
     pthread_cond_init(&s->monitor_cv, NULL);
     s->running = false;
@@ -190,8 +272,10 @@ Scheduler* scheduler_create(const SchedulerConfig* config) {
 void scheduler_destroy(Scheduler* sched) {
     if (!sched) return;
     if (sched->running) scheduler_stop(sched);
-    free(sched->workers);
+    scheduler_join_workers(sched);
     pthread_mutex_destroy(&sched->mutex);
+    pthread_mutex_destroy(&sched->worker_mutex);
+    pthread_cond_destroy(&sched->worker_cv);
     pthread_mutex_destroy(&sched->monitor_mutex);
     pthread_cond_destroy(&sched->monitor_cv);
     free(sched);
@@ -239,6 +323,17 @@ static void* scheduler_monitor_fn(void* arg) {
                        e->name, (unsigned long)ls.avg_us,
                        (unsigned long)ls.p99_us, (unsigned long)ls.sample_count);
             }
+            if (e->runtime_stats.budget_overrun_count != e->last_reported_overruns) {
+                printf("[scheduler] OVERLOAD: %s budget=%luus overruns=%lu "
+                       "last=%luus max=%luus shed=%lu\n",
+                       e->name,
+                       (unsigned long)e->runtime_stats.execution_budget_us,
+                       (unsigned long)e->runtime_stats.budget_overrun_count,
+                       (unsigned long)e->runtime_stats.last_execution_us,
+                       (unsigned long)e->runtime_stats.max_execution_us,
+                       (unsigned long)e->runtime_stats.shed_count);
+                e->last_reported_overruns = e->runtime_stats.budget_overrun_count;
+            }
         }
         pthread_mutex_unlock(&sched->mutex);
     }
@@ -251,10 +346,18 @@ int scheduler_start(Scheduler* sched) {
 
     /* 启动后台监控线程：周期性检查所有任务的延迟，超阈值时告警 */
     SchedMonitorArgs* ma = (SchedMonitorArgs*)malloc(sizeof(SchedMonitorArgs));
+    if (!ma) {
+        sched->running = false;
+        return ERR_INTERNAL;
+    }
     ma->sched = sched;
     ma->period_us = 5000000ULL;  /* 5s 周期 */
+    if (pthread_create(&sched->monitor_thread, NULL, scheduler_monitor_fn, ma) != 0) {
+        free(ma);
+        sched->running = false;
+        return ERR_INTERNAL;
+    }
     sched->monitor_active = true;
-    pthread_create(&sched->monitor_thread, NULL, scheduler_monitor_fn, ma);
 
     printf("[scheduler] Started with %u tasks, %u worker threads (mode=%s)\n",
            sched->entry_count, sched->config.worker_thread_count,
@@ -296,15 +399,7 @@ void scheduler_stop(Scheduler* sched) {
         sched->monitor_active = false;
     }
 
-    /* Join workers */
-    if (sched->workers) {
-        for (uint32_t i = 0; i < sched->worker_count; i++) {
-            pthread_join(sched->workers[i], NULL);
-        }
-        free(sched->workers);
-        sched->workers = NULL;
-        sched->worker_count = 0;
-    }
+    scheduler_join_workers(sched);
 
     printf("[scheduler] Stopped\n");
 }
@@ -326,7 +421,7 @@ static void* scheduler_worker_fn(void* arg) {
     snprintf(tname, sizeof(tname), "sched-w%d", wid);
     pthread_setname_np(pthread_self(), tname);
 
-    /* Round-robin index: each worker starts at a different offset */
+    /* Round-robin index: each worker starts at a different offset. */
     int start_idx = (int)(wid % (uint32_t)(sched->entry_count > 0 ? sched->entry_count : 1));
 
     while (sched->running) {
@@ -334,38 +429,58 @@ static void* scheduler_worker_fn(void* arg) {
 
         pthread_mutex_lock(&sched->mutex);
         int n = sched->entry_count;
-        for (int j = 0; j < n && sched->running; j++) {
-            int idx = (start_idx + j) % n;
-            SchedTaskEntry* e = &sched->entries[idx];
+        /* Priority is a scheduler policy, not a forced preemption mechanism:
+         * a long callback still runs to completion.  Scanning CRITICAL to LOW
+         * ensures the next available worker selects control work before
+         * another non-critical callback.  The rotating start index preserves
+         * fairness within one priority band. */
+        for (int priority = TASK_PRIORITY_CRITICAL;
+             priority >= TASK_PRIORITY_LOW && sched->running; priority--) {
+            for (int j = 0; j < n && sched->running; j++) {
+                int idx = (start_idx + j) % n;
+                SchedTaskEntry* e = &sched->entries[idx];
 
-            if (!e->active || !e->task) continue;
+                if (!e->active || !e->task ||
+                    entry_priority(e) != (TaskPriority)priority) {
+                    continue;
+                }
 
-            /* RateControl gating */
-            if (!rate_control_acquire(&e->rate_control)) continue;
+                if (!resource_usage_check(&e->resource)) {
+                    e->runtime_stats.quota_denied_count++;
+                    continue;
+                }
 
-            /* Claim: 同一 task 不可被多 worker 并发 execute */
-            bool expected = false;
-            if (!atomic_compare_exchange_strong(&e->executing, &expected, true)) {
-                continue;
+                if (consume_low_priority_shed_locked(e)) continue;
+
+                /* RateControl gating */
+                if (!rate_control_acquire(&e->rate_control)) continue;
+
+                /* Claim: 同一 task 不可被多 worker 并发 execute */
+                bool expected = false;
+                if (!atomic_compare_exchange_strong(&e->executing, &expected, true)) {
+                    continue;
+                }
+
+                /* Grab a reference before unlocking */
+                TaskBase* task = e->task;
+                LatencyTracker* lt = &e->latency;
+                pthread_mutex_unlock(&sched->mutex);
+
+                uint64_t t0 = clock_now_us();
+                if (task->vtable && task->vtable->execute) {
+                    task->vtable->execute(task);
+                }
+                uint64_t dt = clock_now_us() - t0;
+                any_ran = true;
+
+                pthread_mutex_lock(&sched->mutex);
+                latency_tracker_record(lt, dt);
+                record_execution_locked(e, dt);
+                atomic_store(&e->executing, false);
             }
-
-            /* Grab a reference before unlocking */
-            TaskBase* task = e->task;
-            LatencyTracker* lt = &e->latency;
-            pthread_mutex_unlock(&sched->mutex);
-
-            uint64_t t0 = clock_now_us();
-            if (task->vtable && task->vtable->execute) {
-                task->vtable->execute(task);
-            }
-            uint64_t dt = clock_now_us() - t0;
-            any_ran = true;
-
-            pthread_mutex_lock(&sched->mutex);
-            latency_tracker_record(lt, dt);
-            atomic_store(&e->executing, false);
         }
         pthread_mutex_unlock(&sched->mutex);
+        if (n > 0) start_idx = (start_idx + 1) % n;
 
         /* If no task was ready, sleep briefly to avoid busy-waiting */
         if (!any_ran) {
@@ -383,33 +498,60 @@ int scheduler_run_loop(Scheduler* sched) {
         return 0;
     }
 
-    sched->running = true;
+    if (scheduler_start(sched) != 0) return ERR_INTERNAL;
     uint32_t nw = sched->config.worker_thread_count;
     if (nw == 0) nw = 1;
     if (nw > (uint32_t)sched->entry_count) nw = (uint32_t)sched->entry_count;
 
-    sched->workers = (pthread_t*)calloc(nw, sizeof(pthread_t));
-    sched->worker_count = nw;
+    pthread_t* workers = (pthread_t*)calloc(nw, sizeof(pthread_t));
+    if (!workers) {
+        scheduler_stop(sched);
+        return ERR_INTERNAL;
+    }
+
+    pthread_mutex_lock(&sched->worker_mutex);
+    sched->workers = workers;
+    sched->worker_count = 0;
+    sched->workers_creating = true;
+    pthread_mutex_unlock(&sched->worker_mutex);
 
     printf("[scheduler] run_loop: %u worker(s) for %d tasks (mode=%s)\n",
            nw, sched->entry_count,
            sched->config.mode == SCHEDULER_MODE_CHOREO ? "CHOREO" : "CLASSIC");
 
+    bool worker_create_failed = false;
     for (uint32_t i = 0; i < nw; i++) {
+        if (!sched->running) break;
         WorkerArgs* wa = (WorkerArgs*)malloc(sizeof(WorkerArgs));
+        if (!wa) {
+            worker_create_failed = true;
+            break;
+        }
         wa->sched = sched;
         wa->worker_id = i;
-        pthread_create(&sched->workers[i], NULL, scheduler_worker_fn, wa);
+        if (pthread_create(&workers[i], NULL, scheduler_worker_fn, wa) != 0) {
+            free(wa);
+            worker_create_failed = true;
+            break;
+        }
+        pthread_mutex_lock(&sched->worker_mutex);
+        sched->worker_count++;
+        pthread_mutex_unlock(&sched->worker_mutex);
     }
 
-    /* Block until scheduler_stop() is called */
-    for (uint32_t i = 0; i < nw; i++) {
-        pthread_join(sched->workers[i], NULL);
+    pthread_mutex_lock(&sched->worker_mutex);
+    sched->workers_creating = false;
+    pthread_cond_broadcast(&sched->worker_cv);
+    pthread_mutex_unlock(&sched->worker_mutex);
+
+    if (worker_create_failed) {
+        scheduler_stop(sched);
+        return ERR_INTERNAL;
     }
 
-    free(sched->workers);
-    sched->workers = NULL;
-    sched->worker_count = 0;
+    /* Block until scheduler_stop() is called.  It may perform this join; the
+     * helper serializes both callers and avoids a double pthread_join. */
+    scheduler_join_workers(sched);
     sched->running = false;
 
     return 0;
@@ -475,6 +617,50 @@ int scheduler_set_quota(Scheduler* sched, int task_id,
     return 0;
 }
 
+int scheduler_set_execution_budget(Scheduler* sched, int task_id,
+                                   uint64_t budget_us) {
+    if (!sched || task_id < 0 || task_id >= sched->entry_count) {
+        return ERR_INVALID_PARAM;
+    }
+
+    pthread_mutex_lock(&sched->mutex);
+    SchedTaskEntry* entry = &sched->entries[task_id];
+    entry->runtime_stats.execution_budget_us = budget_us;
+    if (budget_us == 0)
+        entry->shed_next_low_dispatch = false;
+    pthread_mutex_unlock(&sched->mutex);
+    return 0;
+}
+
+int scheduler_record_execution(Scheduler* sched, int task_id,
+                               uint64_t elapsed_us) {
+    if (!sched || task_id < 0 || task_id >= sched->entry_count) {
+        return ERR_INVALID_PARAM;
+    }
+
+    pthread_mutex_lock(&sched->mutex);
+    SchedTaskEntry* entry = &sched->entries[task_id];
+    if (!entry->active) {
+        pthread_mutex_unlock(&sched->mutex);
+        return ERR_INVALID_PARAM;
+    }
+    latency_tracker_record(&entry->latency, elapsed_us);
+    record_execution_locked(entry, elapsed_us);
+    pthread_mutex_unlock(&sched->mutex);
+    return 0;
+}
+
+void scheduler_get_task_stats(Scheduler* sched, int task_id,
+                              SchedulerTaskStats* stats) {
+    if (!stats) return;
+    memset(stats, 0, sizeof(*stats));
+    if (!sched || task_id < 0 || task_id >= sched->entry_count) return;
+
+    pthread_mutex_lock(&sched->mutex);
+    *stats = sched->entries[task_id].runtime_stats;
+    pthread_mutex_unlock(&sched->mutex);
+}
+
 LatencyTracker* scheduler_get_latency(Scheduler* sched, int task_id) {
     if (!sched || task_id < 0 || task_id >= sched->entry_count) return NULL;
     return &sched->entries[task_id].latency;
@@ -504,6 +690,17 @@ static void choreo_trigger_callback(const Message* msg, void* user_data) {
         SchedTaskEntry* e = &sched->entries[i];
         if (!e->active || e->trigger_topic[0] == '\0') continue;
         if (strcmp(e->trigger_topic, msg->topic) != 0) continue;
+
+        if (!resource_usage_check(&e->resource)) {
+            e->runtime_stats.quota_denied_count++;
+            e->choreo_stats.triggers_missed++;
+            continue;
+        }
+
+        if (consume_low_priority_shed_locked(e)) {
+            e->choreo_stats.triggers_missed++;
+            continue;
+        }
 
         /* Wake the waiting task */
         pthread_mutex_lock(&e->trigger_mutex);
