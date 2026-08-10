@@ -104,6 +104,13 @@ elseif(APPLE)
     include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/include/compat)
 endif()
 
+# QNX is intentionally limited to the PAL foundation in this increment.  This
+# does not make the full runtime, flowcoro stack, or hardware plugins supported.
+if(CMAKE_SYSTEM_NAME STREQUAL "QNX")
+    add_compile_definitions(FLOWENGINE_TARGET_QNX=1)
+    message(STATUS "QNX target: PAL compile foundation only; runtime support is not enabled")
+endif()
+
 # 「忽略目标文件里的未解析符号」链接选项 —— GNU ld 与 Apple ld64 语法不同。
 # 用途:flow_launcher/flow_node_host/flow_bag 链接静态 flowengine_core 时,允许
 # 存在 dlopen 加载的节点 .so 才会提供的符号(以及 frenet/eigen 可选符号)。
@@ -922,6 +929,26 @@ add_executable(test_scheduler_overload tests/test_scheduler_overload.c)
 target_link_libraries(test_scheduler_overload flowengine_core)
 add_test(NAME scheduler_overload_tests COMMAND test_scheduler_overload)
 set_tests_properties(unit_tests PROPERTIES TIMEOUT 10)
+
+# PAL runtime coverage runs on Linux.  The sibling object target below forces
+# the QNX capability branch through a host compiler across every migrated core
+# TU; it is compile-only and makes no QNX runtime-support claim.
+add_executable(test_platform_pal tests/test_platform_pal.c)
+target_link_libraries(test_platform_pal Threads::Threads)
+add_test(NAME platform_pal_tests COMMAND test_platform_pal)
+set_tests_properties(platform_pal_tests PROPERTIES TIMEOUT 10)
+
+add_library(platform_pal_qnx_compile_guard OBJECT
+    tests/platform_pal_qnx_compile.c
+    src/core/clock_service.c
+    src/core/message_bus.c
+    src/core/ipc_channel.c
+    src/core/scheduler.c
+    src/core/task_interface.c
+)
+target_compile_definitions(platform_pal_qnx_compile_guard PRIVATE
+    FLOW_PAL_COMPILE_TEST_QNX=1)
+add_dependencies(test_platform_pal platform_pal_qnx_compile_guard)
 
 # ── 新增模块单元测试（Task Manager / IPC / Discovery / Bag / FlowRegistry）──
 add_executable(test_new_modules tests/test_new_modules.c)

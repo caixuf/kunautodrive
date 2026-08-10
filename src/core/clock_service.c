@@ -1,5 +1,5 @@
 #include "clock_service.h"
-#include <time.h>
+#include "platform_pal.h"
 #include <pthread.h>
 
 static pthread_mutex_t g_clock_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -9,13 +9,13 @@ static uint64_t g_step_us    = 0;
 
 uint64_t clock_now_realtime_us(void) {
     struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
+    flow_pal_clock_gettime_realtime(&ts);
     return (uint64_t)ts.tv_sec * 1000000ULL + (uint64_t)ts.tv_nsec / 1000ULL;
 }
 
 uint64_t clock_now_monotonic_wall_us(void) {
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
+    flow_pal_clock_gettime_monotonic(&ts);
     return (uint64_t)ts.tv_sec * 1000000ULL + (uint64_t)ts.tv_nsec / 1000ULL;
 }
 
@@ -29,7 +29,7 @@ uint64_t clock_now_us(void) {
         return t;
     }
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
+    flow_pal_clock_gettime_monotonic(&ts);
     return (uint64_t)ts.tv_sec * 1000000ULL + (uint64_t)ts.tv_nsec / 1000ULL;
 }
 

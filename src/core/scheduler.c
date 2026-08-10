@@ -12,6 +12,7 @@
 #include "message_bus.h"
 #include "error_codes.h"
 #include "clock_service.h"
+#include "platform_pal.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -294,13 +295,13 @@ static void* scheduler_monitor_fn(void* arg) {
     uint64_t period_us = ma->period_us;
     free(ma);
 
-    pthread_setname_np(pthread_self(), "sched-mon");
+    flow_pal_thread_set_current_name("sched-mon");
 
     /* 用条件变量定时等待而非 usleep：scheduler_stop 发信号后能立即退出，
      * 避免在 usleep(5s) 中间被 join 卡住最多 5 秒（CI 超时失败的根因之一）。 */
     struct timespec ts;
     while (sched->running) {
-        clock_gettime(CLOCK_REALTIME, &ts);
+        flow_pal_clock_gettime_realtime(&ts);
         uint64_t ns = (uint64_t)ts.tv_nsec + (uint64_t)period_us * 1000ULL;
         ts.tv_sec  += (time_t)(ns / 1000000000ULL);
         ts.tv_nsec  = (long)(ns % 1000000000ULL);
@@ -419,7 +420,7 @@ static void* scheduler_worker_fn(void* arg) {
 
     char tname[16];
     snprintf(tname, sizeof(tname), "sched-w%d", wid);
-    pthread_setname_np(pthread_self(), tname);
+    flow_pal_thread_set_current_name(tname);
 
     /* Round-robin index: each worker starts at a different offset. */
     int start_idx = (int)(wid % (uint32_t)(sched->entry_count > 0 ? sched->entry_count : 1));
@@ -484,7 +485,7 @@ static void* scheduler_worker_fn(void* arg) {
 
         /* If no task was ready, sleep briefly to avoid busy-waiting */
         if (!any_ran) {
-            usleep(1000);  /* 1ms */
+            flow_pal_sleep_us(1000);  /* 1ms */
         }
     }
 
@@ -751,7 +752,7 @@ int scheduler_choreo_wait(Scheduler* sched, int task_id, uint64_t timeout_us) {
     } else {
         /* Timed wait */
         struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
+        flow_pal_clock_gettime_realtime(&ts);
         uint64_t ns = ts.tv_nsec + timeout_us * 1000;
         ts.tv_sec  += (time_t)(ns / 1000000000ULL);
         ts.tv_nsec  = (long)(ns % 1000000000ULL);

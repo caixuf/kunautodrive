@@ -31,6 +31,7 @@
 #include "ipc_channel.h"
 #include "clock_service.h"
 #include "error_codes.h"
+#include "platform_pal.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -369,17 +370,6 @@ void ipc_channel_reset_drop_count(IpcChannel* ch) {
 
 #include <time.h>
 
-/** 带 ROBUST 恢复的 process-shared mutex 加锁 */
-static int ipc_mutex_lock(pthread_mutex_t* mtx) {
-    int r = pthread_mutex_lock(mtx);
-    if (r == EOWNERDEAD) {
-        /* 前持有进程崩溃，恢复 mutex 一致性；共享状态由 seq 号自愈 */
-        pthread_mutex_consistent(mtx);
-        return 0;
-    }
-    return r;
-}
-
 /* ── Shared memory header (lives inside the shm region) ─
  * mutex/cond are PTHREAD_PROCESS_SHARED so every process that mmaps this
  * region can lock/wait/broadcast on the *same* underlying primitive — this
@@ -409,16 +399,6 @@ typedef struct {
  * against a missed wakeup and lets the thread recheck recv_running so
  * ipc_channel_stop() doesn't hang. */
 #define IPC_RECV_WAIT_MS 50
-
-/* Single source of truth for which clock the process-shared condvar uses.
- * Must be applied consistently at both pthread_condattr_setclock() (publisher
- * init) and clock_gettime() (every waiter's deadline computation) — a
- * mismatch between the two would make pthread_cond_timedwait() misbehave. */
-#if defined(CLOCK_MONOTONIC) && !defined(__APPLE__)
-#define IPC_COND_CLOCK CLOCK_MONOTONIC
-#else
-#define IPC_COND_CLOCK CLOCK_REALTIME
-#endif
 
 /* ── Subscriber callbacks ─────────────────────────────── */
 
@@ -480,6 +460,10 @@ static size_t shm_total_size(uint32_t depth) {
 IpcChannel* ipc_channel_open(const char* channel_name, IpcRole role,
                               uint32_t queue_depth) {
     if (!channel_name || queue_depth == 0) return NULL;
+    if (!flow_pal_has_capability(FLOW_PAL_CAP_SHARED_MEMORY_IPC)) {
+        errno = ENOTSUP;
+        return NULL;
+    }
 
     IpcChannel* ch = (IpcChannel*)calloc(1, sizeof(IpcChannel));
     if (!ch) return NULL;
@@ -494,22 +478,21 @@ IpcChannel* ipc_channel_open(const char* channel_name, IpcRole role,
 
     if (role == IPC_ROLE_PUBLISHER) {
         /* Create shared memory */
-        shm_unlink(ch->shm_name); /* clean up stale */
-        ch->shm_fd = shm_open(ch->shm_name, O_CREAT | O_RDWR, 0600);
+        flow_pal_shared_memory_unlink(ch->shm_name); /* clean up stale */
+        ch->shm_fd = flow_pal_shared_memory_open(ch->shm_name, O_CREAT | O_RDWR, 0600);
         if (ch->shm_fd < 0) { free(ch); return NULL; }
 
-        if (ftruncate(ch->shm_fd, (off_t)ch->shm_size) != 0) {
+        if (flow_pal_shared_memory_resize(ch->shm_fd, (off_t)ch->shm_size) != 0) {
             close(ch->shm_fd);
-            shm_unlink(ch->shm_name);
+            flow_pal_shared_memory_unlink(ch->shm_name);
             free(ch);
             return NULL;
         }
 
-        ch->shm_ptr = mmap(NULL, ch->shm_size, PROT_READ | PROT_WRITE,
-                           MAP_SHARED, ch->shm_fd, 0);
+        ch->shm_ptr = flow_pal_shared_memory_map(ch->shm_fd, ch->shm_size);
         if (ch->shm_ptr == MAP_FAILED) {
             close(ch->shm_fd);
-            shm_unlink(ch->shm_name);
+            flow_pal_shared_memory_unlink(ch->shm_name);
             free(ch);
             return NULL;
         }
@@ -524,19 +507,13 @@ IpcChannel* ipc_channel_open(const char* channel_name, IpcRole role,
          * broadcast on the same underlying kernel futex — this is what lets
          * the publisher wake subscriber processes immediately instead of
          * them polling on a fixed interval. */
-        pthread_mutexattr_t mattr;
-        pthread_mutexattr_init(&mattr);
-        pthread_mutexattr_setpshared(&mattr, PTHREAD_PROCESS_SHARED);
-        pthread_mutexattr_setrobust(&mattr, PTHREAD_MUTEX_ROBUST);
-        pthread_mutex_init(&hdr->mutex, &mattr);
-        pthread_mutexattr_destroy(&mattr);
-
-        pthread_condattr_t cattr;
-        pthread_condattr_init(&cattr);
-        pthread_condattr_setpshared(&cattr, PTHREAD_PROCESS_SHARED);
-        pthread_condattr_setclock(&cattr, IPC_COND_CLOCK);
-        pthread_cond_init(&hdr->cond, &cattr);
-        pthread_condattr_destroy(&cattr);
+        if (flow_pal_ipc_sync_init(&hdr->mutex, &hdr->cond) != 0) {
+            flow_pal_shared_memory_unmap(ch->shm_ptr, ch->shm_size);
+            close(ch->shm_fd);
+            flow_pal_shared_memory_unlink(ch->shm_name);
+            free(ch);
+            return NULL;
+        }
 
         /* Set last: a subscriber which opens while initialization is in
          * progress treats queue_depth==0 as not ready and retries instead of
@@ -547,7 +524,7 @@ IpcChannel* ipc_channel_open(const char* channel_name, IpcRole role,
         /* Subscriber: map the publisher's actual allocation rather than the
          * caller's requested depth.  The publisher owns ring capacity; a
          * different local QoS default must never under-map its slots. */
-        ch->shm_fd = shm_open(ch->shm_name, O_RDWR, 0600);
+        ch->shm_fd = flow_pal_shared_memory_open(ch->shm_name, O_RDWR, 0600);
         if (ch->shm_fd < 0) { free(ch); return NULL; }
 
         struct stat shm_stat;
@@ -569,8 +546,7 @@ IpcChannel* ipc_channel_open(const char* channel_name, IpcRole role,
         ch->queue_depth = (uint32_t)(slots_size / sizeof(ShmSlot));
         ch->shm_size = actual_size;
 
-        ch->shm_ptr = mmap(NULL, ch->shm_size, PROT_READ | PROT_WRITE,
-                           MAP_SHARED, ch->shm_fd, 0);
+        ch->shm_ptr = flow_pal_shared_memory_map(ch->shm_fd, ch->shm_size);
         if (ch->shm_ptr == MAP_FAILED) {
             close(ch->shm_fd);
             free(ch);
@@ -580,7 +556,7 @@ IpcChannel* ipc_channel_open(const char* channel_name, IpcRole role,
         /* queue_depth is written after pthread primitives are initialized;
          * retrying here handles a subscriber racing publisher startup. */
         if (get_header(ch)->queue_depth != ch->queue_depth) {
-            munmap(ch->shm_ptr, ch->shm_size);
+            flow_pal_shared_memory_unmap(ch->shm_ptr, ch->shm_size);
             close(ch->shm_fd);
             free(ch);
             return NULL;
@@ -598,7 +574,7 @@ void ipc_channel_close(IpcChannel* ch) {
     ipc_channel_stop(ch);
 
     if (ch->shm_ptr && ch->shm_ptr != MAP_FAILED)
-        munmap(ch->shm_ptr, ch->shm_size);
+        flow_pal_shared_memory_unmap(ch->shm_ptr, ch->shm_size);
     if (ch->shm_fd >= 0)
         close(ch->shm_fd);
 
@@ -627,7 +603,7 @@ int ipc_channel_publish(IpcChannel* ch, const char* topic, const char* sender,
      * any subscriber that has fallen behind). This avoids publisher stalls that
      * previously occurred when a slow/absent subscriber left the ring full. */
     ShmHeader* hdr = get_header(ch);
-    ipc_mutex_lock(&hdr->mutex);
+    flow_pal_ipc_mutex_lock(&hdr->mutex);
 
     ShmSlot*   arr = get_slot_array(ch);
     uint64_t   idx = hdr->head;
@@ -670,7 +646,7 @@ int ipc_channel_subscribe(IpcChannel* ch, MessageCallback callback, void* user_d
  * Returns 0 and fills *out if a message was available, ERR_IO if caught up. */
 static int try_read_one(IpcChannel* ch, Message* out) {
     ShmHeader* hdr = get_header(ch);
-    ipc_mutex_lock(&hdr->mutex);
+    flow_pal_ipc_mutex_lock(&hdr->mutex);
     ShmSlot*   arr = get_slot_array(ch);
     uint64_t   head  = hdr->head;
     uint32_t   depth = hdr->queue_depth;
@@ -710,7 +686,7 @@ static int try_read_one(IpcChannel* ch, Message* out) {
  * caller of pthread_cond_timedwait() on this channel to avoid duplicating
  * (and risking divergence in) the overflow-carry arithmetic. */
 static void compute_wait_deadline(struct timespec* ts) {
-#if defined(CLOCK_MONOTONIC) && !defined(__APPLE__)
+#if FLOW_PAL_HAS_MONOTONIC_COND_CLOCK
     uint64_t deadline_us = clock_now_monotonic_wall_us() +
                            (uint64_t)IPC_RECV_WAIT_MS * 1000ULL;
 #else
@@ -726,7 +702,7 @@ static void compute_wait_deadline(struct timespec* ts) {
  * already there. This replaces the old fixed-interval usleep() spin. */
 static void wait_for_data(IpcChannel* ch) {
     ShmHeader* hdr = get_header(ch);
-    ipc_mutex_lock(&hdr->mutex);
+    flow_pal_ipc_mutex_lock(&hdr->mutex);
 
     /* Apply the same sliding-window clamp as try_read_one() before deciding
      * whether data is already available: a read_cursor that fell behind by
@@ -819,7 +795,7 @@ void ipc_channel_stop(IpcChannel* ch) {
 uint64_t ipc_channel_get_drop_count(IpcChannel* ch) {
     if (!ch || !ch->shm_ptr) return 0;
     ShmHeader* hdr = get_header(ch);
-    ipc_mutex_lock(&hdr->mutex);
+    flow_pal_ipc_mutex_lock(&hdr->mutex);
     uint64_t cnt = ch->drop_count;
     pthread_mutex_unlock(&hdr->mutex);
     return cnt;
@@ -828,7 +804,7 @@ uint64_t ipc_channel_get_drop_count(IpcChannel* ch) {
 void ipc_channel_reset_drop_count(IpcChannel* ch) {
     if (!ch || !ch->shm_ptr) return;
     ShmHeader* hdr = get_header(ch);
-    ipc_mutex_lock(&hdr->mutex);
+    flow_pal_ipc_mutex_lock(&hdr->mutex);
     ch->drop_count = 0;
     pthread_mutex_unlock(&hdr->mutex);
 }

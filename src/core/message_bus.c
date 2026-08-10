@@ -11,6 +11,7 @@
 #include "message_bus.h"
 #include "error_codes.h"
 #include "clock_service.h"
+#include "platform_pal.h"
 #include "logger.h"
 #include <stdlib.h>
 #include <string.h>
@@ -445,7 +446,7 @@ static Message* rb_pop(RingBuffer* rb, atomic_bool* running) {
     pthread_mutex_lock(&rb->mutex);
     while (rb->count == 0 && atomic_load(running)) {
         struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
+        flow_pal_clock_gettime_realtime(&ts);
         ts.tv_nsec += 100000000LL; /* 100ms */
         if (ts.tv_nsec >= 1000000000LL) {
             ts.tv_sec++;
@@ -880,7 +881,7 @@ int message_bus_publish(MessageBus* bus, const char* topic, const char* sender,
                     int max_waits = (qf & QOS_FLAG_RELIABLE) ? 5000 : 1000;
                     int waits = 0;
                     while (atomic_load(&e->pending_count) >= depth && waits < max_waits) {
-                        usleep(1000);  /* 1ms */
+                        flow_pal_sleep_us(1000);  /* 1ms */
                         waits++;
                     }
                     if (atomic_load(&e->pending_count) >= depth) {
@@ -1061,7 +1062,7 @@ int message_bus_publish_loaned(MessageBus* bus, const char* topic,
                 int waits = 0;
                 while (atomic_load(&e->pending_count) >= depth &&
                        waits++ < max_waits) {
-                    usleep(1000);
+                    flow_pal_sleep_us(1000);
                 }
                 if (atomic_load(&e->pending_count) >= depth) {
                     atomic_fetch_add(&e->drop_count, 1);
@@ -1289,7 +1290,7 @@ int message_bus_request(MessageBus* bus, const char* topic, const char* sender,
             pthread_cond_wait(&slot->cond, &slot->mutex);
         } else {
             struct timespec ts;
-            clock_gettime(CLOCK_REALTIME, &ts);
+            flow_pal_clock_gettime_realtime(&ts);
             ts.tv_sec  += timeout_ms / 1000;
             ts.tv_nsec += (timeout_ms % 1000) * 1000000LL;
             if (ts.tv_nsec >= 1000000000LL) {
