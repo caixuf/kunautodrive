@@ -1659,6 +1659,21 @@ static int monitor_execute(TaskBase* task) {
                     LOG_ERROR("monitor", "PEM degrade event write failed");
                     g.pem_last_error_log_us = now_us;
                 }
+                cJSON* event = cJSON_CreateObject();
+                if (event) {
+                    cJSON_AddNumberToObject(event, "level", degrade->degrade_level);
+                    cJSON_AddNumberToObject(event, "reason", degrade->degrade_reason);
+                    cJSON_AddNumberToObject(event, "transition_ms",
+                                            (double)degrade->degrade_timestamp_ms);
+                    char* event_json = cJSON_PrintUnformatted(event);
+                    if (event_json) {
+                        transport_publish(g.transport, "pem/degrade_event",
+                                          (const uint8_t*)event_json,
+                                          (uint32_t)strlen(event_json) + 1);
+                        free(event_json);
+                    }
+                    cJSON_Delete(event);
+                }
                 g.pem_last_degrade_level = degrade->degrade_level;
                 g.pem_last_degrade_reason = degrade->degrade_reason;
             }
@@ -1736,7 +1751,7 @@ static const char* s_inputs[]  = { TOPIC_PERCEPTION_OBSTACLES, TOPIC_VEHICLE_STA
                                    TOPIC_PLANNING_TRAJECTORY, TOPIC_ROAD_GEOMETRY,
                                    TOPIC_SCENE_FRAME, TOPIC_CONTROL_CTE,
                                    "traffic/traffic_lights", NULL };
-static const char* s_outputs[] = { NULL };
+static const char* s_outputs[] = { "pem/degrade_event", NULL };
 
 static NodePlugin s_plugin;
 
@@ -1881,6 +1896,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     discovery_advertise(discovery, TOPIC_FLOWENGINE_NODE_INFO, 0xF10E10F0u, CAP_SUBSCRIBER, 0);
 
     if (g.embedded_mode) {
+        transport_advertise(transport, "pem/degrade_event", 0u);
         if (pem_log_open(&g.pem_log, g.pem_log_path, g.pem_rotate_sec,
                          g.pem_rotate_bytes, g.pem_max_segments,
                          g.pem_max_total_bytes) != 0) {

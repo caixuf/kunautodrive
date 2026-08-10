@@ -22,6 +22,7 @@ typedef pthread_mutex_t PemLogMutex;
 #define PEM_RECORD_TOPIC 2u
 #define PEM_RECORD_HEALTH 3u
 #define PEM_RECORD_EVENT 4u
+#define PEM_RECORD_BUSINESS 5u
 
 /* Layout is shared with tools/pem_dump.py through include/pem_log_layout.def. */
 typedef struct {
@@ -67,6 +68,10 @@ typedef struct {
     bool mutex_initialized;
 } PemLog;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 int pem_log_open(PemLog* log, const char* path, uint64_t rotate_sec,
                  uint64_t rotate_bytes, uint32_t max_segments,
                  uint64_t max_total_bytes);
@@ -74,5 +79,9 @@ int pem_log_write(PemLog* log, uint16_t type, uint16_t flags,
                   uint64_t monotonic_us, uint64_t realtime_us,
                   const char* name, const double values[8], bool critical);
 void pem_log_close(PemLog* log);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

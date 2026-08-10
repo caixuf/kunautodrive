@@ -252,3 +252,9 @@ open http://localhost:8800
 # 解析 PEM
 python3 tools/pem_dump.py /tmp/kunautodrive_pem_*.pem
 ```
+## PEM 业务遥测
+
+量产部署会在 `monitor_node` 旁新增 `pem_collector_node`。`monitor_node`
+写入基础设施健康记录，并在降级状态迁移时发布 `pem/degrade_event`。FlowCoro
+采集器订阅车辆 topic，保持回调非阻塞，异步写入持续行程指标和关键事件记录。
+topic 契约与扩展规则见[数据闭环](DATA_CLOSED_LOOP.md#业务回调流)。

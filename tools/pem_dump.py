@@ -8,7 +8,7 @@ import sys
 import zlib
 from pathlib import Path
 
-KINDS = {1: "system", 2: "topic", 3: "health", 4: "event"}
+KINDS = {1: "system", 2: "topic", 3: "health", 4: "event", 5: "business"}
 
 
 def load_layout() -> tuple[dict[str, int], dict[str, int], int]:
@@ -105,6 +105,11 @@ def records(path: Path):
                                    "disable_lane_change", "speed_limit",
                                    "safety_margin"), values))
                 record_type = "event"
+            elif kind == 5:
+                fields = dict(zip(("distance_m", "driving_time_s", "speed_mps",
+                                   "latitude", "longitude", "accuracy_m",
+                                   "source", "fix_age_s"), values))
+                record_type = "business"
             else:
                 fields = {"values": values}
                 record_type = f"unknown:{kind}"

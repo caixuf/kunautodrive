@@ -477,6 +477,13 @@ if(NOT WIN32)
     add_test(NAME pem_log_protocol COMMAND test_pem_log)
 endif()
 
+# pem_collector_node: FlowCoro business telemetry callbacks. Transport callbacks
+# aggregate only; one coroutine owns the durable PEM writer.
+add_library(pem_collector_node SHARED pem_collector_node.cpp pem_log.c)
+target_compile_definitions(pem_collector_node PRIVATE FLOWCORO_INTEGRATION)
+target_compile_options(pem_collector_node PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fcoroutines>)
+target_link_libraries(pem_collector_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
+
 # ── 车端学习闭环节点 (data → train → inference → learner → ota) ─
 
 # inference_node: 内置 tiny-MLP 车端推理（影子模式，支持 OTA 热重载，FlowCoro 协程版）

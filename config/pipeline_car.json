@@ -351,7 +351,23 @@
         "flowengine/node_info",
         "planning/trajectory"
       ],
+      "publish": [
+        { "topic": "pem/degrade_event", "type": "text",
+          "qos": { "depth": 4, "policy": "drop_oldest", "reliability": "reliable" } }
+      ],
       "params": "{\"mode\":\"production\",\"rotate_sec\":300,\"rotate_mb\":100,\"retain_segments\":96,\"retain_mb\":1024}"
+    },
+    {
+      "name": "pem_collector",
+      "library_path": "build/lib/libpem_collector_node.so",
+      "auto_start": true,
+      "subscribe": [
+        "sensor/gps",
+        "fusion/localization",
+        "navigation/region",
+        "pem/degrade_event"
+      ],
+      "params": "{\"emit_hz\":1.0,\"region\":\"rc_car\",\"max_step_m\":20.0,\"driving_speed_mps\":0.3,\"rotate_sec\":300,\"rotate_mb\":100,\"retain_segments\":96,\"retain_mb\":1024}"
     }
   ]
 }
