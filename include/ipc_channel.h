@@ -39,7 +39,9 @@ typedef struct IpcChannel IpcChannel;
  * 打开（或创建）一个 IPC 通道
  * @param channel_name  通道名称（用作 shm 名称前缀，无需 '/' 前缀）
  * @param role          IPC_ROLE_PUBLISHER 或 IPC_ROLE_SUBSCRIBER
- * @param queue_depth   环形缓冲区容量（建议 8~64）
+ * @param queue_depth   发布者的环形缓冲区容量（建议 8~64）。订阅者会映射
+ *                      发布者已创建的实际容量，避免两端本地 QoS 配置不一致时
+ *                      缓冲区越界。
  * @return 通道指针，失败返回 NULL
  */
 IpcChannel* ipc_channel_open(const char* channel_name, IpcRole role,

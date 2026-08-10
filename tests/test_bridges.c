@@ -23,6 +23,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <sys/wait.h>
 
 /* ── 测试宏（与 test_new_modules.c 保持一致风格）──────────── */
 
@@ -154,6 +155,107 @@ static void test_transport_unsubscribe(void) {
 
     transport_destroy(t);
     message_bus_destroy(bus);
+    PASS();
+}
+
+typedef struct {
+    int delivered;
+    uint64_t ipc_delivered;
+} IpcQosResult;
+
+static void test_transport_ipc_qos_depth(void) {
+    TEST("transport IPC uses publisher topic QoS depth");
+
+    int start_pipe[2];
+    int result_pipe[2];
+    ASSERT(pipe(start_pipe) == 0, "start pipe failed");
+    ASSERT(pipe(result_pipe) == 0, "result pipe failed");
+
+    pid_t pid = fork();
+    ASSERT(pid >= 0, "fork failed");
+    if (pid == 0) {
+        close(start_pipe[1]);
+        close(result_pipe[0]);
+
+        char start = 0;
+        if (read(start_pipe[0], &start, sizeof(start)) != sizeof(start))
+            _exit(2);
+        close(start_pipe[0]);
+
+        IpcQosResult result = {0};
+        MessageBus* bus = message_bus_create("ipc_qos_sub");
+        Transport* t = bus ? transport_create(bus, NULL, TRANSPORT_IPC) : NULL;
+        LocalCounter c = { PTHREAD_MUTEX_INITIALIZER, 0, 0 };
+        if (t && transport_subscribe(t, "test/ipc_qos_depth",
+                                     local_counter_cb, &c) == 0) {
+            usleep(200000);
+            TransportStats stats;
+            transport_get_stats(t, &stats);
+            pthread_mutex_lock(&c.m);
+            result.delivered = c.count;
+            pthread_mutex_unlock(&c.m);
+            result.ipc_delivered = stats.ipc_delivered;
+        }
+
+        if (t) transport_destroy(t);
+        if (bus) message_bus_destroy(bus);
+        if (write(result_pipe[1], &result, sizeof(result)) != sizeof(result))
+            _exit(3);
+        close(result_pipe[1]);
+        _exit(0);
+    }
+
+    close(start_pipe[0]);
+    close(result_pipe[1]);
+
+    MessageBus* bus = message_bus_create("ipc_qos_pub");
+    ASSERT(bus != NULL, "publisher bus create failed");
+    Transport* t = transport_create(bus, NULL, TRANSPORT_IPC);
+    ASSERT(t != NULL, "publisher transport create failed");
+
+    TopicQos qos = {
+        .reliability = QOS_BEST_EFFORT,
+        .depth = 3,
+        .policy = QOS_DROP_OLDEST,
+        .transport = TRANSPORT_SHM,
+    };
+    ASSERT(message_bus_set_topic_qos(bus, "test/ipc_qos_depth", &qos) == 0,
+           "set topic QoS failed");
+    ASSERT(transport_advertise(t, "test/ipc_qos_depth", 0) == 0,
+           "advertise failed");
+
+    for (int i = 0; i < 8; i++)
+        ASSERT(transport_publish(t, "test/ipc_qos_depth", &i, sizeof(i)) == 0,
+               "publish %d failed", i);
+
+    TransportStats publisher_stats;
+    transport_get_stats(t, &publisher_stats);
+    ASSERT(publisher_stats.ipc_published == 8,
+           "expected 8 IPC publishes, got %llu",
+           (unsigned long long)publisher_stats.ipc_published);
+
+    char start = 1;
+    ASSERT(write(start_pipe[1], &start, sizeof(start)) == sizeof(start),
+           "failed to release subscriber");
+    close(start_pipe[1]);
+
+    IpcQosResult result = {0};
+    ssize_t received = read(result_pipe[0], &result, sizeof(result));
+    close(result_pipe[0]);
+    int status = 0;
+    ASSERT(waitpid(pid, &status, 0) == pid, "waitpid failed");
+
+    transport_destroy(t);
+    message_bus_destroy(bus);
+
+    ASSERT(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+           "subscriber exited abnormally (status=%d)", status);
+    ASSERT(received == (ssize_t)sizeof(result), "subscriber result missing");
+    ASSERT(result.delivered == 3,
+           "expected 3 retained QoS-depth messages, got %d", result.delivered);
+    ASSERT(result.ipc_delivered == 3,
+           "expected 3 observable IPC deliveries, got %llu",
+           (unsigned long long)result.ipc_delivered);
     PASS();
 }
 
@@ -390,6 +492,7 @@ int main(void) {
     test_transport_local_pubsub();
     test_transport_stats();
     test_transport_unsubscribe();
+    test_transport_ipc_qos_depth();
 
     printf("\n═══ stats_bridge ═══\n");
     test_stats_bridge_open();

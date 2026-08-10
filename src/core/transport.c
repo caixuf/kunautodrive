@@ -17,6 +17,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -24,6 +25,7 @@
 /* ── Topic 路由条目 ──────────────────────────────────────── */
 
 #define TRANSPORT_MAX_TOPICS 128
+#define TRANSPORT_DEFAULT_IPC_DEPTH 32u
 
 typedef struct {
     char        topic[MSG_BUS_MAX_TOPIC_LEN];
@@ -51,6 +53,8 @@ struct Transport {
     TransportPolicy    policy;
     NetworkTransport*  net_transport;    /**< TCP 传输层 */
     bool               running;
+    atomic_uint_fast64_t ipc_published;
+    atomic_uint_fast64_t ipc_delivered;
 
     /* Topic 路由表 */
     TopicRoute         routes[TRANSPORT_MAX_TOPICS];
@@ -74,6 +78,17 @@ static TopicRoute* find_or_create_route(Transport* t, const char* topic) {
     memset(r, 0, sizeof(*r));
     snprintf(r->topic, MSG_BUS_MAX_TOPIC_LEN, "%s", topic);
     return r;
+}
+
+/* IPC capacity is set by the publisher.  Use the topic's configured depth
+ * when available so the cross-process ring has the same backpressure window
+ * as the local bus; preserve the historical depth of 32 when QoS is absent. */
+static uint32_t ipc_depth_for_topic(Transport* t, const char* topic) {
+    TopicStats stats;
+    if (message_bus_get_topic_stats(t->bus, topic, &stats) == 0 &&
+        stats.qos.depth > 0)
+        return stats.qos.depth;
+    return TRANSPORT_DEFAULT_IPC_DEPTH;
 }
 
 /**
@@ -136,6 +151,8 @@ Transport* transport_create(MessageBus* bus, DiscoveryManager* discovery,
     t->bus       = bus;
     t->discovery = discovery;
     t->policy    = policy;
+    atomic_init(&t->ipc_published, 0);
+    atomic_init(&t->ipc_delivered, 0);
     pthread_mutex_init(&t->mutex, NULL);
 
     if (!discovery && policy != TRANSPORT_LOCAL) {
@@ -217,8 +234,16 @@ int transport_advertise(Transport* t, const char* topic, uint32_t type_id) {
     if (t->policy == TRANSPORT_IPC && !r->ipc_channel) {
         char ch_name[256];
         topic_to_ipc_name(topic, ch_name, sizeof(ch_name));
-        r->ipc_channel = ipc_channel_open(ch_name, IPC_ROLE_PUBLISHER, 32);
-        if (r->ipc_channel) r->route = ROUTE_IPC;
+        uint32_t depth = ipc_depth_for_topic(t, topic);
+        r->ipc_channel = ipc_channel_open(ch_name, IPC_ROLE_PUBLISHER, depth);
+        if (r->ipc_channel) {
+            r->route = ROUTE_IPC;
+        } else {
+            LOG_ERROR("transport", "failed to create IPC channel '%s' (depth=%u)",
+                      ch_name, depth);
+            pthread_mutex_unlock(&t->mutex);
+            return ERR_IO;
+        }
     }
     pthread_mutex_unlock(&t->mutex);
 
@@ -247,6 +272,8 @@ int transport_publish(Transport* t, const char* topic,
             if (t->routes[i].ipc_channel && t->routes[i].is_publisher) {
                 route_ret = ipc_channel_publish(t->routes[i].ipc_channel, topic,
                                                 "transport", data, size);
+                if (route_ret == 0)
+                    atomic_fetch_add(&t->ipc_published, 1);
             }
             break;
         }
@@ -278,10 +305,14 @@ int transport_publish_loaned(Transport* t, const char* topic,
  * 1) choreo 调度触发器正常运作（它监听的是本地 bus）
  * 2) 所有已经通过 message_bus_subscribe 注册的回调自动被调用
  * 因此在 ipc_channel_subscribe 中不需要直接传入用户回调 */
-typedef struct { MessageBus* bus; } IpcRelayCtx;
+typedef struct {
+    MessageBus* bus;
+    Transport* transport;
+} IpcRelayCtx;
 
 static void ipc_to_bus_relay(const Message* msg, void* user_data) {
     IpcRelayCtx* ctx = (IpcRelayCtx*)user_data;
+    atomic_fetch_add(&ctx->transport->ipc_delivered, 1);
     message_bus_publish(ctx->bus, msg->topic, msg->sender, msg->data, msg->data_size);
 }
 
@@ -325,6 +356,7 @@ int transport_subscribe(Transport* t, const char* topic,
             IpcRelayCtx* ctx = (IpcRelayCtx*)malloc(sizeof(IpcRelayCtx));
             if (ctx) {
                 ctx->bus = t->bus;
+                ctx->transport = t;
                 ipc_channel_subscribe(ipc_ch, ipc_to_bus_relay, ctx);
                 ipc_channel_start(ipc_ch);
             }
@@ -415,6 +447,8 @@ void transport_get_stats(Transport* t, TransportStats* stats) {
     message_bus_get_stats(t->bus, &pub, &del, &drop);
     stats->local_published = pub;
     stats->local_delivered = del;
+    stats->ipc_published = atomic_load(&t->ipc_published);
+    stats->ipc_delivered = atomic_load(&t->ipc_delivered);
 
     if (t->net_transport) {
         NetTransportStats ns;

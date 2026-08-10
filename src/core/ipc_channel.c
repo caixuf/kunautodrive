@@ -29,6 +29,7 @@
  */
 
 #include "ipc_channel.h"
+#include "clock_service.h"
 #include "error_codes.h"
 #include <stdlib.h>
 #include <string.h>
@@ -361,6 +362,7 @@ void ipc_channel_reset_drop_count(IpcChannel* ch) {
 
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <errno.h>
@@ -512,12 +514,10 @@ IpcChannel* ipc_channel_open(const char* channel_name, IpcRole role,
             return NULL;
         }
 
-        /* Initialize header + slots (zeroed by ftruncate, but be explicit) */
+        /* Initialize the complete region before exposing a ready header.
+         * Subscribers use queue_depth as the publisher-ready indicator. */
         ShmHeader* hdr = get_header(ch);
-        hdr->queue_depth = queue_depth;
-        hdr->_pad  = 0;
-        hdr->head  = 0;
-        memset(get_slot_array(ch), 0, (size_t)queue_depth * sizeof(ShmSlot));
+        memset(ch->shm_ptr, 0, ch->shm_size);
 
         /* Initialize process-shared mutex + condvar in-place inside the shm
          * region so every process that maps this region can lock/wait/
@@ -537,15 +537,50 @@ IpcChannel* ipc_channel_open(const char* channel_name, IpcRole role,
         pthread_condattr_setclock(&cattr, IPC_COND_CLOCK);
         pthread_cond_init(&hdr->cond, &cattr);
         pthread_condattr_destroy(&cattr);
+
+        /* Set last: a subscriber which opens while initialization is in
+         * progress treats queue_depth==0 as not ready and retries instead of
+         * locking an uninitialized process-shared mutex. */
+        hdr->queue_depth = queue_depth;
+        hdr->head = 0;
     } else {
-        /* Subscriber: open existing shm (mutex/cond already initialized by
-         * the publisher inside the shared region). */
+        /* Subscriber: map the publisher's actual allocation rather than the
+         * caller's requested depth.  The publisher owns ring capacity; a
+         * different local QoS default must never under-map its slots. */
         ch->shm_fd = shm_open(ch->shm_name, O_RDWR, 0600);
         if (ch->shm_fd < 0) { free(ch); return NULL; }
+
+        struct stat shm_stat;
+        if (fstat(ch->shm_fd, &shm_stat) != 0 ||
+            shm_stat.st_size < (off_t)sizeof(ShmHeader)) {
+            close(ch->shm_fd);
+            free(ch);
+            return NULL;
+        }
+
+        size_t actual_size = (size_t)shm_stat.st_size;
+        size_t slots_size = actual_size - sizeof(ShmHeader);
+        if (slots_size == 0 || slots_size % sizeof(ShmSlot) != 0 ||
+            slots_size / sizeof(ShmSlot) > UINT32_MAX) {
+            close(ch->shm_fd);
+            free(ch);
+            return NULL;
+        }
+        ch->queue_depth = (uint32_t)(slots_size / sizeof(ShmSlot));
+        ch->shm_size = actual_size;
 
         ch->shm_ptr = mmap(NULL, ch->shm_size, PROT_READ | PROT_WRITE,
                            MAP_SHARED, ch->shm_fd, 0);
         if (ch->shm_ptr == MAP_FAILED) {
+            close(ch->shm_fd);
+            free(ch);
+            return NULL;
+        }
+
+        /* queue_depth is written after pthread primitives are initialized;
+         * retrying here handles a subscriber racing publisher startup. */
+        if (get_header(ch)->queue_depth != ch->queue_depth) {
+            munmap(ch->shm_ptr, ch->shm_size);
             close(ch->shm_fd);
             free(ch);
             return NULL;
@@ -604,9 +639,7 @@ int ipc_channel_publish(IpcChannel* ch, const char* topic, const char* sender,
     slot->msg.type      = MSG_TYPE_PUBLISH;
     slot->msg.data_size = size;
 
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    slot->msg.timestamp_us = (uint64_t)now.tv_sec * 1000000ULL + (uint64_t)now.tv_nsec / 1000ULL;
+    slot->msg.timestamp_us = clock_now_monotonic_wall_us();
 
     if (data && size > 0) memcpy(slot->msg.data, data, size);
 
@@ -677,12 +710,15 @@ static int try_read_one(IpcChannel* ch, Message* out) {
  * caller of pthread_cond_timedwait() on this channel to avoid duplicating
  * (and risking divergence in) the overflow-carry arithmetic. */
 static void compute_wait_deadline(struct timespec* ts) {
-    clock_gettime(IPC_COND_CLOCK, ts);
-    ts->tv_nsec += (long)IPC_RECV_WAIT_MS * 1000000L;
-    if (ts->tv_nsec >= 1000000000L) {
-        ts->tv_sec  += ts->tv_nsec / 1000000000L;
-        ts->tv_nsec %= 1000000000L;
-    }
+#if defined(CLOCK_MONOTONIC) && !defined(__APPLE__)
+    uint64_t deadline_us = clock_now_monotonic_wall_us() +
+                           (uint64_t)IPC_RECV_WAIT_MS * 1000ULL;
+#else
+    uint64_t deadline_us = clock_now_realtime_us() +
+                           (uint64_t)IPC_RECV_WAIT_MS * 1000ULL;
+#endif
+    ts->tv_sec = (time_t)(deadline_us / 1000000ULL);
+    ts->tv_nsec = (long)((deadline_us % 1000000ULL) * 1000ULL);
 }
 
 /* Block (bounded by IPC_RECV_WAIT_MS) until the publisher signals new data,
@@ -723,10 +759,7 @@ int ipc_channel_recv_once(IpcChannel* ch, uint32_t timeout_ms) {
     if (!ch || ch->role != IPC_ROLE_SUBSCRIBER) return ERR_IO;
 
     Message msg;
-    struct timespec deadline;
-    clock_gettime(CLOCK_MONOTONIC, &deadline);
-    uint64_t deadline_us = (uint64_t)deadline.tv_sec * 1000000ULL +
-                           (uint64_t)deadline.tv_nsec / 1000ULL +
+    uint64_t deadline_us = clock_now_monotonic_wall_us() +
                            (uint64_t)timeout_ms * 1000ULL;
 
     for (;;) {
@@ -741,11 +774,7 @@ int ipc_channel_recv_once(IpcChannel* ch, uint32_t timeout_ms) {
             wait_for_data(ch);
             continue;
         }
-        struct timespec nowts;
-        clock_gettime(CLOCK_MONOTONIC, &nowts);
-        uint64_t now_us = (uint64_t)nowts.tv_sec * 1000000ULL +
-                          (uint64_t)nowts.tv_nsec / 1000ULL;
-        if (now_us >= deadline_us) return ERR_IO;
+        if (clock_now_monotonic_wall_us() >= deadline_us) return ERR_IO;
         wait_for_data(ch);
     }
 }
