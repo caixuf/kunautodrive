@@ -172,7 +172,7 @@ jobs:
         # 预构建库格式门禁（configure 期）+ json_to_xodr → RM_Init → frenet↔world
         # 往返不变式。0ca4c09 曾把 Mach-O 覆盖 Linux .so 导致链接晦涩失败，
         # 此步在 CI 上把该类回归拦在集成冒烟之前。
-        run: ctest --test-dir build/modules/adas_nodes --output-on-failure -R "esmini|road_network"
+        run: ctest --test-dir build/modules/adas_nodes --output-on-failure -R "esmini|road_network|pem_log_protocol"
       - name: Pipeline stress run (15s)
         run: timeout 35 ./build/bin/flow_launcher config/pipeline.json --duration 15
       - name: Integration smoke (ctest -L integration)

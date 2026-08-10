@@ -158,6 +158,8 @@ static struct {
     char pem_log_path[512];
     uint64_t pem_rotate_sec;
     uint64_t pem_rotate_bytes;
+    uint64_t pem_max_total_bytes;
+    uint32_t pem_max_segments;
     double pem_cpu_critical_pct;
     double pem_mem_critical_pct;
     uint64_t pem_last_error_log_us;
@@ -1774,6 +1776,8 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     g.pem_last_degrade_reason = -1;
     g.pem_rotate_sec = 300;
     g.pem_rotate_bytes = 100ULL * 1024 * 1024;
+    g.pem_max_segments = 96;  /* 8h at the default 5-minute rotation */
+    g.pem_max_total_bytes = 1024ULL * 1024 * 1024;
     g.pem_cpu_critical_pct = 95.0;
     g.pem_mem_critical_pct = 95.0;
     if (params_json) {
@@ -1800,6 +1804,16 @@ static int monitor_init(MessageBus* bus, Transport* transport,
             if ((item = cJSON_GetObjectItem(root, "rotate_mb")) &&
                 cJSON_IsNumber(item) && item->valuedouble >= 1.0) {
                 g.pem_rotate_bytes =
+                    (uint64_t)(item->valuedouble * 1024.0 * 1024.0);
+            }
+            if ((item = cJSON_GetObjectItem(root, "retain_segments")) &&
+                cJSON_IsNumber(item) && item->valuedouble >= 1.0 &&
+                item->valuedouble <= 100000.0) {
+                g.pem_max_segments = (uint32_t)item->valuedouble;
+            }
+            if ((item = cJSON_GetObjectItem(root, "retain_mb")) &&
+                cJSON_IsNumber(item) && item->valuedouble >= 1.0) {
+                g.pem_max_total_bytes =
                     (uint64_t)(item->valuedouble * 1024.0 * 1024.0);
             }
             if ((item = cJSON_GetObjectItem(root, "cpu_critical_pct")) &&
@@ -1868,11 +1882,14 @@ static int monitor_init(MessageBus* bus, Transport* transport,
 
     if (g.embedded_mode) {
         if (pem_log_open(&g.pem_log, g.pem_log_path, g.pem_rotate_sec,
-                         g.pem_rotate_bytes) != 0) {
+                         g.pem_rotate_bytes, g.pem_max_segments,
+                         g.pem_max_total_bytes) != 0) {
             LOG_ERROR("monitor", "failed to initialize PEM log: %s", g.pem_log_path);
             return -1;
         }
-        LOG_INFO("monitor", "embedded PEM mode enabled: %s_*.pem", g.pem_log_path);
+        LOG_INFO("monitor", "embedded PEM mode enabled: %s_*.pem (retain=%u files, %.0f MiB)",
+                 g.pem_log_path, g.pem_max_segments,
+                 (double)g.pem_max_total_bytes / (1024.0 * 1024.0));
     } else {
     /* Open IPC stats bridge for flowmond (publisher) */
     g.stats_ch = stats_bridge_publisher_open();

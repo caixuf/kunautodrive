@@ -1,0 +1,19 @@
+/*
+ * Canonical PEM v1 record layout.
+ *
+ * This file is deliberately consumed by both the C writer and pem_dump.py.
+ * Keep fields append-only; changing the order or size requires a protocol
+ * version bump.
+ */
+PEM_FIELD(magic, 4)
+PEM_FIELD(version, 2)
+PEM_FIELD(type, 2)
+PEM_FIELD(size, 4)
+PEM_FIELD(crc32, 4)
+PEM_FIELD(monotonic_us, 8)
+PEM_FIELD(realtime_us, 8)
+PEM_FIELD(sequence, 4)
+PEM_FIELD(flags, 2)
+PEM_FIELD(reserved, 2)
+PEM_FIELD(name, 64)
+PEM_FIELD(values, 64)

@@ -7,6 +7,7 @@ import { init2D, init2DFallback, draw2D, switchSceneView, _2d as _2dState, setTo
 import { initCharts, updateCharts, onChartTopicChange, onChartRangeChange, setTopoData as setTopoDataChart } from './charts.js';
 import { safeCall, reportDiag, clearDiag, _auditSceneMaterials } from './utils.js';
 import { updateDeadReckon, _dr, initDeadReckon, tickDeadReckon } from './vis/core/DeadReckon.js';
+import { selectCurrentMotionSegment } from './vis/math/Trajectory.js';
 
 function setText(id, val) {
   var el = document.getElementById(id);
@@ -53,6 +54,26 @@ function updateGameHud() {
   setText('game-heading', gameAngleDeg(heading).toFixed(1) + '°');
   setText('game-motion', gameAngleDeg(motion).toFixed(1) + '°');
   setText('game-slip', slip.toFixed(1) + '°');
+  var trajectory = Array.isArray(scene.trajectory_path) ? scene.trajectory_path : [];
+  var activeTrajectory = selectCurrentMotionSegment(trajectory, ego);
+  var forwardPoints = 0;
+  var reversePoints = 0;
+  var stoppedPoints = 0;
+  var maxTrajectoryGap = 0;
+  for (var i = 0; i < trajectory.length; i++) {
+    var pointSpeed = Number(trajectory[i][2] || 0);
+    if (pointSpeed > 0.05) forwardPoints++;
+    else if (pointSpeed < -0.05) reversePoints++;
+    else stoppedPoints++;
+    if (i > 0) {
+      var dx = Number(trajectory[i][0]) - Number(trajectory[i - 1][0]);
+      var dy = Number(trajectory[i][1]) - Number(trajectory[i - 1][1]);
+      maxTrajectoryGap = Math.max(maxTrajectoryGap, Math.hypot(dx, dy));
+    }
+  }
+  setText('game-traj-points', trajectory.length + ' / ' + activeTrajectory.length);
+  setText('game-traj-gears', forwardPoints + ' / ' + reversePoints + ' / ' + stoppedPoints);
+  setText('game-traj-gap', maxTrajectoryGap.toFixed(1) + ' m');
   var alert = document.getElementById('game-alert');
   if (alert) {
     var mismatch = moving && slip > 8;

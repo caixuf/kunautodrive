@@ -470,9 +470,12 @@ target_link_libraries(safety_control_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
 # monitor_node: 系统监控 + 仪表盘 JSON 导出
 add_library(monitor_node SHARED monitor_node.c pem_log.c)
 target_link_libraries(monitor_node ${NODE_LINK_LIBS})
-add_executable(test_pem_log ${FLOW_ROOT}/tests/test_pem_log.c pem_log.c)
-target_include_directories(test_pem_log PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_test(NAME pem_log_protocol COMMAND test_pem_log)
+if(NOT WIN32)
+    add_executable(test_pem_log ${FLOW_ROOT}/tests/test_pem_log.c pem_log.c)
+    target_include_directories(test_pem_log PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(test_pem_log PRIVATE pthread)
+    add_test(NAME pem_log_protocol COMMAND test_pem_log)
+endif()
 
 # ── 车端学习闭环节点 (data → train → inference → learner → ota) ─
 
