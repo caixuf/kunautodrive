@@ -89,6 +89,27 @@ int st_graph_plan(const StgInput* in, StgResult* out)
 {
     if (!in || !out) return -1;
 
+    /*
+     * 仅当前驱速度落在候选速度附近的可行加速度带内，转移才可能满足
+     * |a| <= STG_A_MAX。边界两侧各保留一个候选并保留下面原有加速度检查，
+     * 确保浮点取整不会改变可行集合。
+     */
+    int pred_first[STG_MAX_CAND];
+    int pred_last[STG_MAX_CAND];
+    const double accel_delta_v2 = 2.0 * STG_S_RES * STG_A_MAX;
+    for (int k = 0; k < STG_MAX_CAND; k++) {
+        const double vk = (double)k * STG_V_CAND_STEP;
+        const double lower_v2 = vk * vk > accel_delta_v2
+            ? vk * vk - accel_delta_v2 : 0.0;
+        const double upper_v2 = vk * vk + accel_delta_v2;
+        int first = (int)floor(sqrt(lower_v2) / STG_V_CAND_STEP) - 1;
+        int last = (int)ceil(sqrt(upper_v2) / STG_V_CAND_STEP) + 1;
+        if (first < 0) first = 0;
+        if (last >= STG_MAX_CAND) last = STG_MAX_CAND - 1;
+        pred_first[k] = first;
+        pred_last[k] = last;
+    }
+
     /* 视界动态扩展：max(50, 停点+5) */
     double horizon = STG_S_HORIZON;
     if (in->stop_s >= 0.0) {
@@ -158,7 +179,11 @@ int st_graph_plan(const StgInput* in, StgResult* out)
             double best_cost = STG_INF;
             int    best_j = -1;
             double best_t = 0.0;
-            for (int j = 0; j < cj_n; j++) {
+            int j_first = pred_first[k];
+            int j_last = pred_last[k];
+            if (j_first >= cj_n) j_first = cj_n - 1;
+            if (j_last >= cj_n) j_last = cj_n - 1;
+            for (int j = j_first; j <= j_last; j++) {
                 const StgDpState* p = &s_dp[i - 1][j];
                 if (p->cost >= STG_INF) continue;
                 double vj = s_cand[i - 1][j];
