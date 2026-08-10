@@ -17,6 +17,9 @@
 #include "topic_registry.h"
 #include "adas_msgs_gen.h"
 #include "degrade_ladder.h"
+#include "health.h"
+#include "safety_evidence.h"
+#include "safety_fault_injection.h"
 #include "clock_service.h"
 #include <cjson/cJSON.h>
 
@@ -76,6 +79,8 @@ struct SafetyParams {
     double min_gap{6.0};
     double time_headway{1.8};
     double hard_brake_ratio{0.45};
+    bool fault_inject_raw_cmd_timeout{false};
+    uint64_t fault_inject_after_us{0};
 };
 
 struct SafetyContext {
@@ -399,6 +404,13 @@ protected:
     Task run() override {
         uint32_t cycle = 0;
         uint64_t last_msg_us = clock_now_us();
+        SafetyFaultInjection fault_injection;
+        safety_fault_injection_init(&fault_injection,
+                                    params_.fault_inject_raw_cmd_timeout,
+                                    params_.fault_inject_after_us);
+        safety_fault_injection_start(&fault_injection, last_msg_us);
+        uint64_t injected_at_us = 0;
+        bool timeout_action_sent = false;
 
         /* 常驻订阅桥：替代 when_any_bus_for——该适配器（WhenAnyBusAwaitableT
          * 反复订阅/退订）多次循环后消息与超时 fire 双失效，safety 曾 3 次
@@ -411,28 +423,44 @@ protected:
             std::string topic;
             Message msg;
             if (cmd_bridge.try_take_any(&topic, &msg)) {
-                last_msg_us = clock_now_us();
-
-                ControlCmd cmd = parse_control_cmd(msg);
-                VehicleState state;
-                bool has_state = false;
-                pthread_mutex_lock(&g.state_mutex);
-                state = g.latest_state;
-                has_state = g.has_state;
-                pthread_mutex_unlock(&g.state_mutex);
-                bool intervened = apply_safety(cmd, state, has_state);
-                publish_cmd(cmd, intervened);
-
-                ++cycle;
-                if (intervened || cycle % 20 == 1) {
-                    LOG_INFO("safety_control", "#%u thr=%.2f brk=%.2f st=%.4f spd=%.1f tgt=%.1f %s",
-                             cycle, cmd.throttle, cmd.brake, cmd.steer, cmd.speed, cmd.target,
-                             intervened ? "INTERVENED" : "pass");
-                }
-            } else {
-                /* 无新消息：数据超时检查 + 固定 5ms 轮询 */
                 uint64_t now_us = clock_now_us();
-                /* 车已停稳（speed<=0.5）时 raw_cmd 停发属正常行为：
+                if (safety_fault_injection_drop_raw_command(&fault_injection, now_us)) {
+                    if (injected_at_us == 0) {
+                        injected_at_us = now_us;
+                        health_record_error("safety_control",
+                                            "fault injection: raw command timeout");
+                        publish_fault_evidence(true, injected_at_us, 0,
+                                               now_us - last_msg_us);
+                        LOG_WARN("safety_control",
+                                 "FAULT_INJECTION raw_cmd_timeout active; dropping raw commands");
+                    }
+                } else {
+                    last_msg_us = now_us;
+                    health_heartbeat("safety_control");
+
+                    ControlCmd cmd = parse_control_cmd(msg);
+                    VehicleState state;
+                    bool has_state = false;
+                    pthread_mutex_lock(&g.state_mutex);
+                    state = g.latest_state;
+                    has_state = g.has_state;
+                    pthread_mutex_unlock(&g.state_mutex);
+                    bool intervened = apply_safety(cmd, state, has_state);
+                    publish_cmd(cmd, intervened);
+
+                    ++cycle;
+                    if (intervened || cycle % 20 == 1) {
+                        LOG_INFO("safety_control", "#%u thr=%.2f brk=%.2f st=%.4f spd=%.1f tgt=%.1f %s",
+                                 cycle, cmd.throttle, cmd.brake, cmd.steer, cmd.speed, cmd.target,
+                                 intervened ? "INTERVENED" : "pass");
+                    }
+                }
+            }
+
+            /* 每个轮询节拍都检查数据超时。故障注入期间 raw_cmd 仍持续抵达
+             * 但被故意丢弃，不能把检测藏在“队列为空”的分支里。 */
+            uint64_t now_us = clock_now_us();
+            /* 车已停稳（speed<=0.5）时 raw_cmd 停发属正常行为：
                  * 例如红灯前刹停后 control 不再高频发 cmd。此时心跳缺失
                  * 不应判 L3，否则与 degrade_ladder 的自动恢复形成 MRM 拉锯
                  * （车停稳却反复 降级→恢复→降级）。仅当车仍在运动而 2s 无
@@ -443,17 +471,33 @@ protected:
                  * 丢包率高，1s 超时导致 MRM 拉锯循环：
                  *   车停→L3清除→起步加速→speed>0.5→raw_cmd 1s stale→L3
                  *   →刹车→停稳→3s 恢复→起步→... 无限循环车速恒为 0 */
-                double cur_speed = 0.0;
-                bool has_state = false;
-                pthread_mutex_lock(&g.state_mutex);
-                cur_speed = g.latest_state.speed;
-                has_state = g.has_state;
-                pthread_mutex_unlock(&g.state_mutex);
-                bool moving = has_state && cur_speed > 0.5;
-                if (moving && (now_us - last_msg_us > 2000000ULL)) {
-                    /* 行驶中数据超时 > 2s → L3 立即停 */
-                    degrade_set_level(DEGRADE_L3, DEGRADE_REASON_HEARTBEAT);
-                }
+            double cur_speed = 0.0;
+            bool has_state = false;
+            pthread_mutex_lock(&g.state_mutex);
+            cur_speed = g.latest_state.speed;
+            has_state = g.has_state;
+            pthread_mutex_unlock(&g.state_mutex);
+            bool moving = has_state && cur_speed > 0.5;
+            if (safety_raw_command_timeout_expired(now_us, last_msg_us, moving,
+                                                   2000000ULL) &&
+                !timeout_action_sent) {
+                /* 行驶中数据超时 > 2s → L3，并由安全闸门主动下发制动，
+                 * 不能只等待一个可能永远不会再来的 raw_cmd。 */
+                degrade_set_level_at(DEGRADE_L3, DEGRADE_REASON_HEARTBEAT,
+                                     (int64_t)(now_us / 1000));
+                health_record_error("safety_control", "raw command timeout");
+                ControlCmd emergency_stop;
+                emergency_stop.brake = 1.0;
+                emergency_stop.hazard = true;
+                emergency_stop.mode = "DATA_TIMEOUT+SAFE";
+                publish_cmd(emergency_stop, true);
+                publish_fault_evidence(fault_injection.activated,
+                                       injected_at_us, now_us,
+                                       now_us - last_msg_us);
+                timeout_action_sent = true;
+                LOG_ERROR("safety_control",
+                          "raw_cmd timeout %.0fms while moving: L3 emergency stop published",
+                          (double)(now_us - last_msg_us) / 1000.0);
             }
             co_await sleep_us(5000);  /* 5ms 轮询节拍（消息驱动 → 固定周期） */
         }
@@ -636,6 +680,21 @@ private:
              * 职责边界：safety 是纯安全闸门（clamp + 碰撞制动覆写），不发起恢复。
              * control 负责所有死锁恢复（已含 target_speed 检查，红灯时不触发）。 */
         }
+        /* degrade_ladder 是全局安全策略的唯一权威。先由本层完成碰撞/TTC
+         * 限幅，再在出口处执行 L2/L3，保证上游恢复出新 raw_cmd 时不会绕过
+         * 已锁存的最小风险动作。 */
+        const DegradeAction degrade_action = degrade_layer_action();
+        if (degrade_action.immediate_stop) {
+            set_changed(cmd.throttle, 0.0);
+            set_changed(cmd.brake, 1.0);
+            set_changed(cmd.steer, 0.0);
+            cmd.hazard = true;
+        } else if (degrade_action.mrm_stop) {
+            set_changed(cmd.throttle, 0.0);
+            set_changed(cmd.brake, std::max(cmd.brake, 0.70));
+            cmd.hazard = true;
+        }
+
         if (changed && cmd.mode.find("SAFE") == std::string::npos) {
             cmd.mode += "+SAFE";
         }
@@ -686,6 +745,31 @@ private:
                           static_cast<uint32_t>(std::strlen(out) + 1));
     }
 
+    void publish_fault_evidence(bool injected, uint64_t injected_at_us,
+                                uint64_t detected_at_us,
+                                uint64_t last_input_age_us) const {
+        const DegradeAction action = degrade_layer_action();
+        SafetyEvidence evidence = {
+            .fault_id = "raw_cmd_timeout",
+            .fault_type = "data_timeout",
+            .component = "safety_control",
+            .injected = injected,
+            .injected_at_us = injected_at_us,
+            .detected_at_us = detected_at_us,
+            .last_input_age_us = last_input_age_us,
+            .action = action,
+            .command_throttle = 0.0,
+            .command_brake = action.immediate_stop ? 1.0 : 0.0,
+            .command_steer = 0.0,
+        };
+        char* json = safety_evidence_to_json(&evidence);
+        if (!json) return;
+        transport_publish(transport_, "safety/evidence",
+                          reinterpret_cast<const uint8_t*>(json),
+                          static_cast<uint32_t>(std::strlen(json) + 1));
+        cJSON_free(json);
+    }
+
     Transport* transport_;
     SafetyParams params_;
 };
@@ -694,7 +778,7 @@ private:
 EXPORT_COROUTINE_TASK(SafetyControlTask, safety_control)
 
 const char* s_inputs[] = {"control/raw_cmd", TOPIC_FUSION_LOCALIZATION, TOPIC_PERCEPTION_OBSTACLES, nullptr};
-const char* s_outputs[] = {"control/cmd", nullptr};
+const char* s_outputs[] = {"control/cmd", "safety/evidence", nullptr};
 extern NodePlugin s_plugin;
 
 int safety_init(MessageBus* bus, Transport* transport, DiscoveryManager* discovery,
@@ -705,17 +789,47 @@ int safety_init(MessageBus* bus, Transport* transport, DiscoveryManager* discove
     g.scheduler = scheduler;
     g.params = SafetyParams{};
     g.has_state = false;
+    health_init();
+    health_register("safety_control",
+                    (HealthCapability)(HEALTH_CAP_CONTROL | HEALTH_CAP_SAFETY_CRITICAL));
 
     if (params_json) {
-        scan_double(params_json, "\"max_throttle\":", &g.params.max_throttle);
-        scan_double(params_json, "\"max_steer\":", &g.params.max_steer);
-        scan_double(params_json, "\"low_speed_steer\":", &g.params.low_speed_steer);
-        scan_double(params_json, "\"time_headway\":", &g.params.time_headway);
+        cJSON* params = cJSON_Parse(params_json);
+        if (params) {
+            cJSON* item;
+            if ((item = cJSON_GetObjectItemCaseSensitive(params, "max_throttle")) &&
+                cJSON_IsNumber(item)) g.params.max_throttle = item->valuedouble;
+            if ((item = cJSON_GetObjectItemCaseSensitive(params, "max_steer")) &&
+                cJSON_IsNumber(item)) g.params.max_steer = item->valuedouble;
+            if ((item = cJSON_GetObjectItemCaseSensitive(params, "low_speed_steer")) &&
+                cJSON_IsNumber(item)) g.params.low_speed_steer = item->valuedouble;
+            if ((item = cJSON_GetObjectItemCaseSensitive(params, "time_headway")) &&
+                cJSON_IsNumber(item)) g.params.time_headway = item->valuedouble;
+
+            /* 显式 opt-in 的闭环故障注入。默认 pipeline 不包含此对象，量产
+             * 配置不会触发；测试配置设 raw_cmd_timeout 后，节点在 after_ms
+             * 之后丢弃 raw_cmd，复用真实 2s timeout/L3/制动路径。 */
+            cJSON* fault = cJSON_GetObjectItemCaseSensitive(params, "fault_injection");
+            if (cJSON_IsObject(fault)) {
+                cJSON* type = cJSON_GetObjectItemCaseSensitive(fault, "type");
+                cJSON* after = cJSON_GetObjectItemCaseSensitive(fault, "after_ms");
+                if (cJSON_IsString(type) &&
+                    strcmp(type->valuestring, "raw_cmd_timeout") == 0 &&
+                    cJSON_IsNumber(after) && after->valuedouble >= 0.0 &&
+                    after->valuedouble <= 600000.0) {
+                    g.params.fault_inject_raw_cmd_timeout = true;
+                    g.params.fault_inject_after_us =
+                        (uint64_t)(after->valuedouble * 1000.0);
+                }
+            }
+            cJSON_Delete(params);
+        }
     }
 
     transport_subscribe(transport, TOPIC_FUSION_LOCALIZATION, on_fusion, nullptr);
     transport_subscribe(transport, TOPIC_PERCEPTION_OBSTACLES, on_perception_obstacles, nullptr);
     transport_advertise(transport, "control/cmd", CONTROL_CMD_TYPE_ID);
+    transport_advertise(transport, "safety/evidence", 0u);
 
     /* §n: 注册 Req/Reply 服务 — 查询安全状态 */
     message_bus_register_service(bus, "safety/status", [](const Message* req, Message* rep, void*) {

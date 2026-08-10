@@ -18,6 +18,50 @@ def load_evaluator():
 
 
 class DemoEvaluatorTest(unittest.TestCase):
+    def test_safety_evidence_contract_accepts_l3_emergency_stop(self):
+        evaluator = load_evaluator()
+        evidence = {
+            "schema_version": 1,
+            "fault": {
+                "id": "raw_cmd_timeout",
+                "type": "data_timeout",
+                "component": "safety_control",
+                "injected": True,
+                "injected_at_us": 1_500_000,
+                "detected_at_us": 3_500_001,
+            },
+            "degrade": {"level": 3, "reason": 9},
+            "action": {
+                "name": "emergency_stop",
+                "immediate_stop": True,
+                "command": {"throttle": 0.0, "brake": 1.0, "steer": 0.0},
+            },
+        }
+        self.assertEqual(evaluator.validate_safety_evidence(evidence), [])
+
+    def test_safety_evidence_contract_rejects_missing_brake(self):
+        evaluator = load_evaluator()
+        evidence = {
+            "schema_version": 1,
+            "fault": {
+                "id": "raw_cmd_timeout",
+                "type": "data_timeout",
+                "component": "safety_control",
+                "injected": True,
+                "injected_at_us": 1,
+                "detected_at_us": 2,
+            },
+            "degrade": {"level": 3},
+            "action": {
+                "name": "emergency_stop",
+                "immediate_stop": True,
+                "command": {"throttle": 0.0, "brake": 0.5},
+            },
+        }
+        failures = evaluator.validate_safety_evidence(evidence)
+        self.assertTrue(failures)
+        self.assertIn("brake=1", failures[0])
+
     def test_expected_edges_are_generated_from_pipeline(self):
         evaluator = load_evaluator()
         pipeline = {

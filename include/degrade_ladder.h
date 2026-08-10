@@ -88,7 +88,19 @@ typedef struct {
 /* ══════════════════════════════════════════════════════════ */
 
 DegradeState* degrade_global_state(void);
+
+/**
+ * 仅允许向更高风险等级迁移；恢复必须经 degrade_clear() 完成。
+ * 时间戳由当前单调时钟填写。
+ */
 void degrade_set_level(int level, int reason);
+
+/**
+ * 与 degrade_set_level() 相同，但调用方提供毫秒单调时间，供 supervisor
+ * 和可复现的故障注入测试写入可审计的 transition 时间。
+ */
+void degrade_set_level_at(int level, int reason, int64_t now_ms);
+
 void degrade_clear(void);
 
 /* ══════════════════════════════════════════════════════════ */

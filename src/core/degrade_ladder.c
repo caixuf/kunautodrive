@@ -10,6 +10,7 @@
  */
 
 #include "degrade_ladder.h"
+#include "clock_service.h"
 #include <string.h>
 #include <stdio.h>
 #if defined(_WIN32)
@@ -81,12 +82,18 @@ DegradeState* degrade_global_state(void) {
     return &g_degrade;
 }
 
-void degrade_set_level(int level, int reason) {
-    /* 不降级（方向错误，L0 是最高） */
+void degrade_set_level_at(int level, int reason, int64_t now_ms) {
     if (level < DEGRADE_L0 || level > DEGRADE_L3) return;
+
+    /* L0 是全功能状态。事故后不允许任意节点把 L2/L3 覆写回较低等级；
+     * 恢复只能走 supervisor 的去抖 degrade_clear()。 */
+    int current = (int)FLOW_ATOMIC_LOAD(&g_degrade.degrade_level);
+    if (level < current) return;
+    if (level == current && level != DEGRADE_L0) return;
+
     FLOW_ATOMIC_STORE(&g_degrade.degrade_level, level);
     FLOW_ATOMIC_STORE(&g_degrade.degrade_reason, reason);
-    FLOW_ATOMIC_STORE(&g_degrade.degrade_timestamp_ms, 0); /* 由调用方填充 */
+    FLOW_ATOMIC_STORE(&g_degrade.degrade_timestamp_ms, now_ms);
 
     /* 根据等级和原因设置 L1 参数 */
     if (level >= DEGRADE_L1) {
@@ -98,6 +105,10 @@ void degrade_set_level(int level, int reason) {
     if (level >= DEGRADE_L3) {
         FLOW_ATOMIC_STORE(&g_degrade.l1_speed_limit, 0.0);  /* 立即停 */
     }
+}
+
+void degrade_set_level(int level, int reason) {
+    degrade_set_level_at(level, reason, (int64_t)(clock_now_us() / 1000));
 }
 
 void degrade_clear(void) {
@@ -201,16 +212,12 @@ void degrade_supervisor_tick(int64_t now_ms) {
     /* 统计各节点超时状态 */
     int timeout_count = 0;
     int timeout_1s_count = 0;
-    int64_t oldest_heartbeat = now_ms;
-
     for (int i = 0; i < g_supervisor.node_count; i++) {
         int64_t hb = g_supervisor.nodes[i].last_heartbeat_ms;
         if (hb == 0) continue;  /* 未注册，不视为超时 */
 
         int64_t age = now_ms - hb;
         if (age < 0) age = 0;
-
-        if (age < oldest_heartbeat) oldest_heartbeat = age;
 
         if (age > 500) {
             if (g_supervisor.nodes[i].timeout_since_ms == 0)
@@ -249,13 +256,11 @@ void degrade_supervisor_tick(int64_t now_ms) {
     if (timeout_1s_count >= 2) {
         /* 多节点超时 >2s → L3 */
         if (current < DEGRADE_L3) {
-            g_degrade.degrade_timestamp_ms = now_ms;
-            degrade_set_level(DEGRADE_L3, DEGRADE_REASON_PLANNING_TO);
+            degrade_set_level_at(DEGRADE_L3, DEGRADE_REASON_PLANNING_TO, now_ms);
         }
     } else if (timeout_1s_count >= 1) {
         /* 单节点超时 >2s → L2 */
         if (current < DEGRADE_L2) {
-            g_degrade.degrade_timestamp_ms = now_ms;
             int reason = DEGRADE_REASON_CONTROL_TO;
             for (int i = 0; i < g_supervisor.node_count; i++) {
                 if (g_supervisor.nodes[i].last_heartbeat_ms < now_ms - 2000) {
@@ -263,18 +268,16 @@ void degrade_supervisor_tick(int64_t now_ms) {
                     break;
                 }
             }
-            degrade_set_level(DEGRADE_L2, reason);
+            degrade_set_level_at(DEGRADE_L2, reason, now_ms);
         }
     } else if (timeout_count >= 2) {
         /* 多节点超时 >500ms → L2 */
         if (current < DEGRADE_L2) {
-            g_degrade.degrade_timestamp_ms = now_ms;
-            degrade_set_level(DEGRADE_L2, DEGRADE_REASON_PLANNING_TO);
+            degrade_set_level_at(DEGRADE_L2, DEGRADE_REASON_PLANNING_TO, now_ms);
         }
     } else if (timeout_count >= 1) {
         /* 单节点超时 >500ms → L1 */
         if (current < DEGRADE_L1) {
-            g_degrade.degrade_timestamp_ms = now_ms;
             int reason = DEGRADE_REASON_CONTROL_TO;
             for (int i = 0; i < g_supervisor.node_count; i++) {
                 if (g_supervisor.nodes[i].timeout_since_ms != 0 &&
@@ -283,7 +286,7 @@ void degrade_supervisor_tick(int64_t now_ms) {
                     break;
                 }
             }
-            degrade_set_level(DEGRADE_L1, reason);
+            degrade_set_level_at(DEGRADE_L1, reason, now_ms);
         }
     }
 }

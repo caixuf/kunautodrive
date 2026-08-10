@@ -435,6 +435,8 @@ set(CORE_SOURCES
     src/core/health.c
     src/core/auto_tuner.c
     src/core/degrade_ladder.c
+    src/core/safety_fault_injection.c
+    src/core/safety_evidence.c
     # src/core/mpc_controller.c — removed 2026-07-28, per ALGORITHM_REFACTOR_PLAN §12
     # src/core/intent_predictor.c — removed 2026-07-28, per ALGORITHM_REFACTOR_PLAN §12
 )
@@ -958,6 +960,12 @@ target_include_directories(test_new_modules PRIVATE ${GEN_DIR})
 
 add_test(NAME new_module_tests COMMAND test_new_modules)
 set_tests_properties(new_module_tests PROPERTIES TIMEOUT 10)
+
+# ── 安全故障注入 / 证据链：确定性心跳丢失和 raw_cmd timeout ──
+add_executable(test_safety_fault_evidence tests/test_safety_fault_evidence.c)
+target_link_libraries(test_safety_fault_evidence flowengine_core)
+add_test(NAME safety_fault_evidence_tests COMMAND test_safety_fault_evidence)
+set_tests_properties(safety_fault_evidence_tests PROPERTIES TIMEOUT 10)
 
 # ── flowrec 配置驱动 Bag v2 采集单元测试 ───────────────────
 add_executable(test_flowrec tests/test_flowrec.c)

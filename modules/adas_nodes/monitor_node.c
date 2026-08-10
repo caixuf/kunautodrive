@@ -209,6 +209,11 @@ static struct {
     char control_debug_json[2048];
     /* 规划层 debug（来自 planning/debug JSON topic，全链路横向调试） */
     char planning_debug_json[2048];
+    /* 安全故障注入/超时证据：保留最近一条完整 JSON，供 dashboard 与 CI evaluator
+     * 消费。锁避免 topic 回调写入与 dashboard 序列化并发。 */
+    char safety_evidence_json[2048];
+    pthread_mutex_t safety_evidence_mutex;
+    volatile int has_safety_evidence;
     volatile int has_planning;
 
     /* Phase 2: 道路几何缓存（从 road/geometry topic 获取，flowsim_node 发布） */
@@ -751,6 +756,31 @@ static void on_planning_debug(const Message* msg, void* user_data) {
     cJSON_Delete(pd);
 }
 
+static void on_safety_evidence(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg || msg->data_size == 0) return;
+
+    /* 只接受合法 JSON；缓存压缩后的完整对象，避免任何未验证 topic payload
+     * 混入 dashboard/evaluator 证据链。 */
+    cJSON* evidence = monitor_cJSON_ParseLength((const char*)msg->data, msg->data_size);
+    if (!evidence) return;
+    char* compact = cJSON_PrintUnformatted(evidence);
+    cJSON_Delete(evidence);
+    if (!compact) return;
+
+    size_t len = strlen(compact);
+    if (len >= sizeof(g.safety_evidence_json)) {
+        LOG_WARN("monitor", "safety evidence too large: %zu bytes", len);
+        free(compact);
+        return;
+    }
+    pthread_mutex_lock(&g.safety_evidence_mutex);
+    memcpy(g.safety_evidence_json, compact, len + 1);
+    g.has_safety_evidence = 1;
+    pthread_mutex_unlock(&g.safety_evidence_mutex);
+    free(compact);
+}
+
 /* JSON 标量提取辅助（json_extract_double / json_extract_int / json_extract_string）
  * 已迁移至共享工具 include/json_extract.h，避免与其他模块（如
  * src/algorithms/nuscenes_loader.c）各自维护一份不一致的实现。 */
@@ -844,6 +874,14 @@ static void export_dashboard_json(void) {
     memcpy(vehicle_state_snap, g.latest_vehicle_state, vs_len);
     vehicle_state_snap[vs_len] = '\0';
     pthread_mutex_unlock(&g.vehicle_state_mutex);
+    char safety_evidence_snap[sizeof(g.safety_evidence_json)];
+    pthread_mutex_lock(&g.safety_evidence_mutex);
+    size_t evidence_len = strnlen(g.safety_evidence_json,
+                                  sizeof(g.safety_evidence_json) - 1);
+    memcpy(safety_evidence_snap, g.safety_evidence_json, evidence_len);
+    safety_evidence_snap[evidence_len] = '\0';
+    int has_safety_evidence = g.has_safety_evidence;
+    pthread_mutex_unlock(&g.safety_evidence_mutex);
 
     /* ── Build cJSON tree ── */
     cJSON* root = cJSON_CreateObject();
@@ -973,6 +1011,11 @@ static void export_dashboard_json(void) {
     cJSON_AddStringToObject(metrics, "driver_mode",
                             g.driver_mode[0] ? g.driver_mode : "NA:READY");
     cJSON_AddNumberToObject(metrics, "route_lane", g.route_lane);
+
+    if (has_safety_evidence && safety_evidence_snap[0]) {
+        cJSON* evidence = monitor_cJSON_Parse(safety_evidence_snap);
+        if (evidence) cJSON_AddItemToObject(metrics, "safety_evidence", evidence);
+    }
 
     /* 行为规划状态 */
     if (g.behavior_state_json[0]) {
@@ -1750,7 +1793,7 @@ static const char* s_inputs[]  = { TOPIC_PERCEPTION_OBSTACLES, TOPIC_VEHICLE_STA
                                    TOPIC_FUSION_LATENCY, TOPIC_FLOWENGINE_NODE_INFO,
                                    TOPIC_PLANNING_TRAJECTORY, TOPIC_ROAD_GEOMETRY,
                                    TOPIC_SCENE_FRAME, TOPIC_CONTROL_CTE,
-                                   "traffic/traffic_lights", NULL };
+                                   "traffic/traffic_lights", "safety/evidence", NULL };
 static const char* s_outputs[] = { "pem/degrade_event", NULL };
 
 static NodePlugin s_plugin;
@@ -1763,6 +1806,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     g.transport   = transport;
     g.discovery   = discovery;
     g.scheduler   = scheduler;
+    pthread_mutex_init(&g.safety_evidence_mutex, NULL);
 
     /* state_file 可从环境变量或默认路径获得 */
     const char* sf = flowengine_state_file();
@@ -1776,6 +1820,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
              "{\"state\":\"NA\",\"committed_lane\":0,\"obs_count\":0}");
     g.control_debug_json[0] = '\0';
     g.planning_debug_json[0] = '\0';
+    g.safety_evidence_json[0] = '\0';
 
     /* samples 环形缓冲初始态 */
     g.samples_head = 0;
@@ -1883,6 +1928,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     transport_subscribe(transport, "behavior/state", on_behavior_state, NULL);
     transport_subscribe(transport, TOPIC_CONTROL_DEBUG, on_control_debug, NULL);
     transport_subscribe(transport, TOPIC_PLANNING_DEBUG, on_planning_debug, NULL);
+    transport_subscribe(transport, "safety/evidence", on_safety_evidence, NULL);
     /* 收集其他节点的自描述广播 (方案B: 数据驱动拓扑感知) */
     transport_subscribe(transport, TOPIC_FLOWENGINE_NODE_INFO, on_node_info, NULL);
     g.node_info_count = 0;
@@ -1998,6 +2044,7 @@ static void monitor_cleanup(void) {
     if (g.dashboard_ch) { ipc_channel_close(g.dashboard_ch); g.dashboard_ch = NULL; }
     pthread_mutex_destroy(&g.remote_stats_mutex);
     pthread_mutex_destroy(&g.vehicle_state_mutex);
+    pthread_mutex_destroy(&g.safety_evidence_mutex);
     pthread_mutex_destroy(&g.scene_frame_mutex);
     LOG_INFO("monitor", "cleanup done");
 }

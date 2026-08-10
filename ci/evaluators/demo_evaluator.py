@@ -29,6 +29,37 @@ DEFAULT_JSON = Path("/tmp/flow_topology.json")
 LAUNCHER_STDERR = Path("/tmp/flow_launcher_stderr.txt")
 PIPELINE_JSON = ROOT / "config" / "pipeline.json"
 
+
+def validate_safety_evidence(evidence: object) -> list[str]:
+    """Validate the v1 timeout-injection evidence contract for CI."""
+    if not isinstance(evidence, dict):
+        return ["safety evidence missing"]
+    if evidence.get("schema_version") != 1:
+        return ["safety evidence schema_version must be 1"]
+
+    fault = evidence.get("fault")
+    degrade = evidence.get("degrade")
+    action = evidence.get("action")
+    if not isinstance(fault, dict) or not isinstance(degrade, dict) or not isinstance(action, dict):
+        return ["safety evidence requires fault, degrade, and action objects"]
+    if fault.get("id") != "raw_cmd_timeout" or fault.get("type") != "data_timeout":
+        return ["safety evidence fault must identify raw_cmd_timeout/data_timeout"]
+    if fault.get("component") != "safety_control" or fault.get("injected") is not True:
+        return ["safety evidence must identify an injected safety_control fault"]
+    if not isinstance(fault.get("injected_at_us"), (int, float)) or \
+            not isinstance(fault.get("detected_at_us"), (int, float)) or \
+            fault["detected_at_us"] <= fault["injected_at_us"]:
+        return ["safety evidence must contain ordered injection/detection timestamps"]
+    if degrade.get("level") != 3:
+        return ["safety evidence timeout must transition to degrade L3"]
+    if action.get("name") != "emergency_stop" or action.get("immediate_stop") is not True:
+        return ["safety evidence timeout must record emergency_stop"]
+    command = action.get("command")
+    if not isinstance(command, dict) or command.get("throttle") != 0.0 or command.get("brake") != 1.0:
+        return ["safety evidence emergency_stop must command throttle=0 and brake=1"]
+    return []
+
+
 TOPIC_MIN_FREQ = {
     "vehicle/state": 15.0,
     "sensor/lidar": 15.0,
@@ -1983,6 +2014,8 @@ def main() -> int:
                         help="override ego lateral offset from route reference (meters)")
     parser.add_argument("--json-out", type=Path, default=None,
                         help="write the machine-readable evaluation result to this JSON path")
+    parser.add_argument("--require-safety-evidence", action="store_true",
+                        help="require injected raw_cmd timeout evidence with L3 emergency stop")
     args = parser.parse_args()
 
     # Auto-detect duration from scenario if not explicitly given
@@ -2012,6 +2045,7 @@ def main() -> int:
                 base_driver = base_metrics.get("driver_mode", "NA:READY")
                 base_route = base_metrics.get("route_lane", 0)
                 base_behavior = base_metrics.get("behavior", {})
+                base_safety_evidence = base_metrics.get("safety_evidence")
                 base_obstacles = base_scene.get("obstacles", [])
                 base_entities = base_scene.get("entities", [])
 
@@ -2043,6 +2077,7 @@ def main() -> int:
                             "driver_mode": base_driver,
                             "route_lane": base_route,
                             "behavior": base_behavior,
+                            "safety_evidence": base_safety_evidence,
                         },
                     })
             else:
@@ -2084,6 +2119,16 @@ def main() -> int:
         _scn_dict = load_json(_scn_path)
 
     failures, warnings, summary = score(samples, LAUNCHER_STDERR, criteria, scenario_name, has_noa_route=has_noa_route, road=road, traffic_lights=traffic_lights, scenario=_scn_dict, expected_duration_s=duration if not args.no_run else None)
+
+    latest_safety_evidence = None
+    for sample in reversed(samples):
+        candidate = sample.get("metrics", {}).get("safety_evidence")
+        if isinstance(candidate, dict):
+            latest_safety_evidence = candidate
+            break
+    summary["safety_evidence_present"] = latest_safety_evidence is not None
+    if args.require_safety_evidence:
+        failures.extend(validate_safety_evidence(latest_safety_evidence))
 
     print("\n=== FlowEngine Demo Evaluation ===")
     for key, value in summary.items():
@@ -2141,6 +2186,7 @@ def main() -> int:
             "failures": failures,
             "warnings": warnings,
             "summary": summary,
+            "safety_evidence": latest_safety_evidence,
             "samples": samples,  # 全量 ego 轨迹采样(t/x/y/heading/speed/steer)，供离线故事/事故分析
             "npc_trajectories": {str(eid): pts for eid, pts in npc_trajectories.items()},  # B: NPC 轨迹
         }

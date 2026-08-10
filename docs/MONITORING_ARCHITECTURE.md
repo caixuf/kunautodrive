@@ -241,3 +241,30 @@ python3 tools/pem_dump.py /tmp/kunautodrive_pem_*.pem
 写入基础设施健康记录，并在降级状态迁移时发布 `pem/degrade_event`。FlowCoro
 采集器订阅车辆 topic，保持回调非阻塞，异步写入持续行程指标和关键事件记录。
 topic 契约与扩展规则见[数据闭环](DATA_CLOSED_LOOP.md#业务回调流)。
+
+## 安全故障注入与证据链（测试用途）
+
+此机制用于回归测试故障隔离链路，**不构成功能安全认证或安全完整性等级声明**。
+
+- `safety_control` 的 `params` 显式配置
+  `{"fault_injection":{"type":"raw_cmd_timeout","after_ms":500}}` 后，节点在
+  500ms 后丢弃 `control/raw_cmd`；默认配置没有该对象，运行时零影响。
+- 真实数据超时路径仍使用 2s 门限：车辆运动时进入 `degrade_ladder` L3，
+  `safety_control` 主动发布 `throttle=0, brake=1`，不会等待不再到来的上游命令。
+- 每次注入与检测均发布 `safety/evidence` JSON；`monitor_node` 将最后一条导出为
+  `metrics.safety_evidence`。终态证据包含注入/检测单调时间、L3 原因和制动命令，
+  可由 `flowrec` 或 dashboard JSON 保存。
+
+确定性单测会同时覆盖缺失心跳（L1 安全包络）和 raw_cmd 超时（L3 紧急制动）：
+
+```bash
+cmake --build build --target test_safety_fault_evidence
+mkdir -p out
+./build/bin/test_safety_fault_evidence --json-out out/safety_fault_evidence.json
+python3 ci/evaluators/demo_evaluator.py --no-run \
+  --json-file <monitor-dashboard.json> --require-safety-evidence \
+  --json-out out/fault_injection_evaluation.json
+```
+
+`--require-safety-evidence` 会校验 v1 schema、注入/检测时间顺序、L3 和
+`emergency_stop(throttle=0, brake=1)`；任一字段缺失会使 CI 失败。
