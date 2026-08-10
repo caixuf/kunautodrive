@@ -47,7 +47,7 @@ double CubicSpline1D::calc_der0(double t) {
 
     int i = search_index(t) - 1;
     double dx = t - x[i];
-    return a[i] + b[i] * dx + c[i] * pow(dx, 2) + d[i] * pow(dx, 3);
+    return ((d[i] * dx + c[i]) * dx + b[i]) * dx + a[i];
 }
 
 // Calculate the 1st derivative evaluated at t
@@ -59,7 +59,7 @@ double CubicSpline1D::calc_der1(double t) {
     int i = search_index(t) - 1;
     double dx = t - x[i];
 
-    return b[i] + 2.0 * c[i] * dx + 3.0 * d[i] * pow(dx, 2);
+    return (3.0 * d[i] * dx + 2.0 * c[i]) * dx + b[i];
 }
 
 // Calculate the 2nd derivative evaluated at

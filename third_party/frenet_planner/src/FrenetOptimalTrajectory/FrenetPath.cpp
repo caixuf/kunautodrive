@@ -7,6 +7,25 @@ const float COLLISION_CHECK_THRESHOLD = 6; // don't check unless within 6m
 
 FrenetPath::FrenetPath(FrenetHyperparameters *fot_hp_) {
     fot_hp = fot_hp_;
+    const size_t point_capacity =
+        static_cast<size_t>(fot_hp->maxt / fot_hp->dt) + 2;
+    t.reserve(point_capacity);
+    d.reserve(point_capacity);
+    d_d.reserve(point_capacity);
+    d_dd.reserve(point_capacity);
+    d_ddd.reserve(point_capacity);
+    s.reserve(point_capacity);
+    s_d.reserve(point_capacity);
+    s_dd.reserve(point_capacity);
+    s_ddd.reserve(point_capacity);
+    x.reserve(point_capacity);
+    y.reserve(point_capacity);
+    yaw.reserve(point_capacity);
+    ds.reserve(point_capacity);
+    c.reserve(point_capacity);
+    ix.reserve(point_capacity);
+    iy.reserve(point_capacity);
+    iyaw.reserve(point_capacity);
 }
 
 // Convert the frenet path to global path in terms of x, y, yaw, velocity

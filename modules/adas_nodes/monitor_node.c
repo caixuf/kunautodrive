@@ -24,6 +24,9 @@
 #include "json_extract.h"
 #include "clock_service.h"
 #include "degrade_ladder.h"
+#include "health.h"
+#include "pem_log.h"
+#include "platform_paths.h"
 #include <cjson/cJSON.h>
 
 #include <stdlib.h>
@@ -108,6 +111,31 @@ static cJSON* monitor_cJSON_Parse(const char* json) {
     return json ? monitor_cJSON_ParseLength(json, strlen(json)) : NULL;
 }
 
+static char* find_last_substring(char* haystack, const char* needle) {
+    char* last = NULL;
+    char* p = haystack;
+    while ((p = strstr(p, needle)) != NULL) {
+        last = p++;
+    }
+    return last;
+}
+
+static int find_or_add_name_slot(char* names, size_t stride, int count,
+                                 const char* name) {
+    for (int i = 0; i < count; i++) {
+        char* slot = names + (size_t)i * stride;
+        if (slot[0] == '\0' || strcmp(slot, name) == 0) {
+            if (slot[0] == '\0') {
+                size_t len = strnlen(name, stride - 1);
+                memcpy(slot, name, len);
+                slot[len] = '\0';
+            }
+            return i;
+        }
+    }
+    return -1;
+}
+
 /* ── 节点本地状态 ───────────────────────────────────────────── */
 
 static struct {
@@ -124,6 +152,26 @@ static struct {
     SysMonitorSnapshot sysmon_cache;
     uint64_t slow_metrics_last_wall_us;
     char* registry_json_cache;
+    bool embedded_mode;
+    bool frequency_configured;
+    PemLog pem_log;
+    char pem_log_path[512];
+    uint64_t pem_rotate_sec;
+    uint64_t pem_rotate_bytes;
+    double pem_cpu_critical_pct;
+    double pem_mem_critical_pct;
+    uint64_t pem_last_error_log_us;
+    struct {
+        char topic[MSG_BUS_MAX_TOPIC_LEN];
+        uint64_t drop_count;
+        uint64_t deadline_count;
+    } pem_topic_state[64];
+    int pem_last_degrade_level;
+    int pem_last_degrade_reason;
+    struct {
+        char name[32];
+        HealthStatus status;
+    } pem_health_state[HEALTH_MAX_NODES];
 
     /* 订阅数据缓存 */
     char latest_obstacles_json[8192];
@@ -1449,9 +1497,19 @@ static void export_dashboard_json(void) {
     }
 
     /* Publish via IPC dashboard bridge for flowmond.
-     * 直接用 json_str，无需再次从磁盘读取——消除双重 I/O。 */
+     * 浏览器只消费实时 metrics，不读取顶层 samples 历史；samples 仅供直接读取
+     * state_file 的 evaluator/trace 工具使用。完整 JSON 约 72KB，会跨过 IPC
+     * 65KB 分块阈值而每帧复制两个固定 chunk（约 130KB）。samples 是根对象最后
+     * 一个字段，生成轻量副本裁掉它后约 42KB，保持单 chunk，文件契约不变。 */
     if (g.dashboard_ch) {
-        if (dashboard_bridge_publish(g.dashboard_ch, json_str, strlen(json_str)) != 0) {
+        size_t bridge_len = strlen(json_str);
+        char* samples_field = find_last_substring(json_str, ",\"samples\":[");
+        if (samples_field && bridge_len > 0 && json_str[bridge_len - 1] == '}') {
+            *samples_field = '}';
+            samples_field[1] = '\0';
+            bridge_len = (size_t)(samples_field - json_str) + 1;
+        }
+        if (dashboard_bridge_publish(g.dashboard_ch, json_str, bridge_len) != 0) {
             LOG_WARN("monitor", "dashboard bridge publish failed, will reopen channel");
             ipc_channel_close(g.dashboard_ch);
             g.dashboard_ch = NULL;
@@ -1483,7 +1541,7 @@ static int monitor_execute(TaskBase* task) {
     /* RateControl/LatencyTracker not yet implemented — use simple usleep */
 
     while (!task->should_stop) {
-        monitor_try_reopen_ipc_bridges();
+        if (!g.embedded_mode) monitor_try_reopen_ipc_bridges();
 
         uint64_t sleep_now_us = clock_now_us();
         if (sleep_now_us < next_deadline_us)
@@ -1498,6 +1556,112 @@ static int monitor_execute(TaskBase* task) {
         /* RateControl 门控：若距上次执行不足 period_us，跳过本次 */
 
         uint64_t t0 = clock_now_us();
+
+        if (g.embedded_mode) {
+            uint64_t now_us = clock_now_us();
+            uint64_t realtime_us = clock_now_realtime_us();
+            SysMonitorSnapshot snapshot;
+            if (g.sysmon && sysmonitor_snapshot(g.sysmon, &snapshot) == 0) {
+                bool critical = snapshot.cpu_total_pct >= g.pem_cpu_critical_pct ||
+                                snapshot.mem_used_pct >= g.pem_mem_critical_pct;
+                double values[8] = {
+                    snapshot.cpu_total_pct, snapshot.mem_used_pct,
+                    (double)snapshot.proc_rss_kb, snapshot.load1,
+                    (double)snapshot.thread_count, snapshot.disk_read_bps,
+                    snapshot.disk_write_bps, 0.0
+                };
+                if (pem_log_write(&g.pem_log, PEM_RECORD_SYSTEM, critical ? 1u : 0u,
+                                  now_us, realtime_us, "system", values, critical) != 0 &&
+                    now_us - g.pem_last_error_log_us >= 1000000ULL) {
+                    LOG_ERROR("monitor", "PEM system record write failed");
+                    g.pem_last_error_log_us = now_us;
+                }
+            }
+            TopicStats topics[64];
+            int topic_count = message_bus_get_all_topic_stats(g.bus, topics, 64);
+            for (int i = 0; i < topic_count; i++) {
+                int state_index = find_or_add_name_slot(
+                    g.pem_topic_state[0].topic, sizeof(g.pem_topic_state[0]), 64,
+                    topics[i].topic);
+                bool critical = state_index >= 0 &&
+                    (topics[i].drop_count >
+                         g.pem_topic_state[state_index].drop_count ||
+                     topics[i].deadline_violations >
+                         g.pem_topic_state[state_index].deadline_count);
+                double values[8] = {
+                    topics[i].frequency_hz,
+                    topics[i].deliver_count > 0
+                        ? (double)topics[i].total_latency_us /
+                          (double)topics[i].deliver_count : 0.0,
+                    (double)topics[i].p99_latency_us,
+                    (double)topics[i].drop_count,
+                    (double)topics[i].subscriber_count,
+                    (double)topics[i].publish_count,
+                    (double)topics[i].deliver_count,
+                    (double)topics[i].deadline_violations
+                };
+                if (pem_log_write(&g.pem_log, PEM_RECORD_TOPIC, critical ? 1u : 0u,
+                                  now_us, realtime_us, topics[i].topic, values,
+                                  critical) != 0 &&
+                    now_us - g.pem_last_error_log_us >= 1000000ULL) {
+                    LOG_ERROR("monitor", "PEM topic record write failed: %s",
+                              topics[i].topic);
+                    g.pem_last_error_log_us = now_us;
+                }
+                if (state_index >= 0) {
+                    g.pem_topic_state[state_index].drop_count = topics[i].drop_count;
+                    g.pem_topic_state[state_index].deadline_count =
+                        topics[i].deadline_violations;
+                }
+            }
+            HealthSnapshot health[HEALTH_MAX_NODES];
+            int health_count = health_get_all(health, HEALTH_MAX_NODES);
+            for (int i = 0; i < health_count; i++) {
+                int state_index = find_or_add_name_slot(
+                    g.pem_health_state[0].name, sizeof(g.pem_health_state[0]),
+                    HEALTH_MAX_NODES, health[i].name);
+                bool changed = state_index >= 0 &&
+                    health[i].status != g.pem_health_state[state_index].status;
+                double values[8] = {
+                    (double)health[i].status, (double)health[i].caps,
+                    (double)health[i].error_count, (double)health[i].avg_latency_us,
+                    (double)health[i].p99_latency_us, (double)health[i].stall_count,
+                    health[i].cpu_pct, (double)health[i].last_heartbeat_us
+                };
+                if (pem_log_write(&g.pem_log, PEM_RECORD_HEALTH,
+                                  changed ? 1u : 0u, now_us, realtime_us,
+                                  health[i].name, values,
+                                  changed && health[i].status != HEALTH_OK) != 0 &&
+                    now_us - g.pem_last_error_log_us >= 1000000ULL) {
+                    LOG_ERROR("monitor", "PEM health record write failed: %s",
+                              health[i].name);
+                    g.pem_last_error_log_us = now_us;
+                }
+                if (state_index >= 0)
+                    g.pem_health_state[state_index].status = health[i].status;
+            }
+            degrade_supervisor_tick(now_us / 1000);
+            DegradeState* degrade = degrade_global_state();
+            if (degrade->degrade_level != g.pem_last_degrade_level ||
+                degrade->degrade_reason != g.pem_last_degrade_reason) {
+                double values[8] = {
+                    (double)degrade->degrade_level, (double)degrade->degrade_reason,
+                    (double)degrade->degrade_timestamp_ms,
+                    (double)degrade->l1_disable_lane_change,
+                    degrade->l1_speed_limit, degrade->l1_safety_margin, 0.0, 0.0
+                };
+                if (pem_log_write(&g.pem_log, PEM_RECORD_EVENT, 1u, now_us,
+                                  realtime_us, "degrade_transition", values,
+                                  degrade->degrade_level > DEGRADE_L0) != 0 &&
+                    now_us - g.pem_last_error_log_us >= 1000000ULL) {
+                    LOG_ERROR("monitor", "PEM degrade event write failed");
+                    g.pem_last_error_log_us = now_us;
+                }
+                g.pem_last_degrade_level = degrade->degrade_level;
+                g.pem_last_degrade_reason = degrade->degrade_reason;
+            }
+            continue;
+        }
 
         /* 重试 stats bridge subscriber（每个周期试一次，连上即止） */
         if (!g.stats_sub && stats_sub_retry < 120) {
@@ -1605,10 +1769,47 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     g.frequency_hz = 60.0;  /* 60Hz: 与 flowsim 60Hz 对齐，前端满帧插值 */
     g.lane_width   = 3.5;
     g.lane_count   = 2;
+    flow_temp_path(g.pem_log_path, sizeof(g.pem_log_path), "flowengine_pem");
+    g.pem_last_degrade_level = -1;
+    g.pem_last_degrade_reason = -1;
+    g.pem_rotate_sec = 300;
+    g.pem_rotate_bytes = 100ULL * 1024 * 1024;
+    g.pem_cpu_critical_pct = 95.0;
+    g.pem_mem_critical_pct = 95.0;
     if (params_json) {
         cJSON* root = monitor_cJSON_Parse(params_json);
         if (root) {
             cJSON* item;
+            if ((item = cJSON_GetObjectItem(root, "mode")) && cJSON_IsString(item)) {
+                g.embedded_mode = strcmp(item->valuestring, "production") == 0 ||
+                                  strcmp(item->valuestring, "embedded") == 0;
+            }
+            if ((item = cJSON_GetObjectItem(root, "pem_log_path")) && cJSON_IsString(item)) {
+                snprintf(g.pem_log_path, sizeof(g.pem_log_path), "%s", item->valuestring);
+            }
+            if ((item = cJSON_GetObjectItem(root, "frequency_hz")) &&
+                cJSON_IsNumber(item) && item->valuedouble >= 0.2 &&
+                item->valuedouble <= 10.0) {
+                g.frequency_hz = item->valuedouble;
+                g.frequency_configured = true;
+            }
+            if ((item = cJSON_GetObjectItem(root, "rotate_sec")) &&
+                cJSON_IsNumber(item) && item->valuedouble >= 1.0) {
+                g.pem_rotate_sec = (uint64_t)item->valuedouble;
+            }
+            if ((item = cJSON_GetObjectItem(root, "rotate_mb")) &&
+                cJSON_IsNumber(item) && item->valuedouble >= 1.0) {
+                g.pem_rotate_bytes =
+                    (uint64_t)(item->valuedouble * 1024.0 * 1024.0);
+            }
+            if ((item = cJSON_GetObjectItem(root, "cpu_critical_pct")) &&
+                cJSON_IsNumber(item)) {
+                g.pem_cpu_critical_pct = item->valuedouble;
+            }
+            if ((item = cJSON_GetObjectItem(root, "mem_critical_pct")) &&
+                cJSON_IsNumber(item)) {
+                g.pem_mem_critical_pct = item->valuedouble;
+            }
             if ((item = cJSON_GetObjectItem(root, "state_file")) && cJSON_IsString(item)) {
                 snprintf(g.state_file, sizeof(g.state_file), "%s", item->valuestring);
             }
@@ -1622,6 +1823,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
             cJSON_Delete(root);
         }
     }
+    if (g.embedded_mode && !g.frequency_configured) g.frequency_hz = 1.0;
 
     /* 创建 state_file 目录 */
     {
@@ -1640,7 +1842,8 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     g.cte_fail_threshold = 0.5;
     g.cte_fail_timeout = 3.0;
 
-    /* 订阅 */
+    /* embedded 模式只依赖总线原生统计，不订阅大消息或 scene。 */
+    if (!g.embedded_mode) {
     transport_subscribe(transport, TOPIC_PERCEPTION_OBSTACLES, on_obstacles, NULL);
     transport_subscribe(transport, TOPIC_VEHICLE_STATE, on_vehicle_state, NULL);
     transport_subscribe(transport, TOPIC_FUSION_LATENCY, on_fusion_latency, NULL);
@@ -1654,6 +1857,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     /* 收集其他节点的自描述广播 (方案B: 数据驱动拓扑感知) */
     transport_subscribe(transport, TOPIC_FLOWENGINE_NODE_INFO, on_node_info, NULL);
     g.node_info_count = 0;
+    }
 
     discovery_advertise(discovery, TOPIC_PERCEPTION_OBSTACLES, 0x0B5A010Eu, CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, TOPIC_VEHICLE_STATE,        0x1C0E5A7Eu, CAP_SUBSCRIBER, 0);
@@ -1662,6 +1866,14 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     discovery_advertise(discovery, TOPIC_SCENE_FRAME,          0x5CE4E011u, CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, TOPIC_FLOWENGINE_NODE_INFO, 0xF10E10F0u, CAP_SUBSCRIBER, 0);
 
+    if (g.embedded_mode) {
+        if (pem_log_open(&g.pem_log, g.pem_log_path, g.pem_rotate_sec,
+                         g.pem_rotate_bytes) != 0) {
+            LOG_ERROR("monitor", "failed to initialize PEM log: %s", g.pem_log_path);
+            return -1;
+        }
+        LOG_INFO("monitor", "embedded PEM mode enabled: %s_*.pem", g.pem_log_path);
+    } else {
     /* Open IPC stats bridge for flowmond (publisher) */
     g.stats_ch = stats_bridge_publisher_open();
     if (!g.stats_ch) {
@@ -1699,6 +1911,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     } else {
         LOG_INFO("monitor", "dashboard bridge publisher opened");
         g.dashboard_retry_after_us = 0;
+    }
     }
 
     /* 托管模式：初始化嵌入的 TaskBase 并挂上 vtable。s_plugin.taskbase 在
@@ -1743,6 +1956,7 @@ static void monitor_cleanup(void) {
      * 与 taskbase 无关，保持原有清理流程不变。 */
     task_stop(&g.taskbase);
     task_base_destroy(&g.taskbase);
+    pem_log_close(&g.pem_log);
     if (g.sysmon) { sysmonitor_destroy(g.sysmon); g.sysmon = NULL; }
     free(g.registry_json_cache);
     g.registry_json_cache = NULL;

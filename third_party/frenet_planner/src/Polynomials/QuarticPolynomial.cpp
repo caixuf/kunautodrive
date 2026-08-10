@@ -9,9 +9,11 @@ QuarticPolynomial::QuarticPolynomial(double xs, double vxs, double axs,
         double vxe, double axe, double t):
         a0(xs), a1(vxs) {
     a2 = axs / 2.0;
+    const double t2 = t * t;
+    const double t3 = t2 * t;
     Matrix2d A;
     Vector2d B;
-    A << 3 * pow(t, 2), 4 * pow(t, 3), 6 * t, 12 * pow(t, 2);
+    A << 3 * t2, 4 * t3, 6 * t, 12 * t2;
     B << vxe - a1 - 2 * a2 * t, axe - 2 * a2;
     Matrix2d A_inv = A.inverse();
     Vector2d x = A_inv * B;
@@ -20,15 +22,15 @@ QuarticPolynomial::QuarticPolynomial(double xs, double vxs, double axs,
 }
 
 double QuarticPolynomial::calc_point(double t) {
-    return a0 + a1 * t + a2 * pow(t, 2) + a3 * pow(t, 3) + a4 * pow(t, 4);
+    return (((a4 * t + a3) * t + a2) * t + a1) * t + a0;
 }
 
 double QuarticPolynomial::calc_first_derivative(double t) {
-    return a1 + 2 * a2 * t + 3 * a3 * pow(t, 2) + 4 * a4 * pow(t, 3);
+    return ((4 * a4 * t + 3 * a3) * t + 2 * a2) * t + a1;
 }
 
 double QuarticPolynomial::calc_second_derivative(double t) {
-    return 2 * a2 + 6 * a3 * t + 12 * a4 * pow(t, 2);
+    return (12 * a4 * t + 6 * a3) * t + 2 * a2;
 }
 
 double QuarticPolynomial::calc_third_derivative(double t) {

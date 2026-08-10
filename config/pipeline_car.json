@@ -351,7 +351,7 @@
         "flowengine/node_info",
         "planning/trajectory"
       ],
-      "params": "{\"state_file\":\"/tmp/flow_topology.json\",\"export_scene\":true}"
+      "params": "{\"mode\":\"production\"}"
     }
   ]
 }
