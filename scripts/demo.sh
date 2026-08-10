@@ -212,7 +212,9 @@ if [ -n "$SCENARIO" ]; then
   PIPELINE_TMP="$PIPELINE_TMP.json"
   trap 'cleanup_pipeline_tmp' EXIT
   SCENARIO_ABS="$([ -f "$SCENARIO" ] && echo "$(cd "$(dirname "$SCENARIO")" && pwd)/$(basename "$SCENARIO")" || echo "$SCENARIO")"
-  sed 's|\\"scenario_file\\": \\"[^\\"]*\\"|\\"scenario_file\\": \\"'$SCENARIO_ABS'\\"|g' "$PIPELINE_ORIG" > "$PIPELINE_TMP"
+  # `params` is itself a JSON string, so its inner quotes are escaped.
+  sed 's|\\\"scenario_file\\\": \\\"[^\\\"]*\\\"|\\\"scenario_file\\\": \\\"'"$SCENARIO_ABS"'\\\"|g' \
+    "$PIPELINE_ORIG" > "$PIPELINE_TMP"
   if [ -n "$START_S" ] || [ -n "$START_D" ]; then
     python3 - "$PIPELINE_TMP" "$START_S" "$START_D" <<'PY'
 import json
