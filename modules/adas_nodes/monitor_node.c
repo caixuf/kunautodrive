@@ -1104,6 +1104,7 @@ static void export_dashboard_json(void) {
             const char* merge_fields[] = {
                 "lights", "brake", "throttle", "vx", "vy",
                 "target_vx", "length", "width", "ai_state",
+                "lateral_offset",
                 "yaw_rate",  /* 前端 heading 外推用（位置/朝向同步，2026-08） */
                 NULL
             };

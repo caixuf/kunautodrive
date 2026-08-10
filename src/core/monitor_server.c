@@ -20,6 +20,7 @@
 #include "serializer.h"
 #include "stats_bridge.h"
 #include "clock_service.h"
+#include "platform_paths.h"
 #include "fp_env.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -822,27 +823,111 @@ static bool dispatch_request(int fd, MonitorServer* ms,
 
     /* POST: /api/training/start|promote → fork+exec modelctl.py */
     if (strcmp(method, "POST") == 0) {
-        /* POST /api/game/control → 游戏模式（demo.sh --game）操控注入：
-         * 浏览器键盘 → 本接口 → 写 /tmp/game_input.json → flowsim 主循环
-         * 读取当控制指令（绕过 control_node，玩家直接开仿真车）。 */
+        /* POST /api/game/control → 3D 游戏模式操控注入。
+         * enabled=true 原子写控制帧并创建接管标志；enabled=false 删除标志，
+         * flowsim 随即恢复 control_node 驱动。 */
         if (strcmp(path, "/api/game/control") == 0) {
+            char mode_path[512];
+            char input_path[512];
+            if (flow_temp_path(mode_path, sizeof(mode_path), "game_mode") != 0 ||
+                flow_temp_path(input_path, sizeof(input_path), "game_input.json") != 0) {
+                send_response(fd, "500 Internal Server Error", "application/json",
+                              "{\"ok\":false,\"error\":\"runtime path failed\"}");
+                close(fd);
+                return false;
+            }
             char* body = read_post_body(fd, req, req_len, 1024);
-            if (body) {
-                FILE* f = fopen("/tmp/game_input.json", "w");
-                if (f) {
-                    fputs(body, f);
-                    fclose(f);
+            cJSON* root = body ? cJSON_Parse(body) : NULL;
+            cJSON* enabled = root
+                ? cJSON_GetObjectItemCaseSensitive(root, "enabled") : NULL;
+            bool valid_enabled = cJSON_IsBool(enabled);
+            if (valid_enabled && !cJSON_IsTrue(enabled)) {
+                bool mode_removed = unlink(mode_path) == 0 || errno == ENOENT;
+                unlink(input_path);
+                if (mode_removed) {
+                    send_response(fd, "200 OK", "application/json",
+                                  "{\"ok\":true,\"enabled\":false}");
+                } else {
+                    send_response(fd, "500 Internal Server Error",
+                                  "application/json",
+                                  "{\"ok\":false,\"error\":\"release failed\"}");
+                }
+            } else if (valid_enabled) {
+                cJSON* throttle = cJSON_GetObjectItemCaseSensitive(root, "throttle");
+                cJSON* brake = cJSON_GetObjectItemCaseSensitive(root, "brake");
+                cJSON* steer = cJSON_GetObjectItemCaseSensitive(root, "steer");
+                bool valid_control = cJSON_IsNumber(throttle) &&
+                    throttle->valuedouble >= 0.0 && throttle->valuedouble <= 1.0 &&
+                    cJSON_IsNumber(brake) &&
+                    brake->valuedouble >= 0.0 && brake->valuedouble <= 1.0 &&
+                    cJSON_IsNumber(steer) &&
+                    steer->valuedouble >= -0.6 && steer->valuedouble <= 0.6;
+                if (!valid_control) {
+                    send_response(fd, "400 Bad Request", "application/json",
+                                  "{\"ok\":false,\"error\":\"invalid control\"}");
+                } else {
+                    cJSON* normalized = cJSON_CreateObject();
+                    cJSON_AddNumberToObject(normalized, "throttle", throttle->valuedouble);
+                    cJSON_AddNumberToObject(normalized, "brake", brake->valuedouble);
+                    cJSON_AddNumberToObject(normalized, "steer", steer->valuedouble);
+                    cJSON_AddNumberToObject(normalized, "wall_us",
+                                            (double)clock_now_monotonic_wall_us());
+                    char* json = cJSON_PrintUnformatted(normalized);
+                    char tmp_path[576];
+                    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.XXXXXX", input_path);
+                    int tmp_fd = json ? mkstemp(tmp_path) : -1;
+                    FILE* f = tmp_fd >= 0 ? fdopen(tmp_fd, "w") : NULL;
+                    bool written = f && fputs(json, f) != EOF && fflush(f) == 0;
+                    if (f && fclose(f) != 0) written = false;
+                    if (tmp_fd >= 0 && !f) close(tmp_fd);
+                    bool installed = written &&
+                        rename(tmp_path, input_path) == 0;
+                    FILE* mode = installed ? fopen(mode_path, "w") : NULL;
+                    bool mode_written = mode && fputs("browser\n", mode) != EOF;
+                    if (mode && fclose(mode) != 0) mode_written = false;
+                    if (installed && mode_written) {
+                        send_response(fd, "200 OK", "application/json",
+                                      "{\"ok\":true,\"enabled\":true}");
+                    } else {
+                        if (tmp_fd >= 0) unlink(tmp_path);
+                        unlink(mode_path);
+                        send_response(fd, "500 Internal Server Error",
+                                      "application/json",
+                                      "{\"ok\":false,\"error\":\"write failed\"}");
+                    }
+                    free(json);
+                    cJSON_Delete(normalized);
+                }
+            } else {
+                send_response(fd, "400 Bad Request", "application/json",
+                              "{\"ok\":false,\"error\":\"invalid game request\"}");
+            }
+            cJSON_Delete(root);
+            free(body);
+            close(fd);
+            return false;
+        }
+        if (strcmp(path, "/api/game/rescue") == 0) {
+            char mode_path[512];
+            char rescue_path[512];
+            bool paths_ok =
+                flow_temp_path(mode_path, sizeof(mode_path), "game_mode") == 0 &&
+                flow_temp_path(rescue_path, sizeof(rescue_path), "game_rescue") == 0;
+            if (!paths_ok || access(mode_path, F_OK) != 0) {
+                send_response(fd, "409 Conflict", "application/json",
+                              "{\"ok\":false,\"error\":\"game mode inactive\"}");
+            } else {
+                FILE* f = fopen(rescue_path, "w");
+                bool written = f && fputs("nearest_lane\n", f) != EOF;
+                if (f && fclose(f) != 0) written = false;
+                if (written) {
                     send_response(fd, "200 OK", "application/json",
                                   "{\"ok\":true}");
                 } else {
                     send_response(fd, "500 Internal Server Error",
                                   "application/json",
-                                  "{\"ok\":false,\"error\":\"write failed\"}");
+                                  "{\"ok\":false,\"error\":\"request failed\"}");
                 }
-                free(body);
-            } else {
-                send_response(fd, "400 Bad Request", "application/json",
-                              "{\"ok\":false,\"error\":\"failed to read body\"}");
             }
             close(fd);
             return false;

@@ -12,6 +12,181 @@ function setText(id, val) {
   var el = document.getElementById(id);
   if (el) el.textContent = val;
 }
+
+function gameAngleDeg(rad) {
+  return rad * 180 / Math.PI;
+}
+
+function gameWrapAngle(rad) {
+  while (rad > Math.PI) rad -= Math.PI * 2;
+  while (rad < -Math.PI) rad += Math.PI * 2;
+  return rad;
+}
+
+function updateGameHud() {
+  if (!gameMode) return;
+  var scene = (topoData.metrics || {}).scene || {};
+  var ego = scene.ego || {};
+  var speed = Number(ego.speed || 0);
+  var heading = Number(ego.heading || 0);
+  var vx = Number(ego.vx || 0);
+  var vy = Number(ego.vy || 0);
+  var moving = Math.hypot(vx, vy) > 0.3;
+  var motion = moving ? Math.atan2(vy, vx) : heading;
+  var slip = Math.abs(gameAngleDeg(gameWrapAngle(motion - heading)));
+  var road = scene.road_network || {};
+  var edge = Array.isArray(road.edges) ? road.edges[0] : null;
+  var laneWidth = Number((edge && edge.lane_width) || 3.5);
+  var laneOffset = Number(ego.lateral_offset);
+  var laneIndex = Number.isFinite(laneOffset)
+    ? Math.round((Math.abs(laneOffset) - laneWidth * 0.5) / laneWidth)
+    : 0;
+  var nearestLaneCenter = Math.sign(laneOffset || 1) *
+    (Math.max(0, laneIndex) + 0.5) * laneWidth;
+  var laneCenterOffset = Number.isFinite(laneOffset)
+    ? laneOffset - nearestLaneCenter
+    : 0;
+  var laneDeparture = Number.isFinite(laneOffset) &&
+    Math.abs(laneCenterOffset) > laneWidth * 0.5 - 0.25 && speed > 1;
+  setText('game-speed', speed.toFixed(1) + ' m/s');
+  setText('game-steer', gameAngleDeg(gameControl.steer).toFixed(1) + '°');
+  setText('game-heading', gameAngleDeg(heading).toFixed(1) + '°');
+  setText('game-motion', gameAngleDeg(motion).toFixed(1) + '°');
+  setText('game-slip', slip.toFixed(1) + '°');
+  var alert = document.getElementById('game-alert');
+  if (alert) {
+    var mismatch = moving && slip > 8;
+    if (laneDeparture) {
+      alert.textContent = '⚠ 车道偏离预警';
+    } else {
+      alert.textContent = mismatch ? '⚠ 车身/移动方向不一致' : '✓ 辅助驾驶仅告警';
+    }
+    alert.classList.toggle('warn', mismatch || laneDeparture);
+  }
+}
+
+function startGameControlLoop() {
+  if (gameSendTimer) clearInterval(gameSendTimer);
+  updateGameControl();
+  gameSendTimer = setInterval(function() {
+    updateGameControl();
+  }, 16);
+}
+
+function updateGameControl() {
+  var scene = (topoData.metrics || {}).scene || {};
+  var speed = Number((scene.ego || {}).speed || 0);
+  var throttle = (gameKeys.ArrowUp || gameKeys.w) ? 0.55 : 0;
+  var brake = (gameKeys.ArrowDown || gameKeys.s) ? 0.7 : 0;
+  var steerLimit = Math.max(0.03, Math.min(0.08, 0.10 - speed * 0.004));
+  var steerTarget = 0;
+  if (gameKeys.ArrowLeft || gameKeys.a) steerTarget += steerLimit;
+  if (gameKeys.ArrowRight || gameKeys.d) steerTarget -= steerLimit;
+  if (gameKeys[' ']) { throttle = 0; brake = 1; }
+  gameControl.throttle = throttle;
+  gameControl.brake = brake;
+  var response = steerTarget === 0 ? 0.36 : 0.20;
+  gameControl.steer += (steerTarget - gameControl.steer) * response;
+  if (Math.abs(gameControl.steer) < 0.001) gameControl.steer = 0;
+  queueGameControl();
+  updateGameHud();
+}
+
+function queueGameControl() {
+  if (gameRequestInFlight) {
+    gameRequestQueued = true;
+    return;
+  }
+  gameRequestInFlight = true;
+  postGameControl(true)
+    .catch(function(e) { reportDiag('game-control', e); })
+    .finally(function() {
+      gameRequestInFlight = false;
+      if (gameRequestQueued && gameMode) {
+        gameRequestQueued = false;
+        queueGameControl();
+      } else {
+        gameRequestQueued = false;
+        gameRequestIdleResolvers.splice(0).forEach(function(resolve) { resolve(); });
+      }
+    });
+}
+
+function waitForGameControlIdle() {
+  if (!gameRequestInFlight) return Promise.resolve();
+  return new Promise(function(resolve) {
+    gameRequestIdleResolvers.push(resolve);
+  });
+}
+
+async function postGameControl(enabled) {
+  var r = await fetch(serverUrl + '/api/game/control', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      enabled: enabled,
+      throttle: enabled ? gameControl.throttle : 0,
+      brake: enabled ? gameControl.brake : 1,
+      steer: enabled ? gameControl.steer : 0
+    })
+  });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+}
+
+async function rescueGameVehicle() {
+  if (!gameMode) return;
+  gameKeys = {};
+  gameControl = { throttle: 0, brake: 0, steer: 0 };
+  try {
+    var r = await fetch(serverUrl + '/api/game/rescue', { method: 'POST' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    setText('game-alert', '✓ 已回到最近车道');
+    var alert = document.getElementById('game-alert');
+    if (alert) alert.classList.remove('warn');
+  } catch (e) {
+    reportDiag('game-rescue', e);
+  }
+}
+
+async function toggleGameMode() {
+  if (gameTogglePending) return;
+  gameTogglePending = true;
+  var next = !gameMode;
+  if (next && !sceneReady()) {
+    reportDiag('game', new Error('3D 场景尚未就绪'));
+    gameTogglePending = false;
+    return;
+  }
+  if (!next && gameSendTimer) {
+    clearInterval(gameSendTimer);
+    gameSendTimer = null;
+    gameRequestQueued = false;
+  }
+  gameControl = { throttle: 0, brake: 0, steer: 0 };
+  try {
+    if (!next) await waitForGameControlIdle();
+    await postGameControl(next);
+  } catch (e) {
+    reportDiag('game', e);
+    if (!next) startGameControlLoop();
+    gameTogglePending = false;
+    return;
+  }
+  gameMode = next;
+  gameKeys = {};
+  var button = document.getElementById('game-toggle');
+  var hud = document.getElementById('game-hud');
+  if (button) {
+    button.classList.toggle('active', gameMode);
+    button.textContent = gameMode ? '⏹ 退出接管' : '🎮 接管车辆';
+  }
+  if (hud) hud.classList.toggle('active', gameMode);
+  if (gameMode) {
+    setCameraMode('driver');
+    startGameControlLoop();
+  }
+  gameTogglePending = false;
+}
 function setStyle(id, prop, val) {
   var el = document.getElementById(id);
   if (el) el.style[prop] = val;
@@ -61,6 +236,14 @@ var chartTopic = '';
 var workspaceMode = 'observe';
 var connectRetries = 0;
 var lastNodeNames = '';
+var gameMode = false;
+var gameKeys = {};
+var gameControl = { throttle: 0, brake: 0, steer: 0 };
+var gameSendTimer = null;
+var gameTogglePending = false;
+var gameRequestInFlight = false;
+var gameRequestQueued = false;
+var gameRequestIdleResolvers = [];
 
 // ── 性能节流：低频 DOM 更新时间戳 ──
 var _lastTableUpdateMs = 0;   // updateTopicStats / updateProcessTopics 上次更新时间
@@ -800,7 +983,38 @@ function tryReconnect() {
 }
 
 async function doConnect() {
-  serverUrl = normalizeServerUrl(document.getElementById('url').value);
+  var nextServerUrl = normalizeServerUrl(document.getElementById('url').value);
+  if (gameMode && nextServerUrl !== serverUrl) {
+    var previousUrl = serverUrl;
+    if (gameSendTimer) {
+      clearInterval(gameSendTimer);
+      gameSendTimer = null;
+    }
+    gameKeys = {};
+    try {
+      await waitForGameControlIdle();
+      var releaseResponse = await fetch(previousUrl + '/api/game/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({enabled:false})
+      });
+      if (!releaseResponse.ok) throw new Error('HTTP ' + releaseResponse.status);
+    } catch (e) {
+      reportDiag('game-release', e);
+      startGameControlLoop();
+      document.getElementById('url').value = serverUrl;
+      return;
+    }
+    gameMode = false;
+    var gameButton = document.getElementById('game-toggle');
+    var gameHud = document.getElementById('game-hud');
+    if (gameButton) {
+      gameButton.classList.remove('active');
+      gameButton.textContent = '🎮 接管车辆';
+    }
+    if (gameHud) gameHud.classList.remove('active');
+  }
+  serverUrl = nextServerUrl;
   document.getElementById('url').value = serverUrl;
   saveState();
   if (eventSource) { eventSource.close(); eventSource = null; }
@@ -1000,6 +1214,7 @@ function setPerfMode(mode) {
   if (sel) sel.textContent = '点击左侧列表选择查看';
   _syncPerfTabs();
   updatePerf();
+  updateGameHud();
 }
 
 function selectPerfProc(pid) {
@@ -2139,6 +2354,8 @@ window.flowboard = {
   setPerfTier: setPerfTier,
   // minimap
   toggleMinimap: toggleMinimap,
+  toggleGameMode: toggleGameMode,
+  rescueGameVehicle: rescueGameVehicle,
   // C.2: NPC detail panel
   closeNPCDetail: closeNPCDetail,
   // export
@@ -2186,42 +2403,45 @@ window.flowboard = {
 // Boot
 // ═══════════════════════════════════════════════════════════════
 
-// ═══════════════════════════════════════════════════════════
-// 游戏模式（demo.sh --game）：玩家键盘操控仿真车
-// 方向键/WASD → POST /api/game/control → flowmond 写 /tmp/game_input.json
-// → flowsim 读文件当控制指令（绕过 control_node，玩家直接开仿真车）
-// 启用条件：URL 带 ?game=1
-// ═══════════════════════════════════════════════════════════
-(function() {
-  var isGame = typeof window !== 'undefined' &&
-    new URLSearchParams(window.location.search).get('game') === '1';
-  if (!isGame) return;
-  var keys = {};
-  var lastSend = 0;
-  window.addEventListener('keydown', function(e) {
-    keys[e.key] = true;
-    if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',
-         'w','W','a','A','s','S','d','D',' '].indexOf(e.key) >= 0) e.preventDefault();
-  });
-  window.addEventListener('keyup', function(e) { keys[e.key] = false; });
-  setInterval(function() {
-    var now = performance.now();
-    if (now - lastSend < 50) return;  // 20Hz 节流
-    lastSend = now;
-    /* 转向 0.12 rad ≈ 巡航转向域（满舵 0.6 的 20%）—— 旧 0.35 按一下
-     * 车就甩（20 m/s 时 yaw_rate 2.7 rad/s = 每秒转 155°），没法玩 */
-    var thr = (keys['ArrowUp'] || keys['w'] || keys['W']) ? 0.5 : 0;
-    var brk = (keys['ArrowDown'] || keys['s'] || keys['S']) ? 0.8 : 0;
-    var st = 0;
-    if (keys['ArrowLeft'] || keys['a'] || keys['A']) st += 0.12;
-    if (keys['ArrowRight'] || keys['d'] || keys['D']) st -= 0.12;
-    if (keys[' ']) { brk = 1.0; thr = 0; }  // 空格 = 手刹
-    fetch(location.origin + '/api/game/control', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ throttle: thr, brake: brk, steer: st })
-    }).catch(function() {});
-  }, 50);
-})();
+window.addEventListener('keydown', function(e) {
+  if (!gameMode) return;
+  var key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (key === 'r') {
+    rescueGameVehicle();
+    e.preventDefault();
+    return;
+  }
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','w','a','s','d',' '].indexOf(key) >= 0) {
+    gameKeys[key] = true;
+    updateGameControl();
+    e.preventDefault();
+  }
+});
+window.addEventListener('keyup', function(e) {
+  if (!gameMode) return;
+  var key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  gameKeys[key] = false;
+  updateGameControl();
+});
+document.addEventListener('visibilitychange', function() {
+  if (gameMode && document.hidden) {
+    gameKeys = {};
+    gameControl = { throttle: 0, brake: 0, steer: 0 };
+    queueGameControl();
+  }
+});
+window.addEventListener('blur', function() {
+  if (gameMode) {
+    gameKeys = {};
+    gameControl = { throttle: 0, brake: 0, steer: 0 };
+    queueGameControl();
+  }
+});
+window.addEventListener('beforeunload', function() {
+  if (gameMode) navigator.sendBeacon(
+    serverUrl + '/api/game/control',
+    new Blob([JSON.stringify({enabled:false})], {type:'application/json'})
+  );
+});
 
 document.addEventListener('DOMContentLoaded', initAll);

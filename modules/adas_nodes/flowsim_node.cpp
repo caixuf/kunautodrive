@@ -184,6 +184,10 @@ struct FlowSimContext {
 
 FlowSimContext g;
 
+static bool game_path(char* out, size_t out_size, const char* name) {
+    return flow_temp_path(out, out_size, name) == 0;
+}
+
 static void reset_runtime_state() {
     if (g.scenario) {
         scenario_free(g.scenario);
@@ -250,7 +254,9 @@ static void on_control_cmd(const Message* msg, void* user_data) {
     if (!msg || msg->data_size == 0) return;
     /* 游戏模式（demo.sh --game）：玩家键盘操控，忽略自动驾驶指令
      * （control_node 会覆盖游戏输入 → 车"自己走"）。 */
-    if (access("/tmp/game_mode", F_OK) == 0) return;
+    char mode_path[512];
+    if (game_path(mode_path, sizeof(mode_path), "game_mode") &&
+        access(mode_path, F_OK) == 0) return;
 
     /* 二进制 ControlCmd 路径 */
     {
@@ -1407,6 +1413,15 @@ protected:
          *   - 指令陈旧 >2000ms → true（FSAFE 停车）
          *   - 再次收到指令 → false（恢复正常） */
         bool use_internal_cruise = true;
+        bool was_game_control_active = false;
+        char game_mode_path[512];
+        char game_input_path[512];
+        char game_rescue_path[512];
+        const bool game_paths_ok =
+            game_path(game_mode_path, sizeof(game_mode_path), "game_mode") &&
+            game_path(game_input_path, sizeof(game_input_path), "game_input.json") &&
+            game_path(game_rescue_path, sizeof(game_rescue_path), "game_rescue");
+        uint64_t game_stale_since_wall_us = 0;
 
         while (!should_stop()) {
             /* 用墙钟单调时间测量帧工作时间——clock_now_us() 在仿真模式下
@@ -1422,10 +1437,12 @@ protected:
              * 消息迟到/丢失，主循环仍以 60Hz 稳定推进。
              * 解析成功即置 use_internal_cruise=false（直接路径，不依赖
              * 陈旧检查——仿真时钟同 tick 内 now==last）。 */
+            bool game_control_requested =
+                game_paths_ok && access(game_mode_path, F_OK) == 0;
             {
                 Message take_msg;
                 if (cmd_bridge.try_take(TOPIC_CONTROL_CMD, &take_msg) &&
-                    take_msg.data_size > 0) {
+                    take_msg.data_size > 0 && !game_control_requested) {
                     /* 二进制 ControlCmd 路径 */
                     ControlCmd bin;
                     if (ControlCmd_deserialize(&bin,
@@ -1580,8 +1597,15 @@ protected:
                     }
                 }
             }
-            if (access("/tmp/game_mode", F_OK) == 0) {
-                FILE* gf = fopen("/tmp/game_input.json", "r");
+            bool game_control_active = game_control_requested;
+            if (was_game_control_active && !game_control_active) {
+                g.last_control_cmd_us.store(0, std::memory_order_relaxed);
+                use_internal_cruise = true;
+            }
+            was_game_control_active = game_control_active;
+            if (game_control_active) {
+                bool fresh_game_input = false;
+                FILE* gf = fopen(game_input_path, "r");
                 if (gf) {
                     char gbuf[512] = {0};
                     size_t gn = fread(gbuf, 1, sizeof(gbuf) - 1, gf);
@@ -1592,19 +1616,25 @@ protected:
                             cJSON* gjt = cJSON_GetObjectItemCaseSensitive(gj, "throttle");
                             cJSON* gjb = cJSON_GetObjectItemCaseSensitive(gj, "brake");
                             cJSON* gjs = cJSON_GetObjectItemCaseSensitive(gj, "steer");
-                            if (cJSON_IsNumber(gjs)) {
+                            cJSON* gjw = cJSON_GetObjectItemCaseSensitive(gj, "wall_us");
+                            uint64_t now_wall = clock_now_monotonic_wall_us();
+                            fresh_game_input = cJSON_IsNumber(gjw) &&
+                                gjw->valuedouble > 0.0 &&
+                                now_wall >= (uint64_t)gjw->valuedouble &&
+                                now_wall - (uint64_t)gjw->valuedouble <= 300000ULL;
+                            if (fresh_game_input && cJSON_IsNumber(gjs)) {
                                 double st = gjs->valuedouble;
                                 if (st >  0.6) st =  0.6;
                                 if (st < -0.6) st = -0.6;
                                 g.ego_steer.store(st, std::memory_order_relaxed);
                             }
-                            if (cJSON_IsNumber(gjt)) {
+                            if (fresh_game_input && cJSON_IsNumber(gjt)) {
                                 double th = gjt->valuedouble;
                                 if (th >  1.0) th = 1.0;
                                 if (th <  0.0) th = 0.0;
                                 g.ego_throttle.store(th, std::memory_order_relaxed);
                             }
-                            if (cJSON_IsNumber(gjb)) {
+                            if (fresh_game_input && cJSON_IsNumber(gjb)) {
                                 double br = gjb->valuedouble;
                                 if (br >  1.0) br = 1.0;
                                 if (br <  0.0) br = 0.0;
@@ -1614,7 +1644,74 @@ protected:
                         }
                     }
                 }
-                g.last_control_cmd_us.store(clock_now_us(), std::memory_order_relaxed);
+                if (!fresh_game_input) {
+                    g.ego_throttle.store(0.0, std::memory_order_relaxed);
+                    g.ego_brake.store(0.0, std::memory_order_relaxed);
+                    g.ego_steer.store(0.0, std::memory_order_relaxed);
+                }
+                if (!fresh_game_input) {
+                    uint64_t now_wall = clock_now_monotonic_wall_us();
+                    if (game_stale_since_wall_us == 0) game_stale_since_wall_us = now_wall;
+                    if (now_wall - game_stale_since_wall_us >= 1000000ULL) {
+                        unlink(game_mode_path);
+                        unlink(game_input_path);
+                        game_control_active = false;
+                        game_control_requested = false;
+                        was_game_control_active = false;
+                        use_internal_cruise = true;
+                        g.last_control_cmd_us.store(0, std::memory_order_relaxed);
+                        LOG_WARN("flowsim",
+                                 "[GAME_LEASE_EXPIRED] no browser input for 1s — "
+                                 "automatic control restored");
+                    }
+                } else {
+                    game_stale_since_wall_us = 0;
+                }
+                if (game_control_active) {
+                    g.last_control_cmd_us.store(clock_now_us(), std::memory_order_relaxed);
+                    use_internal_cruise = false;
+                }
+            } else {
+                game_stale_since_wall_us = 0;
+            }
+            if (game_control_active && remove(game_rescue_path) == 0) {
+                flowsim::FrenetPos fp;
+                if (g.roads_loaded && g.roads.world_to_frenet(ego.x, ego.y, fp)) {
+                    flowsim::WorldPos wp;
+                    if (g.roads.frenet_to_world(fp.road_id, fp.lane_id, fp.s, 0.0, wp) &&
+                        ego.road_pos.relocate(g.roads, fp.road_id, fp.lane_id, fp.s, 0.0)) {
+                        ego.x = wp.x;
+                        ego.y = wp.y;
+                        ego.heading = wp.h;
+                        ego.road_id = fp.road_id;
+                        ego.lane_id = fp.lane_id;
+                        ego.s = fp.s;
+                        ego.offset = flowsim::offset_from_lane_internal(
+                            g.roads, fp.road_id, fp.lane_id, fp.s, 0.0);
+                        ego.speed = 0.0;
+                        ego.vx = 0.0;
+                        ego.vy = 0.0;
+                        ego.v_x_body = 0.0;
+                        ego.v_y_body = 0.0;
+                        ego.yaw_rate = 0.0;
+                        ego.steer = 0.0;
+                        ego.throttle = 0.0;
+                        ego.brake = 0.0;
+                        g.ego_throttle.store(0.0, std::memory_order_relaxed);
+                        g.ego_brake.store(0.0, std::memory_order_relaxed);
+                        g.ego_steer.store(0.0, std::memory_order_relaxed);
+                        g.prev_steer = 0.0;
+                        g.off_rails = false;
+                        ego.steer_override = false;
+                        LOG_INFO("flowsim",
+                                 "[GAME_RESCUE] relocated to road=%d lane=%d s=%.1f",
+                                 fp.road_id, fp.lane_id, fp.s);
+                    } else {
+                        LOG_WARN("flowsim", "[GAME_RESCUE] nearest lane relocation failed");
+                    }
+                } else {
+                    LOG_WARN("flowsim", "[GAME_RESCUE] no nearby drivable lane");
+                }
             }
 
             /* ── Step 1: ego 动力学 ──

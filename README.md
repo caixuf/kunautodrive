@@ -38,6 +38,11 @@
 ## 架构
 
 ```
+
+运行后可在 3D 场景左上角点击 **接管车辆**，无需重启即可用 WASD/方向键
+手动驾驶。游戏 HUD 同步显示转向输入、车身航向、实际移动方向及其偏差，
+并提供不干预车辆的车道偏离预警；开出道路后可按 `R` 或点击
+**回到车道** 重定位到最近车道中心，退出接管后恢复自动驾驶控制。
 ┌──────────────────────────────────────────────────────────────────────┐
 │                        FlowEngine Core (C11)                          │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐ │
@@ -95,25 +100,67 @@ bash build.sh release
 > **入口：** `flow_launcher config/pipeline.json` 是运行 pipeline 的标准、
 > 配置驱动方式（每个节点都是 `dlopen` 加载的 `.so` 插件）。
 
-### Windows（实验性原生支持）
+### Windows 原生支持
 
-Windows 原生路径优先支持 **单进程插件模式**（等价默认 demo）。`--multi`
-依赖 POSIX `fork` + SHM IPC，Windows 下会明确拒绝；参数 AF_UNIX bridge、
-训练/ops 的 fork 子进程 bridge 也会降级为不可用。flowcoro 节点使用
-header-only `rt_executor` 路径；epoll/eventfd 版 `flowcoro_net` 不进入
-Windows 默认构建，主仿真与 FlowBoard dashboard 不受影响。
+Windows 已验证原生单进程插件链路：**15/15 节点加载、FlowSim/esmini
+RoadManager、参数热更新、FlowBoard HTTP 仪表盘、完整拓扑与道路数据、限时退出**
+均可运行。推荐使用 **WinLibs MinGW-w64（POSIX + UCRT，GCC 11+）+ Ninja**；
+`windows-mingw` 是主构建 preset，MSVC/Visual Studio 仍作为次选路径保留。
 
 ```powershell
-# 需要 CMake + Visual Studio Build Tools（可配 Ninja 使用）
-powershell -ExecutionPolicy Bypass -File scripts\demo.ps1 -Duration 15 -NoBrowser
+# 1. 安装工具（也可自行安装同等版本）
+winget install Kitware.CMake
+winget install Ninja-build.Ninja
+winget install BrechtSanders.WinLibs.POSIX.UCRT
+winget install Python.Python.3.12
 
-# 或手动
-cmake --preset windows-ninja
-cmake --build --preset windows-ninja
-cmake -S modules\adas_nodes -B build-win\modules\adas_nodes -DFLOWENGINE_BUILD="$PWD\build-win"
-cmake --build build-win\modules\adas_nodes --config Release
-build-win\bin\flow_launcher.exe config\pipeline.json --duration 15
+# 2. 克隆后初始化第三方依赖
+git clone https://github.com/caixuf/FlowEngine.git
+cd FlowEngine
+git submodule update --init --depth 1 third_party/esmini
+
+# 3. 一键构建并运行；默认自动打开 http://localhost:8800
+powershell -ExecutionPolicy Bypass -File scripts\demo.ps1 -Duration 30
+
+# 常用选项
+powershell -ExecutionPolicy Bypass -File scripts\demo.ps1 -Duration 30 -NoBrowser
+powershell -ExecutionPolicy Bypass -File scripts\demo.ps1 -SkipBuild -Duration 30
+powershell -ExecutionPolicy Bypass -File scripts\demo.ps1 -BuildType Debug
 ```
+
+`demo.ps1` 会自动发现 WinGet 安装的 WinLibs，拒绝 GCC 11 以下的旧工具链，
+在编译器变化时清理过期 CMake cache，构建 esmini RoadManager 和节点 DLL，
+部署匹配的 MinGW runtime DLL，并生成带绝对插件路径的运行时 pipeline。
+运行时状态与日志位于：
+
+```text
+%LOCALAPPDATA%\FlowEngine\tmp\flow_topology.json
+%LOCALAPPDATA%\FlowEngine\tmp\flow_logs\
+```
+
+**原生运行时验收**
+
+首次构建后可运行端到端检查；它会启动 `flow_launcher` 与 `flowmond`，验证参数
+bridge 的 list/get/set 热更新，以及 `http://127.0.0.1:8800/api/topology`
+中的节点、场景和道路数据：
+
+```powershell
+python tools\win_runtime_verify.py
+# PASS: params=..., hot_reload=..., nodes=..., road_edges=...
+```
+
+**当前限制**
+
+- 支持默认的单进程插件模式；`--multi` 依赖 POSIX `fork` + SHM IPC，Windows
+  下不支持。
+- 参数 bridge 在 Windows 使用 TCP loopback，而非 AF_UNIX；`flowctl param`
+  的 list/get/set 可用。
+- 训练/ops 中依赖 `fork` 的子进程路径仍不可用；主仿真、热调参与 FlowBoard
+  不受影响。
+- flowcoro 节点使用 header-only `rt_executor`；epoll/eventfd 版
+  `flowcoro_net` 不进入 Windows 默认构建。
+- 不要混用旧 `C:\mingw64` runtime。`demo.ps1` 会把当前编译器对应的
+  `libatomic/libgcc/libstdc++/libwinpthread` DLL 部署到可执行文件目录。
 
 **mingw-w64 交叉编译（Linux → Windows，CI 门禁用）**
 
@@ -131,9 +178,8 @@ cmake --build build-mingw -j
 file build-mingw/bin/flow_launcher.exe   # → PE32+ executable ... for MS Windows
 ```
 
-> 交叉编译覆盖核心工程（`flow_launcher` / `flowmond` / `flowctl` / 总线 / IPC /
-> bag 等）；`modules/adas_nodes` 的 `flowsim_node` 依赖 esmini RoadManager，需先
-> 构建 esmini（或在 Windows 上用预构建库）。兼容层实现见
+> 交叉编译主要作为 `_WIN32` 编译回归门禁；完整原生 demo 请使用上面的
+> `scripts\demo.ps1`，它会构建 esmini RoadManager 与节点插件。兼容层实现见
 > `include/platform_compat.h`（`_WIN32` 段）与 `include/compat_win/`（POSIX 头平替）。
 
 ### 新手最短路径（复制即可跑）

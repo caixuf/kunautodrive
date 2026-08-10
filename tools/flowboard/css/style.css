@@ -123,6 +123,19 @@ body[data-workspace="operate"] .ws-perf{display:none!important}
   background:radial-gradient(circle at 50% 8%, #7a42ff22, transparent 45%);
 }
 #scene3d > *{position:relative;z-index:1}
+#game-toggle{position:absolute;left:14px;top:14px;z-index:30;background:linear-gradient(135deg,#1f6feb,#8b5cf6);border-color:#58a6ff;color:#fff;font-weight:800;box-shadow:0 4px 18px #0008}
+#game-toggle.active{background:linear-gradient(135deg,#b42318,#f85149);border-color:#ff7b72}
+#game-rescue{display:none;position:absolute;left:145px;top:14px;z-index:30;background:#161b22dd;border-color:#d29922;color:#f0c674;font-weight:700;box-shadow:0 4px 18px #0008}
+#game-toggle.active + #game-rescue{display:block}
+#game-hud{display:none;position:absolute;left:14px;bottom:14px;z-index:29;width:270px;padding:13px 15px;border-radius:12px;background:#08111de8;border:1px solid #58a6ff88;box-shadow:0 8px 28px #000b;backdrop-filter:blur(8px);pointer-events:none}
+#game-hud.active{display:block}
+.game-hud-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px;text-transform:uppercase;letter-spacing:.08em;color:#58a6ff;font-weight:800}
+.game-hud-title b{font-size:9px;color:#3fb950;text-align:right}
+.game-hud-grid{display:grid;grid-template-columns:1fr auto;gap:4px 12px;font:11px/1.5 'JetBrains Mono',monospace;color:#8b949e}
+.game-hud-grid b{color:#fff;text-align:right}
+#game-alert{margin-top:9px;padding:5px 8px;border-radius:6px;background:#0d3320;color:#3fb950;text-align:center;font-size:11px;font-weight:800}
+#game-alert.warn{background:#4d1a1a;color:#ff7b72;animation:alertPulse .8s infinite}
+.game-keys{display:grid;grid-template-columns:1fr 1fr;gap:3px 8px;margin-top:9px;padding-top:8px;border-top:1px solid #30363d;color:#8b949e;font-size:9px}
 /* ── 小地图 HUD ── */
 #minimap-pip{position:absolute;top:10px;right:10px;width:220px;height:160px;z-index:20;border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.10);box-shadow:0 4px 16px rgba(0,0,0,0.55);pointer-events:none}
 #minimap-canvas{display:block;width:220px;height:160px}

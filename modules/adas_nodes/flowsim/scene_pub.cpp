@@ -265,6 +265,7 @@ cJSON* build_ego_json(const Entity& e) {
     cJSON_AddNumberToObject(j, "width", e.width);
     cJSON_AddNumberToObject(j, "height", 1.5);
     cJSON_AddNumberToObject(j, "target_vx", e.target_vx);
+    cJSON_AddNumberToObject(j, "lateral_offset", e.offset);
     /* vx/vy 用于前端速度向量可视化（弯道时 vy≠0） */
     cJSON_AddNumberToObject(j, "vx", e.vx);
     cJSON_AddNumberToObject(j, "vy", e.vy);
