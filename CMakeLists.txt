@@ -1043,6 +1043,13 @@ if(BASH_EXECUTABLE AND NOT WIN32)
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     )
     set_tests_properties(flow_launcher_smoke PROPERTIES TIMEOUT 150 LABELS "integration")
+
+    add_test(NAME pem_runtime_smoke
+        COMMAND ${CMAKE_COMMAND} -E env BUILD_DIR=${CMAKE_BINARY_DIR}
+                ${BASH_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/pem_smoke.sh 4
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    set_tests_properties(pem_runtime_smoke PROPERTIES TIMEOUT 150 LABELS "integration")
 else()
     message(STATUS "skip e2e_smoke/flow_launcher_smoke tests (bash unavailable or WIN32)")
 endif()

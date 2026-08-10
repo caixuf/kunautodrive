@@ -89,5 +89,15 @@ python3 tools/pem_dump.py --jsonl --type event /tmp/kunautodrive_pem_*.pem
 python3 tools/pem_dump.py --type topic --name planning /tmp/kunautodrive_pem_*.pem
 ```
 
+PEM 运行时门禁：
+
+```bash
+env -u LD_LIBRARY_PATH ctest --test-dir build --output-on-failure -R pem_runtime_smoke
+```
+
+该测试以仿真管线临时启用 production monitor 和 `pem_collector`，断言业务
+`.pem` 文件实际生成，并由 `pem_dump.py` 成功解出 `trip:ci_simulation`。
+它随 integration CI 运行，不依赖 GPS、串口或其他实车硬件。
+
 量产 profile 特意不订阅场景和其他大负载 topic，也不会打开 dashboard/stats IPC
 桥接。
