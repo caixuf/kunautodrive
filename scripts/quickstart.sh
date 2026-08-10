@@ -3,7 +3,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$SCRIPT_DIR"
-if [ -x "$SCRIPT_DIR/bin/flow_launcher" ]; then
+SOURCE_TREE=false
+if [ -x "$SCRIPT_DIR/../build/bin/flow_launcher" ]; then
+    ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+    SOURCE_TREE=true
+elif [ -x "$SCRIPT_DIR/bin/flow_launcher" ]; then
     ROOT="$SCRIPT_DIR"
 elif [ -x "$SCRIPT_DIR/../../bin/flow_launcher" ]; then
     ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -12,8 +16,17 @@ elif [ -x "$SCRIPT_DIR/../../../bin/flow_launcher" ]; then
 fi
 
 DURATION="${1:-15}"
-PIPELINE="${FLOWENGINE_PIPELINE:-$ROOT/share/flowengine/config/pipeline.json}"
-FLOWBOARD="$ROOT/share/flowengine/flowboard/index.html"
+PRODUCT_CONFIG="$ROOT/product.json"
+[ -f "$PRODUCT_CONFIG" ] || PRODUCT_CONFIG="$ROOT/config/product.json"
+PRODUCT_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["product_id"])' "$PRODUCT_CONFIG")"
+PLUGIN_DIR="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["plugin_dir"])' "$PRODUCT_CONFIG")"
+if $SOURCE_TREE; then
+    SHARE="$ROOT"
+else
+    SHARE="$ROOT/share/$PRODUCT_ID"
+fi
+PIPELINE="${FLOWENGINE_PIPELINE:-$SHARE/config/pipeline.json}"
+FLOWBOARD="$SHARE/flowboard/index.html"
 JSON_FILE="/tmp/flow_topology.json"
 LOG_DIR="$ROOT/logs"
 TMP_PIPELINE=""
@@ -21,7 +34,7 @@ mkdir -p "$LOG_DIR"
 
 export FLOWENGINE_HOME="$ROOT"
 export PATH="$ROOT/bin:$PATH"
-export LD_LIBRARY_PATH="$ROOT/lib:$ROOT/lib/flowengine/plugins:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="$ROOT/lib:$ROOT/$PLUGIN_DIR:${LD_LIBRARY_PATH:-}"
 
 LAUNCHER_PID=""
 SERVER_PID=""
@@ -51,9 +64,10 @@ cd "$ROOT"
 rm -f "$JSON_FILE"
 
 PIPELINE_RUN="$PIPELINE"
-if [ ! -d "$ROOT/build/lib" ] && [ -d "$ROOT/lib/flowengine/plugins" ]; then
+_PRODUCT_ID="$(python3 -c "import json,sys; d=json.load(open('$ROOT/config/product.json')); print(d['plugin_dir'])" 2>/dev/null || echo "lib/kunautodrive/plugins")"
+if [ ! -d "$ROOT/build/lib" ] && [ -d "$ROOT/$_PRODUCT_ID" ]; then
     TMP_PIPELINE="$(mktemp /tmp/flowengine_pipeline.XXXXXX.json)"
-    python3 - "$PIPELINE" "$TMP_PIPELINE" "$ROOT/lib/flowengine/plugins" <<'PY'
+    python3 - "$PIPELINE" "$TMP_PIPELINE" "$ROOT/$_PRODUCT_ID" <<'PY'
 import json
 import os
 import sys

@@ -1,0 +1,9 @@
+{
+  "id": "passenger-vehicle",
+  "status": "placeholder",
+  "base_pipeline": "pipeline_car.json",
+  "platform": "linux-arm64",
+  "variant": "can-noa",
+  "reason": "Requires production vehicle interfaces, map/navigation inputs and validated CAN DBC.",
+  "nodes": {}
+}

@@ -1,0 +1,8 @@
+{
+  "id": "simulation",
+  "status": "ready",
+  "base_pipeline": "pipeline.json",
+  "platform": "linux-x86_64",
+  "variant": "full-simulation",
+  "nodes": {}
+}

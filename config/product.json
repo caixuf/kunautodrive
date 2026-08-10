@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "product_id": "kunautodrive",
+  "display_name": "KunAutoDrive",
+  "env_prefix": "FLOWENGINE",
+  "install_dir": "kun_auto",
+  "package_prefix": "kunautodrive",
+  "plugin_dir": "lib/kunautodrive/plugins",
+  "default_vehicle": "rc_car"
+}

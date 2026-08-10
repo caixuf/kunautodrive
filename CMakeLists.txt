@@ -135,6 +135,13 @@ set(MSG_FILES
     msg/adas_msgs.msg
 )
 
+set(PRODUCT_CONFIG_FILE "${CMAKE_CURRENT_SOURCE_DIR}/config/product.json"
+    CACHE FILEPATH "Product deployment metadata JSON")
+file(READ "${PRODUCT_CONFIG_FILE}" PRODUCT_CONFIG_JSON)
+string(JSON PRODUCT_ID GET "${PRODUCT_CONFIG_JSON}" product_id)
+string(JSON PRODUCT_PLUGIN_DIR GET "${PRODUCT_CONFIG_JSON}" plugin_dir)
+set(PRODUCT_SHARE_DIR "share/${PRODUCT_ID}")
+
 # 为每个 .msg 生成拆分的 per-struct 头文件 + umbrella 头文件
 foreach(MSG_FILE ${MSG_FILES})
     get_filename_component(MSG_NAME ${MSG_FILE} NAME_WE)
@@ -735,11 +742,14 @@ install(TARGETS flowengine_core
 # 不能用 configure-time GLOB：首次配置时节点 .so 还没生成，会导致安装包漏掉插件。
 # 用 install(DIRECTORY ... FILES_MATCHING) 在 install 阶段按模式收集构建产物。
 install(DIRECTORY "${CMAKE_BINARY_DIR}/lib/"
-    DESTINATION lib/flowengine/plugins
+    DESTINATION ${PRODUCT_PLUGIN_DIR}
     FILES_MATCHING
     PATTERN "lib*_node.so"
+    PATTERN "libsensor_model.so"
     PATTERN "lib*_node.dylib"
+    PATTERN "libsensor_model.dylib"
     PATTERN "*_node.dll"
+    PATTERN "sensor_model.dll"
 )
 
 install(TARGETS example_process example_task cpp_example_task reactive_task flowcoro_task
@@ -772,6 +782,8 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/flowengine.pc"
     DESTINATION lib/pkgconfig
 )
 
+install(FILES "${PRODUCT_CONFIG_FILE}" DESTINATION . RENAME product.json)
+
 # ── Python Tools ────────────────────────────────────────────
 install(PROGRAMS
     tools/train_demo_model.py
@@ -781,23 +793,23 @@ install(PROGRAMS
     tools/pipeline_check.py
     tools/quick_verify.py
     tools/trace_incident.py
-    DESTINATION share/flowengine/tools
+    DESTINATION ${PRODUCT_SHARE_DIR}/tools
 )
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/train_e2e")
     install(DIRECTORY tools/train_e2e/
-        DESTINATION share/flowengine/tools/train_e2e
+        DESTINATION ${PRODUCT_SHARE_DIR}/tools/train_e2e
         FILES_MATCHING PATTERN "*.py"
     )
 endif()
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/dataset")
     install(DIRECTORY tools/dataset/
-        DESTINATION share/flowengine/tools/dataset
+        DESTINATION ${PRODUCT_SHARE_DIR}/tools/dataset
         FILES_MATCHING PATTERN "*.py"
     )
 endif()
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ci/evaluators")
     install(DIRECTORY ci/evaluators/
-        DESTINATION share/flowengine/evaluators
+        DESTINATION ${PRODUCT_SHARE_DIR}/evaluators
         FILES_MATCHING PATTERN "*.py"
     )
 endif()
@@ -807,7 +819,9 @@ install(PROGRAMS
     scripts/demo.sh
     scripts/quickstart.sh
     scripts/stress_test.sh
-    DESTINATION share/flowengine/scripts
+    scripts/product_run.sh
+    scripts/product_install.sh
+    DESTINATION ${PRODUCT_SHARE_DIR}/scripts
 )
 
 install(PROGRAMS scripts/quickstart.sh
@@ -815,21 +829,31 @@ install(PROGRAMS scripts/quickstart.sh
 )
 
 install(DIRECTORY config/
-    DESTINATION share/flowengine/config
+    DESTINATION ${PRODUCT_SHARE_DIR}/config
     FILES_MATCHING PATTERN "*.json"
 )
 
+install(DIRECTORY config/vehicles/
+    DESTINATION ${PRODUCT_SHARE_DIR}/vehicles
+    FILES_MATCHING PATTERN "*.json"
+)
+
+install(PROGRAMS tools/product_config.py tools/vehicle_config.py
+    tools/verify_release.py tools/pem_dump.py
+    DESTINATION ${PRODUCT_SHARE_DIR}/tools
+)
+
 install(DIRECTORY scenarios/
-    DESTINATION share/flowengine/scenarios
+    DESTINATION ${PRODUCT_SHARE_DIR}/scenarios
     FILES_MATCHING PATTERN "*.json"
 )
 
 install(DIRECTORY tools/flowboard/
-    DESTINATION share/flowengine/flowboard
+    DESTINATION ${PRODUCT_SHARE_DIR}/flowboard
 )
 
 install(PROGRAMS tools/foxglove_bridge.py
-    DESTINATION share/flowengine/tools
+    DESTINATION ${PRODUCT_SHARE_DIR}/tools
 )
 
 # 创建配置文件

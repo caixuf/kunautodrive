@@ -2,6 +2,72 @@
 
 > 把 FlowEngine 从仿真部署到真实智能小车。配套配置模板：[config/pipeline_car.json](../config/pipeline_car.json)
 
+## 产品部署目录
+
+默认目录名由 [config/product.json](../config/product.json) 的 `install_dir`
+决定（当前为 `kun_auto`），代码和脚本不依赖这个字面量。车端所有文件统一
+位于一个产品根目录。程序版本只读，车型配置和
+运行数据跨版本保留：
+
+`product.json` 同时是 `product_id`（share 目录）、`display_name`、
+`package_prefix`、`plugin_dir` 和默认车型的唯一事实源。产品改名只修改该
+文件；`FLOWENGINE_*` 和 `libflowengine_*` 属于兼容 ABI，可在品牌改名后继续
+保留，避免破坏既有部署与第三方插件。
+
+```text
+kun_auto/
+├── current -> releases/kunautodrive-<version>-linux-<arch>
+├── releases/
+│   └── kunautodrive-<version>-linux-<arch>/
+│       ├── bin/
+│       ├── lib/kunautodrive/plugins/
+│       ├── share/kunautodrive/{config,vehicles,tools,scripts}/
+│       └── manifest.json
+├── etc/
+│   ├── vehicles/               # 车型 overlay，可按车辆修改
+│   └── waypoints.json
+├── var/
+│   ├── log/
+│   ├── data/
+│   ├── models/
+│   └── run/                    # 生成的 pipeline、PEM 日志和运行态文件
+└── run -> current/share/kunautodrive/scripts/product_run.sh
+```
+
+`releases/` 中的版本禁止在线修改。升级先解包并校验 SHA-256 manifest，
+最后原子切换 `current`；回滚只需把 `current` 指回上一个 release。
+
+### 车型配置
+
+基础拓扑只有 [pipeline_car.json](../config/pipeline_car.json) 一份。车型文件
+位于 `config/vehicles/`，只覆盖硬件端口、执行器 backend、标定参数、节点启停
+和量产采集策略：
+
+| Profile | 用途 |
+|---|---|
+| `simulation` | 当前完整仿真管道 |
+| `rc_car` | 当前 RC 小车，航点跟随 + PCA9685 |
+| `passenger_vehicle.placeholder` | 乘用车占位，生成器拒绝启动 |
+
+生成配置时会检查未知节点、参数 JSON、关键 topic 多发布者和插件是否存在。
+不要为每个车型复制整份 pipeline。
+
+### 打包与安装
+
+```bash
+bash scripts/deploy.sh --package --release --strip
+
+# 在目标机安装到指定 kun_auto 根目录
+bash dist/<package>-<version>-linux-<arch>.install.sh \
+  dist/<package>-<version>-linux-<arch>.tar.gz /opt/kun_auto
+
+# 选择车型运行
+FLOWENGINE_VEHICLE=rc_car /opt/kun_auto/run
+```
+
+量产服务可设置中性的 `PRODUCT_HOME` 和 `FLOWENGINE_VEHICLE`，并由 systemd 接管
+stdout/stderr、重启策略和进程权限。
+
 ## 架构对比
 
 ### 仿真模式（pipeline.json）

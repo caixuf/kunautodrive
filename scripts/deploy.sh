@@ -4,6 +4,7 @@ BUILD_TYPE=Release
 STRIP=false
 PREFIX=""
 PACKAGE_MODE=false
+ARCH="$(uname -m)"
 
 for arg in "$@"; do
     case "$arg" in
@@ -23,15 +24,26 @@ if [ "$PACKAGE_MODE" = false ] && [ -z "$PREFIX" ]; then
 fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PRODUCT_CONFIG="$ROOT/config/product.json"
+PACKAGE_PREFIX="$(python3 "$ROOT/tools/product_config.py" "$PRODUCT_CONFIG" package_prefix)"
+PRODUCT_ID="$(python3 "$ROOT/tools/product_config.py" "$PRODUCT_CONFIG" product_id)"
+PLUGIN_DIR="$(python3 "$ROOT/tools/product_config.py" "$PRODUCT_CONFIG" plugin_dir)"
 BUILD_DIR="$ROOT/build_deploy"
 NODES_BUILD_DIR="$BUILD_DIR/modules/adas_nodes"
 
 if [ "$PACKAGE_MODE" = true ]; then
     VERSION=$(git -C "$ROOT" describe --tags --always 2>/dev/null || echo "dev")
-    TARNAME="flowengine-${VERSION}-linux-x86_64.tar.gz"
+    case "$ARCH" in
+        x86_64|amd64) ARCH=x86_64 ;;
+        aarch64|arm64) ARCH=arm64 ;;
+    esac
+    RELEASE_NAME="${PACKAGE_PREFIX}-${VERSION}-linux-${ARCH}"
+    TARNAME="${RELEASE_NAME}.tar.gz"
     DIST_DIR="$ROOT/dist"
     mkdir -p "$DIST_DIR"
-    PREFIX="$(mktemp -d /tmp/flowengine_pkg_XXXXXX)"
+    STAGE_DIR="$(mktemp -d /tmp/flowengine_pkg_XXXXXX)"
+    trap 'rm -rf "$STAGE_DIR"' EXIT
+    PREFIX="$STAGE_DIR/$RELEASE_NAME"
 fi
 
 echo "[1/4] Building..."
@@ -50,14 +62,38 @@ echo "[4/4] Environment..."
 cat > "$PREFIX/flowengine.env" << EOF
 export FLOWENGINE_HOME="$PREFIX"
 export PATH="\$FLOWENGINE_HOME/bin:\$PATH"
-export LD_LIBRARY_PATH="\$FLOWENGINE_HOME/lib:\$FLOWENGINE_HOME/lib/flowengine/plugins:\${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="\$FLOWENGINE_HOME/lib:\$FLOWENGINE_HOME/$PLUGIN_DIR:\${LD_LIBRARY_PATH:-}"
 EOF
 
 if [ "$PACKAGE_MODE" = true ]; then
-    cd "$PREFIX/.."
-    tar czf "$DIST_DIR/$TARNAME" "$(basename "$PREFIX")/"
-    rm -rf "$PREFIX"
+    mkdir -p "$PREFIX/share/$PRODUCT_ID/deploy"
+    cp "$ROOT/scripts/product_install.sh" "$PREFIX/share/$PRODUCT_ID/deploy/"
+    python3 - "$PREFIX" "$VERSION" "$ARCH" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+files = {}
+for path in sorted(root.rglob("*")):
+    if path.is_file():
+        files[str(path.relative_to(root))] = hashlib.sha256(path.read_bytes()).hexdigest()
+manifest = {
+    "format_version": 1,
+    "version": sys.argv[2],
+    "platform": "linux",
+    "architecture": sys.argv[3],
+    "files": files,
+}
+(root / "manifest.json").write_text(
+    json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+    tar czf "$DIST_DIR/$TARNAME" -C "$STAGE_DIR" "$RELEASE_NAME"
+    cp "$ROOT/scripts/product_install.sh" "$DIST_DIR/${TARNAME%.tar.gz}.install.sh"
+    chmod +x "$DIST_DIR/${TARNAME%.tar.gz}.install.sh"
     echo "✓ $DIST_DIR/$TARNAME"
+    echo "✓ $DIST_DIR/${TARNAME%.tar.gz}.install.sh"
 else
     echo "✓ Deploy to $PREFIX"
 fi
