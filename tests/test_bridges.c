@@ -23,7 +23,9 @@
 #include <string.h>
 #include <unistd.h>
 #include <pthread.h>
+#if !defined(_WIN32)
 #include <sys/wait.h>
+#endif
 
 /* ── 测试宏（与 test_new_modules.c 保持一致风格）──────────── */
 
@@ -163,6 +165,7 @@ typedef struct {
     uint64_t ipc_delivered;
 } IpcQosResult;
 
+#if !defined(_WIN32)
 static void test_transport_ipc_qos_depth(void) {
     TEST("transport IPC uses publisher topic QoS depth");
 
@@ -258,6 +261,7 @@ static void test_transport_ipc_qos_depth(void) {
            (unsigned long long)result.ipc_delivered);
     PASS();
 }
+#endif
 
 /* ══════════════════════════════════════════════════════════ */
 /* stats_bridge                                                */
@@ -492,7 +496,11 @@ int main(void) {
     test_transport_local_pubsub();
     test_transport_stats();
     test_transport_unsubscribe();
+#if !defined(_WIN32)
     test_transport_ipc_qos_depth();
+#else
+    printf("  transport IPC QoS depth (POSIX only)             SKIP\n");
+#endif
 
     printf("\n═══ stats_bridge ═══\n");
     test_stats_bridge_open();
