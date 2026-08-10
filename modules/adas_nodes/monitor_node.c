@@ -121,6 +121,9 @@ static struct {
     TaskBase   taskbase;
 
     SysMonitor* sysmon;
+    SysMonitorSnapshot sysmon_cache;
+    uint64_t slow_metrics_last_wall_us;
+    char* registry_json_cache;
 
     /* 订阅数据缓存 */
     char latest_obstacles_json[8192];
@@ -771,11 +774,20 @@ static void export_dashboard_json(void) {
     int task_count = 0;
     if (g.scheduler) task_count = scheduler_task_count(g.scheduler);
 
-    SysMonitorSnapshot ssnap;
-    memset(&ssnap, 0, sizeof(ssnap));
-    if (g.sysmon) sysmonitor_snapshot(g.sysmon, &ssnap);
-
-    char* topo_json = g.discovery ? discovery_export_json(g.discovery) : NULL;
+    /* 系统与拓扑指标变化慢，1Hz 足够展示。旧实现随 dashboard 10Hz 全扫
+     * /proc + 全量导出 discovery/registry，monitor 单帧约 26ms，与 planning
+     * 周期重叠时形成明显 CPU 尖峰。动态 scene/trajectory 仍保持 10Hz。 */
+    uint64_t slow_now_us = clock_now_monotonic_wall_us();
+    if (g.slow_metrics_last_wall_us == 0 ||
+        slow_now_us - g.slow_metrics_last_wall_us >= 1000000ULL) {
+        g.slow_metrics_last_wall_us = slow_now_us;
+        if (g.sysmon) sysmonitor_snapshot(g.sysmon, &g.sysmon_cache);
+        char* fresh_registry = flow_registry_export_json();
+        if (fresh_registry) {
+            free(g.registry_json_cache);
+            g.registry_json_cache = fresh_registry;
+        }
+    }
     char vehicle_state_snap[sizeof(g.latest_vehicle_state)];
     pthread_mutex_lock(&g.vehicle_state_mutex);
     size_t vs_len = strnlen(g.latest_vehicle_state, sizeof(g.latest_vehicle_state) - 1);
@@ -1322,40 +1334,38 @@ static void export_dashboard_json(void) {
     }
 
     /* Registry */
-    char* reg_json = flow_registry_export_json();
-    if (reg_json) {
-        cJSON* reg = monitor_cJSON_Parse(reg_json);
+    if (g.registry_json_cache) {
+        cJSON* reg = monitor_cJSON_Parse(g.registry_json_cache);
         if (reg) {
             cJSON_AddItemToObject(metrics, "registry", reg);
         }
-        free(reg_json);
     }
 
     /* Sysmon */
     cJSON* sysmon_o = cJSON_AddObjectToObject(metrics, "sysmon");
-    cJSON_AddNumberToObject(sysmon_o, "cpu_total_pct", ssnap.cpu_total_pct);
-    cJSON_AddNumberToObject(sysmon_o, "cpu_user_pct", ssnap.cpu_user_pct);
-    cJSON_AddNumberToObject(sysmon_o, "cpu_sys_pct", ssnap.cpu_sys_pct);
-    cJSON_AddNumberToObject(sysmon_o, "cpu_iowait_pct", ssnap.cpu_iowait_pct);
-    cJSON_AddNumberToObject(sysmon_o, "cpu_idle_pct", ssnap.cpu_idle_pct);
-    cJSON_AddNumberToObject(sysmon_o, "cpu_count", ssnap.cpu_count);
-    cJSON_AddNumberToObject(sysmon_o, "mem_total_kb", (double)ssnap.mem_total_kb);
-    cJSON_AddNumberToObject(sysmon_o, "mem_used_kb", (double)ssnap.mem_used_kb);
-    cJSON_AddNumberToObject(sysmon_o, "mem_used_pct", ssnap.mem_used_pct);
-    cJSON_AddNumberToObject(sysmon_o, "mem_available_kb", (double)ssnap.mem_available_kb);
-    cJSON_AddNumberToObject(sysmon_o, "proc_rss_kb", (double)ssnap.proc_rss_kb);
-    cJSON_AddNumberToObject(sysmon_o, "proc_vms_kb", (double)ssnap.proc_vms_kb);
-    cJSON_AddNumberToObject(sysmon_o, "disk_read_bps", ssnap.disk_read_bps);
-    cJSON_AddNumberToObject(sysmon_o, "disk_write_bps", ssnap.disk_write_bps);
-    cJSON_AddNumberToObject(sysmon_o, "load1", ssnap.load1);
-    cJSON_AddNumberToObject(sysmon_o, "load5", ssnap.load5);
-    cJSON_AddNumberToObject(sysmon_o, "load15", ssnap.load15);
-    cJSON_AddNumberToObject(sysmon_o, "uptime_sec", ssnap.uptime_sec);
-    cJSON_AddNumberToObject(sysmon_o, "thread_count", ssnap.thread_count);
+    cJSON_AddNumberToObject(sysmon_o, "cpu_total_pct", g.sysmon_cache.cpu_total_pct);
+    cJSON_AddNumberToObject(sysmon_o, "cpu_user_pct", g.sysmon_cache.cpu_user_pct);
+    cJSON_AddNumberToObject(sysmon_o, "cpu_sys_pct", g.sysmon_cache.cpu_sys_pct);
+    cJSON_AddNumberToObject(sysmon_o, "cpu_iowait_pct", g.sysmon_cache.cpu_iowait_pct);
+    cJSON_AddNumberToObject(sysmon_o, "cpu_idle_pct", g.sysmon_cache.cpu_idle_pct);
+    cJSON_AddNumberToObject(sysmon_o, "cpu_count", g.sysmon_cache.cpu_count);
+    cJSON_AddNumberToObject(sysmon_o, "mem_total_kb", (double)g.sysmon_cache.mem_total_kb);
+    cJSON_AddNumberToObject(sysmon_o, "mem_used_kb", (double)g.sysmon_cache.mem_used_kb);
+    cJSON_AddNumberToObject(sysmon_o, "mem_used_pct", g.sysmon_cache.mem_used_pct);
+    cJSON_AddNumberToObject(sysmon_o, "mem_available_kb", (double)g.sysmon_cache.mem_available_kb);
+    cJSON_AddNumberToObject(sysmon_o, "proc_rss_kb", (double)g.sysmon_cache.proc_rss_kb);
+    cJSON_AddNumberToObject(sysmon_o, "proc_vms_kb", (double)g.sysmon_cache.proc_vms_kb);
+    cJSON_AddNumberToObject(sysmon_o, "disk_read_bps", g.sysmon_cache.disk_read_bps);
+    cJSON_AddNumberToObject(sysmon_o, "disk_write_bps", g.sysmon_cache.disk_write_bps);
+    cJSON_AddNumberToObject(sysmon_o, "load1", g.sysmon_cache.load1);
+    cJSON_AddNumberToObject(sysmon_o, "load5", g.sysmon_cache.load5);
+    cJSON_AddNumberToObject(sysmon_o, "load15", g.sysmon_cache.load15);
+    cJSON_AddNumberToObject(sysmon_o, "uptime_sec", g.sysmon_cache.uptime_sec);
+    cJSON_AddNumberToObject(sysmon_o, "thread_count", g.sysmon_cache.thread_count);
 
     cJSON* threads_arr = cJSON_AddArrayToObject(sysmon_o, "threads");
-    for (int ti = 0; ti < ssnap.thread_count && ti < 64; ti++) {
-        SysMonitorThreadSnapshot* th = &ssnap.threads[ti];
+    for (int ti = 0; ti < g.sysmon_cache.thread_count && ti < 64; ti++) {
+        SysMonitorThreadSnapshot* th = &g.sysmon_cache.threads[ti];
         cJSON* thr = cJSON_CreateObject();
         cJSON_AddNumberToObject(thr, "tid", (double)(int)th->tid);
         cJSON_AddStringToObject(thr, "name", th->name);
@@ -1449,7 +1459,6 @@ static void export_dashboard_json(void) {
         }
     }
     cJSON_free(json_str);
-    free(topo_json);
 }
 
 /* ── 任务主循环（托管模式 execute） ──────────────────────────── */
@@ -1735,6 +1744,8 @@ static void monitor_cleanup(void) {
     task_stop(&g.taskbase);
     task_base_destroy(&g.taskbase);
     if (g.sysmon) { sysmonitor_destroy(g.sysmon); g.sysmon = NULL; }
+    free(g.registry_json_cache);
+    g.registry_json_cache = NULL;
     if (g.stats_sub) { ipc_channel_stop(g.stats_sub); ipc_channel_close(g.stats_sub); g.stats_sub = NULL; }
     if (g.stats_ch) { ipc_channel_close(g.stats_ch); g.stats_ch = NULL; }
     if (g.dashboard_ch) { ipc_channel_close(g.dashboard_ch); g.dashboard_ch = NULL; }
