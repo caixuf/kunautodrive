@@ -1,4 +1,4 @@
-# FlowEngine 快速入门
+# KunAutoDrive 快速入门
 
 > **目标：** 30 分钟内理解核心概念并运行第一个插件
 
@@ -6,8 +6,8 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/caixuf/FlowEngine.git
-cd FlowEngine
+git clone https://github.com/caixuf/kunautodrive.git
+cd KunAutoDrive
 
 # 安装系统依赖（Ubuntu / Debian）
 sudo apt-get install -y build-essential cmake libcjson-dev
@@ -159,7 +159,7 @@ task->vtable->execute(task);   /* 调用具体实现 */
 
 ### 线程安全
 
-FlowEngine 核心模块（logger、message_bus、task_manager）均通过 pthread mutex 保护共享状态；协程恢复路径通过 flowcoro 无锁队列分发，避免在消息回调线程中长时间持锁。
+KunAutoDrive 核心模块（logger、message_bus、task_manager）均通过 pthread mutex 保护共享状态；协程恢复路径通过 flowcoro 无锁队列分发，避免在消息回调线程中长时间持锁。
 
 ## 常见问题
 

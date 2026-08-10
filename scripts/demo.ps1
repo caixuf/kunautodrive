@@ -19,7 +19,7 @@ foreach ($d in @('D:\tmp','C:\tmp', (Join-Path $env:TEMP 'flow_logs'))) {
         New-Item -ItemType Directory -Force -Path $d | Out-Null
     }
 }
-$runtimeTemp = Join-Path $env:LOCALAPPDATA 'FlowEngine\tmp'
+$runtimeTemp = Join-Path $env:LOCALAPPDATA 'KunAutoDrive\tmp'
 New-Item -ItemType Directory -Force -Path $runtimeTemp | Out-Null
 $env:FLOWENGINE_TEMP_DIR = $runtimeTemp
 $env:FLOWENGINE_STATE_FILE = Join-Path $runtimeTemp 'flow_topology.json'
@@ -137,14 +137,14 @@ if (-not $SkipBuild) {
     } else {
         cmake --preset $Preset
     }
-    if ($LASTEXITCODE -ne 0) { throw "failed to configure FlowEngine" }
+    if ($LASTEXITCODE -ne 0) { throw "failed to configure KunAutoDrive" }
     Write-Host "[demo] build core ..."
     if ($isVs) {
         cmake --build --preset $Preset --config Release
     } else {
         cmake --build --preset $Preset
     }
-    if ($LASTEXITCODE -ne 0) { throw "failed to build FlowEngine core" }
+    if ($LASTEXITCODE -ne 0) { throw "failed to build KunAutoDrive core" }
 
     Write-Host "[demo] build node plugins ..."
     $nodesB = Join-Path $BuildDir "modules\adas_nodes"

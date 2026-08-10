@@ -1,5 +1,5 @@
 #!/bin/bash
-# FlowEngine Stress Test
+# KunAutoDrive Stress Test
 # Usage: bash scripts/stress_test.sh [duration_sec=30] [iterations=3] [--full]
 #   --full: also run 1-hour bus stress, IPC stability, and bag consistency checks
 set -e
@@ -19,7 +19,7 @@ PASS=0
 FAIL=0
 
 echo "╔══════════════════════════════════════════╗"
-echo "║  FlowEngine Stress Test                  ║"
+echo "║  KunAutoDrive Stress Test                  ║"
 echo "║  Duration: ${DURATION}s × $ITERS iterations   ║"
 echo "╚══════════════════════════════════════════╝"
 

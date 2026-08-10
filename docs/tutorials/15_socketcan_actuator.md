@@ -299,7 +299,7 @@ CAN ID 支持 `0x` 十六进制写法（[actuator_node.c:275-289](../../modules/
 
 ### 实验 2：用 cansend 命令行调试
 
-Linux 自带 `can-utils` 工具包，可以脱离 FlowEngine 直接发 CAN 帧测硬件：
+Linux 自带 `can-utils` 工具包，可以脱离 KunAutoDrive 直接发 CAN 帧测硬件：
 
 ```bash
 sudo apt install can-utils

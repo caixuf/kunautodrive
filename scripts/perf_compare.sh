@@ -1,5 +1,5 @@
 #!/bin/bash
-# FlowEngine Performance Comparison — 对比不同构建配置的性能
+# KunAutoDrive Performance Comparison — 对比不同构建配置的性能
 # Usage: bash scripts/perf_compare.sh [duration=10]
 
 DURATION=${1:-10}
@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_BASE="$ROOT/build_perf"
 
 echo "╔══════════════════════════════════════════╗"
-echo "║  FlowEngine Performance Comparison       ║"
+echo "║  KunAutoDrive Performance Comparison       ║"
 echo "║  Duration: ${DURATION}s per config         ║"
 echo "╚══════════════════════════════════════════╝"
 echo ""

@@ -175,12 +175,12 @@ sudo reboot
 
 ---
 
-## 四、编译 FlowEngine
+## 四、编译 KunAutoDrive
 
 ```bash
 # 克隆代码
-git clone https://github.com/caixuf/FlowEngine.git
-cd FlowEngine
+git clone https://github.com/caixuf/kunautodrive.git
+cd KunAutoDrive
 
 # 编译
 mkdir -p build && cd build

@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# FlowEngine Longevity Test — 长时稳定性验证
+# KunAutoDrive Longevity Test — 长时稳定性验证
 #
 # 运行 e2e pipeline 持续指定时长，监控内存/CPU/消息统计，
 # 检测崩溃、泄漏、性能退化。
@@ -20,7 +20,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/build/bin/flow_launcher"
 
 echo "╔══════════════════════════════════════════╗"
-echo "║  FlowEngine Longevity Test               ║"
+echo "║  KunAutoDrive Longevity Test               ║"
 echo "║  Duration: ${DURATION}s                    ║"
 echo "║  $(date '+%Y-%m-%d %H:%M:%S')                           ║"
 echo "╚══════════════════════════════════════════╝"
@@ -32,7 +32,7 @@ if [ ! -x "$BIN" ]; then
     cmake --build "$ROOT/build" --target flow_launcher -j$(nproc) 2>/dev/null
 fi
 
-LOGFILE="/tmp/flowengine_longevity_$$.log"
+LOGFILE="/tmp/kunautodrive_longevity_$$.log"
 JSONFILE="/tmp/flow_topology.json"
 rm -f "$JSONFILE"
 

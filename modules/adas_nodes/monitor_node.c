@@ -1769,7 +1769,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     g.frequency_hz = 60.0;  /* 60Hz: 与 flowsim 60Hz 对齐，前端满帧插值 */
     g.lane_width   = 3.5;
     g.lane_count   = 2;
-    flow_temp_path(g.pem_log_path, sizeof(g.pem_log_path), "flowengine_pem");
+    flow_temp_path(g.pem_log_path, sizeof(g.pem_log_path), "kunautodrive_pem");
     g.pem_last_degrade_level = -1;
     g.pem_last_degrade_reason = -1;
     g.pem_rotate_sec = 300;

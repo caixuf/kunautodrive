@@ -1,4 +1,4 @@
-# FlowEngine Code Wiki
+# KunAutoDrive Code Wiki
 
 > 面向自动驾驶与机器人的仿真优先中间件框架 —— C11 内核、C++20 协程外壳、dlopen 插件化 ADAS Pipeline。
 >
@@ -22,7 +22,7 @@
 
 ## 1. 项目概览
 
-FlowEngine 是一个从零搭建的自动驾驶中间件，灵感来自 Apollo CyberRT。定位是**仿真优先、可复现的实验平台**：感知、融合、规划、控制、学习首先在仿真内运行、观察、测试、回放与评分，再逐步向真车部署演进。
+KunAutoDrive 是一个从零搭建的自动驾驶中间件，灵感来自 Apollo CyberRT。定位是**仿真优先、可复现的实验平台**：感知、融合、规划、控制、学习首先在仿真内运行、观察、测试、回放与评分，再逐步向真车部署演进。
 
 | 维度 | 说明 |
 |------|------|
@@ -43,11 +43,11 @@ FlowEngine 是一个从零搭建的自动驾驶中间件，灵感来自 Apollo C
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                        FlowEngine Core (C11)                          │
+│                        KunAutoDrive Core (C11)                          │
 │  Message Bus │ IPC(SHM) │ Bag(v2/MCAP) │ Clock │ State Machine       │
 │  FlowRegistry│ ParamRegistry │ Discovery │ Serializer(IDL) │ TaskMgr  │
 ├──────────────────────────────────────────────────────────────────────┤
-│                     FlowEngine Shell (C++20)                          │
+│                     KunAutoDrive Shell (C++20)                          │
 │  Coroutine Tasks │ Scheduler(Choreo) │ Fusion(EKF) │ Transport(TCP)  │
 ├──────────────────────────────────────────────────────────────────────┤
 │                     ADAS Pipeline (dlopen plugins)                     │
@@ -571,9 +571,9 @@ python3 ci/evaluators/demo_evaluator.py --no-run    # 仅分析当前数据
 ### 8.6 Docker
 
 ```bash
-docker build -t flowengine .
-docker run --rm flowengine          # e2e 演示
-docker run --rm flowengine demo 30
+docker build -t kunautodrive .
+docker run --rm kunautodrive          # e2e 演示
+docker run --rm kunautodrive demo 30
 ```
 
 ---

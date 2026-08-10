@@ -2,7 +2,7 @@
 
 ## 问题
 
-原始 FlowEngine 的消息传递是 `void* + size`，没有类型安全：
+原始 KunAutoDrive 的消息传递是 `void* + size`，没有类型安全：
 
 ```c
 // 旧方式 — 容易出错

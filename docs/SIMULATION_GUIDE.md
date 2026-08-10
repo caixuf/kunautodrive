@@ -24,7 +24,7 @@ Layer 3: Carla/Gazebo (真实传感器, 完整闭环) — 待实现
 # 数据自动写入 /tmp/flow_topology.json + bus stats
 
 # 2. 录制到 bag
-# (FlowEngine 自动通过 bag_writer_attach 录制)
+# (KunAutoDrive 自动通过 bag_writer_attach 录制)
 
 # 3. 回放 + 校验
 ./build/bin/flow_launcher config/pipeline.json --replay scenario.bag

@@ -1,5 +1,5 @@
 #!/bin/bash
-# FlowEngine Sanitizer CI Script
+# KunAutoDrive Sanitizer CI Script
 # Builds and tests with ASAN and TSAN enabled.
 # Usage: bash scripts/ci_sanitizers.sh [asan|tsan|ubsan|all]
 set -e
@@ -49,7 +49,7 @@ case "$MODE" in
         ;;
     all)
         echo "╔══════════════════════════════════════════╗"
-        echo "║  FlowEngine Sanitizer CI                 ║"
+        echo "║  KunAutoDrive Sanitizer CI                 ║"
         echo "╚══════════════════════════════════════════╝"
         FAILED=0
         run_sanitizer "asan" "ENABLE_ASAN" || FAILED=$((FAILED+1))

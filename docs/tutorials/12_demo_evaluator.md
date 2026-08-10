@@ -1,6 +1,6 @@
 # Demo Evaluator — 回归评估器
 
-`ci/evaluators/demo_evaluator.py` 是 FlowEngine 的自动化回归测试工具。它启动 demo pipeline，
+`ci/evaluators/demo_evaluator.py` 是 KunAutoDrive 的自动化回归测试工具。它启动 demo pipeline，
 采样运行时数据，按预定义标准评分，输出 PASS/FAIL 判定。
 
 ## 为什么需要它

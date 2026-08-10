@@ -1,6 +1,6 @@
-# FlowEngine 可视化架构
+# KunAutoDrive 可视化架构
 
-> 本文档记录 FlowEngine 可视化系统的完整架构：后端 flowmond 监控守护进程 +
+> 本文档记录 KunAutoDrive 可视化系统的完整架构：后端 flowmond 监控守护进程 +
 > 前端 vis/ 模块树（SceneDirector + Layer 对象树 + ViewRegistry 插件注册 +
 > SceneStore 数据契约 + DeadReckon 死推算）。
 >

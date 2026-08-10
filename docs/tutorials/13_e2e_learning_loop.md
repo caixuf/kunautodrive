@@ -1,6 +1,6 @@
 # 13 — E2E Learning Loop 训练闭环
 
-FlowEngine 的学习闭环把 demo pipeline 里的 teacher 行为采成 JSONL，导出成版本化 dataset，再训练 tiny 或 PyTorch artifact，最后通过 evaluator、modelctl 或 sidecar 接回运行时。
+KunAutoDrive 的学习闭环把 demo pipeline 里的 teacher 行为采成 JSONL，导出成版本化 dataset，再训练 tiny 或 PyTorch artifact，最后通过 evaluator、modelctl 或 sidecar 接回运行时。
 
 ## 什么时候用
 

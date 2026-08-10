@@ -1,5 +1,5 @@
 #!/bin/bash
-# FlowEngine Algorithm Stack — Dependency Setup
+# KunAutoDrive Algorithm Stack — Dependency Setup
 # Installs: OpenCV, Eigen, OSQP (optional, user can skip any)
 
 set -e

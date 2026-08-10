@@ -1,6 +1,6 @@
 {
-  "name": "flowengine_v0.2",
-  "description": "FlowEngine v0.2 场景矩阵：故障表中每类高频 bug 至少一个场景兜底（Phase 1.1）。各场景时长覆盖其 choreography 与目标故障被触发的窗口。",
+  "name": "kunautodrive_v0.2",
+  "description": "KunAutoDrive v0.2 场景矩阵：故障表中每类高频 bug 至少一个场景兜底（Phase 1.1）。各场景时长覆盖其 choreography 与目标故障被触发的窗口。",
   "default_duration_s": 45,
   "baseline_tolerances": {
     "_comment": "min_ratio=max_abs_increase 两型门禁只查数值回归（current vs baseline），不查绝对通过。跑新 baseline 前确认当前是健康值。",

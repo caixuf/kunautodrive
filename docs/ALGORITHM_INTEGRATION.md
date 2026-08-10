@@ -3,17 +3,17 @@
 ## 定位
 
 ```
-FlowEngine = 中间件框架（调度 + 通信 + 状态机 + 监控）
+KunAutoDrive = 中间件框架（调度 + 通信 + 状态机 + 监控）
 第三方库  = 算法实现（感知数学 + 融合数学 + 规划数学 + 控制数学）
 
-FlowEngine 不做算法，只做算法的"插座"。
+KunAutoDrive 不做算法，只做算法的"插座"。
 ```
 
 ## 架构
 
 ```
 ┌───────────────────────────────────────────────────┐
-│                   FlowEngine                       │
+│                   KunAutoDrive                       │
 │  ┌──────────┐  ┌──────────┐  ┌───────────────┐   │
 │  │ Scheduler│  │  State   │  │  Discovery    │   │
 │  │ (Choreo) │  │ Machine  │  │  + Transport  │   │
@@ -146,7 +146,7 @@ algorithm_activate_for_mode(&sm, SM_MODE_CP, plugins);
 
 ## 不推荐的做法
 
-- ❌ 在 FlowEngine 内部写复杂的数学运算
+- ❌ 在 KunAutoDrive 内部写复杂的数学运算
 - ❌ 把算法编译进核心库（应该作为独立 .so 插件）
 - ❌ 用 C 写矩阵运算（用 Eigen/Ceres 等经过验证的库）
 
@@ -154,5 +154,5 @@ algorithm_activate_for_mode(&sm, SM_MODE_CP, plugins);
 
 - ✅ 算法作为独立 .so，通过 AlgorithmInterface 接入
 - ✅ 状态机负责模式编排（NA→ACC→CP→NP→NOA）
-- ✅ FlowEngine 负责调度、通信、监控
+- ✅ KunAutoDrive 负责调度、通信、监控
 - ✅ 第三方库负责数学运算

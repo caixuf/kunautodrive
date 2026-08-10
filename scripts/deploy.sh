@@ -41,7 +41,7 @@ if [ "$PACKAGE_MODE" = true ]; then
     TARNAME="${RELEASE_NAME}.tar.gz"
     DIST_DIR="$ROOT/dist"
     mkdir -p "$DIST_DIR"
-    STAGE_DIR="$(mktemp -d /tmp/flowengine_pkg_XXXXXX)"
+    STAGE_DIR="$(mktemp -d /tmp/kunautodrive_pkg_XXXXXX)"
     trap 'rm -rf "$STAGE_DIR"' EXIT
     PREFIX="$STAGE_DIR/$RELEASE_NAME"
 fi
@@ -59,7 +59,7 @@ cmake --install "$BUILD_DIR" 2>/dev/null
 cmake --install "$NODES_BUILD_DIR" 2>/dev/null
 if $STRIP; then echo "[3/4] Stripping..."; find "$PREFIX/bin" "$PREFIX/lib" -type f -executable -o -name "*.so" | xargs strip 2>/dev/null || true; else echo "[3/4] Skipping strip"; fi
 echo "[4/4] Environment..."
-cat > "$PREFIX/flowengine.env" << EOF
+cat > "$PREFIX/${PRODUCT_ID}.env" << EOF
 export FLOWENGINE_HOME="$PREFIX"
 export PATH="\$FLOWENGINE_HOME/bin:\$PATH"
 export LD_LIBRARY_PATH="\$FLOWENGINE_HOME/lib:\$FLOWENGINE_HOME/$PLUGIN_DIR:\${LD_LIBRARY_PATH:-}"

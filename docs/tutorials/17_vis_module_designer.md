@@ -180,7 +180,7 @@ import { ... } from '../math/Curve.js';           // 路曲线采样（沿路布
 
 ### 2. 坐标系映射（极易踩坑）
 
-FlowEngine 仿真用 ENU 世界坐标（x=East, y=North, z=Up）。
+KunAutoDrive 仿真用 ENU 世界坐标（x=East, y=North, z=Up）。
 THREE.js 默认 y=up，映射表：
 
 | 仿真 | THREE | 说明 |
@@ -326,7 +326,7 @@ function build(roadNetwork) {
 如果用户想用外部设计 AI（如 Midjourney 出贴图、Blender 出 gltf），复制以下模板填空：
 
 ```
-你是 FlowEngine 可视化层的设计 AI。请按以下规范输出一个 View 模块。
+你是 KunAutoDrive 可视化层的设计 AI。请按以下规范输出一个 View 模块。
 
 ## 任务
 设计一个 <模块名> 模块：<功能描述>

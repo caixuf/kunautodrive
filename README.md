@@ -1,20 +1,20 @@
-# FlowEngine
+# KunAutoDrive
 
 > 面向自动驾驶与机器人的仿真优先中间件框架 —— C11 内核、C++20 协程外壳、插件化架构。
 >
-> **定位：** FlowEngine 是一个*仿真优先、可复现的实验平台*。核心能力——感知、融合、规划、控制、学习——
+> **定位：** KunAutoDrive 是一个*仿真优先、可复现的实验平台*。核心能力——感知、融合、规划、控制、学习——
 > 首先在**仿真内**被运行、观察、测试、回放与评分；通过纯逻辑单测、schema 迁移与统一时间戳语义，
 > 逐步向真车部署演进。当前阶段不追车规量产认证，已提供 RC 小车硬件落地清单，
 > 详见 [docs/RC_CAR_HARDWARE_CHECKLIST.md](docs/RC_CAR_HARDWARE_CHECKLIST.md)。
 
-[![CI](https://github.com/caixuf/FlowEngine/actions/workflows/ci.yml/badge.svg)](https://github.com/caixuf/FlowEngine/actions)
+[![CI](https://github.com/caixuf/kunautodrive/actions/workflows/ci.yml/badge.svg)](https://github.com/caixuf/kunautodrive/actions)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![C](https://img.shields.io/badge/C-11-555555)
 ![C++](https://img.shields.io/badge/C++-20-659ad2)
 
 ---
 
-## FlowEngine 是什么
+## KunAutoDrive 是什么
 
 一个从零搭建的中间件框架，灵感来自 Apollo CyberRT，以轻量、可嵌入的包提供核心抽象。
 目标是**可组织、可观察、可测试、可回放、可评估——全部在仿真内**：
@@ -44,7 +44,7 @@
 并提供不干预车辆的车道偏离预警；开出道路后可按 `R` 或点击
 **回到车道** 重定位到最近车道中心，退出接管后恢复自动驾驶控制。
 ┌──────────────────────────────────────────────────────────────────────┐
-│                        FlowEngine Core (C11)                          │
+│                        KunAutoDrive Core (C11)                          │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐ │
 │  │ Message  │ │   IPC    │ │   Bag    │ │  Clock   │ │   State    │ │
 │  │   Bus    │ │  (SHM)   │ │ (v2/MCAP)│ │ Service  │ │  Machine   │ │
@@ -54,7 +54,7 @@
 │  │ Registry │ │ Registry │ │  (UDP)   │ │(IDL+FNV) │ │  Manager   │ │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └────────────┘ │
 ├──────────────────────────────────────────────────────────────────────┤
-│                     FlowEngine Shell (C++20)                          │
+│                     KunAutoDrive Shell (C++20)                          │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐ │
 │  │ Coroutine│ │Scheduler │ │  Fusion  │ │Transport │ │  Network   │ │
 │  │  Tasks   │ │(Choreo)  │ │ (EKF)    │ │(TCP/IPC) │ │  Transport │ │
@@ -88,7 +88,7 @@
 ## 快速开始
 
 ```bash
-git clone https://github.com/caixuf/FlowEngine.git && cd FlowEngine
+git clone https://github.com/caixuf/kunautodrive.git && cd KunAutoDrive
 
 # 一键演示（构建 + 运行，默认 15s）
 bash scripts/demo.sh
@@ -115,8 +115,8 @@ winget install BrechtSanders.WinLibs.POSIX.UCRT
 winget install Python.Python.3.12
 
 # 2. 克隆后初始化第三方依赖
-git clone https://github.com/caixuf/FlowEngine.git
-cd FlowEngine
+git clone https://github.com/caixuf/kunautodrive.git
+cd KunAutoDrive
 git submodule update --init --depth 1 third_party/esmini
 
 # 3. 一键构建并运行；默认自动打开 http://localhost:8800
@@ -134,8 +134,8 @@ powershell -ExecutionPolicy Bypass -File scripts\demo.ps1 -BuildType Debug
 运行时状态与日志位于：
 
 ```text
-%LOCALAPPDATA%\FlowEngine\tmp\flow_topology.json
-%LOCALAPPDATA%\FlowEngine\tmp\flow_logs\
+%LOCALAPPDATA%\KunAutoDrive\tmp\flow_topology.json
+%LOCALAPPDATA%\KunAutoDrive\tmp\flow_logs\
 ```
 
 **原生运行时验收**
@@ -198,7 +198,7 @@ python3 tools/learning_loop.py --eval-only <模型目录名> --eval-duration 30 
 bash scripts/deploy.sh --package
 
 # 5) 解包后一键启动（包内脚本）
-bash share/flowengine/scripts/quickstart.sh 15
+bash share/kunautodrive/scripts/quickstart.sh 15
 ```
 
 ---
@@ -368,9 +368,9 @@ open http://localhost:8800
 ## Docker
 
 ```bash
-docker build -t flowengine .
-docker run --rm flowengine          # 运行 e2e 演示
-docker run --rm flowengine demo 30  # 30 秒演示
+docker build -t kunautodrive .
+docker run --rm kunautodrive          # 运行 e2e 演示
+docker run --rm kunautodrive demo 30  # 30 秒演示
 ```
 
 ---
@@ -439,7 +439,7 @@ flowctl version
 
 ## 插件系统
 
-FlowEngine 采用基于 `dlopen` 的插件架构。每个 pipeline 节点是一个共享库（`.so`），
+KunAutoDrive 采用基于 `dlopen` 的插件架构。每个 pipeline 节点是一个共享库（`.so`），
 由 `flow_launcher` 在运行时加载。节点之间仅通过 Message Bus 通信——
 节点之间没有直接函数调用。
 
@@ -513,7 +513,7 @@ TaskBase* create_task(const TaskConfig* cfg) {
 
 ## 学习闭环
 
-FlowEngine 实现了完整的车端学习闭环：
+KunAutoDrive 实现了完整的车端学习闭环：
 
 ```
 ┌──────────────┐    ┌──────────────┐    ┌──────────────┐

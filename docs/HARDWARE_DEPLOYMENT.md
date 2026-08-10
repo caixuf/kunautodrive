@@ -1,6 +1,6 @@
 # 真车硬件部署指南
 
-> 把 FlowEngine 从仿真部署到真实智能小车。配套配置模板：[config/pipeline_car.json](../config/pipeline_car.json)
+> 把 KunAutoDrive 从仿真部署到真实智能小车。配套配置模板：[config/pipeline_car.json](../config/pipeline_car.json)
 
 ## 产品部署目录
 

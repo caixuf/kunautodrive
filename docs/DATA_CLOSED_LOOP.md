@@ -1,6 +1,6 @@
 # Data Closed Loop
 
-FlowEngine uses one observability core with two deployment profiles. It does not
+KunAutoDrive uses one observability core with two deployment profiles. It does not
 maintain separate development-vehicle and production-vehicle collection stacks.
 
 ## Profiles
@@ -43,15 +43,15 @@ transitions are flushed and synced immediately. Periodic records are batched.
 
 Optional parameters are `frequency_hz` (0.2-10), `pem_log_path`,
 `rotate_sec`, `rotate_mb`, `cpu_critical_pct` and `mem_critical_pct`.
-Without `pem_log_path`, logs use the cross-platform FlowEngine temporary
-directory with prefix `flowengine_pem`.
+Without `pem_log_path`, logs use the cross-platform KunAutoDrive temporary
+directory with prefix `kunautodrive_pem`.
 
 Decode logs:
 
 ```bash
-python3 tools/pem_dump.py /tmp/flowengine_pem_*.pem
-python3 tools/pem_dump.py --jsonl --type event /tmp/flowengine_pem_*.pem
-python3 tools/pem_dump.py --type topic --name planning /tmp/flowengine_pem_*.pem
+python3 tools/pem_dump.py /tmp/kunautodrive_pem_*.pem
+python3 tools/pem_dump.py --jsonl --type event /tmp/kunautodrive_pem_*.pem
+python3 tools/pem_dump.py --type topic --name planning /tmp/kunautodrive_pem_*.pem
 ```
 
 The production profile deliberately does not subscribe to scene or large

@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# FlowEngine Demo — 一键演示脚本 (v2 — 配置驱动插件架构)
+# KunAutoDrive Demo — 一键演示脚本 (v2 — 配置驱动插件架构)
 #
 # 使用 flow_launcher + pipeline.json 启动全链路节点插件。
 # 主流程不再自动弹浏览器（WSL/无头环境）；仅 --replay 模式会自动打开仪表盘。
@@ -43,7 +43,7 @@ sanitize_ld_path
 DEFAULT_SCENARIO="${FLOWENGINE_SCENARIO:-scenarios/straight_road.json}"
 
 LOG_DIR="${FLOW_LOG_DIR:-/tmp/flow_logs}"
-PID_FILE="${FLOWENGINE_DEMO_PID_FILE:-/tmp/flowengine_demo.pids}"
+PID_FILE="${FLOWENGINE_DEMO_PID_FILE:-/tmp/kunautodrive_demo.pids}"
 
 terminate_pids() {
   local pids=()
@@ -393,9 +393,9 @@ cleanup() {
 
   echo ""
   echo "  ╔══════════════════════════════════════╗"
-  echo "  ║  Demo Complete — FlowEngine v2.0     ║"
+  echo "  ║  Demo Complete — KunAutoDrive v2.0     ║"
   echo "  ║  Plugin Architecture                 ║"
-  echo "  ║  github.com/caixuf/FlowEngine        ║"
+  echo "  ║  github.com/caixuf/kunautodrive        ║"
   echo "  ╚══════════════════════════════════════╝"
   # Note: no explicit `exit` here — the INT/TERM traps below exit after us,
   # and the EXIT trap just unwinds (guarded so we only run once).
@@ -636,7 +636,7 @@ if [ "$RECORD_MODE" = true ] && [ -f "$BAG_FILE" ]; then
   BAG_SIZE=$(du -h "$BAG_FILE" 2>/dev/null | cut -f1)
   echo "  Bag        : $BAG_FILE ($BAG_SIZE)"
 fi
-echo "  CI Status  : github.com/caixuf/FlowEngine/actions"
+echo "  CI Status  : github.com/caixuf/kunautodrive/actions"
 
 if [ "$PIPELINE_EXITED_EARLY" = true ]; then
   exit 1

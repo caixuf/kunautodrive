@@ -1,4 +1,4 @@
-# FlowEngine 监控与数据采集架构
+# KunAutoDrive 监控与数据采集架构
 
 > **当前可用的监控/可视化链路（统一由 flowmond 守护进程提供）：**
 >
@@ -190,7 +190,7 @@ collectors:
 
 ## 与 CyberRT cyber_monitor 对比
 
-| 功能 | cyber_monitor | FlowEngine |
+| 功能 | cyber_monitor | KunAutoDrive |
 |------|-------------|------------|
 | Topic 列表 | ✅ | ✅ flowmond + flowctl |
 | 实时发布频率 | ✅ | ✅ 内嵌 HTTP SSE |

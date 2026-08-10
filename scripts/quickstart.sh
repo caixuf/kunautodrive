@@ -66,7 +66,7 @@ rm -f "$JSON_FILE"
 PIPELINE_RUN="$PIPELINE"
 _PRODUCT_ID="$(python3 -c "import json,sys; d=json.load(open('$ROOT/config/product.json')); print(d['plugin_dir'])" 2>/dev/null || echo "lib/kunautodrive/plugins")"
 if [ ! -d "$ROOT/build/lib" ] && [ -d "$ROOT/$_PRODUCT_ID" ]; then
-    TMP_PIPELINE="$(mktemp /tmp/flowengine_pipeline.XXXXXX.json)"
+    TMP_PIPELINE="$(mktemp /tmp/kunautodrive_pipeline.XXXXXX.json)"
     python3 - "$PIPELINE" "$TMP_PIPELINE" "$ROOT/$_PRODUCT_ID" <<'PY'
 import json
 import os
@@ -88,7 +88,7 @@ PY
     PIPELINE_RUN="$TMP_PIPELINE"
 fi
 
-echo "Starting FlowEngine demo for ${DURATION}s..."
+echo "Starting KunAutoDrive demo for ${DURATION}s..."
 "$ROOT/bin/flow_launcher" "$PIPELINE_RUN" --duration "$DURATION" \
     > "$LOG_DIR/flow_launcher.out" 2> "$LOG_DIR/flow_launcher.err" &
 LAUNCHER_PID=$!

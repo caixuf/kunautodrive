@@ -13,7 +13,7 @@
 } while (0)
 
 int main(void) {
-    const char* base = "/tmp/flowengine_pem_unit";
+    const char* base = "/tmp/kunautodrive_pem_unit";
     PemLog log;
     CHECK(pem_log_open(&log, base, 300, 100 * 1024 * 1024) == 0);
     double values[8] = {1, 2, 3, 4, 5, 6, 7, 8};

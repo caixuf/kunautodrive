@@ -1,8 +1,8 @@
 # 车端学习闭环 (Vehicle-side Learning Loop)
 
-> FlowEngine 不做训练框架，而是做「车端学习闭环」的中间件底座。
+> KunAutoDrive 不做训练框架，而是做「车端学习闭环」的中间件底座。
 > 围绕现有 Pub/Sub 总线扩展一条 **数据采集 → 训练 → 推理** 的闭环，
-> 把「训练」交给成熟框架，把「实时性 / 部署 / 安全兜底」交给 FlowEngine。
+> 把「训练」交给成熟框架，把「实时性 / 部署 / 安全兜底」交给 KunAutoDrive。
 
 ## TL;DR（新手先跑这 4 条）
 
@@ -18,7 +18,7 @@ python3 tools/learning_loop.py --eval-only <name_or_dir> --eval-duration 30 --pr
 
 # 4) 打部署包并在解包目录一键启动
 bash scripts/deploy.sh --package
-bash share/flowengine/scripts/quickstart.sh 15
+bash share/kunautodrive/scripts/quickstart.sh 15
 ```
 
 常看目录：
@@ -28,8 +28,8 @@ bash share/flowengine/scripts/quickstart.sh 15
 
 ## 为什么不内置大模型训练框架
 
-从零造训练框架是 PyTorch / JAX 量级的工作，与 FlowEngine「轻量级自动驾驶中间件」
-的定位不匹配。更有价值的做法是：**把 FlowEngine 作为闭环的调度 / 通信 / 可视化底座**，
+从零造训练框架是 PyTorch / JAX 量级的工作，与 KunAutoDrive「轻量级自动驾驶中间件」
+的定位不匹配。更有价值的做法是：**把 KunAutoDrive 作为闭环的调度 / 通信 / 可视化底座**，
 每个环节对应一门可落地的前沿技术，工程量可控且互相解耦。
 
 ## 闭环总览
@@ -90,7 +90,7 @@ v1/v2 保持向后兼容。
 **v3: 多隐层 MLP**，`tanh` 激活，纯文本存储，Python 训练侧与 C 推理侧读写同一格式：
 
 ```
-# flowengine-tinymlp v3
+# kunautodrive-tinymlp v3
 in 295              # v3: 59 维/帧 × 5 帧时序窗口
 hidden 64 32        # 多隐层: 隐层 0=64, 隐层 1=32
 out 5               # throttle/brake/steer/lane_change/confidence
@@ -109,7 +109,7 @@ b_out <OUT floats>
 **v1/v2 向后兼容**（单隐层，输出层用 w2/b2 标签）：
 
 ```
-# flowengine-tinymlp v1
+# kunautodrive-tinymlp v1
 in 4
 hidden 8
 out 1
@@ -146,7 +146,7 @@ b2 <1 floats>
 python3 tools/modelctl.py list
 ```
 
-FlowEngine 约定只有两类模型位置：
+KunAutoDrive 约定只有两类模型位置：
 
 | 位置 | 用途 |
 |------|------|
@@ -281,7 +281,7 @@ python3 tools/dataset/export_e2e_dataset.py \
   --output datasets/demo_e2e \
   --scenario pedestrian_crossing
 
-# 训练一个 FlowEngine artifact（tiny-MLP）
+# 训练一个 KunAutoDrive artifact（tiny-MLP）
 python3 tools/train_e2e/train.py \
   --dataset datasets/demo_e2e \
   --output models/e2e_tiny_v001
@@ -315,7 +315,7 @@ models/e2e_tiny_v001/
 `manifest.json`、shadow mode 和评估入口可以保持稳定。
 
 `export_e2e_dataset.py` 会自动识别 recorder v2 样本并导出
-`flowengine.e2e_dataset.v2`，metadata 中的 `feature_names` 会随 artifact 写入
+`kunautodrive.e2e_dataset.v2`，metadata 中的 `feature_names` 会随 artifact 写入
 checkpoint。`torch_sidecar.py` 运行时根据 checkpoint 的 `feature_names` 从
 `/tmp/flow_topology.json` 抽取同一套特征，而不是硬编码 4 维输入。
 
@@ -346,7 +346,7 @@ python3 tools/train_e2e/tiny_sidecar.py \
 也可以先用文件桥接 sidecar 把 PyTorch artifact 放到运行时 shadow 链路旁边：
 
 ```bash
-# 终端 1：运行 FlowEngine，持续写 /tmp/flow_topology.json
+# 终端 1：运行 KunAutoDrive，持续写 /tmp/flow_topology.json
 bash scripts/demo.sh --no-browser 30
 
 # 终端 2：读取 state JSON，写出 PyTorch shadow 推理结果
@@ -466,7 +466,7 @@ python3 tools/modelctl.py ota status
 
 ```json
 {
-  "schema": "flowengine-ota-registry v1",
+  "schema": "kunautodrive-ota-registry v1",
   "current_id": "learner_v001",
   "previous_id": "initial",
   "ab_test": {"enabled": false, "ratio": 0.5},

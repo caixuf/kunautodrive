@@ -1,6 +1,6 @@
 # vis/ 模块设计规范 — 给设计 AI 的接入指南
 
-> 本文档定义 FlowEngine 可视化层 `tools/flowboard/js/vis/` 的模块接口契约。
+> 本文档定义 KunAutoDrive 可视化层 `tools/flowboard/js/vis/` 的模块接口契约。
 > 任何 AI 设计师按此规范输出的 View 模块，可以零修改集成进 SceneDirector。
 
 ## 1. 架构层次（必须遵守）
@@ -150,7 +150,7 @@ store = {
 
 ## 4. 坐标系映射（极易踩坑）
 
-FlowEngine 仿真用 **ENU 世界坐标**（x=East, y=North, z=Up）。
+KunAutoDrive 仿真用 **ENU 世界坐标**（x=East, y=North, z=Up）。
 THREE.js 默认 **y=up**，所以映射：
 
 | 仿真 | THREE | 说明 |
@@ -268,7 +268,7 @@ const headMat = createEmissiveMaterial(0xfff4d6, 1.0); // 独立（每帧改 int
 ---
 
 ```
-你是 FlowEngine 可视化层的设计 AI。请按以下规范输出一个 View 模块。
+你是 KunAutoDrive 可视化层的设计 AI。请按以下规范输出一个 View 模块。
 
 ## 任务
 设计一个 <模块名，如：StreetlightView / PedestrianView / BarrierView> 模块：
