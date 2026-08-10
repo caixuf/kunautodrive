@@ -28,7 +28,7 @@ flowsim(60Hz 真值) → sensor_model(FOV/遮挡/噪声) → perception(DBSCAN)
 | 行为 | 8 状态 FSM：CRUISE / FOLLOW / LEFT_CHANGE / RIGHT_CHANGE / STOP / YIELD / U_TURN / EMERGENCY | `behavior_planner_node.cpp` | 只决定"做什么"，不输出连续控制量 |
 | 导航 | 路由步骤（enter_noa / prepare_u_turn）+ travel_dir（唯一事实源 = flowsim `ref_path.reverse`） | `navigation_node.c` | 10Hz |
 | 规划-路径 | Frenet 最优轨迹（横向五次多项式；变道段固定曲率圆弧回填 kappa） | `planning_node.cpp` | 速度/轨迹唯一权威 |
-| 规划-速度 | **ST 图 + DP 速度规划**（红灯墙 + 动态障碍占据 + 曲率限速，90×101 DP 表） | `st_graph.c` | 1:1 移植自 `tools/speed_planner_sim.py`（11/11 场景 PASS 后冻结） |
+| 规划-速度 | **ST 图 + DP 速度规划**（红灯墙 + 动态障碍占据 + 曲率限速，90×101 DP 表） | `st_graph.c` | 由 `tools/speed_planner_sim.py --run-all` 对照验证 |
 | 规划-掉头 | N 把方向多段掉头（前进满舵弧 → 刹停换 R → 倒车反打 → 循环，≤5 把），512 点细生成 + 段感知下采样 64 | `planning_node.cpp` generate_uturn_trajectory | 生成一次即缓存重放，防「重规划抖动死循环」 |
 | 控制-横向 | Stanley + kappa 前馈（默认）；LTV MPC（`use_ltv_mpc` 参数启用，机动模式跳过） | `control_node.cpp` `ltv_mpc.c` | MPC 求解前注入真实 steer 限幅（内外限幅必须一致） |
 | 控制-纵向 | PID + ACC 跟车（anti-windup：error 翻负清正积分） | `control_node.cpp` | 20Hz |
@@ -43,6 +43,8 @@ flowsim(60Hz 真值) → sensor_model(FOV/遮挡/噪声) → perception(DBSCAN)
 - control→safety 带外信号唯一通道 = `raw.mode` 字符串（如 `"+MANEUVER"` 后缀）。
 - 算法升级必须**先 Python 仿真验证再移植 C++**（`tools/control_sim.py` 6 场景 + `tools/speed_planner_sim.py`），
   移植后跑 `ci/evaluators/demo_evaluator.py` 验证行为一致。
+- ST 图速度剖面的约束、实现边界和验证入口见
+  [速度规划说明](PLANNING_SPEED_UPGRADE_DESIGN.md)。
 
 ## 性能实测参考
 

@@ -51,10 +51,12 @@ typedef struct {
 /* ─────────────────────────────────────────────────────── */
 
 #define BAG_RING_SIZE  (1024 * 1024)    /* 1 MB ring buffer */
-#define BAG_MAX_RECORD (64 * 1024)      /* max single record (64 KB) */
+/* A record carries a Message payload plus v2 metadata and topic bytes. */
+#define BAG_MAX_RECORD (MSG_BUS_MAX_DATA_SIZE + 128)
 
 struct BagWriter {
     FILE*            fp;
+    char*            io_buf;
     pthread_mutex_t  mutex;
     pthread_cond_t   flush_cv;          /* signal: data available */
     bool             attached;
@@ -75,6 +77,7 @@ struct BagWriter {
 
     /* File offset tracker (updated by flush thread) */
     uint64_t         file_offset;
+    uint64_t         enqueued_offset;
 
     /* Index (built during write) */
     BagIndexEntry    index[BAG_MAX_INDEX_ENTRIES];
@@ -93,6 +96,18 @@ static size_t ring_write_space(BagWriter* w) {
 static void ring_advance_write(BagWriter* w, size_t n) {
     w->ring_w = (w->ring_w + n) % BAG_RING_SIZE;
     w->ring_len += n;
+}
+
+static void ring_write_bytes(BagWriter* w, const void* src, size_t n) {
+    const uint8_t* input = (const uint8_t*)src;
+    while (n > 0) {
+        size_t contiguous = BAG_RING_SIZE - w->ring_w;
+        size_t chunk = n < contiguous ? n : contiguous;
+        memcpy(w->ring + w->ring_w, input, chunk);
+        ring_advance_write(w, chunk);
+        input += chunk;
+        n -= chunk;
+    }
 }
 
 static size_t ring_contig_read(BagWriter* w) {
@@ -175,21 +190,29 @@ BagWriter* bag_writer_open(const char* path) {
     w->running  = true;
     w->ring     = (uint8_t*)malloc(BAG_RING_SIZE);
     if (!w->ring) { fclose(fp); free(w); return NULL; }
+    w->io_buf = (char*)malloc(256 * 1024);
     pthread_mutex_init(&w->mutex, NULL);
     pthread_cond_init(&w->flush_cv, NULL);
+
+    if (w->io_buf) setvbuf(fp, w->io_buf, _IOFBF, 256 * 1024);
 
     /* Write placeholder header (overwritten in close) */
     uint8_t header[BAG_HEADER_SIZE];
     memset(header, 0, sizeof(header));
     fwrite(header, 1, sizeof(header), fp);
     w->file_offset = BAG_HEADER_SIZE;
-
-    /* 256KB I/O buffer on the file stream */
-    static char io_buf[256 * 1024];
-    setvbuf(fp, io_buf, _IOFBF, sizeof(io_buf));
+    w->enqueued_offset = BAG_HEADER_SIZE;
 
     /* Start background flush thread */
-    pthread_create(&w->flush_thread, NULL, bag_flush_thread, w);
+    if (pthread_create(&w->flush_thread, NULL, bag_flush_thread, w) != 0) {
+        fclose(fp);
+        free(w->io_buf);
+        free(w->ring);
+        pthread_mutex_destroy(&w->mutex);
+        pthread_cond_destroy(&w->flush_cv);
+        free(w);
+        return NULL;
+    }
 
     return w;
 }
@@ -211,6 +234,7 @@ int bag_writer_write(BagWriter* w, const Message* msg) {
     uint64_t ts    = msg->timestamp_us;
     uint8_t  tlen  = (uint8_t)strnlen(msg->topic, MSG_BUS_MAX_TOPIC_LEN - 1);
     uint32_t dsize = msg->data_size;
+    if (dsize > 0 && !message_bus_message_data(msg)) return ERR_INVALID_PARAM;
 
     /* Build serialized record: [type_id:4B][schema_ver:1B][endian:1B]
      * [ts:8B][tlen:1B][topic:N][dsize:4B][data:N]
@@ -233,33 +257,30 @@ int bag_writer_write(BagWriter* w, const Message* msg) {
         return -1;  /* drop — don't block the pipeline */
     }
 
-    /* Pack record into ring buffer (same format as v2 on-disk) */
-    uint8_t* dst = w->ring + w->ring_w;
-    memcpy(dst, &msg->type_id, 4);       dst += 4;
-    *dst++ = msg->schema_version;
-    *dst++ = msg->endian_marker;
-    memcpy(dst, &ts, 8);                 dst += 8;
-    *dst++ = tlen;
-    if (tlen > 0) { memcpy(dst, msg->topic, tlen); dst += tlen; }
-    memcpy(dst, &dsize, 4);              dst += 4;
-    if (dsize > 0) memcpy(dst, message_bus_message_data(msg), dsize);
-    size_t written = rec_size;
+    /* Pack record into the ring in chunks so a record crossing its physical
+     * end is still serialized contiguously on disk by the flush thread. */
+    ring_write_bytes(w, &msg->type_id, 4);
+    ring_write_bytes(w, &msg->schema_version, 1);
+    ring_write_bytes(w, &msg->endian_marker, 1);
+    ring_write_bytes(w, &ts, 8);
+    ring_write_bytes(w, &tlen, 1);
+    if (tlen > 0) ring_write_bytes(w, msg->topic, tlen);
+    ring_write_bytes(w, &dsize, 4);
+    if (dsize > 0) ring_write_bytes(w, message_bus_message_data(msg), dsize);
 
-    /* Handle ring wrap: if record spans the end, it must fit in one chunk.
-     * The wait above ensures contiguous space is available. */
-    ring_advance_write(w, written);
-
-    /* Update index (file offset estimated from flush position) */
+    /* Index offsets are based on the serialized stream, not asynchronous
+     * flush progress, and are therefore exact even while the ring is queued. */
     BagIndexEntry* ie = find_or_create_index(w, msg->topic);
     if (ie) {
         if (ie->count == 0) {
-            ie->first_offset   = w->file_offset + (uint64_t)w->ring_len;
+            ie->first_offset   = w->enqueued_offset;
             ie->type_id        = msg->type_id;
             ie->schema_version = msg->schema_version;
         }
-        ie->last_offset = w->file_offset + (uint64_t)w->ring_len;
+        ie->last_offset = w->enqueued_offset;
         ie->count++;
     }
+    w->enqueued_offset += rec_size;
 
     if (w->msg_count == 0) w->first_ts = ts;
     w->last_ts = ts;
@@ -335,6 +356,7 @@ void bag_writer_close(BagWriter* w) {
         fclose(w->fp);
     }
 
+    free(w->io_buf);
     free(w->ring);
     pthread_mutex_destroy(&w->mutex);
     pthread_cond_destroy(&w->flush_cv);

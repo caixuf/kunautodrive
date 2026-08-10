@@ -10,7 +10,7 @@
 - **版本**: 2.0.0
 - **生效日期**: 2026-07-18
 - **变更**:
-  - v1.1.0 新增 `entities` 中 `tl`/`etc_gate`/`stop_line` 的 `h`（heading）字段
+  - v1.1.0 新增 `entities` 中 `tl`/`etc_gate`/`stop_line` 的 `heading` 字段
   - v1.2.0 `trajectory_path` 每点新增可选第 4 元素 `edge_id`；前端实现跨 edge 链式投影，解决弯道投影不准
   - v2.0.0 **破坏性变更**：移除 `scene.traffic_lights`（ego-relative fallback）字段，红绿灯统一由 `scene.entities` 中的 `tl`（world 坐标）提供。monitor 不再订阅 `road/traffic_lights` 透传到 scene（该 topic 仍由 flowsim 发布，供 planning/inference/recognition 消费）
 - **维护者**: flowsim / perception / flowboard 三端共同维护
@@ -37,18 +37,18 @@ flowsim_node                     │
 
 ## 3. 坐标系约定
 
-所有**世界坐标**字段遵循以下右手坐标系：
+所有**世界坐标**字段都使用 ENU：`x`=East、`y`=North、`z`=Up（高程），
+地面场景的 `z` 通常为 0。车辆和模型的 ENU `heading=0` 指向 +X，逆时针为正。
 
-- **X 轴**: 纵向（forward / east），沿道路参考线切线方向
-- **Y 轴**: 高度（up），地面通常为 0
-- **Z 轴**: 横向（right / south），垂直于道路参考线
+前端只能通过 `vis/math/Coord.js` 转换：
 
-前端 Three.js 中：
+```text
+worldToThree(x, y, z) = [x, z, -y]
+headingToRotationY(heading) = heading
+```
 
-- 场景坐标：`Vector3(x, 0, y)`，即把消息的 `(x, y)` 映射到 Three.js 的 `(x, z)`
-- 车辆/模型前向为 **+X**
-- 航向角 `heading` 为与 +X 轴的夹角，逆时针为正
-- 前端旋转：`rotation.y = -heading`
+因此 THREE 的 Y 轴是高度、Z 轴与 ENU North 反向；不得在 View 中手写坐标翻转或
+朝向公式。
 
 ## 4. `metrics.scene` JSON Schema
 
@@ -58,7 +58,7 @@ flowsim_node                     │
 
   "ego": {
     "x": 102.5,          // double, 世界坐标 X
-    "y": -1.75,          // double, 世界坐标 Z（映射到 Three.js z）
+    "y": -1.75,          // double, 世界坐标 Y（ENU North）
     "heading": 0.05,     // double, 航向角（rad）
     "speed": 8.0,        // double, m/s
     "steer": 0.02        // double, 方向盘转角（rad）
@@ -81,26 +81,28 @@ flowsim_node                     │
   "road_network": {
     "edges": [
       {
-        "id": 0,
-        "name": "road_0",
-        "nodes": [[0,0], [50,0], [100,0]],  // [[x,y], ...], 参考线中心点，世界坐标
-        "lanes": 2,                          // int, 可行驶车道总数
-        "lane_width": 3.5,                   // double, 单车道宽（m）
-        "length": 100.0                      // double, 参考线长度（m）
+        "id": 0,                              // int, 道路段 ID
+        "name": "road_0",                     // string, 道路名称
+        "nodes": [[0,0,0], [50,0,0]],         // [[x,y,z], ...]，ENU 参考线
+        "lanes": 2,                           // int, 双向合计的可行驶车道数
+        "lane_width": 3.5,                    // double, 单车道宽（m）
+        "oneway": false,                      // bool, 匝道等单行道路为 true
+        "length": 100.0,                      // double, 参考线长度（m）
+        "type": "road"                        // string, 道路类型
       }
     ]
   },
 
   // 完整实体数组（flowsim_node 发布，世界坐标）
   "entities": [
-    { "type": "ego", "id": 0, "x": 102.5, "y": -1.75, "h": 0.05, "spd": 8.0, "steer": 0.02, "throttle": 0.3, "brake": 0.0, "len": 4.6, "wid": 2.0, "vx": 8.0, "vy": 0.0, "tgt": 10.0 },
-    { "type": "car",  "id": 1, "x": 120.0, "y": -1.75, "h": 0.0, "spd": 3.0, "len": 4.6, "wid": 2.0, "ai": "follow", "vx": 3.0, "vy": 0.0 },
-    { "type": "suv",  "id": 2, "x": 130.0, "y":  1.75, "h": 0.0, "spd": 5.0, "len": 4.8, "wid": 2.0, "ai": "cruise", "vx": 5.0, "vy": 0.0 },
-    { "type": "truck","id": 3, "x": 140.0, "y": -1.75, "h": 0.0, "spd": 4.0, "len": 8.0, "wid": 2.5, "ai": "follow", "vx": 4.0, "vy": 0.0 },
-    { "type": "pedestrian", "id": 4, "x": 110.0, "y": 3.5, "spd": 1.0, "vx": 0.0, "vy": 1.0, "parked": false },
-    { "type": "tl",   "id": 5, "x": 200.0, "y": -5.0, "h": 0.0, "state": "red", "remain_s": 12.3 },
-    { "type": "etc_gate", "id": 6, "x": 450.0, "y": 0.0, "h": 0.0, "state": "closed", "progress": 0.0 },
-    { "type": "stop_line", "id": 7, "x": 190.0, "y": -1.75, "h": 0.0 }
+    { "type": "ego", "id": 0, "x": 102.5, "y": -1.75, "heading": 0.05, "speed": 8.0, "steer": 0.02, "throttle": 0.3, "brake": 0.0, "length": 4.6, "width": 2.0, "vx": 8.0, "vy": 0.0, "target_vx": 10.0 },
+    { "type": "car",  "id": 1, "x": 120.0, "y": -1.75, "heading": 0.0, "speed": 3.0, "length": 4.6, "width": 2.0, "ai_state": "follow", "vx": 3.0, "vy": 0.0 },
+    { "type": "suv",  "id": 2, "x": 130.0, "y":  1.75, "heading": 0.0, "speed": 5.0, "length": 4.8, "width": 2.0, "ai_state": "cruise", "vx": 5.0, "vy": 0.0 },
+    { "type": "truck","id": 3, "x": 140.0, "y": -1.75, "heading": 0.0, "speed": 4.0, "length": 8.0, "width": 2.5, "ai_state": "follow", "vx": 4.0, "vy": 0.0 },
+    { "type": "pedestrian", "id": 4, "x": 110.0, "y": 3.5, "speed": 1.0, "vx": 0.0, "vy": 1.0, "parked": false },
+    { "type": "tl",   "id": 5, "x": 200.0, "y": -5.0, "heading": 0.0, "state": "red", "remain_s": 12.3 },
+    { "type": "etc_gate", "id": 6, "x": 450.0, "y": 0.0, "heading": 0.0, "state": "closed", "progress": 0.0 },
+    { "type": "stop_line", "id": 7, "x": 190.0, "y": -1.75, "heading": 0.0 }
   ],
 
   // 障碍物 fallback（vehicle/state，ego-relative，最多 16 个）
@@ -131,7 +133,8 @@ flowsim_node                     │
 | 字段 | 类型 | 单位 | 说明 |
 |------|------|------|------|
 | `x` | double | m | 世界坐标 X |
-| `y` | double | m | 世界坐标 Z（映射到 Three.js z） |
+| `y` | double | m | 世界坐标 Y（ENU North） |
+| `z` | double? | m | ENU 高程；未提供时按 0 处理 |
 | `heading` | double | rad | 航向角，与 +X 夹角，逆时针为正 |
 | `speed` | double | m/s | 纵向速度 |
 | `steer` | double | rad | 方向盘转角 |
@@ -142,14 +145,20 @@ flowsim_node                     │
 |------|------|------|
 | `edges[].id` | int | 道路段 ID |
 | `edges[].name` | string | 道路名称 |
-| `edges[].nodes` | `[[x,y],...]` | 参考线中心点序列，世界坐标 |
-| `edges[].lanes` | int | 可行驶车道总数 |
+| `edges[].nodes` | `[[x,y,z],...]` | 至少两个 ENU 参考线点；第三项为高程，必填 |
+| `edges[].lanes` | int | 双向合计的可行驶车道总数 |
 | `edges[].lane_width` | double | 单车道宽度（m） |
+| `edges[].oneway` | bool | 是否单行；匝道通常为 `true` |
 | `edges[].length` | double | 参考线长度（m） |
+| `edges[].type` | string | `road`、`ramp_curve`、`viaduct_highway`、`urban` 或 `cross_road` |
 
-**渲染约定**：
+`scene_pub.cpp` 在 esmini 路网模式下沿每条参考线约每 25 m 采样，限制在
+8–128 个点；legacy 直道输出两个端点、legacy 弯道输出八点。道路网络静态不变，
+发布端可缓存其 JSON，但每个 `scene/frame` 都带上它，避免前端首帧错过。
 
-- `nodes` 是道路参考线（lane 0），前端用 CatmullRomCurve3 平滑插值
+**消费约定**：
+
+- `nodes` 是道路参考线，前端用 `sampleEdgeNodes()` 转为 THREE 坐标并平滑插值
 - 道路总宽度 = `lanes * lane_width`
 - 道路关于参考线对称：左边缘 = +halfWidth，右边缘 = -halfWidth
 - 中心双黄线位于参考线两侧 ±0.15m
@@ -165,20 +174,21 @@ flowsim_node                     │
 | `type` | string | - | `"car"`, `"suv"`, `"truck"`, `"ego"` |
 | `id` | int | - | 实体唯一 ID |
 | `x` | double | m | 世界坐标 X |
-| `y` | double | m | 世界坐标 Z |
-| `h` | double | rad | 航向角 |
-| `spd` | double | m/s | 速度 |
-| `len` | double | m | 车长 |
-| `wid` | double | m | 车宽 |
+| `y` | double | m | 世界坐标 Y（ENU North） |
+| `z` | double? | m | ENU 高程；未提供时为 0 |
+| `heading` | double | rad | 航向角 |
+| `speed` | double | m/s | 速度 |
+| `length` | double | m | 车长 |
+| `width` | double | m | 车宽 |
 | `vx` | double | m/s | X 方向速度分量 |
-| `vy` | double | m/s | Z 方向速度分量 |
-| `ai` | string | - | AI 状态：`cruise`, `follow`, `stop`, `stop_for_tl`, `etc_approach`, `branch_sel`, `merge`, `yield` |
+| `vy` | double | m/s | Y 方向速度分量 |
+| `ai_state` | string | - | AI 状态：`cruise`, `follow`, `stop_for_tl`, `lane_change`, `cutin`, `stopped`, `yield` |
 
 **渲染约定**：
 
 - 车辆模型前向为 +X
-- 前端旋转：`rotation.y = -h`
-- 行人类型无 `h` 字段时，用 `atan2(vy, vx)` 估算朝向
+- 前端旋转必须使用 `headingToRotationY(heading)`
+- 行人没有 `heading` 时，使用 `headingBetweenPoints()` 从速度方向推导
 
 #### 5.3.2 行人（pedestrian）
 
@@ -187,10 +197,10 @@ flowsim_node                     │
 | `type` | string | `"pedestrian"` |
 | `id` | int | 实体 ID |
 | `x` | double | 世界坐标 X |
-| `y` | double | 世界坐标 Z |
-| `spd` | double | 速度 |
+| `y` | double | 世界坐标 Y（ENU North） |
+| `speed` | double | 速度 |
 | `vx` | double | X 方向速度 |
-| `vy` | double | Z 方向速度 |
+| `vy` | double | Y 方向速度 |
 | `parked` | bool | 是否静止 |
 
 #### 5.3.3 红绿灯（tl）
@@ -200,9 +210,9 @@ flowsim_node                     │
 | `type` | string | `"tl"` |
 | `id` | int | 实体 ID |
 | `x` | double | 世界坐标 X |
-| `y` | double | 世界坐标 Z |
-| `h` | double | 航向角（rad），灯 arm 垂直于该方向；未配置时前端按道路切线估算 |
-| `state` | string | `"green"`, `"yellow"`, `"red"` |
+| `y` | double | 世界坐标 Y（ENU North） |
+| `heading` | double | 航向角（rad），灯臂垂直于该方向 |
+| `state` | string | `"green"`, `"flashing_green"`, `"yellow"`, `"red"` |
 | `remain_s` | double | 剩余时间（s） |
 
 **注意**：v2.0.0 起，红绿灯统一由 `scene.entities` 中的 `tl`（world 坐标）提供，`scene.traffic_lights`（ego-relative）字段已移除。
@@ -214,8 +224,8 @@ flowsim_node                     │
 | `type` | string | `"etc_gate"` |
 | `id` | int | 实体 ID |
 | `x` | double | 世界坐标 X |
-| `y` | double | 世界坐标 Z |
-| `h` | double | 航向角（rad），门架 crossbar 垂直于该方向；未配置时前端按道路切线估算 |
+| `y` | double | 世界坐标 Y（ENU North） |
+| `heading` | double | 航向角（rad），门架 crossbar 垂直于该方向 |
 | `state` | string | `"closed"`, `"opening"`, `"open"` |
 | `progress` | double | 抬杆进度 [0, 1] |
 
@@ -226,7 +236,7 @@ flowsim_node                     │
 | `type` | string | `"stop_line"` |
 | `id` | int | 实体 ID |
 | `x` | double | 世界坐标 X |
-| `y` | double | 世界坐标 Z |
+| `y` | double | 世界坐标 Y（ENU North） |
 
 ### 5.4 `trajectory_path`
 

@@ -142,41 +142,23 @@ flowmond
 # 约 5 秒后，flowmond dashboard 将显示来自 flow_launcher 的 topic 统计
 ```
 
-### flowrec — 数据采集守护进程（计划中）
+### flowrec — 数据采集节点（已实现）
 
 ```
-flowrec
-├── Config Loader        ← 读取采集规则
+flowrec_node
+├── Config Loader        ← pipeline.json 的 params（cJSON）
 ├── Topic Matcher        ← 匹配需要录制的 topic
 ├── Bag Writer           ← 写入 bag 文件 (v2 格式)
-├── Trigger Engine       ← 条件触发 (时间/事件/手动)
+├── Trigger Engine       ← topic_value 条件触发
 ├── Rotation Manager     ← 文件轮转 (大小/时间)
-└── Status Reporter      ← 采集状态上报给 flowmond
+└── Status Reporter      ← 发布 flowrec/status，供 flowmond/monitor 采样
 ```
 
-配置:
-```yaml
-# flowrec.yaml
-collectors:
-  - name: "sensor_raw"
-    topics: ["sensor/lidar", "sensor/gps", "sensor/camera"]
-    output: "/data/bags/sensor_%Y%m%d_%H%M%S.bag"
-    max_size_mb: 1024
-    rotation: "hourly"
-    trigger: "always_on"
-
-  - name: "event_triggered"
-    topics: ["perception/objects", "control/cmd", "fusion/state"]
-    output: "/data/bags/event_%Y%m%d_%H%M%S.bag"
-    max_size_mb: 512
-    trigger:
-      type: "topic_value"
-      topic: "control/cmd"
-      field: "emergency_brake"
-      condition: "== true"
-    pre_buffer_sec: 5
-    post_buffer_sec: 10
-```
+不再引入未构建的 YAML 依赖：采集规则直接放在 `pipeline.json` 的节点
+`params` 中，由 cJSON 严格解析。支持 `always_on`、`topic_value`（typed
+`equals`）、内存上限的 pre-buffer、post-buffer、按字节/时间轮转以及 Bag v2
+输出。完整配置契约、状态 JSON 与运行示例见唯一权威文档
+[FLOWREC.md](FLOWREC.md)。
 
 ## flowmond 告警规则
 
@@ -209,7 +191,8 @@ collectors:
 | 单机 IPC only | `stats_bridge` 基于 POSIX shm，仅支持同机进程间通信；跨机聚合需要 TCP bridge（未实现）|
 | 统计延迟 5s | 业务进程每 5 秒发布一次 stats 快照，非实时；本地总线数据是实时的 |
 | 最多 16 个 topic | `StatsPacket` 单包限制；超过 16 个 topic 时截断（后续可分包）|
-| flowrec 未实现 | 配置驱动数据采集仅在设计阶段 |
+| flowrec 触发器范围 | v1 仅支持顶层 JSON 字段的精确 `equals`；不执行表达式、不支持 YAML 条件字符串 |
+| flowrec 采集范围 | 精确 topic 名匹配；不支持 wildcard，触发 topic 必须包含在同一 collector 的 `topics` |
 
 ## 与 CyberRT cyber_monitor 对比
 
@@ -221,8 +204,8 @@ collectors:
 | 丢包统计 | ✅ | ✅ per-topic drop |
 | 拓扑可视化 | ✅ | ✅ FlowBoard D3 力导向 |
 | **跨进程统计聚合** | ✅ | ✅ stats_bridge IPC（同机）|
-| **配置驱动采集** | ⚠️ 硬编码 | 🚧 flowrec YAML（计划中）|
-| **触发条件录制** | ❌ | 🚧（计划中）|
+| **配置驱动采集** | ⚠️ 硬编码 | ✅ flowrec NodePlugin + JSON params |
+| **触发条件录制** | ❌ | ✅ topic_value + pre/post buffer |
 | **独立监控进程** | ✅ | ✅ flowmond |
 | **告警规则** | ⚠️ | ✅ rule engine |
 | **WebSocket 推送** | ❌ | ✅ 实时 Dashboard |

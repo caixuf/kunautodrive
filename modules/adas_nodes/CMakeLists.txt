@@ -528,6 +528,10 @@ endif()
 add_library(data_recorder_node SHARED data_recorder_node.c)
 target_link_libraries(data_recorder_node ${NODE_LINK_LIBS})
 
+# flowrec_node: 配置驱动 Bag v2 采集（常开 + topic_value 事件窗口）
+add_library(flowrec_node SHARED flowrec_node.c)
+target_link_libraries(flowrec_node ${NODE_LINK_LIBS})
+
 # learner_node: 车端增量 SGD 微调（Stage 3）
 add_library(learner_node SHARED learner_node.c)
 target_link_libraries(learner_node ${NODE_LINK_LIBS})
@@ -722,6 +726,7 @@ set(FLOWENGINE_NODE_PLUGIN_TARGETS
     monitor_node
     inference_node
     data_recorder_node
+    flowrec_node
     learner_node
     model_ota_node
     flowmond_node

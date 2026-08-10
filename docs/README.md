@@ -1,97 +1,43 @@
-# KunAutoDrive 文档索引
+# KunAutoDrive 文档导航
 
-KunAutoDrive 全部文档的统一入口。按「我想做什么」分组，找不到时用页内搜索（Ctrl+F）关键词。
+本页是 `docs/` 的**唯一导航入口**。根目录 [README](../README.md) 只保留项目概览、
+快速运行和常用入口；模块事实、契约和操作说明以本页指定的文档为准。
 
-> 顶层 [README.md](../README.md) 是项目总览；[CLAUDE.md](../CLAUDE.md) 是给 AI/贡献者的编码规范与故障速查；
-> `.claude/skills/` 是开发流程 skill（设计→执行→测试→迭代→清理→文档）。
+## 按模块查阅
 
-## 🚀 快速上手
+| 模块 / 任务 | 权威文档 | 辅助资料 |
+|---|---|---|
+| 构建、运行与项目定位 | [根目录 README](../README.md) | [仿真指南](SIMULATION_GUIDE.md) |
+| 核心运行时、插件和源码入口 | [代码索引](CODE_WIKI.md) | [API 速查](API_QUICK_REFERENCE.md)、[教程 01–11](tutorials/) |
+| 默认 ADAS 节点、topic 与配置 | [Pipeline 架构](PIPELINE_ARCHITECTURE.md) | [代码索引](CODE_WIKI.md) |
+| 当前算法与职责边界 | [算法栈](ALGORITHM_STACK.md) | [算法验证](ALGORITHM_VERIFY_PATTERN.md)、[算法集成](ALGORITHM_INTEGRATION.md) |
+| 规划速度剖面（ST 图 + DP） | [速度规划说明](PLANNING_SPEED_UPGRADE_DESIGN.md) | [算法栈](ALGORITHM_STACK.md) |
+| 控制与真车标定 | [标定指南](CALIBRATION_GUIDE.md) | [算法验证](ALGORITHM_VERIFY_PATTERN.md) |
+| FlowSim、场景与场景回归 | [仿真指南](SIMULATION_GUIDE.md) | [场景设计教程](tutorials/16_flowsim_scenario_design.md) |
+| FlowSim 几何 / 运动 invariant | [Sim Digest](SIM_DIGEST.md) | [仿真指南](SIMULATION_GUIDE.md) |
+| Bag 通用录制与回放 | [Bag 教程](tutorials/05_bag_recording.md) | [API 速查](API_QUICK_REFERENCE.md) |
+| flowrec 配置化留存节点 | [flowrec](FLOWREC.md) | [监控架构](MONITORING_ARCHITECTURE.md) |
+| 监控、flowmond 与 HTTP/SSE | [监控架构](MONITORING_ARCHITECTURE.md) | [FlowBoard API 契约](FLOWBOARD_CONTRACT.md) |
+| FlowBoard 场景帧与 `road_network` schema | [FlowBoard Scene 契约](FLOWBOARD_SCENE_CONTRACT.md) | [可视化架构](VISUALIZATION_ARCHITECTURE.md) |
+| FlowBoard 运行时架构 | [可视化架构](VISUALIZATION_ARCHITECTURE.md) | [vis View 接入规范](VIS_MODULE_GUIDE.md) |
+| PEM 与车端数据采集 | [数据闭环](DATA_CLOSED_LOOP.md) | [硬件部署](HARDWARE_DEPLOYMENT.md) |
+| 训练、影子推理与 OTA | [学习闭环](LEARNING_LOOP.md) | [学习教程](tutorials/13_e2e_learning_loop.md) |
+| 真车 profile、打包与升级 | [硬件部署](HARDWARE_DEPLOYMENT.md) | [RC 小车清单](RC_CAR_HARDWARE_CHECKLIST.md) |
+| 3D 仪表盘故障 | [3D 仪表盘排查](TROUBLESHOOTING_3D_DASHBOARD.md) | [监控架构](MONITORING_ARCHITECTURE.md) |
 
-| 文档 | 说明 |
-|------|------|
-| [QUICK_START.md](QUICK_START.md) | 30 分钟快速入门：构建、跑 demo、看仪表盘 |
-| [SIMULATION_GUIDE.md](SIMULATION_GUIDE.md) | 仿真测试指南 + 场景矩阵回归 |
-| [CODE_WIKI.md](CODE_WIKI.md) | 代码地图：核心模块 / 节点 / 关键函数逐一索引（找代码从这里开始） |
-| [API_QUICK_REFERENCE.md](API_QUICK_REFERENCE.md) | 统一 API 速查（cJSON / clock_service / param / node_pump） |
+## 教程
 
-## 🏗️ 架构与设计
+`tutorials/` 是循序渐进的学习资料，不重复定义模块契约：
 
-| 文档 | 说明 |
-|------|------|
-| [TECHNICAL_DESIGN.md](TECHNICAL_DESIGN.md) | 技术设计总览 |
-| [PIPELINE_ARCHITECTURE.md](PIPELINE_ARCHITECTURE.md) | Pipeline / 节点拓扑架构 |
-| [MONITORING_ARCHITECTURE.md](MONITORING_ARCHITECTURE.md) | 完整监控体系：monitor_node + flowmond + IPC/文件双桥接 + 对外 API |
-| [DATA_CLOSED_LOOP.md](DATA_CLOSED_LOOP.md) | 数据闭环：统一采集内核、development/production 双 profile、PEM 二进制日志 |
-| [HARDWARE_DEPLOYMENT.md](HARDWARE_DEPLOYMENT.md) | 产品产物结构、车型 profile、升级与回滚 |
-| [VISUALIZATION_ARCHITECTURE.md](VISUALIZATION_ARCHITECTURE.md) | 3D 可视化架构（vis/ 模块） |
-| [VIS_MODULE_GUIDE.md](VIS_MODULE_GUIDE.md) | vis/ 模块设计规范（View 接入指南） |
+| 范围 | 教程 |
+|---|---|
+| C / 插件 / 消息总线 / IPC / Bag / 时钟 / 序列化 / 状态机 / 发现 | [01–09](tutorials/) |
+| 融合、协程、评估器 | [10–12](tutorials/) |
+| 学习闭环、航位推算、SocketCAN、场景 | [13–16](tutorials/)；vis View 见 [接入规范](VIS_MODULE_GUIDE.md) |
 
-## 🧠 算法（规划 / 控制 / 感知）
+## 维护约定
 
-| 文档 | 说明 |
-|------|------|
-| [ALGORITHM_STACK.md](ALGORITHM_STACK.md) | 算法栈总览（实际实现） |
-| [ALGORITHM_INTEGRATION.md](ALGORITHM_INTEGRATION.md) | 算法集成指南 |
-| [ALGORITHM_VERIFY_PATTERN.md](ALGORITHM_VERIFY_PATTERN.md) | 算法快速验证工作流（Python 仿真先行） |
-| [PLANNING_SPEED_UPGRADE_DESIGN.md](PLANNING_SPEED_UPGRADE_DESIGN.md) | 速度规划升级设计（ST 图 + DP/QP） |
-| [CALIBRATION_GUIDE.md](CALIBRATION_GUIDE.md) | 控制参数标定指南 |
-
-## 🎓 学习闭环
-
-| 文档 | 说明 |
-|------|------|
-| [LEARNING_LOOP.md](LEARNING_LOOP.md) | 车端学习闭环（采集→训练→影子评估→OTA） |
-
-## 🔌 数据契约与 Schema
-
-| 文档 | 说明 |
-|------|------|
-| [FLOWBOARD_CONTRACT.md](FLOWBOARD_CONTRACT.md) | FlowBoard 数据契约 |
-| [FLOWBOARD_SCENE_CONTRACT.md](FLOWBOARD_SCENE_CONTRACT.md) | FlowBoard 3D Scene 数据契约 |
-| [SCHEMA_road_network.md](SCHEMA_road_network.md) | road_network JSON Schema |
-| [SIM_DIGEST.md](SIM_DIGEST.md) | 仿真 digest / invariant 与调试可视化 |
-
-## 🚗 硬件部署
-
-| 文档 | 说明 |
-|------|------|
-| [HARDWARE_DEPLOYMENT.md](HARDWARE_DEPLOYMENT.md) | 真车硬件部署指南 |
-| [RC_CAR_HARDWARE_CHECKLIST.md](RC_CAR_HARDWARE_CHECKLIST.md) | RC 小车硬件连接操作清单 |
-
-## 🧪 场景与演示
-
-| 文档 | 说明 |
-|------|------|
-| [DRIVING_SCHOOL_PLAN.md](DRIVING_SCHOOL_PLAN.md) | 驾校计划（科目一至科目四场景） |
-
-## 🩺 故障排查
-
-| 文档 | 说明 |
-|------|------|
-| [TROUBLESHOOTING_3D_DASHBOARD.md](TROUBLESHOOTING_3D_DASHBOARD.md) | 3D 仪表盘"加载失败"排查与修复 |
-
-> 更多运行期故障速查见 [CLAUDE.md](../CLAUDE.md) 的「常见故障模式」表。
-
-## 📚 教程（tutorials/）
-
-从零理解 KunAutoDrive 各子系统的分步教程。
-
-| # | 教程 | 主题 |
-|---|------|------|
-| 01 | [C 语言面向对象编程](tutorials/01_oop_in_c.md) | OOP in C |
-| 02 | [插件化架构](tutorials/02_plugin_system.md) | dlopen 动态加载 |
-| 03 | [消息总线与发布/订阅](tutorials/03_message_bus.md) | Message Bus |
-| 04 | [IPC 跨进程通信](tutorials/04_ipc_channel.md) | 共享内存通道 |
-| 05 | [数据录制与回放](tutorials/05_bag_recording.md) | Bag |
-| 06 | [统一时钟服务](tutorials/06_clock_service.md) | Clock Service |
-| 07 | [类型安全序列化层](tutorials/07_serializer.md) | Serializer |
-| 08 | [反射式状态机](tutorials/08_state_machine.md) | State Machine |
-| 09 | [服务发现与拓扑管理](tutorials/09_discovery.md) | Discovery |
-| 10 | [数据融合框架](tutorials/10_fusion.md) | Fusion (EKF) |
-| 11 | [C++20 协程通信原语](tutorials/11_coroutine.md) | Coroutine |
-| 12 | [Demo Evaluator 回归评估器](tutorials/12_demo_evaluator.md) | Demo Evaluator |
-| 13 | [E2E Learning Loop 训练闭环](tutorials/13_e2e_learning_loop.md) | E2E Learning Loop |
-| 14 | [前端航位推算](tutorials/14_dead_reckoning.md) | Dead Reckoning |
-| 15 | [SocketCAN 执行器节点](tutorials/15_socketcan_actuator.md) | SocketCAN Actuator |
-| 16 | [FlowSim 场景设计](tutorials/16_flowsim_scenario_design.md) | 多 edge 路网 + NPC |
-| 17 | [vis 模块设计](tutorials/17_vis_module_designer.md) | View 模块规范 |
+- 修改运行时行为，更新对应模块的权威文档；教程只补充原理和示例。
+- 修改 API 或 JSON 字段，更新相应契约文档；其中 `road_network` 只在
+  [FlowBoard Scene 契约](FLOWBOARD_SCENE_CONTRACT.md) 定义。
+- `FLOWREC.md` 是 flowrec 的独立权威文档；本导航只建立入口，不复制其内容。

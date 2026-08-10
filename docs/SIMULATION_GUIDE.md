@@ -88,10 +88,8 @@ bash scripts/demo.sh
 
 - **运动学双轮自行车模型**：自车采用简化的运动学自行车模型（`step_bicycle`），
   由 `heading += steer * v / L` 驱动横摆，`x += v * cos(heading), y += v * sin(heading)`。
-  无轮胎侧偏、无松弛长度、无摩擦圆约束。适合公路巡航场景的轨迹追踪验证。
-  EPS 转向执行器含一阶低通滤波（τ≈0.15s）模拟真车转向机惯性。
-  如需完整侧偏动力学，见 `entity.h` 中预留的 `F_yf` / `tire_stiffness_f` / `yaw_inertia` 字段——
-  当前均为 {0} 未写入，`step_bicycle_dynamic` 为占位桩。详见 `docs/FLOWSIM_PHYSICS_TODO.md`。
+  适合公路巡航场景的轨迹追踪验证，EPS 转向执行器含一阶低通滤波模拟转向机惯性。
+  运动学 / 动力学模型选择、适用边界和标定方法见[标定指南](CALIBRATION_GUIDE.md)。
 - **ACC 纵向控制**：依据与同车道前车的间距动态限制目标速度，间距越近
   目标速度越低，触发真实的减速/刹车行为。
 - **动态障碍物**：前车、对向来车、过街行人，具备运动学与循环边界，
@@ -110,7 +108,7 @@ open http://localhost:8800
 ```
 
 `scene` 数据结构与坐标系约定详见
-[VISUALIZATION_ARCHITECTURE.md](VISUALIZATION_ARCHITECTURE.md#scene-数据结构真实-3d-仿真)。
+[FlowBoard Scene 契约](FLOWBOARD_SCENE_CONTRACT.md)。
 完整的离线问题根因分析与鲁棒性设计详见
 [tutorials/12_demo_evaluator.md](tutorials/12_demo_evaluator.md)。
 

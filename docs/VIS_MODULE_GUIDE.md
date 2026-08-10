@@ -120,11 +120,9 @@ export function createXxxView(scene) {
 store = {
   roadNetwork: {                  // 道路网络（hash 变化才重建）
     edges: [{
-      id, type, length_m, lanes, lane_width, speed_limit,
-      nodes: [[x,y], ...],        // 路段节点
-      curvature_profile, traffic_lights, etc_gates, junctions, ...
+      id, name, type, length, lanes, lane_width, oneway,
+      nodes: [[x,y,z], ...],      // ENU 路段参考线；外部 schema 见 FlowBoard Scene 契约
     }],
-    junctions: [...]
   },
   roadHash: '...',                // diff 检测用
 
@@ -150,21 +148,16 @@ store = {
 
 ## 4. 坐标系映射（极易踩坑）
 
-KunAutoDrive 仿真用 **ENU 世界坐标**（x=East, y=North, z=Up）。
-THREE.js 默认 **y=up**，所以映射：
+外部 scene schema 以 [FlowBoard Scene 契约](FLOWBOARD_SCENE_CONTRACT.md#坐标系约定)
+为准。View 只能使用 `Coord.js`：
 
-| 仿真 | THREE | 说明 |
-|------|-------|------|
-| `ent.x` | `group.position.x` | 前向（East） |
-| `ent.y` | `group.position.z` | 横向（North） |
-| `0`（地面） | `group.position.y` | 高度（Up） |
-| `ent.heading` (rad) | `group.rotation.y = -heading - π/2` | 0=朝 +x |
+| ENU | THREE |
+|---|---|
+| `(x, y, z)` | `(x, z, -y)` |
+| `heading` | `headingToRotationY(heading)` |
 
-**使用 `headingToRotationY(heading)` 转换**，不要手写公式。
-
-示例：
 ```javascript
-group.position.set(ent.x, 0, ent.y);  // y=0 是地面
+group.position.set(...worldToThree(ent.x, ent.y, ent.z || 0));
 group.rotation.y = headingToRotationY(ent.heading || 0);
 ```
 
@@ -295,8 +288,8 @@ const headMat = createEmissiveMaterial(0xfff4d6, 1.0); // 独立（每帧改 int
 
 ## 强制约束
 1. 只 import：`../core/AssetFactory.js`、`../math/Coord.js`、`../math/Curve.js`、`../math/GeometryMerge.js`
-2. 坐标映射：`group.position.set(ent.x, 0, ent.y)` + `group.rotation.y = headingToRotationY(ent.heading||0)`
-   - 或用 `worldToThree(ent.x, ent.y, ent.z||0)` 解构
+2. 坐标映射：`group.position.set(...worldToThree(ent.x, ent.y, ent.z || 0))`；
+   朝向使用 `headingToRotationY(ent.heading || 0)`
    - sampleEdgeNodes 返回的节点已做 ENU→THREE 交换，不要再调 worldToThree
 3. 材质：`getStdMaterial(color, rough, metal)` 缓存版；发光体用 `createEmissiveMaterial(color, intensity)` 独立版
 4. 几何体：用 `getBox/getCylinder/getPlane` 共享缓存，不要 `new THREE.BoxGeometry` 重复创建

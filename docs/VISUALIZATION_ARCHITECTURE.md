@@ -358,7 +358,7 @@ tools/flowboard/js/
   roadHash: 'abc123',         // roadNetworkHash(rn) 结果，diff 用
   isViaduct: false,           // 高架场景标志（决定路灯/护栏是否布置）
   ego: {                      // 主车（tickAnimation 每帧覆盖 x/y/heading/speed）
-    x, y, z,                  // THREE 坐标（已 worldToThree）
+    x, y, z,                  // ENU 世界坐标；View 渲染时才转换为 THREE
     heading, speed,           // 弧度 + m/s
     steer, brake, throttle,  // 控制量
     lights,                   // 车灯位掩码（见 VehicleLights.js）
@@ -496,8 +496,9 @@ for (const c of children) {
 
 ### 坐标映射 — ENU ↔ THREE
 
-`vis/math/Coord.js` 的 `worldToThree(x, y, z)` 做 ENU→THREE 交换：
-`world(x, y, z) → three(x, z, y)`
+`vis/math/Coord.js` 是唯一转换入口：
+`world(x, y, z) → three(x, z, -y)`，`headingToRotationY(heading) = heading`。
+完整字段语义见 [FlowBoard Scene 契约](FLOWBOARD_SCENE_CONTRACT.md#坐标系约定)。
 
 **重要约定**：
 - `sampleEdgeNodes`（Curve.js）内部已做 ENU→THREE 交换，所以
@@ -592,25 +593,10 @@ const GLTF_TYPE_MAP = {
 
 ### `scene` 数据结构（真实 3D 仿真）
 
-`monitor` 任务在 `metrics.scene` 下导出真实仿真场景，前端据此渲染真实
-三维场景（而非随机点）。坐标系：**自车系, x 前为正, y 左为正 (米)**，
-`heading` 为弧度。向后兼容——若 `scene` 缺失，前端回退到旧的占位渲染。
-
-```json
-{
-  "scene": {
-    "ego":       { "x": 45.1, "y": 0.0, "heading": 0.0, "speed": 10.1, "steer": 0.03 },
-    "lane":      { "width": 3.5, "count": 2, "center": 0.0 },
-    "road":      { "curve_start_x": 150.0, "curve_length_m": 260.0, "curve_offset_m": 9.0 },
-    "obstacles": [
-      { "id": 0, "type": "car",        "x": 21.7, "y": 0.0,  "vx": 6.0,  "len": 4.6, "wid": 2.0 },
-      { "id": 1, "type": "car",        "x": 60.0, "y": -3.5, "vx": -9.0, "len": 4.6, "wid": 2.0 },
-      { "id": 2, "type": "pedestrian", "x": 30.0, "y": 8.0,  "vx": 0.0,  "len": 0.6, "wid": 0.6 }
-    ],
-    "lidar":     [ [px, py, pz], ... ]
-  }
-}
-```
+`monitor` 在 `metrics.scene` 导出真实仿真场景，FlowBoard 据此渲染车辆、道路、
+设施和 LiDAR。字段、坐标系与兼容规则由
+[FlowBoard Scene 契约](FLOWBOARD_SCENE_CONTRACT.md)唯一规定；本历史章节不再复制
+schema，避免架构说明与数据契约分叉。
 
 ### 共享道路几何（Phase 2 — 已落地）
 

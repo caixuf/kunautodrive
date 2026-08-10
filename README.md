@@ -183,19 +183,12 @@ bash build.sh release
 
 ## 文档导航
 
-| 主题 | 文档 |
-|---|---|
-| 监控、FlowBoard、flowmond | [监控架构](docs/MONITORING_ARCHITECTURE.md) / [可视化架构](docs/VISUALIZATION_ARCHITECTURE.md) |
-| PEM、车端采集与数据闭环 | [数据闭环](docs/DATA_CLOSED_LOOP.md) |
-| 学习、训练、影子评估与 OTA | [学习闭环](docs/LEARNING_LOOP.md) |
-| 仿真与场景设计 | [FlowSim 场景设计教程](docs/tutorials/16_flowsim_scenario_design.md) |
-| 消息总线、插件、IPC、Bag、时钟、状态机 | [教程目录](docs/tutorials/) |
-| 故障排查 | [故障排查](docs/TROUBLESHOOTING_3D_DASHBOARD.md) |
-| RC 小车接入 | [RC 小车硬件清单](docs/RC_CAR_HARDWARE_CHECKLIST.md) |
+完整的中文模块导航、权威文档归属和教程入口见 [docs/README.md](docs/README.md)。
+其中 [flowrec](docs/FLOWREC.md) 是配置化 topic 留存节点的独立说明。
 
 ## 兼容性与许可证
 
 产品与仓库名称为 **KunAutoDrive**。`FLOWENGINE_*`、`flowengine_core` 和
 `libflowengine_*` 等保留为 ABI/API 兼容名称，不应作为普通重命名目标。
 
-MIT License。详见 [LICENSE](LICENSE)。
+MIT License。

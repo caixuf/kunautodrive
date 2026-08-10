@@ -325,7 +325,7 @@ lc_state: 0=巡航  1=变道中  2=稳定巡航  3=回切中
 
 > **速度剖面演进**：早期速度剖面由 FOT 代价函数隐式产生 + 红灯 override 补丁堆，
 > 无显式减速语义。现由 `st_graph.c`（ST 图 + DP）统一生成：红灯墙、动态障碍占据、
-> 曲率限速全部进 DP 代价，替代了旧 override 堆。设计见
+> 曲率限速全部进 DP 代价，替代了旧 override 堆。实现说明见
 > [PLANNING_SPEED_UPGRADE_DESIGN.md](PLANNING_SPEED_UPGRADE_DESIGN.md)。
 
 > **已修复 bug — 停稳死锁**（[L787](../modules/adas_nodes/planning_node.cpp#L787)）：旧版 `command_speed = spd_out[0]`（≈当前车速）覆盖导致 `v=0→target=0→油门=0→v=0` 自维持闭锁。已改为 `if (spd_out[0] > command_speed) command_speed = spd_out[0]`（取 max）。
@@ -636,10 +636,9 @@ steer   = cte_term - heading_term - yaw_damp + ff + delta_ff
 
 | 文档 | 主题 |
 |-----|------|
-| [QUICK_START.md](QUICK_START.md) | 30 分钟教程 |
-| [TECHNICAL_DESIGN.md](TECHNICAL_DESIGN.md) | 架构设计 |
 | [PIPELINE_ARCHITECTURE.md](PIPELINE_ARCHITECTURE.md) | Pipeline 设计 |
 | [ALGORITHM_STACK.md](ALGORITHM_STACK.md) | 算法总览 |
 | [CALIBRATION_GUIDE.md](CALIBRATION_GUIDE.md) | 标定指南（含 k_vy 等） |
 | [LEARNING_LOOP.md](LEARNING_LOOP.md) | 车端学习闭环 |
-| `docs/tutorials/` 目录 | 17 篇深度教程（OOP in C、插件、消息总线、IPC、协程、Fusion 等） |
+| [README.md](README.md) | 完整中文文档导航 |
+| `docs/tutorials/` 目录 | 16 篇深度教程（OOP in C、插件、消息总线、IPC、协程、Fusion 等） |

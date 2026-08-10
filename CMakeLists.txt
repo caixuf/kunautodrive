@@ -401,6 +401,7 @@ set(CORE_SOURCES
     src/core/ipc_channel.c
     src/core/clock_service.c
     src/core/bag.c
+    src/core/flowrec.c
     src/core/msg_schema.c
     src/core/serializer.c
     src/core/scheduler.c
@@ -927,6 +928,13 @@ target_include_directories(test_new_modules PRIVATE ${GEN_DIR})
 
 add_test(NAME new_module_tests COMMAND test_new_modules)
 set_tests_properties(new_module_tests PROPERTIES TIMEOUT 10)
+
+# ── flowrec 配置驱动 Bag v2 采集单元测试 ───────────────────
+add_executable(test_flowrec tests/test_flowrec.c)
+target_link_libraries(test_flowrec flowengine_core)
+
+add_test(NAME flowrec_tests COMMAND test_flowrec)
+set_tests_properties(flowrec_tests PROPERTIES TIMEOUT 15)
 
 # ── 传输/可视化桥接栈单元测试（transport / stats_bridge / dashboard_bridge）──
 add_executable(test_bridges tests/test_bridges.c)
