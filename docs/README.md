@@ -20,8 +20,8 @@ KunAutoDrive 全部文档的统一入口。按「我想做什么」分组，找�
 |------|------|
 | [TECHNICAL_DESIGN.md](TECHNICAL_DESIGN.md) | 技术设计总览 |
 | [PIPELINE_ARCHITECTURE.md](PIPELINE_ARCHITECTURE.md) | Pipeline / 节点拓扑架构 |
-| [MONITORING_ARCHITECTURE.md](MONITORING_ARCHITECTURE.md) | 监控与数据采集架构（flowmond / 桥接） |
-| [DATA_CLOSED_LOOP.md](DATA_CLOSED_LOOP.md) | 单采集内核的开发/量产 profile、PEM 日志与数据闭环 |
+| [MONITORING_ARCHITECTURE.md](MONITORING_ARCHITECTURE.md) | 完整监控体系：monitor_node + flowmond + IPC/文件双桥接 + 对外 API |
+| [DATA_CLOSED_LOOP.md](DATA_CLOSED_LOOP.md) | 数据闭环：统一采集内核、development/production 双 profile、PEM 二进制日志 |
 | [HARDWARE_DEPLOYMENT.md](HARDWARE_DEPLOYMENT.md) | 产品产物结构、车型 profile、升级与回滚 |
 | [VISUALIZATION_ARCHITECTURE.md](VISUALIZATION_ARCHITECTURE.md) | 3D 可视化架构（vis/ 模块） |
 | [VIS_MODULE_GUIDE.md](VIS_MODULE_GUIDE.md) | vis/ 模块设计规范（View 接入指南） |

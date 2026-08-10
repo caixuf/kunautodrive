@@ -642,6 +642,7 @@ NPC 瞬移跳变以及消息丢帧。对 pipeline 链路做任何改动后都应
 | [Visualization Architecture](docs/VISUALIZATION_ARCHITECTURE.md) | flowmond + vis/ 模块树（Layer + ViewRegistry + Qt 对象树）|
 | [Vis Module Guide](docs/VIS_MODULE_GUIDE.md) | vis/ 模块接口契约 + 设计 AI 提示词模板 |
 | [Monitoring Architecture](docs/MONITORING_ARCHITECTURE.md) | flowmond + stats bridge |
+| [Data Closed Loop](docs/DATA_CLOSED_LOOP.md) | 统一采集内核 + development/production 双 profile + PEM 二进制日志 |
 | [Pipeline Architecture](docs/PIPELINE_ARCHITECTURE.md) | Pipeline 设计 |
 | [Algorithm Stack](docs/ALGORITHM_STACK.md) | 算法总览（各模块真实算法 × 文件对照） |
 | [Algorithm Integration](docs/ALGORITHM_INTEGRATION.md) | 算法集成指南 |

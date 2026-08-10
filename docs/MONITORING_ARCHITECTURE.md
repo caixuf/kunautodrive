@@ -15,6 +15,29 @@
 >
 > ---
 
+## 与数据闭环的关系（已实现）
+
+监控体系与数据闭环是同一套内核，不是两套系统：
+
+- `development`：高频 + 场景可视化 + samples，服务开发调试；
+- `production`：低频 + 二进制 PEM 记录（system/topic/health/event），服务车端采集。
+
+二者共用同一指标定义（topic 频率、延迟、degrade/health 语义），只改变采样率与输出介质。
+数据闭环文档见 [DATA_CLOSED_LOOP.md](DATA_CLOSED_LOOP.md)。
+
+## 端到端链路（监控 + 闭环）
+
+```text
+业务节点 publish debug/topic
+  -> monitor_node 聚合（state_file + IPC dashboard bridge）
+  -> flowmond 对外统一 API/SSE（仪表盘）
+  -> production 模式落 PEM 二进制日志（CRC + rotate + critical fsync）
+  -> tools/pem_dump.py 过滤/转 JSONL
+  -> evaluator/trace/回放分析
+  -> 参数/模型更新
+  -> 同指标门禁再次验证
+```
+
 ## 设计原则
 
 ```
@@ -220,3 +243,12 @@ cmake -B build && cmake --build build --target flowmond flow_launcher
 open http://localhost:8800
 ```
 
+生产采集（PEM）最小命令：
+
+```bash
+# 生产 profile（不拉 scene，不开 dashboard/stats IPC bridge）
+./build/bin/flow_launcher config/pipeline_car.json --duration 60
+
+# 解析 PEM
+python3 tools/pem_dump.py /tmp/kunautodrive_pem_*.pem
+```
