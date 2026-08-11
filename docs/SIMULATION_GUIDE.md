@@ -137,6 +137,24 @@ python3 ci/evaluators/scenario_regression.py --baseline
 python3 ci/evaluators/scenario_regression.py --only ghost_pedestrian
 ```
 
+在不改变既有场景格式的前提下，`scenarioctl` 可以生成可复现变体，并从失败
+结果重跑原场景：
+
+```bash
+python3 tools/scenarioctl.py generate \
+  --template scenarios/lane_change_traffic.json \
+  --count 20 --seed 20260811 --speed-scale 0.9 \
+  --position-jitter-m 3 --output-dir /tmp/scenario_variants
+
+python3 tools/scenarioctl.py replay \
+  --result /tmp/flow_bad_cases/<run_id>/lane_change_traffic.json \
+  --output /tmp/lane_change_replay.json
+```
+
+生成文件保留原有 FlowSim 字段，只增加 `generation` 元数据；每个变体的 seed
+独立可复现。重放命令从结果的 `run.scenario_file` 读取原场景，并再次调用同一个
+`demo_evaluator.py`，不会绕过现有安全门禁。
+
 每次矩阵运行会在 `--results-dir` 下生成 `run_manifest.json`，记录套件哈希、
 Git revision、通过/失败/回归数量和每个场景的结果路径。失败或数值回归的完整
 结果默认归档到 `/tmp/flow_bad_cases/<run_id>/`，便于直接交给事故分析和

@@ -9,8 +9,11 @@ second scenario format or silently rewrite files.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
+import random
+import subprocess
 import sys
 from pathlib import Path
 
@@ -133,6 +136,87 @@ def fingerprint(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def resolve_scenario(value: str) -> Path:
+    candidate = Path(value)
+    if not candidate.is_absolute():
+        candidate = ROOT / candidate
+    if candidate.is_file():
+        return candidate
+    by_stem = SCENARIO_DIR / f"{value}.json"
+    if by_stem.is_file():
+        return by_stem
+    raise ValueError(f"scenario not found: {value}")
+
+
+def generate_variants(template: Path, output_dir: Path, count: int, seed: int,
+                      speed_scale: float, position_jitter_m: float) -> list[Path]:
+    if count <= 0:
+        raise ValueError("count must be positive")
+    if speed_scale <= 0.0:
+        raise ValueError("speed_scale must be positive")
+    source = load_json(template)
+    if not isinstance(source, dict):
+        raise ValueError(f"{template}: scenario root must be an object")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    generated: list[Path] = []
+    for index in range(count):
+        rng = random.Random(seed + index)
+        scenario = copy.deepcopy(source)
+        scenario["random_seed"] = seed + index
+        generation = {
+            "template": str(template.relative_to(ROOT)),
+            "seed": seed + index,
+            "speed_scale": speed_scale,
+            "position_jitter_m": position_jitter_m,
+        }
+        scenario["generation"] = generation
+        ego = scenario.get("ego")
+        if isinstance(ego, dict):
+            for key in ("init_speed", "target_speed"):
+                if isinstance(ego.get(key), (int, float)):
+                    ego[key] *= speed_scale
+        for actor in scenario.get("actors", []):
+            if not isinstance(actor, dict):
+                continue
+            for key in ("vx", "vy", "speed"):
+                if isinstance(actor.get(key), (int, float)):
+                    actor[key] *= speed_scale
+            if isinstance(actor.get("s"), (int, float)) and position_jitter_m:
+                actor["s"] = max(0.0, actor["s"] + rng.uniform(
+                    -position_jitter_m, position_jitter_m))
+        output = output_dir / f"{template.stem}_{index:04d}.json"
+        output.write_text(json.dumps(scenario, indent=2, ensure_ascii=False) + "\n",
+                          encoding="utf-8")
+        generated.append(output)
+    return generated
+
+
+def replay_result(result_path: Path, output_path: Path | None, duration: int,
+                  interval: float, run_id: str | None) -> int:
+    result = load_json(result_path)
+    if not isinstance(result, dict):
+        raise ValueError(f"{result_path}: result must be a JSON object")
+    run = result.get("run", {})
+    scenario_value = run.get("scenario_file") if isinstance(run, dict) else None
+    if not scenario_value:
+        scenario_value = result.get("scenario")
+    if not scenario_value:
+        raise ValueError(f"{result_path}: no source scenario_file or scenario")
+    scenario = resolve_scenario(str(scenario_value))
+    cmd = [
+        sys.executable,
+        str(ROOT / "ci/evaluators/demo_evaluator.py"),
+        "--scenario", str(scenario.relative_to(ROOT)),
+        "--duration", str(duration),
+        "--interval", str(interval),
+        "--json-out", str(output_path or result_path.with_name(
+            result_path.stem + "_replay.json")),
+    ]
+    if run_id:
+        cmd += ["--run-id", run_id]
+    return subprocess.run(cmd, cwd=ROOT).returncode
+
+
 def validate_paths(paths: list[Path]) -> list[dict]:
     results = []
     for path in paths:
@@ -156,6 +240,20 @@ def main() -> int:
     validate.add_argument("paths", nargs="*", type=Path,
                           help="scenario JSON paths (default: all scenarios + suite)")
     validate.add_argument("--json", action="store_true", dest="as_json")
+    generate = sub.add_parser("generate", help="generate deterministic scenario variants")
+    generate.add_argument("--template", required=True,
+                           help="scenario path or file stem")
+    generate.add_argument("--count", type=int, default=1)
+    generate.add_argument("--seed", type=int, default=1)
+    generate.add_argument("--speed-scale", type=float, default=1.0)
+    generate.add_argument("--position-jitter-m", type=float, default=0.0)
+    generate.add_argument("--output-dir", type=Path, required=True)
+    replay = sub.add_parser("replay", help="re-run a saved evaluator result")
+    replay.add_argument("--result", type=Path, required=True)
+    replay.add_argument("--output", type=Path)
+    replay.add_argument("--duration", type=int, default=45)
+    replay.add_argument("--interval", type=float, default=0.5)
+    replay.add_argument("--run-id")
     args = parser.parse_args()
 
     if args.command == "validate":
@@ -170,6 +268,19 @@ def main() -> int:
                 for error in result["errors"]:
                     print(f"  - {error}")
         return 0 if all(result["ok"] for result in results) else 1
+    if args.command == "generate":
+        template = resolve_scenario(args.template)
+        generated = generate_variants(
+            template, args.output_dir if args.output_dir.is_absolute()
+            else ROOT / args.output_dir, args.count, args.seed,
+            args.speed_scale, args.position_jitter_m,
+        )
+        for path in generated:
+            print(f"generated {path} sha256={fingerprint(path)}")
+        return 0
+    if args.command == "replay":
+        return replay_result(args.result, args.output, args.duration,
+                             args.interval, args.run_id)
     return 2
 
 
