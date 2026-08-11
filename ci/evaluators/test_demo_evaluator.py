@@ -42,9 +42,10 @@ class DemoEvaluatorTest(unittest.TestCase):
         projection = evaluator._road_network_projection(scene, 50.0, 0.5)
 
         self.assertIsNotNone(projection)
-        _, signed_offset, lane_count, _, _, _ = projection
+        _, signed_offset, lane_count, _, _, _, edge_index = projection
         self.assertEqual(lane_count, 1)
         self.assertAlmostEqual(signed_offset, 0.5)
+        self.assertEqual(edge_index, 0)
 
     def test_formal_metrics_report_tracking_comfort_and_timing_groups(self):
         evaluator = load_evaluator()

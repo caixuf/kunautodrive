@@ -643,11 +643,11 @@ def nearest_lane_error(y: float, lane_width: float = 3.5, lane_count: int = 2, r
     return min(abs(y - c) for c in lane_centers)
 
 
-def _road_network_projection(scene: dict, x: float, y: float) -> tuple[float, float, int, float, float, float] | None:
+def _road_network_projection(scene: dict, x: float, y: float) -> tuple[float, float, int, float, float, float, int] | None:
     """Project a world point onto the nearest road-network polyline segment.
 
     Returns cumulative arc length, signed lateral offset, lane count, lane
-    width, road-edge margin, and local heading.
+    width, road-edge margin, local heading, and the source edge index.
     """
     road_network = scene.get("road_network")
     if not isinstance(road_network, dict):
@@ -656,11 +656,11 @@ def _road_network_projection(scene: dict, x: float, y: float) -> tuple[float, fl
     if not isinstance(edges, list):
         return None
 
-    best: tuple[float, float, int, float, float, float, float] | None = None
+    best: tuple[float, float, int, float, float, float, float, int] | None = None
     px = float(x)
     py = float(y)
     edge_s_base = 0.0
-    for edge in edges:
+    for edge_index, edge in enumerate(edges):
         if not isinstance(edge, dict):
             continue
         nodes = edge.get("nodes")
@@ -696,7 +696,7 @@ def _road_network_projection(scene: dict, x: float, y: float) -> tuple[float, fl
             seg_heading = math.atan2(dy, dx)
             candidate = (
                 dist, edge_s_base + local_s + t * seg_len, signed_offset,
-                lane_count, lane_width, margin, seg_heading,
+                lane_count, lane_width, margin, seg_heading, edge_index,
             )
             # Road membership is geometric: a narrow ramp must not be
             # projected onto a farther, wider arterial simply because that
@@ -709,8 +709,8 @@ def _road_network_projection(scene: dict, x: float, y: float) -> tuple[float, fl
 
     if best is None:
         return None
-    _, s, signed_offset, lane_count, lane_width, margin, road_heading = best
-    return s, signed_offset, lane_count, lane_width, margin, road_heading
+    _, s, signed_offset, lane_count, lane_width, margin, road_heading, edge_index = best
+    return s, signed_offset, lane_count, lane_width, margin, road_heading, edge_index
 
 
 def _road_network_cross_track(scene: dict, x: float, y: float) -> tuple[float, float, float, float] | None:
@@ -724,7 +724,7 @@ def _road_network_cross_track(scene: dict, x: float, y: float) -> tuple[float, f
     projection = _road_network_projection(scene, x, y)
     if projection is None:
         return None
-    _, signed_offset, lane_count, lane_width, margin, road_heading = projection
+    _, signed_offset, lane_count, lane_width, margin, road_heading, _ = projection
     return (
         nearest_lane_error(signed_offset, lane_width, lane_count, 0.0),
         margin,
@@ -778,8 +778,12 @@ def sample_metrics(sample: dict, road: dict | None = None,
     cross_track = _road_network_cross_track(scene, x, y)
     road_heading = None
     road_signed_offset = None
+    road_segment = None
     if cross_track is not None:
         lane_error, road_edge_margin, road_heading, road_signed_offset = cross_track
+        projection = _road_network_projection(scene, x, y)
+        if projection is not None:
+            road_segment = projection[6]
     else:
         lane_error = nearest_lane_error(y_rel, lane_width, lane_count, 0.0)
         road_edge_margin = lane_width * lane_count * 0.5 - abs(y_rel) - 1.0
@@ -850,6 +854,7 @@ def sample_metrics(sample: dict, road: dict | None = None,
         "road_heading": road_heading,          # road_network 局部道路朝向（rad）或 None
         "road_s": road_s,                      # road_network 全局弧长（m）或 None
         "road_signed_offset": road_signed_offset,  # road_network 横向偏移（m）或 None
+        "road_segment": road_segment,
         "lane_count": lane_count,
         "y_rel": y_rel,
         "min_forward_gap": min_forward_gap,
@@ -1882,7 +1887,21 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         # the run already has authoritative road geometry. Do not downgrade a
         # curved route to raw world-y merely because of those transient frames.
         if len(offsets) >= 10:
-            y_range = max(offsets) - min(offsets)
+            segment_offsets: dict[int, list[float]] = {}
+            for metric in series:
+                offset = metric.get("road_signed_offset")
+                segment = metric.get("road_segment")
+                if (isinstance(offset, (int, float)) and math.isfinite(offset)
+                        and isinstance(segment, int)):
+                    segment_offsets.setdefault(segment, []).append(float(offset))
+            # A ramp-to-viaduct route legitimately changes its lane reference
+            # between edges. Detect weaving within a continuous road edge,
+            # while road-edge margin remains the cross-edge safety authority.
+            ranges = [
+                max(values) - min(values)
+                for values in segment_offsets.values() if len(values) >= 10
+            ]
+            y_range = max(ranges) if ranges else max(offsets) - min(offsets)
         else:
             y_range = max(ys) - min(ys)
         if y_range > 4.5:
