@@ -798,6 +798,7 @@ protected:
 
             const char* model_name = g.use_onnx ? (g.onnx.loaded ? "onnx" : "heuristic")
                                                  : (g.model.loaded ? "tiny-mlp" : "heuristic");
+            const bool speed_contract = shadow_speed_gate_supported();
             write_shadow_sidecar(shadow_delta, pred_speed, model_name);
 
             /* 所有模式下都发布 inference/trajectory 供监控 */
@@ -805,6 +806,9 @@ protected:
                 cJSON* tj_root = cJSON_CreateObject();
                 cJSON_AddStringToObject(tj_root, "type", "inference");
                 cJSON_AddStringToObject(tj_root, "model", model_name);
+                cJSON_AddStringToObject(tj_root, "prediction_contract",
+                                        speed_contract ? "target_speed" : "direct_control");
+                cJSON_AddBoolToObject(tj_root, "shadow_gate_supported", speed_contract);
                 cJSON_AddNumberToObject(tj_root, "infer", g.infer_count);
                 cJSON_AddTrueToObject(tj_root, "shadow");
                 cJSON_AddNumberToObject(tj_root, "target_speed", pred_speed);
