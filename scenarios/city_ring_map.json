@@ -1,0 +1,47 @@
+{
+  "name": "city_ring_map",
+  "description": "Map-backed city ring smoke scenario; static roads come from maps/city_ring/map.json.",
+  "map_file": "../maps/city_ring/map.json",
+  "random_seed": 202608,
+  "duration_s": 120,
+  "lighting": "day",
+  "weather": "clear",
+  "visibility_m": 1200,
+  "npc_lane_change": true,
+  "ego": {
+    "x": 20.0,
+    "y": -1.75,
+    "heading": 0.0,
+    "init_speed": 10.0,
+    "target_speed": 13.0,
+    "wheelbase": 2.7,
+    "length": 4.6,
+    "width": 2.0,
+    "max_steer": 0.6
+  },
+  "actors": [
+    {
+      "id": 1,
+      "type": "car",
+      "segment_id": 1,
+      "s": 360,
+      "l": -1.75,
+      "vx": 14.0,
+      "vy": 0.0,
+      "len": 4.6,
+      "wid": 2.0
+    }
+  ],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 120,
+    "min_avg_speed_mps": 3.0,
+    "min_distance_m": 450
+  },
+  "route": [],
+  "scenarios": [],
+  "choreography": {
+    "loop_period_s": 999,
+    "beats": []
+  }
+}

@@ -38,9 +38,11 @@ def validate_scenario(data: object, path: Path) -> list[str]:
     errors: list[str] = []
     if not isinstance(data, dict):
         return [f"{path}: root must be an object"]
-    for key in ("name", "description", "ego", "road_network", "actors", "pass_criteria"):
+    for key in ("name", "description", "ego", "actors", "pass_criteria"):
         if key not in data:
             errors.append(f"{path}: missing required field '{key}'")
+    if "road_network" not in data and "map_file" not in data and "map_id" not in data:
+        errors.append(f"{path}: requires road_network or map_file/map_id")
     if not isinstance(data.get("name"), str) or not data.get("name"):
         errors.append(f"{path}: name must be a non-empty string")
     if not isinstance(data.get("random_seed"), int):
@@ -55,7 +57,17 @@ def validate_scenario(data: object, path: Path) -> list[str]:
                 _number(ego[key], f"{path}: ego.{key}", errors)
 
     road = data.get("road_network")
-    if not isinstance(road, dict):
+    if road is None and ("map_file" in data or "map_id" in data):
+        map_ref = data.get("map_file")
+        if not isinstance(map_ref, str) and isinstance(data.get("map_id"), str):
+            map_ref = f"../maps/{data['map_id']}/map.json"
+        if not isinstance(map_ref, str):
+            errors.append(f"{path}: map_file must be a string")
+        else:
+            map_path = (path.parent / map_ref).resolve()
+            if not map_path.is_file():
+                errors.append(f"{path}: map reference does not exist: {map_ref}")
+    elif not isinstance(road, dict):
         errors.append(f"{path}: road_network must be an object")
     else:
         edges = road.get("edges")
