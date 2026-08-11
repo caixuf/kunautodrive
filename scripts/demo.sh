@@ -44,6 +44,14 @@ DEFAULT_SCENARIO="${FLOWENGINE_SCENARIO:-scenarios/straight_road.json}"
 
 LOG_DIR="${FLOW_LOG_DIR:-/tmp/flow_logs}"
 PID_FILE="${FLOWENGINE_DEMO_PID_FILE:-/tmp/kunautodrive_demo.pids}"
+JSON_FILE="${FLOW_TOPOLOGY_FILE:-/tmp/flow_topology.json}"
+ENVIRONMENT_FILE="${FLOW_ENVIRONMENT_FILE:-/tmp/flow_environment.json}"
+LAUNCHER_STDOUT="${FLOW_LAUNCHER_STDOUT:-/tmp/flow_launcher_stdout.txt}"
+LAUNCHER_STDERR="${FLOW_LAUNCHER_STDERR:-/tmp/flow_launcher_stderr.txt}"
+SKIP_SERVICES="${FLOW_SKIP_SERVICES:-0}"
+SKIP_GLOBAL_CLEANUP="${FLOW_SKIP_GLOBAL_CLEANUP:-0}"
+BUILD_LOCK="${FLOW_BUILD_LOCK:-}"
+SKIP_BUILD="${FLOW_SKIP_BUILD:-0}"
 
 terminate_pids() {
   local pids=()
@@ -121,25 +129,29 @@ terminate_recorded_pids() {
 
 # Kill stale children recorded by the previous demo run. Avoid process-name
 # sweeps: this environment may be shared, so only PIDs created by demo.sh are
-# eligible for cleanup.
-if [ -f "$PID_FILE" ]; then
-  terminate_recorded_pids
-  rm -f "$PID_FILE"
+# eligible for cleanup. Concurrent matrix workers opt out of global cleanup.
+if [ "$SKIP_GLOBAL_CLEANUP" != "1" ]; then
+  if [ -f "$PID_FILE" ]; then
+    terminate_recorded_pids
+    rm -f "$PID_FILE"
+  fi
+  sleep 0.5
 fi
-sleep 0.5
 # Clean up old per-module log files from previous run
 rm -rf "$LOG_DIR" 2>/dev/null || true
 mkdir -p "$LOG_DIR"
-for port in 8800 8765; do
-  # Linux 优先 ss；macOS 无 ss（也无 /proc）用 lsof 找监听该端口的进程。
-  if command -v ss >/dev/null 2>&1; then
-    pid=$(ss -tlnp "sport = :$port" 2>/dev/null | grep -oP 'pid=\K\d+' | head -1)
-  else
-    pid=$(lsof -ti "tcp:$port" -sTCP:LISTEN 2>/dev/null | head -1)
-  fi
-  [ -n "$pid" ] && terminate_pids "$pid"
-done
-sleep 0.5
+if [ "$SKIP_GLOBAL_CLEANUP" != "1" ]; then
+  for port in 8800 8765; do
+    # Linux 优先 ss；macOS 无 ss（也无 /proc）用 lsof 找监听该端口的进程。
+    if command -v ss >/dev/null 2>&1; then
+      pid=$(ss -tlnp "sport = :$port" 2>/dev/null | grep -oP 'pid=\K\d+' | head -1)
+    else
+      pid=$(lsof -ti "tcp:$port" -sTCP:LISTEN 2>/dev/null | head -1)
+    fi
+    [ -n "$pid" ] && terminate_pids "$pid"
+  done
+  sleep 0.5
+fi
 
 DURATION=0  # 0 = 自动从场景 duration_s 读取，设置正数 = 覆盖
 # 默认无限时模式：场景可能跑超过 duration_s（NPC/事件还在继续），
@@ -158,7 +170,6 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$ROOT/build"
 LAUNCHER_BIN="$BUILD_DIR/bin/flow_launcher"
 PIPELINE="${FLOW_PIPELINE:-$ROOT/config/pipeline.json}"
-JSON_FILE="/tmp/flow_topology.json"
 BAG_FILE="/tmp/flow_demo_$(date +%Y%m%d_%H%M%S).bag"
 
 while [ $# -gt 0 ]; do
@@ -305,7 +316,13 @@ echo ""
 
 # ── Build ───────────────────────────────────────────────────
 echo "───[1/4] Building..."
-if [ ! -f "$LAUNCHER_BIN" ]; then
+if [ "$SKIP_BUILD" = "1" ]; then
+  echo "  ↷ Build skipped (prebuilt isolated evaluation runtime)"
+elif [ -n "$BUILD_LOCK" ] && command -v flock >/dev/null 2>&1; then
+  exec 9>"$BUILD_LOCK"
+  flock 9
+fi
+if [ "$SKIP_BUILD" != "1" ] && [ ! -f "$LAUNCHER_BIN" ]; then
   echo "  First build, this may take a moment..."
   # 仅 Linux 强制 gcc（项目在 Ubuntu/CI 上以 gcc 为准）；macOS 无 gcc，用系统
   # 默认 Apple clang（C++20 协程 -std=c++20 原生支持，无需 -fcoroutines）。
@@ -313,6 +330,7 @@ if [ ! -f "$LAUNCHER_BIN" ]; then
   [ "$(uname -s)" = "Linux" ] && CC_ARG="-DCMAKE_C_COMPILER=gcc"
   cmake -S "$ROOT" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release $CC_ARG > /dev/null 2>&1
 fi
+if [ "$SKIP_BUILD" != "1" ]; then
 set -o pipefail  # scoped to this build block only — restored via `set +o pipefail`
                  # below once both `cmake --build ... | tail -1` calls are done, so
                  # a build failure surfaces (pipeline exit = cmake's, not tail's)
@@ -366,6 +384,11 @@ if echo "$ADAS_CFG_LOG" | grep -q "planning_node: building in fallback mode"; th
   echo "    Fix: sudo apt install libeigen3-dev, then re-run this script."
   echo ""
 fi
+if [ -n "$BUILD_LOCK" ] && command -v flock >/dev/null 2>&1; then
+  flock -u 9
+  exec 9>&-
+fi
+fi
 
 # ── Cleanup handler ─────────────────────────────────────────
 # Runs on normal exit AND on Ctrl+C (INT) / TERM. It must:
@@ -390,7 +413,7 @@ cleanup() {
   # 保留拓扑文件供评估器/evaluator 事后分析（不删除）
   [ -f "$JSON_FILE" ] && cp "$JSON_FILE" "${JSON_FILE%.json}_$(date +%Y%m%d_%H%M%S).json" 2>/dev/null || true
   # 退出游戏模式（flowsim 恢复正常 control_node 驱动）
-  rm -f /tmp/game_mode /tmp/game_input.json /tmp/flow_environment.json 2>/dev/null || true
+  rm -f /tmp/game_mode /tmp/game_input.json "$ENVIRONMENT_FILE" 2>/dev/null || true
   cleanup_pipeline_tmp
 
   echo ""
@@ -411,7 +434,7 @@ trap 'cleanup; exit 143' TERM
 
 # ── Start flow_launcher with pipeline ───────────────────────
 echo "───[2/4] Starting pipeline (flowsim→sensor_model→perception→fusion→planning→control→monitor)..."
-rm -f "$JSON_FILE" /tmp/flow_environment.json
+rm -f "$JSON_FILE" "$ENVIRONMENT_FILE"
 cd "$ROOT"  # run from root so build/lib/ paths resolve
 
 LAUNCHER_ARGS=("$PIPELINE")
@@ -430,19 +453,19 @@ fi
 [ "$MULTI_MODE" = true ] && echo "  Multi-process mode: each node runs as a separate process"
 
 "$LAUNCHER_BIN" "${LAUNCHER_ARGS[@]}" \
-  > /tmp/flow_launcher_stdout.txt 2>/tmp/flow_launcher_stderr.txt &
+  > "$LAUNCHER_STDOUT" 2>"$LAUNCHER_STDERR" &
 LAUNCHER_PID=$!
 LAUNCHER_STARTED_AT=$(date +%s)
 record_pid "$LAUNCHER_PID" flow_launcher
 sleep 1
 if ! kill -0 $LAUNCHER_PID 2>/dev/null; then
-  echo "  ✗ Pipeline failed! Check /tmp/flow_launcher_stderr.txt"
-  cat /tmp/flow_launcher_stderr.txt 2>/dev/null || true
+  echo "  ✗ Pipeline failed! Check $LAUNCHER_STDERR"
+  cat "$LAUNCHER_STDERR" 2>/dev/null || true
   exit 1
 fi
 echo "  ✓ Pipeline running (PID $LAUNCHER_PID)"
 
-# ── Start dashboard server (file bridge: read /tmp/flow_topology.json) ──
+# ── Start dashboard server (file bridge: read the topology snapshot) ──
 # 依据 VISUALIZATION_ARCHITECTURE.md: flowmond 拥有独立 MessageBus,
 # 看不到 flow_launcher 进程内的数据, launch 演示必须用文件桥接。
 echo "───[3/4] Starting dashboard..."
@@ -454,44 +477,47 @@ done
 if [ ! -s "$JSON_FILE" ]; then
   echo "  ✗ Timeout waiting for $JSON_FILE — monitor node may have failed"
 fi
-"$BUILD_DIR/bin/flowmond" --port 8800 --html-path "$ROOT/tools/flowboard/index.html" \
-  > /tmp/flowmond.log 2>&1 &
-SERVER_PID=$!
-record_pid "$SERVER_PID" flowmond
-sleep 2
-if kill -0 $SERVER_PID 2>/dev/null; then
-    # Self-check: verify the server actually responds
-    CHECK=$(curl -s --max-time 3 -o /dev/null -w '%{http_code}' http://127.0.0.1:8800/api/health 2>/dev/null || echo "000")
-    if [ "$CHECK" = "200" ]; then
-        echo "  ✓ Dashboard at http://localhost:8800"
-    else
-        echo "  ✗ Dashboard started but not responding (HTTP $CHECK)"
-        echo "  Server log:"
-        cat /tmp/flowmond.log
-    fi
+if [ "$SKIP_SERVICES" = "1" ]; then
+  echo "  ↷ Dashboard and Foxglove bridge disabled for isolated evaluation worker"
 else
-    echo "  ✗ flowmond failed! Check /tmp/flowmond.log"
-    cat /tmp/flowmond.log
+  "$BUILD_DIR/bin/flowmond" --port 8800 --html-path "$ROOT/tools/flowboard/index.html" \
+    > "${FLOWMOND_LOG:-/tmp/flowmond.log}" 2>&1 &
+  SERVER_PID=$!
+  record_pid "$SERVER_PID" flowmond
+  sleep 2
+  if kill -0 $SERVER_PID 2>/dev/null; then
+      # Self-check: verify the server actually responds
+      CHECK=$(curl -s --max-time 3 -o /dev/null -w '%{http_code}' http://127.0.0.1:8800/api/health 2>/dev/null || echo "000")
+      if [ "$CHECK" = "200" ]; then
+          echo "  ✓ Dashboard at http://localhost:8800"
+      else
+          echo "  ✗ Dashboard started but not responding (HTTP $CHECK)"
+          echo "  Server log:"
+          cat "${FLOWMOND_LOG:-/tmp/flowmond.log}"
+      fi
+    else
+      echo "  ✗ flowmond failed! Check ${FLOWMOND_LOG:-/tmp/flowmond.log}"
+      cat "${FLOWMOND_LOG:-/tmp/flowmond.log}"
+    fi
+  python3 "$ROOT/tools/foxglove_bridge.py" --port 8765 --json-file "$JSON_FILE" \
+    > "${FOXGLOVE_LOG:-/tmp/foxglove_bridge.log}" 2>&1 &
+  BRIDGE_PID=$!
+  record_pid "$BRIDGE_PID" foxglove_bridge
+  echo "  ✓ 3D Bridge at ws://localhost:8765 (Foxglove Studio)"
 fi
-
-python3 "$ROOT/tools/foxglove_bridge.py" --port 8765 --json-file "$JSON_FILE" \
-  > /tmp/foxglove_bridge.log 2>&1 &
-BRIDGE_PID=$!
-record_pid "$BRIDGE_PID" foxglove_bridge
-echo "  ✓ 3D Bridge at ws://localhost:8765 (Foxglove Studio)"
 
 # ── Live monitor ────────────────────────────────────────────
 echo "───[4/4] Live monitor (${DURATION}s)..."
 echo ""
 
 # 准备行为日志过滤（筛选 [BEH]、[SM] 和 [INV] 日志行）
-BEH_LOG="/tmp/flow_beh_monitor.txt"
+BEH_LOG="${FLOW_BEH_LOG:-/tmp/flow_beh_monitor.txt}"
 : > "$BEH_LOG"  # 清空
 sleep 1  # 等日志文件就绪
 # 旧实现是 `tail -F | grep &`：EXIT trap 只能杀到管道最后一个进程，
 # macOS 又没有 GNU tail --pid，tail 孙进程会泄漏并持有评估器 stdout 管道。
 # 用一个 Python watcher 轮询文件，cleanup 只需按 PID 杀一个进程。
-python3 - "$LOG_DIR/launcher.log" /tmp/flow_launcher_stderr.txt "$BEH_LOG" <<'PY' &
+python3 - "$LOG_DIR/launcher.log" "$LAUNCHER_STDERR" "$BEH_LOG" <<'PY' &
 import os
 import re
 import sys
@@ -615,7 +641,7 @@ echo "═══ Pipeline Summary ═══"
 
 # Extract stats from per-module log files (fallback to old stderr file)
 LAUNCHER_LOG="$LOG_DIR/launcher.log"
-STDERR_LOG="/tmp/flow_launcher_stderr.txt"
+STDERR_LOG="$LAUNCHER_STDERR"
 STAT_SRC="${LAUNCHER_LOG}"
 [ -f "$STAT_SRC" ] || STAT_SRC="$STDERR_LOG"
 

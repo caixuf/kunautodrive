@@ -135,6 +135,9 @@ python3 ci/evaluators/scenario_regression.py --baseline
 
 # 只跑单个场景（按文件名去后缀匹配）
 python3 ci/evaluators/scenario_regression.py --only ghost_pedestrian
+
+# 使用 4 个隔离 worker 并发跑场景（每个 worker 独立拓扑/日志）
+python3 ci/evaluators/scenario_regression.py --workers 4
 ```
 
 在不改变既有场景格式的前提下，`scenarioctl` 可以生成可复现变体，并从失败
@@ -156,7 +159,9 @@ python3 tools/scenarioctl.py replay \
 `demo_evaluator.py`，不会绕过现有安全门禁。
 
 每次矩阵运行会在 `--results-dir` 下生成 `run_manifest.json`，记录套件哈希、
-Git revision、通过/失败/回归数量和每个场景的结果路径。失败或数值回归的完整
+Git revision、worker 数、通过/失败/回归数量和每个场景的结果路径。并发模式会为
+每个 worker 创建独立 pipeline、拓扑快照、日志和 PID 文件，并禁用 dashboard/
+Foxglove 服务，避免共享端口和临时文件互相干扰。失败或数值回归的完整
 结果默认归档到 `/tmp/flow_bad_cases/<run_id>/`，便于直接交给事故分析和
 场景重放；可用 `--no-archive` 关闭复制：
 

@@ -955,15 +955,21 @@ static bool dispatch_request(int fd, MonitorServer* ms,
                 visibility->valuedouble >= 10.0 && visibility->valuedouble <= 5000.0;
             if (valid_light && valid_weather && valid_visibility) {
                 char* normalized = cJSON_PrintUnformatted(root);
-                char tmp_path[] = "/tmp/flow_environment.json.tmp.XXXXXX";
-                int tmp_fd = normalized ? mkstemp(tmp_path) : -1;
+                char tmp_path[512];
+                char environment_path[512];
+                bool temp_paths_ok =
+                    flow_temp_path(tmp_path, sizeof(tmp_path),
+                                   "flow_environment.json.tmp.XXXXXX") == 0 &&
+                    flow_temp_path(environment_path, sizeof(environment_path),
+                                   "flow_environment.json") == 0;
+                int tmp_fd = normalized && temp_paths_ok ? mkstemp(tmp_path) : -1;
                 FILE* f = tmp_fd >= 0 ? fdopen(tmp_fd, "w") : NULL;
                 bool written = f && fputs(normalized, f) != EOF &&
                                fflush(f) == 0;
                 if (f && fclose(f) != 0) written = false;
                 if (tmp_fd >= 0 && !f) close(tmp_fd);
-                bool installed = written &&
-                    rename(tmp_path, "/tmp/flow_environment.json") == 0;
+                bool installed = written && temp_paths_ok &&
+                    rename(tmp_path, environment_path) == 0;
                 if (installed) {
                     send_response(fd, "200 OK", "application/json", "{\"ok\":true}");
                 } else {

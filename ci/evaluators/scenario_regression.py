@@ -31,8 +31,10 @@ Extending this harness (for follow-up implementers):
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -110,6 +112,7 @@ def write_run_manifest(
     suite: dict,
     rows: list[dict],
     run_stamp: str,
+    worker_count: int = 1,
 ) -> Path:
     """Write a compact index that points to full results and archived Bad Cases."""
     manifest = {
@@ -121,6 +124,7 @@ def write_run_manifest(
         "suite_file": str(suite_path),
         "suite_sha256": sha256_file(suite_path),
         "scenario_count": len(rows),
+        "worker_count": worker_count,
         "pass_count": sum(row["result"] == "PASS" for row in rows),
         "fail_count": sum(row["result"] != "PASS" for row in rows),
         "regression_count": sum(bool(row["regressions"]) for row in rows),
@@ -130,6 +134,53 @@ def write_run_manifest(
     path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
                     encoding="utf-8")
     return path
+
+
+def prepare_worker_workspace(results_dir: Path, key: str) -> tuple[Path, dict[str, str]]:
+    """Create isolated runtime paths for one evaluator subprocess.
+
+    The simulator itself remains unchanged.  Only the launcher config's
+    monitor state path and process-local artifacts are redirected so workers
+    cannot overwrite one another's snapshots or cleanup files.
+    """
+    workspace = results_dir / ".workers" / key
+    workspace.mkdir(parents=True, exist_ok=True)
+    pipeline_path = workspace / "pipeline.json"
+    pipeline = load_json(ROOT / "config" / "pipeline.json")
+    if not isinstance(pipeline, dict):
+        raise RuntimeError("invalid default pipeline.json")
+
+    for node in pipeline.get("processes", pipeline.get("nodes", [])):
+        if not isinstance(node, dict) or node.get("name") != "monitor":
+            continue
+        params = node.get("params", {})
+        if isinstance(params, str):
+            params_obj = json.loads(params)
+            params_obj["state_file"] = str(workspace / "topology.json")
+            node["params"] = json.dumps(params_obj, separators=(",", ":"))
+        elif isinstance(params, dict):
+            params["state_file"] = str(workspace / "topology.json")
+        break
+    pipeline_path.write_text(json.dumps(pipeline, indent=2, ensure_ascii=False) + "\n",
+                             encoding="utf-8")
+
+    paths = {
+        "FLOW_PIPELINE": str(pipeline_path),
+        "FLOWENGINE_TEMP_DIR": str(workspace),
+        "FLOW_BUILD_LOCK": str(results_dir / ".build.lock"),
+        "FLOW_TOPOLOGY_FILE": str(workspace / "topology.json"),
+        "FLOW_LOG_DIR": str(workspace / "logs"),
+        "FLOWENGINE_DEMO_PID_FILE": str(workspace / "demo.pids"),
+        "FLOW_LAUNCHER_STDOUT": str(workspace / "launcher.stdout"),
+        "FLOW_LAUNCHER_STDERR": str(workspace / "launcher.stderr"),
+        "FLOWMOND_LOG": str(workspace / "flowmond.log"),
+        "FOXGLOVE_LOG": str(workspace / "foxglove.log"),
+        "FLOW_ENVIRONMENT_FILE": str(workspace / "flow_environment.json"),
+        "FLOW_BEH_LOG": str(workspace / "behavior.log"),
+        "FLOW_SKIP_SERVICES": "1",
+        "FLOW_SKIP_GLOBAL_CLEANUP": "1",
+    }
+    return workspace, paths
 
 
 def enabled_scenarios(suite: dict) -> list[dict]:
@@ -154,19 +205,24 @@ def run_scenario(entry: dict, default_duration: int, interval: float,
     key = scenario_key(entry)
     out_path = results_dir / f"{key}.json"
     duration = int(entry.get("duration_s", default_duration))
+    _, worker_env = prepare_worker_workspace(results_dir, key)
+    topology_path = Path(worker_env["FLOW_TOPOLOGY_FILE"])
     cmd = [
         sys.executable, str(EVALUATOR),
         "--scenario", entry["file"],
         "--duration", str(duration),
         "--interval", str(interval),
+        "--json-file", str(topology_path),
         "--json-out", str(out_path),
     ]
-    print(f"\n─── running scenario '{key}' ({duration}s) ───")
+    print(f"\n─── running scenario '{key}' ({duration}s) ───", flush=True)
     # 超时兜底：demo_evaluator 理论上不会挂（select 限时读取），但冷构建
     # （adas_nodes 子项目 ~2.5min）+ 运行 + 收尾可能很长，给足余量后仍超时
     # 就判 FAIL 而不是无限等待。demo.sh 自身有 start_new_session + killpg 清理。
     try:
-        proc = subprocess.run(cmd, cwd=ROOT, timeout=duration + 420)
+        env = os.environ.copy()
+        env.update(worker_env)
+        proc = subprocess.run(cmd, cwd=ROOT, env=env, timeout=duration + 420)
     except subprocess.TimeoutExpired:
         return {
             "scenario": key,
@@ -252,6 +308,8 @@ def main() -> int:
                         help="scenario suite manifest (default: scenarios/suite.json)")
     parser.add_argument("--interval", type=float, default=0.25,
                         help="sample interval passed to demo_evaluator")
+    parser.add_argument("--workers", type=int, default=1,
+                        help="number of isolated evaluator workers (default: 1)")
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR,
                         help="where per-scenario result JSON is written")
     parser.add_argument("--archive-dir", type=Path, default=Path("/tmp/flow_bad_cases"),
@@ -269,6 +327,8 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true",
                         help="list the scenarios that would run without executing the demo")
     args = parser.parse_args()
+    if args.workers < 1:
+        raise SystemExit("--workers must be at least 1")
 
     suite = load_suite(args.suite)
     scenarios = enabled_scenarios(suite)
@@ -292,9 +352,26 @@ def main() -> int:
     rows: list[dict] = []
     run_stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     baseline_slims: dict[str, dict] = {}  # key -> slim payload（仅 --update-baseline 填充）
+    payloads: dict[str, dict] = {}
+    active_workers = min(args.workers, len(scenarios)) if scenarios else 0
+    if args.workers == 1 or len(scenarios) <= 1:
+        for entry in scenarios:
+            key = scenario_key(entry)
+            payloads[key] = run_scenario(entry, default_duration, args.interval,
+                                         args.results_dir)
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=active_workers) as executor:
+            futures = {
+                executor.submit(run_scenario, entry, default_duration,
+                                 args.interval, args.results_dir): scenario_key(entry)
+                for entry in scenarios
+            }
+            for future in concurrent.futures.as_completed(futures):
+                payloads[futures[future]] = future.result()
+
     for entry in scenarios:
         key = scenario_key(entry)
-        payload = run_scenario(entry, default_duration, args.interval, args.results_dir)
+        payload = payloads[key]
         # 结果 payload 已在内存，--update-baseline 直接投影，避免二次读盘解析 28MB JSON。
         # 用 payload[k] 而非 .get(k)：契约违约（缺 key）必须出声，不能静默写 null baseline。
         if args.update_baseline:
@@ -332,7 +409,7 @@ def main() -> int:
                 encoding="utf-8")
         print(f"\nupdated slim baseline in {args.baseline_dir} "
               f"({len(baseline_slims)} scenarios)")
-        write_run_manifest(args.results_dir, args.suite, suite, rows, run_stamp)
+        write_run_manifest(args.results_dir, args.suite, suite, rows, run_stamp, active_workers)
         return 0
 
     if not args.no_archive:
@@ -344,7 +421,7 @@ def main() -> int:
                 payload, Path(row["result_path"]), args.archive_dir, run_stamp
             )
             row["bad_case_path"] = str(archived) if archived else None
-    write_run_manifest(args.results_dir, args.suite, suite, rows, run_stamp)
+    write_run_manifest(args.results_dir, args.suite, suite, rows, run_stamp, active_workers)
     print_report(rows)
 
     failed = [r for r in rows if r["result"] != "PASS"]

@@ -32,6 +32,18 @@ PIPELINE_JSON = ROOT / "config" / "pipeline.json"
 EVALUATION_SCHEMA_VERSION = 1
 
 
+def runtime_topology_path() -> Path:
+    return Path(os.environ.get("FLOW_TOPOLOGY_FILE", str(DEFAULT_JSON)))
+
+
+def runtime_launcher_stderr_path() -> Path:
+    return Path(os.environ.get("FLOW_LAUNCHER_STDERR", str(LAUNCHER_STDERR)))
+
+
+def runtime_pipeline_path() -> Path:
+    return Path(os.environ.get("FLOW_PIPELINE", str(PIPELINE_JSON)))
+
+
 def validate_safety_evidence(evidence: object) -> list[str]:
     """Validate the v1 timeout-injection evidence contract for CI."""
     if not isinstance(evidence, dict):
@@ -310,7 +322,7 @@ def load_scenario_criteria_from_pipeline() -> tuple[dict, str | None, bool, dict
     or [] for scenarios without signalized intersections — used by score()
     to check red-light violations (ego crossing stop line during red phase).
     """
-    pipeline = load_json(PIPELINE_JSON) or {}
+    pipeline = load_json(runtime_pipeline_path()) or {}
     nodes = _pipeline_nodes(pipeline)
     scenario_file = None
     for node in nodes:
@@ -356,7 +368,7 @@ def load_scenario_criteria_from_pipeline() -> tuple[dict, str | None, bool, dict
 
 
 def load_pipeline_expected_edges() -> list[tuple[str, str, str]]:
-    pipeline = load_json(PIPELINE_JSON) or {}
+    pipeline = load_json(runtime_pipeline_path()) or {}
     return expected_edges_from_pipeline(pipeline)
 
 
@@ -365,7 +377,7 @@ def _pipeline_flowsim_scenario_file() -> str | None:
     flowsim node params (or None if not found). Used to pass the pipeline's
     default scenario to demo.sh --scenario, so that demo.sh does not override
     it with its own DEFAULT_SCENARIO (infinite_straight.json, no route)."""
-    pipeline = load_json(PIPELINE_JSON) or {}
+    pipeline = load_json(runtime_pipeline_path()) or {}
     for node in _pipeline_nodes(pipeline):
         if not isinstance(node, dict) or node.get("name") != "flowsim":
             continue
@@ -422,7 +434,8 @@ def pipeline_scenario_override(scenario_file: str | None):
         yield None
         return
 
-    original_text = PIPELINE_JSON.read_text(encoding="utf-8")
+    pipeline_path = runtime_pipeline_path()
+    original_text = pipeline_path.read_text(encoding="utf-8")
     pipeline = json.loads(original_text)
     patched_nodes = []
     for node in _pipeline_nodes(pipeline):
@@ -452,11 +465,11 @@ def pipeline_scenario_override(scenario_file: str | None):
               file=sys.stderr)
 
     try:
-        PIPELINE_JSON.write_text(json.dumps(pipeline, indent=2, ensure_ascii=False) + "\n",
+        pipeline_path.write_text(json.dumps(pipeline, indent=2, ensure_ascii=False) + "\n",
                                  encoding="utf-8")
         yield scenario_file
     finally:
-        PIPELINE_JSON.write_text(original_text, encoding="utf-8")
+        pipeline_path.write_text(original_text, encoding="utf-8")
 
 
 def topic_map(sample: dict) -> dict:
@@ -2144,7 +2157,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Evaluate FlowEngine demo behavior.")
     parser.add_argument("--duration", type=int, default=0, help="demo run duration in seconds (0=auto-detect from scenario)")
     parser.add_argument("--interval", type=float, default=0.25, help="JSON sample interval in seconds")
-    parser.add_argument("--json-file", type=Path, default=DEFAULT_JSON)
+    parser.add_argument("--json-file", type=Path, default=None)
     parser.add_argument("--no-run", action="store_true", help="evaluate current JSON/logs without starting demo.sh")
     parser.add_argument("--scenario", type=str, default=None,
                         help="scenario JSON path; temporarily overrides flowsim.scenario_file for this run")
@@ -2162,6 +2175,8 @@ def main() -> int:
     parser.add_argument("--require-safety-evidence", action="store_true",
                         help="require injected raw_cmd timeout evidence with L3 emergency stop")
     args = parser.parse_args()
+    if args.json_file is None:
+        args.json_file = runtime_topology_path()
 
     # Auto-detect duration from scenario if not explicitly given
     duration = args.duration
@@ -2263,7 +2278,11 @@ def main() -> int:
             _scn_path = ROOT / _scn_path
         _scn_dict = load_json(_scn_path)
 
-    failures, warnings, summary = score(samples, LAUNCHER_STDERR, criteria, scenario_name, has_noa_route=has_noa_route, road=road, traffic_lights=traffic_lights, scenario=_scn_dict, expected_duration_s=duration if not args.no_run else None)
+    failures, warnings, summary = score(samples, runtime_launcher_stderr_path(), criteria,
+                                         scenario_name, has_noa_route=has_noa_route,
+                                         road=road, traffic_lights=traffic_lights,
+                                         scenario=_scn_dict,
+                                         expected_duration_s=duration if not args.no_run else None)
 
     latest_safety_evidence = None
     for sample in reversed(samples):

@@ -1573,7 +1573,10 @@ protected:
              * 写入，浏览器键盘 → HTTP）当控制指令，绕过 control_node。
              * 同时刷新 last_control_cmd_us 避免 FSAFE 误触发。 */
             if ((g.cycle % 30u) == 0u) {
-                FILE* ef = fopen("/tmp/flow_environment.json", "r");
+                char environment_path[512];
+                FILE* ef = game_path(environment_path, sizeof(environment_path),
+                                      "flow_environment.json")
+                               ? fopen(environment_path, "r") : nullptr;
                 if (ef) {
                     char ebuf[512] = {0};
                     size_t en = fread(ebuf, 1, sizeof(ebuf) - 1, ef);
@@ -2215,12 +2218,15 @@ protected:
                         }
                     }
                 }
-                // ASCII 俯视图：3D 运行时自动生成，写到 /tmp/flow_ascii_overhead.txt
+                // ASCII 俯视图：3D 运行时自动生成，写到配置的临时目录，
                 // 供 dashboard / 终端 cat 查看。每 100 帧（5s）更新一次，
                 // 避免高频文件 I/O 阻塞主循环。
                 if (g.cycle % 300 == 0) {
                     std::string ascii = flowsim::render_ascii_overhead(g.static_digest, dd, 80, 40);
-                    FILE* fp = fopen("/tmp/flow_ascii_overhead.txt", "w");
+                    char ascii_path[512];
+                    FILE* fp = game_path(ascii_path, sizeof(ascii_path),
+                                          "flow_ascii_overhead.txt")
+                                   ? fopen(ascii_path, "w") : nullptr;
                     if (fp) {
                         fputs(ascii.c_str(), fp);
                         fclose(fp);
@@ -2273,7 +2279,11 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
     reset_runtime_state();
     /* Operator overrides are scoped to one simulator run.  Other launch paths
      * do not pass through demo.sh cleanup, so FlowSim owns the reset too. */
-    remove("/tmp/flow_environment.json");
+    char environment_path[512];
+    if (game_path(environment_path, sizeof(environment_path),
+                  "flow_environment.json")) {
+        remove(environment_path);
+    }
 
     /* 默认 AI 配置（与 Phase 1 测试一致） */
     g.ai_cfg.lane_width = 3.5;

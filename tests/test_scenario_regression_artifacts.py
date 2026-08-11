@@ -1,10 +1,14 @@
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from ci.evaluators import scenario_regression
 from ci.evaluators.scenario_regression import (
     archive_failed_result,
+    prepare_worker_workspace,
     sha256_file,
     write_run_manifest,
 )
@@ -43,6 +47,54 @@ class ScenarioRegressionArtifactsTest(unittest.TestCase):
         self.assertEqual(data["schema"], "flowengine.evaluation_run.v1")
         self.assertEqual(data["fail_count"], 1)
         self.assertEqual(data["results"][0]["scenario"], "curve_road")
+        self.assertEqual(data["worker_count"], 1)
+
+    def test_worker_workspace_isolates_monitor_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace, env = prepare_worker_workspace(Path(tmp), "curve_road")
+            pipeline = json.loads((workspace / "pipeline.json").read_text(encoding="utf-8"))
+            monitor = next(node for node in pipeline["processes"] if node["name"] == "monitor")
+            params = json.loads(monitor["params"])
+
+            self.assertEqual(params["state_file"], env["FLOW_TOPOLOGY_FILE"])
+            self.assertEqual(env["FLOW_SKIP_SERVICES"], "1")
+            self.assertEqual(env["FLOW_SKIP_GLOBAL_CLEANUP"], "1")
+            self.assertNotEqual(env["FLOW_TOPOLOGY_FILE"], "/tmp/flow_topology.json")
+
+    def test_matrix_dispatches_isolated_workers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            suite_path = root / "suite.json"
+            suite_path.write_text(json.dumps({
+                "name": "parallel-test",
+                "default_duration_s": 1,
+                "scenarios": [
+                    {"file": "scenarios/straight_road.json", "enabled": True},
+                    {"file": "scenarios/curve_road.json", "enabled": True},
+                ],
+            }), encoding="utf-8")
+
+            def fake_run(entry, _duration, _interval, _results_dir):
+                key = Path(entry["file"]).stem
+                return {
+                    "scenario": key, "result": "PASS",
+                    "failures": [], "warnings": [], "summary": {},
+                }
+
+            argv = [
+                "scenario_regression.py", "--suite", str(suite_path),
+                "--results-dir", str(root / "results"), "--workers", "2",
+                "--no-archive",
+            ]
+            with patch.object(scenario_regression, "run_scenario", side_effect=fake_run), \
+                    patch.object(sys, "argv", argv):
+                self.assertEqual(scenario_regression.main(), 0)
+
+            manifest = json.loads(
+                (root / "results" / "run_manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(manifest["worker_count"], 2)
+            self.assertEqual(manifest["pass_count"], 2)
 
     def test_sha256_is_stable(self):
         with tempfile.TemporaryDirectory() as tmp:
