@@ -22,7 +22,7 @@ const entities = [
 const layout = inferRoadFacilities(road, entities);
 eq('两辆停放车辆 + 中间空位生成 3 个车位', layout.parkingBays, 3);
 eq('信号灯生成 1 条停止线', layout.stopLines, 1);
-eq('停止线不再误绘为斑马线', layout.crosswalks, 0);
+eq('停止线后方生成 1 组正确人行横道', layout.crosswalks, 1);
 const stopLine = layout.marks.find(mark => mark.width === 0.38);
 ok('停止线横跨来车方向的半幅道路',
   stopLine && Math.abs(stopLine.x - 248) < 1e-6 &&

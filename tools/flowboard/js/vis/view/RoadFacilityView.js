@@ -22,6 +22,9 @@ const BAY_LENGTH = 6.2;
 const BAY_WIDTH = 2.8;
 const ARROW_SPACING = 120;
 const MAX_ARROWS_PER_EDGE = 16;
+const CROSSWALK_STRIPES = 6;
+const CROSSWALK_STRIPE_W = 0.48;
+const CROSSWALK_GAP = 0.38;
 
 function roadNodes(edge) {
   if (!Array.isArray(edge?.nodes)) return [];
@@ -114,6 +117,15 @@ function addParkingBay(layout, x, y, heading, empty) {
   }
 }
 
+function addCrosswalk(layout, center, heading, travelSign, width) {
+  for (let i = 0; i < CROSSWALK_STRIPES; i++) {
+    const along = travelSign * (2.0 + i * (CROSSWALK_STRIPE_W + CROSSWALK_GAP));
+    const p = offsetPoint(center.x, center.y, heading, along, 0);
+    addMark(layout, p.x, p.y, heading + Math.PI * 0.5, width, CROSSWALK_STRIPE_W);
+  }
+  layout.crosswalks++;
+}
+
 export function inferRoadFacilities(roadNetwork, entities, scenarioName = '') {
   const layout = {
     marks: [], poles: [], parkingBays: 0, stopLines: 0, crosswalks: 0, arrows: 0,
@@ -160,6 +172,10 @@ export function inferRoadFacilities(roadNetwork, entities, scenarioName = '') {
     // old repeated stripes resembled an incorrectly positioned crosswalk.
     addMark(layout, stopCenter.x, stopCenter.y, heading + Math.PI * 0.5, stopLineWidth, 0.38);
     layout.stopLines++;
+    if (light.crosswalk !== false) {
+      const travelSign = isOneWay || laneDirection < 0 ? 1 : -1;
+      addCrosswalk(layout, stopCenter, heading, travelSign, stopLineWidth);
+    }
   }
 
   const parkingScene = String(scenarioName).toLowerCase().includes('parking');
