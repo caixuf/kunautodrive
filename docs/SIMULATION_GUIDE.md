@@ -137,6 +137,17 @@ python3 ci/evaluators/scenario_regression.py --baseline
 python3 ci/evaluators/scenario_regression.py --only ghost_pedestrian
 ```
 
+每次矩阵运行会在 `--results-dir` 下生成 `run_manifest.json`，记录套件哈希、
+Git revision、通过/失败/回归数量和每个场景的结果路径。失败或数值回归的完整
+结果默认归档到 `/tmp/flow_bad_cases/<run_id>/`，便于直接交给事故分析和
+场景重放；可用 `--no-archive` 关闭复制：
+
+```bash
+python3 ci/evaluators/scenario_regression.py \
+  --results-dir /tmp/flow_regression \
+  --archive-dir /tmp/flow_bad_cases
+```
+
 底层由 `ci/evaluators/demo_evaluator.py` 逐场景执行；后者新增两个可组合参数：
 
 - `--scenario <path>`：临时把 `config/pipeline.json` 的 `sim_world.scenario_file`

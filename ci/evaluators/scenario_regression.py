@@ -31,9 +31,12 @@ Extending this harness (for follow-up implementers):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]  # ci/evaluators/ → 项目根
@@ -46,6 +49,7 @@ DEFAULT_BASELINE_DIR = ROOT / "tests" / "baseline"
 # "summary"; failures/warnings are kept for human inspection of the committed file.
 # Keep in sync with demo_evaluator.main()'s --json-out payload shape.
 BASELINE_KEYS = ("scenario", "result", "failures", "warnings", "summary")
+RUN_MANIFEST_SCHEMA = "flowengine.evaluation_run.v1"
 
 
 def load_json(path: Path) -> dict | None:
@@ -60,6 +64,72 @@ def load_suite(path: Path) -> dict:
     if not isinstance(suite, dict) or not isinstance(suite.get("scenarios"), list):
         raise SystemExit(f"invalid suite manifest: {path}")
     return suite
+
+
+def sha256_file(path: Path) -> str | None:
+    try:
+        digest = hashlib.sha256()
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return None
+
+
+def git_revision() -> str | None:
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    revision = proc.stdout.strip()
+    return revision or None
+
+
+def archive_failed_result(payload: dict, result_path: Path, archive_root: Path,
+                          run_stamp: str) -> Path | None:
+    """Copy only actionable failed/regressed artifacts into a bounded run folder."""
+    if not result_path.is_file():
+        return None
+    scenario = str(payload.get("scenario", result_path.stem) or result_path.stem)
+    destination = archive_root / run_stamp / f"{scenario}.json"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(result_path, destination)
+    return destination
+
+
+def write_run_manifest(
+    results_dir: Path,
+    suite_path: Path,
+    suite: dict,
+    rows: list[dict],
+    run_stamp: str,
+) -> Path:
+    """Write a compact index that points to full results and archived Bad Cases."""
+    manifest = {
+        "schema": RUN_MANIFEST_SCHEMA,
+        "run_id": run_stamp,
+        "generated_unix_s": time.time(),
+        "git_commit": git_revision(),
+        "suite": suite.get("name"),
+        "suite_file": str(suite_path),
+        "suite_sha256": sha256_file(suite_path),
+        "scenario_count": len(rows),
+        "pass_count": sum(row["result"] == "PASS" for row in rows),
+        "fail_count": sum(row["result"] != "PASS" for row in rows),
+        "regression_count": sum(bool(row["regressions"]) for row in rows),
+        "results": rows,
+    }
+    path = results_dir / "run_manifest.json"
+    path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8")
+    return path
 
 
 def enabled_scenarios(suite: dict) -> list[dict]:
@@ -184,6 +254,10 @@ def main() -> int:
                         help="sample interval passed to demo_evaluator")
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR,
                         help="where per-scenario result JSON is written")
+    parser.add_argument("--archive-dir", type=Path, default=Path("/tmp/flow_bad_cases"),
+                        help="where failed/regressed full results are archived")
+    parser.add_argument("--no-archive", action="store_true",
+                        help="do not copy failed/regressed results to archive-dir")
     parser.add_argument("--baseline-dir", type=Path, default=DEFAULT_BASELINE_DIR,
                         help="directory holding baseline result JSON files")
     parser.add_argument("--baseline", action="store_true",
@@ -216,6 +290,7 @@ def main() -> int:
     args.results_dir.mkdir(parents=True, exist_ok=True)
 
     rows: list[dict] = []
+    run_stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     baseline_slims: dict[str, dict] = {}  # key -> slim payload（仅 --update-baseline 填充）
     for entry in scenarios:
         key = scenario_key(entry)
@@ -238,6 +313,7 @@ def main() -> int:
 
         rows.append({
             "scenario": key,
+            "result_path": str(args.results_dir / f"{key}.json"),
             "result": payload.get("result", "FAIL"),
             "failures": failures,
             "warnings": payload.get("warnings", []) or [],
@@ -256,8 +332,19 @@ def main() -> int:
                 encoding="utf-8")
         print(f"\nupdated slim baseline in {args.baseline_dir} "
               f"({len(baseline_slims)} scenarios)")
+        write_run_manifest(args.results_dir, args.suite, suite, rows, run_stamp)
         return 0
 
+    if not args.no_archive:
+        for row in rows:
+            if row["result"] == "PASS" and not row["regressions"]:
+                continue
+            payload = load_json(Path(row["result_path"])) or {}
+            archived = archive_failed_result(
+                payload, Path(row["result_path"]), args.archive_dir, run_stamp
+            )
+            row["bad_case_path"] = str(archived) if archived else None
+    write_run_manifest(args.results_dir, args.suite, suite, rows, run_stamp)
     print_report(rows)
 
     failed = [r for r in rows if r["result"] != "PASS"]
