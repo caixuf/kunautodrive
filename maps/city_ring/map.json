@@ -2,17 +2,537 @@
   "schema_version": 1,
   "map_id": "city_ring",
   "name": "Validated city ring baseline",
-  "source_scenario": "scenarios/city_comprehensive.json",
-  "road_network": {
-    "edge_order": [0, 1, 2, 3, 4, 5],
-    "authoritative_geometry": "source_scenario.road_network.edges",
-    "connections": [
-      {"from_edge": 0, "to_edge": 1, "type": "continue"},
-      {"from_edge": 1, "to_edge": 2, "type": "merge"},
-      {"from_edge": 2, "to_edge": 3, "type": "continue"},
-      {"from_edge": 3, "to_edge": 4, "type": "diverge"},
-      {"from_edge": 4, "to_edge": 5, "type": "continue"}
-    ]
+  "roads": [
+    {
+      "id": "road_0",
+      "legacy_id": 0,
+      "type": "urban",
+      "name": "ground_signal_avenue",
+      "lanes": 4,
+      "lane_width": 3.5,
+      "speed_limit": 15.0,
+      "oneway": false,
+      "nodes": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          180,
+          0,
+          0
+        ],
+        [
+          360,
+          0,
+          0
+        ],
+        [
+          500,
+          -22,
+          0
+        ],
+        [
+          620,
+          -22,
+          0
+        ]
+      ],
+      "elevation_profile": null
+    },
+    {
+      "id": "road_1",
+      "legacy_id": 1,
+      "type": "urban",
+      "name": "curved_commercial_boulevard",
+      "lanes": 4,
+      "lane_width": 3.5,
+      "speed_limit": 15.0,
+      "oneway": false,
+      "nodes": [
+        [
+          620,
+          -22,
+          0
+        ],
+        [
+          640.028,
+          -22.372,
+          0
+        ],
+        [
+          660.095,
+          -23.241,
+          0
+        ],
+        [
+          680.171,
+          -24.234,
+          0
+        ],
+        [
+          700.228,
+          -24.979,
+          0
+        ],
+        [
+          720.237,
+          -25.103,
+          0
+        ],
+        [
+          740.171,
+          -24.234,
+          0
+        ],
+        [
+          760,
+          -22,
+          0
+        ],
+        [
+          779.079,
+          -18.305,
+          0
+        ],
+        [
+          797.874,
+          -13.317,
+          0
+        ],
+        [
+          816.425,
+          -7.302,
+          0
+        ],
+        [
+          834.771,
+          -0.525,
+          0
+        ],
+        [
+          852.952,
+          6.746,
+          0
+        ],
+        [
+          871.007,
+          14.247,
+          0
+        ],
+        [
+          889.185,
+          21.928,
+          0
+        ],
+        [
+          907.34,
+          30.259,
+          0
+        ],
+        [
+          925.274,
+          39.071,
+          0
+        ],
+        [
+          943.072,
+          48.187,
+          0
+        ],
+        [
+          960.815,
+          57.425,
+          0
+        ],
+        [
+          978.585,
+          66.607,
+          0
+        ],
+        [
+          996.467,
+          75.553,
+          0
+        ],
+        [
+          1014.438,
+          84.04,
+          0
+        ],
+        [
+          1032.307,
+          91.935,
+          0
+        ],
+        [
+          1050.314,
+          99.521,
+          0
+        ],
+        [
+          1068.391,
+          106.946,
+          0
+        ],
+        [
+          1086.474,
+          114.359,
+          0
+        ],
+        [
+          1100,
+          120,
+          0
+        ]
+      ],
+      "elevation_profile": null
+    },
+    {
+      "id": "road_2",
+      "legacy_id": 2,
+      "type": "ramp_curve",
+      "name": "eastbound_viaduct_entry",
+      "lanes": 2,
+      "lane_width": 3.5,
+      "speed_limit": 14.0,
+      "oneway": true,
+      "nodes": [
+        [
+          1100,
+          120,
+          0
+        ],
+        [
+          1119.161,
+          125.816,
+          0.67
+        ],
+        [
+          1138.521,
+          131.166,
+          1.33
+        ],
+        [
+          1157.739,
+          136.849,
+          2.0
+        ],
+        [
+          1176.472,
+          143.664,
+          2.67
+        ],
+        [
+          1194.226,
+          152.322,
+          3.33
+        ],
+        [
+          1210.394,
+          162.785,
+          4.0
+        ],
+        [
+          1225.747,
+          174.557,
+          4.77
+        ],
+        [
+          1240.765,
+          186.87,
+          5.54
+        ],
+        [
+          1255.929,
+          198.96,
+          6.31
+        ],
+        [
+          1271.72,
+          210.06,
+          7.08
+        ],
+        [
+          1288.548,
+          219.464,
+          7.85
+        ],
+        [
+          1306.179,
+          227.249,
+          8.62
+        ],
+        [
+          1324.302,
+          233.987,
+          9.0
+        ],
+        [
+          1342.648,
+          240.249,
+          9.0
+        ],
+        [
+          1360.95,
+          246.607,
+          9.0
+        ],
+        [
+          1370,
+          250,
+          9.0
+        ]
+      ],
+      "elevation_profile": [
+        {
+          "s": 0,
+          "h": 0
+        },
+        {
+          "s": 120,
+          "h": 4
+        },
+        {
+          "s": 250,
+          "h": 9
+        }
+      ]
+    },
+    {
+      "id": "road_3",
+      "legacy_id": 3,
+      "type": "viaduct_highway",
+      "name": "elevated_ring_east",
+      "lanes": 4,
+      "lane_width": 3.5,
+      "speed_limit": 20.0,
+      "oneway": false,
+      "nodes": [
+        [
+          1370,
+          250,
+          9
+        ],
+        [
+          1600,
+          250,
+          9
+        ],
+        [
+          1850,
+          238,
+          9
+        ],
+        [
+          2100,
+          210,
+          9
+        ]
+      ],
+      "elevation_profile": [
+        {
+          "s": 0,
+          "h": 9
+        },
+        {
+          "s": 520,
+          "h": 9
+        }
+      ]
+    },
+    {
+      "id": "road_4",
+      "legacy_id": 4,
+      "type": "ramp_curve",
+      "name": "westbound_viaduct_exit",
+      "lanes": 2,
+      "lane_width": 3.5,
+      "speed_limit": 12.0,
+      "oneway": true,
+      "nodes": [
+        [
+          2100,
+          210,
+          9.0
+        ],
+        [
+          2118.271,
+          203.86,
+          8.39
+        ],
+        [
+          2136.64,
+          197.968,
+          7.78
+        ],
+        [
+          2154.99,
+          192.027,
+          7.17
+        ],
+        [
+          2173.202,
+          185.738,
+          6.56
+        ],
+        [
+          2191.156,
+          178.803,
+          5.94
+        ],
+        [
+          2208.833,
+          170.754,
+          5.33
+        ],
+        [
+          2225.947,
+          161.134,
+          4.72
+        ],
+        [
+          2242.67,
+          150.723,
+          4.11
+        ],
+        [
+          2259.413,
+          140.377,
+          3.5
+        ],
+        [
+          2276.587,
+          130.951,
+          2.89
+        ],
+        [
+          2294.544,
+          123.314,
+          2.28
+        ],
+        [
+          2313.102,
+          117.82,
+          1.67
+        ],
+        [
+          2332.097,
+          113.766,
+          1.06
+        ],
+        [
+          2351.301,
+          110.4,
+          0.45
+        ],
+        [
+          2370.486,
+          106.972,
+          0.0
+        ],
+        [
+          2380,
+          105,
+          0.0
+        ]
+      ],
+      "elevation_profile": [
+        {
+          "s": 0,
+          "h": 9
+        },
+        {
+          "s": 120,
+          "h": 5
+        },
+        {
+          "s": 250,
+          "h": 0
+        }
+      ]
+    },
+    {
+      "id": "road_5",
+      "legacy_id": 5,
+      "type": "urban",
+      "name": "riverfront_return_road",
+      "lanes": 4,
+      "lane_width": 3.5,
+      "speed_limit": 13.0,
+      "oneway": false,
+      "nodes": [
+        [
+          2380,
+          105,
+          0
+        ],
+        [
+          2520,
+          105,
+          0
+        ],
+        [
+          2660,
+          72,
+          0
+        ],
+        [
+          2780,
+          20,
+          0
+        ],
+        [
+          2920,
+          0,
+          0
+        ]
+      ],
+      "elevation_profile": null
+    }
+  ],
+  "connections": [
+    {"from_road": "road_0", "to_road": "road_1", "type": "continue"},
+    {"from_road": "road_1", "to_road": "road_2", "type": "merge"},
+    {"from_road": "road_2", "to_road": "road_3", "type": "continue"},
+    {"from_road": "road_3", "to_road": "road_4", "type": "diverge"},
+    {"from_road": "road_4", "to_road": "road_5", "type": "continue"}
+  ],
+  "cross_roads": [
+    {
+      "name": "north_left_turn",
+      "at_s": 210,
+      "length_m": 180,
+      "lanes": 2,
+      "lane_width": 3.5,
+      "speed_limit": 8.0,
+      "direction": 1
+    },
+    {
+      "name": "south_right_turn",
+      "at_s": 390,
+      "length_m": 220,
+      "lanes": 2,
+      "lane_width": 3.5,
+      "speed_limit": 8.0,
+      "direction": -1
+    },
+    {
+      "name": "downtown_crossing",
+      "at_s": 720,
+      "length_m": 200,
+      "lanes": 2,
+      "lane_width": 3.5,
+      "speed_limit": 8.0,
+      "direction": 1
+    }
+  ],
+  "junctions": [],
+  "landmarks": {
+    "traffic_lights": [],
+    "stop_lines": [],
+    "construction_zones": []
   },
   "validation": {
     "default_route": "mainline",
