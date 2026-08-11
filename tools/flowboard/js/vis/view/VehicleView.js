@@ -11,7 +11,7 @@
  *   2. 程序化 fallback（utils._buildSedan 等）—— 兼容 /api/topology 无 model 字段
  *
  * Layer 树驱动：rootLayer.update(store, now) → 创建/更新车辆 + 每帧动画
- * （车轮转向/滚动、方向盘、刹车灯/转向灯/大灯 emissive 控制）
+ * （车轮转向/滚动、方向盘、刹车灯/转向灯/大灯控制）
  */
 
 import { deriveLightState, LIGHT_TURN_LEFT, LIGHT_TURN_RIGHT, LIGHT_HAZARD, LIGHT_HIGH_BEAM, LIGHT_LOW_BEAM } from './VehicleLights.js';
@@ -30,13 +30,13 @@ const LIGHT_TURN_ON = new THREE.Color(0xff8800);
 const LIGHT_HEAD_ON = new THREE.Color(0xffffcc);
 
 const BRAKE_Y = 0.55;      // 尾灯高度
-const BRAKE_Z = -2.0;      // 车尾
-const BRAKE_X = 0.65;      // 左右间距
-const TURN_X = 0.75;
-const TURN_Z = -1.95;
+const BRAKE_X = -2.05;     // 车尾
+const BRAKE_Z = 0.65;      // 左右间距
+const TURN_X = -2.08;
+const TURN_Z = 0.78;
 const HEAD_Y = 0.45;       // 前灯高度
-const HEAD_Z = 2.05;       // 车头
-const HEAD_X = 0.60;
+const HEAD_X = 2.12;       // 车头
+const HEAD_Z = 0.62;
 
 const GEO_RECT = new THREE.PlaneGeometry(0.18, 0.10);
 const GEO_BRAKE = new THREE.PlaneGeometry(0.10, 0.06);  // 刹车灯：窄条不占视觉
@@ -46,6 +46,9 @@ const GEO_HEAD  = new THREE.PlaneGeometry(0.26, 0.14);  // 近光灯：宽大明
 function _makeRectMesh(geo, color, x, y, z) {
   const mat = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, transparent: true, opacity: 0.9 });
   const m = new THREE.Mesh(geo, mat);
+  // Vehicles are X-forward in the shared ENU/THREE contract; place the
+  // rectangular light on the front/rear YZ face rather than the old Z face.
+  m.rotation.y = Math.PI / 2;
   m.position.set(x, y, z);
   return m;
 }
@@ -383,12 +386,16 @@ export function createVehicleView(scene, renderer, modelCache) {
 
       if (!child.isMesh) return;
 
-      // 车轮旋转（沿 X 轴）
+      // 车轮旋转：程序化模型沿 X，glTF 车轮沿 Z。
       if (name.includes('wheel') || name.includes('tire') || name.includes('tyre')) {
         if (speed_mps !== undefined) {
-          // 假设半径 0.35m
-          const angularSpeed = speed_mps / 0.35;
-          child.rotation.x += angularSpeed * 0.016;
+          const radius = 0.35;
+          const angularSpeed = speed_mps / radius;
+          if (child.userData && child.userData.rollAxis === 'z') {
+            child.rotation.z += angularSpeed * 0.016;
+          } else {
+            child.rotation.x += angularSpeed * 0.016;
+          }
         }
       }
     });
@@ -419,9 +426,14 @@ export function createVehicleView(scene, renderer, modelCache) {
       entry.group = _createGltfVehicle(gltf, id, type);
       vehicleGroup.add(entry.group);
 
-      // glTF 模型自带灯节点（turnsignal_/brakelight_/headlight_），
-      // 由 _setVehicleLights 控制 emissive，不需要 PlaneGeometry 方块。
-      entry.lights = null;
+      // 目标 SU7 网格没有可独立驱动的语义灯节点，保留其原始灯罩，
+      // 再叠加同一套程序化灯光反馈；已有语义灯的模型不重复叠加。
+      const ud = entry.group.userData || {};
+      const hasSemanticLights = ud.brakeLights || ud.turnSignals || ud.headlights;
+      entry.lights = hasSemanticLights ? null : createVehicleLights(entry.group);
+      if (entry.lights) {
+        entry.group.add(entry.lights.group);
+      }
     }
 
     // 如果没有 group（glTF 加载失败或未就绪），创建 fallback
@@ -550,9 +562,9 @@ export function createVehicleView(scene, renderer, modelCache) {
         }
       }
 
-      // 灯光：glTF 模型用 emissive 材质自带灯节点，不叠加 PlaneGeometry 方块
-      // 只有程序化 fallback 车辆（无 modelData）才需要 PlaneGeometry 灯光
-      if (!entry.modelData && entry.lights) {
+      // 模型和 fallback 都复用同一套可见灯光反馈；有语义 emissive 节点
+      // 的模型同时保留其材质亮度控制。
+      if (entry.lights) {
         entry.lights.update(v);
       }
 

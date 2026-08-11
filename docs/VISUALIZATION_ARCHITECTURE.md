@@ -587,6 +587,13 @@ const GLTF_TYPE_MAP = {
 3. 只要新模型符合节点命名约定（`wheel_FL/FR/RL/RR`、`brakelight_L/R`、
    `turnsignal_FL/...`），车灯闪烁、车轮滚动、刹车灯都会自动联动
 
+当前 ego 默认使用 `tools/flowboard/models/su7/sm_car.gltf`。这是来自
+[Yechuanjie/xiaomi-su7](https://github.com/Yechuanjie/xiaomi-su7) 的授权展示资产，
+使用 `EXT_meshopt_compression`，由 `bootstrap.js` 注册的 MeshoptDecoder 解码。
+该模型把左右轮合并为前后两个轮轴网格，`models.js` 在加载时包装为
+`axle_front/axle_rear`，因此仍复用统一的转向、滚动和灯光契约；加载失败时回退到
+现有的程序化 `su7.gltf`。
+
 ---
 
 ## 第五部分：历史记录（Phase 2-4 增量重构，已落地）

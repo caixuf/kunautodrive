@@ -17,6 +17,11 @@ window.THREE = Object.assign({}, THREE);
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 window.THREE.GLTFLoader = GLTFLoader;
 
+// Meshopt is required by the authorized SU7 asset and is optional for the
+// existing uncompressed fallback models.
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+window.THREE.MeshoptDecoder = MeshoptDecoder;
+
 // RGBELoader — HDRI 环境贴图加载
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 window.THREE.RGBELoader = RGBELoader;
@@ -40,4 +45,4 @@ window.THREE.OutputPass = OutputPass;
 import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 window.THREE.SMAAPass = SMAAPass;
 
-console.log('[bootstrap] Three.js r160 ESM loaded, THREE.GLTFLoader + post-processing ready');
+console.log('[bootstrap] Three.js r160 ESM loaded, GLTFLoader + MeshoptDecoder + post-processing ready');

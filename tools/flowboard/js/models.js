@@ -8,6 +8,9 @@
  * glTF 节点约定（gen_models.py 生成）：
  *   wheel_FL / wheel_FR / wheel_RL / wheel_RR  — 四轮节点
  *   body / cabin / cab / cargo / torso / head  — 车身/驾驶舱等
+ *
+ * 授权 SU7 资产（models/su7/sm_car.gltf）把左右轮合并为两个轮轴网格，
+ * 本模块会在加载后包装成 axle_front/axle_rear，复用同一套动画契约。
  * 本模块从命名节点建立 userData.frontAxle / rearAxle / wheels，使 glTF 车辆
  * 与程序化 _buildSedan 一样支持前轴转向 + 全轮滚动动画。
  *
@@ -27,9 +30,56 @@ const _cache = {};
 
 /** Loading state */
 let _ready = false;
-let _loadError = null;
 
 const MODEL_NAMES = ['sedan', 'su7', 'truck', 'suv', 'pedestrian'];
+const MODEL_VERSION = '20260811su7';
+
+/** Primary assets are tried first; generated models remain explicit fallbacks. */
+const MODEL_SOURCES = {
+  sedan: ['/tools/flowboard/models/sedan.gltf?v=' + MODEL_VERSION],
+  su7: [
+    '/tools/flowboard/models/su7/sm_car.gltf?v=' + MODEL_VERSION,
+    '/tools/flowboard/models/su7.gltf?v=' + MODEL_VERSION
+  ],
+  truck: ['/tools/flowboard/models/truck.gltf?v=' + MODEL_VERSION],
+  suv: ['/tools/flowboard/models/suv.gltf?v=' + MODEL_VERSION],
+  pedestrian: ['/tools/flowboard/models/pedestrian.gltf?v=' + MODEL_VERSION]
+};
+
+/**
+ * The source model has one mesh per axle (each mesh contains its left/right
+ * wheel). Wrapping the mesh preserves its glTF transform and gives steering
+ * and rolling independent pivots.
+ */
+function _wrapSu7WheelAsAxle(group, wheelNames, axleName, role) {
+  var wheel = null;
+  group.traverse(function(c) {
+    if (!wheel && wheelNames.indexOf(c.name) >= 0) wheel = c;
+  });
+  if (!wheel || !wheel.parent || (wheel.parent && wheel.parent.name === axleName)) return;
+
+  var parent = wheel.parent;
+  var axle = new THREE.Group();
+  axle.name = axleName;
+  axle.position.copy(wheel.position);
+  axle.quaternion.copy(wheel.quaternion);
+  axle.scale.copy(wheel.scale);
+  axle.userData.wheelAxle = role;
+  parent.add(axle);
+  axle.add(wheel);
+
+  wheel.position.set(0, 0, 0);
+  wheel.quaternion.identity();
+  wheel.scale.set(1, 1, 1);
+  wheel.userData.wheelAxle = role;
+  wheel.userData.rollAxis = 'z';
+}
+
+function _adaptSu7WheelNodes(group) {
+  // GLTFLoader sanitizes Blender's dot-suffixed names to Wheel001/Wheel002.
+  _wrapSu7WheelAsAxle(group, ['Wheel.001', 'Wheel001'], 'axle_front', 'front');
+  _wrapSu7WheelAsAxle(group, ['Wheel.002', 'Wheel002'], 'axle_rear', 'rear');
+}
 
 /**
  * 从 glTF 场景建立带 userData 的车辆 Group。
@@ -64,8 +114,11 @@ function _buildVehicleFromGltf(name, gltf) {
 
   // 车辆类型才需要建立 wheel userData（行人无轮）
   if (name !== 'pedestrian') {
+    if (name === 'su7') _adaptSu7WheelNodes(group);
+
     var fl = null, fr = null, rl = null, rr = null;
     var fwGroup = null, rwGroup = null;
+    var axleWheels = [];
     group.traverse(function(c) {
       var n = c.name;
       if (n === 'axle_front') fwGroup = c;
@@ -74,6 +127,7 @@ function _buildVehicleFromGltf(name, gltf) {
       else if (n === 'wheel_FR') fr = c;
       else if (n === 'wheel_RL') rl = c;
       else if (n === 'wheel_RR') rr = c;
+      else if (c.userData && c.userData.wheelAxle) axleWheels.push(c);
     });
     // 标记 GLTF 车轮滚动轴 = Z（cylinder axis=Z），VehicleView.js 据此用 rotation.z 滚动。
     // 程序化 _buildSedan 的车轮没有此标记，默认走 rotation.x（cylinder axis=X）。
@@ -93,6 +147,10 @@ function _buildVehicleFromGltf(name, gltf) {
     if (fr) wheels.push(fr);
     if (rl) wheels.push(rl);
     if (rr) wheels.push(rr);
+    axleWheels.forEach(function(w) {
+      if (w.userData.rollAxis !== 'z') w.userData.rollAxis = 'z';
+      if (wheels.indexOf(w) < 0) wheels.push(w);
+    });
     if (fwGroup) group.userData.frontAxle = fwGroup;
     if (rwGroup) group.userData.rearAxle = rwGroup;
     if (wheels.length) group.userData.wheels = wheels;
@@ -119,7 +177,7 @@ function _buildVehicleFromGltf(name, gltf) {
 }
 
 /**
- * Preload all glTF models from /tools/flowboard/models/<name>.gltf.
+ * Preload all glTF models from the model registry above.
  * If GLTFLoader is unavailable, all models stay null and getModel() returns fallback.
  * Returns a promise that resolves when all models are loaded or failed.
  */
@@ -137,6 +195,11 @@ export function initModelCache() {
 
   return new Promise(function(resolve) {
     var loader = new THREE.GLTFLoader();
+    if (THREE.MeshoptDecoder && loader.setMeshoptDecoder) {
+      loader.setMeshoptDecoder(THREE.MeshoptDecoder);
+    } else {
+      console.warn('[models] MeshoptDecoder unavailable; the authorized SU7 asset will use its generated fallback');
+    }
     var pending = MODEL_NAMES.length;
 
     function onModelLoaded(name, gltf) {
@@ -152,17 +215,28 @@ export function initModelCache() {
       if (pending <= 0) { _ready = true; resolve(); }
     }
 
+    function loadCandidate(name, index) {
+      var sources = MODEL_SOURCES[name];
+      var url = sources[index];
+      loader.load(
+        url,
+        function(g) { onModelLoaded(name, g); },
+        undefined,
+        function(e) {
+          if (index + 1 < sources.length) {
+            console.warn('[models] ' + name + ' primary asset failed; trying fallback model');
+            loadCandidate(name, index + 1);
+          } else {
+            onModelError(name, e);
+          }
+        }
+      );
+    }
+
     for (var i = 0; i < MODEL_NAMES.length; i++) {
       var name = MODEL_NAMES[i];
       _cache[name] = null;
-      loader.load(
-        // ?v= 缓存破坏：models/ 曾以 immutable 提供，模型左右修复后浏览器
-        // 一直用旧缓存。改了模型就 bump 这个版本号（服务端已改 no-cache）。
-        '/tools/flowboard/models/' + name + '.gltf?v=20260808',
-        function(n) { return function(g) { onModelLoaded(n, g); }; }(name),
-        undefined,
-        function(n) { return function(e) { onModelError(n, e); }; }(name)
-      );
+      loadCandidate(name, 0);
     }
   });
 }
@@ -208,6 +282,7 @@ export function getModel(type) {
 export function _relinkWheelUserData(clone) {
   var fwGroup = null, rwGroup = null;
   var fl = null, fr = null, rl = null, rr = null;
+  var axleWheels = [];
   clone.traverse(function(c) {
     var n = c.name;
     if (n === 'axle_front') fwGroup = c;
@@ -216,6 +291,7 @@ export function _relinkWheelUserData(clone) {
     else if (n === 'wheel_FR') fr = c;
     else if (n === 'wheel_RL') rl = c;
     else if (n === 'wheel_RR') rr = c;
+    else if (c.userData && c.userData.wheelAxle) axleWheels.push(c);
   });
   // 为每个 wheel 节点重打 rollAxis='z'（与 _buildVehicleFromGltf 保持一致）
   [fl, fr, rl, rr].forEach(function(w) {
@@ -228,6 +304,10 @@ export function _relinkWheelUserData(clone) {
   if (fwGroup) { clone.userData.frontAxle = fwGroup; if (fl) wheels.push(fl); if (fr) wheels.push(fr); }
   if (rwGroup) { clone.userData.rearAxle = rwGroup; if (rl) wheels.push(rl); if (rr) wheels.push(rr); }
   if (!fwGroup && !rwGroup) { [fl, fr, rl, rr].forEach(function(w) { if (w) wheels.push(w); }); }
+  axleWheels.forEach(function(w) {
+    if (w.userData.rollAxis !== 'z') w.userData.rollAxis = 'z';
+    if (wheels.indexOf(w) < 0) wheels.push(w);
+  });
   if (wheels.length) clone.userData.wheels = wheels;
   // 灯节点引用也需重建（与 _buildVehicleFromGltf 扫描范围保持一致）
   var brakeLights = [], turnSignals = {}, headlights = [], adsIndicators = [];
@@ -342,4 +422,3 @@ export function _setVehicleLights(group, state, blinkPhase) {
     }
   }
 }
-

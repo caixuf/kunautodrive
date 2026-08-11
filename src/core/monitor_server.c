@@ -35,6 +35,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <limits.h>
 
 #include "health.h"
 #include "auto_tuner.h"
@@ -449,12 +450,12 @@ static const char* cache_control_for_path(const char* path) {
 }
 
 /* 扩展响应：keep-alive + 自定义 Cache-Control + 可选 gzip。
- * SSE 不走此函数。body 以 NUL 结尾（按 strlen 算长度）。 */
-static void send_response_full(int fd, const char* status, const char* content_type,
-                                const char* body, bool keep_alive,
-                                const char* cache_control,
-                                bool allow_gzip, const char* accept_encoding) {
-    int body_len = body ? (int)strlen(body) : 0;
+ * SSE 不走此函数。bytes 允许 glTF 的 .bin/WebP 等含 NUL 的资源。 */
+static void send_response_full_bytes(int fd, const char* status, const char* content_type,
+                                      const char* body, size_t body_size, bool keep_alive,
+                                      const char* cache_control,
+                                      bool allow_gzip, const char* accept_encoding) {
+    int body_len = body_size > (size_t)INT_MAX ? INT_MAX : (int)body_size;
     char* gz_body = NULL;
     int gz_len = 0;
     const char* enc_header = "";
@@ -496,6 +497,15 @@ static void send_response_full(int fd, const char* status, const char* content_t
         (void)w;
     }
     if (gz_body) free(gz_body);
+}
+
+static void send_response_full(int fd, const char* status, const char* content_type,
+                                const char* body, bool keep_alive,
+                                const char* cache_control,
+                                bool allow_gzip, const char* accept_encoding) {
+    send_response_full_bytes(fd, status, content_type, body,
+                             body ? strlen(body) : 0, keep_alive,
+                             cache_control, allow_gzip, accept_encoding);
 }
 
 /* ── SSE 流 ──────────────────────────────────────────────── */
@@ -1308,7 +1318,8 @@ static bool dispatch_request(int fd, MonitorServer* ms,
         char filepath[1024];
         snprintf(filepath, sizeof(filepath), "%s/%s", dir, rel);
 
-        char* fbuf = read_file(filepath, NULL);
+        size_t file_len = 0;
+        char* fbuf = read_file(filepath, &file_len);
         if (fbuf) {
             /* Content type by extension. */
             const char* ctype = "application/octet-stream";
@@ -1334,6 +1345,10 @@ static bool dispatch_request(int fd, MonitorServer* ms,
                     ctype = "application/wasm";
                 } else if (strcmp(dot, ".png") == 0) {
                     ctype = "image/png";
+                } else if (strcmp(dot, ".webp") == 0) {
+                    ctype = "image/webp";
+                } else if (strcmp(dot, ".bin") == 0) {
+                    ctype = "application/octet-stream";
                 } else if (strcmp(dot, ".gltf") == 0) {
                     ctype = "model/gltf+json";
                     allow_gzip = true;
@@ -1342,9 +1357,9 @@ static bool dispatch_request(int fd, MonitorServer* ms,
             /* 路径分级缓存：vendor/ + models/ → immutable；其余 no-cache。
              * 缓存 + keep-alive + gzip 让 three.module.js 1243KB 二次打开近 0 字节传输。 */
             const char* cache = cache_control_for_path(reqpath);
-            send_response_full(fd, "200 OK", ctype, fbuf,
-                               client_keep_alive, cache,
-                               allow_gzip, accept_encoding);
+            send_response_full_bytes(fd, "200 OK", ctype, fbuf, file_len,
+                                     client_keep_alive, cache,
+                                     allow_gzip, accept_encoding);
             free(fbuf);
         } else {
             const char* notfound = "{\"error\":\"not found\"}";
