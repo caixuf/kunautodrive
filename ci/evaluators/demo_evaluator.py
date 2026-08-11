@@ -762,7 +762,16 @@ def _sample_time_seconds(sample: dict) -> float:
     if isinstance(demo_time, (int, float)) and math.isfinite(float(demo_time)):
         return float(demo_time)
     raw = float(sample.get("timestamp", 0.0) or 0.0)
-    return raw / 1_000_000.0 if abs(raw) > 100_000.0 else raw
+    # Dashboard samples use Unix seconds; low-level message timestamps use
+    # monotonic/realtime microseconds. Only the latter reach this magnitude.
+    return raw / 1_000_000.0 if abs(raw) > 100_000_000_000.0 else raw
+
+
+def _timestamp_delta_seconds(value: float, origin: float) -> float:
+    """Return a relative duration for either seconds or microsecond timestamps."""
+    delta = value - origin
+    scale = 1_000_000.0 if max(abs(value), abs(origin)) > 100_000_000_000.0 else 1.0
+    return delta / scale
 
 
 def _p95(values: list[float]) -> float:
@@ -2225,7 +2234,7 @@ def main() -> int:
 
                     samples.append({
                         "timestamp": float(r.get("t", data.get("timestamp", 0))),
-                        "t_demo": float(r.get("t", 0)) / 1_000_000.0,  # C: 归一化到 demo 启动后秒
+                        "t_demo": 0.0,  # filled from the first ring timestamp below
                         "metrics": {
                             "scene": {
                                 "ego": ego,
@@ -2240,6 +2249,12 @@ def main() -> int:
                             "safety_evidence": base_safety_evidence,
                         },
                     })
+                if samples:
+                    ring_t0 = float(samples[0].get("timestamp", 0.0) or 0.0)
+                    for sample in samples:
+                        sample["t_demo"] = _timestamp_delta_seconds(
+                            float(sample.get("timestamp", 0.0) or 0.0), ring_t0
+                        )
             else:
                 samples = [data]
         returncode = 0
@@ -2341,8 +2356,9 @@ def main() -> int:
         if samples:
             t0 = float(samples[0].get("timestamp", 0.0) or 0.0)
             for s in samples:
-                s["t_demo"] = (float(s.get("timestamp", 0.0) or 0.0) - t0) / 1_000_000.0 \
-                    if t0 > 0 else 0.0
+                s["t_demo"] = _timestamp_delta_seconds(
+                    float(s.get("timestamp", 0.0) or 0.0), t0
+                ) if t0 else 0.0
 
         payload = build_evaluation_payload(
             summary=summary,

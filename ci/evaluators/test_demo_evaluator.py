@@ -38,6 +38,32 @@ class DemoEvaluatorTest(unittest.TestCase):
         self.assertEqual(metrics["timing_sample_count"], 3)
         self.assertAlmostEqual(metrics["timing_sample_period_mean_s"], 0.1)
 
+    def test_formal_metrics_accept_dashboard_unix_second_timestamps(self):
+        evaluator = load_evaluator()
+        metrics = evaluator.compute_formal_metrics(
+            [{"lane_error": 0.0, "speed": 0.0}] * 3,
+            [
+                {"timestamp": 1_700_000_000.0},
+                {"timestamp": 1_700_000_000.1},
+                {"timestamp": 1_700_000_000.2},
+            ],
+        )
+        self.assertAlmostEqual(metrics["timing_sample_period_mean_s"], 0.1)
+
+    def test_timestamp_delta_handles_microseconds_without_scaling_seconds(self):
+        evaluator = load_evaluator()
+        self.assertAlmostEqual(
+            evaluator._timestamp_delta_seconds(1_700_000_000.1, 1_700_000_000.0),
+            0.1,
+            places=6,
+        )
+        self.assertAlmostEqual(
+            evaluator._timestamp_delta_seconds(1_700_000_000_100_000.0,
+                                               1_700_000_000_000_000.0),
+            0.1,
+            places=6,
+        )
+
     def test_evaluation_payload_has_v1_envelope_and_legacy_summary(self):
         evaluator = load_evaluator()
         summary = {"scenario": "straight_road", "avg_speed_mps": 8.0}
