@@ -197,3 +197,26 @@ python3 ci/evaluators/scenario_regression.py \
 数值回归阈值支持两种门：`min_ratio`（当前值 ≥ 基线 × 比例）与
 `max_abs_increase`（当前值 ≤ 基线 + 增量）。判定逻辑见
 `ci/evaluators/scenario_regression.py::compare_summary()`。
+
+### 统一评测报告与标准轨迹指标
+
+不重新运行仿真即可汇总结果协议：
+
+```bash
+python3 tools/eval_report.py \
+  --input /tmp/flow_regression --json
+```
+
+开环预测可通过独立 JSON 注入，格式为
+`{"predictions":[{"prediction":[{"x":0,"y":0}], "ground_truth":[...]}]}`：
+
+```bash
+python3 tools/eval_report.py \
+  --input /tmp/flow_regression \
+  --predictions /tmp/open_loop_predictions.json --json
+```
+
+报告输出场景通过率、标准开环 ADE/FDE 和 MPI。ADE/FDE 只有同时提供等长预测
+轨迹与真值轨迹才会是 `computed`；MPI 只有生产者同时提供数值 `mpi` 和
+`mpi_definition` 才会汇总，否则明确标记 `unavailable`，不会把闭环车道误差
+冒充开环预测指标。
