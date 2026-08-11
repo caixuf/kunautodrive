@@ -887,6 +887,13 @@ protected:
              * 与主 lead 检测同款投影，前进/返程/任意 heading 正确。 */
             const double lc_fwd_x = std::cos(g.ego_heading);
             const double lc_fwd_y = std::sin(g.ego_heading);
+            /* ref_path 只覆盖 ego 前方；将目标车道后车投影到路径起点会
+             * 得到 along=0，漏掉后向安全检查。目标车道换道窗口只需局部
+             * 纵向关系，沿当前车头方向投影可同时覆盖前车、后车和并行车。 */
+            auto target_lane_along = [&](double obs_x, double obs_y) {
+                return (obs_x - g.ego_x) * lc_fwd_x +
+                       (obs_y - g.ego_y) * lc_fwd_y;
+            };
             /* ref_path 在返程时按行进方向反序发布，Frenet d 也随切线翻转。
              * 因此“右侧通行半幅”在行进方向坐标中始终是 lane [lc/2, lc-1]；
              * 再按 on_return 翻到 [0, lc/2-1] 会二次镜像，把返程车强制送回
@@ -917,7 +924,7 @@ protected:
                                 g.obs_x[i], g.obs_y[i], obs_projection, lc, lw) ||
                             fabs(obs_projection.d - tl_y) > lat_tol) continue;
                         const double along =
-                            obs_projection.s - ego_projection.s;
+                            target_lane_along(g.obs_x[i], g.obs_y[i]);
                         if (along > 0.0 && along < left_gap) {
                             left_gap = along;
                             left_lead_v = g.obs_vx[i] * lc_fwd_x +
@@ -933,7 +940,7 @@ protected:
                             fabs(obs_projection.d - tl_y) > lat_tol) continue;
                         const double along =
                             obs_projection.s - ego_projection.s;
-                        if (along < 0.0) {
+                        if (along <= 0.0) {
                             double rd = -along;
                             double obs_along_v = g.obs_vx[i] * lc_fwd_x +
                                                  g.obs_vy[i] * lc_fwd_y;
@@ -965,7 +972,7 @@ protected:
                                 g.obs_x[i], g.obs_y[i], obs_projection, lc, lw) ||
                             fabs(obs_projection.d - tl_y) > lat_tol) continue;
                         const double along =
-                            obs_projection.s - ego_projection.s;
+                            target_lane_along(g.obs_x[i], g.obs_y[i]);
                         if (along > 0.0 && along < right_gap) {
                             right_gap = along;
                             right_lead_v = g.obs_vx[i] * lc_fwd_x +
@@ -981,7 +988,7 @@ protected:
                             fabs(obs_projection.d - tl_y) > lat_tol) continue;
                         const double along =
                             obs_projection.s - ego_projection.s;
-                        if (along < 0.0) {
+                        if (along <= 0.0) {
                             double rd = -along;
                             double obs_along_v = g.obs_vx[i] * lc_fwd_x +
                                                  g.obs_vy[i] * lc_fwd_y;
