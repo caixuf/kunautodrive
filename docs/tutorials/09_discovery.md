@@ -87,9 +87,10 @@ bash scripts/fullstack_demo.sh
     perception_node -> fusion_node (pub/sub)
 ```
 
-> ⚠️ **实现状态提示**：Discovery 模块的 UDP 组播协议和拓扑追踪功能已实现，
-> 但**基于 Discovery 的跨进程 topic 数据转发（IPC/TCP bridge）当前未实现**。
-> 因此 `flowmond` 等监控节点虽然能通过 Discovery 发现业务节点，但不通过 Discovery
-> 携带 topic 统计数据。flowmond 改由两条独立链路获取统计：(1) `stats_bridge` /
-> `dashboard_bridge` IPC 通道订阅业务进程统计；(2) 轮询 monitor 节点写出的
+> ⚠️ **职责边界提示**：Discovery 的 UDP 组播只负责节点/Topic 元数据发现和拓扑追踪，
+> 不承载业务 payload。跨进程业务 topic 使用 `Transport` 的 IPC 路由，跨机业务
+> topic 使用 `TransportPolicy=TRANSPORT_REMOTE` 或 `AUTO` 的
+> `NetworkTransport` TCP bridge；两者都不是 Discovery 本身转发。
+> `flowmond` 的监控统计仍走两条独立链路：(1) `stats_bridge` /
+> `dashboard_bridge` 同机 IPC；(2) 轮询 monitor 节点写出的
 > `/tmp/flow_topology.json` 作为回退。详见 `docs/VISUALIZATION_ARCHITECTURE.md`。

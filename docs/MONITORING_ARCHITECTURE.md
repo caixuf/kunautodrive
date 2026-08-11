@@ -11,7 +11,8 @@
 > flowmond 的 `dashboard_file_watcher_fn` 线程轮询 monitor 节点写出的
 > `/tmp/flow_topology.json`，IPC 不可用时自动回退到此链路。
 > - `flowmond` 有独立的 `MessageBus`，不共享业务节点总线
-> - 跨机 TCP bridge 尚未实现，当前仅支持同机 POSIX SHM
+> - flowmond 的 stats/dashboard 聚合目前仅支持同机 POSIX SHM；业务 topic 的
+>   跨机 TCP 转发由独立的 `Transport`/`NetworkTransport` 提供，不属于监控桥接
 >
 > ---
 
@@ -188,7 +189,7 @@ flowrec_node
 
 | 限制 | 说明 |
 |------|------|
-| 单机 IPC only | `stats_bridge` 基于 POSIX shm，仅支持同机进程间通信；跨机聚合需要 TCP bridge（未实现）|
+| 监控聚合单机 IPC | `stats_bridge`/`dashboard_bridge` 基于 POSIX shm，仅支持同机 flowmond 聚合；业务 topic 跨机转发走独立 Transport TCP 层 |
 | 统计延迟 5s | 业务进程每 5 秒发布一次 stats 快照，非实时；本地总线数据是实时的 |
 | 最多 16 个 topic | `StatsPacket` 单包限制；超过 16 个 topic 时截断（后续可分包）|
 | flowrec 触发器范围 | v1 仅支持顶层 JSON 字段的精确 `equals`；不执行表达式、不支持 YAML 条件字符串 |
