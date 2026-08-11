@@ -93,7 +93,8 @@ async function previewSelectedRoute() {
   if (modal && frame) {
     modal.style.display = 'block';
     frame.src = '/tools/flowboard/map_preview.html?map=' +
-      encodeURIComponent(map.value) + '&route=' + encodeURIComponent(route.value);
+      encodeURIComponent(map.value) + '&route=' + encodeURIComponent(route.value) +
+      '&v=20260812isolated2';
   }
 }
 
@@ -103,6 +104,16 @@ function closeMapPreview() {
   if (frame) frame.src = 'about:blank';
   if (modal) modal.style.display = 'none';
 }
+
+// Click dimmed backdrop (not the panel) to close preview.
+document.addEventListener('click', function (event) {
+  var modal = document.getElementById('map-preview-modal');
+  if (!modal || modal.style.display === 'none') return;
+  if (event.target === modal) closeMapPreview();
+});
+document.addEventListener('keydown', function (event) {
+  if (event.key === 'Escape') closeMapPreview();
+});
 
 function gameAngleDeg(rad) {
   return rad * 180 / Math.PI;
