@@ -644,28 +644,35 @@ class CodeGenerator:
         for f in s.fields:
             elem_size = self._field_size(f)
             count = f.array_size if f.array_size > 0 else 1
-            for i in range(count):
-                access = f"{f.name}[{i}]" if f.array_size > 0 else f.name
-                if f.is_nested:
-                    lines.append(f"    {{ /* {access} */")
-                    lines.append(f"        size_t sz = 0;")
-                    lines.append(f"        {f.idl_type}_serialize(&src->{access}, buf ? buf + {offset} : NULL, &sz);")
-                    lines.append(f"    }}")
-                elif f.is_enum:
-                    lines.append(f"    if (buf) buf[{offset}] = (int8_t)src->{access};")
-                elif is_float_type(f.idl_type) and f.idl_type == 'float64':
-                    lines.append(f"    if (buf) serializer_store_le(buf + {offset}, &src->{access}, 8);")
-                elif f.idl_type == 'float':
-                    lines.append(f"    if (buf) serializer_store_le(buf + {offset}, &src->{access}, 4);")
-                elif is_integer_type(f.idl_type) and f.idl_type in ('int16', 'uint16'):
-                    lines.append(f"    if (buf) serializer_store_le(buf + {offset}, &src->{access}, 2);")
-                elif is_integer_type(f.idl_type) and f.idl_type in ('int32', 'uint32'):
-                    lines.append(f"    if (buf) serializer_store_le(buf + {offset}, &src->{access}, 4);")
-                elif is_integer_type(f.idl_type) and f.idl_type in ('int64', 'uint64'):
-                    lines.append(f"    if (buf) serializer_store_le(buf + {offset}, &src->{access}, 8);")
-                else:
-                    lines.append(f"    if (buf) buf[{offset}] = (uint8_t)src->{access};")
-                offset += elem_size
+            if f.array_size > 0:
+                lines.append(f"    for (size_t i = 0; i < {count}; i++) {{")
+                access = f"{f.name}[i]"
+                field_offset = f"{offset} + i * {elem_size}"
+            else:
+                access = f.name
+                field_offset = str(offset)
+            if f.is_nested:
+                lines.append(f"    {{ /* {access} */")
+                lines.append(f"        size_t sz = 0;")
+                lines.append(f"        {f.idl_type}_serialize(&src->{access}, buf ? buf + {field_offset} : NULL, &sz);")
+                lines.append(f"    }}")
+            elif f.is_enum:
+                lines.append(f"    if (buf) buf[{field_offset}] = (int8_t)src->{access};")
+            elif is_float_type(f.idl_type) and f.idl_type == 'float64':
+                lines.append(f"    if (buf) serializer_store_le(buf + {field_offset}, &src->{access}, 8);")
+            elif f.idl_type == 'float':
+                lines.append(f"    if (buf) serializer_store_le(buf + {field_offset}, &src->{access}, 4);")
+            elif is_integer_type(f.idl_type) and f.idl_type in ('int16', 'uint16'):
+                lines.append(f"    if (buf) serializer_store_le(buf + {field_offset}, &src->{access}, 2);")
+            elif is_integer_type(f.idl_type) and f.idl_type in ('int32', 'uint32'):
+                lines.append(f"    if (buf) serializer_store_le(buf + {field_offset}, &src->{access}, 4);")
+            elif is_integer_type(f.idl_type) and f.idl_type in ('int64', 'uint64'):
+                lines.append(f"    if (buf) serializer_store_le(buf + {field_offset}, &src->{access}, 8);")
+            else:
+                lines.append(f"    if (buf) buf[{field_offset}] = (uint8_t)src->{access};")
+            if f.array_size > 0:
+                lines.append("    }")
+            offset += elem_size * count
 
         lines.append(f"    return 0;")
         lines.append(f"}}")
@@ -686,28 +693,35 @@ class CodeGenerator:
         for f in s.fields:
             elem_size = self._field_size(f)
             count = f.array_size if f.array_size > 0 else 1
-            for i in range(count):
-                access = f"{f.name}[{i}]" if f.array_size > 0 else f.name
-                if f.is_nested:
-                    nested_size = self._struct_size(self.structs[f.nested_typename])
-                    lines.append(f"    {{ /* {access} */")
-                    lines.append(f"        {f.idl_type}_deserialize(&dst->{access}, buf + {offset}, {nested_size});")
-                    lines.append(f"    }}")
-                elif f.is_enum:
-                    lines.append(f"    dst->{access} = ({f.c_type})((int8_t)buf[{offset}]);")
-                elif is_float_type(f.idl_type) and f.idl_type == 'float64':
-                    lines.append(f"    serializer_load_le(&dst->{access}, buf + {offset}, 8);")
-                elif f.idl_type == 'float':
-                    lines.append(f"    serializer_load_le(&dst->{access}, buf + {offset}, 4);")
-                elif is_integer_type(f.idl_type) and f.idl_type in ('int16', 'uint16'):
-                    lines.append(f"    serializer_load_le(&dst->{access}, buf + {offset}, 2);")
-                elif is_integer_type(f.idl_type) and f.idl_type in ('int32', 'uint32'):
-                    lines.append(f"    serializer_load_le(&dst->{access}, buf + {offset}, 4);")
-                elif is_integer_type(f.idl_type) and f.idl_type in ('int64', 'uint64'):
-                    lines.append(f"    serializer_load_le(&dst->{access}, buf + {offset}, 8);")
-                else:
-                    lines.append(f"    dst->{access} = ({f.c_type})buf[{offset}];")
-                offset += elem_size
+            if f.array_size > 0:
+                lines.append(f"    for (size_t i = 0; i < {count}; i++) {{")
+                access = f"{f.name}[i]"
+                field_offset = f"{offset} + i * {elem_size}"
+            else:
+                access = f.name
+                field_offset = str(offset)
+            if f.is_nested:
+                nested_size = self._struct_size(self.structs[f.nested_typename])
+                lines.append(f"    {{ /* {access} */")
+                lines.append(f"        {f.idl_type}_deserialize(&dst->{access}, buf + {field_offset}, {nested_size});")
+                lines.append(f"    }}")
+            elif f.is_enum:
+                lines.append(f"    dst->{access} = ({f.c_type})((int8_t)buf[{field_offset}]);")
+            elif is_float_type(f.idl_type) and f.idl_type == 'float64':
+                lines.append(f"    serializer_load_le(&dst->{access}, buf + {field_offset}, 8);")
+            elif f.idl_type == 'float':
+                lines.append(f"    serializer_load_le(&dst->{access}, buf + {field_offset}, 4);")
+            elif is_integer_type(f.idl_type) and f.idl_type in ('int16', 'uint16'):
+                lines.append(f"    serializer_load_le(&dst->{access}, buf + {field_offset}, 2);")
+            elif is_integer_type(f.idl_type) and f.idl_type in ('int32', 'uint32'):
+                lines.append(f"    serializer_load_le(&dst->{access}, buf + {field_offset}, 4);")
+            elif is_integer_type(f.idl_type) and f.idl_type in ('int64', 'uint64'):
+                lines.append(f"    serializer_load_le(&dst->{access}, buf + {field_offset}, 8);")
+            else:
+                lines.append(f"    dst->{access} = ({f.c_type})buf[{field_offset}];")
+            if f.array_size > 0:
+                lines.append("    }")
+            offset += elem_size * count
 
         lines.append(f"    return 0;")
         lines.append(f"}}")
@@ -726,17 +740,23 @@ class CodeGenerator:
         for f in s.fields:
             elem_size = self._field_size(f)
             count = f.array_size if f.array_size > 0 else 1
-            for i in range(count):
-                if f.is_nested:
-                    lines.append(f"    {f.idl_type}_endian_swap(p + {offset});")
-                elif elem_size == 2:
-                    lines.append(f"    serializer_swap16(p + {offset});")
-                elif elem_size == 4:
-                    lines.append(f"    serializer_swap32(p + {offset});")
-                elif elem_size == 8:
-                    lines.append(f"    serializer_swap64(p + {offset});")
-                # 1-byte types need no swap
-                offset += elem_size
+            if f.array_size > 0:
+                lines.append(f"    for (size_t i = 0; i < {count}; i++) {{")
+                field_offset = f"{offset} + i * {elem_size}"
+            else:
+                field_offset = str(offset)
+            if f.is_nested:
+                lines.append(f"    {f.idl_type}_endian_swap(p + {field_offset});")
+            elif elem_size == 2:
+                lines.append(f"    serializer_swap16(p + {field_offset});")
+            elif elem_size == 4:
+                lines.append(f"    serializer_swap32(p + {field_offset});")
+            elif elem_size == 8:
+                lines.append(f"    serializer_swap64(p + {field_offset});")
+            # 1-byte types need no swap
+            if f.array_size > 0:
+                lines.append("    }")
+            offset += elem_size * count
 
         lines.append("}")
         lines.append("")
