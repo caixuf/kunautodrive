@@ -595,6 +595,7 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
                 if (ego.road_pos.world(wp)) {
                     ego.x = wp.x;
                     ego.y = wp.y;
+                    ego.z = wp.z;
                     ego.heading = wp.h;
                 }
             } else {
@@ -628,6 +629,7 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
                 if (g.roads.frenet_to_world(a->segment_id, 0, a->s, a->l, wp)) {
                     e.x = wp.x;
                     e.y = wp.y;
+                    e.z = wp.z;
                     e.heading = wp.h;
                 } else {
                     /* esmini 查不到此 road id → 退化为沿 x 轴线性放置 */
@@ -697,11 +699,23 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
          * world_to_frenet 失败时回退到旧格式兜底。 */
         if (g.roads_loaded && g.route.ok() && e.is_npc_vehicle()) {
             if (a->segment_id >= 0) {
-                /* 新格式：用场景指定的 segment_id/s/l 直接初始化 */
-                e.road_id = a->segment_id;
-                e.s       = a->s;
-                e.offset  = a->l;
-                e.target_offset = a->l;
+                /* s/l 先被投成世界坐标；再反投得到真实 driving lane。不能把
+                 * a->l 当 lane 0 的 offset：RoadPosition 以 lane 0 初始化会将
+                 * 同向 NPC 翻到中心参考线的反向朝向。 */
+                flowsim::FrenetPos fp;
+                if (g.roads.world_to_frenet(e.x, e.y, fp)) {
+                    e.road_id = fp.road_id;
+                    e.lane_id = fp.lane_id;
+                    e.s = fp.s;
+                    e.offset = flowsim::offset_from_lane_internal(
+                        g.roads, fp.road_id, fp.lane_id, fp.s, fp.offset);
+                    e.target_offset = e.offset;
+                } else {
+                    e.road_id = a->segment_id;
+                    e.s = a->s;
+                    e.offset = a->l;
+                    e.target_offset = a->l;
+                }
             } else {
                 /* 旧格式：用 world_to_frenet 反算路网位置 */
                 flowsim::FrenetPos fp;
@@ -758,24 +772,11 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
          * 且 road_pos.frenet() 供 same_lane/find_lead 等用。 */
         if (g.roads_loaded && e.is_npc_vehicle()) {
             int rid = e.road_id;
-            int lid = 0;          /* 默认中心线（新格式旧分支） */
+            int lid = e.lane_id;
             double sl = e.s;
-            double ol = e.offset;
-            if (a->segment_id >= 0) {
-                rid = a->segment_id;
-                sl = a->s;
-                ol = a->l;
-            } else {
-                /* P1 修复：旧格式 NPC 用 world_to_frenet 反算的真实 lane_id。
-                 * 原代码硬编码 lane_id=0（中心线 type="none"），RM_SetLanePosition
-                 * 对该车道 align=true 返回 h=PI（对向），导致同向 NPC
-                 * vx = speed*cos(PI) = -speed 倒着开（npc1 从 x=120 倒退到 x=99）。 */
-                lid = e.lane_id;
-                /* road_pos.init 的 offset 是 lane 内偏移（车道中心时≈0）。
-                 * e.offset 是道路参考线偏移（lane_center + fp.offset），不能直接传；
-                 * 车在车道中心时 fp.offset≈0，多数场景满足，用 0 即可。 */
-                ol = 0.0;
-            }
+            /* road_pos.init 的 offset 是车道内偏移。e.offset 是相对道路参考线
+             * 的偏移，不能直接传；新旧场景都以已投影到的真实 lane_id + 0 初始化。 */
+            double ol = 0.0;
             /* ── Bug 修复：原条件 `rid > 0` 漏掉了 road_id == 0 的合法道路。
              *
              * 这与 line 561 的 `e.road_id >= 0` 修复是同一个 bug 模式：
@@ -2012,6 +2013,11 @@ protected:
                             ego.lane_id = fp.lane_id;
                             ego.s = fp.s;
                             ego.offset = fp.offset;
+                            flowsim::WorldPos wp;
+                            if (g.roads.frenet_to_world(
+                                    fp.road_id, fp.lane_id, fp.s, fp.offset, wp)) {
+                                ego.z = wp.z;
+                            }
                             double ref_off = flowsim::offset_from_lane_internal(
                                 g.roads, fp.road_id, fp.lane_id, fp.s, fp.offset);
                             ego.road_pos.relocate(g.roads, fp.road_id, fp.lane_id, fp.s, ref_off);

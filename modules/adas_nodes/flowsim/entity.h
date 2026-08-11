@@ -80,7 +80,7 @@ struct Entity {
     int        scenario_id{0};     /**< 场景业务 id（JSON 里的 actor/tl/egc/ego id），choreography/override 查找用此字段 */
 
     /* ── Transform ── */
-    double x{0}, y{0}, heading{0}; /**< 世界坐标 + 航向 (rad) */
+    double x{0}, y{0}, z{0}, heading{0}; /**< 世界坐标（含道路高程）+ 航向 (rad) */
     double signal_stop_x{0}, signal_stop_y{0}; /**< TrafficLight 世界停止线点 */
     double vx{0}, vy{0};           /**< 世界系速度 (m/s) */
     double speed{0};               /**< 标量速度 = √(vx²+vy²)，车辆用 */

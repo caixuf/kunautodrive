@@ -255,6 +255,7 @@ cJSON* build_ego_json(const Entity& e) {
     cJSON_AddNumberToObject(j, "id", (double)e.id);
     cJSON_AddNumberToObject(j, "x", e.x);
     cJSON_AddNumberToObject(j, "y", e.y);
+    cJSON_AddNumberToObject(j, "z", e.z);
     cJSON_AddNumberToObject(j, "heading", e.heading);
     cJSON_AddNumberToObject(j, "speed", e.speed);
     cJSON_AddNumberToObject(j, "steer", e.steer);
@@ -283,6 +284,7 @@ cJSON* build_npc_vehicle_json(const Entity& e) {
     cJSON_AddNumberToObject(j, "id", (double)e.id);
     cJSON_AddNumberToObject(j, "x", e.x);
     cJSON_AddNumberToObject(j, "y", e.y);
+    cJSON_AddNumberToObject(j, "z", e.z);
     cJSON_AddNumberToObject(j, "heading", e.heading);
     cJSON_AddNumberToObject(j, "speed", e.speed);
     cJSON_AddNumberToObject(j, "yaw_rate", e.yaw_rate);
@@ -313,6 +315,7 @@ cJSON* build_pedestrian_json(const Entity& e) {
     cJSON_AddNumberToObject(j, "id", (double)e.id);
     cJSON_AddNumberToObject(j, "x", e.x);
     cJSON_AddNumberToObject(j, "y", e.y);
+    cJSON_AddNumberToObject(j, "z", e.z);
     /* 行人 heading 从 vx/vy 推算（step_pedestrian 不维护 heading 字段，
      * 横穿时 e.heading 为道路航向而非行人朝向） */
     double ped_heading = e.heading;

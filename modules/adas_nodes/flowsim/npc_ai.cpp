@@ -854,6 +854,7 @@ mobil_done: ;
                 if (!in_crash_cooldown) {
                     npc.x = wp.x;
                     npc.y = wp.y;
+                    npc.z = wp.z;
                     double h = wp.h + (npc.route_dir < 0 ? M_PI : 0.0);
                     while (h >  M_PI) h -= 2.0 * M_PI;
                     while (h < -M_PI) h += 2.0 * M_PI;
@@ -877,6 +878,7 @@ mobil_done: ;
                         if (npc.road_pos.world(wp_sep)) {
                             npc.x = wp_sep.x;
                             npc.y = wp_sep.y;
+                            npc.z = wp_sep.z;
                             double h = wp_sep.h + (npc.route_dir < 0 ? M_PI : 0.0);
                             while (h >  M_PI) h -= 2.0 * M_PI;
                             while (h < -M_PI) h += 2.0 * M_PI;
@@ -938,6 +940,7 @@ mobil_done: ;
         if (roads->frenet_to_world(rid, 0, s_local, npc.offset, wp)) {
             npc.x = wp.x;
             npc.y = wp.y;
+            npc.z = wp.z;
             /* 位置用 lane0+offset（横向正确）；航向不用 esmini lane0 的 h
              * （type=none 参考线 h 在 0/π 间跳 → 对向 +π 后仍翻转），
              * 改用中心线两点几何切线 × route_dir。 */

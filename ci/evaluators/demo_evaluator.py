@@ -740,10 +740,16 @@ def angle_diff(a: float, b: float) -> float:
     return d
 
 
-def sample_metrics(sample: dict, road: dict | None = None) -> dict:
+def sample_metrics(sample: dict, road: dict | None = None,
+                   scenario_road_network: dict | None = None) -> dict:
     metrics = sample.get("metrics", {})
     vehicle = metrics.get("vehicle", {})
     scene = metrics.get("scene", {})
+    # The selected scenario is authoritative for offline scoring. Historical
+    # monitor samples can contain an empty or stale road_network from a prior
+    # run; using it makes a curved route look like lane weaving.
+    if scenario_road_network is not None:
+        scene = {**scene, "road_network": scenario_road_network}
     ego = scene.get("ego", {})
     obstacles = scene.get("obstacles", [])
     lane = scene.get("lane", {})
@@ -1370,7 +1376,13 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
                 speed_limit = float(sl)
 
     last = samples[-1]
-    series = [sample_metrics(s, road) for s in samples]
+    scenario_road_network = (
+        scenario.get("road_network") if isinstance(scenario, dict) else None
+    )
+    series = [
+        sample_metrics(s, road, scenario_road_network)
+        for s in samples
+    ]
     speeds = [m["speed"] for m in series]
     xs = [m["x"] for m in series]
     ys = [m["y"] for m in series]
@@ -1859,9 +1871,15 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     # road_network 弯道场景：绝对 y 随道路走向扫动（S 弯 y 从 -3 到 +103），
     # 必须改用 road_signed_offset（相对参考线的横向偏移）的峰峰值，否则弯道
     # 合法行驶被误报为蛇形（2026-08-04 实测 curve_road）。直路仍用绝对 y。
-    offsets = [m.get("road_signed_offset") for m in series]
+    offsets = [
+        float(offset) for offset in (m.get("road_signed_offset") for m in series)
+        if isinstance(offset, (int, float)) and math.isfinite(offset)
+    ]
     if len(ys) >= 10:
-        if all(o is not None for o in offsets):
+        # Scene data may be unavailable during monitor startup while the rest of
+        # the run already has authoritative road geometry. Do not downgrade a
+        # curved route to raw world-y merely because of those transient frames.
+        if len(offsets) >= 10:
             y_range = max(offsets) - min(offsets)
         else:
             y_range = max(ys) - min(ys)
@@ -2332,6 +2350,10 @@ def main() -> int:
                     ego["heading"] = rh
                     ego["speed"] = rs
                     ego["steer"] = rst
+                    vehicle = dict(base_vehicle)
+                    vehicle["x"] = rx
+                    vehicle["y"] = ry
+                    vehicle["speed"] = rs
 
                     samples.append({
                         "timestamp": float(r.get("t", data.get("timestamp", 0))),
@@ -2343,7 +2365,7 @@ def main() -> int:
                                 "obstacles": base_obstacles,
                                 "entities": base_entities,
                             },
-                            "vehicle": base_vehicle,
+                            "vehicle": vehicle,
                             "driver_mode": base_driver,
                             "route_lane": base_route,
                             "behavior": base_behavior,

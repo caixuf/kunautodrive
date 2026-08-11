@@ -181,7 +181,7 @@ DynamicDigest build_dynamic_digest(const EntityPool& pool, double sim_time,
         ad.type = dt;
         ad.pos[0] = e.x - ox;
         ad.pos[1] = e.y - oy;
-        ad.pos[2] = 0;  // z 从 road_height 查
+        ad.pos[2] = e.z;
         ad.bbox[0] = e.length;
         ad.bbox[1] = e.width;
         ad.bbox[2] = (e.type == EntityType::Pedestrian) ? 1.7 : 1.5;
