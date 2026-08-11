@@ -1101,9 +1101,12 @@ set_tests_properties(xodr_compatibility_tools PROPERTIES TIMEOUT 10)
 
 add_test(NAME map_compiler_tools
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_map_compiler.py
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
-set_tests_properties(map_compiler_tools PROPERTIES TIMEOUT 10)
+set_tests_properties(map_compiler_tools PROPERTIES
+    TIMEOUT 10
+    ENVIRONMENT "PYTHONPATH=${CMAKE_SOURCE_DIR}"
+)
 
 # ── Smoke test: flow_launcher short integration run ──
 find_program(BASH_EXECUTABLE bash)
