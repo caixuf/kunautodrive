@@ -468,6 +468,75 @@ static void test_disc_topology(void) {
     PASS();
 }
 
+static void test_disc_multicast_port_wire(void) {
+    TEST("discovery multicast carries business TCP port");
+    DiscoveryManager* left = discovery_create("wire_left", CAP_PUBLISHER);
+    DiscoveryManager* right = discovery_create("wire_right", CAP_SUBSCRIBER);
+    if (!left || !right) {
+        if (left) discovery_destroy(left);
+        if (right) discovery_destroy(right);
+        FAIL("discovery create failed");
+        return;
+    }
+
+    int setup_ok =
+        discovery_set_unicast_port(left, 17701) == 0 &&
+        discovery_set_unicast_port(right, 17702) == 0 &&
+        discovery_advertise(left, "wire/topic", 0xCAFE, CAP_PUBLISHER, 20.0) == 0 &&
+        discovery_advertise(right, "wire/topic", 0xCAFE, CAP_SUBSCRIBER, 20.0) == 0;
+    if (!setup_ok) {
+        discovery_destroy(left);
+        discovery_destroy(right);
+        FAIL("discovery wire setup failed");
+        return;
+    }
+
+    int started_left = discovery_start(left) == 0;
+    int started_right = started_left && discovery_start(right) == 0;
+    if (!started_right) {
+        if (started_left) discovery_stop(left);
+        discovery_destroy(left);
+        discovery_destroy(right);
+        FAIL("discovery start failed");
+        return;
+    }
+    usleep(500000);
+
+    TopologyGraph left_graph;
+    TopologyGraph right_graph;
+    int left_rc = discovery_copy_topology(left, &left_graph);
+    int right_rc = discovery_copy_topology(right, &right_graph);
+    bool left_received_right = false;
+    bool right_received_left = false;
+    if (left_rc == 0) {
+        for (uint32_t i = 0; i < left_graph.node_count; i++) {
+            if (strcmp(left_graph.nodes[i].name, "wire_right") == 0 &&
+                left_graph.nodes[i].unicast_port == 17702) {
+                left_received_right = true;
+                break;
+            }
+        }
+    }
+    if (right_rc == 0) {
+        for (uint32_t i = 0; i < right_graph.node_count; i++) {
+            if (strcmp(right_graph.nodes[i].name, "wire_left") == 0 &&
+                right_graph.nodes[i].unicast_port == 17701) {
+                right_received_left = true;
+                break;
+            }
+        }
+    }
+
+    discovery_stop(left);
+    discovery_stop(right);
+    discovery_destroy(left);
+    discovery_destroy(right);
+
+    ASSERT(left_received_right && right_received_left,
+           "multicast beacon did not preserve advertised business ports");
+    PASS();
+}
+
 /* ══════════════════════════════════════════════════════════ */
 /* Bag Tests                                                  */
 /* ══════════════════════════════════════════════════════════ */
@@ -833,6 +902,7 @@ int main(void) {
     test_disc_create_destroy();
     test_disc_advertise_topic();
     test_disc_topology();
+    test_disc_multicast_port_wire();
 
     /* ── Bag ────────────────────────────────── */
     printf("\n═══ Bag ═══\n");
