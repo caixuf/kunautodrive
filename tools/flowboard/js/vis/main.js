@@ -32,6 +32,8 @@ let _director = null;
 let _ready = false;
 let _lastTopoData = null;
 let _statsView = null;
+let _lastMinimapDrawMs = 0;
+const MINIMAP_INTERVAL_MS = 1000 / 30;
 
 function _syncEnvironment(store) {
   if (!_skyEnv || !store) return;
@@ -295,8 +297,12 @@ function _startRenderLoop() {
       _frameCount++;
       if (_perfMonitor) _perfMonitor.tickFrame();   // 供给 PHM watchdog 采样
 
-      // 小地图 HUD（2D 叠层，每帧绘制）
-      if (_minimap) _minimap.draw(store);
+      // 小地图是独立 Canvas 的完整重绘；它不需要与 60/120Hz 3D 同步。
+      // 固定 30Hz 可消除它与 WebGL/DOM 同帧重绘造成的主线程尖峰。
+      if (_minimap && now - _lastMinimapDrawMs >= MINIMAP_INTERVAL_MS) {
+        _minimap.draw(store);
+        _lastMinimapDrawMs = now;
+      }
 
       // 性能监控面板（每 500ms 更新一次 DOM）
       if (_statsView) {
@@ -443,7 +449,53 @@ if (typeof window !== 'undefined') {
     /** 强制重渲染 */
     forceResize() { resize3D(); },
     /** 清除所有错误 */
-    clearErrors() { _lastRenderErr = null; }
+    clearErrors() { _lastRenderErr = null; },
+    /** 测量帧间隔分布（诊断"平均10ms却一卡一卡"的真实抖动源）。
+     *  采样 N 帧 rAF 间隔，返回直方图 + 最大/中位/平均。卡顿往往不是
+     *  平均帧率问题，而是偶发大间隔（GC/后处理/阴影重建）——这个直方图
+     *  能直接暴露 spike 的分布和频率。 */
+    frameHistogram(n) {
+      const frames = (n && n > 0) ? n : 300;
+      return new Promise(function(resolve) {
+        let last = performance.now();
+        const gaps = [];
+        let count = 0;
+        function sample() {
+          const now = performance.now();
+          gaps.push(now - last);
+          last = now;
+          count++;
+          if (count < frames) requestAnimationFrame(sample);
+          else {
+            const sorted = gaps.slice().sort(function(a, b) { return a - b; });
+            const sum = gaps.reduce(function(a, b) { return a + b; }, 0);
+            const avg = sum / gaps.length;
+            const median = sorted[Math.floor(sorted.length / 2)];
+            const max = sorted[sorted.length - 1];
+            // 直方图分桶：<17, 17-20, 20-25, 25-33, 33-50, 50-100, >100ms
+            const buckets = [0, 0, 0, 0, 0, 0, 0];
+            const LABELS = ['<17', '17-20', '20-25', '25-33', '33-50', '50-100', '>100'];
+            gaps.forEach(function(g) {
+              if (g < 17) buckets[0]++;
+              else if (g < 20) buckets[1]++;
+              else if (g < 25) buckets[2]++;
+              else if (g < 33) buckets[3]++;
+              else if (g < 50) buckets[4]++;
+              else if (g < 100) buckets[5]++;
+              else buckets[6]++;
+            });
+            const hist = LABELS.map(function(label, i) {
+              return label + 'ms: ' + buckets[i] + (buckets[i] ? ' (' + Math.round(buckets[i] / gaps.length * 100) + '%)' : '');
+            }).join('\n');
+            console.log('[vis] frame histogram (' + frames + ' frames):');
+            console.log('  avg=' + avg.toFixed(1) + 'ms  median=' + median.toFixed(1) + 'ms  max=' + max.toFixed(0) + 'ms');
+            console.log(hist);
+            resolve({ avg, median, max, hist, gaps });
+          }
+        }
+        requestAnimationFrame(sample);
+      });
+    }
   };
 }
 
