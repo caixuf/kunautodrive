@@ -781,6 +781,9 @@ install(DIRECTORY include/
     DESTINATION include/flowengine
     FILES_MATCHING PATTERN "*.h"
 )
+install(FILES include/pem_log_layout.def
+    DESTINATION include/flowengine
+)
 
 # ── pkg-config ──────────────────────────────────────────────
 configure_file(

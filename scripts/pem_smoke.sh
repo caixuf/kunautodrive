@@ -5,9 +5,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
 DURATION="${1:-4}"
-WORK="$(mktemp -d /tmp/kunautodrive_pem_smoke.XXXXXX)"
+WORK="$ROOT/build/pem_smoke_$$"
 PIPELINE="$WORK/pipeline.json"
 LOG="$WORK/launcher.log"
+mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
 if [ ! -x "$BUILD_DIR/bin/flow_launcher" ] ||
@@ -28,6 +29,8 @@ for process in pipeline["processes"]:
         process["params"] = json.dumps({
             "mode": "production", "frequency_hz": 2,
             "pem_log_path": os.environ["PEM_BASE"] + "_infra",
+            "state_file": os.path.join(os.path.dirname(os.environ["PEM_BASE"]),
+                                       "topology.json"),
             "rotate_sec": 300, "rotate_mb": 1,
             "retain_segments": 2, "retain_mb": 2,
         }, separators=(",", ":"))

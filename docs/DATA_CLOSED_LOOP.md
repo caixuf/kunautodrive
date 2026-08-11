@@ -40,10 +40,13 @@ writer，避免文件系统阻塞控制工作线程。
 
 ## PEM 有界指标/事件运行时
 
-`modules/adas_nodes/pem_runtime.[ch]` 是 PEM 的内存运行时；`pem_collector` 是其
-单线程 pipeline owner，`pem_log` 仍是唯一 LogManager（轮转、CRC、fsync 和保留策略
-均未迁移）。`monitor_node` 的 production 基础设施流保持原有 system/topic/health/
-degrade 采集路径，只把写入前的 latest/event staging 接入同一运行时 API。
+`modules/pem/` 是独立 PEM 模块：`pem_runtime.c` 是内存运行时，`pem_log.c` 是唯一
+LogManager（轮转、CRC、fsync 和保留策略）。其公共 C API 位于
+`include/pem_log.h` 和 `include/pem_runtime.h`（安装后为
+`include/flowengine/`）；`pem_collector` 和 `monitor_node` 仅作为薄节点适配器，
+提供采集策略和 durable-writer callback。monitor 的 production 基础设施流保持原有
+system/topic/health/degrade 采集路径，只把写入前的 latest/event staging 接入同一运行时
+API。
 
 ### 运行时分层
 
@@ -143,10 +146,18 @@ python3 tools/pem_dump.py --type topic --name planning /tmp/kunautodrive_pem_*.p
 PEM 运行时门禁：
 
 ```bash
+env -u LD_LIBRARY_PATH cmake -S modules/pem -B build/modules/pem
+env -u LD_LIBRARY_PATH cmake --build build/modules/pem
+env -u LD_LIBRARY_PATH ctest --test-dir build/modules/pem --output-on-failure \
+  -R 'pem_log_protocol|pem_runtime_bounded'
+
+# End-to-end monitor + collector adapter smoke test
 env -u LD_LIBRARY_PATH ctest --test-dir build --output-on-failure -R pem_runtime_smoke
 ```
 
-该测试以仿真管线临时启用 production monitor 和 `pem_collector`，断言业务
+前两个测试由 `modules/pem/CMakeLists.txt` 注册，独立验证 PEM 日志协议与有界
+运行时；adapter 的独立 CMake 构建也会包含它们。最后一个测试以仿真管线临时启用
+production monitor 和 `pem_collector`，断言业务
 `.pem` 文件实际生成，并由 `pem_dump.py` 成功解出 `trip:ci_simulation`。
 它随 integration CI 运行，不依赖 GPS、串口或其他实车硬件。
 

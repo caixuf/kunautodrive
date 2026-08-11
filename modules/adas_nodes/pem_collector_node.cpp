@@ -6,8 +6,8 @@
 #include "adas_msgs_gen.h"
 #include "clock_service.h"
 #include "coroutine_task.h"
-#include "pem_log.h"
-#include "pem_runtime.h"
+#include <pem_log.h>
+#include <pem_runtime.h>
 #include "platform_paths.h"
 
 #undef LOG_TRACE

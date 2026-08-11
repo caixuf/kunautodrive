@@ -1,4 +1,4 @@
-#include "pem_log.h"
+#include <pem_log.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -14,6 +14,10 @@
         return 1; \
     } \
 } while (0)
+
+#ifndef PEM_TEST_OUTPUT_DIR
+#define PEM_TEST_OUTPUT_DIR "."
+#endif
 
 typedef struct {
     PemLog* log;
@@ -38,7 +42,8 @@ static void* write_records(void* opaque) {
 
 int main(void) {
     char base[128];
-    snprintf(base, sizeof(base), "/tmp/kunautodrive_pem_unit_%ld", (long)getpid());
+    snprintf(base, sizeof(base), "%s/kunautodrive_pem_unit_%ld",
+             PEM_TEST_OUTPUT_DIR, (long)getpid());
     PemLog log;
     CHECK(PEM_RECORD_SIZE == 168);
     CHECK(PEM_RECORD_CRC_OFFSET == 12);

@@ -27,7 +27,7 @@ typedef pthread_mutex_t PemLogMutex;
 /* Layout is shared with tools/pem_dump.py through include/pem_log_layout.def. */
 typedef struct {
 #define PEM_FIELD(name, size) uint8_t name[size];
-#include <pem_log_layout.def>
+#include "pem_log_layout.def"
 #undef PEM_FIELD
 } PemRecordLayout;
 

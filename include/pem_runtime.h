@@ -1,7 +1,7 @@
 #ifndef FLOWENGINE_PEM_RUNTIME_H
 #define FLOWENGINE_PEM_RUNTIME_H
 
-#include "pem_log.h"
+#include <pem_log.h>
 
 #ifdef __cplusplus
 extern "C" {
