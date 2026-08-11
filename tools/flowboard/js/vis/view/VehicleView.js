@@ -116,6 +116,12 @@ let _envMap = null;
 function _ensureEnvMap(renderer, scene) {
   if (_envMap) return _envMap;
   if (!renderer || !scene) return null;
+  // main.js already bakes the scene environment during initialization. Reuse
+  // it instead of creating a second PMREM target on the first vehicle tick.
+  if (scene.environment) {
+    _envMap = scene.environment;
+    return _envMap;
+  }
   try {
     _pmrem = new THREE.PMREMGenerator(renderer);
     // 从场景渲染环境贴图（天空 + 光照）
@@ -137,28 +143,76 @@ function _isBodyMesh(mesh) {
 function _upgradeToCarPaint(mesh, envMap) {
   if (!mesh.material) return;
 
-  // 如果已经是 MeshPhysicalMaterial 且已设 clearcoat，跳过
-  if (mesh.material.isMeshPhysicalMaterial && mesh.material.clearcoat > 0.5) return;
+  const upgrade = (oldMat) => {
+    if (!oldMat || (oldMat.isMeshPhysicalMaterial && oldMat.clearcoat > 0.5)) return oldMat;
+    // Black trim/interior is intentionally not car paint.  Keeping its
+    // original StandardMaterial avoids turning a rough dark part into a
+    // mirror-black PhysicalMaterial.
+    const materialName = (oldMat.name || '').toLowerCase();
+    if (materialName.includes('smoothblack') ||
+        materialName.includes('frostedblack') ||
+        materialName.includes('iron') ||
+        materialName.includes('wheel') ||
+        materialName.includes('logo')) {
+      return oldMat;
+    }
 
-  // 保留原色
-  const oldColor = mesh.material.color ? mesh.material.color.getHex() : 0xcccccc;
-  // 不信 gltf 烘焙的 metalness（gen_models.py 里偏高，导致金属漆缺环境反射时发黑）。
-  // 强制 clamp 到 PAINT_METALNESS，保证有漫反射基色，不纯靠反射成像。
-  const oldRoughness = mesh.material.roughness !== undefined ? mesh.material.roughness : PAINT_ROUGHNESS;
+    // Preserve the common StandardMaterial fields explicitly. Three r160's
+    // MeshPhysicalMaterial.copy() also copies physical-only fields and throws
+    // when its source is a MeshStandardMaterial.
+    const mat = new THREE.MeshPhysicalMaterial();
+    mat.name = oldMat.name || '';
+    if (oldMat.color) mat.color.copy(oldMat.color);
+    if (oldMat.emissive && mat.emissive) mat.emissive.copy(oldMat.emissive);
+    mat.map = oldMat.map || null;
+    mat.lightMap = oldMat.lightMap || null;
+    mat.lightMapIntensity = oldMat.lightMapIntensity !== undefined ? oldMat.lightMapIntensity : 1;
+    mat.aoMap = oldMat.aoMap || null;
+    mat.aoMapIntensity = oldMat.aoMapIntensity !== undefined ? oldMat.aoMapIntensity : 1;
+    mat.emissiveMap = oldMat.emissiveMap || null;
+    mat.emissiveIntensity = oldMat.emissiveIntensity !== undefined ? oldMat.emissiveIntensity : 1;
+    mat.bumpMap = oldMat.bumpMap || null;
+    mat.bumpScale = oldMat.bumpScale !== undefined ? oldMat.bumpScale : 1;
+    mat.normalMap = oldMat.normalMap || null;
+    mat.normalMapType = oldMat.normalMapType;
+    if (oldMat.normalScale && mat.normalScale) mat.normalScale.copy(oldMat.normalScale);
+    mat.displacementMap = oldMat.displacementMap || null;
+    mat.displacementScale = oldMat.displacementScale !== undefined ? oldMat.displacementScale : 1;
+    mat.displacementBias = oldMat.displacementBias !== undefined ? oldMat.displacementBias : 0;
+    mat.roughnessMap = oldMat.roughnessMap || null;
+    mat.metalnessMap = oldMat.metalnessMap || null;
+    mat.alphaMap = oldMat.alphaMap || null;
+    mat.transparent = !!oldMat.transparent;
+    mat.opacity = oldMat.opacity !== undefined ? oldMat.opacity : 1;
+    mat.alphaTest = oldMat.alphaTest !== undefined ? oldMat.alphaTest : 0;
+    mat.side = oldMat.side !== undefined ? oldMat.side : THREE.FrontSide;
+    mat.vertexColors = !!oldMat.vertexColors;
+    mat.flatShading = !!oldMat.flatShading;
+    mat.depthWrite = oldMat.depthWrite !== undefined ? oldMat.depthWrite : true;
+    mat.depthTest = oldMat.depthTest !== undefined ? oldMat.depthTest : true;
+    mat.toneMapped = oldMat.toneMapped !== undefined ? oldMat.toneMapped : true;
+    mat.metalness = oldMat.metalness !== undefined
+      ? Math.min(oldMat.metalness, PAINT_METALNESS)
+      : PAINT_METALNESS;
+    const oldRoughness = oldMat.roughness !== undefined
+      ? oldMat.roughness
+      : PAINT_ROUGHNESS;
+    // Avoid a near-zero roughness mirror that becomes black when the
+    // reflection probe has little energy, while retaining the glossy paint.
+    mat.roughness = Math.max(0.15, Math.min(oldRoughness, PAINT_ROUGHNESS));
+    mat.clearcoat = PAINT_CLEARCOAT;
+    mat.clearcoatRoughness = PAINT_CLEARCOAT_ROUGHNESS;
+    mat.envMap = envMap || oldMat.envMap || null;
+    mat.envMapIntensity = ENVMAP_INTENSITY;
+    oldMat.dispose();
+    return mat;
+  };
 
-  const mat = new THREE.MeshPhysicalMaterial({
-    color: oldColor,
-    metalness: PAINT_METALNESS,
-    roughness: Math.min(oldRoughness, PAINT_ROUGHNESS),
-    clearcoat: PAINT_CLEARCOAT,
-    clearcoatRoughness: PAINT_CLEARCOAT_ROUGHNESS,
-    envMap: envMap || null,
-    envMapIntensity: ENVMAP_INTENSITY,
-    depthWrite: true,
-  });
-
-  mesh.material.dispose();
-  mesh.material = mat;
+  if (Array.isArray(mesh.material)) {
+    mesh.material = mesh.material.map(upgrade);
+  } else {
+    mesh.material = upgrade(mesh.material);
+  }
 }
 
 /** 遍历 glTF scene，给车身 mesh 上清漆 */
@@ -330,10 +384,11 @@ export function createVehicleView(scene, renderer, modelCache) {
 
   /** 从 glTF 创建车辆/行人。
    *  getModel() 返回的已经是 THREE.Group（非 loader 原始 {scene}），
-   *  直接对其 clone，不要走 .scene 否则抛 TypeError 导致永远回退 fallback。
+   *  直接使用，不要再次 clone 或走 .scene，否则会浪费一份完整模型并
+   *  让大模型加载时产生额外卡顿。
    *  行人只显示躯干+头+腿，不注入方向盘/车漆/车轮动画。 */
   function _createGltfVehicle(gltf, id, type) {
-    const scene = gltf.clone(true);
+    const scene = gltf;
     scene.name = 'gltf_' + id;
     // clone() 不深拷贝 userData 引用，重建 wheel/light 引用
     _relinkWheelUserData(scene);
@@ -414,8 +469,10 @@ export function createVehicleView(scene, renderer, modelCache) {
       vehicleMap.set(id, entry);
     }
 
-    // 尝试加载 glTF 模型
-    const gltf = getModel(type);
+    // Only clone a cached glTF when this vehicle has not adopted it yet.
+    // Calling getModel() unconditionally here cloned the full SU7 hierarchy
+    // (169k triangles/materials) on every animation frame.
+    const gltf = entry.modelData ? null : getModel(type);
     if (gltf && !entry.modelData) {
       // 清除旧 fallback group（避免双重模型叠加）
       if (entry.group) {

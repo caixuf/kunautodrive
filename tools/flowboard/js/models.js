@@ -263,6 +263,19 @@ export function getModel(type) {
   var model = _cache[name];
   if (model) {
     var clone = model.clone();
+    // Object3D.clone() shares materials.  Give each vehicle its own material
+    // set so light animation and per-instance paint upgrades cannot mutate the
+    // cached prototype or dispose resources used by another vehicle.
+    clone.traverse(function(c) {
+      if (!c.isMesh || !c.material) return;
+      if (Array.isArray(c.material)) {
+        c.material = c.material.map(function(material) {
+          return material && material.clone ? material.clone() : material;
+        });
+      } else if (c.material.clone) {
+        c.material = c.material.clone();
+      }
+    });
     // Scale: glTF models are built in meters (1:1 with scene)
     // Reset any pre-applied transforms
     clone.scale.set(1, 1, 1);
