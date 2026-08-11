@@ -21,7 +21,13 @@ const entities = [
 
 const layout = inferRoadFacilities(road, entities);
 eq('两辆停放车辆 + 中间空位生成 3 个车位', layout.parkingBays, 3);
-eq('信号停止线生成 1 组斑马线', layout.crosswalks, 1);
+eq('信号灯生成 1 条停止线', layout.stopLines, 1);
+eq('停止线不再误绘为斑马线', layout.crosswalks, 0);
+const stopLine = layout.marks.find(mark => mark.width === 0.38);
+ok('停止线横跨来车方向的半幅道路',
+  stopLine && Math.abs(stopLine.x - 248) < 1e-6 &&
+  Math.abs(stopLine.y + 3.5) < 1e-6 &&
+  Math.abs(stopLine.length - 7) < 1e-6);
 eq('500m 城市路生成 4 个方向箭头', layout.arrows, 4);
 eq('空车位四角生成 4 根考试桩杆', layout.poles.length, 4);
 ok('全部设施合并为共享路面标记实例', layout.marks.length > 20);

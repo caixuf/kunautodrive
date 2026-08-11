@@ -2,7 +2,7 @@
  * RoadFacilityView.js — low-cost scenario-specific road furniture.
  *
  * Derives markings from the existing road/entity contract:
- * - traffic lights -> zebra crossings
+ * - traffic lights -> lane-direction stop lines
  * - parking roads + stationary cars -> occupied/empty parking bays and exam poles
  * - urban/exam roads -> directional arrows
  *
@@ -74,6 +74,7 @@ function nearestRoadPoint(edges, x, y, edgeFilter = () => true) {
       if (!best || distance < best.distance) {
         best = {
           edge, edgeIndex, distance, heading,
+          refX, refY,
           s: edgeS + segmentLength * t,
           lateral: (x - refX) * nx + (y - refY) * ny,
         };
@@ -114,7 +115,9 @@ function addParkingBay(layout, x, y, heading, empty) {
 }
 
 export function inferRoadFacilities(roadNetwork, entities, scenarioName = '') {
-  const layout = { marks: [], poles: [], parkingBays: 0, crosswalks: 0, arrows: 0 };
+  const layout = {
+    marks: [], poles: [], parkingBays: 0, stopLines: 0, crosswalks: 0, arrows: 0,
+  };
   const edges = Array.isArray(roadNetwork?.edges) ? roadNetwork.edges : [];
   const allEntities = Array.isArray(entities) ? entities : [];
 
@@ -141,12 +144,22 @@ export function inferRoadFacilities(roadNetwork, entities, scenarioName = '') {
     const projection = nearestRoadPoint(edges, x, y);
     const edge = projection?.edge || edges[0] || {};
     const heading = projection?.heading || 0;
-    const roadWidth = (Number(edge.lanes) || 4) * (Number(edge.lane_width) || 3.5);
-    for (let i = -3; i <= 3; i++) {
-      const p = offsetPoint(x, y, heading, i * 0.72 - 4.0, 0);
-      addMark(layout, p.x, p.y, heading + Math.PI * 0.5, roadWidth, 0.42);
-    }
-    layout.crosswalks++;
+    const lanes = Math.max(1, Number(edge.lanes) || 4);
+    const laneWidth = Number(edge.lane_width) || 3.5;
+    const isOneWay = edge.oneway === true;
+    const laneDirection = isOneWay ? 0 : (projection?.lateral || -1) < 0 ? -1 : 1;
+    const stopLineWidth = isOneWay ? lanes * laneWidth : lanes * laneWidth * 0.5;
+    const stopCenter = offsetPoint(
+      projection?.refX ?? x,
+      projection?.refY ?? y,
+      heading,
+      0,
+      isOneWay ? 0 : laneDirection * stopLineWidth * 0.5,
+    );
+    // A stop line is one solid bar across the approaching carriageway. The
+    // old repeated stripes resembled an incorrectly positioned crosswalk.
+    addMark(layout, stopCenter.x, stopCenter.y, heading + Math.PI * 0.5, stopLineWidth, 0.38);
+    layout.stopLines++;
   }
 
   const parkingScene = String(scenarioName).toLowerCase().includes('parking');
@@ -196,7 +209,7 @@ export function createRoadFacilityView(scene) {
   group.name = 'roadFacilities';
   scene.add(group);
   let lastSignature = '';
-  let stats = { marks: 0, poles: 0, parkingBays: 0, crosswalks: 0, arrows: 0 };
+  let stats = { marks: 0, poles: 0, parkingBays: 0, stopLines: 0, crosswalks: 0, arrows: 0 };
 
   function clear() {
     while (group.children.length) {
@@ -225,6 +238,7 @@ export function createRoadFacilityView(scene) {
       marks: layout.marks.length,
       poles: layout.poles.length,
       parkingBays: layout.parkingBays,
+      stopLines: layout.stopLines,
       crosswalks: layout.crosswalks,
       arrows: layout.arrows,
     };

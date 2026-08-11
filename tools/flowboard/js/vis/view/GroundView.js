@@ -1,10 +1,10 @@
 /**
  * GroundView.js — 草地/地面
- * 纯色 #3e6b34（深饱和草绿），无 canvas 纹理。
+ * 程序化草地覆盖城市建筑外的开放空间；道路、人行道和绿化带各自独立铺装。
  * 位置 y=-0.05（路面上方 0.10m，防 z-fight）。
  */
 
-const GRASS_COLOR = 0x3e6b34;
+const GRASS_COLOR = 0x426d37;
 let _grassTexture = null;
 
 function buildGrassTexture() {
@@ -15,18 +15,18 @@ function buildGrassTexture() {
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#3e6b34';
+  ctx.fillStyle = '#426d37';
   ctx.fillRect(0, 0, size, size);
 
   // Deterministic low-frequency patches give the flat ground a usable
   // scale cue without adding geometry or a network asset dependency.
-  for (let i = 0; i < 180; i++) {
+  for (let i = 0; i < 240; i++) {
     const seed = (i * 1664525 + 1013904223) >>> 0;
     const x = (seed & 0xff);
     const y = ((seed >>> 8) & 0xff);
     const radius = 3 + ((seed >>> 16) & 0x0f);
-    const green = 46 + ((seed >>> 20) & 0x1f);
-    ctx.fillStyle = `rgba(${35 + ((seed >>> 24) & 0x0f)},${green},${28 + ((seed >>> 12) & 0x0f)},0.22)`;
+    const green = 61 + ((seed >>> 20) & 0x1f);
+    ctx.fillStyle = `rgba(${37 + ((seed >>> 24) & 0x0f)},${green},${27 + ((seed >>> 12) & 0x0f)},0.20)`;
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, Math.PI * 2);
     ctx.fill();
@@ -35,7 +35,7 @@ function buildGrassTexture() {
   _grassTexture = new THREE.CanvasTexture(canvas);
   _grassTexture.wrapS = THREE.RepeatWrapping;
   _grassTexture.wrapT = THREE.RepeatWrapping;
-  _grassTexture.repeat.set(64, 64);
+  _grassTexture.repeat.set(96, 96);
   _grassTexture.colorSpace = THREE.SRGBColorSpace;
   return _grassTexture;
 }

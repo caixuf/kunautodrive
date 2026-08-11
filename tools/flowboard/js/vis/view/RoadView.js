@@ -5,6 +5,7 @@
  *   - 沥青 PBR：程序化 CanvasTexture 生成 albedo + normal map（颗粒感）
  *   - 车道线：轻微 emissive 反光 + 虚线 bug 修复
  *   - 路肩/路缘石：道路两侧各一条浅色窄带
+ *   - 城市道路：路缘石、人行道和草地绿化带分层，避免建筑直接落在沥青旁
  *
  * P2 弯道/匝道（2026-08）：
  *   - 边缘类型感知：road/ramp_curve/viaduct_highway/urban
@@ -24,6 +25,9 @@ import { tangentToNormal, offsetAlongNormal, forwardENU } from '../math/Coord.js
 
 const ASPHALT_COLOR = 0x2a2a2a;
 const SHOULDER_COLOR = 0x5a5a55;
+const CURB_COLOR = 0x9a9a92;
+const SIDEWALK_COLOR = 0x777b78;
+const VERGE_COLOR = 0x355d35;
 const LINE_WHITE = 0xcccccc;
 const LINE_YELLOW = 0xffd700;
 const RAMP_COLOR = 0x353535;    // 匝道路面比主路略浅
@@ -35,7 +39,13 @@ const Y_ROAD = 0.10;      // 路面高度
 const Y_MARK = 0.13;      // 车道线高度（略高于路面防 z-fight）
 const Y_EDGE = 0.14;      // 路缘边线高度，略高于车道线确保远距离可见
 const Y_SHOULDER = 0.08;  // 路肩高度（略低于路面）
+const Y_SIDEWALK = 0.09;
+const Y_CURB = 0.15;
+const Y_VERGE = 0.03;
 const SHOULDER_W = 0.6;   // 路肩宽度 (m)
+const CURB_W = 0.18;
+const SIDEWALK_W = 2.4;
+const VERGE_W = 3.2;
 const DASH = 3.0;         // 虚线段长 (m)
 const GAP = 6.0;          // 虚线间隔 (m)
 
@@ -291,7 +301,10 @@ export function createRoadView(scene) {
   function buildRamp(edge, nodes) {
     const points = sampleEdgeNodes(nodes, SAMPLES_RAMP);
     const spine = buildSpine(points);
-    if (spine.length < 2) return { roadGeos: [], whiteGeos: [] };
+    if (spine.length < 2) return {
+      roadGeos: [], shoulderGeos: [], curbGeos: [], sidewalkGeos: [],
+      vergeGeos: [], whiteGeos: [],
+    };
 
     const laneWidth = edge.lane_width || RAMP_LANE_W;
     const rampLanes = Math.max(1, edge.lanes || 1);
@@ -326,10 +339,12 @@ export function createRoadView(scene) {
       }
     }
 
-    const roadGeos = [road];
-    if (shoulderL) roadGeos.push(shoulderL);
-    if (shoulderR) roadGeos.push(shoulderR);
-    return { roadGeos, whiteGeos, spine, cum: buildCumulative(spine) };
+    return {
+      roadGeos: [road],
+      shoulderGeos: [shoulderL, shoulderR].filter(Boolean),
+      curbGeos: [], sidewalkGeos: [], vergeGeos: [],
+      whiteGeos, spine, cum: buildCumulative(spine),
+    };
   }
 
   /** 在匝道汇入主路的位置渲染汇入区标识（渐变虚线标记） */
@@ -376,7 +391,12 @@ export function createRoadView(scene) {
     const sampleCount = edgeSampleCount(nodes, edge.type);
     const points = sampleEdgeNodes(nodes, sampleCount);
     const spine = buildSpine(points);
-    if (spine.length < 2) return { roadGeos: [], shoulderGeos: [], whiteGeos: [], yellowGeos: [], spine, cum: [] };
+    if (spine.length < 2) {
+      return {
+        roadGeos: [], shoulderGeos: [], curbGeos: [], sidewalkGeos: [],
+        vergeGeos: [], whiteGeos: [], yellowGeos: [], spine, cum: [],
+      };
+    }
 
     const lanes = edge.lanes || DEFAULT_LANES;
     const laneWidth = edge.lane_width || LANE_WIDTH;
@@ -433,10 +453,33 @@ export function createRoadView(scene) {
       }
     }
 
-    const roadGeos = [road];
-    if (shoulderL) roadGeos.push(shoulderL);
-    if (shoulderR) roadGeos.push(shoulderR);
-    return { roadGeos, shoulderGeos: [], whiteGeos, yellowGeos, spine, cum: buildCumulative(spine) };
+    const shoulderGeos = [shoulderL, shoulderR].filter(Boolean);
+    const curbGeos = [];
+    const sidewalkGeos = [];
+    const vergeGeos = [];
+    const isUrban = edge.type === EDGE_TYPE.URBAN ||
+      String(edge.name || '').toLowerCase().includes('urban');
+
+    if (isUrban) {
+      for (const side of [-1, 1]) {
+        const curb = ribbonGeo(offsetSpine(spine, side * (hw + SHOULDER_W + CURB_W * 0.5)),
+          CURB_W * 0.5, Y_CURB);
+        const sidewalk = ribbonGeo(offsetSpine(spine,
+          side * (hw + SHOULDER_W + CURB_W + SIDEWALK_W * 0.5)),
+        SIDEWALK_W * 0.5, Y_SIDEWALK);
+        const verge = ribbonGeo(offsetSpine(spine,
+          side * (hw + SHOULDER_W + CURB_W + SIDEWALK_W + VERGE_W * 0.5)),
+        VERGE_W * 0.5, Y_VERGE);
+        if (curb) curbGeos.push(curb);
+        if (sidewalk) sidewalkGeos.push(sidewalk);
+        if (verge) vergeGeos.push(verge);
+      }
+    }
+
+    return {
+      roadGeos: [road], shoulderGeos, curbGeos, sidewalkGeos, vergeGeos,
+      whiteGeos, yellowGeos, spine, cum: buildCumulative(spine),
+    };
   }
 
   /** 从 edge nodes 构建（兼容三种 edge 格式） */
@@ -475,6 +518,9 @@ export function createRoadView(scene) {
 
     const roadGeos = [];
     const shoulderGeos = [];
+    const curbGeos = [];
+    const sidewalkGeos = [];
+    const vergeGeos = [];
     const whiteLineGeos = [];
     const yellowLineGeos = [];
     const rampGeos = [];
@@ -489,6 +535,9 @@ export function createRoadView(scene) {
       const result = buildStandardRoad(edge, nodes);
       for (const g of result.roadGeos) roadGeos.push(g);
       for (const g of result.shoulderGeos) shoulderGeos.push(g);
+      for (const g of result.curbGeos) curbGeos.push(g);
+      for (const g of result.sidewalkGeos) sidewalkGeos.push(g);
+      for (const g of result.vergeGeos) vergeGeos.push(g);
       for (const g of result.whiteGeos) whiteLineGeos.push(g);
       for (const g of result.yellowGeos) yellowLineGeos.push(g);
       if (result.spine.length >= 2) {
@@ -502,6 +551,7 @@ export function createRoadView(scene) {
       const nodes = parseNodes(edge);
       const result = buildRamp(edge, nodes);
       for (const g of result.roadGeos) rampGeos.push(g);
+      for (const g of result.shoulderGeos) shoulderGeos.push(g);
       for (const g of result.whiteGeos) whiteLineGeos.push(g);
 
       // 汇入区标识：在匝道和主路之间画汇入虚线
@@ -560,6 +610,20 @@ export function createRoadView(scene) {
       mesh.receiveShadow = true;
       roadGroup.add(mesh);
     }
+
+    // 城市路缘石、人行道和绿化带分别合批，静态路网不随帧更新。
+    const addSurface = function(geometries, color, roughness) {
+      if (!geometries.length) return;
+      const mat = new THREE.MeshStandardMaterial({
+        color, roughness, metalness: 0, side: THREE.DoubleSide,
+      });
+      const mesh = new THREE.Mesh(mergeGeometries(geometries), mat);
+      mesh.receiveShadow = true;
+      roadGroup.add(mesh);
+    };
+    addSurface(curbGeos, CURB_COLOR, 0.78);
+    addSurface(sidewalkGeos, SIDEWALK_COLOR, 0.92);
+    addSurface(vergeGeos, VERGE_COLOR, 1.0);
 
     // 白色车道线
     if (whiteLineGeos.length) {
