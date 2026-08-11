@@ -1105,7 +1105,7 @@ add_test(NAME map_compiler_tools
 )
 set_tests_properties(map_compiler_tools PROPERTIES
     TIMEOUT 10
-    ENVIRONMENT "PYTHONPATH=${CMAKE_SOURCE_DIR}"
+    ENVIRONMENT "PYTHONPATH=${CMAKE_SOURCE_DIR}:$ENV{PYTHONPATH}"
 )
 
 # ── Smoke test: flow_launcher short integration run ──
