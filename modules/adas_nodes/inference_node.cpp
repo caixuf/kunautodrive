@@ -491,8 +491,8 @@ static void write_shadow_sidecar(double shadow_delta, double pred_speed,
         cJSON_AddNumberToObject(root, "shadow_speed_rmse", sqrt(g.shadow_sq_sum / (double)g.shadow_n));
     }
     /* 稳态窗 MAE：门禁主口径（避免起步瞬态把增量模型 delta 拉爆）。 */
+    cJSON_AddNumberToObject(root, "shadow_settled_n", (double)g.shadow_settled_n);
     if (g.shadow_settled_n > 0) {
-        cJSON_AddNumberToObject(root, "shadow_settled_n", (double)g.shadow_settled_n);
         cJSON_AddNumberToObject(root, "shadow_speed_mae_settled",
                                 g.shadow_settled_abs_sum / (double)g.shadow_settled_n);
         cJSON_AddNumberToObject(root, "shadow_speed_rmse_settled",

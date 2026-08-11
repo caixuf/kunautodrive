@@ -82,6 +82,75 @@ class DemoEvaluatorTest(unittest.TestCase):
             places=6,
         )
 
+    def test_shadow_gate_requires_enough_settled_samples(self):
+        evaluator = load_evaluator()
+        with tempfile.TemporaryDirectory() as workspace:
+            previous = os.environ.get("FLOWENGINE_TEMP_DIR")
+            os.environ["FLOWENGINE_TEMP_DIR"] = workspace
+            try:
+                Path(workspace, "flow_tiny_inference.json").write_text(
+                    '{"shadow_delta": -6.0, "shadow_speed_mae": 6.0, '
+                    '"shadow_settled_n": 3, '
+                    '"shadow_speed_mae_settled": 1.0}\n',
+                    encoding="utf-8",
+                )
+                metrics = evaluator._load_shadow_metrics()
+            finally:
+                if previous is None:
+                    os.environ.pop("FLOWENGINE_TEMP_DIR", None)
+                else:
+                    os.environ["FLOWENGINE_TEMP_DIR"] = previous
+
+        self.assertFalse(metrics["gate_ready"])
+        self.assertIsNone(metrics["mae"])
+        self.assertEqual(metrics["settled_n"], 3)
+        self.assertAlmostEqual(metrics["full_mae"], 6.0)
+
+    def test_shadow_gate_uses_settled_mae_when_ready(self):
+        evaluator = load_evaluator()
+        with tempfile.TemporaryDirectory() as workspace:
+            previous = os.environ.get("FLOWENGINE_TEMP_DIR")
+            os.environ["FLOWENGINE_TEMP_DIR"] = workspace
+            try:
+                Path(workspace, "flow_tiny_inference.json").write_text(
+                    '{"shadow_delta": -1.0, "shadow_speed_mae": 4.0, '
+                    '"shadow_settled_n": 20, '
+                    '"shadow_speed_mae_settled": 1.5}\n',
+                    encoding="utf-8",
+                )
+                metrics = evaluator._load_shadow_metrics()
+            finally:
+                if previous is None:
+                    os.environ.pop("FLOWENGINE_TEMP_DIR", None)
+                else:
+                    os.environ["FLOWENGINE_TEMP_DIR"] = previous
+
+        self.assertTrue(metrics["gate_ready"])
+        self.assertAlmostEqual(metrics["mae"], 1.5)
+        self.assertAlmostEqual(metrics["full_mae"], 4.0)
+
+    def test_shadow_gate_does_not_fail_without_settled_evidence(self):
+        evaluator = load_evaluator()
+        failures, warnings = evaluator._shadow_gate_issues({
+            "delta": -6.0,
+            "full_mae": 6.0,
+            "mae": None,
+            "settled_n": 0,
+            "gate_ready": False,
+        })
+        self.assertEqual(failures, [])
+        self.assertEqual(warnings, [])
+
+        failures, warnings = evaluator._shadow_gate_issues({
+            "delta": -6.0,
+            "full_mae": 6.0,
+            "mae": None,
+            "settled_n": 3,
+            "gate_ready": False,
+        })
+        self.assertEqual(failures, [])
+        self.assertIn("inconclusive", warnings[0])
+
     def test_evaluation_payload_has_v1_envelope_and_legacy_summary(self):
         evaluator = load_evaluator()
         summary = {"scenario": "straight_road", "avg_speed_mps": 8.0}
@@ -300,6 +369,25 @@ class DemoEvaluatorTest(unittest.TestCase):
 
         self.assertLess(metrics["lane_error"], 0.2)
         self.assertGreater(metrics["road_edge_margin"], 0.7)
+
+    def test_sample_metrics_marks_lane_change_as_maneuver_window(self):
+        evaluator = load_evaluator()
+        sample = {
+            "metrics": {
+                "vehicle": {"speed": 10.0, "x": 0.0},
+                "scene": {
+                    "ego": {"x": 0.0, "y": 0.0, "heading": 0.0},
+                    "lane": {"width": 3.5, "count": 2},
+                    "obstacles": [],
+                },
+                "behavior": {"state": "LEFT_CHANGE"},
+            }
+        }
+
+        metrics = evaluator.sample_metrics(sample, road=None)
+
+        self.assertEqual(metrics["behavior_state"], "LEFT_CHANGE")
+        self.assertTrue(metrics["maneuver_active"])
 
 
     def test_pipeline_declares_behavior_planner_flowsim_edges(self):

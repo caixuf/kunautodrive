@@ -157,6 +157,7 @@ SHADOW_INFERENCE_FILES = [
 # Thresholds for shadow_delta = inference_speed - planning_speed (m/s).
 SHADOW_DELTA_WARN = 2.0   # |delta| > this → WARN
 SHADOW_DELTA_FAIL = 5.0   # |delta| > this → FAIL
+SHADOW_SETTLED_MIN_SAMPLES = 20
 
 # ── Task 5：分层识别率 / 预警提前量阈值 ──
 # 真值实体（flowsim scene.entities）与感知障碍（scene.obstacles）匹配距离阈值。
@@ -230,15 +231,18 @@ def _shadow_inference_files() -> list[Path]:
     return SHADOW_INFERENCE_FILES
 
 
-def _load_shadow_delta() -> tuple[float | None, float | None]:
+def _load_shadow_metrics() -> dict:
     """Read the latest shadow_delta and shadow speed MAE from any active sidecar file.
 
-    Returns (shadow_delta_latest, shadow_speed_mae) where either may be None.
-    Prefers shadow_speed_mae for threshold checks; shadow_delta_latest for display.
-    2026-08-05 合并两处修复：
-      - 云端: 用全量 MAE 做阈值(单帧 delta 在瞬态被拉爆 -14~-19 误报)
-      - 本机: 优先稳态窗 MAE(shadow_speed_mae_settled, 仅 |target−ego_v|
-        小时统计, 消除 stop-and-go 每次误报), 回退全量 shadow_speed_mae
+    The settled MAE is a hard gate only after enough settled samples exist.
+    A run that never reaches the settled band is reported as inconclusive rather
+    than failing on a transient/full-run error that the metric cannot explain.
+
+    Returns a dict with latest delta, full MAE, gate MAE, sample count, and
+    whether the gate has enough evidence.
+    Sidecars predating the settled-sample field retain the full-MAE
+    compatibility path; current inference_node sidecars are inconclusive
+    until the settled sample count is large enough.
     """
     best_path: Path | None = None
     best_mtime = -1.0
@@ -251,20 +255,82 @@ def _load_shadow_delta() -> tuple[float | None, float | None]:
         except FileNotFoundError:
             pass
     if best_path is None:
-        return None, None
+        return {
+            "delta": None,
+            "full_mae": None,
+            "mae": None,
+            "settled_n": 0,
+            "gate_ready": False,
+        }
     try:
         with best_path.open("r", encoding="utf-8") as fh:
             data = json.load(fh)
         delta = data.get("shadow_delta")
-        # 稳态窗 MAE 优先（消除瞬态误报），回退全量 MAE
-        mae = data.get("shadow_speed_mae_settled")
-        if mae is None:
-            mae = data.get("shadow_speed_mae")
+        full_mae = data.get("shadow_speed_mae")
+        settled_mae = data.get("shadow_speed_mae_settled")
+        settled_n = data.get("shadow_settled_n")
+        settled_n = int(settled_n) if isinstance(settled_n, (int, float)) else None
+        if settled_mae is not None:
+            gate_ready = settled_n is not None and settled_n >= SHADOW_SETTLED_MIN_SAMPLES
+            mae = settled_mae if gate_ready else None
+        else:
+            # External sidecars may only provide full-run MAE. Keep that
+            # compatibility path; inference_node writes settled_n explicitly.
+            gate_ready = "shadow_settled_n" not in data
+            mae = full_mae if gate_ready else None
         delta_val = float(delta) if delta is not None else None
+        full_mae_val = float(full_mae) if full_mae is not None else None
         mae_val = float(mae) if mae is not None else None
-        return delta_val, mae_val
+        return {
+            "delta": delta_val,
+            "full_mae": full_mae_val,
+            "mae": mae_val,
+            "settled_n": settled_n or 0,
+            "gate_ready": gate_ready,
+        }
     except (json.JSONDecodeError, OSError, ValueError):
-        return None, None
+        return {
+            "delta": None,
+            "full_mae": None,
+            "mae": None,
+            "settled_n": 0,
+            "gate_ready": False,
+        }
+
+
+def _load_shadow_delta() -> tuple[float | None, float | None]:
+    """Compatibility wrapper returning (latest_delta, gate_mae)."""
+    metrics = _load_shadow_metrics()
+    return metrics["delta"], metrics["mae"]
+
+
+def _shadow_gate_issues(metrics: dict) -> tuple[list[str], list[str]]:
+    """Return shadow metric failures and warnings supported by the evidence."""
+    failures: list[str] = []
+    warnings: list[str] = []
+    if not metrics["gate_ready"]:
+        settled_n = metrics["settled_n"]
+        if settled_n > 0:
+            warnings.append(
+                f"shadow_speed_mae inconclusive: only {settled_n} settled samples "
+                f"(need {SHADOW_SETTLED_MIN_SAMPLES})"
+            )
+        return failures, warnings
+
+    shadow_mae = metrics["mae"]
+    if shadow_mae is None:
+        return failures, warnings
+    if shadow_mae > SHADOW_DELTA_FAIL:
+        failures.append(
+            f"shadow_speed_mae too large: {shadow_mae:+.2f} m/s "
+            f"(threshold {SHADOW_DELTA_FAIL:.1f} m/s)"
+        )
+    elif shadow_mae > SHADOW_DELTA_WARN:
+        warnings.append(
+            f"shadow_speed_mae elevated: {shadow_mae:+.2f} m/s "
+            f"(warn threshold {SHADOW_DELTA_WARN:.1f} m/s)"
+        )
+    return failures, warnings
 
 
 def _pipeline_nodes(pipeline: dict) -> list:
@@ -667,6 +733,11 @@ def sample_metrics(sample: dict, road: dict | None = None) -> dict:
     obstacles = scene.get("obstacles", [])
     lane = scene.get("lane", {})
     scn_entities = scene.get("entities", [])
+    behavior = metrics.get("behavior", {})
+    behavior_state = str(behavior.get("state", "") or "").upper()
+    maneuver_active = any(token in behavior_state for token in (
+        "CHANGE", "OVERTAKE", "UTURN", "PARK",
+    ))
 
     speed = float(vehicle.get("speed", ego.get("speed", 0.0)) or 0.0)
     x = float(vehicle.get("x", ego.get("x", 0.0)) or 0.0)
@@ -765,6 +836,8 @@ def sample_metrics(sample: dict, road: dict | None = None) -> dict:
         "route_lane": int(metrics.get("route_lane", 0) or 0),
         "entities": scn_entities if isinstance(scn_entities, list) else [],
         "tp_cycle_by_id": tp_cycle_by_id,
+        "behavior_state": behavior_state,
+        "maneuver_active": maneuver_active,
     }
 
 
@@ -1917,8 +1990,10 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     # 从未阻断过合并 —— 而 min_forward_gap 在 -0.69m 和 4.66m 之间随机漂移，
     # 两次 run 的差别只是运气。用 desired_gap 的比例做阈值，判据随车速伸缩。
     #
-    # 掉头窗口豁免（2026-08-04 多把方向掉头批次）：掉头执行期（heading 扫过
-    # ±90°）及其前 12s 减速接近段 + 后 8s 回正段，min_forward_gap 不判 FAIL。
+    # 机动窗口豁免：掉头执行期（heading 扫过
+    # ±90°）及其前 12s 减速接近段 + 后 8s 回正段不判 FAIL；变道/超车/泊车
+    # 状态同样跳过。机动中横向穿越相邻车道，几何上的最小纵向 gap 不是
+    # ACC 本车道时距指标，应由机动安全门禁和 TTC 证据链负责。
     # 理由：① "施工前掉头"的触发障碍就是掉头刺激源（实测第一次掉头触发时
     # 前方障碍 10.3-16.5m，掉头即对它的响应，gap 小是机动语义而非 ACC 失守）；
     # ② 掉头弧内 ego 横穿路面/低速换挡，感知障碍的沿向距离在弧内无意义。
@@ -1935,8 +2010,12 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
                 t = timestamps[i] if i < len(timestamps) else i * 0.5
                 if t_first - 12.0 <= t <= t_last + 8.0:
                     uturn_window[i] = True
-    valid_gap_records = [(m["min_forward_gap"], m["speed"]) for i, m in enumerate(series)
-                         if not uturn_window[i] and not math.isinf(m["min_forward_gap"])]
+    valid_gap_records = [
+        (m["min_forward_gap"], m["speed"])
+        for i, m in enumerate(series)
+        if (not uturn_window[i] and not m.get("maneuver_active", False)
+            and not math.isinf(m["min_forward_gap"]))
+    ]
     if valid_gap_records:
         min_gap_all = min(gap for gap, _speed in valid_gap_records)
         moving_gaps = [(gap, speed) for gap, speed in valid_gap_records if abs(speed) > 1.0]
@@ -2000,23 +2079,14 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         )
 
     # ── shadow delta check ──
-    # 优先 shadow_speed_mae（稳态窗 settled 优先，回退全量）做阈值；
-    # 仅当 MAE 不可用（run 太短）才用 |单帧 delta|。单帧 delta 在起步/
-    # 急刹瞬态会被拉爆（-14~-19），不具代表性。
-    shadow_delta, shadow_mae = _load_shadow_delta()
-    shadow_check_val = (shadow_mae if shadow_mae is not None
-                        else (abs(shadow_delta) if shadow_delta is not None else None))
-    if shadow_check_val is not None:
-        if shadow_check_val > SHADOW_DELTA_FAIL:
-            metric_label = "shadow_speed_mae" if shadow_mae is not None else "shadow_delta"
-            failures.append(
-                f"{metric_label} too large: {shadow_check_val:+.2f} m/s (threshold {SHADOW_DELTA_FAIL:.1f} m/s)"
-            )
-        elif shadow_check_val > SHADOW_DELTA_WARN:
-            metric_label = "shadow_speed_mae" if shadow_mae is not None else "shadow_delta"
-            warnings.append(
-                f"{metric_label} elevated: {shadow_check_val:+.2f} m/s (warn threshold {SHADOW_DELTA_WARN:.1f} m/s)"
-            )
+    # 仅在 settled 样本达到证据下限时用 shadow_speed_mae 做阈值；证据不足
+    # 报 INCONCLUSIVE，不用 |单帧 delta| 冒充长期模型误差。单帧 delta 和
+    # 全量 MAE 在起步/急刹瞬态会被拉爆（-14~-19），不具代表性。
+    shadow_metrics = _load_shadow_metrics()
+    shadow_mae = shadow_metrics["mae"]
+    shadow_failures, shadow_warnings = _shadow_gate_issues(shadow_metrics)
+    failures.extend(shadow_failures)
+    warnings.extend(shadow_warnings)
 
     # ── Task 5：分层识别率 / 预警提前量 ──
     # truth（flowsim scene.entities）vs perceived（scene.obstacles 转世界坐标）
@@ -2107,6 +2177,9 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         "inference_topic_active": inference_topic_active,
         "inference_freq_hz": inference_freq,
         "shadow_speed_mae_settled": shadow_mae,
+        "shadow_speed_mae_full": shadow_metrics["full_mae"],
+        "shadow_settled_samples": shadow_metrics["settled_n"],
+        "shadow_gate_ready": shadow_metrics["gate_ready"],
         "has_traffic_lights": bool(scenario_lights),
         "red_light_violation": red_light_violation,
         "red_light_violation_details": red_light_violation_details,
