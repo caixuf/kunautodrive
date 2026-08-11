@@ -46,7 +46,7 @@ TOPIC_MIN_FREQ = {
 
 # 期望的行为状态机状态集合
 BEHAVIOR_STATES = {"NA", "READY", "CRUISE", "FOLLOW", "LEFT_CHANGE",
-                   "RIGHT_CHANGE", "STOP", "YIELD", "EMERGENCY"}
+                   "RIGHT_CHANGE", "STOP", "YIELD", "U_TURN", "EMERGENCY"}
 
 # 车道数量来源：感知/规划期望的合理范围
 LANE_COUNT_RANGE = (1, 8)
