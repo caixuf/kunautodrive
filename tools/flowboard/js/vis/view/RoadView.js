@@ -551,28 +551,18 @@ export function createRoadView(scene) {
     const edgeR = edgeLine(spine, -(hw - EDGE_INSET));
     if (edgeR) whiteGeos.push(edgeR);
 
-    // 车道分隔
+    // 双向道路的中心分界必须连续双黄线；同向道路的所有内部边界才是白虚线。
+    // 不能按长度把中心线切成虚线“掉头区”：掉头权限由拓扑/行为层决定，渲染层
+    // 不应凭空制造可跨越的中心线。
+    const hasOpposingTraffic = edge.oneway !== true && lanes >= 2 && lanes % 2 === 0;
     for (let k = 1; k < lanes; k++) {
       const d = -hw + k * laneWidth;
-      if (lanes >= 4 && k === Math.floor(lanes / 2)) {
-        // 中央对向分界 → 黄实线为主 + 两端黄虚线（掉头区域）
-        const DASH_ZONE = 50.0;
-        const cum = buildCumulative(spine);
-        const totalLen = cum[cum.length - 1];
-        if (totalLen > 2 * DASH_ZONE) {
-          const solidSpine = [];
-          for (let i = 0; i < spine.length; i++) {
-            if (cum[i] >= DASH_ZONE && cum[i] <= totalLen - DASH_ZONE) {
-              solidSpine.push({ ...spine[i] });
-            }
-          }
-          if (solidSpine.length >= 2) {
-            const g = solidLine(solidSpine, d);
-            if (g) yellowGeos.push(g);
-          }
-        }
-        for (const g of dashedLineInRange(spine, d, 0, DASH_ZONE)) yellowGeos.push(g);
-        for (const g of dashedLineInRange(spine, d, totalLen - DASH_ZONE, totalLen)) yellowGeos.push(g);
+      if (hasOpposingTraffic && k === lanes / 2) {
+        const CENTER_GAP = 0.12;
+        const left = solidLine(spine, d - CENTER_GAP);
+        const right = solidLine(spine, d + CENTER_GAP);
+        if (left) yellowGeos.push(left);
+        if (right) yellowGeos.push(right);
       } else {
         for (const g of dashedLine(spine, d)) whiteGeos.push(g);
       }
@@ -638,7 +628,7 @@ export function createRoadView(scene) {
       if (c.material) c.material.dispose();
     }
     built = false;
-    stats = { rampTransitions: 0 };
+    stats = { rampTransitions: 0, doubleYellowCenterlines: 0 };
 
     if (!roadNetwork || !roadNetwork.edges || roadNetwork.edges.length === 0) return;
 
@@ -666,6 +656,7 @@ export function createRoadView(scene) {
       for (const g of result.vergeGeos) vergeGeos.push(g);
       for (const g of result.whiteGeos) whiteLineGeos.push(g);
       for (const g of result.yellowGeos) yellowLineGeos.push(g);
+      if (result.yellowGeos.length === 2) stats.doubleYellowCenterlines++;
       if (result.spine.length >= 2) {
         mainRoadSpines.push({ edge, spine: result.spine, cum: result.cum });
       }

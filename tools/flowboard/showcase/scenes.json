@@ -1,6 +1,6 @@
 {
   "generated_by": "tools/build_showcase.py",
-  "count": 13,
+  "count": 14,
   "scenarios": [
     {
       "file": "scenarios/straight_road.json",
@@ -4780,6 +4780,626 @@
               "actor": "1",
               "act": "brake",
               "vx": 14.0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "file": "scenarios/city_comprehensive.json",
+      "name": "city_comprehensive",
+      "description": "城市综合路网旗舰场景：地面信号路口、连续弯道、施工避让、上匝道、高架、下匝道、超车与掉头回程。",
+      "duration_s": 180,
+      "enabled": true,
+      "raw": {
+        "name": "city_comprehensive",
+        "description": "城市综合路网旗舰场景：地面信号路口、连续弯道、施工避让、上匝道、高架、下匝道、超车与掉头回程。",
+        "random_seed": 202608,
+        "duration_s": 180,
+        "lighting": "day",
+        "weather": "clear",
+        "visibility_m": 1200,
+        "npc_lane_change": true,
+        "ego": {
+          "x": 20.0,
+          "y": -1.75,
+          "heading": 0.0,
+          "init_speed": 10.0,
+          "target_speed": 16.0,
+          "wheelbase": 2.7,
+          "length": 4.6,
+          "width": 2.0,
+          "max_steer": 0.6
+        },
+        "road_network": {
+          "edges": [
+            {
+              "id": 0,
+              "type": "urban",
+              "name": "ground_signal_avenue",
+              "lanes": 4,
+              "lane_width": 3.5,
+              "speed_limit": 15.0,
+              "oneway": false,
+              "nodes": [
+                [
+                  0,
+                  0,
+                  0
+                ],
+                [
+                  180,
+                  0,
+                  0
+                ],
+                [
+                  360,
+                  0,
+                  0
+                ],
+                [
+                  500,
+                  -22,
+                  0
+                ],
+                [
+                  620,
+                  -22,
+                  0
+                ]
+              ]
+            },
+            {
+              "id": 1,
+              "type": "urban",
+              "name": "curved_commercial_boulevard",
+              "lanes": 4,
+              "lane_width": 3.5,
+              "speed_limit": 13.0,
+              "oneway": false,
+              "nodes": [
+                [
+                  620,
+                  -22,
+                  0
+                ],
+                [
+                  760,
+                  -22,
+                  0
+                ],
+                [
+                  880,
+                  18,
+                  0
+                ],
+                [
+                  1010,
+                  82,
+                  0
+                ],
+                [
+                  1100,
+                  120,
+                  0
+                ]
+              ]
+            },
+            {
+              "id": 2,
+              "type": "ramp_curve",
+              "name": "eastbound_viaduct_entry",
+              "lanes": 1,
+              "lane_width": 3.5,
+              "speed_limit": 14.0,
+              "oneway": true,
+              "elevation_profile": [
+                {
+                  "s": 0,
+                  "h": 0
+                },
+                {
+                  "s": 120,
+                  "h": 4
+                },
+                {
+                  "s": 250,
+                  "h": 9
+                }
+              ],
+              "nodes": [
+                [
+                  1100,
+                  120,
+                  0
+                ],
+                [
+                  1190,
+                  150,
+                  2
+                ],
+                [
+                  1280,
+                  215,
+                  6
+                ],
+                [
+                  1370,
+                  250,
+                  9
+                ]
+              ]
+            },
+            {
+              "id": 3,
+              "type": "viaduct_highway",
+              "name": "elevated_ring_east",
+              "lanes": 4,
+              "lane_width": 3.5,
+              "speed_limit": 20.0,
+              "oneway": false,
+              "elevation_profile": [
+                {
+                  "s": 0,
+                  "h": 9
+                },
+                {
+                  "s": 520,
+                  "h": 9
+                }
+              ],
+              "nodes": [
+                [
+                  1370,
+                  250,
+                  9
+                ],
+                [
+                  1600,
+                  250,
+                  9
+                ],
+                [
+                  1850,
+                  238,
+                  9
+                ],
+                [
+                  2100,
+                  210,
+                  9
+                ]
+              ]
+            },
+            {
+              "id": 4,
+              "type": "ramp_curve",
+              "name": "westbound_viaduct_exit",
+              "lanes": 1,
+              "lane_width": 3.5,
+              "speed_limit": 12.0,
+              "oneway": true,
+              "elevation_profile": [
+                {
+                  "s": 0,
+                  "h": 9
+                },
+                {
+                  "s": 120,
+                  "h": 5
+                },
+                {
+                  "s": 250,
+                  "h": 0
+                }
+              ],
+              "nodes": [
+                [
+                  2100,
+                  210,
+                  9
+                ],
+                [
+                  2200,
+                  175,
+                  6
+                ],
+                [
+                  2290,
+                  125,
+                  2
+                ],
+                [
+                  2380,
+                  105,
+                  0
+                ]
+              ]
+            },
+            {
+              "id": 5,
+              "type": "urban",
+              "name": "riverfront_return_road",
+              "lanes": 4,
+              "lane_width": 3.5,
+              "speed_limit": 13.0,
+              "oneway": false,
+              "nodes": [
+                [
+                  2380,
+                  105,
+                  0
+                ],
+                [
+                  2520,
+                  105,
+                  0
+                ],
+                [
+                  2660,
+                  72,
+                  0
+                ],
+                [
+                  2780,
+                  20,
+                  0
+                ],
+                [
+                  2920,
+                  0,
+                  0
+                ]
+              ]
+            }
+          ],
+          "cross_roads": [
+            {
+              "name": "north_left_turn",
+              "at_s": 210,
+              "length_m": 180,
+              "lanes": 2,
+              "lane_width": 3.5,
+              "speed_limit": 8.0,
+              "direction": 1
+            },
+            {
+              "name": "south_right_turn",
+              "at_s": 390,
+              "length_m": 220,
+              "lanes": 2,
+              "lane_width": 3.5,
+              "speed_limit": 8.0,
+              "direction": -1
+            },
+            {
+              "name": "downtown_crossing",
+              "at_s": 720,
+              "length_m": 200,
+              "lanes": 2,
+              "lane_width": 3.5,
+              "speed_limit": 8.0,
+              "direction": 1
+            }
+          ],
+          "junctions": [
+            {
+              "id": 40,
+              "type": "fork",
+              "incoming_road": 1,
+              "connecting_roads": [
+                {
+                  "id": 140,
+                  "name": "parking_district_branch",
+                  "length_m": 150,
+                  "lanes": 1,
+                  "lane_width": 3.5,
+                  "speed_limit": 8.0,
+                  "oneway": true,
+                  "curvature_profile": [
+                    {
+                      "radius": -35,
+                      "arc": 55
+                    },
+                    {
+                      "radius": 0,
+                      "arc": 95
+                    }
+                  ],
+                  "target_road": 5
+                },
+                {
+                  "id": 141,
+                  "name": "viaduct_branch",
+                  "length_m": 280,
+                  "lanes": 1,
+                  "lane_width": 3.5,
+                  "speed_limit": 14.0,
+                  "oneway": true,
+                  "curvature_profile": [
+                    {
+                      "radius": 42,
+                      "arc": 80
+                    },
+                    {
+                      "radius": 0,
+                      "arc": 200
+                    }
+                  ],
+                  "elevation_profile": [
+                    {
+                      "s": 0,
+                      "h": 0
+                    },
+                    {
+                      "s": 280,
+                      "h": 9
+                    }
+                  ],
+                  "target_road": 2
+                }
+              ]
+            }
+          ]
+        },
+        "actors": [
+          {
+            "id": 1,
+            "type": "car",
+            "segment_id": 0,
+            "s": 90,
+            "l": -1.75,
+            "vx": 8.0,
+            "vy": 0.0,
+            "len": 4.6,
+            "wid": 2.0
+          },
+          {
+            "id": 2,
+            "type": "car",
+            "segment_id": 0,
+            "s": 145,
+            "l": -5.25,
+            "vx": 12.0,
+            "vy": 0.0,
+            "len": 4.6,
+            "wid": 2.0
+          },
+          {
+            "id": 3,
+            "type": "suv",
+            "segment_id": 1,
+            "s": 50,
+            "l": -1.75,
+            "vx": 9.0,
+            "vy": 0.0,
+            "len": 4.8,
+            "wid": 2.1
+          },
+          {
+            "id": 4,
+            "type": "truck",
+            "segment_id": 3,
+            "s": 170,
+            "l": -1.75,
+            "vx": 13.0,
+            "vy": 0.0,
+            "len": 8.0,
+            "wid": 2.5
+          },
+          {
+            "id": 5,
+            "type": "car",
+            "segment_id": 3,
+            "s": 240,
+            "l": -5.25,
+            "vx": 17.0,
+            "vy": 0.0,
+            "len": 4.6,
+            "wid": 2.0
+          },
+          {
+            "id": 6,
+            "type": "car",
+            "segment_id": 5,
+            "s": 115,
+            "l": 1.75,
+            "vx": -10.0,
+            "vy": 0.0,
+            "len": 4.6,
+            "wid": 2.0
+          },
+          {
+            "id": 7,
+            "type": "car",
+            "segment_id": 5,
+            "s": 180,
+            "l": -1.75,
+            "vx": 8.0,
+            "vy": 0.0,
+            "len": 4.6,
+            "wid": 2.0
+          },
+          {
+            "id": 8,
+            "type": "pedestrian",
+            "x": 225,
+            "y": -8.5,
+            "vx": 0.0,
+            "vy": 0.0,
+            "len": 0.5,
+            "wid": 0.5
+          }
+        ],
+        "traffic_lights": [
+          {
+            "id": 0,
+            "x": 210,
+            "y_lane": -1.75,
+            "green_s": 24,
+            "yellow_s": 3,
+            "red_s": 28,
+            "phase_offset_s": 0
+          },
+          {
+            "id": 1,
+            "x": 505,
+            "y_lane": -1.75,
+            "green_s": 35,
+            "yellow_s": 3,
+            "red_s": 22,
+            "phase_offset_s": 12
+          },
+          {
+            "id": 2,
+            "x": 760,
+            "y_lane": -1.75,
+            "green_s": 30,
+            "yellow_s": 3,
+            "red_s": 25,
+            "phase_offset_s": 8
+          }
+        ],
+        "stop_lines": [
+          {
+            "id": 0,
+            "x": 198,
+            "y": -1.75
+          },
+          {
+            "id": 1,
+            "x": 493,
+            "y": -1.75
+          },
+          {
+            "id": 2,
+            "x": 748,
+            "y": -1.75
+          }
+        ],
+        "construction_zones": [
+          {
+            "id": 0,
+            "x": 690,
+            "y": -1.75,
+            "length": 34,
+            "width": 3.5
+          },
+          {
+            "id": 1,
+            "x": 2470,
+            "y": 105,
+            "length": 28,
+            "width": 3.5
+          }
+        ],
+        "route": [
+          {
+            "trigger_x": 150,
+            "type": "lane_change",
+            "target_lane": 3,
+            "target_speed": 10,
+            "label": "prepare_left_turn"
+          },
+          {
+            "trigger_x": 430,
+            "type": "lane_change",
+            "target_lane": 2,
+            "target_speed": 10,
+            "label": "prepare_right_turn"
+          },
+          {
+            "trigger_x": 720,
+            "type": "branch_select",
+            "branch_id": 141,
+            "target_lane": 2,
+            "target_speed": 12,
+            "label": "select_viaduct_entry"
+          },
+          {
+            "trigger_x": 1080,
+            "type": "merge",
+            "target_lane": 2,
+            "target_speed": 14,
+            "label": "merge_to_elevated"
+          },
+          {
+            "trigger_x": 2020,
+            "type": "lane_change",
+            "target_lane": 3,
+            "target_speed": 11,
+            "label": "avoid_exit_workzone"
+          },
+          {
+            "trigger_x": 2580,
+            "type": "u_turn",
+            "target_lane": 0,
+            "target_speed": 6,
+            "label": "return_u_turn"
+          }
+        ],
+        "pass_criteria": {
+          "no_collision": true,
+          "max_duration_s": 150,
+          "min_avg_speed_mps": 3.0,
+          "min_distance_m": 900
+        },
+        "scenarios": [
+          {
+            "name": "construction_avoidance",
+            "label": "施工区提前避让",
+            "trigger": {
+              "type": "ego_x_gte",
+              "value": 650
+            },
+            "actor_overrides": [
+              {
+                "id": 1,
+                "target_offset": -5.25
+              }
+            ]
+          },
+          {
+            "name": "viaduct_merge",
+            "label": "高架汇入",
+            "trigger": {
+              "type": "ego_x_gte",
+              "value": 1050
+            },
+            "actor_overrides": [
+              {
+                "id": 4,
+                "target_vx": 11.0
+              }
+            ]
+          }
+        ],
+        "choreography": {
+          "loop_period_s": 999,
+          "beats": [
+            {
+              "t": 12,
+              "actor": "1",
+              "act": "brake",
+              "vx": 2.0
+            },
+            {
+              "t": 28,
+              "actor": "3",
+              "act": "brake",
+              "vx": 5.0
+            },
+            {
+              "t": 52,
+              "actor": "5",
+              "act": "lane_change",
+              "vx": 15.0
+            },
+            {
+              "t": 76,
+              "actor": "8",
+              "act": "cross",
+              "vx": 1.2
             }
           ]
         }

@@ -38,9 +38,9 @@ sanitize_ld_path() {
 }
 sanitize_ld_path
 
-# 默认场景：连续城市综合路网，覆盖地面路口、匝道、高架、施工避让和掉头回程。
+# 默认场景：已验证的连续主路。城市综合场景仍在逐段闭环验证，不作为默认入口。
 # 可用 --scenario 覆盖；不指定时 patch pipeline.json 指向此场景。
-DEFAULT_SCENARIO="${FLOWENGINE_SCENARIO:-scenarios/city_comprehensive.json}"
+DEFAULT_SCENARIO="${FLOWENGINE_SCENARIO:-scenarios/straight_road.json}"
 
 LOG_DIR="${FLOW_LOG_DIR:-/tmp/flow_logs}"
 PID_FILE="${FLOWENGINE_DEMO_PID_FILE:-/tmp/kunautodrive_demo.pids}"

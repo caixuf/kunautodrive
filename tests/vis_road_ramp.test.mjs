@@ -15,6 +15,14 @@ const mainEdge = {
   nodes: [[0, 0, 0], [300, 0, 0]],
 };
 
+const bidirectionalView = build({ edges: [mainEdge] });
+eq('双向道路绘制连续双黄中心线', bidirectionalView.getStats().doubleYellowCenterlines, 1);
+
+const oneWayView = build({
+  edges: [{ ...mainEdge, id: 'oneway-main', oneway: true }],
+});
+eq('同向道路不绘制黄色对向中心线', oneWayView.getStats().doubleYellowCenterlines, 0);
+
 const mergeView = build({
   edges: [
     mainEdge,
