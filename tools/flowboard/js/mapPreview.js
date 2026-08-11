@@ -1,4 +1,5 @@
-import { init3DScene, resize3D, update3D, setCameraMode, setPerfTier } from './vis/main.js';
+import './bootstrap.js';
+import { init3DScene, resize3D, update3D, setCameraMode } from './vis/main.js';
 
 function toTopo(map, routes, routeId) {
   const route = routes.find((item) => item.id === routeId);
@@ -37,10 +38,13 @@ async function boot() {
   const routeId = params.get('route') || 'main';
   const msg = document.getElementById('msg');
   try {
-    init3DScene(document.getElementById('scene3d'));
-    // Preview is isolated from the live dashboard, so use the full downtown
-    // asset budget and let the existing software-renderer guard downgrade it.
-    setPerfTier('high');
+    const canvas = document.getElementById('scene3d-canvas');
+    if (!canvas || typeof canvas.getContext !== 'function') {
+      throw new Error('3D canvas unavailable');
+    }
+    if (!init3DScene(canvas)) {
+      throw new Error('WebGL renderer initialization failed');
+    }
     const response = await fetch('/api/map/preview', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},

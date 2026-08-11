@@ -5,17 +5,19 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>FlowBoard 3D Map Preview</title>
   <style>
-    html, body, #scene3d { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #0a0d14; }
+    html, body, #scene3d, #scene3d-canvas { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #0a0d14; }
+    #scene3d-canvas { display: block; }
     #msg { position: absolute; inset: 0; display: grid; place-items: center; color: #8b949e; font: 13px sans-serif; pointer-events: none; }
   </style>
 </head>
 <body>
-  <div id="scene3d"><div id="msg">加载地图…</div></div>
+  <div id="scene3d">
+    <canvas id="scene3d-canvas"></canvas>
+    <div id="msg">加载地图…</div>
+  </div>
   <script type="importmap">
     {"imports":{"three":"/tools/flowboard/vendor/three/three.module.js","three/addons/":"/tools/flowboard/vendor/three/jsm/"}}
   </script>
-  <!-- bootstrap first: installs window.THREE for view modules -->
-  <script type="module" src="js/bootstrap.js"></script>
-  <script type="module" src="js/mapPreview.js?v=20260812isolated2"></script>
+  <script type="module" src="js/mapPreview.js?v=20260812canvas"></script>
 </body>
 </html>

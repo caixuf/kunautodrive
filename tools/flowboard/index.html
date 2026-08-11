@@ -146,8 +146,8 @@
     <button class="ws-btn" data-ws="perf" onclick="flowboard.switchWorkspace('perf')">📊 性能分析</button>
   </div>
   <div id="map-preview-modal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(1,4,9,.55);box-sizing:border-box">
-    <div style="position:absolute;right:18px;top:18px;width:min(720px,46vw);height:min(460px,58vh);display:flex;flex-direction:column;background:#0d1117;border:1px solid #30363d;border-radius:12px;overflow:hidden;box-shadow:0 18px 48px rgba(0,0,0,.55)">
-      <div style="position:relative;display:flex;align-items:center;justify-content:space-between;padding:10px 48px 10px 14px;border-bottom:1px solid #30363d;background:#11161d">
+    <div id="map-preview-panel" style="position:absolute;right:18px;top:18px;width:min(720px,46vw);height:min(460px,58vh);display:flex;flex-direction:column;background:#0d1117;border:1px solid #30363d;border-radius:12px;overflow:hidden;box-shadow:0 18px 48px rgba(0,0,0,.55)">
+      <div id="map-preview-handle" style="position:relative;display:flex;align-items:center;justify-content:space-between;padding:10px 48px 10px 14px;border-bottom:1px solid #30363d;background:#11161d;cursor:move;user-select:none">
         <strong style="font-size:13px">🗺 3D 地图预览</strong>
         <span style="font-size:11px;color:#8b949e">拖拽旋转 · 滚轮缩放 · 右键平移</span>
         <button type="button" onclick="flowboard.closeMapPreview()" title="关闭"

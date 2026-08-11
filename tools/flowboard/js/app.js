@@ -105,6 +105,33 @@ function closeMapPreview() {
   if (modal) modal.style.display = 'none';
 }
 
+function initMapPreviewDrag() {
+  var panel = document.getElementById('map-preview-panel');
+  var handle = document.getElementById('map-preview-handle');
+  if (!panel || !handle || handle.dataset.dragReady) return;
+  handle.dataset.dragReady = 'true';
+  var drag = null;
+  handle.addEventListener('pointerdown', function (event) {
+    if (event.target.closest('button')) return;
+    var rect = panel.getBoundingClientRect();
+    drag = {dx: event.clientX - rect.left, dy: event.clientY - rect.top};
+    panel.style.left = rect.left + 'px';
+    panel.style.top = rect.top + 'px';
+    panel.style.right = 'auto';
+    handle.setPointerCapture(event.pointerId);
+  });
+  handle.addEventListener('pointermove', function (event) {
+    if (!drag) return;
+    var maxX = Math.max(0, window.innerWidth - panel.offsetWidth);
+    var maxY = Math.max(0, window.innerHeight - panel.offsetHeight);
+    panel.style.left = Math.max(0, Math.min(maxX, event.clientX - drag.dx)) + 'px';
+    panel.style.top = Math.max(0, Math.min(maxY, event.clientY - drag.dy)) + 'px';
+  });
+  function stopDrag() { drag = null; }
+  handle.addEventListener('pointerup', stopDrag);
+  handle.addEventListener('pointercancel', stopDrag);
+}
+
 // Click dimmed backdrop (not the panel) to close preview.
 document.addEventListener('click', function (event) {
   var modal = document.getElementById('map-preview-modal');
@@ -114,6 +141,7 @@ document.addEventListener('click', function (event) {
 document.addEventListener('keydown', function (event) {
   if (event.key === 'Escape') closeMapPreview();
 });
+document.addEventListener('DOMContentLoaded', initMapPreviewDrag);
 
 function gameAngleDeg(rad) {
   return rad * 180 / Math.PI;
