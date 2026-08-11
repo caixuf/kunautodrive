@@ -9,6 +9,7 @@ from tools.ai_framework import (
     VLAInput,
     WorldModelAction,
     WorldModelState,
+    rollout_evaluation,
     rollout_reference,
 )
 
@@ -43,3 +44,37 @@ class AIFrameworkTest(unittest.TestCase):
         self.assertEqual(result["schema_version"], "flowengine.ai_contracts.v1")
         self.assertEqual(len(result["frames"]), 2)
 
+    def test_evaluator_artifact_can_feed_shadow_rollout(self):
+        evaluation = {
+            "schema_version": 1,
+            "scenario": "straight_road",
+            "result": "PASS",
+            "run": {"run_id": "eval-001"},
+            "samples": [
+                {
+                    "t_demo": 0.0,
+                    "metrics": {
+                        "scene": {
+                            "ego": {"x": 0.0, "y": 0.0, "speed": 4.0},
+                            "obstacles": [],
+                            "lane": {"width": 3.5},
+                        }
+                    },
+                },
+                {
+                    "t_demo": 0.1,
+                    "metrics": {
+                        "scene": {
+                            "ego": {"x": 0.4, "y": 0.0, "speed": 4.0},
+                            "obstacles": [],
+                            "lane": {"width": 3.5},
+                        }
+                    },
+                },
+            ],
+        }
+        artifact = rollout_evaluation(evaluation, "follow route", max_frames=2)
+        self.assertTrue(artifact["advisory_only"])
+        self.assertEqual(artifact["source"]["run_id"], "eval-001")
+        self.assertEqual(artifact["metrics"]["frame_count"], 2)
+        self.assertEqual(len(artifact["frames"]), 2)

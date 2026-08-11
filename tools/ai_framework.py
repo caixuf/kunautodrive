@@ -197,16 +197,108 @@ def rollout_reference(scenario: dict, steps: int, dt_s: float,
             "frames": frames}
 
 
+def _sample_state(sample: dict) -> WorldModelState:
+    metrics = sample.get("metrics", {}) if isinstance(sample, dict) else {}
+    scene = metrics.get("scene", {}) if isinstance(metrics, dict) else {}
+    ego = scene.get("ego", {}) if isinstance(scene, dict) else {}
+    obstacles = scene.get("obstacles", []) if isinstance(scene, dict) else []
+    if not isinstance(ego, dict):
+        ego = {}
+    if not isinstance(obstacles, list):
+        obstacles = []
+    timestamp = sample.get("t_demo")
+    if not isinstance(timestamp, (int, float)):
+        raw_timestamp = sample.get("timestamp", 0.0)
+        timestamp = float(raw_timestamp or 0.0) / 1_000_000.0
+    lane = scene.get("lane", {}) if isinstance(scene, dict) else {}
+    context = {
+        "speed_limit": float(lane.get("speed_limit", 22.0) or 22.0)
+        if isinstance(lane, dict) else 22.0,
+        "lane_width": float(lane.get("width", 3.5) or 3.5)
+        if isinstance(lane, dict) else 3.5,
+    }
+    return WorldModelState(float(timestamp), dict(ego),
+                           [dict(obs) for obs in obstacles if isinstance(obs, dict)],
+                           context)
+
+
+def rollout_evaluation(evaluation: dict, instruction: str,
+                       max_frames: int = 200) -> dict:
+    """Run the reference adapters over an existing evaluator JSON artifact."""
+    samples = evaluation.get("samples", [])
+    if not isinstance(samples, list):
+        raise ValueError("evaluation artifact samples must be an array")
+    selected = [sample for sample in samples[:max_frames] if isinstance(sample, dict)]
+    if not selected:
+        raise ValueError("evaluation artifact contains no samples")
+    first = _sample_state(selected[0])
+    world = KinematicWorldModel(float(first.ego.get("wheelbase", 2.7) or 2.7))
+    vla = ReferenceVLA()
+    frames = []
+    collision_risk_count = 0
+    for index, sample in enumerate(selected):
+        state = _sample_state(sample)
+        intent = vla.predict(VLAInput(
+            state.timestamp_s, instruction, state.ego, state.obstacles,
+            [], state.scene_context, frames[-3:],
+        ))
+        current = float(state.ego.get("speed", state.ego.get("v", 0.0)) or 0.0)
+        action = WorldModelAction(
+            throttle=max(0.0, min(1.0, (intent.target_speed_mps - current) * 0.08)),
+            brake=1.0 if intent.target_speed_mps <= 0.1 and current > 0.1 else 0.0,
+        )
+        next_state = world.predict(state, action, 0.1)
+        collision_risk_count += int("collision_risk" in next_state.events)
+        frames.append({
+            "index": index,
+            "source_t": state.timestamp_s,
+            "ego": state.ego,
+            "intent": asdict(intent),
+            "action": asdict(action),
+            "predicted_next_ego": next_state.next_state.ego,
+            "events": next_state.events,
+            "uncertainty": next_state.uncertainty,
+        })
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "artifact_type": "ai_shadow_rollout",
+        "backend": "reference",
+        "advisory_only": True,
+        "generated_at_unix_s": time.time(),
+        "instruction": instruction,
+        "source": {
+            "schema_version": evaluation.get("schema_version"),
+            "run_id": evaluation.get("run", {}).get("run_id"),
+            "scenario": evaluation.get("scenario"),
+            "result": evaluation.get("result"),
+        },
+        "metrics": {
+            "frame_count": len(frames),
+            "collision_risk_count": collision_risk_count,
+            "maneuvers": sorted({frame["intent"]["maneuver"] for frame in frames}),
+        },
+        "frames": frames,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the reference VLA/world-model contract.")
-    parser.add_argument("--scenario", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--scenario", type=Path)
+    source.add_argument("--evaluation", type=Path,
+                        help="existing demo_evaluator --json-out artifact")
     parser.add_argument("--steps", type=int, default=20)
+    parser.add_argument("--max-frames", type=int, default=200)
     parser.add_argument("--dt", type=float, default=0.1)
     parser.add_argument("--instruction", default="Drive safely and follow the route.")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    scenario = json.loads(args.scenario.read_text(encoding="utf-8"))
-    result = rollout_reference(scenario, args.steps, args.dt, args.instruction)
+    if args.evaluation:
+        evaluation = json.loads(args.evaluation.read_text(encoding="utf-8"))
+        result = rollout_evaluation(evaluation, args.instruction, args.max_frames)
+    else:
+        scenario = json.loads(args.scenario.read_text(encoding="utf-8"))
+        result = rollout_reference(scenario, args.steps, args.dt, args.instruction)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n",
                            encoding="utf-8")

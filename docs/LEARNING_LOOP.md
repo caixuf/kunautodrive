@@ -42,6 +42,12 @@ python3 tools/ai_framework.py \
   --scenario scenarios/straight_road.json \
   --steps 20 \
   --output /tmp/ai_rollout.json
+
+# 对已有 demo_evaluator --json-out 结果做 shadow rollout
+python3 tools/ai_framework.py \
+  --evaluation /tmp/flow_regression/straight_road.json \
+  --max-frames 200 \
+  --output /tmp/ai_shadow.json
 ```
 
 当前包含：
@@ -51,6 +57,8 @@ python3 tools/ai_framework.py \
   下一状态、事件和不确定性；
 - `ReferenceVLA` 和 `KinematicWorldModel`：仅用于接口、回放和 smoke test 的确定性
   参考实现，不代表真实 VLA 或生成式世界模型；
+- `--evaluation`：直接消费现有 evaluator 的 `samples`，生成带 `source.run_id`、
+  `metrics` 和逐帧不确定性的 advisory shadow artifact；
 - `SCHEMA_VERSION`：后续接入真实多模态模型时，保持输入输出和现有 evaluator 可追踪。
 
 真实模型接入只需实现 `VLAAdapter.predict()` 或
