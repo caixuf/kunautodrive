@@ -477,6 +477,9 @@ static int active_output_dim(void) {
 
 static bool shadow_speed_gate_supported(void) {
     /* out<5 的模型首个输出是 target_speed；out>=5 是 throttle/brake/...。 */
+    const bool active_loaded = g.use_onnx ? (g.onnx.loaded != 0)
+                                         : (g.model.loaded != 0);
+    if (!active_loaded) return true;  /* heuristic fallback emits target_speed */
     return active_output_dim() > 0 && active_output_dim() < 5;
 }
 
