@@ -81,9 +81,14 @@ lcov.info
 datasets/
 models/
 runs/
-# 例外：FlowBoard 3D 模型资产（glTF 占位模型，非训练产物）
+# 例外：FlowBoard 3D 模型资产（非训练产物）
 !tools/flowboard/models/
 !tools/flowboard/models/*.gltf
+!tools/flowboard/models/city/
+!tools/flowboard/models/city/*.gltf
+!tools/flowboard/models/city/*.bin
+!tools/flowboard/models/city/*.png
+!tools/flowboard/models/city/*.txt
 
 # Valgrind输出
 *.valgrind
@@ -158,4 +163,3 @@ build-win-vs/
 build-mingw/
 # Offline Eigen vendor tree (header-only; prefer build/_deps clone or this local cache)
 third_party/eigen/
-

@@ -54,11 +54,11 @@ const MODEL_SOURCES = {
  * 资产来源：Quaternius Downtown City MegaKit (CC0)，放置到
  * tools/flowboard/models/city/。文件缺失时静默回退到程序化 Box 建筑
  * （BuildingView 现有实现），保证无外网资产时行为不变。 */
-const CITY_MODEL_VERSION = '20260811city';
+const CITY_MODEL_VERSION = '20260811downtown-v1';
 const CITY_MODEL_SOURCES = {
-  city_a: ['/tools/flowboard/models/city/building_a.glb?v=' + CITY_MODEL_VERSION],
-  city_b: ['/tools/flowboard/models/city/building_b.glb?v=' + CITY_MODEL_VERSION],
-  city_c: ['/tools/flowboard/models/city/building_c.glb?v=' + CITY_MODEL_VERSION]
+  city_a: ['/tools/flowboard/models/city/Building_Small_1.gltf?v=' + CITY_MODEL_VERSION],
+  city_b: ['/tools/flowboard/models/city/Building_Medium_2_001.gltf?v=' + CITY_MODEL_VERSION],
+  city_c: ['/tools/flowboard/models/city/Building_Large_2.gltf?v=' + CITY_MODEL_VERSION]
 };
 const _cityCache = {};
 let _cityReady = false;

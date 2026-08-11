@@ -1,8 +1,8 @@
 /**
  * BuildingView.js — 道路两侧城市楼群
  *
- * 2 个 InstancedMesh（楼体 + 屋顶），共享一张程序生成窗格贴图。
- * 无外网资产；性能档只改变实例密度，不改变 draw call。
+ * 远景使用 2 个 InstancedMesh（楼体 + 屋顶），近景按预算复用真实
+ * Downtown City 建筑；模型缺失时始终回退到程序化楼体。
  */
 
 import { sampleEdgeNodes } from '../math/Curve.js';
@@ -29,6 +29,11 @@ const LAYERS = [
  * 模型缺失时回退到程序化 Box 楼体（原实现），保证无外网资产行为不变。
  * glTF 建筑尺寸/朝向各异，摆放前按目标高度归一化缩放。 */
 const CITY_BUILDING_NAMES = ['city_a', 'city_b', 'city_c'];
+export const CITY_MODEL_BUDGET = Object.freeze({
+  high: 18,
+  medium: 8,
+  low: 0,
+});
 
 function buildingTexture() {
   const canvas = document.createElement('canvas');
@@ -71,7 +76,7 @@ export function createBuildingView(scene) {
 
   /** 把一个城市建筑 glTF 克隆按目标高度归一化后放到指定位置。
    *  返回 true 表示已用真实模型，false 表示该资产缺失（调用方回退 Box）。 */
-  function placeCityModel(name, slot) {
+  function placeCityModel(name, slot, tier) {
     const model = getCityModel(name);
     if (!model) return false;
     // 归一化：按源模型包围盒高度缩放到目标高度，底部对齐地面。
@@ -83,8 +88,15 @@ export function createBuildingView(scene) {
     const scaledBox = new THREE.Box3().setFromObject(model);
     model.position.set(slot.x, -scaledBox.min.y, slot.z);
     model.rotation.y = slot.rotation;
-    model.castShadow = true;
-    model.receiveShadow = true;
+    model.traverse((child) => {
+      if (!child.isMesh) return;
+      child.castShadow = tier === 'high';
+      child.receiveShadow = false;
+      child.frustumCulled = true;
+    });
+    model.updateMatrixWorld(true);
+    model.matrixAutoUpdate = false;
+    model.userData.cityAsset = true;
     group.add(model);
     return true;
   }
@@ -94,9 +106,11 @@ export function createBuildingView(scene) {
   let lastStore = null;
 
   function build(roadNetwork, store = {}) {
+    const tier = store.perfTier || 'high';
+    const cityBudget = CITY_MODEL_BUDGET[tier] || 0;
     /* 首次 build 时启动城市模型加载（fire-and-forget）。加载完成后若
-     * 路网未变则重建一次以切换到 glTF 建筑；否则下次 build 自然使用。 */
-    if (!cityLoadStarted) {
+     * 路网未变则重建一次以切换到 glTF 建筑；低档位不下载真实模型。 */
+    if (!cityLoadStarted && cityBudget > 0) {
       cityLoadStarted = true;
       lastRoadNetwork = roadNetwork;
       lastStore = store;
@@ -109,7 +123,6 @@ export function createBuildingView(scene) {
     }
     clear();
     if (!roadNetwork || !Array.isArray(roadNetwork.edges)) return;
-    const tier = store.perfTier || 'high';
     const spacing = SPACING[tier] || SPACING.high;
     const slots = [];
 
@@ -157,24 +170,23 @@ export function createBuildingView(scene) {
     }
     if (!slots.length) return;
 
-    /* 优先用城市 glTF 建筑（若任一已加载）。逐 slot 尝试真实模型，
-     * 缺失的 slot 落到 Box 兜底——模型文件不存在时整体回退到
-     * 程序化贴图楼体，保证无外网资产时视觉与旧版一致。 */
+    /* 真实建筑只放在近景且受性能档预算限制。每栋 Downtown 建筑有
+     * 12~13 个材质 primitive，不能像盒体一样为每个 slot 克隆；剩余
+     * 位置统一进入下方 InstancedMesh，保持中远景的低 draw call。 */
     const useCity = CITY_BUILDING_NAMES.some((n) => getCityModel(n) !== null);
-    if (useCity) {
-      for (const slot of slots) {
+    const realModelBudget = useCity ? cityBudget : 0;
+    let cityPlaced = 0;
+    const boxSlots = [];
+    for (const slot of slots) {
+      const useRealModel = slot.layer === 0 && cityPlaced < realModelBudget;
+      if (useRealModel) {
         const name = CITY_BUILDING_NAMES[Math.floor(slot.seed * CITY_BUILDING_NAMES.length) % CITY_BUILDING_NAMES.length];
-        if (!placeCityModel(name, slot)) {
-          // 单个模型缺失：落 Box（见下方 Box 路径），这里按目标尺寸补一个简单楼体。
-          const bodyGeo = new THREE.BoxGeometry(slot.depth, slot.height, slot.width);
-          const facade = new THREE.MeshStandardMaterial({ color: 0x8998a8, roughness: 0.78, metalness: 0.04 });
-          const mesh = new THREE.Mesh(bodyGeo, facade);
-          mesh.position.set(slot.x, slot.height / 2, slot.z);
-          mesh.rotation.y = slot.rotation;
-          group.add(mesh);
+        if (placeCityModel(name, slot, tier)) {
+          cityPlaced++;
+          continue;
         }
       }
-      return;
+      boxSlots.push(slot);
     }
 
     const facade = new THREE.MeshStandardMaterial({
@@ -198,8 +210,8 @@ export function createBuildingView(scene) {
       roughness: 1.0,
     });
 
-    const nearMid = slots.filter((s) => s.layer < 2);
-    const far = slots.filter((s) => s.layer >= 2);
+    const nearMid = boxSlots.filter((s) => s.layer < 2);
+    const far = boxSlots.filter((s) => s.layer >= 2);
 
     const bodyGeo = new THREE.BoxGeometry(1, 1, 1);
     const roofGeo = new THREE.BoxGeometry(1, 1, 1);
