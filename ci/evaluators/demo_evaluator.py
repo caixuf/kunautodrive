@@ -21,6 +21,7 @@ import statistics
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 
@@ -28,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[2]  # ci/evaluators/ → 项目根
 DEFAULT_JSON = Path("/tmp/flow_topology.json")
 LAUNCHER_STDERR = Path("/tmp/flow_launcher_stderr.txt")
 PIPELINE_JSON = ROOT / "config" / "pipeline.json"
+EVALUATION_SCHEMA_VERSION = 1
 
 
 def validate_safety_evidence(evidence: object) -> list[str]:
@@ -58,6 +60,65 @@ def validate_safety_evidence(evidence: object) -> list[str]:
     if not isinstance(command, dict) or command.get("throttle") != 0.0 or command.get("brake") != 1.0:
         return ["safety evidence emergency_stop must command throttle=0 and brake=1"]
     return []
+
+
+def _git_revision() -> str | None:
+    """Return the evaluated source revision without making git a hard dependency."""
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    revision = proc.stdout.strip()
+    return revision or None
+
+
+def build_evaluation_payload(
+    *,
+    summary: dict,
+    result: str,
+    failures: list[str],
+    warnings: list[str],
+    samples: list[dict],
+    npc_trajectories: dict[str, list[dict]],
+    safety_evidence: dict | None,
+    scenario_file: str | None,
+    mode: str = "closed_loop",
+    run_id: str | None = None,
+) -> dict:
+    """Build the stable v1 result envelope while preserving legacy fields.
+
+    ``summary`` remains available for existing baselines and ``metrics`` is the
+    canonical location for new consumers. The sampled traces stay unchanged so
+    incident analysis and model promotion do not need a second data format.
+    """
+    scenario = str(summary.get("scenario", "") or "")
+    scenario_id = Path(scenario_file).stem if scenario_file else scenario
+    return {
+        "schema_version": EVALUATION_SCHEMA_VERSION,
+        "run": {
+            "run_id": run_id or uuid.uuid4().hex,
+            "mode": mode,
+            "scenario_id": scenario_id,
+            "scenario_file": scenario_file,
+            "git_commit": _git_revision(),
+            "generated_at_unix_s": time.time(),
+        },
+        "scenario": scenario,
+        "result": result,
+        "failures": failures,
+        "warnings": warnings,
+        "metrics": summary,
+        "summary": summary,
+        "safety_evidence": safety_evidence,
+        "samples": samples,
+        "npc_trajectories": npc_trajectories,
+    }
 
 
 TOPIC_MIN_FREQ = {
@@ -2014,6 +2075,11 @@ def main() -> int:
                         help="override ego lateral offset from route reference (meters)")
     parser.add_argument("--json-out", type=Path, default=None,
                         help="write the machine-readable evaluation result to this JSON path")
+    parser.add_argument("--run-id", type=str, default=None,
+                        help="stable caller-supplied evaluation run identifier")
+    parser.add_argument("--mode", choices=("open_loop", "closed_loop", "road_test"),
+                        default="closed_loop",
+                        help="evaluation mode recorded in the result envelope")
     parser.add_argument("--require-safety-evidence", action="store_true",
                         help="require injected raw_cmd timeout evidence with L3 emergency stop")
     args = parser.parse_args()
@@ -2180,16 +2246,18 @@ def main() -> int:
                 s["t_demo"] = (float(s.get("timestamp", 0.0) or 0.0) - t0) / 1_000_000.0 \
                     if t0 > 0 else 0.0
 
-        payload = {
-            "scenario": summary.get("scenario"),
-            "result": result,
-            "failures": failures,
-            "warnings": warnings,
-            "summary": summary,
-            "safety_evidence": latest_safety_evidence,
-            "samples": samples,  # 全量 ego 轨迹采样(t/x/y/heading/speed/steer)，供离线故事/事故分析
-            "npc_trajectories": {str(eid): pts for eid, pts in npc_trajectories.items()},  # B: NPC 轨迹
-        }
+        payload = build_evaluation_payload(
+            summary=summary,
+            result=result,
+            failures=failures,
+            warnings=warnings,
+            samples=samples,
+            npc_trajectories={str(eid): pts for eid, pts in npc_trajectories.items()},
+            safety_evidence=latest_safety_evidence,
+            scenario_file=_scn_file,
+            mode=args.mode,
+            run_id=args.run_id,
+        )
         args.json_out.parent.mkdir(parents=True, exist_ok=True)
         args.json_out.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
                                  encoding="utf-8")

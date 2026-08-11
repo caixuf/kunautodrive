@@ -19,7 +19,30 @@ python3 ci/evaluators/demo_evaluator.py --duration 45 --interval 0.5
 
 # 只分析已存在的数据，不重新启动 demo
 python3 ci/evaluators/demo_evaluator.py --no-run
+
+# 指定可追踪的评测运行标识和评测模式
+python3 ci/evaluators/demo_evaluator.py \
+  --scenario scenarios/straight_road.json \
+  --run-id nightly-straight-001 \
+  --mode closed_loop \
+  --json-out /tmp/straight.result.json
 ```
+
+## 统一结果协议 v1
+
+使用 `--json-out` 时，结果保留原有的 `summary`、`samples` 和
+`npc_trajectories` 字段，并增加稳定的顶层协议字段：
+
+| 字段 | 说明 |
+|------|------|
+| `schema_version` | 结果协议版本，当前为 `1` |
+| `run` | `run_id`、`mode`、`scenario_id`、场景文件、Git revision 和生成时间 |
+| `metrics` | 规范化指标入口，当前与兼容保留的 `summary` 相同 |
+| `result` / `failures` / `warnings` | 门禁结论和可操作诊断 |
+
+`mode` 当前支持 `open_loop`、`closed_loop`、`road_test`。评测器暂时仍由
+FlowSim 驱动闭环运行；其余模式用于让同一结果协议可以被回放器和实车适配器复用，
+不会伪造尚未接入的数据。
 
 ## 工作原理
 

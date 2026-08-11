@@ -18,6 +18,30 @@ def load_evaluator():
 
 
 class DemoEvaluatorTest(unittest.TestCase):
+    def test_evaluation_payload_has_v1_envelope_and_legacy_summary(self):
+        evaluator = load_evaluator()
+        summary = {"scenario": "straight_road", "avg_speed_mps": 8.0}
+        payload = evaluator.build_evaluation_payload(
+            summary=summary,
+            result="PASS",
+            failures=[],
+            warnings=["sample warning"],
+            samples=[{"timestamp": 1.0}],
+            npc_trajectories={"1": [{"t": 0.0, "x": 2.0}]},
+            safety_evidence=None,
+            scenario_file="scenarios/straight_road.json",
+            mode="closed_loop",
+            run_id="run-test-001",
+        )
+
+        self.assertEqual(payload["schema_version"], 1)
+        self.assertEqual(payload["run"]["run_id"], "run-test-001")
+        self.assertEqual(payload["run"]["scenario_id"], "straight_road")
+        self.assertEqual(payload["run"]["mode"], "closed_loop")
+        self.assertEqual(payload["metrics"], summary)
+        self.assertIs(payload["summary"], summary)
+        self.assertEqual(payload["npc_trajectories"]["1"][0]["x"], 2.0)
+
     def test_safety_evidence_contract_accepts_l3_emergency_stop(self):
         evaluator = load_evaluator()
         evidence = {
