@@ -128,7 +128,7 @@ struct FlowSimContext {
     double            curve_length_m{0};
     double            curve_offset_m{0};
 
-    /* 物理模型选择："kinematic"（默认）| "dynamic"（预留，未实现） */
+    /* 物理模型选择："kinematic"（默认）| "dynamic"（线性轮胎二自由度） */
     char              physics_model[32]{"kinematic"};
 
     /* control/cmd 状态 */

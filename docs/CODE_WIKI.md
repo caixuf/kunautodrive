@@ -400,7 +400,7 @@ lc_state: 0=巡航  1=变道中  2=稳定巡航  3=回切中
 速度: vx=v*cos(h), vy=v*sin(h)
 ```
 
-**`step_bicycle_dynamic()`**（[L67](../modules/adas_nodes/flowsim/physics.cpp#L67)）：**动力学桩（未实现）**。首次调用打 LOG_WARN 后 fallback 到 step_bicycle。entity.h 的 `v_x_body/v_y_body/yaw_rate/F_yf/F_yr/tire_stiffness/yaw_inertia` 字段运行时恒 0。
+**`step_bicycle_dynamic()`**（[L67](../modules/adas_nodes/flowsim/physics.cpp#L67)）：线性轮胎二自由度动力学模型。积分车身侧向速度与横摆角速度，含滑移角饱和、摩擦加速度护栏和低速运动学退化；`entity.h` 的 `v_x_body/v_y_body/yaw_rate/F_yf/F_yr/tire_stiffness/yaw_inertia` 字段在 `physics_model=dynamic` 时生效。
 
 > **heading 重置逻辑 — 文档/代码漂移**：[CLAUDE.md L415](../CLAUDE.md) 与 flowsim_node.cpp:1185 注释声称"运动学模式每帧重置 heading 为道路切线"，但 [L1240](../modules/adas_nodes/flowsim_node.cpp#L1240) 实现已改为**保留 bicycle 自由积分 heading**（仅归一化），靠 `sin(heading - road_heading)` 驱动横向位移构成负反馈闭环。**以代码为准**。这一改动直接影响 control 的 v_lat_damp 是否生效——旧实现 heading 被道路切线拽回→heading_err≈0→横向 PD 退化为纯 P。
 
