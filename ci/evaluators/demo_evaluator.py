@@ -239,7 +239,7 @@ def _load_shadow_metrics() -> dict:
     than failing on a transient/full-run error that the metric cannot explain.
 
     Returns a dict with latest delta, full MAE, gate MAE, sample count, and
-    whether the gate has enough evidence.
+    whether the gate is supported and has enough evidence.
     Sidecars predating the settled-sample field retain the full-MAE
     compatibility path; current inference_node sidecars are inconclusive
     until the settled sample count is large enough.
@@ -260,6 +260,7 @@ def _load_shadow_metrics() -> dict:
             "full_mae": None,
             "mae": None,
             "settled_n": 0,
+            "gate_supported": True,
             "gate_ready": False,
         }
     try:
@@ -270,13 +271,19 @@ def _load_shadow_metrics() -> dict:
         settled_mae = data.get("shadow_speed_mae_settled")
         settled_n = data.get("shadow_settled_n")
         settled_n = int(settled_n) if isinstance(settled_n, (int, float)) else None
+        gate_supported = data.get("shadow_gate_supported", True)
+        gate_supported = bool(gate_supported)
         if settled_mae is not None:
-            gate_ready = settled_n is not None and settled_n >= SHADOW_SETTLED_MIN_SAMPLES
+            gate_ready = (
+                gate_supported
+                and settled_n is not None
+                and settled_n >= SHADOW_SETTLED_MIN_SAMPLES
+            )
             mae = settled_mae if gate_ready else None
         else:
             # External sidecars may only provide full-run MAE. Keep that
             # compatibility path; inference_node writes settled_n explicitly.
-            gate_ready = "shadow_settled_n" not in data
+            gate_ready = gate_supported and "shadow_settled_n" not in data
             mae = full_mae if gate_ready else None
         delta_val = float(delta) if delta is not None else None
         full_mae_val = float(full_mae) if full_mae is not None else None
@@ -286,6 +293,7 @@ def _load_shadow_metrics() -> dict:
             "full_mae": full_mae_val,
             "mae": mae_val,
             "settled_n": settled_n or 0,
+            "gate_supported": gate_supported,
             "gate_ready": gate_ready,
         }
     except (json.JSONDecodeError, OSError, ValueError):
@@ -294,6 +302,7 @@ def _load_shadow_metrics() -> dict:
             "full_mae": None,
             "mae": None,
             "settled_n": 0,
+            "gate_supported": True,
             "gate_ready": False,
         }
 
@@ -308,6 +317,12 @@ def _shadow_gate_issues(metrics: dict) -> tuple[list[str], list[str]]:
     """Return shadow metric failures and warnings supported by the evidence."""
     failures: list[str] = []
     warnings: list[str] = []
+    if not metrics.get("gate_supported", True):
+        warnings.append(
+            "shadow_speed_mae not gated: model output contract is direct_control, "
+            "not target_speed"
+        )
+        return failures, warnings
     if not metrics["gate_ready"]:
         settled_n = metrics["settled_n"]
         if settled_n > 0:

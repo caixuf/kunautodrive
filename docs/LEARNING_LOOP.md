@@ -110,6 +110,10 @@ v1/v2 保持向后兼容。
 | lane_change | 换道意图 (-1=左, 0=直, 1=右) |
 | confidence | 置信度 (0 ~ 1.0) |
 
+5 维及以上输出是 `direct_control` 契约：模型预测执行量，不能把由油门/刹车
+反推的参考速度当作 `target_speed` 与 planning 目标做 shadow 硬门禁。评测器会保留
+该观测值，但只有 1/2/4 维 `target_speed` 契约才启用 `shadow_speed_mae` 门禁。
+
 ### 样本格式 (JSONL)
 
 ```json

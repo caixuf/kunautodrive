@@ -151,6 +151,34 @@ class DemoEvaluatorTest(unittest.TestCase):
         self.assertEqual(failures, [])
         self.assertIn("inconclusive", warnings[0])
 
+    def test_shadow_gate_skips_direct_control_output_contract(self):
+        evaluator = load_evaluator()
+        with tempfile.TemporaryDirectory() as workspace:
+            previous = os.environ.get("FLOWENGINE_TEMP_DIR")
+            os.environ["FLOWENGINE_TEMP_DIR"] = workspace
+            try:
+                Path(workspace, "flow_tiny_inference.json").write_text(
+                    '{"shadow_delta": -9.0, "shadow_speed_mae": 9.0, '
+                    '"shadow_settled_n": 20, '
+                    '"shadow_speed_mae_settled": 9.0, '
+                    '"prediction_contract": "direct_control", '
+                    '"shadow_gate_supported": false}\n',
+                    encoding="utf-8",
+                )
+                metrics = evaluator._load_shadow_metrics()
+                failures, warnings = evaluator._shadow_gate_issues(metrics)
+            finally:
+                if previous is None:
+                    os.environ.pop("FLOWENGINE_TEMP_DIR", None)
+                else:
+                    os.environ["FLOWENGINE_TEMP_DIR"] = previous
+
+        self.assertFalse(metrics["gate_supported"])
+        self.assertFalse(metrics["gate_ready"])
+        self.assertIsNone(metrics["mae"])
+        self.assertEqual(failures, [])
+        self.assertIn("direct_control", warnings[0])
+
     def test_evaluation_payload_has_v1_envelope_and_legacy_summary(self):
         evaluator = load_evaluator()
         summary = {"scenario": "straight_road", "avg_speed_mps": 8.0}

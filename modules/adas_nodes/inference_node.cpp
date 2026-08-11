@@ -465,10 +465,21 @@ static bool dims_supported(int in_dim, int out_dim) {
  * 把最新 shadow_delta + 累计 |delta| 统计原子写到 g.sidecar_path。
  * 与 tools/train_e2e/torch_sidecar.py 输出对称（demo_evaluator._load_shadow_delta
  * 读 "shadow_delta" 字段）；额外的聚合字段供 modelctl promote 门禁消费：
- *   shadow_speed_mae  = mean(|pred_speed - planning_target_speed|)
+ *   shadow_speed_mae  = mean(|pred_speed - planning_target_speed|)，仅适用于
+ *                       target_speed 输出契约；direct_control 模型仍保留该
+ *                       观测值，但通过 shadow_gate_supported=false 禁止误用。
  *   shadow_speed_rmse = sqrt(mean(delta²))
  * 限频 1Hz，tmp+rename 原子替换，避免读端撕裂。
  */
+static int active_output_dim(void) {
+    return g.use_onnx ? g.onnx.out_dim : g.model.out_dim;
+}
+
+static bool shadow_speed_gate_supported(void) {
+    /* out<5 的模型首个输出是 target_speed；out>=5 是 throttle/brake/...。 */
+    return active_output_dim() > 0 && active_output_dim() < 5;
+}
+
 static void write_shadow_sidecar(double shadow_delta, double pred_speed,
                                  const char* model_name) {
     if (!g.sidecar_path[0]) return;
@@ -480,6 +491,14 @@ static void write_shadow_sidecar(double shadow_delta, double pred_speed,
     cJSON_AddStringToObject(root, "source", "inference_node");
     cJSON_AddStringToObject(root, "model", model_name);
     cJSON_AddStringToObject(root, "model_path", g.model_path);
+    const bool gate_supported = shadow_speed_gate_supported();
+    cJSON_AddStringToObject(root, "prediction_contract",
+                            gate_supported ? "target_speed" : "direct_control");
+    cJSON_AddBoolToObject(root, "shadow_gate_supported", gate_supported);
+    if (!gate_supported) {
+        cJSON_AddStringToObject(root, "shadow_gate_reason",
+                                "model outputs control actions, not target_speed");
+    }
     cJSON_AddNumberToObject(root, "t_unix", (double)now / 1e6);
     cJSON_AddNumberToObject(root, "infer_count", g.infer_count);
     cJSON_AddNumberToObject(root, "pred_speed", pred_speed);
