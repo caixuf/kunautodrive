@@ -1031,9 +1031,17 @@ static int inference_init(MessageBus* bus, Transport* transport,
     g.frame_dim = (active_in == 23 || active_in == 115) ? V3_DIM : V2_DIM;
 
     /* sidecar 默认策略：加载了真实模型才写（heuristic 的 delta 不该进 shadow 门禁）。
-     * evaluator 的 SHADOW_INFERENCE_FILES 已包含 /tmp/flow_tiny_inference.json。 */
+     * worker 评测通过 FLOWENGINE_TEMP_DIR 隔离 sidecar，避免并发场景互读。 */
     if (!g.sidecar_path[0] && (g.use_onnx ? g.onnx.loaded : g.model.loaded)) {
-        strncpy(g.sidecar_path, "/tmp/flow_tiny_inference.json", sizeof(g.sidecar_path) - 1);
+        const char* temp_dir = getenv("FLOWENGINE_TEMP_DIR");
+        if (temp_dir && temp_dir[0]) {
+            snprintf(g.sidecar_path, sizeof(g.sidecar_path),
+                     "%s/flow_tiny_inference.json", temp_dir);
+        } else {
+            strncpy(g.sidecar_path, "/tmp/flow_tiny_inference.json",
+                    sizeof(g.sidecar_path) - 1);
+        }
+        g.sidecar_path[sizeof(g.sidecar_path) - 1] = '\0';
     }
 
     transport_subscribe(transport, "fusion/localization", on_fusion, nullptr);

@@ -2,6 +2,8 @@
 """Behavior tests for demo_evaluator configuration-driven checks."""
 
 import importlib.util
+import os
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -57,6 +59,22 @@ class DemoEvaluatorTest(unittest.TestCase):
             0.1,
             places=6,
         )
+
+    def test_shadow_sidecar_uses_worker_workspace(self):
+        evaluator = load_evaluator()
+        with tempfile.TemporaryDirectory() as workspace:
+            previous = os.environ.get("FLOWENGINE_TEMP_DIR")
+            os.environ["FLOWENGINE_TEMP_DIR"] = workspace
+            try:
+                self.assertEqual(
+                    evaluator._shadow_inference_files()[1],
+                    Path(workspace) / "flow_tiny_inference.json",
+                )
+            finally:
+                if previous is None:
+                    os.environ.pop("FLOWENGINE_TEMP_DIR", None)
+                else:
+                    os.environ["FLOWENGINE_TEMP_DIR"] = previous
         self.assertAlmostEqual(
             evaluator._timestamp_delta_seconds(1_700_000_000_100_000.0,
                                                1_700_000_000_000_000.0),

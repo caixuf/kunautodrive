@@ -218,6 +218,18 @@ TRUTH_LAYER_FOR_TYPE = {
 }
 
 
+def _shadow_inference_files() -> list[Path]:
+    """Resolve sidecar files in the worker workspace when one is configured."""
+    temp_dir = os.environ.get("FLOWENGINE_TEMP_DIR")
+    if temp_dir:
+        root = Path(temp_dir)
+        return [
+            root / "flow_torch_inference.json",
+            root / "flow_tiny_inference.json",
+        ]
+    return SHADOW_INFERENCE_FILES
+
+
 def _load_shadow_delta() -> tuple[float | None, float | None]:
     """Read the latest shadow_delta and shadow speed MAE from any active sidecar file.
 
@@ -230,7 +242,7 @@ def _load_shadow_delta() -> tuple[float | None, float | None]:
     """
     best_path: Path | None = None
     best_mtime = -1.0
-    for path in SHADOW_INFERENCE_FILES:
+    for path in _shadow_inference_files():
         try:
             mtime = path.stat().st_mtime
             if mtime > best_mtime:
