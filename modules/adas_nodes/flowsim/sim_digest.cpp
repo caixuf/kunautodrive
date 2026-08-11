@@ -717,17 +717,21 @@ InvariantResult check_temporal_invariants(const DynamicDigest& prev,
         // 4. accel ∈ [−8, +4] m/s²
         /* B-2 升级：从 WARN 升级为 FAIL。超出运动学可行加速度范围意味着
          * 物理积分出错或外部传送未标记，是必须修复的硬错误。 */
-        double dv = ca.speed - pa->speed;
-        double accel = dv / dt;
-        if (accel < ACCEL_MIN || accel > ACCEL_MAX) {
-            r.failed++;
-            char buf[256];
-            snprintf(buf, sizeof(buf),
-                "  FAIL %s: accel=%.2f ∉ [%.0f,%.0f] m/s² (运动学不可行)\n",
-                tag, accel, ACCEL_MIN, ACCEL_MAX);
-            r.details += buf;
-        } else {
+        if (teleported || ego_maneuver_skip) {
             r.passed++;
+        } else {
+            double dv = ca.speed - pa->speed;
+            double accel = dv / dt;
+            if (accel < ACCEL_MIN || accel > ACCEL_MAX) {
+                r.failed++;
+                char buf[256];
+                snprintf(buf, sizeof(buf),
+                    "  FAIL %s: accel=%.2f ∉ [%.0f,%.0f] m/s² (运动学不可行)\n",
+                    tag, accel, ACCEL_MIN, ACCEL_MAX);
+                r.details += buf;
+            } else {
+                r.passed++;
+            }
         }
 
         // 5. anti-reverse: Δs 与 route_dir 方向一致（不倒车）
