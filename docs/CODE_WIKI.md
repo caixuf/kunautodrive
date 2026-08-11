@@ -502,6 +502,17 @@ flowsim ─► esminiRMLib (RoadPosition) ─► road_network / route
 - [third_party/frenet_planner/](../third_party/frenet_planner) — Frenet Optimal Trajectory（含 CubicSpline1D/2D、QuarticPolynomial、QuinticPolynomial）
 - `third_party/esmini`（git submodule）— OpenDRIVE 道路位置
 
+接入外部 `.xodr` 前先运行静态兼容性预检，避免把 esmini 未验证的 geometry 或断链路网直接带进仿真：
+
+```bash
+python3 tools/xodr_compat_check.py path/to/road.xodr
+python3 tools/xodr_compat_check.py path/to/road.xodr --strict --json
+python3 tools/xodr_compat_check.py path/to/road.xodr \
+  --runtime-test build/modules/adas_nodes/test_road_network
+```
+
+预检覆盖 XML 基础结构、`line/arc/spiral/poly3` 已验证几何、`paramPoly3`/`laneOffset`/超高程等部分支持特性、道路/路口引用、车道 ID 方向和几何连续性。它不替代 esmini 的实际加载测试：`--runtime-test` 会复用已有 `test_road_network`，继续执行 `RM_Init` 及 Frenet/world invariant。
+
 ---
 
 ## 8. 项目运行方式

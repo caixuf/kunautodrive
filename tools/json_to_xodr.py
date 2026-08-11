@@ -661,6 +661,7 @@ def road_to_xml(road: Road) -> ET.Element:
     for li in range(1, n_per_side + 1):
         ln = ET.SubElement(right, "lane", {"id": f"-{li}", "type": "driving"})
         ET.SubElement(ln, "width", {
+            "s": "0.0",
             "a": f"{road.lane_width:.4f}", "b": "0", "c": "0", "d": "0"
         })
     # left 侧：对向车道（id=+1,+2,...,+n_per_side），双向道路才生成
@@ -669,6 +670,7 @@ def road_to_xml(road: Road) -> ET.Element:
         for li in range(1, n_per_side + 1):
             ln = ET.SubElement(left, "lane", {"id": f"{li}", "type": "driving"})
             ET.SubElement(ln, "width", {
+                "s": "0.0",
                 "a": f"{road.lane_width:.4f}", "b": "0", "c": "0", "d": "0"
             })
     # 限速 via type/speed (OpenDRIVE 用 road type 元素)
