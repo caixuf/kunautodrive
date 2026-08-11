@@ -216,7 +216,8 @@ python3 tools/eval_report.py \
   --predictions /tmp/open_loop_predictions.json --json
 ```
 
-报告输出场景通过率、标准开环 ADE/FDE 和 MPI。ADE/FDE 只有同时提供等长预测
+报告输出场景通过率、按 `run.mode` 分组的通过率、标准开环 ADE/FDE 和 MPI。
+ADE/FDE 只有同时提供等长预测
 轨迹与真值轨迹才会是 `computed`；MPI 只有生产者同时提供数值 `mpi` 和
 `mpi_definition` 才会汇总，否则明确标记 `unavailable`，不会把闭环车道误差
 冒充开环预测指标。

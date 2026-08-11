@@ -188,24 +188,41 @@ def build_report(payloads: list[dict], prediction_value: Any = None) -> dict:
     scenario_ids = []
     pass_count = 0
     trajectory_records: list[dict] = []
+    mode_totals: dict[str, int] = {}
+    mode_passes: dict[str, int] = {}
     for payload in payloads:
         scenario = payload.get("scenario") or payload.get("run", {}).get("scenario_id")
         if scenario:
             scenario_ids.append(str(scenario))
         if payload.get("result") == "PASS":
             pass_count += 1
+        run = payload.get("run")
+        mode = run.get("mode") if isinstance(run, dict) else payload.get("mode")
+        mode = str(mode or "unknown")
+        mode_totals[mode] = mode_totals.get(mode, 0) + 1
+        if payload.get("result") == "PASS":
+            mode_passes[mode] = mode_passes.get(mode, 0) + 1
         trajectory_records.extend(_trajectory_records(payload))
 
     if prediction_value is not None:
         trajectory_records.extend(_trajectory_records(prediction_value))
     open_loop = compute_open_loop_metrics(trajectory_records)
     scenario_count = len(payloads)
+    mode_summary = {
+        mode: {
+            "scenario_count": count,
+            "pass_count": mode_passes.get(mode, 0),
+            "pass_rate": mode_passes.get(mode, 0) / count if count else None,
+        }
+        for mode, count in sorted(mode_totals.items())
+    }
     return {
         "schema_version": REPORT_SCHEMA,
         "scenario_count": scenario_count,
         "pass_count": pass_count,
         "scenario_pass_rate": pass_count / scenario_count if scenario_count else None,
         "scenario_pass_rate_status": "computed" if scenario_count else "unavailable",
+        "modes": mode_summary,
         "open_loop": open_loop,
         "mpi": _mpi_summary(payloads),
         "scenarios": scenario_ids,

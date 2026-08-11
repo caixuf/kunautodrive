@@ -73,3 +73,12 @@ class EvaluationReportTest(unittest.TestCase):
         self.assertEqual(required_metric_failures(
             report, require_open_loop=True, require_mpi=True
         ), [])
+
+    def test_report_groups_pass_rate_by_evaluation_mode(self):
+        report = build_report([
+            {"run": {"scenario_id": "a", "mode": "closed_loop"}, "result": "PASS"},
+            {"run": {"scenario_id": "b", "mode": "closed_loop"}, "result": "FAIL"},
+            {"run": {"scenario_id": "c", "mode": "road_test"}, "result": "PASS"},
+        ])
+        self.assertEqual(report["modes"]["closed_loop"]["pass_rate"], 0.5)
+        self.assertEqual(report["modes"]["road_test"]["pass_rate"], 1.0)
