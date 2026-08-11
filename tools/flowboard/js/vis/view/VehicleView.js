@@ -558,7 +558,13 @@ export function createVehicleView(scene, renderer, modelCache) {
       // 车轮旋转：程序化模型沿 X，glTF 车轮沿 Z。
       if (!_isSteeringWheelNode(child.name) &&
           (name.includes('wheel') || name.includes('tire') || name.includes('tyre'))) {
-        if (speed_mps !== undefined) {
+        // The authorized SU7 stores each axle as one wheel mesh. At full lock,
+        // applying wheel roll to that same mesh competes with its steering
+        // parent transform and makes the visible tires orbit off the axle.
+        // Keep the steering transform authoritative during maneuvers; straight
+        // and near-straight driving retain the normal rolling animation.
+        const su7SteeringLock = type === 'su7' && Math.abs(steering.frontAxleYaw) > 0.005;
+        if (speed_mps !== undefined && !su7SteeringLock) {
           const radius = 0.35;
           const angularSpeed = speed_mps / radius;
           if (child.userData && child.userData.rollAxis === 'z') {
