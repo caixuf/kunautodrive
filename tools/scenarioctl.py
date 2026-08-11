@@ -140,7 +140,7 @@ def validate_map(path: Path) -> list[str]:
         return [str(exc)]
     if not isinstance(data, dict):
         return [f"{path}: root must be an object"]
-    for key in ("schema_version", "map_id", "roads", "validation"):
+    for key in ("schema_version", "map_id", "roads"):
         if key not in data:
             errors.append(f"{path}: missing required field '{key}'")
     map_id = data.get("map_id")
@@ -161,12 +161,24 @@ def validate_map(path: Path) -> list[str]:
                 errors.append(f"{label}.id must be a non-empty string")
             else:
                 road_ids.append(road_id)
-            nodes = road.get("nodes")
-            if not isinstance(nodes, list) or len(nodes) < 2:
-                errors.append(f"{label}.nodes must contain at least two points")
-            for key in ("lanes", "lane_width", "speed_limit"):
-                if not isinstance(road.get(key), (int, float)):
-                    errors.append(f"{label}.{key} must be numeric")
+            centerline = road.get("centerline", road.get("nodes"))
+            if not isinstance(centerline, list) or len(centerline) < 2:
+                errors.append(f"{label}.centerline must contain at least two points")
+            lanes = road.get("lanes")
+            if isinstance(lanes, list):
+                for lane_index, lane in enumerate(lanes):
+                    if not isinstance(lane, dict):
+                        errors.append(f"{label}.lanes[{lane_index}] must be an object")
+                    elif not isinstance(lane.get("centerline"), list):
+                        errors.append(f"{label}.lanes[{lane_index}].centerline is required")
+            elif not isinstance(lanes, (int, float)):
+                errors.append(f"{label}.lanes must be an array or numeric")
+            if "lane_width" not in road and not isinstance(lanes, list):
+                errors.append(f"{label}.lane_width must be numeric")
+            elif "lane_width" in road and not isinstance(road["lane_width"], (int, float)):
+                errors.append(f"{label}.lane_width must be numeric")
+            if not isinstance(road.get("speed_limit"), (int, float)):
+                errors.append(f"{label}.speed_limit must be numeric")
     if len(set(road_ids)) != len(road_ids):
         errors.append(f"{path}: roads contains duplicate ids")
     return errors
@@ -195,7 +207,7 @@ def validate_routes(path: Path, map_data: object) -> list[str]:
         if not isinstance(route, dict) or not isinstance(route.get("id"), str):
             errors.append(f"{label}.id must be a string")
             continue
-        route_roads = route.get("roads")
+        route_roads = route.get("roads", route.get("road_chain"))
         if not isinstance(route_roads, list) or not route_roads:
             errors.append(f"{label}.roads must be a non-empty array")
         elif any(road_id not in road_ids for road_id in route_roads):

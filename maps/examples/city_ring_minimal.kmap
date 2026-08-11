@@ -1,0 +1,32 @@
+Map {
+    id: city_ring
+    name: "City Ring"
+
+    Road ground_avenue {
+        type: urban
+        lanes: 4
+        laneWidth: 3.5
+        speedLimit: 15.0
+        oneWay: false
+        Point { x: 0; y: 0; z: 0 }
+        Point { x: 180; y: 0; z: 0 }
+        Point { x: 360; y: 0; z: 0 }
+    }
+
+    Road curved_boulevard {
+        type: urban
+        lanes: 4
+        laneWidth: 3.5
+        speedLimit: 15.0
+        oneWay: false
+        Point { x: 360; y: 0; z: 0 }
+        Point { x: 500; y: -22; z: 0 }
+        Point { x: 620; y: -22; z: 0 }
+    }
+
+    Connection {
+        from: ground_avenue
+        to: curved_boulevard
+        type: continue
+    }
+}

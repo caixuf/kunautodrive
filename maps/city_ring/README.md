@@ -8,5 +8,7 @@ closed-loop validation.
 - `map.json` contains the authoritative road geometry, elevation profiles,
   road properties, static landmarks and road connections.
 - `routes.json` contains reusable route definitions.
+- `../examples/city_ring_minimal.kmap` demonstrates the declarative source
+  syntax; compile it with `python3 tools/map_compiler.py`.
 
 The default `scripts/demo.sh` entry point is unchanged.
