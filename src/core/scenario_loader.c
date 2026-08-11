@@ -87,6 +87,24 @@ static void resolve_map_reference(cJSON* scenario, const char* scenario_path) {
     cJSON_ArrayForEach(road, roads) {
         if (!cJSON_IsObject(road)) continue;
         cJSON* edge = cJSON_Duplicate(road, 1);
+        cJSON* centerline = cJSON_GetObjectItemCaseSensitive(edge, "centerline");
+        if (centerline && !cJSON_GetObjectItemCaseSensitive(edge, "nodes")) {
+            cJSON_AddItemToObject(edge, "nodes", cJSON_Duplicate(centerline, 1));
+        }
+        cJSON* lanes = cJSON_GetObjectItemCaseSensitive(edge, "lanes");
+        if (cJSON_IsArray(lanes)) {
+            int lane_count = cJSON_GetArraySize(lanes);
+            cJSON* lane0 = cJSON_GetArrayItem(lanes, 0);
+            cJSON* width = cJSON_IsObject(lane0)
+                ? cJSON_GetObjectItemCaseSensitive(lane0, "width") : NULL;
+            double lane_width = cJSON_IsNumber(width) ? width->valuedouble : 0.0;
+            cJSON_DeleteItemFromObjectCaseSensitive(edge, "lanes");
+            cJSON_AddNumberToObject(edge, "lanes", lane_count);
+            if (lane_width > 0.0) {
+                cJSON_DeleteItemFromObjectCaseSensitive(edge, "lane_width");
+                cJSON_AddNumberToObject(edge, "lane_width", lane_width);
+            }
+        }
         cJSON_DeleteItemFromObjectCaseSensitive(edge, "id");
         cJSON* legacy_id = cJSON_GetObjectItemCaseSensitive(edge, "legacy_id");
         int id = cJSON_IsNumber(legacy_id) ? (int)legacy_id->valuedouble : index;

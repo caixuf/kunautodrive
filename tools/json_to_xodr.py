@@ -403,7 +403,11 @@ def roads_from_road_network(rn_cfg: dict) -> tuple[list[Road], list[Junction]]:
     junctions: list[Junction] = []
     junctions_cfg = rn_cfg.get("junctions") or []
     for jcfg in junctions_cfg:
-        jid = int(jcfg.get("id", 100 + len(junctions)))
+        try:
+            jid = int(jcfg.get("id", 100 + len(junctions)))
+        except (TypeError, ValueError):
+            # Reserved semantic junctions have no OpenDRIVE connecting roads yet.
+            continue
         jtype = str(jcfg.get("type", "fork"))
         incoming = int(jcfg.get("incoming_road", -1))
         if incoming < 0:
@@ -750,9 +754,18 @@ def load_scenario(path: Path) -> dict:
     if not isinstance(roads, list) or not roads:
         raise ValueError(f"{map_path}: roads must be a non-empty array")
     edges = []
-    for road in roads:
+    for index, road in enumerate(roads):
         edge = dict(road)
-        edge["id"] = edge.get("legacy_id", len(edges))
+        edge["id"] = edge.get("legacy_id", index)
+        if "nodes" not in edge and "centerline" in edge:
+            edge["nodes"] = edge["centerline"]
+        lane_data = edge.get("lanes")
+        if isinstance(lane_data, list):
+            edge["lanes"] = len(lane_data)
+            if lane_data and isinstance(lane_data[0], dict):
+                edge["lane_width"] = lane_data[0].get(
+                    "width", edge.get("lane_width", DEFAULT_LANE_WIDTH)
+                )
         edge.pop("legacy_id", None)
         edges.append(edge)
     resolved = dict(scenario)
