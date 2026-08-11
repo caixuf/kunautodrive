@@ -10,7 +10,9 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#if !defined(_WIN32)
 #include <sys/wait.h>
+#endif
 #include <unistd.h>
 
 #ifndef FLOWCTL_TEST_BIN
@@ -122,6 +124,37 @@ static int transport_publish_cb(const Message* msg, void* user_data) {
                              message_bus_message_data(msg), msg->data_size);
 }
 
+#if defined(_WIN32)
+static int run_flowctl_capture(char* const argv[], char* output, size_t output_size) {
+    char command[4096];
+    size_t used = 0;
+    command[0] = '\0';
+    for (size_t i = 0; argv[i]; i++) {
+        const char* arg = argv[i];
+        size_t len = strlen(arg);
+        if (used + len * 2 + 4 >= sizeof(command)) return -1;
+        command[used++] = '"';
+        memcpy(command + used, arg, len);
+        used += len;
+        command[used++] = '"';
+        command[used++] = ' ';
+    }
+    if (used + 5 >= sizeof(command)) return -1;
+    memcpy(command + used, "2>&1", 5);
+
+    FILE* stream = _popen(command, "r");
+    if (!stream) return -1;
+    size_t read_total = 0;
+    while (read_total + 1 < output_size) {
+        size_t nread = fread(output + read_total, 1,
+                             output_size - read_total - 1, stream);
+        read_total += nread;
+        if (nread == 0) break;
+    }
+    output[read_total] = '\0';
+    return _pclose(stream);
+}
+#else
 static int run_flowctl_capture(char* const argv[], char* output, size_t output_size) {
     int pipefd[2];
     if (pipe(pipefd) != 0) return -1;
@@ -157,6 +190,7 @@ static int run_flowctl_capture(char* const argv[], char* output, size_t output_s
     if (WIFEXITED(status)) return WEXITSTATUS(status);
     return -1;
 }
+#endif
 
 static void test_replay_window_and_filter(void) {
     TEST("bag replay window + topic filter");
@@ -279,6 +313,47 @@ static void test_replay_ipc_transport_boundary(void) {
     ASSERT(transport_advertise(pub_transport, "ipc/replay", 0) == 0,
            "pub advertise failed");
 
+#if defined(_WIN32)
+    MessageBus* sub_bus = message_bus_create("bag_replay_sub");
+    Transport* sub_transport = sub_bus
+        ? transport_create(sub_bus, NULL, TRANSPORT_IPC) : NULL;
+    Counter counter = { .mutex = PTHREAD_MUTEX_INITIALIZER };
+    ASSERT(sub_bus && sub_transport, "subscriber transport create failed");
+    ASSERT(transport_start(sub_transport) == 0, "subscriber transport start failed");
+    ASSERT(transport_subscribe(sub_transport, "ipc/replay", counter_cb, &counter) == 0,
+           "subscriber transport subscribe failed");
+
+    BagReader* reader = bag_reader_open(path);
+    ASSERT(reader != NULL, "reader open failed");
+    ReplayTransportCtx ctx = { .transport = pub_transport };
+    BagReplayOptions options;
+    memset(&options, 0, sizeof(options));
+    options.publish_fn = transport_publish_cb;
+    options.publish_user_data = &ctx;
+
+    uint64_t played = 0;
+    int rc = bag_reader_play_with_options(reader, &options, &played);
+    ASSERT(rc == ERR_OK, "IPC replay failed rc=%d", rc);
+    ASSERT(played == 2, "expected 2 IPC replayed messages, got %llu",
+           (unsigned long long)played);
+    bag_reader_close(reader);
+
+    for (int i = 0; i < 20; i++) {
+        pthread_mutex_lock(&counter.mutex);
+        int delivered = counter.count;
+        pthread_mutex_unlock(&counter.mutex);
+        if (delivered >= 2) break;
+        usleep(50000);
+    }
+    pthread_mutex_lock(&counter.mutex);
+    int delivered = counter.count;
+    int last_value = counter.last_value;
+    pthread_mutex_unlock(&counter.mutex);
+    ASSERT(delivered == 2,
+           "subscriber saw count=%d last=%d", delivered, last_value);
+    transport_destroy(sub_transport);
+    message_bus_destroy(sub_bus);
+#else
     int ready_pipe[2];
     int result_pipe[2];
     ASSERT(pipe(ready_pipe) == 0, "ready pipe failed");
@@ -356,6 +431,7 @@ static void test_replay_ipc_transport_boundary(void) {
            "child subscriber exit=%d", WEXITSTATUS(status));
     ASSERT(result[0] == 2,
            "subscriber saw count=%d last=%d", result[0], result[1]);
+#endif
 
     transport_destroy(pub_transport);
     message_bus_destroy(pub_bus);

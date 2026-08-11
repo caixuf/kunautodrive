@@ -73,6 +73,8 @@ _setVehicleLights(rawLightScene, { brake: true, head: true }, 0);
 ok('SU7 真实灯材质亮度和可见性增强',
   frontMaterial.emissiveIntensity === 8 &&
   rearMaterial.emissiveIntensity === 6 &&
+  rawFrontMesh.visible === true &&
+  rawRearMesh.visible === true &&
   frontMaterial.toneMapped === false &&
   rearMaterial.toneMapped === false);
 _setVehicleLights(rawLightScene, { brake: false, head: false, turnL: true }, 0.1);

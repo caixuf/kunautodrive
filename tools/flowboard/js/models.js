@@ -348,6 +348,7 @@ function _setLightMeshMaterials(meshes, intensity, colorHex) {
 function _setSu7LightMeshMaterials(meshes, intensity, colorHex) {
   for (var i = 0; i < meshes.length; i++) {
     var mesh = meshes[i];
+    if (mesh) mesh.visible = true;
     var materials = mesh && mesh.userData && mesh.userData.su7LampMaterials;
     if (!materials || !materials.length) continue;
     for (var j = 0; j < materials.length; j++) {
@@ -367,6 +368,7 @@ function _setSu7LightMeshMaterials(meshes, intensity, colorHex) {
 function _setSu7LightMeshSideMaterials(meshes, side, intensity, colorHex) {
   for (var i = 0; i < meshes.length; i++) {
     var mesh = meshes[i];
+    if (mesh) mesh.visible = true;
     var sideMaterials = mesh && mesh.userData && mesh.userData.su7LampSideMaterials;
     var materials = sideMaterials && sideMaterials[side];
     if (!materials || !materials.length) {
