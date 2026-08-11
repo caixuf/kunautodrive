@@ -480,7 +480,8 @@ static bool shadow_speed_gate_supported(void) {
     const bool active_loaded = g.use_onnx ? (g.onnx.loaded != 0)
                                          : (g.model.loaded != 0);
     if (!active_loaded) return true;  /* heuristic fallback emits target_speed */
-    return active_output_dim() > 0 && active_output_dim() < 5;
+    const int out_dim = active_output_dim();
+    return out_dim > 0 && out_dim < 5;
 }
 
 static void write_shadow_sidecar(double shadow_delta, double pred_speed,
