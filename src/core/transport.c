@@ -252,6 +252,16 @@ int transport_advertise(Transport* t, const char* topic, uint32_t type_id) {
         discovery_advertise(t->discovery, topic, type_id, CAP_PUBLISHER, 0);
     }
 
+    /* A publisher owns the outbound TCP bridge. AUTO cannot know whether a
+     * remote subscriber will appear after this advertisement, so bridge its
+     * advertised topics too; receivers still deliver only to local subscribers. */
+    if (t->net_transport &&
+        (t->policy == TRANSPORT_REMOTE || t->policy == TRANSPORT_AUTO) &&
+        !r->remote_bridged) {
+        if (net_transport_bridge_topic(t->net_transport, topic) == 0)
+            r->remote_bridged = true;
+    }
+
     LOG_INFO("transport", "advertise '%s' (route=%d, type_id=0x%08x)",
              topic, (int)r->route, type_id);
     return 0;
@@ -332,14 +342,6 @@ int transport_subscribe(Transport* t, const char* topic,
     /* Subscribe to local bus (always, as fallback) */
     message_bus_subscribe(t->bus, topic, callback, user_data);
 
-    /* For REMOTE routes, bridge via TCP */
-    if (r->route == ROUTE_REMOTE && t->net_transport) {
-        net_transport_bridge_topic(t->net_transport, topic);
-        pthread_mutex_lock(&t->mutex);
-        r->remote_bridged = true;
-        pthread_mutex_unlock(&t->mutex);
-    }
-
     /* For IPC policy/routes, set up IPC subscriber.
      * Slow open done outside lock; result written back under lock. */
     if ((t->policy == TRANSPORT_IPC || r->route == ROUTE_IPC)) {
@@ -392,9 +394,6 @@ int transport_unsubscribe(Transport* t, const char* topic,
     pthread_mutex_lock(&t->mutex);
     for (int i = 0; i < t->route_count; i++) {
         if (strcmp(t->routes[i].topic, topic) == 0) {
-            if (t->routes[i].remote_bridged && t->net_transport) {
-                net_transport_unbridge_topic(t->net_transport, topic);
-            }
             if (t->routes[i].ipc_channel) {
                 ipc_channel_close(t->routes[i].ipc_channel);
                 t->routes[i].ipc_channel = NULL;

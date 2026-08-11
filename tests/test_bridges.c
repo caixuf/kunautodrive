@@ -13,6 +13,7 @@
  */
 
 #include "transport.h"
+#include "network_transport.h"
 #include "stats_bridge.h"
 #include "dashboard_bridge.h"
 #include "message_bus.h"
@@ -164,6 +165,66 @@ typedef struct {
     int delivered;
     uint64_t ipc_delivered;
 } IpcQosResult;
+
+typedef struct {
+    pthread_mutex_t mutex;
+    int count;
+    int last_value;
+} NetworkSink;
+
+static void network_sink_cb(const Message* msg, void* user_data) {
+    NetworkSink* sink = (NetworkSink*)user_data;
+    int value = 0;
+    if (msg->data_size >= sizeof(value)) memcpy(&value, msg->data, sizeof(value));
+    pthread_mutex_lock(&sink->mutex);
+    sink->count++;
+    sink->last_value = value;
+    pthread_mutex_unlock(&sink->mutex);
+}
+
+static void test_network_transport_roundtrip(void) {
+    TEST("NetworkTransport TCP roundtrip");
+    MessageBus* sender_bus = message_bus_create("t_net_sender");
+    MessageBus* receiver_bus = message_bus_create("t_net_receiver");
+    ASSERT(sender_bus != NULL && receiver_bus != NULL, "bus create failed");
+
+    NetworkTransport* receiver =
+        net_transport_create("127.0.0.1", 17771, receiver_bus, NULL);
+    NetworkTransport* sender =
+        net_transport_create("127.0.0.1", 17770, sender_bus, NULL);
+    ASSERT(receiver != NULL && sender != NULL,
+           "network transport create failed");
+
+    NetworkSink sink = { PTHREAD_MUTEX_INITIALIZER, 0, 0 };
+    ASSERT(message_bus_subscribe(receiver_bus, "test/network",
+                                 network_sink_cb, &sink) == 0,
+           "receiver subscribe failed");
+    ASSERT(net_transport_bridge_topic(sender, "test/network") == 0,
+           "sender bridge failed");
+    ASSERT(net_transport_start(receiver) == 0, "receiver start failed");
+    ASSERT(net_transport_start(sender) == 0, "sender start failed");
+    ASSERT(net_transport_connect(sender, "127.0.0.1", 17771) == 0,
+           "sender connect failed");
+
+    int value = 1234;
+    ASSERT(message_bus_publish(sender_bus, "test/network", "test",
+                               &value, sizeof(value)) == 0,
+           "sender publish failed");
+    usleep(250000);
+
+    pthread_mutex_lock(&sink.mutex);
+    int count = sink.count;
+    int last_value = sink.last_value;
+    pthread_mutex_unlock(&sink.mutex);
+    ASSERT(count == 1, "expected one network delivery, got %d", count);
+    ASSERT(last_value == value, "expected %d, got %d", value, last_value);
+
+    net_transport_destroy(sender);
+    net_transport_destroy(receiver);
+    message_bus_destroy(sender_bus);
+    message_bus_destroy(receiver_bus);
+    PASS();
+}
 
 #if !defined(_WIN32)
 static void test_transport_ipc_qos_depth(void) {
@@ -496,6 +557,7 @@ int main(void) {
     test_transport_local_pubsub();
     test_transport_stats();
     test_transport_unsubscribe();
+    test_network_transport_roundtrip();
 #if !defined(_WIN32)
     test_transport_ipc_qos_depth();
 #else

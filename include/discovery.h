@@ -40,6 +40,7 @@ extern "C" {
 #define DISC_TOPIC_NAME_LEN       64
 #define DISC_MULTICAST_GROUP      "239.255.0.100"
 #define DISC_MULTICAST_PORT       5500
+#define DISC_DEFAULT_UNICAST_PORT 0
 #define DISC_HEARTBEAT_MS         2000
 #define DISC_NODE_TIMEOUT_MS      10000
 #define DISC_BEACON_MAX_SIZE      2048
@@ -104,6 +105,13 @@ void discovery_destroy(DiscoveryManager* dm);
 
 /** 启动发现服务（创建 socket + 心跳线程 + 接收线程） */
 int discovery_start(DiscoveryManager* dm);
+
+/**
+ * 设置本节点对外提供的业务 TCP 端口。
+ * 0 表示本节点未启用 TCP Transport；NetworkTransport 创建时会覆盖为
+ * 实际监听端口。必须在多播 beacon 发出前设置。
+ */
+int discovery_set_unicast_port(DiscoveryManager* dm, uint16_t port);
 
 /** 停止发现服务 */
 void discovery_stop(DiscoveryManager* dm);

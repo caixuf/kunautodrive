@@ -91,6 +91,10 @@ bash scripts/fullstack_demo.sh
 > 不承载业务 payload。跨进程业务 topic 使用 `Transport` 的 IPC 路由，跨机业务
 > topic 使用 `TransportPolicy=TRANSPORT_REMOTE` 或 `AUTO` 的
 > `NetworkTransport` TCP bridge；两者都不是 Discovery 本身转发。
+> `NetworkTransport` 创建时会把实际监听端口写入 Discovery beacon 的
+> `unicast_port` 字段（默认 `NET_DEFAULT_PORT=7700`），因此自动连接不会把
+> Discovery 组播端口 `5500` 误当成业务 TCP 端口；旧节点未提供该字段时才回退
+> 到 `7700`。
 > `flowmond` 的监控统计仍走两条独立链路：(1) `stats_bridge` /
 > `dashboard_bridge` 同机 IPC；(2) 轮询 monitor 节点写出的
 > `/tmp/flow_topology.json` 作为回退。详见 `docs/VISUALIZATION_ARCHITECTURE.md`。

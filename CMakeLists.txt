@@ -1005,6 +1005,15 @@ add_dependencies(test_adas_nodes_logic msg_codegen)
 target_include_directories(test_adas_nodes_logic PRIVATE ${GEN_DIR})
 
 add_test(NAME adas_nodes_logic_tests COMMAND test_adas_nodes_logic)
+
+add_executable(test_lidar_contract tests/test_lidar_contract.c)
+add_dependencies(test_lidar_contract msg_codegen)
+target_include_directories(test_lidar_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/adas_nodes
+    ${GEN_DIR}
+)
+target_link_libraries(test_lidar_contract flowengine_core)
+add_test(NAME lidar_contract_tests COMMAND test_lidar_contract)
 set_tests_properties(adas_nodes_logic_tests PROPERTIES TIMEOUT 10)
 
 # ── ManeuverTracker 通用机动跟踪器单元测试（纯算法，无 transport/param 依赖）──

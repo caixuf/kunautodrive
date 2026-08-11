@@ -46,6 +46,7 @@
 
 #include "node_plugin.h"
 #include "adas_msgs_gen.h"
+#include "lidar_contract.h"
 #include "transport.h"
 #include "discovery.h"
 #include "logger.h"
@@ -102,6 +103,10 @@ static struct {
     LidarFrame last_lidar;
     uint64_t   last_lidar_us;
     int        have_lidar;
+    uint32_t   last_lidar_cloud_frame_id;
+    uint64_t   last_lidar_cloud_timestamp_us;
+    int        have_lidar_cloud;
+    uint64_t   lidar_cloud_frames_received;
     float      last_obs_x;         /* 上一次用于航向反推的 lidar 观测位置 */
     float      last_obs_y;
     int        have_last_obs;
@@ -123,6 +128,7 @@ static struct {
 } g;
 
 static void on_lidar(const Message* msg, void* user_data);
+static void on_lidar_cloud(const Message* msg, void* user_data);
 static void on_imu(const Message* msg, void* user_data);
 static void slam_update_dead_reckon(Pose2D* pose);
 static void slam_update_ekf_slam(Pose2D* pose);
@@ -154,6 +160,41 @@ static void on_lidar(const Message* msg, void* user_data) {
     g.have_lidar    = 1;
     g.lidar_frames_received++;
     pthread_mutex_unlock(&g.lock);
+}
+
+static void on_lidar_cloud(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg || !g.enabled || msg->data_size == 0) return;
+
+    LidarPointCloud cloud;
+    const uint8_t* data = (const uint8_t*)message_bus_message_data(msg);
+    if (!data ||
+        LidarPointCloud_deserialize(&cloud, data, msg->data_size) != 0) {
+        LOG_WARN("slam", "LidarPointCloud deserialize failed (size=%u)",
+                 msg->data_size);
+        return;
+    }
+
+    pthread_mutex_lock(&g.lock);
+    float density = 0.0f;
+    const char* error = lidar_point_cloud_validate(
+        &cloud, g.have_lidar_cloud, g.last_lidar_cloud_frame_id,
+        g.last_lidar_cloud_timestamp_us, &density);
+    if (!error) {
+        g.last_lidar_cloud_frame_id = cloud.frame_id;
+        g.last_lidar_cloud_timestamp_us = cloud.timestamp_us;
+        g.have_lidar_cloud = 1;
+        g.lidar_cloud_frames_received++;
+    }
+    pthread_mutex_unlock(&g.lock);
+
+    if (error) {
+        LOG_WARN("slam", "invalid LidarPointCloud frame=%u count=%u: %s",
+                 cloud.frame_id, cloud.count, error);
+    } else if (cloud.frame_id == 1) {
+        LOG_INFO("slam", "LidarPointCloud contract active (count=%u density=%.3f)",
+                 cloud.count, density);
+    }
 }
 
 static void on_imu(const Message* msg, void* user_data) {
@@ -395,7 +436,9 @@ static const TaskInterface slam_vtable = {
     .on_message    = nullptr,
 };
 
-static const char* s_inputs[]  = { "sensor/lidar", "sensor/imu", NULL };
+static const char* s_inputs[]  = {
+    "sensor/lidar", "sensor/lidar_points", "sensor/imu", NULL
+};
 static const char* s_outputs[] = { "sensor/pose", NULL };
 
 static int slam_init(MessageBus* bus, Transport* transport,
@@ -497,6 +540,9 @@ static int slam_init(MessageBus* bus, Transport* transport,
         transport_subscribe(transport, "sensor/lidar", on_lidar, NULL);
         discovery_advertise(discovery, "sensor/lidar",
                             LIDARFRAME_TYPE_ID, CAP_SUBSCRIBER, 0);
+        transport_subscribe(transport, "sensor/lidar_points", on_lidar_cloud, NULL);
+        discovery_advertise(discovery, "sensor/lidar_points",
+                            LIDARPOINTCLOUD_TYPE_ID, CAP_SUBSCRIBER, 0);
     }
     if (g.use_imu) {
         transport_subscribe(transport, "sensor/imu", on_imu, NULL);

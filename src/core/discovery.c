@@ -50,6 +50,7 @@ struct DiscoveryManager {
     uint8_t  my_capabilities;
     TopicAdvert my_topics[DISC_MAX_TOPICS_PER_NODE];
     uint32_t my_topic_count;
+    uint16_t unicast_port;       /* 业务 TCP Transport 监听端口，0 = 未启用 */
 
     /* 拓扑 */
     TopologyGraph topology;
@@ -76,7 +77,7 @@ struct DiscoveryManager {
 /* ══════════════════════════════════════════════════════════ */
 
 static int serialize_beacon(uint8_t* buf, size_t buf_size,
-                            uint8_t msg_type, const DiscoveryManager* dm) {
+                            uint8_t msg_type, DiscoveryManager* dm) {
     if (buf_size < 128) return ERR_INVALID_PARAM;
     size_t off = 0;
 
@@ -100,7 +101,9 @@ static int serialize_beacon(uint8_t* buf, size_t buf_size,
     /* IP + port (placeholder for now) */
     uint32_t ip = 0; /* will be filled by receiver from recvaddr */
     memcpy(buf + off, &ip, 4); off += 4;
-    uint16_t port = DISC_MULTICAST_PORT;
+    pthread_mutex_lock(&dm->stop_mutex);
+    uint16_t port = htons(dm->unicast_port);
+    pthread_mutex_unlock(&dm->stop_mutex);
     memcpy(buf + off, &port, 2); off += 2;
 
     /* CRC32 (over everything except magic) */
@@ -146,7 +149,9 @@ static int deserialize_beacon(const uint8_t* buf, size_t len,
     }
 
     memcpy(&node->ipv4_address, buf + off, 4); off += 4;
-    memcpy(&node->unicast_port, buf + off, 2); off += 2;
+    uint16_t wire_port;
+    memcpy(&wire_port, buf + off, 2); off += 2;
+    node->unicast_port = ntohs(wire_port);
 
     /* Verify CRC32 (covers everything after the 4-byte magic) */
     uint32_t received_crc;
@@ -369,6 +374,7 @@ DiscoveryManager* discovery_create(const char* node_name, uint8_t capabilities) 
     else snprintf(dm->my_name, DISC_NODE_NAME_LEN, "node_%d", getpid());
     dm->my_pid = (uint32_t)getpid();
     dm->my_capabilities = capabilities;
+    dm->unicast_port = DISC_DEFAULT_UNICAST_PORT;
 
     pthread_mutex_init(&dm->topo_mutex, NULL);
     pthread_mutex_init(&dm->stop_mutex, NULL);
@@ -441,6 +447,14 @@ int discovery_start(DiscoveryManager* dm) {
     printf("[discovery:%s] started (group=%s:%d, caps=0x%02x)\n",
            dm->my_name, DISC_MULTICAST_GROUP, DISC_MULTICAST_PORT,
            dm->my_capabilities);
+    return 0;
+}
+
+int discovery_set_unicast_port(DiscoveryManager* dm, uint16_t port) {
+    if (!dm) return ERR_INVALID_PARAM;
+    pthread_mutex_lock(&dm->stop_mutex);
+    dm->unicast_port = port;
+    pthread_mutex_unlock(&dm->stop_mutex);
     return 0;
 }
 
