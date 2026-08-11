@@ -932,25 +932,27 @@ target_link_libraries(test_scheduler_overload flowengine_core)
 add_test(NAME scheduler_overload_tests COMMAND test_scheduler_overload)
 set_tests_properties(unit_tests PROPERTIES TIMEOUT 10)
 
-# PAL runtime coverage runs on Linux.  The sibling object target below forces
+# PAL runtime coverage runs on Linux only. The sibling object target forces
 # the QNX capability branch through a host compiler across every migrated core
 # TU; it is compile-only and makes no QNX runtime-support claim.
-add_executable(test_platform_pal tests/test_platform_pal.c)
-target_link_libraries(test_platform_pal Threads::Threads)
-add_test(NAME platform_pal_tests COMMAND test_platform_pal)
-set_tests_properties(platform_pal_tests PROPERTIES TIMEOUT 10)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(test_platform_pal tests/test_platform_pal.c)
+    target_link_libraries(test_platform_pal Threads::Threads)
+    add_test(NAME platform_pal_tests COMMAND test_platform_pal)
+    set_tests_properties(platform_pal_tests PROPERTIES TIMEOUT 10)
 
-add_library(platform_pal_qnx_compile_guard OBJECT
-    tests/platform_pal_qnx_compile.c
-    src/core/clock_service.c
-    src/core/message_bus.c
-    src/core/ipc_channel.c
-    src/core/scheduler.c
-    src/core/task_interface.c
-)
-target_compile_definitions(platform_pal_qnx_compile_guard PRIVATE
-    FLOW_PAL_COMPILE_TEST_QNX=1)
-add_dependencies(test_platform_pal platform_pal_qnx_compile_guard)
+    add_library(platform_pal_qnx_compile_guard OBJECT
+        tests/platform_pal_qnx_compile.c
+        src/core/clock_service.c
+        src/core/message_bus.c
+        src/core/ipc_channel.c
+        src/core/scheduler.c
+        src/core/task_interface.c
+    )
+    target_compile_definitions(platform_pal_qnx_compile_guard PRIVATE
+        FLOW_PAL_COMPILE_TEST_QNX=1)
+    add_dependencies(test_platform_pal platform_pal_qnx_compile_guard)
+endif()
 
 # ── 新增模块单元测试（Task Manager / IPC / Discovery / Bag / FlowRegistry）──
 add_executable(test_new_modules tests/test_new_modules.c)
