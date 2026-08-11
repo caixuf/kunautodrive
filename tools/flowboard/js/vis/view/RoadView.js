@@ -13,6 +13,11 @@
  *   - 匝道：单行道、窄路面、无黄色中心线、汇入区虚线标识
  *   - 汇入区：匝道汇入主路时渲染渐变虚线
  *
+ * P3 匝道过渡（2026-08）：
+ * - 平行贴合主路的入口/出口自动识别，生成加速/减速车道
+ * - 梯形并道边界和导流 V 线全部沿局部曲线构造
+ * - 普通端点转弯不触发，避免在城市路口错误绘制高速导流区
+ *
  * 车道线手法移植自 docs/scene.html（materials + polygonOffset 防 z-fight），
  * 但几何由 road_network 数据驱动（沿采样中心线按横向偏移铺设）。
  * road_network 变化时重建，ego 位姿变化不重建。
@@ -57,6 +62,10 @@ const SAMPLES_STRAIGHT = 24;
 /* 匝道渲染参数 */
 const RAMP_LANE_W = 3.0;   // 匝道车道宽度略窄 (m)
 const RAMP_SHOULDER_W = 0.4; // 匝道路肩略窄
+const TAPER_DEFAULT_M = 90.0;
+const TAPER_MIN_M = 35.0;
+const TAPER_MAX_M = 160.0;
+const RAMP_JOIN_DISTANCE_M = 16.0;
 
 // ═══════════════════════════════════════════════════════════
 // 程序化沥青纹理（CanvasTexture，零外部资源）
@@ -166,6 +175,7 @@ export function createRoadView(scene) {
   let roadGroup = new THREE.Group();
   scene.add(roadGroup);
   let built = false;
+  let stats = { rampTransitions: 0 };
 
   // 确保纹理已生成
   _buildAsphaltTextures();
@@ -274,6 +284,86 @@ export function createRoadView(scene) {
     return geos;
   }
 
+  /** 车道从主路边缘向外展宽/收窄的梯形路面。 */
+  function taperLaneGeo(spine, cum, startS, endS, side, edgeOffset, startWidth, endWidth) {
+    const length = endS - startS;
+    if (length < 1 || spine.length < 2) return null;
+    const positions = [], indices = [], uvs = [];
+    const count = Math.max(2, Math.ceil(length / 4) + 1);
+    for (let i = 0; i < count; i++) {
+      const t = i / (count - 1);
+      const c = sampleSpineAt(spine, cum, startS + length * t);
+      const width = startWidth + (endWidth - startWidth) * t;
+      const inner = side * edgeOffset;
+      const outer = side * (edgeOffset + Math.max(0.03, width));
+      positions.push(
+        c.px + c.nx * inner, c.py + Y_ROAD + 0.002, c.pz + c.nz * inner,
+        c.px + c.nx * outer, c.py + Y_ROAD + 0.002, c.pz + c.nz * outer,
+      );
+      uvs.push(0, t, 1, t);
+    }
+    for (let i = 0; i < count - 1; i++) {
+      const base = i * 2;
+      indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    return geo;
+  }
+
+  function taperBoundaryGeo(spine, cum, startS, endS, side, edgeOffset, startWidth, endWidth) {
+    const length = endS - startS;
+    if (length < 1) return null;
+    const count = Math.max(2, Math.ceil(length / 4) + 1);
+    const centers = [];
+    for (let i = 0; i < count; i++) {
+      const t = i / (count - 1);
+      const c = sampleSpineAt(spine, cum, startS + length * t);
+      const width = startWidth + (endWidth - startWidth) * t;
+      centers.push({
+        px: c.px + c.nx * side * (edgeOffset + width),
+        py: c.py,
+        pz: c.pz + c.nz * side * (edgeOffset + width),
+        nx: c.nx, nz: c.nz,
+      });
+    }
+    return ribbonGeo(centers, LINE_W * 0.5, Y_MARK);
+  }
+
+  /** 在导流区画 V 形斜纹。它们与主路局部切线绑定，弯道上不会错位。 */
+  function addGoreChevrons(geos, spine, cum, startS, endS, side, edgeOffset,
+      startWidth, endWidth) {
+    const length = endS - startS;
+    const count = Math.min(7, Math.floor(length / 18));
+    for (let i = 1; i <= count; i++) {
+      const t = i / (count + 1);
+      const width = startWidth + (endWidth - startWidth) * t;
+      if (width < 1.0) continue;
+      const c = sampleSpineAt(spine, cum, startS + length * t);
+      const lateral = side * (edgeOffset + width * 0.55);
+      const apex = { px: c.px + c.nx * lateral, py: c.py, pz: c.pz + c.nz * lateral, nx: c.nx, nz: c.nz };
+      const back = 2.0;
+      const spread = Math.min(1.25, width * 0.32);
+      const left = {
+        px: apex.px - c.nz * back + c.nx * side * spread,
+        py: c.py, pz: apex.pz + c.nx * back + c.nz * side * spread,
+        nx: c.nx, nz: c.nz,
+      };
+      const right = {
+        px: apex.px - c.nz * back - c.nx * side * spread,
+        py: c.py, pz: apex.pz + c.nx * back - c.nz * side * spread,
+        nx: c.nx, nz: c.nz,
+      };
+      const leftGeo = ribbonGeo([left, apex], 0.11, Y_MARK);
+      const rightGeo = ribbonGeo([right, apex], 0.11, Y_MARK);
+      if (leftGeo) geos.push(leftGeo);
+      if (rightGeo) geos.push(rightGeo);
+    }
+  }
+
   /** 从 edge nodes 构建 spine（中心线样点 + XZ 法线） */
   function buildSpine(points) {
     const spine = [];
@@ -347,43 +437,78 @@ export function createRoadView(scene) {
     };
   }
 
-  /** 在匝道汇入主路的位置渲染汇入区标识（渐变虚线标记） */
-  function buildMergeZone(rampEdge, rampSpine, rampCum, mainSpine, mainCum) {
-    if (!rampSpine || rampSpine.length < 2 || !mainSpine || mainSpine.length < 2) return [];
-
-    // 匝道末端（汇入点）
-    const rampEnd = rampSpine[rampSpine.length - 1];
+  /** 在主路内部点识别与匝道平行的连接。端点交汇多为普通转弯，不能误画加速道。 */
+  function findRampConnection(rampEdge, rampSpine, rampCum, main) {
+    if (rampSpine.length < 2 || main.spine.length < 4) return null;
     const rampTotal = rampCum[rampCum.length - 1];
-
-    // 在主路上找距离匝道末端最近的点
-    let bestDist = 1e9, bestIdx = 0;
-    for (let i = 0; i < mainSpine.length; i++) {
-      const dx = mainSpine[i].px - rampEnd.px;
-      const dz = mainSpine[i].pz - rampEnd.pz;
-      const d = dx * dx + dz * dz;
-      if (d < bestDist) { bestDist = d; bestIdx = i; }
+    const candidates = [
+      { endpoint: 'start', point: rampSpine[0], adjacent: sampleSpineAt(rampSpine, rampCum, Math.min(10, rampTotal)) },
+      { endpoint: 'end', point: rampSpine[rampSpine.length - 1], adjacent: sampleSpineAt(rampSpine, rampCum, Math.max(0, rampTotal - 10)) },
+    ];
+    let best = null;
+    for (const candidate of candidates) {
+      for (let i = 1; i < main.spine.length - 1; i++) {
+        const c = main.spine[i];
+        const distance = Math.hypot(c.px - candidate.point.px, c.pz - candidate.point.pz);
+        if (!best || distance < best.distance) best = { ...candidate, distance, index: i, mainPoint: c };
+      }
     }
+    if (!best || best.distance > RAMP_JOIN_DISTANCE_M) return null;
+    const mainTotal = main.cum[main.cum.length - 1];
+    const joinS = main.cum[best.index];
+    if (joinS < TAPER_MIN_M || joinS > mainTotal - TAPER_MIN_M) return null;
 
-    const mergeDist = Math.sqrt(bestDist);
-    // 汇入区距离 > 30m 不渲染（可能是远距离另一条路，不是汇入）
-    if (mergeDist > 30) return [];
+    const rampForward = best.endpoint === 'end'
+      ? { x: best.point.px - best.adjacent.px, z: best.point.pz - best.adjacent.pz }
+      : { x: best.adjacent.px - best.point.px, z: best.adjacent.pz - best.point.pz };
+    const next = main.spine[Math.min(best.index + 1, main.spine.length - 1)];
+    const prev = main.spine[Math.max(best.index - 1, 0)];
+    const mainForward = { x: next.px - prev.px, z: next.pz - prev.pz };
+    const rampLength = Math.hypot(rampForward.x, rampForward.z) || 1;
+    const mainLength = Math.hypot(mainForward.x, mainForward.z) || 1;
+    const alignment = (rampForward.x * mainForward.x + rampForward.z * mainForward.z) /
+      (rampLength * mainLength);
+    if (alignment < 0.65) return null;
 
-    // 在主路上标记汇入区：从汇入点往前 30m 的渐变虚线
-    const mainCumI = mainCum[bestIdx];
-    const mergeStart = Math.max(0, mainCumI - 30);
-    const mergeEnd = mainCumI + 10;
+    const explicitRole = String(rampEdge.ramp_role || rampEdge.layout || '').toLowerCase();
+    const role = explicitRole === 'diverge' || explicitRole === 'exit' ? 'diverge'
+      : explicitRole === 'merge' || explicitRole === 'entry' ? 'merge'
+      : best.endpoint === 'end' ? 'merge' : 'diverge';
+    const sideVector = {
+      x: best.adjacent.px - best.mainPoint.px,
+      z: best.adjacent.pz - best.mainPoint.pz,
+    };
+    const side = sideVector.x * best.mainPoint.nx + sideVector.z * best.mainPoint.nz < 0 ? -1 : 1;
+    return { role, side, joinS };
+  }
 
-    // 匝道末端到主路汇入点的渐变虚线束
-    const geos = [];
-    // 汇入区在主路上的横向位置：匝道 1 车道宽，放在主路右车道侧
-    // 匝道从右车道汇入，汇入区标记在主路 rightmost lane 位置
-    // 此处用渐变虚线表示"请观察主路车辆"
-    const laneWidth = 3.5;
-    // 主路右车道中心线位置（假设单向 2 车道，主路右车道中心在 -hw + 0.75*laneWidth）
-    // 简化为在主路右路肩附近画一段汇入标识
-    const mergeZone = dashedLineInRange(mainSpine, -(laneWidth * 1.5), mergeStart, mergeEnd);
-    for (const g of mergeZone) geos.push(g);
-    return geos;
+  /** 构建加速/减速车道、渐变并道线与导流 V 线。 */
+  function buildRampTransition(rampEdge, rampSpine, rampCum, main) {
+    const connection = findRampConnection(rampEdge, rampSpine, rampCum, main);
+    if (!connection) return { roadGeos: [], whiteGeos: [] };
+    const mainTotal = main.cum[main.cum.length - 1];
+    const requested = Number(rampEdge.taper_length_m ?? rampEdge.accel_length_m ??
+      rampEdge.decel_length_m ?? TAPER_DEFAULT_M);
+    const taperLength = Math.max(TAPER_MIN_M, Math.min(TAPER_MAX_M,
+      Number.isFinite(requested) ? requested : TAPER_DEFAULT_M));
+    const startS = connection.role === 'merge'
+      ? Math.max(0, connection.joinS - taperLength) : connection.joinS;
+    const endS = connection.role === 'merge'
+      ? connection.joinS : Math.min(mainTotal, connection.joinS + taperLength);
+    if (endS - startS < TAPER_MIN_M) return { roadGeos: [], whiteGeos: [] };
+
+    const laneWidth = Number(main.edge.lane_width) || LANE_WIDTH;
+    const edgeOffset = (Number(main.edge.lanes) || DEFAULT_LANES) * laneWidth * 0.5;
+    const startWidth = connection.role === 'merge' ? laneWidth : 0;
+    const endWidth = connection.role === 'merge' ? 0 : laneWidth;
+    const road = taperLaneGeo(main.spine, main.cum, startS, endS, connection.side,
+      edgeOffset, startWidth, endWidth);
+    const boundary = taperBoundaryGeo(main.spine, main.cum, startS, endS, connection.side,
+      edgeOffset, startWidth, endWidth);
+    const whiteGeos = boundary ? [boundary] : [];
+    addGoreChevrons(whiteGeos, main.spine, main.cum, startS, endS, connection.side,
+      edgeOffset, startWidth, endWidth);
+    return { roadGeos: road ? [road] : [], whiteGeos };
   }
 
   /** 从 edge nodes 构建主路路面 + 车道线 + 路肩 */
@@ -513,6 +638,7 @@ export function createRoadView(scene) {
       if (c.material) c.material.dispose();
     }
     built = false;
+    stats = { rampTransitions: 0 };
 
     if (!roadNetwork || !roadNetwork.edges || roadNetwork.edges.length === 0) return;
 
@@ -541,7 +667,7 @@ export function createRoadView(scene) {
       for (const g of result.whiteGeos) whiteLineGeos.push(g);
       for (const g of result.yellowGeos) yellowLineGeos.push(g);
       if (result.spine.length >= 2) {
-        mainRoadSpines.push({ spine: result.spine, cum: result.cum });
+        mainRoadSpines.push({ edge, spine: result.spine, cum: result.cum });
       }
     }
 
@@ -554,10 +680,14 @@ export function createRoadView(scene) {
       for (const g of result.shoulderGeos) shoulderGeos.push(g);
       for (const g of result.whiteGeos) whiteLineGeos.push(g);
 
-      // 汇入区标识：在匝道和主路之间画汇入虚线
+      // 在几何上真正贴合主路的平行匝道上，补齐加速/减速车道、
+      // 渐变并道线和导流 V 线；普通端点转弯不会误触发。
       if (result.spine && result.spine.length >= 2) {
         for (const ms of mainRoadSpines) {
-          for (const g of buildMergeZone(edge, result.spine, result.cum, ms.spine, ms.cum)) {
+          const transition = buildRampTransition(edge, result.spine, result.cum, ms);
+          for (const g of transition.roadGeos) roadGeos.push(g);
+          if (transition.roadGeos.length) stats.rampTransitions++;
+          for (const g of transition.whiteGeos) {
             whiteLineGeos.push(g);
           }
         }
@@ -654,6 +784,7 @@ export function createRoadView(scene) {
 
   function getRoadGroup() { return roadGroup; }
   function isBuilt() { return built; }
+  function getStats() { return { ...stats }; }
 
-  return { build, getRoadGroup, isBuilt };
+  return { build, getRoadGroup, isBuilt, getStats };
 }
