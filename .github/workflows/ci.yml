@@ -45,6 +45,8 @@ jobs:
             exit 1
           fi
           echo "✓ All scenario_file references exist on disk"
+      - name: Validate scenario and suite contracts
+        run: python3 tools/scenarioctl.py validate
 
   # ── clock_service enforcement gate ─────────────────────────
   # clock_service.h must be the only time source for nodes. Raw
