@@ -1,0 +1,75 @@
+Map {
+    id: city_center
+    name: "First-tier city center"
+
+    Road central_avenue {
+        type: urban
+        lanes: 6
+        laneWidth: 3.5
+        speedLimit: 13.0
+        oneWay: false
+        Point { x: -600; y: 0; z: 0 }
+        Point { x: -300; y: 0; z: 0 }
+        Point { x: 0; y: 0; z: 0 }
+        Point { x: 300; y: 0; z: 0 }
+        Point { x: 600; y: 0; z: 0 }
+    }
+
+    Road financial_street {
+        type: urban
+        lanes: 4
+        laneWidth: 3.5
+        speedLimit: 11.0
+        oneWay: false
+        Point { x: 0; y: -420; z: 0 }
+        Point { x: 0; y: -210; z: 0 }
+        Point { x: 0; y: 0; z: 0 }
+        Point { x: 0; y: 210; z: 0 }
+        Point { x: 0; y: 420; z: 0 }
+    }
+
+    Road riverside_boulevard {
+        type: urban
+        lanes: 4
+        laneWidth: 3.5
+        speedLimit: 12.0
+        oneWay: false
+        Point { x: -600; y: 420; z: 0 }
+        Point { x: -300; y: 420; z: 0 }
+        Point { x: 0; y: 420; z: 0 }
+        Point { x: 300; y: 420; z: 0 }
+        Point { x: 600; y: 420; z: 0 }
+    }
+
+    Road downtown_underpass {
+        type: ramp_curve
+        lanes: 2
+        laneWidth: 3.5
+        speedLimit: 15.0
+        oneWay: true
+        Point { x: -600; y: -35; z: 0 }
+        Point { x: -300; y: -35; z: -4 }
+        Point { x: 0; y: -35; z: -5 }
+        Point { x: 300; y: -35; z: -4 }
+        Point { x: 600; y: -35; z: 0 }
+        Elevation { s: 0; z: 0 }
+        Elevation { s: 300; z: -5 }
+        Elevation { s: 600; z: 0 }
+    }
+
+    Connection {
+        from: central_avenue
+        to: financial_street
+        type: intersection
+    }
+    Connection {
+        from: central_avenue
+        to: riverside_boulevard
+        type: intersection
+    }
+    Connection {
+        from: central_avenue
+        to: downtown_underpass
+        type: underpass
+    }
+}

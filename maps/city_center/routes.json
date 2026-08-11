@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "map_id": "city_center",
+  "routes": [
+    {
+      "id": "central_crossing",
+      "name": "Central Avenue through financial district",
+      "kind": "main",
+      "road_chain": ["central_avenue", "financial_street"],
+      "lane_direction": 1,
+      "validated": false
+    },
+    {
+      "id": "riverside",
+      "name": "Central Avenue to riverside boulevard",
+      "kind": "urban",
+      "road_chain": ["central_avenue", "riverside_boulevard"],
+      "lane_direction": 1,
+      "validated": false
+    },
+    {
+      "id": "underpass",
+      "name": "Downtown underpass bypass",
+      "kind": "underpass",
+      "road_chain": ["central_avenue", "downtown_underpass"],
+      "lane_direction": 1,
+      "validated": false
+    }
+  ]
+}

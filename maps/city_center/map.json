@@ -1,0 +1,960 @@
+{
+  "schema_version": 1,
+  "map_id": "city_center",
+  "name": "First-tier city center",
+  "roads": [
+    {
+      "id": "central_avenue",
+      "nodes": [
+        [
+          -600,
+          0,
+          0
+        ],
+        [
+          -300,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          300,
+          0,
+          0
+        ],
+        [
+          600,
+          0,
+          0
+        ]
+      ],
+      "type": "urban",
+      "lanes": [
+        {
+          "id": "central_avenue.lane.1",
+          "index": 1,
+          "width": 3.5,
+          "direction": 1,
+          "centerline": [
+            [
+              -600.0,
+              1.75,
+              0.0
+            ],
+            [
+              -300.0,
+              1.75,
+              0.0
+            ],
+            [
+              0.0,
+              1.75,
+              0.0
+            ],
+            [
+              300.0,
+              1.75,
+              0.0
+            ],
+            [
+              600.0,
+              1.75,
+              0.0
+            ]
+          ],
+          "markings": [
+            {
+              "type": "double_yellow",
+              "side": "left"
+            },
+            {
+              "type": "dashed_white",
+              "side": "right"
+            }
+          ],
+          "successors": []
+        },
+        {
+          "id": "central_avenue.lane.2",
+          "index": 2,
+          "width": 3.5,
+          "direction": 1,
+          "centerline": [
+            [
+              -600.0,
+              5.25,
+              0.0
+            ],
+            [
+              -300.0,
+              5.25,
+              0.0
+            ],
+            [
+              0.0,
+              5.25,
+              0.0
+            ],
+            [
+              300.0,
+              5.25,
+              0.0
+            ],
+            [
+              600.0,
+              5.25,
+              0.0
+            ]
+          ],
+          "markings": [
+            {
+              "type": "dashed_white",
+              "side": "right"
+            }
+          ],
+          "successors": []
+        },
+        {
+          "id": "central_avenue.lane.3",
+          "index": 3,
+          "width": 3.5,
+          "direction": 1,
+          "centerline": [
+            [
+              -600.0,
+              8.75,
+              0.0
+            ],
+            [
+              -300.0,
+              8.75,
+              0.0
+            ],
+            [
+              0.0,
+              8.75,
+              0.0
+            ],
+            [
+              300.0,
+              8.75,
+              0.0
+            ],
+            [
+              600.0,
+              8.75,
+              0.0
+            ]
+          ],
+          "markings": [
+            {
+              "type": "solid_white",
+              "side": "right"
+            }
+          ],
+          "successors": []
+        },
+        {
+          "id": "central_avenue.lane.101",
+          "index": 1,
+          "width": 3.5,
+          "direction": -1,
+          "centerline": [
+            [
+              -600.0,
+              -1.75,
+              0.0
+            ],
+            [
+              -300.0,
+              -1.75,
+              0.0
+            ],
+            [
+              0.0,
+              -1.75,
+              0.0
+            ],
+            [
+              300.0,
+              -1.75,
+              0.0
+            ],
+            [
+              600.0,
+              -1.75,
+              0.0
+            ]
+          ],
+          "markings": [
+            {
+              "type": "double_yellow",
+              "side": "right"
+            },
+            {
+              "type": "dashed_white",
+              "side": "left"
+            }
+          ],
+          "successors": []
+        },
+        {
+          "id": "central_avenue.lane.102",
+          "index": 2,
+          "width": 3.5,
+          "direction": -1,
+          "centerline": [
+            [
+              -600.0,
+              -5.25,
+              0.0
+            ],
+            [
+              -300.0,
+              -5.25,
+              0.0
+            ],
+            [
+              0.0,
+              -5.25,
+              0.0
+            ],
+            [
+              300.0,
+              -5.25,
+              0.0
+            ],
+            [
+              600.0,
+              -5.25,
+              0.0
+            ]
+          ],
+          "markings": [
+            {
+              "type": "dashed_white",
+              "side": "left"
+            }
+          ],
+          "successors": []
+        },
+        {
+          "id": "central_avenue.lane.103",
+          "index": 3,
+          "width": 3.5,
+          "direction": -1,
+          "centerline": [
+            [
+              -600.0,
+              -8.75,
+              0.0
+            ],
+            [
+              -300.0,
+              -8.75,
+              0.0
+            ],
+            [
+              0.0,
+              -8.75,
+              0.0
+            ],
+            [
+              300.0,
+              -8.75,
+              0.0
+            ],
+            [
+              600.0,
+              -8.75,
+              0.0
+            ]
+          ],
+          "markings": [
+            {
+              "type": "solid_white",
+              "side": "left"
+            }
+          ],
+          "successors": []
+        }
+      ],
+      "lane_width": 3.5,
+      "speed_limit": 13.0,
+      "oneway": false,
+      "centerline": [
+        [
+          -600.0,
+          0.0,
+          0.0
+        ],
+        [
+          -300.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          300.0,
+          0.0,
+          0.0
+        ],
+        [
+          600.0,
+          0.0,
+          0.0
+        ]
+      ]
+    },
+    {
+      "id": "financial_street",
+      "nodes": [
+        [
+          0,
+          -420,
+          0
+        ],
+        [
+          0,
+          -210,
+          0
+        ],
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          210,
+          0
+        ],
+        [
+          0,
+          420,
+          0
+        ]
+      ],
+      "type": "urban",
+      "lanes": [
+        {
+          "id": "financial_street.lane.1",
+          "index": 1,
+          "width": 3.5,
+          "direction": 1,
+          "centerline": [
+            [
+              -1.75,
+              -420.0,
+              0.0
+            ],
+            [
+              -1.75,
+              -210.0,
+              0.0
+            ],
+            [
+              -1.75,
+              0.0,
+              0.0
+            ],
+            [
+              -1.75,
+              210.0,
+              0.0
+            ],
+            [
+              -1.75,
+              420.0,
+              0.0
+            ]
+          ],
+          "markings": [
+            {
+              "type": "double_yellow",
+              "side": "left"
+            },
+            {
+              "type": "dashed_white",
+              "side": "right"
+            }
+          ],
+          "successors": []
+        },
+        {
+          "id": "financial_street.lane.2",
+          "index": 2,
+          "width": 3.5,
+          "direction": 1,
+          "centerline": [
+            [
+              -5.25,
+              -420.0,
+              0.0
+            ],
+            [
+              -5.25,
+              -210.0,
+              0.0
+            ],
+            [
+              -5.25,
+              0.0,
+              0.0
+            ],
+            [
+              -5.25,
+              210.0,
+              0.0
+            ],
+            [
+              -5.25,
+              420.0,
+              0.0
+            ]
+          ],
+          "markings": [
+            {
+              "type": "solid_white",
+              "side": "right"
+            }
+          ],
+          "successors": []
+        },
+        {
+          "id": "financial_street.lane.101",
+          "index": 1,
+          "width": 3.5,
+          "direction": -1,
+          "centerline": [
+            [
+              1.75,
+              -420.0,
+              0.0
+            ],
+            [
+              1.75,
+              -210.0,
+              0.0
+            ],
+            [
+              1.75,
+              0.0,
+              0.0
+            ],
+            [
+              1.75,
+              210.0,
+              0.0
+            ],
+            [
+              1.75,
+              420.0,
+              0.0
+            ]
+          ],
+          "markings": [
+            {
+              "type": "double_yellow",
+              "side": "right"
+            },
+            {
+              "type": "dashed_white",
+              "side": "left"
+            }
+          ],
+          "successors": []
+        },
+        {
+          "id": "financial_street.lane.102",
+          "index": 2,
+          "width": 3.5,
+          "direction": -1,
+          "centerline": [
+            [
+              5.25,
+              -420.0,
+              0.0
+            ],
+            [
+              5.25,
+              -210.0,
+              0.0
+            ],
+            [
+              5.25,
+              0.0,
+              0.0
+            ],
+            [
+              5.25,
+              210.0,
+              0.0
+            ],
+            [
+              5.25,
+              420.0,
+              0.0
+            ]
+          ],
+          "markings": [
+            {
+              "type": "solid_white",
+              "side": "left"
+            }
+          ],
+          "successors": []
+        }
+      ],
+      "lane_width": 3.5,
+      "speed_limit": 11.0,
+      "oneway": false,
+      "centerline": [
+        [
+          0.0,
+          -420.0,
+          0.0
+        ],
+        [
+          0.0,
+          -210.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          210.0,
+          0.0
+        ],
+        [
+          0.0,
+          420.0,
+          0.0
+        ]
+      ]
+    },
+    {
+      "id": "riverside_boulevard",
+      "nodes": [
+        [
+          -600,
+          420,
+          0
+        ],
+        [
+          -300,
+          420,
+          0
+        ],
+        [
+          0,
+          420,
+          0
+        ],
+        [
+          300,
+          420,
+          0
+        ],
+        [
+          600,
+          420,
+          0
+        ]
+      ],
+      "type": "urban",
+      "lanes": [
+        {
+          "id": "riverside_boulevard.lane.1",
+          "index": 1,
+          "width": 3.5,
+          "direction": 1,
+          "centerline": [
+            [
+              -600.0,
+              421.75,
+              0.0
+            ],
+            [
+              -300.0,
+              421.75,
+              0.0
+            ],
+            [
+              0.0,
+              421.75,
+              0.0
+            ],
+            [
+              300.0,
+              421.75,
+              0.0
+            ],
+            [
+              600.0,
+              421.75,
+              0.0
+            ]
+          ],
+          "markings": [
+            {
+              "type": "double_yellow",
+              "side": "left"
+            },
+            {
+              "type": "dashed_white",
+              "side": "right"
+            }
+          ],
+          "successors": []
+        },
+        {
+          "id": "riverside_boulevard.lane.2",
+          "index": 2,
+          "width": 3.5,
+          "direction": 1,
+          "centerline": [
+            [
+              -600.0,
+              425.25,
+              0.0
+            ],
+            [
+              -300.0,
+              425.25,
+              0.0
+            ],
+            [
+              0.0,
+              425.25,
+              0.0
+            ],
+            [
+              300.0,
+              425.25,
+              0.0
+            ],
+            [
+              600.0,
+              425.25,
+              0.0
+            ]
+          ],
+          "markings": [
+            {
+              "type": "solid_white",
+              "side": "right"
+            }
+          ],
+          "successors": []
+        },
+        {
+          "id": "riverside_boulevard.lane.101",
+          "index": 1,
+          "width": 3.5,
+          "direction": -1,
+          "centerline": [
+            [
+              -600.0,
+              418.25,
+              0.0
+            ],
+            [
+              -300.0,
+              418.25,
+              0.0
+            ],
+            [
+              0.0,
+              418.25,
+              0.0
+            ],
+            [
+              300.0,
+              418.25,
+              0.0
+            ],
+            [
+              600.0,
+              418.25,
+              0.0
+            ]
+          ],
+          "markings": [
+            {
+              "type": "double_yellow",
+              "side": "right"
+            },
+            {
+              "type": "dashed_white",
+              "side": "left"
+            }
+          ],
+          "successors": []
+        },
+        {
+          "id": "riverside_boulevard.lane.102",
+          "index": 2,
+          "width": 3.5,
+          "direction": -1,
+          "centerline": [
+            [
+              -600.0,
+              414.75,
+              0.0
+            ],
+            [
+              -300.0,
+              414.75,
+              0.0
+            ],
+            [
+              0.0,
+              414.75,
+              0.0
+            ],
+            [
+              300.0,
+              414.75,
+              0.0
+            ],
+            [
+              600.0,
+              414.75,
+              0.0
+            ]
+          ],
+          "markings": [
+            {
+              "type": "solid_white",
+              "side": "left"
+            }
+          ],
+          "successors": []
+        }
+      ],
+      "lane_width": 3.5,
+      "speed_limit": 12.0,
+      "oneway": false,
+      "centerline": [
+        [
+          -600.0,
+          420.0,
+          0.0
+        ],
+        [
+          -300.0,
+          420.0,
+          0.0
+        ],
+        [
+          0.0,
+          420.0,
+          0.0
+        ],
+        [
+          300.0,
+          420.0,
+          0.0
+        ],
+        [
+          600.0,
+          420.0,
+          0.0
+        ]
+      ]
+    },
+    {
+      "id": "downtown_underpass",
+      "nodes": [
+        [
+          -600,
+          -35,
+          0
+        ],
+        [
+          -300,
+          -35,
+          -4
+        ],
+        [
+          0,
+          -35,
+          -5
+        ],
+        [
+          300,
+          -35,
+          -4
+        ],
+        [
+          600,
+          -35,
+          0
+        ]
+      ],
+      "type": "ramp_curve",
+      "lanes": [
+        {
+          "id": "downtown_underpass.lane.1",
+          "index": 1,
+          "width": 3.5,
+          "direction": 1,
+          "centerline": [
+            [
+              -600.0,
+              -33.25,
+              0.0
+            ],
+            [
+              -300.0,
+              -33.25,
+              -4.0
+            ],
+            [
+              0.0,
+              -33.25,
+              -5.0
+            ],
+            [
+              300.0,
+              -33.25,
+              -4.0
+            ],
+            [
+              600.0,
+              -33.25,
+              0.0
+            ]
+          ],
+          "markings": [
+            {
+              "type": "dashed_white",
+              "side": "right"
+            }
+          ],
+          "successors": []
+        },
+        {
+          "id": "downtown_underpass.lane.2",
+          "index": 2,
+          "width": 3.5,
+          "direction": 1,
+          "centerline": [
+            [
+              -600.0,
+              -29.75,
+              0.0
+            ],
+            [
+              -300.0,
+              -29.75,
+              -4.0
+            ],
+            [
+              0.0,
+              -29.75,
+              -5.0
+            ],
+            [
+              300.0,
+              -29.75,
+              -4.0
+            ],
+            [
+              600.0,
+              -29.75,
+              0.0
+            ]
+          ],
+          "markings": [
+            {
+              "type": "solid_white",
+              "side": "right"
+            }
+          ],
+          "successors": []
+        }
+      ],
+      "lane_width": 3.5,
+      "speed_limit": 15.0,
+      "oneway": true,
+      "centerline": [
+        [
+          -600.0,
+          -35.0,
+          0.0
+        ],
+        [
+          -300.0,
+          -35.0,
+          -4.0
+        ],
+        [
+          0.0,
+          -35.0,
+          -5.0
+        ],
+        [
+          300.0,
+          -35.0,
+          -4.0
+        ],
+        [
+          600.0,
+          -35.0,
+          0.0
+        ]
+      ],
+      "elevation_profile": [
+        {
+          "s": 0,
+          "z": 0
+        },
+        {
+          "s": 300,
+          "z": -5
+        },
+        {
+          "s": 600,
+          "z": 0
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from_road": "central_avenue",
+      "to_road": "financial_street",
+      "type": "intersection"
+    },
+    {
+      "from_road": "central_avenue",
+      "to_road": "riverside_boulevard",
+      "type": "intersection"
+    },
+    {
+      "from_road": "central_avenue",
+      "to_road": "downtown_underpass",
+      "type": "underpass"
+    }
+  ],
+  "junctions": [],
+  "landmarks": {
+    "traffic_lights": [],
+    "stop_lines": [],
+    "construction_zones": []
+  }
+}
