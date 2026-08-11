@@ -10,7 +10,7 @@ import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { ok, done } from './test-utils.mjs';
 import { _cleanSu7Exterior } from '../tools/flowboard/js/vis/view/VehicleView.js';
-import { _relinkWheelUserData } from '../tools/flowboard/js/models.js';
+import { _relinkWheelUserData, _setVehicleLights } from '../tools/flowboard/js/models.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../tools/flowboard/models/su7');
 const modelPath = resolve(ROOT, 'sm_car.gltf');
@@ -37,8 +37,20 @@ const rawRearLights = (model.nodes || []).filter(node =>
 ok('SU7 真实灯节点前后位置自洽',
   rawFrontLights.every(node => node.translation && node.translation[0] > 0) &&
   rawRearLights.every(node => node.translation && node.translation[0] < 0));
-const rawFrontMesh = { name: 'Light', isMesh: true, material: {} };
-const rawRearMesh = { name: 'Light.003', isMesh: true, material: {} };
+const frontMaterial = {
+  emissive: { setHex(value) { this.value = value; } },
+  emissiveIntensity: 1,
+  toneMapped: true,
+  side: 0,
+};
+const rearMaterial = {
+  emissive: { setHex(value) { this.value = value; } },
+  emissiveIntensity: 1,
+  toneMapped: true,
+  side: 0,
+};
+const rawFrontMesh = { name: 'Light', isMesh: true, material: frontMaterial };
+const rawRearMesh = { name: 'Light.003', isMesh: true, material: rearMaterial };
 const rawLightScene = {
   userData: { modelType: 'su7' },
   traverse(visitor) {
@@ -49,6 +61,12 @@ _relinkWheelUserData(rawLightScene);
 ok('SU7 真实灯材质接入 headlight/brakelight 契约',
   rawLightScene.userData.headlights.includes(rawFrontMesh) &&
   rawLightScene.userData.brakeLights.includes(rawRearMesh));
+_setVehicleLights(rawLightScene, { brake: true, head: true }, 0);
+ok('SU7 真实灯材质亮度和可见性增强',
+  frontMaterial.emissiveIntensity === 8 &&
+  rearMaterial.emissiveIntensity === 6 &&
+  frontMaterial.toneMapped === false &&
+  rearMaterial.toneMapped === false);
 ok('SU7 clean exterior 节点存在', ['ChePai', 'Logo', 'Logo.001'].every(name =>
   (model.nodes || []).some(node => node.name === name)));
 ok('SU7 外部 bin/WebP 资源完整', referencedFiles.length > 0 &&

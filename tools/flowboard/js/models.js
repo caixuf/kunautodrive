@@ -88,19 +88,56 @@ function _adaptSu7WheelNodes(group) {
  */
 function _adaptSu7LightNodes(group) {
   var front = [], rear = [];
+  function prepare(mesh, kind) {
+    if (!mesh.userData) mesh.userData = {};
+    mesh.userData.su7LightKind = kind;
+    var materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    materials.forEach(function(material) {
+      if (!material) return;
+      // The source lens normals are not guaranteed to face every camera angle.
+      // Double-sided, non-tonemapped emission keeps the real lens visible
+      // without replacing its geometry or emissive texture.
+      if (THREE.DoubleSide !== undefined) material.side = THREE.DoubleSide;
+      if (material.toneMapped !== undefined) material.toneMapped = false;
+    });
+  }
   group.traverse(function(c) {
     if (!c.isMesh) return;
     if (c.name === 'Light' ||
         c.name === 'Light.002' || c.name === 'Light002' ||
         c.name === 'LightGlass.004' || c.name === 'LightGlass004') {
       front.push(c);
+      prepare(c, 'head');
     } else if (c.name === 'Light.003' || c.name === 'Light003' || c.name === 'LightGlass') {
       rear.push(c);
+      prepare(c, 'brake');
     }
   });
   if (front.length) group.userData.headlights = front;
   if (rear.length) group.userData.brakeLights = rear;
   group.userData.su7RawLights = front.length > 0 && rear.length > 0;
+}
+
+function _setLightMeshMaterial(mesh, intensity, colorHex) {
+  var materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  for (var m = 0; m < materials.length; m++) {
+    var material = materials[m];
+    if (!material) continue;
+    if (material.emissive) material.emissive.setHex(colorHex);
+    if (material.emissiveIntensity !== undefined) material.emissiveIntensity = intensity;
+    // Keep the real SU7 lens readable above the ACES curve and from both
+    // sides; semantic glTF lights use the same path when available.
+    if (material.toneMapped !== undefined) material.toneMapped = false;
+    if (THREE.DoubleSide !== undefined && material.side !== undefined) {
+      material.side = THREE.DoubleSide;
+    }
+  }
+}
+
+function _setLightMeshMaterials(meshes, intensity, colorHex) {
+  for (var i = 0; i < meshes.length; i++) {
+    _setLightMeshMaterial(meshes[i], intensity, colorHex);
+  }
 }
 
 /**
@@ -423,33 +460,28 @@ export function _setVehicleLights(group, state, blinkPhase) {
   if (!group || !group.userData) return;
   var ud = group.userData;
   var blinkOn = (blinkPhase !== undefined) ? (Math.sin(blinkPhase * Math.PI * 2 * 1.5) > 0) : true;
-  // 刹车灯：on=1.5（降低视觉占比），off=0.15（微弱暗红）
+  // Keep the source lens and texture, but make the state change unambiguous
+  // against the bright outdoor HDRI and the renderer's ACES exposure.
   if (ud.brakeLights) {
-    var bi = state.brake ? 1.5 : 0.15;
-    for (var i = 0; i < ud.brakeLights.length; i++) {
-      if (ud.brakeLights[i].material) ud.brakeLights[i].material.emissiveIntensity = bi;
-    }
+    var bi = state.brake ? 6.0 : 0.08;
+    _setLightMeshMaterials(ud.brakeLights, bi, 0xff211c);
   }
-  // 转向灯：亮闪 4.5（更醒目），灭 0.1
+  // 转向灯：亮闪 6.0（更醒目），灭 0.05
   if (ud.turnSignals) {
     var ts = ud.turnSignals;
     var setSide = function(on, keys) {
-      var intensity = on ? (blinkOn ? 4.5 : 0.1) : 0.1;
+      var intensity = on ? (blinkOn ? 6.0 : 0.05) : 0.05;
       for (var k = 0; k < keys.length; k++) {
-        if (ts[keys[k]] && ts[keys[k]].material) {
-          ts[keys[k]].material.emissiveIntensity = intensity;
-        }
+        if (ts[keys[k]]) _setLightMeshMaterial(ts[keys[k]], intensity, 0xff8a18);
       }
     };
     setSide(state.turnL, ['FL', 'RL']);
     setSide(state.turnR, ['FR', 'RR']);
   }
-  // 大灯：亮 3.0（补足视觉占比），灭 0.4
+  // 大灯：亮 8.0（补足白天 HDRI 下的视觉占比），灭 0.05
   if (ud.headlights && state.head !== undefined) {
-    var hi = state.head ? 3.0 : 0.4;
-    for (var h = 0; h < ud.headlights.length; h++) {
-      if (ud.headlights[h].material) ud.headlights[h].material.emissiveIntensity = hi;
-    }
+    var hi = state.head ? 8.0 : 0.05;
+    _setLightMeshMaterials(ud.headlights, hi, 0xfff4cf);
   }
   // 自动驾驶小蓝灯（ads_indicator）：车尾左右各一，量产 ADS 标志。
   // 常亮 + 高 emissive（穿透性蓝光），不受 brake/turn 状态影响。
