@@ -30,7 +30,7 @@ const LIGHT_TURN_ON = new THREE.Color(0xff8800);
 const LIGHT_HEAD_ON = new THREE.Color(0xffffcc);
 
 const BRAKE_Y = 0.55;      // 尾灯高度
-const BRAKE_X = -2.05;     // 车尾
+const BRAKE_X = -2.05;     // 车尾（X-forward）
 const BRAKE_Z = 0.65;      // 左右间距
 const TURN_X = -2.08;
 const TURN_Z = 0.78;
@@ -59,12 +59,15 @@ function _makeRectMesh(geo, color, x, y, z) {
 function createVehicleLights(vehicleGroup) {
   const group = new THREE.Group();
 
-  const brakeL = _makeRectMesh(GEO_BRAKE, LIGHT_OFF, -BRAKE_X, BRAKE_Y, BRAKE_Z);
-  const brakeR = _makeRectMesh(GEO_BRAKE, LIGHT_OFF,  BRAKE_X, BRAKE_Y, BRAKE_Z);
-  const turnL  = _makeRectMesh(GEO_TURN, LIGHT_OFF, -TURN_X,  BRAKE_Y, TURN_Z);
-  const turnR  = _makeRectMesh(GEO_TURN, LIGHT_OFF,  TURN_X,  BRAKE_Y, TURN_Z);
-  const headL  = _makeRectMesh(GEO_HEAD, LIGHT_OFF, -HEAD_X,  HEAD_Y,  HEAD_Z);
-  const headR  = _makeRectMesh(GEO_HEAD, LIGHT_OFF,  HEAD_X,  HEAD_Y,  HEAD_Z);
+  // In the shared X-forward frame, left is -Z and right is +Z. Keep each
+  // pair on the same front/rear face; the previous wiring swapped X/Z and
+  // put one brake/turn/head lamp at the wrong end of the car.
+  const brakeL = _makeRectMesh(GEO_BRAKE, LIGHT_OFF, BRAKE_X, BRAKE_Y, -BRAKE_Z);
+  const brakeR = _makeRectMesh(GEO_BRAKE, LIGHT_OFF, BRAKE_X, BRAKE_Y,  BRAKE_Z);
+  const turnL  = _makeRectMesh(GEO_TURN, LIGHT_OFF, TURN_X,  BRAKE_Y, -TURN_Z);
+  const turnR  = _makeRectMesh(GEO_TURN, LIGHT_OFF, TURN_X,  BRAKE_Y,  TURN_Z);
+  const headL  = _makeRectMesh(GEO_HEAD, LIGHT_OFF, HEAD_X,  HEAD_Y, -HEAD_Z);
+  const headR  = _makeRectMesh(GEO_HEAD, LIGHT_OFF, HEAD_X,  HEAD_Y,  HEAD_Z);
 
   // 熄灯时隐藏，避免暗色灯片显示为车身边缘的黑方块
   brakeL.visible = brakeR.visible = false;
@@ -75,14 +78,17 @@ function createVehicleLights(vehicleGroup) {
 
   return {
     group,
-    update(v) {
+    update(v, nowMs) {
       const s = deriveLightState(v.lights || 0, v.brake || 0);
+      const blinkOn = nowMs === undefined
+        ? true
+        : (((nowMs / 1000) * 1.5) % 1) < 0.5;
       brakeL.visible = s.brake;
       brakeR.visible = s.brake;
       brakeL.material.color.copy(LIGHT_BRAKE_ON);
       brakeR.material.color.copy(LIGHT_BRAKE_ON);
-      turnL.visible = s.turnL;
-      turnR.visible = s.turnR;
+      turnL.visible = s.turnL && blinkOn;
+      turnR.visible = s.turnR && blinkOn;
       turnL.material.color.copy(LIGHT_TURN_ON);
       turnR.material.color.copy(LIGHT_TURN_ON);
       headL.visible = s.head;
@@ -315,6 +321,7 @@ export function initModels() {
 export function createVehicleView(scene, renderer, modelCache) {
   const vehicleMap = new Map();  // id → { group, lights, modelData, ... }
   let vehicleGroup = new THREE.Group();
+  let lastUpdateMs = null;
   scene.add(vehicleGroup);
 
   // ── 辅助工具 ──
@@ -434,7 +441,12 @@ export function createVehicleView(scene, renderer, modelCache) {
     if (!vis) return;
     // 行人：无方向盘/车轮/灯光动画
     if (type === 'pedestrian') return;
-    const speed_mps = v ? v.speed_mps : 0;
+    // SceneDirector normalizes the dashboard contract to `speed` (m/s).
+    // Keep speed_mps as a compatibility alias for standalone callers.
+    const speed_mps = v
+      ? (Number.isFinite(v.speed_mps) ? v.speed_mps
+        : (Number.isFinite(v.speed) ? v.speed : 0))
+      : 0;
 
     // 前轴转向：glTF 模型 axle_front（含 wheel_FL/wheel_FR）整体绕 Y 旋转。
     // steer > 0 = 右转，THREE rotation.y 正向 = 逆时针，故取负。
@@ -472,9 +484,9 @@ export function createVehicleView(scene, renderer, modelCache) {
           const radius = 0.35;
           const angularSpeed = speed_mps / radius;
           if (child.userData && child.userData.rollAxis === 'z') {
-            child.rotation.z += angularSpeed * 0.016;
+            child.rotation.z += angularSpeed * dt;
           } else {
-            child.rotation.x += angularSpeed * 0.016;
+            child.rotation.x += angularSpeed * dt;
           }
         }
       }
@@ -537,7 +549,7 @@ export function createVehicleView(scene, renderer, modelCache) {
       );
       entry.group.position.set(tx, ty, tz);
       entry.group.rotation.set(0, headingToRotationY(vehicleData.heading || vehicleData.yaw || 0), 0);
-      entry.steerAngle = vehicleData.steer || vehicleData.steerAngle || 0;
+      entry.steerAngle = vehicleData.steer ?? vehicleData.steerAngle ?? 0;
     }
 
     return entry;
@@ -591,7 +603,10 @@ export function createVehicleView(scene, renderer, modelCache) {
   /** Layer 树每帧调用：从 store 同步 ego + entities → 创建/更新/删除车辆 + 动画 */
   function update(store, now) {
     if (!store) return;
-    const dt = 1 / 60;  // 默认帧间隔
+    const dt = lastUpdateMs === null || now === undefined
+      ? 1 / 60
+      : Math.min(0.1, Math.max(0, (now - lastUpdateMs) / 1000));
+    lastUpdateMs = now === undefined ? lastUpdateMs : now;
 
     // 收集所有需要渲染的实体（ego + 其他车辆/NPC）
     const activeIds = new Set();
@@ -647,7 +662,7 @@ export function createVehicleView(scene, renderer, modelCache) {
       // 模型和 fallback 都复用同一套可见灯光反馈；有语义 emissive 节点
       // 的模型同时保留其材质亮度控制。
       if (entry.lights) {
-        entry.lights.update(v);
+        entry.lights.update(v, now);
       }
 
       // glTF 模型 emissive 灯光（含 ads_indicator 小蓝灯）

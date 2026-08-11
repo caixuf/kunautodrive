@@ -591,7 +591,9 @@ const GLTF_TYPE_MAP = {
 [Yechuanjie/xiaomi-su7](https://github.com/Yechuanjie/xiaomi-su7) 的授权展示资产，
 使用 `EXT_meshopt_compression`，由 `bootstrap.js` 注册的 MeshoptDecoder 解码。
 该模型把左右轮合并为前后两个轮轴网格，`models.js` 在加载时包装为
-`axle_front/axle_rear`，因此仍复用统一的转向、滚动和灯光契约；加载失败时回退到
+`axle_front/axle_rear`，因此仍复用统一的前轴转向、全轮滚动和灯光契约。前端消费
+scene 的 `speed`（m/s）字段按真实渲染帧间隔推进轮胎，并将 `steer` 1:1 映射到
+前轴；加载失败时回退到
 现有的程序化 `su7.gltf`。
 
 SU7 运行时有两条性能/材质保护：缓存模型只在车辆首次切换到 glTF 时 clone，
@@ -599,7 +601,9 @@ SU7 运行时有两条性能/材质保护：缓存模型只在车辆首次切换
 纹理、透明度和多材质分组，黑色内饰/饰件不强制转换成高反射车漆。这样既避免
 软件 WebGL 下的 CPU 卡顿，也避免材质被共享实例或错误的 PBR 转换污染。
 默认还启用 clean exterior：移除带文字的车漆 AO 贴图以及独立车牌/Logo 网格，
-保留原车漆、车灯、轮毂和车身结构。
+保留原车漆、车灯、轮毂和车身结构。SU7 无语义灯节点时使用与车体
+X-forward 坐标契约一致的程序化灯片：刹车灯/转向灯位于车尾，近光灯位于车头；
+`lights` 位掩码和 `brake` 字段驱动亮灭，转向灯按 1.5 Hz 闪烁。
 
 ---
 
