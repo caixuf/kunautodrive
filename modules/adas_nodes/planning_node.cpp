@@ -167,6 +167,7 @@ struct PlanningContext {
     double curve_offset_m{0};
     int    lane_count{2};       /* 从 road/geometry 订阅获取 */
     double lane_width{3.5};     /* 从 road/geometry 订阅获取 */
+    double road_speed_limit{20.0}; /* FlowSim 当前道路限速，规划速度上限 */
 
     /* 变道圆弧曲率（固定方向盘 = 固定 kappa，2026-08）：
      * 变道轨迹生成时计算，回填后填给轨迹点，control kappa 前馈用 */
@@ -1104,6 +1105,10 @@ static void on_road_geometry(const Message* msg, void* user_data) {
             g.lane_count = new_lc;
         }
         if ((item = cJSON_GetObjectItem(root, "lane_width")))     g.lane_width = item->valuedouble;
+        if ((item = cJSON_GetObjectItem(root, "speed_limit")) &&
+            cJSON_IsNumber(item) && item->valuedouble > 0.0) {
+            g.road_speed_limit = item->valuedouble;
+        }
         cJSON_Delete(root);
     } else {
         LOG_WARN("planning", "[RG] cJSON_Parse FAILED");
@@ -1582,6 +1587,9 @@ protected:
                     speed_clamp_warn++;
                 }
                 command_speed = g.cfg_max_speed;
+            }
+            if (command_speed > g.road_speed_limit) {
+                command_speed = g.road_speed_limit;
             }
             const double environment_max_speed =
                 g.cfg_max_speed * g.environment_speed_factor;

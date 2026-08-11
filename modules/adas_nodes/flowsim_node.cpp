@@ -1116,6 +1116,7 @@ static void publish_road_geometry(void) {
      * 这里查询失败时回退 2（向后兼容 2 车道场景）。 */
     int lane_count = 2;
     int road_id = -1;
+    double speed_limit = 20.0;
     if (g.roads_loaded) {
         const flowsim::Entity& ego = g.pool[0];
         flowsim::FrenetPos ef;
@@ -1123,9 +1124,12 @@ static void publish_road_geometry(void) {
             road_id = ef.road_id;
             int n = g.roads.drivable_lane_count(ef.road_id, ef.s);
             if (n > 0) lane_count = n;
+            speed_limit = g.roads.speed_limit(
+                ef.road_id, ef.lane_id, ef.s, speed_limit);
         }
     }
     cJSON_AddNumberToObject(root, "lane_count", lane_count);
+    cJSON_AddNumberToObject(root, "speed_limit", speed_limit);
     /* 单双向：behavior 变道候选限制用（双向路禁止越线变道到对向） */
     cJSON_AddNumberToObject(root, "oneway",
                             (g.scenario && g.scenario->road.oneway) ? 1 : 0);

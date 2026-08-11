@@ -698,9 +698,11 @@ def _road_network_projection(scene: dict, x: float, y: float) -> tuple[float, fl
                 dist, edge_s_base + local_s + t * seg_len, signed_offset,
                 lane_count, lane_width, margin, seg_heading,
             )
-            if (best is None or
-                    margin > best[5] + 1e-9 or
-                    (abs(margin - best[5]) <= 1e-9 and dist < best[0])):
+            # Road membership is geometric: a narrow ramp must not be
+            # projected onto a farther, wider arterial simply because that
+            # arterial has a larger edge margin. Margin is an output of the
+            # selected road, not the selection criterion.
+            if best is None or dist < best[0] - 1e-9:
                 best = candidate
             local_s += seg_len
         edge_s_base += local_s

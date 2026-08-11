@@ -20,6 +20,32 @@ def load_evaluator():
 
 
 class DemoEvaluatorTest(unittest.TestCase):
+    def test_road_network_projection_prefers_nearest_ramp_over_wider_road(self):
+        evaluator = load_evaluator()
+        scene = {
+            "road_network": {
+                "edges": [
+                    {
+                        "lanes": 1,
+                        "lane_width": 3.5,
+                        "nodes": [[0.0, 0.0], [100.0, 0.0]],
+                    },
+                    {
+                        "lanes": 4,
+                        "lane_width": 3.5,
+                        "nodes": [[0.0, 10.0], [100.0, 10.0]],
+                    },
+                ],
+            },
+        }
+
+        projection = evaluator._road_network_projection(scene, 50.0, 0.5)
+
+        self.assertIsNotNone(projection)
+        _, signed_offset, lane_count, _, _, _ = projection
+        self.assertEqual(lane_count, 1)
+        self.assertAlmostEqual(signed_offset, 0.5)
+
     def test_formal_metrics_report_tracking_comfort_and_timing_groups(self):
         evaluator = load_evaluator()
         samples = [
