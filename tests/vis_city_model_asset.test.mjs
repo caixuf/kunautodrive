@@ -6,7 +6,10 @@ import { readFileSync, statSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { ok, done } from './test-utils.mjs';
-import { CITY_MODEL_BUDGET } from '../tools/flowboard/js/vis/view/BuildingView.js';
+import {
+  CITY_MODEL_BUDGET,
+  cityBuildingPose,
+} from '../tools/flowboard/js/vis/view/BuildingView.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../tools/flowboard/models/city');
 const MODEL_SOURCE = readFileSync(
@@ -52,5 +55,14 @@ ok('real city model budget remains bounded',
   CITY_MODEL_BUDGET.high === 18 &&
   CITY_MODEL_BUDGET.medium === 8 &&
   CITY_MODEL_BUDGET.low === 0);
+
+const left = cityBuildingPose(100, 7.5, -20, 0, 1, 32, -1);
+const right = cityBuildingPose(100, 7.5, -20, 0, 1, 32, 1);
+ok('city buildings retain sampled road elevation',
+  left.y === 7.5 && right.y === 7.5);
+ok('city buildings are placed on opposite road sides',
+  left.z === -52 && right.z === 12);
+ok('city building facades face inward on both road sides',
+  Math.abs(Math.abs(left.rotation - right.rotation) - Math.PI) < 1e-9);
 
 done();

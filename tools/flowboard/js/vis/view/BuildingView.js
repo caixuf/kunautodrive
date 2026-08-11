@@ -35,6 +35,18 @@ export const CITY_MODEL_BUDGET = Object.freeze({
   low: 0,
 });
 
+/** Place each building on the sampled road elevation with its facade facing
+ * the road centerline. Exported as a pure geometry contract for regression
+ * tests; callers add their own height and footprint dimensions. */
+export function cityBuildingPose(px, py, pz, nx, nz, offset, side) {
+  return {
+    x: px + nx * offset * side,
+    y: py,
+    z: pz + nz * offset * side,
+    rotation: directionToRotationY(-nx * side, -nz * side),
+  };
+}
+
 function buildingTexture() {
   const canvas = document.createElement('canvas');
   canvas.width = 64;
@@ -66,11 +78,20 @@ export function createBuildingView(scene) {
     while (group.children.length) {
       const child = group.children[0];
       group.remove(child);
-      if (child.geometry) child.geometry.dispose();
-      if (child.material) {
-        if (child.material.map) child.material.map.dispose();
-        child.material.dispose();
-      }
+      const isCityAsset = !!child.userData.cityAsset;
+      child.traverse((node) => {
+        if (!node.isMesh) return;
+        // City clones share immutable geometry/textures with the cache. Their
+        // per-instance materials are safe to release; disposing shared assets
+        // would corrupt the next road-network rebuild.
+        if (!isCityAsset && node.geometry) node.geometry.dispose();
+        const materials = Array.isArray(node.material) ? node.material : [node.material];
+        for (const material of materials) {
+          if (!material) continue;
+          if (!isCityAsset && material.map) material.map.dispose();
+          material.dispose();
+        }
+      });
     }
   }
 
@@ -86,7 +107,7 @@ export function createBuildingView(scene) {
     model.scale.set(scale, scale, scale);
     // Box3 含模型原点偏移：重新计算缩放后底部，确保落在地面（y=0）。
     const scaledBox = new THREE.Box3().setFromObject(model);
-    model.position.set(slot.x, -scaledBox.min.y, slot.z);
+    model.position.set(slot.x, slot.y - scaledBox.min.y, slot.z);
     model.rotation.y = slot.rotation;
     model.traverse((child) => {
       if (!child.isMesh) return;
@@ -144,7 +165,7 @@ export function createBuildingView(scene) {
 
         let distance = 0;
         for (let i = 3; i < points.length; i += 3) {
-          const px = points[i], pz = points[i + 2];
+          const px = points[i], py = points[i + 1], pz = points[i + 2];
           const prevX = points[i - 3], prevZ = points[i - 1];
           const segment = Math.hypot(px - prevX, pz - prevZ);
           distance += segment;
@@ -157,12 +178,11 @@ export function createBuildingView(scene) {
           const width = (12 + seed * 8) * (li === 0 ? 1 : 0.8);
           const depth = (10 + (1 - seed) * 8) * (li === 0 ? 1 : 0.8);
           for (const side of [-1, 1]) {
+            const pose = cityBuildingPose(px, py, pz, nx, nz, offset, side);
             slots.push({
-              x: px + nx * offset * side,
-              z: pz + nz * offset * side,
+              ...pose,
               height, width, depth, seed,
               layer: li,
-              rotation: directionToRotationY(nx, nz),
             });
           }
         }
@@ -221,13 +241,13 @@ export function createBuildingView(scene) {
       const bodies = new THREE.InstancedMesh(bodyGeo, facadeMat, slotList.length);
       const roofs = new THREE.InstancedMesh(roofGeo, roofMat, slotList.length);
       slotList.forEach((slot, i) => {
-        dummy.position.set(slot.x, slot.height / 2, slot.z);
+        dummy.position.set(slot.x, slot.y + slot.height / 2, slot.z);
         dummy.rotation.set(0, slot.rotation, 0);
         dummy.scale.set(slot.depth, slot.height, slot.width);
         dummy.updateMatrix();
         bodies.setMatrixAt(i, dummy.matrix);
 
-        dummy.position.set(slot.x, slot.height + 0.5, slot.z);
+        dummy.position.set(slot.x, slot.y + slot.height + 0.5, slot.z);
         dummy.scale.set(slot.depth * 0.72, 1, slot.width * 0.72);
         dummy.updateMatrix();
         roofs.setMatrixAt(i, dummy.matrix);
