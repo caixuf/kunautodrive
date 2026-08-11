@@ -26,6 +26,7 @@
 #include "degrade_ladder.h"
 #include "health.h"
 #include "pem_log.h"
+#include "pem_runtime.h"
 #include "platform_paths.h"
 #include <cjson/cJSON.h>
 
@@ -155,6 +156,8 @@ static struct {
     bool embedded_mode;
     bool frequency_configured;
     PemLog pem_log;
+    PemRuntime pem_runtime;
+    bool pem_runtime_open;
     char pem_log_path[512];
     uint64_t pem_rotate_sec;
     uint64_t pem_rotate_bytes;
@@ -306,6 +309,20 @@ static struct {
     double lane_width;
     int    lane_count;
 } g;
+
+static int monitor_write_pem_runtime_record(const PemRuntimeRecord* record,
+                                            void* user_data) {
+    (void)user_data;
+    int rc = pem_log_write(&g.pem_log, record->type, record->flags,
+                           record->monotonic_us, record->realtime_us,
+                           record->name, record->values, record->critical);
+    if (rc != 0 &&
+        record->monotonic_us - g.pem_last_error_log_us >= 1000000ULL) {
+        LOG_ERROR("monitor", "PEM runtime write failed: %s", record->name);
+        g.pem_last_error_log_us = record->monotonic_us;
+    }
+    return rc;
+}
 
 static void monitor_try_reopen_ipc_bridges(void) {
     uint64_t now_us = clock_now_us();
@@ -674,6 +691,20 @@ static void on_scene_frame(const Message* msg, void* user_data) {
     cJSON_Delete(root);
 }
 
+static void cache_fusion_latency(double avg_us, double p50_us, double p99_us) {
+    g.fusion_lat_avg_us = avg_us;
+    g.fusion_lat_p50_us = p50_us;
+    g.fusion_lat_p99_us = p99_us;
+    if (g.pem_runtime_open) {
+        const double values[PEM_RECORD_VALUE_COUNT] = {
+            avg_us, p50_us, p99_us, 0.0, 0.0, 0.0, 0.0, 0.0
+        };
+        pem_runtime_update_metric(&g.pem_runtime, PEM_RECORD_TOPIC, 0,
+                                  clock_now_us(), clock_now_realtime_us(),
+                                  "latency:fusion", values, false);
+    }
+}
+
 static void on_fusion_latency(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
@@ -682,9 +713,7 @@ static void on_fusion_latency(const Message* msg, void* user_data) {
     {
         LatencyReport lr;
         if (LatencyReport_deserialize(&lr, (const uint8_t*)msg->data, msg->data_size) == 0) {
-            g.fusion_lat_avg_us = lr.avg_us;
-            g.fusion_lat_p50_us = lr.p50_us;
-            g.fusion_lat_p99_us = lr.p99_us;
+            cache_fusion_latency(lr.avg_us, lr.p50_us, lr.p99_us);
             return;
         }
     }
@@ -694,9 +723,16 @@ static void on_fusion_latency(const Message* msg, void* user_data) {
     cJSON* root = monitor_cJSON_Parse(d);
     if (root) {
         cJSON* item;
-        if ((item = cJSON_GetObjectItem(root, "avg_us"))) g.fusion_lat_avg_us = item->valuedouble;
-        if ((item = cJSON_GetObjectItem(root, "p50_us"))) g.fusion_lat_p50_us = item->valuedouble;
-        if ((item = cJSON_GetObjectItem(root, "p99_us"))) g.fusion_lat_p99_us = item->valuedouble;
+        double avg_us = g.fusion_lat_avg_us;
+        double p50_us = g.fusion_lat_p50_us;
+        double p99_us = g.fusion_lat_p99_us;
+        if ((item = cJSON_GetObjectItem(root, "avg_us")) && cJSON_IsNumber(item))
+            avg_us = item->valuedouble;
+        if ((item = cJSON_GetObjectItem(root, "p50_us")) && cJSON_IsNumber(item))
+            p50_us = item->valuedouble;
+        if ((item = cJSON_GetObjectItem(root, "p99_us")) && cJSON_IsNumber(item))
+            p99_us = item->valuedouble;
+        cache_fusion_latency(avg_us, p50_us, p99_us);
         cJSON_Delete(root);
     }
 }
@@ -1615,12 +1651,9 @@ static int monitor_execute(TaskBase* task) {
                     (double)snapshot.thread_count, snapshot.disk_read_bps,
                     snapshot.disk_write_bps, 0.0
                 };
-                if (pem_log_write(&g.pem_log, PEM_RECORD_SYSTEM, critical ? 1u : 0u,
-                                  now_us, realtime_us, "system", values, critical) != 0 &&
-                    now_us - g.pem_last_error_log_us >= 1000000ULL) {
-                    LOG_ERROR("monitor", "PEM system record write failed");
-                    g.pem_last_error_log_us = now_us;
-                }
+                pem_runtime_update_metric(&g.pem_runtime, PEM_RECORD_SYSTEM,
+                                          critical ? 1u : 0u, now_us, realtime_us,
+                                          "system", values, critical);
             }
             TopicStats topics[64];
             int topic_count = message_bus_get_all_topic_stats(g.bus, topics, 64);
@@ -1645,14 +1678,9 @@ static int monitor_execute(TaskBase* task) {
                     (double)topics[i].deliver_count,
                     (double)topics[i].deadline_violations
                 };
-                if (pem_log_write(&g.pem_log, PEM_RECORD_TOPIC, critical ? 1u : 0u,
-                                  now_us, realtime_us, topics[i].topic, values,
-                                  critical) != 0 &&
-                    now_us - g.pem_last_error_log_us >= 1000000ULL) {
-                    LOG_ERROR("monitor", "PEM topic record write failed: %s",
-                              topics[i].topic);
-                    g.pem_last_error_log_us = now_us;
-                }
+                pem_runtime_update_metric(&g.pem_runtime, PEM_RECORD_TOPIC,
+                                          critical ? 1u : 0u, now_us, realtime_us,
+                                          topics[i].topic, values, critical);
                 if (state_index >= 0) {
                     g.pem_topic_state[state_index].drop_count = topics[i].drop_count;
                     g.pem_topic_state[state_index].deadline_count =
@@ -1673,15 +1701,10 @@ static int monitor_execute(TaskBase* task) {
                     (double)health[i].p99_latency_us, (double)health[i].stall_count,
                     health[i].cpu_pct, (double)health[i].last_heartbeat_us
                 };
-                if (pem_log_write(&g.pem_log, PEM_RECORD_HEALTH,
-                                  changed ? 1u : 0u, now_us, realtime_us,
-                                  health[i].name, values,
-                                  changed && health[i].status != HEALTH_OK) != 0 &&
-                    now_us - g.pem_last_error_log_us >= 1000000ULL) {
-                    LOG_ERROR("monitor", "PEM health record write failed: %s",
-                              health[i].name);
-                    g.pem_last_error_log_us = now_us;
-                }
+                pem_runtime_update_metric(&g.pem_runtime, PEM_RECORD_HEALTH,
+                                          changed ? 1u : 0u, now_us, realtime_us,
+                                          health[i].name, values,
+                                          changed && health[i].status != HEALTH_OK);
                 if (state_index >= 0)
                     g.pem_health_state[state_index].status = health[i].status;
             }
@@ -1695,13 +1718,9 @@ static int monitor_execute(TaskBase* task) {
                     (double)degrade->l1_disable_lane_change,
                     degrade->l1_speed_limit, degrade->l1_safety_margin, 0.0, 0.0
                 };
-                if (pem_log_write(&g.pem_log, PEM_RECORD_EVENT, 1u, now_us,
-                                  realtime_us, "degrade_transition", values,
-                                  degrade->degrade_level > DEGRADE_L0) != 0 &&
-                    now_us - g.pem_last_error_log_us >= 1000000ULL) {
-                    LOG_ERROR("monitor", "PEM degrade event write failed");
-                    g.pem_last_error_log_us = now_us;
-                }
+                pem_runtime_emit_event(&g.pem_runtime, PEM_RECORD_EVENT, 1u,
+                                       now_us, realtime_us, "degrade_transition",
+                                       values, degrade->degrade_level > DEGRADE_L0);
                 cJSON* event = cJSON_CreateObject();
                 if (event) {
                     cJSON_AddNumberToObject(event, "level", degrade->degrade_level);
@@ -1719,6 +1738,11 @@ static int monitor_execute(TaskBase* task) {
                 }
                 g.pem_last_degrade_level = degrade->degrade_level;
                 g.pem_last_degrade_reason = degrade->degrade_reason;
+            }
+            if (pem_runtime_drain(&g.pem_runtime, monitor_write_pem_runtime_record,
+                                  NULL, PEM_RUNTIME_EVENT_CAPACITY +
+                                  PEM_RUNTIME_METRIC_CAPACITY) < 0) {
+                LOG_ERROR("monitor", "PEM runtime drain failed");
             }
             continue;
         }
@@ -1920,7 +1944,6 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     if (!g.embedded_mode) {
     transport_subscribe(transport, TOPIC_PERCEPTION_OBSTACLES, on_obstacles, NULL);
     transport_subscribe(transport, TOPIC_VEHICLE_STATE, on_vehicle_state, NULL);
-    transport_subscribe(transport, TOPIC_FUSION_LATENCY, on_fusion_latency, NULL);
     transport_subscribe(transport, TOPIC_PLANNING_TRAJECTORY, on_planning_trajectory, NULL);
     transport_subscribe(transport, TOPIC_CONTROL_CTE, on_control_cte, NULL);
     transport_subscribe(transport, TOPIC_ROAD_GEOMETRY, on_road_geometry, NULL);
@@ -1933,6 +1956,8 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     transport_subscribe(transport, TOPIC_FLOWENGINE_NODE_INFO, on_node_info, NULL);
     g.node_info_count = 0;
     }
+    /* Production PEM also caches the latest end-to-end fusion latency. */
+    transport_subscribe(transport, TOPIC_FUSION_LATENCY, on_fusion_latency, NULL);
 
     discovery_advertise(discovery, TOPIC_PERCEPTION_OBSTACLES, 0x0B5A010Eu, CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, TOPIC_VEHICLE_STATE,        0x1C0E5A7Eu, CAP_SUBSCRIBER, 0);
@@ -1943,9 +1968,16 @@ static int monitor_init(MessageBus* bus, Transport* transport,
 
     if (g.embedded_mode) {
         transport_advertise(transport, "pem/degrade_event", 0u);
+        if (pem_runtime_init(&g.pem_runtime) != PEM_RUNTIME_OK) {
+            LOG_ERROR("monitor", "failed to initialize bounded PEM runtime");
+            return -1;
+        }
+        g.pem_runtime_open = true;
         if (pem_log_open(&g.pem_log, g.pem_log_path, g.pem_rotate_sec,
                          g.pem_rotate_bytes, g.pem_max_segments,
                          g.pem_max_total_bytes) != 0) {
+            pem_runtime_destroy(&g.pem_runtime);
+            g.pem_runtime_open = false;
             LOG_ERROR("monitor", "failed to initialize PEM log: %s", g.pem_log_path);
             return -1;
         }
@@ -2036,6 +2068,10 @@ static void monitor_cleanup(void) {
     task_stop(&g.taskbase);
     task_base_destroy(&g.taskbase);
     pem_log_close(&g.pem_log);
+    if (g.pem_runtime_open) {
+        pem_runtime_destroy(&g.pem_runtime);
+        g.pem_runtime_open = false;
+    }
     if (g.sysmon) { sysmonitor_destroy(g.sysmon); g.sysmon = NULL; }
     free(g.registry_json_cache);
     g.registry_json_cache = NULL;

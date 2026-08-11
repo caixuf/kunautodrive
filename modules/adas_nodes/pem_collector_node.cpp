@@ -7,6 +7,7 @@
 #include "clock_service.h"
 #include "coroutine_task.h"
 #include "pem_log.h"
+#include "pem_runtime.h"
 #include "platform_paths.h"
 
 #undef LOG_TRACE
@@ -20,6 +21,7 @@
 #include <cjson/cJSON.h>
 
 #include <cmath>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -29,8 +31,6 @@ namespace {
 constexpr double kEarthRadiusM = 6371000.0;
 constexpr double kDefaultMaxStepM = 50.0;
 constexpr double kDefaultDrivingSpeedMps = 0.3;
-constexpr size_t kEventQueueCapacity = 32;
-
 enum DistanceSource {
     DISTANCE_NONE = 0,
     DISTANCE_GPS = 1,
@@ -56,10 +56,14 @@ struct MetricState {
     DistanceSource source = DISTANCE_NONE;
 };
 
-struct PendingEvent {
-    char name[PEM_RECORD_NAME_SIZE] {};
-    double values[PEM_RECORD_VALUE_COUNT] {};
-    bool critical = false;
+struct PemTopicBinding {
+    uint16_t index = 0;
+};
+
+struct PemTopicManager {
+    PemRuntimeTopicConfig configs[PEM_RUNTIME_TOPIC_CAPACITY] {};
+    PemTopicBinding bindings[PEM_RUNTIME_TOPIC_CAPACITY] {};
+    uint32_t count = 0;
 };
 
 struct Collector {
@@ -67,17 +71,17 @@ struct Collector {
     DiscoveryManager* discovery = nullptr;
     Scheduler* scheduler = nullptr;
     PemLog log {};
+    PemRuntime runtime {};
+    PemTopicManager topic_manager {};
     std::mutex mutex;
     MetricState metrics {};
-    PendingEvent events[kEventQueueCapacity] {};
-    size_t event_head = 0;
-    size_t event_size = 0;
     char region[32] = "unassigned";
     char pem_path[512] {};
     double emit_hz = 1.0;
     double max_step_m = kDefaultMaxStepM;
     double driving_speed_mps = kDefaultDrivingSpeedMps;
-    uint64_t dropped_events = 0;
+    uint64_t reported_dropped_events = 0;
+    uint64_t reported_dropped_inputs = 0;
     bool opened = false;
     struct pem_collector_Wrapper* task_wrapper = nullptr;
 } g;
@@ -100,26 +104,160 @@ static bool valid_coordinate(double latitude, double longitude) {
            std::abs(latitude) <= 90.0 && std::abs(longitude) <= 180.0;
 }
 
-static void enqueue_event_locked(const char* name, const double values[8], bool critical) {
-    if (g.event_size == kEventQueueCapacity) {
-        g.event_head = (g.event_head + 1) % kEventQueueCapacity;
-        --g.event_size;
-        ++g.dropped_events;
-    }
-    PendingEvent& event = g.events[(g.event_head + g.event_size) % kEventQueueCapacity];
-    std::snprintf(event.name, sizeof(event.name), "%s", name);
-    std::memcpy(event.values, values, sizeof(event.values));
-    event.critical = critical;
-    ++g.event_size;
+static int topic_kind_from_json(const char* text, uint8_t* kind) {
+    if (!text || !kind) return -1;
+    if (std::strcmp(text, "gps") == 0) *kind = PEM_PAYLOAD_GPS;
+    else if (std::strcmp(text, "localization") == 0) *kind = PEM_PAYLOAD_LOCALIZATION;
+    else if (std::strcmp(text, "region") == 0) *kind = PEM_PAYLOAD_REGION;
+    else if (std::strcmp(text, "degrade") == 0) *kind = PEM_PAYLOAD_DEGRADE;
+    else if (std::strcmp(text, "heartbeat") == 0) *kind = PEM_PAYLOAD_HEARTBEAT;
+    else if (std::strcmp(text, "opaque") == 0) *kind = PEM_PAYLOAD_OPAQUE;
+    else return -1;
+    return 0;
 }
 
-static void on_gps(const Message* msg, void*) {
+static int topic_priority_from_json(const char* text, uint8_t* priority) {
+    if (!text || !priority) return -1;
+    if (std::strcmp(text, "fault") == 0) *priority = PEM_INPUT_FAULT;
+    else if (std::strcmp(text, "metric") == 0) *priority = PEM_INPUT_METRIC;
+    else if (std::strcmp(text, "heartbeat") == 0) *priority = PEM_INPUT_HEARTBEAT;
+    else return -1;
+    return 0;
+}
+
+static int topic_manager_add(PemTopicManager* manager, const char* topic,
+                             uint8_t kind, uint8_t priority,
+                             uint32_t heartbeat_timeout_ms) {
+    if (!manager || !topic || !topic[0] ||
+        manager->count >= PEM_RUNTIME_TOPIC_CAPACITY) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < manager->count; ++i) {
+        if (std::strcmp(manager->configs[i].topic, topic) == 0) return -1;
+    }
+    PemRuntimeTopicConfig& config = manager->configs[manager->count];
+    std::snprintf(config.topic, sizeof(config.topic), "%s", topic);
+    config.kind = kind;
+    config.priority = priority;
+    config.heartbeat_timeout_ms = heartbeat_timeout_ms;
+    manager->bindings[manager->count].index = (uint16_t)manager->count;
+    ++manager->count;
+    return 0;
+}
+
+static int topic_manager_defaults(PemTopicManager* manager) {
+    *manager = PemTopicManager {};
+    return topic_manager_add(manager, "sensor/gps", PEM_PAYLOAD_GPS,
+                             PEM_INPUT_METRIC, 2000) ||
+           topic_manager_add(manager, "fusion/localization", PEM_PAYLOAD_LOCALIZATION,
+                             PEM_INPUT_METRIC, 2000) ||
+           topic_manager_add(manager, "navigation/region", PEM_PAYLOAD_REGION,
+                             PEM_INPUT_METRIC, 0) ||
+           topic_manager_add(manager, "pem/degrade_event", PEM_PAYLOAD_DEGRADE,
+                             PEM_INPUT_FAULT, 0);
+}
+
+static int topic_manager_configure(PemTopicManager* manager, const cJSON* params) {
+    if (topic_manager_defaults(manager) != 0) return -1;
+    const cJSON* runtime = params
+        ? cJSON_GetObjectItemCaseSensitive(params, "pem_runtime") : nullptr;
+    if (!runtime) return 0;
+    if (!cJSON_IsObject(runtime)) return -1;
+    const cJSON* version = cJSON_GetObjectItemCaseSensitive(runtime, "schema_version");
+    const cJSON* topics = cJSON_GetObjectItemCaseSensitive(runtime, "topics");
+    if (!cJSON_IsNumber(version) || version->valueint != 1 || !cJSON_IsArray(topics))
+        return -1;
+    *manager = PemTopicManager {};
+    const cJSON* item = nullptr;
+    cJSON_ArrayForEach(item, topics) {
+        const cJSON* name = cJSON_GetObjectItemCaseSensitive(item, "topic");
+        const cJSON* kind = cJSON_GetObjectItemCaseSensitive(item, "kind");
+        const cJSON* priority = cJSON_GetObjectItemCaseSensitive(item, "priority");
+        const cJSON* heartbeat =
+            cJSON_GetObjectItemCaseSensitive(item, "heartbeat_timeout_ms");
+        uint8_t parsed_kind = PEM_PAYLOAD_OPAQUE;
+        uint8_t parsed_priority = PEM_INPUT_METRIC;
+        uint32_t timeout_ms = 0;
+        if (!cJSON_IsObject(item) || !cJSON_IsString(name) || !name->valuestring ||
+            !cJSON_IsString(kind) || !kind->valuestring ||
+            topic_kind_from_json(kind->valuestring, &parsed_kind) != 0) {
+            return -1;
+        }
+        if (cJSON_IsString(priority) && priority->valuestring) {
+            if (topic_priority_from_json(priority->valuestring, &parsed_priority) != 0)
+                return -1;
+        } else if (parsed_kind == PEM_PAYLOAD_DEGRADE) {
+            parsed_priority = PEM_INPUT_FAULT;
+        } else if (parsed_kind == PEM_PAYLOAD_HEARTBEAT) {
+            parsed_priority = PEM_INPUT_HEARTBEAT;
+        }
+        if (cJSON_IsNumber(heartbeat)) {
+            if (heartbeat->valuedouble < 0.0 || heartbeat->valuedouble > 3600000.0)
+                return -1;
+            timeout_ms = (uint32_t)heartbeat->valuedouble;
+        }
+        if (topic_manager_add(manager, name->valuestring, parsed_kind, parsed_priority,
+                              timeout_ms) != 0) {
+            return -1;
+        }
+    }
+    return manager->count > 0 ? 0 : -1;
+}
+
+/* TopicManager callback contract: validate bounds then copy into the runtime
+ * pool. Parsing, metrics, diagnostics, and file I/O belong to the coroutine. */
+static void on_pem_topic(const Message* msg, void* user_data) {
+    const PemTopicBinding* binding = static_cast<const PemTopicBinding*>(user_data);
+    if (!msg || !binding || msg->data_size == 0) {
+        return;
+    }
+    if (msg->data_size > PEM_RUNTIME_INPUT_DATA_SIZE) {
+        pem_runtime_note_input_reject(&g.runtime, binding->index);
+        return;
+    }
+    const uint8_t* data = static_cast<const uint8_t*>(message_bus_message_data(msg));
+    if (!data) return;
+    (void)pem_runtime_enqueue_input(&g.runtime, binding->index, data,
+                                    (uint16_t)msg->data_size, msg->timestamp_us,
+                                    clock_now_us());
+}
+
+static int write_runtime_record(const PemRuntimeRecord* record, void*) {
+    return pem_log_write(&g.log, record->type, record->flags,
+                         record->monotonic_us, record->realtime_us,
+                         record->name, record->values, record->critical);
+}
+
+static void publish_perf_diag(const PemDiagnostic* diagnostic, void*) {
+    if (!diagnostic || !g.transport) return;
+    cJSON* root = cJSON_CreateObject();
+    if (!root) return;
+    cJSON_AddNumberToObject(root, "schema_version", diagnostic->schema_version);
+    cJSON_AddStringToObject(root, "source", diagnostic->source);
+    cJSON_AddStringToObject(root, "code", diagnostic->code);
+    cJSON_AddNumberToObject(root, "severity", diagnostic->severity);
+    cJSON_AddNumberToObject(root, "monotonic_us", (double)diagnostic->monotonic_us);
+    cJSON_AddNumberToObject(root, "realtime_us", (double)diagnostic->realtime_us);
+    cJSON* values = cJSON_AddArrayToObject(root, "values");
+    for (size_t i = 0; i < PEM_RECORD_VALUE_COUNT; ++i)
+        cJSON_AddItemToArray(values, cJSON_CreateNumber(diagnostic->values[i]));
+    char* json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!json) return;
+    transport_publish(g.transport, "perf_diag", (const uint8_t*)json,
+                      (uint32_t)std::strlen(json) + 1);
+    std::free(json);
+}
+
+static void process_gps_input(const PemRuntimeInput& input) {
     GpsData gps {};
-    if (!msg || GpsData_deserialize(&gps, msg->data, msg->data_size) != 0 ||
+    if (GpsData_deserialize(&gps, input.data, input.data_size) != 0 ||
         !valid_coordinate(gps.latitude, gps.longitude)) {
         return;
     }
-    const uint64_t timestamp_us = gps.timestamp_us ? gps.timestamp_us : msg->timestamp_us;
+    const uint64_t timestamp_us = gps.timestamp_us ? gps.timestamp_us :
+                                  input.source_timestamp_us;
+    if (!timestamp_us) return;
     std::lock_guard<std::mutex> lock(g.mutex);
     MetricState& state = g.metrics;
     if (state.have_gps && timestamp_us > state.last_gps_us) {
@@ -144,16 +282,16 @@ static void on_gps(const Message* msg, void*) {
     state.have_gps = true;
 }
 
-static void on_localization(const Message* msg, void*) {
+static void process_localization_input(const PemRuntimeInput& input) {
     Localization localization {};
-    if (!msg || Localization_deserialize(&localization, msg->data, msg->data_size) != 0 ||
+    if (Localization_deserialize(&localization, input.data, input.data_size) != 0 ||
         !std::isfinite(localization.x) || !std::isfinite(localization.y)) {
         return;
     }
-    const uint64_t timestamp_us = msg->timestamp_us;
+    const uint64_t timestamp_us = input.source_timestamp_us;
+    if (!timestamp_us) return;
     std::lock_guard<std::mutex> lock(g.mutex);
     MetricState& state = g.metrics;
-    /* GPS is the authoritative odometer whenever a recent fix exists. */
     const bool gps_recent = state.have_gps && timestamp_us >= state.last_gps_us &&
                             timestamp_us - state.last_gps_us <= 2000000ULL;
     if (state.have_localization && timestamp_us > state.last_localization_us) {
@@ -175,54 +313,82 @@ static void on_localization(const Message* msg, void*) {
     state.have_localization = true;
 }
 
-static void on_region(const Message* msg, void*) {
-    if (!msg || msg->data_size == 0) return;
-    cJSON* root = cJSON_ParseWithLength((const char*)msg->data, msg->data_size);
+static void process_region_input(const PemRuntimeInput& input, uint64_t now_us,
+                                 uint64_t realtime_us) {
+    cJSON* root = cJSON_ParseWithLength((const char*)input.data, input.data_size);
     if (!root) return;
-    cJSON* region = cJSON_GetObjectItemCaseSensitive(root, "region");
+    const cJSON* region = cJSON_GetObjectItemCaseSensitive(root, "region");
+    char event_name[PEM_RECORD_NAME_SIZE] {};
+    bool changed = false;
     if (cJSON_IsString(region) && region->valuestring && region->valuestring[0]) {
         std::lock_guard<std::mutex> lock(g.mutex);
         if (std::strncmp(g.region, region->valuestring, sizeof(g.region)) != 0) {
             std::snprintf(g.region, sizeof(g.region), "%s", region->valuestring);
-            const double values[8] = {0.0};
-            char name[PEM_RECORD_NAME_SIZE];
-            std::snprintf(name, sizeof(name), "region_transition:%s", g.region);
-            enqueue_event_locked(name, values, false);
+            std::snprintf(event_name, sizeof(event_name), "region_transition:%s", g.region);
+            changed = true;
         }
     }
     cJSON_Delete(root);
+    if (changed) {
+        const double values[PEM_RECORD_VALUE_COUNT] = {0.0};
+        pem_runtime_emit_event(&g.runtime, PEM_RECORD_EVENT, 1u, now_us, realtime_us,
+                               event_name, values, false);
+    }
 }
 
-static void on_degrade_event(const Message* msg, void*) {
-    if (!msg || msg->data_size == 0) return;
-    cJSON* root = cJSON_ParseWithLength((const char*)msg->data, msg->data_size);
+static void process_degrade_input(const PemRuntimeInput& input, uint64_t now_us,
+                                  uint64_t realtime_us) {
+    cJSON* root = cJSON_ParseWithLength((const char*)input.data, input.data_size);
     if (!root) return;
     const cJSON* level = cJSON_GetObjectItemCaseSensitive(root, "level");
     const cJSON* reason = cJSON_GetObjectItemCaseSensitive(root, "reason");
-    const cJSON* transition = cJSON_GetObjectItemCaseSensitive(root, "transition_ms");
+    const cJSON* transition =
+        cJSON_GetObjectItemCaseSensitive(root, "transition_ms");
     if (cJSON_IsNumber(level) && cJSON_IsNumber(reason)) {
-        const double values[8] = {
+        const double values[PEM_RECORD_VALUE_COUNT] = {
             level->valuedouble, reason->valuedouble,
             cJSON_IsNumber(transition) ? transition->valuedouble : 0.0,
-            0.0, 0.0, 0.0, 0.0, 0.0
+            0.0, 0.0, 0.0, 0.0, 0.0,
         };
-        std::lock_guard<std::mutex> lock(g.mutex);
-        enqueue_event_locked("degrade_transition", values, level->valuedouble > 0.0);
+        const uint8_t severity = level->valuedouble > 0.0 ? 2u : 0u;
+        pem_runtime_report_fault(&g.runtime, "pem_collector", "degrade_transition",
+                                 severity, now_us, realtime_us, values);
     }
     cJSON_Delete(root);
 }
 
-struct PemSubscription {
-    const char* topic;
-    MessageCallback callback;
-};
+static void process_runtime_input(const PemRuntimeInput& input) {
+    PemRuntimeTopicConfig topic {};
+    if (pem_runtime_get_topic(&g.runtime, input.topic_index, &topic) != PEM_RUNTIME_OK)
+        return;
+    const uint64_t now_us = clock_now_us();
+    const uint64_t realtime_us = clock_now_realtime_us();
+    pem_runtime_calculate_input_metrics(&g.runtime, &input, now_us, realtime_us);
+    switch (topic.kind) {
+        case PEM_PAYLOAD_GPS:
+            process_gps_input(input);
+            break;
+        case PEM_PAYLOAD_LOCALIZATION:
+            process_localization_input(input);
+            break;
+        case PEM_PAYLOAD_REGION:
+            process_region_input(input, now_us, realtime_us);
+            break;
+        case PEM_PAYLOAD_DEGRADE:
+            process_degrade_input(input, now_us, realtime_us);
+            break;
+        default:
+            break;
+    }
+}
 
-static const PemSubscription kSubscriptions[] = {
-    {"sensor/gps", on_gps},
-    {"fusion/localization", on_localization},
-    {"navigation/region", on_region},
-    {"pem/degrade_event", on_degrade_event},
-};
+static void process_runtime_inputs() {
+    PemRuntimeInput input {};
+    for (uint32_t i = 0; i < PEM_RUNTIME_INPUT_CAPACITY; ++i) {
+        if (pem_runtime_dequeue_input(&g.runtime, &input) != PEM_RUNTIME_OK) break;
+        process_runtime_input(input);
+    }
+}
 
 class PemCollectorTask : public CoroutineTask {
 public:
@@ -239,22 +405,15 @@ public:
 
 private:
     void flush() {
+        /* This coroutine is the only PEM pipeline consumer and durable writer:
+         * fault inputs are dequeued before metric and heartbeat inputs. */
+        process_runtime_inputs();
         MetricState metrics;
-        PendingEvent events[kEventQueueCapacity];
-        size_t event_count = 0;
         char region[sizeof(g.region)];
-        uint64_t dropped_events = 0;
         {
             std::lock_guard<std::mutex> lock(g.mutex);
             metrics = g.metrics;
             std::memcpy(region, g.region, sizeof(region));
-            event_count = g.event_size;
-            for (size_t i = 0; i < event_count; ++i)
-                events[i] = g.events[(g.event_head + i) % kEventQueueCapacity];
-            g.event_head = 0;
-            g.event_size = 0;
-            dropped_events = g.dropped_events;
-            g.dropped_events = 0;
         }
         const uint64_t now_us = clock_now_us();
         const uint64_t realtime_us = clock_now_realtime_us();
@@ -267,23 +426,43 @@ private:
         };
         char name[PEM_RECORD_NAME_SIZE];
         std::snprintf(name, sizeof(name), "trip:%s", region);
-        if (pem_log_write(&g.log, PEM_RECORD_BUSINESS, 0, now_us, realtime_us,
-                          name, values, false) != 0) {
-            LOG_ERROR("pem_collector", "business snapshot write failed");
-        }
-        for (size_t i = 0; i < event_count; ++i) {
-            if (pem_log_write(&g.log, PEM_RECORD_EVENT, 1u, now_us, realtime_us,
-                              events[i].name, events[i].values,
-                              events[i].critical) != 0) {
-                LOG_ERROR("pem_collector", "event write failed: %s", events[i].name);
+        pem_runtime_update_metric(&g.runtime, PEM_RECORD_BUSINESS, 0, now_us,
+                                  realtime_us, name, values, false);
+        pem_runtime_watchdog_tick(&g.runtime, now_us, realtime_us);
+        PemRuntimeStats stats {};
+        pem_runtime_get_stats(&g.runtime, &stats);
+        const uint64_t dropped_inputs =
+            stats.dropped_inputs[PEM_INPUT_FAULT] +
+            stats.dropped_inputs[PEM_INPUT_METRIC] +
+            stats.dropped_inputs[PEM_INPUT_HEARTBEAT];
+        if (dropped_inputs > g.reported_dropped_inputs) {
+            const double dropped[PEM_RECORD_VALUE_COUNT] = {
+                (double)(dropped_inputs - g.reported_dropped_inputs),
+                (double)stats.dropped_inputs[PEM_INPUT_FAULT],
+                (double)stats.dropped_inputs[PEM_INPUT_METRIC],
+                (double)stats.dropped_inputs[PEM_INPUT_HEARTBEAT],
+                0.0, 0.0, 0.0, 0.0,
+            };
+            if (pem_runtime_report_fault(&g.runtime, "pem_collector",
+                                         "input_pool_overflow", 2u, now_us,
+                                         realtime_us, dropped) == PEM_RUNTIME_OK) {
+                g.reported_dropped_inputs = dropped_inputs;
             }
         }
-        if (dropped_events) {
-            const double dropped[8] = {(double)dropped_events, 0.0, 0.0, 0.0,
-                                       0.0, 0.0, 0.0, 0.0};
-            pem_log_write(&g.log, PEM_RECORD_EVENT, 1u, now_us, realtime_us,
-                          "collector_event_overflow", dropped, true);
+        if (stats.dropped_events > g.reported_dropped_events) {
+            const double dropped[PEM_RECORD_VALUE_COUNT] = {
+                (double)(stats.dropped_events - g.reported_dropped_events),
+                0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0
+            };
+            if (pem_runtime_emit_event(&g.runtime, PEM_RECORD_EVENT, 1u, now_us,
+                                       realtime_us, "collector_event_overflow",
+                                       dropped, true) == PEM_RUNTIME_OK)
+                g.reported_dropped_events = stats.dropped_events;
         }
+        if (pem_runtime_drain(&g.runtime, write_runtime_record, nullptr,
+                              PEM_RUNTIME_EVENT_CAPACITY + PEM_RUNTIME_METRIC_CAPACITY) < 0)
+            LOG_ERROR("pem_collector", "PEM runtime drain failed");
     }
 };
 
@@ -292,7 +471,7 @@ EXPORT_COROUTINE_TASK(PemCollectorTask, pem_collector)
 static const char* s_inputs[] = {
     "sensor/gps", "fusion/localization", "navigation/region", "pem/degrade_event", nullptr
 };
-static const char* s_outputs[] = {nullptr};
+static const char* s_outputs[] = {"perf_diag", nullptr};
 extern NodePlugin s_plugin;
 
 static int pem_collector_init(MessageBus* bus, Transport* transport,
@@ -302,11 +481,12 @@ static int pem_collector_init(MessageBus* bus, Transport* transport,
     g.discovery = discovery;
     g.scheduler = scheduler;
     g.metrics = {};
-    g.event_head = g.event_size = g.dropped_events = 0;
     std::snprintf(g.region, sizeof(g.region), "%s", "unassigned");
     g.emit_hz = 1.0;
     g.max_step_m = kDefaultMaxStepM;
     g.driving_speed_mps = kDefaultDrivingSpeedMps;
+    g.reported_dropped_events = 0;
+    g.reported_dropped_inputs = 0;
     uint64_t rotate_sec = 300;
     uint64_t rotate_bytes = 100ULL * 1024 * 1024;
     uint32_t retain_segments = 96;
@@ -339,17 +519,37 @@ static int pem_collector_init(MessageBus* bus, Transport* transport,
         item = cJSON_GetObjectItemCaseSensitive(params, "pem_log_path");
         if (cJSON_IsString(item) && item->valuestring)
             std::snprintf(g.pem_path, sizeof(g.pem_path), "%s", item->valuestring);
-        cJSON_Delete(params);
+    }
+    const int topic_config_rc = topic_manager_configure(&g.topic_manager, params);
+    if (params) cJSON_Delete(params);
+    if (topic_config_rc != 0) {
+        LOG_ERROR("pem_collector", "invalid pem_runtime topic configuration (schema v1)");
+        return -1;
     }
     if (g.emit_hz > 10.0) g.emit_hz = 10.0;
+    if (pem_runtime_init(&g.runtime) != PEM_RUNTIME_OK) {
+        LOG_ERROR("pem_collector", "cannot initialize bounded PEM runtime");
+        return -1;
+    }
+    if (pem_runtime_configure_topics(&g.runtime, g.topic_manager.configs,
+                                     g.topic_manager.count) != PEM_RUNTIME_OK) {
+        pem_runtime_destroy(&g.runtime);
+        LOG_ERROR("pem_collector", "cannot initialize PEM TopicManager");
+        return -1;
+    }
+    pem_runtime_set_diagnostic_callback(&g.runtime, publish_perf_diag, nullptr);
     if (pem_log_open(&g.log, g.pem_path, rotate_sec, rotate_bytes,
                      retain_segments, retain_bytes) != 0) {
+        pem_runtime_destroy(&g.runtime);
         LOG_ERROR("pem_collector", "cannot open PEM stream at %s", g.pem_path);
         return -1;
     }
     g.opened = true;
-    for (const PemSubscription& subscription : kSubscriptions)
-        transport_subscribe(transport, subscription.topic, subscription.callback, nullptr);
+    transport_advertise(transport, "perf_diag", 0u);
+    for (uint32_t i = 0; i < g.topic_manager.count; ++i) {
+        transport_subscribe(transport, g.topic_manager.configs[i].topic,
+                            on_pem_topic, &g.topic_manager.bindings[i]);
+    }
 
     TaskConfig config {};
     std::snprintf(config.name, sizeof(config.name), "pem_collector");
@@ -357,12 +557,13 @@ static int pem_collector_init(MessageBus* bus, Transport* transport,
     g.task_wrapper = pem_collector_create(&config, bus);
     if (!g.task_wrapper) {
         pem_log_close(&g.log);
+        pem_runtime_destroy(&g.runtime);
         g.opened = false;
         return -1;
     }
     s_plugin.taskbase = pem_collector_get_base(g.task_wrapper);
-    LOG_INFO("pem_collector", "initialized (FlowCoro, %.1f Hz, region=%s, stream=%s)",
-             g.emit_hz, g.region, g.pem_path);
+    LOG_INFO("pem_collector", "initialized (PEM pipeline, %.1f Hz, topics=%u, region=%s, stream=%s)",
+             g.emit_hz, g.topic_manager.count, g.region, g.pem_path);
     return 0;
 }
 
@@ -388,6 +589,7 @@ static void pem_collector_cleanup() {
         pem_log_close(&g.log);
         g.opened = false;
     }
+    pem_runtime_destroy(&g.runtime);
 }
 
 static int pem_collector_health() { return g.opened ? 0 : -1; }
@@ -396,7 +598,7 @@ NodePlugin s_plugin = {
     NODE_PLUGIN_API_VERSION,
     "pem_collector",
     "1.0.0",
-    "FlowCoro asynchronous PEM business telemetry collector",
+    "Bounded priority PEM metric/event pipeline",
     s_inputs,
     s_outputs,
     pem_collector_init,

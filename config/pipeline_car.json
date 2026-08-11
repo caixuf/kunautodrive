@@ -367,7 +367,11 @@
         "navigation/region",
         "pem/degrade_event"
       ],
-      "params": "{\"emit_hz\":1.0,\"region\":\"rc_car\",\"max_step_m\":20.0,\"driving_speed_mps\":0.3,\"rotate_sec\":300,\"rotate_mb\":100,\"retain_segments\":96,\"retain_mb\":1024}"
+      "publish": [
+        { "topic": "perf_diag", "type": "text",
+          "qos": { "depth": 16, "policy": "drop_oldest", "reliability": "best_effort" } }
+      ],
+      "params": "{\"emit_hz\":1.0,\"region\":\"rc_car\",\"max_step_m\":20.0,\"driving_speed_mps\":0.3,\"rotate_sec\":300,\"rotate_mb\":100,\"retain_segments\":96,\"retain_mb\":1024,\"pem_runtime\":{\"schema_version\":1,\"topics\":[{\"topic\":\"sensor/gps\",\"kind\":\"gps\",\"priority\":\"metric\",\"heartbeat_timeout_ms\":2000},{\"topic\":\"fusion/localization\",\"kind\":\"localization\",\"priority\":\"metric\",\"heartbeat_timeout_ms\":2000},{\"topic\":\"navigation/region\",\"kind\":\"region\",\"priority\":\"metric\"},{\"topic\":\"pem/degrade_event\",\"kind\":\"degrade\",\"priority\":\"fault\"}]}}"
     }
   ]
 }

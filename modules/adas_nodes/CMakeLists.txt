@@ -467,14 +467,23 @@ target_link_libraries(control_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
 add_library(safety_control_node SHARED safety_control_node.cpp)
 target_link_libraries(safety_control_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
 
+# PEM runtime: fixed storage used by each single-writer PEM stream.
+add_library(pem_runtime STATIC pem_runtime.c)
+set_target_properties(pem_runtime PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(pem_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
 # monitor_node: 系统监控 + 仪表盘 JSON 导出
 add_library(monitor_node SHARED monitor_node.c pem_log.c)
-target_link_libraries(monitor_node ${NODE_LINK_LIBS})
+target_link_libraries(monitor_node ${NODE_LINK_LIBS} pem_runtime)
 if(NOT WIN32)
     add_executable(test_pem_log ${FLOW_ROOT}/tests/test_pem_log.c pem_log.c)
     target_include_directories(test_pem_log PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(test_pem_log PRIVATE pthread)
     add_test(NAME pem_log_protocol COMMAND test_pem_log)
+    add_executable(test_pem_runtime ${FLOW_ROOT}/tests/test_pem_runtime.c)
+    target_include_directories(test_pem_runtime PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(test_pem_runtime PRIVATE pem_runtime pthread)
+    add_test(NAME pem_runtime_bounded COMMAND test_pem_runtime)
 endif()
 
 # pem_collector_node: FlowCoro business telemetry callbacks. Transport callbacks
@@ -482,7 +491,7 @@ endif()
 add_library(pem_collector_node SHARED pem_collector_node.cpp pem_log.c)
 target_compile_definitions(pem_collector_node PRIVATE FLOWCORO_INTEGRATION)
 target_compile_options(pem_collector_node PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fcoroutines>)
-target_link_libraries(pem_collector_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
+target_link_libraries(pem_collector_node ${NODE_LINK_LIBS} ${NODE_CXX_RT} pem_runtime)
 
 # ── 车端学习闭环节点 (data → train → inference → learner → ota) ─
 
