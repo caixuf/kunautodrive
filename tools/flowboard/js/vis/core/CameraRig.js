@@ -14,7 +14,7 @@ const _roadBBox = new THREE.Box3();
 
 export function createCameraRig(canvas) {
   const camera = new THREE.PerspectiveCamera(
-    55,                                    // FOV
+    58,                                    // FOV, closer to a wide real driving camera
     (canvas.clientWidth || 1) / (canvas.clientHeight || 1),  // aspect
     0.5,                                   // near
     2000                                   // far
@@ -84,16 +84,15 @@ export function createCameraRig(canvas) {
     const eh = sEH;
     switch (mode) {
       case 'chase': {
-        const behind = 10, height = 3.5;
+        // Keep the road vanishing point above the vehicle without turning
+        // chase mode into a top-down map view.
+        const behind = 9, height = 3.0;
         camera.position.set(
           ex - Math.cos(eh) * behind,
           eg + height,
           ez - Math.sin(eh) * behind
         );
-        /* lookAt 前向偏移 5m→2m：原来相机看车前 5m 处，车辆出现在画面
-         * 下方偏后；改为 2m 让车辆本身更接近视野中心。
-         * 高度 1→0.8：对应 fallback 车身重心（body.y=0.65，整车~0.7m）*/
-        camera.lookAt(ex + Math.cos(eh) * 2, eg + 0.8, ez + Math.sin(eh) * 2);
+        camera.lookAt(ex + Math.cos(eh) * 4, eg + 1.05, ez + Math.sin(eh) * 4);
         break;
       }
       case 'top': {

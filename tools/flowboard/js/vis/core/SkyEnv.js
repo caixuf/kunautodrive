@@ -11,6 +11,8 @@
  */
 
 const TAU = Math.PI * 2;
+const SKY_RADIUS = 1500;
+const FOG_EXTINCTION_AT_VISIBILITY = Math.sqrt(-Math.log(0.05));
 
 // ═══════════════════════════════════════════════════════════
 // 时段参数表
@@ -39,23 +41,28 @@ const WEATHER_MODES = {
 // ═══════════════════════════════════════════════════════════
 
 const SKY_VERT = `
-varying vec3 vWorldPos;
+varying vec3 vDirection;
 void main() {
-  vec4 worldPos = modelMatrix * vec4(position, 1.0);
-  vWorldPos = worldPos.xyz;
+  // The dome follows the camera, so its local vertex direction is stable
+  // even when the vehicle moves kilometres along the road.
+  vDirection = position;
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }`;
 
 const SKY_FRAG = `
 uniform vec3 uTopColor;
 uniform vec3 uBotColor;
+uniform vec3 uHorizonColor;
 uniform float uOffset;
 uniform float uExponent;
-varying vec3 vWorldPos;
+varying vec3 vDirection;
 void main() {
-  float h = normalize(vWorldPos).y;
+  float h = normalize(vDirection).y;
   float t = max(pow(max(h + uOffset, 0.0), uExponent), 0.0);
-  gl_FragColor = vec4(mix(uBotColor, uTopColor, t), 1.0);
+  vec3 base = mix(uBotColor, uTopColor, min(t, 1.0));
+  float horizonBand = 1.0 - smoothstep(0.0, 0.22, abs(h));
+  vec3 skyColor = mix(base, uHorizonColor, horizonBand * 0.65);
+  gl_FragColor = vec4(skyColor, 1.0);
 }`;
 
 // ═══════════════════════════════════════════════════════════
@@ -64,13 +71,14 @@ void main() {
 
 export function createSkyEnv(scene, sunLight, hemiLight) {
   // ── 天空穹顶 ──
-  const skyGeo = new THREE.SphereGeometry(500, 32, 16);
+  const skyGeo = new THREE.SphereGeometry(SKY_RADIUS, 48, 24);
   const skyMat = new THREE.ShaderMaterial({
     vertexShader: SKY_VERT,
     fragmentShader: SKY_FRAG,
     uniforms: {
       uTopColor:  { value: new THREE.Color(0x4682b4) },
       uBotColor:  { value: new THREE.Color(0x87ceeb) },
+      uHorizonColor: { value: new THREE.Color(0xd9e7ea) },
       uOffset:    { value: 0.1 },
       uExponent:  { value: 0.6 },
     },
@@ -145,6 +153,7 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
   // ── 状态 ──
   let _timeOfDay = 'noon';
   let _weather = 'clear';
+  let _visibilityM = null;
   let _dayMode = true;  // 兼容旧 API
   let _camera = null;   // 相机引用，每帧让穹顶跟随相机
 
@@ -171,6 +180,9 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
     const skyBot = new THREE.Color(t.skyBot).lerp(new THREE.Color(w.skyTint), 0.5);
     skyMat.uniforms.uTopColor.value.copy(skyTop);
     skyMat.uniforms.uBotColor.value.copy(skyBot);
+    skyMat.uniforms.uHorizonColor.value.copy(
+      skyBot.clone().lerp(new THREE.Color(0xffffff), Math.min(0.28, 0.08 + t.sunIntensity * 0.1))
+    );
 
     // 太阳
     _setSunPosition(t.angle);
@@ -184,8 +196,12 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
       hemi.intensity = t.ambIntensity * 0.4 * w.sunIntensityMul;
     }
 
-    // 雾
-    const fogDensity = t.fogDensity * w.fogDensityMul;
+    // Prefer the scenario's measured visibility when available. FogExp2
+    // reaches 5% transmittance at the configured distance, matching the
+    // meaning of visibility_m used by the simulator and sensors.
+    const fogDensity = _visibilityM != null
+      ? FOG_EXTINCTION_AT_VISIBILITY / _visibilityM
+      : t.fogDensity * w.fogDensityMul;
     scene.fog.density = fogDensity;
     scene.fog.color.copy(skyBot);
 
@@ -217,18 +233,26 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
     _applyTimeSlot(_timeOfDay);
   }
 
+  /** Set the scenario visibility distance in metres. */
+  function setVisibility(distanceM) {
+    _visibilityM = Number.isFinite(distanceM) && distanceM > 0
+      ? Math.max(1, distanceM)
+      : null;
+    _applyTimeSlot(_timeOfDay);
+  }
+
   /** 获取当前时段/天气 */
   function getTimeOfDay() { return _timeOfDay; }
   function getWeather() { return _weather; }
+  function getVisibility() { return _visibilityM; }
   function isDay() { return _dayMode; }
 
-  /** 设置相机引用，穹顶每帧跟随相机位置（半径500的球罩住相机视野） */
+  /** 设置相机引用，穹顶每帧跟随相机位置 */
   function setCamera(cam) { _camera = cam; }
 
   // ── 每帧 tick ──
   function tick(dt) {
-    // 穹顶跟随相机：半径500的球必须以相机为中心，否则 ego 开远后穹顶
-    // 被视锥裁掉，露出 renderer 默认黑 clear color。
+    // The dome follows the camera so the horizon remains stable on long roads.
     if (_camera) {
       sky.position.copy(_camera.position);
     }
@@ -274,8 +298,8 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
   _applyTimeSlot(_timeOfDay);
 
   return {
-    setTimeOfDay, setWeather,
-    getTimeOfDay, getWeather, isDay,
+    setTimeOfDay, setWeather, setVisibility,
+    getTimeOfDay, getWeather, getVisibility, isDay,
     setCamera, tick, dispose,
     getSun, getAmbient,
   };

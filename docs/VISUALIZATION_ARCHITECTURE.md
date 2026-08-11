@@ -748,6 +748,11 @@ HTML inline `onclick` 全部改走 `window.flowboard.X()`，集中式重命名�
 `tools/flowboard/showcase.html` 是一个**综合展示页**：无需启动 C 管道，直接在
 浏览器里 3D 预览 `scenarios/*.json` 里的**全部场景**，左侧列表点选切换。
 
+天空穹顶使用相机相对方向计算渐变，因此车辆沿长道路行驶时地平线不会随世界
+坐标漂移；`visibility_m` 作为 FogExp2 的 5% 透射距离，和传感器/评测使用的
+场景能见度保持同一量纲。默认 chase 视角采用略宽 FOV 和较小俯角，保留道路
+消失点与车辆比例的真实驾驶构图。
+
 ### 为什么可行
 
 3D 渲染（`SceneDirector`）完全数据驱动，只消费一帧 `metrics.scene`

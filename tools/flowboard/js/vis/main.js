@@ -36,10 +36,13 @@ let _statsView = null;
 function _syncEnvironment(store) {
   if (!_skyEnv || !store) return;
   const env = store.env || {};
-  const environmentKey = `${env.lighting || 'day'}|${env.weather || 'clear'}`;
+  const visibilityM = Number.isFinite(env.visibilityM) && env.visibilityM > 0
+    ? env.visibilityM : 1000;
+  const environmentKey = `${env.lighting || 'day'}|${env.weather || 'clear'}|${Math.round(visibilityM)}`;
   if (environmentKey === _lastEnvironmentKey) return;
   _skyEnv.setTimeOfDay(env.lighting === 'day' ? 'noon' : env.lighting);
   _skyEnv.setWeather(env.weather || 'clear');
+  _skyEnv.setVisibility(visibilityM);
   _lastEnvironmentKey = environmentKey;
 }
 let _minimap = null;
