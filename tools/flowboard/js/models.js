@@ -268,6 +268,20 @@ function _isSu7EmissiveMaterial(material) {
     (!materialName && material.emissive);
 }
 
+function _prepareSu7EmissiveMaterial(material) {
+  if (!_isSu7EmissiveMaterial(material)) return false;
+  /* sm_car's Car_ight uses a 4x4 emissiveMap. MeshStandardMaterial multiplies
+   * this texture with emissive color and intensity, so the authored mask can
+   * reduce runtime white/red/amber commands to black. The real lamp geometry
+   * and base-color lens texture stay intact; only the dynamic emission mask
+   * is removed. */
+  if (material.emissiveMap) {
+    material.emissiveMap = null;
+    material.needsUpdate = true;
+  }
+  return true;
+}
+
 function _normalizeSu7NodeName(name) {
   return String(name || '').toLowerCase().replace(/[._\-\s]/g, '');
 }
@@ -291,7 +305,7 @@ function _adaptSu7LightNodes(group) {
     var materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     materials.forEach(function(material) {
       if (!material) return;
-      if (_isSu7EmissiveMaterial(material)) emissiveMaterials.push(material);
+      if (_prepareSu7EmissiveMaterial(material)) emissiveMaterials.push(material);
       // The source lens normals are not guaranteed to face every camera angle.
       // Double-sided, non-tonemapped emission keeps the real lens visible
       // without replacing its geometry or emissive texture.
@@ -353,6 +367,7 @@ function _setSu7LightMeshMaterials(meshes, intensity, colorHex) {
     if (!materials || !materials.length) continue;
     for (var j = 0; j < materials.length; j++) {
       var material = materials[j];
+      if (!_prepareSu7EmissiveMaterial(material)) continue;
       if (material.emissive) material.emissive.setHex(colorHex);
       if (material.emissiveIntensity !== undefined) {
         material.emissiveIntensity = intensity;
@@ -381,7 +396,7 @@ function _setSu7LightMeshSideMaterials(meshes, side, intensity, colorHex) {
     }
     for (var j = 0; j < materials.length; j++) {
       var material = materials[j];
-      if (!_isSu7EmissiveMaterial(material)) continue;
+      if (!_prepareSu7EmissiveMaterial(material)) continue;
       if (material.emissive) material.emissive.setHex(colorHex);
       if (material.emissiveIntensity !== undefined) {
         material.emissiveIntensity = intensity;

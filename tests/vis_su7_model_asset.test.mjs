@@ -39,12 +39,14 @@ ok('SU7 真实灯节点前后位置自洽',
   rawRearLights.every(node => node.translation && node.translation[0] < 0));
 const frontMaterial = {
   emissive: { setHex(value) { this.value = value; } },
+  emissiveMap: {},
   emissiveIntensity: 1,
   toneMapped: true,
   side: 0,
 };
 const rearMaterial = {
   emissive: { setHex(value) { this.value = value; } },
+  emissiveMap: {},
   emissiveIntensity: 1,
   toneMapped: true,
   side: 0,
@@ -73,6 +75,8 @@ _setVehicleLights(rawLightScene, { brake: true, head: true }, 0);
 ok('SU7 真实灯材质亮度和可见性增强',
   frontMaterial.emissiveIntensity === 8 &&
   rearMaterial.emissiveIntensity === 6 &&
+  frontMaterial.emissiveMap === null &&
+  rearMaterial.emissiveMap === null &&
   rawFrontMesh.visible === true &&
   rawRearMesh.visible === true &&
   frontMaterial.toneMapped === false &&
