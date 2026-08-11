@@ -584,7 +584,7 @@ target_link_libraries(imu_driver_node ${NODE_LINK_LIBS})
 # 为 GPS 丢失场景（室内/隧道）提供定位。支持三种算法模式：
 #   - dead_reckon: 默认简易里程计（陀螺仪积分 heading，加速度计积分速度）
 #   - ekf_slam:   轻量 EKF-SLAM（5维状态估计器，内置实现，无需外部依赖）
-#   - fast_lio2:  FAST-LIO2 紧耦合（未实现：当前 LidarFrame 单点非点云，一律拒绝降级）
+#   - fast_lio2:  FAST-LIO2 紧耦合（后端未实现；sensor/lidar_points 契约已定义，一律拒绝降级）
 # 无传感器时自动降级为 dry-run（生成圆形轨迹模拟位姿）。
 # 编译依赖: adas_msgs_gen.h (LidarFrame/ImuData/Pose2D 序列化)，随构建生成。
 #
@@ -608,7 +608,7 @@ if(ENABLE_FAST_LIO2)
     # find_library(FAST_LIO2_LIB NAMES fast_lio2 HINTS /usr/local/lib)
     # target_link_libraries(slam_node ${NODE_LINK_LIBS} stdc++
     #     ${PCL_LIBRARIES} Eigen3::Eigen Sophus::Sophus ${FAST_LIO2_LIB})
-    message(STATUS "slam_node: HAVE_FAST_LIO2 enabled (仍未实现：LidarFrame 单点非点云，运行时拒绝降级 dead_reckon)")
+    message(STATUS "slam_node: HAVE_FAST_LIO2 enabled (后端未实现；运行时拒绝降级 dead_reckon)")
 endif()
 
 # test_ekf_slam / test_ekf_fusion 已移至主项目 CMakeLists.txt 注册（enable_testing

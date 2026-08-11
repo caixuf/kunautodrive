@@ -22,6 +22,7 @@
 /* ── Sensor topics ──────────────────────────────────────────── */
 
 #define TOPIC_SENSOR_LIDAR    "sensor/lidar"
+#define TOPIC_SENSOR_LIDAR_POINTS "sensor/lidar_points"
 #define TOPIC_SENSOR_IMU      "sensor/imu"
 #define TOPIC_SENSOR_POSE     "sensor/pose"
 #define TOPIC_SENSOR_GPS      "sensor/gps"

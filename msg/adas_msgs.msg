@@ -46,6 +46,24 @@ struct LidarFrame {
     uint32   frame_id
 }
 
+# LiDAR 点云批次（FAST-LIO2/LIO-SAM 的输入契约）
+# 与单点 LidarFrame 分离：count <= 2048，时间偏移用于 deskew。
+struct LidarPoint {
+    float    x
+    float    y
+    float    z
+    float    intensity
+    uint32   time_offset_us
+}
+
+struct LidarPointCloud {
+    uint32   frame_id
+    uint64   timestamp_us
+    uint32   count
+    uint32   sensor_id
+    LidarPoint points[2048]
+}
+
 struct GpsData {
     float64  latitude       # 纬度（度）
     float64  longitude      # 经度（度）

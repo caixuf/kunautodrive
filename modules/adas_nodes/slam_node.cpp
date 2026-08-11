@@ -22,18 +22,16 @@
  *   协方差传播: 完整 5×5 状态转移矩阵 + 过程噪声 Q
  *   量测更新: 支持位置/航向观测校正（LiDAR 特征或仿真真值）
  *
- * ── FAST-LIO2（LiDAR+IMU 紧耦合）：未实现，且当前数据契约无法实现 ──
- *   FAST-LIO2 的配准前端要求**真实点云**（每帧上千点做 scan-to-map）。本项目
- *   sensor/lidar 的 LidarFrame (msg/adas_msgs.msg) 是**单点带噪伪传感器**
- *   {x,y,z,intensity}，不是点云——喂不进 FAST-LIO2。故 algo="fast_lio2" 一律
- *   被 fast_lio2_init() 拒绝并降级 dead_reckon（不静默假装在跑 LIO）。
+ * ── FAST-LIO2（LiDAR+IMU 紧耦合）：后端未实现，输入契约已独立 ──
+ *   FAST-LIO2 的配准前端要求**真实点云**（每帧上千点做 scan-to-map）。
+ *   `sensor/lidar` 仍是单点兼容 topic；`sensor/lidar_points` 使用
+ *   `LidarPointCloud`（最多 2048 点、逐点时间偏移）作为真实点云输入契约。
+ *   后端尚未链接，故 algo="fast_lio2" 一律被 fast_lio2_init() 拒绝并降级
+ *   dead_reckon（不静默假装在跑 LIO）。
  *
- *   接入真实 FAST-LIO2 的**前置里程碑**（不在本轮范围）：
- *     1. 消息契约重构：把单点 LidarFrame 扩成真实点云 topic（变长点数组），
- *        sensor_model_node 产出真实/仿真点云，而非单点伪传感器。
- *     2. 完成 (1) 后再 git clone hku-mars/FAST_LIO、link PCL/Eigen/Sophus，
- *        在 HAVE_FAST_LIO2 块里用 esekfom 做点云配准 + IMU 预测，填 Pose2D。
- *   在 (1) 之前，任何"git clone 即可接"的说法都是错的——没有点云输入。
+ *   接入真实 FAST-LIO2 的下一步是让 lidar_driver/sensor_model 发布
+ *   `sensor/lidar_points`，再 link PCL/Eigen/Sophus，在 HAVE_FAST_LIO2 块里用
+ *   esekfom 做点云配准 + IMU 预测，填 Pose2D。只有这两步完成后才可启用后端。
  *
  * ── 也可作为纯里程计节点 ──
  *   source=POSE_SOURCE_ODOMETRY(3) 时，下游 fusion_node 把本节点输出当作
@@ -41,7 +39,8 @@
  *
  * 话题契约：
  *   输入: sensor/lidar (LidarFrame 二进制, type_id=0xd712aa51)
- *         sensor/imu   (ImuData  二进制, type_id=0x7dc626af)
+ *         sensor/lidar_points (LidarPointCloud 二进制, fast_lio2 后端预留)
+ *         sensor/imu   (ImuData 二进制, type_id=0x7dc626af)
  *   输出: sensor/pose  (Pose2D   二进制, type_id=0x026c6093)
  */
 
