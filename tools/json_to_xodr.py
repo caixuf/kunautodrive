@@ -753,6 +753,34 @@ def load_scenario(path: Path) -> dict:
     roads = city_map.get("roads", [])
     if not isinstance(roads, list) or not roads:
         raise ValueError(f"{map_path}: roads must be a non-empty array")
+    route_file = scenario.get("route_file")
+    route_id = scenario.get("route_id")
+    if route_file and route_id:
+        route_path = Path(route_file)
+        if not route_path.is_absolute():
+            route_path = next(
+                (candidate for candidate in (
+                    path.parent / route_path,
+                    path.parent.parent / route_path,
+                    Path.cwd() / route_path,
+                ) if candidate.is_file()),
+                route_path,
+            )
+        with route_path.open("r", encoding="utf-8") as f:
+            route_data = json.load(f)
+        selected = next(
+            (route for route in route_data.get("routes", [])
+             if route.get("id") == route_id),
+            None,
+        )
+        if selected is None:
+            raise ValueError(f"{route_path}: route not found: {route_id}")
+        chain = selected.get("road_chain", [])
+        by_id = {road.get("id"): road for road in roads}
+        missing = [road_id for road_id in chain if road_id not in by_id]
+        if missing:
+            raise ValueError(f"{route_path}: route {route_id} references missing roads {missing}")
+        roads = [by_id[road_id] for road_id in chain]
     edges = []
     for index, road in enumerate(roads):
         edge = dict(road)

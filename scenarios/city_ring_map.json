@@ -2,6 +2,8 @@
   "name": "city_ring_map",
   "description": "Map-backed city ring smoke scenario; static roads come from maps/city_ring/map.json.",
   "map_file": "../maps/city_ring/map.json",
+  "route_file": "../maps/city_ring/routes.json",
+  "route_id": "main",
   "random_seed": 202608,
   "duration_s": 120,
   "lighting": "day",

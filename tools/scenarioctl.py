@@ -67,6 +67,24 @@ def validate_scenario(data: object, path: Path) -> list[str]:
             map_path = (path.parent / map_ref).resolve()
             if not map_path.is_file():
                 errors.append(f"{path}: map reference does not exist: {map_ref}")
+    route_file = data.get("route_file")
+    route_id = data.get("route_id")
+    if route_file is not None or route_id is not None:
+        if not isinstance(route_file, str) or not isinstance(route_id, str):
+            errors.append(f"{path}: route_file and route_id must both be strings")
+        else:
+            route_path = (path.parent / route_file).resolve()
+            if not route_path.is_file():
+                errors.append(f"{path}: route reference does not exist: {route_file}")
+            else:
+                try:
+                    route_data = load_json(route_path)
+                    route_ids = {item.get("id") for item in route_data.get("routes", [])
+                                 if isinstance(item, dict)}
+                    if route_id not in route_ids:
+                        errors.append(f"{path}: route_id not found: {route_id}")
+                except ValueError as exc:
+                    errors.append(str(exc))
     elif not isinstance(road, dict):
         errors.append(f"{path}: road_network must be an object")
     else:

@@ -11,6 +11,7 @@
 #   bash scripts/demo.sh --multi      # fork+exec 多进程模式
 #   bash scripts/demo.sh --manual     # 游戏模式：终端 WASD 键盘直接驾驶 ego
 #   bash scripts/demo.sh --scenario scenarios/straight_road.json  # 指定场景
+#   bash scripts/demo.sh --scenario scenarios/city_ring_map.json --route main
 #   bash scripts/demo.sh --start-s 2700 --start-d -1.75            # 从 route 2700m 起跑
 #   bash scripts/demo.sh --no-browser # 不自动打开浏览器（仅对 --replay 模式生效）
 # =============================================================================
@@ -165,6 +166,8 @@ REPLAY_FILE=""
 SCENARIO=""  # 留空则用 DEFAULT_SCENARIO（旗舰场景）
 START_S=""
 START_D=""
+ROUTE_ID=""
+ROUTE_SCENARIO_TMP=""
 MANUAL_MODE=false
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$ROOT/build"
@@ -181,6 +184,7 @@ while [ $# -gt 0 ]; do
     --replay) REPLAY_FILE="$2"; shift ;;
     --game) GAME_MODE=true ;;
     --scenario) SCENARIO="$2"; shift ;;
+    --route) ROUTE_ID="$2"; shift ;;
     --start-s) START_S="$2"; shift ;;
     --start-d) START_D="$2"; shift ;;
     ''|*[!0-9]*) ;;
@@ -210,6 +214,7 @@ fi
 PIPELINE_TMP=""
 cleanup_pipeline_tmp() {
   [ -n "$PIPELINE_TMP" ] && rm -f "$PIPELINE_TMP"
+  [ -n "$ROUTE_SCENARIO_TMP" ] && rm -f "$ROUTE_SCENARIO_TMP"
 }
 if [ -z "$SCENARIO" ]; then
   SCENARIO="$DEFAULT_SCENARIO"
@@ -223,6 +228,13 @@ if [ -n "$SCENARIO" ]; then
   PIPELINE_TMP="$PIPELINE_TMP.json"
   trap 'cleanup_pipeline_tmp' EXIT
   SCENARIO_ABS="$([ -f "$SCENARIO" ] && echo "$(cd "$(dirname "$SCENARIO")" && pwd)/$(basename "$SCENARIO")" || echo "$SCENARIO")"
+  if [ -n "$ROUTE_ID" ]; then
+    ROUTE_SCENARIO_TMP="$(mktemp "$(dirname "$SCENARIO_ABS")/.route_XXXXXX.json")" || {
+      echo "  ✗ cannot create route scenario"; exit 1;
+    }
+    jq --arg route_id "$ROUTE_ID" '.route_id = $route_id' "$SCENARIO_ABS" > "$ROUTE_SCENARIO_TMP"
+    SCENARIO_ABS="$ROUTE_SCENARIO_TMP"
+  fi
   # `params` is itself a JSON string, so its inner quotes are escaped.
   sed 's|\\\"scenario_file\\\": \\\"[^\\\"]*\\\"|\\\"scenario_file\\\": \\\"'"$SCENARIO_ABS"'\\\"|g' \
     "$PIPELINE_ORIG" > "$PIPELINE_TMP"

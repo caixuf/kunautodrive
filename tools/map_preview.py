@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 
-def render(path: Path) -> str:
+def render(path: Path, routes_path: Path | None = None) -> str:
     data = json.loads(path.read_text(encoding="utf-8"))
     roads = data.get("roads", [])
     points = [
@@ -57,6 +57,30 @@ def render(path: Path) -> str:
         )
     legend = "".join(connections) or "<li>no explicit connections</li>"
     title = html.escape(str(data.get("name", data.get("map_id", path.stem))))
+    routes = []
+    if routes_path and routes_path.is_file():
+        route_data = json.loads(routes_path.read_text(encoding="utf-8"))
+        routes = route_data.get("routes", [])
+    route_options = "".join(
+        f'<option value="{html.escape(str(route.get("id", "")))}">'
+        f'{html.escape(str(route.get("name", route.get("id", ""))))}'
+        f'{" [draft]" if route.get("draft") or route.get("validated") is False else ""}</option>'
+        for route in routes
+    )
+    route_panel = ""
+    if route_options:
+        route_panel = f"""
+<label>Route <select id="route">{route_options}</select></label>
+<pre id="command"></pre>
+<script>
+const route = document.querySelector('#route');
+const command = document.querySelector('#command');
+function updateCommand() {{
+  command.textContent = 'bash scripts/demo.sh --scenario scenarios/city_ring_map.json --route ' + route.value;
+}}
+route.addEventListener('change', updateCommand);
+updateCommand();
+</script>"""
     return f"""<!doctype html>
 <meta charset="utf-8">
 <title>{title} map preview</title>
@@ -68,9 +92,13 @@ svg {{ background: #263238; border: 1px solid #4b5563; }}
 text {{ fill: #fbbf24; font-size: 13px; }}
 aside {{ min-width: 260px; }} li {{ margin: 8px 0; }}
 </style>
+main {{ display: flex; gap: 20px; padding: 20px; }}
+select {{ max-width: 260px; }}
+pre {{ white-space: pre-wrap; color: #93c5fd; }}
+</style>
 <main><svg viewBox="0 0 {width:.0f} {height:.0f}" width="{width:.0f}" height="{height:.0f}">
 {"".join(lines)}{"".join(labels)}
-</svg><aside><h2>{title}</h2><ul>{legend}</ul></aside></main>
+</svg><aside><h2>{title}</h2>{route_panel}<ul>{legend}</ul></aside></main>
 """
 
 
@@ -78,8 +106,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("map", type=Path)
     parser.add_argument("-o", "--output", type=Path, required=True)
+    parser.add_argument("--routes", type=Path)
     args = parser.parse_args()
-    args.output.write_text(render(args.map), encoding="utf-8")
+    routes = args.routes or args.map.with_name("routes.json")
+    args.output.write_text(render(args.map, routes), encoding="utf-8")
     print(f"wrote {args.output}")
     return 0
 
