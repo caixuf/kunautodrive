@@ -18,6 +18,26 @@ def load_evaluator():
 
 
 class DemoEvaluatorTest(unittest.TestCase):
+    def test_formal_metrics_report_tracking_comfort_and_timing_groups(self):
+        evaluator = load_evaluator()
+        samples = [
+            {"t_demo": 0.0},
+            {"t_demo": 0.1},
+            {"t_demo": 0.2},
+        ]
+        series = [
+            {"lane_error": 1.0, "speed": 0.0},
+            {"lane_error": 0.5, "speed": 1.0},
+            {"lane_error": 0.25, "speed": 2.0},
+        ]
+        metrics = evaluator.compute_formal_metrics(series, samples)
+        self.assertEqual(metrics["trajectory_metric_type"], "closed_loop_lane_tracking")
+        self.assertAlmostEqual(metrics["trajectory_ade_m"], 0.583333, places=4)
+        self.assertAlmostEqual(metrics["trajectory_fde_m"], 0.25)
+        self.assertAlmostEqual(metrics["comfort_accel_rms_mps2"], 10.0, places=4)
+        self.assertEqual(metrics["timing_sample_count"], 3)
+        self.assertAlmostEqual(metrics["timing_sample_period_mean_s"], 0.1)
+
     def test_evaluation_payload_has_v1_envelope_and_legacy_summary(self):
         evaluator = load_evaluator()
         summary = {"scenario": "straight_road", "avg_speed_mps": 8.0}

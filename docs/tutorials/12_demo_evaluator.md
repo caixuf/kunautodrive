@@ -69,6 +69,11 @@ FlowSim 驱动闭环运行；其余模式用于让同一结果协议可以被回
 | NPC 运动 | NPC 最大速度（捕获瞬移 bug） | <45 m/s |
 | 丢帧 | topic 丢弃计数 | 0 |
 
+`--json-out` 的 `summary.formal_metrics` 还提供分组指标：闭环车道跟踪
+`trajectory_ade_m` / `trajectory_fde_m`（不是预测真值 ADE/FDE）、
+加速度 RMS、jerk P95/最大值，以及采样周期均值/P99。这些字段用于跨场景
+报告；没有真实预测轨迹时不会伪造开环 ADE/FDE。
+
 ## 结果解读
 
 ### PASS

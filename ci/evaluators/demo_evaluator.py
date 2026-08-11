@@ -743,6 +743,83 @@ def sample_metrics(sample: dict, road: dict | None = None) -> dict:
     }
 
 
+def _sample_time_seconds(sample: dict) -> float:
+    """Normalize evaluator timestamps without changing the legacy summary path."""
+    demo_time = sample.get("t_demo")
+    if isinstance(demo_time, (int, float)) and math.isfinite(float(demo_time)):
+        return float(demo_time)
+    raw = float(sample.get("timestamp", 0.0) or 0.0)
+    return raw / 1_000_000.0 if abs(raw) > 100_000.0 else raw
+
+
+def _p95(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    values = sorted(values)
+    index = (len(values) - 1) * 0.95
+    low = math.floor(index)
+    high = math.ceil(index)
+    if low == high:
+        return values[low]
+    return values[low] + (values[high] - values[low]) * (index - low)
+
+
+def compute_formal_metrics(series: list[dict], samples: list[dict]) -> dict:
+    """Compute grouped, data-backed metrics for the unified result protocol.
+
+    The trajectory ADE/FDE names are deliberately qualified as lane-tracking
+    errors: they compare ego against the nearest lane center, not a prediction
+    ground truth that the closed-loop evaluator does not possess.
+    """
+    if not series:
+        return {
+            "trajectory_metric_type": "closed_loop_lane_tracking",
+            "trajectory_ade_m": None,
+            "trajectory_fde_m": None,
+            "comfort_accel_rms_mps2": None,
+            "comfort_jerk_p95_mps3": None,
+            "comfort_jerk_max_mps3": None,
+            "timing_sample_period_mean_s": None,
+            "timing_sample_period_p99_s": None,
+            "timing_sample_count": 0,
+        }
+    times = [_sample_time_seconds(sample) for sample in samples]
+    lane_errors = [
+        abs(float(metric.get("lane_error", 0.0) or 0.0)) for metric in series
+    ]
+    periods = [
+        times[index] - times[index - 1]
+        for index in range(1, len(times))
+        if times[index] > times[index - 1]
+    ]
+    speeds = [float(metric.get("speed", 0.0) or 0.0) for metric in series]
+    accelerations = [
+        (speeds[index] - speeds[index - 1]) / periods[index - 1]
+        for index in range(1, len(speeds))
+        if index - 1 < len(periods) and periods[index - 1] > 0.0
+    ]
+    jerk: list[float] = []
+    for index in range(1, len(accelerations)):
+        period_index = index
+        if period_index >= len(periods) or periods[period_index] <= 0.0:
+            continue
+        jerk.append(abs((accelerations[index] - accelerations[index - 1]) /
+                        periods[period_index]))
+    accel_rms = math.sqrt(statistics.fmean(value * value for value in accelerations)) \
+        if accelerations else 0.0
+    return {
+        "trajectory_metric_type": "closed_loop_lane_tracking",
+        "trajectory_ade_m": statistics.fmean(lane_errors),
+        "trajectory_fde_m": lane_errors[-1],
+        "comfort_accel_rms_mps2": accel_rms,
+        "comfort_jerk_p95_mps3": _p95(jerk),
+        "comfort_jerk_max_mps3": max(jerk) if jerk else 0.0,
+        "timing_sample_period_mean_s": statistics.fmean(periods) if periods else 0.0,
+        "timing_sample_period_p99_s": _p95(periods),
+        "timing_sample_count": len(series),
+    }
+
+
 def sign_flips(values: list[float], deadband: float) -> int:
     flips = 0
     prev = 0
@@ -1181,6 +1258,7 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     steer_signed = [m["steer_signed"] for m in series]
     headings = [m["heading"] for m in series]
     timestamps = [float(s.get("timestamp", 0.0) or 0.0) for s in samples]
+    formal_metrics = compute_formal_metrics(series, samples)
     scenario_layer_counts = scenario_actor_layer_counts(scenario)
 
     # ── 掉头检测（防巡航向门禁对合法掉头误报）──
@@ -2026,6 +2104,7 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         "target_lane": int(last.get("metrics", {}).get("behavior", {}).get("target_lane", -1) or -1),
         "blocked": bool(last.get("metrics", {}).get("behavior", {}).get("blocked", False)),
         "worthwhile": bool(last.get("metrics", {}).get("behavior", {}).get("worthwhile", False)),
+        "formal_metrics": formal_metrics,
     }
 
     # ── 门禁有效性：指标交叉一致性 ────────────────────────────
