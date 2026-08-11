@@ -21,6 +21,18 @@
     <button onclick="flowboard.doConnect()" class="primary" style="flex:1">🔗 连接</button>
     <button onclick="flowboard.doSimulate()" style="flex:1">🎬 演示</button>
   </div>
+  <div class="card" id="map-route-card">
+    <div class="card-header"><h2>🗺 地图路线</h2><span class="toggle">▼</span></div>
+    <div class="card-body">
+      <select id="map-choice" onchange="flowboard.onMapChoiceChange()" style="width:100%">
+        <option value="city_ring">city_ring · 城市环线</option>
+        <option value="city_center">city_center · 市中心</option>
+      </select>
+      <select id="route-choice" onchange="flowboard.onRouteChoiceChange()" style="width:100%;margin-top:5px"></select>
+      <div id="route-help" style="font-size:10px;color:#8b949e;margin-top:5px"></div>
+      <button onclick="flowboard.runSelectedRoute()" class="primary" style="width:100%;margin-top:7px">▶ 运行选中路线</button>
+    </div>
+  </div>
   <div id="diag-bar" style="display:none;margin-top:4px;padding:4px 6px;border-radius:6px;background:#3a1414;border:1px solid#5c1a1a;color:#f0a0a0;font-size:10px;line-height:1.4;max-height:90px;overflow:auto;cursor:pointer" title="点击清除" onclick="flowboard.clearDiag()"></div>
 
   <div class="sidebar-segment">

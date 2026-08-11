@@ -14,6 +14,63 @@ function setText(id, val) {
   if (el) el.textContent = val;
 }
 
+const MAP_ROUTES = {
+  city_ring: [
+    { id: 'main', name: '主线（地面→匝道→高架→返回）', scenario: 'scenarios/city_ring_map.json' },
+    { id: 'on_ramp', name: '上匝道（草稿）', scenario: 'scenarios/city_ring_map.json', draft: true },
+    { id: 'off_ramp', name: '下匝道（草稿）', scenario: 'scenarios/city_ring_map.json', draft: true },
+    { id: 'viaduct', name: '高架（草稿）', scenario: 'scenarios/city_ring_map.json', draft: true },
+  ],
+  city_center: [
+    { id: 'central_crossing', name: '中央大道→金融街（未验证）', scenario: '', draft: true },
+    { id: 'riverside', name: '中央大道→滨江路（未验证）', scenario: '', draft: true },
+    { id: 'underpass', name: '下穿道路（未验证）', scenario: '', draft: true },
+  ],
+};
+
+function refreshRouteChoices() {
+  var map = document.getElementById('map-choice');
+  var routes = document.getElementById('route-choice');
+  if (!map || !routes) return;
+  var items = MAP_ROUTES[map.value] || [];
+  routes.innerHTML = items.map(function (item) {
+    return '<option value="' + item.id + '">' + item.name + '</option>';
+  }).join('');
+  onRouteChoiceChange();
+}
+
+function onMapChoiceChange() {
+  refreshRouteChoices();
+}
+
+function onRouteChoiceChange() {
+  var map = document.getElementById('map-choice');
+  var route = document.getElementById('route-choice');
+  var help = document.getElementById('route-help');
+  if (!map || !route || !help) return;
+  var item = (MAP_ROUTES[map.value] || []).find(function (entry) {
+    return entry.id === route.value;
+  });
+  help.textContent = item && item.draft
+    ? '该路线仍是草稿，暂不允许启动仿真。'
+    : '可运行：' + (item ? item.scenario : '');
+}
+
+function runSelectedRoute() {
+  var map = document.getElementById('map-choice');
+  var route = document.getElementById('route-choice');
+  var item = map && route && (MAP_ROUTES[map.value] || []).find(function (entry) {
+    return entry.id === route.value;
+  });
+  if (!item || item.draft || !item.scenario) {
+    toast('该路线尚未通过闭环验证');
+    return;
+  }
+  var command = 'bash scripts/demo.sh --scenario ' + item.scenario + ' --route ' + item.id;
+  navigator.clipboard && navigator.clipboard.writeText(command);
+  toast('已复制运行命令：' + command);
+}
+
 function gameAngleDeg(rad) {
   return rad * 180 / Math.PI;
 }
@@ -2192,6 +2249,7 @@ document.addEventListener('keydown', function(e) {
 function initAll() {
   var urlInput = document.getElementById('url');
   if (urlInput) urlInput.value = serverUrl;
+  refreshRouteChoices();
   switchWorkspace(workspaceMode || 'observe');
   // 1. Initialize D3 topology graph
   initTopo();
@@ -2398,6 +2456,9 @@ window.flowboard = {
   // connect / data
   doConnect: doConnect,
   doSimulate: doSimulate,
+  onMapChoiceChange: onMapChoiceChange,
+  onRouteChoiceChange: onRouteChoiceChange,
+  runSelectedRoute: runSelectedRoute,
   doPause: doPause,
   clearFrames: clearFrames,
   resetView: resetView,
