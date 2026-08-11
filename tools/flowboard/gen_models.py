@@ -221,23 +221,23 @@ def build_pedestrian() -> tuple[list[float], list[int]]:
 MATERIALS = {
     "car_paint": {
         "pbrMetallicRoughness": {
-            "baseColorFactor": [0.2, 0.4, 0.85, 1.0],    # 蓝色金属漆
-            "metallicFactor": 0.85,
-            "roughnessFactor": 0.3,
+            "baseColorFactor": [0.18, 0.31, 0.55, 1.0],  # 普通深蓝通勤车漆
+            "metallicFactor": 0.35,
+            "roughnessFactor": 0.42,
         },
     },
     "truck_paint": {
         "pbrMetallicRoughness": {
             "baseColorFactor": [0.85, 0.2, 0.15, 1.0],   # 红色
-            "metallicFactor": 0.6,
-            "roughnessFactor": 0.5,
+            "metallicFactor": 0.25,
+            "roughnessFactor": 0.58,
         },
     },
     "suv_paint": {
         "pbrMetallicRoughness": {
-            "baseColorFactor": [0.2, 0.2, 0.2, 1.0],     # 黑色
-            "metallicFactor": 0.8,
-            "roughnessFactor": 0.25,
+            "baseColorFactor": [0.16, 0.20, 0.17, 1.0],  # 低调深绿 SUV
+            "metallicFactor": 0.30,
+            "roughnessFactor": 0.40,
         },
     },
     # ── Task 6：小米 SU7 专属车漆 ──
@@ -331,14 +331,14 @@ MATERIALS = {
 # ── 模型规格 ──────────────────────────────────────────────────
 
 MODEL_SPECS = [
-    # ── sedan 精致版：车身件 + 4 车门 + 充电盖 + 雨刮器 + 后备箱盖 +
+    # ── sedan 通勤版：车身件 + 4 车门 + 格栅 + 保险杠 + 后备箱盖 +
     #    前大灯/后刹车灯/4 转向灯 + 圆柱车轮。车头朝 +x（与 _buildSedan 一致）。
     #    灯节点命名约定被 models.js 扫描建立 userData.brakeLights /
     #    turnSignals / headlights，VehicleView.js 通过 emissiveIntensity 切换亮灭。
     #    Task A: 压低车身/座舱，目标 L=4.6 H=1.45 W=1.8 L:H≈3.2。
     {
         "name": "sedan",
-        "materials": ["car_paint", "glass", "tire", "headlight", "brakelight", "turnsignal", "ads_indicator"],
+        "materials": ["car_paint", "glass", "tire", "headlight", "brakelight", "turnsignal"],
         "parts": [
             # 车身件 (car_paint, mat 0) — 目标 L=4.6 H=1.45 W=1.80 L:H≈3.2
             # body: cy=0.53 sy=0.52 → top=0.79 bottom=0.27
@@ -361,9 +361,15 @@ MODEL_SPECS = [
             # 雨刮器臂 x 2（前挡风玻璃上，压低）
             {"name": "wiper_L",  "mat": 0, "build_fn": lambda: box_vertices(1.05,  1.05,  -0.35, 0.5,  0.02, 0.04)},
             {"name": "wiper_R",  "mat": 0, "build_fn": lambda: box_vertices(1.05,  1.05, 0.35, 0.5,  0.02, 0.04)},
+            # 普通通勤车的进气格栅、保险杠与侧窗：提升轮廓识别，不引入运动套件。
+            {"name": "grille",   "mat": 2, "build_fn": lambda: box_vertices(2.28, 0.48, 0.0, 0.05, 0.22, 1.08)},
+            {"name": "bumper_front", "mat": 2, "build_fn": lambda: box_vertices(2.29, 0.32, 0.0, 0.08, 0.14, 1.60)},
+            {"name": "bumper_rear",  "mat": 2, "build_fn": lambda: box_vertices(-2.29, 0.34, 0.0, 0.08, 0.14, 1.60)},
             # 玻璃 (glass, mat 1)
             {"name": "windshield",  "mat": 1, "build_fn": lambda: box_vertices(1.10,  1.00, 0.0, 0.06, 0.36, 1.45)},
             {"name": "rear_window",  "mat": 1, "build_fn": lambda: box_vertices(-1.05, 0.96, 0.0, 0.06, 0.30, 1.38)},
+            {"name": "side_window_L", "mat": 1, "build_fn": lambda: box_vertices(0.00, 1.15, -0.75, 1.75, 0.22, 0.04)},
+            {"name": "side_window_R", "mat": 1, "build_fn": lambda: box_vertices(0.00, 1.15, 0.75, 1.75, 0.22, 0.04)},
             # 前大灯 (headlight, mat 3) — 白色发光
             {"name": "headlight_L", "mat": 3, "build_fn": lambda: box_vertices(2.18, 0.55,  -0.58, 0.10, 0.16, 0.42)},
             {"name": "headlight_R", "mat": 3, "build_fn": lambda: box_vertices(2.18, 0.55, 0.58, 0.10, 0.16, 0.42)},
@@ -375,9 +381,6 @@ MODEL_SPECS = [
             {"name": "turnsignal_FR", "mat": 5, "build_fn": lambda: box_vertices(2.16,  0.55, 0.82, 0.08, 0.14, 0.12)},
             {"name": "turnsignal_RL", "mat": 5, "build_fn": lambda: box_vertices(-2.16, 0.60,  -0.82, 0.08, 0.14, 0.12)},
             {"name": "turnsignal_RR", "mat": 5, "build_fn": lambda: box_vertices(-2.16, 0.60, 0.82, 0.08, 0.14, 0.12)},
-            # 自动驾驶小蓝灯 ×2 (ads_indicator, mat 6) — 车尾左右，始终亮
-            {"name": "ads_indicator_L", "mat": 6, "build_fn": lambda: cylinder_vertices(-1.75, 0.80,  -0.48, 0.07, 0.08, "y", 12)},
-            {"name": "ads_indicator_R", "mat": 6, "build_fn": lambda: cylinder_vertices(-1.75, 0.80, 0.48, 0.07, 0.08, "y", 12)},
             # ── 车辆转向系统：前/后轴 Group（pivot 在轴心，无 mesh）──
             {"name": "axle_front", "translation": [ 1.35, 0.33, 0.0]},
             {"name": "axle_rear",  "translation": [-1.35, 0.33, 0.0]},
@@ -465,6 +468,15 @@ MODEL_SPECS = [
             {"name": "cab",        "mat": 0, "build_fn": lambda: box_vertices( 1.0,  0.55, 0.0,  2.0, 0.9,  2.4)},
             # cargo: cy=1.60 sy=2.00 → top=2.60 = 目标 H
             {"name": "cargo",      "mat": 0, "build_fn": lambda: box_vertices(-2.5,  1.60, 0.0,  5.5, 2.0,  2.5)},
+            # 商用车细节只强调功能性结构，避免与主车竞争视觉焦点。
+            {"name": "grille",     "mat": 2, "build_fn": lambda: box_vertices( 2.02, 0.72, 0.0,  0.05, 0.30, 1.35)},
+            {"name": "bumper",     "mat": 2, "build_fn": lambda: box_vertices( 2.04, 0.35, 0.0,  0.10, 0.16, 2.35)},
+            {"name": "mirror_L",   "mat": 2, "build_fn": lambda: box_vertices( 1.15, 1.05, -1.30, 0.18, 0.16, 0.10)},
+            {"name": "mirror_R",   "mat": 2, "build_fn": lambda: box_vertices( 1.15, 1.05, 1.30, 0.18, 0.16, 0.10)},
+            {"name": "cargo_rib_1", "mat": 2, "build_fn": lambda: box_vertices(-1.40, 1.60, -1.27, 0.06, 1.72, 0.03)},
+            {"name": "cargo_rib_2", "mat": 2, "build_fn": lambda: box_vertices(-3.20, 1.60, -1.27, 0.06, 1.72, 0.03)},
+            {"name": "cargo_rib_3", "mat": 2, "build_fn": lambda: box_vertices(-1.40, 1.60, 1.27, 0.06, 1.72, 0.03)},
+            {"name": "cargo_rib_4", "mat": 2, "build_fn": lambda: box_vertices(-3.20, 1.60, 1.27, 0.06, 1.72, 0.03)},
             {"name": "windshield", "mat": 1, "build_fn": lambda: box_vertices( 0.5,  0.95, 0.0,  0.08, 0.6, 1.6)},
             {"name": "headlight_L",  "mat": 3, "build_fn": lambda: box_vertices( 1.95, 0.55,  -0.70, 0.10, 0.18, 0.40)},
             {"name": "headlight_R",  "mat": 3, "build_fn": lambda: box_vertices( 1.95, 0.55, 0.70, 0.10, 0.18, 0.40)},
@@ -499,7 +511,17 @@ MODEL_SPECS = [
                 -0.3, 1.40, 0.0, 1.8, 0.60, 1.50, 1.28, 0.30, 0.22)},
             {"name": "rear",       "mat": 0, "build_fn": lambda: tapered_box_vertices(
                 1.0, 1.35, 0.0, 1.2, 0.55, 1.50, 1.30, 0.18, 0.0)},
+            # 量产 SUV 的黑色包围、行李架和格栅，不使用运动化扰流板或动态灯。
+            {"name": "grille",     "mat": 2, "build_fn": lambda: box_vertices( 2.30, 0.58, 0.0, 0.05, 0.26, 1.18)},
+            {"name": "bumper_front", "mat": 2, "build_fn": lambda: box_vertices( 2.31, 0.32, 0.0, 0.08, 0.16, 1.70)},
+            {"name": "bumper_rear",  "mat": 2, "build_fn": lambda: box_vertices(-2.31, 0.34, 0.0, 0.08, 0.16, 1.70)},
+            {"name": "cladding_L", "mat": 2, "build_fn": lambda: box_vertices(0.0, 0.34, -0.97, 3.75, 0.12, 0.04)},
+            {"name": "cladding_R", "mat": 2, "build_fn": lambda: box_vertices(0.0, 0.34, 0.97, 3.75, 0.12, 0.04)},
+            {"name": "roof_rail_L", "mat": 2, "build_fn": lambda: box_vertices(-0.30, 1.70, -0.58, 1.42, 0.04, 0.05)},
+            {"name": "roof_rail_R", "mat": 2, "build_fn": lambda: box_vertices(-0.30, 1.70, 0.58, 1.42, 0.04, 0.05)},
             {"name": "windshield", "mat": 1, "build_fn": lambda: box_vertices( 1.10, 1.12,  0.0,  0.06, 0.48, 1.45)},
+            {"name": "side_window_L", "mat": 1, "build_fn": lambda: box_vertices(-0.25, 1.34, -0.76, 1.48, 0.28, 0.04)},
+            {"name": "side_window_R", "mat": 1, "build_fn": lambda: box_vertices(-0.25, 1.34, 0.76, 1.48, 0.28, 0.04)},
             {"name": "headlight_L",  "mat": 3, "build_fn": lambda: box_vertices( 2.28, 0.62,  -0.60, 0.10, 0.18, 0.42)},
             {"name": "headlight_R",  "mat": 3, "build_fn": lambda: box_vertices( 2.28, 0.62, 0.60, 0.10, 0.18, 0.42)},
             {"name": "brakelight_L", "mat": 4, "build_fn": lambda: box_vertices(-2.28, 0.72,  -0.60, 0.10, 0.16, 0.42)},
