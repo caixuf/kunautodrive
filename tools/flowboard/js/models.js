@@ -82,6 +82,28 @@ function _adaptSu7WheelNodes(group) {
 }
 
 /**
+ * The authorized SU7 asset uses real light meshes instead of the generated
+ * semantic names. Reuse those meshes for headlights and brake lights; the
+ * procedural overlay remains responsible only for side-specific indicators.
+ */
+function _adaptSu7LightNodes(group) {
+  var front = [], rear = [];
+  group.traverse(function(c) {
+    if (!c.isMesh) return;
+    if (c.name === 'Light' ||
+        c.name === 'Light.002' || c.name === 'Light002' ||
+        c.name === 'LightGlass.004' || c.name === 'LightGlass004') {
+      front.push(c);
+    } else if (c.name === 'Light.003' || c.name === 'Light003' || c.name === 'LightGlass') {
+      rear.push(c);
+    }
+  });
+  if (front.length) group.userData.headlights = front;
+  if (rear.length) group.userData.brakeLights = rear;
+  group.userData.su7RawLights = front.length > 0 && rear.length > 0;
+}
+
+/**
  * 从 glTF 场景建立带 userData 的车辆 Group。
  * - 保留节点层级与 name（便于按名查找车轮/轴）
  * - 克隆 material 使每个实例独立可改色
@@ -114,7 +136,10 @@ function _buildVehicleFromGltf(name, gltf) {
 
   // 车辆类型才需要建立 wheel userData（行人无轮）
   if (name !== 'pedestrian') {
-    if (name === 'su7') _adaptSu7WheelNodes(group);
+    if (name === 'su7') {
+      _adaptSu7WheelNodes(group);
+      _adaptSu7LightNodes(group);
+    }
 
     var fl = null, fr = null, rl = null, rr = null;
     var fwGroup = null, rwGroup = null;
@@ -322,6 +347,9 @@ export function _relinkWheelUserData(clone) {
     if (wheels.indexOf(w) < 0) wheels.push(w);
   });
   if (wheels.length) clone.userData.wheels = wheels;
+  if (clone.userData && clone.userData.modelType === 'su7') {
+    _adaptSu7LightNodes(clone);
+  }
   // 灯节点引用也需重建（与 _buildVehicleFromGltf 扫描范围保持一致）
   var brakeLights = [], turnSignals = {}, headlights = [], adsIndicators = [];
   clone.traverse(function(c) {

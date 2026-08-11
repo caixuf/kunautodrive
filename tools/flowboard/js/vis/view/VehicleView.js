@@ -33,6 +33,8 @@ const BRAKE_Y = 0.55;      // 尾灯高度
 const BRAKE_X = -2.05;     // 车尾（X-forward）
 const BRAKE_Z = 0.65;      // 左右间距
 const TURN_X = -2.08;
+const TURN_FRONT_Y = 0.68;
+const TURN_REAR_Y = 0.72;
 const TURN_Z = 0.78;
 const HEAD_Y = 0.45;       // 前灯高度
 const HEAD_X = 2.12;       // 车头
@@ -53,28 +55,52 @@ function _makeRectMesh(geo, color, x, y, z) {
   return m;
 }
 
+function _findTurnAnchor(vehicleGroup, names, fallback) {
+  let node = null;
+  if (vehicleGroup && vehicleGroup.traverse) {
+    vehicleGroup.traverse((child) => {
+      if (!node && names.includes(child.name)) node = child;
+    });
+  }
+  if (!node || !node.position) return fallback;
+  const outward = node.position.x >= 0 ? 0.12 : -0.12;
+  return { x: node.position.x + outward, y: node.position.y };
+}
+
 /** 为车辆模型创建灯光网格组。
  *  @param {THREE.Group} vehicleGroup 车辆模型根节点
+ *  @param {{brake?: boolean, turn?: boolean, head?: boolean}} options
  *  @returns {{group: THREE.Group, update: (v: object) => void}} */
-function createVehicleLights(vehicleGroup) {
+function createVehicleLights(vehicleGroup, options = {}) {
   const group = new THREE.Group();
+  const showBrakeOverlay = options.brake !== false;
+  const showTurnOverlay = options.turn !== false;
+  const showHeadOverlay = options.head !== false;
+  const frontTurn = _findTurnAnchor(vehicleGroup,
+    ['Light', 'Light.002', 'Light002', 'LightGlass.004', 'LightGlass004'],
+    { x: HEAD_X + 0.12, y: TURN_FRONT_Y });
+  const rearTurn = _findTurnAnchor(vehicleGroup,
+    ['Light.003', 'Light003', 'LightGlass'],
+    { x: TURN_X - 0.12, y: TURN_REAR_Y });
 
   // In the shared X-forward frame, left is -Z and right is +Z. Keep each
   // pair on the same front/rear face; the previous wiring swapped X/Z and
   // put one brake/turn/head lamp at the wrong end of the car.
   const brakeL = _makeRectMesh(GEO_BRAKE, LIGHT_OFF, BRAKE_X, BRAKE_Y, -BRAKE_Z);
   const brakeR = _makeRectMesh(GEO_BRAKE, LIGHT_OFF, BRAKE_X, BRAKE_Y,  BRAKE_Z);
-  const turnL  = _makeRectMesh(GEO_TURN, LIGHT_OFF, TURN_X,  BRAKE_Y, -TURN_Z);
-  const turnR  = _makeRectMesh(GEO_TURN, LIGHT_OFF, TURN_X,  BRAKE_Y,  TURN_Z);
+  const turnFL = _makeRectMesh(GEO_TURN, LIGHT_OFF, frontTurn.x, frontTurn.y, -TURN_Z);
+  const turnFR = _makeRectMesh(GEO_TURN, LIGHT_OFF, frontTurn.x, frontTurn.y,  TURN_Z);
+  const turnRL = _makeRectMesh(GEO_TURN, LIGHT_OFF, rearTurn.x, rearTurn.y, -TURN_Z);
+  const turnRR = _makeRectMesh(GEO_TURN, LIGHT_OFF, rearTurn.x, rearTurn.y,  TURN_Z);
   const headL  = _makeRectMesh(GEO_HEAD, LIGHT_OFF, HEAD_X,  HEAD_Y, -HEAD_Z);
   const headR  = _makeRectMesh(GEO_HEAD, LIGHT_OFF, HEAD_X,  HEAD_Y,  HEAD_Z);
 
   // 熄灯时隐藏，避免暗色灯片显示为车身边缘的黑方块
   brakeL.visible = brakeR.visible = false;
-  turnL.visible = turnR.visible = false;
+  turnFL.visible = turnFR.visible = turnRL.visible = turnRR.visible = false;
   headL.visible = headR.visible = false;
 
-  group.add(brakeL, brakeR, turnL, turnR, headL, headR);
+  group.add(brakeL, brakeR, turnFL, turnFR, turnRL, turnRR, headL, headR);
 
   return {
     group,
@@ -83,16 +109,20 @@ function createVehicleLights(vehicleGroup) {
       const blinkOn = nowMs === undefined
         ? true
         : (((nowMs / 1000) * 1.5) % 1) < 0.5;
-      brakeL.visible = s.brake;
-      brakeR.visible = s.brake;
+      brakeL.visible = showBrakeOverlay && s.brake;
+      brakeR.visible = showBrakeOverlay && s.brake;
       brakeL.material.color.copy(LIGHT_BRAKE_ON);
       brakeR.material.color.copy(LIGHT_BRAKE_ON);
-      turnL.visible = s.turnL && blinkOn;
-      turnR.visible = s.turnR && blinkOn;
-      turnL.material.color.copy(LIGHT_TURN_ON);
-      turnR.material.color.copy(LIGHT_TURN_ON);
-      headL.visible = s.head;
-      headR.visible = s.head;
+      const turnL = showTurnOverlay && s.turnL && blinkOn;
+      const turnR = showTurnOverlay && s.turnR && blinkOn;
+      turnFL.visible = turnRL.visible = turnL;
+      turnFR.visible = turnRR.visible = turnR;
+      turnFL.material.color.copy(LIGHT_TURN_ON);
+      turnFR.material.color.copy(LIGHT_TURN_ON);
+      turnRL.material.color.copy(LIGHT_TURN_ON);
+      turnRR.material.color.copy(LIGHT_TURN_ON);
+      headL.visible = showHeadOverlay && s.head;
+      headR.visible = showHeadOverlay && s.head;
       headL.material.color.copy(LIGHT_HEAD_ON);
       headR.material.color.copy(LIGHT_HEAD_ON);
     }
@@ -520,11 +550,15 @@ export function createVehicleView(scene, renderer, modelCache) {
       entry.group = _createGltfVehicle(gltf, id, type);
       vehicleGroup.add(entry.group);
 
-      // 目标 SU7 网格没有可独立驱动的语义灯节点，保留其原始灯罩，
-      // 再叠加同一套程序化灯光反馈；已有语义灯的模型不重复叠加。
+      // SU7 原始 Light/LightGlass 节点复用真实材质；只为没有语义节点的
+      // 侧向转向灯补四角 overlay，避免把车灯整套替换成悬空灯片。
       const ud = entry.group.userData || {};
-      const hasSemanticLights = ud.brakeLights || ud.turnSignals || ud.headlights;
-      entry.lights = hasSemanticLights ? null : createVehicleLights(entry.group);
+      const hasCompleteSemanticLights = ud.brakeLights && ud.turnSignals && ud.headlights;
+      entry.lights = hasCompleteSemanticLights ? null : createVehicleLights(entry.group, {
+        brake: !ud.brakeLights,
+        turn: !ud.turnSignals,
+        head: !ud.headlights,
+      });
       if (entry.lights) {
         entry.group.add(entry.lights.group);
       }

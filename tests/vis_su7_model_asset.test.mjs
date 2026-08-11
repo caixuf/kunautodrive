@@ -10,6 +10,7 @@ import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { ok, done } from './test-utils.mjs';
 import { _cleanSu7Exterior } from '../tools/flowboard/js/vis/view/VehicleView.js';
+import { _relinkWheelUserData } from '../tools/flowboard/js/models.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../tools/flowboard/models/su7');
 const modelPath = resolve(ROOT, 'sm_car.gltf');
@@ -26,6 +27,28 @@ ok('SU7 要求 Meshopt 和 WebP 扩展', [
 ].every(name => (model.extensionsRequired || []).includes(name)));
 ok('SU7 轮轴节点存在', ['Wheel.001', 'Wheel.002'].every(name =>
   (model.nodes || []).some(node => node.name === name)));
+const rawLightNodes = ['Light', 'Light.002', 'Light.003', 'LightGlass', 'LightGlass.004'];
+ok('SU7 真实前后灯节点存在', rawLightNodes.every(name =>
+  (model.nodes || []).some(node => node.name === name)));
+const rawFrontLights = (model.nodes || []).filter(node =>
+  ['Light', 'Light.002', 'LightGlass.004'].includes(node.name));
+const rawRearLights = (model.nodes || []).filter(node =>
+  ['Light.003', 'LightGlass'].includes(node.name));
+ok('SU7 真实灯节点前后位置自洽',
+  rawFrontLights.every(node => node.translation && node.translation[0] > 0) &&
+  rawRearLights.every(node => node.translation && node.translation[0] < 0));
+const rawFrontMesh = { name: 'Light', isMesh: true, material: {} };
+const rawRearMesh = { name: 'Light.003', isMesh: true, material: {} };
+const rawLightScene = {
+  userData: { modelType: 'su7' },
+  traverse(visitor) {
+    [rawFrontMesh, rawRearMesh].forEach(visitor);
+  },
+};
+_relinkWheelUserData(rawLightScene);
+ok('SU7 真实灯材质接入 headlight/brakelight 契约',
+  rawLightScene.userData.headlights.includes(rawFrontMesh) &&
+  rawLightScene.userData.brakeLights.includes(rawRearMesh));
 ok('SU7 clean exterior 节点存在', ['ChePai', 'Logo', 'Logo.001'].every(name =>
   (model.nodes || []).some(node => node.name === name)));
 ok('SU7 外部 bin/WebP 资源完整', referencedFiles.length > 0 &&
