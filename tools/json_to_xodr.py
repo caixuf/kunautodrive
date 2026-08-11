@@ -35,6 +35,7 @@ import argparse
 import json
 import math
 import sys
+from pathlib import Path
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Optional
@@ -724,14 +725,53 @@ def convert(scenario: dict) -> str:
     return ET.tostring(root, encoding="unicode", xml_declaration=True)
 
 
+def load_scenario(path: Path) -> dict:
+    """Load a scenario and resolve an optional reusable map reference."""
+    with path.open("r", encoding="utf-8") as f:
+        scenario = json.load(f)
+    if not isinstance(scenario, dict):
+        raise ValueError(f"{path}: scenario root must be an object")
+    map_ref = scenario.get("map_file")
+    if map_ref is None and isinstance(scenario.get("map_id"), str):
+        map_ref = f"maps/{scenario['map_id']}/map.json"
+    if map_ref is None:
+        return scenario
+    map_path = Path(map_ref)
+    if not map_path.is_absolute():
+        candidates = (
+            path.parent / map_path,
+            path.parent.parent / map_path,
+            Path.cwd() / map_path,
+        )
+        map_path = next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
+    with map_path.open("r", encoding="utf-8") as f:
+        city_map = json.load(f)
+    roads = city_map.get("roads", [])
+    if not isinstance(roads, list) or not roads:
+        raise ValueError(f"{map_path}: roads must be a non-empty array")
+    edges = []
+    for road in roads:
+        edge = dict(road)
+        edge["id"] = edge.get("legacy_id", len(edges))
+        edge.pop("legacy_id", None)
+        edges.append(edge)
+    resolved = dict(scenario)
+    resolved["road_network"] = {
+        "edges": edges,
+        "cross_roads": city_map.get("cross_roads", []),
+        "junctions": city_map.get("junctions", []),
+    }
+    return resolved
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="FlowEngine 场景 JSON → OpenDRIVE xodr")
     ap.add_argument("scenario", help="场景 JSON 文件路径")
     ap.add_argument("-o", "--output", help="输出 xodr 路径 (默认 stdout)")
     args = ap.parse_args()
 
-    with open(args.scenario, "r", encoding="utf-8") as f:
-        scenario = json.load(f)
+    scenario_path = Path(args.scenario).resolve()
+    scenario = load_scenario(scenario_path)
     xml = convert(scenario)
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:

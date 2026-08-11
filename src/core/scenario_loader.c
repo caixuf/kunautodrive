@@ -35,6 +35,85 @@ static char* read_file(const char* path) {
     return buf;
 }
 
+static void resolve_map_reference(cJSON* scenario, const char* scenario_path) {
+    if (!scenario || cJSON_GetObjectItemCaseSensitive(scenario, "road_network"))
+        return;
+
+    cJSON* jmap = cJSON_GetObjectItemCaseSensitive(scenario, "map_file");
+    char map_path[1024] = {0};
+    if (cJSON_IsString(jmap) && jmap->valuestring) {
+        const char* slash = strrchr(scenario_path, '/');
+        if (slash) {
+            size_t dir_len = (size_t)(slash - scenario_path);
+            snprintf(map_path, sizeof(map_path), "%.*s/../%s",
+                     (int)dir_len, scenario_path, jmap->valuestring);
+        } else {
+            snprintf(map_path, sizeof(map_path), "%s", jmap->valuestring);
+        }
+    } else {
+        cJSON* jid = cJSON_GetObjectItemCaseSensitive(scenario, "map_id");
+        if (!cJSON_IsString(jid) || !jid->valuestring) return;
+        const char* slash = strrchr(scenario_path, '/');
+        if (slash) {
+            size_t dir_len = (size_t)(slash - scenario_path);
+            snprintf(map_path, sizeof(map_path), "%.*s/../maps/%s/map.json",
+                     (int)dir_len, scenario_path, jid->valuestring);
+        } else {
+            snprintf(map_path, sizeof(map_path), "maps/%s/map.json", jid->valuestring);
+        }
+    }
+
+    char* content = read_file(map_path);
+    if (!content) {
+        LOG_WARN("scenario", "map reference '%s' could not be opened", map_path);
+        return;
+    }
+    cJSON* map = cJSON_Parse(content);
+    free(content);
+    if (!map) {
+        LOG_WARN("scenario", "map reference '%s' contains invalid JSON", map_path);
+        return;
+    }
+
+    cJSON* roads = cJSON_GetObjectItemCaseSensitive(map, "roads");
+    if (!cJSON_IsArray(roads) || cJSON_GetArraySize(roads) == 0) {
+        LOG_WARN("scenario", "map '%s' has no roads array", map_path);
+        cJSON_Delete(map);
+        return;
+    }
+    cJSON* edges = cJSON_CreateArray();
+    int index = 0;
+    cJSON* road = NULL;
+    cJSON_ArrayForEach(road, roads) {
+        if (!cJSON_IsObject(road)) continue;
+        cJSON* edge = cJSON_Duplicate(road, 1);
+        cJSON_DeleteItemFromObjectCaseSensitive(edge, "id");
+        cJSON* legacy_id = cJSON_GetObjectItemCaseSensitive(edge, "legacy_id");
+        int id = cJSON_IsNumber(legacy_id) ? (int)legacy_id->valuedouble : index;
+        cJSON_DeleteItemFromObjectCaseSensitive(edge, "legacy_id");
+        cJSON_AddNumberToObject(edge, "id", id);
+        cJSON_AddItemToArray(edges, edge);
+        index++;
+    }
+    cJSON* network = cJSON_CreateObject();
+    cJSON_AddItemToObject(network, "edges", edges);
+    cJSON* extra = cJSON_GetObjectItemCaseSensitive(map, "cross_roads");
+    if (extra) cJSON_AddItemToObject(network, "cross_roads", cJSON_Duplicate(extra, 1));
+    extra = cJSON_GetObjectItemCaseSensitive(map, "junctions");
+    if (extra) cJSON_AddItemToObject(network, "junctions", cJSON_Duplicate(extra, 1));
+    cJSON_AddItemToObject(scenario, "road_network", network);
+
+    const char* static_fields[] = {"traffic_lights", "stop_lines", "construction_zones"};
+    cJSON* landmarks = cJSON_GetObjectItemCaseSensitive(map, "landmarks");
+    for (size_t i = 0; i < sizeof(static_fields) / sizeof(static_fields[0]); i++) {
+        if (cJSON_GetObjectItemCaseSensitive(scenario, static_fields[i])) continue;
+        extra = landmarks ? cJSON_GetObjectItemCaseSensitive(landmarks, static_fields[i]) : NULL;
+        if (extra) cJSON_AddItemToObject(scenario, static_fields[i], cJSON_Duplicate(extra, 1));
+    }
+    LOG_INFO("scenario", "resolved map '%s' (%d road(s))", map_path, index);
+    cJSON_Delete(map);
+}
+
 /* ── 公共 API ─────────────────────────────────────────────── */
 
 ScenarioConfig* scenario_load(const char* path) {
@@ -53,6 +132,7 @@ ScenarioConfig* scenario_load(const char* path) {
                   cJSON_GetErrorPtr() ? cJSON_GetErrorPtr() : "unknown");
         return NULL;
     }
+    resolve_map_reference(root, path);
 
     ScenarioConfig* sc = (ScenarioConfig*)calloc(1, sizeof(ScenarioConfig));
     if (!sc) { cJSON_Delete(root); return NULL; }
