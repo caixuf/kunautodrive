@@ -14,6 +14,17 @@ const SPACING = { high: 55, medium: 80, low: 120 };
 // 楼体完整落在路肩外的草地上，并给行道树/人行空间留出视觉缓冲。
 const SETBACK = 32;
 
+/* ── 三排纵深天际线 ─────────────────────────────────────────────
+ * 真实城市天际线的"剪影感"来自多层纵深：近排沿路楼 + 中排 + 远排高层。
+ * 用三排 InstancedMesh（合并进同一批），每排 offset 递增、高度递增、
+ * 饱和度递减（远景被雾冲淡、强调剪影），一处生成、一处组成 draw call，
+ * 不增加渲染层复杂度。 */
+const LAYERS = [
+  { offsetMul: 1.0, hMin: 18, hMax: 60, spacingMul: 1.0, sat: 1.0 },  // 近排
+  { offsetMul: 2.6, hMin: 40, hMax: 110, spacingMul: 0.8, sat: 0.72 }, // 中排高层
+  { offsetMul: 5.0, hMin: 70, hMax: 180, spacingMul: 0.6, sat: 0.5 }, // 远景摩天楼剪影
+];
+
 /* 城市建筑 glTF 资产（Quaternius Downtown City MegaKit, CC0）。
  * 模型缺失时回退到程序化 Box 楼体（原实现），保证无外网资产行为不变。
  * glTF 建筑尺寸/朝向各异，摆放前按目标高度归一化缩放。 */
@@ -111,29 +122,36 @@ export function createBuildingView(scene) {
       const points = sampleEdgeNodes(nodes, 18);
       const lanes = edge.lanes || 2;
       const laneWidth = edge.lane_width || LANE_WIDTH;
-      const offset = lanes * laneWidth / 2 + SETBACK;
+      const baseOffset = lanes * laneWidth / 2 + SETBACK;
 
-      let distance = 0;
-      for (let i = 3; i < points.length; i += 3) {
-        const px = points[i], pz = points[i + 2];
-        const prevX = points[i - 3], prevZ = points[i - 1];
-        const segment = Math.hypot(px - prevX, pz - prevZ);
-        distance += segment;
-        if (distance < spacing) continue;
-        distance = 0;
-        const [nx, nz] = tangentToNormal(px - prevX, pz - prevZ);
-        const hash = Math.abs(Math.trunc(px * 17 + pz * 31)) % 997;
-        const seed = hash / 997;
-        const height = 18 + seed * 42;
-        const width = 12 + seed * 8;
-        const depth = 10 + (1 - seed) * 8;
-        for (const side of [-1, 1]) {
-          slots.push({
-            x: px + nx * offset * side,
-            z: pz + nz * offset * side,
-            height, width, depth, seed,
-            rotation: directionToRotationY(nx, nz),
-          });
+      for (let li = 0; li < LAYERS.length; li++) {
+        const layer = LAYERS[li];
+        const offset = baseOffset * layer.offsetMul;
+        const layerSpacing = spacing * layer.spacingMul;
+
+        let distance = 0;
+        for (let i = 3; i < points.length; i += 3) {
+          const px = points[i], pz = points[i + 2];
+          const prevX = points[i - 3], prevZ = points[i - 1];
+          const segment = Math.hypot(px - prevX, pz - prevZ);
+          distance += segment;
+          if (distance < layerSpacing) continue;
+          distance = 0;
+          const [nx, nz] = tangentToNormal(px - prevX, pz - prevZ);
+          const hash = Math.abs(Math.trunc(px * 17 + pz * 31 + li * 997)) % 997;
+          const seed = hash / 997;
+          const height = layer.hMin + seed * (layer.hMax - layer.hMin);
+          const width = (12 + seed * 8) * (li === 0 ? 1 : 0.8);
+          const depth = (10 + (1 - seed) * 8) * (li === 0 ? 1 : 0.8);
+          for (const side of [-1, 1]) {
+            slots.push({
+              x: px + nx * offset * side,
+              z: pz + nz * offset * side,
+              height, width, depth, seed,
+              layer: li,
+              rotation: directionToRotationY(nx, nz),
+            });
+          }
         }
       }
     }
@@ -169,29 +187,47 @@ export function createBuildingView(scene) {
       color: 0x4a5664,
       roughness: 0.9,
     });
+    // 远景排：剪影材质（低饱和被雾冲淡 + 无窗格贴图，降低 draw call 与视觉噪点）
+    const farFacade = new THREE.MeshStandardMaterial({
+      color: 0x8a95a5,
+      roughness: 0.95,
+      metalness: 0.0,
+    });
+    const farRoof = new THREE.MeshStandardMaterial({
+      color: 0x6b7686,
+      roughness: 1.0,
+    });
+
+    const nearMid = slots.filter((s) => s.layer < 2);
+    const far = slots.filter((s) => s.layer >= 2);
+
     const bodyGeo = new THREE.BoxGeometry(1, 1, 1);
     const roofGeo = new THREE.BoxGeometry(1, 1, 1);
-    const bodies = new THREE.InstancedMesh(bodyGeo, facade, slots.length);
-    const roofs = new THREE.InstancedMesh(roofGeo, roof, slots.length);
     const dummy = new THREE.Object3D();
+    const buildBatch = function(slotList, facadeMat, roofMat) {
+      if (!slotList.length) return;
+      const bodies = new THREE.InstancedMesh(bodyGeo, facadeMat, slotList.length);
+      const roofs = new THREE.InstancedMesh(roofGeo, roofMat, slotList.length);
+      slotList.forEach((slot, i) => {
+        dummy.position.set(slot.x, slot.height / 2, slot.z);
+        dummy.rotation.set(0, slot.rotation, 0);
+        dummy.scale.set(slot.depth, slot.height, slot.width);
+        dummy.updateMatrix();
+        bodies.setMatrixAt(i, dummy.matrix);
 
-    slots.forEach((slot, i) => {
-      dummy.position.set(slot.x, slot.height / 2, slot.z);
-      dummy.rotation.set(0, slot.rotation, 0);
-      dummy.scale.set(slot.depth, slot.height, slot.width);
-      dummy.updateMatrix();
-      bodies.setMatrixAt(i, dummy.matrix);
-
-      dummy.position.set(slot.x, slot.height + 0.5, slot.z);
-      dummy.scale.set(slot.depth * 0.72, 1, slot.width * 0.72);
-      dummy.updateMatrix();
-      roofs.setMatrixAt(i, dummy.matrix);
-    });
-    bodies.instanceMatrix.needsUpdate = true;
-    roofs.instanceMatrix.needsUpdate = true;
-    bodies.castShadow = tier === 'high';
-    bodies.receiveShadow = true;
-    group.add(bodies, roofs);
+        dummy.position.set(slot.x, slot.height + 0.5, slot.z);
+        dummy.scale.set(slot.depth * 0.72, 1, slot.width * 0.72);
+        dummy.updateMatrix();
+        roofs.setMatrixAt(i, dummy.matrix);
+      });
+      bodies.instanceMatrix.needsUpdate = true;
+      roofs.instanceMatrix.needsUpdate = true;
+      bodies.castShadow = slotList === nearMid ? tier === 'high' : false;
+      bodies.receiveShadow = true;
+      group.add(bodies, roofs);
+    };
+    buildBatch(nearMid, facade, roof);
+    buildBatch(far, farFacade, farRoof);
   }
 
   return { build, clear, getGroup: () => group };
