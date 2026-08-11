@@ -220,3 +220,14 @@ python3 tools/eval_report.py \
 轨迹与真值轨迹才会是 `computed`；MPI 只有生产者同时提供数值 `mpi` 和
 `mpi_definition` 才会汇总，否则明确标记 `unavailable`，不会把闭环车道误差
 冒充开环预测指标。
+
+CI 或岗位演示需要把标准指标作为硬门禁时，显式追加：
+
+```bash
+python3 tools/eval_report.py \
+  --input /tmp/flow_regression \
+  --predictions /tmp/open_loop_predictions.json \
+  --require-open-loop --require-mpi
+```
+
+门禁要求对应指标状态为 `computed`；`unavailable` 或 `invalid` 都返回非零状态。

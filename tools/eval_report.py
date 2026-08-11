@@ -212,30 +212,58 @@ def build_report(payloads: list[dict], prediction_value: Any = None) -> dict:
     }
 
 
+def required_metric_failures(report: dict, *, require_open_loop: bool = False,
+                             require_mpi: bool = False) -> list[str]:
+    """Return hard-gate failures for consumers that require standard metrics."""
+    failures = []
+    if require_open_loop and report["open_loop"]["status"] != "computed":
+        failures.append(
+            f"open-loop ADE/FDE is {report['open_loop']['status']}, expected computed"
+        )
+    if require_mpi and report["mpi"]["status"] != "computed":
+        failures.append(f"MPI is {report['mpi']['status']}, expected computed")
+    return failures
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True,
                         help="one evaluator JSON or a results directory")
     parser.add_argument("--predictions", type=Path,
                         help="optional JSON with predictions and ground truth")
+    parser.add_argument("--require-open-loop", action="store_true",
+                        help="fail unless standard ADE/FDE can be computed")
+    parser.add_argument("--require-mpi", action="store_true",
+                        help="fail unless producer-defined MPI can be computed")
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args(argv)
     try:
         payloads = _result_payloads(args.input)
         predictions = _load_json(args.predictions) if args.predictions else None
         report = build_report(payloads, predictions)
+        gate_failures = required_metric_failures(
+            report,
+            require_open_loop=args.require_open_loop,
+            require_mpi=args.require_mpi,
+        )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     if args.as_json:
+        report["gate_failures"] = gate_failures
         print(json.dumps(report, indent=2, ensure_ascii=False))
     else:
         print(f"scenario pass rate: {report['scenario_pass_rate']}")
         print(f"open-loop ADE/FDE: {report['open_loop']['status']} "
               f"{report['open_loop']['ade_m']}/{report['open_loop']['fde_m']}")
         print(f"MPI: {report['mpi']['status']} {report['mpi']['mean']}")
-    return 0 if report["open_loop"]["status"] != "invalid" and \
-        report["mpi"]["status"] != "invalid" else 2
+        if gate_failures:
+            print("gate: FAIL")
+            for failure in gate_failures:
+                print(f"  - {failure}")
+    if report["open_loop"]["status"] == "invalid" or report["mpi"]["status"] == "invalid":
+        return 2
+    return 1 if gate_failures else 0
 
 
 if __name__ == "__main__":

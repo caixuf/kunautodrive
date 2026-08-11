@@ -1,6 +1,11 @@
 import unittest
 
-from tools.eval_report import build_report, compute_open_loop_metrics, trajectory_error
+from tools.eval_report import (
+    build_report,
+    compute_open_loop_metrics,
+    required_metric_failures,
+    trajectory_error,
+)
 
 
 class EvaluationReportTest(unittest.TestCase):
@@ -43,3 +48,28 @@ class EvaluationReportTest(unittest.TestCase):
         self.assertEqual(report["open_loop"]["status"], "unavailable")
         self.assertEqual(report["mpi"]["status"], "unavailable")
         self.assertIsNone(report["open_loop"]["ade_m"])
+
+    def test_required_metric_gate_rejects_unavailable_metrics(self):
+        report = build_report([{"scenario": "a", "result": "PASS", "metrics": {}}])
+        failures = required_metric_failures(
+            report, require_open_loop=True, require_mpi=True
+        )
+        self.assertEqual(len(failures), 2)
+
+    def test_required_metric_gate_accepts_computed_metrics(self):
+        report = build_report(
+            [{
+                "scenario": "a",
+                "result": "PASS",
+                "metrics": {"mpi": 0.2, "mpi_definition": "intervention_rate"},
+            }],
+            {
+                "predictions": [{
+                    "prediction": [[0, 0], [1, 0]],
+                    "ground_truth": [[0, 0], [1, 0]],
+                }],
+            },
+        )
+        self.assertEqual(required_metric_failures(
+            report, require_open_loop=True, require_mpi=True
+        ), [])
