@@ -61,14 +61,20 @@ def build_manifest():
     scenes = []
     for name, duration_s, enabled in ordered_scenario_files():
         raw = load_json(os.path.join(SCENARIOS_DIR, name))
-        scenes.append({
+        entry = {
             "file": "scenarios/" + name,
             "name": raw.get("name", name),
             "description": raw.get("description", ""),
             "duration_s": duration_s if duration_s is not None else raw.get("duration_s"),
             "enabled": bool(enabled),
             "raw": raw,
-        })
+        }
+        map_file = raw.get("map_file")
+        if map_file:
+            map_path = os.path.normpath(os.path.join(SCENARIOS_DIR, map_file))
+            if os.path.isfile(map_path):
+                entry["map"] = load_json(map_path)
+        scenes.append(entry)
     return {
         "generated_by": "tools/build_showcase.py",
         "count": len(scenes),

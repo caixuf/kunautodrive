@@ -52,6 +52,20 @@ function adaptRoadNetwork(rn) {
   return { edges };
 }
 
+function mapToRoadNetwork(map) {
+  if (!map || !Array.isArray(map.roads)) return { edges: [] };
+  return adaptRoadNetwork({
+    edges: map.roads.map((road) => ({
+      ...road,
+      nodes: road.centerline || road.nodes,
+      lanes: Array.isArray(road.lanes) ? road.lanes.length : road.lanes,
+      lane_width: Array.isArray(road.lanes) && road.lanes[0]
+        ? road.lanes[0].width : road.lane_width,
+      length: road.length_m,
+    })),
+  });
+}
+
 /** ego 定义 → scene.ego（速度归零，静态快照）。 */
 function adaptEgo(ego) {
   if (!ego) return { type: 'ego', id: 0, x: 0, y: 0, heading: 0, speed: 0 };
@@ -128,7 +142,7 @@ function adaptTrafficLight(t) {
  * @param {object} raw  scenarios/*.json 解析后的对象
  * @returns {{road_network, ego, entities, construction_zones, lighting, t_us}}
  */
-export function scenarioToScene(raw) {
+export function scenarioToScene(raw, staticMap) {
   raw = raw || {};
   const entities = [];
 
@@ -141,7 +155,9 @@ export function scenarioToScene(raw) {
   const scene = {
     t_us: 0,
     lighting: raw.lighting || 'day',
-    road_network: adaptRoadNetwork(raw.road_network),
+    road_network: raw.road_network
+      ? adaptRoadNetwork(raw.road_network)
+      : mapToRoadNetwork(staticMap),
     ego: adaptEgo(raw.ego),
     entities,
   };
@@ -163,6 +179,6 @@ export function scenarioToScene(raw) {
  * 包一层 topoData 结构（SceneDirector.update 期望 metrics.scene）。
  * @param {object} raw  scenarios/*.json 解析后的对象
  */
-export function scenarioToTopoData(raw) {
-  return { metrics: { scene: scenarioToScene(raw) } };
+export function scenarioToTopoData(raw, staticMap) {
+  return { metrics: { scene: scenarioToScene(raw, staticMap) } };
 }

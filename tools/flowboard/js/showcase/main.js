@@ -62,7 +62,7 @@ function selectScene(i) {
   }
 
   try {
-    update3D(scenarioToTopoData(s.raw));
+    update3D(scenarioToTopoData(s.raw, s.map));
     // 场景切换后把相机重置到新路网中心/ego。
     resetCamera();
     setMsg('');

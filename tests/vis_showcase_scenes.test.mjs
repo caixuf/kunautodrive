@@ -41,7 +41,12 @@ function listScenarioFiles() {
 
   for (const f of files) {
     const raw = JSON.parse(fs.readFileSync(path.join(SCEN_DIR, f), 'utf-8'));
-    const topo = scenarioToTopoData(raw);
+    let staticMap = null;
+    if (raw.map_file) {
+      staticMap = JSON.parse(fs.readFileSync(
+        path.resolve(SCEN_DIR, raw.map_file), 'utf-8'));
+    }
+    const topo = scenarioToTopoData(raw, staticMap);
 
     ViewRegistry.clear();
     const scene = globalThis.THREE.Scene();

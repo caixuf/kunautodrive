@@ -56,7 +56,7 @@ function onRouteChoiceChange() {
     : '可运行：' + (item ? item.scenario : '');
 }
 
-function runSelectedRoute() {
+async function runSelectedRoute() {
   var map = document.getElementById('map-choice');
   var route = document.getElementById('route-choice');
   var item = map && route && (MAP_ROUTES[map.value] || []).find(function (entry) {
@@ -66,9 +66,42 @@ function runSelectedRoute() {
     toast('该路线尚未通过闭环验证');
     return;
   }
-  var command = 'bash scripts/demo.sh --scenario ' + item.scenario + ' --route ' + item.id;
-  navigator.clipboard && navigator.clipboard.writeText(command);
-  toast('已复制运行命令：' + command);
+  try {
+    var response = await fetch(serverUrl + '/api/sim/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ route: item.id })
+    });
+    var result = await response.json();
+    if (!response.ok || !result.ok) {
+      toast(result.error || '仿真启动失败');
+      return;
+    }
+    toast('已启动路线：' + item.name + ' (PID ' + result.pid + ')');
+  } catch (error) {
+    toast('仿真启动接口离线');
+    reportDiag('sim-run', error);
+  }
+}
+
+async function previewSelectedRoute() {
+  var map = document.getElementById('map-choice');
+  var route = document.getElementById('route-choice');
+  if (!map || !route) return;
+  var modal = document.getElementById('map-preview-modal');
+  var frame = document.getElementById('map-preview-frame');
+  if (modal && frame) {
+    modal.style.display = 'block';
+    frame.src = '/tools/flowboard/map_preview.html?map=' +
+      encodeURIComponent(map.value) + '&route=' + encodeURIComponent(route.value);
+  }
+}
+
+function closeMapPreview() {
+  var modal = document.getElementById('map-preview-modal');
+  var frame = document.getElementById('map-preview-frame');
+  if (frame) frame.src = 'about:blank';
+  if (modal) modal.style.display = 'none';
 }
 
 function gameAngleDeg(rad) {
@@ -2459,6 +2492,8 @@ window.flowboard = {
   onMapChoiceChange: onMapChoiceChange,
   onRouteChoiceChange: onRouteChoiceChange,
   runSelectedRoute: runSelectedRoute,
+  previewSelectedRoute: previewSelectedRoute,
+  closeMapPreview: closeMapPreview,
   doPause: doPause,
   clearFrames: clearFrames,
   resetView: resetView,

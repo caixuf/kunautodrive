@@ -35,6 +35,9 @@
 #include <errno.h>
 #include <signal.h>
 #include <sys/wait.h>
+
+static pthread_mutex_t g_route_demo_mu = PTHREAD_MUTEX_INITIALIZER;
+static pid_t g_route_demo_pid = 0;
 #include <limits.h>
 
 #include "health.h"
@@ -833,6 +836,110 @@ static bool dispatch_request(int fd, MonitorServer* ms,
 
     /* POST: /api/training/start|promote → fork+exec modelctl.py */
     if (strcmp(method, "POST") == 0) {
+        /* POST /api/map/preview -> serve the authoritative map and routes
+         * to the official FlowBoard preview without duplicating geometry. */
+        if (strcmp(path, "/api/map/preview") == 0) {
+            char* body = read_post_body(fd, req, req_len, 1024);
+            cJSON* root = body ? cJSON_Parse(body) : NULL;
+            cJSON* map = root ? cJSON_GetObjectItemCaseSensitive(root, "map") : NULL;
+            const char* map_id = cJSON_IsString(map) ? map->valuestring : NULL;
+            bool allowed = map_id &&
+                (strcmp(map_id, "city_ring") == 0 || strcmp(map_id, "city_center") == 0);
+            if (!allowed) {
+                send_response(fd, "400 Bad Request", "application/json",
+                              "{\"ok\":false,\"error\":\"map is not allowlisted\"}");
+            } else {
+                size_t map_len = 0, routes_len = 0;
+                char map_path[PATH_MAX];
+                char routes_path[PATH_MAX];
+                snprintf(map_path, sizeof(map_path), "maps/%s/map.json", map_id);
+                snprintf(routes_path, sizeof(routes_path), "maps/%s/routes.json", map_id);
+                char* map_json = read_file(map_path, &map_len);
+                char* routes_json = read_file(routes_path, &routes_len);
+                if (!map_json || !routes_json) {
+                    free(map_json);
+                    free(routes_json);
+                    send_response(fd, "404 Not Found", "application/json",
+                                  "{\"ok\":false,\"error\":\"map data unavailable\"}");
+                } else {
+                    size_t total = map_len + routes_len + 32;
+                    char* response = (char*)malloc(total);
+                    if (!response) {
+                        free(map_json);
+                        free(routes_json);
+                        send_response(fd, "500 Internal Server Error", "application/json",
+                                      "{\"ok\":false,\"error\":\"out of memory\"}");
+                    } else {
+                        int n = snprintf(response, total, "{\"ok\":true,\"map\":%s,\"routes\":%s}",
+                                         map_json, routes_json);
+                        send_response_full(fd, "200 OK", "application/json", response,
+                                           false, "no-cache", true, accept_encoding);
+                        free(response);
+                        free(map_json);
+                        free(routes_json);
+                        (void)n;
+                    }
+                }
+            }
+            cJSON_Delete(root);
+            free(body);
+            close(fd);
+            return false;
+        }
+        /* POST /api/sim/run → start one allowlisted map route from FlowBoard. */
+        if (strcmp(path, "/api/sim/run") == 0) {
+            char* body = read_post_body(fd, req, req_len, 1024);
+            cJSON* root = body ? cJSON_Parse(body) : NULL;
+            cJSON* route = root ? cJSON_GetObjectItemCaseSensitive(root, "route") : NULL;
+            const char* route_id = cJSON_IsString(route) ? route->valuestring : NULL;
+            bool allowed = route_id &&
+                (strcmp(route_id, "main") == 0 ||
+                 strcmp(route_id, "on_ramp") == 0 ||
+                 strcmp(route_id, "off_ramp") == 0 ||
+                 strcmp(route_id, "viaduct") == 0);
+            if (!allowed) {
+                send_response(fd, "400 Bad Request", "application/json",
+                              "{\"ok\":false,\"error\":\"route is not allowlisted or validated\"}");
+            } else {
+                pthread_mutex_lock(&g_route_demo_mu);
+                if (g_route_demo_pid > 0) {
+                    if (waitpid(g_route_demo_pid, NULL, WNOHANG) > 0) g_route_demo_pid = 0;
+                }
+                if (g_route_demo_pid > 0) {
+                    pthread_mutex_unlock(&g_route_demo_mu);
+                    send_response(fd, "409 Conflict", "application/json",
+                                  "{\"ok\":false,\"error\":\"a route demo is already running\"}");
+                } else {
+                    char root_dir[512];
+                    if (!getcwd(root_dir, sizeof(root_dir))) root_dir[0] = '\0';
+                    pid_t pid = fork();
+                    if (pid == 0) {
+                        if (root_dir[0]) chdir(root_dir);
+                        execl("/bin/bash", "bash", "scripts/demo.sh", "60",
+                              "--scenario", "scenarios/city_ring_map.json",
+                              "--route", route_id, "--no-browser", (char*)NULL);
+                        _exit(127);
+                    }
+                    if (pid > 0) {
+                        g_route_demo_pid = pid;
+                        pthread_mutex_unlock(&g_route_demo_mu);
+                        char response[128];
+                        snprintf(response, sizeof(response),
+                                 "{\"ok\":true,\"pid\":%ld,\"route\":\"%s\"}",
+                                 (long)pid, route_id);
+                        send_response(fd, "200 OK", "application/json", response);
+                    } else {
+                        pthread_mutex_unlock(&g_route_demo_mu);
+                        send_response(fd, "500 Internal Server Error", "application/json",
+                                      "{\"ok\":false,\"error\":\"failed to start demo\"}");
+                    }
+                }
+            }
+            cJSON_Delete(root);
+            free(body);
+            close(fd);
+            return false;
+        }
         /* POST /api/game/control → 3D 游戏模式操控注入。
          * enabled=true 原子写控制帧并创建接管标志；enabled=false 删除标志，
          * flowsim 随即恢复 control_node 驱动。 */
