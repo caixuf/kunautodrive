@@ -1,13 +1,76 @@
 {
-  "schema_version": 1,
   "map_id": "city_ring",
   "routes": [
     {
-      "id": "mainline",
-      "description": "Validated ground road, curved boulevard, elevated entry, viaduct, exit and return road",
-      "roads": ["road_0", "road_1", "road_2", "road_3", "road_4", "road_5"],
-      "lane_policy": "preserve_current_legal_lane",
-      "validated": true
+      "id": "main",
+      "name": "主线（地面主路→上匝道→高架→下匝道→滨河返回路）",
+      "kind": "main",
+      "road_chain": [
+        "ground_signal_avenue",
+        "curved_commercial_boulevard",
+        "eastbound_viaduct_entry",
+        "elevated_ring_east",
+        "westbound_viaduct_exit",
+        "riverfront_return_road"
+      ],
+      "lane_direction": 1
+    },
+    {
+      "id": "on_ramp",
+      "name": "上匝道（商业大道→东行高架入口→高架东段）",
+      "kind": "on_ramp",
+      "road_chain": [
+        "curved_commercial_boulevard",
+        "eastbound_viaduct_entry",
+        "elevated_ring_east"
+      ],
+      "lane_direction": 1,
+      "draft": true
+    },
+    {
+      "id": "off_ramp",
+      "name": "下匝道（高架东段→西行高架出口→滨河返回路）",
+      "kind": "off_ramp",
+      "road_chain": [
+        "elevated_ring_east",
+        "westbound_viaduct_exit",
+        "riverfront_return_road"
+      ],
+      "lane_direction": 1,
+      "draft": true
+    },
+    {
+      "id": "viaduct",
+      "name": "高架（elevated_ring_east，全程 elevation=9m）",
+      "kind": "viaduct",
+      "road_chain": [
+        "elevated_ring_east"
+      ],
+      "lane_direction": 1,
+      "draft": true
+    }
+  ],
+  "reserved_turns": [
+    {
+      "from": "ground_signal_avenue",
+      "at_s": 210,
+      "direction": 1,
+      "junction": "junction_reserved_001",
+      "reserved": true
+    },
+    {
+      "from": "ground_signal_avenue",
+      "at_s": 390,
+      "direction": -1,
+      "junction": "junction_reserved_002",
+      "reserved": true
+    },
+    {
+      "from": "curved_commercial_boulevard",
+      "at_s": 720,
+      "direction": 1,
+      "junction": "junction_reserved_003",
+      "reserved": true
     }
   ]
 }
