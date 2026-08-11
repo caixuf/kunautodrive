@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
+#include <unistd.h>
 
 #define FLOWENGINE_VERSION "1.0.0"
 #define FLOWCTL_MAX_TOPICS 64
@@ -50,6 +51,7 @@ static void print_usage(void) {
     printf("  state <task>            Show task state machine\n");
     printf("  topic stats <topic>     Per-topic statistics\n");
     printf("  bag info <file>         Bag file metadata\n");
+    printf("  bag play <file>         Launch replay pipeline from a bag\n");
     printf("  schema <type>           Type information\n");
     printf("  param list              List live params from the running process\n");
     printf("  param get <name>        Read a param from the running process\n");
@@ -58,6 +60,13 @@ static void print_usage(void) {
     printf("  dashboard               Start real-time dashboard\n");
     printf("  version                 Show version\n");
     printf("  help                    This help\n");
+    printf("\n");
+    printf("Replay:\n");
+    printf("  flowctl bag play <file> [--config config/pipeline.json] [--multi]\n");
+    printf("                       [--rate 1.0] [--topic <topic>] [--start <sec>]\n");
+    printf("                       [--end <sec>] [--loop] [--duration <sec>]\n");
+    printf("  Note: attaching to an already-running pipeline is unsupported;\n");
+    printf("        launch replay through flow_launcher instead.\n");
 }
 
 static void print_version(void) {
@@ -434,6 +443,139 @@ static int cmd_bag_info(const char* path) {
     return 0;
 }
 
+static int parse_nonnegative_double_arg(const char* text, double* out) {
+    if (!text || !out) return ERR_INVALID_PARAM;
+    char* end = NULL;
+    double value = strtod(text, &end);
+    if (end == text || (end && *end != '\0') || value < 0.0) return ERR_INVALID_PARAM;
+    *out = value;
+    return ERR_OK;
+}
+
+static void resolve_sibling_executable(const char* argv0, const char* name,
+                                       char* out, size_t out_size) {
+    if (!out || out_size == 0) return;
+    if (!argv0 || !argv0[0]) {
+        snprintf(out, out_size, "%s", name);
+        return;
+    }
+    const char* slash = strrchr(argv0, '/');
+    if (!slash) {
+        snprintf(out, out_size, "%s", name);
+        return;
+    }
+    int dir_len = (int)(slash + 1 - argv0);
+    snprintf(out, out_size, "%.*s%s", dir_len, argv0, name);
+}
+
+static int cmd_bag_play(int argc, char** argv) {
+    if (argc < 4 || !argv[3]) {
+        fprintf(stderr, "Usage: flowctl bag play <file.bag> [--config <pipeline.json>] [--multi] [--rate <x>] [--topic <topic>] [--start <sec>] [--end <sec>] [--loop] [--duration <sec>]\n");
+        return 1;
+    }
+
+    const char* bag_path = argv[3];
+    const char* config_path = "config/pipeline.json";
+    const char* topic_filter = NULL;
+    const char* duration_arg = NULL;
+    double rate = 1.0;
+    double start_sec = 0.0;
+    double end_sec = 0.0;
+    int multi_mode = 0;
+    int loop = 0;
+
+    for (int i = 4; i < argc; i++) {
+        if (strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
+            config_path = argv[++i];
+        } else if (strcmp(argv[i], "--multi") == 0) {
+            multi_mode = 1;
+        } else if (strcmp(argv[i], "--rate") == 0 && i + 1 < argc) {
+            if (parse_nonnegative_double_arg(argv[++i], &rate) != ERR_OK) {
+                fprintf(stderr, "Error: invalid --rate '%s'\n", argv[i]);
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--topic") == 0 && i + 1 < argc) {
+            topic_filter = argv[++i];
+        } else if (strcmp(argv[i], "--start") == 0 && i + 1 < argc) {
+            if (parse_nonnegative_double_arg(argv[++i], &start_sec) != ERR_OK) {
+                fprintf(stderr, "Error: invalid --start '%s'\n", argv[i]);
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--end") == 0 && i + 1 < argc) {
+            if (parse_nonnegative_double_arg(argv[++i], &end_sec) != ERR_OK) {
+                fprintf(stderr, "Error: invalid --end '%s'\n", argv[i]);
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--loop") == 0) {
+            loop = 1;
+        } else if (strcmp(argv[i], "--duration") == 0 && i + 1 < argc) {
+            duration_arg = argv[++i];
+        } else if (strcmp(argv[i], "--attach") == 0 ||
+                   strcmp(argv[i], "--running") == 0) {
+            fprintf(stderr, "Error: attaching replay to an already-running pipeline is unsupported; launch via 'flowctl bag play <file> [--multi]'\n");
+            return 1;
+        } else {
+            fprintf(stderr, "Error: unknown replay option '%s'\n", argv[i]);
+            return 1;
+        }
+    }
+
+    if (end_sec > 0.0 && end_sec < start_sec) {
+        fprintf(stderr, "Error: --end must be >= --start\n");
+        return 1;
+    }
+
+    BagReader* reader = bag_reader_open(bag_path);
+    if (!reader) {
+        fprintf(stderr, "Error: cannot open '%s'\n", bag_path);
+        return 1;
+    }
+    bag_reader_close(reader);
+
+    char flow_launcher_path[512];
+    resolve_sibling_executable(argv[0], "flow_launcher",
+                               flow_launcher_path, sizeof(flow_launcher_path));
+
+    char rate_buf[32];
+    char start_buf[32];
+    char end_buf[32];
+    snprintf(rate_buf, sizeof(rate_buf), "%.12g", rate);
+    snprintf(start_buf, sizeof(start_buf), "%.12g", start_sec);
+    snprintf(end_buf, sizeof(end_buf), "%.12g", end_sec);
+
+    char* exec_argv[24];
+    int n = 0;
+    exec_argv[n++] = flow_launcher_path;
+    exec_argv[n++] = (char*)config_path;
+    if (multi_mode) exec_argv[n++] = "--multi";
+    if (duration_arg) { exec_argv[n++] = "--duration"; exec_argv[n++] = (char*)duration_arg; }
+    exec_argv[n++] = "--replay-bag";
+    exec_argv[n++] = (char*)bag_path;
+    exec_argv[n++] = "--replay-rate";
+    exec_argv[n++] = rate_buf;
+    if (topic_filter && topic_filter[0]) {
+        exec_argv[n++] = "--replay-topic";
+        exec_argv[n++] = (char*)topic_filter;
+    }
+    if (start_sec > 0.0) {
+        exec_argv[n++] = "--replay-start";
+        exec_argv[n++] = start_buf;
+    }
+    if (end_sec > 0.0) {
+        exec_argv[n++] = "--replay-end";
+        exec_argv[n++] = end_buf;
+    }
+    if (loop) exec_argv[n++] = "--replay-loop";
+    exec_argv[n] = NULL;
+
+    if (strchr(flow_launcher_path, '/'))
+        execv(flow_launcher_path, exec_argv);
+    else
+        execvp(flow_launcher_path, exec_argv);
+    perror("exec");
+    return 1;
+}
+
 /* ── schema ───────────────────────────────────────────────── */
 
 static int cmd_schema(const char* type_name) {
@@ -604,6 +746,7 @@ int main(int argc, char** argv) {
     if (strcmp(cmd, "bag") == 0) {
         if (!arg1) { print_usage(); return 1; }
         if (strcmp(arg1, "info") == 0 && arg2) return cmd_bag_info(arg2);
+        if (strcmp(arg1, "play") == 0) return cmd_bag_play(argc, argv);
         if (strcmp(arg1, "check") == 0 && arg2) {
             BagReader* r = bag_reader_open(arg2);
             if (!r) { printf("✗ Cannot open '%s'\n", arg2); return 1; }

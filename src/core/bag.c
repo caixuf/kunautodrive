@@ -23,6 +23,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <inttypes.h>
+#include <limits.h>
 
 /* ── 文件格式常量 ──────────────────────────────────────────── */
 
@@ -373,6 +374,10 @@ struct BagReader {
     bool    is_v2;               /* true = new format, false = legacy */
     uint64_t msg_count;          /* from header (v2) or computed (legacy) */
     uint64_t duration_us;        /* from header (v2) or computed (legacy) */
+    uint64_t first_ts_us;        /* cached: first record timestamp */
+    uint64_t last_ts_us;         /* cached: last record timestamp */
+    bool     time_bounds_valid;
+    uint64_t index_offset;       /* v2: first byte of index section; 0 if absent */
     /* Index (v2 only) */
     BagIndexEntry index[BAG_MAX_INDEX_ENTRIES];
     int      index_count;
@@ -407,6 +412,7 @@ BagReader* bag_reader_open(const char* path) {
         header_ok &= (fread(&r->msg_count, sizeof(r->msg_count), 1, fp) == 1);
         header_ok &= (fread(&r->duration_us, sizeof(r->duration_us), 1, fp) == 1);
         header_ok &= (fread(&index_offset, sizeof(index_offset),  1, fp) == 1);
+        r->index_offset = index_offset;
 
         if (!header_ok) {
             fclose(fp);
@@ -554,6 +560,11 @@ static int read_record_legacy(FILE* fp, uint64_t* ts_out, Message* msg_out) {
 }
 
 static int read_record(BagReader* r, uint64_t* ts_out, Message* msg_out) {
+    if (r && r->is_v2 && r->index_offset > r->data_start) {
+        long pos = ftell(r->fp);
+        if (pos >= 0 && (uint64_t)pos >= r->index_offset)
+            return 0;
+    }
     if (r->is_v2) return read_record_v2(r->fp, ts_out, msg_out);
     else          return read_record_legacy(r->fp, ts_out, msg_out);
 }
@@ -567,62 +578,202 @@ static void sleep_us(uint64_t us) {
     nanosleep(&ts, NULL);
 }
 
+static bool should_stop_replay(const BagReplayOptions* options) {
+    return options && options->should_stop &&
+           options->should_stop(options->should_stop_user_data);
+}
+
+static int sleep_interruptible_us(uint64_t us, const BagReplayOptions* options) {
+    while (us > 0) {
+        if (should_stop_replay(options)) return ERR_TIMEOUT;
+        uint64_t chunk = (us > 10000ULL) ? 10000ULL : us;
+        sleep_us(chunk);
+        us -= chunk;
+    }
+    return ERR_OK;
+}
+
+static bool topic_matches_filter(const char* topic, const char* topic_filter) {
+    if (!topic_filter || topic_filter[0] == '\0' || strcmp(topic_filter, "*") == 0)
+        return true;
+    return strcmp(topic, topic_filter) == 0;
+}
+
+static int deliver_replayed_message(const BagReplayOptions* options, const Message* msg) {
+    if (!options || !msg) return ERR_INVALID_PARAM;
+    if (options->publish_fn)
+        return options->publish_fn(msg, options->publish_user_data);
+    if (options->bus)
+        return message_bus_publish(options->bus, msg->topic, msg->sender,
+                                   message_bus_message_data(msg), msg->data_size);
+    printf("[bag_play] ts=%" PRIu64 " topic=%s size=%u type_id=0x%08x\n",
+           msg->timestamp_us, msg->topic, msg->data_size, msg->type_id);
+    return ERR_OK;
+}
+
+int bag_reader_get_time_bounds(BagReader* r, uint64_t* first_ts_us, uint64_t* last_ts_us) {
+    if (!r || !r->fp) return ERR_INVALID_PARAM;
+    if (r->time_bounds_valid) {
+        if (first_ts_us) *first_ts_us = r->first_ts_us;
+        if (last_ts_us)  *last_ts_us  = r->last_ts_us;
+        return ERR_OK;
+    }
+
+    if (r->is_v2 && r->msg_count == 0) {
+        r->first_ts_us = 0;
+        r->last_ts_us = 0;
+        r->time_bounds_valid = true;
+        if (first_ts_us) *first_ts_us = 0;
+        if (last_ts_us)  *last_ts_us = 0;
+        return ERR_OK;
+    }
+
+    long saved_pos = ftell(r->fp);
+    if (saved_pos < 0) saved_pos = (long)r->data_start;
+
+    if (r->is_v2) {
+        Message msg;
+        uint64_t ts = 0;
+        fseek(r->fp, (long)r->data_start, SEEK_SET);
+        int rc = read_record(r, &ts, &msg);
+        if (rc != 1) {
+            fseek(r->fp, saved_pos, SEEK_SET);
+            return ERR_IO;
+        }
+        r->first_ts_us = ts;
+        r->last_ts_us = ts + r->duration_us;
+    } else {
+        fseek(r->fp, (long)r->data_start, SEEK_SET);
+        Message msg;
+        uint64_t ts = 0;
+        bool first = true;
+        int rc = 0;
+        while ((rc = read_record(r, &ts, &msg)) == 1) {
+            if (first) {
+                r->first_ts_us = ts;
+                first = false;
+            }
+            r->last_ts_us = ts;
+        }
+        if (rc < 0) {
+            fseek(r->fp, saved_pos, SEEK_SET);
+            return rc;
+        }
+        if (first) {
+            r->first_ts_us = 0;
+            r->last_ts_us = 0;
+        }
+    }
+
+    r->time_bounds_valid = true;
+    fseek(r->fp, saved_pos, SEEK_SET);
+    if (first_ts_us) *first_ts_us = r->first_ts_us;
+    if (last_ts_us)  *last_ts_us  = r->last_ts_us;
+    return ERR_OK;
+}
+
+static int bag_reader_play_absolute_window(BagReader* r,
+                                           const BagReplayOptions* options,
+                                           uint64_t start_us,
+                                           uint64_t end_us,
+                                           uint64_t* played_count) {
+    if (!r || !r->fp || !options) return ERR_INVALID_PARAM;
+    if (options->speed < 0.0) return ERR_INVALID_PARAM;
+    if (end_us > 0 && end_us < start_us) return ERR_INVALID_PARAM;
+
+    uint64_t total = 0;
+    int rc = ERR_OK;
+
+    do {
+        if (should_stop_replay(options)) break;
+        fseek(r->fp, (long)r->data_start, SEEK_SET);
+
+        uint64_t prev_ts = 0;
+        bool first_emitted = true;
+        bool emitted_this_pass = false;
+        Message msg;
+        uint64_t ts = 0;
+
+        while (!should_stop_replay(options)) {
+            rc = read_record(r, &ts, &msg);
+            if (rc == 0) { rc = ERR_OK; break; }   /* EOF */
+            if (rc < 0)  goto done;
+
+            if (start_us > 0 && ts < start_us) continue;
+            if (end_us   > 0 && ts > end_us) {
+                rc = ERR_OK;
+                break;
+            }
+            if (!topic_matches_filter(msg.topic, options->topic_filter)) continue;
+
+            if (first_emitted) {
+                prev_ts = ts;
+                first_emitted = false;
+            } else if (options->speed > 0.0) {
+                uint64_t gap_us = ts - prev_ts;
+                uint64_t delay = (uint64_t)((double)gap_us / options->speed);
+                rc = sleep_interruptible_us(delay, options);
+                if (rc == ERR_TIMEOUT) { rc = ERR_OK; goto done; }
+                if (rc != ERR_OK) goto done;
+                prev_ts = ts;
+            }
+
+            if (options->drive_sim_clock || clock_is_sim_mode())
+                clock_set_sim_time(ts);
+
+            rc = deliver_replayed_message(options, &msg);
+            if (rc != ERR_OK) goto done;
+            total++;
+            emitted_this_pass = true;
+        }
+        if (!emitted_this_pass) break;
+    } while (options->loop && !should_stop_replay(options));
+
+done:
+    if (played_count) *played_count = total;
+    return rc;
+}
+
 /* ── Playback ──────────────────────────────────────────────── */
+
+int bag_reader_play_with_options(BagReader* r,
+                                 const BagReplayOptions* options,
+                                 uint64_t* played_count) {
+    if (!r || !options) return ERR_INVALID_PARAM;
+
+    uint64_t first_ts = 0;
+    int rc = bag_reader_get_time_bounds(r, &first_ts, NULL);
+    if (rc != ERR_OK) {
+        if (played_count) *played_count = 0;
+        return rc;
+    }
+
+    uint64_t start_us = 0;
+    uint64_t end_us = 0;
+    if (options->start_offset_us > 0) start_us = first_ts + options->start_offset_us;
+    if (options->end_offset_us > 0)   end_us   = first_ts + options->end_offset_us;
+    if (end_us > 0 && end_us < start_us) {
+        if (played_count) *played_count = 0;
+        return ERR_INVALID_PARAM;
+    }
+    return bag_reader_play_absolute_window(r, options, start_us, end_us, played_count);
+}
 
 int bag_reader_play_filtered(BagReader* r, MessageBus* bus, float speed,
                              const char* topic_filter,
                              uint64_t start_us, uint64_t end_us) {
-    if (!r || !r->fp) return ERR_INVALID_PARAM;
+    BagReplayOptions options;
+    memset(&options, 0, sizeof(options));
+    options.bus = bus;
+    options.speed = speed;
+    options.topic_filter = topic_filter;
+    options.drive_sim_clock = clock_is_sim_mode();
 
-    /* Seek to data start */
-    fseek(r->fp, (long)r->data_start, SEEK_SET);
-
-    uint64_t prev_ts    = 0;
-    uint64_t wall_start = 0;
-    int      count      = 0;
-    bool     first      = true;
-
-    Message msg;
-    uint64_t ts;
-
-    while (read_record(r, &ts, &msg) == 1) {
-        /* time range filter */
-        if (start_us > 0 && ts < start_us) continue;
-        if (end_us   > 0 && ts > end_us)   break;
-
-        /* topic filter */
-        if (topic_filter && strcmp(topic_filter, "*") != 0 &&
-            strcmp(topic_filter, "") != 0) {
-            if (strcmp(msg.topic, topic_filter) != 0) continue;
-        }
-
-        if (first) {
-            prev_ts    = ts;
-            wall_start = clock_now_us();
-            first      = false;
-        } else if (speed > 0.0f) {
-            uint64_t gap_us  = ts - prev_ts;
-            uint64_t delay   = (uint64_t)((double)gap_us / (double)speed);
-            if (delay > 0) sleep_us(delay);
-            prev_ts = ts;
-        }
-
-        /* Update sim clock for bag replay */
-        if (clock_is_sim_mode()) {
-            clock_set_sim_time(ts);
-        }
-
-        if (bus) {
-            message_bus_publish(bus, msg.topic, msg.sender, msg.data, msg.data_size);
-        } else {
-            printf("[bag_play] ts=%" PRIu64 " topic=%s size=%u type_id=0x%08x\n",
-                   ts, msg.topic, msg.data_size, msg.type_id);
-        }
-        count++;
-    }
-
-    (void)wall_start;
-    return count;
+    uint64_t played = 0;
+    int rc = bag_reader_play_absolute_window(r, &options, start_us, end_us, &played);
+    if (rc != ERR_OK) return rc;
+    if (played > (uint64_t)INT_MAX) return ERR_OVERFLOW;
+    return (int)played;
 }
 
 int bag_reader_play(BagReader* r, MessageBus* bus, float speed) {
@@ -660,6 +811,11 @@ int bag_reader_info(BagReader* r, uint64_t* msg_count, uint64_t* duration_us) {
 
     if (msg_count)   *msg_count   = count;
     if (duration_us) *duration_us = (last_ts > first_ts) ? (last_ts - first_ts) : 0;
+    r->msg_count = count;
+    r->duration_us = (last_ts > first_ts) ? (last_ts - first_ts) : 0;
+    r->first_ts_us = first ? 0 : first_ts;
+    r->last_ts_us = first ? 0 : last_ts;
+    r->time_bounds_valid = true;
 
     fseek(r->fp, 0, SEEK_SET);  /* back to start */
     return 0;

@@ -33,6 +33,7 @@
 #include <errno.h>
 #include <time.h>
 #include <dlfcn.h>
+#include <inttypes.h>
 
 #include "logger.h"
 #include "node_plugin.h"
@@ -47,6 +48,8 @@
 #include "crash_handler.h"
 #include "param_bridge.h"
 #include "param_registry.h"   /* param_count() — 启动日志报告已注册参数数 */
+#include "clock_service.h"
+#include "error_codes.h"
 
 /* ── 节点描述 ──────────────────────────────────────────────── */
 
@@ -67,6 +70,7 @@ typedef struct {
     NodePlugin* plugin;
     /* 多进程模式 */
     pid_t       pid;
+    bool        replay_disabled;
 } NodeDesc;
 
 static volatile int g_running = 1;
@@ -74,6 +78,29 @@ static NodeDesc g_nodes[MAX_NODES];
 static int      g_node_count = 0;
 
 static void sig_handler(int sig) { (void)sig; g_running = 0; }
+
+typedef struct {
+    const char* bag_path;
+    const char* topic_filter;
+    double      speed;
+    uint64_t    start_offset_us;
+    uint64_t    end_offset_us;
+    bool        loop;
+    bool        enabled;
+    char        selected_topics[64][64];
+    int         selected_topic_count;
+} ReplayConfig;
+
+typedef struct {
+    bool        use_ipc;
+    MessageBus* bus;
+    Transport*  transport;
+} ReplayPublishCtx;
+
+typedef struct {
+    bool     use_deadline;
+    uint64_t deadline_wall_us;
+} ReplayStopCtx;
 
 /* ── 加载配置 (统一使用 config_manager) ──────────────────────── */
 
@@ -133,17 +160,272 @@ static int parse_pipeline(const char* path, int* stagger_ms_out) {
     return g_node_count;
 }
 
+static bool replay_stop_requested(void* user_data) {
+    ReplayStopCtx* stop = (ReplayStopCtx*)user_data;
+    if (!g_running) return true;
+    if (stop && stop->use_deadline &&
+        clock_now_monotonic_wall_us() >= stop->deadline_wall_us)
+        return true;
+    return false;
+}
+
+static int replay_publish_cb(const Message* msg, void* user_data) {
+    ReplayPublishCtx* ctx = (ReplayPublishCtx*)user_data;
+    if (!ctx || !msg) return ERR_INVALID_PARAM;
+    if (ctx->use_ipc) {
+        return transport_publish(ctx->transport, msg->topic,
+                                 message_bus_message_data(msg), msg->data_size);
+    }
+    return message_bus_publish(ctx->bus, msg->topic, msg->sender,
+                               message_bus_message_data(msg), msg->data_size);
+}
+
+static bool topic_equals(const char* a, const char* b) {
+    return a && b && strcmp(a, b) == 0;
+}
+
+static bool replay_topic_selected(const ReplayConfig* replay, const char* topic) {
+    if (!replay || !replay->enabled) return false;
+    if (!topic) return false;
+    if (!replay->topic_filter || !replay->topic_filter[0] ||
+        strcmp(replay->topic_filter, "*") == 0)
+        return true;
+    return strcmp(replay->topic_filter, topic) == 0;
+}
+
+static int replay_consumer_count(const char* topic) {
+    int consumers = 0;
+    for (int i = 0; i < g_node_count; i++) {
+        if (g_nodes[i].replay_disabled) continue;
+        for (int j = 0; j < g_nodes[i].input_count; j++) {
+            if (topic_equals(g_nodes[i].inputs[j], topic))
+                consumers++;
+        }
+    }
+    return consumers;
+}
+
+static int prepare_replay_nodes(ReplayConfig* replay,
+                                char* error, size_t error_size) {
+    if (!replay || !replay->enabled) return ERR_OK;
+    if (!replay->bag_path) return ERR_INVALID_PARAM;
+    replay->selected_topic_count = 0;
+
+    BagReader* reader = bag_reader_open(replay->bag_path);
+    if (!reader) {
+        snprintf(error, error_size, "cannot open replay bag '%s'", replay->bag_path);
+        return ERR_IO;
+    }
+
+    char bag_topics[64][64];
+    int total_topics = bag_reader_get_topics(reader, bag_topics, 64, NULL);
+    bag_reader_close(reader);
+    if (total_topics < 0) {
+        snprintf(error, error_size, "cannot enumerate replay topics from '%s'",
+                 replay->bag_path);
+        return ERR_IO;
+    }
+
+    int selected = 0;
+    for (int i = 0; i < total_topics && selected < 64; i++) {
+        if (!replay_topic_selected(replay, bag_topics[i])) continue;
+        snprintf(replay->selected_topics[selected++], 64, "%s", bag_topics[i]);
+    }
+
+    replay->selected_topic_count = selected;
+    if (selected == 0) {
+        snprintf(error, error_size,
+                 "replay topic filter matched no bag topics%s%s",
+                 replay->topic_filter ? ": " : "",
+                 replay->topic_filter ? replay->topic_filter : "");
+        return ERR_NOT_FOUND;
+    }
+
+    for (int i = 0; i < g_node_count; i++) g_nodes[i].replay_disabled = false;
+
+    for (int i = 0; i < g_node_count; i++) {
+        NodeDesc* nd = &g_nodes[i];
+        int overlap = 0;
+        int blocking = 0;
+
+        for (int out = 0; out < nd->output_count; out++) {
+            bool supplied_by_bag = false;
+            for (int rt = 0; rt < selected; rt++) {
+                if (topic_equals(nd->outputs[out], replay->selected_topics[rt])) {
+                    supplied_by_bag = true;
+                    overlap++;
+                    break;
+                }
+            }
+            if (!supplied_by_bag && replay_consumer_count(nd->outputs[out]) > 0)
+                blocking++;
+        }
+
+        if (overlap == 0) continue;
+        if (blocking == 0) {
+            nd->replay_disabled = true;
+            LOG_INFO("launcher", "replay auto-skip node '%s' (bag supplies its live outputs)",
+                     nd->name);
+            continue;
+        }
+
+        char missing[256] = "";
+        for (int out = 0; out < nd->output_count; out++) {
+            bool supplied_by_bag = false;
+            for (int rt = 0; rt < selected; rt++) {
+                if (topic_equals(nd->outputs[out], replay->selected_topics[rt])) {
+                    supplied_by_bag = true;
+                    break;
+                }
+            }
+            if (!supplied_by_bag && replay_consumer_count(nd->outputs[out]) > 0) {
+                if (missing[0]) strncat(missing, ", ", sizeof(missing) - strlen(missing) - 1);
+                strncat(missing, nd->outputs[out], sizeof(missing) - strlen(missing) - 1);
+            }
+        }
+        snprintf(error, error_size,
+                 "replay topic(s) would duplicate live node '%s', but it also publishes required non-bag topic(s): %s",
+                 nd->name, missing[0] ? missing : "(unknown)");
+        return ERR_INVALID_PARAM;
+    }
+
+    return ERR_OK;
+}
+
+static int advertise_replay_topics(Transport* transport,
+                                   BagReader* reader,
+                                   char replay_topics[][64],
+                                   int replay_topic_count) {
+    if (!transport || !reader) return ERR_INVALID_PARAM;
+    for (int i = 0; i < replay_topic_count; i++) {
+        uint32_t type_id = 0;
+        uint8_t schema_ver = 0;
+        if (bag_reader_get_type_info(reader, replay_topics[i], &type_id, &schema_ver) != 0) {
+            type_id = 0;
+        }
+        (void)schema_ver;
+        int rc = transport_advertise(transport, replay_topics[i], type_id);
+        if (rc != ERR_OK) return rc;
+    }
+    return ERR_OK;
+}
+
+static int run_replay(ReplayConfig* replay,
+                      bool use_ipc,
+                      MessageBus* bus,
+                      Transport* transport,
+                      int duration) {
+    if (!replay || !replay->enabled || !replay->bag_path) return ERR_OK;
+
+    BagReader* reader = bag_reader_open(replay->bag_path);
+    if (!reader) {
+        LOG_WARN("launcher", "replay: cannot open bag '%s'", replay->bag_path);
+        return ERR_IO;
+    }
+
+    char error[512] = {0};
+    int rc = prepare_replay_nodes(replay, error, sizeof(error));
+    if (rc != ERR_OK) {
+        LOG_WARN("launcher", "replay setup failed: %s", error[0] ? error : err_str(rc));
+        bag_reader_close(reader);
+        return rc;
+    }
+
+    rc = advertise_replay_topics(transport, reader,
+                                 replay->selected_topics,
+                                 replay->selected_topic_count);
+    if (rc != ERR_OK) {
+        LOG_WARN("launcher", "replay advertise failed: %s", err_str(rc));
+        bag_reader_close(reader);
+        return rc;
+    }
+
+    ReplayPublishCtx publish_ctx = {
+        .use_ipc = use_ipc,
+        .bus = bus,
+        .transport = transport,
+    };
+    ReplayStopCtx stop_ctx = {
+        .use_deadline = duration > 0,
+        .deadline_wall_us = duration > 0
+            ? clock_now_monotonic_wall_us() + (uint64_t)duration * 1000000ULL
+            : 0,
+    };
+    BagReplayOptions options;
+    memset(&options, 0, sizeof(options));
+    options.bus = use_ipc ? NULL : bus;
+    options.publish_fn = replay_publish_cb;
+    options.publish_user_data = &publish_ctx;
+    options.speed = replay->speed;
+    options.topic_filter = replay->topic_filter;
+    options.start_offset_us = replay->start_offset_us;
+    options.end_offset_us = replay->end_offset_us;
+    options.loop = replay->loop;
+    options.drive_sim_clock = !use_ipc;
+    options.should_stop = replay_stop_requested;
+    options.should_stop_user_data = &stop_ctx;
+
+    if (!use_ipc) {
+        clock_set_sim_mode(true);
+    } else {
+        LOG_WARN("launcher", "replay over IPC keeps child processes on wall-clock time; sim clock remains local to injector");
+    }
+
+    LOG_INFO("launcher", "replay start: bag=%s rate=%.3fx topic=%s loop=%s mode=%s",
+             replay->bag_path, replay->speed,
+             replay->topic_filter && replay->topic_filter[0] ? replay->topic_filter : "*",
+             replay->loop ? "on" : "off",
+             use_ipc ? "ipc" : "local");
+
+    uint64_t played = 0;
+    rc = bag_reader_play_with_options(reader, &options, &played);
+    if (!use_ipc) clock_set_sim_mode(false);
+    bag_reader_close(reader);
+
+    if (rc == ERR_OK) {
+        LOG_INFO("launcher", "replay complete: %" PRIu64 " message(s)", played);
+        usleep(200000);
+    } else {
+        LOG_WARN("launcher", "replay stopped: %s after %" PRIu64 " message(s)",
+                 err_str(rc), played);
+    }
+    return rc;
+}
+
+static int parse_nonnegative_double(const char* text, double* out) {
+    if (!text || !out) return ERR_INVALID_PARAM;
+    char* end = NULL;
+    double value = strtod(text, &end);
+    if (end == text || (end && *end != '\0') || value < 0.0) return ERR_INVALID_PARAM;
+    *out = value;
+    return ERR_OK;
+}
+
+static int seconds_to_us(double seconds, uint64_t* out_us) {
+    if (!out_us || seconds < 0.0) return ERR_INVALID_PARAM;
+    double micros = seconds * 1000000.0;
+    if (micros > (double)UINT64_MAX) return ERR_OVERFLOW;
+    *out_us = (uint64_t)micros;
+    return ERR_OK;
+}
+
 /* ── dlopen 单进程模式 ─────────────────────────────────────── */
 
 static int run_dlopen_mode(int duration, int stagger_ms,
                            MessageBus* bus, Transport* transport,
-                           DiscoveryManager* discovery, Scheduler* scheduler) {
+                           DiscoveryManager* discovery, Scheduler* scheduler,
+                           ReplayConfig* replay) {
 
     LOG_INFO("launcher", "mode: dlopen (single-process)");
 
     /* 初始化所有节点插件 */
     for (int i = 0; i < g_node_count; i++) {
         NodeDesc* nd = &g_nodes[i];
+        if (nd->replay_disabled) {
+            LOG_INFO("launcher", "[%d/%d] skipped %-16s  (replay-supplied source)",
+                     i + 1, g_node_count, nd->name);
+            continue;
+        }
         if (!nd->library[0]) {
             LOG_WARN("launcher", "node %s: no library path, skipping", nd->name);
             continue;
@@ -240,6 +522,7 @@ static int run_dlopen_mode(int duration, int stagger_ms,
     /* 启动所有已初始化的节点（留微小间隔避免多节点广播同一 topic 时
      * 在微秒级内连续 publish 导致频率估算出现尖峰，如 node_info 的 52kHz） */
     for (int i = 0; i < g_node_count; i++) {
+        if (g_nodes[i].replay_disabled) continue;
         if (g_nodes[i].plugin) {
             g_nodes[i].plugin->start();
             LOG_INFO("launcher", "  started %s", g_nodes[i].name);
@@ -259,12 +542,17 @@ static int run_dlopen_mode(int duration, int stagger_ms,
     else
         LOG_WARN("launcher", "param bridge failed to start — remote tuning unavailable");
 
-    /* 等待运行时间或信号: duration ≤ 0 表示持续运行直到 Ctrl+C */
-    if (duration > 0) {
-        for (int t = 0; t < duration && g_running; t++) sleep(1);
+    if (replay && replay->enabled) {
+        int replay_rc = run_replay(replay, false, bus, transport, duration);
+        if (replay_rc != ERR_OK) g_running = 0;
     } else {
-        LOG_INFO("launcher", "running indefinitely — press Ctrl+C to stop");
-        while (g_running) sleep(1);
+        /* 等待运行时间或信号: duration ≤ 0 表示持续运行直到 Ctrl+C */
+        if (duration > 0) {
+            for (int t = 0; t < duration && g_running; t++) sleep(1);
+        } else {
+            LOG_INFO("launcher", "running indefinitely — press Ctrl+C to stop");
+            while (g_running) sleep(1);
+        }
     }
 
     /* 优雅停止 */
@@ -272,10 +560,12 @@ static int run_dlopen_mode(int duration, int stagger_ms,
     /* 先停参数服务：之后 registry 里的值不会再被外部改动，节点可以安心退出。 */
     param_bridge_server_stop(param_srv);
     for (int i = g_node_count - 1; i >= 0; i--) {
+        if (g_nodes[i].replay_disabled) continue;
         if (g_nodes[i].plugin) { g_nodes[i].plugin->stop(); }
     }
     sleep(1);  /* 给线程时间退出 */
     for (int i = g_node_count - 1; i >= 0; i--) {
+        if (g_nodes[i].replay_disabled) continue;
         if (g_nodes[i].plugin) {
             g_nodes[i].plugin->cleanup();
             LOG_INFO("launcher", "  stopped %s", g_nodes[i].name);
@@ -328,7 +618,10 @@ static pid_t launch_node_process(const NodeDesc* nd, const char* self_exe,
 }
 
 static int run_multi_process_mode(int duration, int stagger_ms,
-                                  const char* self_exe, const char* config_path) {
+                                  const char* self_exe, const char* config_path,
+                                  ReplayConfig* replay,
+                                  MessageBus* replay_bus,
+                                  Transport* replay_transport) {
 #if defined(_WIN32)
     (void)duration; (void)stagger_ms; (void)self_exe; (void)config_path;
     LOG_WARN("launcher", "--multi is not supported on native Windows; use single-process mode");
@@ -337,12 +630,23 @@ static int run_multi_process_mode(int duration, int stagger_ms,
     LOG_INFO("launcher", "mode: multi-process (fork+exec flow_node_host)");
     for (int i = 0; i < g_node_count && g_running; i++) {
         NodeDesc* nd = &g_nodes[i];
+        if (nd->replay_disabled) {
+            LOG_INFO("launcher", "[%d/%d] skipped %-16s  (replay-supplied source)",
+                     i + 1, g_node_count, nd->name);
+            continue;
+        }
         nd->pid = launch_node_process(nd, self_exe, config_path, duration);
         if (nd->pid > 0)
             LOG_INFO("launcher", "[%d/%d] started %-16s  pid=%d", i+1, g_node_count, nd->name, (int)nd->pid);
         usleep((unsigned)stagger_ms * 1000);
     }
     LOG_INFO("launcher", "all nodes started (%ds) — dashboard: http://localhost:8800", duration);
+    if (replay && replay->enabled && replay_bus && replay_transport && g_running) {
+        usleep(300000);  /* let subscriber hosts finish transport_subscribe() */
+        int replay_rc = run_replay(replay, true, replay_bus, replay_transport, duration);
+        if (replay_rc != ERR_OK) LOG_WARN("launcher", "multi-process replay exited with %s", err_str(replay_rc));
+        g_running = 0;
+    }
     while (g_running) {
         int status;
         pid_t done = waitpid(-1, &status, WNOHANG);
@@ -363,14 +667,55 @@ int main(int argc, char** argv) {
     fp_env_init();  /* FTZ/DAZ：防 denormal 进 JSON 触发 glibc strtod 断言 */
     const char* config_path = "config/pipeline.json";
     const char* bag_path    = NULL;
+    ReplayConfig replay = {
+        .speed = 1.0,
+    };
     int duration = 0;
     int multi_mode = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--duration") == 0 && i + 1 < argc) duration = atoi(argv[++i]);
         else if (strcmp(argv[i], "--bag") == 0 && i + 1 < argc) bag_path = argv[++i];
+        else if (strcmp(argv[i], "--replay-bag") == 0 && i + 1 < argc) {
+            replay.bag_path = argv[++i];
+            replay.enabled = true;
+        }
+        else if (strcmp(argv[i], "--replay-rate") == 0 && i + 1 < argc) {
+            if (parse_nonnegative_double(argv[++i], &replay.speed) != ERR_OK) {
+                fprintf(stderr, "invalid --replay-rate: %s\n", argv[i]);
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "--replay-topic") == 0 && i + 1 < argc) replay.topic_filter = argv[++i];
+        else if (strcmp(argv[i], "--replay-start") == 0 && i + 1 < argc) {
+            double seconds = 0.0;
+            if (parse_nonnegative_double(argv[++i], &seconds) != ERR_OK ||
+                seconds_to_us(seconds, &replay.start_offset_us) != ERR_OK) {
+                fprintf(stderr, "invalid --replay-start: %s\n", argv[i]);
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "--replay-end") == 0 && i + 1 < argc) {
+            double seconds = 0.0;
+            if (parse_nonnegative_double(argv[++i], &seconds) != ERR_OK ||
+                seconds_to_us(seconds, &replay.end_offset_us) != ERR_OK) {
+                fprintf(stderr, "invalid --replay-end: %s\n", argv[i]);
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "--replay-loop") == 0) replay.loop = true;
         else if (strcmp(argv[i], "--multi") == 0) multi_mode = 1;
         else if (argv[i][0] != '-') config_path = argv[i];
+    }
+
+    if (bag_path && replay.enabled) {
+        fprintf(stderr, "--bag recording and --replay-bag are mutually exclusive\n");
+        return 1;
+    }
+    if (replay.enabled && replay.end_offset_us > 0 &&
+        replay.end_offset_us < replay.start_offset_us) {
+        fprintf(stderr, "--replay-end must be >= --replay-start\n");
+        return 1;
     }
 
     /* 按模块名写独立日志文件：launcher → /tmp/flow_logs/launcher.log
@@ -410,6 +755,16 @@ int main(int argc, char** argv) {
         LOG_WARN("launcher", "no nodes found in %s", config_path);
         log_shutdown(); return 1;
     }
+    if (replay.enabled) {
+        char error[512] = {0};
+        int rc = prepare_replay_nodes(&replay, error, sizeof(error));
+        if (rc != ERR_OK) {
+            LOG_WARN("launcher", "replay setup failed: %s", error[0] ? error : err_str(rc));
+            log_shutdown();
+            return 1;
+        }
+        LOG_INFO("launcher", "replay prepared: %d bag topic(s) selected", replay.selected_topic_count);
+    }
 
     signal(SIGINT, sig_handler); signal(SIGTERM, sig_handler);
 
@@ -417,7 +772,41 @@ int main(int argc, char** argv) {
 #if !defined(_WIN32)
         signal(SIGCHLD, SIG_DFL);
 #endif
-        run_multi_process_mode(duration, stagger_ms, argv[0], config_path);
+        MessageBus* replay_bus = NULL;
+        Transport* replay_transport = NULL;
+        if (replay.enabled) {
+            replay_bus = message_bus_create("launcher_replay_ipc");
+            replay_transport = replay_bus ? transport_create(replay_bus, NULL, TRANSPORT_IPC) : NULL;
+            if (!replay_bus || !replay_transport || transport_start(replay_transport) != ERR_OK) {
+                LOG_WARN("launcher", "failed to initialize IPC replay injector");
+                if (replay_transport) transport_destroy(replay_transport);
+                if (replay_bus) message_bus_destroy(replay_bus);
+                log_shutdown();
+                return 1;
+            }
+            BagReader* replay_reader = bag_reader_open(replay.bag_path);
+            if (!replay_reader ||
+                advertise_replay_topics(replay_transport, replay_reader,
+                                        replay.selected_topics,
+                                        replay.selected_topic_count) != ERR_OK) {
+                LOG_WARN("launcher", "failed to pre-advertise replay IPC topics");
+                if (replay_reader) bag_reader_close(replay_reader);
+                transport_stop(replay_transport);
+                transport_destroy(replay_transport);
+                message_bus_destroy(replay_bus);
+                log_shutdown();
+                return 1;
+            }
+            bag_reader_close(replay_reader);
+        }
+
+        run_multi_process_mode(duration, stagger_ms, argv[0], config_path,
+                               &replay, replay_bus, replay_transport);
+        if (replay_transport) {
+            transport_stop(replay_transport);
+            transport_destroy(replay_transport);
+        }
+        if (replay_bus) message_bus_destroy(replay_bus);
     } else {
         /* dlopen 模式: 需要初始化基础设施 */
         adas_msgs_register_all();
@@ -506,7 +895,7 @@ int main(int argc, char** argv) {
         scheduler_set_choreo_bus(scheduler, bus);
         scheduler_start(scheduler);
 
-        run_dlopen_mode(duration, stagger_ms, bus, transport, discovery, scheduler);
+        run_dlopen_mode(duration, stagger_ms, bus, transport, discovery, scheduler, &replay);
 
         if (bag_writer) {
             bag_writer_close(bag_writer);

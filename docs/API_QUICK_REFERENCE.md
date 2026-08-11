@@ -220,6 +220,8 @@ BagReader* r = bag_reader_open("out.bag");
 bag_reader_info(r, &count, &duration);
 bag_reader_play(r, bus, 1.0f);
 bag_reader_get_topics(r, topics, 64, counts);
+BagReplayOptions opt = {.bus = bus, .topic_filter = "sensor/gps", .start_offset_us = 1000000};
+bag_reader_play_with_options(r, &opt, &played);
 bag_reader_close(r);
 ```
 
@@ -231,6 +233,9 @@ flowctl graph
 flowctl state <task>
 flowctl topic stats <topic>
 flowctl bag info|check <file>
+flowctl bag play <file> [--config config/pipeline.json] [--multi]
+                     [--rate 1.0] [--topic <topic>] [--start <sec>]
+                     [--end <sec>] [--loop] [--duration <sec>]
 flowctl schema <type>
 flowctl param list|get|set     # 打到运行中的 flow_launcher，set 下一帧生效
 flowctl registry

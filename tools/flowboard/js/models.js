@@ -46,6 +46,73 @@ const MODEL_SOURCES = {
   pedestrian: ['/tools/flowboard/models/pedestrian.gltf?v=' + MODEL_VERSION]
 };
 
+/* ── 静态城市模型（建筑等）────────────────────────────────────────
+ * 与车辆模型不同：城市 glTF 是静态装饰件，不做轮轴/车灯适配，也不需要
+ * clone() 时深拷贝材质给每辆车独立改色。按名字缓存一个原型，getCityModel
+ * 返回 clone 后的 Group 供 BuildingView 沿路摆放。
+ *
+ * 资产来源：Quaternius Downtown City MegaKit (CC0)，放置到
+ * tools/flowboard/models/city/。文件缺失时静默回退到程序化 Box 建筑
+ * （BuildingView 现有实现），保证无外网资产时行为不变。 */
+const CITY_MODEL_VERSION = '20260811city';
+const CITY_MODEL_SOURCES = {
+  city_a: ['/tools/flowboard/models/city/building_a.glb?v=' + CITY_MODEL_VERSION],
+  city_b: ['/tools/flowboard/models/city/building_b.glb?v=' + CITY_MODEL_VERSION],
+  city_c: ['/tools/flowboard/models/city/building_c.glb?v=' + CITY_MODEL_VERSION]
+};
+const _cityCache = {};
+let _cityReady = false;
+
+/**
+ * 预加载城市建筑 glTF。任一文件缺失只 warn，不阻断；对应缓存位保持 null，
+ * 供 BuildingView 回退到程序化几何。
+ */
+export function initCityModelCache() {
+  if (_cityReady) return Promise.resolve();
+  if (window._gltfLoaderUnavailable || !THREE || !THREE.GLTFLoader) {
+    _cityReady = true;
+    return Promise.resolve();
+  }
+  return new Promise(function(resolve) {
+    var loader = new THREE.GLTFLoader();
+    if (THREE.MeshoptDecoder && loader.setMeshoptDecoder) {
+      loader.setMeshoptDecoder(THREE.MeshoptDecoder);
+    }
+    var names = Object.keys(CITY_MODEL_SOURCES);
+    var pending = names.length;
+    function done(name, gltfOrNull) {
+      _cityCache[name] = gltfOrNull ? gltfOrNull.scene : null;
+      pending--;
+      if (pending <= 0) { _cityReady = true; resolve(); }
+    }
+    for (var i = 0; i < names.length; i++) {
+      (function(name) {
+        _cityCache[name] = null;
+        loader.load(
+          CITY_MODEL_SOURCES[name][0],
+          function(g) { done(name, g); },
+          undefined,
+          function(err) {
+            console.warn('[models] city model "' + name + '" unavailable (' +
+              (err && err.message ? err.message : err) + ') — BuildingView falls back to programmatic boxes');
+            done(name, null);
+          }
+        );
+      })(names[i]);
+    }
+  });
+}
+
+/**
+ * 取一个城市建筑模型的克隆实例（供沿路摆放）。
+ * @param {string} name  'city_a' | 'city_b' | 'city_c'
+ * @returns {THREE.Group|null}  模型缺失返回 null，调用方回退程序化几何
+ */
+export function getCityModel(name) {
+  var proto = _cityCache[name];
+  return proto ? proto.clone() : null;
+}
+
 /**
  * The source model has one mesh per axle (each mesh contains its left/right
  * wheel). Wrapping the mesh preserves its glTF transform and gives steering
@@ -83,39 +150,177 @@ function _adaptSu7WheelNodes(group) {
 
 /**
  * The authorized SU7 asset uses real light meshes instead of the generated
- * semantic names. Reuse those meshes for headlights and brake lights; the
- * procedural overlay remains responsible only for side-specific indicators.
+ * semantic names. Reuse those meshes for headlights and brake lights, while
+ * splitting their authored triangles into left/right material groups. The
+ * source asset combines both sides into one mesh, so material-side grouping is
+ * the only way to keep the signal on the actual lamp geometry without adding
+ * floating overlays.
  */
+function _splitSu7LampGeometry(mesh) {
+  if (!mesh || !mesh.geometry || !mesh.geometry.getAttribute ||
+      !mesh.geometry.index || !mesh.geometry.index.array) return;
+  if (mesh.userData && mesh.userData.su7LampSideSplit) return;
+
+  var geometry = mesh.geometry;
+  var position = geometry.getAttribute('position');
+  var sourceIndex = geometry.index;
+  if (!position || !sourceIndex || sourceIndex.count < 3) return;
+
+  var sourceMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  var materialCount = sourceMaterials.length || 1;
+  var groups = geometry.groups && geometry.groups.length
+    ? geometry.groups
+    : [{ start: 0, count: sourceIndex.count, materialIndex: 0 }];
+  var sideIndices = [[], []];
+  for (var side = 0; side < 2; side++) {
+    sideIndices[side] = [];
+    for (var materialIndex = 0; materialIndex < materialCount; materialIndex++) {
+      sideIndices[side].push([]);
+    }
+  }
+
+  var indices = sourceIndex.array;
+  for (var gi = 0; gi < groups.length; gi++) {
+    var group = groups[gi];
+    var materialIndex = Math.max(0, Math.min(
+      materialCount - 1, group.materialIndex || 0
+    ));
+    var end = Math.min(sourceIndex.count, group.start + group.count);
+    for (var offset = group.start; offset + 2 < end; offset += 3) {
+      var ia = indices[offset];
+      var ib = indices[offset + 1];
+      var ic = indices[offset + 2];
+      var centroidZ = (
+        position.getZ(ia) + position.getZ(ib) + position.getZ(ic)
+      ) / 3;
+      var side = centroidZ < 0 ? 0 : 1;  // THREE: -Z left, +Z right.
+      sideIndices[side][materialIndex].push(ia, ib, ic);
+    }
+  }
+
+  var leftCount = sideIndices[0].reduce(function(total, list) {
+    return total + list.length;
+  }, 0);
+  var rightCount = sideIndices[1].reduce(function(total, list) {
+    return total + list.length;
+  }, 0);
+  if (!leftCount || !rightCount) return;
+
+  var reordered = [];
+  var outputGroups = [];
+  var outputOffset = 0;
+  for (var outputSide = 0; outputSide < 2; outputSide++) {
+    for (var outputMaterial = 0; outputMaterial < materialCount; outputMaterial++) {
+      var sideList = sideIndices[outputSide][outputMaterial];
+      if (!sideList.length) continue;
+      reordered.push.apply(reordered, sideList);
+      outputGroups.push({
+        start: outputOffset,
+        count: sideList.length,
+        materialIndex: outputSide * materialCount + outputMaterial,
+      });
+      outputOffset += sideList.length;
+    }
+  }
+
+  var IndexArray = sourceIndex.array.constructor;
+  geometry.setIndex(new THREE.BufferAttribute(new IndexArray(reordered), 1));
+  geometry.clearGroups();
+  for (var og = 0; og < outputGroups.length; og++) {
+    var outputGroup = outputGroups[og];
+    geometry.addGroup(
+      outputGroup.start,
+      outputGroup.count,
+      outputGroup.materialIndex
+    );
+  }
+
+  var leftMaterials = [];
+  var rightMaterials = [];
+  for (var mi = 0; mi < materialCount; mi++) {
+    var sourceMaterial = sourceMaterials[mi];
+    leftMaterials.push(sourceMaterial && sourceMaterial.clone
+      ? sourceMaterial.clone() : sourceMaterial);
+    rightMaterials.push(sourceMaterial && sourceMaterial.clone
+      ? sourceMaterial.clone() : sourceMaterial);
+  }
+  mesh.material = leftMaterials.concat(rightMaterials);
+  if (!mesh.userData) mesh.userData = {};
+  mesh.userData.su7LampSideSplit = true;
+  mesh.userData.su7LampMaterialCount = materialCount;
+}
+
+function _lampMaterialsBySide(mesh) {
+  if (!mesh || !mesh.userData || !mesh.userData.su7LampSideSplit) return null;
+  var materials = Array.isArray(mesh.material) ? mesh.material : [];
+  var materialCount = mesh.userData.su7LampMaterialCount || (materials.length / 2);
+  if (!materialCount || materials.length < materialCount * 2) return null;
+  return {
+    left: materials.slice(0, materialCount),
+    right: materials.slice(materialCount, materialCount * 2),
+  };
+}
+
+function _isSu7EmissiveMaterial(material) {
+  if (!material) return false;
+  var materialName = (material.name || '').toLowerCase();
+  return materialName.indexOf('car_ight') >= 0 ||
+    (!materialName && material.emissive);
+}
+
+function _normalizeSu7NodeName(name) {
+  return String(name || '').toLowerCase().replace(/[._\-\s]/g, '');
+}
+
+function _hasSu7Ancestor(mesh, names) {
+  var parent = mesh && mesh.parent;
+  while (parent) {
+    if (names.indexOf(_normalizeSu7NodeName(parent.name)) >= 0) return true;
+    parent = parent.parent;
+  }
+  return false;
+}
+
 function _adaptSu7LightNodes(group) {
   var front = [], rear = [];
   function prepare(mesh, kind) {
     if (!mesh.userData) mesh.userData = {};
+    _splitSu7LampGeometry(mesh);
     mesh.userData.su7LightKind = kind;
+    var emissiveMaterials = [];
     var materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     materials.forEach(function(material) {
       if (!material) return;
+      if (_isSu7EmissiveMaterial(material)) emissiveMaterials.push(material);
       // The source lens normals are not guaranteed to face every camera angle.
       // Double-sided, non-tonemapped emission keeps the real lens visible
       // without replacing its geometry or emissive texture.
       if (THREE.DoubleSide !== undefined) material.side = THREE.DoubleSide;
       if (material.toneMapped !== undefined) material.toneMapped = false;
     });
+    mesh.userData.su7LampMaterials = emissiveMaterials;
+    mesh.userData.su7LampSideMaterials = _lampMaterialsBySide(mesh);
   }
   group.traverse(function(c) {
     if (!c.isMesh) return;
-    if (c.name === 'Light' ||
-        c.name === 'Light.002' || c.name === 'Light002' ||
-        c.name === 'LightGlass.004' || c.name === 'LightGlass004') {
+    var normalizedName = _normalizeSu7NodeName(c.name);
+    var isFront = ['light', 'light002', 'lightglass004'].indexOf(normalizedName) >= 0 ||
+      _hasSu7Ancestor(c, ['light', 'lightglass004']);
+    var isRear = ['light003', 'lightglass'].indexOf(normalizedName) >= 0 ||
+      _hasSu7Ancestor(c, ['light003', 'lightglass']);
+    if (isFront) {
       front.push(c);
       prepare(c, 'head');
-    } else if (c.name === 'Light.003' || c.name === 'Light003' || c.name === 'LightGlass') {
+    } else if (isRear) {
       rear.push(c);
       prepare(c, 'brake');
     }
   });
   if (front.length) group.userData.headlights = front;
   if (rear.length) group.userData.brakeLights = rear;
-  group.userData.su7RawLights = front.length > 0 && rear.length > 0;
+  group.userData.su7RawLights = front.length > 0 && rear.length > 0
+    ? { front: front, rear: rear }
+    : null;
 }
 
 function _setLightMeshMaterial(mesh, intensity, colorHex) {
@@ -137,6 +342,53 @@ function _setLightMeshMaterial(mesh, intensity, colorHex) {
 function _setLightMeshMaterials(meshes, intensity, colorHex) {
   for (var i = 0; i < meshes.length; i++) {
     _setLightMeshMaterial(meshes[i], intensity, colorHex);
+  }
+}
+
+function _setSu7LightMeshMaterials(meshes, intensity, colorHex) {
+  for (var i = 0; i < meshes.length; i++) {
+    var mesh = meshes[i];
+    var materials = mesh && mesh.userData && mesh.userData.su7LampMaterials;
+    if (!materials || !materials.length) continue;
+    for (var j = 0; j < materials.length; j++) {
+      var material = materials[j];
+      if (material.emissive) material.emissive.setHex(colorHex);
+      if (material.emissiveIntensity !== undefined) {
+        material.emissiveIntensity = intensity;
+      }
+      if (material.toneMapped !== undefined) material.toneMapped = false;
+      if (THREE.DoubleSide !== undefined && material.side !== undefined) {
+        material.side = THREE.DoubleSide;
+      }
+    }
+  }
+}
+
+function _setSu7LightMeshSideMaterials(meshes, side, intensity, colorHex) {
+  for (var i = 0; i < meshes.length; i++) {
+    var mesh = meshes[i];
+    var sideMaterials = mesh && mesh.userData && mesh.userData.su7LampSideMaterials;
+    var materials = sideMaterials && sideMaterials[side];
+    if (!materials || !materials.length) {
+      // Keep unsupported/legacy glTF variants functional. Only a mesh that
+      // was not split may use the whole authored lens as the fallback.
+      if (!mesh || !mesh.userData || !mesh.userData.su7LampSideSplit) {
+        _setSu7LightMeshMaterials([mesh], intensity, colorHex);
+      }
+      continue;
+    }
+    for (var j = 0; j < materials.length; j++) {
+      var material = materials[j];
+      if (!_isSu7EmissiveMaterial(material)) continue;
+      if (material.emissive) material.emissive.setHex(colorHex);
+      if (material.emissiveIntensity !== undefined) {
+        material.emissiveIntensity = intensity;
+      }
+      if (material.toneMapped !== undefined) material.toneMapped = false;
+      if (THREE.DoubleSide !== undefined && material.side !== undefined) {
+        material.side = THREE.DoubleSide;
+      }
+    }
   }
 }
 
@@ -460,28 +712,47 @@ export function _setVehicleLights(group, state, blinkPhase) {
   if (!group || !group.userData) return;
   var ud = group.userData;
   var blinkOn = (blinkPhase !== undefined) ? (Math.sin(blinkPhase * Math.PI * 2 * 1.5) > 0) : true;
-  // Keep the source lens and texture, but make the state change unambiguous
-  // against the bright outdoor HDRI and the renderer's ACES exposure.
-  if (ud.brakeLights) {
-    var bi = state.brake ? 6.0 : 0.08;
-    _setLightMeshMaterials(ud.brakeLights, bi, 0xff211c);
-  }
-  // 转向灯：亮闪 6.0（更醒目），灭 0.05
-  if (ud.turnSignals) {
-    var ts = ud.turnSignals;
-    var setSide = function(on, keys) {
-      var intensity = on ? (blinkOn ? 6.0 : 0.05) : 0.05;
-      for (var k = 0; k < keys.length; k++) {
-        if (ts[keys[k]]) _setLightMeshMaterial(ts[keys[k]], intensity, 0xff8a18);
-      }
-    };
-    setSide(state.turnL, ['FL', 'RL']);
-    setSide(state.turnR, ['FR', 'RR']);
-  }
-  // 大灯：亮 8.0（补足白天 HDRI 下的视觉占比），灭 0.05
-  if (ud.headlights && state.head !== undefined) {
-    var hi = state.head ? 8.0 : 0.05;
-    _setLightMeshMaterials(ud.headlights, hi, 0xfff4cf);
+  /* The authorized SU7 has combined front/rear lamp meshes, not four
+   * semantic turn-signal nodes. The mesh is grouped by its authored local Z
+   * coordinate, so a turn signal changes only the corresponding real lamp
+   * geometry instead of painting a floating rectangular overlay. */
+  if (ud.su7RawLights) {
+    var frontIntensity = state.head ? 8.0 : 0.05;
+    var rearIntensity = state.brake ? 6.0 : 0.05;
+    _setSu7LightMeshMaterials(ud.su7RawLights.front, frontIntensity, 0xfff4cf);
+    _setSu7LightMeshMaterials(ud.su7RawLights.rear, rearIntensity, 0xff211c);
+    if (blinkOn && state.turnL) {
+      _setSu7LightMeshSideMaterials(ud.su7RawLights.front, 'left', 10.0, 0xffa21a);
+      _setSu7LightMeshSideMaterials(ud.su7RawLights.rear, 'left', 10.0, 0xffa21a);
+    }
+    if (blinkOn && state.turnR) {
+      _setSu7LightMeshSideMaterials(ud.su7RawLights.front, 'right', 10.0, 0xffa21a);
+      _setSu7LightMeshSideMaterials(ud.su7RawLights.rear, 'right', 10.0, 0xffa21a);
+    }
+  } else {
+    // Keep the source lens and texture, but make the state change unambiguous
+    // against the bright outdoor HDRI and the renderer's ACES exposure.
+    if (ud.brakeLights) {
+      var bi = state.brake ? 6.0 : 0.08;
+      _setLightMeshMaterials(ud.brakeLights, bi, 0xff211c);
+    }
+    // 转向灯：亮闪 6.0（更醒目），灭 0.05
+    if (ud.turnSignals) {
+      var ts = ud.turnSignals;
+      var setSide = function(on, keys) {
+        var intensity = on ? (blinkOn ? 6.0 : 0.05) : 0.05;
+        for (var k = 0; k < keys.length; k++) {
+          if (ts[keys[k]]) _setLightMeshMaterial(ts[keys[k]], intensity, 0xff8a18);
+        }
+      };
+      setSide(state.turnL, ['FL', 'RL']);
+      setSide(state.turnR, ['FR', 'RR']);
+    }
+    // 大灯：亮 8.0（补足白天 HDRI 下的视觉占比），灭 0.05
+    if (ud.headlights && state.head !== undefined) {
+      var hi = state.head ? 8.0 : 0.05;
+      _setLightMeshMaterials(ud.headlights, hi, 0xfff4cf);
+    }
   }
   // 自动驾驶小蓝灯（ads_indicator）：车尾左右各一，量产 ADS 标志。
   // 常亮 + 高 emissive（穿透性蓝光），不受 brake/turn 状态影响。

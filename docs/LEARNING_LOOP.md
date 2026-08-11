@@ -255,7 +255,7 @@ python3 tools/learning_loop.py --eval-only <name_or_dir> --eval-duration 30 --pr
 
 打开 `http://localhost:8800` 后：
 
-1. `🛠 Ops Console` → `Bag 文件` + `回灌 Bag`：直接触发 `flow_bag --replay`
+1. `🛠 Ops Console` → `Bag 文件` + `回灌 Bag`：直接触发 `flowctl bag play <file>`
 2. `🛠 Ops Console` → `Eval 模型名` + `跑 Eval-Only`：触发 `learning_loop.py --eval-only`
 3. `🛠 Ops Console` → `跑完整学习闭环`：触发 `learning_loop.py --collect ... --backend ...`
 

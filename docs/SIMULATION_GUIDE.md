@@ -28,7 +28,7 @@ Layer 3: CARLA (可选外部后端, 适配边界已就绪)
 # (KunAutoDrive 自动通过 bag_writer_attach 录制)
 
 # 3. 回放 + 校验
-./build/bin/flow_launcher config/pipeline.json --replay scenario.bag
+./build/bin/flowctl bag play recordings/scenario.bag --config config/pipeline.json
 ```
 
 ## Layer 2: 2D 模拟器
@@ -87,8 +87,11 @@ grep "timeout\|miss" scenario.log   # 超时/丢帧
 bash scripts/demo.sh
 
 # 2. Bag 回放 (需要预先录制的 bag)
-./build/bin/flow_launcher config/pipeline.json --duration 10          # 先录制
-./build/bin/flow_launcher config/pipeline.json --replay /tmp/test.bag  # 再回放
+./build/bin/flow_launcher config/pipeline.json --bag recordings/test.bag --duration 10
+./build/bin/flowctl bag play recordings/test.bag --config config/pipeline.json
+
+# 多进程链路验证（launcher 父进程通过 IPC 注入 replay）
+./build/bin/flowctl bag play recordings/test.bag --config config/pipeline.json --multi
 
 # 3. 接入算法测试
 ./build/bin/flow_launcher config/pipeline.json

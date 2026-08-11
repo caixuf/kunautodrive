@@ -299,7 +299,14 @@ export function _steeringVisualState(steer) {
   return {
     frontAxleYaw: filteredSteer,
     steeringWheelRoll: filteredSteer * STEERING_WHEEL_RATIO,
+    steeringWheelAxis: 'x',
   };
+}
+
+/** 方向盘网格不能进入车轮滚动分支，否则会随车速持续“自转”。 */
+export function _isSteeringWheelNode(name) {
+  const normalized = String(name || '').toLowerCase().replace(/[-\s]/g, '_');
+  return normalized === 'steering_wheel' || normalized === 'steeringwheel';
 }
 
 /* glTF 模型（sedan/suv/truck/su7）均无 "steering"/"steer"/"handle" 命名节点，
@@ -309,15 +316,13 @@ export function _steeringVisualState(steer) {
 function _createSteeringWheel() {
   const pos = new THREE.Group();
   pos.name = 'steering_system';
-  pos.position.set(0.5, 1.0, 0.4);
+  // SU7 is left-hand drive: the shared vehicle frame maps the driver's side
+  // to -Z (THREE left), not the passenger side at +Z.
+  pos.position.set(0.5, 1.0, -0.4);
 
-  const yaw = new THREE.Group();
-  yaw.name = 'steering_axis';
-  yaw.rotation.y = -Math.PI / 2;  // column: +Z → -X
-
-  const tilt = new THREE.Group();
-  tilt.name = 'steering_column';
-  tilt.rotation.x = 0.45;  // column 顶部向后上方 25°
+  const axis = new THREE.Group();
+  axis.name = 'steering_axis';
+  axis.rotation.z = -0.10;  // column points from dashboard toward the driver
 
   const columnGeo = new THREE.CylinderGeometry(0.022, 0.028, 0.34, 8);
   const columnMat = new THREE.MeshStandardMaterial({
@@ -325,21 +330,22 @@ function _createSteeringWheel() {
   });
   const column = new THREE.Mesh(columnGeo, columnMat);
   column.name = 'steering_column_shaft';
-  column.rotation.x = Math.PI / 2;  // cylinder axis Y → local steering axis Z
-  column.position.z = -0.15;
-  tilt.add(column);
+  column.rotation.z = Math.PI / 2;  // cylinder axis Y → local steering axis X
+  column.position.x = -0.15;
+  axis.add(column);
 
   const wheelPivot = new THREE.Group();
   wheelPivot.name = 'steering_wheel_pivot';
-  wheelPivot.position.z = -0.30;
+  wheelPivot.position.x = -0.30;
 
-  // 方向盘圆环（TorusGeometry：XY 平面，法线沿 Z）
+  // 方向盘圆环：旋转到 YZ 平面，法线沿车辆 X 轴。
   const torusGeo = new THREE.TorusGeometry(0.16, 0.018, 8, 24);
   const torusMat = new THREE.MeshStandardMaterial({
     color: 0x111111, roughness: 0.45, metalness: 0.7,  // exempt: steering wheel rim (non-body metal)
   });
   const torus = new THREE.Mesh(torusGeo, torusMat);
   torus.name = 'steering_wheel';  // 让 _updateGltfVehicle 的 traverse 选中
+  torus.rotation.y = Math.PI / 2;
   torus.castShadow = false;       // 方向盘不投影，避免车内饰阴影噪音
 
   // 中心 hub（child of torus，跟随旋转）
@@ -348,7 +354,7 @@ function _createSteeringWheel() {
     color: 0x222222, roughness: 0.4, metalness: 0.8,  // exempt: steering wheel hub (non-body metal)
   });
   const hub = new THREE.Mesh(hubGeo, hubMat);
-  hub.rotation.x = Math.PI / 2;  // 圆柱轴 Y → Z (沿 column)
+  hub.rotation.z = Math.PI / 2;  // 圆柱轴 Y → X (沿 column)
   torus.add(hub);
 
   // 3 条辐条（child of torus，跟随旋转；各 120° 间隔）
@@ -358,14 +364,13 @@ function _createSteeringWheel() {
   });
   for (let i = 0; i < 3; i++) {
     const spoke = new THREE.Mesh(spokeGeo, spokeMat);
-    spoke.rotation.z = (i * 120) * Math.PI / 180;
+    spoke.rotation.x = (i * 120) * Math.PI / 180;
     torus.add(spoke);
   }
 
   wheelPivot.add(torus);
-  tilt.add(wheelPivot);
-  yaw.add(tilt);
-  pos.add(yaw);
+  axis.add(wheelPivot);
+  pos.add(axis);
   return pos;
 }
 
@@ -532,7 +537,7 @@ export function createVehicleView(scene, renderer, modelCache) {
     if (steeringWheelPivot) {
       // A real local pivot is used instead of rotating the torus mesh itself;
       // the shaft, hub and spokes therefore share one physical steering axis.
-      steeringWheelPivot.rotation.z = steering.steeringWheelRoll;
+      steeringWheelPivot.rotation.x = steering.steeringWheelRoll;
     }
 
     vis.traverse((child) => {
@@ -551,7 +556,8 @@ export function createVehicleView(scene, renderer, modelCache) {
       if (!child.isMesh) return;
 
       // 车轮旋转：程序化模型沿 X，glTF 车轮沿 Z。
-      if (name.includes('wheel') || name.includes('tire') || name.includes('tyre')) {
+      if (!_isSteeringWheelNode(child.name) &&
+          (name.includes('wheel') || name.includes('tire') || name.includes('tyre'))) {
         if (speed_mps !== undefined) {
           const radius = 0.35;
           const angularSpeed = speed_mps / radius;
@@ -592,11 +598,12 @@ export function createVehicleView(scene, renderer, modelCache) {
       entry.group = _createGltfVehicle(gltf, id, type);
       vehicleGroup.add(entry.group);
 
-      // SU7 原始 Light/LightGlass 节点复用真实材质；只为没有语义节点的
-      // 侧向转向灯补四角 overlay，避免把车灯整套替换成悬空灯片。
+      // SU7 原始 Light/LightGlass 节点复用真实材质；仅在没有真实灯节点
+      // 的 fallback 模型上创建灯光网格，避免悬浮方块覆盖精细车身。
       const ud = entry.group.userData || {};
       const hasCompleteSemanticLights = ud.brakeLights && ud.turnSignals && ud.headlights;
-      entry.lights = hasCompleteSemanticLights ? null : createVehicleLights(entry.group, {
+      const hasRawSu7Lights = !!ud.su7RawLights;
+      entry.lights = hasCompleteSemanticLights || hasRawSu7Lights ? null : createVehicleLights(entry.group, {
         brake: !ud.brakeLights,
         turn: !ud.turnSignals,
         head: !ud.headlights,

@@ -979,6 +979,15 @@ target_link_libraries(test_flowrec flowengine_core)
 add_test(NAME flowrec_tests COMMAND test_flowrec)
 set_tests_properties(flowrec_tests PROPERTIES TIMEOUT 15)
 
+# ── Bag replay 回放/CLI/IPC 边界单元测试 ───────────────────
+add_executable(test_bag_replay tests/test_bag_replay.c)
+target_link_libraries(test_bag_replay flowengine_core scheduler_cpp)
+target_compile_definitions(test_bag_replay PRIVATE
+    FLOWCTL_TEST_BIN="${CMAKE_BINARY_DIR}/bin/flowctl")
+
+add_test(NAME bag_replay_tests COMMAND test_bag_replay)
+set_tests_properties(bag_replay_tests PROPERTIES TIMEOUT 20)
+
 # ── 传输/可视化桥接栈单元测试（transport / stats_bridge / dashboard_bridge）──
 add_executable(test_bridges tests/test_bridges.c)
 target_link_libraries(test_bridges flowengine_core scheduler_cpp)

@@ -51,15 +51,23 @@ const rearMaterial = {
 };
 const rawFrontMesh = { name: 'Light', isMesh: true, material: frontMaterial };
 const rawRearMesh = { name: 'Light.003', isMesh: true, material: rearMaterial };
+const sanitizedFrontNode = { name: 'Light', parent: null };
+const sanitizedFrontMesh = {
+  name: 'Object_14003',
+  isMesh: true,
+  material: frontMaterial,
+  parent: sanitizedFrontNode,
+};
 const rawLightScene = {
   userData: { modelType: 'su7' },
   traverse(visitor) {
-    [rawFrontMesh, rawRearMesh].forEach(visitor);
+    [rawFrontMesh, sanitizedFrontMesh, rawRearMesh].forEach(visitor);
   },
 };
 _relinkWheelUserData(rawLightScene);
 ok('SU7 真实灯材质接入 headlight/brakelight 契约',
   rawLightScene.userData.headlights.includes(rawFrontMesh) &&
+  rawLightScene.userData.headlights.includes(sanitizedFrontMesh) &&
   rawLightScene.userData.brakeLights.includes(rawRearMesh));
 _setVehicleLights(rawLightScene, { brake: true, head: true }, 0);
 ok('SU7 真实灯材质亮度和可见性增强',
@@ -67,6 +75,13 @@ ok('SU7 真实灯材质亮度和可见性增强',
   rearMaterial.emissiveIntensity === 6 &&
   frontMaterial.toneMapped === false &&
   rearMaterial.toneMapped === false);
+_setVehicleLights(rawLightScene, { brake: false, head: false, turnL: true }, 0.1);
+ok('SU7 转向灯直接复用真实灯罩而非悬浮方块',
+  rawLightScene.userData.su7RawLights &&
+  frontMaterial.emissiveIntensity === 10 &&
+  rearMaterial.emissiveIntensity === 10 &&
+  frontMaterial.emissive.value === 0xffa21a &&
+  rearMaterial.emissive.value === 0xffa21a);
 ok('SU7 clean exterior 节点存在', ['ChePai', 'Logo', 'Logo.001'].every(name =>
   (model.nodes || []).some(node => node.name === name)));
 ok('SU7 外部 bin/WebP 资源完整', referencedFiles.length > 0 &&

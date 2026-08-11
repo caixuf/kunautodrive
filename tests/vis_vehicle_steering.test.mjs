@@ -4,7 +4,10 @@
  * 后端约定 steer > 0 为左转，前轴和方向盘必须保持同向显示。
  */
 
-import { _steeringVisualState } from '../tools/flowboard/js/vis/view/VehicleView.js';
+import {
+  _isSteeringWheelNode,
+  _steeringVisualState,
+} from '../tools/flowboard/js/vis/view/VehicleView.js';
 import { ok, done } from './test-utils.mjs';
 
 const left = _steeringVisualState(0.2);
@@ -19,5 +22,11 @@ ok('小于死区的输入不抖动车轮', straight.frontAxleYaw === 0 &&
   straight.steeringWheelRoll === 0);
 ok('方向盘显示倍率为 7:1',
   Math.abs(left.steeringWheelRoll - left.frontAxleYaw * 7) < 1e-12);
+ok('方向盘绕车辆前后轴旋转而非绕轮面法线翻转',
+  left.steeringWheelAxis === 'x');
+ok('方向盘不会被车轮滚动逻辑误识别',
+  _isSteeringWheelNode('steering_wheel') &&
+  _isSteeringWheelNode('steering-wheel') &&
+  !_isSteeringWheelNode('Wheel.001'));
 
 done();
