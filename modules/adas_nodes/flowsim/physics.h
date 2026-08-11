@@ -25,7 +25,7 @@ namespace flowsim {
  * @param dt     时间步长 (s)
  * @param throttle 油门 [0,1]
  * @param brake    刹车 [0,1]
- * @param steer    方向盘转角 (rad)，正值右转
+ * @param steer    方向盘转角 (rad)，正值左转（ENU heading/y 增大）
  *
  * 调用方负责设置 throttle/brake/steer（ego 从 control/cmd，NPC 从 AI）。
  * 本函数只做物理积分，不做决策。

@@ -86,6 +86,41 @@ function updateGameHud() {
   }
 }
 
+function updateGameLightButtons() {
+  var states = {
+    'game-light-low': gameLights.lowBeam,
+    'game-light-left': gameLights.turnSignal === 1,
+    'game-light-right': gameLights.turnSignal === 2,
+    'game-light-hazard': gameLights.hazard
+  };
+  Object.keys(states).forEach(function(id) {
+    var button = document.getElementById(id);
+    if (!button) return;
+    button.classList.toggle('active', states[id]);
+    button.setAttribute('aria-pressed', states[id] ? 'true' : 'false');
+  });
+}
+
+function toggleGameLight(kind) {
+  if (!gameMode) return;
+  if (kind === 'low') {
+    gameLights.lowBeam = !gameLights.lowBeam;
+  } else if (kind === 'left') {
+    gameLights.turnSignal = gameLights.turnSignal === 1 ? 0 : 1;
+    gameLights.hazard = false;
+  } else if (kind === 'right') {
+    gameLights.turnSignal = gameLights.turnSignal === 2 ? 0 : 2;
+    gameLights.hazard = false;
+  } else if (kind === 'hazard') {
+    gameLights.hazard = !gameLights.hazard;
+    if (gameLights.hazard) gameLights.turnSignal = 0;
+  } else {
+    return;
+  }
+  updateGameLightButtons();
+  queueGameControl();
+}
+
 function startGameControlLoop() {
   if (gameSendTimer) clearInterval(gameSendTimer);
   updateGameControl();
@@ -148,7 +183,10 @@ async function postGameControl(enabled) {
       enabled: enabled,
       throttle: enabled ? gameControl.throttle : 0,
       brake: enabled ? gameControl.brake : 1,
-      steer: enabled ? gameControl.steer : 0
+      steer: enabled ? gameControl.steer : 0,
+      turn_signal: enabled ? gameLights.turnSignal : 0,
+      hazard: enabled ? gameLights.hazard : false,
+      low_beam: enabled ? gameLights.lowBeam : false
     })
   });
   if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -158,6 +196,8 @@ async function rescueGameVehicle() {
   if (!gameMode) return;
   gameKeys = {};
   gameControl = { throttle: 0, brake: 0, steer: 0 };
+  gameLights = { lowBeam: false, turnSignal: 0, hazard: false };
+  updateGameLightButtons();
   try {
     var r = await fetch(serverUrl + '/api/game/rescue', { method: 'POST' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -184,6 +224,8 @@ async function toggleGameMode() {
     gameRequestQueued = false;
   }
   gameControl = { throttle: 0, brake: 0, steer: 0 };
+  gameLights = { lowBeam: false, turnSignal: 0, hazard: false };
+  updateGameLightButtons();
   try {
     if (!next) await waitForGameControlIdle();
     await postGameControl(next);
@@ -260,6 +302,7 @@ var lastNodeNames = '';
 var gameMode = false;
 var gameKeys = {};
 var gameControl = { throttle: 0, brake: 0, steer: 0 };
+var gameLights = { lowBeam: false, turnSignal: 0, hazard: false };
 var gameSendTimer = null;
 var gameTogglePending = false;
 var gameRequestInFlight = false;
@@ -2262,6 +2305,13 @@ document.addEventListener('keydown', function(ev) {
 
   const key = ev.key.toLowerCase();
 
+  if (gameMode && (key === 'l' || key === 'q' || key === 'e' || key === 'h')) {
+    toggleGameLight(key === 'l' ? 'low'
+      : (key === 'q' ? 'left' : (key === 'e' ? 'right' : 'hazard')));
+    ev.preventDefault();
+    return;
+  }
+
   // 1-6 切换视角
   if (key in _CAMERA_SHORTCUTS) {
     ev.preventDefault();
@@ -2377,6 +2427,7 @@ window.flowboard = {
   toggleMinimap: toggleMinimap,
   toggleGameMode: toggleGameMode,
   rescueGameVehicle: rescueGameVehicle,
+  toggleGameLight: toggleGameLight,
   // C.2: NPC detail panel
   closeNPCDetail: closeNPCDetail,
   // export
@@ -2448,6 +2499,8 @@ document.addEventListener('visibilitychange', function() {
   if (gameMode && document.hidden) {
     gameKeys = {};
     gameControl = { throttle: 0, brake: 0, steer: 0 };
+    gameLights = { lowBeam: false, turnSignal: 0, hazard: false };
+    updateGameLightButtons();
     queueGameControl();
   }
 });
@@ -2455,6 +2508,8 @@ window.addEventListener('blur', function() {
   if (gameMode) {
     gameKeys = {};
     gameControl = { throttle: 0, brake: 0, steer: 0 };
+    gameLights = { lowBeam: false, turnSignal: 0, hazard: false };
+    updateGameLightButtons();
     queueGameControl();
   }
 });

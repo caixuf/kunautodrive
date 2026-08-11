@@ -135,6 +135,10 @@ body[data-workspace="operate"] .ws-perf{display:none!important}
 .game-hud-grid b{color:#fff;text-align:right}
 #game-alert{margin-top:9px;padding:5px 8px;border-radius:6px;background:#0d3320;color:#3fb950;text-align:center;font-size:11px;font-weight:800}
 #game-alert.warn{background:#4d1a1a;color:#ff7b72;animation:alertPulse .8s infinite}
+.game-lights{display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-top:9px;padding-top:8px;border-top:1px solid #30363d;pointer-events:auto}
+.game-lights>span{width:100%;font-size:9px;color:#8b949e;letter-spacing:.06em}
+.game-lights button{padding:4px 7px;font-size:10px;color:#8b949e}
+.game-lights button.active{background:#1f6feb;color:#fff;border-color:#58a6ff;box-shadow:0 0 8px #1f6feb88}
 .game-keys{display:grid;grid-template-columns:1fr 1fr;gap:3px 8px;margin-top:9px;padding-top:8px;border-top:1px solid #30363d;color:#8b949e;font-size:9px}
 /* ── 小地图 HUD ── */
 #minimap-pip{position:absolute;top:10px;right:10px;width:220px;height:160px;z-index:20;border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.10);box-shadow:0 4px 16px rgba(0,0,0,0.55);pointer-events:none}

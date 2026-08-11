@@ -120,16 +120,15 @@ static void test_bicycle_turn() {
     e.heading = 0;
     e.x = 0; e.y = 0;
 
-    // 恒定右转 0.1 rad，2 秒
+    // 恒定左转 0.1 rad，2 秒
     double dt = 0.05;
     for (int i = 0; i < 40; ++i) {
         step_bicycle(e, dt, 0.0, 0.0, 0.1);
     }
     std::printf("  after 2s turn: x=%.2f y=%.2f heading=%.4f\n",
                 e.x, e.y, e.heading);
-    CHECK(e.heading > 0.05, "turned right (heading > 0)");
-    // 右转 → y 应该减小（heading 正 → cos(heading) ≈ 1, sin(heading) > 0）
-    // 但自行模型中正 steer 让 heading 增加 → y 增加
+    CHECK(e.heading > 0.05, "turned left (heading > 0)");
+    // 左转 → y 增大（heading 正 → cos(heading) ≈ 1, sin(heading) > 0）
     CHECK(e.y > 0.5, "lateral displacement > 0.5m");
 }
 
@@ -169,7 +168,7 @@ static void test_dynamic_turn() {
     double yaw_ss = e.yaw_rate;  // 4.0s
     std::printf("  steady: v=%.2f yaw_rate=%.4f (3s=%.4f) heading=%.3f y=%.2f\n",
                 e.speed, yaw_ss, yaw_prev, e.heading, e.y);
-    // 正 steer → 正 yaw_rate → heading/y 增大（与运动学符号一致）
+    // 正 steer → 正 yaw_rate → heading/y 增大（左转，与运动学符号一致）
     CHECK(yaw_ss > 0.05, "positive steer -> positive yaw_rate");
     CHECK(e.heading > 0.1 && e.y > 0.5, "vehicle turned toward +y");
     // 收敛：末秒 yaw_rate 变化很小（未发散、未极限环）

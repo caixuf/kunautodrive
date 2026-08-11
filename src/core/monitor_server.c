@@ -866,12 +866,21 @@ static bool dispatch_request(int fd, MonitorServer* ms,
                 cJSON* throttle = cJSON_GetObjectItemCaseSensitive(root, "throttle");
                 cJSON* brake = cJSON_GetObjectItemCaseSensitive(root, "brake");
                 cJSON* steer = cJSON_GetObjectItemCaseSensitive(root, "steer");
+                cJSON* turn_signal = cJSON_GetObjectItemCaseSensitive(root, "turn_signal");
+                cJSON* hazard = cJSON_GetObjectItemCaseSensitive(root, "hazard");
+                cJSON* low_beam = cJSON_GetObjectItemCaseSensitive(root, "low_beam");
                 bool valid_control = cJSON_IsNumber(throttle) &&
                     throttle->valuedouble >= 0.0 && throttle->valuedouble <= 1.0 &&
                     cJSON_IsNumber(brake) &&
                     brake->valuedouble >= 0.0 && brake->valuedouble <= 1.0 &&
                     cJSON_IsNumber(steer) &&
-                    steer->valuedouble >= -0.6 && steer->valuedouble <= 0.6;
+                    steer->valuedouble >= -0.6 && steer->valuedouble <= 0.6 &&
+                    (!turn_signal || (cJSON_IsNumber(turn_signal) &&
+                                      (turn_signal->valuedouble == 0.0 ||
+                                       turn_signal->valuedouble == 1.0 ||
+                                       turn_signal->valuedouble == 2.0))) &&
+                    (!hazard || cJSON_IsBool(hazard)) &&
+                    (!low_beam || cJSON_IsBool(low_beam));
                 if (!valid_control) {
                     send_response(fd, "400 Bad Request", "application/json",
                                   "{\"ok\":false,\"error\":\"invalid control\"}");
@@ -880,6 +889,12 @@ static bool dispatch_request(int fd, MonitorServer* ms,
                     cJSON_AddNumberToObject(normalized, "throttle", throttle->valuedouble);
                     cJSON_AddNumberToObject(normalized, "brake", brake->valuedouble);
                     cJSON_AddNumberToObject(normalized, "steer", steer->valuedouble);
+                    cJSON_AddNumberToObject(normalized, "turn_signal",
+                                            turn_signal ? turn_signal->valuedouble : 0.0);
+                    cJSON_AddBoolToObject(normalized, "hazard",
+                                          hazard && cJSON_IsTrue(hazard));
+                    cJSON_AddBoolToObject(normalized, "low_beam",
+                                          low_beam && cJSON_IsTrue(low_beam));
                     cJSON_AddNumberToObject(normalized, "wall_us",
                                             (double)clock_now_monotonic_wall_us());
                     char* json = cJSON_PrintUnformatted(normalized);

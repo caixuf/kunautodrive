@@ -32,8 +32,8 @@ public:
     /**
      * 更新 ego 车灯。在 step_bicycle 之后调用。
      * 规则（spec §5.3）：
-     *   - steer > 0.1  → 右转向灯
-     *   - steer < -0.1 → 左转向灯
+     *   - steer > 0.1  → 左转向灯（ENU heading/y 增大）
+     *   - steer < -0.1 → 右转向灯
      *   - brake > 0.1  → 刹车灯（由 VehicleView 直接读 brake 字段，不占 lights 位）
      *   - speed < 0.5 且倒车 → 倒车灯
      *   - sim_time 在夜间（18:00-06:00）→ 近光灯

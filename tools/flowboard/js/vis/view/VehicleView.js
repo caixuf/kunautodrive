@@ -289,18 +289,49 @@ export function _cleanSu7Exterior(scene) {
 // 方向盘程序化注入
 // ═══════════════════════════════════════════════════════════
 
+const STEERING_DEADZONE = 0.005;
+const STEERING_WHEEL_RATIO = 7;
+
+/** 将后端前轮转角映射到前轴和方向盘的显示轴。 */
+export function _steeringVisualState(steer) {
+  const numericSteer = Number.isFinite(steer) ? steer : 0;
+  const filteredSteer = Math.abs(numericSteer) < STEERING_DEADZONE ? 0 : numericSteer;
+  return {
+    frontAxleYaw: filteredSteer,
+    steeringWheelRoll: filteredSteer * STEERING_WHEEL_RATIO,
+  };
+}
+
 /* glTF 模型（sedan/suv/truck/su7）均无 "steering"/"steer"/"handle" 命名节点，
- * 因此程序化注入一个名为 "steering_wheel" 的 torus mesh。
- * 旋转方向：steer > 0 = 右转，THREE rotation.z 正向逆时针，故取 -10 倍。 */
+ * 因此程序化注入一个带 steering_column / steering_axis / steering_wheel_pivot
+ * 的真实转向组件。仿真约定 steer>0 会让 ENU heading/y 增大（左转），
+ * steer<0 是右转；前轴和方向盘都沿这个约定显示。 */
 function _createSteeringWheel() {
   const pos = new THREE.Group();
+  pos.name = 'steering_system';
   pos.position.set(0.5, 1.0, 0.4);
 
   const yaw = new THREE.Group();
+  yaw.name = 'steering_axis';
   yaw.rotation.y = -Math.PI / 2;  // column: +Z → -X
 
   const tilt = new THREE.Group();
+  tilt.name = 'steering_column';
   tilt.rotation.x = 0.45;  // column 顶部向后上方 25°
+
+  const columnGeo = new THREE.CylinderGeometry(0.022, 0.028, 0.34, 8);
+  const columnMat = new THREE.MeshStandardMaterial({
+    color: 0x222228, roughness: 0.5, metalness: 0.65, // exempt: steering column
+  });
+  const column = new THREE.Mesh(columnGeo, columnMat);
+  column.name = 'steering_column_shaft';
+  column.rotation.x = Math.PI / 2;  // cylinder axis Y → local steering axis Z
+  column.position.z = -0.15;
+  tilt.add(column);
+
+  const wheelPivot = new THREE.Group();
+  wheelPivot.name = 'steering_wheel_pivot';
+  wheelPivot.position.z = -0.30;
 
   // 方向盘圆环（TorusGeometry：XY 平面，法线沿 Z）
   const torusGeo = new THREE.TorusGeometry(0.16, 0.018, 8, 24);
@@ -331,7 +362,8 @@ function _createSteeringWheel() {
     torus.add(spoke);
   }
 
-  tilt.add(torus);
+  wheelPivot.add(torus);
+  tilt.add(wheelPivot);
   yaw.add(tilt);
   pos.add(yaw);
   return pos;
@@ -479,29 +511,39 @@ export function createVehicleView(scene, renderer, modelCache) {
       : 0;
 
     // 前轴转向：glTF 模型 axle_front（含 wheel_FL/wheel_FR）整体绕 Y 旋转。
-    // steer > 0 = 右转，THREE rotation.y 正向 = 逆时针，故取负。
+    // 仿真 steer>0 会让 ENU y/heading 增大，即左转；THREE +Y 也把 +X
+    // 车头转向 -Z（左侧），所以不再额外取反。steer<0 正确显示右转。
     // 1:1 映射（2026-08 修复）：后端 step_bicycle 的 steer 就是前轮转角 δ，
     // 直接显示 —— 变道 0.05-0.1 rad ≈ 3-6°（可见），掉头满舵 0.45-0.60 rad
     // ≈ 26-34°（真实前轮最大转角）。旧乘子 0.6 把前轮角又缩小 40%，
     // 变道时前轮只转 2-3.5° 肉眼不可见 → "前轮不会动"。
     // 死区滤波：|steer| < 0.005 时视为 0，避免直路巡航时方向盘和车轮微动。
-    const rawSteer = (entry && entry.steerAngle) || 0;
-    const steerFiltered = (Math.abs(rawSteer) < 0.005) ? 0 : rawSteer;
+    const steering = _steeringVisualState(entry && entry.steerAngle);
     if (vis.userData && vis.userData.frontAxle) {
-      vis.userData.frontAxle.rotation.y = -steerFiltered;
+      vis.userData.frontAxle.rotation.y = steering.frontAxleYaw;
+    }
+
+    let steeringWheelPivot = null;
+    vis.traverse((child) => {
+      if (!steeringWheelPivot && child.name === 'steering_wheel_pivot') {
+        steeringWheelPivot = child;
+      }
+    });
+    if (steeringWheelPivot) {
+      // A real local pivot is used instead of rotating the torus mesh itself;
+      // the shaft, hub and spokes therefore share one physical steering axis.
+      steeringWheelPivot.rotation.z = steering.steeringWheelRoll;
     }
 
     vis.traverse((child) => {
       const name = (child.name || '').toLowerCase();
 
-      // 方向盘优先处理（允许非 Mesh 的 Group，但 _createSteeringWheel 里的 torus
-      // 是 Mesh 且 name 含 'steering'，所以 isMesh 早退仍能命中）。
-      // 乘子 10（不是原 0.02）：让 0.1 rad 的 steer 视觉上转 ~57°，max 0.25 → ~143°，
-      // 肉眼可见。负号：THREE.js rotation.z 正向是逆时针，驾驶员视角下右转（steer>0）
-      // 应顺时针，所以取反符合直觉。
-      if ((name.includes('steering') || name.includes('steer') || name.includes('handle')) &&
-          steerFiltered !== undefined) {
-        child.rotation.z = steerFiltered * -10;
+      // 兼容外部 glTF 的旧 steering_wheel 节点；本项目注入的 SU7 组件
+      // 已经由 steering_wheel_pivot 处理，避免 torus 被二次旋转。
+      if (!steeringWheelPivot &&
+          (name.includes('steering') || name.includes('steer') || name.includes('handle')) &&
+          steering.frontAxleYaw !== undefined) {
+        child.rotation.z = steering.steeringWheelRoll;
         // 命中方向盘后不再处理车轮逻辑（避免方向盘被误判为 wheel）
         return;
       }
@@ -687,9 +729,8 @@ export function createVehicleView(scene, renderer, modelCache) {
         // 加死区滤波，避免直路巡航时微动）
         const vis = _getVisGroup(entry);
         if (vis && vis.userData && vis.userData.frontAxle) {
-          const raw = (entry && entry.steerAngle) || 0;
-          const sf = (Math.abs(raw) < 0.005) ? 0 : raw;
-          vis.userData.frontAxle.rotation.y = -sf;
+          const steering = _steeringVisualState(entry && entry.steerAngle);
+          vis.userData.frontAxle.rotation.y = steering.frontAxleYaw;
         }
       }
 

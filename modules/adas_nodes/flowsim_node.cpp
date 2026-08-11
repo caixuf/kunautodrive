@@ -141,6 +141,7 @@ struct FlowSimContext {
     /* 灯光指令（control_node 决策下发，意图先行） */
     std::atomic<uint8_t> ego_turn_signal{0};
     std::atomic<bool>    ego_hazard{false};
+    std::atomic<bool>    ego_low_beam{false};
     /* 档位（control_node→safety_control→flowsim 透传，DRIVE=1/REVERSE=-1） */
     std::atomic<int8_t>  ego_gear{GEAR_DRIVE};
 
@@ -211,6 +212,7 @@ static void reset_runtime_state() {
     g.ego_steer.store(0.0, std::memory_order_relaxed);
     g.ego_turn_signal.store(0, std::memory_order_relaxed);
     g.ego_hazard.store(false, std::memory_order_relaxed);
+    g.ego_low_beam.store(false, std::memory_order_relaxed);
     g.ego_gear.store(GEAR_DRIVE, std::memory_order_relaxed);
 
     g.cycle = 0;
@@ -1569,7 +1571,8 @@ protected:
 
             /* ── 游戏模式（demo.sh --game）：玩家键盘操控 ──
              * /tmp/game_mode 存在 = 游戏模式：主循环从 /tmp/game_input.json
-             * 读 {throttle, brake, steer}（flowmond POST /api/game/control
+             * 读 {throttle, brake, steer, turn_signal, hazard, low_beam}
+             * （flowmond POST /api/game/control
              * 写入，浏览器键盘 → HTTP）当控制指令，绕过 control_node。
              * 同时刷新 last_control_cmd_us 避免 FSAFE 误触发。 */
             if ((g.cycle % 30u) == 0u) {
@@ -1604,6 +1607,9 @@ protected:
             if (was_game_control_active && !game_control_active) {
                 g.last_control_cmd_us.store(0, std::memory_order_relaxed);
                 use_internal_cruise = true;
+                g.ego_turn_signal.store(0, std::memory_order_relaxed);
+                g.ego_hazard.store(false, std::memory_order_relaxed);
+                g.ego_low_beam.store(false, std::memory_order_relaxed);
             }
             was_game_control_active = game_control_active;
             if (game_control_active) {
@@ -1619,6 +1625,9 @@ protected:
                             cJSON* gjt = cJSON_GetObjectItemCaseSensitive(gj, "throttle");
                             cJSON* gjb = cJSON_GetObjectItemCaseSensitive(gj, "brake");
                             cJSON* gjs = cJSON_GetObjectItemCaseSensitive(gj, "steer");
+                            cJSON* gjts = cJSON_GetObjectItemCaseSensitive(gj, "turn_signal");
+                            cJSON* gjh = cJSON_GetObjectItemCaseSensitive(gj, "hazard");
+                            cJSON* gjl = cJSON_GetObjectItemCaseSensitive(gj, "low_beam");
                             cJSON* gjw = cJSON_GetObjectItemCaseSensitive(gj, "wall_us");
                             uint64_t now_wall = clock_now_monotonic_wall_us();
                             fresh_game_input = cJSON_IsNumber(gjw) &&
@@ -1643,6 +1652,21 @@ protected:
                                 if (br <  0.0) br = 0.0;
                                 g.ego_brake.store(br, std::memory_order_relaxed);
                             }
+                            if (fresh_game_input && cJSON_IsNumber(gjts)) {
+                                int ts = (int)gjts->valuedouble;
+                                if (ts < 0) ts = 0;
+                                if (ts > 2) ts = 2;
+                                g.ego_turn_signal.store((uint8_t)ts,
+                                    std::memory_order_relaxed);
+                            }
+                            if (fresh_game_input && cJSON_IsBool(gjh)) {
+                                g.ego_hazard.store(cJSON_IsTrue(gjh),
+                                    std::memory_order_relaxed);
+                            }
+                            if (fresh_game_input && cJSON_IsBool(gjl)) {
+                                g.ego_low_beam.store(cJSON_IsTrue(gjl),
+                                    std::memory_order_relaxed);
+                            }
                             cJSON_Delete(gj);
                         }
                     }
@@ -1663,6 +1687,9 @@ protected:
                         was_game_control_active = false;
                         use_internal_cruise = true;
                         g.last_control_cmd_us.store(0, std::memory_order_relaxed);
+                        g.ego_turn_signal.store(0, std::memory_order_relaxed);
+                        g.ego_hazard.store(false, std::memory_order_relaxed);
+                        g.ego_low_beam.store(false, std::memory_order_relaxed);
                         LOG_WARN("flowsim",
                                  "[GAME_LEASE_EXPIRED] no browser input for 1s — "
                                  "automatic control restored");
@@ -2076,6 +2103,10 @@ protected:
                 g.scene_pub_cfg.weather == "fog" || g.scene_pub_cfg.visibility_m < 100.0;
             flowsim::VehicleActor::update_all_lights(
                 g.pool, dark || weather_lights, foggy);
+            /* 游戏模式允许在白天手动开近光；夜间/低能见度仍由环境规则强制开启。 */
+            if (g.ego_low_beam.load(std::memory_order_relaxed)) {
+                ego.lights.set_low_beam(true);
+            }
 
             /* ── Step 6: 推进逻辑时钟 ── */
             clock_advance_us(FLOWSIM_DT_US);

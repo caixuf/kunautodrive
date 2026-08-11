@@ -42,9 +42,9 @@ void VehicleActor::update_ego_lights(Entity& ego, bool low_visibility, bool fogg
      * 静止或倒车状态不触发，避免低速泊车时方向盘乱转导致灯乱闪。 */
     if (!ego.lights.any_turn() && ego.speed > SPEED_REVERSE_THRESHOLD) {
         if (ego.steer > STEER_TURN_THRESHOLD) {
-            ego.lights.set_turn_right(true);   /* steer > 0 = 右转 */
+            ego.lights.set_turn_left(true);    /* steer > 0 = 左转 */
         } else if (ego.steer < -STEER_TURN_THRESHOLD) {
-            ego.lights.set_turn_left(true);    /* steer < 0 = 左转 */
+            ego.lights.set_turn_right(true);   /* steer < 0 = 右转 */
         }
     }
 
@@ -89,9 +89,9 @@ void VehicleActor::update_npc_lights(Entity& npc, bool low_visibility, bool fogg
         default:
             /* 巡航/跟车：根据 steer 打转向灯 */
             if (npc.steer > STEER_TURN_THRESHOLD) {
-                npc.lights.set_turn_right(true);
-            } else if (npc.steer < -STEER_TURN_THRESHOLD) {
                 npc.lights.set_turn_left(true);
+            } else if (npc.steer < -STEER_TURN_THRESHOLD) {
+                npc.lights.set_turn_right(true);
             }
             break;
     }
