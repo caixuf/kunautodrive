@@ -225,6 +225,30 @@ function _applyCarPaintToScene(gltfScene, envMap) {
   });
 }
 
+/** Keep the authorized SU7 as a clean production vehicle.
+ * The source asset contains a text/logo AO decal and separate plate/badge
+ * meshes. They are presentation stickers rather than vehicle paint. */
+export function _cleanSu7Exterior(scene) {
+  scene.traverse((child) => {
+    const name = child.name || '';
+    if (name === 'ChePai' || name.toLowerCase().indexOf('logo') === 0) {
+      child.visible = false;
+      return;
+    }
+    if (!child.isMesh || !child.material) return;
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    materials.forEach((material) => {
+      if ((material.name || '').toLowerCase() === 'car_body') {
+        // sm_car_img0 is a text/logo atlas used as ambient occlusion on the
+        // paint shell. Removing only this map preserves the original color
+        // while eliminating the baked-on lettering.
+        material.aoMap = null;
+        material.aoMapIntensity = 1;
+      }
+    });
+  });
+}
+
 // ═══════════════════════════════════════════════════════════
 // 方向盘程序化注入
 // ═══════════════════════════════════════════════════════════
@@ -397,6 +421,7 @@ export function createVehicleView(scene, renderer, modelCache) {
       return scene;
     }
     // 应用车漆升级
+    if (type === 'su7') _cleanSu7Exterior(scene);
     _applyCarPaintToScene(scene, _envMap);
     // 注入方向盘（glTF 车辆模型未自带 steering_wheel mesh）
     scene.add(_createSteeringWheel());
