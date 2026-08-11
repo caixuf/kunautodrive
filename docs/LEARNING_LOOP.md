@@ -32,6 +32,31 @@ bash share/kunautodrive/scripts/quickstart.sh 15
 的定位不匹配。更有价值的做法是：**把 KunAutoDrive 作为闭环的调度 / 通信 / 可视化底座**，
 每个环节对应一门可落地的前沿技术，工程量可控且互相解耦。
 
+## VLA / 世界模型适配骨架
+
+`tools/ai_framework.py` 提供零依赖的 adapter 契约，复用现有场景 JSON、学习闭环和
+评测器，不重复实现训练框架：
+
+```bash
+python3 tools/ai_framework.py \
+  --scenario scenarios/straight_road.json \
+  --steps 20 \
+  --output /tmp/ai_rollout.json
+```
+
+当前包含：
+
+- `VLAInput` / `VLAOutput`：指令、ego、障碍物、路线和场景上下文到规划意图；
+- `WorldModelState` / `WorldModelAction` / `WorldModelPrediction`：状态、动作、
+  下一状态、事件和不确定性；
+- `ReferenceVLA` 和 `KinematicWorldModel`：仅用于接口、回放和 smoke test 的确定性
+  参考实现，不代表真实 VLA 或生成式世界模型；
+- `SCHEMA_VERSION`：后续接入真实多模态模型时，保持输入输出和现有 evaluator 可追踪。
+
+真实模型接入只需实现 `VLAAdapter.predict()` 或
+`WorldModelAdapter.predict()`，再由 sidecar/节点把结果映射到现有
+`planning/trajectory` 和 `inference/trajectory`，安全控制链不被绕过。
+
 ## 闭环总览
 
 ```
