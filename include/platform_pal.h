@@ -130,7 +130,13 @@ static inline int flow_pal_thread_set_current_name(const char* name) {
 }
 
 static inline int flow_pal_sleep_us(unsigned int usec) {
+#if defined(_WIN32)
+    /* platform_compat.h maps usleep to void flow_win_usleep(). */
+    usleep(usec);
+    return 0;
+#else
     return usleep(usec);
+#endif
 }
 
 #if !defined(_WIN32)
