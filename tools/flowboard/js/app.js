@@ -2,7 +2,7 @@
 // FlowBoard — Entry Point ES Module
 // ═══════════════════════════════════════════════════════════════
 // Imports from sub-modules
-import { init3DScene, resize3D, update3D, sceneReady, scene3d, setTopoData as setTopoData3D, setDebugCam, setCameraMode, resetCamera, resetMapView, closeNPCDetail, setPerfTier, togglePerfOverlay, toggleMinimap } from './vis/main.js';
+import { init3DScene, resize3D, update3D, sceneReady, scene3d, setTopoData as setTopoData3D, setDebugCam, setCameraMode, resetCamera, resetMapView, closeNPCDetail, setPerfTier, togglePerfOverlay, toggleMinimap, setRenderPaused } from './vis/main.js';
 import { init2D, init2DFallback, draw2D, switchSceneView, _2d as _2dState, setTopoData as setTopoData2D } from './scene2d.js';
 import { initCharts, updateCharts, onChartTopicChange, onChartRangeChange, setTopoData as setTopoDataChart } from './charts.js';
 import { safeCall, reportDiag, clearDiag, _auditSceneMaterials } from './utils.js';
@@ -27,12 +27,42 @@ const MAP_ROUTES = {
     { id: 'underpass', name: '下穿道路（未验证）', scenario: '', draft: true },
   ],
 };
+const MAP_ROUTE_CACHE = {};
 
-function refreshRouteChoices() {
+async function fetchMapRoutes(mapId) {
+  if (MAP_ROUTE_CACHE[mapId]) return MAP_ROUTE_CACHE[mapId];
+  try {
+    var response = await fetch('/api/map/preview', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({map: mapId}),
+      cache: 'no-store',
+    });
+    var result = await response.json();
+    var apiRoutes = result && result.routes && Array.isArray(result.routes.routes)
+      ? result.routes.routes
+      : null;
+    if (!response.ok || !result.ok || !apiRoutes) throw new Error(result && result.error ? result.error : 'route metadata unavailable');
+    MAP_ROUTE_CACHE[mapId] = apiRoutes.map(function (item) {
+      return {
+        id: item.id,
+        name: item.name || item.id,
+        scenario: mapId === 'city_ring' && item.draft !== true ? 'scenarios/city_ring_map.json' : '',
+        draft: item.draft === true || item.validated === false,
+      };
+    });
+    return MAP_ROUTE_CACHE[mapId];
+  } catch (_) {
+    return MAP_ROUTES[mapId] || [];
+  }
+}
+
+async function refreshRouteChoices() {
   var map = document.getElementById('map-choice');
   var routes = document.getElementById('route-choice');
   if (!map || !routes) return;
-  var items = MAP_ROUTES[map.value] || [];
+  routes.innerHTML = '<option value="">加载路线中…</option>';
+  var items = await fetchMapRoutes(map.value);
   routes.innerHTML = items.map(function (item) {
     return '<option value="' + item.id + '">' + item.name + '</option>';
   }).join('');
@@ -48,7 +78,8 @@ function onRouteChoiceChange() {
   var route = document.getElementById('route-choice');
   var help = document.getElementById('route-help');
   if (!map || !route || !help) return;
-  var item = (MAP_ROUTES[map.value] || []).find(function (entry) {
+  var items = MAP_ROUTE_CACHE[map.value] || MAP_ROUTES[map.value] || [];
+  var item = items.find(function (entry) {
     return entry.id === route.value;
   });
   help.textContent = item && item.draft
@@ -59,7 +90,8 @@ function onRouteChoiceChange() {
 async function runSelectedRoute() {
   var map = document.getElementById('map-choice');
   var route = document.getElementById('route-choice');
-  var item = map && route && (MAP_ROUTES[map.value] || []).find(function (entry) {
+  var items = map ? (MAP_ROUTE_CACHE[map.value] || MAP_ROUTES[map.value] || []) : [];
+  var item = map && route && items.find(function (entry) {
     return entry.id === route.value;
   });
   if (!item || item.draft || !item.scenario) {
@@ -91,6 +123,7 @@ async function previewSelectedRoute() {
   var modal = document.getElementById('map-preview-modal');
   var frame = document.getElementById('map-preview-frame');
   if (modal && frame) {
+    setRenderPaused(true);
     modal.style.display = 'block';
     frame.src = '/tools/flowboard/map_preview.html?map=' +
       encodeURIComponent(map.value) + '&route=' + encodeURIComponent(route.value) +
@@ -103,6 +136,7 @@ function closeMapPreview() {
   var frame = document.getElementById('map-preview-frame');
   if (frame) frame.src = 'about:blank';
   if (modal) modal.style.display = 'none';
+  setRenderPaused(false);
 }
 
 function initMapPreviewDrag() {

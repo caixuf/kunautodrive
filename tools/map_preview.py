@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 def render(path: Path, routes_path: Path | None = None) -> str:
+    repo_root = Path(__file__).resolve().parents[1]
     data = json.loads(path.read_text(encoding="utf-8"))
     roads = data.get("roads", [])
     points = [
@@ -61,6 +62,7 @@ def render(path: Path, routes_path: Path | None = None) -> str:
     if routes_path and routes_path.is_file():
         route_data = json.loads(routes_path.read_text(encoding="utf-8"))
         routes = route_data.get("routes", [])
+    scenario_path = repo_root / "scenarios" / f"{path.parent.name}_map.json"
     route_options = "".join(
         f'<option value="{html.escape(str(route.get("id", "")))}">'
         f'{html.escape(str(route.get("name", route.get("id", ""))))}'
@@ -69,6 +71,15 @@ def render(path: Path, routes_path: Path | None = None) -> str:
     )
     route_panel = ""
     if route_options:
+        if scenario_path.is_file():
+            scenario_ref = scenario_path.relative_to(repo_root).as_posix()
+            scenario_cmd = (
+                f"command.textContent = 'bash scripts/demo.sh --scenario {scenario_ref} --route ' + route.value;"
+            )
+        else:
+            scenario_cmd = (
+                "command.textContent = 'No runnable demo scenario is available for this map.';"
+            )
         route_panel = f"""
 <label>Route <select id="route">{route_options}</select></label>
 <pre id="command"></pre>
@@ -76,7 +87,7 @@ def render(path: Path, routes_path: Path | None = None) -> str:
 const route = document.querySelector('#route');
 const command = document.querySelector('#command');
 function updateCommand() {{
-  command.textContent = 'bash scripts/demo.sh --scenario scenarios/city_ring_map.json --route ' + route.value;
+  {scenario_cmd}
 }}
 route.addEventListener('change', updateCommand);
 updateCommand();
@@ -92,7 +103,7 @@ svg {{ background: #263238; border: 1px solid #4b5563; }}
 text {{ fill: #fbbf24; font-size: 13px; }}
 aside {{ min-width: 260px; }} li {{ margin: 8px 0; }}
 </style>
-main {{ display: flex; gap: 20px; padding: 20px; }}
+<style>
 select {{ max-width: 260px; }}
 pre {{ white-space: pre-wrap; color: #93c5fd; }}
 </style>

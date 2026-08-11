@@ -33,6 +33,7 @@ let _ready = false;
 let _lastTopoData = null;
 let _statsView = null;
 let _lastMinimapDrawMs = 0;
+let _renderPaused = false;
 const MINIMAP_INTERVAL_MS = 1000 / 30;
 
 function _syncEnvironment(store) {
@@ -247,6 +248,10 @@ function _startRenderLoop() {
     requestAnimationFrame(loop);
     // 标签页隐藏时跳过渲染（节省 GPU）
     if (document.hidden) return;
+    if (_renderPaused) {
+      if (_perfMonitor) _perfMonitor.setActive(false);
+      return;
+    }
     // observe 工作区不可见时降帧到 10fps（Analyze/Operate 工作区）
     const isObserve = document.body.getAttribute('data-workspace') !== 'analyze' &&
                       document.body.getAttribute('data-workspace') !== 'operate';
@@ -540,6 +545,11 @@ export function setTopoData(data) {
 /** 场景是否就绪 */
 export function sceneReady() {
   return _ready;
+}
+
+export function setRenderPaused(paused) {
+  _renderPaused = paused === true;
+  if (_perfMonitor) _perfMonitor.setActive(!_renderPaused);
 }
 
 // scene3d 已在模块顶部 export let 声明，init3DScene 里赋值

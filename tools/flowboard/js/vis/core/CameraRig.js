@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { OrbitControls, MapControls } from 'three/addons/controls/OrbitControls.js';
 
 /**
  * CameraRig.js — 相机控制器
@@ -21,12 +21,26 @@ export function createCameraRig(canvas) {
   );
 
   let mode = 'chase';
+  let needsControlSnap = false;
+  let mapAutoFollow = false;
 
   // D-2: OrbitControls — 初始 disabled，仅 orbit 模式启用
   const orbitControls = new OrbitControls(camera, canvas);
   orbitControls.enabled = false;
   orbitControls.target.set(0, 0, 0);
   orbitControls.update();
+
+  const mapControls = new MapControls(camera, canvas);
+  mapControls.enabled = false;
+  mapControls.enableRotate = false;
+  mapControls.screenSpacePanning = true;
+  mapControls.zoomToCursor = true;
+  mapControls.target.set(0, 0, 0);
+  mapControls.update();
+
+  mapControls.addEventListener('start', () => {
+    if (mode === 'map') mapAutoFollow = false;
+  });
 
   /* 相机跟随（2026-08 顿挫复盘重写）：
    * 位置**刚性锁定** ego 显示位姿，不做二次平滑。
@@ -48,6 +62,10 @@ export function createCameraRig(canvas) {
     const ez = ego ? -(ego.y) : 0;
     const ehRaw = ego ? ego.heading || 0 : 0;
     const eg = ego ? ego.z || 0 : 0;
+    const mapTargetX = ego && Number.isFinite(ego.mapViewTargetX) ? ego.mapViewTargetX : ex;
+    const mapTargetZ = ego && Number.isFinite(ego.mapViewTargetY) ? -ego.mapViewTargetY : ez;
+    const mapTargetY = ego && Number.isFinite(ego.mapViewTargetZ) ? ego.mapViewTargetZ : eg;
+    const mapHeight = ego && Number.isFinite(ego.mapViewHeight) ? ego.mapViewHeight : 80;
 
     /* 帧间 dt（now 单位与渲染一致）；首帧 snap 到真值防漂移 */
     const tSec = (now != null && now > 0) ? now : 0;
@@ -61,9 +79,6 @@ export function createCameraRig(canvas) {
     while (dh < -Math.PI) dh += 2 * Math.PI;
     _camSH += dh * alpha;
     const sEH = _camSH;
-
-    // D-2: 每帧更新 orbitControls.target 跟随 ego
-    orbitControls.target.set(ex, eg, ez);
 
     // 流畅专题：原先这里每帧 const c = getCenter(roadGroup) 但 c 在所有
     // switch 分支里都被各自的 const c 覆盖，属于死代码 + 白算一次 Box3。
@@ -117,12 +132,20 @@ export function createCameraRig(canvas) {
         break;
       }
       case 'map': {
-        camera.position.set(ex, eg + 80, ez);
-        camera.lookAt(ex, eg, ez);
+        if (needsControlSnap || mapAutoFollow) {
+          camera.position.set(mapTargetX, mapTargetY + mapHeight, mapTargetZ);
+          mapControls.target.set(mapTargetX, mapTargetY, mapTargetZ);
+          camera.lookAt(mapTargetX, mapTargetY, mapTargetZ);
+          needsControlSnap = false;
+        }
+        mapControls.update();
         break;
       }
       case 'orbit': {
-        // D-2: OrbitControls 自动处理，无需手动设置
+        if (needsControlSnap) {
+          orbitControls.target.set(ex, eg, ez);
+          needsControlSnap = false;
+        }
         orbitControls.update();
         break;
       }
@@ -132,14 +155,20 @@ export function createCameraRig(canvas) {
   function setMode(m) {
     if (['chase', 'top', 'driver', 'front', 'map', 'orbit'].includes(m)) {
       mode = m;
-      // D-2: orbit 模式启用 OrbitControls，其他模式禁用
+      needsControlSnap = (mode === 'map' || mode === 'orbit');
+      mapAutoFollow = (mode === 'map');
       orbitControls.enabled = (mode === 'orbit');
+      mapControls.enabled = (mode === 'map');
     }
   }
 
   function reset(roadGroup) {
     orbitControls.target.set(0, 0, 0);
     orbitControls.update();
+    mapControls.target.set(0, 0, 0);
+    mapControls.update();
+    needsControlSnap = (mode === 'map' || mode === 'orbit');
+    mapAutoFollow = (mode === 'map');
 
     if (mode === 'chase' || mode === 'top' || mode === 'driver' || mode === 'front' || mode === 'map') {
       // B3 fix: 不再用路包围盒中心（10km 路→x=5000，车在 x≈50 时看空路），
