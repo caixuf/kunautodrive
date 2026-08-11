@@ -202,7 +202,6 @@ jobs:
       - name: Regression evaluator (45s demo)
         run: python3 ci/evaluators/demo_evaluator.py --duration 45 --interval 0.5
       - name: Pipeline integrity check
-        continue-on-error: true
         run: python3 tools/pipeline_check.py --json /tmp/flow_topology.json
 
   # ── Visualization layer (flowmond) + algorithm regression ──
