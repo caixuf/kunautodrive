@@ -1,7 +1,8 @@
 # 仿真测试指南
 
 > **注意：** 当前可用的仿真入口是 `flow_launcher config/pipeline.json`（配置驱动，dlopen 加载插件节点）。
-> Carla 集成桥接 `carla_bridge.py` 尚未实现，此处保留为设计参考。
+> `tools/carla_bridge.py` 已提供可选 CARLA 适配边界和 capability gate；没有 CARLA
+> SDK/服务器时会明确报告 unavailable，不会伪装成已接通。
 
 ## 三层仿真体系
 
@@ -12,8 +13,8 @@ Layer 1: Bag 回放 (零依赖, 现在就能跑)
 Layer 2: 2D 运动学模拟 (轻量, 验证控制/规划)
   → 单车模型 + 简单传感器 + 场景定义
 
-Layer 3: Carla/Gazebo (真实传感器, 完整闭环) — 待实现
-  → 物理引擎 + 相机/LiDAR/雷达模型 + 3D 场景
+Layer 3: CARLA (可选外部后端, 适配边界已就绪)
+  → 时钟快照 + 传感器批次 + 控制映射；真实闭环需 CARLA SDK/服务器
 ```
 
 ## Layer 1: Bag 回放测试
@@ -41,6 +42,21 @@ bash scripts/demo.sh
 ```
 
 内置场景定义见 `scenarios/straight_road.json`（4 车道直路：同向慢车 + 对向来车 + 行人 + 红绿灯）。
+
+### 可选 CARLA 后端
+
+先检查后端能力，不会自动下载或伪造 CARLA：
+
+```bash
+python3 tools/carla_bridge.py capabilities --json
+python3 tools/carla_bridge.py check
+```
+
+适配器只负责 simulator I/O，统一输出 `flowengine.simulator_capabilities.v1`
+契约：仿真时钟 `SimulationClock`、传感器 `SensorPacket`/`SensorBatch` 和
+`ControlCommand` → `carla.VehicleControl` 映射。规划、限速、安全闸门和评估仍
+复用 FlowEngine 的 planning/control/safety/evaluator 链路；`check` 在缺少
+CARLA Python API 时返回非零，CI 可据此选择性启用外部后端。
 
 ## 场景库
 
