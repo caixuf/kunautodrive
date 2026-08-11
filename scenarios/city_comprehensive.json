@@ -1,6 +1,6 @@
 {
   "name": "city_comprehensive",
-  "description": "城市综合路网旗舰场景：地面信号路口、连续弯道、施工避让、上匝道、高架、下匝道、超车与掉头回程。",
+  "description": "城市连续路网基础：地面主路、连续弯道、上下匝道与高架；信号、施工、超车和掉头将在各自闭环回归通过后分阶段接入。",
   "random_seed": 202608,
   "duration_s": 180,
   "lighting": "day",
