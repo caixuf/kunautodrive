@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "map_id": "city_ring",
+  "name": "Validated city ring baseline",
+  "source_scenario": "scenarios/city_comprehensive.json",
+  "road_network": {
+    "edge_order": [0, 1, 2, 3, 4, 5],
+    "authoritative_geometry": "source_scenario.road_network.edges",
+    "connections": [
+      {"from_edge": 0, "to_edge": 1, "type": "continue"},
+      {"from_edge": 1, "to_edge": 2, "type": "merge"},
+      {"from_edge": 2, "to_edge": 3, "type": "continue"},
+      {"from_edge": 3, "to_edge": 4, "type": "diverge"},
+      {"from_edge": 4, "to_edge": 5, "type": "continue"}
+    ]
+  },
+  "validation": {
+    "default_route": "mainline",
+    "min_closed_loop_seconds": 120,
+    "default_demo_enabled": false
+  }
+}

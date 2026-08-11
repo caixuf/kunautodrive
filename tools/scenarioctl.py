@@ -132,6 +132,64 @@ def validate_suite(path: Path) -> list[str]:
     return errors
 
 
+def validate_map(path: Path) -> list[str]:
+    errors: list[str] = []
+    try:
+        data = load_json(path)
+    except ValueError as exc:
+        return [str(exc)]
+    if not isinstance(data, dict):
+        return [f"{path}: root must be an object"]
+    for key in ("schema_version", "map_id", "road_network", "validation"):
+        if key not in data:
+            errors.append(f"{path}: missing required field '{key}'")
+    map_id = data.get("map_id")
+    if not isinstance(map_id, str) or not map_id:
+        errors.append(f"{path}: map_id must be a non-empty string")
+    network = data.get("road_network")
+    edge_order = network.get("edge_order") if isinstance(network, dict) else None
+    if not isinstance(edge_order, list) or not edge_order:
+        errors.append(f"{path}: road_network.edge_order must be a non-empty array")
+        edge_order = []
+    if len(set(edge_order)) != len(edge_order):
+        errors.append(f"{path}: road_network.edge_order contains duplicates")
+    source = data.get("source_scenario")
+    if isinstance(source, str) and not (ROOT / source).is_file():
+        errors.append(f"{path}: source_scenario does not exist: {source}")
+    return errors
+
+
+def validate_routes(path: Path, map_data: object) -> list[str]:
+    errors: list[str] = []
+    try:
+        data = load_json(path)
+    except ValueError as exc:
+        return [str(exc)]
+    if not isinstance(data, dict):
+        return [f"{path}: root must be an object"]
+    route_map_id = data.get("map_id")
+    if not isinstance(route_map_id, str):
+        errors.append(f"{path}: map_id must be a string")
+    elif isinstance(map_data, dict) and route_map_id != map_data.get("map_id"):
+        errors.append(f"{path}: map_id does not match map")
+    routes = data.get("routes")
+    if not isinstance(routes, list) or not routes:
+        return errors + [f"{path}: routes must be a non-empty array"]
+    network = map_data.get("road_network", {}) if isinstance(map_data, dict) else {}
+    edge_order = set(network.get("edge_order", [])) if isinstance(network, dict) else set()
+    for index, route in enumerate(routes):
+        label = f"{path}: routes[{index}]"
+        if not isinstance(route, dict) or not isinstance(route.get("id"), str):
+            errors.append(f"{label}.id must be a string")
+            continue
+        edges = route.get("edges")
+        if not isinstance(edges, list) or not edges:
+            errors.append(f"{label}.edges must be a non-empty array")
+        elif any(edge not in edge_order for edge in edges):
+            errors.append(f"{label}.edges contains an edge absent from map")
+    return errors
+
+
 def fingerprint(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -240,6 +298,9 @@ def main() -> int:
     validate.add_argument("paths", nargs="*", type=Path,
                           help="scenario JSON paths (default: all scenarios + suite)")
     validate.add_argument("--json", action="store_true", dest="as_json")
+    map_validate = sub.add_parser("validate-map", help="validate a reusable map and routes")
+    map_validate.add_argument("map", type=Path)
+    map_validate.add_argument("--routes", type=Path, required=True)
     generate = sub.add_parser("generate", help="generate deterministic scenario variants")
     generate.add_argument("--template", required=True,
                            help="scenario path or file stem")
@@ -268,6 +329,21 @@ def main() -> int:
                 for error in result["errors"]:
                     print(f"  - {error}")
         return 0 if all(result["ok"] for result in results) else 1
+    if args.command == "validate-map":
+        map_path = args.map if args.map.is_absolute() else ROOT / args.map
+        routes_path = args.routes if args.routes.is_absolute() else ROOT / args.routes
+        errors = validate_map(map_path)
+        try:
+            map_data = load_json(map_path)
+        except ValueError:
+            map_data = None
+        errors.extend(validate_routes(routes_path, map_data))
+        if errors:
+            for error in errors:
+                print(f"FAIL {error}")
+            return 1
+        print(f"PASS {map_path} routes={routes_path}")
+        return 0
     if args.command == "generate":
         template = resolve_scenario(args.template)
         generated = generate_variants(
