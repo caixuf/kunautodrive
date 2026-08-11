@@ -299,7 +299,16 @@ def check_data_integrity(data: dict, section: _Section) -> None:
             else:
                 section.ok(f"ego 速度 {speed:.1f} m/s")
             if abs(steer) > STEER_SANE_MAX:
-                section.warn(f"ego steer 超限: {steer:.3f} > {STEER_SANE_MAX}")
+                maneuver_state = str(
+                    metrics.get("behavior", {}).get("state", "")
+                ).upper()
+                if maneuver_state == "U_TURN":
+                    section.ok(
+                        f"ego steer {steer:.3f} permitted during U_TURN "
+                        f"(cruise limit {STEER_SANE_MAX})"
+                    )
+                else:
+                    section.warn(f"ego steer 超限: {steer:.3f} > {STEER_SANE_MAX}")
 
     # scene.lane
     lane = scene.get("lane", {})
