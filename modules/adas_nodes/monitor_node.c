@@ -188,6 +188,19 @@ static struct {
     volatile int has_obstacles;
     volatile int has_vehicle_state;
 
+    /* 感知实体缓存（perception/tracked_objects，JSON，车体坐标系）。
+     * 可视化与仿真解耦：前端实体渲染数据源可在「仿真真值 entities」与
+     * 「感知输出 perception_entities」间切换（scene_source 参数）。
+     * tracked_objects 的 KF 状态本质是世界系，仅输出时转为车体系；monitor
+     * 用同一份 vehicle/state ego pose 逆变换回世界系（恰好抵消 tracker 的变换）。 */
+    char latest_tracked_objects[65536];
+    pthread_mutex_t tracked_mutex;
+    volatile int has_tracked_objects;
+    /* 实体渲染数据源：pick(pipeline) 读 "scene_source"
+     *   = "perception" → 前端实体渲染用 perception_entities（感知输出）
+     *   = 其它/默认     → 用 entities（仿真真值）。 */
+    char scene_source[16];
+
     /* §11.1 测量回路：CTE 监控 */
     volatile double latest_cte;       /* 最新横向跟踪误差 (m) */
     double cte_fail_timer;            /* CTE 超阈值持续计时 (s) */
@@ -359,6 +372,24 @@ static void on_obstacles(const Message* msg, void* user_data) {
     memcpy(g.latest_obstacles_json, msg->data, copy);
     g.latest_obstacles_json[copy] = '\0';
     g.has_obstacles = 1;
+}
+
+/* perception/tracked_objects 订阅回调 — 缓存感知语义障碍物（JSON，车体系）。
+ * 由 object_tracker_node 发布（KF 跟踪 + 静态/动态分类），供可视化与仿真解耦
+ * 时作为「感知实体」数据源。锁内 memcpy 到共享缓存，锁外由 export 解析。 */
+static void on_tracked_objects(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg) return;
+    size_t copy = msg->data_size < sizeof(g.latest_tracked_objects) - 1
+                  ? msg->data_size : sizeof(g.latest_tracked_objects) - 1;
+    char sanitized[sizeof(g.latest_tracked_objects)];
+    memcpy(sanitized, msg->data, copy);
+    sanitized[copy] = '\0';
+    sanitize_subnormal_literals(sanitized);
+    pthread_mutex_lock(&g.tracked_mutex);
+    memcpy(g.latest_tracked_objects, sanitized, strlen(sanitized) + 1);
+    g.has_tracked_objects = 1;
+    pthread_mutex_unlock(&g.tracked_mutex);
 }
 
 static void on_vehicle_state(const Message* msg, void* user_data) {
@@ -1210,6 +1241,10 @@ static void export_dashboard_json(void) {
     cJSON* scene = cJSON_AddObjectToObject(metrics, "scene");
     /* schema_version 供前端做兼容性检查，见 docs/FLOWBOARD_SCENE_CONTRACT.md §6 */
     cJSON_AddStringToObject(scene, "schema_version", "1.0.0");
+    /* 前端实体渲染数据源：perception → 用 perception_entities（感知输出），
+     * 其它/默认 → 用 entities（仿真真值）。与仿真解耦的开关。 */
+    cJSON_AddStringToObject(scene, "source",
+        g.scene_source[0] ? g.scene_source : "ground_truth");
     /* 仿真时间戳：前端 DeadReckon 数据时间轴（解耦 SSE 交付抖动） */
     if (g.scene_t_us > 0) cJSON_AddNumberToObject(scene, "t_us", g.scene_t_us);
     cJSON* ego_o = cJSON_AddObjectToObject(scene, "ego");
@@ -1371,6 +1406,74 @@ static void export_dashboard_json(void) {
             }
         }
         free(ent_snap);
+    }
+
+    /* 感知实体（perception/tracked_objects，车体系 → 世界 ENU 逆变换）。
+     * 可视化与仿真解耦：tracked_objects 的 KF 状态世界系 (wx,wy)，object_tracker
+     * 输出时用 vehicle/state ego pose 转为车体系 (bx,by)；这里用同一份 ego pose
+     * 逆变换回世界系，前端可据此渲染「感知出来的障碍物」而非仿真真值。
+     * 逆变换矩阵（体→世界，与 tracker 的 world→body 恰好互逆）：
+     *   wx = ego_x + bx*cos(h) − by*sin(h)
+     *   wy = ego_y + bx*sin(h) + by*cos(h)
+     * heading 由世界速度矢量推导（tracker 输出 heading 恒 0，无朝向信息）。 */
+    if (g.has_tracked_objects) {
+        char tracked_snap[sizeof(g.latest_tracked_objects)];
+        size_t tk_len;
+        pthread_mutex_lock(&g.tracked_mutex);
+        tk_len = strlen(g.latest_tracked_objects);
+        if (tk_len >= sizeof(tracked_snap)) tk_len = sizeof(tracked_snap) - 1;
+        memcpy(tracked_snap, g.latest_tracked_objects, tk_len);
+        tracked_snap[tk_len] = '\0';
+        pthread_mutex_unlock(&g.tracked_mutex);
+        cJSON* tracked = (tk_len > 2) ? monitor_cJSON_Parse(tracked_snap) : NULL;
+        if (tracked) {
+            cJSON* arr = cJSON_GetObjectItemCaseSensitive(tracked, "objects");
+            int n = (arr && cJSON_IsArray(arr)) ? cJSON_GetArraySize(arr) : 0;
+            double eh = hdg, cx = ego_x, cy = ego_y;
+            double ch_ = cos(eh), sh_ = sin(eh);
+            cJSON* pe_arr = cJSON_AddArrayToObject(scene, "perception_entities");
+            for (int i = 0; i < n; i++) {
+                cJSON* o = cJSON_GetArrayItem(arr, i);
+                if (!o) continue;
+                cJSON* jx = cJSON_GetObjectItemCaseSensitive(o, "x");
+                cJSON* jy = cJSON_GetObjectItemCaseSensitive(o, "y");
+                cJSON* jvx = cJSON_GetObjectItemCaseSensitive(o, "vx");
+                cJSON* jvy = cJSON_GetObjectItemCaseSensitive(o, "vy");
+                if (!cJSON_IsNumber(jx) || !cJSON_IsNumber(jy)) continue;
+                double bx = jx->valuedouble, by = jy->valuedouble;
+                double bvx = cJSON_IsNumber(jvx) ? jvx->valuedouble : 0.0;
+                double bvy = cJSON_IsNumber(jvy) ? jvy->valuedouble : 0.0;
+                /* 体→世界（位置 + 速度） */
+                double wx = cx + bx * ch_ - by * sh_;
+                double wy = cy + bx * sh_ + by * ch_;
+                double wvx = bvx * ch_ - bvy * sh_;
+                double wvy = bvx * sh_ + bvy * ch_;
+                double spd = sqrt(wvx * wvx + wvy * wvy);
+                double heading = atan2(wvy, wvx);
+                /* 类别：VEHICLE→car、PEDESTRIAN→pedestrian、其余→car */
+                cJSON* jt = cJSON_GetObjectItemCaseSensitive(o, "type");
+                const char* tstr = (cJSON_IsString(jt)) ? jt->valuestring : "VEHICLE";
+                const char* fe_type = "car";
+                if (strncmp(tstr, "PEDESTRIAN", 10) == 0) fe_type = "pedestrian";
+                cJSON* pe = cJSON_CreateObject();
+                cJSON_AddNumberToObject(pe, "id", cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(o, "id"))
+                                          ? cJSON_GetObjectItemCaseSensitive(o, "id")->valuedouble : i);
+                cJSON_AddStringToObject(pe, "type", fe_type);
+                cJSON_AddNumberToObject(pe, "x", wx);
+                cJSON_AddNumberToObject(pe, "y", wy);
+                cJSON_AddNumberToObject(pe, "z", 0.0);
+                cJSON_AddNumberToObject(pe, "heading", heading);
+                cJSON_AddNumberToObject(pe, "speed", spd);
+                cJSON_AddNumberToObject(pe, "vx", wvx);
+                cJSON_AddNumberToObject(pe, "vy", wvy);
+                cJSON_AddNumberToObject(pe, "length", cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(o, "length"))
+                                          ? cJSON_GetObjectItemCaseSensitive(o, "length")->valuedouble : 4.6);
+                cJSON_AddNumberToObject(pe, "width", cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(o, "width"))
+                                          ? cJSON_GetObjectItemCaseSensitive(o, "width")->valuedouble : 2.0);
+                cJSON_AddItemToArray(pe_arr, pe);
+            }
+            cJSON_Delete(tracked);
+        }
     }
 
     /* 规划轨迹 path 数组透传给 3D 前端。
@@ -1918,6 +2021,9 @@ static int monitor_init(MessageBus* bus, Transport* transport,
                 int val = (int)item->valuedouble;
                 if (val >= 1 && val <= 8) g.lane_count = val;
             }
+            if ((item = cJSON_GetObjectItem(root, "scene_source")) && cJSON_IsString(item)) {
+                snprintf(g.scene_source, sizeof(g.scene_source), "%s", item->valuestring);
+            }
             cJSON_Delete(root);
         }
     }
@@ -1943,6 +2049,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     /* embedded 模式只依赖总线原生统计，不订阅大消息或 scene。 */
     if (!g.embedded_mode) {
     transport_subscribe(transport, TOPIC_PERCEPTION_OBSTACLES, on_obstacles, NULL);
+    transport_subscribe(transport, TOPIC_PERCEPTION_TRACKED_OBJECTS, on_tracked_objects, NULL);
     transport_subscribe(transport, TOPIC_VEHICLE_STATE, on_vehicle_state, NULL);
     transport_subscribe(transport, TOPIC_PLANNING_TRAJECTORY, on_planning_trajectory, NULL);
     transport_subscribe(transport, TOPIC_CONTROL_CTE, on_control_cte, NULL);
@@ -2002,6 +2109,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
      * ipc_channel_publish 会因无 subscriber 而丢弃早期包（可接受，启动竞态）。 */
     pthread_mutex_init(&g.remote_stats_mutex, NULL);
     pthread_mutex_init(&g.vehicle_state_mutex, NULL);
+    pthread_mutex_init(&g.tracked_mutex, NULL);
     /* P3 修复：初始化 scene_frame 缓存 mutex，避免未初始化锁行为未定义。
      * on_scene_frame（消息总线线程）写 scene_entities_json，
      * export_dashboard_json（主线程）读同一 buffer。 */

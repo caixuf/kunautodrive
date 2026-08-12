@@ -269,7 +269,15 @@ export function createSceneDirector(scene) {
       store.trajectoryPath = null;
     }
 
-    if (frame.entities !== undefined && !skipEntities) {
+    // ── 实体渲染数据源（与仿真解耦，见 docs/FLOWBOARD_SCENE_CONTRACT.md）──
+    // scene.source === "perception" 时用感知输出 perception_entities（后端已把
+    // 车体系逆变换回世界 ENU + 推导 heading/speed），否则用仿真真值 entities。
+    // 默认 entities（ground_truth），保证实车/仿真切换时前端行为一致。
+    const entitiesSource = (frame.source === 'perception' && Array.isArray(frame.perception_entities))
+      ? frame.perception_entities
+      : frame.entities;
+
+    if (entitiesSource !== undefined && !skipEntities) {
       /* P2-7 前端 invariant：scene.entities 的 (type, id) 必须全局唯一。
        *
        * 防御 P0-2 类 id 撞车污染：后端 entity pool 用业务 id 覆盖 pool 索引
@@ -285,7 +293,7 @@ export function createSceneDirector(scene) {
        * 只警告不抛错 —— 抛错会让整个 SceneDirector 崩溃，更糟。 */
       const _seenKeys = new Set();
       const _collisions = [];
-      for (const e of frame.entities) {
+      for (const e of entitiesSource) {
         if (!e || e.type === 'ego') continue;
         const k = (e.type || '?') + ':' + (e.id != null ? e.id : '?');
         if (_seenKeys.has(k)) _collisions.push(k);
@@ -296,7 +304,7 @@ export function createSceneDirector(scene) {
           _collisions.slice(0, 5).join(', '),
           _collisions.length > 5 ? `(+${_collisions.length - 5} more)` : '');
       }
-      store.entities = frame.entities.filter(e => e && e.type !== 'ego').map((e) => {
+      store.entities = entitiesSource.filter(e => e && e.type !== 'ego').map((e) => {
         /* 按类型给出默认尺寸（后端 len/wid/height 缺失时兜底） */
         const etype = e.type || 'car';
         let defLen, defWid, defH;

@@ -52,7 +52,14 @@ function adaptRoadNetwork(rn) {
   return { edges };
 }
 
-function mapToRoadNetwork(map) {
+/**
+ * 独立 HD map（maps/<id>/map.json）→ 前端 road_network。
+ * 可视化与仿真解耦：主仪表盘在独立地图模式下用它生成 road_network，
+ * 替代从 metrics.scene 读取的仿真路网。纯函数，零 THREE 依赖。
+ * @param {object} map  map.json（{roads:[{id,type,lanes[],centerline,...}]}）
+ * @returns {{edges: Array}}
+ */
+export function mapToRoadNetwork(map) {
   if (!map || !Array.isArray(map.roads)) return { edges: [] };
   return adaptRoadNetwork({
     edges: map.roads.map((road) => ({

@@ -7,11 +7,10 @@
 
 ## 1. 版本
 
-- **版本**: 2.0.0
-- **生效日期**: 2026-07-18
+- **版本**: 2.1.0
+- **生效日期**: 2026-08-12
 - **变更**:
-  - v1.1.0 新增 `entities` 中 `tl`/`etc_gate`/`stop_line` 的 `heading` 字段
-  - v1.2.0 `trajectory_path` 每点新增可选第 4 元素 `edge_id`；前端实现跨 edge 链式投影，解决弯道投影不准
+  - v2.1.0 新增 `scene.source`（实体渲染数据源开关）与 `scene.perception_entities`（感知输出实体，世界坐标）。可视化与仿真解耦：`source:"perception"` 时前端实体渲染改用感知输出，`source:"ground_truth"`（默认）时沿用仿真真值 `entities`。
   - v2.0.0 **破坏性变更**：移除 `scene.traffic_lights`（ego-relative fallback）字段，红绿灯统一由 `scene.entities` 中的 `tl`（world 坐标）提供。monitor 不再订阅 `road/traffic_lights` 透传到 scene（该 topic 仍由 flowsim 发布，供 planning/inference/recognition 消费）
 - **维护者**: flowsim / perception / flowboard 三端共同维护
 
@@ -55,6 +54,8 @@ headingToRotationY(heading) = heading
 ```jsonc
 {
   "schema_version": "1.0.0",  // string, 数据契约版本号（v1.2.1 新增）
+
+  "source": "ground_truth",  // string, 实体渲染数据源: "ground_truth"(默认,仿真真值) | "perception"(感知输出)
 
   "ego": {
     "x": 102.5,          // double, 世界坐标 X
@@ -103,6 +104,12 @@ headingToRotationY(heading) = heading
     { "type": "tl",   "id": 5, "x": 200.0, "y": -5.0, "heading": 0.0, "state": "red", "remain_s": 12.3 },
     { "type": "etc_gate", "id": 6, "x": 450.0, "y": 0.0, "heading": 0.0, "state": "closed", "progress": 0.0 },
     { "type": "stop_line", "id": 7, "x": 190.0, "y": -1.75, "heading": 0.0 }
+  ],
+
+  // 感知输出实体（perception/tracked_objects 经 monitor 车体系→世界逆变换 + 推导
+  // heading/speed）。source=="perception" 时前端用它替代 entities 渲染障碍物。
+  "perception_entities": [
+    { "id": 1, "type": "car", "x": 113.5, "y": -1.3, "z": 0.0, "heading": 1.51, "speed": 0.1, "vx": 0.0, "vy": 0.1, "length": 4.6, "width": 2.0 }
   ],
 
   // 障碍物 fallback（vehicle/state，ego-relative，最多 16 个）
@@ -155,6 +162,12 @@ headingToRotationY(heading) = heading
 `scene_pub.cpp` 在 esmini 路网模式下沿每条参考线约每 25 m 采样，限制在
 8–128 个点；legacy 直道输出两个端点、legacy 弯道输出八点。道路网络静态不变，
 发布端可缓存其 JSON，但每个 `scene/frame` 都带上它，避免前端首帧错过。
+
+**独立地图来源（可视化与仿真解耦，方案 B）**：主仪表盘带 `?map=<id>&route=<id>`
+时，前端经 `/api/map/preview` 加载 `maps/<id>/map.json`，用 `mapToRoadNetwork`
+（`tools/flowboard/js/showcase/sceneAdapter.js`，纯函数，有 `vis_maptoroad.test.mjs`
+门禁）生成 `road_network`，覆盖 `metrics.scene` 里的仿真路网，并置 `scene.source="perception"`
+（实体来自感知输出）。此时路网与实体都脱离仿真，为实车预览铺路。
 
 **消费约定**：
 
@@ -237,6 +250,34 @@ headingToRotationY(heading) = heading
 | `id` | int | 实体 ID |
 | `x` | double | 世界坐标 X |
 | `y` | double | 世界坐标 Y（ENU North） |
+
+### 5.3.6 `perception_entities`（v2.1.0 新增，感知输出）
+
+由 `perception/tracked_objects`（object_tracker 的 KF 语义障碍物，车体系）经 monitor
+用同一份 `vehicle/state` ego pose 逆变换回**世界 ENU 坐标**，并从世界速度矢量推导
+`heading`/`speed`。`scene.source=="perception"` 时前端用它替代 `entities` 渲染障碍物，
+实现可视化与仿真解耦。
+
+| 字段 | 类型 | 单位 | 说明 |
+|------|------|------|------|
+| `id` | int | - | 跟踪目标 ID（跨帧唯一） |
+| `type` | string | - | `"car"`（VEHICLE/CYCLIST/UNKNOWN 统一映射）或 `"pedestrian"`（PEDESTRIAN） |
+| `x` / `y` | double | m | 世界 ENU 坐标（由车体系逆变换所得） |
+| `z` | double | m | 高程，恒 0（地面场景） |
+| `heading` | double | rad | 由世界速度矢量推导 `atan2(vy, vx)` |
+| `speed` | double | m/s | 世界速度标量 `√(vx²+vy²)` |
+| `vx` / `vy` | double | m/s | 世界系速度分量 |
+| `length` / `width` | double | m | 包围盒尺寸（来自 KF track） |
+
+**说明**：感知层无语义 `ai_state`（跟车/变道等行为标签是仿真特有的），前端在
+`source=="perception"` 时对应标签缺省。坐标逆变换与 object_tracker 的 world→body
+恰好互逆（都用同一份 ego pose），故感知实体落位与仿真真值一致（实测同车 KF 估计
+vs 真值偏差 <0.5m）。
+
+**BEV 鸟瞰渲染**：2D 俯视视图（`scene2d.js`）在 `scene.source=="perception"` 时，
+用 `perception_entities` 的世界坐标（`project()` 投影）渲染感知障碍物角标（替代仿真
+真值 `scene.obstacles`），叠加路网、规划轨迹（`trajectory_path`）、LiDAR 点云、检测
+射线、ego。这是实车主流的 ADAS-HMI BEV 形态：感知 bbox + 规划轨迹 + 高精地图底图。
 
 ### 5.4 `trajectory_path`
 

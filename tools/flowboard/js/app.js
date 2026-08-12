@@ -8,6 +8,7 @@ import { initCharts, updateCharts, onChartTopicChange, onChartRangeChange, setTo
 import { safeCall, reportDiag, clearDiag, _auditSceneMaterials } from './utils.js';
 import { updateDeadReckon, _dr, initDeadReckon, tickDeadReckon } from './vis/core/DeadReckon.js';
 import { selectCurrentMotionSegment } from './vis/math/Trajectory.js';
+import { mapToRoadNetwork } from './showcase/sceneAdapter.js';
 
 function setText(id, val) {
   var el = document.getElementById(id);
@@ -28,6 +29,57 @@ const MAP_ROUTES = {
   ],
 };
 const MAP_ROUTE_CACHE = {};
+
+/* ── 独立地图路网覆盖（可视化与仿真解耦，方案 B）──
+ * 主仪表盘加载 maps/<id>/map.json 生成 road_network，可覆盖 metrics.scene 里
+ * 的仿真路网，让"路网"也脱离仿真（实体由 perception_entities 提供）。
+ * mapToRoadNetwork 是 sceneAdapter 的纯函数（有 vis_maptoroad.test.mjs 门禁）。
+ * 启用：URL ?map=<id>&route=<id>，或 UI 选择地图后点"独立地图"。 */
+const INDEPENDENT_MAP_CACHE = {};   // mapId -> { map, roadNetwork, routeId }
+let _independentMapActive = false;
+
+async function loadIndependentMap(mapId, routeId) {
+  if (!mapId) return false;
+  const key = mapId + ':' + (routeId || '');
+  if (INDEPENDENT_MAP_CACHE[key]) {
+    _independentMapActive = true;
+    return true;
+  }
+  try {
+    var response = await fetch('/api/map/preview', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({map: mapId}),
+      cache: 'no-store',
+    });
+    var result = await response.json();
+    if (!response.ok || !result.ok || !result.map) throw new Error('map load failed');
+    INDEPENDENT_MAP_CACHE[key] = {
+      map: result.map,
+      roadNetwork: mapToRoadNetwork(result.map),
+      routeId: routeId || null,
+    };
+    _independentMapActive = true;
+    return true;
+  } catch (error) {
+    console.warn('[independent-map] load failed:', error && error.message);
+    _independentMapActive = false;
+    return false;
+  }
+}
+
+/** 若独立地图模式激活，用独立 map 路网覆盖 topoData 的 scene.road_network。
+ * 幂等：每帧调用安全。返回是否发生了覆盖。 */
+function applyIndependentRoadNetwork(topo) {
+  if (!_independentMapActive) return false;
+  const cached = Object.values(INDEPENDENT_MAP_CACHE)[0];
+  if (!cached || !cached.roadNetwork) return false;
+  const scene = topo && topo.metrics && topo.metrics.scene;
+  if (!scene) return false;
+  scene.road_network = cached.roadNetwork;
+  scene.source = 'perception';   // 独立地图模式下实体来自感知输出
+  return true;
+}
 
 async function fetchMapRoutes(mapId) {
   if (MAP_ROUTE_CACHE[mapId]) return MAP_ROUTE_CACHE[mapId];
@@ -1293,6 +1345,9 @@ function clearFrames() {
 // ═══════════════════════════════════════════════════════════════
 
 function updateAll() {
+  // 独立地图模式：用独立 map 路网覆盖仿真 scene.road_network（可视化与仿真解耦）
+  if (_independentMapActive) applyIndependentRoadNetwork(topoData);
+
   // Each sub-renderer is isolated: a fault must not stop subsequent renders.
   // Failures surface in the diagnostic bar instead of being silently swallowed.
   //
@@ -2362,6 +2417,17 @@ function initAll() {
   var urlInput = document.getElementById('url');
   if (urlInput) urlInput.value = serverUrl;
   refreshRouteChoices();
+  // 独立地图模式：?map=<id>&route=<id> 时加载独立 HD map 覆盖仿真路网
+  // （可视化与仿真解耦，方案 B：路网来自 map.json，实体来自感知输出）
+  try {
+    var params = new URLSearchParams(location.search);
+    var mapId = params.get('map');
+    if (mapId) {
+      loadIndependentMap(mapId, params.get('route') || undefined).then(function(okFlag) {
+        if (okFlag) toast('独立地图已启用：' + mapId + '（路网来自 map.json，实体来自感知）');
+      });
+    }
+  } catch (_) {}
   switchWorkspace(workspaceMode || 'observe');
   // 1. Initialize D3 topology graph
   initTopo();

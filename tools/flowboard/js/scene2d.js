@@ -458,6 +458,58 @@ export function draw2D() {
     });
   }
 
+  // ── 感知输出障碍物（perception_entities，世界坐标，可视化与仿真解耦）──
+  // scene.source=="perception" 时用感知跟踪输出渲染，替代仿真真值 obstacles。
+  // 世界坐标直接用 project() 投影（相对坐标系感知目标用 relativeToCanvas）。
+  if (scn && scn.source === 'perception' && Array.isArray(scn.perception_entities)) {
+    scn.perception_entities.forEach(function (pe) {
+      var bq = project(pe.x || 0, pe.y || 0);
+      var bx = bq[0], by = bq[1];
+      var dist = Math.sqrt((pe.x || 0) * (pe.x || 0) + (pe.y || 0) * (pe.y || 0));
+      var isPed = pe.type === 'pedestrian';
+      var Wd = Math.max(10, (pe.width || 2) * s);
+      var L = Math.max(14, (pe.length || 4.6) * s);
+      var col = isPed ? '#44ee88' : '#00ff88';
+      var lbl = isPed ? 'PED' : (OBS_LBL[pe.type] || 'VEH');
+      var hw = Wd / 2, hl = L / 2;
+      var cornerLen = Math.min(8, Math.min(Wd, L) * 0.3);
+      ctx.save();
+      ctx.translate(bx, by);
+      ctx.shadowColor = col;
+      ctx.shadowBlur = 6;
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.9;
+      // 感知风格角标包围盒（四角 bracket）
+      ctx.beginPath();
+      ctx.moveTo(-hw, -hl + cornerLen); ctx.lineTo(-hw, -hl); ctx.lineTo(-hw + cornerLen, -hl);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(hw - cornerLen, -hl); ctx.lineTo(hw, -hl); ctx.lineTo(hw, -hl + cornerLen);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(-hw, hl - cornerLen); ctx.lineTo(-hw, hl); ctx.lineTo(-hw + cornerLen, hl);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(hw - cornerLen, hl); ctx.lineTo(hw, hl); ctx.lineTo(hw, hl - cornerLen);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      // 类别标签
+      ctx.fillStyle = col;
+      ctx.font = "bold 9px 'JetBrains Mono',monospace";
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(lbl, -hw + 2, -hl - 3);
+      // 距离标签
+      ctx.fillStyle = 'rgba(0,255,136,0.5)';
+      ctx.font = "8px 'JetBrains Mono',monospace";
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'top';
+      ctx.fillText(dist.toFixed(0) + 'm', hw - 2, hl + 3);
+      ctx.restore();
+    });
+  }
+
   // ── Ego vehicle (detailed top-down view, with subtle speed animation) ──
   ctx.save();
   ctx.translate(carX, carY);
