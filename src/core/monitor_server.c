@@ -886,7 +886,10 @@ static bool dispatch_request(int fd, MonitorServer* ms,
             close(fd);
             return false;
         }
-        /* POST /api/sim/run → start one allowlisted map route from FlowBoard. */
+#if !defined(_WIN32)
+        /* POST /api/sim/run → start one allowlisted map route from FlowBoard.
+         * POSIX-only：fork/execl/waitpid 在原生 Windows(mingw) 不存在，
+         * 与 exec_python_tool 一致，Windows 跨编译下此路由不注册（门禁收敛）。 */
         if (strcmp(path, "/api/sim/run") == 0) {
             char* body = read_post_body(fd, req, req_len, 1024);
             cJSON* root = body ? cJSON_Parse(body) : NULL;
@@ -940,6 +943,7 @@ static bool dispatch_request(int fd, MonitorServer* ms,
             close(fd);
             return false;
         }
+#endif /* !_WIN32 (POST /api/sim/run is POSIX-only) */
         /* POST /api/game/control → 3D 游戏模式操控注入。
          * enabled=true 原子写控制帧并创建接管标志；enabled=false 删除标志，
          * flowsim 随即恢复 control_node 驱动。 */

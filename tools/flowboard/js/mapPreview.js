@@ -1,5 +1,6 @@
 import './bootstrap.js';
 import { init3DScene, resize3D, update3D, setCameraMode, resetMapView } from './vis/main.js';
+import { headingBetweenPoints } from './vis/math/Coord.js';
 
 function clonePoint(point) {
   return [Number(point[0] || 0), Number(point[1] || 0), Number(point[2] || 0)];
@@ -54,7 +55,10 @@ function routeFocus(path) {
   }
   const first = path[0];
   const second = path[1] || first;
-  const heading = Math.atan2(Number(second[1] || 0) - Number(first[1] || 0), Number(second[0] || 0) - Number(first[0] || 0));
+  const heading = headingBetweenPoints(
+    Number(first[0] || 0), Number(first[1] || 0),
+    Number(second[0] || 0), Number(second[1] || 0),
+  );
   const span = Math.max(maxX - minX, maxY - minY);
   return {
     centerX: (minX + maxX) / 2,
