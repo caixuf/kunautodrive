@@ -361,15 +361,15 @@ static int run_replay(ReplayConfig* replay,
     options.start_offset_us = replay->start_offset_us;
     options.end_offset_us = replay->end_offset_us;
     options.loop = replay->loop;
-    options.drive_sim_clock = !use_ipc;
+    /* 单进程回放也不驱动 sim clock：被驱动的 clock_now_us() 返回注入的消息时间戳
+     * 而非单调墙钟，会让依赖 clock_now_us() 做 usleep 排程的节点(如 monitor 的
+     * 60Hz topology 导出)在回放期间只导出一帧 → 3D 停在首帧。而回放时所有计算节点
+     * (flowsim/planning/control/...) 都被 bag 输出覆盖而跳过，没有任何节点需要被
+     * 驱动的 sim clock —— 与 --multi 子进程保持墙钟一致。重放消息自带时间戳
+     * (scene/frame.t_us 等)，消费者无需 sim clock。 */
+    options.drive_sim_clock = false;
     options.should_stop = replay_stop_requested;
     options.should_stop_user_data = &stop_ctx;
-
-    if (!use_ipc) {
-        clock_set_sim_mode(true);
-    } else {
-        LOG_WARN("launcher", "replay over IPC keeps child processes on wall-clock time; sim clock remains local to injector");
-    }
 
     LOG_INFO("launcher", "replay start: bag=%s rate=%.3fx topic=%s loop=%s mode=%s",
              replay->bag_path, replay->speed,

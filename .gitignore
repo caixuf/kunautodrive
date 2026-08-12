@@ -4,6 +4,8 @@ build_asan_rel/
 bin/
 lib/*
 obj/
+# 测试运行产物
+bag_replay_test_artifacts/
 
 # CMake生成的文件
 CMakeCache.txt

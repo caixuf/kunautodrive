@@ -61,6 +61,7 @@ static void cleanup_artifacts(void) {
     unlink(ARTIFACT_DIR "/loop.bag");
     unlink(ARTIFACT_DIR "/timing.bag");
     unlink(ARTIFACT_DIR "/ipc.bag");
+    unlink(ARTIFACT_DIR "/nonmono.bag");
     rmdir(ARTIFACT_DIR);
 }
 
@@ -295,6 +296,43 @@ static void test_replay_rate_timing(void) {
     PASS();
 }
 
+static void test_replay_nonmonotonic_ts(void) {
+    TEST("bag replay does not stall on backward timestamps");
+    ensure_artifact_dir();
+    const char* path = ARTIFACT_DIR "/nonmono.bag";
+    BagWriter* writer = bag_writer_open(path);
+    ASSERT(writer != NULL, "open failed");
+    /* 模拟多线程录制产生的轻微倒挂时间戳（实车 bag 有数百处 up to ~300us 倒挂）。
+     * 旧实现 uint64 直接相减 ts-prev 在倒挂时下溢成 ~584 年 → sleep 近似永久，
+     * 1× 回放冻结。这里倒挂 100us，回放必须快速完成而非下溢卡死。 */
+    write_int_record(writer, "t/nonmono", 1000000ULL, 1);
+    write_int_record(writer, "t/nonmono", 999900ULL, 2);   /* 倒挂 100us */
+    write_int_record(writer, "t/nonmono", 1100000ULL, 3);
+    bag_writer_close(writer);
+
+    BagReader* reader = bag_reader_open(path);
+    ASSERT(reader != NULL, "reader open failed");
+
+    IntCollector collector = {0};
+    BagReplayOptions options;
+    memset(&options, 0, sizeof(options));
+    options.publish_fn = collect_int_cb;
+    options.publish_user_data = &collector;
+    options.speed = 1.0;
+
+    uint64_t start = clock_now_monotonic_wall_us();
+    uint64_t played = 0;
+    int rc = bag_reader_play_with_options(reader, &options, &played);
+    ASSERT(rc == ERR_OK, "nonmonotonic replay failed rc=%d", rc);
+    uint64_t elapsed = clock_now_monotonic_wall_us() - start;
+    ASSERT(played == 3, "expected 3 messages, got %llu", (unsigned long long)played);
+    ASSERT(elapsed < 200000ULL,
+           "backward ts must not underflow sleep (elapsed %llu us)",
+           (unsigned long long)elapsed);
+    bag_reader_close(reader);
+    PASS();
+}
+
 static void test_replay_ipc_transport_boundary(void) {
     TEST("bag replay injects through transport IPC");
     ensure_artifact_dir();
@@ -479,6 +517,7 @@ int main(void) {
     test_replay_window_and_filter();
     test_replay_loop_order();
     test_replay_rate_timing();
+    test_replay_nonmonotonic_ts();
     test_replay_ipc_transport_boundary();
     test_flowctl_play_validation();
     cleanup_artifacts();

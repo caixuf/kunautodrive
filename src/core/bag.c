@@ -710,7 +710,11 @@ static int bag_reader_play_absolute_window(BagReader* r,
                 prev_ts = ts;
                 first_emitted = false;
             } else if (options->speed > 0.0) {
-                uint64_t gap_us = ts - prev_ts;
+                /* 多线程录制时不同 topic 的时钟源/写入顺序可能使相邻记录时间戳
+                 * 轻微倒挂(实测 up to ~300us, 数百处)。若直接 uint64 相减会下溢
+                 * 成 ~584 年 → sleep_interruptible_us 近似永久睡眠, 1× 回放冻结。
+                 * 倒挂视为 0 间隙(不 sleep), 不追赶、不倒退。 */
+                uint64_t gap_us = (ts > prev_ts) ? (ts - prev_ts) : 0;
                 uint64_t delay = (uint64_t)((double)gap_us / options->speed);
                 rc = sleep_interruptible_us(delay, options);
                 if (rc == ERR_TIMEOUT) { rc = ERR_OK; goto done; }

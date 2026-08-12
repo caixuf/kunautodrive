@@ -264,12 +264,24 @@ PY
   echo "  Scenario: $SCENARIO_ABS"
 fi
 
-# ── Replay fast path: no pipeline, just flowmond + flow_launcher --replay ──
+# ── Replay: 完整 pipeline 回放 → monitor 重新融合 → 3D 完整还原 ──
+# 走 flow_launcher --replay-bag：把 bag 里录的 scene/frame、vehicle/state、
+# planning/trajectory、road/geometry 注入 message bus，monitor_node 照常运行
+# 并重新生成完整 topology(road_network + 全部 entities + 轨迹 + 红绿灯)。
+# 旧实现走 flow_bag --replay 只回放 vehicle/state 单 topic → 3D 只剩空车。
 if [ -n "$REPLAY_FILE" ]; then
   echo "═══ Replay Mode: $REPLAY_FILE ═══"
-  "$BUILD_DIR/bin/flowmond" --port 8800 --html-path "$ROOT/tools/flowboard/index.html" > /tmp/flowmond.log 2>&1 &
+  rm -f "$JSON_FILE"
+  cd "$ROOT"
+  LAUNCHER_ARGS=("$PIPELINE" --replay-bag "$REPLAY_FILE")
+  "$LAUNCHER_BIN" "${LAUNCHER_ARGS[@]}" \
+    > "$LAUNCHER_STDOUT" 2>"$LAUNCHER_STDERR" &
+  LAUNCHER_PID=$!
+  echo "  Replaying via full pipeline (launcher PID $LAUNCHER_PID)..."
+
+  "$BUILD_DIR/bin/flowmond" --port 8800 --html-path "$ROOT/tools/flowboard/index.html" \
+    > "${FLOWMOND_LOG:-/tmp/flowmond.log}" 2>&1 &
   SERVER_PID=$!
-  sleep 1
   echo "  Dashboard: http://localhost:8800"
   if $OPEN_BROWSER; then
     # 等服务器就绪再开浏览器（复用 main path 的 health check 写法）
@@ -280,8 +292,10 @@ if [ -n "$REPLAY_FILE" ]; then
     done
     xdg-open http://localhost:8800 2>/dev/null || open http://localhost:8800 2>/dev/null || true
   fi
-  "$BUILD_DIR/bin/flow_bag" --replay "$REPLAY_FILE" 2>&1
-  kill $SERVER_PID 2>/dev/null
+  # launcher 在 bag EOF 后自动停止节点并退出；等待结束再收尾
+  wait "$LAUNCHER_PID" 2>/dev/null
+  echo "  Replay finished."
+  kill "$SERVER_PID" 2>/dev/null
   exit 0
 fi
 
