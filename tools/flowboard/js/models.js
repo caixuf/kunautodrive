@@ -146,6 +146,118 @@ function _adaptSu7WheelNodes(group) {
   // GLTFLoader sanitizes Blender's dot-suffixed names to Wheel001/Wheel002.
   _wrapSu7WheelAsAxle(group, ['Wheel.001', 'Wheel001'], 'axle_front', 'front');
   _wrapSu7WheelAsAxle(group, ['Wheel.002', 'Wheel002'], 'axle_rear', 'rear');
+  // 授权 sm_car 的前轴是"左右轮合并成单个网格"。整体偏转这样的网格会让两个
+  // 前轮一起绕轴心平移（掉头满舵下各 ~0.47m 脱离轮拱 = 车轮"漂移"）。真实前轮
+  // 绕各自 kingpin 原地转向，故把前轴合并网格拆成左右两个独立轮，供 VehicleView
+  // 用单轮 rotation.y 做原地转向。生成式 su7.gltf 已是独立 wheel_FL/FR，不触发。
+  var frontAxle = null;
+  group.traverse(function(c) { if (!frontAxle && c.name === 'axle_front') frontAxle = c; });
+  if (frontAxle) _splitMergedFrontAxle(frontAxle);
+}
+
+/**
+ * 把"左右轮合并成单个网格"的前轴拆成两个独立车轮（wheel_FL / wheel_FR）。
+ * 每个轮几何按 z 重定心到自身轮心原点，挂回 axle 并在 z=±轮心 处定位 —— 这样
+ * VehicleView 用 rotation.y 转向时是绕各自轮心（kingpin）原地转，轮心不动、不漂移。
+ * 若该轴本来就是独立双轮（生成式模型），单个轮网格 z 跨度 < 0.2m，直接返回 null。
+ * @returns {Array|null}  [leftMesh, rightMesh] 或 null
+ */
+function _splitMergedFrontAxle(axle) {
+  if (!axle || !axle.children) return null;
+  var merged = null;
+  axle.children.forEach(function(c) { if (!merged && c.isMesh) merged = c; });
+  if (!merged || !merged.geometry) return null;
+
+  var geo = merged.geometry;
+  var pos = geo.getAttribute('position');
+  if (!pos || pos.count < 3) return null;
+
+  var minZ = Infinity, maxZ = -Infinity;
+  for (var i = 0; i < pos.count; i++) {
+    var z = pos.getZ(i);
+    if (z < minZ) minZ = z;
+    if (z > maxZ) maxZ = z;
+  }
+  if (!isFinite(minZ) || !isFinite(maxZ) || (maxZ - minZ) < 0.2) return null; // 非双轮合并
+
+  var midZ = (minZ + maxZ) / 2;          // 左右轮分界
+  var leftCenter = (minZ + midZ) / 2;    // 左轮中心 z
+  var rightCenter = (midZ + maxZ) / 2;   // 右轮中心 z
+
+  var index = geo.index ? geo.index.array : null;
+  var normal = geo.getAttribute('normal');
+  var uv = geo.getAttribute('uv');
+  var nTri = Math.floor(index ? index.length / 3 : pos.count / 3);
+
+  function triVert(i, k) { return index ? index[i * 3 + k] : i * 3 + k; }
+
+  // 按面片质心 z 归属左右两侧；顶点跨侧共享时各侧复制一份（轮左右几何独立）。
+  var leftVerts = [], rightVerts = [];
+  var leftMap = Object.create(null), rightMap = Object.create(null);
+  var leftIdx = [], rightIdx = [];
+
+  for (var t = 0; t < nTri; t++) {
+    var zs = 0;
+    for (var k = 0; k < 3; k++) zs += pos.getZ(triVert(t, k));
+    var right = (zs / 3) >= midZ;
+    var verts = right ? rightVerts : leftVerts;
+    var map = right ? rightMap : leftMap;
+    var outIdx = right ? rightIdx : leftIdx;
+    for (var k2 = 0; k2 < 3; k2++) {
+      var vi = triVert(t, k2);
+      var oi = map[vi];
+      if (oi === undefined) {
+        oi = verts.length;
+        map[vi] = oi;
+        verts.push(vi);
+      }
+      outIdx.push(oi);
+    }
+  }
+  if (leftVerts.length < 6 || rightVerts.length < 6) return null;
+
+  function buildHalf(verts, idx, centerZ) {
+    var positions = new Float32Array(verts.length * 3);
+    var normals = normal ? new Float32Array(verts.length * 3) : null;
+    var uvs = uv ? new Float32Array(verts.length * 2) : null;
+    for (var i = 0; i < verts.length; i++) {
+      var v = verts[i];
+      positions[i * 3] = pos.getX(v);
+      positions[i * 3 + 1] = pos.getY(v);
+      positions[i * 3 + 2] = pos.getZ(v) - centerZ;   // 重定心到轮心
+      if (normals) { normals[i * 3] = normal.getX(v); normals[i * 3 + 1] = normal.getY(v); normals[i * 3 + 2] = normal.getZ(v); }
+      if (uvs) { uvs[i * 2] = uv.getX(v); uvs[i * 2 + 1] = uv.getY(v); }
+    }
+    var g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    if (normals) g.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    if (uvs) g.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+    g.setIndex(new THREE.BufferAttribute(new Uint32Array(idx), 1));
+    return g;
+  }
+
+  var leftGeo = buildHalf(leftVerts, leftIdx, leftCenter);
+  var rightGeo = buildHalf(rightVerts, rightIdx, rightCenter);
+
+  var mat = Array.isArray(merged.material) ? merged.material[0] : merged.material;
+  var leftMesh = new THREE.Mesh(leftGeo, mat);
+  var rightMesh = new THREE.Mesh(rightGeo, mat);
+  leftMesh.name = 'wheel_FL';
+  rightMesh.name = 'wheel_FR';
+  leftMesh.position.z = leftCenter;
+  rightMesh.position.z = rightCenter;
+  leftMesh.userData.rollAxis = 'z';
+  rightMesh.userData.rollAxis = 'z';
+  leftMesh.userData.wheelAxle = 'front';
+  rightMesh.userData.wheelAxle = 'front';
+  leftMesh.castShadow = merged.castShadow;
+  rightMesh.castShadow = merged.castShadow;
+
+  axle.remove(merged);
+  merged.geometry.dispose();
+  axle.add(leftMesh);
+  axle.add(rightMesh);
+  return [leftMesh, rightMesh];
 }
 
 /**

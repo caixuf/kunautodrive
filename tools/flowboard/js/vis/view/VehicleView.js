@@ -524,8 +524,20 @@ export function createVehicleView(scene, renderer, modelCache) {
     // 变道时前轮只转 2-3.5° 肉眼不可见 → "前轮不会动"。
     // 死区滤波：|steer| < 0.005 时视为 0，避免直路巡航时方向盘和车轮微动。
     const steering = _steeringVisualState(entry && entry.steerAngle);
-    if (vis.userData && vis.userData.frontAxle) {
-      vis.userData.frontAxle.rotation.y = steering.frontAxleYaw;
+    /* 前轴转向：让每个前轮绕**自身**垂直轴(kingpin)原地转向，而不是 yaw 整个
+     * axle_front。整体旋转 axle_front 会让左右前轮一起绕轴心平移——掉头满舵
+     * (0.58 rad) 下各轮 ~0.47m 脱离轮拱，看起来"车轮漂移"（wheel_FL/FR 是
+     * axle_front 的子节点，几何居中于自身原点，rotation.y 正好绕轮心转向）。
+     * 真实前轮绕各自 kingpin 转向、轮心不动，故只设前轮 rotation.y。 */
+    const fa = vis.userData && vis.userData.frontAxle;
+    if (fa) {
+      fa.rotation.y = 0;
+      fa.traverse((child) => {
+        if (!child.isMesh || _isSteeringWheelNode(child.name)) return;
+        if (/wheel|tire|tyre/i.test(child.name || '')) {
+          child.rotation.y = steering.frontAxleYaw;
+        }
+      });
     }
 
     let steeringWheelPivot = null;
