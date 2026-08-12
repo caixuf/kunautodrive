@@ -76,6 +76,65 @@ static void normalize_heading(Entity& e) {
     while (e.heading < -M_PI) e.heading += 2.0 * M_PI;
 }
 
+/* Pacejka 96 魔术公式侧向力（乘用车标定见 tools/tire_dynamics_sim.py --tune）：
+ *   F_y = D·sin(C·atan(B·α − E·(B·α − atan(B·α))))
+ *   D   = μ·Fz（峰值受附着系数限制，μ 可降以模拟湿滑路面）
+ *   Fz  = 静态轴荷（质心偏前，前/后轴按 CG_FRONT_FRAC 分配）
+ * 与线性模型不同：α 不硬饱和，由魔术公式自身平滑进入饱和，更贴近真实摩擦圆。 */
+static double pacejka_lateral_force(double alpha, double mu, double Fz,
+                                    double B, double C, double E) {
+    double Bx = B * alpha;
+    double y  = std::sin(C * std::atan(Bx - E * (Bx - std::atan(Bx))));
+    return (mu * Fz) * y;
+}
+
+/* 二自由度横向动力学积分（Pacejka 版）：更新 v_y_body / yaw_rate / heading，
+ * 并把车体系速度投影回世界系 x/y。框架与 integrate_lateral_dynamics 一致，
+ * 仅轮胎侧向力由魔术公式给出（不硬饱和滑移角）。 */
+static void integrate_lateral_dynamics_pacejka(Entity& e, double dt) {
+    constexpr double GRAV = 9.81;
+    double a  = CG_FRONT_FRAC * e.wheelbase;          // 质心→前轴
+    double b  = e.wheelbase - a;                      // 质心→后轴
+    double vx = e.v_x_body;
+
+    // 滑移角（不饱和，交给魔术公式）
+    double alpha_f = e.steer - std::atan2(e.v_y_body + a * e.yaw_rate, vx);
+    double alpha_r =        - std::atan2(e.v_y_body - b * e.yaw_rate, vx);
+
+    // 前/后轴静态轴荷（质心偏前 → 前轴分担 b/L，后轴分担 a/L）
+    double Fz_f = e.mass * GRAV * b / e.wheelbase;
+    double Fz_r = e.mass * GRAV * a / e.wheelbase;
+
+    e.F_yf = pacejka_lateral_force(alpha_f, e.pacejka_mu, Fz_f,
+                                   e.pacejka_b, e.pacejka_c, e.pacejka_e);
+    e.F_yr = pacejka_lateral_force(alpha_r, e.pacejka_mu, Fz_r,
+                                   e.pacejka_b, e.pacejka_c, e.pacejka_e);
+
+    double vy_dot = (e.F_yf + e.F_yr) / e.mass - vx * e.yaw_rate;
+    double r_dot  = (a * e.F_yf - b * e.F_yr) / e.yaw_inertia;
+
+    e.v_y_body += vy_dot * dt;
+    e.yaw_rate += r_dot  * dt;
+
+    /* 摩擦圆护栏（与线性模型一致）：|v_y| ≤ vx·tan(slip_max)·1.5,
+     * |r| ≤ μ·g/vx。Pacejka 峰值本身受 μ·Fz 限制，护栏仅兜底非线性输入。 */
+    const double max_vy = std::fabs(vx) * std::tan(SLIP_ANGLE_MAX) * 1.5;
+    if (std::fabs(e.v_y_body) > max_vy) e.v_y_body = std::copysign(max_vy, e.v_y_body);
+    const double max_r = (0.8 * GRAV) / std::max(vx, 1.0);
+    if (std::fabs(e.yaw_rate) > max_r) e.yaw_rate = std::copysign(max_r, e.yaw_rate);
+
+    e.heading  += e.yaw_rate * dt;
+    normalize_heading(e);
+
+    // 车体系 (v_x, v_y) → 世界系
+    double ch = std::cos(e.heading), sh = std::sin(e.heading);
+    e.vx = e.v_x_body * ch - e.v_y_body * sh;
+    e.vy = e.v_x_body * sh + e.v_y_body * ch;
+    e.x += e.vx * dt;
+    e.y += e.vy * dt;
+    e.speed = std::sqrt(e.v_x_body * e.v_x_body + e.v_y_body * e.v_y_body);
+}
+
 void step_bicycle(Entity& e, double dt, double throttle, double brake, double steer) {
     e.speed += longitudinal_accel(e, throttle, brake, e.speed) * dt;
     /* 倒车只允许显式负油门触发（三把方向掉头相位）。
@@ -179,10 +238,37 @@ void step_bicycle_dynamic(Entity& e, double dt, double throttle, double brake, d
     integrate_lateral_dynamics(e, dt);               // 内部把 e.speed 更新为合速度大小
 }
 
+void step_bicycle_dynamic_pacejka(Entity& e, double dt, double throttle, double brake, double steer) {
+    // 低速退化：运动学既够用又稳（前向欧拉对高横向刚度在低速发散）
+    if (e.speed < LOW_SPEED_MS) {
+        step_bicycle(e, dt, throttle, brake, steer);
+        e.v_x_body = e.speed;
+        e.v_y_body = 0.0;
+        return;
+    }
+    // 入口同步 + 纵向解耦积分（与 step_bicycle_dynamic 同构）
+    if (e.v_x_body <= 0.0 && e.speed > 0.0) e.v_x_body = e.speed;
+    e.v_x_body += longitudinal_accel(e, throttle, brake, e.v_x_body) * dt;
+    if (e.v_x_body < 0.0) e.v_x_body = 0.0;
+
+    update_steer(e, steer, dt);
+    integrate_lateral_dynamics_pacejka(e, dt);
+}
+
 void apply_vehicle_defaults(Entity& e) {
     /* 执行器滞后参数：所有车辆共用默认值 */
     e.steer_tau = 0.15;
     e.steer_rate_max = 0.6;
+
+    /* Pacejka 魔术公式参数（physics_model=pacejka 时才被读取；运动学/线性模式
+     * 无视）。乘用车标定扫描见 tools/tire_dynamics_sim.py --tune：
+     *   B=8.0 C=1.2 E=-0.2 μ=0.7（干燥沥青，峰值横向加速度 ~0.7g）。
+     * μ 为峰值附着系数，可降以模拟湿滑/积雪路面。所有车型共用（真实车差异在
+     * 载荷 Fz 与 yaw_inertia，B/C/E 对乘用车差异不大）。 */
+    e.pacejka_b = 8.0;
+    e.pacejka_c = 1.2;
+    e.pacejka_e = -0.2;
+    e.pacejka_mu = 0.7;
 
     /* 动力学模型参数（physics_model=dynamic 时才被读取；运动学模式无视）：
      *   tire_stiffness_{f,r} —— 每轴等效侧偏刚度 (N/rad)，线性轮胎 F_y = Cα·α

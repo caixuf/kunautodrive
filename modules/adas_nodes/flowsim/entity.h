@@ -113,6 +113,15 @@ struct Entity {
     double tire_stiffness_r{0};    /**< 后轮侧偏刚度 (N/rad)，默认 0 = 未初始化 */
     double yaw_inertia{0};         /**< 绕 Z 轴转动惯量 (kg·m²)，默认 0 = 未初始化 */
 
+    /* ── Pacejka 魔术公式参数（physics_model=pacejka 时启用，见 physics.cpp）──
+     * F_y = D·sin(C·atan(B·α − E·(B·α − atan(B·α))))，D=μ·Fz（峰值受附着限制），
+     * α 为滑移角（不硬饱和，由魔术公式自然饱和）。标定扫描见
+     * tools/tire_dynamics_sim.py --tune（B=8.0 C=1.2 E=-0.2 μ=0.7 为乘用车最优）。 */
+    double pacejka_b{0};           /**< 刚度因子 B，默认 0 = 未初始化 */
+    double pacejka_c{0};           /**< 形状因子 C，默认 0 = 未初始化 */
+    double pacejka_e{0};           /**< 曲率因子 E，默认 0 = 未初始化 */
+    double pacejka_mu{0};          /**< 峰值附着系数 μ，默认 0 = 未初始化（摩擦圆上限） */
+
     /* ── 执行器滞后参数（运动学模型也启用，用于 yaw_rate 精确计算）── */
     double steer_tau{0.15};        /**< 转向执行器一阶滞后时间常数 (s)，典型 EPS 0.10-0.20 */
     double steer_rate_max{0.6};    /**< 最大转向速率 (rad/s)，EPS 物理限制 */

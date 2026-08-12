@@ -58,6 +58,27 @@ void step_bicycle(Entity& e, double dt, double throttle, double brake, double st
 void step_bicycle_dynamic(Entity& e, double dt, double throttle, double brake, double steer);
 
 /**
+ * 动力学自行车模型积分（Pacejka 魔术公式轮胎，opt-in）。
+ *
+ * 与 step_bicycle_dynamic（线性轮胎）共用二自由度框架：侧向速度 v_y_body +
+ * 横摆角速度 yaw_rate 积分，低速(<5m/s)退化运动学。区别仅在轮胎侧向力：
+ *   - 线性轮胎：F_y=Cα·α，滑移角硬饱和于 ±0.12rad（摩擦极限近似）
+ *   - Pacejka：F_y=D·sin(C·atan(B·α − E·(B·α − atan(B·α))))，D=μ·Fz，
+ *     滑移角不硬饱和、由魔术公式自然饱和，峰值受附着系数 μ·Fz 限制，
+ *     可模拟雨天/湿滑路面降附着。参数 B/C/E/μ 由 apply_vehicle_defaults 预置。
+ *
+ * 与线性模型相同的已知边界（见 docs/CALIBRATION_GUIDE.md）：
+ *   1. 低速退化运动学（v_x<5m/s），起步/堵车段与运动学等价。
+ *   2. 与现有 MPC 模型失配——控制器基于运动学假设整定，非线性下过弯横向
+ *      误差可能变大，需 understeer 前馈补偿（见 tools/tire_dynamics_sim.py）。
+ *      故默认关闭，仅作仿真保真度选项，验收标准是「稳定不发散 + invariant 通过」。
+ *
+ * 启用方式：pipeline.json 中 flowsim 节点 params 加 "physics_model":"pacejka"
+ *          （B/C/E/μ 由 apply_vehicle_defaults 按车型预置，可经 params 覆盖）。
+ */
+void step_bicycle_dynamic_pacejka(Entity& e, double dt, double throttle, double brake, double steer);
+
+/**
  * 简易行人运动学：按 vx/vy 匀速移动，到达边界后反弹/停止。
  * 调用方负责设置 vx/vy 和边界逻辑（在 npc_ai 里处理）。
  * 本函数只做 x += vx*dt, y += vy*dt。

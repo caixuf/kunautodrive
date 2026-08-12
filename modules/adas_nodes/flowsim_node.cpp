@@ -1832,6 +1832,9 @@ protected:
             if (strcmp(g.physics_model, "dynamic") == 0) {
                 flowsim::step_bicycle_dynamic(ego, FLOWSIM_DT_SEC,
                                               ego.throttle, ego.brake, ego.steer);
+            } else if (strcmp(g.physics_model, "pacejka") == 0) {
+                flowsim::step_bicycle_dynamic_pacejka(ego, FLOWSIM_DT_SEC,
+                                                      ego.throttle, ego.brake, ego.steer);
             } else {
                 flowsim::step_bicycle(ego, FLOWSIM_DT_SEC,
                                       ego.throttle, ego.brake, ego.steer);
@@ -2378,6 +2381,10 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
                 if (strcmp(g.physics_model, "dynamic") == 0) {
                     LOG_INFO("flowsim", "physics_model=dynamic selected "
                              "(线性轮胎二自由度；<5m/s 退化运动学，见 CALIBRATION_GUIDE.md)");
+                } else if (strcmp(g.physics_model, "pacejka") == 0) {
+                    LOG_INFO("flowsim", "physics_model=pacejka selected "
+                             "(Pacejka 魔术公式轮胎；峰值受 μ·Fz 限制，可模拟湿滑路面，"
+                             "见 CALIBRATION_GUIDE.md)");
                 }
             }
             cJSON_Delete(p);

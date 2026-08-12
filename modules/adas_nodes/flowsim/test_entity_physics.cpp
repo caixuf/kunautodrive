@@ -17,6 +17,7 @@ using flowsim::NpcState;
 using flowsim::apply_vehicle_defaults;
 using flowsim::step_bicycle;
 using flowsim::step_bicycle_dynamic;
+using flowsim::step_bicycle_dynamic_pacejka;
 using flowsim::step_pedestrian;
 
 static int failures = 0;
@@ -299,6 +300,111 @@ static void test_steer_override_full_lock() {
     CHECK(approx(diam, 2.0 * R_center, 0.3), "U-turn diameter ~ 2*sqrt(R^2+hw^2)");
 }
 
+static void test_pacejka_defaults() {
+    std::printf("--- pacejka defaults ---\n");
+    Entity car;  car.type = EntityType::Car;   apply_vehicle_defaults(car);
+    Entity suv;  suv.type = EntityType::SUV;   apply_vehicle_defaults(suv);
+    Entity trk;  trk.type = EntityType::Truck; apply_vehicle_defaults(trk);
+    CHECK(car.pacejka_b > 0.0 && car.pacejka_c > 0.0, "car pacejka B/C set");
+    CHECK(car.pacejka_mu > 0.0, "car pacejka mu set");
+    CHECK(approx(car.pacejka_b, suv.pacejka_b, 0.01), "car/suv share B");
+    CHECK(approx(car.pacejka_mu, trk.pacejka_mu, 0.01), "car/truck share mu");
+}
+
+static void test_pacejka_turn() {
+    std::printf("--- pacejka steady-state turn ---\n");
+    Entity e;
+    e.type = EntityType::Car;
+    apply_vehicle_defaults(e);
+    e.x = 0; e.y = 0; e.heading = 0; e.speed = 15.0;
+
+    double dt = 0.05;
+    double yaw_prev = 0.0;
+    for (int i = 0; i < 80; ++i) {  // 4 秒到稳态，throttle 抵消阻力
+        step_bicycle_dynamic_pacejka(e, dt, 0.15, 0.0, 0.05);
+        if (i == 60) yaw_prev = e.yaw_rate;
+    }
+    double yaw_ss = e.yaw_rate;
+    std::printf("  steady: v=%.2f yaw_rate=%.4f (3s=%.4f) heading=%.3f y=%.2f\n",
+                e.speed, yaw_ss, yaw_prev, e.heading, e.y);
+    CHECK(yaw_ss > 0.05, "positive steer -> positive yaw_rate");
+    CHECK(e.heading > 0.1 && e.y > 0.5, "vehicle turned toward +y");
+    CHECK(approx(yaw_ss, yaw_prev, 0.02), "yaw_rate converged to steady state");
+    // 不足转向：动力学稳态 yaw 低于运动学预测 v/L·tan(steer)
+    double yaw_kin = (e.speed / e.wheelbase) * std::tan(0.05);
+    CHECK(yaw_ss < yaw_kin, "understeer: pacejka yaw < kinematic prediction");
+}
+
+static void test_pacejka_mu_limits_lateral() {
+    std::printf("--- pacejka mu limits lateral accel ---\n");
+    // 高附着 vs 低附着（湿滑）：同一 steer+速度，低 μ 产生更小横向力。
+    // 注意：大转向下 yaw_rate 会被摩擦圆护栏钳到同一值(≈0.8g/vx)，
+    // 真正的 μ 差异体现在轮胎侧向力 F_y(∝μ·Fz)。这里用中等 steer 验证
+    // 力随 μ 线性缩放（干 0.7 vs 湿 0.3 → F 比 ≈ 3/7）。
+    Entity dry, wet;
+    dry.type = wet.type = EntityType::Car;
+    apply_vehicle_defaults(dry);
+    apply_vehicle_defaults(wet);
+    wet.pacejka_mu = 0.3;   // 湿滑路面
+    dry.speed = wet.speed = 15.0;
+    dry.x = dry.y = wet.x = wet.y = 0;
+    dry.heading = wet.heading = 0;
+
+    double dt = 0.05;
+    for (int i = 0; i < 40; ++i) {  // 2 秒中等转向（不触发护栏饱和）
+        step_bicycle_dynamic_pacejka(dry, dt, 0.15, 0.0, 0.05);
+        step_bicycle_dynamic_pacejka(wet, dt, 0.15, 0.0, 0.05);
+    }
+    double Fy_dry = std::fabs(dry.F_yf), Fy_wet = std::fabs(wet.F_yf);
+    std::printf("  dry: yaw_rate=%.4f |F_yf|=%.0fN  wet: yaw_rate=%.4f |F_yf|=%.0fN\n",
+                dry.yaw_rate, Fy_dry, wet.yaw_rate, Fy_wet);
+    // 湿滑 → 抓地力下降 → 横向力与 yaw 都减小（湿滑的滑移角更大，故力比非严格
+    // 等于 μ 比，但方向性保证成立）
+    CHECK(Fy_wet < Fy_dry, "low mu -> smaller lateral force");
+    CHECK(std::fabs(wet.yaw_rate) < std::fabs(dry.yaw_rate),
+          "low mu -> smaller yaw_rate (less grip)");
+}
+
+static void test_pacejka_highspeed_bounded() {
+    std::printf("--- pacejka high-speed large steer (bounded, no NaN) ---\n");
+    Entity e;
+    e.type = EntityType::Car;
+    apply_vehicle_defaults(e);
+    e.x = 0; e.y = 0; e.heading = 0; e.speed = 30.0;
+
+    double dt = 0.05;
+    for (int i = 0; i < 2400; ++i) {  // 120 秒持续大转向
+        step_bicycle_dynamic_pacejka(e, dt, 0.2, 0.0, 0.2);
+    }
+    std::printf("  after 120s: speed=%.2f yaw_rate=%.4f v_y=%.2f x=%.1f y=%.1f\n",
+                e.speed, e.yaw_rate, e.v_y_body, e.x, e.y);
+    CHECK(!std::isnan(e.x) && !std::isnan(e.y), "position finite (no NaN)");
+    CHECK(!std::isnan(e.yaw_rate) && !std::isnan(e.v_y_body), "state finite (no NaN)");
+    CHECK(std::fabs(e.yaw_rate) < 2.0, "yaw_rate bounded (<2 rad/s)");
+    CHECK(std::fabs(e.v_y_body) < 60.0, "v_y_body bounded (slip guard)");
+    CHECK(e.speed < 60.0, "speed bounded (near drag-terminal ~50 m/s)");
+}
+
+static void test_pacejka_lowspeed_degrade() {
+    std::printf("--- pacejka low-speed degrades to kinematic ---\n");
+    Entity ep, ek;
+    ep.type = ek.type = EntityType::Car;
+    apply_vehicle_defaults(ep);
+    apply_vehicle_defaults(ek);
+    ep.speed = ek.speed = 2.0;  // < LOW_SPEED_MS(5.0)
+
+    double dt = 0.05;
+    for (int i = 0; i < 40; ++i) {
+        step_bicycle_dynamic_pacejka(ep, dt, 0.2, 0.0, 0.1);
+        step_bicycle(ek, dt, 0.2, 0.0, 0.1);
+    }
+    std::printf("  pacejka:(x=%.3f y=%.3f h=%.4f)  kin:(x=%.3f y=%.3f h=%.4f)\n",
+                ep.x, ep.y, ep.heading, ek.x, ek.y, ek.heading);
+    CHECK(approx(ep.x, ek.x, 1e-6), "low-speed x matches kinematic");
+    CHECK(approx(ep.y, ek.y, 1e-6), "low-speed y matches kinematic");
+    CHECK(approx(ep.heading, ek.heading, 1e-6), "low-speed heading matches kinematic");
+}
+
 static void test_pedestrian() {
     std::printf("--- pedestrian ---\n");
     Entity p;
@@ -322,6 +428,11 @@ int main() {
     test_dynamic_lowspeed_degrade();
     test_rear_axle_no_slip();
     test_steer_override_full_lock();
+    test_pacejka_defaults();
+    test_pacejka_turn();
+    test_pacejka_mu_limits_lateral();
+    test_pacejka_highspeed_bounded();
+    test_pacejka_lowspeed_degrade();
     test_pedestrian();
     std::printf("=== %d failures ===\n", failures);
     return failures == 0 ? 0 : 1;
