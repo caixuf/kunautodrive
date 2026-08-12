@@ -1,5 +1,8 @@
 import * as THREE from 'three';
-import { OrbitControls, MapControls } from 'three/addons/controls/OrbitControls.js';
+import * as OrbitControlsModule from 'three/addons/controls/OrbitControls.js';
+
+const OrbitControls = OrbitControlsModule.OrbitControls;
+const MapControls = OrbitControlsModule.MapControls || OrbitControls;
 
 /**
  * CameraRig.js — 相机控制器

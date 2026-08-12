@@ -82,6 +82,39 @@ def fetch_json(url: str) -> dict:
         return json.load(response)
 
 
+def _read_tail(path: Path, max_lines: int = 20) -> str:
+    if not path.exists():
+        return ""
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    return "\n".join(lines[-max_lines:])
+
+
+def wait_complete_topology(timeout_s: float = 30.0) -> dict:
+    """Wait until flowmond serves a usable topology snapshot.
+
+    On slower Windows runners the first few /api/topology responses can be
+    structurally incomplete while launcher is still publishing initial scene
+    state, so poll with a bounded deadline.
+    """
+    deadline = time.monotonic() + timeout_s
+    last_topology = {}
+    while time.monotonic() < deadline:
+        try:
+            topology = fetch_json("http://127.0.0.1:8800/api/topology")
+            scene = topology.get("metrics", {}).get("scene", topology.get("scene", {}))
+            edges = scene.get("road_network", {}).get("edges", [])
+            if topology.get("nodes") and edges:
+                return topology
+            last_topology = topology
+        except OSError:
+            pass
+        time.sleep(0.5)
+    raise RuntimeError(
+        "flowmond did not receive a complete topology from launcher "
+        f"within {timeout_s:.0f}s (last nodes={len(last_topology.get('nodes', []))})"
+    )
+
+
 def make_runtime_pipeline(runtime_temp: Path) -> Path:
     pipeline = json.loads(require(PIPELINE_SOURCE, "Windows pipeline").read_text(encoding="utf-8"))
     for process in pipeline.get("processes", []):
@@ -169,24 +202,21 @@ def main() -> int:
         if "19" not in updated:
             raise RuntimeError(f"hot reload was not observable: before={original}, after={updated}")
 
-        topology = {}
-        for _ in range(20):
-            try:
-                topology = fetch_json("http://127.0.0.1:8800/api/topology")
-                scene = topology.get("metrics", {}).get("scene", topology.get("scene", {}))
-                edges = scene.get("road_network", {}).get("edges", [])
-                if topology.get("nodes") and edges:
-                    break
-            except OSError:
-                pass
-            time.sleep(0.5)
-        else:
-            raise RuntimeError("flowmond did not receive a complete topology from launcher")
+        topology = wait_complete_topology(timeout_s=45.0)
 
         scene = topology.get("metrics", {}).get("scene", topology.get("scene", {}))
         edges = scene.get("road_network", {}).get("edges", [])
         print(f"PASS: params={len(rows)}, hot_reload={updated}, nodes={len(topology['nodes'])}, road_edges={len(edges)}")
         return 0
+    except Exception as error:
+        launcher_tail = _read_tail(log_dir / "win_runtime_launcher.log")
+        flowmond_tail = _read_tail(log_dir / "win_runtime_flowmond.log")
+        details = [str(error)]
+        if launcher_tail:
+            details.append("[launcher log tail]\n" + launcher_tail)
+        if flowmond_tail:
+            details.append("[flowmond log tail]\n" + flowmond_tail)
+        raise RuntimeError("\n\n".join(details)) from error
     finally:
         for proc in (flowmond, launcher):
             if proc and proc.poll() is None:

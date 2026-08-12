@@ -268,7 +268,7 @@ jobs:
       - name: ESLint no-undef + no-unused-vars
         run: |
           set -e
-          npx eslint -c tools/flowboard/eslint.config.mjs tools/flowboard/js/vis/
+          npx --yes eslint -c tools/flowboard/eslint.config.mjs tools/flowboard/js/vis/
       # ── 门禁 3: 单帧 tick 冒烟（3 场景 × tickAnimation） ──
       - name: Render tick smoke (3 scenarios)
         run: |

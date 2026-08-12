@@ -15,7 +15,7 @@
 
 import { readdirSync } from 'fs';
 import { resolve, relative, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const VIS_DIR = resolve(__dirname, '../tools/flowboard/js/vis');
@@ -50,7 +50,7 @@ for (const absPath of modulePaths) {
   // 显示相对 vis/ 的路径（如 core/CameraRig.js），更易读
   const name = relative(VIS_DIR, absPath).replace(/\\/g, '/');
   try {
-    await import(absPath);
+    await import(pathToFileURL(absPath).href);
     pass++;
     console.log('  PASS  ' + name);
   } catch (err) {
