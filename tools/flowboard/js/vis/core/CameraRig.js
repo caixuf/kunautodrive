@@ -59,6 +59,9 @@ export function createCameraRig(canvas) {
    * 打轮动作,且避免朝向噪声直接晃动整个画面。 */
   let _camSH = 0, _camInit = false;
   let _camLastT = 0;
+  // 自由视角(orbit)跟车：记录上一帧 ego 位置，按位移把 orbit 目标+相机整体平移，
+  // 让用户自由环绕/缩放时仍贴着移动中的 ego，而不是钉在进入环绕时的旧位置。
+  let _orbitPrevEgo = null;
 
   function update(ego, roadGroup, now) {
     let ex = ego ? ego.x : 0;
@@ -148,7 +151,22 @@ export function createCameraRig(canvas) {
         if (needsControlSnap) {
           orbitControls.target.set(ex, eg, ez);
           needsControlSnap = false;
+        } else if (_orbitPrevEgo) {
+          // 按 ego 位移整体平移 target + 相机，保持用户既有的环绕半径/视角，
+          // 同时让自由视角"跟随"移动中的车辆（否则车开出屏幕只剩空路）。
+          const dx = ex - _orbitPrevEgo.x;
+          const dy = eg - _orbitPrevEgo.y;
+          const dz = ez - _orbitPrevEgo.z;
+          if (Math.abs(dx) + Math.abs(dy) + Math.abs(dz) > 1e-6) {
+            camera.position.x += dx;
+            camera.position.y += dy;
+            camera.position.z += dz;
+            orbitControls.target.x += dx;
+            orbitControls.target.y += dy;
+            orbitControls.target.z += dz;
+          }
         }
+        _orbitPrevEgo = { x: ex, y: eg, z: ez };
         orbitControls.update();
         break;
       }
