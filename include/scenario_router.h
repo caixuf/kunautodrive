@@ -8,8 +8,8 @@
 extern "C" {
 #endif
 
-#define ROUTER_MAX_LANES   4096   /* 支持大地图（city_grid 5200 lane 的级别） */
-#define ROUTER_MAX_EDGES   8192
+#define ROUTER_MAX_LANES   8192    /* 完整 city_grid：5200 lane */
+#define ROUTER_MAX_EDGES   32768   /* 完整 city_grid：~2 万有向边 */
 #define ROUTER_MAX_PATH    256
 
 /* 车道段 */
@@ -33,12 +33,16 @@ typedef struct {
     double cost;            /* 通行代价 */
 } RouterEdge;
 
-/* 路由图 */
+/* 路由图。
+ * 内部 lanes/edges/lane_index 均为堆分配（router_graph_init 分配、
+ * router_graph_free 释放）：完整 city_grid 5200 lane 时结构体定长数组
+ * 会达 ~1.3MB，放栈上（flowsim 协程/导航线程）有爆栈风险。 */
 typedef struct {
-    RouterLane  lanes[ROUTER_MAX_LANES];
+    RouterLane* lanes;      /* [ROUTER_MAX_LANES] */
     int         lane_count;
-    RouterEdge  edges[ROUTER_MAX_EDGES];
+    RouterEdge* edges;      /* [ROUTER_MAX_EDGES] */
     int         edge_count;
+    int*        lane_index; /* lane_id → lanes[] 下标（-1=无），heuristic O(1) 查 */
 } RouterGraph;
 
 /* 路由结果 */
@@ -49,9 +53,15 @@ typedef struct {
 } RouterPath;
 
 /**
- * 初始化路由图（清空所有车道和边）。
+ * 初始化路由图（堆分配 lanes/edges/lane_index，清空计数）。
+ * 用完后必须调用 router_graph_free() 释放。
  */
 void router_graph_init(RouterGraph* g);
+
+/**
+ * 释放路由图内部堆内存。graph 本体（栈上/struct 内）由调用方负责。
+ */
+void router_graph_free(RouterGraph* g);
 
 /**
  * 添加车道段。

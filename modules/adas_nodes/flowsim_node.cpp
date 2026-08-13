@@ -687,6 +687,13 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
             if (a->len <= 0) e.length = 0.5;
             if (a->wid <= 0) e.width = 0.5;
         }
+        /* M3：NPC 路口转向意图（直行为主 + 部分左/右转），大地图交叉口不再
+         * 全直行（原来 advance 硬编码 junc_angle=M_PI）。顺行 NPC 在 road_pos
+         * 推进分支消费；对向/无 road_pos 走 route 分支不受影响。 */
+        if (e.is_npc_vehicle()) {
+            int r = rand() % 10;
+            e.turn_intent = (r < 6) ? 0 : ((r % 2) ? 1 : 2);  /* 60% 直, 20% 左, 20% 右 */
+        }
         /* 中央 route 初始化：所有 NPC 车辆（新旧格式）都通过 world_to_frenet
          * 定位到路网后初始化 route_dir/route_s/offset，保证严格贴道路几何行驶。
          *
@@ -2334,9 +2341,13 @@ static bool build_route_via_astar(void) {
     if (router_build_from_map_json(&graph, g.scenario->road_network_json,
                                    /*lane_change_penalty=*/8.0, &lane_count) != 0) {
         LOG_WARN("flowsim", "astar: router_build_from_map_json failed — fallback auto chain");
+        router_graph_free(&graph);
         return false;
     }
-    if (lane_count <= 0) return false;
+    if (lane_count <= 0) {
+        router_graph_free(&graph);
+        return false;
+    }
 
     int max_road = 0;
     for (int i = 0; i < graph.lane_count; i++) {
@@ -2347,6 +2358,7 @@ static bool build_route_via_astar(void) {
     if (start_lane < 0 || goal_lane < 0) {
         LOG_WARN("flowsim", "astar: start/goal lane missing (start=%d goal=%d)",
                  start_lane, goal_lane);
+        router_graph_free(&graph);
         return false;
     }
 
@@ -2354,6 +2366,7 @@ static bool build_route_via_astar(void) {
     if (router_astar(&graph, start_lane, goal_lane, &path) != 0 || path.count < 2) {
         LOG_WARN("flowsim", "astar: 无路可达 lane %d -> %d — fallback auto chain",
                  start_lane, goal_lane);
+        router_graph_free(&graph);
         return false;
     }
 
@@ -2372,8 +2385,10 @@ static bool build_route_via_astar(void) {
     if (!g.route.build_from_chain(g.roads, road_chain, rc_count)) {
         LOG_WARN("flowsim", "astar: route build_from_chain(%d roads) failed — fallback",
                  rc_count);
+        router_graph_free(&graph);
         return false;
     }
+    router_graph_free(&graph);
     std::string chain_str;
     for (int i = 0; i < rc_count; i++) {
         if (i) chain_str += ",";

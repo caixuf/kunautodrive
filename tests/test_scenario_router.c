@@ -39,6 +39,7 @@ static void test_straight_chain(void) {
     ASSERT(p.count == n, "path should contain all %d lanes, got %d", n, p.count);
     ASSERT(fabs(p.total_cost - 400.0) < 1.0, "cost should be 400m, got %.1f", p.total_cost);
     for (int i = 0; i < n; i++) ASSERT(p.lane_ids[i] == i, "lane order wrong at %d", i);
+    router_graph_free(&g);
     PASS();
 }
 
@@ -54,6 +55,7 @@ static void test_unreachable(void) {
     /* 1 -> 2 断开 */
     RouterPath p;
     ASSERT(router_astar(&g, 0, 2, &p) == -1, "disconnected should return -1");
+    router_graph_free(&g);
     PASS();
 }
 
@@ -82,6 +84,7 @@ static void test_2d_grid(void) {
     int rc = router_astar(&g, 0, 0 * N + (N - 1), &p); /* (0,0) -> (0,19) */
     ASSERT(rc == 0, "grid A* should succeed");
     ASSERT(p.count == N, "vertical path should have %d lanes", N);
+    router_graph_free(&g);
     PASS();
 }
 
@@ -99,6 +102,7 @@ static void test_xy_length(void) {
         }
     }
     ASSERT(found, "lane 7 not found");
+    router_graph_free(&g);
     PASS();
 }
 
@@ -142,6 +146,7 @@ static void test_map_json_build_and_astar(void) {
     ASSERT(p.count == 2, "path should be 2 lanes, got %d", p.count);
     ASSERT(p.lane_ids[0] == start && p.lane_ids[1] == goal, "path order wrong");
     ASSERT(fabs(p.total_cost - 100.0) < 1.0, "cost should be ~100m, got %.1f", p.total_cost);
+    router_graph_free(&g);
     PASS();
 }
 
@@ -165,6 +170,7 @@ static void test_map_json_no_cross_direction_neighbors(void) {
     }
     ASSERT(has_12, "same-direction neighbors should connect");
     ASSERT(!has_101, "cross-direction must NOT connect (禁止越线变道)");
+    router_graph_free(&g);
     PASS();
 }
 
@@ -189,6 +195,7 @@ static void test_map_json_turn_route(void) {
     ASSERT(router_astar(&g, r0_1, r2_1, &p) == 0, "turn A* should succeed");
     ASSERT(p.count == 2 && p.lane_ids[0] == r0_1 && p.lane_ids[1] == r2_1,
            "turn path wrong (count=%d)", p.count);
+    router_graph_free(&g);
     PASS();
 }
 

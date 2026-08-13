@@ -392,6 +392,7 @@ static int navigation_init(MessageBus* bus, Transport* transport,
             g.road_length_m = 3000.0;
             if (sc->duration_s > 0.0) (void)0;
             if (g.lane_count > 0) {
+                router_graph_free(&g.lane_graph);  /* 防 reload 重复分配泄漏 */
                 router_graph_init(&g.lane_graph);
                 for (int i = 0; i < g.lane_count; ++i) {
                     router_add_lane(&g.lane_graph, i, 0.0, g.road_length_m, i, 0, 22.0);
@@ -449,6 +450,7 @@ static void navigation_stop(void) {
 static void navigation_cleanup(void) {
     task_stop(&g.taskbase);
     task_base_destroy(&g.taskbase);
+    router_graph_free(&g.lane_graph);
     pthread_mutex_destroy(&g.mu);
 }
 

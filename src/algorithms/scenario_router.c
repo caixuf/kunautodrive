@@ -83,21 +83,27 @@ static inline int closed_set_has(uint64_t* cs, int id) {
 
 /* ── Euclidean heuristic: distance from lane center to goal lane center ── */
 static double heuristic(const RouterGraph* g, int from_id, int to_id) {
-    double cx_from = 0, cy_from = 0, cx_to = 0, cy_to = 0;
-    int found_from = 0, found_to = 0;
-    for (int i = 0; i < g->lane_count; i++) {
-        if (g->lanes[i].id == from_id) {
-            cx_from = (g->lanes[i].start_x + g->lanes[i].end_x) * 0.5;
-            cy_from = (g->lanes[i].start_y + g->lanes[i].end_y) * 0.5;
-            found_from = 1;
-        }
-        if (g->lanes[i].id == to_id) {
-            cx_to = (g->lanes[i].start_x + g->lanes[i].end_x) * 0.5;
-            cy_to = (g->lanes[i].start_y + g->lanes[i].end_y) * 0.5;
-            found_to = 1;
+    int fi = -1, ti = -1;
+    if (g->lane_index && from_id >= 0 && from_id < ROUTER_MAX_LANES) {
+        fi = g->lane_index[from_id];
+    }
+    if (g->lane_index && to_id >= 0 && to_id < ROUTER_MAX_LANES) {
+        ti = g->lane_index[to_id];
+    }
+    /* 无索引时回退线性扫（兼容 id 超出上限的调用方） */
+    if (fi < 0 || ti < 0) {
+        for (int i = 0; i < g->lane_count; i++) {
+            if (g->lanes[i].id == from_id) fi = i;
+            if (g->lanes[i].id == to_id) ti = i;
         }
     }
-    if (!found_from || !found_to) return 0.0;
+    if (fi < 0 || ti < 0) return 0.0;
+    const RouterLane* a = &g->lanes[fi];
+    const RouterLane* b = &g->lanes[ti];
+    double cx_from = (a->start_x + a->end_x) * 0.5;
+    double cy_from = (a->start_y + a->end_y) * 0.5;
+    double cx_to   = (b->start_x + b->end_x) * 0.5;
+    double cy_to   = (b->start_y + b->end_y) * 0.5;
     return hypot(cx_to - cx_from, cy_to - cy_from);
 }
 
@@ -116,6 +122,20 @@ static double edge_cost(const RouterGraph* g, int from_id, int to_id) {
 
 void router_graph_init(RouterGraph* g) {
     memset(g, 0, sizeof(*g));
+    g->lanes = (RouterLane*)calloc((size_t)ROUTER_MAX_LANES, sizeof(RouterLane));
+    g->edges = (RouterEdge*)calloc((size_t)ROUTER_MAX_EDGES, sizeof(RouterEdge));
+    g->lane_index = (int*)malloc((size_t)ROUTER_MAX_LANES * sizeof(int));
+    if (g->lane_index) {
+        for (int i = 0; i < ROUTER_MAX_LANES; i++) g->lane_index[i] = -1;
+    }
+}
+
+void router_graph_free(RouterGraph* g) {
+    if (!g) return;
+    free(g->lanes);
+    free(g->edges);
+    free(g->lane_index);
+    memset(g, 0, sizeof(*g));
 }
 
 int router_add_lane(RouterGraph* g, int id, double start_x, double end_x,
@@ -128,7 +148,7 @@ int router_add_lane_xy(RouterGraph* g, int id, double start_x, double end_x,
                        double start_y, double end_y,
                        int lane_idx, int road_id, double speed_limit) {
     if (g->lane_count >= ROUTER_MAX_LANES) return -1;
-    RouterLane* l = &g->lanes[g->lane_count++];
+    RouterLane* l = &g->lanes[g->lane_count];
     l->id = id;
     l->start_x = start_x;
     l->end_x = end_x;
@@ -138,6 +158,11 @@ int router_add_lane_xy(RouterGraph* g, int id, double start_x, double end_x,
     l->road_id = road_id;
     l->speed_limit = speed_limit;
     l->length = hypot(end_x - start_x, end_y - start_y);
+    /* id → 下标映射（id 须 < ROUTER_MAX_LANES；超出则回退线性扫，不在此建立） */
+    if (g->lane_index && id >= 0 && id < ROUTER_MAX_LANES) {
+        g->lane_index[id] = g->lane_count;
+    }
+    g->lane_count++;
     return 0;
 }
 
@@ -277,29 +302,32 @@ int router_astar(const RouterGraph* g, int from_id, int to_id, RouterPath* path)
         return 0;
     }
 
-    /* Open set (binary heap) */
-    AstarNode open_set[ROUTER_MAX_LANES];
-    int open_size = 0;
-
-    /* Closed set */
-    uint64_t closed_set[CLOSED_SIZE];
-    closed_set_init(closed_set);
-
-    /* g_score and parent for each lane */
-    double g_score[ROUTER_MAX_LANES];
-    int parent[ROUTER_MAX_LANES];
-    int in_open[ROUTER_MAX_LANES];
+    /* 堆分配：完整 city_grid 8192 lane 时栈上数组会超 ~250KB */
+    AstarNode* open_set = (AstarNode*)calloc((size_t)ROUTER_MAX_LANES, sizeof(AstarNode));
+    double* g_score = (double*)malloc((size_t)ROUTER_MAX_LANES * sizeof(double));
+    int* parent = (int*)malloc((size_t)ROUTER_MAX_LANES * sizeof(int));
+    int* in_open = (int*)malloc((size_t)ROUTER_MAX_LANES * sizeof(int));
+    if (!open_set || !g_score || !parent || !in_open) {
+        free(open_set); free(g_score); free(parent); free(in_open);
+        return -1;
+    }
     for (int i = 0; i < ROUTER_MAX_LANES; i++) {
         g_score[i] = 1e15;
         parent[i] = -1;
         in_open[i] = 0;
     }
 
+    /* Closed set（1KB，栈上即可） */
+    uint64_t closed_set[CLOSED_SIZE];
+    closed_set_init(closed_set);
+
+    int open_size = 0;
     double h0 = heuristic(g, from_id, to_id);
     g_score[from_id] = 0.0;
     pq_push(open_set, &open_size, from_id, 0.0, h0);
     in_open[from_id] = 1;
 
+    int rc = -1;
     while (open_size > 0) {
         int current;
         double cur_g;
@@ -321,7 +349,8 @@ int router_astar(const RouterGraph* g, int from_id, int to_id, RouterPath* path)
             for (int i = sp - 1; i >= 0 && path->count < ROUTER_MAX_PATH; i--)
                 path->lane_ids[path->count++] = stack[i];
             path->total_cost = cur_g;
-            return 0;
+            rc = 0;
+            break;
         }
 
         /* Expand neighbors */
@@ -344,8 +373,11 @@ int router_astar(const RouterGraph* g, int from_id, int to_id, RouterPath* path)
         }
     }
 
-    /* No path found */
-    return -1;
+    free(open_set);
+    free(g_score);
+    free(parent);
+    free(in_open);
+    return rc;  /* 0=找到路径, -1=无路可达 */
 }
 
 int router_lane_at(const RouterGraph* g, int road_id, int lane_idx, double x) {

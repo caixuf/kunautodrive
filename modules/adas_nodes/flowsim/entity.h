@@ -144,6 +144,13 @@ struct Entity {
     int    route_dir{0};           /**< route 行驶方向：+1 顺行，-1 对向，0=未上route(走旧逻辑) */
     int    route_fail_count{0};    /**< frenet_to_world 连续失败计数（≥5 强制 recycle 防飞出） */
 
+    /* ── 路口转向意图（M3：NPC 路口按需选择支路）──
+     * 0=直行 1=左转 2=右转。spawn 时随机分配（直行为主），road_pos 推进
+     * 过路口（road_id 变化）后重新随机，避免一直右转绕圈。esmini
+     * RM_PositionMoveForward 的 junctionSelectorAngle 语义：
+     *   M_PI=直行, M_PI/2=右转, 3*M_PI/2=左转（基准 0 = incoming road 方向）。 */
+    int    turn_intent{0};
+
     /* ── NPC 避障换道（让 NPC 不再"堵成一坨"）── */
     double lane_change_timer{0.0};  /**< 换道冷却计时器 (s)：>0 期间不评估换道，避免频繁抖动 */
     double target_offset{0.0};      /**< E2: 换道目标横向偏移，offset 每帧向此值平滑插值 */

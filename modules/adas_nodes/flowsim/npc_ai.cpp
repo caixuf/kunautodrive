@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>   /* rand()：M3 路口转向意图随机重分配 */
 
 namespace flowsim {
 
@@ -785,13 +786,17 @@ mobil_done: ;
     // 到达 route 起点时直接停用（不 recycle，见下方说明）。
     if (npc.road_pos.ok() && roads && roads->loaded() && npc.route_dir >= 0) {
         // ── RoadPosition 推进分支 ──
-        // junction_angle 暂用 M_PI（直行）；BranchSel 状态可后续从 route step
-        // type 映射左/右转。advance 失败（路网边界）→ recycle。
+        // junction_angle 由 NPC 路口转向意图（turn_intent）决定：直行/左/右，
+        // esmini 只在 advance 遇到 junction 时用它选连接 road（M3 路口按需选支路）。
+        // 语义见 entity.h turn_intent 注释：M_PI=直行 M_PI/2=右转 3M_PI/2=左转。
         double dist = npc.speed * dt;
         double junc_angle = M_PI;
-        if (npc.state == NpcState::Cruise) {
-            // 路口选支路：暂用直行（后续可从 target_vx 或 route step 决定）
-            junc_angle = M_PI;
+        if (npc.turn_intent == 1) {
+            junc_angle = 3.0 * M_PI / 2.0;   /* 左转 */
+        } else if (npc.turn_intent == 2) {
+            junc_angle = M_PI / 2.0;         /* 右转 */
+        } else {
+            junc_angle = M_PI;               /* 直行 */
         }
         bool adv_ok = true;
         if (dist > 0.0) {
@@ -891,6 +896,14 @@ mobil_done: ;
             // 但 npc.road_id/lane_id/s 也需更新供下游逻辑/调试使用）
             FrenetPos fp;
             if (npc.road_pos.frenet(fp)) {
+                /* M3：过路口（road_id 变化）后重新随机转向意图，避免一直右转
+                 * 绕圈/死循环。只在顺行推进分支内做，recycle 传送（recycle_npc
+                 * 会改 road_id）不触发——recycle 后 road_pos.relocate 已重新定位，
+                 * 此处 fp 反映的是推进后位置，正常路口穿越才会跨 road。 */
+                if (fp.road_id != npc.road_id) {
+                    int r = rand() % 10;
+                    npc.turn_intent = (r < 6) ? 0 : ((r % 2) ? 1 : 2);  /* 60% 直, 20% 左, 20% 右 */
+                }
                 npc.road_id = fp.road_id;
                 npc.lane_id = fp.lane_id;
                 npc.s = fp.s;
