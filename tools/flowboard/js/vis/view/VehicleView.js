@@ -407,6 +407,42 @@ export function _isSteeringWheelNode(name) {
   return normalized === 'steering_wheel' || normalized === 'steeringwheel';
 }
 
+/**
+ * 车轮滚动里程（沿车头方向累计的有符号位移）。
+ * 用死推算的**平滑位姿**（NPC 的 smoothX，ego 的 _dr.smoothX）逐帧位移来
+ * 积分，而不是 speed×帧间隔：平滑位姿本就是帧率无关、无抖动地推进的，所以
+ * 车轮角速度与渲染帧率 / 速度信号抖动完全解耦——车速不变时车轮匀速转动，
+ * 不再忽快忽慢。直接用 ego 的 raw lastX 不行：lastX 只在 SSE tick 落点才变
+ * （心跳去重丢弃 <1cm 的重复帧），两次 tick 之间恒定，里程会"台阶式"跳变
+ * → 车轮反而更卡。相机仍用 raw lastX（定案：raw 无顿挫），与此处互不影响。
+ * 首帧无历史位姿时回退 speed×dt，保证 dt/speed 仍被引用。
+ * @returns {number} 累计滚动里程（米，可正可负）
+ */
+export function _advanceWheelOdometry(entry, v, dt, speed_mps) {
+  // 优先用平滑位姿（ego 经 SceneDirector 注入 smoothX/smoothZ/smoothHeading；
+  // NPC ent.x 本就是 smooth）。拿不到时回退 raw。
+  const ex = v.smoothX ?? v.x ?? v.px ?? 0;
+  const ey = v.smoothZ ?? v.y ?? v.py ?? 0;
+  const h = v.smoothHeading ?? v.heading ?? v.yaw ?? 0;
+  if (entry._odoPrevX === undefined) {
+    entry._odoPrevX = ex; entry._odoPrevY = ey;
+    entry._odoDist = (Number.isFinite(speed_mps) ? speed_mps : 0) * (dt || 0);
+    return entry._odoDist;
+  }
+  const dx = ex - entry._odoPrevX;
+  const dy = ey - entry._odoPrevY;
+  entry._odoPrevX = ex; entry._odoPrevY = ey;
+  // 沿车头方向取有符号位移（支持倒车）。
+  let d = dx * Math.cos(h) + dy * Math.sin(h);
+  // 钳制：正常每帧位移 = speed×dt；超过约 3 倍预期值的突变视为瞬移 / 重连
+  // 落点，钳住避免车轮被异常位移带着整圈疯转。这样高速 + 低帧率（如非
+  // observe 10fps）下的正常大位移不会被误杀，仍能匀速转动。
+  const cap = Math.max(0.5, (Number.isFinite(speed_mps) ? speed_mps : 0) * (dt || 0) * 3);
+  if (d > cap) d = cap; else if (d < -cap) d = -cap;
+  entry._odoDist = (entry._odoDist || 0) + d;
+  return entry._odoDist;
+}
+
 /* glTF 模型（sedan/suv/truck/su7）均无 "steering"/"steer"/"handle" 命名节点，
  * 因此程序化注入一个带 steering_column / steering_axis / steering_wheel_pivot
  * 的真实转向组件。仿真约定 steer>0 会让 ENU heading/y 增大（左转），
@@ -617,6 +653,12 @@ export function createVehicleView(scene, renderer, modelCache) {
         : (Number.isFinite(v.speed) ? v.speed : 0))
       : 0;
 
+    // 车轮里程（沿车头方向累计位移）：每帧只算一次、所有车轮共享同一个值，
+    // 否则在 vis.traverse 里逐轮调用会重复累加 entry._odoPrevX，导致第 2 个
+    // 起的车轮 dx=0 永不转动。里程只与"实际走过的路程"相关，与渲染帧率 /
+    // 速度信号抖动完全解耦——车速不变时车轮匀速滚动，不再忽快忽慢。
+    const wheelOdo = _advanceWheelOdometry(entry, v, dt, speed_mps);
+
     // 前轴转向：glTF 模型 axle_front（含 wheel_FL/wheel_FR）整体绕 Y 旋转。
     // 仿真 steer>0 会让 ENU y/heading 增大，即左转；THREE +Y 也把 +X
     // 车头转向 -Z（左侧），所以不再额外取反。steer<0 正确显示右转。
@@ -669,22 +711,19 @@ export function createVehicleView(scene, renderer, modelCache) {
 
       if (!child.isMesh) return;
 
-      // 车轮旋转：程序化模型沿 X，glTF 车轮沿 Z。
+      // 车轮滚动：用里程累计（沿车头方向位移）而非 speed×dt，彻底与渲染帧率 /
+      // 速度信号抖动解耦。车速不变时每帧位移恒定 → 车轮匀速转动，无忽快忽慢。
+      // 转向（rotation.y / kingpin）与滚动（rotation.x|z）是独立自由度，
+      // 故 glTF 前轮即便在打方向时也照常滚动，不再"锁死停转"。
       if (!_isSteeringWheelNode(child.name) &&
           (name.includes('wheel') || name.includes('tire') || name.includes('tyre'))) {
-        if (speed_mps !== undefined) {
-          const radius = 0.35;
-          const angularSpeed = speed_mps / radius;
-          // 转向与滚动是两个独立自由度：程序化模型用 kingpin 父组转向（rotation.y）
-          // + 轮胎自身滚动（rotation.x/z），glTF 前轮同样让轮胎照常滚动 ——
-          // 打方向时前轮持续滚动，不再"锁死停转"（旧实现为避免欧拉组合漂移，
-          // 在转向时暂停前轮滚动，观感是"打方向轮子就不动了"）。
-          const TAU = Math.PI * 2;
-          if (child.userData && child.userData.rollAxis === 'z') {
-            child.rotation.z = (child.rotation.z + angularSpeed * dt) % TAU;
-          } else {
-            child.rotation.x = (child.rotation.x + angularSpeed * dt) % TAU;
-          }
+        const radius = 0.35;
+        const TAU = Math.PI * 2;
+        const wheelAngle = (wheelOdo / radius) % TAU;
+        if (child.userData && child.userData.rollAxis === 'z') {
+          child.rotation.z = wheelAngle;
+        } else {
+          child.rotation.x = wheelAngle;
         }
       }
     });
@@ -866,23 +905,23 @@ export function createVehicleView(scene, renderer, modelCache) {
               w.userData.kingpin.rotation.y = yaw;
             }
           });
-          // 车轮滚动：轮胎自身（kingpin 分离 → 独立自由度），打方向也照常滚动。
+          // 车轮滚动：同样用里程累计（与 glTF 路径共享 _advanceWheelOdometry，
+          // 每帧只调一次避免逐轮重复累加）。半径取程序化模型的实际轮胎半径。
           const speed_mps = v
             ? (Number.isFinite(v.speed_mps) ? v.speed_mps
               : (Number.isFinite(v.speed) ? v.speed : 0))
             : 0;
-          if (speed_mps !== undefined) {
-            const radius = vis.userData.wheelRadius || 0.33;
-            const angularSpeed = speed_mps / radius;
-            const TAU = Math.PI * 2;
-            vis.userData.wheels.forEach((w) => {
-              if (w.userData && w.userData.rollAxis === 'z') {
-                w.rotation.z = (w.rotation.z + angularSpeed * dt) % TAU;
-              } else {
-                w.rotation.x = (w.rotation.x + angularSpeed * dt) % TAU;
-              }
-            });
-          }
+          const radius = vis.userData.wheelRadius || 0.33;
+          const wheelOdo = _advanceWheelOdometry(entry, v, dt, speed_mps);
+          const TAU = Math.PI * 2;
+          const wheelAngle = (wheelOdo / radius) % TAU;
+          vis.userData.wheels.forEach((w) => {
+            if (w.userData && w.userData.rollAxis === 'z') {
+              w.rotation.z = wheelAngle;
+            } else {
+              w.rotation.x = wheelAngle;
+            }
+          });
         }
       }
 

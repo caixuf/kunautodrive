@@ -425,6 +425,13 @@ export function createSceneDirector(scene) {
       store.ego.heading = _dr.lastHeading;
       store.ego.speed = _dr.lastSpeed;
       store.ego.z = egoZ;
+      // 车轮里程用平滑位姿（smooth*）而非 raw last*：lastX 只在 SSE tick 落点
+      // 变化（心跳去重），两次 tick 之间恒定 → 直接积分会让车轮台阶式跳动。
+      // smoothX 每帧外推 + 指数平滑、帧率无关地推进，车轮因此匀速滚动。
+      // 仅供给 VehicleView 里程使用，相机/世界仍锚定 raw lastX（无顿挫定案）。
+      store.ego.smoothX = _dr.smoothX;
+      store.ego.smoothZ = _dr.smoothZ;
+      store.ego.smoothHeading = _dr.smoothHeading;
     }
     /* 流畅专题：NPC 与 ego 同构的 dead reckon。
      * now 是 performance.now() 毫秒，转秒喂给 entity tick（与 ego 路径

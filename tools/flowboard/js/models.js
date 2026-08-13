@@ -391,6 +391,15 @@ function _prepareSu7EmissiveMaterial(material) {
     material.emissiveMap = null;
     material.needsUpdate = true;
   }
+  /* Keep the lamp DEPTH-TESTED against the car body (depthTest stays true) so it
+   * is NOT visible through the body from the opposite side. The lamp is drawn in
+   * the transparent pass (transparent=true) with a high renderOrder (set in
+   * _adaptSu7LightNodes) so it lands on top of the lens glass; depthWrite=false
+   * stops the glow from occluding other transparent surfaces. The glass itself
+   * is told not to write depth (see _adaptSu7LightNodes) so it cannot dim the
+   * lamp sitting ~3mm behind it. */
+  if (material.transparent !== undefined) material.transparent = true;
+  if (material.depthWrite !== undefined) material.depthWrite = false;
   return true;
 }
 
@@ -413,6 +422,7 @@ function _adaptSu7LightNodes(group) {
     if (!mesh.userData) mesh.userData = {};
     _splitSu7LampGeometry(mesh);
     mesh.userData.su7LightKind = kind;
+    var isGlass = /lightglass/i.test(mesh.name || '');
     var emissiveMaterials = [];
     var materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     materials.forEach(function(material) {
@@ -423,7 +433,17 @@ function _adaptSu7LightNodes(group) {
       // without replacing its geometry or emissive texture.
       if (THREE.DoubleSide !== undefined) material.side = THREE.DoubleSide;
       if (material.toneMapped !== undefined) material.toneMapped = false;
+      // The lamp lens glass (LightGlass.004 / LightGlass) sits ~3mm in front of
+      // the emissive Light mesh. A transparent glass that writes depth would
+      // occlude (and dim) the front turn/head light behind it. Transparent glass
+      // must not write depth, so the emissive lamp (higher renderOrder, set just
+      // below) can draw on top of it without see-through (depthTest stays on).
+      if (isGlass && material.depthWrite !== undefined) material.depthWrite = false;
     });
+    // Draw the lamp over its (transparent, depth-write-disabled) lens glass so
+    // the front halo is not washed out. depthTest stays on, so the body still
+    // occludes the lamp from the opposite side — no see-through to the tail lights.
+    if (mesh.renderOrder !== undefined) mesh.renderOrder = 10;
     mesh.userData.su7LampMaterials = emissiveMaterials;
     mesh.userData.su7LampSideMaterials = _lampMaterialsBySide(mesh);
   }

@@ -43,6 +43,9 @@ const frontMaterial = {
   emissiveIntensity: 1,
   toneMapped: true,
   side: 0,
+  depthTest: true,
+  transparent: false,
+  depthWrite: true,
 };
 const rearMaterial = {
   emissive: { setHex(value) { this.value = value; } },
@@ -50,9 +53,20 @@ const rearMaterial = {
   emissiveIntensity: 1,
   toneMapped: true,
   side: 0,
+  depthTest: true,
+  transparent: false,
+  depthWrite: true,
 };
-const rawFrontMesh = { name: 'Light', isMesh: true, material: frontMaterial };
-const rawRearMesh = { name: 'Light.003', isMesh: true, material: rearMaterial };
+const glassMaterial = {
+  name: 'Car_window',
+  transparent: false,
+  toneMapped: true,
+  side: 0,
+  depthWrite: true,
+};
+const rawFrontMesh = { name: 'Light', isMesh: true, material: frontMaterial, renderOrder: 0 };
+const rawRearMesh = { name: 'Light.003', isMesh: true, material: rearMaterial, renderOrder: 0 };
+const rawFrontGlassMesh = { name: 'LightGlass.004', isMesh: true, material: glassMaterial, renderOrder: 0 };
 const sanitizedFrontNode = { name: 'Light', parent: null };
 const sanitizedFrontMesh = {
   name: 'Object_14003',
@@ -63,7 +77,7 @@ const sanitizedFrontMesh = {
 const rawLightScene = {
   userData: { modelType: 'su7' },
   traverse(visitor) {
-    [rawFrontMesh, sanitizedFrontMesh, rawRearMesh].forEach(visitor);
+    [rawFrontMesh, sanitizedFrontMesh, rawRearMesh, rawFrontGlassMesh].forEach(visitor);
   },
 };
 _relinkWheelUserData(rawLightScene);
@@ -88,6 +102,21 @@ ok('SU7 转向灯直接复用真实灯罩而非悬浮方块',
   rearMaterial.emissiveIntensity === 10 &&
   frontMaterial.emissive.value === 0xffa21a &&
   rearMaterial.emissive.value === 0xffa21a);
+// 修复：前灯 emissive 材质须穿透 25% 不透明深色灯罩玻璃（Light 在玻璃之后），
+// 因此设 depthTest=false + transparent=true，并把灯网格 renderOrder 抬高到玻璃之上。
+ok('SU7 前灯 emissive 穿透灯罩玻璃且不透视车身',
+  // lamp 仍受车身深度遮挡（depthTest 保持 true）→ 不会从车头看到尾灯
+  frontMaterial.depthTest === true &&
+  frontMaterial.transparent === true &&
+  frontMaterial.depthWrite === false &&
+  rearMaterial.depthTest === true &&
+  rearMaterial.transparent === true &&
+  rearMaterial.depthWrite === false &&
+  rawFrontMesh.renderOrder === 10 &&
+  rawRearMesh.renderOrder === 10);
+ok('SU7 灯罩玻璃不写深度（避免遮挡其后 emissive 灯）',
+  rawFrontGlassMesh.renderOrder === 10 &&
+  glassMaterial.depthWrite === false);
 ok('SU7 clean exterior 节点存在', ['ChePai', 'Logo', 'Logo.001'].every(name =>
   (model.nodes || []).some(node => node.name === name)));
 ok('SU7 外部 bin/WebP 资源完整', referencedFiles.length > 0 &&
