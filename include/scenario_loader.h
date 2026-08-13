@@ -362,6 +362,11 @@ typedef struct {
     Choreography      choreography;   /**< 编舞循环配置（可选，缺省 enabled=false） */
     /* ── NPC 行为开关 ── */
     bool              npc_lane_change;/**< NPC 启用 MOBIL 自主变道（默认 false，各守其道） */
+    /* ── 解析后的 road_network JSON（A* 主循环建图用）──
+     * resolve_map_reference 注入后保留一份 cJSON_PrintUnformatted 字符串：
+     * edges[].lanes[] 含 id/direction/successors，供 flowsim 初始化阶段
+     * router_build_from_map_json 建全局车道图。scenario_free 释放。 */
+    char*             road_network_json;
 } ScenarioConfig;
 
 /**

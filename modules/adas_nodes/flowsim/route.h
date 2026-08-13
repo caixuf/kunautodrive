@@ -58,6 +58,17 @@ public:
      */
     bool build(FlowRoadNetwork& roads, double tol = 4.0);
 
+    /**
+     * 按显式 road_id 有序链构建 route（road_chain 契约）。
+     * 用于 A* 输出的车道链去重 road 后 → Route，替换/补充自动链式 build()：
+     * road_chain 已由路由层保证拓扑连续，无需再按端点几何猜测后继。
+     * @param roads    路网（查 road 长度）
+     * @param road_ids 有序 road 数字 id 数组（esmini 数值 id，与 map edge id 一致）
+     * @param count    数组长度
+     * @return 至少链出一段返回 true（图外 road 处截断，保留已链部分）
+     */
+    bool build_from_chain(FlowRoadNetwork& roads, const int* road_ids, int count);
+
     bool   ok() const { return !segs_.empty(); }
     int    count() const { return static_cast<int>(segs_.size()); }
     double total_length() const { return total_; }

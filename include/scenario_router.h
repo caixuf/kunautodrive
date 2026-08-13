@@ -98,6 +98,38 @@ int router_astar(const RouterGraph* g, int from_id, int to_id, RouterPath* path)
  */
 int router_lane_at(const RouterGraph* g, int road_id, int lane_idx, double x);
 
+/**
+ * 从 road_network JSON（map.json 经 resolve_map_reference 注入的
+ * `road_network.edges[]`，每个 edge 的 `lanes[]` 含 id/direction/successors）
+ * 构建车道级路由图。用于主循环初始化阶段把 lane 拓扑带进运行时（A* 接入）。
+ *
+ * - 每个 lane 分配递增整数图 id（router_add_lane_xy，几何取 lane centerline
+ *   首末点，回退 edge centerline）；
+ * - road_id = edge 的数字 id（legacy_id 或索引，与 json_to_xodr 生成的 xodr
+ *   编号一致，保证 A* 输出能直接映射回 esmini road id）；
+ * - 后继边（type=0，来自 lane.successors 字符串 id，代价 = 源 lane 长度）；
+ * - 同 road 内同方向相邻 lane 的左右邻边（代价 = lane_change_penalty）。
+ *
+ * @param g                   目标图（调用前先 router_graph_init）
+ * @param road_net_json       road_network 对象 JSON 字符串（含 edges[]）
+ * @param lane_change_penalty 变道惩罚（米等效）
+ * @param out_lane_count      输出 lane 数（可 NULL）
+ * @return 0=成功（可能 0 lane），-1=JSON 解析失败
+ */
+int router_build_from_map_json(RouterGraph* g, const char* road_net_json,
+                               double lane_change_penalty, int* out_lane_count);
+
+/**
+ * 在 RouterGraph 中按 road_id + 方向查 forward 车道的图 id。
+ * @param g         路由图
+ * @param road_id   road 数字 id
+ * @param direction 1=正向（lane.direction>0），-1=反向
+ * @param lane_idx  车道索引（1=最内侧第一车道），<=0 时取该方向第一条
+ * @return 图 lane id，找不到返回 -1
+ */
+int router_lane_id_in_road(const RouterGraph* g, int road_id, int direction,
+                           int lane_idx);
+
 #ifdef __cplusplus
 }
 #endif

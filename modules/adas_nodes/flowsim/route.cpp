@@ -88,6 +88,38 @@ bool Route::build(FlowRoadNetwork& roads, double tol) {
     return !segs_.empty();
 }
 
+bool Route::build_from_chain(FlowRoadNetwork& roads, const int* road_ids, int count) {
+    segs_.clear();
+    total_ = 0.0;
+    if (!road_ids || count <= 0) return false;
+
+    // 预建 road_id → length 索引（esmini road_count 通常不大，线性扫描即可）。
+    struct LenById { int id; double len; };
+    std::vector<LenById> lens;
+    const int n = roads.road_count();
+    lens.reserve(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i) {
+        RoadInfo info;
+        if (roads.road_info(i, info) && info.length > 0.0)
+            lens.push_back({(int)info.id, info.length});
+    }
+    if (lens.empty()) return false;
+
+    double acc = 0.0;
+    for (int i = 0; i < count; ++i) {
+        int rid = road_ids[i];
+        // 图外 road（不在 xodr 里）截断，保留已链部分。
+        auto it = std::find_if(lens.begin(), lens.end(),
+                               [rid](const LenById& l) { return l.id == rid; });
+        if (it == lens.end()) break;
+        segs_.push_back({it->id, it->len, acc});
+        acc += it->len;
+    }
+
+    total_ = acc;
+    return !segs_.empty();
+}
+
 int Route::index_of(int road_id) const {
     for (size_t i = 0; i < segs_.size(); ++i) {
         if (segs_[i].road_id == road_id) return (int)i;

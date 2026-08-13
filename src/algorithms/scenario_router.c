@@ -8,6 +8,7 @@
  */
 
 #include "scenario_router.h"
+#include <cjson/cJSON.h>
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
@@ -357,4 +358,226 @@ int router_lane_at(const RouterGraph* g, int road_id, int lane_idx, double x) {
             return l->id;
     }
     return -1;
+}
+
+/* ══════════════════════════════════════════════════════════════ */
+/*  Map JSON builder — lane successors 带进运行时（A* 接入主循环）  */
+/* ══════════════════════════════════════════════════════════════ */
+
+/* 字符串 lane id → 图 int id 映射（本构建器局部使用，strdup 持有）。 */
+typedef struct {
+    char* key;   /* lane 字符串 id，如 "ns_avenue_00_seg_00.lane.1" */
+    int   id;    /* 图 int id */
+} RouterStrId;
+
+typedef struct {
+    RouterStrId* items;
+    int          count;
+    int          cap;
+} RouterStrIdMap;
+
+static void strid_map_free(RouterStrIdMap* m) {
+    for (int i = 0; i < m->count; i++) free(m->items[i].key);
+    free(m->items);
+    m->items = NULL;
+    m->count = 0;
+    m->cap = 0;
+}
+
+static int strid_map_add(RouterStrIdMap* m, const char* key, int id) {
+    if (m->count >= m->cap) {
+        int ncap = m->cap ? m->cap * 2 : 64;
+        RouterStrId* nitems = (RouterStrId*)realloc(m->items, (size_t)ncap * sizeof(RouterStrId));
+        if (!nitems) return -1;
+        m->items = nitems;
+        m->cap = ncap;
+    }
+    m->items[m->count].key = strdup(key);
+    m->items[m->count].id = id;
+    m->count++;
+    return 0;
+}
+
+static int strid_map_find(const RouterStrIdMap* m, const char* key) {
+    for (int i = 0; i < m->count; i++) {
+        if (strcmp(m->items[i].key, key) == 0) return m->items[i].id;
+    }
+    return -1;
+}
+
+/* 从 JSON 数组取 [x, y] 点；失败返回 0。 */
+static int json_pt_xy(cJSON* pt, double* ox, double* oy) {
+    if (!cJSON_IsArray(pt) || cJSON_GetArraySize(pt) < 2) return 0;
+    cJSON* jx = cJSON_GetArrayItem(pt, 0);
+    cJSON* jy = cJSON_GetArrayItem(pt, 1);
+    if (!cJSON_IsNumber(jx) || !cJSON_IsNumber(jy)) return 0;
+    *ox = jx->valuedouble;
+    *oy = jy->valuedouble;
+    return 1;
+}
+
+int router_build_from_map_json(RouterGraph* g, const char* road_net_json,
+                               double lane_change_penalty, int* out_lane_count) {
+    if (out_lane_count) *out_lane_count = 0;
+    if (!g || !road_net_json) return -1;
+
+    cJSON* rn = cJSON_Parse(road_net_json);
+    if (!rn) return -1;
+    cJSON* jedges = cJSON_GetObjectItemCaseSensitive(rn, "edges");
+    if (!cJSON_IsArray(jedges)) { cJSON_Delete(rn); return -1; }
+
+    RouterStrIdMap strmap = {0};
+    int n_edges = cJSON_GetArraySize(jedges);
+    int lane_count = 0;
+
+    /* Pass 1：注册所有 lane（分配图 id，记录几何/road_id/direction/index） */
+    for (int ei = 0; ei < n_edges; ei++) {
+        cJSON* edge = cJSON_GetArrayItem(jedges, ei);
+        if (!cJSON_IsObject(edge)) continue;
+        /* road_id = edge 数字 id（resolve_map_reference 已写入 legacy_id 或索引，
+         * 与 json_to_xodr 的 xodr road id 一致） */
+        int road_id = ei;
+        cJSON* jrid = cJSON_GetObjectItemCaseSensitive(edge, "id");
+        if (cJSON_IsNumber(jrid)) road_id = (int)jrid->valuedouble;
+
+        double speed = 15.0;
+        cJSON* jspd = cJSON_GetObjectItemCaseSensitive(edge, "speed_limit");
+        if (cJSON_IsNumber(jspd)) speed = jspd->valuedouble;
+
+        /* edge 中心线回退几何 */
+        double esx = 0, esy = 0, eex = 0, eey = 0;
+        int edge_geom = 0;
+        cJSON* jedge_cl = cJSON_GetObjectItemCaseSensitive(edge, "centerline");
+        if (cJSON_IsArray(jedge_cl) && cJSON_GetArraySize(jedge_cl) >= 1) {
+            cJSON* p0 = cJSON_GetArrayItem(jedge_cl, 0);
+            cJSON* p1 = cJSON_GetArrayItem(jedge_cl, cJSON_GetArraySize(jedge_cl) - 1);
+            if (json_pt_xy(p0, &esx, &esy) && json_pt_xy(p1, &eex, &eey))
+                edge_geom = 1;
+        }
+
+        cJSON* jlanes = cJSON_GetObjectItemCaseSensitive(edge, "lanes");
+        if (!cJSON_IsArray(jlanes)) continue;
+        int n_lanes = cJSON_GetArraySize(jlanes);
+        for (int li = 0; li < n_lanes; li++) {
+            cJSON* lane = cJSON_GetArrayItem(jlanes, li);
+            if (!cJSON_IsObject(lane)) continue;
+            cJSON* jname = cJSON_GetObjectItemCaseSensitive(lane, "id");
+            if (!cJSON_IsString(jname) || !jname->valuestring) continue;
+
+            int direction = 1;
+            cJSON* jdir = cJSON_GetObjectItemCaseSensitive(lane, "direction");
+            if (cJSON_IsNumber(jdir) && jdir->valuedouble < 0.0) direction = -1;
+            int idx = li + 1;
+            cJSON* jidx = cJSON_GetObjectItemCaseSensitive(lane, "index");
+            if (cJSON_IsNumber(jidx)) idx = (int)jidx->valuedouble;
+            /* 对向 lane index 与 id 约定对齐（lane.101 = idx 101，见
+             * map_compiler/extract_city_map 命名），便于同 road 内左右邻检测
+             * 只连同向相邻 lane、禁止跨方向变道。map.json 的 index 字段对
+             * 对向 lane 只给 1（与 id 前缀 101 不一致），须按 direction 补偏移。 */
+            if (direction == -1 && idx < 100) idx += 100;
+
+            /* lane 中心线首末点；缺失回退 edge 中心线（0 长度 → 单点） */
+            double sx = 0, sy = 0, ex = 0, ey = 0;
+            int has_geom = 0;
+            cJSON* jcl = cJSON_GetObjectItemCaseSensitive(lane, "centerline");
+            if (cJSON_IsArray(jcl) && cJSON_GetArraySize(jcl) >= 1) {
+                cJSON* p0 = cJSON_GetArrayItem(jcl, 0);
+                cJSON* p1 = cJSON_GetArrayItem(jcl, cJSON_GetArraySize(jcl) - 1);
+                if (json_pt_xy(p0, &sx, &sy) && json_pt_xy(p1, &ex, &ey)) has_geom = 1;
+            }
+            if (!has_geom && edge_geom) { sx = esx; sy = esy; ex = eex; ey = eey; }
+
+            int lane_id = g->lane_count;
+            if (router_add_lane_xy(g, lane_id, sx, ex, sy, ey,
+                                   idx, road_id, speed) != 0) {
+                /* 图已满，放弃剩余 lane */
+                goto done;
+            }
+            if (strid_map_add(&strmap, jname->valuestring, lane_id) != 0) goto done;
+            lane_count++;
+        }
+    }
+
+    /* Pass 2：显式 successors（type=0）+ 同 road 同方向相邻 lane（type=1/2） */
+    int seq = 0;
+    for (int ei = 0; ei < n_edges && seq < g->lane_count; ei++) {
+        cJSON* edge = cJSON_GetArrayItem(jedges, ei);
+        if (!cJSON_IsObject(edge)) continue;
+        cJSON* jlanes = cJSON_GetObjectItemCaseSensitive(edge, "lanes");
+        if (!cJSON_IsArray(jlanes)) continue;
+
+        int n_lanes = cJSON_GetArraySize(jlanes);
+        for (int li = 0; li < n_lanes; li++) {
+            cJSON* lane = cJSON_GetArrayItem(jlanes, li);
+            if (!cJSON_IsObject(lane)) continue;
+            if (seq >= g->lane_count) break;
+            int graph_id = seq++;
+
+            /* successors：字符串 id → 图 id */
+            cJSON* jsucc = cJSON_GetObjectItemCaseSensitive(lane, "successors");
+            if (cJSON_IsArray(jsucc)) {
+                int ns = cJSON_GetArraySize(jsucc);
+                for (int si = 0; si < ns; si++) {
+                    cJSON* js = cJSON_GetArrayItem(jsucc, si);
+                    if (!cJSON_IsString(js) || !js->valuestring) continue;
+                    int tid = strid_map_find(&strmap, js->valuestring);
+                    if (tid < 0) continue;   /* 指向图外 road（route 过滤掉的段） */
+                    router_add_edge(g, graph_id, tid, 0);
+                }
+            }
+        }
+    }
+
+    /* 同 road 同方向相邻 lane 左右邻边（双向，代价 = lane_change_penalty） */
+    for (int a = 0; a < g->lane_count; a++) {
+        for (int b = a + 1; b < g->lane_count; b++) {
+            const RouterLane* la = &g->lanes[a];
+            const RouterLane* lb = &g->lanes[b];
+            if (la->road_id != lb->road_id) continue;
+            int da = (la->lane_idx >= 100) ? -1 : 1;
+            int db = (lb->lane_idx >= 100) ? -1 : 1;
+            if (da != db) continue;   /* 对向 lane 不互邻（禁止越线变道） */
+            if (abs(la->lane_idx - lb->lane_idx) != 1) continue;
+            /* 同方向相邻：a→b 与 b→a 双向 */
+            router_add_edge(g, a, b, 1);
+            router_add_edge(g, b, a, 2);
+        }
+    }
+
+    /* 赋边代价：后继 = 源 lane 长度；邻边 = lane_change_penalty */
+    for (int i = 0; i < g->edge_count; i++) {
+        RouterEdge* e = &g->edges[i];
+        if (e->type == 0) {
+            double len = 0;
+            for (int j = 0; j < g->lane_count; j++) {
+                if (g->lanes[j].id == e->from_id) { len = g->lanes[j].length; break; }
+            }
+            e->cost = len;
+        } else {
+            e->cost = lane_change_penalty;
+        }
+    }
+
+done:
+    strid_map_free(&strmap);
+    cJSON_Delete(rn);
+    if (out_lane_count) *out_lane_count = lane_count;
+    return 0;
+}
+
+int router_lane_id_in_road(const RouterGraph* g, int road_id, int direction,
+                           int lane_idx) {
+    int best = -1;
+    for (int i = 0; i < g->lane_count; i++) {
+        const RouterLane* l = &g->lanes[i];
+        if (l->road_id != road_id) continue;
+        int d = (l->lane_idx >= 100) ? -1 : 1;
+        if (d != direction) continue;
+        if (lane_idx > 0 && l->lane_idx == lane_idx) return l->id;
+        if (lane_idx <= 0) {
+            /* 取该方向 index 最小（= 最内侧第一车道） */
+            if (best < 0 || l->lane_idx < g->lanes[best].lane_idx) best = i;
+        }
+    }
+    return best >= 0 ? g->lanes[best].id : -1;
 }

@@ -45,6 +45,7 @@
 #include "flowsim/route.h"
 #include "flowsim/sim_digest.h"
 #include "flowsim/lane_frenet.h"          /* C-2: 共享车道中心横向偏移公式 */
+#include "scenario_router.h"              /* 车道级 A*：主循环建图 + ego 起终点路由 */
 
 #include <stdlib.h>
 #include <string.h>
@@ -2313,6 +2314,76 @@ private:
     Transport* transport_;
 };
 
+/* ── A* 接入主循环（路径 1：in-process 建图，见 docs/MAP_ENGINE_ROUTING.md §6）
+ *
+ * 从 scenario->road_network_json（resolve_map_reference 注入，lanes[] 含
+ * id/direction/successors，且已按 route_file/route_id 过滤到与 xodr 同集合同编号）
+ * 建 RouterGraph → 跑 ego 起终点 A* → 车道链去重 road → Route::build_from_chain。
+ * 成功后 ref_path 沿 A* 车道链发布，planning/control 跟随（M2 控制链路）。
+ *
+ * 起终点约定：首 road 正向第一车道 → 末 road（图内最大 road_id）正向第一车道。
+ * 城市环形/网格场景的 main 链是开链，A* 结果 = 预设 road_chain（零行为变化）；
+ * 需要含转向的 O-D 时换一个带弯的 route_id（如 city_grid 'astar_turn'）即可。 */
+static bool build_route_via_astar(void) {
+    if (!g.scenario || !g.scenario->road_network_json) return false;
+    if (!g.roads_loaded) return false;
+
+    RouterGraph graph;
+    router_graph_init(&graph);
+    int lane_count = 0;
+    if (router_build_from_map_json(&graph, g.scenario->road_network_json,
+                                   /*lane_change_penalty=*/8.0, &lane_count) != 0) {
+        LOG_WARN("flowsim", "astar: router_build_from_map_json failed — fallback auto chain");
+        return false;
+    }
+    if (lane_count <= 0) return false;
+
+    int max_road = 0;
+    for (int i = 0; i < graph.lane_count; i++) {
+        if (graph.lanes[i].road_id > max_road) max_road = graph.lanes[i].road_id;
+    }
+    int start_lane = router_lane_id_in_road(&graph, 0, 1, 0);
+    int goal_lane  = router_lane_id_in_road(&graph, max_road, 1, 0);
+    if (start_lane < 0 || goal_lane < 0) {
+        LOG_WARN("flowsim", "astar: start/goal lane missing (start=%d goal=%d)",
+                 start_lane, goal_lane);
+        return false;
+    }
+
+    RouterPath path;
+    if (router_astar(&graph, start_lane, goal_lane, &path) != 0 || path.count < 2) {
+        LOG_WARN("flowsim", "astar: 无路可达 lane %d -> %d — fallback auto chain",
+                 start_lane, goal_lane);
+        return false;
+    }
+
+    /* lane 链 → 去重 road 链（连续同 road 合并，routes.json road_chain 契约） */
+    int road_chain[ROUTER_MAX_PATH];
+    int rc_count = 0;
+    int prev_road = -1;
+    for (int i = 0; i < path.count; i++) {
+        int rid = graph.lanes[path.lane_ids[i]].road_id;
+        if (rid != prev_road) {
+            road_chain[rc_count++] = rid;
+            prev_road = rid;
+        }
+    }
+
+    if (!g.route.build_from_chain(g.roads, road_chain, rc_count)) {
+        LOG_WARN("flowsim", "astar: route build_from_chain(%d roads) failed — fallback",
+                 rc_count);
+        return false;
+    }
+    std::string chain_str;
+    for (int i = 0; i < rc_count; i++) {
+        if (i) chain_str += ",";
+        chain_str += std::to_string(road_chain[i]);
+    }
+    LOG_INFO("flowsim", "astar route: %d lanes / %d roads, cost=%.0fm (lane %d -> %d) road_chain=[%s]",
+             path.count, rc_count, path.total_cost, start_lane, goal_lane, chain_str.c_str());
+    return true;
+}
+
 /* ── TaskBase 包装器（宏生成）— 必须在 flowsim_init 前展开 ──────── */
 EXPORT_COROUTINE_TASK(FlowSimTask, flowsim)
 
@@ -2428,7 +2499,13 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
                 g.roads_loaded = true;
                 LOG_INFO("flowsim", "esmini road network loaded: %d roads",
                          g.roads.road_count());
-                if (g.route.build(g.roads)) {
+                /* A* 接入主循环（M1+M2）：场景带 map 引用时，用 map.json 的
+                 * lane successors 建全局图 → ego 起终点 A* → Route 沿 A* 车道链。
+                 * 失败回退旧的自动端点连续性链式 build()（无 map 场景必然走这里）。 */
+                if (build_route_via_astar()) {
+                    LOG_INFO("flowsim", "central route via A*: %d segments, %.0fm total",
+                             g.route.count(), g.route.total_length());
+                } else if (g.route.build(g.roads)) {
                     LOG_INFO("flowsim", "central route built: %d segments, %.0fm total",
                              g.route.count(), g.route.total_length());
                 } else {

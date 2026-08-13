@@ -38,13 +38,13 @@ python3 tools/xodr_compat_check.py --runtime-test test_road_network
 
 ## 关键现状 / 坑
 
-1. **A* 未接入主 flowsim 循环**：`scenario_router.c` 只被 `navigation_node.c` 用，且那里建的是单 road 换道 toy 图；`flowsim_node.cpp` 只走 `Route`（预设 `road_chain` 线性拼接）。
+1. **A* 已接入主 flowsim 循环（2026-08，M1+M2）**：`flowsim_node.build_route_via_astar()` 初始化建图（`router_build_from_map_json` 从 `scenario->road_network_json` 读 `lanes[].successors`）→ ego 起终点 A* → 车道链去重 road → `Route::build_from_chain` → ref_path 沿 A* 车道链 → planning/control 跟随。失败回退旧 `Route::build()`（无 map 场景必走回退）。前置：`scenario_loader` 修 map_file/route_file 相对路径 bug + 保留 lanes[] + 按 route_file/route_id 过滤 roads 到与 xodr 同集合同编号。
 2. **大地图路线爆炸**：原 `city_grid/routes.json` 把 52 条大道顺序串成一条链；大地图要真实转向拓扑 + A*，别枚举长 `road_chain`。已把 main 改为 `ns_avenue_00` 全程段链。
 3. **lane successors 为空 = 无拓扑（已修复）**：`grid_map_generator.py` 已拆段建模——每条大道在交叉口拆成独立 road 段（`ns_avenue_00_seg_00`），每段 lane 填直/左/右 successors，顶层 `junctions[]` 用 fork 表达每个进入方向。`--check` 通过（1300 段 / 2600 junctions）。
 4. **交叉口转向是占位**：`extract_city_map.py` 只产 `reserved` junction，真实左/右/直靠 json_to_xodr 的 `<junction>` 增强。
 5. **json_to_xodr 网格 junction（已部分落地）**：`load_scenario` 已做字符串 road id → 数字索引映射，city_grid 可转出结构化 `<junction>`（每进入方向 fork 含直/左/右 connection），`xodr_compat_check` 静态检查 PASS。待后续：esmini 运行时校验（需编译 test_road_network）+ laneLink + 段两端连 junction 的归属语义。
-6. **A* 容量上限 256 lane/512 edge/64 path**，直接用于整张 city_grid 会超限，需扩容或分层。
+6. **A* 容量已扩容**：`ROUTER_MAX_LANES` 4096 / 2D 启发式 / `router_add_lane_xy`；`router_build_from_map_json` 直接吃 road_network JSON（字符串 lane id → int，road_id = edge 数字 id 与 xodr 对齐）。
 
-## A* 接入主循环（设计要点）
+## A* 接入主循环（已落地）
 
-主循环建图后 `router_build_topology` 建全局图 → 每辆 ego/NPC 需要时 `router_astar` 求车道路径 → 转成沿车道中心线的轨迹目标喂纵向/横向控制。接入前先 rebase 干净（flowsim_node/collision 曾有未提交 WIP）。
+主循环建图后 `router_build_from_map_json` 建全局图 → ego 起终点 `router_astar` → 车道链去重 road → `Route::build_from_chain` → ref_path 沿 A* 车道链喂 planning/control。M3 待办：每辆 NPC / 路口前按需重路由（当前 ego 一次性路由 + 静态链）。

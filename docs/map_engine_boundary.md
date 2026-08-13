@@ -29,24 +29,20 @@
    （按 id 查 road/lane、按空间范围查邻近车道），而不是仅一次性转成场景 JSON。
 2. **网格拓扑**：交叉口转向后继（左/右/直）的生成与维护——当前
    `extract_city_map.py` 只做顺序链 + `reserved` 占位，无真实转向连接。
-3. **路由接入主循环**：车道级 A* 当前已实现但**未接入**主仿真。
+3. **路由接入主循环**：车道级 A* 已接入主 flowsim 循环（M1+M2，见 §3）。
 4. **验证策略**：大地图路线爆炸，"主线验证才放行"需改为按区域抽样。
 
-## 3. 关键缺口：A* 路由未在主线
+## 3. A* 接入主循环（2026-08 已落地，M1+M2）
 
 - 已实现：`src/algorithms/scenario_router.c` —— 车道级 A* 图（successor / 左邻 /
-  右邻建图，`router_build_topology` @ :142，`router_astar` @ :257）。
-- 现状：仅被 `modules/adas_nodes/navigation_node.c`（:20/:57/:399）使用，
-  **主 flowsim 仿真循环未调用**。即"车辆在地图里怎么找路"在主循环里是缺位的，
-  目前车辆沿预设 `road_chain` 线性行驶。
-
-### 接入主循环的最小改动分析（待办，不在此文档落地）
-1. 在主循环初始化阶段（flowsim_node 建图后）调用 `router_build_topology`，
-   用 `map.json` 的 lane 后继 + `json_to_xodr` 产出的路口连接构建全局图。
-2. 为每辆 ego/NPC 在需要（起点→终点、或路口前）调用 `router_astar` 求车道路径。
-3. 把 A* 输出的车道序列转为沿车道中心线的轨迹目标，喂给现有纵向/横向控制。
-4. 注意：当前 `flowsim_node.cpp` / `collision.cpp` 有未提交 WIP，接入前应先 rebase
-   干净，避免冲突。
+  右邻建图，`router_build_topology` @ :142，`router_astar` @ :257，2D 网格扩容
+  `ROUTER_MAX_LANES` 4096 + `router_build_from_map_json`）。
+- 已接入：`flowsim_node` 初始化阶段 `build_route_via_astar()` 建全局图 + ego 起终点
+  A* → `Route::build_from_chain` → ref_path 沿 A* 车道链 → planning/control 跟随。
+- 前置依赖（同批落地）：`scenario_loader.resolve_map_reference` 修 map_file/route_file
+  相对路径 bug、保留 `lanes[].successors`、按 route_file/route_id 过滤 roads 到与
+  xodr 同集合同编号；`ScenarioConfig.road_network_json` 暴露解析后的 road_network。
+- 待办（M3）：每辆 NPC / 路口前按需重路由；当前 ego 一次性起终点路由 + 静态链。
 
 ## 4. 与 5km×5km 大地图的关系
 

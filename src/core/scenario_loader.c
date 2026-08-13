@@ -39,16 +39,43 @@ static void resolve_map_reference(cJSON* scenario, const char* scenario_path) {
     if (!scenario || cJSON_GetObjectItemCaseSensitive(scenario, "road_network"))
         return;
 
-    cJSON* jmap = cJSON_GetObjectItemCaseSensitive(scenario, "map_file");
+    /* ── 找 map.json 文件 ─────────────────────────────────── */
     char map_path[1024] = {0};
+    cJSON* map = NULL;
+
+    cJSON* jmap = cJSON_GetObjectItemCaseSensitive(scenario, "map_file");
     if (cJSON_IsString(jmap) && jmap->valuestring) {
+        /* 与 json_to_xodr.load_scenario 同款候选路径：scenario 目录下 → 上一级 →
+         * cwd。map_file 既可能是相对项目根的 "maps/<id>/map.json"，也可能是相对
+         * scenario 目录的 "../maps/<id>/map.json"（如 scenarios/city_*_map.json）。
+         * 旧实现只拼 scenarios/../<map_file>，对 "../maps/..." 会叠成 ../../ 打不开
+         * （road_network 从未注入，A* 无图可建），此 bug 连带影响 lane_count/type。 */
         const char* slash = strrchr(scenario_path, '/');
+        char base[1024] = {0};
         if (slash) {
             size_t dir_len = (size_t)(slash - scenario_path);
-            snprintf(map_path, sizeof(map_path), "%.*s/../%s",
-                     (int)dir_len, scenario_path, jmap->valuestring);
+            snprintf(base, sizeof(base), "%.*s", (int)dir_len, scenario_path);
         } else {
-            snprintf(map_path, sizeof(map_path), "%s", jmap->valuestring);
+            snprintf(base, sizeof(base), ".");
+        }
+        char cand[3][1024];
+        snprintf(cand[0], sizeof(cand[0]), "%s/%s", base, jmap->valuestring);
+        snprintf(cand[1], sizeof(cand[1]), "%s/../%s", base, jmap->valuestring);
+        snprintf(cand[2], sizeof(cand[2]), "%s", jmap->valuestring);
+        for (int i = 0; i < 3; i++) {
+            char* c = read_file(cand[i]);
+            if (c) {
+                map = cJSON_Parse(c);
+                free(c);
+                if (map) { snprintf(map_path, sizeof(map_path), "%s", cand[i]); break; }
+                cJSON_Delete(map);
+                map = NULL;
+            }
+        }
+        if (!map) {
+            LOG_WARN("scenario", "map reference '%s' could not be opened "
+                     "(tried scenario dir / parent / cwd)", jmap->valuestring);
+            return;
         }
     } else {
         cJSON* jid = cJSON_GetObjectItemCaseSensitive(scenario, "map_id");
@@ -61,18 +88,17 @@ static void resolve_map_reference(cJSON* scenario, const char* scenario_path) {
         } else {
             snprintf(map_path, sizeof(map_path), "maps/%s/map.json", jid->valuestring);
         }
-    }
-
-    char* content = read_file(map_path);
-    if (!content) {
-        LOG_WARN("scenario", "map reference '%s' could not be opened", map_path);
-        return;
-    }
-    cJSON* map = cJSON_Parse(content);
-    free(content);
-    if (!map) {
-        LOG_WARN("scenario", "map reference '%s' contains invalid JSON", map_path);
-        return;
+        char* content = read_file(map_path);
+        if (!content) {
+            LOG_WARN("scenario", "map reference '%s' could not be opened", map_path);
+            return;
+        }
+        map = cJSON_Parse(content);
+        free(content);
+        if (!map) {
+            LOG_WARN("scenario", "map reference '%s' contains invalid JSON", map_path);
+            return;
+        }
     }
 
     cJSON* roads = cJSON_GetObjectItemCaseSensitive(map, "roads");
@@ -81,6 +107,95 @@ static void resolve_map_reference(cJSON* scenario, const char* scenario_path) {
         cJSON_Delete(map);
         return;
     }
+
+    /* route_file/route_id：按 json_to_xodr 同款语义把 roads 过滤到 road_chain 顺序。
+     * 保证注入的 road_network 与 json_to_xodr 生成的 xodr 是同一套 road 集合、
+     * 同一套数字 id（legacy_id 或过滤后索引）——A* 输出才能直接映射回 esmini。
+     * 过滤失败（缺 route / chain 引用缺失 road）时回退全量 roads，不阻断场景加载。 */
+    cJSON* jroute_file = cJSON_GetObjectItemCaseSensitive(scenario, "route_file");
+    cJSON* jroute_id  = cJSON_GetObjectItemCaseSensitive(scenario, "route_id");
+    if (cJSON_IsString(jroute_file) && jroute_file->valuestring &&
+        cJSON_IsString(jroute_id) && jroute_id->valuestring) {
+        char routes_path[1024] = {0};
+        const char* slash = strrchr(scenario_path, '/');
+        char rbase[1024] = {0};
+        if (slash) {
+            size_t dir_len = (size_t)(slash - scenario_path);
+            snprintf(rbase, sizeof(rbase), "%.*s", (int)dir_len, scenario_path);
+        } else {
+            snprintf(rbase, sizeof(rbase), ".");
+        }
+        char rcand[3][1024];
+        snprintf(rcand[0], sizeof(rcand[0]), "%s/%s", rbase, jroute_file->valuestring);
+        snprintf(rcand[1], sizeof(rcand[1]), "%s/../%s", rbase, jroute_file->valuestring);
+        snprintf(rcand[2], sizeof(rcand[2]), "%s", jroute_file->valuestring);
+        char* routes_content = NULL;
+        for (int i = 0; i < 3; i++) {
+            routes_content = read_file(rcand[i]);
+            if (routes_content) {
+                snprintf(routes_path, sizeof(routes_path), "%s", rcand[i]);
+                break;
+            }
+        }
+        if (routes_content) {
+            cJSON* routes_doc = cJSON_Parse(routes_content);
+            free(routes_content);
+            cJSON* selected = NULL;
+            cJSON* routes_arr = routes_doc
+                ? cJSON_GetObjectItemCaseSensitive(routes_doc, "routes") : NULL;
+            if (cJSON_IsArray(routes_arr)) {
+                cJSON* r = NULL;
+                cJSON_ArrayForEach(r, routes_arr) {
+                    cJSON* rid = r ? cJSON_GetObjectItemCaseSensitive(r, "id") : NULL;
+                    if (cJSON_IsString(rid) && rid->valuestring &&
+                        strcmp(rid->valuestring, jroute_id->valuestring) == 0) {
+                        selected = r;
+                        break;
+                    }
+                }
+            }
+            cJSON* chain = selected
+                ? cJSON_GetObjectItemCaseSensitive(selected, "road_chain") : NULL;
+            if (cJSON_IsArray(chain)) {
+                cJSON* filtered = cJSON_CreateArray();
+                int missing = 0;
+                int cn = cJSON_GetArraySize(chain);
+                for (int ci = 0; ci < cn && !missing; ci++) {
+                    cJSON* jr = cJSON_GetArrayItem(chain, ci);
+                    if (!cJSON_IsString(jr) || !jr->valuestring) { missing = 1; break; }
+                    cJSON* found = NULL;
+                    cJSON* road = NULL;
+                    cJSON_ArrayForEach(road, roads) {
+                        cJSON* rid2 = road ? cJSON_GetObjectItemCaseSensitive(road, "id") : NULL;
+                        if (cJSON_IsString(rid2) && rid2->valuestring &&
+                            strcmp(rid2->valuestring, jr->valuestring) == 0) {
+                            found = road;
+                            break;
+                        }
+                    }
+                    if (!found) { missing = 1; break; }
+                    cJSON_AddItemToArray(filtered, cJSON_Duplicate(found, 1));
+                }
+                if (!missing && cJSON_GetArraySize(filtered) > 0) {
+                    cJSON_DeleteItemFromObjectCaseSensitive(map, "roads");
+                    cJSON_AddItemToObject(map, "roads", filtered);
+                    roads = cJSON_GetObjectItemCaseSensitive(map, "roads");
+                    LOG_INFO("scenario", "map '%s' roads filtered to route '%s' (%d road(s))",
+                             map_path, jroute_id->valuestring, cJSON_GetArraySize(roads));
+                } else {
+                    cJSON_Delete(filtered);
+                    if (missing)
+                        LOG_WARN("scenario", "route '%s' chain references missing road — "
+                                 "keep full roads", jroute_id->valuestring);
+                }
+            }
+            if (routes_doc) cJSON_Delete(routes_doc);
+        } else {
+            LOG_WARN("scenario", "route file '%s' could not be opened — keep full roads",
+                     routes_path);
+        }
+    }
+
     cJSON* edges = cJSON_CreateArray();
     int index = 0;
     cJSON* road = NULL;
@@ -98,8 +213,10 @@ static void resolve_map_reference(cJSON* scenario, const char* scenario_path) {
             cJSON* width = cJSON_IsObject(lane0)
                 ? cJSON_GetObjectItemCaseSensitive(lane0, "width") : NULL;
             double lane_width = cJSON_IsNumber(width) ? width->valuedouble : 0.0;
-            cJSON_DeleteItemFromObjectCaseSensitive(edge, "lanes");
-            cJSON_AddNumberToObject(edge, "lanes", lane_count);
+            /* 保留 lanes[]（含 id/direction/successors）供运行时 A* 建图；
+             * 另加 lane_count 数字字段供 edges[0].lanes 计数消费方使用。
+             * json_to_xodr.py 会自行重读 map.json，不受此注入形状影响。 */
+            cJSON_AddNumberToObject(edge, "lane_count", lane_count);
             if (lane_width > 0.0) {
                 cJSON_DeleteItemFromObjectCaseSensitive(edge, "lane_width");
                 cJSON_AddNumberToObject(edge, "lane_width", lane_width);
@@ -154,6 +271,11 @@ ScenarioConfig* scenario_load(const char* path) {
 
     ScenarioConfig* sc = (ScenarioConfig*)calloc(1, sizeof(ScenarioConfig));
     if (!sc) { cJSON_Delete(root); return NULL; }
+
+    /* 保留解析后的 road_network JSON（含 lanes[].successors），供 flowsim
+     * 初始化阶段 router_build_from_map_json 建全局车道图。scenario_free 释放。 */
+    cJSON* jrn_keep = cJSON_GetObjectItemCaseSensitive(root, "road_network");
+    if (cJSON_IsObject(jrn_keep)) sc->road_network_json = cJSON_PrintUnformatted(jrn_keep);
 
     /* name */
     cJSON* jname = cJSON_GetObjectItemCaseSensitive(root, "name");
@@ -371,9 +493,17 @@ ScenarioConfig* scenario_load(const char* path) {
                 }
                 /* 提取 lanes / lane_width 供 flowsim 非 esmini 路径算 road_half_width，
                  * 避免 road_half_width 硬编码 3.5 导致 4 车道场景灯杆落在路面内
-                 * （与车辆位置重叠）。未配置时保持 0，消费方 fallback 到 2 车道 / 3.5m。 */
+                 * （与车辆位置重叠）。未配置时保持 0，消费方 fallback 到 2 车道 / 3.5m。
+                 * resolve_map_reference 保留 lanes[] 数组并另加 lane_count 数字，
+                 * 这里优先读 lane_count，其次数组长度，最后兼容旧数字格式。 */
+                cJSON* jlane_count = cJSON_GetObjectItemCaseSensitive(jedge0, "lane_count");
                 cJSON* jlanes = cJSON_GetObjectItemCaseSensitive(jedge0, "lanes");
-                if (cJSON_IsNumber(jlanes)) sc->road.lanes = (int)jlanes->valuedouble;
+                if (cJSON_IsNumber(jlane_count))
+                    sc->road.lanes = (int)jlane_count->valuedouble;
+                else if (cJSON_IsArray(jlanes))
+                    sc->road.lanes = cJSON_GetArraySize(jlanes);
+                else if (cJSON_IsNumber(jlanes))
+                    sc->road.lanes = (int)jlanes->valuedouble;
                 cJSON* jlwid = cJSON_GetObjectItemCaseSensitive(jedge0, "lane_width");
                 if (cJSON_IsNumber(jlwid)) sc->road.lane_width = jlwid->valuedouble;
                 cJSON* joneway = cJSON_GetObjectItemCaseSensitive(jedge0, "oneway");
@@ -662,6 +792,8 @@ ScenarioConfig* scenario_load(const char* path) {
 }
 
 void scenario_free(ScenarioConfig* scenario) {
+    if (!scenario) return;
+    free(scenario->road_network_json);
     free(scenario);
 }
 
