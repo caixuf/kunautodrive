@@ -23,15 +23,18 @@ export class PerfMonitor {
    * @param {Function} opts.onReport          上报回调 (stats) => void
    */
   constructor({ windowMs = 1000, lowFps = 30, downgradeWindows = 3,
+                warmupMs = 6000,
                 onDowngrade = null, onReport = null } = {}) {
     this._windowMs = windowMs;
     this._lowFps = lowFps;
     this._downgradeWindows = downgradeWindows;
+    this._warmupMs = warmupMs;
     this._onDowngrade = onDowngrade;
     this._onReport = onReport;
 
     this._frames = 0;          // 当前窗口累计帧数
     this._windowStart = 0;     // 当前窗口起点（performance.now）
+    this._initTime = 0;        // 启动时刻（暖机起点，见 start()）
     this._consecutive = 0;     // 连续低帧窗口数
     this._timer = null;        // setInterval 句柄
     this._paused = false;      // 手动设档后暂停自动降级
@@ -68,6 +71,7 @@ export class PerfMonitor {
   start() {
     if (this._timer) return;
     this._windowStart = performance.now();
+    this._initTime = this._windowStart;   // 暖机起点：从首帧采样窗口启动算起
     this._timer = setInterval(() => this._onWindow(), this._windowMs);
   }
 
@@ -100,6 +104,18 @@ export class PerfMonitor {
 
     // 3D 不可见（主动降帧省 GPU）时不计入低帧，避免误降画质
     if (!this._active) { this._consecutive = 0; return; }
+
+    // 开局暖机：glTF 模型异步加载 / PMREM 环境烘焙 / 材质编译都会在
+    // 主线程造成前几秒低帧。这是"加载开销"而非 GPU 卡死，不参与降档，
+    // 否则开局卡一下就永久降画质。
+    if (now - this._initTime < this._warmupMs) { this._consecutive = 0; return; }
+
+    // 切到其它标签页/应用：rAF 被浏览器暂停 → 本窗口 frames=0 → fps≈0，
+    // 这是"主动省 GPU"而非卡死。若此时还按低帧降档，切回来画质已永久变差。
+    if (typeof document !== 'undefined' && document.hidden) {
+      this._consecutive = 0;
+      return;
+    }
 
     if (fps < this._lowFps) {
       this._consecutive++;

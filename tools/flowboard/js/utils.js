@@ -358,8 +358,10 @@ export function _buildSedan(color, secondaryColor, addSpots) {
   }
   addAdsLight(0.48, 'L'); addAdsLight(-0.48, 'R');
 
-  // Wheels (4) — 前后轴分别建 Group，前轴支持转向动画。
-  // 轴 Group pivot 在轴中心，车轮相对轴定位，rotation.y 转向时车轮绕轴心自转而非绕车身公转。
+  // Wheels (4) — 前轮用真实 kingpin 转向轴结构：轮胎刚性连接在 kingpin 上，
+  // 转向绕各自轮心（kingpin.rotation.y，pivot 在轮心，不漂移），
+  // 滚动在轮胎自身（rotation.x，cylinder axis=X）—— 两个独立自由度可同时进行，
+  // 打方向时轮胎照常滚动（传动轴刚性带动），无需"锁滚动"规避冲突。
   var axleX = 1.35, rearAxleX = -1.35, wheelY = 0.34, wheelZ = 0.95;
   var wheels = [];
   var frontAxle = new T.Group();
@@ -369,8 +371,19 @@ export function _buildSedan(color, secondaryColor, addSpots) {
   for (var wi = 0; wi < 4; wi++) {
     var wh = _buildWheel(T);
     var zSign = (wi === 0 || wi === 2) ? wheelZ : -wheelZ;
-    wh.position.set(0, 0, zSign);
-    if (wi < 2) frontAxle.add(wh); else rearAxle.add(wh);
+    if (wi < 2) {
+      // 前轮：包一层 kingpin（转向轴），pivot 在轮心；轮胎是 kingpin 的子节点
+      var kingpin = new T.Group();
+      kingpin.name = 'kingpin_' + (wi === 0 ? 'FL' : 'FR');
+      kingpin.position.set(0, 0, zSign);
+      wh.position.set(0, 0, 0);
+      kingpin.add(wh);
+      frontAxle.add(kingpin);
+      wh.userData.kingpin = kingpin;   // VehicleView 据此绕轮心转向
+    } else {
+      wh.position.set(0, 0, zSign);
+      rearAxle.add(wh);
+    }
     wheels.push(wh);
   }
   // 车轴可视化横梁（共享 geo + mat，避免每车重复创建）
@@ -517,31 +530,95 @@ export function _buildSedan(color, secondaryColor, addSpots) {
   var shoulderR = new T.Mesh(_carGeom.shoulderLine, lineMat);
   shoulderR.position.set(0.1, 1.10, -0.86); g.add(shoulderR);
 
-  // ── SU7 内饰（透过玻璃可见）：方向盘 + 座椅 + 仪表盘 + 屏幕 ──
-  var interiorMat = new T.MeshStandardMaterial({ color: 0x0a0a12, roughness: 0.9 });
-  var seatMat = new T.MeshStandardMaterial({ color: 0x151520, roughness: 0.9 });
-  // 仪表盘
-  var dash = new T.Mesh(_carGeom.dash, interiorMat);
-  dash.position.set(0.80, 0.75, 0); g.add(dash);
-  // 仪表屏（emissive 蓝色微亮）
-  var screenMat = new T.MeshStandardMaterial({ color: 0x001122, emissive: 0x001133, emissiveIntensity: 0.5, roughness: 0.1, metalness: 0.5 });
-  var screen = new T.Mesh(_carGeom.dashScreen, screenMat);
-  screen.position.set(0.52, 0.80, 0);
-  screen.rotation.y = 0.3;
-  g.add(screen);
-  // 方向盘（torus + 倾斜）
-  var intWheelMat = new T.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 });
+  // ── 完整内饰（左舵，driver 在 -Z，透过玻璃可见）──
+  var interiorMat = new T.MeshStandardMaterial({ color: 0x0d0d14, roughness: 0.9 });  // 深色搪塑
+  var softMat = new T.MeshStandardMaterial({ color: 0x1a1a24, roughness: 0.85 });     // 软包/门板
+  var seatMat = new T.MeshStandardMaterial({ color: 0x151520, roughness: 0.9 });      // 座椅
+  var accentMat = new T.MeshStandardMaterial({ color: 0x20202e, roughness: 0.4, metalness: 0.3 }); // 饰条
+  var chromeInt = new T.MeshStandardMaterial({ color: 0xbbbbbb, metalness: 0.8, roughness: 0.2 }); // 镀铬
+  var darkTrim = new T.MeshStandardMaterial({ color: 0x0a0a0f, roughness: 0.7 });     // 深色饰条
+  var screenMat = new T.MeshStandardMaterial({ color: 0x001122, emissive: 0x113355, emissiveIntensity: 0.6, roughness: 0.1, metalness: 0.5 });
+  var gaugeMat = new T.MeshStandardMaterial({ color: 0x001122, emissive: 0x224466, emissiveIntensity: 0.7, roughness: 0.1, metalness: 0.4 });
+  var domeMat = new T.MeshStandardMaterial({ color: 0xffeebb, emissive: 0xffdd88, emissiveIntensity: 1.2, roughness: 0.4 });
+  function iBox(w, h, d, x, y, z, m) {
+    var msh = new T.Mesh(new T.BoxGeometry(w, h, d), m);
+    msh.position.set(x, y, z);
+    g.add(msh);
+    return msh;
+  }
+
+  // ── 仪表台（横贯，driver 侧凹进 + 贯穿氛围灯）──
+  iBox(0.34, 0.16, 1.50, 0.68, 0.74, 0, interiorMat);                              // 主台上部
+  iBox(0.02, 0.13, 1.50, 0.50, 0.74, 0, softMat);                                  // 朝向驾驶员的斜面
+  iBox(0.30, 0.006, 1.44, 0.70, 0.66, 0, new T.MeshStandardMaterial({ color: 0x2244ff, emissive: 0x2244ff, emissiveIntensity: 1.5, roughness: 0.4 })); // 氛围灯带
+  iBox(0.02, 0.10, 0.36, 0.60, 0.78, -0.38, gaugeMat);                            // 驾驶员液晶仪表
+  iBox(0.02, 0.16, 0.40, 0.58, 0.80, 0.14, screenMat);                            // 中控悬浮大屏
+  iBox(0.02, 0.10, 0.02, 0.58, 0.70, 0.14, darkTrim);                              // 中控屏支架
+  [-0.55, 0.0, 0.55].forEach(function(z) { iBox(0.06, 0.03, 0.16, 0.66, 0.80, z, darkTrim); }); // 空调出风口×3
+
+  // ── 方向盘（torus + 中心 hub + 多功能按键，左舵 -Z）──
+  var intWheelMat = new T.MeshStandardMaterial({ color: 0x1c1c22, roughness: 0.75 });
   var intWheel = new T.Mesh(_carGeom.intWheel, intWheelMat);
-  intWheel.position.set(0.70, 0.88, 0);
+  intWheel.position.set(0.80, 0.90, -0.38);
   intWheel.rotation.y = Math.PI / 2;
   intWheel.rotation.x = -0.35;
   g.add(intWheel);
-  // 座椅 ×2
-  [-0.35, 0.35].forEach(function(z) {
-    var seat = new T.Mesh(_carGeom.seat, seatMat);
-    seat.position.set(-0.05, 0.75, z);
-    g.add(seat);
+  var hubInt = new T.Mesh(new T.CylinderGeometry(0.045, 0.045, 0.05, 16),
+    new T.MeshStandardMaterial({ color: 0x2a2a33, roughness: 0.4, metalness: 0.5 }));
+  hubInt.rotation.z = Math.PI / 2;
+  hubInt.position.set(0.80, 0.90, -0.38);
+  g.add(hubInt);
+  [-0.07, 0.07].forEach(function(dx) { iBox(0.03, 0.05, 0.03, 0.80 + dx, 0.90, -0.38, darkTrim); }); // 多功能按键
+
+  // ── 前排座椅（坐垫 + 靠背 + 头枕 + 头枕支柱）──
+  function buildSeat(x, z) {
+    iBox(0.48, 0.12, 0.46, x, 0.52, z, seatMat);          // 坐垫
+    iBox(0.10, 0.50, 0.44, x - 0.08, 0.78, z, seatMat);   // 靠背（略后倾）
+    iBox(0.10, 0.10, 0.28, x - 0.06, 1.05, z, seatMat);   // 头枕
+    iBox(0.015, 0.08, 0.02, x - 0.08, 0.98, z, chromeInt); // 头枕支柱
+  }
+  buildSeat(0.05, -0.38);  // driver
+  buildSeat(0.05, 0.38);   // passenger
+
+  // ── 后排连排座椅（坐垫 + 靠背 + 头枕×2）──
+  iBox(1.40, 0.12, 0.30, -0.70, 0.50, 0, seatMat);         // 坐垫
+  iBox(0.10, 0.45, 1.30, -0.78, 0.72, 0, seatMat);         // 靠背
+  [-0.42, 0.42].forEach(function(z) { iBox(0.10, 0.10, 0.30, -0.76, 0.98, z, seatMat); }); // 后排头枕
+
+  // ── 中央扶手箱 + 电子档把 + 杯架 ──
+  iBox(0.34, 0.06, 0.22, 0.22, 0.52, 0, accentMat);        // 扶手箱
+  iBox(0.05, 0.06, 0.03, 0.30, 0.57, 0, chromeInt);        // 电子档把
+  iBox(0.22, 0.02, 0.16, 0.16, 0.53, 0, darkTrim);         // 杯架
+
+  // ── 踏板（driver 侧）──
+  var pedalMat = new T.MeshStandardMaterial({ color: 0x111118, roughness: 0.5 });
+  iBox(0.04, 0.10, 0.07, 0.98, 0.44, -0.44, pedalMat);     // 油门
+  iBox(0.04, 0.12, 0.08, 0.92, 0.44, -0.34, pedalMat);     // 刹车
+
+  // ── 门板内衬（前后门，两侧）+ 门扶手 ──
+  [[0.45, 0.55], [-0.5, 0.45]].forEach(function(cfg) {
+    var x = cfg[0], w = cfg[1];
+    iBox(w, 0.30, 0.04, x, 0.62, 0.86, softMat);   // 左门板
+    iBox(w, 0.30, 0.04, x, 0.62, -0.86, softMat);  // 右门板
+    iBox(w * 0.5, 0.03, 0.05, x, 0.70, 0.83, accentMat);
+    iBox(w * 0.5, 0.03, 0.05, x, 0.70, -0.83, accentMat);
   });
+
+  // ── A/B/C 柱（车内视觉分隔）──
+  [1.00, 0.15, -0.95].forEach(function(x) {
+    var pillar = new T.Mesh(new T.CylinderGeometry(0.03, 0.03, 1.0, 8), interiorMat);
+    pillar.position.set(x, 0.95, 0);
+    g.add(pillar);
+  });
+
+  // ── 顶棚内衬 + 车顶内灯 ──
+  iBox(1.70, 0.02, 1.28, 0.05, 1.32, 0, softMat);          // 顶棚内衬
+  iBox(0.08, 0.02, 0.14, 0.30, 1.28, 0, domeMat);          // 车顶内灯
+
+  // ── 内后视镜 ──
+  iBox(0.03, 0.09, 0.05, 0.92, 1.06, 0, darkTrim);         // 镜杆
+  iBox(0.02, 0.07, 0.22, 0.93, 1.06, 0,
+    new T.MeshStandardMaterial({ color: 0x88aacc, roughness: 0.2, metalness: 0.5 })); // 镜面
 
   // 车底接触阴影：软边径向渐变平面，补充 AO 感
   g.add(_buildContactShadow(4.6, 2.0));

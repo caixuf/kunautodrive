@@ -83,6 +83,7 @@ struct Entity {
     double x{0}, y{0}, z{0}, heading{0}; /**< 世界坐标（含道路高程）+ 航向 (rad) */
     double signal_stop_x{0}, signal_stop_y{0}; /**< TrafficLight 世界停止线点 */
     double vx{0}, vy{0};           /**< 世界系速度 (m/s) */
+    double vz{0};                  /**< 世界系垂直速度 (m/s)，重力落体物理用 */
     double speed{0};               /**< 标量速度 = √(vx²+vy²)，车辆用 */
     double target_vx{0};           /**< AI 目标纵向速度 */
     double steer{0};               /**< 当前方向盘转角 (rad) */

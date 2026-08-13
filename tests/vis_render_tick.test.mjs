@@ -15,6 +15,8 @@
 import { createSceneDirector } from '../tools/flowboard/js/vis/director/SceneDirector.js';
 import * as ViewRegistry from '../tools/flowboard/js/vis/core/ViewRegistry.js';
 import { worldToThree, headingToRotationY } from '../tools/flowboard/js/vis/math/Coord.js';
+import { roadHeightAt } from '../tools/flowboard/js/vis/math/RoadHeight.js';
+import { VEHICLE_GROUND_Y } from '../tools/flowboard/js/vis/view/VehicleView.js';
 import { selectCurrentMotionSegment } from '../tools/flowboard/js/vis/math/Trajectory.js';
 import { ok, eq, done } from './test-utils.mjs';
 
@@ -196,11 +198,12 @@ function makeParkingExamFrame() {
       const egoEntry = vv?.getVehicleMap?.().get('ego');
       ok('车辆视图: ego 已创建', !!egoEntry && !!egoEntry.group);
       if (egoEntry?.group) {
-        const [wx, wy, wz] = worldToThree(store.ego.x, store.ego.y, store.ego.z);
+        const [wx, wz] = [store.ego.x, -store.ego.y];
+        const expY = roadHeightAt(store, store.ego.x, store.ego.y) + VEHICLE_GROUND_Y;
         ok('车辆视图: ego.position.x 对齐 worldToThree',
           Math.abs((egoEntry.group.position.x || 0) - wx) < 1e-6);
-        ok('车辆视图: ego.position.y 对齐 worldToThree',
-          Math.abs((egoEntry.group.position.y || 0) - wy) < 1e-6);
+        ok('车辆视图: ego.position.y 贴地(道路高度+路面厚度)',
+          Math.abs((egoEntry.group.position.y || 0) - expY) < 1e-6);
         ok('车辆视图: ego.position.z 对齐 worldToThree',
           Math.abs((egoEntry.group.position.z || 0) - wz) < 1e-6);
         ok('车辆视图: ego.rotation.y 对齐 headingToRotationY',
@@ -264,10 +267,11 @@ function makeParkingExamFrame() {
     const egoEntry = vv?.getVehicleMap?.().get('ego');
     ok('高架: ego 车辆实例存在', !!egoEntry && !!egoEntry.group);
     if (egoEntry?.group) {
-      const [wx, wy, wz] = worldToThree(store.ego.x, store.ego.y, store.ego.z);
-      ok('高架: ego.position 映射正确',
+      const [wx, wz] = [store.ego.x, -store.ego.y];
+      const expY = roadHeightAt(store, store.ego.x, store.ego.y) + VEHICLE_GROUND_Y;
+      ok('高架: ego.position 贴地映射正确',
         Math.abs((egoEntry.group.position.x || 0) - wx) < 1e-6 &&
-        Math.abs((egoEntry.group.position.y || 0) - wy) < 1e-6 &&
+        Math.abs((egoEntry.group.position.y || 0) - expY) < 1e-6 &&
         Math.abs((egoEntry.group.position.z || 0) - wz) < 1e-6);
     }
   }
@@ -323,10 +327,11 @@ function makeParkingExamFrame() {
     ok('多车道: npc1 实例存在', !!npc1 && !!npc1.group);
     if (npc1?.group) {
       const e = store.entities.find(x => x.id === 'npc1');
-      const [wx, wy, wz] = worldToThree(e.x, e.y, e.z);
-      ok('多车道: npc1.position 映射正确',
+      const [wx, wz] = [e.x, -e.y];
+      const expY = roadHeightAt(store, e.x, e.y) + VEHICLE_GROUND_Y;
+      ok('多车道: npc1.position 贴地映射正确',
         Math.abs((npc1.group.position.x || 0) - wx) < 1e-6 &&
-        Math.abs((npc1.group.position.y || 0) - wy) < 1e-6 &&
+        Math.abs((npc1.group.position.y || 0) - expY) < 1e-6 &&
         Math.abs((npc1.group.position.z || 0) - wz) < 1e-6);
       ok('多车道: npc1.rotation.y 映射正确',
         Math.abs((npc1.group.rotation.y || 0) - headingToRotationY(e.heading || 0)) < 1e-6);

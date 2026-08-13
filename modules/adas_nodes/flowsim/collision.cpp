@@ -12,6 +12,7 @@
  */
 
 #include "collision.h"
+#include "road_network.h"
 
 #include <cmath>
 #include <algorithm>
@@ -164,6 +165,78 @@ void apply_collision_response(EntityPool& pool, const std::vector<CollisionPair>
         // 车不会停在错误位置。
         if (a.is_vehicle()) a.crash_cooldown = 0.5;
         if (b.is_vehicle()) b.crash_cooldown = 0.5;
+    }
+}
+
+void apply_guardrail(Entity& e, FlowRoadNetwork& roads, double /*dt*/) {
+    if (!e.active || !e.is_vehicle()) return;
+    // 用车辆世界坐标反查所在道路的 Frenet（含横向偏移 offset）
+    FrenetPos f;
+    if (!roads.world_to_frenet(e.x, e.y, f)) return;
+
+    double lw = roads.lane_width(f.road_id, 0, f.s);
+    if (lw < 1.0 || lw > 10.0) lw = 3.5;
+    int lanes = roads.drivable_lane_count(f.road_id, f.s);
+    if (lanes < 2) return;                     // 单车道/未知，不做护栏约束
+
+    /* 路缘 = 单侧车道数 × 车道宽 + 0.6m 路肩余量（最外侧车道外沿外一点）。
+     * drivable_lane_count 是双向合计，单侧取一半。offset 语义为相对道路参考线
+     * （lane_id=0 中心线）的横向偏移，故路缘边界 = ±(side*lw + shoulder)。 */
+    double side = lanes * 0.5;
+    double guardrail = side * lw + 0.6;
+    if (std::fabs(f.offset) <= guardrail) return;
+
+    // 越界 → 护栏阻挡：钳制 offset 到路缘，回投世界坐标（车贴护栏，不冲出）
+    double clamped = (f.offset > 0.0) ? guardrail : -guardrail;
+    WorldPos wp;
+    if (!roads.frenet_to_world(f.road_id, 0, f.s, clamped, wp)) return;
+    e.x = wp.x;
+    e.y = wp.y;
+    e.offset = clamped;
+    /* 护栏碰撞反馈：速度削减（撞护栏停下 / 沿护栏滑行），进入碰撞冷却。
+     * 不置 last_teleport_cycle（位置连续，非瞬移），冷却防每 tick 反复减速叠加。 */
+    e.speed *= 0.3;
+    e.vx *= 0.3;
+    e.vy *= 0.3;
+    if (e.crash_cooldown < 0.3) e.crash_cooldown = 0.3;
+}
+
+void apply_gravity(Entity& e, FlowRoadNetwork& roads, double dt) {
+    if (!e.active || !e.is_vehicle()) return;
+    const double G = 9.81;
+    e.vz -= G * dt;   // 重力加速度（垂直向下）
+
+    // 查询所在位置的道路高度作为支撑面
+    FrenetPos f;
+    bool on_road = roads.world_to_frenet(e.x, e.y, f);
+    double ground_z = 0.0;
+    if (on_road) {
+        WorldPos wp;
+        if (roads.frenet_to_world(f.road_id, 0, f.s, f.offset, wp)) {
+            ground_z = wp.z;
+        } else {
+            on_road = false;
+        }
+    }
+
+    if (!on_road) {
+        // 不在道路上 → 无支撑，自由下落
+        e.z += e.vz * dt;
+        if (e.z < -200.0) e.z = -200.0;   // 防无限下坠
+        return;
+    }
+
+    if (e.z <= ground_z) {
+        // 贴地：道路支撑，垂直速度归零
+        e.z = ground_z;
+        e.vz = 0.0;
+    } else {
+        // 高于路面 → 重力下落；落到路面则支撑
+        e.z += e.vz * dt;
+        if (e.z <= ground_z) {
+            e.z = ground_z;
+            e.vz = 0.0;
+        }
     }
 }
 

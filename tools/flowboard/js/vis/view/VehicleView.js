@@ -18,6 +18,7 @@ import { deriveLightState, LIGHT_TURN_LEFT, LIGHT_TURN_RIGHT, LIGHT_HAZARD, LIGH
 import { getStdMaterial } from '../core/AssetFactory.js';
 import { initModelCache, getModel, _setVehicleLights, _relinkWheelUserData } from '../../models.js';
 import { worldToThree, headingToRotationY } from '../math/Coord.js';
+import { roadHeightAt } from '../math/RoadHeight.js';
 
 // ═══════════════════════════════════════════════════════════
 // createVehicleLights — THREE 灯光网格工厂（原在 VehicleLights.js，
@@ -28,6 +29,11 @@ const LIGHT_OFF = new THREE.Color(0x111111);
 const LIGHT_BRAKE_ON = new THREE.Color(0xff0000);
 const LIGHT_TURN_ON = new THREE.Color(0xff8800);
 const LIGHT_HEAD_ON = new THREE.Color(0xffffcc);
+
+// 车辆接地偏移：车辆模型原点=路面(y=0，轮子下缘≈0)，而渲染路面画在
+// RoadView.Y_ROAD=0.10（车道线/边线防 z-fight 的微抬升）。车辆 y 取所在位置
+// 的道路高度(roadHeightAt) + 此偏移，保证匝道/高架高度变化时仍贴合渲染路面。
+export const VEHICLE_GROUND_Y = 0.10;
 
 const BRAKE_Y = 0.55;      // 尾灯高度
 const BRAKE_X = -2.05;     // 车尾（X-forward）
@@ -285,6 +291,98 @@ export function _cleanSu7Exterior(scene) {
   });
 }
 
+/** 新能源绿牌纹理，依据 GA 36-2018《中华人民共和国机动车号牌》小型新能源
+ *  汽车号牌规格绘制（Canvas 1px=1mm，零外部资源）：
+ *  - 外廓 440×140mm，8 字符（省简称 + 发牌字母 + 6 位序号）；
+ *  - 字高 90mm；前两字宽 45mm，后 6 字宽 43mm，字距 9mm；
+ *  - 渐变绿底、黑字、黑框线，第 2/3 字间有间隔圆点。
+ *  逐字符排版并按实测字宽横向压缩，避免方形西文字体把 8 个字挤出板面。 */
+function _makeNewEnergyPlateTexture(plateText) {
+  const W = 440, H = 140;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+
+  // 渐变绿底（上亮下深）
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#3fc05a');
+  g.addColorStop(1, '#0d7d3a');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  const text = String(plateText || '京A6666666').slice(0, 8);
+
+  // GA 36-2018 字符布局（mm）：字高 90，前两字 45 宽、后六字 43 宽
+  const widths = [45, 45, 43, 43, 43, 43, 43, 43];
+  const gap = 9;
+  const contentW = widths.reduce((a, b) => a + b, 0) + gap * (widths.length - 1);
+  let x = (W - contentW) / 2;
+  const centers = widths.map((w) => { x += w / 2; const cx = x; x += w / 2 + gap; return cx; });
+
+  // 黑框线（距边 5mm，线宽 2mm）
+  ctx.strokeStyle = '#0a0a0a';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(5, 5, W - 10, H - 10);
+
+  // 第 2、3 字符之间的间隔圆点（直径 8mm）
+  ctx.fillStyle = '#0a0a0a';
+  ctx.beginPath();
+  ctx.arc((centers[1] + widths[1] / 2 + centers[2] - widths[2] / 2) / 2, H / 2, 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 逐字符绘制：测量实际字宽后横向压缩进 43/45mm 字格（只压不拉，窄字符如 1 保留自然字宽）
+  ctx.fillStyle = '#0a0a0a';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '900 90px "Arial Black","PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const targetW = widths[i] || 43;
+    const measured = ctx.measureText(ch).width || targetW;
+    const sx = Math.min(1, targetW / measured);
+    ctx.save();
+    ctx.translate(centers[i], H / 2);
+    ctx.scale(sx, 1);
+    ctx.fillText(ch, 0, 2);
+    ctx.restore();
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+/** 给 su7 叠加新能源绿牌（前后各一块）。
+ *  定位全部来自模型自带 "ChePai" 节点的实测顶点（解码 meshopt 压缩后取世界坐标）：
+ *  - 前牌：垂直平面，位于前保险杠凹槽内，x≈2.627、y 中心≈0.546、z≈0，
+ *    尺寸 0.428(宽)×0.133(高)；外框唇边在 x≈2.630，车牌收进框内 3mm。
+ *  - 后牌：随尾门倾斜，绝非竖直——底边靠后 x≈-2.584、顶边靠前 x≈-2.536，
+ *    中心 (-2.560, 0.502, 0)，尺寸 0.428×0.135。用基底矩阵把平面旋到贴合
+ *    尾门斜面（法线朝后并略向上）。
+ *  车牌尺寸取 ChePai 实测值而非国标 0.48×0.14，以恰好落进原厂预留框。 */
+function _applyNewEnergyPlate(scene, plateText) {
+  const tex = _makeNewEnergyPlateTexture(plateText);
+  const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.35, metalness: 0.1 });
+
+  // 前牌：垂直，正面朝 +X。比 ChePai(2.627) 前出 1mm 避免 z-fight，仍收在唇边(2.630)内。
+  const front = new THREE.Mesh(new THREE.PlaneGeometry(0.428, 0.133), mat);
+  front.rotation.y = Math.PI / 2;                 // 纹理右沿世界 -Z，正面朝 +X
+  front.position.set(2.628, 0.546, -0.001);
+  scene.add(front);
+
+  // 后牌：贴合倾斜尾门。局部 X(宽)→世界 +Z，局部 Y(高)→尾门向上方向，
+  // 局部 Z(正面)→外法线（朝后且略向上）。
+  const rear = new THREE.Mesh(new THREE.PlaneGeometry(0.428, 0.135), mat);
+  const right = new THREE.Vector3(0, 0, 1);
+  // 底边中心 (-2.584, 0.439) → 顶边中心 (-2.536, 0.567)
+  const up = new THREE.Vector3(0.048, 0.128, 0).normalize();
+  const normal = new THREE.Vector3().crossVectors(right, up).normalize();
+  rear.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, normal));
+  rear.position.set(-2.560, 0.502, 0.0).addScaledVector(normal, 0.003);
+  scene.add(rear);
+}
+
 // ═══════════════════════════════════════════════════════════
 // 方向盘程序化注入
 // ═══════════════════════════════════════════════════════════
@@ -497,8 +595,12 @@ export function createVehicleView(scene, renderer, modelCache) {
     // 应用车漆升级
     if (type === 'su7') _cleanSu7Exterior(scene);
     _applyCarPaintToScene(scene, _envMap);
-    // 注入方向盘（glTF 车辆模型未自带 steering_wheel mesh）
-    scene.add(_createSteeringWheel());
+    // 新能源绿牌（京A6666666，前后各一块）
+    if (type === 'su7') _applyNewEnergyPlate(scene, '京A6666666');
+    // 注入方向盘：sedan/suv/truck 由 gen_models.py 生成，只有四个外露车轮、
+    // 没有内饰，需要程序化补一个方向盘以提供转向反馈。SU7 是授权高精度模型，
+    // 驾驶位自带方向盘（interior.009 @ 左舵驾驶位），不能再叠一个丑的。
+    if (type !== 'su7') scene.add(_createSteeringWheel());
     return scene;
   }
 
@@ -570,19 +672,18 @@ export function createVehicleView(scene, renderer, modelCache) {
       // 车轮旋转：程序化模型沿 X，glTF 车轮沿 Z。
       if (!_isSteeringWheelNode(child.name) &&
           (name.includes('wheel') || name.includes('tire') || name.includes('tyre'))) {
-        // The authorized SU7 stores each axle as one wheel mesh. At full lock,
-        // applying wheel roll to that same mesh competes with its steering
-        // parent transform and makes the visible tires orbit off the axle.
-        // Keep the steering transform authoritative during maneuvers; straight
-        // and near-straight driving retain the normal rolling animation.
-        const su7SteeringLock = type === 'su7' && Math.abs(steering.frontAxleYaw) > 0.005;
-        if (speed_mps !== undefined && !su7SteeringLock) {
+        if (speed_mps !== undefined) {
           const radius = 0.35;
           const angularSpeed = speed_mps / radius;
+          // 转向与滚动是两个独立自由度：程序化模型用 kingpin 父组转向（rotation.y）
+          // + 轮胎自身滚动（rotation.x/z），glTF 前轮同样让轮胎照常滚动 ——
+          // 打方向时前轮持续滚动，不再"锁死停转"（旧实现为避免欧拉组合漂移，
+          // 在转向时暂停前轮滚动，观感是"打方向轮子就不动了"）。
+          const TAU = Math.PI * 2;
           if (child.userData && child.userData.rollAxis === 'z') {
-            child.rotation.z += angularSpeed * dt;
+            child.rotation.z = (child.rotation.z + angularSpeed * dt) % TAU;
           } else {
-            child.rotation.x += angularSpeed * dt;
+            child.rotation.x = (child.rotation.x + angularSpeed * dt) % TAU;
           }
         }
       }
@@ -592,7 +693,7 @@ export function createVehicleView(scene, renderer, modelCache) {
   // ── 公共 API ──
 
   /** 添加或更新一辆车 */
-  function updateVehicle(id, vehicleData, type) {
+  function updateVehicle(id, vehicleData, type, store) {
     // 确保 envMap 已生成
     _ensureEnvMap(renderer, scene);
 
@@ -643,11 +744,15 @@ export function createVehicleView(scene, renderer, modelCache) {
 
     // 更新位姿（ENU → THREE 坐标映射）
     if (vehicleData) {
-      const [tx, ty, tz] = worldToThree(
-        vehicleData.x || vehicleData.px || 0,
-        vehicleData.y || vehicleData.py || 0,
-        vehicleData.z || vehicleData.pz || 0
-      );
+      const ex = vehicleData.x || vehicleData.px || 0;
+      const ey = vehicleData.y || vehicleData.py || 0;
+      const [tx, , tz] = worldToThree(ex, ey, 0);
+      // 车辆贴地：高度 = 所在位置的路面高度(roadHeightAt，跟随匝道/高架坡度)
+      // + 渲染路面厚度偏移(RoadView.Y_ROAD，车道线防 z-fight 的微抬升)。
+      // 用道路高度而非数据 z，保证道路高度变化（匝道/高架）时车辆始终贴合路面，
+      // 轮子不会陷入路面也不会悬空。
+      const roadZ = store ? roadHeightAt(store, ex, ey) : (vehicleData.z || 0);
+      const ty = roadZ + VEHICLE_GROUND_Y;
       entry.group.position.set(tx, ty, tz);
       entry.group.rotation.set(0, headingToRotationY(vehicleData.heading || vehicleData.yaw || 0), 0);
       entry.steerAngle = vehicleData.steer ?? vehicleData.steerAngle ?? 0;
@@ -716,7 +821,7 @@ export function createVehicleView(scene, renderer, modelCache) {
     if (store.ego) {
       const egoId = 'ego';
       activeIds.add(egoId);
-      updateVehicle(egoId, store.ego, 'su7');
+      updateVehicle(egoId, store.ego, 'su7', store);
     }
 
     // 2. 其他实体（car/truck/suv/pedestrian — 排除红绿灯/ETC/停止线等非车辆）
@@ -726,7 +831,7 @@ export function createVehicleView(scene, renderer, modelCache) {
       if (!ent || !ent.id) continue;
       if (!VEHICLE_TYPES.has(ent.type)) continue;
       activeIds.add(ent.id);
-      updateVehicle(ent.id, ent, ent.type || 'car');
+      updateVehicle(ent.id, ent, ent.type || 'car', store);
     }
 
     // 3. 删除消失的车辆
@@ -750,12 +855,34 @@ export function createVehicleView(scene, renderer, modelCache) {
         // 行人灯光不处理
         if (type === 'pedestrian') return;
       } else {
-        // 程序化 fallback 前轴转向（1:1 显示前轮角，见上方 glTF 路径注释；
-        // 加死区滤波，避免直路巡航时微动）
+        // 程序化 fallback（_buildSedan）前轮 kingpin 转向 + 全轮滚动。
         const vis = _getVisGroup(entry);
-        if (vis && vis.userData && vis.userData.frontAxle) {
+        if (vis && vis.userData && vis.userData.wheels) {
           const steering = _steeringVisualState(entry && entry.steerAngle);
-          vis.userData.frontAxle.rotation.y = steering.frontAxleYaw;
+          const yaw = steering.frontAxleYaw;
+          // 前轮转向：绕各自 kingpin（轮心垂直轴，pivot 在轮心）→ 原地转不漂移。
+          vis.userData.wheels.forEach((w) => {
+            if (w.userData && w.userData.kingpin) {
+              w.userData.kingpin.rotation.y = yaw;
+            }
+          });
+          // 车轮滚动：轮胎自身（kingpin 分离 → 独立自由度），打方向也照常滚动。
+          const speed_mps = v
+            ? (Number.isFinite(v.speed_mps) ? v.speed_mps
+              : (Number.isFinite(v.speed) ? v.speed : 0))
+            : 0;
+          if (speed_mps !== undefined) {
+            const radius = vis.userData.wheelRadius || 0.33;
+            const angularSpeed = speed_mps / radius;
+            const TAU = Math.PI * 2;
+            vis.userData.wheels.forEach((w) => {
+              if (w.userData && w.userData.rollAxis === 'z') {
+                w.rotation.z = (w.rotation.z + angularSpeed * dt) % TAU;
+              } else {
+                w.rotation.x = (w.rotation.x + angularSpeed * dt) % TAU;
+              }
+            });
+          }
         }
       }
 

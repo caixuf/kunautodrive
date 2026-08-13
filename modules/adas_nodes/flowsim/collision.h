@@ -24,6 +24,8 @@
 
 namespace flowsim {
 
+class FlowRoadNetwork;  // 前置声明，apply_guardrail 参数用引用
+
 /** 一对发生碰撞的实体索引 */
 struct CollisionPair {
     EntityId a;
@@ -46,6 +48,26 @@ int detect_collisions(const EntityPool& pool, std::vector<CollisionPair>& pairs)
  * @param pairs  detect_collisions 的输出
  */
 void apply_collision_response(EntityPool& pool, const std::vector<CollisionPair>& pairs);
+
+/**
+ * 护栏/路缘碰撞：车辆横向偏移超出道路可行驶边界（路缘）时被护栏阻挡。
+ * 将 offset 钳制到路缘并回投世界坐标（车贴护栏、不冲出路面），削减速度并
+ * 进入碰撞冷却。需在路网已加载时调用。
+ * @param e     车辆实体（非车辆直接返回）
+ * @param roads 路网（world_to_frenet / lane_width / drivable_lane_count）
+ * @param dt    时间步长 (s，当前仅用于统一签名)
+ */
+void apply_guardrail(Entity& e, FlowRoadNetwork& roads, double dt);
+
+/**
+ * 重力落体 + 道路支撑（垂直方向物理）。
+ * 每 tick 对垂直速度 vz 施加重力；查询所在位置道路高度作为支撑面：
+ *   - 在道路上且 z ≤ 路面高度 → 贴地（z=路面高，vz=0）
+ *   - z 高于路面 → 按重力下落，落回路面
+ *   - 不在道路上（冲出路面/无支撑）→ 自由下落
+ * 使 z 由物理决定而非硬编码，冲出道路时自然下坠。
+ */
+void apply_gravity(Entity& e, FlowRoadNetwork& roads, double dt);
 
 /**
  * OBB-OBB 相交判定（SAT）。

@@ -1648,7 +1648,7 @@ protected:
                             if (fresh_game_input && cJSON_IsNumber(gjt)) {
                                 double th = gjt->valuedouble;
                                 if (th >  1.0) th = 1.0;
-                                if (th <  0.0) th = 0.0;
+                                if (th < -1.0) th = -1.0;   // 负值 = 倒车驱动
                                 g.ego_throttle.store(th, std::memory_order_relaxed);
                             }
                             if (fresh_game_input && cJSON_IsNumber(gjb)) {
@@ -2085,6 +2085,27 @@ protected:
                     /* 仅发布涉及 ego 的碰撞事件，与旧 sim_world 行为一致；
                      * NPC 间 AABB 重叠不产生 topic 消息，避免 evaluator 误判。 */
                     if (is_ego) publish_sim_collision(g.pool[p.a], g.pool[p.b]);
+                }
+            }
+
+            /* ── Step 4.5: 护栏/路缘碰撞 ──
+             * 车辆横向偏移超出道路可行驶边界（路缘）时被护栏阻挡：钳制到路缘、
+             * 削减速度。需路网已加载。 */
+            if (g.roads_loaded) {
+                for (int i = 0; i < g.pool.size(); ++i) {
+                    flowsim::Entity& v = g.pool[i];
+                    if (!v.active || !v.is_vehicle()) continue;
+                    flowsim::apply_guardrail(v, g.roads, FLOWSIM_DT_SEC);
+                }
+            }
+
+            /* ── Step 4.6: 重力落体 + 道路支撑（垂直方向物理）──
+             * z 由重力 + 道路高度场决定：在道路上贴地，冲出路面则自然下坠。 */
+            if (g.roads_loaded) {
+                for (int i = 0; i < g.pool.size(); ++i) {
+                    flowsim::Entity& v = g.pool[i];
+                    if (!v.active || !v.is_vehicle()) continue;
+                    flowsim::apply_gravity(v, g.roads, FLOWSIM_DT_SEC);
                 }
             }
 

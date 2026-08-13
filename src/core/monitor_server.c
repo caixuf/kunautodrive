@@ -981,7 +981,7 @@ static bool dispatch_request(int fd, MonitorServer* ms,
                 cJSON* hazard = cJSON_GetObjectItemCaseSensitive(root, "hazard");
                 cJSON* low_beam = cJSON_GetObjectItemCaseSensitive(root, "low_beam");
                 bool valid_control = cJSON_IsNumber(throttle) &&
-                    throttle->valuedouble >= 0.0 && throttle->valuedouble <= 1.0 &&
+                    throttle->valuedouble >= -1.0 && throttle->valuedouble <= 1.0 &&
                     cJSON_IsNumber(brake) &&
                     brake->valuedouble >= 0.0 && brake->valuedouble <= 1.0 &&
                     cJSON_IsNumber(steer) &&

@@ -213,6 +213,7 @@ function updateGameHud() {
   var laneDeparture = Number.isFinite(laneOffset) &&
     Math.abs(laneCenterOffset) > laneWidth * 0.5 - 0.25 && speed > 1;
   setText('game-speed', speed.toFixed(1) + ' m/s');
+  setText('game-gear', gameGear);
   setText('game-steer', gameAngleDeg(gameControl.steer).toFixed(1) + '°');
   setText('game-heading', gameAngleDeg(heading).toFixed(1) + '°');
   setText('game-motion', gameAngleDeg(motion).toFixed(1) + '°');
@@ -295,9 +296,12 @@ function startGameControlLoop() {
 function updateGameControl() {
   var scene = (topoData.metrics || {}).scene || {};
   var speed = Number((scene.ego || {}).speed || 0);
-  var throttle = (gameKeys.ArrowUp || gameKeys.w) ? 0.55 : 0;
+  // D 挡：W/↑ 前进油门；R 挡：W/↑ 反向油门（倒车），S/↓ 作为倒车制动。
+  // throttle 范围 [-1,1]：负值 = 倒车驱动（flowsim step_bicycle 支持负 throttle）。
+  var throttle = (gameKeys.ArrowUp || gameKeys.w)
+    ? (gameGear === 'R' ? -0.55 : 0.55) : 0;
   var brake = (gameKeys.ArrowDown || gameKeys.s) ? 0.7 : 0;
-  var steerLimit = Math.max(0.03, Math.min(0.08, 0.10 - speed * 0.004));
+  var steerLimit = Math.max(0.03, Math.min(0.08, 0.10 - Math.abs(speed) * 0.004));
   var steerTarget = 0;
   if (gameKeys.ArrowLeft || gameKeys.a) steerTarget += steerLimit;
   if (gameKeys.ArrowRight || gameKeys.d) steerTarget -= steerLimit;
@@ -387,6 +391,7 @@ async function toggleGameMode() {
     gameRequestQueued = false;
   }
   gameControl = { throttle: 0, brake: 0, steer: 0 };
+  gameGear = 'D';   // 进入/退出游戏模式时挡位复位前进
   gameLights = { lowBeam: false, turnSignal: 0, hazard: false };
   updateGameLightButtons();
   try {
@@ -464,6 +469,7 @@ var connectRetries = 0;
 var lastNodeNames = '';
 var gameMode = false;
 var gameKeys = {};
+var gameGear = 'D';   // 游戏挡位：'D' 前进 / 'R' 倒车（R 键切换；R 挡时 W/↑ = 倒车）
 var gameControl = { throttle: 0, brake: 0, steer: 0 };
 var gameLights = { lowBeam: false, turnSignal: 0, hazard: false };
 var gameSendTimer = null;
@@ -2648,7 +2654,9 @@ window.addEventListener('keydown', function(e) {
   if (!gameMode) return;
   var key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   if (key === 'r') {
-    rescueGameVehicle();
+    // R 键切换挡位 D↔R（倒车）。rescue 用按钮触发。
+    gameGear = (gameGear === 'D') ? 'R' : 'D';
+    updateGameControl();
     e.preventDefault();
     return;
   }
