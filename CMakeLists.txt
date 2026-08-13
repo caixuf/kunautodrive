@@ -966,6 +966,13 @@ target_include_directories(test_new_modules PRIVATE ${GEN_DIR})
 add_test(NAME new_module_tests COMMAND test_new_modules)
 set_tests_properties(new_module_tests PROPERTIES TIMEOUT 10)
 
+# ── 车道级 A* 路由（扩容后：二维网格 >256 lane）─────────────
+add_executable(test_scenario_router tests/test_scenario_router.c)
+target_link_libraries(test_scenario_router flowengine_core)
+target_link_libraries(test_scenario_router m)
+add_test(NAME scenario_router_tests COMMAND test_scenario_router)
+set_tests_properties(scenario_router_tests PROPERTIES TIMEOUT 10)
+
 # ── 安全故障注入 / 证据链：确定性心跳丢失和 raw_cmd timeout ──
 add_executable(test_safety_fault_evidence tests/test_safety_fault_evidence.c)
 target_link_libraries(test_safety_fault_evidence flowengine_core)

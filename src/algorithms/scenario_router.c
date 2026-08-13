@@ -67,35 +67,37 @@ static int pq_pop(AstarNode* heap, int* size, int* out_id, double* out_g) {
     return 0;
 }
 
-/* Closed set as bitmask: 256 lanes = 4 × uint64_t */
-#define CLOSED_SIZE 4
+/* Closed set as bitmask: ROUTER_MAX_LANES lanes = ceil(ROUTER_MAX_LANES/64) × uint64_t */
+#define CLOSED_SIZE ((ROUTER_MAX_LANES + 63) / 64)
 static inline void closed_set_init(uint64_t* cs) {
     memset(cs, 0, CLOSED_SIZE * sizeof(uint64_t));
 }
 static inline void closed_set_add(uint64_t* cs, int id) {
-    if (id >= 0 && id < 256) cs[id / 64] |= (1ULL << (id % 64));
+    if (id >= 0 && id < ROUTER_MAX_LANES) cs[id / 64] |= (1ULL << (id % 64));
 }
 static inline int closed_set_has(uint64_t* cs, int id) {
-    if (id < 0 || id >= 256) return 0;
+    if (id < 0 || id >= ROUTER_MAX_LANES) return 0;
     return (cs[id / 64] >> (id % 64)) & 1ULL;
 }
 
 /* ── Euclidean heuristic: distance from lane center to goal lane center ── */
 static double heuristic(const RouterGraph* g, int from_id, int to_id) {
-    double cx_from = 0, cx_to = 0;
+    double cx_from = 0, cy_from = 0, cx_to = 0, cy_to = 0;
     int found_from = 0, found_to = 0;
     for (int i = 0; i < g->lane_count; i++) {
         if (g->lanes[i].id == from_id) {
             cx_from = (g->lanes[i].start_x + g->lanes[i].end_x) * 0.5;
+            cy_from = (g->lanes[i].start_y + g->lanes[i].end_y) * 0.5;
             found_from = 1;
         }
         if (g->lanes[i].id == to_id) {
             cx_to = (g->lanes[i].start_x + g->lanes[i].end_x) * 0.5;
+            cy_to = (g->lanes[i].start_y + g->lanes[i].end_y) * 0.5;
             found_to = 1;
         }
     }
     if (!found_from || !found_to) return 0.0;
-    return fabs(cx_to - cx_from);
+    return hypot(cx_to - cx_from, cy_to - cy_from);
 }
 
 /* ── Find edge cost from from_id to to_id ── */
@@ -117,15 +119,24 @@ void router_graph_init(RouterGraph* g) {
 
 int router_add_lane(RouterGraph* g, int id, double start_x, double end_x,
                     int lane_idx, int road_id, double speed_limit) {
+    return router_add_lane_xy(g, id, start_x, end_x, 0.0, 0.0,
+                              lane_idx, road_id, speed_limit);
+}
+
+int router_add_lane_xy(RouterGraph* g, int id, double start_x, double end_x,
+                       double start_y, double end_y,
+                       int lane_idx, int road_id, double speed_limit) {
     if (g->lane_count >= ROUTER_MAX_LANES) return -1;
     RouterLane* l = &g->lanes[g->lane_count++];
     l->id = id;
     l->start_x = start_x;
     l->end_x = end_x;
+    l->start_y = start_y;
+    l->end_y = end_y;
     l->lane_idx = lane_idx;
     l->road_id = road_id;
     l->speed_limit = speed_limit;
-    l->length = fabs(end_x - start_x);
+    l->length = hypot(end_x - start_x, end_y - start_y);
     return 0;
 }
 

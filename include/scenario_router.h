@@ -8,15 +8,17 @@
 extern "C" {
 #endif
 
-#define ROUTER_MAX_LANES   256
-#define ROUTER_MAX_EDGES   512
-#define ROUTER_MAX_PATH    64
+#define ROUTER_MAX_LANES   4096   /* 支持大地图（city_grid 5200 lane 的级别） */
+#define ROUTER_MAX_EDGES   8192
+#define ROUTER_MAX_PATH    256
 
 /* 车道段 */
 typedef struct {
     int     id;             /* 车道段唯一 ID */
     double  start_x;        /* 起点 x (m) */
     double  end_x;          /* 终点 x (m) */
+    double  start_y;        /* 起点 y (m)，二维网格启发式用（默认 0） */
+    double  end_y;          /* 终点 y (m) */
     int     lane_idx;       /* 车道索引 (0=最左) */
     int     road_id;        /* 所在道路段 ID */
     double  speed_limit;    /* 限速 (m/s) */
@@ -56,6 +58,14 @@ void router_graph_init(RouterGraph* g);
  */
 int router_add_lane(RouterGraph* g, int id, double start_x, double end_x,
                     int lane_idx, int road_id, double speed_limit);
+
+/**
+ * 添加车道段（二维坐标版本）。start_y/end_y 用于二维网格启发式，
+ * 提高大地图（网格/环线）下 A* 的搜索质量。
+ */
+int router_add_lane_xy(RouterGraph* g, int id, double start_x, double end_x,
+                       double start_y, double end_y,
+                       int lane_idx, int road_id, double speed_limit);
 
 /**
  * 添加拓扑边。type=0(后继), 1(左邻), 2(右邻)。
