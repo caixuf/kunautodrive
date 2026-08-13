@@ -1,0 +1,49 @@
+{
+  "name": "city_grid_map",
+  "description": "5km x 5km urban road grid; static roads come from maps/city_grid/map.json. Ego drives ns_avenue_00 (route 'main') northbound.",
+  "map_file": "../maps/city_grid/map.json",
+  "route_file": "../maps/city_grid/routes.json",
+  "route_id": "main",
+  "random_seed": 202608,
+  "duration_s": 120,
+  "lighting": "day",
+  "weather": "clear",
+  "visibility_m": 1200,
+  "npc_lane_change": true,
+  "ego": {
+    "x": -1.75,
+    "y": 0.0,
+    "heading": 1.5708,
+    "init_speed": 10.0,
+    "target_speed": 13.0,
+    "wheelbase": 2.7,
+    "length": 4.6,
+    "width": 2.0,
+    "max_steer": 0.6
+  },
+  "actors": [
+    {
+      "id": 1,
+      "type": "car",
+      "segment_id": 0,
+      "s": 360,
+      "l": -1.75,
+      "vx": 14.0,
+      "vy": 0.0,
+      "len": 4.6,
+      "wid": 2.0
+    }
+  ],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 120,
+    "min_avg_speed_mps": 3.0,
+    "min_distance_m": 450
+  },
+  "route": [],
+  "scenarios": [],
+  "choreography": {
+    "loop_period_s": 999,
+    "beats": []
+  }
+}

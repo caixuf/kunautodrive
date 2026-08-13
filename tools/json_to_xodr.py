@@ -781,9 +781,13 @@ def load_scenario(path: Path) -> dict:
         if missing:
             raise ValueError(f"{route_path}: route {route_id} references missing roads {missing}")
         roads = [by_id[road_id] for road_id in chain]
+    # road 字符串 id → 数字索引映射（map.json 用字符串 road/lane id，
+    # json_to_xodr 内部用数字 edge id，junctions 引用需换算到同一套索引）。
+    name_to_idx: dict = {}
     edges = []
     for index, road in enumerate(roads):
         edge = dict(road)
+        name_to_idx[str(edge.get("id"))] = index
         edge["id"] = edge.get("legacy_id", index)
         if "nodes" not in edge and "centerline" in edge:
             edge["nodes"] = edge["centerline"]
@@ -796,11 +800,37 @@ def load_scenario(path: Path) -> dict:
                 )
         edge.pop("legacy_id", None)
         edges.append(edge)
+
+    # 把 map.json 的 junctions（字符串 road id）换算成数字索引；非字符串透传，
+    # 向后兼容既有数字 id / reserved 占位 junction。
+    def _map_id(v):
+        if isinstance(v, str):
+            return name_to_idx.get(v, -1)
+        return v
+
+    juncs = []
+    for jcfg in city_map.get("junctions", []):
+        jc = dict(jcfg)
+        if "incoming_road" in jc:
+            jc["incoming_road"] = _map_id(jc["incoming_road"])
+        if "target_road" in jc:
+            jc["target_road"] = _map_id(jc["target_road"])
+        conns = []
+        for c in jc.get("connecting_roads", []):
+            cc = dict(c)
+            if "id" in cc:
+                cc["id"] = _map_id(cc["id"])
+            if "target_road" in cc:
+                cc["target_road"] = _map_id(cc["target_road"])
+            conns.append(cc)
+        jc["connecting_roads"] = conns
+        juncs.append(jc)
+
     resolved = dict(scenario)
     resolved["road_network"] = {
         "edges": edges,
         "cross_roads": city_map.get("cross_roads", []),
-        "junctions": city_map.get("junctions", []),
+        "junctions": juncs,
     }
     return resolved
 

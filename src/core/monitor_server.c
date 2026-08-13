@@ -844,7 +844,9 @@ static bool dispatch_request(int fd, MonitorServer* ms,
             cJSON* map = root ? cJSON_GetObjectItemCaseSensitive(root, "map") : NULL;
             const char* map_id = cJSON_IsString(map) ? map->valuestring : NULL;
             bool allowed = map_id &&
-                (strcmp(map_id, "city_ring") == 0 || strcmp(map_id, "city_center") == 0);
+                (strcmp(map_id, "city_ring") == 0 ||
+                 strcmp(map_id, "city_center") == 0 ||
+                 strcmp(map_id, "city_grid") == 0);
             if (!allowed) {
                 send_response(fd, "400 Bad Request", "application/json",
                               "{\"ok\":false,\"error\":\"map is not allowlisted\"}");
@@ -895,6 +897,8 @@ static bool dispatch_request(int fd, MonitorServer* ms,
             cJSON* root = body ? cJSON_Parse(body) : NULL;
             cJSON* route = root ? cJSON_GetObjectItemCaseSensitive(root, "route") : NULL;
             const char* route_id = cJSON_IsString(route) ? route->valuestring : NULL;
+            cJSON* jmap = root ? cJSON_GetObjectItemCaseSensitive(root, "map") : NULL;
+            const char* map_id_run = cJSON_IsString(jmap) ? jmap->valuestring : "city_ring";
             bool allowed = route_id &&
                 (strcmp(route_id, "main") == 0 ||
                  strcmp(route_id, "on_ramp") == 0 ||
@@ -918,8 +922,11 @@ static bool dispatch_request(int fd, MonitorServer* ms,
                     pid_t pid = fork();
                     if (pid == 0) {
                         if (root_dir[0]) chdir(root_dir);
+                        const char* scenario = (strcmp(map_id_run, "city_grid") == 0)
+                            ? "scenarios/city_grid_map.json"
+                            : "scenarios/city_ring_map.json";
                         execl("/bin/bash", "bash", "scripts/demo.sh", "60",
-                              "--scenario", "scenarios/city_ring_map.json",
+                              "--scenario", scenario,
                               "--route", route_id, "--no-browser", (char*)NULL);
                         _exit(127);
                     }
