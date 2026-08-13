@@ -77,8 +77,8 @@ sim_world → sensor_model → perception → fusion → planning → control �
 | `src/core/param_bridge.c` | 参数跨进程通道（AF_UNIX，`flowctl param set` 边跑边调） |
 | `src/core/scenario_loader.c` | 场景 JSON 加载器（actor 定义 + ego 配置） |
 | `include/platform_compat.h` | 跨平台兼容层（macOS⇄Linux，CMake force-include，仅 APPLE 生效）：pthread 命名签名、robust mutex、condvar 时钟降级 |
-| `modules/adas_nodes/flowsim/physics.cpp` | 运动学自行车模型；dynamics 桩（未实现，降级到运动学） |
-| `modules/adas_nodes/flowsim/entity.h` | 仿真实体（含 v_x_body/v_y_body/yaw_rate/F_yf/F_yr 动力学桩字段，运行时未使用） |
+| `modules/adas_nodes/flowsim/physics.cpp` | 运动学自行车模型 + 可选线性轮胎二自由度动态模型（pipeline.json `physics_model`，低速<5m/s 退化运动学）；碰撞/护栏/重力见 [FLOWSIM_PHYSICS.md](docs/FLOWSIM_PHYSICS.md)、`/flowsim-physics` |
+| `modules/adas_nodes/flowsim/entity.h` | 仿真实体（含 v_x_body/v_y_body/yaw_rate/F_yf/F_yr、垂直速度 vz、crash_cooldown、route_s；EntityPool 边界检查） |
 | `scenarios/straight_road.json` | 直道导航场景（默认；另有 curve_road/dense_npc/multi_light/oncoming/泊车/驾考科目一~四等共 13 个场景 + suite.json 场景矩阵） |
 | `modules/adas_nodes/data_recorder_node.c` | 训练样本采集（Learning Loop Stage 0） |
 | `modules/adas_nodes/inference_node.cpp` | tiny-MLP 影子推理（Learning Loop Stage 2） |
@@ -572,6 +572,8 @@ frame: THREE  | up: +Y | 单位: m | ENU→THREE: [x, z, -y] | ego_centered: tru
 # 可视化架构
 
 详见 [可视化架构](docs/VISUALIZATION_ARCHITECTURE.md)。
+渲染层经验（车轮 kingpin 转向/贴地/SU7 车牌/相机跟随/性能降档/map preview）见
+[3D 渲染沉淀](docs/VIS_3D_RENDERING.md)，改渲染代码先 `/vis-3d-rendering`、`/su7-rendering`。
 
 前端 3D 渲染使用 `vis/` 架构：
 

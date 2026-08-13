@@ -12,6 +12,10 @@
 | **verification** | `verification.md` | 理解/使用本项目的验证与可观测性架构：分层验证阶梯、debug topic→monitor→topology 数据流、liveness/require 门禁、trace_incident、flowctl 热调参 |
 | **debugging** | `debugging.md` | 行为异常排查（转向灯反/该停不停/该走不走/刹停到 0/改代码现象不变）：分层探针 + 值传播验证 + 状态锁死 + 缓存层检查；先看 verification.md 理解有哪些现成观测手段 |
 | **py-sim-first** | `py-sim-first.md` | 算法模块升级的 Python 仿真先行流程。任何控制/规划/感知/行为决策类改动，**必须先 Python 仿真验证再移植到 C++**。包含 6 场景（curve/emergency/stop_go/obstacle/merge/cutin）+ 参数扫描 + 掉头仿真 + 移植 checklist |
+| **map-engine** | `map-engine.md` | 地图引擎 + A* 路由：map.json/routes.json/kmap 字段契约、工具命令链、esmini road_network 接口约束、A* 未接入主循环现状与改造要点。改地图/路由相关代码时用（详见 `docs/MAP_ENGINE_ROUTING.md`） |
+| **flowsim-physics** | `flowsim-physics.md` | FlowSim 物理引擎：运动学/动力学模型切换、OBB 碰撞接入（Step 4/4.5/4.6）、护栏、重力贴地、实体池边界。改 flowsim 物理/碰撞/重力时用（详见 `docs/FLOWSIM_PHYSICS.md`） |
+| **vis-3d-rendering** | `vis-3d-rendering.md` | FlowBoard 3D 渲染：车轮 kingpin 转向/滚动/modulo 2π/贴地、camera 跟随、PerfMonitor 降档三重防误触发、map preview 隔离。改 flowboard/js/vis 渲染代码时用（详见 `docs/VIS_3D_RENDERING.md`） |
+| **su7-rendering** | `su7-rendering.md` | SU7 模型渲染：车牌 GA 36-2018 + 模型实测 ChePai 定位 + makeBasis 贴尾门斜面、原厂方向盘门控。改 SU7/车牌/方向盘渲染时用（详见 `docs/VIS_3D_RENDERING.md` §2-3） |
 
 ## 改动后必跑流程
 
