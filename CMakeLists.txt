@@ -1108,6 +1108,15 @@ set_tests_properties(map_compiler_tools PROPERTIES
     ENVIRONMENT "PYTHONPATH=${CMAKE_SOURCE_DIR}:$ENV{PYTHONPATH}"
 )
 
+add_test(NAME astar_route_tools
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_astar_route.py
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(astar_route_tools PROPERTIES
+    TIMEOUT 10
+    ENVIRONMENT "PYTHONPATH=${CMAKE_SOURCE_DIR}:$ENV{PYTHONPATH}"
+)
+
 # ── Smoke test: flow_launcher short integration run ──
 find_program(BASH_EXECUTABLE bash)
 if(BASH_EXECUTABLE AND NOT WIN32)

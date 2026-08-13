@@ -101,6 +101,26 @@
       ],
       "lane_direction": 1,
       "draft": true
+    },
+    {
+      "id": "astar_turn",
+      "name": "A* 生成的右转路线（ns_00 北上→ew_10）",
+      "kind": "main",
+      "road_chain": [
+        "ns_avenue_00_seg_00",
+        "ns_avenue_00_seg_01",
+        "ns_avenue_00_seg_02",
+        "ns_avenue_00_seg_03",
+        "ns_avenue_00_seg_04",
+        "ns_avenue_00_seg_05",
+        "ns_avenue_00_seg_06",
+        "ns_avenue_00_seg_07",
+        "ns_avenue_00_seg_08",
+        "ns_avenue_00_seg_09",
+        "ew_avenue_10_seg_00"
+      ],
+      "lane_direction": 1,
+      "generated_by": "astar_route.py"
     }
   ],
   "reserved_turns": []
