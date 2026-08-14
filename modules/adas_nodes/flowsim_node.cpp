@@ -2379,13 +2379,48 @@ private:
  * 建 RouterGraph → 跑 ego 起终点 A* → 车道链去重 road → Route::build_from_chain。
  * 成功后 ref_path 沿 A* 车道链发布，planning/control 跟随（M2 控制链路）。
  *
- * 起终点约定：首 road 正向第一车道 → 末 road（图内最大 road_id）正向第一车道。
+ * 起终点约定：route 链首尾（road_network_json edges[] 首尾 id）正向第一车道。
+ * resolve_map_reference 按 route_file/route_id 过滤后 edges[] 顺序即 road_chain
+ * 顺序，首尾即链首/链末；无 route 过滤时全量 edges 首尾近似旧 0→max_road。
  * 城市环形/网格场景的 main 链是开链，A* 结果 = 预设 road_chain（零行为变化）；
- * 需要含转向的 O-D 时换一个带弯的 route_id（如 city_grid 'astar_turn'）即可。 */
+ * 需要含转向的 O-D 时换一个带弯的 route_id（如 city_grid 'astar_turn'）即可。
+ *
+ * 2026-08 P0：edges[] 顺序本身即 route 链（过滤后 road_chain 顺序），因此
+ * **直接以 edges[] 作 road_chain 调 build_from_chain**，A* 仅作"该链不可达时
+ * 兜底改道"——OSM 主链的 lane successors 带岔路（way_* / 中山东二路等），
+ * 起终点 A* 会抄近路跳段，丢了预设主链。 */
 static bool build_route_via_astar(void) {
     if (!g.scenario || !g.scenario->road_network_json) return false;
     if (!g.roads_loaded) return false;
 
+    /* ── 取 edges[] 顺序作为 route 链 ──
+     * edges 顺序 == resolve_map_reference 过滤后的 road_chain 顺序；每个 edge 的
+     * 数字 id == legacy_id（全量索引，与 json_to_xodr 全量导出的 xodr road id 同
+     * 一编号空间），可直接喂 build_from_chain 匹配 esmini。 */
+    int chain_ids[ROUTER_MAX_PATH];
+    int chain_n = 0;
+    cJSON* rn = cJSON_Parse(g.scenario->road_network_json);
+    cJSON* jedges = rn ? cJSON_GetObjectItemCaseSensitive(rn, "edges") : NULL;
+    if (cJSON_IsArray(jedges)) {
+        int ne = cJSON_GetArraySize(jedges);
+        for (int i = 0; i < ne && chain_n < ROUTER_MAX_PATH; i++) {
+            cJSON* e = cJSON_GetArrayItem(jedges, i);
+            cJSON* jid = e ? cJSON_GetObjectItemCaseSensitive(e, "id") : NULL;
+            if (cJSON_IsNumber(jid)) chain_ids[chain_n++] = (int)jid->valuedouble;
+        }
+    }
+    if (rn) cJSON_Delete(rn);
+    if (chain_n < 2) {
+        LOG_WARN("flowsim", "astar: no valid road chain from edges — fallback auto chain");
+        return false;
+    }
+    if (g.route.build_from_chain(g.roads, chain_ids, chain_n)) {
+        LOG_INFO("flowsim", "central route via A* chain: %d segments, %.0fm total",
+                 g.route.count(), g.route.total_length());
+        return true;
+    }
+
+    /* ── 兜底：预设链不可达（图外 road / 断链）时用起终点 A* 改道 ── */
     RouterGraph graph;
     router_graph_init(&graph);
     int lane_count = 0;
@@ -2400,15 +2435,11 @@ static bool build_route_via_astar(void) {
         return false;
     }
 
-    int max_road = 0;
-    for (int i = 0; i < graph.lane_count; i++) {
-        if (graph.lanes[i].road_id > max_road) max_road = graph.lanes[i].road_id;
-    }
-    int start_lane = router_lane_id_in_road(&graph, 0, 1, 0);
-    int goal_lane  = router_lane_id_in_road(&graph, max_road, 1, 0);
+    int start_lane = router_lane_id_in_road(&graph, chain_ids[0], 1, 0);
+    int goal_lane  = router_lane_id_in_road(&graph, chain_ids[chain_n - 1], 1, 0);
     if (start_lane < 0 || goal_lane < 0) {
         LOG_WARN("flowsim", "astar: start/goal lane missing (start=%d goal=%d)",
-                 start_lane, goal_lane);
+                 chain_ids[0], chain_ids[chain_n - 1]);
         router_graph_free(&graph);
         return false;
     }

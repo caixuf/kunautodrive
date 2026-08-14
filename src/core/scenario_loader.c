@@ -164,17 +164,29 @@ static void resolve_map_reference(cJSON* scenario, const char* scenario_path) {
                     cJSON* jr = cJSON_GetArrayItem(chain, ci);
                     if (!cJSON_IsString(jr) || !jr->valuestring) { missing = 1; break; }
                     cJSON* found = NULL;
+                    int found_full_idx = -1;
+                    int full_idx = 0;
                     cJSON* road = NULL;
                     cJSON_ArrayForEach(road, roads) {
                         cJSON* rid2 = road ? cJSON_GetObjectItemCaseSensitive(road, "id") : NULL;
                         if (cJSON_IsString(rid2) && rid2->valuestring &&
                             strcmp(rid2->valuestring, jr->valuestring) == 0) {
                             found = road;
+                            found_full_idx = full_idx;
                             break;
                         }
+                        full_idx++;
                     }
                     if (!found) { missing = 1; break; }
-                    cJSON_AddItemToArray(filtered, cJSON_Duplicate(found, 1));
+                    /* 注入 legacy_id = map.json 全量索引（P0，2026-08）：
+                     * json_to_xodr 全量导出时 xodr road id = 全量索引（map.json 原序），
+                     * C 侧过滤后 road_network 必须沿用同一套 id —— 否则 A* 输出的
+                     * road_chain（过滤序 0..n-1）映射到 xodr 会错配到别的道路
+                     * （OSM main 链 9 段在 map.json 里散落分布，过滤序 ≠ 全量序）。 */
+                    cJSON* dup = cJSON_Duplicate(found, 1);
+                    cJSON_DeleteItemFromObjectCaseSensitive(dup, "legacy_id");
+                    cJSON_AddNumberToObject(dup, "legacy_id", found_full_idx);
+                    cJSON_AddItemToArray(filtered, dup);
                 }
                 if (!missing && cJSON_GetArraySize(filtered) > 0) {
                     cJSON_DeleteItemFromObjectCaseSensitive(map, "roads");
