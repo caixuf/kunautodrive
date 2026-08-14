@@ -99,6 +99,20 @@ python3 tools/pipeline_check.py
   连通检查，避免 5200 车道级别 O(n²) 卡死（另一个 AI 提议）。
 - [ ] 上述完成后：`vis:check:all` + `pipeline_check` + 环城路 E-W 回归全量过一遍再收。
 
+### 剩余视觉噪点（回家解决，已定位未修）
+
+- [ ] **路口白色细线残留**：`ConnectorView._buildTurnConnectors`（转向连接曲线）在 OSM
+      上偏密，路口处残留白色细线。门控方案：只在 fork junction 有真实
+      `connecting_roads[].turn` 数据且路口 arm 数 ≤ 4 时画；或对 OSM 地图
+      （`map_id` 以 osm_ 开头）整体关闭。位置：`ConnectorView.js` build() 的
+      `if (junctions.length) _buildTurnConnectors(...)`。
+- [ ] **防撞桶已修**（916610e）：只在真断头端点放。若预览仍见零星桶，属地图边界
+      正常，不用管。
+- [ ] **S 弯外侧路肩/人行道收窄**：offsetSpine 曲率钳制为对称钳制，外侧急弯略收窄，
+      观感可接受；如需更精细可改为内侧钳制（注意坐标手性，见 RoadView.js offsetSpine 注释）。
+- [ ] **路口斑马线/停止线**：已用路口端向外切线统一基准；若个别不规则路口仍偏，
+      可让 detectJunctions 输出每 arm 的权威切线（advisor 建议），替代端点反推。
+
 ---
 
 ## 4. 3D 细节演进路线图（核心：怎么越来越细节）
