@@ -22,9 +22,9 @@ const BAY_LENGTH = 6.2;
 const BAY_WIDTH = 2.8;
 const ARROW_SPACING = 120;
 const MAX_ARROWS_PER_EDGE = 16;
-const CROSSWALK_STRIPES = 6;
-const CROSSWALK_STRIPE_W = 0.48;
-const CROSSWALK_GAP = 0.38;
+const CROSSWALK_STRIPE_W = 0.48; // 条纹宽（跨道路方向，GB 5768.3 40~45cm）
+const CROSSWALK_GAP = 0.38;      // 条带间距（跨道路方向，规范 60cm 上下）
+const CROSSWALK_LENGTH = 2.5;    // 条纹沿道路长度（交叉口 ≥2m，路段 ≥3m）
 
 function roadNodes(edge) {
   if (!Array.isArray(edge?.nodes)) return [];
@@ -117,11 +117,16 @@ function addParkingBay(layout, x, y, heading, empty) {
   }
 }
 
-function addCrosswalk(layout, center, heading, travelSign, width) {
-  for (let i = 0; i < CROSSWALK_STRIPES; i++) {
-    const along = travelSign * (2.0 + i * (CROSSWALK_STRIPE_W + CROSSWALK_GAP));
-    const p = offsetPoint(center.x, center.y, heading, along, 0);
-    addMark(layout, p.x, p.y, heading + Math.PI * 0.5, width, CROSSWALK_STRIPE_W);
+function addCrosswalk(layout, center, heading, width) {
+  /* GB 5768.3 5.8：斑马线条纹平行于道路中心线（与车同向），沿道路长度短
+   * （交叉口 ≥2m / 路段 ≥3m）；跨道路方向铺多条条带。旧实现条纹长轴垂直
+   * 道路（横跨半幅路面）→ 方向反了。 */
+  const step = CROSSWALK_STRIPE_W + CROSSWALK_GAP;
+  const count = Math.max(2, Math.round(width / step));
+  for (let i = 0; i < count; i++) {
+    const across = (i - (count - 1) / 2) * step;
+    const p = offsetPoint(center.x, center.y, heading + Math.PI * 0.5, across, 0);
+    addMark(layout, p.x, p.y, heading, CROSSWALK_LENGTH, CROSSWALK_STRIPE_W);
   }
   layout.crosswalks++;
 }
@@ -173,8 +178,7 @@ export function inferRoadFacilities(roadNetwork, entities, scenarioName = '') {
     addMark(layout, stopCenter.x, stopCenter.y, heading + Math.PI * 0.5, stopLineWidth, 0.38);
     layout.stopLines++;
     if (light.crosswalk !== false) {
-      const travelSign = isOneWay || laneDirection < 0 ? 1 : -1;
-      addCrosswalk(layout, stopCenter, heading, travelSign, stopLineWidth);
+      addCrosswalk(layout, stopCenter, heading, stopLineWidth);
     }
   }
 

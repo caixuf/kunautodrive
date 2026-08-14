@@ -499,4 +499,66 @@ console.log('--- 7. 物理自洽：车头朝向 vs 运动方向 ---');
   ok('所有 heading 下车头方向与运动方向同向（点积>0.99，物理自洽）', allOk);
 }
 
+// ═══════════════════════════════════════════════════════════
+// 10. 路口几何 invariant（JunctionDetect 消费数据层 junctions[]）
+//     验证：数据层路口 → THREE 中心坐标走 worldToThree（y/z 不交换）；
+//     radius 透传；byId 正确映射每条 edge 起点/终点所属路口。
+//     这是"路口方块/四角错位"回归的守门：坐标错一位符号=红。
+// ═══════════════════════════════════════════════════════════
+console.log('--- 10. JunctionDetect 路口几何 invariant ---');
+
+import { detectJunctions } from '../tools/flowboard/js/vis/view/JunctionDetect.js';
+
+{
+  // 数据层 junctions[]（scene_pub 输出 schema，ENU 坐标）
+  const rn = {
+    edges: [
+      { id: 0, lanes: 4, lane_width: 3.5, nodes: [[-200, 0, 0], [0, 0, 0]] },
+      { id: 1, lanes: 4, lane_width: 3.5, nodes: [[0, 0, 0], [200, 0, 0]] },
+      { id: 2, lanes: 4, lane_width: 3.5, nodes: [[0, -200, 0], [0, 0, 0]] },
+      { id: 3, lanes: 4, lane_width: 3.5, nodes: [[0, 0, 0], [0, 200, 0]] },
+    ],
+    junctions: [{ id: 0, x: 0, y: 0, z: 0, radius: 8.5, n: 4, roads: [0, 1, 2, 3] }],
+  };
+  const { centers, byId } = detectJunctions(rn);
+  ok('数据层 junction 被消费（centers 非空）', centers.length === 1);
+  ok('路口中心位于原点', centers.length === 1 && Math.abs(centers[0].x) < 1e-9 && Math.abs(centers[0].z) < 1e-9);
+  ok('radius 透传', centers.length === 1 && Math.abs(centers[0].radius - 8.5) < 1e-9);
+  // byId：每条 edge 至少一端映射到路口 0（THREE 坐标，非 y/z 交换）
+  for (const id of ['0', '1', '2', '3']) {
+    const e = byId.get(id);
+    ok(`edge ${id} 映射到路口`, e && (e.start === 0 || e.end === 0));
+  }
+}
+
+{
+  // 数据层路口在非原点（验证 ENU→THREE：y(North) → -z，不走 y/z 交换）
+  const rn2 = {
+    edges: [
+      { id: 0, lanes: 4, lane_width: 3.5, nodes: [[-200, 100, 0], [0, 100, 0]] },
+      { id: 1, lanes: 4, lane_width: 3.5, nodes: [[0, 100, 0], [200, 100, 0]] },
+      { id: 2, lanes: 4, lane_width: 3.5, nodes: [[0, -100, 0], [0, 100, 0]] },
+      { id: 3, lanes: 4, lane_width: 3.5, nodes: [[0, 100, 0], [0, 300, 0]] },
+    ],
+    junctions: [{ id: 0, x: 0, y: 100, z: 0, radius: 8.5, n: 4, roads: [0, 1, 2, 3] }],
+  };
+  const { centers } = detectJunctions(rn2);
+  ok('非原点路口：THREE.z = -y(North) = -100',
+     centers.length === 1 && Math.abs(centers[0].x) < 1e-9 && Math.abs(centers[0].z + 100) < 1e-9);
+}
+
+{
+  // 无数据层 junctions → 几何聚类兜底（十字 4 臂 → 1 个路口）
+  const rn3 = {
+    edges: [
+      { id: 0, lanes: 4, lane_width: 3.5, nodes: [[-200, 0, 0], [0, 0, 0]] },
+      { id: 1, lanes: 4, lane_width: 3.5, nodes: [[0, 0, 0], [200, 0, 0]] },
+      { id: 2, lanes: 4, lane_width: 3.5, nodes: [[0, -200, 0], [0, 0, 0]] },
+      { id: 3, lanes: 4, lane_width: 3.5, nodes: [[0, 0, 0], [0, 200, 0]] },
+    ],
+  };
+  const { centers } = detectJunctions(rn3);
+  ok('无数据层 → 几何聚类兜底检出 1 路口', centers.length === 1);
+}
+
 done();

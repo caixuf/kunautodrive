@@ -1,5 +1,5 @@
 import './bootstrap.js';
-import { init3DScene, resize3D, update3D, setCameraMode, resetMapView } from './vis/main.js';
+import { init3DScene, resize3D, update3D, setCameraMode, resetMapView, setOrbitLeftAction } from './vis/main.js';
 import { headingBetweenPoints } from './vis/math/Coord.js';
 
 function clonePoint(point) {
@@ -41,6 +41,25 @@ function buildRoutePath(map, route) {
   return routePath;
 }
 
+/* orbit 模式左键动作切换：按 P / Space 在 旋转 ↔ 平移 间切换，
+ * 避免右键平移与浏览器上下文菜单冲突。 */
+let _orbitLeftMode = 'rotate';
+function initOrbitModeSwitch(hint) {
+  window.addEventListener('keydown', function (event) {
+    if (event.key === 'p' || event.key === 'P' || event.key === ' ') {
+      event.preventDefault();
+      _orbitLeftMode = _orbitLeftMode === 'pan' ? 'rotate' : 'pan';
+      setOrbitLeftAction(_orbitLeftMode);
+      if (hint) {
+        hint.textContent = _orbitLeftMode === 'pan'
+          ? '左键平移 · 滚轮缩放（按 P/Space 切回旋转）'
+          : '左键旋转 · 滚轮缩放（按 P/Space 切换平移）';
+      }
+    }
+  });
+  setOrbitLeftAction('rotate');
+}
+
 function routeFocus(path) {
   if (!path.length) {
     return { centerX: 0, centerY: 0, centerZ: 0, heading: 0, height: 80 };
@@ -71,8 +90,10 @@ function routeFocus(path) {
 
 function toTopo(map, routes, routeId) {
   const route = routes.find((item) => item.id === routeId);
-  const chain = route && Array.isArray(route.road_chain) ? route.road_chain : null;
-  const roads = (map.roads || []).filter((road) => !chain || chain.includes(road.id));
+  /* 全量路网：预览显示整张地图的全部 road 段（不再按 route.road_chain
+   * 过滤）。只有整张路网铺开，用户才能看到网格城市的真实密度，
+   * 而不是孤零零一条大道 + 大片草地。route 仍用于相机聚焦与轨迹线。 */
+  const roads = (map.roads || []);
   const routePath = buildRoutePath(map, route || {});
   const edges = roads.map((road, index) => {
     const lanes = Array.isArray(road.lanes) ? road.lanes : [];
@@ -137,12 +158,13 @@ async function boot() {
     if (!response.ok || !result.ok) throw new Error(result.error || '地图加载失败');
     const route = (result.routes.routes || []).find((item) => item.id === routeId);
     if (hint) {
-      hint.textContent = (route ? route.name + ' · ' : '') + '左键拖拽平移，滚轮缩放';
+      hint.textContent = (route ? route.name + ' · ' : '') + '左键旋转 · 滚轮缩放 · 按 P/Space 切换平移';
     }
     update3D(toTopo(result.map, result.routes.routes || [], routeId));
-    setCameraMode('map');
+    setCameraMode('orbit');
     resetMapView();
     resize3D();
+    initOrbitModeSwitch(hint);
     if (msg) msg.remove();
   } catch (error) {
     if (msg) msg.textContent = `预览失败：${error.message}`;

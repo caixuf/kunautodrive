@@ -169,6 +169,11 @@ export function scenarioToScene(raw, staticMap) {
     entities,
   };
 
+  // OSM 建筑（单源真相）：从静态 map.json 透传 buildings[] 给前端 BuildingView。
+  if (staticMap && Array.isArray(staticMap.buildings)) {
+    scene.buildings = staticMap.buildings;
+  }
+
   if (Array.isArray(raw.construction_zones) && raw.construction_zones.length > 0) {
     scene.construction_zones = raw.construction_zones.map((cz) => ({
       id: cz.id,

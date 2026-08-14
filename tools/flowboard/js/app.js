@@ -218,6 +218,47 @@ function initMapPreviewDrag() {
   handle.addEventListener('pointercancel', stopDrag);
 }
 
+/* 预览窗口边缘拖拽缩放（保持固定宽高比）。
+ * 从右下角手柄拖动，宽度跟随鼠标、高度按 data-ratio 同步，保证地图不拉伸。 */
+function initMapPreviewResize() {
+  var panel = document.getElementById('map-preview-panel');
+  var handle = document.getElementById('map-preview-resize');
+  if (!panel || !handle || handle.dataset.resizeReady) return;
+  handle.dataset.resizeReady = 'true';
+  var ratio = parseFloat(panel.getAttribute('data-ratio')) || 1.565;
+  var MIN_W = 420, MAX_W = window.innerWidth - 60;
+  var drag = null;
+  handle.addEventListener('pointerdown', function (event) {
+    drag = {
+      startX: event.clientX,
+      startW: panel.offsetWidth,
+      startH: panel.offsetHeight,
+    };
+    handle.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+  handle.addEventListener('pointermove', function (event) {
+    if (!drag) return;
+    var newW = Math.max(MIN_W, Math.min(MAX_W, drag.startW + (event.clientX - drag.startX)));
+    var newH = newW / ratio;
+    // 高度不超视口，超了按高度回算宽度
+    var maxH = window.innerHeight - 40;
+    if (newH > maxH) { newH = maxH; newW = newH * ratio; }
+    var maxX = Math.max(0, window.innerWidth - newW);
+    var maxY = Math.max(0, window.innerHeight - newH);
+    var left = Math.min(parseFloat(panel.style.left || window.innerWidth - newW), maxX);
+    var top = Math.min(parseFloat(panel.style.top || 18), maxY);
+    panel.style.width = newW + 'px';
+    panel.style.height = newH + 'px';
+    panel.style.left = Math.max(0, left) + 'px';
+    panel.style.top = Math.max(0, top) + 'px';
+    panel.style.right = 'auto';
+  });
+  function stopResize() { drag = null; }
+  handle.addEventListener('pointerup', stopResize);
+  handle.addEventListener('pointercancel', stopResize);
+}
+
 // Click dimmed backdrop (not the panel) to close preview.
 document.addEventListener('click', function (event) {
   var modal = document.getElementById('map-preview-modal');
@@ -227,7 +268,10 @@ document.addEventListener('click', function (event) {
 document.addEventListener('keydown', function (event) {
   if (event.key === 'Escape') closeMapPreview();
 });
-document.addEventListener('DOMContentLoaded', initMapPreviewDrag);
+document.addEventListener('DOMContentLoaded', function () {
+  initMapPreviewDrag();
+  initMapPreviewResize();
+});
 
 function gameAngleDeg(rad) {
   return rad * 180 / Math.PI;

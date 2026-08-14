@@ -14,8 +14,10 @@
 
 import { worldToThree, forwardENU } from '../math/Coord.js';
 import { selectCurrentMotionSegment } from '../math/Trajectory.js';
+import { roadHeightAt } from '../math/RoadHeight.js';
+import { VEHICLE_GROUND_Y } from './VehicleView.js';
 
-const TRAJ_GROUND_OFFSET = 0.08;
+const TRAJ_GROUND_OFFSET = 0.02;  // 光带相对车辆贴地高度的额外偏移（避免 z-fight）
 const MAX_PLAN_POINTS   = 64;             // 后端轨迹点上限
 const SPLINE_SUBDIV     = 4;              // 每个规划段细分数（64→~250 渲染点）
 const MAX_RENDER_POINTS = MAX_PLAN_POINTS * SPLINE_SUBDIV;
@@ -36,12 +38,6 @@ const CORE_WIDTH_START = 0.12;
 const CORE_WIDTH_END   = 0.04;
 const CORE_ALPHA_START = 1.0;
 const CORE_ALPHA_END   = 0.35;
-
-/* 方向箭头 */
-const ARROW_SPACING_M  = 4.5;
-const ARROW_LENGTH     = 0.55;
-const ARROW_RADIUS     = 0.15;
-const ARROW_ALPHA      = 0.75;
 
 /* 流动高亮条 */
 const FLOW_SPEED       = 12;             // m/s，流动速度
@@ -76,7 +72,6 @@ export function createTrajectoryView(scene) {
   let ribbonMesh = null;
   let coreMesh = null;
   let flowMesh = null;
-  let arrowGroup = null;
   let outerGeo = null, ribbonGeo = null, coreGeo = null, flowGeo = null;
   let flowMat = null;
 
@@ -152,28 +147,21 @@ export function createTrajectoryView(scene) {
     flowMesh = new THREE.Mesh(flowGeo, flowMat);
     flowMesh.frustumCulled = false;
     group.add(flowMesh);
-
-    arrowGroup = new THREE.Group();
-    group.add(arrowGroup);
-    _ensureArrowPool();
   }
 
   function clear() {
     [outerGeo, ribbonGeo, coreGeo, flowGeo].forEach(g => { if (g) g.setDrawRange(0, 0); });
-    /* 箭头池：隐藏而非销毁（复用，避免每帧新建 ConeGeometry + clone 材质
-     * 的分配风暴 —— 60fps × ~11 箭头/帧 = 每秒 ~660 个几何体，150s 累积
-     * 近 10 万个，GC 压力逐步恶化 → 后段卡成 PPT（2026-08-04 实测）。 */
-    for (const m of _arrowPool) m.visible = false;
   }
 
   /**
    * 把后端原始轨迹点转为 THREE 坐标并做样条平滑
    * @returns {Array<{x,y,z,dx,dz,dist,v,rgb}>}
    */
-  function _buildSmoothPoints(trajPath, ego) {
+  function _buildSmoothPoints(trajPath, ego, store) {
     if (!trajPath || trajPath.length < 2) return [];
 
-    const egoZ = (ego.z || 0) + TRAJ_GROUND_OFFSET;
+    // 轨迹高度绑定车辆贴地高度：roadHeightAt + VEHICLE_GROUND_Y + 额外偏移
+    const egoZ = roadHeightAt(store, ego.x, ego.y) + VEHICLE_GROUND_Y + TRAJ_GROUND_OFFSET;
 
     /* 轨迹起点锚定到车头实时位置（ENU）：
      * 规划 10Hz 快照，车每帧（60fps）实时运动。变道时车横向移动快，
@@ -354,71 +342,6 @@ export function createTrajectoryView(scene) {
     return totalLen;
   }
 
-  /** 沿路径放置方向箭头 */
-  /* 箭头池：一次性预建 MAX_ARROWS 个锥体，每帧只改 position/quaternion/
-   * opacity，不新建/释放几何体 —— 消除每帧分配风暴导致的 GC 渐进卡顿。 */
-  const ARROW_POOL_MAX = 40;
-  const _arrowPool = [];
-
-  function _ensureArrowPool() {
-    if (_arrowPool.length) return;
-    const geo = new THREE.ConeGeometry(ARROW_RADIUS, ARROW_LENGTH, 6);
-    for (let i = 0; i < ARROW_POOL_MAX; i++) {
-      const mat = new THREE.MeshBasicMaterial({
-        color: 0xffffff, transparent: true, opacity: ARROW_ALPHA, depthWrite: false,
-      });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.visible = false;
-      arrowGroup.add(mesh);
-      _arrowPool.push(mesh);
-    }
-  }
-
-  function _buildArrows(points, colorArr) {
-    if (points.length < 2) { clear(); return; }
-
-    const totalLen = points[points.length - 1].dist || 1;
-    if (totalLen < ARROW_LENGTH) { clear(); return; }
-
-    const hex = (colorArr[_R] << 16) | (colorArr[_G] << 8) | colorArr[_B];
-    const baseColor = new THREE.Color(hex);
-
-    for (const m of _arrowPool) m.visible = false;
-
-    const up = new THREE.Vector3(0, 1, 0);
-    const dir = new THREE.Vector3();
-    let nextArrowDist = ARROW_SPACING_M * 0.3;
-    let arrowIdx = 0;
-
-    for (let i = 1; i < points.length; i++) {
-      const p = points[i];
-      const prev = points[i - 1];
-      const segLen = p.dist - prev.dist;
-      while (p.dist >= nextArrowDist) {
-        if (arrowIdx >= ARROW_POOL_MAX) return;   // 池满截断（正常不会到）
-        const t = segLen > 0.001 ? (nextArrowDist - prev.dist) / segLen : 0;
-        const ax = prev.x + (p.x - prev.x) * t;
-        const az = prev.z + (p.z - prev.z) * t;
-        const adx = prev.dx + (p.dx - prev.dx) * t;
-        const adz = prev.dz + (p.dz - prev.dz) * t;
-
-        const mesh = _arrowPool[arrowIdx++];
-        mesh.visible = true;
-        mesh.position.set(ax, prev.y + 0.25, az);
-        dir.set(adx, 0, adz).normalize();
-        mesh.quaternion.setFromUnitVectors(up, dir);
-
-        const fadeT = totalLen > 0.1 ? nextArrowDist / totalLen : 0;
-        mesh.material.color.copy(baseColor);
-        mesh.material.opacity = ARROW_ALPHA * (1 - fadeT * 0.7);
-
-        nextArrowDist += ARROW_SPACING_M;
-        if (nextArrowDist > totalLen) break;
-      }
-      if (nextArrowDist > totalLen) break;
-    }
-  }
-
   /* 流动动画时间 */
   let _flowTime = 0;
   let _lastFrameT = 0;
@@ -453,7 +376,7 @@ export function createTrajectoryView(scene) {
 
     /* 1. 构建平滑曲线点 */
     const activePath = selectCurrentMotionSegment(trajPath, ego);
-    const points = _buildSmoothPoints(activePath, ego);
+    const points = _buildSmoothPoints(activePath, ego, store);
     if (points.length < 2) { clear(); return; }
 
     /* 取起点颜色作为固定色（辉光/箭头用） */
@@ -487,9 +410,6 @@ export function createTrajectoryView(scene) {
       const flowA = FLOW_ALPHA * (bev ? BEV_FLOW_ALPHA_SCALE : 1);
       _fillRibbon(flowGeo, points, flowW, flowW * 0.3, flowA, 0, true, fixedColor, flowOff, wScale);
     }
-
-    /* 6. 方向箭头 */
-    _buildArrows(points, [Math.round(fixedColor[0]*255), Math.round(fixedColor[1]*255), Math.round(fixedColor[2]*255)]);
   }
 
   function dispose() {
@@ -498,11 +418,6 @@ export function createTrajectoryView(scene) {
     [outerMesh, ribbonMesh, coreMesh, flowMesh].forEach(m => {
       if (m && m.material) m.material.dispose();
     });
-    for (const m of _arrowPool) {
-      if (m.geometry) m.geometry.dispose();
-      if (m.material) m.material.dispose();
-    }
-    _arrowPool.length = 0;
     scene.remove(group);
   }
 

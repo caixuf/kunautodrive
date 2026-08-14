@@ -23,6 +23,12 @@ const layout = inferRoadFacilities(road, entities);
 eq('两辆停放车辆 + 中间空位生成 3 个车位', layout.parkingBays, 3);
 eq('信号灯生成 1 条停止线', layout.stopLines, 1);
 eq('停止线后方生成 1 组正确人行横道', layout.crosswalks, 1);
+// GB 5768.3 5.8：斑马线条纹应与道路中心线平行（与车同向），沿道路长度短（2.5m）。
+const crosswalkMarks = layout.marks.filter(mark => mark.width === 0.48);
+ok('斑马线条纹平行于道路（heading=0）且长度短（2.5m）',
+  crosswalkMarks.length >= 2 &&
+  crosswalkMarks.every(m => Math.abs(m.heading) < 1e-6) &&
+  crosswalkMarks.every(m => Math.abs(m.length - 2.5) < 1e-6));
 const stopLine = layout.marks.find(mark => mark.width === 0.38);
 ok('停止线横跨来车方向的半幅道路',
   stopLine && Math.abs(stopLine.x - 248) < 1e-6 &&

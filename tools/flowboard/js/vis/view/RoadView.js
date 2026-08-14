@@ -27,6 +27,7 @@ import { sampleEdgeNodes, edgeSampleCount as adaptiveEdgeSampleCount } from '../
 import { mergeGeometries } from '../math/GeometryMerge.js';
 import { LANE_WIDTH, DEFAULT_LANES, EDGE_TYPE } from '../core/Constants.js';
 import { tangentToNormal, offsetAlongNormal, forwardENU } from '../math/Coord.js';
+import { detectJunctions } from './JunctionDetect.js';
 
 const ASPHALT_COLOR = 0x2a2a2a;
 const SHOULDER_COLOR = 0x5a5a55;
@@ -176,6 +177,8 @@ export function createRoadView(scene) {
   scene.add(roadGroup);
   let built = false;
   let stats = { rampTransitions: 0 };
+  let _junctionCenters = [];    // 当前路网的交叉口中心 [{x,z,radius}]
+  let _junctionByEdge = new Map(); // edgeId -> {start:idx|null, end:idx|null}
 
   // 确保纹理已生成
   _buildAsphaltTextures();
@@ -206,10 +209,34 @@ export function createRoadView(scene) {
     return geo;
   }
 
-  /** 把中心线整体横向偏移 d（沿各点法线方向） */
+  /** 把中心线整体横向偏移 d（沿各点法线方向）。
+   *  2026-08-14 曲率钳制：急弯处（局部曲率半径 R < |d|）偏移折线会回折自相交
+   *  → 车道线/边线"打结"（OSM S 弯实测）。按每点局部曲率半径把偏移量钳到
+   *  R - 余量，内侧偏移折线不再自相交。 */
   function offsetSpine(spine, d) {
-    return spine.map(c => {
-      const [opx, , opz] = offsetAlongNormal(c.px, c.pz, c.nx, c.nz, d);
+    const cum = buildCumulative(spine);
+    return spine.map((c, i) => {
+      let off = d;
+      if (i > 0 && i < spine.length - 1) {
+        const a = spine[i - 1], b = spine[i + 1];
+        const v1x = c.px - a.px, v1z = c.pz - a.pz;
+        const v2x = b.px - c.px, v2z = b.pz - c.pz;
+        const l1 = Math.hypot(v1x, v1z), l2 = Math.hypot(v2x, v2z);
+        if (l1 > 1e-6 && l2 > 1e-6) {
+          const cross = (v1x * v2z - v1z * v2x) / (l1 * l2);
+          const dot = (v1x * v2x + v1z * v2z) / (l1 * l2);
+          const ang = Math.atan2(cross, dot);   // exempt: 曲率钳制用有向转角，非坐标/朝向计算
+          if (Math.abs(ang) > 1e-4) {
+            const chord = (l1 + l2) * 0.5;
+            const R = chord / (2 * Math.sin(Math.abs(ang) / 2));  // exempt: 局部曲率半径几何，非偏移手算
+            // 对称钳制：内侧防自相交（打结），外侧急弯略收窄（可接受）。
+            // 留 0.3m 余量防贴死。
+            const maxOff = Math.max(0.3, R - 0.3);
+            off = Math.max(-maxOff, Math.min(d, maxOff));
+          }
+        }
+      }
+      const [opx, , opz] = offsetAlongNormal(c.px, c.pz, c.nx, c.nz, off);
       return { px: opx, py: c.py, pz: opz, nx: c.nx, nz: c.nz };
     });
   }
@@ -515,6 +542,11 @@ export function createRoadView(scene) {
   function buildStandardRoad(edge, nodes) {
     const sampleCount = edgeSampleCount(nodes, edge.type);
     const points = sampleEdgeNodes(nodes, sampleCount);
+    /* 2026-08-14 路口一劳永逸：路面 ribbon 永不截断（贯穿路口，相邻路自然
+     * 重叠覆盖，沥青色一致看不出缝）；标线/路肩/人行道/绿化带在路口边界停
+     * （简单距离过滤：spine 点到最近 junction 中心 > radius 才画），不再依赖
+     * 精确弧段裁剪——截断半径与 patch 对不齐的"烂路口"和裁剪退化导致的
+     * 打结都消失。 */
     const spine = buildSpine(points);
     if (spine.length < 2) {
       return {
@@ -522,23 +554,23 @@ export function createRoadView(scene) {
         vergeGeos: [], whiteGeos: [], yellowGeos: [], spine, cum: [],
       };
     }
+    const markSpine = filterSpineOutsideJunctions(spine, edge.id);
 
     const lanes = edge.lanes || DEFAULT_LANES;
     const laneWidth = edge.lane_width || LANE_WIDTH;
     const hw = (lanes * laneWidth) / 2;
 
-    // 路面
+    // 路面（不截断，贯穿路口）
     const road = ribbonGeo(spine, hw, Y_ROAD);
 
-    // 路肩
-    const shoulderL = ribbonGeo(spine.map(c => ({
-      px: c.px + c.nx * (hw + SHOULDER_W * 0.5), py: c.py, pz: c.pz + c.nz * (hw + SHOULDER_W * 0.5),
-      nx: c.nx, nz: c.nz,
-    })), SHOULDER_W * 0.5, Y_SHOULDER);
-    const shoulderR = ribbonGeo(spine.map(c => ({
-      px: c.px - c.nx * (hw + SHOULDER_W * 0.5), py: c.py, pz: c.pz - c.nz * (hw + SHOULDER_W * 0.5),
-      nx: c.nx, nz: c.nz,
-    })), SHOULDER_W * 0.5, Y_SHOULDER);
+    // 路肩（路口边界停，逐段）
+    const shoulderGeos = [];
+    for (const seg of markSpine) {
+      const sL = ribbonGeo(offsetSpine(seg, hw + SHOULDER_W * 0.5), SHOULDER_W * 0.5, Y_SHOULDER);
+      const sR = ribbonGeo(offsetSpine(seg, -(hw + SHOULDER_W * 0.5)), SHOULDER_W * 0.5, Y_SHOULDER);
+      if (sL) shoulderGeos.push(sL);
+      if (sR) shoulderGeos.push(sR);
+    }
 
     const whiteGeos = [];
     const yellowGeos = [];
@@ -546,29 +578,35 @@ export function createRoadView(scene) {
     // 路缘边线（白实线）：路缘内缩。外沿=实线（真路约定 + 静态 invariant
     // 「外沿=实线」一致）；虚线只用于同向车道分隔。边线比车道线宽（0.20m vs
     // 0.15m）且略高（0.14m vs 0.13m），远距离可见，与车道分隔虚线视觉区分明显。
-    const edgeL = edgeLine(spine, hw - EDGE_INSET);
-    if (edgeL) whiteGeos.push(edgeL);
-    const edgeR = edgeLine(spine, -(hw - EDGE_INSET));
-    if (edgeR) whiteGeos.push(edgeR);
+    for (const seg of markSpine) {
+      const edgeL = edgeLine(seg, hw - EDGE_INSET);
+      if (edgeL) whiteGeos.push(edgeL);
+      const edgeR = edgeLine(seg, -(hw - EDGE_INSET));
+      if (edgeR) whiteGeos.push(edgeR);
+    }
 
-    // 双向道路的中心分界必须连续双黄线；同向道路的所有内部边界才是白虚线。
-    // 不能按长度把中心线切成虚线“掉头区”：掉头权限由拓扑/行为层决定，渲染层
-    // 不应凭空制造可跨越的中心线。
-    const hasOpposingTraffic = edge.oneway !== true && lanes >= 2 && lanes % 2 === 0;
-    for (let k = 1; k < lanes; k++) {
-      const d = -hw + k * laneWidth;
-      if (hasOpposingTraffic && k === lanes / 2) {
-        const CENTER_GAP = 0.12;
-        const left = solidLine(spine, d - CENTER_GAP);
-        const right = solidLine(spine, d + CENTER_GAP);
-        if (left) yellowGeos.push(left);
-        if (right) yellowGeos.push(right);
-      } else {
-        for (const g of dashedLine(spine, d)) whiteGeos.push(g);
+    // 标线按 GB 5768 语义生成（与 extract_city_map._markings / json_to_xodr
+    // 一致，单一真相）：对向分隔=双黄实线；同向车道分隔=白色虚线；外缘白实线
+    // 由上方 edgeLine 负责。中心线位置取 k===nPerSide（forward 车道数），对奇数
+    // 车道数（如 2+1 不对称）同样能正确落在两向分界，不再因 lanes%2!=0 丢中心线。
+    const oneway = edge.oneway === true;
+    const nPerSide = oneway ? lanes : Math.max(1, Math.floor(lanes / 2));
+    for (const seg of markSpine) {
+      for (let k = 1; k < lanes; k++) {
+        const d = -hw + k * laneWidth;
+        const isCenter = !oneway && k === nPerSide;
+        if (isCenter) {
+          const CENTER_GAP = 0.12;
+          const left = solidLine(seg, d - CENTER_GAP);
+          const right = solidLine(seg, d + CENTER_GAP);
+          if (left) yellowGeos.push(left);
+          if (right) yellowGeos.push(right);
+        } else {
+          for (const g of dashedLine(seg, d)) whiteGeos.push(g);
+        }
       }
     }
 
-    const shoulderGeos = [shoulderL, shoulderR].filter(Boolean);
     const curbGeos = [];
     const sidewalkGeos = [];
     const vergeGeos = [];
@@ -576,18 +614,20 @@ export function createRoadView(scene) {
       String(edge.name || '').toLowerCase().includes('urban');
 
     if (isUrban) {
-      for (const side of [-1, 1]) {
-        const curb = ribbonGeo(offsetSpine(spine, side * (hw + SHOULDER_W + CURB_W * 0.5)),
-          CURB_W * 0.5, Y_CURB);
-        const sidewalk = ribbonGeo(offsetSpine(spine,
-          side * (hw + SHOULDER_W + CURB_W + SIDEWALK_W * 0.5)),
-        SIDEWALK_W * 0.5, Y_SIDEWALK);
-        const verge = ribbonGeo(offsetSpine(spine,
-          side * (hw + SHOULDER_W + CURB_W + SIDEWALK_W + VERGE_W * 0.5)),
-        VERGE_W * 0.5, Y_VERGE);
-        if (curb) curbGeos.push(curb);
-        if (sidewalk) sidewalkGeos.push(sidewalk);
-        if (verge) vergeGeos.push(verge);
+      for (const seg of markSpine) {
+        for (const side of [-1, 1]) {
+          const curb = ribbonGeo(offsetSpine(seg, side * (hw + SHOULDER_W + CURB_W * 0.5)),
+            CURB_W * 0.5, Y_CURB);
+          const sidewalk = ribbonGeo(offsetSpine(seg,
+            side * (hw + SHOULDER_W + CURB_W + SIDEWALK_W * 0.5)),
+          SIDEWALK_W * 0.5, Y_SIDEWALK);
+          const verge = ribbonGeo(offsetSpine(seg,
+            side * (hw + SHOULDER_W + CURB_W + SIDEWALK_W + VERGE_W * 0.5)),
+          VERGE_W * 0.5, Y_VERGE);
+          if (curb) curbGeos.push(curb);
+          if (sidewalk) sidewalkGeos.push(sidewalk);
+          if (verge) vergeGeos.push(verge);
+        }
       }
     }
 
@@ -595,6 +635,32 @@ export function createRoadView(scene) {
       roadGeos: [road], shoulderGeos, curbGeos, sidewalkGeos, vergeGeos,
       whiteGeos, yellowGeos, spine, cum: buildCumulative(spine),
     };
+  }
+
+  /** 路口边界停的简单距离过滤：把 spine 按「到最近 junction 中心 > radius」
+   *  拆成若干连续段（路口内不画标线/侧向元素），返回段数组（每段 ≥2 点）。
+   *  路面不截断（贯穿路口），只有标线/侧向元素用这些段，避免中心线连桥穿路口。 */
+  function filterSpineOutsideJunctions(spine, edgeId) {
+    const entry = _junctionByEdge.get(String(edgeId));
+    if (!entry) return [spine];
+    const js = [];
+    if (entry.start != null) js.push(_junctionCenters[entry.start]);
+    if (entry.end != null) js.push(_junctionCenters[entry.end]);
+    if (!js.length) return [spine];
+    const segs = [];
+    let cur = [];
+    for (const c of spine) {
+      const outside = js.every((j) => Math.hypot(c.px - j.x, c.pz - j.z) > (j.radius || 0));
+      if (outside) {
+        cur.push(c);
+      } else if (cur.length >= 2) {
+        segs.push(cur); cur = [];
+      } else {
+        cur = [];
+      }
+    }
+    if (cur.length >= 2) segs.push(cur);
+    return segs.length ? segs : [];
   }
 
   /** 从 edge nodes 构建（兼容三种 edge 格式） */
@@ -631,6 +697,11 @@ export function createRoadView(scene) {
     stats = { rampTransitions: 0, doubleYellowCenterlines: 0 };
 
     if (!roadNetwork || !roadNetwork.edges || roadNetwork.edges.length === 0) return;
+
+    // 交叉口检测：先算一次，供所有 edge 收口使用
+    const junctions = detectJunctions(roadNetwork);
+    _junctionCenters = junctions.centers;
+    _junctionByEdge = junctions.byId;
 
     const roadGeos = [];
     const shoulderGeos = [];

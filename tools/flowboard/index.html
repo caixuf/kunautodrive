@@ -27,6 +27,9 @@
       <select id="map-choice" onchange="flowboard.onMapChoiceChange()" style="width:100%">
         <option value="city_ring">city_ring · 城市环线</option>
         <option value="city_center">city_center · 市中心</option>
+        <option value="city_grid">city_grid · 5km 网格</option>
+        <option value="osm_test">osm_test · 陆家嘴(500m)</option>
+        <option value="osm_lujiazui">osm_lujiazui · 陆家嘴大地图</option>
       </select>
       <select id="route-choice" onchange="flowboard.onRouteChoiceChange()" style="width:100%;margin-top:5px"></select>
       <div id="route-help" style="font-size:10px;color:#8b949e;margin-top:5px"></div>
@@ -146,15 +149,17 @@
     <button class="ws-btn" data-ws="perf" onclick="flowboard.switchWorkspace('perf')">📊 性能分析</button>
   </div>
   <div id="map-preview-modal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(1,4,9,.55);box-sizing:border-box">
-    <div id="map-preview-panel" style="position:absolute;right:18px;top:18px;width:min(720px,46vw);height:min(460px,58vh);display:flex;flex-direction:column;background:#0d1117;border:1px solid #30363d;border-radius:12px;overflow:hidden;box-shadow:0 18px 48px rgba(0,0,0,.55)">
+    <div id="map-preview-panel" data-ratio="1.565" style="position:absolute;right:18px;top:18px;width:min(920px,64vw);height:min(588px,70vh);display:flex;flex-direction:column;background:#0d1117;border:1px solid #30363d;border-radius:12px;overflow:hidden;box-shadow:0 18px 48px rgba(0,0,0,.55)">
       <div id="map-preview-handle" style="position:relative;display:flex;align-items:center;justify-content:space-between;padding:10px 48px 10px 14px;border-bottom:1px solid #30363d;background:#11161d;cursor:move;user-select:none">
         <strong style="font-size:13px">🗺 3D 地图预览</strong>
-        <span style="font-size:11px;color:#8b949e">拖拽旋转 · 滚轮缩放 · 右键平移</span>
+        <span style="font-size:11px;color:#8b949e">左键旋转 · 滚轮缩放 · 右键平移 · 右下角拖拽改大小</span>
         <button type="button" onclick="flowboard.closeMapPreview()" title="关闭"
           style="position:absolute;right:8px;top:6px;width:32px;height:32px;border:0;border-radius:8px;background:#21262d;color:#f0f6fc;font-size:18px;line-height:1;cursor:pointer">×</button>
       </div>
       <iframe id="map-preview-frame" title="3D 地图预览"
         style="display:block;width:100%;flex:1;min-height:0;border:0;background:#0a0d14"></iframe>
+      <div id="map-preview-resize" title="拖拽调整大小（保持比例）"
+        style="position:absolute;right:0;bottom:0;width:22px;height:22px;cursor:nwse-resize;background:linear-gradient(135deg,transparent 50%,#3d444d 50%,#3d444d 58%,transparent 58%);user-select:none;touch-action:none"></div>
     </div>
   </div>
 

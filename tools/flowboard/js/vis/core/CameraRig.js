@@ -38,6 +38,9 @@ export function createCameraRig(canvas) {
   // D-2: OrbitControls — 初始 disabled，仅 orbit 模式启用
   const orbitControls = new OrbitControls(camera, canvas);
   orbitControls.enabled = false;
+  orbitControls.screenSpacePanning = true;   // 平移沿屏幕平面，俯视预览"手抓地图"更直观
+  orbitControls.zoomToCursor = true;
+  orbitControls.mouseButtons.RIGHT = -1;     // 禁用右键（避免 contextmenu 冲突），左键用 P/Space 切换旋转/平移
   orbitControls.target.set(0, 0, 0);
   orbitControls.update();
 
@@ -46,6 +49,7 @@ export function createCameraRig(canvas) {
   mapControls.enableRotate = false;
   mapControls.screenSpacePanning = true;
   mapControls.zoomToCursor = true;
+  mapControls.mouseButtons.RIGHT = -1;       // 同上：禁用右键，左键平移/滚轮缩放
   mapControls.target.set(0, 0, 0);
   mapControls.update();
 
@@ -166,7 +170,15 @@ export function createCameraRig(canvas) {
       }
       case 'orbit': {
         if (needsControlSnap) {
-          orbitControls.target.set(ex, eg, ez);
+          if (ego && Number.isFinite(ego.mapViewHeight)) {
+            // 预览页（mapPreview.js 注入 map_view_* 字段）：定位到地图上方，
+            // 支持自由旋转/缩放/平移查看整张地图。
+            camera.position.set(mapTargetX, mapTargetY + mapHeight, mapTargetZ);
+            orbitControls.target.set(mapTargetX, mapTargetY, mapTargetZ);
+            camera.lookAt(mapTargetX, mapTargetY, mapTargetZ);
+          } else {
+            orbitControls.target.set(ex, eg, ez);
+          }
           needsControlSnap = false;
         } else if (_orbitPrevEgo) {
           // 按 ego 位移整体平移 target + 相机，保持用户既有的环绕半径/视角，
@@ -210,6 +222,20 @@ export function createCameraRig(canvas) {
     return mode === 'bev';
   }
 
+  /* orbit 模式下切换左键动作：'rotate' 左键旋转 / 'pan' 左键平移。
+   * 键盘切换（见 mapPreview.js），避免右键平移与浏览器上下文菜单冲突。 */
+  function setOrbitLeftAction(action) {
+    const mapMode = mode === 'map';
+    if (action === 'pan') {
+      orbitControls.mouseButtons.LEFT = THREE.MOUSE.PAN;
+      mapControls.mouseButtons.LEFT = THREE.MOUSE.PAN;
+    } else {
+      orbitControls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+      mapControls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+    }
+    return mapMode ? 'map' : (action === 'pan' ? 'pan' : 'rotate');
+  }
+
   /* 更新正交相机视锥：按画布宽高比与可视范围（userData.viewMeters）计算，
    * 使纵向始终覆盖 viewMeters 米、横向随比例扩展，俯视比例不拉伸。 */
   function resize(w, h) {
@@ -238,5 +264,5 @@ export function createCameraRig(canvas) {
     }
   }
 
-  return { camera, update, setMode, reset, getActiveCamera, isBev, resize };
+  return { camera, update, setMode, reset, getActiveCamera, isBev, resize, setOrbitLeftAction };
 }

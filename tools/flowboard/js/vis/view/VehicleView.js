@@ -17,7 +17,7 @@
 import { deriveLightState, LIGHT_TURN_LEFT, LIGHT_TURN_RIGHT, LIGHT_HAZARD, LIGHT_HIGH_BEAM, LIGHT_LOW_BEAM } from './VehicleLights.js';
 import { getStdMaterial } from '../core/AssetFactory.js';
 import { initModelCache, getModel, _setVehicleLights, _relinkWheelUserData } from '../../models.js';
-import { worldToThree, headingToRotationY } from '../math/Coord.js';
+import { worldToThree, headingToRotationY, forwardENU } from '../math/Coord.js';
 import { roadHeightAt } from '../math/RoadHeight.js';
 
 // ═══════════════════════════════════════════════════════════
@@ -432,8 +432,9 @@ export function _advanceWheelOdometry(entry, v, dt, speed_mps) {
   const dx = ex - entry._odoPrevX;
   const dy = ey - entry._odoPrevY;
   entry._odoPrevX = ex; entry._odoPrevY = ey;
-  // 沿车头方向取有符号位移（支持倒车）。
-  let d = dx * Math.cos(h) + dy * Math.sin(h);
+  // 沿车头方向取有符号位移（支持倒车）：位移在 forwardENU(h) 上的投影。
+  const [fx, fy] = forwardENU(h);
+  let d = dx * fx + dy * fy;
   // 钳制：正常每帧位移 = speed×dt；超过约 3 倍预期值的突变视为瞬移 / 重连
   // 落点，钳住避免车轮被异常位移带着整圈疯转。这样高速 + 低帧率（如非
   // observe 10fps）下的正常大位移不会被误杀，仍能匀速转动。

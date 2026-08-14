@@ -13,6 +13,7 @@ import { sampleEdgeNodes } from '../math/Curve.js';
 import { getStdMaterial } from '../core/AssetFactory.js';
 import { LANE_WIDTH, EDGE_TYPE } from '../core/Constants.js';
 import { tangentToNormal } from '../math/Coord.js';
+import { detectJunctions } from './JunctionDetect.js';
 
 const TREE_SPACING = 30;
 const TREE_PHASE   = 5;
@@ -28,6 +29,12 @@ const COLOR_CANOPY_UPPER = 0x3d8035;
 export function inferTreeSlots(roadNetwork) {
   const slots = [];
   if (!roadNetwork?.edges?.length) return slots;
+
+  /* 2026-08-14 路口避让：树不落在路口内/路口边缘（OSM 实测树长在马路和
+   * 路口中间）。到最近 junction 中心距离 < radius + 2m 的槽位丢弃。 */
+  const { centers } = detectJunctions(roadNetwork);
+  const nearJunction = (x, z) => centers.some((c) =>
+    Math.hypot(x - c.x, z - c.z) < (c.radius || 0) + 2.0);
 
   for (const edge of roadNetwork.edges) {
     if (edge.type === EDGE_TYPE.VIADUCT_HIGHWAY || edge.name === EDGE_TYPE.VIADUCT_HIGHWAY) continue;
@@ -73,6 +80,7 @@ export function inferTreeSlots(roadNetwork) {
       for (const side of [-1, 1]) {
         const x = s.px + s.nx * (halfWidth + TREE_OFFSET) * side;
         const z = s.pz + s.nz * (halfWidth + TREE_OFFSET) * side;
+        if (nearJunction(x, z)) continue;   // 路口避让
         const variant = ((i * 17 + (side > 0 ? 7 : 3)) % 11) / 10;
         slots.push({ x, z, py: s.py, side, arc: targetArc, variant });
       }

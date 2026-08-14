@@ -29,7 +29,7 @@ console.log('=== vis/ 综合展示场景渲染门禁 ===\n');
 
 function listScenarioFiles() {
   return fs.readdirSync(SCEN_DIR)
-    .filter((f) => f.endsWith('.json') && f !== 'suite.json')
+    .filter((f) => f.endsWith('.json') && f !== 'suite.json' && !f.startsWith('.'))
     .sort();
 }
 

@@ -582,6 +582,12 @@ export function resetMapView() {
   resetCamera();
 }
 
+/** orbit 预览：切换左键动作（rotate/pan），键盘快捷键用（见 mapPreview.js） */
+export function setOrbitLeftAction(action) {
+  if (_cameraRig) return _cameraRig.setOrbitLeftAction(action);
+  return 'rotate';
+}
+
 /** 同步档位到 store（视图可读：TrajectoryView 低档跳过装饰性加法混合层） */
 function _syncPerfTier() {
   if (_director) _director.getStore().perfTier = _perfTier;

@@ -27,6 +27,7 @@ import { createPerceptionView } from '../view/PerceptionView.js';
 import { createEffectView } from '../view/EffectView.js';
 import { createTrajectoryView } from '../view/TrajectoryView.js';
 import { createRoadFacilityView } from '../view/RoadFacilityView.js';
+import { createStreetFurnitureView } from '../view/StreetFurnitureView.js';
 import {
   tickDeadReckon, _dr,
   updateEntityDeadReckon, tickEntityDeadReckon, getEntitySmooth,
@@ -72,6 +73,7 @@ ViewRegistry.register('perception',   createPerceptionView);
 ViewRegistry.register('effect',       createEffectView);
 ViewRegistry.register('trajectory',   createTrajectoryView);
 ViewRegistry.register('roadFacility', createRoadFacilityView);
+ViewRegistry.register('streetFurniture', createStreetFurnitureView);
 
 export function createSceneDirector(scene) {
   const store = createSceneStore();
@@ -105,7 +107,7 @@ export function createSceneDirector(scene) {
    * 不再保留 9 个顶层 const —— ViewRegistry 是单一事实来源，避免双份引用。 */
   for (const [layerName, viewNames] of [
     ['env',   ['ground', 'viaduct']],
-    ['road',  ['road', 'streetlight', 'barrier', 'connector', 'tree', 'construction', 'roadFacility']],
+    ['road',  ['road', 'streetlight', 'barrier', 'connector', 'tree', 'construction', 'roadFacility', 'streetFurniture']],
     ['agent', ['vehicle', 'label', 'perception', 'effect', 'trajectory']],
     ['infra', ['trafficLight', 'etcGate']],
   ]) {
@@ -167,6 +169,9 @@ export function createSceneDirector(scene) {
     if (Number.isFinite(frame.visibility_m)) store.env.visibilityM = frame.visibility_m;
 
     if (rn && !skipRoad) {
+      // OSM 建筑（单源真相）：从 scene frame 顶层 buildings[] 透传到 roadNetwork，
+      // 供 BuildingView 渲染真实轮廓（无则回退程序化天际线）。
+      if (frame && Array.isArray(frame.buildings)) rn.buildings = frame.buildings;
       const hash = roadNetworkHash(rn);
       if (hash !== lastRoadHash) {
         const edgesArr = Array.isArray(rn.edges) ? rn.edges : [];
@@ -177,6 +182,7 @@ export function createSceneDirector(scene) {
         ViewRegistry.safeCall('road', 'build', rn);
         ViewRegistry.safeCall('construction', 'build', rn, frame.construction_zones);
         ViewRegistry.safeCall('ground', 'build', 20000);
+        ViewRegistry.safeCall('streetFurniture', 'build', rn);
 
         if (isViaduct) {
           const edge0 = edgesArr[0] || {};
