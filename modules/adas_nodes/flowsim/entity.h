@@ -146,9 +146,12 @@ struct Entity {
 
     /* ── 路口转向意图（M3：NPC 路口按需选择支路）──
      * 0=直行 1=左转 2=右转。spawn 时随机分配（直行为主），road_pos 推进
-     * 过路口（road_id 变化）后重新随机，避免一直右转绕圈。esmini
-     * RM_PositionMoveForward 的 junctionSelectorAngle 语义：
-     *   M_PI=直行, M_PI/2=右转, 3*M_PI/2=左转（基准 0 = incoming road 方向）。 */
+     * 过路口（road_id 变化）后重新随机，避免一直右转绕圈。
+     * junctionSelectorAngle 语义（esmini 代码实测，2026-08-14）：
+     *   0=直行, M_PI/2=左转, 3*M_PI/2=右转。
+     *   ⚠ esmini 头文件注释误写为 pi=straight pi/2=right 3pi/2=left，
+     *   代码实际 Math：deltaHeading = (outHeading - drivingHeading) mod 2π，
+     *   直行时 deltaHeading=0，绝不可能等于 π。 */
     int    turn_intent{0};
 
     /* ── NPC 避障换道（让 NPC 不再"堵成一坨"）── */

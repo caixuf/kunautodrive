@@ -104,6 +104,15 @@ class Road:
     # 透传成 nodes 三元组 [x, y, z]，前端 scene3d.js 用 z 做路面 Y 高度。
     elevation_profile: list = field(default_factory=list)
     oneway: bool = False  # True=单向道路(不生成对向车道)，False=双向对称
+    # ── lane 级拓扑（laneLink 生成用，2026-08）──
+    # lane_meta: [{id, index, direction, successors:[str]}] —— map.json lanes[]
+    # 原样保留。esmini 在 junction 处按 lane 选路（Junction::GetNumberOfRoadConnections）
+    # 依赖 <connection><laneLink>，而 laneLink 只能从 lane successors 推导。
+    lane_meta: list = field(default_factory=list)
+    # <link> 的 junction 版：本 road 起点/终点连到哪个 junction（elementType="junction"）。
+    # road 级 predecessor/successor（elementType="road"）由直连 road 填充，两者独立。
+    predecessor_junction: int = -1   # 起点连的 junction id
+    successor_junction: int = -1     # 终点连的 junction id
 
 
 @dataclass
@@ -111,11 +120,14 @@ class Junction:
     """OpenDRIVE <junction> 描述：道路分叉(fork)或汇入(merge)。
     incoming_road 是分叉前/汇入前的主路 id；connections 中每项为
     (connecting_road_id, target_road_id_or_None)，target 为 None 时
-    表示该 connecting road 终点不再接续（fork 的分支末端）。"""
+    表示该 connecting road 终点不再接续（fork 的分支末端）。
+    lane_links: {connecting_road_id: [(incoming_lane_id, connecting_lane_id), ...]}
+    供 <connection><laneLink> 生成（esmini 在路口按 lane 选路必需）。"""
     id: int
     name: str
     incoming_road: int
     connections: list  # list[tuple[int, Optional[int]]]
+    lane_links: dict = field(default_factory=dict)  # connecting_road_id -> [(from,to)]
 
 
 def build_straight_road(rid: int, name: str, length: float, lanes: int,
@@ -318,20 +330,47 @@ def roads_from_legacy_road(road_cfg: dict) -> list[Road]:
     return roads
 
 
+def _xodr_lane_id(id_num: int) -> int:
+    """map.json lane id 后缀 N → OpenDRIVE lane id。
+    约定（map_compiler/extract_city_map）：正向 lane id 1..100（xodr right 侧 =
+    负数 id），对向 lane id 101..200（xodr left 侧 = 正数 id）。"""
+    return -id_num if id_num <= 100 else (id_num - 100)
+
+
+def _parse_lane_succ(succ: str) -> tuple[Optional[str], Optional[int]]:
+    """lane successor 形如 "<road_str>.lane.<N>" → (road 字符串 id, lane 后缀 N)。"""
+    if not isinstance(succ, str):
+        return None, None
+    road_str, sep, tail = succ.rpartition(".lane.")
+    if not sep or not tail.isdigit():
+        return None, None
+    return road_str, int(tail)
+
+
 def roads_from_road_network(rn_cfg: dict) -> tuple[list[Road], list[Junction]]:
-    """新格式 road_network{edges:[...], junctions:[...]} → (roads, junctions)。
+    """新格式 road_network{edges:[...], junctions[...]} → (roads, junctions)。
 
     每个 edge 一个 road；edges 之间默认顺序拼接（端点连续）。
     junctions 数组描述道路分叉(fork)/汇入(merge)：
-      - fork: incoming_road 终点分叉出多条 connecting_roads，每条从 incoming_road
-              终点状态起独立构建，标记 junction_id 并设 predecessor=incoming_road。
-      - merge: incoming_road（加速车道）汇入 target_road，把 incoming_road 标记为
-              junction 的 connecting road，successor=target_road。
-    无 junctions 时退化为既有顺序拼接逻辑（完全向后兼容）。"""
+
+    ── laneLink 生成（2026-08 修复，esmini 路口 lane 级选路必需）──
+    esmini 的 Junction::GetNumberOfRoadConnections(road_id, lane_id) 遍历
+    connection 的 <laneLink> 条目（RoadManager.cpp:5772-5792），缺 laneLink
+    时返回 0 → RM_PositionMoveForward 失败 → NPC 无法跨越路口。
+    生成逻辑：对于每个 fork junction，从 incoming road 的 lane_meta 提取
+    successors（形如 "<road>.lane.<N>"），解析出目标 road 数字 id + lane index，
+    转换为 xodr lane id（forward 侧 = -index, oncoming 侧 = +(index-100)）
+    生成 <laneLink from="incoming_lane_id" to="connecting_lane_id"/>。
+    同时给 incoming road 设 successor_junction（<link> 指向 junction 而非 road），
+    connecting road 设 predecessor_junction（<link> 指向 junction 而非 incoming）。
+    """
     edges = rn_cfg.get("edges") or rn_cfg.get("segments") or []
     state = RoadState(0.0, 0.0, 0.0)
     roads: list[Road] = []
     end_states: dict[int, RoadState] = {}   # road id → 该 road 终点的全局状态
+    start_states: dict[int, RoadState] = {}  # road id → 该 road 起点的全局状态
+    # 字符串 road id → 数字索引（load_scenario 注入，lane successors 解析用）
+    road_id_map: dict = rn_cfg.get("road_id_map") or {}
 
     # 第一遍：顺序构建所有 edge，记录每段终点状态供 junction 分支起算。
     # 同时为前后 edge 串接 successor/predecessor link —— 这是 OpenDRIVE 道路拓扑
@@ -355,7 +394,26 @@ def roads_from_road_network(rn_cfg: dict) -> tuple[list[Road], list[Junction]]:
         skip_main_link = eid in junction_conn_ids
         etype = str(e.get("type", "road"))
         length = float(e.get("length_m", 0.0))
-        lanes = int(e.get("lanes", e.get("lane_count", 2)))
+        lane_v = e.get("lanes", e.get("lane_count", 2))
+        lane_meta: list = []
+        if isinstance(lane_v, list):
+            # 新格式：lanes[] 含 id/index/direction/successors（laneLink 生成用）。
+            # id 形如 "<road>.lane.<N>"，N 与 id 后缀一致（正向 1..100、对向 101..200）。
+            lanes = int(e.get("lane_count", len(lane_v)))
+            for _li, _l in enumerate(lane_v):
+                if not isinstance(_l, dict):
+                    continue
+                _lid = str(_l.get("id", ""))
+                _, _sep, _tail = _lid.rpartition(".lane.")
+                _id_num = int(_tail) if (_sep and _tail.isdigit()) else int(_l.get("index", _li + 1))
+                lane_meta.append({
+                    "id_num": _id_num,
+                    "index": int(_l.get("index", _li + 1)),
+                    "direction": int(_l.get("direction", 1)),
+                    "successors": list(_l.get("successors", []) or []),
+                })
+        else:
+            lanes = int(lane_v)
         lw = float(e.get("lane_width", DEFAULT_LANE_WIDTH))
         sp = float(e.get("speed_limit", DEFAULT_SPEED))
         oneway = bool(e.get("oneway", False))
@@ -377,8 +435,10 @@ def roads_from_road_network(rn_cfg: dict) -> tuple[list[Road], list[Junction]]:
             r.oneway = True
         # 高架 elevation_profile 透传（ [{"s":0,"h":0},{"s":250,"h":8}] ）
         r.elevation_profile = list(e.get("elevation_profile") or [])
+        r.lane_meta = lane_meta
         roads.append(r)
         end_states[eid] = state
+        start_states[eid] = RoadState(r.geoms[0].x, r.geoms[0].y, r.geoms[0].hdg) if r.geoms else state
         main_edge_ids.append((eid, skip_main_link))
 
     # 为顺序拼接的主路 edge 串接 successor/predecessor link（OpenDRIVE 拓扑连贯性）。
@@ -416,7 +476,38 @@ def roads_from_road_network(rn_cfg: dict) -> tuple[list[Road], list[Junction]]:
 
         if jtype == "fork":
             # 分叉：每条 connecting_road 从 incoming_road 终点起独立构建。
+            # 并生成 laneLink + junction link（让 esmini 在路口按 lane 选路）。
             conns: list[tuple[int, Optional[int]]] = []
+            conn_lane_links: dict[int, list[tuple[int, int]]] = {}  # cid -> [(from,to)]
+            # 找 incoming road 对象（用 road id 匹配）
+            inc_road = None
+            for r in roads:
+                if r.id == incoming:
+                    inc_road = r
+                    break
+            # 判断 fork 在 incoming 的哪一端：connecting road 几何起点 vs
+            # incoming 终点/起点（city_grid 拆段模型里一个 road 段两端各一交叉口，
+            # 需区分末端 fork（successor）与起点 fork（predecessor））。
+            inc_end = end_states.get(incoming)
+            inc_start = start_states.get(incoming)
+            fork_at_end: Optional[bool] = None
+            for r2 in roads:
+                if not r2.geoms:
+                    continue
+                if any(int(c.get("id", -1)) == r2.id for c in jcfg.get("connecting_roads", [])):
+                    cs = (r2.geoms[0].x, r2.geoms[0].y)
+                    if inc_end and abs(cs[0] - inc_end.x) + abs(cs[1] - inc_end.y) < 4.0:
+                        fork_at_end = True
+                    elif inc_start and abs(cs[0] - inc_start.x) + abs(cs[1] - inc_start.y) < 4.0:
+                        fork_at_end = False
+                    if fork_at_end is not None:
+                        break
+            if inc_road is not None:
+                if fork_at_end is True:
+                    inc_road.successor_junction = jid
+                elif fork_at_end is False:
+                    inc_road.predecessor_junction = jid
+
             for c in jcfg.get("connecting_roads", []):
                 cid = int(c.get("id", -1))
                 if cid < 0:
@@ -438,7 +529,7 @@ def roads_from_road_network(rn_cfg: dict) -> tuple[list[Road], list[Junction]]:
                 if existing:
                     cr = existing
                     cr.junction_id = jid
-                    cr.predecessor = incoming
+                    cr.predecessor_junction = jid  # 指向 junction 而非 incoming road
                     cend = end_states.get(cid, start_state)
                 else:
                     c_nodes = c.get("nodes")
@@ -451,7 +542,7 @@ def roads_from_road_network(rn_cfg: dict) -> tuple[list[Road], list[Junction]]:
                     else:
                         cr, cend = build_straight_road(cid, cname, clen, clanes, clw, csp, start_state)
                     cr.junction_id = jid
-                    cr.predecessor = incoming
+                    cr.predecessor_junction = jid
                     cr.elevation_profile = list(c.get("elevation_profile") or [])
                     roads.append(cr)
                 # 若配置了 target_road，分支末端接续到目标主路
@@ -462,7 +553,27 @@ def roads_from_road_network(rn_cfg: dict) -> tuple[list[Road], list[Junction]]:
                 else:
                     conns.append((cid, None))
                 end_states[cid] = cend
-            junctions.append(Junction(jid, f"fork_{jid}", incoming, conns))
+
+                # ── laneLink 生成 ──
+                # 从 incoming road 的 lane_meta 中找 successors 指向 cid 的 lane，
+                # 每个这种 lane 生成 (from_xodr_lane, to_xodr_lane)。
+                succ_lane_pairs: list[tuple[int, int]] = []
+                if inc_road is not None:
+                    for lm in inc_road.lane_meta:
+                        for s in lm.get("successors", []):
+                            src_road_str, src_lane_idx = _parse_lane_succ(s)
+                            if src_road_str is None:
+                                continue
+                            src_road_num = road_id_map.get(src_road_str, -1)
+                            if src_road_num == cid and src_lane_idx is not None:
+                                from_lane = _xodr_lane_id(lm["id_num"])
+                                to_lane = _xodr_lane_id(src_lane_idx)
+                                succ_lane_pairs.append((from_lane, to_lane))
+                if succ_lane_pairs:
+                    conn_lane_links[cid] = succ_lane_pairs
+            junc_obj = Junction(jid, f"fork_{jid}", incoming, conns)
+            junc_obj.lane_links = conn_lane_links
+            junctions.append(junc_obj)
 
         elif jtype == "merge":
             # 汇入：incoming_road（加速车道）→ 新建短 connecting road → target_road（主线）。
@@ -579,7 +690,10 @@ def road_to_xml(road: Road) -> ET.Element:
     })
     # NOA Phase 1: <link> 描述 connecting road 与 incoming/target road 的拓扑连接，
     # esmini RoadManager 据此构建分叉/汇入路网。
-    if road.predecessor >= 0 or road.successor >= 0:
+    # 2026-08：road 级 predecessor/successor 用 elementType="road"（直连），
+    # predecessor_junction/successor_junction 用 elementType="junction"（过路口）。
+    if (road.predecessor >= 0 or road.successor >= 0 or
+            road.predecessor_junction >= 0 or road.successor_junction >= 0):
         link = ET.SubElement(r, "link")
         if road.predecessor >= 0:
             ET.SubElement(link, "predecessor", {
@@ -592,6 +706,16 @@ def road_to_xml(road: Road) -> ET.Element:
                 "elementId": str(road.successor),
                 "elementType": "road",
                 "contactPoint": "start",
+            })
+        if road.predecessor_junction >= 0:
+            ET.SubElement(link, "predecessor", {
+                "elementId": str(road.predecessor_junction),
+                "elementType": "junction",
+            })
+        if road.successor_junction >= 0:
+            ET.SubElement(link, "successor", {
+                "elementId": str(road.successor_junction),
+                "elementType": "junction",
             })
     pv = ET.SubElement(r, "planView")
     for g in road.geoms:
@@ -702,12 +826,19 @@ def build_xodr(roads: list[Road], junctions: list[Junction] | None = None) -> ET
         })
         for ci, (conn_road, _target) in enumerate(j.connections):
             # target 仅用于 connecting road 的 <successor>，已在 road_to_xml 的 <link> 中表达
-            ET.SubElement(je, "connection", {
+            conn_el = ET.SubElement(je, "connection", {
                 "id": str(ci),
                 "incomingRoad": str(j.incoming_road),
                 "connectingRoad": str(conn_road),
                 "contactPoint": "start",
             })
+            # 2026-08: laneLink —— esmini 在 junction 处按 lane 选路必需
+            # （Junction::GetNumberOfRoadConnections 遍历 <laneLink>，缺则返回 0）。
+            for from_lane, to_lane in (j.lane_links.get(conn_road) or []):
+                ET.SubElement(conn_el, "laneLink", {
+                    "from": str(from_lane),
+                    "to": str(to_lane),
+                })
     return root
 
 
@@ -793,11 +924,15 @@ def load_scenario(path: Path) -> dict:
             edge["nodes"] = edge["centerline"]
         lane_data = edge.get("lanes")
         if isinstance(lane_data, list):
-            edge["lanes"] = len(lane_data)
+            # 保留 lanes[]（含 id/index/direction/successors），供 junction laneLink
+            # 生成（esmini 路口 lane 级转向必需）；另加 lane_count 数字字段给计数消费方。
+            edge["lane_count"] = len(lane_data)
             if lane_data and isinstance(lane_data[0], dict):
                 edge["lane_width"] = lane_data[0].get(
                     "width", edge.get("lane_width", DEFAULT_LANE_WIDTH)
                 )
+        elif isinstance(lane_data, int):
+            edge["lane_count"] = lane_data
         edge.pop("legacy_id", None)
         edges.append(edge)
 
@@ -831,6 +966,9 @@ def load_scenario(path: Path) -> dict:
         "edges": edges,
         "cross_roads": city_map.get("cross_roads", []),
         "junctions": juncs,
+        # 字符串 road id → 数字索引（lane successors 形如 "<road>.lane.<N>" 需要
+        # 解析回数字 road id 才能与 connection 的 connectingRoad 对上，生成 laneLink）
+        "road_id_map": name_to_idx,
     }
     return resolved
 

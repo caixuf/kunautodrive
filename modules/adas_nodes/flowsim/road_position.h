@@ -35,12 +35,14 @@ namespace flowsim {
  * 析构时 RM_DeletePosition 释放。handle 在 init() 成功后有效，init 失败或
  * 未调用时 handle_ 为 -1，所有查询返回 false/默认值。
  *
- * junctionSelectorAngle 语义（来自 esmini 文档）：
- *   - 0.0       = 沿 incoming road 方向（通常等于"不转弯"）
- *   - M_PI_2    = 右转
- *   - M_PI      = 直行
- *   - 3*M_PI_2  = 左转
+ * junctionSelectorAngle 语义（esmini 代码实测，2026-08-14）：
+ *   - 0.0       = 直行（deltaHeading ≈ 0，沿 incoming road 方向）
+ *   - M_PI/2    = 左转
+ *   - 3*M_PI/2  = 右转
  *   - -1.0      = 随机选支路
+ *   ⚠ esmini 头文件注释误写 "pi=straight pi/2=right 3pi/2=left"：
+ *   代码实际 Math（MoveToConnectingRoad）deltaHeading = (连接 road 行驶航向 −
+ *   本车行驶航向) mod 2π，直行时 deltaHeading=0，绝不可能等于 π。
  */
 class RoadPosition {
 public:

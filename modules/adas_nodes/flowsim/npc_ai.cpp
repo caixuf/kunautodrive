@@ -21,6 +21,7 @@
 #include "road_network.h"
 #include "route.h"
 #include "lane_frenet.h"   /* C-2: 共享车道中心横向偏移公式 */
+#include "logger.h"        /* M3 临时诊断 */
 
 #include <algorithm>
 #include <cmath>
@@ -788,15 +789,20 @@ mobil_done: ;
         // ── RoadPosition 推进分支 ──
         // junction_angle 由 NPC 路口转向意图（turn_intent）决定：直行/左/右，
         // esmini 只在 advance 遇到 junction 时用它选连接 road（M3 路口按需选支路）。
-        // 语义见 entity.h turn_intent 注释：M_PI=直行 M_PI/2=右转 3M_PI/2=左转。
+        // esmini 语义（RoadManager.cpp MoveToConnectingRoad，2026-08 实测）：
+        //   deltaHeading = (连接 road 行驶方向航向 - 本车行驶航向) mod 2π，
+        //   junctionSelectorAngle 取 |deltaHeading - angle| 最小者。
+        //   故 0=直行（deltaHeading≈0）、M_PI/2=左转、3M_PI/2=右转。
+        //   ⚠ esmini 头文件注释写 "pi=straight pi/2=right 3pi/2=left" 是错的，
+        //   straight 的 deltaHeading 恒为 0，绝不可能等于 π（=180° 掉头）。
         double dist = npc.speed * dt;
-        double junc_angle = M_PI;
+        double junc_angle = 0.0;
         if (npc.turn_intent == 1) {
-            junc_angle = 3.0 * M_PI / 2.0;   /* 左转 */
+            junc_angle = M_PI / 2.0;          /* 左转 */
         } else if (npc.turn_intent == 2) {
-            junc_angle = M_PI / 2.0;         /* 右转 */
+            junc_angle = 3.0 * M_PI / 2.0;    /* 右转 */
         } else {
-            junc_angle = M_PI;               /* 直行 */
+            junc_angle = 0.0;                 /* 直行 */
         }
         bool adv_ok = true;
         if (dist > 0.0) {
@@ -903,6 +909,8 @@ mobil_done: ;
                 if (fp.road_id != npc.road_id) {
                     int r = rand() % 10;
                     npc.turn_intent = (r < 6) ? 0 : ((r % 2) ? 1 : 2);  /* 60% 直, 20% 左, 20% 右 */
+                    LOG_INFO("flowsim", "M3 diag: npc%d crossed %d -> %d intent=%d",
+                             npc.scenario_id, npc.road_id, fp.road_id, npc.turn_intent);
                 }
                 npc.road_id = fp.road_id;
                 npc.lane_id = fp.lane_id;
