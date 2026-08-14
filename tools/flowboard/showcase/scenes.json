@@ -1367,6 +1367,7 @@
         "lighting": "day",
         "weather": "clear",
         "visibility_m": 800,
+        "random_seed": 42,
         "ego": {
           "x": -100.0,
           "y": -1.75,
@@ -1392,6 +1393,7 @@
               "type": "urban",
               "lanes": 4,
               "lane_width": 3.5,
+              "speed_limit": 15.0,
               "nodes": [
                 [
                   -200,
@@ -1410,6 +1412,7 @@
               "type": "urban",
               "lanes": 4,
               "lane_width": 3.5,
+              "speed_limit": 15.0,
               "nodes": [
                 [
                   0,
@@ -1428,6 +1431,7 @@
               "type": "urban",
               "lanes": 4,
               "lane_width": 3.5,
+              "speed_limit": 15.0,
               "nodes": [
                 [
                   0,
@@ -1446,6 +1450,7 @@
               "type": "urban",
               "lanes": 4,
               "lane_width": 3.5,
+              "speed_limit": 15.0,
               "nodes": [
                 [
                   0,
