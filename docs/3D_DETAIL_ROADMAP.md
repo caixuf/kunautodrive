@@ -86,13 +86,17 @@ python3 tools/pipeline_check.py
 
 ## 3. 待办清单（已列入计划，按优先级）
 
-- [ ] **P0 — A* 起终点启发式修复**（让 OSM 大地图真正能开一段）
+- [x] **P0 — A* 起终点启发式修复**（让 OSM 大地图真正能开一段）**✓ 2026-08-14 f20a3eb**
   - 位置：`modules/adas_nodes/flowsim_node.cpp` `build_route_via_astar`
   - 问题：起终点用 `road 0 → road max_road`（过滤后的路序 ≠ 路线链序）→ OSM 上 A*
     只给出 2 路 128m 短路线，且可能不在 ego 脚下 → demo 里 ego 1.2 m/s、beh=NA。
-  - 方案：改用场景 route 的 `road_chain`（chain[0] → chain[-1]）作为 A* 起终点，
-    并验证：osm_lujiazui demo ego 能沿主链开一段（速度>5、beh≠NA、CTE 不发散）。
-  - 验收：`FLOW_SKIP_BUILD=1 bash scripts/demo.sh --scenario scenarios/osm_lujiazui.json`。
+  - 方案：`scenario_loader.c` route 过滤时注入 `legacy_id`=map.json 全量索引（与
+    json_to_xodr 全量导出的 xodr road id 同编号空间）；`build_route_via_astar`
+    直接以 edges[]（过滤后即 road_chain 顺序）调 `build_from_chain`，A* 仅作链
+    不可达时兜底改道（OSM 主链 lane successors 带岔路，起终点 A* 会抄近路跳段）。
+  - 验证：osm_lujiazui demo ego 0→14.2m/s 沿主链（9 段 3213m）行驶，planning
+    waypoint=25 持续跟随；city_grid 25 段 5000m 零行为变化；straight_road 回退
+    正常；ctest 25/25。
 - [ ] **P1 — 预览大图性能**：491 路 / 2.4MB map.json，前端首帧加载与合批是否卡顿；
   必要时分层 LOD 或静态合批。
 - [ ] **P2（可选）— OSM A* 连通回归脚本**：`tools/` 下补一个只跑 main 链 lane 0→末段的
@@ -106,8 +110,11 @@ python3 tools/pipeline_check.py
       `connecting_roads[].turn` 数据且路口 arm 数 ≤ 4 时画；或对 OSM 地图
       （`map_id` 以 osm_ 开头）整体关闭。位置：`ConnectorView.js` build() 的
       `if (junctions.length) _buildTurnConnectors(...)`。
-- [ ] **防撞桶已修**（916610e）：只在真断头端点放。若预览仍见零星桶，属地图边界
-      正常，不用管。
+- [ ] **防撞桶已修**（本会话）：`_buildBarrierEndCap` 加孤端检测——端点无任何其他
+      edge 端点在 1.5m 邻接容差内才是真断头。OSM 982→236 桶（-76%，仅留边界断头）；
+      city_grid 2600→0 桶（网格本就不该有桶）。若预览仍见零星桶，属地图边界正常。
+      弯路护栏（BarrierView 金属护栏）只对 type='highway' 生效，OSM 0 条 highway
+      不触发，无需额外修。
 - [ ] **S 弯外侧路肩/人行道收窄**：offsetSpine 曲率钳制为对称钳制，外侧急弯略收窄，
       观感可接受；如需更精细可改为内侧钳制（注意坐标手性，见 RoadView.js offsetSpine 注释）。
 - [ ] **路口斑马线/停止线**：已用路口端向外切线统一基准；若个别不规则路口仍偏，

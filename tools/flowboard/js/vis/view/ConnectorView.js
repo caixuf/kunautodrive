@@ -31,6 +31,10 @@ const STOP_LINE_W = 0.45;        // 停止线宽（垂直于行车的横条）
 const PATCH_Y = 0.105;           // 路口铺装略高于路面防 z-fight
 const CROSS_Y = 0.16;            // 斑马线高度
 const STOP_Y = 0.17;             // 停止线高度（比斑马线再高一点防 z-fight）
+// 断头判定容差：两条 road 相接的接缝（连续连接/弯道转折/路口汇聚）端点几乎
+// 重合（OSM 段首尾精确同点），只有无任何邻接端点的孤端才是真断头。1.5m 既
+// 能覆盖 OSM 聚类 gap，又不会把相邻道路端点（远大于 1.5m）误判成接缝。
+const DEAD_END_TOL_M = 1.5;
 
 export function createConnectorView(scene) {
   const group = new THREE.Group();
@@ -97,13 +101,28 @@ export function createConnectorView(scene) {
       _buildViaductPier(edge);
     }
 
-    // ── 5. BarrierEndCap：只在**真断头端点**（不属于任何路口）放防撞桶 ──
+    // ── 5. BarrierEndCap：只在**真断头端点**（孤端）放防撞桶 ──
     //  2026-08-14：旧实现对每个 edge 起止点都放，OSM 地图每条 way 是一个
     //  edge、端点几乎都在路口/连续处 → 防撞桶铺满全图。改为 byId 判定：
     //  entry.start/end == null 才是断头路/地图边界。
+    //  2026-08（本会话）：byId 只识别 ≥3 臂路口簇，2 端点接缝（连续连接/
+    //  弯道转折/环形路段间）被剔成 null → 连接处/弯路仍铺桶（用户报障）。
+    //  补"孤端检测"：端点无任何其他 edge 端点在邻接容差内才是真断头；
+    //  连续接缝/弯道转折/路口汇聚都有邻接端点 → 不放桶。
+    const endpointLocs = [];
+    for (const e of edges) {
+      if (!Array.isArray(e.nodes) || e.nodes.length < 2) continue;
+      const ns = e.nodes.map((n) =>
+        Array.isArray(n) ? n : [n.x || 0, n.y || 0, n.z || 0]);
+      const [sx, , sz] = worldToThree(ns[0][0] || 0, ns[0][1] || 0, ns[0][2] || 0);
+      const [ex, , ez] = worldToThree(
+        ns[ns.length - 1][0] || 0, ns[ns.length - 1][1] || 0, ns[ns.length - 1][2] || 0);
+      endpointLocs.push({ x: sx, z: sz, id: String(e.id) });
+      endpointLocs.push({ x: ex, z: ez, id: String(e.id) });
+    }
     for (const edge of edges) {
       if (edge.type === 'ramp_curve' || edge.type === 'intersection') continue;
-      _buildBarrierEndCap(edge, byId);
+      _buildBarrierEndCap(edge, byId, endpointLocs);
     }
 
     built = true;
@@ -482,10 +501,13 @@ export function createConnectorView(scene) {
     }
   }
 
-  /** 5. BarrierEndCap：防撞桶（红白圆柱）只放在真断头端点。
-   *  byId: Map<edgeId,{start,end}>（路口索引或 null）；null 端 = 断头路/边界。
+  /** 5. BarrierEndCap：防撞桶（红白圆柱）只放在真断头（孤端）端点。
+   *  byId: Map<edgeId,{start,end}>（≥3 臂路口中心索引或 null），用于跳过路口。
+   *  endpointLocs: 所有 edge 端点（THREE 坐标 + edge id），孤端判定用。
+   *  断头 = 端点既不属于 ≥3 臂路口，又无任何其他 edge 端点在邻接容差内
+   *  （连续连接/弯道转折/环形路段间两端点重合 → 有邻接 → 不是断头）。
    *  位置用端点切线的右法线（沿道路外侧），不再硬编码 +z。 */
-  function _buildBarrierEndCap(edge, byId) {
+  function _buildBarrierEndCap(edge, byId, endpointLocs) {
     const entry = byId ? byId.get(String(edge.id)) : null;
     const nodes = (edge.nodes || []).map((n) =>
       Array.isArray(n) ? n : [n.x || 0, n.y || 0, n.z || 0]);
@@ -506,8 +528,19 @@ export function createConnectorView(scene) {
       group.add(white);
     };
 
+    // 端点是否真断头：不属于 ≥3 臂路口 + 无任何邻接端点
+    const isDeadEnd = (node) => {
+      const [x, , z] = worldToThree(node[0] || 0, node[1] || 0, node[2] || 0);
+      for (const ep of endpointLocs) {
+        if (ep.id === String(edge.id)) continue;
+        if (Math.hypot(ep.x - x, ep.z - z) < DEAD_END_TOL_M) return false;
+      }
+      return true;
+    };
+
     // 起点断头：切线 = nodes[0]→nodes[1]，向外 = -切线 的右法线
-    if (!entry || entry.start == null) {
+    const startDead = entry ? entry.start == null : true;
+    if (startDead && isDeadEnd(nodes[0])) {
       const [sx, , sz] = worldToThree(nodes[0][0] || 0, nodes[0][1] || 0, nodes[0][2] || 0);
       const [nx1, , nz1] = worldToThree(nodes[1][0] || 0, nodes[1][1] || 0, nodes[1][2] || 0);
       const tx = nx1 - sx, tz = nz1 - sz;
@@ -516,7 +549,8 @@ export function createConnectorView(scene) {
       put({ x: sx, z: sz }, { x: -tz / tl, z: tx / tl });
     }
     // 终点断头：切线 = nodes[n-2]→nodes[n-1]，向外 = 右法线
-    if (!entry || entry.end == null) {
+    const endDead = entry ? entry.end == null : true;
+    if (endDead && isDeadEnd(nodes[nodes.length - 1])) {
       const a = nodes[nodes.length - 2], b = nodes[nodes.length - 1];
       const [ax, , az] = worldToThree(a[0] || 0, a[1] || 0, a[2] || 0);
       const [bx, , bz] = worldToThree(b[0] || 0, b[1] || 0, b[2] || 0);
