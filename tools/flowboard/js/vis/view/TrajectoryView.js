@@ -49,6 +49,15 @@ const FLOW_SEG_LEN     = 3.0;            // 高亮段长度
 const FLOW_WIDTH       = 0.65;           // 高亮段宽度（相对主光带放大约1.2x）
 const FLOW_ALPHA       = 0.45;
 
+/* BEV（正交俯视）下的视觉补偿。
+ * 光流"发光感"本质是透视近大远小 + 加法混合叠加出的错觉；BEV 正交相机
+ * 零透视、全图统一像素尺度，原世界米宽度的光带俯视下只剩几像素细线、流动
+ * 高亮也不明显 → 观感"low"。BEV 下整体加宽光带并把流动高亮调亮，让光流
+ * 在统一尺度下依旧清晰（不依赖后处理 Bloom——轨迹是 MeshBasicMaterial，
+ * 本就不参与辉光）。 */
+const BEV_WIDTH_SCALE     = 2.6;         // 外辉光/主体/核心光带整体加宽倍数
+const BEV_FLOW_ALPHA_SCALE = 1.9;        // 流动高亮峰值 alpha 放大（俯视才看得清）
+
 /* 速度着色 */
 const COLOR_NORMAL  = [0x00, 0xc8, 0xff];  // 科技蓝
 const COLOR_BRAKE   = [0xff, 0x88, 0x00];  // 制动橙
@@ -291,20 +300,21 @@ export function createTrajectoryView(scene) {
    * 写入一条 triangle strip 光带
    */
   function _fillRibbon(geo, points, widthStart, widthEnd, alphaStart, alphaEnd,
-                       usePointColor, fixedColor, flowOffset) {
+                       usePointColor, fixedColor, flowOffset, widthScale) {
     const n = points.length;
     if (n < 2) { geo.setDrawRange(0, 0); return 0; }
 
     const pos = geo.attributes.position.array;
     const col = geo.attributes.color.array;
     const totalLen = points[n - 1].dist || 1;
+    const ws = widthScale && widthScale > 0 ? widthScale : 1;   // BEV 加宽补偿
 
     let vi = 0, ci = 0;
 
     for (let i = 0; i < n; i++) {
       const p = points[i];
       const t = totalLen > 0.1 ? p.dist / totalLen : 0;
-      const w = (widthStart + (widthEnd - widthStart) * t) * 0.5;
+      const w = (widthStart + (widthEnd - widthStart) * t) * 0.5 * ws;
       let a = alphaStart + (alphaEnd - alphaStart) * t;
 
       /* 流动高亮：flowOffset 是时间偏移，以 sin 波控制高亮段 */
@@ -437,6 +447,10 @@ export function createTrajectoryView(scene) {
     }
     _lastFrameT = now;
 
+    /* BEV 俯视：光带整体加宽 + 流动高亮调亮（见顶部 BEV_* 常量说明） */
+    const bev = !!store.isBev;
+    const wScale = bev ? BEV_WIDTH_SCALE : 1;
+
     /* 1. 构建平滑曲线点 */
     const activePath = selectCurrentMotionSegment(trajPath, ego);
     const points = _buildSmoothPoints(activePath, ego);
@@ -448,11 +462,11 @@ export function createTrajectoryView(scene) {
 
     /* 2. 外层辉光（固定色，加法混合）—— 低档跳过（装饰层，软件渲染最贵） */
     if (!lowTier) {
-      _fillRibbon(outerGeo, points, OUTER_WIDTH_START, OUTER_WIDTH_END, OUTER_ALPHA, 0, false, fixedColor);
+      _fillRibbon(outerGeo, points, OUTER_WIDTH_START, OUTER_WIDTH_END, OUTER_ALPHA, 0, false, fixedColor, undefined, wScale);
     }
 
     /* 3. 主体光带（逐点颜色，平滑色彩过渡） */
-    _fillRibbon(ribbonGeo, points, RIBBON_WIDTH_START, RIBBON_WIDTH_END, RIBBON_ALPHA_START, RIBBON_ALPHA_END, true, fixedColor);
+    _fillRibbon(ribbonGeo, points, RIBBON_WIDTH_START, RIBBON_WIDTH_END, RIBBON_ALPHA_START, RIBBON_ALPHA_END, true, fixedColor, undefined, wScale);
 
     /* 4. 内亮核心（白色偏基础色，加法混合）—— 低档也跳过（只剩主体光带 1 层） */
     const coreColor = [
@@ -461,14 +475,17 @@ export function createTrajectoryView(scene) {
       Math.min(1, fixedColor[2] * 0.4 + 0.6),
     ];
     if (!lowTier) {
-      _fillRibbon(coreGeo, points, CORE_WIDTH_START, CORE_WIDTH_END, CORE_ALPHA_START, CORE_ALPHA_END, false, coreColor);
+      _fillRibbon(coreGeo, points, CORE_WIDTH_START, CORE_WIDTH_END, CORE_ALPHA_START, CORE_ALPHA_END, false, coreColor, undefined, wScale);
     }
 
-    /* 5. 流动高亮条（高亮主光带，略宽一点，用加法混合 + 时间偏移 sin 波）—— 低档跳过 */
+    /* 5. 流动高亮条（高亮主光带，略宽一点，用加法混合 + 时间偏移 sin 波）—— 低档跳过。
+     * BEV 下光带随 wScale 加宽，流动峰值 alpha 再放大，俯视也能看清"光流"。 */
     const totalLen = points[points.length - 1].dist || 1;
     const flowOff = _flowTime % (FLOW_SEG_LEN * 2);
     if (!lowTier) {
-      _fillRibbon(flowGeo, points, FLOW_WIDTH, FLOW_WIDTH * 0.3, FLOW_ALPHA, 0, true, fixedColor, flowOff);
+      const flowW = FLOW_WIDTH * wScale;
+      const flowA = FLOW_ALPHA * (bev ? BEV_FLOW_ALPHA_SCALE : 1);
+      _fillRibbon(flowGeo, points, flowW, flowW * 0.3, flowA, 0, true, fixedColor, flowOff, wScale);
     }
 
     /* 6. 方向箭头 */

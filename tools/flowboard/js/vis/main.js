@@ -273,6 +273,8 @@ function _startRenderLoop() {
     try {
       const now = performance.now();
       const store = _director.getStore();
+      /* 把当前相机模式透传给各 View（轨迹等需按 BEV/透视调整视觉尺度） */
+      store.isBev = _cameraRig.isBev();
       _syncEnvironment(store);
       const roadGroup = store.isViaduct
         ? _director.getViaductView().getGroup()
