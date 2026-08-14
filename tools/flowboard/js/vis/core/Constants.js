@@ -25,3 +25,11 @@ export const ENTITY_TYPE = {
 export const VIADUCT_HEIGHT = 7.0;
 export const VIADUCT_RIDE_HEIGHT = 7.7;
 export const VIADUCT_VIS_LENGTH = 500;  // 高架可视段长度 (m)，兜底 edge.length 缺失
+
+/* 隧道/地道引道名字特征（OSM tunnel 标签在 osm_to_map 里丢失，只剩名字可辨）。
+ * RoadView 用它把隧道降级为暗色无标线路面（俯视不再斜穿街区），
+ * ConnectorView 用它抑制隧道口的斑马线/停止线（行人不可穿越）。 */
+export const TUNNEL_NAME_RE = /隧道|地道|tunnel/i;
+export function isTunnelEdge(edge) {
+  return TUNNEL_NAME_RE.test(String((edge && (edge.name || edge.id)) || ''));
+}

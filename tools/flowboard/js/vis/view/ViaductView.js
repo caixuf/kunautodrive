@@ -203,8 +203,10 @@ function _makeGuardrail(length, height, sideOffset, postSpacing = 3) {
   const railH = 0.75;
   const z = sideOffset;
 
-  const beamGeo = new THREE.BoxGeometry(length, 0.15, 0.05);
-  for (const yOff of [railH - 0.08, railH - 0.4]) {
+  /* 双波板 0.66/0.46（板顶 ~0.71m），与 BarrierView 地面波形梁同一观感；
+   * 旧版 0.67/0.35 间距 0.32m 过开，远看是两条漂浮白条。 */
+  const beamGeo = new THREE.BoxGeometry(length, 0.13, 0.05);
+  for (const yOff of [0.66, 0.46]) {
     const beam = new THREE.Mesh(beamGeo, M.metalRail);
     beam.position.set(0, height + yOff, z);
     beam.castShadow = true;
@@ -212,7 +214,7 @@ function _makeGuardrail(length, height, sideOffset, postSpacing = 3) {
   }
 
   const postCount = Math.floor(length / postSpacing);
-  const postGeo = new THREE.BoxGeometry(0.07, railH, 0.07);
+  const postGeo = new THREE.BoxGeometry(0.13, railH, 0.10);
   const postMat = M.metalRail;
   const postPositions = [];
   for (let i = 0; i < postCount; i++) {

@@ -23,17 +23,21 @@ import { getStdMaterial } from '../core/AssetFactory.js';
 import { LANE_WIDTH, DEFAULT_LANES, EDGE_TYPE } from '../core/Constants.js';
 import { tangentToNormal, directionToRotationY } from '../math/Coord.js';
 
-const POST_SPACING   = 3.0;  // 立柱间距（米）
+/* 波形梁护栏观感（2026-08-14 升级）：旧版 0.18m 双板间距 0.45m（0.75/0.30），
+ * 远看像两条互不相干的漂浮白条；立柱 0.08m 细得不可见。按真实 W 板收敛：
+ * 板顶 ~0.71m，双板 0.66/0.46 收紧模拟 W 阴影缝，立柱 2m 间距读作连续护栏。 */
+const POST_SPACING   = 2.0;  // 立柱间距（米）
 const POST_OFFSET    = 0.5;  // 护栏距路缘外距离（米）
-const POST_H         = 0.9;  // 立柱高度
-const BEAM_THICKNESS = 0.08; // 横梁厚度
-const BEAM_W         = 0.18; // 横梁宽度
-const BEAM_UPPER_Y   = 0.75; // 上横梁高度
-const BEAM_LOWER_Y   = 0.30; // 下横梁高度
-const SEGMENT_LEN    = 3.0;  // 横梁分段长度（与立柱间距对齐）
+const POST_H         = 0.75; // 立柱高度
+const POST_W         = 0.13; // 立柱截面（沿道路）
+const BEAM_THICKNESS = 0.05; // 横梁厚度
+const BEAM_W         = 0.13; // 横梁高度（单波）
+const BEAM_UPPER_Y   = 0.66; // 上波中心高度
+const BEAM_LOWER_Y   = 0.46; // 下波中心高度
+const SEGMENT_LEN    = 2.0;  // 横梁分段长度（与立柱间距对齐）
 
-const COLOR_POST = 0xc0c0c0;
-const COLOR_BEAM = 0xc0c0c0;
+const COLOR_POST = 0x8a9095;   // 镀锌钢立柱（略暗）
+const COLOR_BEAM = 0x9aa0a4;   // 镀锌钢波形板（metalness 0.85 金属光泽）
 
 export function createBarrierView(scene) {
   let group = new THREE.Group();
@@ -135,13 +139,13 @@ export function createBarrierView(scene) {
     if (posts.length === 0) return;
 
     const N = posts.length;
-    const postGeo = new THREE.BoxGeometry(BEAM_THICKNESS, POST_H, BEAM_THICKNESS);
-    const postMat = getStdMaterial(COLOR_POST, 0.6, 0.3);
+    const postGeo = new THREE.BoxGeometry(POST_W, POST_H, BEAM_THICKNESS * 2);
+    const postMat = getStdMaterial(COLOR_POST, 0.45, 0.8);
     postMesh = new THREE.InstancedMesh(postGeo, postMat, N);
 
     const M = upperBeamSegs.length;
     const beamGeo = new THREE.BoxGeometry(SEGMENT_LEN, BEAM_W, BEAM_THICKNESS);
-    const beamMat = getStdMaterial(COLOR_BEAM, 0.6, 0.3);
+    const beamMat = getStdMaterial(COLOR_BEAM, 0.35, 0.85);
     upperBeamMesh = new THREE.InstancedMesh(beamGeo, beamMat, M);
     lowerBeamMesh = new THREE.InstancedMesh(beamGeo, beamMat, M);
 

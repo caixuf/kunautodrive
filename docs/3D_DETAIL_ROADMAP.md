@@ -6,6 +6,9 @@
 > 配套阅读：`docs/VISUALIZATION_ARCHITECTURE.md`（3D 总体架构）、`docs/VIS_MODULE_GUIDE.md`
 > （渲染模块门禁）、`docs/ROAD_MARKINGS_MODULE.md`（路面标线模块）、
 > `docs/MAP_ENGINE_ROUTING.md`（地图/A*）、`docs/FLOWBOARD_SCENE_CONTRACT.md`（数据契约）。
+>
+> **★ 框架级方案：`docs/VIS_3D_LANE_PIPELINE.md`（2026-08-14）** —— 车道级渲染管线 +
+> TopologyModel + 设计系统。连接处（路口/护栏/接缝）问题的根治路线，P0~P3 分期。
 
 ---
 

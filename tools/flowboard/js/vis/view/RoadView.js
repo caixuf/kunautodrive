@@ -25,7 +25,7 @@
 
 import { sampleEdgeNodes, edgeSampleCount as adaptiveEdgeSampleCount } from '../math/Curve.js';
 import { mergeGeometries } from '../math/GeometryMerge.js';
-import { LANE_WIDTH, DEFAULT_LANES, EDGE_TYPE } from '../core/Constants.js';
+import { LANE_WIDTH, DEFAULT_LANES, EDGE_TYPE, isTunnelEdge } from '../core/Constants.js';
 import { tangentToNormal, offsetAlongNormal, forwardENU } from '../math/Coord.js';
 import { detectJunctions } from './JunctionDetect.js';
 
@@ -37,6 +37,7 @@ const VERGE_COLOR = 0x355d35;
 const LINE_WHITE = 0xcccccc;
 const LINE_YELLOW = 0xffd700;
 const RAMP_COLOR = 0x353535;    // 匝道路面比主路略浅
+const TUNNEL_COLOR = 0x1b1b1d;  // 隧道/地道：暗色无标线路面（俯视读作地下走廊）
 
 const LINE_W = 0.15;      // 车道线宽度 (m)
 const EDGE_LINE_W = 0.20; // 路缘边线宽度 (m)，比车道线略宽以区分路边界
@@ -600,6 +601,18 @@ export function createRoadView(scene) {
     // 路面（不截断，贯穿路口）
     const road = ribbonGeo(spine, hw, Y_ROAD);
 
+    /* 隧道/地道（2026-08-14）：只铺路面，不画标线/路肩/人行道。
+     * 地下段若按地表道路全量渲染，俯视时会斜穿街区形成"假路/假路口"噪声
+     * （OSM 陆家嘴：延安东路隧道斜穿地表路网，白虚线横跨建筑）。
+     * 路面保留（车辆仍可能通行），由 build() 归入 tunnelGeos 暗色网格。 */
+    if (isTunnelEdge(edge)) {
+      return {
+        roadGeos: [road], shoulderGeos: [], curbGeos: [], sidewalkGeos: [],
+        vergeGeos: [], whiteGeos: [], yellowGeos: [], spine, cum: buildCumulative(spine),
+        tunnel: true,
+      };
+    }
+
     // 路肩（路口边界停，逐段）
     const shoulderGeos = [];
     for (const seg of markSpine) {
@@ -752,6 +765,7 @@ export function createRoadView(scene) {
     const whiteLineGeos = [];
     const yellowLineGeos = [];
     const rampGeos = [];
+    const tunnelGeos = [];
 
     // 收集所有主路 edge 的 spine（用于汇入区检测）
     const mainRoadSpines = [];
@@ -761,7 +775,11 @@ export function createRoadView(scene) {
       if (isRampEdge(edge)) continue;
       const nodes = parseNodes(edge);
       const result = buildStandardRoad(edge, nodes);
-      for (const g of result.roadGeos) roadGeos.push(g);
+      if (result.tunnel) {
+        for (const g of result.roadGeos) tunnelGeos.push(g);
+      } else {
+        for (const g of result.roadGeos) roadGeos.push(g);
+      }
       for (const g of result.shoulderGeos) shoulderGeos.push(g);
       for (const g of result.curbGeos) curbGeos.push(g);
       for (const g of result.sidewalkGeos) sidewalkGeos.push(g);
@@ -827,6 +845,19 @@ export function createRoadView(scene) {
         side: THREE.DoubleSide,
       });
       const mesh = new THREE.Mesh(mergeGeometries(rampGeos), mat);
+      mesh.receiveShadow = true;
+      roadGroup.add(mesh);
+    }
+
+    // 隧道/地道路面（暗色、无标线：俯视读作地下走廊，不斜穿街区抢眼）
+    if (tunnelGeos.length) {
+      const mat = new THREE.MeshStandardMaterial({
+        color: TUNNEL_COLOR,
+        roughness: 0.92,
+        metalness: 0.0,
+        side: THREE.DoubleSide,
+      });
+      const mesh = new THREE.Mesh(mergeGeometries(tunnelGeos), mat);
       mesh.receiveShadow = true;
       roadGroup.add(mesh);
     }

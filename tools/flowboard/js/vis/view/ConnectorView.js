@@ -13,7 +13,7 @@
  */
 
 import { getBox, getCylinder, getStdMaterial } from '../core/AssetFactory.js';
-import { LANE_WIDTH, DEFAULT_LANES, EDGE_TYPE } from '../core/Constants.js';
+import { LANE_WIDTH, DEFAULT_LANES, EDGE_TYPE, isTunnelEdge } from '../core/Constants.js';
 import { worldToThree, forwardENU, directionToRotationY } from '../math/Coord.js';
 import { detectJunctions } from './JunctionDetect.js';
 
@@ -35,6 +35,44 @@ const STOP_Y = 0.17;             // 停止线高度（比斑马线再高一点�
 // 重合（OSM 段首尾精确同点），只有无任何邻接端点的孤端才是真断头。1.5m 既
 // 能覆盖 OSM 聚类 gap，又不会把相邻道路端点（远大于 1.5m）误判成接缝。
 const DEAD_END_TOL_M = 1.5;
+
+/** 沿 edge 折线从路口端向外走，停在「到路口中心径向距离 ≥ exitRadius」的
+ *  第一处，返回 {x, z, ux, uz}（THREE 坐标，(ux,uz)=远离路口的局部切线）。
+ *  曲路修正（2026-08-14）：旧实现用「路口端最后一小段」直射线外推位置+朝向，
+ *  弯道/隧道引道（如延安东路隧道，160 节点急弯）端段方向与路口外真实路向
+ *  差达 72°，斑马线斜切路面。径向出圈语义（而非固定弧长）同时覆盖聚类
+ *  中心偏移导致的端点不在圆上的情形（否则锚点可能落在路口圆内部）。 */
+export function walkFromJunction(pts, fromEnd, cx, cz, exitRadius) {
+  const n = pts.length;
+  const step = fromEnd ? -1 : 1;
+  let i = fromEnd ? n - 1 : 0;
+  let px = pts[i].x, pz = pts[i].z;
+  const rad = (x, z) => Math.hypot(x - cx, z - cz);
+  while (true) {
+    const j = i + step;
+    if (j < 0 || j >= n) break;
+    const dx = pts[j].x - px, dz = pts[j].z - pz;
+    const l = Math.hypot(dx, dz);
+    if (l < 1e-9) { i = j; continue; }
+    const ux = dx / l, uz = dz / l;
+    if (rad(px, pz) >= exitRadius) return { x: px, z: pz, ux, uz };   // 已在圆外：端点即锚点
+    if (rad(pts[j].x, pts[j].z) >= exitRadius) {
+      // 本段内有一次径向上穿（起点<半径、终点≥半径，单极小值二次型 → 二分安全）
+      let lo = 0, hi = 1;
+      for (let k = 0; k < 24; k++) {
+        const mid = (lo + hi) / 2;
+        if (rad(px + dx * mid, pz + dz * mid) >= exitRadius) hi = mid; else lo = mid;
+      }
+      return { x: px + dx * hi, z: pz + dz * hi, ux, uz };
+    }
+    px = pts[j].x; pz = pts[j].z; i = j;
+  }
+  // 整条路都在圆内（短 stub 全在路口里）：停在远端点，方向用末段
+  const a = fromEnd ? pts[1] : pts[n - 2], b = fromEnd ? pts[0] : pts[n - 1];
+  const dx = b.x - a.x, dz = b.z - a.z;
+  const l = Math.hypot(dx, dz) || 1;
+  return { x: px, z: pz, ux: dx / l, uz: dz / l };
+}
 
 export function createConnectorView(scene) {
   const group = new THREE.Group();
@@ -158,7 +196,9 @@ export function createConnectorView(scene) {
   /** 2b. 交叉口路面补齐：在每个检测到的路口中心铺一块**真实路口多边形**。
    *  2026-08-14：路面 ribbon 不再截断（RoadView 贯穿路口），patch 不再是
    *  "补缺口"的唯一手段，改为颜色统一（沥青底色覆盖四路重叠的杂乱边缘）；
-   *  斑马线/停止线方向统一用路口端向外切线（与 polygon arms 同一基准）。
+   *  polygon 角点 / 斑马线 / 停止线统一用 walkFromJunction 沿 arm 折线做
+   *  径向出圈取位置与局部切线——曲路上位置贴路、朝向贴弯（旧端段直线外推在
+   *  急弯引道上方向偏差达 72°，斑马线斜切路面）。
    *  数据源：数据层 junctions[]（scene_pub 预计算）优先，几何聚类兜底。
    *  斑马线/停止线保持 InstancedMesh 合批；路口多边形合并为单个 BufferGeometry。
    *  centers/byId 由 build() 统一 detectJunctions 计算后传入，避免重复检测。 */
@@ -176,39 +216,37 @@ export function createConnectorView(scene) {
     for (let ci = 0; ci < centers.length; ci++) {
       const c = centers[ci];
 
-      // ── 收集本路口所有进入方向的 (单位方向, 半宽)，构建真实路口多边形 ──
-      // 每条关联 road 在收口半径处有两个边界点（中心线端 ± 半宽×法线），
-      // 按绕中心的角度排序围成凸多边形（十字路口 → 八边形，非正方形）。
-      const arms = [];   // {dx, dz, hw}
+      // ── 收集本路口所有 arm：折线点（THREE XZ）+ 半宽 + 从哪端进路口 ──
+      // polygon 角点 / 斑马线 / 停止线统一用 walkFromJunction 沿折线径向出圈取
+      // 位置与局部切线（曲路不再用端段直线外推）。
+      const arms = [];   // {pts, fromEnd, hw, roadW, edge}
       for (const [edgeId, entry] of byId) {
         if (entry.start !== ci && entry.end !== ci) continue;
         const edge = edgeMap.get(edgeId);
         if (!edge || !Array.isArray(edge.nodes) || edge.nodes.length < 2) continue;
         const nodes = edge.nodes.map((n) =>
           Array.isArray(n) ? n : [n.x || 0, n.y || 0, n.z || 0]);
-        const fromEnd = entry.end === ci;
-        const aIdx = fromEnd ? nodes.length - 2 : 0;
-        const bIdx = fromEnd ? nodes.length - 1 : 1;
         /* ENU [x,y,z] → THREE 走 worldToThree（门禁强制，禁止裸 -y 翻转） */
-        const [ax, , az] = worldToThree(Number(nodes[aIdx][0]) || 0, Number(nodes[aIdx][1]) || 0, Number(nodes[aIdx][2]) || 0);
-        const [bx, , bz] = worldToThree(Number(nodes[bIdx][0]) || 0, Number(nodes[bIdx][1]) || 0, Number(nodes[bIdx][2]) || 0);
-        // 向外切线（路口端最后一小段），与斑马线/停止线共用同一方向基准
-        const dirX = fromEnd ? ax - bx : bx - ax;
-        const dirZ = fromEnd ? az - bz : bz - az;
-        const len = Math.hypot(dirX, dirZ) || 1;
+        const pts = nodes.map((n) => {
+          const [x, , z] = worldToThree(Number(n[0]) || 0, Number(n[1]) || 0, Number(n[2]) || 0);
+          return { x, z };
+        });
+        const fromEnd = entry.end === ci;
         const laneW = Number(edge.lane_width) || LANE_WIDTH;
-        const hw = ((Number(edge.lanes) || DEFAULT_LANES) * laneW) / 2;
-        arms.push({ dx: dirX / len, dz: dirZ / len, hw });
+        const lanesN = Number(edge.lanes) || DEFAULT_LANES;
+        arms.push({ pts, fromEnd, hw: (lanesN * laneW) / 2, roadW: lanesN * laneW + 0.6, edge });
       }
       if (arms.length >= 2) {
-        // 边界点（THREE 平面）：center + dir*radius ± 法线*hw
+        // 边界点：walk 到 radius 弧长处（路实际穿出路口圆的位置）± 该处法线*半宽，
+        // 按绕中心的角度排序围成凸多边形（十字路口 → 八边形，非正方形）。
         const pts = [];
         for (const a of arms) {
-          const pxn = -a.dz, pzn = a.dx;           // XZ 平面右法线
-          const bx = c.x + a.dx * c.radius + pxn * a.hw;
-          const bz = c.z + a.dz * c.radius + pzn * a.hw;
-          const tx = c.x + a.dx * c.radius - pxn * a.hw;
-          const tz = c.z + a.dz * c.radius - pzn * a.hw;
+          const w = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, c.radius);
+          const pxn = -w.uz, pzn = w.ux;           // XZ 平面法线
+          const bx = w.x + pxn * a.hw;
+          const bz = w.z + pzn * a.hw;
+          const tx = w.x - pxn * a.hw;
+          const tz = w.z - pzn * a.hw;
           pts.push({ x: bx, z: bz, ang: Math.atan2(bz - c.z, bx - c.x) }); // exempt: 排序用，非 heading 计算
           pts.push({ x: tx, z: tz, ang: Math.atan2(tz - c.z, tx - c.x) }); // exempt: 排序用，非 heading 计算
         }
@@ -223,43 +261,23 @@ export function createConnectorView(scene) {
         }
       }
 
-      // ── 斑马线 + 停止线：遍历关联该路口的 edge，取靠近路口的端点方向 ──
-      for (const [edgeId, entry] of byId) {
-        if (entry.start !== ci && entry.end !== ci) continue;
-        const edge = edgeMap.get(edgeId);
-        if (!edge || !Array.isArray(edge.nodes) || edge.nodes.length < 2) continue;
-        const nodes = edge.nodes.map((n) =>
-          Array.isArray(n) ? n : [n.x || 0, n.y || 0, n.z || 0]);
-        const fromEnd = entry.end === ci;
-        const aIdx = fromEnd ? nodes.length - 2 : 0;
-        const bIdx = fromEnd ? nodes.length - 1 : 1;
-        /* ENU [x,y,z] → THREE 走 worldToThree（门禁强制，禁止裸 -y 翻转） */
-        const [ax, , az] = worldToThree(Number(nodes[aIdx][0]) || 0, Number(nodes[aIdx][1]) || 0, Number(nodes[aIdx][2]) || 0);
-        const [bx, , bz] = worldToThree(Number(nodes[bIdx][0]) || 0, Number(nodes[bIdx][1]) || 0, Number(nodes[bIdx][2]) || 0);
-        // 从路口中心指向本 edge 的**向外切线**：取路口端最后一小段的切线。
-        // 旧实现 !fromEnd 用 a-center（a 恰在路口中心，≈零向量→方向退化）、
-        // fromEnd 用 center-a（指向路口内，方向反）→ 斑马线/停止线朝向随机乱。
-        const dirX = fromEnd ? ax - bx : bx - ax;
-        const dirZ = fromEnd ? az - bz : bz - az;
-        const len = Math.hypot(dirX, dirZ) || 1;
-        const ux = dirX / len, uz = dirZ / len;
-        // 斑马线中心：在路口多边形**外侧**的路面上（跨整幅路），不贴 patch 边缘
-        const cx = c.x + ux * (c.radius + 2.0);
-        const cz = c.z + uz * (c.radius + 2.0);
+      // ── 斑马线 + 停止线：沿各 arm 折线 walk 到路口外弧长处，位置贴曲路、
+      //  朝向取该处局部切线。隧道/地道引道（行人不可穿越）跳过。 ──
+      for (const a of arms) {
+        if (isTunnelEdge(a.edge)) continue;   // 隧道/地道引道：行人不可穿越
+        // 斑马线中心：walk 到路口多边形外侧的路面上（跨整幅路），不贴 patch 边缘
+        const wc = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, c.radius + 2.0);
         // GB 5768.3 5.8：斑马线条纹应与道路中心线平行（与车同向），条纹沿道路
-        // 长度短（交叉口 ≥2m），跨道路方向铺多条条带。旧实现条纹长轴垂直道路
-        // （横跨整幅路面）→ 观感像给车走的横条，方向反了。
-        const laneW = Number(edge.lane_width) || LANE_WIDTH;
-        const roadW = (Number(edge.lanes) || DEFAULT_LANES) * laneW + 0.6;
-        const rotY = directionToRotationY(ux, uz);   // 条纹长轴沿道路（平行行车）
+        // 长度短（交叉口 ≥2m），跨道路方向铺多条条带。
+        const rotY = directionToRotationY(wc.ux, wc.uz);   // 条纹长轴沿道路（平行行车）
         const step = CROSSWALK_STRIPE_W + CROSSWALK_GAP;
-        const stripeCount = Math.max(2, Math.round(roadW / step));
-        const nx = -uz, nz = ux;                     // 跨道路方向（铺条）
+        const stripeCount = Math.max(2, Math.round(a.roadW / step));
+        const nx = -wc.uz, nz = wc.ux;                     // 跨道路方向（铺条）
         for (let i = 0; i < stripeCount; i++) {
           const across = (i - (stripeCount - 1) / 2) * step;
           crossInstances.push({
-            x: cx + nx * across,
-            z: cz + nz * across,
+            x: wc.x + nx * across,
+            z: wc.z + nz * across,
             rotY,
             len: CROSSWALK_LENGTH,
             w: CROSSWALK_STRIPE_W,
@@ -268,13 +286,13 @@ export function createConnectorView(scene) {
         // 停止线：GB 5768.3 5.19 白色实线横跨**来车方向半幅**路面（垂直行车），
         // 位于斑马线外侧（来向更远一点）。来向 = -u，右行制下来车半幅在来向右侧
         // （THREE 方向 (ux,uz) 的右侧 = (-uz,ux)；来向 -u 的右侧 = (uz,-ux)）。
-        const stopDist = c.radius + 2.0 + CROSSWALK_LENGTH + 1.5;
-        const halfW = roadW * 0.25;
+        const ws = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, c.radius + 2.0 + CROSSWALK_LENGTH + 1.5);
+        const halfW = a.roadW * 0.25;
         stopInstances.push({
-          x: c.x + ux * stopDist + uz * halfW,
-          z: c.z + uz * stopDist - ux * halfW,
-          rotY: rotY + Math.PI / 2,
-          len: roadW * 0.5,
+          x: ws.x + ws.uz * halfW,
+          z: ws.z - ws.ux * halfW,
+          rotY: directionToRotationY(ws.ux, ws.uz) + Math.PI / 2,
+          len: a.roadW * 0.5,
           w: STOP_LINE_W,
         });
       }
