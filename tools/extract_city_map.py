@@ -83,6 +83,7 @@ def build_road(edge, rid):
         "type": etype,
         "speed_limit": sp,
         "oneway": oneway,
+        "lane_width": lw,
         "centerline": [[round(p[0], 3), round(p[1], 3), round(p[2], 3)] for p in center],
         "lanes": [],
     }
@@ -99,10 +100,10 @@ def build_road(edge, rid):
 
     for idx, is_opp in lane_defs:
         if not is_opp:
-            offset = -(idx - 0.5) * lw
+            offset = (idx - 0.5) * lw
             direction = 1
         else:
-            offset = (idx - 0.5) * lw
+            offset = -(idx - 0.5) * lw
             direction = -1
         lane_id = "%s.lane.%d" % (road["id"], idx if not is_opp else 100 + idx)
         road["lanes"].append({

@@ -1,0 +1,37 @@
+{
+  "name": "osm_lujiazui",
+  "description": "OSM 真实路网（上海陆家嘴）smoke 场景；静态道路来自 osm_lujiazui/map.json，ego 沿 route 'main'（最长连接道路链）行驶。",
+  "map_file": "../maps/osm_lujiazui/map.json",
+  "route_file": "../maps/osm_lujiazui/routes.json",
+  "route_id": "main",
+  "random_seed": 202608,
+  "duration_s": 120,
+  "lighting": "day",
+  "weather": "clear",
+  "visibility_m": 1200,
+  "npc_lane_change": true,
+  "ego": {
+    "x": -989.819,
+    "y": -407.4,
+    "heading": 0.0157,
+    "init_speed": 10.0,
+    "target_speed": 13.0,
+    "wheelbase": 2.7,
+    "length": 4.6,
+    "width": 2.0,
+    "max_steer": 0.6
+  },
+  "actors": [],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 120,
+    "min_avg_speed_mps": 3.0,
+    "min_distance_m": 450
+  },
+  "route": [],
+  "scenarios": [],
+  "choreography": {
+    "loop_period_s": 999,
+    "beats": []
+  }
+}

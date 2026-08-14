@@ -455,10 +455,24 @@ def roads_from_road_network(rn_cfg: dict) -> tuple[list[Road], list[Junction]]:
         prev_r = main_road_by_id[prev_id]
         curr_r = main_road_by_id[curr_id]
         if prev_r.junction_id == -1 and curr_r.junction_id == -1:
-            if prev_r.successor < 0:
-                prev_r.successor = curr_id
-            if curr_r.predecessor < 0:
-                curr_r.predecessor = prev_id
+            # 仅当几何连续（上一段终点 ≈ 本段起点）才串接 successor/predecessor。
+            # 这是为支持"整张网格全量导出"而加的护栏：city_grid 把每条大道拆成
+            # 25 段，段内首尾相接（应串接），但大道之间是断开的（如 ns_00_seg_23
+            # 终点 (0,5000) 与 ns_01_seg_00 起点 (0,0) 相距数公里）。若无条件串接，
+            # 会造出跨大道的幽灵 link，让 NPC/连通性错乱。route 链 / 直道场景里
+            # 各段本就连续，此护栏不阻止其正常串接。
+            prev_end = end_states.get(prev_id)
+            curr_start = start_states.get(curr_id)
+            contiguous = (
+                prev_end is not None and curr_start is not None
+                and abs(prev_end.x - curr_start.x) < 1.0
+                and abs(prev_end.y - curr_start.y) < 1.0
+            )
+            if contiguous:
+                if prev_r.successor < 0:
+                    prev_r.successor = curr_id
+                if curr_r.predecessor < 0:
+                    curr_r.predecessor = prev_id
 
     junctions: list[Junction] = []
     junctions_cfg = rn_cfg.get("junctions") or []
@@ -681,6 +695,24 @@ def roads_from_road_network(rn_cfg: dict) -> tuple[list[Road], list[Junction]]:
 
 # ── Road 列表 → xodr XML ───────────────────────────────────
 
+# GB 5768 标线线宽（m）。一般道路 15cm；主干路/高等级取 20cm（此处 Road 未带等级，
+# 统一按一般城市道路 15cm，符合 GB 5768 对普通路段的默认要求）。
+ROADMARK_WIDTH = 0.15
+
+
+def _lane_roadmark(li: int, n_per_side: int) -> tuple[str, str]:
+    """按车道位置返回该车道**左侧**边界标线（GB 5768 语义）。
+
+    OpenDRIVE <roadMark> 描述车道左侧（靠中心）边界：
+      - 最内侧车道(li==1)：对向分隔 → 黄色实线（双黄实线的单线近似）；
+      - 其余车道(li>=2)：同向车道分隔 → 白色虚线。
+    外侧边缘线由前端 edgeLine 负责，此处不画（OpenDRIVE 左侧 roadMark 表达不到最外缘）。
+    """
+    if li == 1:
+        return "yellow", "solid"
+    return "white", "broken"
+
+
 def road_to_xml(road: Road) -> ET.Element:
     r = ET.Element("road", {
         "name": road.name,
@@ -793,6 +825,11 @@ def road_to_xml(road: Road) -> ET.Element:
             "s": "0.0",
             "a": f"{road.lane_width:.4f}", "b": "0", "c": "0", "d": "0"
         })
+        color, rtype = _lane_roadmark(li, n_per_side)
+        ET.SubElement(ln, "roadMark", {
+            "sOffset": "0.0", "type": rtype, "color": color,
+            "width": f"{ROADMARK_WIDTH:.3f}", "laneChange": "none",
+        })
     # left 侧：对向车道（id=+1,+2,...,+n_per_side），双向道路才生成
     if not is_oneway:
         left = ET.SubElement(ls, "left")
@@ -801,6 +838,11 @@ def road_to_xml(road: Road) -> ET.Element:
             ET.SubElement(ln, "width", {
                 "s": "0.0",
                 "a": f"{road.lane_width:.4f}", "b": "0", "c": "0", "d": "0"
+            })
+            color, rtype = _lane_roadmark(li, n_per_side)
+            ET.SubElement(ln, "roadMark", {
+                "sOffset": "0.0", "type": rtype, "color": color,
+                "width": f"{ROADMARK_WIDTH:.3f}", "laneChange": "none",
             })
     # 限速 via type/speed (OpenDRIVE 用 road type 元素)
     t = ET.SubElement(r, "type", {"s": "0.0", "type": "town"})
@@ -910,8 +952,16 @@ def load_scenario(path: Path) -> dict:
         by_id = {road.get("id"): road for road in roads}
         missing = [road_id for road_id in chain if road_id not in by_id]
         if missing:
+            # 路由链引用了地图里不存在的 road——这是地图/路由数据错误，必须报错
+            # （否则 A* / ego 路由会静默失败）。但不因此裁剪 road 集合：
+            # .xodr 是"整张路网"，ego 路由由 flowsim_node 的 A* 单独处理，
+            # 不能被截断成只剩路由链的那几条（会导致整座城市不渲染、路口消失）。
             raise ValueError(f"{route_path}: route {route_id} references missing roads {missing}")
-        roads = [by_id[road_id] for road_id in chain]
+        # 注意：不再按 route 链裁剪 roads。历史上这里 `roads = [by_id[rid] for rid
+        # in chain]` 只导出 ego 路径上的几十段，esmini 加载的 .xodr 因此缺了整张
+        # 网格 → 前端 build_road_network_json 只收到路由链那几条 road + 几乎 0 个
+        # 路口 → 十字路口根本不渲染。全量导出才能让 1300 段路 + 路口全部可见。
+        # route 链仅作数据完整性校验（上面 missing 检查），不用于裁剪。
     # road 字符串 id → 数字索引映射（map.json 用字符串 road/lane id，
     # json_to_xodr 内部用数字 edge id，junctions 引用需换算到同一套索引）。
     name_to_idx: dict = {}
