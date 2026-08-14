@@ -97,19 +97,28 @@ python3 tools/pipeline_check.py
   - 验证：osm_lujiazui demo ego 0→14.2m/s 沿主链（9 段 3213m）行驶，planning
     waypoint=25 持续跟随；city_grid 25 段 5000m 零行为变化；straight_road 回退
     正常；ctest 25/25。
-- [ ] **P1 — 预览大图性能**：491 路 / 2.4MB map.json，前端首帧加载与合批是否卡顿；
-  必要时分层 LOD 或静态合批。
+- [x] **P1 — 预览大图性能**（✓ 2026-08-14）：Node 实测 SceneDirector.update 3.39s →
+      581ms（5.8x），RoadView.build 2.9s → 475ms。三个优化：
+      ① **isRampEdge 误判修复**（最大头，占原耗时 87%）：旧判断含 `oneway===true`，
+      OSM 330/491 条单行道被当匝道 → 第二遍匝道循环 ramp×main 全组合跑
+      findRampConnection（330×161 次 O(n) 点扫）+ 主路画成匝道样式（缺中心黄线）。
+      匝道只由 type=ramp_curve 或 name 含 ramp 判定（city_ring/city_center 匝道
+      type 均为 ramp_curve，不依赖 oneway，零回归）。
+      ② **虚线合批**：dashedLine/dashedLineInRange 每段虚线一个 BufferGeometry
+      → 整条虚线合并成单 geo（OSM 数万 geo + 数万次 computeVertexNormals 消除）。
+      ③ **offsetSpine 删死代码**：buildCumulative 计算了但从未使用。
+      验证：vis:check:all 全绿；浏览器实测 OSM 491 路 + 387 建筑正常渲染，
+      105 draw call / 1.88M 三角形，无 JS 错误无黑屏。
 - [ ] **P2（可选）— OSM A* 连通回归脚本**：`tools/` 下补一个只跑 main 链 lane 0→末段的
   连通检查，避免 5200 车道级别 O(n²) 卡死（另一个 AI 提议）。
 - [ ] 上述完成后：`vis:check:all` + `pipeline_check` + 环城路 E-W 回归全量过一遍再收。
 
 ### 剩余视觉噪点（回家解决，已定位未修）
 
-- [ ] **路口白色细线残留**：`ConnectorView._buildTurnConnectors`（转向连接曲线）在 OSM
-      上偏密，路口处残留白色细线。门控方案：只在 fork junction 有真实
-      `connecting_roads[].turn` 数据且路口 arm 数 ≤ 4 时画；或对 OSM 地图
-      （`map_id` 以 osm_ 开头）整体关闭。位置：`ConnectorView.js` build() 的
-      `if (junctions.length) _buildTurnConnectors(...)`。
+- [ ] **路口白色细线残留**：`_buildTurnConnectors` 依赖 junctions[].connecting_roads[].turn，
+      但 scene_pub 输出 junctions 不含这些字段（只有 {id,x,y,z,radius,n,roads}），
+      `fork.type !== 'fork'` 跳过所有 → **实际死代码，不触发**。data-junction 场景
+      （showcase 预览）也走 mapToRoadNetwork 无 junctions。标记为不触发，暂不修。
 - [ ] **防撞桶已修**（本会话）：`_buildBarrierEndCap` 加孤端检测——端点无任何其他
       edge 端点在 1.5m 邻接容差内才是真断头。OSM 982→236 桶（-76%，仅留边界断头）；
       city_grid 2600→0 桶（网格本就不该有桶）。若预览仍见零星桶，属地图边界正常。

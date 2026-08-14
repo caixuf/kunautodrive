@@ -214,7 +214,6 @@ export function createRoadView(scene) {
    *  → 车道线/边线"打结"（OSM S 弯实测）。按每点局部曲率半径把偏移量钳到
    *  R - 余量，内侧偏移折线不再自相交。 */
   function offsetSpine(spine, d) {
-    const cum = buildCumulative(spine);
     return spine.map((c, i) => {
       let off = d;
       if (i > 0 && i < spine.length - 1) {
@@ -275,22 +274,43 @@ export function createRoadView(scene) {
     return ribbonGeo(offsetSpine(spine, d), EDGE_LINE_W / 2, Y_EDGE);
   }
 
-  /** 虚线：沿偏移中心线按弧长 march，每 (DASH+GAP) 铺一段 */
+  /** 虚线：沿偏移中心线按弧长 march，每 (DASH+GAP) 铺一段。
+   *  2026-08 P1：整条虚线的所有段**合并成一个 BufferGeometry**（每段一个 quad，
+   *  共享一个 geo）——旧实现每段各建一个 BufferGeometry，OSM 491 路 × 多虚线 ×
+   *  每路几十段 ≈ 数万 geo + 数万次 computeVertexNormals，RoadView.build 占
+   *  SceneDirector.update 87%（~3s）。合批后每条虚线 1 个 geo。 */
   function dashedLine(spine, d) {
     const centers = offsetSpine(spine, d);
     const cum = buildCumulative(centers);
     const total = cum[cum.length - 1];
-    const geos = [];
+    const positions = [], indices = [], uvs = [];
+    const hw = LINE_W / 2;
+    let quads = 0;
     for (let s = 0; s < total; s += DASH + GAP) {
       const end = Math.min(s + DASH, total);
       if (end - s < 0.1) continue;
-      const g = ribbonGeo([sampleSpineAt(centers, cum, s), sampleSpineAt(centers, cum, end)], LINE_W / 2, Y_MARK);
-      if (g) geos.push(g);
+      const a = sampleSpineAt(centers, cum, s);
+      const b = sampleSpineAt(centers, cum, end);
+      const nx = a.nx, nz = a.nz;   // 用起点的法线（段很短，法线变化可忽略）
+      const base = positions.length / 3;
+      positions.push(a.px + nx * hw, a.py + Y_MARK, a.pz + nz * hw);
+      positions.push(a.px - nx * hw, a.py + Y_MARK, a.pz - nz * hw);
+      positions.push(b.px + nx * hw, b.py + Y_MARK, b.pz + nz * hw);
+      positions.push(b.px - nx * hw, b.py + Y_MARK, b.pz - nz * hw);
+      uvs.push(0, 0, 1, 0, 0, 1, 1, 1);
+      indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
+      quads++;
     }
-    return geos;
+    if (quads === 0) return [];
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    return [geo];
   }
 
-  /** 在指定弧长范围 [rangeStart, rangeEnd) 内生成虚线 */
+  /** 在指定弧长范围 [rangeStart, rangeEnd) 内生成虚线（同样合批成单 geo） */
   function dashedLineInRange(spine, d, rangeStart, rangeEnd) {
     const centers = offsetSpine(spine, d);
     const cum = buildCumulative(centers);
@@ -299,16 +319,33 @@ export function createRoadView(scene) {
     const re = Math.min(total, rangeEnd);
     if (rs >= re) return [];
 
-    const geos = [];
+    const positions = [], indices = [], uvs = [];
+    const hw = LINE_W / 2;
     const pattern = DASH + GAP;
+    let quads = 0;
     let s = Math.floor(rs / pattern) * pattern;
     for (; s < re; s += pattern) {
       const end = Math.min(s + DASH, re);
       if (end - s < 0.1 || end <= rs) continue;
-      const g = ribbonGeo([sampleSpineAt(centers, cum, Math.max(s, rs)), sampleSpineAt(centers, cum, end)], LINE_W / 2, Y_MARK);
-      if (g) geos.push(g);
+      const a = sampleSpineAt(centers, cum, Math.max(s, rs));
+      const b = sampleSpineAt(centers, cum, end);
+      const nx = a.nx, nz = a.nz;
+      const base = positions.length / 3;
+      positions.push(a.px + nx * hw, a.py + Y_MARK, a.pz + nz * hw);
+      positions.push(a.px - nx * hw, a.py + Y_MARK, a.pz - nz * hw);
+      positions.push(b.px + nx * hw, b.py + Y_MARK, b.pz + nz * hw);
+      positions.push(b.px - nx * hw, b.py + Y_MARK, b.pz - nz * hw);
+      uvs.push(0, 0, 1, 0, 0, 1, 1, 1);
+      indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
+      quads++;
     }
-    return geos;
+    if (quads === 0) return [];
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    return [geo];
   }
 
   /** 车道从主路边缘向外展宽/收窄的梯形路面。 */
@@ -678,10 +715,14 @@ export function createRoadView(scene) {
     return nodes;
   }
 
-  /** 检测 edge 是否为匝道 */
+  /** 检测 edge 是否为匝道。
+   *  2026-08 P1：**不要用 oneway 判匝道**——oneway 是单行道（城市主干道普遍），
+   *  不是匝道。旧判断含 `edge.oneway === true`，导致 OSM 330/491 条单行道被
+   *  误判为匝道：① 主路画成匝道样式（无双黄中心线/城市路肩）；② build() 第二遍
+   *  匝道循环 ramp×main 全组合跑 findRampConnection（330×161 次 O(n) 点扫）→
+   *  RoadView.build ~3s 卡顿首帧。匝道只由 type=ramp_curve 或 name 含 ramp 判定。 */
   function isRampEdge(edge) {
     return edge.type === EDGE_TYPE.RAMP_CURVE
-      || edge.oneway === true
       || (edge.name && edge.name.indexOf('ramp') !== -1);
   }
 
