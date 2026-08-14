@@ -1937,10 +1937,25 @@ protected:
                 /* 计算前向可用空间：到路端/施工墙/障碍物的距离，用于倒车腾挪决策 */
                 double forward_space_m = 1e9;  /* 默认无限（无路端信息） */
                 if (has_fresh_map_ref() && g.map_ref_count >= 2) {
-                    /* 参考路径最后一点是路端（flowsim 前向采样在路端停止） */
-                    double road_end_x = g.map_ref_x[g.map_ref_count - 1];
-                    forward_space_m = road_end_x - g.ego_x;
-                    if (forward_space_m < 0.0) forward_space_m = 0.0;
+                    /* 前向空间 = 沿参考路径弧长到路端（flowsim 参考路径恒从 ego
+                     * 向前延伸，map_ref_s[last]-ego_s 即前向弧长）。
+                     * 旧实现 road_end_x - ego_x 假定朝 +x：N-S 路上 road_end_x≈
+                     * ego_x → fwd≈0/小正值 → 掉头 Phase 0 误触发；E-W 返程反向
+                     * 路径下得 0（=无约束）→ 完整弧（靠巧合工作）。
+                     * 曾直接改弧长 map_ref_s[last]-ego_s，但返程起步时 flowsim
+                     * 参考路径只覆盖 ~15m（未延伸到路端）→ fwd≈15m → 掉头弧
+                     * 被截断卡死。加覆盖护栏：参考路径不足 60m 说明路端测不准，
+                     * 不约束掉头弧（真实障碍由下方方向感知钳制兜底）。 */
+                    double ego_s = 0.0, ego_d = 0.0;
+                    if (project_to_reference_path(g.ego_x, g.ego_y, ego_s, ego_d)) {
+                        const double ahead_s =
+                            g.map_ref_s[g.map_ref_count - 1] - ego_s;
+                        if (ahead_s >= 60.0) forward_space_m = ahead_s;
+                    } else {
+                        double road_end_x = g.map_ref_x[g.map_ref_count - 1];
+                        forward_space_m = road_end_x - g.ego_x;
+                        if (forward_space_m < 0.0) forward_space_m = 0.0;
+                    }
                 }
                 /* 施工区权威前缘（scene/frame）：不依赖感知。感知丢墙或
                  * |dy|<3 横向漏检时旧链路会虚高 fwd → 满舵扫进施工。 */
@@ -1951,16 +1966,29 @@ protected:
                 /* 前方静止障碍（施工区/停放车）同样占据掉头空间：只看路端会在
                  * 施工区前 1.3m 处误判 fwd=30m → 跳过 Phase 0 倒车腾挪直接
                  * 前进满舵 → 撞墙被 safety 拦停（2026-08-03 实测）。取
-                 * min(路端, 施工前缘, 本车道前方最近静止障碍距离-安全裕度)。 */
-                for (int i = 0; i < g.kMaxObs; i++) {
-                    /* 空槽 (0,0)：on_perception_obstacles 清零未用槽位 */
-                    if (g.obs_x[i] == 0.0 && g.obs_y[i] == 0.0) continue;
-                    if (fabs(g.obs_vx[i]) < 0.5 && fabs(g.obs_vy[i]) < 0.5 &&
-                        g.obs_x[i] > g.ego_x &&
-                        fabs(g.obs_y[i] - g.ego_y) < 3.0) {
-                        double d = g.obs_x[i] - g.ego_x - 2.0; /* 2m 安全裕度 */
-                        if (d < 0.0) d = 0.0;
-                        if (d < forward_space_m) forward_space_m = d;
+                 * min(路端, 施工前缘, 本车道前方最近静止障碍距离-安全裕度)。
+                 *
+                 * 2026-08-14 方向感知：旧实现写死 obs_x > ego_x（隐含朝 +x 行驶）
+                 * ——西行起步（heading≈π，straight_road 返程）把身后的 +x 障碍
+                 * 误当"前方"，与方向感知弧长配合会把 fwd 截小 → 掉头弧截断。
+                 * 改为沿车头方向投影：ahead>0（行进前方）+ 横向相近才算占用。 */
+                {
+                    const double hx = std::cos(g.ego_heading);
+                    const double hy = std::sin(g.ego_heading);
+                    for (int i = 0; i < g.kMaxObs; i++) {
+                        /* 空槽 (0,0)：on_perception_obstacles 清零未用槽位 */
+                        if (g.obs_x[i] == 0.0 && g.obs_y[i] == 0.0) continue;
+                        if (fabs(g.obs_vx[i]) < 0.5 && fabs(g.obs_vy[i]) < 0.5) {
+                            const double dx = g.obs_x[i] - g.ego_x;
+                            const double dy = g.obs_y[i] - g.ego_y;
+                            const double ahead = dx * hx + dy * hy;      /* 行进方向投影 */
+                            const double perp = std::fabs(-dx * hy + dy * hx); /* 横向偏距 */
+                            if (ahead > 0.0 && perp < 3.0) {
+                                double d = ahead - 2.0;                  /* 2m 安全裕度 */
+                                if (d < 0.0) d = 0.0;
+                                if (d < forward_space_m) forward_space_m = d;
+                            }
+                        }
                     }
                 }
                 /* 512 点细生成 + 段感知下采样到 64：Phase 0 倒车 3.4s×20Hz

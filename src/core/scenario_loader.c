@@ -236,6 +236,10 @@ static void resolve_map_reference(cJSON* scenario, const char* scenario_path) {
     if (extra) cJSON_AddItemToObject(network, "cross_roads", cJSON_Duplicate(extra, 1));
     extra = cJSON_GetObjectItemCaseSensitive(map, "junctions");
     if (extra) cJSON_AddItemToObject(network, "junctions", cJSON_Duplicate(extra, 1));
+    /* 建筑：单源真相（footprint+height+x+y+rotation）。随 road_network_json 一起
+     * 保留，flowsim 初始化阶段直接解析为静态碰撞/遮挡体，与路由共用同一 JSON 通道。 */
+    extra = cJSON_GetObjectItemCaseSensitive(map, "buildings");
+    if (extra) cJSON_AddItemToObject(network, "buildings", cJSON_Duplicate(extra, 1));
     cJSON_AddItemToObject(scenario, "road_network", network);
 
     const char* static_fields[] = {"traffic_lights", "stop_lines", "construction_zones"};

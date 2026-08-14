@@ -11,7 +11,7 @@
   "visibility_m": 1200,
   "npc_lane_change": true,
   "ego": {
-    "x": -1.75,
+    "x": 1.75,
     "y": 0.0,
     "heading": 1.5708,
     "init_speed": 10.0,

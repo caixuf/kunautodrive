@@ -76,6 +76,7 @@
 #define TOPIC_ROAD_GEOMETRY       "road/geometry"
 #define TOPIC_ROAD_REF_PATH       "road/ref_path"
 #define TOPIC_ROAD_TRAFFIC_LIGHTS "road/traffic_lights"
+#define TOPIC_WORLD_BUILDINGS     "world/buildings"   /* OSM 建筑 OBB 列表（静态，init 时发布一次）*/
 
 /* ── Simulation topics ──────────────────────────────────────── */
 

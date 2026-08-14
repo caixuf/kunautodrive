@@ -165,7 +165,14 @@ cJSON* build_road_network_json(ScenePubConfig& cfg) {
     cJSON* rn = cJSON_CreateObject();
     cJSON* edges = cJSON_CreateArray();
 
+    /* 路网可用时预检测路口（数据层单一事实源，前端 JunctionDetect 降级兜底） */
+    std::vector<JunctionInfo> detected_junctions;
+
     if (cfg.roads && cfg.roads->loaded() && cfg.roads->road_count() > 0) {
+        /* 先预检路口（esmini 路网模式）：数据层单一事实源，前端 JunctionDetect 降级兜底 */
+        detected_junctions = cfg.roads->detect_junctions();
+        const double cluster_radius = 15.0;   /* 端点→路口中心匹配半径（m） */
+        auto all_eps = cfg.roads->road_endpoints();  /* 每条 road 两端点世界坐标 */
         /* esmini 模式：每条 road 一个 edge。
          * 注意 cfg.roads 是非 const 指针 — frenet_to_world 会更新内部 position
          * 状态（esmini C API 限制），所以 ScenePubConfig 在 publish_scene_frame
@@ -220,6 +227,52 @@ cJSON* build_road_network_json(ScenePubConfig& cfg) {
                 cJSON_AddStringToObject(edge, "type", etype);
             }
             cJSON_AddItemToArray(edges, edge);
+        }
+
+        /* ── 路口匹配 + 导出 junctions[] ──
+         * 对每个检测到的路口中心，找出所有"端点落在中心 cluster_radius 内"的 road：
+         *   起点落在中心附近 → 该 road 的 start 连到这个路口
+         *   终点落在中心附近 → 该 road 的 end 连到这个路口
+         * 输出给前端 ConnectorView/RoadView 直接消费（无需几何再猜一次）。
+         * 坐标：ENU（前端 worldToThree 统一转换）。 */
+        auto junction_of = [&](double ex, double ey) -> int {
+            for (size_t j = 0; j < detected_junctions.size(); ++j) {
+                double dx = ex - detected_junctions[j].x;
+                double dy = ey - detected_junctions[j].y;
+                if (dx * dx + dy * dy <= cluster_radius * cluster_radius) {
+                    return (int)j;
+                }
+            }
+            return -1;
+        };
+        cJSON* juncs = cJSON_AddArrayToObject(rn, "junctions");
+        for (size_t j = 0; j < detected_junctions.size(); ++j) {
+            const JunctionInfo& ji = detected_junctions[j];
+            cJSON* jj = cJSON_CreateObject();
+            cJSON_AddNumberToObject(jj, "id", (double)ji.id);
+            cJSON_AddNumberToObject(jj, "x", ji.x);
+            cJSON_AddNumberToObject(jj, "y", ji.y);
+            cJSON_AddNumberToObject(jj, "z", 0.0);
+            cJSON_AddNumberToObject(jj, "radius", ji.radius);
+            cJSON_AddNumberToObject(jj, "n", (double)ji.n);
+            /* 关联 road：遍历 edge 起点/终点坐标匹配 */
+            cJSON* roads_arr = cJSON_AddArrayToObject(jj, "roads");
+            for (int i = 0; i < cfg.roads->road_count(); ++i) {
+                RoadInfo info;
+                if (!cfg.roads->road_info(i, info)) continue;
+                /* 起点/终点世界坐标（用端点列表匹配，避免重复查询） */
+                double sx = 0, sy = 0, ex = 0, ey = 0;
+                for (const auto& ep : all_eps) {
+                    if ((int)ep.road_id == (int)info.id) {
+                        if (ep.is_start) { sx = ep.x; sy = ep.y; }
+                        else            { ex = ep.x; ey = ep.y; }
+                    }
+                }
+                if (junction_of(sx, sy) == (int)j || junction_of(ex, ey) == (int)j) {
+                    cJSON_AddItemToArray(roads_arr, cJSON_CreateNumber((double)info.id));
+                }
+            }
+            cJSON_AddItemToArray(juncs, jj);
         }
     } else {
         /* 旧场景模式：单条 edge 表示整条道路 */
@@ -436,6 +489,11 @@ char* build_scene_frame_json(const EntityPool& pool,
         /* 缓存失败（极少见，如首次 build 返回 nullptr）→ 降级为直接构建 */
         cJSON* rn = build_road_network_json(cfg);
         if (rn) cJSON_AddItemToObject(root, "road_network", rn);
+    }
+
+    /* OSM 建筑（静态）：emit 缓存的 raw buildings[] 给前端 BuildingView 渲染真实轮廓。 */
+    if (!cfg.buildings_json.empty()) {
+        cJSON_AddRawToObject(root, "buildings", cfg.buildings_json.c_str());
     }
 
     cJSON* entities = build_entities_json(pool);

@@ -911,6 +911,13 @@ mobil_done: ;
                     npc.turn_intent = (r < 6) ? 0 : ((r % 2) ? 1 : 2);  /* 60% 直, 20% 左, 20% 右 */
                     LOG_INFO("flowsim", "M3 diag: npc%d crossed %d -> %d intent=%d",
                              npc.scenario_id, npc.road_id, fp.road_id, npc.turn_intent);
+                    /* route 多链：NPC 在路口左转/右转进入主 route 之外的分支/匝道
+                     * 时，route.index_of 无法映射 route_s。在此提前标记 off-route，
+                     * 下方 route_s 同步块据此把 route_dir 置 0，让 find_lead/recycle
+                     * 回退世界系比较，NPC 仍由 road_pos.advance 沿真实拓扑行驶。 */
+                    if (route && route->ok() && route->index_of(fp.road_id) < 0) {
+                        npc.route_dir = 0;
+                    }
                 }
                 npc.road_id = fp.road_id;
                 npc.lane_id = fp.lane_id;

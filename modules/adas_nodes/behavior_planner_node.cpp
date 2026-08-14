@@ -1076,7 +1076,16 @@ protected:
                  * 保持巡航，临近触发点才平滑降到 uturn_max_trigger_speed。
                  * 替代旧实现"进入 360m 减速区就全程封顶 5 m/s"的硬限速。 */
                 double uturn_natural_target = 0.0;
-                if (cur != BEH_ST_U_TURN) {
+                /* 掉头触发逻辑整体基于世界 +x 轴坐标（road_end_x / ego_x /
+                 * uturn_ref_x），仅对 E-W 主路（straight_road 掉头场景）成立。
+                 * N-S / 网格 / OSM 路上 road_end_x≈ego_x → 起步即误判"在路端"
+                 * → 起点触发 U_TURN 逆行（2026-08 网格地图实测：启动即掉头 +
+                 * navigation forward/return 振荡）。用 flowsim 参考路径主导方向
+                 * 判定：|Δx|>|Δy|（E-W 主导）才启用掉头触发逻辑。 */
+                const bool route_ew = (g.ref_count >= 2) &&
+                    std::fabs(g.ref_x[g.ref_count - 1] - g.ref_x[0]) >
+                    std::fabs(g.ref_y[g.ref_count - 1] - g.ref_y[0]);
+                if (cur != BEH_ST_U_TURN && route_ew) {
                     /* 掉头触发参考点 = min(路端, 触发区内前方最近静止障碍)。
                      * 施工区在路端时必须在施工前完成掉头（2026-08-03 实测：
                      * straight_road 施工 x=2985 前缘 2970，旧实现只按路端

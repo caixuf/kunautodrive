@@ -151,4 +151,100 @@ int FlowRoadNetwork::drivable_lane_count(int road_id, double s) {
     return (n > 0) ? n : 0;
 }
 
+std::vector<RoadEndpoint> FlowRoadNetwork::road_endpoints() const {
+    std::vector<RoadEndpoint> eps;
+    if (!loaded_) return eps;
+
+    const int n = RM_GetNumberOfRoads();
+    eps.reserve((size_t)n * 2);
+    /* 复用 pos_handle_ 查端点世界坐标（road_network.h 注释：单线程使用） */
+    for (int i = 0; i < n; ++i) {
+        id_t rid = RM_GetIdOfRoadFromIndex((unsigned)i);
+        double len = RM_GetRoadLength(rid);
+        if (len <= 0.0) continue;
+
+        /* 起点 s=0 */
+        if (RM_SetLanePosition(pos_handle_, rid, 0, 0.0, 0.0, false) >= 0) {
+            RM_PositionData pd;
+            if (RM_GetPositionData(pos_handle_, &pd) >= 0) {
+                eps.push_back({(int)rid, pd.x, pd.y, true});
+            }
+        }
+        /* 终点 s=length */
+        if (RM_SetLanePosition(pos_handle_, rid, 0, 0.0, len, false) >= 0) {
+            RM_PositionData pd;
+            if (RM_GetPositionData(pos_handle_, &pd) >= 0) {
+                eps.push_back({(int)rid, pd.x, pd.y, false});
+            }
+        }
+    }
+    return eps;
+}
+
+std::vector<JunctionInfo> FlowRoadNetwork::detect_junctions(double cluster_radius_m) const {
+    std::vector<JunctionInfo> out;
+    if (!loaded_ || cluster_radius_m <= 0.0) return out;
+
+    /* 每条 road 的"收口 reach"：半宽 + 城市扩展 + 余量，与前端 JunctionDetect.js
+     * 的 reach 公式逐字一致（EXTRA_URBAN_M=3.6 / EXTRA_BASE_M=1.0 / REACH_MARGIN_M=0.5）：
+     *   reach = half_width + (urban ? 3.6 : 1.0) + 0.5
+     * 复用 pos_handle_ 查车道宽（esmini 全局单例限制，见类注释）。 */
+    const int n = RM_GetNumberOfRoads();
+    std::vector<double> road_reach((size_t)n, 3.5 * 2.0 + 1.0 + 0.5);  // 兜底：4 车道 × 3.5m
+    for (int i = 0; i < n; ++i) {
+        id_t rid = RM_GetIdOfRoadFromIndex((unsigned)i);
+        int dr = RM_GetRoadNumberOfDrivableLanes(rid, 0.0);
+        double w = 0.0;
+        if (dr > 0 && RM_GetLaneWidthByRoadId(rid, -1, 0.0, &w) >= 0 && w > 0.0) {
+            double half_width = dr * w * 0.5;
+            const char* name = RM_GetRoadIdString(rid);
+            bool urban = (name && std::strstr(name, "urban") != nullptr);
+            road_reach[(size_t)i] = half_width + (urban ? 3.6 : 1.0) + 0.5;
+        }
+    }
+
+    /* 贪心聚类（与前端 JunctionDetect.js 同构）：
+     * 依次取端点，归入距离最近且 <= cluster_radius 的簇，否则新开一簇。 */
+    struct Cluster {
+        double x{0.0}, y{0.0};
+        double radius{0.0};
+        int    n{0};
+    };
+    std::vector<Cluster> clusters;
+    const auto eps = road_endpoints();
+    for (const auto& ep : eps) {
+        int    best = -1;
+        double best_d = cluster_radius_m * cluster_radius_m;
+        for (int ci = 0; ci < (int)clusters.size(); ++ci) {
+            double dx = ep.x - clusters[ci].x;
+            double dy = ep.y - clusters[ci].y;
+            double d2 = dx * dx + dy * dy;
+            if (d2 < best_d) { best_d = d2; best = ci; }
+        }
+        if (best >= 0) {
+            Cluster& c = clusters[(size_t)best];
+            c.x = (c.x * c.n + ep.x) / (c.n + 1);
+            c.y = (c.y * c.n + ep.y) / (c.n + 1);
+            c.n += 1;
+            /* 半径 = 汇聚端点的最大 reach（铺装盖住所有收口） */
+            int rl = ep.road_id;   // road 数值 id ∈ [0, n)
+            double reach = (rl >= 0 && rl < (int)road_reach.size()) ? road_reach[(size_t)rl] : 8.5;
+            c.radius = std::max(c.radius, reach);
+        } else {
+            int rl = ep.road_id;
+            double reach = (rl >= 0 && rl < (int)road_reach.size()) ? road_reach[(size_t)rl] : 8.5;
+            clusters.push_back({ep.x, ep.y, reach, 1});
+        }
+    }
+
+    /* 只保留 >=3 端点汇聚的真路口（2 端点是地图边界/直连，不生成路口方块） */
+    int jid = 0;
+    for (int ci = 0; ci < (int)clusters.size(); ++ci) {
+        if (clusters[(size_t)ci].n < 3) continue;
+        out.push_back({jid++, clusters[(size_t)ci].x, clusters[(size_t)ci].y,
+                       clusters[(size_t)ci].radius, clusters[(size_t)ci].n});
+    }
+    return out;
+}
+
 }  // namespace flowsim

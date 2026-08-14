@@ -120,6 +120,8 @@ struct ControlContext {
     double target_path_heading{0};
     double target_path_kappa{0};
     double target_road_center_y{0};
+    double target_road_center_x{0};
+    double road_center_x{0};   /* 当前帧目标道路中心 x（N-S 路横向在 x 轴，2026-08 网格/OSM 兼容） */
     double road_center_y{0};   /* 当前帧目标道路中心 y（来自 trajectory 第一个点，供 fallback 使用） */
     char   driving_mode[32]{}; /* 从 planning 广播的驾驶模式（如 "NOA:READY"），仅用于日志/透传 */
     int8_t beh_command{0};     /* 最新 planning/behavior 指令（BehaviorCommand enum：LEFT_CHANGE=2…），用于转向灯 */
@@ -370,6 +372,8 @@ static void on_trajectory(const Message* msg, void* user_data) {
         g.target_path_kappa = (double)traj.points[d_idx].kappa;
     }
     g.target_road_center_y = g.target_path_y - g.lane_d * cos(g.target_path_heading);
+    /* N-S 路（h=π/2）道路中心横向在 x 轴：target_path_x + l·sin(h)（2026-08 网格/OSM 兼容） */
+    g.target_road_center_x = g.target_path_x + g.lane_d * sin(g.target_path_heading);
     if (g.cycle > 900 && g.cycle < 1000) {
         LOG_WARN("control", "[DBG traj] cycle=%d pts=%d v_last=%.2f d_la=%.2f valid=%d",
                  g.cycle, n_pts, (double)traj.points[n_pts - 1].v,
@@ -411,7 +415,8 @@ static void on_trajectory(const Message* msg, void* user_data) {
  * 前方——这对横向控制是合理的（轻微前瞻）。
  */
 static bool query_ref_at(double ego_x, double ego_y,
-                         double& out_y, double& out_h, double& out_kappa) {
+                         double& out_x, double& out_y,
+                         double& out_h, double& out_kappa) {
     if (g.ref_path.empty()) return false;
     uint64_t now_us = clock_now_us();
     if (g.last_ref_path_us == 0 ||
@@ -435,13 +440,17 @@ static bool query_ref_at(double ego_x, double ego_y,
         pthread_mutex_unlock(&g.ref_path_mtx);
         return false;
     }
-    /* 返回道路中心 y（= 轨迹点 y - 横向偏移 d 沿法线投影）。
-     * 轨迹点 y = road_center_y + d * cos(theta)，
-     * 所以 road_center_y = y - d * cos(theta) = y - l * cos(h)。
+    /* 返回道路中心 (x,y)（= 轨迹点 - 横向偏移 d 沿法线投影）。
+     * 轨迹点 (x,y) = road_center + d * n̂，其中 n̂ = (-sinθ, cosθ)，
+     * 所以 road_center_x = x - d * (-sin h) = x + l * sin(h)，
+     *    road_center_y = y - d * cos(h)  = y - l * cos(h)。
      *
+     * 旧实现只返回 road_center_y（世界 y 轴），N-S 路（θ=π/2）上横向
+     * 在 x 轴 → y 向横向完全失效（2026-08 网格地图实测 ego 横向失控）。
      * 旧实现直接返回 best->y（含偏移），导致：
      *   cruise_lane_y = (road_center_y + d) + lane_d = 双重计算偏移
      *   → lat_error 随 ego 偏移正反馈发散 → 车飘到 y=-135m */
+    out_x     = best->x + best->l * sin(best->h);
     out_y     = best->y - best->l * cos(best->h);
     out_h     = best->h;
     out_kappa = best->kappa;
@@ -513,24 +522,31 @@ protected:
             if (!g.has_fusion || !g.has_planning) {
                 /* DATA_TIMEOUT fallback: 用最后缓存的 trajectory 路径点做横向保持。
                  * 控制层不做独立车道判定——committed_lane_side 已移到 planning。 */
-                double fb_road_c = 0.0, fb_road_heading = 0.0, fb_kappa_unused = 0.0;
+                double fb_road_cx = 0.0, fb_road_c = 0.0, fb_road_heading = 0.0, fb_kappa_unused = 0.0;
                 if (g.has_fusion) {
-                    if (!query_ref_at(g.ego_x, g.ego_y, fb_road_c, fb_road_heading, fb_kappa_unused)) {
+                    if (!query_ref_at(g.ego_x, g.ego_y, fb_road_cx, fb_road_c, fb_road_heading, fb_kappa_unused)) {
                         /* ref_path 不可用 → 保持当前位置，不自推车道参考 */
+                        fb_road_cx = g.ego_x;
                         fb_road_c = g.ego_y;
                         fb_road_heading = g.ego_heading;
                     }
                 }
                 /* 无 planning 时保持当前车道（road_center + lane_d），非自推目标车道。
                  * fb_road_c 是道路中心（0），lane_d 是上次轨迹的横向偏移（如 -5.25）。
-                 * 旧实现用 fb_road_c 做目标 → 车被拉向道路中心而非当前车道。 */
+                 * 旧实现用 fb_road_c 做目标 → 车被拉向道路中心而非当前车道。
+                 * 横向误差沿参考线法向投影（N-S/E-W 通用，2026-08 网格地图修复）。 */
                 double fb_target_y = (g.has_fusion && g.ref_path.size() > 0)
                                      ? fb_road_c + g.lane_d
                                      : g.ego_y;
                 if (g.has_fusion && g.ref_path.size() > 0) {
                     g.road_center_y = fb_road_c;
                 }
-                double fb_lat_error = fb_target_y - g.ego_y;
+                double fb_nx = -sin(fb_road_heading);
+                double fb_ny =  cos(fb_road_heading);
+                double fb_tgt_x = fb_road_cx + g.lane_d * fb_nx;
+                double fb_tgt_y = fb_road_c + g.lane_d * fb_ny;
+                double fb_lat_error = (fb_tgt_x - g.ego_x) * fb_nx +
+                                      (fb_tgt_y - g.ego_y) * fb_ny;
                 double fb_cte_term  = atan2(g.lat_kp * fb_lat_error, fmax(g.current_speed, 3.0));
                 /* fallback heading_term: 同主循环一样加 wrap + junction 守卫 */
                 double fb_ref_h_eff = fb_road_heading;
@@ -595,19 +611,22 @@ protected:
              * 只有本地查询失败（轨迹稀疏/ego 偏离>5m）才回退前视点。 */
             double ref_road_heading = 0.0;
             double ref_kappa = 0.0;
-            double road_c = g.road_center_y;  /* 默认保持上一帧值 */
+            double road_cx = g.road_center_x;  /* 默认保持上一帧值 */
+            double road_c  = g.road_center_y;
             bool ref_ok = query_ref_at(g.ego_x, g.ego_y,
-                                       road_c, ref_road_heading, ref_kappa);
+                                       road_cx, road_c, ref_road_heading, ref_kappa);
             if (!ref_ok) {
                 /* ref_path 不可用：回退到轨迹前视点几何，否则 heading/kappa 归零 */
                 ref_road_heading = 0.0;
                 ref_kappa = 0.0;
                 if (g.has_planning) {
+                    road_cx = g.target_road_center_x;
                     road_c = g.target_road_center_y;
                     ref_road_heading = g.target_path_heading;
                     ref_kappa = g.target_path_kappa;
                 }
             }
+            g.road_center_x = road_cx;
             g.road_center_y = road_c;
 
             /* 车道保持目标：本地道路中心 + 轨迹 lane_d。
@@ -616,21 +635,36 @@ protected:
              * 目标用本地 road_c（query_ref_at 最近点），不用轨迹前视点
              * target_path_y：弯道上前视点 y 高于 ego 当前位置，直用会让
              * lat_error 虚高 → 车往弯内侧漂（S 弯稳态偏 ~3m）。本地
-             * road_c + lane_d·cos(h) 就是 ego 所在弧位处的车道中心。 */
-            double cruise_lane_y = g.has_planning
-                ? (g.road_center_y + g.lane_d * cos(ref_road_heading))
-                : g.ego_y;
-            /* 出路沿恢复：不管有没有 planning，只要 |ego_y| >> 道路范围就强制回车道。
+             * road_c + lane_d·n̂ 就是 ego 所在弧位处的车道中心。
+             *
+             * 2026-08-14 方向无关化（网格/OSM 兼容）：旧实现横向误差只投影
+             * 到世界 y 轴（lat_err = (target_y - ego_y)·cos(h)），N-S 路
+             * （h=π/2）cos=0 → 横向全失效 → ego 横向失控（网格地图实测）。
+             * 改为目标点沿参考线左法向 n̂=(-sin h, cos h) 偏移 lane_d，
+             * lat_err_n = (target - ego)·n̂ 对任意行进方向自洽。 */
+            double ref_nx = -sin(ref_road_heading);
+            double ref_ny =  cos(ref_road_heading);
+            double target_px = g.road_center_x + g.lane_d * ref_nx;
+            double target_py = g.road_center_y + g.lane_d * ref_ny;
+            double cruise_lane_y = g.has_planning ? target_py : g.ego_y;
+            /* 出路沿恢复：不管有没有 planning，只要横向偏距 >> 道路范围就强制回车道。
              * 出路沿后 Frenet 仍可能输出轨迹（投影到参考线外推），让 has_planning=1，
              * 旧 recovery 不触发。必须无条件拦截。
              * 2026-08-05 去硬编码：旧实现 -1.75 写死"前进车道"，掉头返程（西行）
              * 出路沿时把车拽向对向侧（方向盲）。改为恢复 ego 所在侧的第一条车道
              * （road_center ± 半车道宽），前进/返程自洽。control 刻意不订阅
-             * lane_width（保持独立），1.75 = 标准 3.5m 车道半宽。 */
-            if (fabs(g.ego_y - g.road_center_y) > 15.0) {
-                const double side = (g.ego_y >= g.road_center_y) ? 1.0 : -1.0;
-                cruise_lane_y = g.road_center_y + side * 1.75;
-                g.integral = 0;  /* 出路沿时清零积分，防止恢复后积分饱和 */
+             * lane_width（保持独立），1.75 = 标准 3.5m 车道半宽。
+             * 2026-08-14 横向偏距改用法向投影（N-S/E-W 通用）。 */
+            {
+                double lat_off = (g.ego_x - g.road_center_x) * ref_nx +
+                                 (g.ego_y - g.road_center_y) * ref_ny;
+                if (fabs(lat_off) > 15.0) {
+                    const double side = (lat_off >= 0.0) ? 1.0 : -1.0;
+                    target_px = g.road_center_x + side * 1.75 * ref_nx;
+                    target_py = g.road_center_y + side * 1.75 * ref_ny;
+                    cruise_lane_y = target_py;
+                    g.integral = 0;  /* 出路沿时清零积分，防止恢复后积分饱和 */
+                }
             }
 
             /* ── 死锁恢复: 车长时间近乎静止时，给一点前向油门打破静摩擦 ── */
@@ -674,6 +708,7 @@ protected:
                 g.target_path_heading = lp.heading;
                 g.target_path_kappa = lp.kappa;
                 g.target_road_center_y = g.target_path_y - g.lane_d * std::cos(g.target_path_heading);
+                g.target_road_center_x = g.target_path_x + g.lane_d * std::sin(g.target_path_heading);
             }
 
             double acc_target;
@@ -766,12 +801,14 @@ protected:
 
             double error = acc_target - g.current_speed;
             double lat_error = effective_target_y - g.ego_y;
-            /* 横向误差投影到参考线左法向：n̂=(−sinθ,cosθ)，y 差分量 = cosθ。
-             * lat_error 是世界系 y 差，Stanley/MPC/psi_des 全链假设"正误差=左打舵"，
-             * 该假设仅在车头朝 +x（θ≈0）成立；掉头返程 θ≈π 时符号语义翻转，
-             * 控制器会稳定在镜像平衡点——目标 y=+1.75 却收敛到 y=-1.2 对向
-             * 车道（2026-08-03 demo13 实测逆行）。投影后对两个方向都自洽。 */
-            double lat_err_n = lat_error * cos(ref_road_heading);
+            /* 横向误差沿参考线左法向投影：n̂=(−sinθ,cosθ)。
+             * 旧实现只取世界 y 差分量（lat_error·cosθ），N-S 路（θ=π/2）
+             * cosθ=0 → 横向全失效 → ego 横向失控（2026-08 网格地图实测）。
+             * 现用完整目标点 (target_px,target_py) 投影到 n̂，对任意行进方向
+             * 自洽；E-W（θ=0）与返程（θ=π）退化为旧值，零回归。
+             * Stanley/MPC/psi_des 全链假设"正误差=左打舵"在法向框架下成立。 */
+            double lat_err_n = (target_px - g.ego_x) * ref_nx +
+                               (target_py - g.ego_y) * ref_ny;
             if (g.cycle % 100 == 0 || fabs(lat_error) > 0.5) {
                 LOG_WARN("control", "[DBG_LAT] cyc=%d lane_d=%.2f rc_y=%.2f tgt_y=%.2f ego_y=%.2f lat_err=%.2f spd=%.1f gear=%d",
                          g.cycle, g.lane_d, g.road_center_y, effective_target_y, g.ego_y,
@@ -1124,6 +1161,7 @@ protected:
                 cJSON_AddNumberToObject(dbg, "target_speed", acc_target);
                 cJSON_AddNumberToObject(dbg, "lane_d", g.lane_d);
                 cJSON_AddNumberToObject(dbg, "road_center_y", g.road_center_y);
+                cJSON_AddNumberToObject(dbg, "road_center_x", g.road_center_x);
                 cJSON_AddNumberToObject(dbg, "target_y", effective_target_y);
                 cJSON_AddNumberToObject(dbg, "lat_error", lat_error);
                 cJSON_AddNumberToObject(dbg, "steer", steer);
@@ -1223,6 +1261,9 @@ static int control_init(MessageBus* bus, Transport* transport,
     g.target_path_heading = 0.0;
     g.target_path_kappa = 0.0;
     g.target_road_center_y = 0.0;
+    g.target_road_center_x = 0.0;
+    g.road_center_x = 0.0;
+    g.road_center_y = 0.0;
     g.driving_mode[0] = '\0';
 
     g.has_fusion = 0;

@@ -1,0 +1,37 @@
+{
+  "name": "cross_intersection",
+  "description": "Simple 4-way cross intersection fixture: 4 roads meeting at origin (E-W along x, N-S along y). Junction detection / rendering sanity. No route filtering, all 4 arms present.",
+  "duration_s": 30,
+  "lighting": "day",
+  "weather": "clear",
+  "visibility_m": 800,
+  "ego": {
+    "x": -100.0,
+    "y": -1.75,
+    "heading": 0.0,
+    "init_speed": 8.0,
+    "target_speed": 12.0,
+    "wheelbase": 2.7,
+    "length": 4.6,
+    "width": 2.0,
+    "max_steer": 0.6
+  },
+  "actors": [],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 30,
+    "min_avg_speed_mps": 2.0,
+    "min_distance_m": 50
+  },
+  "road_network": {
+    "edges": [
+      { "id": 0, "type": "urban", "lanes": 4, "lane_width": 3.5, "nodes": [[-200, 0, 0], [0, 0, 0]] },
+      { "id": 1, "type": "urban", "lanes": 4, "lane_width": 3.5, "nodes": [[0, 0, 0], [200, 0, 0]] },
+      { "id": 2, "type": "urban", "lanes": 4, "lane_width": 3.5, "nodes": [[0, -200, 0], [0, 0, 0]] },
+      { "id": 3, "type": "urban", "lanes": 4, "lane_width": 3.5, "nodes": [[0, 0, 0], [0, 200, 0]] }
+    ]
+  },
+  "route": [],
+  "scenarios": [],
+  "choreography": { "loop_period_s": 999, "beats": [] }
+}

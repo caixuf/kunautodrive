@@ -26,6 +26,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace flowsim {
 
@@ -53,6 +54,23 @@ struct RoadInfo {
     std::string str_id;      /**< 字符串 id（xodr 里写的 id 属性） */
     double length{0.0};      /**< 道路总长 (m) */
     int    drivable_lanes{0};/**< 可行驶车道数（在 s=0 处统计） */
+};
+
+/** 道路端点（ENU 世界坐标）—— 路口检测的输入 */
+struct RoadEndpoint {
+    int    road_id{0};       /**< 所属 road id */
+    double x{0.0};           /**< ENU x（East） */
+    double y{0.0};           /**< ENU y（North） */
+    bool   is_start{false};  /**< true=road 起点(s=0)，false=road 终点(s=length) */
+};
+
+/** 检测到的路口中心（ENU 世界坐标） */
+struct JunctionInfo {
+    int    id{0};            /**< 路口序号 */
+    double x{0.0};           /**< 路口中心 ENU x */
+    double y{0.0};           /**< 路口中心 ENU y */
+    double radius{0.0};      /**< 收口半径（道路半宽 + 余量），前端据此截断/铺装 */
+    int    n{0};             /**< 汇聚端点（进入方向）数，>=3 才是真路口 */
 };
 
 /**
@@ -128,6 +146,25 @@ public:
      * 失败返回 0。
      */
     int drivable_lane_count(int road_id, double s);
+
+    /**
+     * 检测路网中的所有交叉口中心（端点几何聚类）。
+     *
+     * esmini C API 不暴露 junction 拓扑（仅 RM_GetJunctionIdString 字符串），
+     * 因此从「每条 road 两端点世界坐标」贪心聚簇：同一交叉口的所有 road 端点
+     * 空间上重合（网格拆段模型里一个交叉口有 4 段端点汇聚）。与前端
+     * JunctionDetect.js 的 CLUSTER_RADIUS_M=15m 语义一致，作为数据层单一事实源。
+     *
+     * @param cluster_radius_m 端点聚簇半径，> 该距离视为不同交叉口（默认 15m）
+     * @return 只保留 >=3 端点汇聚的真路口（2 端点是地图边界/直连，不生成路口）
+     */
+    std::vector<JunctionInfo> detect_junctions(double cluster_radius_m = 15.0) const;
+
+    /**
+     * 枚举所有道路端点（ENU 世界坐标），供路口检测等拓扑分析用。
+     * 端点 = 每条 road 参考线 s=0 与 s=length 处的世界坐标。
+     */
+    std::vector<RoadEndpoint> road_endpoints() const;
 
 private:
     bool loaded_{false};

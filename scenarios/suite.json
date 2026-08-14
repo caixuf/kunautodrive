@@ -22,6 +22,7 @@
        "stagnation_duration_s": {"max_abs_increase": 18.0},
        "steer_rate_rms_per_s": {"max_abs_increase": 0.7}
      }},
+    {"file": "scenarios/cross_intersection.json",  "duration_s": 30, "enabled": false},
     {"file": "scenarios/curve_road.json",          "duration_s": 60, "enabled": true},
     {"file": "scenarios/lane_change_traffic.json", "duration_s": 45, "enabled": true,
      "baseline_tolerances": {"stagnation_duration_s": {"max_abs_increase": 10.0}}},

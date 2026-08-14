@@ -242,6 +242,13 @@ int RoadPosition::sample_ahead(FlowRoadNetwork& /*roads*/, double lookahead,
             p.kappa = 0.0;
         }
 
+        /* 起点 kappa：首点无前一点做中心差分，用前向差分（与 route.cpp
+         * sample_ahead 端点前向差分一致），不再恒为 0 —— 否则弯道起点处
+         * Stanley 曲率前馈缺失，入弯瞬间方向盘前馈为 0。 */
+        if (p.kappa != 0.0 && out.size() == 1) {
+            out[0].kappa = p.kappa;
+        }
+
         out.push_back(p);
         prev = cur;
     }

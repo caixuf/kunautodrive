@@ -39,6 +39,7 @@
 #include "flowsim/physics.h"
 #include "flowsim/npc_ai.h"
 #include "flowsim/collision.h"
+#include "flowsim/building.h"   /* OSM 建筑 OBB：碰撞 + 遮挡共用 */
 #include "flowsim/scene_events.h"
 #include "flowsim/scene_pub.h"
 #include "flowsim/actor/VehicleActor.h"   /* 车灯信号派生（Phase 1 重构）*/
@@ -110,6 +111,10 @@ struct FlowSimContext {
     flowsim::EntityPool       pool;
     flowsim::NpcAiConfig      ai_cfg;
     flowsim::Route            route;         // 中央有序 route（NPC 车道跟随，见 route.h）
+
+    /* OSM 建筑：单源真相（footprint→OBB）解析出的静态碰撞/遮挡体。
+     * 由 road_network_json 中的 buildings[] 加载（scenario_loader 已随 road_network 注入）。 */
+    std::vector<flowsim::BuildingOBB> buildings;
 
     /* Phase 2.2: scene/frame 发布配置（init 阶段填充，主循环每帧传入） */
     flowsim::ScenePubConfig   scene_pub_cfg;
@@ -2099,6 +2104,52 @@ protected:
                 }
             }
 
+            /* ── Step 4.2: 车辆↔建筑静态碰撞 ──
+             * 建筑是静态实体（OBB），车辆撞上即视为碰撞，与车-车碰撞同处理：
+             * 速度归零 + 刹车 + 沿外法线推出建筑 + 进入碰撞冷却。ego 撞建筑
+             * 同样发 COLLISION 标记，使 no_collision 判据失败（与车-车一致）。
+             * 建筑数量有限，直接 O(n_veh × n_bld) 的 OBB SAT（broad-phase 用 AABB）。 */
+            if (!g.buildings.empty()) {
+                for (int i = 0; i < g.pool.size(); ++i) {
+                    flowsim::Entity& e = g.pool[i];
+                    if (!e.active || !e.is_vehicle() || e.crash_cooldown > 0.0) continue;
+                    for (size_t bi = 0; bi < g.buildings.size(); ++bi) {
+                        const flowsim::BuildingOBB& b = g.buildings[bi];
+                        // AABB broad-phase：建筑 OBB 的轴对齐包络
+                        double bhx = (std::fabs(b.len * 0.5 * std::cos(b.heading)) +
+                                      std::fabs(b.wid * 0.5 * std::sin(b.heading)));
+                        double bhy = (std::fabs(b.len * 0.5 * std::sin(b.heading)) +
+                                      std::fabs(b.wid * 0.5 * std::cos(b.heading)));
+                        if (std::fabs(e.x - b.x) > e.length * 0.5 + bhx) continue;
+                        if (std::fabs(e.y - b.y) > e.width * 0.5 + bhy) continue;
+                        if (!flowsim::obb_hits_building(e.x, e.y, e.length, e.width,
+                                                       e.heading, b)) continue;
+
+                        // 命中：停下 + 刹车 + 沿外法线推出建筑外
+                        e.speed = 0; e.vx = 0; e.vy = 0;
+                        e.brake = 1.0; e.throttle = 0.0;
+                        double dx = e.x - b.x, dy = e.y - b.y;
+                        double d = std::hypot(dx, dy);
+                        if (d < 1e-6) { dx = 1.0; dy = 0.0; d = 1.0; }
+                        double nx = dx / d, ny = dy / d;
+                        // 建筑沿 (nx,ny) 方向的支撑半径
+                        double support = std::fabs(b.len * 0.5 * (nx * std::cos(b.heading) + ny * std::sin(b.heading))) +
+                                         std::fabs(b.wid * 0.5 * (-nx * std::sin(b.heading) + ny * std::cos(b.heading)));
+                        double veh_r = std::max(e.length, e.width) * 0.5;
+                        double back = support + veh_r + 0.05;
+                        e.x = b.x + nx * back;
+                        e.y = b.y + ny * back;
+                        e.last_teleport_cycle = g.cycle;
+                        e.crash_cooldown = 0.5;
+                        if (i == 0) {
+                            LOG_ERROR("flowsim", "COLLISION ego↔building%d", (int)bi);
+                            publish_sim_collision(e, e);
+                        }
+                        break;  // 一辆车一帧只处理一次建筑碰撞
+                    }
+                }
+            }
+
             /* ── Step 4.5: 护栏/路缘碰撞 ──
              * 车辆横向偏移超出道路可行驶边界（路缘）时被护栏阻挡：钳制到路缘、
              * 削减速度。需路网已加载。 */
@@ -2491,6 +2542,35 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
         g.scenario->ego.y = -1.75;
         g.scenario->ego.init_speed = g.init_speed;
         g.scenario->ego.target_speed = g.target_speed;
+    }
+
+    /* OSM 建筑加载：从 road_network_json 的 buildings[] 解析为静态 OBB。
+     * 供车辆-建筑碰撞（Step 4.2）与感知遮挡（world/buildings 广播）共用。 */
+    if (g.scenario && g.scenario->road_network_json) {
+        flowsim::load_buildings(g.scenario->road_network_json, g.buildings);
+        if (!g.buildings.empty()) {
+            LOG_INFO("flowsim", "loaded %d OSM buildings as static colliders/occluders",
+                     (int)g.buildings.size());
+        }
+        /* 前端渲染用原始 buildings[]（含 footprint/height，非 OBB）：从同一 JSON 提取
+         * 为 raw 字符串缓存进 scene_pub_cfg，每帧 emit 给 BuildingView。 */
+        cJSON* rn = cJSON_Parse(g.scenario->road_network_json);
+        if (rn) {
+            cJSON* barr = cJSON_GetObjectItemCaseSensitive(rn, "buildings");
+            if (barr) {
+                char* bs = cJSON_PrintUnformatted(barr);
+                if (bs) { g.scene_pub_cfg.buildings_json = bs; free(bs); }
+                /* 广播给感知节点（world/buildings），供传感器视线遮挡判定。静态数据，
+                 * 仅在 init 发布一次；obstacle 位置每帧变化，遮挡在 perception 内计算。 */
+                char* bsp = cJSON_PrintUnformatted(barr);
+                if (bsp) {
+                    transport_publish(g.transport, TOPIC_WORLD_BUILDINGS,
+                                      (const uint8_t*)bsp, (uint32_t)strlen(bsp) + 1);
+                    free(bsp);
+                }
+            }
+            cJSON_Delete(rn);
+        }
     }
 
     /* 场景参数覆盖 */

@@ -262,7 +262,7 @@ target_link_libraries(fusion_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
 # perception_node: DBSCAN 感知 + 传感器仿真 (FlowCoro 协程版)
 # 采用 FlowCoroTask（线程池 resume）：DBSCAN 点云聚类为重计算，同步 resume 会阻塞
 # 消息总线分发线程导致 drops，故改用线程池 resume。
-add_library(perception_node SHARED perception_node.cpp)
+add_library(perception_node SHARED perception_node.cpp flowsim/building.cpp)
 target_compile_definitions(perception_node PRIVATE FLOWCORO_INTEGRATION)
 target_compile_options(perception_node PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fcoroutines>)
 target_link_libraries(perception_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
@@ -358,6 +358,7 @@ if(ESMINI_RMLIB)
 endif()
 add_library(flowsim_node SHARED
     flowsim_node.cpp
+    flowsim/building.cpp
     flowsim/road_network.cpp
     flowsim/road_position.cpp
     flowsim/physics.cpp
@@ -414,6 +415,17 @@ if(ESMINI_RMLIB)
             COMMAND test_road_network ${CMAKE_CURRENT_BINARY_DIR}/straight_road.xodr
         )
         set_tests_properties(flowsim_road_network PROPERTIES FIXTURES_REQUIRED XODR)
+        # 十字路口夹具：4 条 road 在原点交汇 → detect_junctions 应检出 1 个 n=4 路口
+        add_test(NAME gen_esmini_cross_xodr
+            COMMAND ${Python3_EXECUTABLE} ${FLOW_ROOT}/tools/json_to_xodr.py
+                    ${FLOW_ROOT}/scenarios/cross_intersection.json
+                    -o ${CMAKE_CURRENT_BINARY_DIR}/cross_intersection.xodr
+        )
+        set_tests_properties(gen_esmini_cross_xodr PROPERTIES FIXTURES_SETUP XODR_CROSS)
+        add_test(NAME flowsim_road_network_cross
+            COMMAND test_road_network ${CMAKE_CURRENT_BINARY_DIR}/cross_intersection.xodr
+        )
+        set_tests_properties(flowsim_road_network_cross PROPERTIES FIXTURES_REQUIRED XODR_CROSS)
     endif()
 endif()
 

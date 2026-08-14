@@ -109,6 +109,23 @@ int main(int argc, char** argv) {
     WorldPos wbad;
     CHECK(!net.frenet_to_world(999, -1, 10.0, 0.0, wbad), "non-existent road returns false");
 
+    // ── 路口检测（几何端点聚类 invariant）──
+    // 通用不变式（不绑定场景）：检测到的每个路口至少 3 个端点汇聚、
+    // 半径不小于路宽半幅 + 余量；单条直路（straight_road.xodr）必须为 0 路口。
+    {
+        auto junctions = net.detect_junctions();
+        std::printf("  detect_junctions: %zu junctions\n", junctions.size());
+        for (const auto& j : junctions) {
+            char msg[96];
+            std::snprintf(msg, sizeof msg, "junction@(%.1f,%.1f) n>=3", j.x, j.y);
+            CHECK(j.n >= 3, msg);
+            std::snprintf(msg, sizeof msg, "junction@(%.1f,%.1f) radius>5", j.x, j.y);
+            CHECK(j.radius > 5.0, msg);
+        }
+        // 单条直路（fixture）只有 2 个端点，不构成路口
+        if (roads == 1) CHECK(junctions.empty(), "single straight road: 0 junctions");
+    }
+
     // move semantics
     FlowRoadNetwork net2 = std::move(net);
     CHECK(net2.loaded(), "moved-to net is loaded");

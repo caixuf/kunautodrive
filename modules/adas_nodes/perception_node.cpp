@@ -27,6 +27,8 @@
 #include "discovery.h"
 #include "serializer.h"   /* NOA Phase 2.1: msg_cast 解析 sensor/lidar LidarFrame */
 #include "coroutine_task.h"
+#include "topic_registry.h"
+#include "flowsim/building.h"   /* OSM 建筑 OBB：传感器视线遮挡 */
 #undef LOG_TRACE
 #undef LOG_DEBUG
 #undef LOG_INFO
@@ -95,6 +97,10 @@ struct PerceptionContext {
     double obs_noise_std_m{0.08};
     int    enable_simple_occlusion{1};
 
+    /* OSM 建筑（静态）：从 world/buildings 订阅，供传感器视线遮挡判定。
+     * 建筑是静态几何，init 时收到一次即可；遮挡在每帧 LOS 计算时用。 */
+    std::vector<flowsim::BuildingOBB> buildings;
+
     /* NOA Phase 2.1: 感知输入模式
      *   ground_truth (默认): 从 vehicle/state 读真值 ego+obstacles，向后兼容
      *   sensor: 额外消费 sensor/lidar 的 LidarFrame，用传感器测量的 ego 位置替代
@@ -125,6 +131,18 @@ static int obstacle_in_fov(double rx, double ry, double max_range_m, double fov_
 }
 
 /* ── vehicle/state 订阅 ──────────────────────────────────────── */
+
+/* world/buildings：flowsim_node 在 init 时发布一次静态建筑 OBB 列表。
+ * 解析为本地 vector，供每帧视线遮挡判定（ego→障碍物 线段穿过建筑则遮挡）。 */
+static void on_world_buildings(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg) return;
+    flowsim::load_buildings((const char*)msg->data, g.buildings);
+    if (!g.buildings.empty()) {
+        LOG_INFO("perception", "received %d OSM buildings for LOS occlusion",
+                 (int)g.buildings.size());
+    }
+}
 
 static void on_vehicle_state(const Message* msg, void* user_data) {
     (void)user_data;
@@ -304,6 +322,21 @@ protected:
                             if (fabs(vis_a[i] - vis_a[j]) < occ_beam && vis_r[j] + 2.0 < vis_r[i]) {
                                 vis_keep[i] = 0;
                                 break;
+                            }
+                        }
+                        /* 建筑遮挡：ego→障碍物的视线线段被任一建筑足迹阻断即遮挡。
+                         * vis_rx/vis_ry 是障碍物在 ego 车体系（前向=rx, 左=ry）坐标，
+                         * 反变换回世界系后与建筑 OBB（世界 ENU）做线段相交测试。 */
+                        if (vis_keep[i] && !g.buildings.empty()) {
+                            double dx = vis_rx[i] * ch + vis_ry[i] * sh;
+                            double dy = -vis_rx[i] * sh + vis_ry[i] * ch;
+                            double ox = ego_ref_x + dx, oy = ego_ref_y + dy;
+                            for (size_t bi = 0; bi < g.buildings.size(); ++bi) {
+                                if (flowsim::segment_intersects_building(
+                                        ego_ref_x, ego_ref_y, ox, oy, g.buildings[bi])) {
+                                    vis_keep[i] = 0;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -498,6 +531,8 @@ static int perception_init(MessageBus* bus, Transport* transport,
     transport_subscribe(transport, "sensor/lidar", on_sensor_lidar, nullptr);
     /* 订阅 road/geometry 获取车道参数（用于 Obstacle.lane_id 赋值） */
     transport_subscribe(transport, "road/geometry", on_road_geometry, nullptr);
+    /* 订阅 OSM 建筑（静态，init 时发布一次），供视线遮挡 */
+    transport_subscribe(transport, TOPIC_WORLD_BUILDINGS, on_world_buildings, nullptr);
 
     discovery_advertise(discovery, "vehicle/state",         0x1C0E5A7Eu, CAP_SUBSCRIBER,  0);
     discovery_advertise(discovery, "sensor/lidar",          LIDARFRAME_TYPE_ID, CAP_SUBSCRIBER, 0);

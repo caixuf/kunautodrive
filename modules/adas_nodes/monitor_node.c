@@ -248,11 +248,13 @@ static struct {
      * 车辆/行人（MAX_OBS_SCENE=16），而 NOA 24-NPC 场景需要前端能渲染全部 24
      * 个 NPC + ego + 红绿灯 + ETC 门架 + 停止线。完整 entities 透传后，前端
      * (vis/main.js) 优先消费 scn.entities，scn.obstacles 作为旧场景 fallback。 */
-    char   scene_road_network_json[8192];   /* road_network（edges 数组，每段含 nodes[[x,y,z],...]）*/
-    char   scene_entities_json[65536];  /* 完整 entities（NOA 24 NPC + ego + TL/ETC/StopLine）
+    char   scene_road_network_json[262144]; /* road_network（edges 数组，每段含 nodes[[x,y,z],...]）
+                                          * 原 8192 在 5x5km 网格地图（~12KB）就会被截断 → cJSON_Parse 失败
+                                          * → 前端 3D 路网消失。扩到 256KB 容纳 OSM 真实城市地图。 */
+    char   scene_entities_json[262144];  /* 完整 entities（NOA 24 NPC + ego + TL/ETC/StopLine）
                                           * 原 16384 在 24-NPC 场景下会被截断 → cJSON_Parse 返回 NULL
                                           * → export_dashboard_json 静默丢弃 scene.entities，
-                                          *   前端 3D 场景只剩 ego。扩到 64KB 足够 30+ 实体。 */
+                                          *   前端 3D 场景只剩 ego。扩到 256KB 足够 100+ 实体。 */
     char   scene_ego_json[4096];        /* ego 实体 JSON（含 lights/brake/vx/vy，~1.5KB 实测） */
     char   scene_construction_json[1024]; /* construction_zones（施工区几何，后端单一事实源，透传给前端） */
     char   scene_scenario_name[64]; /* 场景语义名，供前端选择专属设施 */

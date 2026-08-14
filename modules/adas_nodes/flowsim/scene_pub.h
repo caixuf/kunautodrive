@@ -109,6 +109,12 @@ struct ScenePubConfig {
      * 首次 build_scene_frame_json 时构建并缓存为 JSON 字符串，后续帧直接用
      * cJSON_AddRawToObject 复用，避免重复采样。空字符串表示未缓存。 */
     std::string cached_road_network_json;
+
+    /* ── OSM 建筑（静态，单源真相）──
+     * 与 road_network 同源 map.json 的 buildings[]（footprint+height+x+y+rotation+mesh）。
+     * init 阶段由 flowsim_node 从 road_network_json 提取 raw 缓存；每帧 emit 给前端
+     * BuildingView 渲染真实建筑轮廓。建筑在仿真中不变，故缓存为字符串。 */
+    std::string buildings_json;
 };
 
 /**
