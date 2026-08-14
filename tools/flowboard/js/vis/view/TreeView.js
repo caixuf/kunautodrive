@@ -13,7 +13,7 @@ import { sampleEdgeNodes } from '../math/Curve.js';
 import { getStdMaterial } from '../core/AssetFactory.js';
 import { LANE_WIDTH, EDGE_TYPE } from '../core/Constants.js';
 import { tangentToNormal } from '../math/Coord.js';
-import { detectJunctions } from './JunctionDetect.js';
+import { getTopology } from '../model/TopologyModel.js';
 
 const TREE_SPACING = 30;
 const TREE_PHASE   = 5;
@@ -31,10 +31,10 @@ export function inferTreeSlots(roadNetwork) {
   if (!roadNetwork?.edges?.length) return slots;
 
   /* 2026-08-14 路口避让：树不落在路口内/路口边缘（OSM 实测树长在马路和
-   * 路口中间）。到最近 junction 中心距离 < radius + 2m 的槽位丢弃。 */
-  const { centers } = detectJunctions(roadNetwork);
-  const nearJunction = (x, z) => centers.some((c) =>
-    Math.hypot(x - c.x, z - c.z) < (c.radius || 0) + 2.0);
+   * 路口中间）。到最近 junction 中心距离 < radius + 2m 的槽位丢弃。
+   * P0：拓扑走 TopologyModel 单一事实源（与其他 view 共享同一次计算）。 */
+  const topo = getTopology(roadNetwork);
+  const nearJunction = (x, z) => !!(topo && topo.nearJunction(x, z, 2.0));
 
   for (const edge of roadNetwork.edges) {
     if (edge.type === EDGE_TYPE.VIADUCT_HIGHWAY || edge.name === EDGE_TYPE.VIADUCT_HIGHWAY) continue;

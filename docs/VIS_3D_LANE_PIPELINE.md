@@ -111,6 +111,13 @@ map.json（车道级，已有）
   - **路口导向虚线**：用 connecting_roads.turn 画 lane 级转向引导线
     （左转弯导流线/直行导流线，复活 `_buildTurnConnectors` 的正确数据版）；
   - 停止线/斑马线按 turn 数据归属来车方向（而非每个 arm 全画）；
+- **匝道汇入/汇出渠化**（2026-08-14 用户供高德参考图：沪昆高速出口/入口）：
+  - 导流区 V 形 45° 斜纹 + 白实线收边（现有 `addGoreChevrons` 骨架对齐其密度/角度）；
+  - 出口渐变段自导流鼻端加宽、入口加速车道平行段+收拢段（现有 taper 对齐）；
+  - **主路车道线不被匝道打断**（当前 ramp transition 区主路标线连续性需复核）；
+  - 主路/匝道间**绿色隔离带**（verge ribbon，非沥青直连）；
+  - 跨线桥表达：上方道路桥面板 + 底部投影（ViaductView 通用化，非整段高架专用）；
+  - 出口/入口蓝色 chip 路牌（LabelView 按 ramp 角色自动布设）；
 - 门禁：渠化锚点数值 invariant + osm_lujiazui golden 截图。
 
 ### P2 — 车道级渲染（scene_pub 扩展，1-2 个 PR）

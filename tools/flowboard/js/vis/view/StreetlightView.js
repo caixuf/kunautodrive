@@ -22,6 +22,7 @@ import { sampleEdgeNodes } from '../math/Curve.js';
 import { getStdMaterial, createEmissiveMaterial } from '../core/AssetFactory.js';
 import { LANE_WIDTH, DEFAULT_LANES, EDGE_TYPE } from '../core/Constants.js';
 import { tangentToNormal, directionToRotationY } from '../math/Coord.js';
+import { getTopology } from '../model/TopologyModel.js';
 
 const LAMP_SPACING = 40;   // 路灯间距（米）
 const LAMP_OFFSET  = 1.5;  // 路灯距路缘外距离（米）
@@ -56,6 +57,10 @@ export function createStreetlightView(scene) {
   function build(roadNetwork) {
     clear();
     if (!roadNetwork || !roadNetwork.edges || roadNetwork.edges.length === 0) return;
+
+    /* P0 路口避让（TopologyModel 单一事实源）：路灯立在路口内/边缘会挡道且
+     * 视觉上与路口渠化冲突。距路口中心 < radius + 2m 的槽位丢弃（与 TreeView 同 margin）。 */
+    const topo = getTopology(roadNetwork);
 
     // ── 第一遍：收集所有放置点 ──
     const slots = [];  // [{x, z, nx, nz, side: +1|-1}]
@@ -108,6 +113,7 @@ export function createStreetlightView(scene) {
         // 路灯位置：中心线 + 法线 × (halfWidth + LAMP_OFFSET) × side
         const x = s.px + s.nx * (halfWidth + LAMP_OFFSET) * side;
         const z = s.pz + s.nz * (halfWidth + LAMP_OFFSET) * side;
+        if (topo && topo.nearJunction(x, z, 2.0)) continue;   // 路口避让
         slots.push({ x, z, nx: s.nx, nz: s.nz, side });
       }
     }

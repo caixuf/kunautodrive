@@ -27,7 +27,7 @@ import { sampleEdgeNodes, edgeSampleCount as adaptiveEdgeSampleCount } from '../
 import { mergeGeometries } from '../math/GeometryMerge.js';
 import { LANE_WIDTH, DEFAULT_LANES, EDGE_TYPE, isTunnelEdge } from '../core/Constants.js';
 import { tangentToNormal, offsetAlongNormal, forwardENU } from '../math/Coord.js';
-import { detectJunctions } from './JunctionDetect.js';
+import { getTopology } from '../model/TopologyModel.js';
 
 const ASPHALT_COLOR = 0x2a2a2a;
 const SHOULDER_COLOR = 0x5a5a55;
@@ -178,8 +178,7 @@ export function createRoadView(scene) {
   scene.add(roadGroup);
   let built = false;
   let stats = { rampTransitions: 0 };
-  let _junctionCenters = [];    // 当前路网的交叉口中心 [{x,z,radius}]
-  let _junctionByEdge = new Map(); // edgeId -> {start:idx|null, end:idx|null}
+  let _topo = null;    // TopologyModel（P0 单一事实源，build 时按 hash 缓存共享）
 
   // 确保纹理已生成
   _buildAsphaltTextures();
@@ -687,30 +686,12 @@ export function createRoadView(scene) {
     };
   }
 
-  /** 路口边界停的简单距离过滤：把 spine 按「到最近 junction 中心 > radius」
+  /** 路口边界停：委托 TopologyModel 把 spine 按「到最近 junction 中心 > radius」
    *  拆成若干连续段（路口内不画标线/侧向元素），返回段数组（每段 ≥2 点）。
    *  路面不截断（贯穿路口），只有标线/侧向元素用这些段，避免中心线连桥穿路口。 */
   function filterSpineOutsideJunctions(spine, edgeId) {
-    const entry = _junctionByEdge.get(String(edgeId));
-    if (!entry) return [spine];
-    const js = [];
-    if (entry.start != null) js.push(_junctionCenters[entry.start]);
-    if (entry.end != null) js.push(_junctionCenters[entry.end]);
-    if (!js.length) return [spine];
-    const segs = [];
-    let cur = [];
-    for (const c of spine) {
-      const outside = js.every((j) => Math.hypot(c.px - j.x, c.pz - j.z) > (j.radius || 0));
-      if (outside) {
-        cur.push(c);
-      } else if (cur.length >= 2) {
-        segs.push(cur); cur = [];
-      } else {
-        cur = [];
-      }
-    }
-    if (cur.length >= 2) segs.push(cur);
-    return segs.length ? segs : [];
+    if (!_topo) return [spine];
+    return _topo.segmentsOutsideJunctions(edgeId, spine);
   }
 
   /** 从 edge nodes 构建（兼容三种 edge 格式） */
@@ -752,10 +733,9 @@ export function createRoadView(scene) {
 
     if (!roadNetwork || !roadNetwork.edges || roadNetwork.edges.length === 0) return;
 
-    // 交叉口检测：先算一次，供所有 edge 收口使用
-    const junctions = detectJunctions(roadNetwork);
-    _junctionCenters = junctions.centers;
-    _junctionByEdge = junctions.byId;
+    // 交叉口拓扑：TopologyModel 单一事实源（按 roadNetworkHash 缓存，
+    // 与 ConnectorView/TreeView/StreetlightView/BarrierView 共享同一次计算）
+    _topo = getTopology(roadNetwork);
 
     const roadGeos = [];
     const shoulderGeos = [];

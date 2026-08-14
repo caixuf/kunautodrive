@@ -15,7 +15,7 @@
 import { getBox, getCylinder, getStdMaterial } from '../core/AssetFactory.js';
 import { LANE_WIDTH, DEFAULT_LANES, EDGE_TYPE, isTunnelEdge } from '../core/Constants.js';
 import { worldToThree, forwardENU, directionToRotationY } from '../math/Coord.js';
-import { detectJunctions } from './JunctionDetect.js';
+import { getTopology, walkFromJunction } from '../model/TopologyModel.js';
 
 const TAPER_COLOR  = 0x2a2a2a;   // 锥形过渡路面（同沥青色）
 const JUNCTION_COLOR = 0x2a2a2a; // 路口区域与路面同色（2026-08-14 无缝，不再像补丁块）
@@ -35,44 +35,6 @@ const STOP_Y = 0.17;             // 停止线高度（比斑马线再高一点�
 // 重合（OSM 段首尾精确同点），只有无任何邻接端点的孤端才是真断头。1.5m 既
 // 能覆盖 OSM 聚类 gap，又不会把相邻道路端点（远大于 1.5m）误判成接缝。
 const DEAD_END_TOL_M = 1.5;
-
-/** 沿 edge 折线从路口端向外走，停在「到路口中心径向距离 ≥ exitRadius」的
- *  第一处，返回 {x, z, ux, uz}（THREE 坐标，(ux,uz)=远离路口的局部切线）。
- *  曲路修正（2026-08-14）：旧实现用「路口端最后一小段」直射线外推位置+朝向，
- *  弯道/隧道引道（如延安东路隧道，160 节点急弯）端段方向与路口外真实路向
- *  差达 72°，斑马线斜切路面。径向出圈语义（而非固定弧长）同时覆盖聚类
- *  中心偏移导致的端点不在圆上的情形（否则锚点可能落在路口圆内部）。 */
-export function walkFromJunction(pts, fromEnd, cx, cz, exitRadius) {
-  const n = pts.length;
-  const step = fromEnd ? -1 : 1;
-  let i = fromEnd ? n - 1 : 0;
-  let px = pts[i].x, pz = pts[i].z;
-  const rad = (x, z) => Math.hypot(x - cx, z - cz);
-  while (true) {
-    const j = i + step;
-    if (j < 0 || j >= n) break;
-    const dx = pts[j].x - px, dz = pts[j].z - pz;
-    const l = Math.hypot(dx, dz);
-    if (l < 1e-9) { i = j; continue; }
-    const ux = dx / l, uz = dz / l;
-    if (rad(px, pz) >= exitRadius) return { x: px, z: pz, ux, uz };   // 已在圆外：端点即锚点
-    if (rad(pts[j].x, pts[j].z) >= exitRadius) {
-      // 本段内有一次径向上穿（起点<半径、终点≥半径，单极小值二次型 → 二分安全）
-      let lo = 0, hi = 1;
-      for (let k = 0; k < 24; k++) {
-        const mid = (lo + hi) / 2;
-        if (rad(px + dx * mid, pz + dz * mid) >= exitRadius) hi = mid; else lo = mid;
-      }
-      return { x: px + dx * hi, z: pz + dz * hi, ux, uz };
-    }
-    px = pts[j].x; pz = pts[j].z; i = j;
-  }
-  // 整条路都在圆内（短 stub 全在路口里）：停在远端点，方向用末段
-  const a = fromEnd ? pts[1] : pts[n - 2], b = fromEnd ? pts[0] : pts[n - 1];
-  const dx = b.x - a.x, dz = b.z - a.z;
-  const l = Math.hypot(dx, dz) || 1;
-  return { x: px, z: pz, ux: dx / l, uz: dz / l };
-}
 
 export function createConnectorView(scene) {
   const group = new THREE.Group();
@@ -114,8 +76,10 @@ export function createConnectorView(scene) {
 
     // ── 2b. 交叉口路面补齐：在每个检测到的路口中心铺一块**真实路口多边形**
     //  沥青路面（比路宽大一点，覆盖四向收口后的缺口）+ 四个方向斑马线 ──
-    const { centers, byId } = detectJunctions(roadNetwork);
-    _buildJunctionPatch(roadNetwork, centers, byId);
+    const topo = getTopology(roadNetwork);
+    const centers = topo ? topo.centers : [];
+    const byId = topo ? topo.byId : new Map();
+    _buildJunctionPatch(topo, centers);
 
     // ── 2c. 转向连接曲线：按 fork junctions[] 的 connecting_roads[].turn 画
     //  车辆转向路径（左转向左弯/右转向右弯/直行平直），颜色区分转向类型。──
@@ -199,14 +163,10 @@ export function createConnectorView(scene) {
    *  polygon 角点 / 斑马线 / 停止线统一用 walkFromJunction 沿 arm 折线做
    *  径向出圈取位置与局部切线——曲路上位置贴路、朝向贴弯（旧端段直线外推在
    *  急弯引道上方向偏差达 72°，斑马线斜切路面）。
-   *  数据源：数据层 junctions[]（scene_pub 预计算）优先，几何聚类兜底。
-   *  斑马线/停止线保持 InstancedMesh 合批；路口多边形合并为单个 BufferGeometry。
-   *  centers/byId 由 build() 统一 detectJunctions 计算后传入，避免重复检测。 */
-  function _buildJunctionPatch(roadNetwork, centers, byId) {
-    if (!centers.length) return;
-
-    const edges = roadNetwork.edges;
-    const edgeMap = new Map(edges.map((e) => [String(e.id), e]));
+   *  拓扑（centers/arms/折线点）来自 TopologyModel 单一事实源（P0 收敛）。
+   *  斑马线/停止线保持 InstancedMesh 合批；路口多边形合并为单个 BufferGeometry。 */
+  function _buildJunctionPatch(topo, centers) {
+    if (!topo || !centers.length) return;
 
     // 路口多边形（全部合并进一个 BufferGeometry，静态路网单 mesh）+ 标线实例
     const polyPositions = [], polyIndices = [];
@@ -216,26 +176,8 @@ export function createConnectorView(scene) {
     for (let ci = 0; ci < centers.length; ci++) {
       const c = centers[ci];
 
-      // ── 收集本路口所有 arm：折线点（THREE XZ）+ 半宽 + 从哪端进路口 ──
-      // polygon 角点 / 斑马线 / 停止线统一用 walkFromJunction 沿折线径向出圈取
-      // 位置与局部切线（曲路不再用端段直线外推）。
-      const arms = [];   // {pts, fromEnd, hw, roadW, edge}
-      for (const [edgeId, entry] of byId) {
-        if (entry.start !== ci && entry.end !== ci) continue;
-        const edge = edgeMap.get(edgeId);
-        if (!edge || !Array.isArray(edge.nodes) || edge.nodes.length < 2) continue;
-        const nodes = edge.nodes.map((n) =>
-          Array.isArray(n) ? n : [n.x || 0, n.y || 0, n.z || 0]);
-        /* ENU [x,y,z] → THREE 走 worldToThree（门禁强制，禁止裸 -y 翻转） */
-        const pts = nodes.map((n) => {
-          const [x, , z] = worldToThree(Number(n[0]) || 0, Number(n[1]) || 0, Number(n[2]) || 0);
-          return { x, z };
-        });
-        const fromEnd = entry.end === ci;
-        const laneW = Number(edge.lane_width) || LANE_WIDTH;
-        const lanesN = Number(edge.lanes) || DEFAULT_LANES;
-        arms.push({ pts, fromEnd, hw: (lanesN * laneW) / 2, roadW: lanesN * laneW + 0.6, edge });
-      }
+      // ── 本路口所有 arm（TopologyModel 缓存：折线点 + 半宽 + 从哪端进路口）──
+      const arms = topo.armsOfJunction(ci);   // [{edgeId, fromEnd, pts, hw, roadW, edge}]
       if (arms.length >= 2) {
         // 边界点：walk 到 radius 弧长处（路实际穿出路口圆的位置）± 该处法线*半宽，
         // 按绕中心的角度排序围成凸多边形（十字路口 → 八边形，非正方形）。

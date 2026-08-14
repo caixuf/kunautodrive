@@ -14,8 +14,12 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve as pathResolve, dirname } from 'node:path';
-import { walkFromJunction, createConnectorView }
+import { createConnectorView }
   from '../tools/flowboard/js/vis/view/ConnectorView.js';
+import { createBarrierView }
+  from '../tools/flowboard/js/vis/view/BarrierView.js';
+import { walkFromJunction }
+  from '../tools/flowboard/js/vis/model/TopologyModel.js';
 import { detectJunctions } from '../tools/flowboard/js/vis/view/JunctionDetect.js';
 import { ok, done } from './test-utils.mjs';
 
@@ -218,6 +222,87 @@ console.log('--- 5. OSM 陆家嘴真实图（skip 若缺图）---');
     }
     ok(`大地图条纹朝向全平行（>15° 的 ${bad}/${stripes.length}，worst=${worst.toFixed(1)}°）`, bad === 0);
   }
+}
+
+// ── 6. 护栏路口裁剪：护栏立柱/横梁端点不得落在路口圆内（P0 用户报障修复）──
+console.log('--- 6. 护栏路口裁剪（highway 十字）---');
+{
+  // 两条 highway 在 (0,0) 相接 + 两条支路成 ≥3 臂路口；highway 才触发 BarrierView
+  const hwEdges = [
+    { id: 'hwy_w', name: 'hwy_w', type: 'highway', lanes: 2, lane_width: 3.5, nodes: [[-60, 0, 0], [0, 0, 0]], oneway: false },
+    { id: 'hwy_e', name: 'hwy_e', type: 'highway', lanes: 2, lane_width: 3.5, nodes: [[0, 0, 0], [60, 0, 0]], oneway: false },
+    { id: 'side_s', name: 'side_s', type: 'secondary', lanes: 2, lane_width: 3.5, nodes: [[0, -30, 0], [0, 0, 0]], oneway: false },
+    { id: 'side_n', name: 'side_n', type: 'secondary', lanes: 2, lane_width: 3.5, nodes: [[0, 0, 0], [0, 30, 0]], oneway: false },
+  ];
+  const { centers } = detectJunctions({ edges: hwEdges });
+  ok('合成十字恰好 1 个路口', centers.length === 1);
+  const JC = centers[0] || { x: 0, z: 0, radius: 5 };   // THREE 坐标（≈(0,0)，半径≈5）
+  const scene = new THREE.Group();
+  createBarrierView(scene).build({ edges: hwEdges });
+  let posts = 0, beams = 0, insidePosts = 0, insideBeamEnds = 0;
+  scene.traverse((ch) => {
+    if (!ch.isInstancedMesh || !ch.material || !ch.material.color) return;
+    const hex = ch.material.color.getHex();
+    const isPost = hex === 0x8a9095, isBeam = hex === 0x9aa0a4;
+    if (!isPost && !isBeam) return;
+    const baseLen = (ch.geometry.parameters && ch.geometry.parameters.width) || 1;
+    const m = new THREE.Matrix4();
+    for (let i = 0; i < ch.count; i++) {
+      ch.getMatrixAt(i, m);
+      const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+      m.decompose(p, q, s);
+      if (isPost) {
+        posts++;
+        if (Math.hypot(p.x - JC.x, p.z - JC.z) < JC.radius - 1e-6) insidePosts++;
+      } else {
+        beams++;
+        const ax = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+        const half = (s.x * baseLen) / 2;   // 梁实际半长 = scale.x × 几何底长 / 2
+        for (const sgn of [1, -1]) {
+          const ex = p.x + ax.x * half * sgn, ez = p.z + ax.z * half * sgn;
+          if (Math.hypot(ex - JC.x, ez - JC.z) < JC.radius - 1e-6) insideBeamEnds++;
+        }
+      }
+    }
+  });
+  ok(`护栏已生成（posts=${posts} beams=${beams}）`, posts > 20 && beams > 20);
+  ok(`立柱不穿路口（${insidePosts}/${posts}）`, insidePosts === 0);
+  ok(`横梁端点不穿路口（${insideBeamEnds}）`, insideBeamEnds === 0);
+}
+
+// ── 7. 护栏弯道打结防护：急弯内侧偏移收缩时不得产出过短/反向横梁 ──
+console.log('--- 7. 护栏弯道打结防护（R=6 发卡，内侧偏移 4m 收缩比 0.33<0.35）---');
+{
+  // 发卡：直段 + R=6 半圆 + 直段（内侧偏移 R-d=2m，每 2m 弧长弦收缩到 0.67m）
+  const nodes = [[-40, 6, 0], [-6, 6, 0]];
+  for (let k = 0; k <= 36; k++) {
+    const th = Math.PI - (k / 36) * Math.PI;   // 180°→0°
+    nodes.push([6 * Math.cos(th), 6 + 6 * Math.sin(th), 0]);
+  }
+  nodes.push([40, 6, 0]);
+  const hairpin = [
+    { id: 'hairpin', name: 'hairpin_hwy', type: 'highway', lanes: 2, lane_width: 3.5, nodes, oneway: false },
+  ];
+  const scene = new THREE.Group();
+  createBarrierView(scene).build({ edges: hairpin });
+  let beams = 0, minLen = Infinity;
+  scene.traverse((ch) => {
+    if (!ch.isInstancedMesh || !ch.material || !ch.material.color) return;
+    if (ch.material.color.getHex() !== 0x9aa0a4) return;   // 只看横梁
+    const baseLen = (ch.geometry.parameters && ch.geometry.parameters.width) || 1;
+    const m = new THREE.Matrix4();
+    for (let i = 0; i < ch.count; i++) {
+      ch.getMatrixAt(i, m);
+      const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+      m.decompose(p, q, s);
+      beams++;
+      const actualLen = s.x * baseLen;
+      if (actualLen < minLen) minLen = actualLen;
+    }
+  });
+  // 无防护时内侧发卡段会产出 ~0.66m 的打结短梁；有防护全部 ≥ 弦比阈值
+  ok(`发卡横梁无打结短梁（min=${minLen.toFixed(2)}m，阈值 0.7m，beams=${beams}）`,
+    beams > 0 && minLen >= 0.7);
 }
 
 done();

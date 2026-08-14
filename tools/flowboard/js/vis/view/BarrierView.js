@@ -22,6 +22,7 @@ import { sampleEdgeNodes } from '../math/Curve.js';
 import { getStdMaterial } from '../core/AssetFactory.js';
 import { LANE_WIDTH, DEFAULT_LANES, EDGE_TYPE } from '../core/Constants.js';
 import { tangentToNormal, directionToRotationY } from '../math/Coord.js';
+import { getTopology } from '../model/TopologyModel.js';
 
 /* 波形梁护栏观感（2026-08-14 升级）：旧版 0.18m 双板间距 0.45m（0.75/0.30），
  * 远看像两条互不相干的漂浮白条；立柱 0.08m 细得不可见。按真实 W 板收敛：
@@ -58,6 +59,11 @@ export function createBarrierView(scene) {
   function build(roadNetwork) {
     clear();
     if (!roadNetwork || !roadNetwork.edges || roadNetwork.edges.length === 0) return;
+
+    /* P0（2026-08-14）：拓扑单一事实源。旧版护栏从 edge 首通铺到尾、毫无路口
+     * 感知——路口/弯道接缝处多条 edge 的护栏互相穿插成圈（用户报障"栏杆在弯道
+     * 地方交叉圆圈"）。现在 spine 点落在路口圆内即断链，护栏在路口边界终止。 */
+    const topo = getTopology(roadNetwork);
 
     const posts = [];
     const upperBeamSegs = [];
@@ -103,26 +109,40 @@ export function createBarrierView(scene) {
       // 两侧对称放置
       for (const side of [+1, -1]) {
         const sideOffset = (halfWidth + POST_OFFSET) * side;
-        const prevPost = { x: null, z: null };
+        let prev = null;   // {x, z} 上一根保留立柱位置；路口/打结处断链（横梁不跨缺口）
         for (let i = 0; i <= postCount; i++) {
           const targetArc = i * POST_SPACING;
           let j = 1;
           while (j < spine.length && spine[j].cum < targetArc) j++;
           if (j >= spine.length) j = spine.length - 1;
           const s = spine[j];
+
+          // 路口裁剪：spine 点在路口圆内 → 断链（护栏终止于路口边界，
+          // 横梁绝不跨路口——否则路口处多路护栏互相穿插成圈）
+          if (topo && topo.pointInJunction(edge.id, s.px, s.pz)) { prev = null; continue; }
+
           const x = s.px + s.nx * sideOffset;
           const z = s.pz + s.nz * sideOffset;
+
+          /* 弯道打结防护：相邻偏移点弦长 / 弧长（POST_SPACING）< 0.35 → 内侧
+           * 偏移曲线在急弯处收缩打结（曲率半径 R < 偏移量时偏移曲线自交）。
+           * 跳过此柱并断链留缝——留缝读作护栏端部开口，好过穿插扭结。 */
+          if (prev) {
+            const chord = Math.hypot(x - prev.x, z - prev.z);
+            if (chord < POST_SPACING * 0.35) { prev = null; continue; }
+          }
+
           // 立柱旋转：让 box 沿道路切向
           // 切线 = (tx, tz) = (nz, -nx)（从法线 nx=-tz/l, nz=tx/l 反推）
           const rotY = directionToRotationY(s.nz, -s.nx);
           posts.push({ x, y: POST_H / 2, z, rotY });
 
-          // 横梁段（除第一根外，每根立柱连一段到前一根）
-          if (prevPost.x !== null) {
-            const midX = (prevPost.x + x) / 2;
-            const midZ = (prevPost.z + z) / 2;
-            const dx = x - prevPost.x;
-            const dz = z - prevPost.z;
+          // 横梁段（除链首外，每根立柱连一段到前一根）
+          if (prev) {
+            const midX = (prev.x + x) / 2;
+            const midZ = (prev.z + z) / 2;
+            const dx = x - prev.x;
+            const dz = z - prev.z;
             const len = Math.sqrt(dx * dx + dz * dz);
             if (len > 0.01) {
               const beamRotY = directionToRotationY(dx, dz);
@@ -130,8 +150,7 @@ export function createBarrierView(scene) {
               lowerBeamSegs.push({ x: midX, z: midZ, len, rotY: beamRotY });
             }
           }
-          prevPost.x = x;
-          prevPost.z = z;
+          prev = { x, z };
         }
       }
     }
