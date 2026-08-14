@@ -97,10 +97,13 @@ export function createConnectorView(scene) {
       _buildViaductPier(edge);
     }
 
-    // ── 5. BarrierEndCap：每个 edge 起止点放防撞桶 ──
+    // ── 5. BarrierEndCap：只在**真断头端点**（不属于任何路口）放防撞桶 ──
+    //  2026-08-14：旧实现对每个 edge 起止点都放，OSM 地图每条 way 是一个
+    //  edge、端点几乎都在路口/连续处 → 防撞桶铺满全图。改为 byId 判定：
+    //  entry.start/end == null 才是断头路/地图边界。
     for (const edge of edges) {
       if (edge.type === 'ramp_curve' || edge.type === 'intersection') continue;
-      _buildBarrierEndCap(edge);
+      _buildBarrierEndCap(edge, byId);
     }
 
     built = true;
@@ -479,28 +482,48 @@ export function createConnectorView(scene) {
     }
   }
 
-  /** 5. BarrierEndCap：防撞桶（红白圆柱）放在 edge 起止点 */
-  function _buildBarrierEndCap(edge) {
-    const start = _getEdgeStart(edge);
-    const end = _getEdgeEnd(edge);
-    if (!start || !end) return;
+  /** 5. BarrierEndCap：防撞桶（红白圆柱）只放在真断头端点。
+   *  byId: Map<edgeId,{start,end}>（路口索引或 null）；null 端 = 断头路/边界。
+   *  位置用端点切线的右法线（沿道路外侧），不再硬编码 +z。 */
+  function _buildBarrierEndCap(edge, byId) {
+    const entry = byId ? byId.get(String(edge.id)) : null;
+    const nodes = (edge.nodes || []).map((n) =>
+      Array.isArray(n) ? n : [n.x || 0, n.y || 0, n.z || 0]);
+    if (nodes.length < 2) return;
 
-    const width = (edge.lanes || DEFAULT_LANES) * (edge.lane_width || LANE_WIDTH);
-    [start, end].forEach(pos => {
-      // 红白两段圆柱
+    const put = (pos, outward) => {
       const redGeo = getCylinder(0.3, 0.35, 0.4);
       const redMat = getStdMaterial(BARREL_RED, 0.6, 0.1);
       const red = new THREE.Mesh(redGeo, redMat);
-      red.position.set(pos.x, 0.3, pos.z + width / 2 + 0.5);
+      red.position.set(pos.x + outward.x * 0.5, 0.3, pos.z + outward.z * 0.5);
       red.castShadow = true;
       group.add(red);
 
       const whiteGeo = getCylinder(0.3, 0.3, 0.3);
       const whiteMat = getStdMaterial(BARREL_WHITE, 0.6, 0.1);
       const white = new THREE.Mesh(whiteGeo, whiteMat);
-      white.position.set(pos.x, 0.75, pos.z + width / 2 + 0.5);
+      white.position.set(pos.x + outward.x * 0.5, 0.75, pos.z + outward.z * 0.5);
       group.add(white);
-    });
+    };
+
+    // 起点断头：切线 = nodes[0]→nodes[1]，向外 = -切线 的右法线
+    if (!entry || entry.start == null) {
+      const [sx, , sz] = worldToThree(nodes[0][0] || 0, nodes[0][1] || 0, nodes[0][2] || 0);
+      const [nx1, , nz1] = worldToThree(nodes[1][0] || 0, nodes[1][1] || 0, nodes[1][2] || 0);
+      const tx = nx1 - sx, tz = nz1 - sz;
+      const tl = Math.hypot(tx, tz) || 1;
+      // 右法线（切线右侧）= (-tz, tx)/tl；起点向外取右法线
+      put({ x: sx, z: sz }, { x: -tz / tl, z: tx / tl });
+    }
+    // 终点断头：切线 = nodes[n-2]→nodes[n-1]，向外 = 右法线
+    if (!entry || entry.end == null) {
+      const a = nodes[nodes.length - 2], b = nodes[nodes.length - 1];
+      const [ax, , az] = worldToThree(a[0] || 0, a[1] || 0, a[2] || 0);
+      const [bx, , bz] = worldToThree(b[0] || 0, b[1] || 0, b[2] || 0);
+      const tx = bx - ax, tz = bz - az;
+      const tl = Math.hypot(tx, tz) || 1;
+      put({ x: bx, z: bz }, { x: -tz / tl, z: tx / tl });
+    }
   }
 
   /** 工具：获取 edge 起点（优先用 nodes[0]，否则用 length_m 累计）
