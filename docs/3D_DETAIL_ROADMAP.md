@@ -109,8 +109,12 @@ python3 tools/pipeline_check.py
       ③ **offsetSpine 删死代码**：buildCumulative 计算了但从未使用。
       验证：vis:check:all 全绿；浏览器实测 OSM 491 路 + 387 建筑正常渲染，
       105 draw call / 1.88M 三角形，无 JS 错误无黑屏。
-- [ ] **P2（可选）— OSM A* 连通回归脚本**：`tools/` 下补一个只跑 main 链 lane 0→末段的
-  连通检查，避免 5200 车道级别 O(n²) 卡死（另一个 AI 提议）。
+- [x] **P2（可选）— OSM A* 连通回归脚本**：`tools/check_map_connectivity.py` 已落地并接入
+  CI `map-connectivity-gate` job。遍历所有被 scenarios/*.json 引用的地图，对每条 route
+  跑 `astar_route.py --check`（相邻 road 对 lane successor 连通 + 首尾 A* 端点可达）。
+  已知断链（city_center / osm_test 陆家嘴环路 14.7m gap）在 KNOWN_BROKEN 白名单 WARN
+  不阻断，白名单外任何 FAIL 都 ERROR 阻断合并 —— 与 scenario-file-gate 对称，防止
+  "改了地图 demo 里 ego 开不动"类回归。本地验证：5 图全跑通，2 WARN / 0 FAIL。
 - [ ] 上述完成后：`vis:check:all` + `pipeline_check` + 环城路 E-W 回归全量过一遍再收。
 
 ### 剩余视觉噪点（回家解决，已定位未修）

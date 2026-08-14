@@ -68,6 +68,21 @@ jobs:
           fi
           echo "✓ modules/ uses clock_now_us() exclusively"
 
+  # ── map connectivity gate ──────────────────────────────────
+  # 每个被 scenarios/*.json 引用的地图，main 链车道连通性回归检查
+  # （tools/check_map_connectivity.py → astar_route.py --check）。
+  # 地图数据（osm_to_map / grid / map_compiler）或 routes.json 改动后，
+  # lane successors 一旦断开，demo 里 ego 立即开不动（osm_test 陆家嘴环路
+  # 14.7m gap 前车之鉴）。与 scenario-file-gate 对称：纯数据检查、秒级完成、
+  # 不依赖编译。已知断链在 check_map_connectivity.py 的 KNOWN_BROKEN 白名单
+  # 中 WARN 不阻断，白名单外任何 FAIL 都 ERROR 阻断合并。
+  map-connectivity-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject broken main-chain lane connectivity in referenced maps
+        run: python3 tools/check_map_connectivity.py
+
   # ── Standard build + test (Release) ────────────────────────
   build-release:
     runs-on: ubuntu-24.04
