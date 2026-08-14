@@ -1,0 +1,174 @@
+# 3D 生成细节演进路线（临时文档 / 回家继续干指南）
+
+> 目的：记录 3D 生成架构的**当前状态**、**已列入计划的待办**、以及「如何让生成的 3D
+> 越来越细节」的**分阶段演进路线**。写给回家后继续推进的自己/协作者。
+>
+> 配套阅读：`docs/VISUALIZATION_ARCHITECTURE.md`（3D 总体架构）、`docs/VIS_MODULE_GUIDE.md`
+> （渲染模块门禁）、`docs/ROAD_MARKINGS_MODULE.md`（路面标线模块）、
+> `docs/MAP_ENGINE_ROUTING.md`（地图/A*）、`docs/FLOWBOARD_SCENE_CONTRACT.md`（数据契约）。
+
+---
+
+## 0. 快速上手（跑起来看 3D）
+
+```bash
+# 1) 起预览服务（不跑仿真，纯看地图）
+build/bin/flowmond --port 8800 --html-path tools/flowboard/index.html
+# 浏览器 http://localhost:8800 → 地图路线 → 下拉选地图 → 「👁 3D 预览选中路线」
+
+# 2) 起完整仿真 demo（默认 straight_road）
+bash scripts/demo.sh                      # 默认 15s；或
+bash scripts/demo.sh --scenario scenarios/osm_lujiazui.json   # OSM 大地图
+bash scripts/demo.sh --scenario scenarios/city_grid_map.json  # 5km 网格
+
+# 3) 3D 门禁（改了 tools/flowboard/ 必须过）
+npm run vis:check:all
+
+# 4) 离线静态检查
+python3 tools/pipeline_check.py
+```
+
+关键目录/文件：
+
+| 作用 | 路径 |
+|------|------|
+| 3D 渲染视图（路面/路口/建筑/设施…） | `tools/flowboard/js/vis/view/` |
+| 坐标/数学（`worldToThree` 收敛，门禁强制） | `tools/flowboard/js/vis/math/Coord.js` |
+| 场景数据适配（scenario → 3D topo） | `tools/flowboard/js/showcase/sceneAdapter.js` |
+| 数据层导出 / API | `src/core/scenario_loader.c`、`src/core/monitor_server.c`、`modules/adas_nodes/flowsim/scene_pub.cpp` |
+| 地图生成 | `tools/extract_city_map.py`、`tools/grid_map_generator.py`、`tools/osm_to_map.py` |
+
+---
+
+## 1. 当前 3D 生成架构（现状速览）
+
+数据流：**场景/地图 JSON → 数据层（scenario_loader / scene_pub / monitor_server）→ sceneAdapter → 各 View → Three.js**
+
+各 View 职责：
+
+| View | 渲染内容 |
+|------|----------|
+| `RoadView` | 路面 ribbon、路缘、人行道/绿化带、中心线（双黄）、车道分隔线（白虚线）、边缘线（白实线） |
+| `ConnectorView` | 路口多边形铺装、斑马线、停止线、匝道渐变、高架桥墩、防撞桶 |
+| `RoadFacilityView` | 停止线/斑马线（信号灯推导）、停车位/考试桩、导向箭头 |
+| `BuildingView` | OSM 建筑 OBB（footprint+height） |
+| `GroundView` / `TrajectoryView` / `VehicleView` / `BarrierView` / `TrafficLightView` / `ETCGateView` | 地面、轨迹光流、车辆、护栏、信号灯、ETC 门架 |
+| `JunctionDetect` | 交叉口中心检测（数据层 junctions 优先，几何聚类兜底） |
+
+契约与门禁：
+
+- 坐标统一走 `Coord.worldToThree`（ENU → THREE），`vis_coord_property.test.mjs` 强制。
+- 路面标线方向已按国标 GB 5768.3 校正（见 §2）。
+- 修改 `tools/flowboard/` 必须通过 `npm run vis:check:all`，新增场景要同步 `tools/flowboard/showcase/scenes.json`（`python3 tools/build_showcase.py`）。
+
+---
+
+## 2. 本会话已完成（做过的细节工作）
+
+- **斑马线方向修正**（GB 5768.3 5.8：条纹应与道路中心线平行）：`ConnectorView.js`
+  `_buildJunctionPatch` / `_buildJunctionCap`、`RoadFacilityView.js` `addCrosswalk` 三处
+  改为「条纹平行道路、沿道路长度短（2.5m）、跨道路铺条」。新增测试断言
+  `tests/vis_road_facility.test.mjs`。
+- **路口/标线规范审计**：停止线（白实线横跨来向半幅）、导向箭头、中心线（双黄实线）、
+  车道分隔线（白虚线）、边缘线（白实线）均核对合规，无需改动。
+- **OSM 连通性**（另一 AI）：`osm_to_map.py generate_connectivity` 掉头保护改为「仅不同
+  街道才跳过」→ 陆家嘴环路 -179° 断链修复，运行时 A* 不再 `无路可达`。
+- **OSM 大地图**：`maps/osm_lujiazui`（491 路 / 843 路口簇 / 564 建筑），`--check` 通过；
+  main 链 9/9 从 lane 0 可达。
+- **N-S 掉头方向判定**：`planning_node.cpp` forward_space 改「弧长 + 60m 覆盖护栏」、
+  障碍钳制改「车头方向投影」（N-S/E-W 通用）；验证默认 21.0 m/s、city_grid 15.2、ctest 7/7。
+- **默认场景回归修复**：回退 planning forward_space 弧长化 + flowsim `u_turn_active` 相对
+  路线两处（它们叠加导致起步掉头卡死），恢复 HEAD 逻辑后再以覆盖护栏方式重做 N-S 修复。
+- **预览接入**：`monitor_server.c` /api/map/preview 白名单加 `osm_test`/`osm_lujiazui`；
+  `index.html` 地图下拉加两项；`flowmond`/`flow_launcher` 重建后端点验证返回完整 map。
+
+---
+
+## 3. 待办清单（已列入计划，按优先级）
+
+- [ ] **P0 — A* 起终点启发式修复**（让 OSM 大地图真正能开一段）
+  - 位置：`modules/adas_nodes/flowsim_node.cpp` `build_route_via_astar`
+  - 问题：起终点用 `road 0 → road max_road`（过滤后的路序 ≠ 路线链序）→ OSM 上 A*
+    只给出 2 路 128m 短路线，且可能不在 ego 脚下 → demo 里 ego 1.2 m/s、beh=NA。
+  - 方案：改用场景 route 的 `road_chain`（chain[0] → chain[-1]）作为 A* 起终点，
+    并验证：osm_lujiazui demo ego 能沿主链开一段（速度>5、beh≠NA、CTE 不发散）。
+  - 验收：`FLOW_SKIP_BUILD=1 bash scripts/demo.sh --scenario scenarios/osm_lujiazui.json`。
+- [ ] **P1 — 预览大图性能**：491 路 / 2.4MB map.json，前端首帧加载与合批是否卡顿；
+  必要时分层 LOD 或静态合批。
+- [ ] **P2（可选）— OSM A* 连通回归脚本**：`tools/` 下补一个只跑 main 链 lane 0→末段的
+  连通检查，避免 5200 车道级别 O(n²) 卡死（另一个 AI 提议）。
+- [ ] 上述完成后：`vis:check:all` + `pipeline_check` + 环城路 E-W 回归全量过一遍再收。
+
+---
+
+## 4. 3D 细节演进路线图（核心：怎么越来越细节）
+
+> 核心洞察：**3D 细节 = 数据源丰富度 × 渲染层表达能力 × 契约扩展**。三者的增长缺一不可：
+> - 数据源有真数据（OSM 拉更多类），渲染层才画得出来；
+> - 渲染层几何/材质/贴图表达力强，数据才有意义；
+> - 每次新增都要同步 sceneAdapter / map.json 契约 + 门禁测试。
+
+### P0 路面标线细节（继续走规范路线）
+- 导向箭头按**车道转向**区分：直行 / 直行+左转 / 直行+右转 / 左转待转区箭头（GB 5768.3 5.13）。
+- 非机动车横道线（5.18）、减速带/震荡线、渠化导流线（6.5）按路口类型渲染。
+- 标线随车道数自适应（当前箭头只画直线箭头）。
+
+### P1 交叉口细节
+- 真实路缘**转弯半径**（圆弧圆角代替直切）——数据层 junctions 已有几何，渲染层可做圆角。
+- 渠化岛 / 安全岛 / 导流岛（大路口）。
+- 右转专用道 + 导流虚线。
+- 路口范围按 incoming 车道数动态扩收。
+
+### P2 建筑视觉（当前是纯色 OBB 盒子）
+- **贴图立面**：按 footprint + height + building:levels 生成带窗格/墙面的盒子贴图
+  （路线参考 osm2world）。
+- **屋顶类型**：平顶/坡顶/塔楼顶。
+- **LOD**：近景完整几何，远景合并为简化盒体。
+- **材质**：玻璃幕墙高光、日夜光照切换。
+
+### P3 道路设施与 POI（数据源扩展）
+- 交通标志牌（限速/让行/禁停/停车让行）——OSM `traffic_sign` 拉取。
+- 路灯、公交站（`highway=bus_stop`）、护栏/防撞桶（已有部分）。
+- 行道树/绿化带（`landuse` / `natural=tree`）。
+- 立交：桥墩/桥面阴影、匝道渐变（已有骨架）。
+
+### P4 环境
+- 天空盒、雾效、环境光/阴影（已有基础）。
+- 天气/时段切换（雨雾反光、黄昏灯光）。
+- 水面（黄浦江 `waterway`）与滨江绿化带。
+
+### P5 性能与架构
+- 全场景合批收敛（InstancedMesh + 纹理图集）。
+- LOD 系统 + 视锥/距离裁剪。
+- 大图（491 路）首帧加载优化（分块 / 静态合批 / worker 化解析）。
+
+---
+
+## 5. 数据源演进（让细节有真数据）
+
+- 当前 OSM 已覆盖：道路（491 路）+ 建筑（564 栋）。
+- 下一步可拉：`highway=traffic_signals`（信号灯位置）、`traffic_sign`（标志牌）、
+  `highway=bus_stop`（公交站）、`highway=street_lamp`（路灯）、`natural=tree`（树木）、
+  `waterway`（河流）、`landuse`（绿地/水域色块）。
+- 原则：**按需拉取，映射到 map.json 的 landmarks / 新字段**，并同步
+  `sceneAdapter` 契约 + 门禁测试，避免「数据有、前端不认」。
+
+---
+
+## 6. 验证与门禁纪律（回家照做）
+
+1. 改 `tools/flowboard/` → `npm run vis:check:all`（不红）。
+2. 新增/修改场景 → `python3 tools/build_showcase.py` 同步 `scenes.json`。
+3. 新增渲染语义 → 在 `tests/vis_*.test.mjs` 加断言（参考斑马线方向断言）。
+4. 改仿真（modules/adas_nodes）→ `ctest`（build/modules/adas_nodes）+ 默认场景 demo +
+   涉及的地图 demo 都跑一遍。
+5. 地图数据改动 → `python3 tools/osm_to_map.py --check maps/<id>`。
+6. 提交前确认没有泄漏的 `scenarios/.route_*.json` 空文件（demo `--route` 残留，会挂门禁）。
+
+---
+
+## 7. 下一步一句话总结
+
+先把 **P0 A* 起终点修复** 做掉让 OSM 能开一段；之后 3D 细节按
+**P0 标线 → P1 路口 → P2 建筑 → P3 设施/POI → P4 环境** 的顺序推进，
+每一步都「拉数据 + 加 View + 过门禁 + 补断言」闭环。
