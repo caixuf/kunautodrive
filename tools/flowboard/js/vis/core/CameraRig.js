@@ -23,6 +23,14 @@ export function createCameraRig(canvas) {
     2000                                   // far
   );
 
+  /* BEV（鸟瞰）正交相机：平行投影，无透视畸变，俯视 ego 且车头朝屏幕上方
+   * （heading-up，类 Tesla FSD BEV HMI）。复用同一 3D 场景，车模/道路/轨迹/
+   * 感知叠层从正上方看即 BEV。初始视锥为占位，真实尺寸由 resize(w,h) 按宽高比
+   * 与 userData.viewMeters（可视范围约 150m）计算。 */
+  const bevCamera = new THREE.OrthographicCamera(-75, 75, 75, -75, 0.1, 2000);
+  bevCamera.position.set(0, 100, 0);
+  bevCamera.userData.viewMeters = 150;
+
   let mode = 'chase';
   let needsControlSnap = false;
   let mapAutoFollow = false;
@@ -121,6 +129,15 @@ export function createCameraRig(canvas) {
         camera.lookAt(ex, eg, ez);
         break;
       }
+      case 'bev': {
+        // 正交俯视：相机在 ego 正上方，看向 ego；up 设为 ego 前向在地面投影，
+        // 使车头朝屏幕上方（heading-up）。高度 H 只影响 near/far，不改变投影比例。
+        const H = 100;
+        bevCamera.position.set(ex, eg + H, ez);
+        bevCamera.up.set(Math.cos(eh), 0, -Math.sin(eh));
+        bevCamera.lookAt(ex, eg, ez);
+        break;
+      }
       case 'driver': {
         camera.position.set(
           ex + Math.cos(eh) * 1.0, eg + 1.5,
@@ -174,13 +191,35 @@ export function createCameraRig(canvas) {
   }
 
   function setMode(m) {
-    if (['chase', 'top', 'driver', 'front', 'map', 'orbit'].includes(m)) {
+    if (['chase', 'top', 'driver', 'front', 'map', 'orbit', 'bev'].includes(m)) {
       mode = m;
       needsControlSnap = (mode === 'map' || mode === 'orbit');
       mapAutoFollow = (mode === 'map');
       orbitControls.enabled = (mode === 'orbit');
       mapControls.enabled = (mode === 'map');
     }
+  }
+
+  /* 当前活动相机：BEV 模式用正交相机，其余用透视相机。渲染循环据此选择
+   * 渲染相机（BEV 还应绕过透视专用的后处理 Composer）。 */
+  function getActiveCamera() {
+    return mode === 'bev' ? bevCamera : camera;
+  }
+
+  function isBev() {
+    return mode === 'bev';
+  }
+
+  /* 更新正交相机视锥：按画布宽高比与可视范围（userData.viewMeters）计算，
+   * 使纵向始终覆盖 viewMeters 米、横向随比例扩展，俯视比例不拉伸。 */
+  function resize(w, h) {
+    const aspect = (h && h > 0) ? w / h : 1;
+    const m = bevCamera.userData.viewMeters || 150;
+    bevCamera.top = m / 2;
+    bevCamera.bottom = -m / 2;
+    bevCamera.left = -m * aspect / 2;
+    bevCamera.right = m * aspect / 2;
+    bevCamera.updateProjectionMatrix();
   }
 
   function reset(roadGroup) {
@@ -199,5 +238,5 @@ export function createCameraRig(canvas) {
     }
   }
 
-  return { camera, update, setMode, reset };
+  return { camera, update, setMode, reset, getActiveCamera, isBev, resize };
 }

@@ -292,12 +292,15 @@ function _startRenderLoop() {
       // 天空穹顶跟随相机 + 雨粒子动画（真实帧间 dt，高刷屏下速度不失真）
       _skyEnv.tick(dtSec);
 
-      // low/ultra 档：禁用 composer 直接渲染（旁路后处理管线，GPU 压力骤降）
-      const noPost = _perfTier === 'low' || _perfTier === 'ultra';
+      // BEV 用正交俯视相机；为避开透视专用的 Composer/GTAO（与正交相机不兼容
+      // 且俯视示意也不需要接触阴影/辉光），BEV 直接渲染绕过后处理管线。
+      const activeCam = _cameraRig.getActiveCamera();
+      const bev = _cameraRig.isBev();
+      const noPost = _perfTier === 'low' || _perfTier === 'ultra' || bev;
       if (noPost) {
-        _renderer.render(_scene, _cameraRig.camera);
+        _renderer.render(_scene, activeCam);
       } else {
-        renderFrame(_renderer, _composer, _scene, _cameraRig.camera);
+        renderFrame(_renderer, _composer, _scene, activeCam);
       }
       _frameCount++;
       if (_perfMonitor) _perfMonitor.tickFrame();   // 供给 PHM watchdog 采样
@@ -329,7 +332,7 @@ if (typeof window !== 'undefined') {
   window.__vis = {
     get scene() { return _scene; },
     get renderer() { return _renderer; },
-    get camera() { return _cameraRig ? _cameraRig.camera : null; },
+    get camera() { return _cameraRig ? _cameraRig.getActiveCamera() : null; },
     get director() { return _director; },
     get ready() { return _ready; },
     get frameCount() { return _frameCount; },
@@ -521,6 +524,8 @@ export function resize3D(width, height) {
   }
   if (width <= 0 || height <= 0) return;  // 容器还没渲染出来
   resize(_renderer, _composer, _cameraRig.camera, width, height);
+  // 同步更新 BEV 正交相机视锥（透视/Composer 已由上面的 resize 处理）
+  if (_cameraRig && _cameraRig.resize) _cameraRig.resize(width, height);
 }
 
 /** 每帧更新（app.js 调用） */

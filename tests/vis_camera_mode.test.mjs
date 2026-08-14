@@ -44,9 +44,28 @@ console.log('--- CameraRig 冒烟测试 ---');
 let rig;
 checkNoThrow('createCameraRig 不抛错', () => { rig = createCameraRig(canvas); });
 
-// 2) 全部 6 种模式切换不抛错
-const modes = ['chase', 'top', 'driver', 'front', 'map', 'orbit'];
-checkNoThrow('6 种模式切换不抛错', () => { modes.forEach(m => rig.setMode(m)); });
+// 2) 全部模式切换不抛错（含 BEV）
+const modes = ['chase', 'top', 'driver', 'front', 'map', 'orbit', 'bev'];
+checkNoThrow('全部模式（含 bev）切换不抛错', () => { modes.forEach(m => rig.setMode(m)); });
+
+// 2b) BEV 正交相机：接口存在、模式切换选不同相机实例、isBev 正确
+// 注：three-shim 是递归 Proxy，不暴露 isOrthographicCamera/isPerspectiveCamera
+// 标志也不回读被赋的数值属性，故用"活动相机实例身份"区分透视/正交相机。
+check('getActiveCamera 是函数', typeof rig.getActiveCamera === 'function', true);
+check('isBev 是函数', typeof rig.isBev === 'function', true);
+
+const perspCam = rig.camera; // 透视相机引用（返回对象中的 camera）
+checkNoThrow('setMode(bev) 不抛错', () => { rig.setMode('bev'); });
+checkNoThrow('update(bev) 不抛错', () => { rig.update(ego, null, 0); });
+checkNoThrow('resize(800,600) 不抛错', () => { rig.resize(800, 600); });
+check('BEV 模式 isBev() 为 true', rig.isBev(), true);
+check('BEV 模式活动相机 != 透视相机（切换到正交相机实例）',
+  rig.getActiveCamera() !== perspCam, true);
+
+// 切回 chase 应恢复透视相机
+checkNoThrow('setMode(chase) 不抛错', () => { rig.setMode('chase'); });
+check('切回 chase 后 isBev() 为 false', rig.isBev(), false);
+check('切回 chase 活动相机 === 透视相机', rig.getActiveCamera() === perspCam, true);
 
 // 3-7) 5 种跟车模式 update 不抛错
 const chaseModes = ['chase', 'top', 'driver', 'front', 'map'];

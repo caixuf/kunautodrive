@@ -16,7 +16,7 @@
 
 import { safeCall, reportDiag } from './utils.js';
 import { _dr, tickDeadReckon } from './vis/core/DeadReckon.js';
-import { init3DScene, resize3D } from './vis/main.js';
+import { init3DScene, resize3D, setCameraMode } from './vis/main.js';
 import { selectCurrentMotionSegment } from './vis/math/Trajectory.js';
 import {
   drawRoadNetwork2D,
@@ -677,18 +677,21 @@ export function switchSceneView(mode) {
   document.querySelectorAll('#scene-view-btns .toggle-btn').forEach(function (b) {
     b.classList.toggle('active', b.dataset.view === mode);
   });
-  if (mode === '2d') {
-    if (c3d) c3d.style.display = 'none';
-    if (c2d) c2d.style.display = '';
-    if (!_2d.active) init2DFallback(true);
-  } else {
+  // BEV（鸟瞰）：复用 3D 引擎的正交俯视相机渲染，显示道路/车模/轨迹/感知叠层。
+  // 旧的 Canvas-2D 仍保留为无 WebGL 兜底，但默认 2d 按钮进入 BEV。
+  if (mode === '2d' || mode === 'bev') {
     if (c2d) c2d.style.display = 'none';
     if (c3d) c3d.style.display = '';
-    if (_2d.animId) cancelAnimationFrame(_2d.animId);
-    _2d.active = false;
+    if (_2d.animId) { cancelAnimationFrame(_2d.animId); _2d.active = false; }
     init3DScene();
-    setTimeout(resize3D, 100);
+    setTimeout(function () { resize3D(); setCameraMode('bev'); }, 100);
+    return;
   }
+  if (c2d) c2d.style.display = 'none';
+  if (c3d) c3d.style.display = '';
+  if (_2d.animId) { cancelAnimationFrame(_2d.animId); _2d.active = false; }
+  init3DScene();
+  setTimeout(function () { resize3D(); setCameraMode(mode === '3d' ? 'chase' : mode); }, 100);
 }
 
 // All public functions are declared with `export function ...` at their
