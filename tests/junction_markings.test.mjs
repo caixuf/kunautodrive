@@ -18,6 +18,8 @@ import { createConnectorView }
   from '../tools/flowboard/js/vis/view/ConnectorView.js';
 import { createBarrierView }
   from '../tools/flowboard/js/vis/view/BarrierView.js';
+import { createRoadView }
+  from '../tools/flowboard/js/vis/view/RoadView.js';
 import { walkFromJunction }
   from '../tools/flowboard/js/vis/model/TopologyModel.js';
 import { detectJunctions } from '../tools/flowboard/js/vis/view/JunctionDetect.js';
@@ -394,6 +396,78 @@ console.log('--- 9. 路口多边形圆角化 ---');
     }
   }
   ok('圆角顶点保持在路口域内', inDomain);
+}
+
+// ── 10. P1b 匝道汇入/汇出渠化：45° 斜纹密度 + 主路边线连续 + 绿色隔离带 ──
+console.log('--- 10. 匝道导流区渠化（merge gore）---');
+{
+  const main10 = { id: 'main', type: 'highway', lanes: 4, lane_width: 3.5,
+    nodes: [[0, 0, 0], [300, 0, 0]] };
+  const mergeRamp = { id: 'entry-ramp', type: 'ramp_curve', lanes: 1, lane_width: 3.2,
+    taper_length_m: 80, nodes: [[65, -9, 0], [150, 0, 0]] };
+  // 隔离带场景：匝道先与主路平行分开（间隙 2~3m 草皮）再贴合汇入
+  const vergeRamp = { id: 'verge-ramp', type: 'ramp_curve', lanes: 1, lane_width: 3.2,
+    taper_length_m: 80, nodes: [[0, -12, 0], [60, -10, 0], [120, -6, 0], [150, 0, 0]] };
+
+  const whiteTris = (view) => {
+    let tris = 0, roiVerts = 0, edgeLineAt = { up: false, down: false };
+    view.getRoadGroup().traverse((ch) => {
+      if (!ch.isMesh || ch.isInstancedMesh || !ch.material || !ch.material.color) return;
+      if (ch.material.color.getHex() !== 0xcccccc) return;   // LINE_WHITE
+      const pos = ch.geometry.getAttribute('position');
+      tris += (ch.geometry.index ? ch.geometry.index.count : pos.count) / 3;
+      for (let i = 0; i < pos.count; i++) {
+        const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+        // 斜纹/渐变边界 ROI：taper 弧长 [70,150]、侧向 [6.5,11.5]、Y_MARK
+        if (y > 0.128 && y < 0.132 && x >= 70 && x <= 150 && z > 6.5 && z < 11.5) roiVerts++;
+        // 主路匝道侧边线（d=+6.75，Y_EDGE=0.14）在渐变段两端都在 = 未被打断
+        if (y > 0.138 && y < 0.142 && z > 6.5 && z < 7.0) {
+          if (x > 72 && x < 78) edgeLineAt.up = true;
+          if (x > 142 && x < 148) edgeLineAt.down = true;
+        }
+      }
+    });
+    return { tris, roiVerts, edgeLineAt };
+  };
+
+  const baseView = createRoadView(new THREE.Group());
+  baseView.build({ edges: [main10] });
+  const base = whiteTris(baseView);
+
+  const mergeScene = new THREE.Group();
+  const mergeView = createRoadView(mergeScene);
+  mergeView.build({ edges: [main10, mergeRamp] });
+  const withRamp = whiteTris(mergeView);
+  ok('汇入过渡区生成', mergeView.getStats().rampTransitions === 1);
+  // 斜纹 11 条 × 2 tri + 渐变边界 ~40 tri ≥ 60
+  ok(`导流区标线三角形增量（${withRamp.tris - base.tris} ≥ 60）`,
+    withRamp.tris - base.tris >= 60);
+  // 斜纹 ~10×4 + 边界 ~38 顶点落在 ROI（实测 78；采样站位置受 spine 离散化
+  // 影响有 ±2m 抖动，阈值取 70 锁密度不锁点位）
+  ok(`导流区 ROI 顶点密度（${withRamp.roiVerts} ≥ 70）`, withRamp.roiVerts >= 70);
+  ok('主路匝道侧边线贯穿渐变段（不被匝道打断）',
+    withRamp.edgeLineAt.up && withRamp.edgeLineAt.down);
+
+  // 绿色隔离带：平行分开段之间铺草皮（VERGE_COLOR 只可能来自 buildRampVerge，
+  // highway 主路自身不产生 verge）
+  const vergeScene = new THREE.Group();
+  const vergeView = createRoadView(vergeScene);
+  vergeView.build({ edges: [main10, vergeRamp] });
+  let vergeTris = 0, vergeInGap = true, vergeVerts = 0;
+  vergeScene.traverse((ch) => {
+    if (!ch.isMesh || ch.isInstancedMesh || !ch.material || !ch.material.color) return;
+    if (ch.material.color.getHex() !== 0x355d35) return;
+    const pos = ch.geometry.getAttribute('position');
+    vergeTris += (ch.geometry.index ? ch.geometry.index.count : pos.count) / 3;
+    for (let i = 0; i < pos.count; i++) {
+      vergeVerts++;
+      const x = pos.getX(i), z = pos.getZ(i);
+      // 条带必须在主路肩外界（z≥7.4）与匝道（z≤12.6）之间、平行段 x∈[-2,65]
+      if (z < 7.4 || z > 12.6 || x < -2 || x > 65) vergeInGap = false;
+    }
+  });
+  ok(`绿色隔离带已生成（${vergeTris} tri）`, vergeTris > 0);
+  ok(`隔离带限定在主路/匝道间隙（${vergeVerts} 顶点）`, vergeVerts > 0 && vergeInGap);
 }
 
 done();

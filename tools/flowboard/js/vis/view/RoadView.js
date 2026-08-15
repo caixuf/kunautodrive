@@ -85,6 +85,8 @@ function _buildAsphaltTextures() {
   const canvas = document.createElement('canvas');
   canvas.width = SIZE; canvas.height = SIZE;
   const ctx = canvas.getContext('2d');
+  // jsdom 等无头环境有 document 但 canvas 无 2D 上下文（无 canvas 包），同样跳过
+  if (!ctx || typeof ctx.getImageData !== 'function') return;
 
   // 基底：深灰沥青色
   ctx.fillStyle = '#2a2a2a';
@@ -92,6 +94,9 @@ function _buildAsphaltTextures() {
 
   // 随机噪声颗粒（模拟沥青骨料）
   const imageData = ctx.getImageData(0, 0, SIZE, SIZE);
+  // 无头 canvas 桩（tests/support Proxy ctx）只写不读：getImageData 返回空壳，
+  // 读不回像素就放弃纹理（材质 map 为 null 也能正常渲染纯色沥青）
+  if (!imageData || !imageData.data || !imageData.data.length) return;
   const data = imageData.data;
   for (let i = 0; i < data.length; i += 4) {
     const noise = (Math.random() - 0.5) * 28;
@@ -397,34 +402,38 @@ export function createRoadView(scene) {
     return ribbonGeo(centers, LINE_W * 0.5, Y_MARK);
   }
 
-  /** 在导流区画 V 形斜纹。它们与主路局部切线绑定，弯道上不会错位。 */
+  /** 导流区斜纹（2026-08-15 P1b，对齐真实匝道汇入/汇出照片 + GB 5768.3）：
+   *  45° 对角条纹横跨导流区全宽（内缘主路边线 → 外缘渐变边界），线宽 0.45m，
+   *  沿程间距 5m；尖端宽度 <1.2m 处自然中止（与真实鼻端一致）。
+   *  条纹端点挂主路局部切线采样点，弯道上不错位。
+   *  旧实现：最多 7 个 spread≤1.25m 的小 V 浮在导流区中央，密度/角度都不对。 */
   function addGoreChevrons(geos, spine, cum, startS, endS, side, edgeOffset,
       startWidth, endWidth) {
     const length = endS - startS;
-    const count = Math.min(7, Math.floor(length / 18));
-    for (let i = 1; i <= count; i++) {
-      const t = i / (count + 1);
-      const width = startWidth + (endWidth - startWidth) * t;
-      if (width < 1.0) continue;
-      const c = sampleSpineAt(spine, cum, startS + length * t);
-      const lateral = side * (edgeOffset + width * 0.55);
-      const apex = { px: c.px + c.nx * lateral, py: c.py, pz: c.pz + c.nz * lateral, nx: c.nx, nz: c.nz };
-      const back = 2.0;
-      const spread = Math.min(1.25, width * 0.32);
-      const left = {
-        px: apex.px - c.nz * back + c.nx * side * spread,
-        py: c.py, pz: apex.pz + c.nx * back + c.nz * side * spread,
-        nx: c.nx, nz: c.nz,
-      };
-      const right = {
-        px: apex.px - c.nz * back - c.nx * side * spread,
-        py: c.py, pz: apex.pz + c.nx * back - c.nz * side * spread,
-        nx: c.nx, nz: c.nz,
-      };
-      const leftGeo = ribbonGeo([left, apex], 0.11, Y_MARK);
-      const rightGeo = ribbonGeo([right, apex], 0.11, Y_MARK);
-      if (leftGeo) geos.push(leftGeo);
-      if (rightGeo) geos.push(rightGeo);
+    if (length < 1) return;
+    const STRIPE_W = 0.45;    // GB 5768.3 导流线宽 45cm
+    const SPACING = 5.0;      // 沿程间距（真实导流区 4~6m）
+    const widthAt = (s) => startWidth + (endWidth - startWidth) * ((s - startS) / length);
+    for (let s = startS + SPACING * 0.5; s + 1 < endS; s += SPACING) {
+      const w0 = widthAt(s);
+      if (w0 < 1.2) continue;             // 鼻端尖端不画
+      // 45°：沿程跨度 = 横向跨度（条纹从内缘上游斜到外缘下游）
+      const s2 = Math.min(s + w0, endS);
+      const w1 = widthAt(s2);
+      const a = sampleSpineAt(spine, cum, s);
+      const b = sampleSpineAt(spine, cum, s2);
+      const p1x = a.px + a.nx * side * edgeOffset;
+      const p1z = a.pz + a.nz * side * edgeOffset;
+      const p2x = b.px + b.nx * side * (edgeOffset + w1);
+      const p2z = b.pz + b.nz * side * (edgeOffset + w1);
+      const dx = p2x - p1x, dz = p2z - p1z;
+      if (Math.hypot(dx, dz) < 0.5) continue;
+      const [snx, snz] = tangentToNormal(dx, dz);
+      const stripe = ribbonGeo([
+        { px: p1x, py: a.py, pz: p1z, nx: snx, nz: snz },
+        { px: p2x, py: b.py, pz: p2z, nx: snx, nz: snz },
+      ], STRIPE_W / 2, Y_MARK);
+      if (stripe) geos.push(stripe);
     }
   }
 
@@ -546,10 +555,58 @@ export function createRoadView(scene) {
     return { role, side, joinS };
   }
 
-  /** 构建加速/减速车道、渐变并道线与导流 V 线。 */
+  /** 主路/匝道间绿色隔离带（2026-08-15 P1b）：渐变段之外匝道与主路逐渐分开的
+   *  楔形区铺草皮——真实互通里这里是绿化带/导流岛，不是沥青直连。
+   *  沿匝道 spine 逐样点找主路最近点，横向间隙 ∈ [0.8, 25]m 且不在渐变段
+   *  弧长范围内时铺 quad 条带（内缘 = 主路肩外界，外缘 = 匝道肩内界）。 */
+  function buildRampVerge(rampSpine, main, connection, mainHw, rampHw, startS, endS) {
+    const side = connection.side;
+    const inner = side * (mainHw + SHOULDER_W);
+    const positions = [], indices = [], uvs = [];
+    let prev = null;
+    for (const rp of rampSpine) {
+      let bi = -1, bestD = Infinity;
+      for (let i = 0; i < main.spine.length; i++) {
+        const d = Math.hypot(main.spine[i].px - rp.px, main.spine[i].pz - rp.pz);
+        if (d < bestD) { bestD = d; bi = i; }
+      }
+      if (bi < 0) break;
+      const s = main.cum[bi];
+      if (s > startS - 1 && s < endS + 1) { prev = null; continue; }   // 渐变段是沥青
+      const mp = main.spine[bi];
+      const lat = (rp.px - mp.px) * mp.nx + (rp.pz - mp.pz) * mp.nz;   // 匝道侧向位置
+      const outer = lat - side * (rampHw + RAMP_SHOULDER_W);
+      const gap = (outer - inner) * side;
+      if (gap < 0.8 || gap > 25) { prev = null; continue; }
+      const cur = {
+        ix: mp.px + mp.nx * inner, iz: mp.pz + mp.nz * inner,
+        ox: mp.px + mp.nx * outer, oz: mp.pz + mp.nz * outer, py: mp.py,
+      };
+      if (prev) {
+        const base = positions.length / 3;
+        positions.push(
+          prev.ix, prev.py + Y_VERGE, prev.iz, prev.ox, prev.py + Y_VERGE, prev.oz,
+          cur.ix, cur.py + Y_VERGE, cur.iz, cur.ox, cur.py + Y_VERGE, cur.oz);
+        /* 与 ribbonGeo 一致的 uv（mergeGeometries 要求属性集合一致，缺 uv 会
+         * 与城市路 verge 合并失败返 null） */
+        uvs.push(0, 0, 1, 0, 0, 1, 1, 1);
+        indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
+      }
+      prev = cur;
+    }
+    if (!indices.length) return null;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    return geo;
+  }
+
+  /** 构建加速/减速车道、渐变并道线与导流斜纹。 */
   function buildRampTransition(rampEdge, rampSpine, rampCum, main) {
     const connection = findRampConnection(rampEdge, rampSpine, rampCum, main);
-    if (!connection) return { roadGeos: [], whiteGeos: [] };
+    if (!connection) return { roadGeos: [], whiteGeos: [], vergeGeos: [] };
     const mainTotal = main.cum[main.cum.length - 1];
     const requested = Number(rampEdge.taper_length_m ?? rampEdge.accel_length_m ??
       rampEdge.decel_length_m ?? TAPER_DEFAULT_M);
@@ -559,7 +616,7 @@ export function createRoadView(scene) {
       ? Math.max(0, connection.joinS - taperLength) : connection.joinS;
     const endS = connection.role === 'merge'
       ? connection.joinS : Math.min(mainTotal, connection.joinS + taperLength);
-    if (endS - startS < TAPER_MIN_M) return { roadGeos: [], whiteGeos: [] };
+    if (endS - startS < TAPER_MIN_M) return { roadGeos: [], whiteGeos: [], vergeGeos: [] };
 
     const laneWidth = Number(main.edge.lane_width) || LANE_WIDTH;
     const edgeOffset = (Number(main.edge.lanes) || DEFAULT_LANES) * laneWidth * 0.5;
@@ -572,7 +629,9 @@ export function createRoadView(scene) {
     const whiteGeos = boundary ? [boundary] : [];
     addGoreChevrons(whiteGeos, main.spine, main.cum, startS, endS, connection.side,
       edgeOffset, startWidth, endWidth);
-    return { roadGeos: road ? [road] : [], whiteGeos };
+    const rampHw = (Number(rampEdge.lanes) || 1) * (Number(rampEdge.lane_width) || RAMP_LANE_W) * 0.5;
+    const verge = buildRampVerge(rampSpine, main, connection, edgeOffset, rampHw, startS, endS);
+    return { roadGeos: road ? [road] : [], whiteGeos, vergeGeos: verge ? [verge] : [] };
   }
 
   /** 从 edge nodes 构建主路路面 + 车道线 + 路肩 */
@@ -791,6 +850,7 @@ export function createRoadView(scene) {
           for (const g of transition.whiteGeos) {
             whiteLineGeos.push(g);
           }
+          for (const g of transition.vergeGeos) vergeGeos.push(g);
         }
       }
     }
