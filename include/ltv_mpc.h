@@ -13,8 +13,8 @@
  * 模型: 绕参考轨迹 (v(t), kappa(t)) 线性化的自行车模型
  *
  * 设计约束:
- *   - N=20, dt=0.05s → 1s 预测时域
- *   - 单次求解 < 1ms
+ *   - 默认 N=60, dt=0.025s → 1.5s 预测时域（运行时节由 control_node 注入）
+ *   - 单次求解 < 1ms（3×3 Riccati，O(N)）
  *   - 失败有确定返回码，不退化为 NaN/静默
  */
 
@@ -27,7 +27,7 @@ extern "C" {
 
 /* ── 常量 ─────────────────────────────────────────────────── */
 
-#define LTV_MPC_MAX_HORIZON  20   /**< 最大预测步数 */
+#define LTV_MPC_MAX_HORIZON  80   /**< 最大预测步数（默认 horizon=60 → 1.5s @ dt=0.025） */
 #define LTV_MPC_STATE_DIM    3    /**< [e_y, e_psi, delta] */
 #define LTV_MPC_CONTROL_DIM  1    /**< [ddelta] */
 

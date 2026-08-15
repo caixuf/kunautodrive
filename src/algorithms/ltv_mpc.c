@@ -3,7 +3,7 @@
  *
  * 绕轨迹线性化的误差动力学，离散 Riccati 递归求解。
  * 3 状态 [e_y, e_psi, delta], 1 控制 [ddelta].
- * N=20, dt=0.05s。
+ * 默认 N=60, dt=0.025s（匹配控制节点 40Hz 周期；运行时节由调用方注入）。
  *
  * 数值方法：Riccati 递归（3×3 矩阵 + 标量求逆），O(N) 时间。
  * 零动态分配，失败有确定返回码。
@@ -119,10 +119,13 @@ LtvMpcConfig ltv_mpc_default_config(void) {
     cfg.r_ddelta  = 0.5;
     cfg.qf_y      = 20.0;
     cfg.qf_psi    = 40.0;
-    cfg.horizon   = 20;
-    cfg.dt        = 0.05;
+    cfg.horizon   = 60;     /* 60 步 × dt=0.025 = 1.5s 预测时域 */
+    cfg.dt        = 0.025;  /* 匹配 control_node 40Hz 控制周期 (25000µs) */
     cfg.wheelbase = 2.7;
-    cfg.max_steer = 0.35;
+    /* max_steer 默认值取巡航转向包络上限(0.16rad，对应 1.4m/s² 横向加速度)。
+     * 运行时由 control_node 按当前车速经 steer_limit_for_speed 逐帧覆盖，
+     * 使 MPC 模型与执行器实际权限一致（避免模型误以为有 0.35 的舵量）。 */
+    cfg.max_steer = 0.16;
     cfg.max_dsteer = 0.5;
     return cfg;
 }
