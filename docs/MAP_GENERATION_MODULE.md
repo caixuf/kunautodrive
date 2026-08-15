@@ -119,9 +119,10 @@ SUMO → `osm_lujiazui_v2`（net2map 生成，车道级几何更准，建筑经 
       若 build_road 改动，需确认 DSL 产物仍一致（靠 `test_map_compiler.py` 兜底）。
 - [ ] **`extract_city_map.py` 场景提取路径偏历史遗留**：与 DSL 对 city_ring 有两条
       手写通道重叠，可评估是否统一到 DSL。
-- [ ] **net2map 红绿灯未映射**：SUMO `tlLogic` 暂未写入 `landmarks.traffic_lights`
-      （现有契约是直路 x/y_lane 模型，塞 SUMO 信号相位进去是死数据）。待 TL 契约升级
-      （路口中心 + 相位）后再接。见 §9。
+- [x] **net2map 红绿灯已映射**：`build_traffic_lights` 把 SUMO `tlLogic` 逐 link 拆成
+      停止线灯（green_s/yellow_s/red_s/phase_offset_s 由程序灯色累加），已用合成 net.xml
+      验证 2 相位错峰正确。限制见 §9①（需重跑真实 net.xml 才写入 v2 图；runtime 单周期
+      + TL_CACHE_MAX=16 是天花板）。
 - [ ] **net2map 建筑靠继承**：自身不拉建筑，需 `--buildings-from <既有OSM图 map.json>`；
       理想是复用 osm_to_map 的建筑解析或独立 OSM 建筑源。
 
@@ -131,8 +132,16 @@ SUMO → `osm_lujiazui_v2`（net2map 生成，车道级几何更准，建筑经 
 
 `net2map.py` 是真实城市图推荐入口，但相较"完全成熟"仍有：
 
-1. **红绿灯（最高优先）**：`landmarks.traffic_lights` 契约待升级为「路口中心 + 相位」
-   模型后，才能把 SUMO `tlLogic` 接入；当前 `net2map` 输出空 `traffic_lights`。
+1. **红绿灯（已接，仍有限制）**：`net2map` 现已把 SUMO `tlLogic` 逐 link 映射成
+   `landmarks.traffic_lights`（见 `build_traffic_lights`）：每条受控连接 = 一个停止线灯，
+   相位 `green_s/yellow_s/red_s/phase_offset_s` 由该 link 在程序各相位灯色累加得到、
+   `phase_offset_s` 取首次变绿时刻 → 同一路口 N-S/E-W 天然错峰（runtime 单周期相位机
+   即可复现双向交替，已用合成 net.xml 验证 2 相位正确）。**限制**：① 必须**重新跑
+   `net2map` 于真实 `net.xml`** 才会写入（已生成的 `osm_lujiazui_v2/map.json` 是在此
+   功能前出的，其 `traffic_lights` 仍为空）；② runtime 相位机是「绿→黄→红」单周期，
+   多相位/搭接相位退化为近似；③ `traffic_light.h` 的 `TL_CACHE_MAX=16` 限制运行时
+   同时缓存的灯数，超大路口群超 16 个灯时多余灯 runtime 不发布状态（显示/决策盲区）。
+   彻底解决需把契约升级为「路口中心 + 相位 + 每 link 信号」并放宽缓存上限。
 2. **建筑**：需从既有 OSM 图继承（`--buildings-from`），不能独立产建筑。
 3. **`main` 路线链**：沿真实可驾驶拓扑（`_build_successor_graph` + 最长路径）生成，
    已通过 `check_map_connectivity.py` 车道链连通；若路网存在长回路，最长路径为启发式

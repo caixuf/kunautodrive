@@ -20,8 +20,9 @@ flowsim(json_to_xodr) / flowboard(/api/map/preview) / A*(astar_route) /
   * 路口内部 edge（function="internal"）→ connector road（type 继承 to-edge），
     junctions[] 按 (junction, from-edge) 分组为 fork 契约，lane successors
     串起 from-lane → 内部 lane → to-lane，json_to_xodr 据此生成 laneLink。
-  * 红绿灯暂不映射：landmarks.traffic_lights 消费契约是直路 x/y_lane 模型，
-    SUMO tlLogic 塞进去是死数据，留待 TL 契约升级。
+  * 红绿灯：SUMO tlLogic 逐 link 拆成一条停止线灯（见 build_traffic_lights），
+    相位时长由该 link 在程序各相位灯色累加、phase_offset 取首次变绿时刻，同路口
+    N-S/E-W 天然错峰。runtime 单周期相位机可复现标准 2 相位，多相位退化为近似。
 
 用法：
   python3 tools/net2map.py /tmp/lujiazui.net.xml --out maps/osm_lujiazui_v2 \
@@ -468,6 +469,31 @@ class NetConverter:
         self.junctions = {j.get("id"): j for j in self.root.findall("junction")}
         self.connections = self.root.findall("connection")
 
+        # SUMO tlLogic（路口信号配时）：jid → {offset, phases:[(dur, state_str)]}。
+        # state_str 按 linkIndex 索引每个受控连接（'G/g'绿 'y'黄 其余红）。
+        self.tllogic: dict[str, dict] = {}
+        for tl in self.root.findall("tlLogic"):
+            jid = tl.get("id")
+            phases = [(float(p.get("duration", "0")), p.get("state", ""))
+                      for p in tl.findall("phase")]
+            self.tllogic[jid] = {
+                "offset": float(tl.get("offset", "0")),
+                "phases": phases,
+            }
+
+        # 受 tlLogic 控制的连接：记录 (from_edge, from_lane_idx, tl_id, linkIndex)，
+        # 供 build_traffic_lights 把每个 link 映射成一个停止线红绿灯。
+        self.conn_links: list[tuple[str, int, str, int | None]] = []
+        for c in self.connections:
+            tl = c.get("tl")
+            if not tl:
+                continue
+            li = c.get("linkIndex")
+            self.conn_links.append((
+                c.get("from"), int(c.get("fromLane", "0")), tl,
+                int(li) if li is not None else None,
+            ))
+
         # 每个 edge 的可驾驶 lane 映射：sumo_lane_idx → 我们的 index（1=最左）
         self.lane_index_map: dict[str, dict[int, int]] = {}
         self.drivable_lanes: dict[str, list[ET.Element]] = {}
@@ -509,6 +535,101 @@ class NetConverter:
         return [[*self.to_enu(x, y), 0.0] for x, y in parse_shape(shape)]
 
     # ── 主转换 ───────────────────────────────────────────────
+    def _project_to_centerline(self, cl: list, pt: tuple) -> tuple[float, float]:
+        """把点 pt 投影到折线 cl：返回 (沿 cl 弧长 s, 带符号横向偏移 d)。
+
+        d 符号由 (cl 切线 × (pt-cl)) 叉积定（左正右负），供 traffic_light 的
+        y_lane（车道横向坐标）使用。
+        """
+        best_s, best_d, best_sign = 0.0, 1e9, 1.0
+        s = 0.0
+        for i in range(len(cl) - 1):
+            ax, ay = cl[i][0], cl[i][1]
+            bx, by = cl[i + 1][0], cl[i + 1][1]
+            dx, dy = bx - ax, by - ay
+            l2 = dx * dx + dy * dy
+            t = 0.0 if l2 == 0 else ((pt[0] - ax) * dx + (pt[1] - ay) * dy) / l2
+            t = max(0.0, min(1.0, t))
+            px, py = ax + t * dx, ay + t * dy
+            d = math.hypot(pt[0] - px, pt[1] - py)
+            if d < best_d:
+                best_d = d
+                best_s = s + t * math.sqrt(l2)
+                cr = (bx - ax) * (pt[1] - ay) - (by - ay) * (pt[0] - ax)
+                best_sign = 1.0 if cr >= 0 else -1.0
+            s += math.sqrt(l2)
+        return best_s, best_sign * best_d
+
+    def build_traffic_lights(self, roads: list[dict]) -> list[dict]:
+        """把 SUMO tlLogic 映射成 map.json 红绿灯（landmarks.traffic_lights）。
+
+        契约对齐（ScenarioTrafficLight / traffic_light.h）：每条灯是「一条道路上的
+        停止线点」，字段 x=沿路弧长、y_lane=车道横向、heading=朝向、green_s/yellow_s/
+        red_s/phase_offset_s=相位。SUMO tlLogic 是**路口级**多相位配时（state 串按
+        linkIndex 标每个受控连接的灯色），本函数**逐 link 拆成一条灯**，相位时长由
+        该 link 在程序各相位中的灯色累加得到、phase_offset 取该 link 首次变绿的时刻——
+        于是同一路口内 N-S 与 E-W 的灯天然错峰（runtime 单周期相位机即可复现双向交替）。
+
+        近似（诚实声明）：runtime 相位机是「绿→黄→红」单周期，无法表达一个 link 每
+        周期多次变绿或复杂协调；标准 2 相位路口可精确复现，多相位/搭接相位退化为近似。
+        """
+        if not self.tllogic:
+            return []
+        by_sumo = {r["sumo_id"]: r for r in roads}
+        out: list[dict] = []
+        next_id = 0
+        for jid, prog in self.tllogic.items():
+            phases = prog["phases"]
+            T = sum(d for d, _ in phases) or 1.0
+            for (fe, fl, tl, li) in self.conn_links:
+                if tl != jid or li is None:
+                    continue
+                road = by_sumo.get(fe)
+                if road is None:
+                    continue
+                our = self.lane_index_map.get(fe, {}).get(fl)
+                if our is None:
+                    continue
+                lane = next((l for l in road["lanes"] if l["index"] == our), None)
+                if lane is None:
+                    continue
+                cl = lane.get("centerline") or []
+                if len(cl) < 2:
+                    continue
+                stop = (cl[-1][0], cl[-1][1])           # 停止线 = 车道末端（路口入口）
+                s, d = self._project_to_centerline(road["centerline"], stop)
+                heading = math.atan2(cl[-1][1] - cl[-2][1], cl[-1][0] - cl[-2][0])
+                green = yellow = red = 0.0
+                first_green = None
+                for k, (dur, state) in enumerate(phases):
+                    if li >= len(state):
+                        red += dur
+                        continue
+                    sig = state[li]
+                    if sig in "Gg":
+                        green += dur
+                        if first_green is None:
+                            first_green = sum(phases[j][0] for j in range(k))
+                    elif sig == "y":
+                        yellow += dur
+                    else:
+                        red += dur
+                if green <= 0.0:        # 恒红 link（无绿相位）→ runtime 视为无灯，跳过
+                    continue
+                offset = (first_green if first_green is not None else 0.0) + prog["offset"]
+                out.append({
+                    "id": next_id,
+                    "x": round(s, 3),
+                    "y_lane": round(d, 3),
+                    "heading": round(heading, 4),
+                    "red_s": round(red, 2),
+                    "yellow_s": round(yellow, 2),
+                    "green_s": round(green, 2),
+                    "phase_offset_s": round(offset % T, 2),
+                })
+                next_id += 1
+        return out
+
     def convert(self) -> dict:
         roads: list[dict] = []
         # lane successors：lane_id → [lane_id]
@@ -660,8 +781,8 @@ class NetConverter:
             "roads": roads,
             "connections": [],
             "junctions": junctions_out,
-            "landmarks": {"traffic_lights": [], "stop_lines": [],
-                          "construction_zones": []},
+            "landmarks": {"traffic_lights": self.build_traffic_lights(roads),
+                          "stop_lines": [], "construction_zones": []},
             "buildings": [],
             "_stats": {"skipped_non_vehicle_edges": skipped},
         }
@@ -719,8 +840,9 @@ def main() -> int:
     print("wrote %s" % out_path)
     print("  roads: %d（其中路口 connector %d）" % (len(doc["roads"]), n_conn))
     print("  lanes: %d（lane successors %d 条）" % (n_lanes, n_succ))
-    print("  junctions: %d, buildings: %d" %
-          (len(doc["junctions"]), len(doc["buildings"])))
+    print("  junctions: %d, buildings: %d, traffic_lights: %d" %
+          (len(doc["junctions"]), len(doc["buildings"]),
+           len(doc["landmarks"]["traffic_lights"])))
     print("  skipped non-vehicle edges: %d" % stats["skipped_non_vehicle_edges"])
 
     # ── routes.json（main 路线 = 最长几何连接真实道路链） ──
