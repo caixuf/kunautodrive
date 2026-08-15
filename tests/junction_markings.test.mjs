@@ -22,6 +22,8 @@ import { createRoadView }
   from '../tools/flowboard/js/vis/view/RoadView.js';
 import { walkFromJunction }
   from '../tools/flowboard/js/vis/model/TopologyModel.js';
+import { SCENE }
+  from '../tools/flowboard/js/vis/theme/tokens.js';
 import { detectJunctions } from '../tools/flowboard/js/vis/view/JunctionDetect.js';
 import { ok, done } from './test-utils.mjs';
 
@@ -382,7 +384,7 @@ console.log('--- 9. 路口多边形圆角化 ---');
   let patch = null;
   scene.traverse((ch) => {
     if (ch.isInstancedMesh || !ch.isMesh || !ch.material || !ch.material.color) return;
-    if (ch.material.color.getHex() === 0x2a2a2a) patch = ch;
+    if (ch.material.color.getHex() === SCENE.asphalt) patch = ch;   // 路口铺装 = 路面色 token
   });
   const vc = patch ? patch.geometry.getAttribute('position').count : 0;
   // 4 臂 × 2 边界点 = 8 → Chaikin ×2 → 32；顶点须在路口域内（不外鼓不塌陷）

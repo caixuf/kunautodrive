@@ -1484,7 +1484,7 @@ function _perfRowHTML(kind, it) {
   var active = kind === 'proc' ? (key === perfSelPid) : (key === perfSelTid);
   var meta;
   if (kind === 'proc') {
-    meta = key+' · '+Math.round((it.rss_kb||0)/1024)+'MB · '+(it.thread_count||0)+'🧵';
+    meta = key+' · '+Math.round((it.rss_kb||0)/1024)+'MB · '+(it.thread_count||0)+'<svg class="ic" aria-hidden="true"><use href="#i-list"/></svg>';
   } else {
     var st = it.state === 'R' ? '运行' : (it.state === 'S' ? '睡眠' : '阻塞');
     meta = 'TID '+key+' · '+st;
@@ -1770,7 +1770,7 @@ function updateMetrics() {
           var cpuColor = th.cpu_pct > 50 ? '#f85149' : (th.cpu_pct > 20 ? '#d29922' : '#3fb950');
           var barColor = th.cpu_pct > 50 ? '#f85149' : (th.cpu_pct > 20 ? '#d29922' : '#3fb950');
           var barPct = Math.min(100, th.cpu_pct * 2);
-          var stateIcon = th.state === 'R' ? '🟢' : (th.state === 'S' ? '💤' : '⏸');
+          var stateIcon = th.state === 'R' ? '🟢' : (th.state === 'S' ? '💤' : '<svg class="ic" aria-hidden="true"><use href="#i-pause"/></svg>');
           var matchedNode = nodeNames.find(function(nm){ return nm && th.name && th.name.indexOf(nm) >= 0; });
           var nameDisplay = matchedNode ? '<span style="color:#58a6ff">'+matchedNode+'</span>' : '<span>'+th.name+'</span>';
           return '<div class="thread-row" onclick="showNodeDetail(\''+(matchedNode||'')+'\')" style="cursor:'+(matchedNode?'pointer':'default')+'">'+
@@ -2049,7 +2049,7 @@ function showNodeDetail(name) {
     html += '<div style="margin-top:8px;font-weight:600;color:#8b949e;font-size:10px">线程资源</div>';
     matchThreads.forEach(function(th) {
       var cpuColor = th.cpu_pct > 50 ? '#f85149' : (th.cpu_pct > 20 ? '#d29922' : '#3fb950');
-      var stateIcon = th.state === 'R' ? '🟢' : (th.state === 'S' ? '💤' : '⏸');
+      var stateIcon = th.state === 'R' ? '🟢' : (th.state === 'S' ? '💤' : '<svg class="ic" aria-hidden="true"><use href="#i-pause"/></svg>');
       html += '<div class="stat-row"><span style="font-size:10px">'+stateIcon+' '+th.name+' (TID '+th.tid+')</span><span style="font-size:11px;font-weight:700;color:'+cpuColor+'">'+th.cpu_pct.toFixed(1)+'%</span></div>';
     });
   }

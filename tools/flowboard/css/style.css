@@ -1,3 +1,18 @@
+/* ── 设计 token（P3，与 js/vis/theme/tokens.js 一一对应，改色只改这两处）── */
+:root{
+  --bg:#0d1117; --bg-raised:#11161d; --bg-inset:#0a0d14;
+  --border:#30363d; --border-soft:#252d3a;
+  --text:#c9d1d9; --text-bright:#f0f6fc; --text-dim:#8b949e; --text-faint:#484f58;
+  --accent:#58a6ff; --success:#3fb950; --warn:#d29922; --danger:#f85149; --violet:#bc8cff;
+  --font-xs:11px; --font-sm:12px; --font-md:13px; --font-lg:16px; --font-xl:20px;
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:20px;
+  --radius-sm:6px; --radius-md:10px;
+  --shadow-card:0 2px 8px rgba(0,0,0,.4); --shadow-popover:0 18px 48px rgba(0,0,0,.55);
+}
+/* SVG 图标（sprite symbol，Lucide 风格 24px/1.5px 描边/单色素描） */
+.ic{width:14px;height:14px;vertical-align:-2px;flex-shrink:0}
+/* 数据面板数字等宽（不跳动） */
+.val,.mono,.mini-stat .val{ font-variant-numeric:tabular-nums }
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#090c10;color:#c9d1d9;font:13px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei','Helvetica Neue',Helvetica,Arial,sans-serif;display:flex;height:100vh;overflow:hidden;position:relative;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
 body::before{

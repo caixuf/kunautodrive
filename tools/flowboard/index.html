@@ -6,23 +6,50 @@
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-<div id="demo-watermark" style="display:none;position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:9999;padding:4px 14px;border-radius:0 0 8px 8px;background:linear-gradient(135deg,#33220d,#4d351a);color:#f0c674;border:1px solid#5c401a;border-top:none;font-size:11px;font-weight:600;letter-spacing:1px;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,.4)">⚠ DEMO 模拟数据 — 非实时链路</div>
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <symbol id="i-zap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+  <symbol id="i-clapper" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z"/><path d="m6.2 5.3 3.1 3.9"/><path d="m12.4 3.4 3.1 4"/><path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
+  <symbol id="i-map" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.6 9 3 3.7 5.2A1 1 0 0 0 3 6.1v11.5a.5.5 0 0 0 .7.5L9 16l6 3 5.3-2.2a1 1 0 0 0 .7-.9V4.4a.5.5 0 0 0-.7-.5Z"/><path d="M9 3v13"/><path d="M15 8v13"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 3 14 9-14 9V3z"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" x2="12" y1="20" y2="10"/><line x1="18" x2="18" y1="20" y2="4"/><line x1="6" x2="6" y1="20" y2="16"/></symbol>
+  <symbol id="i-trending" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></symbol>
+  <symbol id="i-car" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2"/><circle cx="7" cy="17" r="2"/><path d="M9 17h6"/><circle cx="17" cy="17" r="2"/></symbol>
+  <symbol id="i-monitor" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></symbol>
+  <symbol id="i-radio" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><path d="M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7M5.6 5.6a9 9 0 0 0 0 12.8M18.4 5.6a9 9 0 0 1 0 12.8"/></symbol>
+  <symbol id="i-gamepad" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="12" x2="10" y2="12"/><line x1="8" y1="10" x2="8" y2="14"/><line x1="15" y1="13" x2="15.01" y2="13"/><line x1="18" y1="11" x2="18.01" y2="11"/><path d="M17.32 5H6.68a4 4 0 0 0-3.99 3.59C2.6 9.42 2 14.46 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.41-1.41A2 2 0 0 1 9.83 16h4.34a2 2 0 0 1 1.41.59L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.54-.6-6.58-.68-7.26A4 4 0 0 0 17.32 5z"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></symbol>
+  <symbol id="i-wrench" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></symbol>
+  <symbol id="i-maximize" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15.36-6.36L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.36 6.36L3 16"/><path d="M3 21v-5h5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4M12 17h.01"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
+</svg>
+<div id="demo-watermark" style="display:none;position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:9999;padding:4px 14px;border-radius:0 0 8px 8px;background:linear-gradient(135deg,#33220d,#4d351a);color:#f0c674;border:1px solid#5c401a;border-top:none;font-size:11px;font-weight:600;letter-spacing:1px;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,.4)"><svg class="ic" aria-hidden="true"><use href="#i-warn"/></svg> DEMO 模拟数据 — 非实时链路</div>
 <div id="sidebar">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
-    <div class="icon" style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#1f6feb,#8b5cf6);display:flex;align-items:center;justify-content:center;font-size:18px">⚡</div>
+    <div class="icon" style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#1f6feb,#8b5cf6);display:flex;align-items:center;justify-content:center;font-size:18px"><svg class="ic" style="width:18px;height:18px" aria-hidden="true"><use href="#i-zap"/></svg></div>
     <div>
       <div style="font-weight:700;font-size:16px;background:linear-gradient(135deg,#58a6ff,#bc8cff);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent">FlowBoard</div>
       <div style="font-size:10px;color:#484f58">自动驾驶实时监控</div>
-      <a href="/tools/flowboard/showcase.html" title="综合 3D 场景展示（无需运行管道）" style="font-size:10px;color:#58a6ff;text-decoration:none">🎬 综合 3D 场景展示 →</a>
+      <a href="/tools/flowboard/showcase.html" title="综合 3D 场景展示（无需运行管道）" style="font-size:10px;color:#58a6ff;text-decoration:none"><svg class="ic" aria-hidden="true"><use href="#i-clapper"/></svg> 综合 3D 场景展示 →</a>
     </div>
   </div>
   <span id="conn-dot" class="pill pill-dead" style="align-self:flex-start">● 连接中...</span>
   <div class="sidebar-segment" id="quick-actions">
-    <button onclick="flowboard.doConnect()" class="primary" style="flex:1">🔗 连接</button>
-    <button onclick="flowboard.doSimulate()" style="flex:1">🎬 演示</button>
+    <button onclick="flowboard.doConnect()" class="primary" style="flex:1"><svg class="ic" aria-hidden="true"><use href="#i-link"/></svg> 连接</button>
+    <button onclick="flowboard.doSimulate()" style="flex:1"><svg class="ic" aria-hidden="true"><use href="#i-clapper"/></svg> 演示</button>
   </div>
   <div class="card" id="map-route-card">
-    <div class="card-header"><h2>🗺 地图路线</h2><span class="toggle">▼</span></div>
+    <div class="card-header"><h2><svg class="ic" aria-hidden="true"><use href="#i-map"/></svg> 地图路线</h2><span class="toggle">▼</span></div>
     <div class="card-body">
       <select id="map-choice" onchange="flowboard.onMapChoiceChange()" style="width:100%">
         <option value="city_ring">city_ring · 城市环线</option>
@@ -33,8 +60,8 @@
       </select>
       <select id="route-choice" onchange="flowboard.onRouteChoiceChange()" style="width:100%;margin-top:5px"></select>
       <div id="route-help" style="font-size:10px;color:#8b949e;margin-top:5px"></div>
-      <button onclick="flowboard.previewSelectedRoute()" style="width:100%;margin-top:7px">👁 3D 预览选中路线</button>
-      <button onclick="flowboard.runSelectedRoute()" class="primary" style="width:100%;margin-top:7px">▶ 运行选中路线</button>
+      <button onclick="flowboard.previewSelectedRoute()" style="width:100%;margin-top:7px"><svg class="ic" aria-hidden="true"><use href="#i-eye"/></svg> 3D 预览选中路线</button>
+      <button onclick="flowboard.runSelectedRoute()" class="primary" style="width:100%;margin-top:7px"><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg> 运行选中路线</button>
     </div>
   </div>
   <div id="diag-bar" style="display:none;margin-top:4px;padding:4px 6px;border-radius:6px;background:#3a1414;border:1px solid#5c1a1a;color:#f0a0a0;font-size:10px;line-height:1.4;max-height:90px;overflow:auto;cursor:pointer" title="点击清除" onclick="flowboard.clearDiag()"></div>
@@ -43,10 +70,10 @@
     <input id="url" value="" placeholder="监控服务地址">
     <div style="display:flex;gap:4px;margin-top:4px">
       <div class="dropdown">
-        <button onclick="flowboard.toggleExportMenu()" class="sm" title="导出">⬇ 导出</button>
+        <button onclick="flowboard.toggleExportMenu()" class="sm" title="导出"><svg class="ic" aria-hidden="true"><use href="#i-download"/></svg> 导出</button>
         <div class="dropdown-menu" id="export-menu">
-          <button onclick="flowboard.exportPNG()">📸 拓扑图 PNG</button>
-          <button onclick="flowboard.exportCSV()">📊 QoS CSV</button>
+          <button onclick="flowboard.exportPNG()"><svg class="ic" aria-hidden="true"><use href="#i-camera"/></svg> 拓扑图 PNG</button>
+          <button onclick="flowboard.exportCSV()"><svg class="ic" aria-hidden="true"><use href="#i-chart"/></svg> QoS CSV</button>
         </div>
       </div>
     </div>
@@ -56,41 +83,41 @@
     <div style="font-size:10px;color:#8b949e;letter-spacing:.3px;margin-bottom:4px">话题过滤</div>
     <div class="input-inline">
       <input id="topic-filter" placeholder="sensor/lidar, control/cmd" oninput="flowboard.onFilterChange()">
-      <button class="sm" onclick="flowboard.clearTopicFilter()" title="清除过滤">✕</button>
+      <button class="sm" onclick="flowboard.clearTopicFilter()" title="清除过滤"><svg class="ic" aria-hidden="true"><use href="#i-x"/></svg></button>
     </div>
   </div>
 
   <div class="sidebar-segment">
   <div style="display:flex;gap:4px">
-    <button onclick="flowboard.doPause()" id="pause-btn" style="flex:1">⏯ 暂停</button>
-    <button onclick="flowboard.clearFrames()" style="flex:1">🗑 清空</button>
-    <button onclick="flowboard.resetView()" class="sm" title="重置视图（R 键）">🔲</button>
+    <button onclick="flowboard.doPause()" id="pause-btn" style="flex:1"><svg class="ic" aria-hidden="true"><use href="#i-pause"/></svg> 暂停</button>
+    <button onclick="flowboard.clearFrames()" style="flex:1"><svg class="ic" aria-hidden="true"><use href="#i-trash"/></svg> 清空</button>
+    <button onclick="flowboard.resetView()" class="sm" title="重置视图（R 键）"><svg class="ic" aria-hidden="true"><use href="#i-maximize"/></svg></button>
   </div>
   </div>
 
-  <div class="card" id="training-card"><div class="card-header" onclick="flowboard.toggleCard(this)"><h2>🧠 训练</h2><span class="toggle">▼</span></div>
+  <div class="card" id="training-card"><div class="card-header" onclick="flowboard.toggleCard(this)"><h2><svg class="ic" aria-hidden="true"><use href="#i-cpu"/></svg> 训练</h2><span class="toggle">▼</span></div>
     <div class="card-body">
       <div class="stat-row"><span class="label">状态</span><span class="value" id="train-status" style="font-size:11px">空闲</span></div>
       <div class="stat-row"><span class="label">模型</span><span class="value mono" id="train-model" style="font-size:10px">—</span></div>
       <div style="display:flex;gap:4px;margin-top:8px">
         <button onclick="flowboard.openTrainingModal()" class="primary" style="flex:1">开始训练</button>
-        <button onclick="flowboard.refreshTrainingStatus()" class="sm">↻</button>
+        <button onclick="flowboard.refreshTrainingStatus()" class="sm"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg></button>
       </div>
     </div>
   </div>
 
-  <div class="card" id="ops-card"><div class="card-header" onclick="flowboard.toggleCard(this)"><h2>🛠 运维控制台</h2><span class="toggle">▼</span></div>
+  <div class="card" id="ops-card"><div class="card-header" onclick="flowboard.toggleCard(this)"><h2><svg class="ic" aria-hidden="true"><use href="#i-wrench"/></svg> 运维控制台</h2><span class="toggle">▼</span></div>
     <div class="card-body">
       <div class="stat-row"><span class="label">Bag 回灌</span><span class="value" id="ops-bag-state" style="font-size:11px">空闲</span></div>
       <div class="stat-row"><span class="label">学习闭环</span><span class="value" id="ops-learning-state" style="font-size:11px">空闲</span></div>
       <div style="display:flex;gap:4px;margin-top:8px">
         <button onclick="flowboard.openOpsModal()" class="primary" style="flex:1">执行操作</button>
-        <button onclick="flowboard.refreshOpsStatus()" class="sm">↻</button>
+        <button onclick="flowboard.refreshOpsStatus()" class="sm"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg></button>
       </div>
     </div>
   </div>
 
-  <div class="card" id="bus-card"><div class="card-header" onclick="flowboard.toggleCard(this)"><h2>📊 总线统计</h2><span class="toggle">▼</span></div>
+  <div class="card" id="bus-card"><div class="card-header" onclick="flowboard.toggleCard(this)"><h2><svg class="ic" aria-hidden="true"><use href="#i-chart"/></svg> 总线统计</h2><span class="toggle">▼</span></div>
     <div class="card-body"><div class="metric-grid">
       <div class="mini-stat"><div class="val" id="m-pub">0</div><div class="lbl">已发布</div></div>
       <div class="mini-stat"><div class="val" id="m-del">0</div><div class="lbl">已投递</div></div>
@@ -99,11 +126,11 @@
     </div></div>
   </div>
 
-  <div class="card"><div class="card-header" onclick="flowboard.toggleCard(this)"><h2>🟢 节点</h2><span class="toggle">▼</span></div>
+  <div class="card"><div class="card-header" onclick="flowboard.toggleCard(this)"><h2>节点</h2><span class="toggle">▼</span></div>
     <div class="card-body"><div id="node-status"><span style="color:#484f58">暂无数据</span></div></div>
   </div>
 
-  <div class="card" id="vehicle-card" style="display:none"><div class="card-header" onclick="flowboard.toggleCard(this)"><h2>🚗 车辆状态</h2><span class="toggle">▼</span></div>
+  <div class="card" id="vehicle-card" style="display:none"><div class="card-header" onclick="flowboard.toggleCard(this)"><h2><svg class="ic" aria-hidden="true"><use href="#i-car"/></svg> 车辆状态</h2><span class="toggle">▼</span></div>
     <div class="card-body"><div class="metric-grid">
       <div class="mini-stat"><div class="val" id="v-speed" style="color:#3fb950">--</div><div class="lbl">速度 m/s</div></div>
       <div class="mini-stat"><div class="val" id="v-target" style="color:#58a6ff">--</div><div class="lbl">目标 m/s</div></div>
@@ -115,11 +142,11 @@
     </div></div>
   </div>
 
-  <div class="card" id="sysmon-card" style="display:none"><div class="card-header" onclick="flowboard.toggleCard(this)"><h2>🖥️ 系统</h2><span class="toggle">▼</span></div>
+  <div class="card" id="sysmon-card" style="display:none"><div class="card-header" onclick="flowboard.toggleCard(this)"><h2><svg class="ic" aria-hidden="true"><use href="#i-monitor"/></svg> 系统</h2><span class="toggle">▼</span></div>
     <div class="card-body">
       <div class="view-toggle" id="sys-view-toggle">
-        <button class="toggle-btn active" data-view="system" onclick="flowboard.switchSysView('system')">📊 系统</button>
-        <button class="toggle-btn" data-view="threads" onclick="flowboard.switchSysView('threads')">🧵 线程</button>
+        <button class="toggle-btn active" data-view="system" onclick="flowboard.switchSysView('system')"><svg class="ic" aria-hidden="true"><use href="#i-chart"/></svg> 系统</button>
+        <button class="toggle-btn" data-view="threads" onclick="flowboard.switchSysView('threads')"><svg class="ic" aria-hidden="true"><use href="#i-list"/></svg> 线程</button>
       </div>
       <div id="sys-view-system"><div class="metric-grid">
       <div class="mini-stat"><div class="val" id="s-cpu" style="color:#58a6ff">--</div><div class="lbl">CPU %</div></div>
@@ -143,15 +170,15 @@
 
 <div id="main">
   <div id="workspace-nav" class="workspace-nav">
-    <button class="ws-btn active" data-ws="observe" onclick="flowboard.switchWorkspace('observe')">🛰 观察</button>
-    <button class="ws-btn" data-ws="analyze" onclick="flowboard.switchWorkspace('analyze')">📈 分析</button>
-    <button class="ws-btn" data-ws="operate" onclick="flowboard.switchWorkspace('operate')">🛠 运维</button>
-    <button class="ws-btn" data-ws="perf" onclick="flowboard.switchWorkspace('perf')">📊 性能分析</button>
+    <button class="ws-btn active" data-ws="observe" onclick="flowboard.switchWorkspace('observe')"><svg class="ic" aria-hidden="true"><use href="#i-radio"/></svg> 观察</button>
+    <button class="ws-btn" data-ws="analyze" onclick="flowboard.switchWorkspace('analyze')"><svg class="ic" aria-hidden="true"><use href="#i-trending"/></svg> 分析</button>
+    <button class="ws-btn" data-ws="operate" onclick="flowboard.switchWorkspace('operate')"><svg class="ic" aria-hidden="true"><use href="#i-wrench"/></svg> 运维</button>
+    <button class="ws-btn" data-ws="perf" onclick="flowboard.switchWorkspace('perf')"><svg class="ic" aria-hidden="true"><use href="#i-chart"/></svg> 性能分析</button>
   </div>
   <div id="map-preview-modal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(1,4,9,.55);box-sizing:border-box">
     <div id="map-preview-panel" data-ratio="1.565" style="position:absolute;right:18px;top:18px;width:min(920px,64vw);height:min(588px,70vh);display:flex;flex-direction:column;background:#0d1117;border:1px solid #30363d;border-radius:12px;overflow:hidden;box-shadow:0 18px 48px rgba(0,0,0,.55)">
       <div id="map-preview-handle" style="position:relative;display:flex;align-items:center;justify-content:space-between;padding:10px 48px 10px 14px;border-bottom:1px solid #30363d;background:#11161d;cursor:move;user-select:none">
-        <strong style="font-size:13px">🗺 3D 地图预览</strong>
+        <strong style="font-size:13px"><svg class="ic" aria-hidden="true"><use href="#i-map"/></svg> 3D 地图预览</strong>
         <span style="font-size:11px;color:#8b949e">左键旋转 · 滚轮缩放 · 右键平移 · 右下角拖拽改大小</span>
         <button type="button" onclick="flowboard.closeMapPreview()" title="关闭"
           style="position:absolute;right:8px;top:6px;width:32px;height:32px;border:0;border-radius:8px;background:#21262d;color:#f0f6fc;font-size:18px;line-height:1;cursor:pointer">×</button>
@@ -180,7 +207,7 @@
     <div id="process-topics" style="max-height:200px;overflow-y:auto"><span style="color:#484f58;padding:10px">暂无数据</span></div></div>
 
   <div class="card ws-block ws-observe" id="scene3d-card"><div class="card-header" onclick="flowboard.toggleCard(this)" style="flex-wrap:wrap;gap:6px 8px"><h2 style="flex-shrink:0"><span class="dot" style="background:#3fb950"></span>场景视图</h2><div style="display:flex;align-items:center;gap:4px;margin-left:auto" id="scene-view-btns" onclick="event.stopPropagation()"><button class="toggle-btn active" data-view="3d" onclick="flowboard.switchSceneView('3d')" style="padding:4px 12px;font-size:11px">3D</button><button class="toggle-btn" data-view="2d" onclick="flowboard.switchSceneView('2d')" style="padding:4px 12px;font-size:11px">BEV</button></div><div style="display:flex;align-items:center;gap:4px" onclick="event.stopPropagation()"><select id="env-lighting" onchange="flowboard.setEnvironment()" title="时段"><option value="day">白天</option><option value="dusk">黄昏</option><option value="night">夜晚</option></select><select id="env-weather" onchange="flowboard.setEnvironment()" title="天气"><option value="clear">晴</option><option value="overcast">阴</option><option value="rain">雨</option><option value="snow">雪</option><option value="fog">雾</option></select></div><div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap" id="cam-mode-btns" onclick="event.stopPropagation()"><button class="toggle-btn active" data-cam="chase" onclick="flowboard.setCameraMode('chase');_updateCamBtns(this)" title="追逐视角" style="padding:4px 10px;font-size:11px">尾随</button><button class="toggle-btn" data-cam="top" onclick="flowboard.setCameraMode('top');_updateCamBtns(this)" title="俯视" style="padding:4px 10px;font-size:11px">俯视</button><button class="toggle-btn" data-cam="orbit" onclick="flowboard.setCameraMode('orbit');_updateCamBtns(this)" title="自由轨道（拖拽旋转/滚轮缩放）" style="padding:4px 10px;font-size:11px">自由</button><button class="toggle-btn" data-cam="driver" onclick="flowboard.setCameraMode('driver');_updateCamBtns(this)" title="驾驶员视角" style="padding:4px 10px;font-size:11px">第一人称</button><button class="toggle-btn" data-cam="front" onclick="flowboard.setCameraMode('front');_updateCamBtns(this)" title="前保险杠" style="padding:4px 10px;font-size:11px">车头</button><button class="toggle-btn" data-cam="map" onclick="flowboard.setCameraMode('map');_updateCamBtns(this)" title="鸟瞰地图（拖拽平移/滚轮缩放）" style="padding:4px 10px;font-size:11px">地图</button><button class="toggle-btn" data-cam="bev" onclick="flowboard.setCameraMode('bev');_updateCamBtns(this)" title="BEV 正交鸟瞰（车头朝上，复用 3D 场景）" style="padding:4px 10px;font-size:11px">BEV</button><button class="toggle-btn" onclick="flowboard.resetMapView()" title="回到自车（地图模式拖远后用）" style="padding:4px 8px;font-size:12px">⟳</button></div><span class="toggle" style="align-self:flex-start">▼</span></div>
-    <div class="card-body" style="padding:0"><canvas id="scene2d" width="1200" height="800" style="display:none;width:100%;height:100%;background:#0a0d14"></canvas><div id="scene3d" style="width:100%;height:100%;background:#5588aa;position:relative;overflow:hidden"><button id="game-toggle" onclick="flowboard.toggleGameMode()" type="button">🎮 接管车辆</button><button id="game-rescue" onclick="flowboard.rescueGameVehicle()" type="button">↩ 回到车道</button><div id="game-hud"><div class="game-hud-title"><span>手动驾驶</span><b id="game-state">玩家全权控制 · ADAS 仅告警</b></div><div class="game-hud-grid"><span>挡位</span><b id="game-gear">D</b><span>速度</span><b id="game-speed">0.0 m/s</b><span>转向输入</span><b id="game-steer">0.0°</b><span>车身航向</span><b id="game-heading">0.0°</b><span>移动方向</span><b id="game-motion">0.0°</b><span>方向偏差</span><b id="game-slip">0.0°</b><span>规划/显示点</span><b id="game-traj-points">0 / 0</b><span>F/R/停</span><b id="game-traj-gears">0 / 0 / 0</b><span>最大点距</span><b id="game-traj-gap">0.0 m</b></div><div class="game-lights"><span>灯光测试</span><button id="game-light-low" onclick="flowboard.toggleGameLight('low')" type="button" aria-pressed="false">近光 L</button><button id="game-light-left" onclick="flowboard.toggleGameLight('left')" type="button" aria-pressed="false">左转 Q</button><button id="game-light-right" onclick="flowboard.toggleGameLight('right')" type="button" aria-pressed="false">右转 E</button><button id="game-light-hazard" onclick="flowboard.toggleGameLight('hazard')" type="button" aria-pressed="false">双闪 H</button></div><div id="game-alert">辅助驾驶仅告警</div><div class="game-keys"><span>W/↑ 油门</span><span>S/↓ 制动</span><span>A D/← → 转向</span><span>空格 急刹</span><span>R 切换挡位 D/R</span><span>L/Q/E/H 灯光</span></div></div><div id="scene3d-msg" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none;max-width:400px;display:none"></div></div></div>
+    <div class="card-body" style="padding:0"><canvas id="scene2d" width="1200" height="800" style="display:none;width:100%;height:100%;background:#0a0d14"></canvas><div id="scene3d" style="width:100%;height:100%;background:#5588aa;position:relative;overflow:hidden"><button id="game-toggle" onclick="flowboard.toggleGameMode()" type="button"><svg class="ic" aria-hidden="true"><use href="#i-gamepad"/></svg> 接管车辆</button><button id="game-rescue" onclick="flowboard.rescueGameVehicle()" type="button"><svg class="ic" aria-hidden="true"><use href="#i-undo"/></svg> 回到车道</button><div id="game-hud"><div class="game-hud-title"><span>手动驾驶</span><b id="game-state">玩家全权控制 · ADAS 仅告警</b></div><div class="game-hud-grid"><span>挡位</span><b id="game-gear">D</b><span>速度</span><b id="game-speed">0.0 m/s</b><span>转向输入</span><b id="game-steer">0.0°</b><span>车身航向</span><b id="game-heading">0.0°</b><span>移动方向</span><b id="game-motion">0.0°</b><span>方向偏差</span><b id="game-slip">0.0°</b><span>规划/显示点</span><b id="game-traj-points">0 / 0</b><span>F/R/停</span><b id="game-traj-gears">0 / 0 / 0</b><span>最大点距</span><b id="game-traj-gap">0.0 m</b></div><div class="game-lights"><span>灯光测试</span><button id="game-light-low" onclick="flowboard.toggleGameLight('low')" type="button" aria-pressed="false">近光 L</button><button id="game-light-left" onclick="flowboard.toggleGameLight('left')" type="button" aria-pressed="false">左转 Q</button><button id="game-light-right" onclick="flowboard.toggleGameLight('right')" type="button" aria-pressed="false">右转 E</button><button id="game-light-hazard" onclick="flowboard.toggleGameLight('hazard')" type="button" aria-pressed="false">双闪 H</button></div><div id="game-alert">辅助驾驶仅告警</div><div class="game-keys"><span>W/↑ 油门</span><span>S/↓ 制动</span><span>A D/← → 转向</span><span>空格 急刹</span><span>R 切换挡位 D/R</span><span>L/Q/E/H 灯光</span></div></div><div id="scene3d-msg" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none;max-width:400px;display:none"></div></div></div>
   </div>
 
   <div class="card ws-block ws-analyze"><div class="card-header" onclick="flowboard.toggleCard(this)">
@@ -204,12 +231,12 @@
     <div class="card-body">
       <div class="ops-grid">
         <div class="ops-tile">
-          <h3>🧠 学习闭环</h3>
+          <h3><svg class="ic" aria-hidden="true"><use href="#i-cpu"/></svg> 学习闭环</h3>
           <p>启动模型训练、影子模式评估、自动模型上线，查看训练日志。</p>
           <button class="primary" onclick="flowboard.openTrainingModal()">打开训练控制台</button>
         </div>
         <div class="ops-tile">
-          <h3>🛠 运行操作</h3>
+          <h3><svg class="ic" aria-hidden="true"><use href="#i-wrench"/></svg> 运行操作</h3>
           <p>Bag 数据回灌、bag 信息查看、模型评估、完整学习流水线执行。</p>
           <button class="primary" onclick="flowboard.openOpsModal()">打开运维控制台</button>
         </div>
@@ -251,7 +278,7 @@
 <div id="detail-panel">
   <div style="display:flex;justify-content:space-between;align-items:center">
     <h3 style="color:#58a6ff;font-size:14px" id="det-name">—</h3>
-    <button onclick="flowboard.closeDetail()" class="sm" style="color:#f85149">✕</button>
+    <button onclick="flowboard.closeDetail()" class="sm" style="color:#f85149"><svg class="ic" aria-hidden="true"><use href="#i-x"/></svg></button>
   </div>
   <div id="det-body" style="color:#484f58;font-size:11px">在拓扑图中选择一个节点查看详情</div>
 </div>
@@ -260,14 +287,14 @@
 <div id="npc-detail-panel" style="display:none;position:fixed;right:20px;bottom:20px;width:240px;z-index:9000;padding:12px;border-radius:10px;background:#161b22;border:1px solid #252d3a;box-shadow:0 8px 24px rgba(0,0,0,0.5)">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
     <h3 style="color:#58a6ff;font-size:14px;margin:0">NPC 信息</h3>
-    <button onclick="flowboard.closeNPCDetail()" class="sm" style="color:#f85149">✕</button>
+    <button onclick="flowboard.closeNPCDetail()" class="sm" style="color:#f85149"><svg class="ic" aria-hidden="true"><use href="#i-x"/></svg></button>
   </div>
   <div style="color:#484f58;font-size:11px">在 3D 场景中点击 NPC 车辆查看</div>
 </div>
 
 <div id="training-modal" class="modal-overlay" onclick="if(event.target===this)flowboard.closeTrainingModal()">
   <div class="modal" data-status-endpoint="/api/training/status">
-    <div class="modal-header"><h3>训练控制台</h3><button onclick="flowboard.closeTrainingModal()" class="sm" style="color:#f85149">✕</button></div>
+    <div class="modal-header"><h3>训练控制台</h3><button onclick="flowboard.closeTrainingModal()" class="sm" style="color:#f85149"><svg class="ic" aria-hidden="true"><use href="#i-x"/></svg></button></div>
     <div class="modal-body">
       <div class="form-grid">
         <div class="form-field"><label>推理后端</label><select id="train-backend" onchange="flowboard.syncTrainingForm()"><option value="torch">PyTorch</option><option value="tiny">TinyNN (内置)</option></select></div>
@@ -290,7 +317,7 @@
 
 <div id="ops-modal" class="modal-overlay" onclick="if(event.target===this)flowboard.closeOpsModal()">
   <div class="modal">
-    <div class="modal-header"><h3>运维控制台</h3><button onclick="flowboard.closeOpsModal()" class="sm" style="color:#f85149">✕</button></div>
+    <div class="modal-header"><h3>运维控制台</h3><button onclick="flowboard.closeOpsModal()" class="sm" style="color:#f85149"><svg class="ic" aria-hidden="true"><use href="#i-x"/></svg></button></div>
     <div class="modal-body">
       <div class="form-grid">
         <div class="form-field"><label>Bag 文件路径</label><input id="ops-bag-path" placeholder="/tmp/demo.bag"></div>
@@ -301,17 +328,17 @@
         <div class="form-field"><label>全流程模型名(可选)</label><input id="ops-loop-name" placeholder="loop_custom_name"></div>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
-        <button onclick="flowboard.startBagReplay()" class="primary">▶ 回灌 Bag</button>
-        <button onclick="flowboard.stopBagReplay()">⏹ 停止回灌</button>
+        <button onclick="flowboard.startBagReplay()" class="primary"><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg> 回灌 Bag</button>
+        <button onclick="flowboard.stopBagReplay()"><svg class="ic" aria-hidden="true"><use href="#i-stop"/></svg> 停止回灌</button>
         <button onclick="flowboard.runBagInfo()">ℹ Bag 信息</button>
         <label class="muted" style="font-size:11px"><input type="checkbox" id="ops-eval-promote" style="width:auto;margin-right:4px">eval-only 后自动上线</label>
-        <button onclick="flowboard.startLearningEval()" class="primary">▶ 仅跑评估</button>
+        <button onclick="flowboard.startLearningEval()" class="primary"><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg> 仅跑评估</button>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
         <label class="muted" style="font-size:11px"><input type="checkbox" id="ops-loop-promote" style="width:auto;margin-right:4px">全流程后自动上线</label>
-        <button onclick="flowboard.startLearningFull()" class="primary">▶ 跑完整学习闭环</button>
-        <button onclick="flowboard.stopLearningLoop()">⏹ 停止学习任务</button>
-        <button onclick="flowboard.refreshOpsStatus()">↻ 刷新状态</button>
+        <button onclick="flowboard.startLearningFull()" class="primary"><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg> 跑完整学习闭环</button>
+        <button onclick="flowboard.stopLearningLoop()"><svg class="ic" aria-hidden="true"><use href="#i-stop"/></svg> 停止学习任务</button>
+        <button onclick="flowboard.refreshOpsStatus()"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg> 刷新状态</button>
       </div>
       <div><div style="font-size:10px;color:#8b949e;margin-bottom:4px;letter-spacing:.3px">Bag 日志</div><div id="ops-bag-log" class="log-box">暂无 bag 回灌任务。</div></div>
       <div><div style="font-size:10px;color:#8b949e;margin-bottom:4px;letter-spacing:.3px">学习闭环日志</div><div id="ops-learning-log" class="log-box">暂无学习闭环任务。</div></div>

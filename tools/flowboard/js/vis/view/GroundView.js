@@ -8,7 +8,9 @@
  * 位置 y=-0.05（路面上方 0.10m，防 z-fight）。
  */
 
-const GROUND_BASE = 0x6b7257;  // 城市地块基底（偏土绿，比纯草更中性）
+import { SCENE } from '../theme/tokens.js';
+
+const GROUND_BASE = SCENE.groundBase;  // 城市地块基底（偏土绿，比纯草更中性）
 let _groundTexture = null;
 
 /* 程序化卫星图质感：模拟 OSM 风格俯视——深色街道带 + 灰色建筑块 +

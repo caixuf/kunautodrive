@@ -28,16 +28,19 @@ import { mergeGeometries } from '../math/GeometryMerge.js';
 import { LANE_WIDTH, DEFAULT_LANES, EDGE_TYPE, isTunnelEdge } from '../core/Constants.js';
 import { tangentToNormal, offsetAlongNormal, forwardENU } from '../math/Coord.js';
 import { getTopology } from '../model/TopologyModel.js';
+import { SCENE } from '../theme/tokens.js';
 
-const ASPHALT_COLOR = 0x2a2a2a;
-const SHOULDER_COLOR = 0x5a5a55;
-const CURB_COLOR = 0x9a9a92;
-const SIDEWALK_COLOR = 0x777b78;
-const VERGE_COLOR = 0x355d35;
-const LINE_WHITE = 0xcccccc;
-const LINE_YELLOW = 0xffd700;
-const RAMP_COLOR = 0x353535;    // 匝道路面比主路略浅
-const TUNNEL_COLOR = 0x1b1b1d;  // 隧道/地道：暗色无标线路面（俯视读作地下走廊）
+/* 配色全部来自 theme/tokens.js（P3 设计 token 单一事实源）：
+ * 路面/匝道/路肩/人行道/路缘石五级明度拉开（16→20→33→51→66%）。 */
+const ASPHALT_COLOR = SCENE.asphalt;
+const SHOULDER_COLOR = SCENE.shoulder;
+const CURB_COLOR = SCENE.curb;
+const SIDEWALK_COLOR = SCENE.sidewalk;
+const VERGE_COLOR = SCENE.verge;
+const LINE_WHITE = SCENE.lineWhite;
+const LINE_YELLOW = SCENE.lineYellow;
+const RAMP_COLOR = SCENE.rampSurface;
+const TUNNEL_COLOR = SCENE.tunnel;
 
 const LINE_W = 0.15;      // 车道线宽度 (m)
 const EDGE_LINE_W = 0.20; // 路缘边线宽度 (m)，比车道线略宽以区分路边界
@@ -88,8 +91,8 @@ function _buildAsphaltTextures() {
   // jsdom 等无头环境有 document 但 canvas 无 2D 上下文（无 canvas 包），同样跳过
   if (!ctx || typeof ctx.getImageData !== 'function') return;
 
-  // 基底：深灰沥青色
-  ctx.fillStyle = '#2a2a2a';
+  // 基底：深灰沥青色（与 SCENE.asphalt 同值，纹理叠在 asphalt 材质色上）
+  ctx.fillStyle = '#24262b';
   ctx.fillRect(0, 0, SIZE, SIZE);
 
   // 随机噪声颗粒（模拟沥青骨料）

@@ -16,14 +16,17 @@ import { getBox, getCylinder, getStdMaterial } from '../core/AssetFactory.js';
 import { LANE_WIDTH, DEFAULT_LANES, isTunnelEdge } from '../core/Constants.js';
 import { worldToThree, forwardENU, directionToRotationY } from '../math/Coord.js';
 import { getTopology, walkFromJunction } from '../model/TopologyModel.js';
+import { SCENE } from '../theme/tokens.js';
 
-const TAPER_COLOR  = 0x2a2a2a;   // 锥形过渡路面（同沥青色）
-const JUNCTION_COLOR = 0x2a2a2a; // 路口区域与路面同色（2026-08-14 无缝，不再像补丁块）
-const CROSSWALK_COLOR = 0xf5f5f0; // 斑马线白
-const MERGE_LINE_COLOR = 0xffffff; // 导流线白
-const PIER_COLOR   = 0x6b6b6b;   // 桥墩灰
-const BARREL_RED   = 0xd02020;   // 防撞桶红
-const BARREL_WHITE = 0xf0f0f0;   // 防撞桶白
+/* 配色全部来自 theme/tokens.js（P3 设计 token 单一事实源）。
+ * TAPER/JUNCTION 必须与 RoadView 路面同色（无缝），所以共享 SCENE.asphalt。 */
+const TAPER_COLOR  = SCENE.asphalt;   // 锥形过渡路面（同沥青色）
+const JUNCTION_COLOR = SCENE.asphalt; // 路口区域与路面同色（2026-08-14 无缝，不再像补丁块）
+const CROSSWALK_COLOR = SCENE.crosswalk; // 斑马线白
+const MERGE_LINE_COLOR = SCENE.guideLine; // 导流线白
+const PIER_COLOR   = SCENE.pier;      // 桥墩灰
+const BARREL_RED   = SCENE.barrelRed;   // 防撞桶红
+const BARREL_WHITE = SCENE.barrelWhite;   // 防撞桶白
 const CROSSWALK_STRIPE_W = 0.5;  // 条带宽（跨道路方向）
 const CROSSWALK_GAP = 0.5;       // 条带间距（跨道路方向）
 const CROSSWALK_LENGTH = 2.5;    // 条纹沿道路长度（GB 5768.3 交叉口 ≥2m）

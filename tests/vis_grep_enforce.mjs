@@ -85,6 +85,17 @@ const RULES = [
     dir: JS_DIR,
     exempt: /\/\/\s*exempt|github\.com|Source Han|fonts\.googleapis|trae-api/,
   },
+  // ── P3 设计 token 门禁：3D 配色只能来自 js/vis/theme/tokens.js ──
+  // fileExempt = 未迁移存量文件白名单（随迁移收缩，只减不增）；
+  // RoadView/GroundView/ConnectorView 已迁移完成，不在白名单 = 强制走 token。
+  {
+    name: '裸十六进制颜色字面量 (0xRRGGBB)',
+    pattern: '0x[0-9a-fA-F]{6}',
+    desc: '3D 配色只能来自 theme/tokens.js 的 SCENE.*（纯白/纯黑中性色与注释豁免）',
+    dir: JS_DIR,
+    exempt: /\/\/\s*exempt|SCENE\.|0x(?:[fF]{6}|[0]{6})\b/,
+    fileExempt: /\/theme\/tokens\.js$|\/utils\.js$|\/models\.js$|\/app\.js$|\/core\/AssetFactory\.js$|\/core\/SkyEnv\.js$|\/core\/Lighting\.js$|\/view\/(StreetlightView|RoadFacilityView|BarrierView|TrafficLightView|ETCGateView|BuildingView|PerceptionView|VehicleView|ConstructionView|ViaductView|TreeView|EffectView|StreetFurnitureView)\.js$/,
+  },
   {
     name: '车身材质金属度过高 (metalness >= 0.55)',
     pattern: 'metalness:\\s*0\\.[5-9][5-9]|metalness:\\s*0\\.[6-9]\\d*|metalness:\\s*[1-9]',
