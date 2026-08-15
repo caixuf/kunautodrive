@@ -3,6 +3,23 @@
 > 2026-08-14。回答三个问题：① 护栏/路口等**连接处**为什么一直烂、怎么框架级解决；
 > ② 高德/开源成熟地图的画线衔接为什么永远完美（不是人调的）；
 > ③ 可视化界面怎么从"能用"到"专业软件"。
+>
+> **竣工状态（2026-08-15）**：P0/P1/P2/P3 全部落地，门禁全绿。
+> 关键架构变更：原 P1/P2 的「scene_pub 透传 junctions/lanes」**未走 C++ 每帧透传**，
+> 改为前端按 scenario_name 经既有 `POST /api/map/preview` 一次性拉取权威 map.json
+> （`js/vis/model/MapData.js`，SceneDirector 注入 `map_junctions`/`lane_data`，
+> 注入标志位计入 `roadNetworkHash` 恰好触发一次重建）。理由：lane 几何 ~590KB +
+> junctions ~382KB，20Hz 每帧透传是 ~20MB/s 浪费；静态数据按需拉一次即可。
+> 遗留未做（诚实清单）：跨线桥通用化（ViaductView）、出口/入口蓝色 chip 路牌
+> （LabelView ramp 角色）、lane 多边形路面（road ribbon 视觉已够，标线已车道级）。
+
+| 期 | 状态 | commit |
+|----|------|--------|
+| P0 TopologyModel + 护栏/家具收敛 | ✅ | dcb3eb7 |
+| P1a 路口渠化（圆角多边形/导流虚线/停止线归属） | ✅ | 3cf2665 |
+| P1b 匝道渠化（45° 斜纹全宽/绿色隔离带/主路边线连续） | ✅ | 372a261 |
+| P2 车道级标线（lane 边界成图 + MapData 通道） | ✅ | bcea0c6 |
+| P3 设计系统（tokens + SVG 图标 + 配色分层 + token 门禁） | ✅ | 272a317 |
 
 ## TL;DR
 
