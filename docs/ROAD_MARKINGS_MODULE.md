@@ -113,7 +113,7 @@ for (const across of [-…0…+]) {
 
 ---
 
-## 7. 演进路线（详见 docs/3D_DETAIL_ROADMAP.md）
+## 7. 演进路线（框架级方案详见 docs/VIS_3D_LANE_PIPELINE.md）
 
 标线方向已合规；下一步按路线图 P0（组合箭头）→ P1（路口圆角/渠化岛）推进，
 每步「改 View + 补测试断言 + 过 vis:check:all」。

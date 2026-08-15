@@ -75,7 +75,6 @@ flowsim ──vehicle/state──┐
 control_node ──control/raw_cmd──► [safety_control_node] ──control/cmd──► [actuator] ──► CAN/PWM
                                   (限幅+TTC+行人+横向交叉)        (3s 看门狗)
    │                                                        │
-   └── control/raw_cmd/text ──► [guardian_node] ──control/emergency_stop──► (旁路紧急制动)
 
 mpc_controller  ← mpc_set_*  ← control_node (每帧)  【已废弃，代码已删除】
 frenet_bridge   ← frenet_plan ← planning_node (20Hz)
@@ -103,7 +102,7 @@ flowsim/physics ← step_bicycle ← flowsim_node (20Hz tick, 闭环 ego)
 | 录制 | [bag.c](../src/core/bag.c) / [mcap_writer.c](../src/core/mcap_writer.c) | Bag v2 + MCAP 格式录制/回放 |
 | 服务发现 | [discovery.c](../src/core/discovery.c) | UDP 服务发现 + 拓扑追踪 |
 | 监控 | [monitor_server.c](../src/core/monitor_server.c) / [stats_bridge.c](../src/core/stats_bridge.c) / [dashboard_bridge.c](../src/core/dashboard_bridge.c) | 内嵌 HTTP 服务器、跨进程统计/仪表盘 IPC 桥接 |
-| 插件宿主 | [node_plugin.h](../include/node_plugin.h) / [node_context.c](../src/core/node_context.c) | NodePlugin 接口，节点 `.so` 的统一 ABI |
+| 插件宿主 | [node_plugin.h](../include/node_plugin.h) | NodePlugin 接口，节点 `.so` 的统一 ABI |
 
 ### 参数系统（控制调参的核心基础设施）
 
@@ -173,7 +172,7 @@ class MyTask : public CoroutineTask {
 
 ## 5. 控制子系统详解（重点）
 
-控制链路是 `planning → control → safety_control → actuator`，外加 `guardian` 旁路熔断。本节逐模块剖析。
+控制链路是 `planning → control → safety_control → actuator`。本节逐模块剖析。
 
 ### 5.1 control_node — 控制核心
 
@@ -353,32 +352,7 @@ lc_state: 0=巡航  1=变道中  2=稳定巡航  3=回切中
 
 > **职责边界**：safety_control **不发起死锁恢复**（已移除原 5s low-speed recovery）。理由：与 control 的 SPEED_ZERO_RECOVERY 互相矛盾（control 设 thr=0.15，safety 覆写 thr=0.20/brk=0.30→既进又刹），且 safety 不订阅红绿灯→红灯停车 5s 后会强制蠕行闯红灯。死锁恢复全部归属 control_node。
 
-### 5.5 guardian_node — 熔断器（off-line）
-
-**文件**：[guardian_node.c](../modules/adas_nodes/guardian_node.c)（589 行），20Hz，TASK_PRIORITY_HIGH
-**订阅**：`vehicle/state`、`control/raw_cmd/text`、`fusion/localization`、`perception/obstacles`
-**发布**：`control/emergency_stop`（旁路正常链路）
-
-定位：**链路外**独立看门狗，不依赖 planning/control 正常运转，5 级粗粒度检查，仅故障时介入。
-
-| Level | 检查 | 阈值 |
-|-------|------|------|
-| 1 碰撞 | `check_collision()` | ttc < 1.5s |
-| 2 车道偏离 | `check_lane_departure()` | \|cte\| > 2.5m 且 speed>10 |
-| 3 超速 | `check_overspeed()` | speed > 35 m/s |
-| 4 指令合理性 | `check_cmd_sanity()` | \|steer\|>0.5 / thr+brk 同>0.1 / 高速大转向 |
-| 5 心跳超时 | `check_timeout()` | ego/loc >500ms / cmd >1500ms |
-
-**safety_control vs guardian 对比**：
-
-| 维度 | safety_control | guardian |
-|------|----------------|----------|
-| 定位 | 链路内必经闸门 | 链路外独立看门狗 |
-| 干预 | 修改/限幅 control 指令 → control/cmd | 发布 control/emergency_stop（旁路） |
-| 检查 | 精细 per-obstacle（TTC/行人/横向交叉） | 5 级粗粒度 |
-| 优先级 | normal | HIGH |
-
-### 5.6 actuator — 执行器
+### 5.5 actuator — 执行器
 
 两个二选一节点，都订阅 safety_control 限幅后的 `control/cmd`，都有 3s 看门狗（超时强制中位）。
 
@@ -388,7 +362,7 @@ lc_state: 0=巡航  1=变道中  2=稳定巡航  3=回切中
 
 > pipeline 二选一：真车 ESC 用 actuator_node（CAN），RC 小车用 actuator_pwm_node（PWM）。
 
-### 5.7 flowsim/physics — 车辆动力学仿真真值
+### 5.6 flowsim/physics — 车辆动力学仿真真值
 
 **文件**：[physics.cpp](../modules/adas_nodes/flowsim/physics.cpp)（104 行）/ [entity.h](../modules/adas_nodes/flowsim/entity.h)（258 行）/ [flowsim_node.cpp](../modules/adas_nodes/flowsim_node.cpp)
 
@@ -408,7 +382,7 @@ lc_state: 0=巡航  1=变道中  2=稳定巡航  3=回切中
 
 **EPS 转向低通**（[L1170](../modules/adas_nodes/flowsim_node.cpp#L1170)）：`steer=0.4*raw+0.6*prev`，模拟电动助力转向惯性，滤掉 Stanley 小幅振荡。
 
-### 5.8 frenet_bridge — FOT 包装
+### 5.7 frenet_bridge — FOT 包装
 
 **文件**：[frenet_bridge.cpp](../src/algorithms/frenet_bridge.cpp)（177 行）/ [frenet_bridge.h](../src/algorithms/frenet_bridge.h)
 
@@ -425,7 +399,7 @@ C wrapper 封装开源 Frenet Optimal Trajectory (FOT) 规划器（Apache-2.0）
 >
 > `#ifdef HAVE_FRENET` 守卫：未安装 libeigen3-dev 时编译为 lane_keep_fallback（恒 d=0，**不变道**）。
 
-### 5.9 waypoint_follower — Pure Pursuit（替代规划）
+### 5.8 waypoint_follower — Pure Pursuit（替代规划）
 
 **文件**：[waypoint_follower_node.c](../modules/adas_nodes/waypoint_follower_node.c)（678 行），L2 级 RC 小车航点跟随。
 
@@ -449,7 +423,6 @@ C wrapper 封装开源 Frenet Optimal Trajectory (FOT) 规划器（Apache-2.0）
 | `step_bicycle()` | [physics.cpp](../modules/adas_nodes/flowsim/physics.cpp) | 运动学自行车积分 |
 | `Entity` / `EntityPool` | [entity.h](../modules/adas_nodes/flowsim/entity.h) | 仿真实体固定池（128，Ego=index 0） |
 | `apply_safety()` | [safety_control_node.cpp](../modules/adas_nodes/safety_control_node.cpp) | 安全包络总入口（限幅+TTC+行人+横向交叉） |
-| `publish_emergency_stop()` | [guardian_node.c](../modules/adas_nodes/guardian_node.c) | 熔断紧急制动 |
 
 ### 核心中间件
 
