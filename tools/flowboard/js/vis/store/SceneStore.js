@@ -41,19 +41,25 @@ export function createSceneStore() {
   };
 }
 
-/** 计算 road_network 的 hash，用于 diff 检测 */
+/** 计算 road_network 的 hash，用于 diff 检测。
+ *  mj/ld 标志位：MapData 注入 map_junctions/lane_data 时改变 hash，
+ *  恰好触发一次 view 重建（数据到达帧）。 */
 export function roadNetworkHash(rn) {
   if (!rn || !rn.edges) return '';
-  return JSON.stringify(rn.edges.map(e => ({
-    id: e.id ?? 0,
-    name: e.name ?? '',
-    type: e.type ?? '',
-    lanes: e.lanes ?? 0,
-    lane_width: e.lane_width ?? 0,
-    length: e.length ?? e.length_m ?? 0,
-    one_way: e.one_way ?? false,
-    nodes: e.nodes ?? [],
-  })));
+  return JSON.stringify({
+    e: rn.edges.map(e => ({
+      id: e.id ?? 0,
+      name: e.name ?? '',
+      type: e.type ?? '',
+      lanes: e.lanes ?? 0,
+      lane_width: e.lane_width ?? 0,
+      length: e.length ?? e.length_m ?? 0,
+      one_way: e.one_way ?? false,
+      nodes: e.nodes ?? [],
+    })),
+    mj: rn.map_junctions ? 1 : 0,
+    ld: rn.lane_data ? 1 : 0,
+  });
 }
 
 /**

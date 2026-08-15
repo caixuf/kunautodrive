@@ -470,4 +470,75 @@ console.log('--- 10. 匝道导流区渠化（merge gore）---');
   ok(`隔离带限定在主路/匝道间隙（${vergeVerts} 顶点）`, vergeVerts > 0 && vergeInGap);
 }
 
+// ── 11. P2 车道级标线：lane_data 边界成图 + 共享边界去重 + 路口终止 ──
+console.log('--- 11. 车道级标线（lane_data 数据驱动）---');
+{
+  // 主路在 x=50 处断成两条 edge + 单行支路 → 强制路口；lane_data 按 edge name 键控
+  const mkLane = (id, dir, cz, markings, x0, x1) => ({
+    id, index: 1, direction: dir, width: 3.0,
+    centerline: [[x0, cz, 0], [x1, cz, 0]],
+    markings,
+  });
+  // ENU 车道中心 y：+1.5/+4.5（北向车道）与 -1.5/-4.5（南向车道）
+  // side 契约 = 道路参考线坐标系（右=+法线；THREE 法线 +z = ENU -y）
+  const lanesW = [
+    mkLane('w.lane.1', 1, -1.5, [{ type: 'double_yellow', side: 'left' }, { type: 'dashed_white', side: 'right' }], 0, 50),
+    mkLane('w.lane.2', 1, -4.5, [{ type: 'solid_white', side: 'right' }], 0, 50),
+    mkLane('w.lane.101', -1, 1.5, [{ type: 'double_yellow', side: 'right' }, { type: 'dashed_white', side: 'left' }], 0, 50),
+    mkLane('w.lane.102', -1, 4.5, [{ type: 'solid_white', side: 'left' }], 0, 50),
+  ];
+  const lanesE = lanesW.map((l) => ({ ...l, id: l.id.replace('w.', 'e.'),
+    centerline: [[50, l.centerline[0][1], 0], [100, l.centerline[0][1], 0]] }));
+  const edges11 = [
+    // lane_width=3.5 与 lane 数据 width=3.0 故意不一致：启发式位置（虚线 ±3.5/
+    // 边线 ±6.75）与数据位置（±3.0/±6.0）完全可区分
+    { id: 'main_w', name: 'main_w', type: 'highway', lanes: 4, lane_width: 3.5, nodes: [[0, 0, 0], [50, 0, 0]], oneway: false },
+    { id: 'main_e', name: 'main_e', type: 'highway', lanes: 4, lane_width: 3.5, nodes: [[50, 0, 0], [100, 0, 0]], oneway: false },
+    { id: 'side_1l', name: 'side_1l', type: 'secondary', lanes: 1, lane_width: 3.0, nodes: [[50, -20, 0], [50, 0, 0]], oneway: true },
+  ];
+  const laneData = { main_w: lanesW, main_e: lanesE };
+  const scene = new THREE.Group();
+  const view = createRoadView(scene);
+  view.build({ edges: edges11, lane_data: laneData });
+
+  const whiteZ = [], yellowZ = [];
+  scene.traverse((ch) => {
+    if (!ch.isMesh || ch.isInstancedMesh || !ch.material || !ch.material.color) return;
+    const hex = ch.material.color.getHex();
+    if (hex !== 0xcccccc && hex !== 0xffd700) return;
+    const pos = ch.geometry.getAttribute('position');
+    for (let i = 0; i < pos.count; i++) {
+      if (hex === 0xcccccc) whiteZ.push({ y: pos.getY(i), x: pos.getX(i), z: pos.getZ(i) });
+      else yellowZ.push({ x: pos.getX(i), z: pos.getZ(i) });
+    }
+  });
+  // 车道级位置：虚线 |z|=3.0（Y_MARK 0.13），实线外沿 |z|=6.0（Y_EDGE 0.14）。
+  // 裁剪段端部的微 quad 有轻微倾斜（实测 ≤4/84 顶点偏 ~0.3m），按 ≥95% 达标判。
+  const dashes = whiteZ.filter((v) => v.y > 0.128 && v.y < 0.132);
+  // 实线只看主路区域（排除 side_1l 的竖向边线 x∈[45,55]）
+  const solids = whiteZ.filter((v) => v.y > 0.138 && v.y < 0.142 && (v.x < 45 || v.x > 55));
+  const ratio = (arr, target) => arr.filter((v) => Math.abs(Math.abs(v.z) - target) < 0.2).length / Math.max(1, arr.length);
+  ok(`虚线落在车道边界 |z|=3.0（${dashes.length} 顶点）`,
+    dashes.length > 20 && ratio(dashes, 3.0) >= 0.95);
+  ok(`外侧实线落在 |z|=6.0（${solids.length} 顶点）`,
+    solids.length > 20 && ratio(solids, 6.0) >= 0.95);
+  // 启发式位置（虚线 ±3.5 / 边线 ±6.75，lane_width=3.5 时）不得出现
+  ok('无启发式 offset 残留（±3.5 虚线/±6.75 边线）',
+    !dashes.some((v) => Math.abs(Math.abs(v.z) - 3.5) < 0.15)
+    && !solids.some((v) => Math.abs(Math.abs(v.z) - 6.75) < 0.15));
+  // 共享边界去重：只看 main_w 区域（x∈[0,42]，路口圆外）——去重成功 = 双黄
+  // 2 条 ribbon ≈ 96 顶点；失败会翻倍（lane.1 与 lane.101 各画一对）
+  const yellowW = yellowZ.filter((v) => v.x >= 0 && v.x < 42);
+  ok(`双黄去重（main_w 区 ${yellowW.length} 顶点，重复会 ~192）`,
+    yellowW.length > 50 && yellowW.length < 150
+    && yellowW.every((v) => Math.abs(v.z) < 0.35));
+  // 路口终止：x∈[43,57]（路口圆半径~7.5）内不得有 |z|=3.0 的虚线顶点
+  ok('车道边界在路口圆内自动终止',
+    !dashes.some((v) => Math.abs(Math.abs(v.z) - 3.0) < 0.2 && v.x > 43 && v.x < 57));
+
+  // 兜底：无 lane_data 的 edge 仍走启发式（side_1l 有边线）
+  ok('无 lane_data 的 edge 启发式兜底仍出标线',
+    whiteZ.some((v) => v.y > 0.138 && Math.abs(v.x - 50) < 2.5));
+}
+
 done();

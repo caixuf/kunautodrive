@@ -13,7 +13,7 @@
  */
 
 import { getBox, getCylinder, getStdMaterial } from '../core/AssetFactory.js';
-import { LANE_WIDTH, DEFAULT_LANES, EDGE_TYPE, isTunnelEdge } from '../core/Constants.js';
+import { LANE_WIDTH, DEFAULT_LANES, isTunnelEdge } from '../core/Constants.js';
 import { worldToThree, forwardENU, directionToRotationY } from '../math/Coord.js';
 import { getTopology, walkFromJunction } from '../model/TopologyModel.js';
 

@@ -119,10 +119,19 @@ function toTopo(map, routes, routeId) {
    * 路口中心格式（JunctionDetect 数据层优先消费），fork 记录没有 x/y/z，
    * 若同名传入会被当成 843 个位于 (0,0) 的路口中心，预览渲染全崩。 */
   const mapJunctions = Array.isArray(map.junctions) ? map.junctions : [];
+  /* P2 车道级渲染：roads[].lanes[]（centerline/width/markings）按 road.id
+   * 键控注入 road_network.lane_data，RoadView 直接消费（与 live 路径的
+   * MapData 注入同形同键）。 */
+  const laneData = {};
+  for (const road of roads) {
+    if (road && road.id && Array.isArray(road.lanes) && road.lanes.length) {
+      laneData[road.id] = road.lanes;
+    }
+  }
   return {metrics: {scene: {
     t_us: 0,
     lighting: 'day',
-    road_network: {edges, map_junctions: mapJunctions},
+    road_network: {edges, map_junctions: mapJunctions, lane_data: laneData},
     ego: {type: 'ego', id: 0, x: focus.centerX, y: focus.centerY, z: focus.centerZ,
       heading: focus.heading, speed: 0, vx: 0, vy: 0, length: 4.6, width: 2,
       map_view_height: focus.height,

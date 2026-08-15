@@ -184,6 +184,7 @@ export function createRoadView(scene) {
   let built = false;
   let stats = { rampTransitions: 0 };
   let _topo = null;    // TopologyModel（P0 单一事实源，build 时按 hash 缓存共享）
+  let _laneData = null; // P2 车道级 lane_data（MapData/预览注入，无则启发式兜底）
 
   // 确保纹理已生成
   _buildAsphaltTextures();
@@ -634,6 +635,52 @@ export function createRoadView(scene) {
     return { roadGeos: road ? [road] : [], whiteGeos, vergeGeos: verge ? [verge] : [] };
   }
 
+  /** 车道级标线（2026-08-15 P2）：lane_data 的 lanes[]{centerline,width,markings}
+   *  直接成图——标线 = 车道边界数据本身，不是启发式 offset。
+   *  side 语义（osm_to_map 数据契约）：相对**道路参考线**（centerline 折线）
+   *  坐标系，right = +法线，与 lane.direction 无关（双向路 dir=-1 车道的
+   *  double_yellow 标 right = 几何中央，实测验证）。
+   *  相邻车道共享边界会被两侧各报一次 → 端点量化 key 去重；
+   *  边界折线过路口圆裁剪（TopologyModel 段拆分，与启发式路径同源）。
+   *  @returns 生成的 geo 数（0 = 数据不可用，调用方回退启发式） */
+  function buildLaneMarkingsInto(lanes, edgeId, whiteGeos, yellowGeos) {
+    let made = 0;
+    const seen = new Set();
+    for (const lane of lanes) {
+      const cl = lane && lane.centerline;
+      if (!Array.isArray(cl) || cl.length < 2) continue;
+      const pts = sampleEdgeNodes(cl, SAMPLES_STRAIGHT);
+      const spine = buildSpine(pts);
+      if (spine.length < 2) continue;
+      const hw = (Number(lane.width) || LANE_WIDTH) / 2;
+      for (const mk of (lane.markings || [])) {
+        if (!mk || !mk.type) continue;
+        const d = (mk.side === 'right' ? 1 : -1) * hw;
+        const a = spine[0], b = spine[spine.length - 1];
+        const key = `${mk.type}|${Math.round(a.px + a.nx * d)},${Math.round(a.pz + a.nz * d)}|`
+          + `${Math.round(b.px + b.nx * d)},${Math.round(b.pz + b.nz * d)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const boundary = offsetSpine(spine, d);
+        for (const seg of filterSpineOutsideJunctions(boundary, edgeId)) {
+          if (mk.type === 'dashed_white') {
+            for (const g of dashedLine(seg, 0)) { whiteGeos.push(g); made++; }
+          } else if (mk.type === 'solid_white') {
+            const g = edgeLine(seg, 0);
+            if (g) { whiteGeos.push(g); made++; }
+          } else if (mk.type === 'double_yellow') {
+            const CENTER_GAP = 0.12;
+            const l = solidLine(seg, -CENTER_GAP);
+            const r = solidLine(seg, CENTER_GAP);
+            if (l) { yellowGeos.push(l); made++; }
+            if (r) { yellowGeos.push(r); made++; }
+          }
+        }
+      }
+    }
+    return made;
+  }
+
   /** 从 edge nodes 构建主路路面 + 车道线 + 路肩 */
   function buildStandardRoad(edge, nodes) {
     const sampleCount = edgeSampleCount(nodes, edge.type);
@@ -686,6 +733,14 @@ export function createRoadView(scene) {
     // 路缘边线（白实线）：路缘内缩。外沿=实线（真路约定 + 静态 invariant
     // 「外沿=实线」一致）；虚线只用于同向车道分隔。边线比车道线宽（0.20m vs
     // 0.15m）且略高（0.14m vs 0.13m），远距离可见，与车道分隔虚线视觉区分明显。
+    // P2 车道级：lane_data 有该 road 的 lanes[] → 标线全部来自车道边界数据
+    // （含外侧实线/双黄），下面两个启发式块整块跳过——offset 漂移/双偏移/
+    // 穿路口问题连根消失；无数据走旧启发式（旧场景零回归）。
+    const laneRec = _laneData && (_laneData[edge.name] || _laneData[String(edge.id)]);
+    const laneMarkingsMade = Array.isArray(laneRec)
+      ? buildLaneMarkingsInto(laneRec, edge.id, whiteGeos, yellowGeos)
+      : 0;
+    if (!laneMarkingsMade) {
     for (const seg of markSpine) {
       const edgeL = edgeLine(seg, hw - EDGE_INSET);
       if (edgeL) whiteGeos.push(edgeL);
@@ -714,6 +769,7 @@ export function createRoadView(scene) {
         }
       }
     }
+    }   // !laneMarkingsMade（启发式兜底块结束）
 
     const curbGeos = [];
     const sidewalkGeos = [];
@@ -795,6 +851,7 @@ export function createRoadView(scene) {
     // 交叉口拓扑：TopologyModel 单一事实源（按 roadNetworkHash 缓存，
     // 与 ConnectorView/TreeView/StreetlightView/BarrierView 共享同一次计算）
     _topo = getTopology(roadNetwork);
+    _laneData = roadNetwork.lane_data || null;
 
     const roadGeos = [];
     const shoulderGeos = [];

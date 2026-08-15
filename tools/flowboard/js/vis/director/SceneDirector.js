@@ -9,6 +9,7 @@
  */
 
 import { createSceneStore, roadNetworkHash } from '../store/SceneStore.js';
+import { mapDataForScenario } from '../model/MapData.js';
 import { headingBetweenPoints } from '../math/Coord.js';
 import { createRoadView } from '../view/RoadView.js';
 import { createGroundView } from '../view/GroundView.js';
@@ -172,6 +173,14 @@ export function createSceneDirector(scene) {
       // OSM 建筑（单源真相）：从 scene frame 顶层 buildings[] 透传到 roadNetwork，
       // 供 BuildingView 渲染真实轮廓（无则回退程序化天际线）。
       if (frame && Array.isArray(frame.buildings)) rn.buildings = frame.buildings;
+      /* P2 车道级数据：OSM 权威地图经 MapData 一次性取回后注入 map_junctions /
+       * lane_data；注入标志位计入 roadNetworkHash → 数据到达帧恰好触发一次
+       * view 重建。非 OSM 场景返回 null，走启发式兜底（零回归）。 */
+      const md = mapDataForScenario(store.scenarioName);
+      if (md) {
+        if (!rn.map_junctions && md.junctions.length) rn.map_junctions = md.junctions;
+        if (!rn.lane_data && Object.keys(md.laneData).length) rn.lane_data = md.laneData;
+      }
       const hash = roadNetworkHash(rn);
       if (hash !== lastRoadHash) {
         const edgesArr = Array.isArray(rn.edges) ? rn.edges : [];
