@@ -10,7 +10,7 @@
  */
 
 /* monitor_server /api/map/preview 的 allowlist 地图（新增地图需同步两侧） */
-const ALLOWED = new Set(['city_ring', 'city_center', 'city_grid', 'osm_test', 'osm_lujiazui']);
+const ALLOWED = new Set(['city_ring', 'city_center', 'city_grid', 'osm_test', 'osm_lujiazui', 'osm_lujiazui_v2']);
 /* scenario_name 与 map 目录名不一致的别名表 */
 const ALIAS = { osm_city_map: 'osm_test' };
 
@@ -40,6 +40,11 @@ function buildIndex(map) {
   for (let i = 0; i < roads.length; i++) {
     const r = roads[i];
     if (!r || r.id == null) continue;
+    /* net2map 把 SUMO 路口内部 connector（sumo_id 以 ':' 开头）也输出成 road。
+     * 这些是路口内部短连接：渲染成路面会在每个路口缠成一团、污染路口几何聚类
+     * （树/护栏/路灯槽位判定跟着错），而路口本身由 junction patch 覆盖。渲染层
+     * 直接跳过，只保留真实道路。同步不计入 laneData（内部连接不单独画标线）。 */
+    if (r.sumo_id && String(r.sumo_id).startsWith(':')) continue;
     if (Array.isArray(r.lanes) && r.lanes.length) laneData[r.id] = r.lanes;
     const cl = Array.isArray(r.centerline) ? r.centerline : [];
     if (cl.length < 2) continue;

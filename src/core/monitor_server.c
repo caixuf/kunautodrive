@@ -848,7 +848,8 @@ static bool dispatch_request(int fd, MonitorServer* ms,
                  strcmp(map_id, "city_center") == 0 ||
                  strcmp(map_id, "city_grid") == 0 ||
                  strcmp(map_id, "osm_test") == 0 ||
-                 strcmp(map_id, "osm_lujiazui") == 0);
+                 strcmp(map_id, "osm_lujiazui") == 0 ||
+                 strcmp(map_id, "osm_lujiazui_v2") == 0);
             if (!allowed) {
                 send_response(fd, "400 Bad Request", "application/json",
                               "{\"ok\":false,\"error\":\"map is not allowlisted\"}");
