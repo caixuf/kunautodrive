@@ -26,6 +26,7 @@ import math
 import csv
 import sys
 import os
+import re
 import argparse
 
 # ── 常量（与C代码严格一致）──────────────────────────────────
@@ -91,7 +92,7 @@ def _rect_hits_construction(x, y, h, cz_x, cz_y, cz_len, cz_wid, margin=0.5):
 #  LTV MPC 求解器（完全移植 ltv_mpc.c）
 # ══════════════════════════════════════════════════════════════
 
-LTV_MPC_MAX_HORIZON = 20
+LTV_MPC_MAX_HORIZON = 80
 LTV_MPC_OK          = 0
 LTV_MPC_ERR_SINGULAR = -2
 
@@ -103,10 +104,10 @@ class LtvMpcConfig:
         self.r_ddelta  = 0.5
         self.qf_y      = 20.0
         self.qf_psi    = 40.0
-        self.horizon   = 20
-        self.dt        = 0.05
+        self.horizon   = 60
+        self.dt        = DT    # 求解器 dt 必须 = 本进程实际控制周期（C++ 侧 40Hz=0.025）
         self.wheelbase = WHEELBASE
-        self.max_steer  = 0.35
+        self.max_steer  = 0.16   # 巡航转向包络上限（1.4m/s² 横向加速度）
         self.max_dsteer = 0.5
 
 class LtvMpcSolver:
@@ -162,7 +163,7 @@ class LtvMpcSolver:
 
             A = [[0.0]*3 for _ in range(3)]
             A[0][0] = 1.0;  A[0][1] = v_safe * dt;  A[0][2] = 0.5 * v_safe * dt
-            A[1][1] = 1.0;  A[1][2] = 0.5 * v_safe / L * dt
+            A[1][1] = 1.0;  A[1][2] = v_safe / L * dt   # 与 plant v/L·tanδ 一致（旧 0.5 低估 2×横摆 authority）
             A[2][2] = 1.0
             B = [0.0, 0.0, dt]
             c = [0.0, -kk * v_safe * dt, 0.0]
@@ -239,7 +240,7 @@ class LtvMpcSolver:
 
             x_next = [0.0]*3
             x_next[0] = x[0] + dt * (v_safe * x[1] + 0.5 * v_safe * x[2])
-            x_next[1] = x[1] + dt * (0.5 * v_safe / L * x[2] - kk * v_safe)
+            x_next[1] = x[1] + dt * (v_safe / L * x[2] - kk * v_safe)   # 与 plant v/L·tanδ 一致
             x_next[2] = x[2] + dt * u
             if x_next[2] >  max_steer: x_next[2] =  max_steer
             if x_next[2] < -max_steer: x_next[2] = -max_steer
@@ -249,6 +250,36 @@ class LtvMpcSolver:
                 return None, -4
 
         return best_u, LTV_MPC_OK
+
+
+def mpc_steer_step(mpc, e_y, e_psi, prev_steer, speed, v_ref, kappa_ref):
+    """与 control_node.cpp LTV MPC 调用点同构的应用层（2026-08-15 统一约定）。
+
+    约定（与求解器模型 ė_y=v·e_psi / ė_psi=0.5·v/L·δ−κv 自洽）：
+      e_y   = 路径左侧为正（E-W 直道 = ego_y − target_y）
+      e_psi = ego_heading − ref_heading（左为正）
+      δ>0  = 左打舵（CCW）
+    应用：steer = prev_steer + u·dt（u 是转向速率 rad/s，必须按控制周期积分），
+    输出钉到巡航转向包络 steer_limit_for_speed(v, 1.4)（与 C++ 同口径）。
+
+    返回 (steer_cmd, ok)；ok=False 时调用方回退 Stanley。
+    """
+    mpc.set_state(e_y, e_psi, prev_steer, speed)
+    n = min(len(kappa_ref), LTV_MPC_MAX_HORIZON)
+    mpc.set_reference(v_ref, kappa_ref, n)
+    # 机动自适应包络：大横向误差（变道/避障）用 2.4 m/s²（与 ROAD_GUARD 同档），
+    # 巡航小误差用 1.4 m/s² 舒适包络。1.4 包络在 12m/s 只给 0.026rad，
+    # 变道最小可行时间已贴边，增量式控制再慢半拍 → 饱和摇摆（仿真实测）。
+    env = 2.4 if abs(e_y) > 0.5 else 1.4
+    mpc.cfg.max_steer = steer_limit_for_speed(speed, env)
+    u, rc = mpc.solve()
+    if rc != LTV_MPC_OK or u is None:
+        return prev_steer, False
+    steer = prev_steer + u * mpc.cfg.dt
+    limit = steer_limit_for_speed(speed, env)
+    if steer >  limit: steer =  limit
+    if steer < -limit: steer = -limit
+    return steer, True
 
 
 # ══════════════════════════════════════════════════════════════
@@ -446,8 +477,10 @@ class ControlLayer:
     3. ROAD_GUARD 检查 |ego_y - target_lane_center| > 阈值（非 |ego_y - road_center|）
     4. lat_error = ego_y - target_lane_center
     """
-    def __init__(self, params=None):
+    def __init__(self, params=None, use_mpc=False, mpc_cfg=None):
         self.params = params or StanleyParams()
+        self.use_mpc = use_mpc
+        self.mpc = LtvMpcSolver(mpc_cfg) if use_mpc else None   # 复用同一求解器（K/kff 状态）
         self.ref_path = []
         self.prev_steer = 0.0
         self.lane_d = 0.0          # 前视点横向偏移（从 trajectory 提取）
@@ -491,9 +524,18 @@ class ControlLayer:
         lat_error = target_lane_center - ego_y  # Stanley 约定
         heading_error = ego_heading - best.heading
 
-        # Stanley 控制
-        steer = stanley_control(lat_error, heading_error, ego_yaw_rate,
-                                ego_v, best.kappa, self.prev_steer, self.params)
+        # 横向控制：LTV MPC（求解失败回退 Stanley）——与 C++ 调用点同约定：
+        # e_y = 路径左侧为正（= -lat_error）；e_psi = ego_heading - ref_heading
+        mpc_ok = False
+        if self.use_mpc:
+            v_ref = [max(self.target_speed, 0.5)] * len(self.ref_path)
+            k_ref = [p.kappa for p in self.ref_path]
+            steer, mpc_ok = mpc_steer_step(self.mpc, -lat_error, heading_error,
+                                           self.prev_steer, ego_v, v_ref, k_ref)
+        if not mpc_ok:
+            # Stanley 控制
+            steer = stanley_control(lat_error, heading_error, ego_yaw_rate,
+                                    ego_v, best.kappa, self.prev_steer, self.params)
 
         # ROAD_GUARD（修复后：检查偏离目标车道，非道路中心）
         y_from_target = abs(ego_y - target_lane_center)
@@ -669,8 +711,8 @@ def run_simulation(use_mpc=False, do_lane_change=False,
         # 误差计算
         lat_error = target_y - ego.y  # Stanley约定
         heading_error = ego.heading - 0.0  # 直道ref_heading=0
-        e_y = ego.y - target_y  # MPC约定
-        e_psi = 0.0 - ego.heading  # MPC约定：ref_h - ego_h
+        e_y = ego.y - target_y  # MPC约定：路径左侧为正
+        e_psi = ego.heading - 0.0  # MPC约定：ego_h - ref_h（左为正）
 
         steer_cmd = 0.0
         mpc_ok = False
@@ -678,13 +720,8 @@ def run_simulation(use_mpc=False, do_lane_change=False,
         if use_mpc:
             v_ref = [target_speed] * LTV_MPC_MAX_HORIZON
             kappa_ref = [0.0] * LTV_MPC_MAX_HORIZON
-            mpc.set_state(e_y, e_psi, prev_steer, ego.v)
-            mpc.set_reference(v_ref, kappa_ref, LTV_MPC_MAX_HORIZON)
-            ddelta, rc = mpc.solve()
-            if rc == LTV_MPC_OK and ddelta is not None:
-                # C代码直接加，不乘dt（保持一致行为）
-                steer_cmd = prev_steer + ddelta
-                mpc_ok = True
+            steer_cmd, mpc_ok = mpc_steer_step(mpc, e_y, e_psi, prev_steer, ego.v,
+                                               v_ref, kappa_ref)
 
         if not mpc_ok:
             steer_cmd = stanley_control(lat_error, heading_error, ego.yaw_rate,
@@ -1679,7 +1716,7 @@ def tune_uturn_multi():
 # ── 场景 1: 曲线跟随（Curve following） ─────────────────────
 
 def run_curve_scenario(kappa=0.005, target_speed=12.0, duration=15.0, use_mpc=False,
-                       stanley_params=None):
+                       stanley_params=None, mpc_cfg=None):
     """弯道保持仿真
 
     道路常曲率弯道（kappa=0.005 ≈ R=200m），自车沿车道中心行驶。
@@ -1707,6 +1744,7 @@ def run_curve_scenario(kappa=0.005, target_speed=12.0, duration=15.0, use_mpc=Fa
 
     n_steps = int(duration / DT)
     prev_steer = 0.0
+    mpc = None   # 首次进入 MPC 分支时惰性创建（求解器有 K/kff 状态，不能每步新建）
 
     # 弯道圆心（右弯时圆心在 x=0, y=R）
     R = 1.0 / kappa if abs(kappa) > 1e-9 else float('inf')
@@ -1750,14 +1788,16 @@ def run_curve_scenario(kappa=0.005, target_speed=12.0, duration=15.0, use_mpc=Fa
 
         # 控制
         if use_mpc:
-            mpc = LtvMpcSolver()
-            mpc.set_state(lat_error, heading_error, prev_steer, ego.v)
-            N = 20
-            v_ref = [target_speed] * N
-            k_ref = [kappa] * N
-            mpc.set_reference(v_ref, k_ref, N)
-            steer_cmd, _ = mpc.solve()
-            if steer_cmd is None:
+            if mpc is None:
+                mpc = LtvMpcSolver(mpc_cfg)
+            # MPC 约定：e_y = ego - target（路径左侧为正，y 向近似）；
+            # e_psi = ego_heading - ref_heading（heading_error 已是此约定）
+            e_y = ego.y - nearest_cy
+            v_ref = [target_speed] * LTV_MPC_MAX_HORIZON
+            k_ref = [kappa] * LTV_MPC_MAX_HORIZON
+            steer_cmd, mpc_ok = mpc_steer_step(mpc, e_y, heading_error, prev_steer,
+                                               ego.v, v_ref, k_ref)
+            if not mpc_ok:
                 steer_cmd = 0.0
         else:
             steer_cmd = stanley_control(lat_error, heading_error, ego.yaw_rate,
@@ -1995,7 +2035,7 @@ def run_stop_go_scenario(init_speed=10.0, initial_gap=30.0, duration=20.0):
 # ── 场景 4: 障碍物避让（Obstacle avoidance） ─────────────────
 
 def run_obstacle_avoid_scenario(init_speed=12.0, obs_x=60.0, obs_width=2.0,
-                                 duration=10.0, target_lane=1):
+                                 duration=10.0, target_lane=1, use_mpc=False, mpc_cfg=None):
     """障碍物避让仿真
 
     自车巡航中，前方车道内有静止障碍物。
@@ -2019,7 +2059,7 @@ def run_obstacle_avoid_scenario(init_speed=12.0, obs_x=60.0, obs_width=2.0,
     result = ScenarioResult()
 
     planner = PlanningLayer()
-    controller = ControlLayer(StanleyParams())
+    controller = ControlLayer(StanleyParams(), use_mpc=use_mpc, mpc_cfg=mpc_cfg)
     lon_ctrl = LongitudinalController(target_speed=init_speed)
     prev_steer = 0.0
 
@@ -2093,7 +2133,7 @@ def run_obstacle_avoid_scenario(init_speed=12.0, obs_x=60.0, obs_width=2.0,
 # ── 场景 5: 匝道汇入（Merge） ────────────────────────────────
 
 def run_merge_scenario(init_speed=8.0, target_speed=15.0, merge_x=50.0,
-                        merge_lane=1, duration=15.0):
+                        merge_lane=1, duration=15.0, use_mpc=False, mpc_cfg=None):
     """匝道汇入仿真
 
     自车在加速车道（起始 y=-5.25m = lane 3），
@@ -2116,7 +2156,7 @@ def run_merge_scenario(init_speed=8.0, target_speed=15.0, merge_x=50.0,
     result = ScenarioResult()
 
     planner = PlanningLayer()
-    controller = ControlLayer(StanleyParams())
+    controller = ControlLayer(StanleyParams(), use_mpc=use_mpc, mpc_cfg=mpc_cfg)
     lon_ctrl = LongitudinalController(target_speed=target_speed)
 
     n_steps = int(duration / DT)
@@ -2173,7 +2213,7 @@ def run_merge_scenario(init_speed=8.0, target_speed=15.0, merge_x=50.0,
 # ── 场景 6: 加塞处理（Cut-in） ──────────────────────────────
 
 def run_cutin_scenario(init_speed=12.0, cutin_speed=10.0, cutin_x=30.0,
-                        duration=12.0):
+                        duration=12.0, use_mpc=False, mpc_cfg=None):
     """加塞仿真
 
     自车巡航中，右前方旁车突然向左变道切入本车道。
@@ -2197,7 +2237,7 @@ def run_cutin_scenario(init_speed=12.0, cutin_speed=10.0, cutin_x=30.0,
     result = ScenarioResult()
 
     planner = PlanningLayer()
-    controller = ControlLayer(StanleyParams())
+    controller = ControlLayer(StanleyParams(), use_mpc=use_mpc, mpc_cfg=mpc_cfg)
     lon_ctrl = LongitudinalController(target_speed=init_speed)
 
     n_steps = int(duration / DT)
@@ -2447,12 +2487,12 @@ def main():
     # ── 全量场景执行 ──
     if args.run_all:
         print("\n" + "=" * 60)
-        print("  场景全集 — 6 种上路操作全量验证")
+        print(f"  场景全集 — 6 种上路操作全量验证（横向: {'LTV-MPC' if args.mpc else 'Stanley'}）")
         print("=" * 60)
         results = []
 
         print("\n  ── 场景 1: 曲线跟随 ──")
-        r1 = run_curve_scenario(kappa=0.005, target_speed=12.0, duration=15.0)
+        r1 = run_curve_scenario(kappa=0.005, target_speed=12.0, duration=15.0, use_mpc=args.mpc)
         print_scene_result(r1, "曲线跟随 (kappa=0.005, R=200m, 12m/s)")
         results.append(("curve", r1))
 
@@ -2467,17 +2507,17 @@ def main():
         results.append(("stop_go", r3))
 
         print("\n  ── 场景 4: 障碍物避让 ──")
-        r4 = run_obstacle_avoid_scenario(init_speed=12.0, obs_x=60.0)
+        r4 = run_obstacle_avoid_scenario(init_speed=12.0, obs_x=60.0, use_mpc=args.mpc)
         print_scene_result(r4, "障碍物避让 (v0=12m/s, obs_x=60m)")
         results.append(("obstacle", r4))
 
         print("\n  ── 场景 5: 匝道汇入 ──")
-        r5 = run_merge_scenario(init_speed=8.0, target_speed=15.0, merge_x=50.0)
+        r5 = run_merge_scenario(init_speed=8.0, target_speed=15.0, merge_x=50.0, use_mpc=args.mpc)
         print_scene_result(r5, "匝道汇入 (8→15m/s, merge_x=50m)")
         results.append(("merge", r5))
 
         print("\n  ── 场景 6: 加塞处理 ──")
-        r6 = run_cutin_scenario(init_speed=12.0, cutin_speed=10.0, cutin_x=30.0)
+        r6 = run_cutin_scenario(init_speed=12.0, cutin_speed=10.0, cutin_x=30.0, use_mpc=args.mpc)
         print_scene_result(r6, "加塞处理 (v0=12m/s, cutin_v=10m/s, cutin_x=30m)")
         results.append(("cutin", r6))
 
@@ -2528,7 +2568,46 @@ def main():
         return
 
     if args.tune_mpc:
-        print("MPC参数扫描功能待实现（当前默认参数q_y=10,q_psi=20,r=0.5因C代码直接加未乘dt有单位问题）")
+        # LTV-MPC 参数扫描：粗网格扫 q_y/q_psi/r_ddelta/q_delta，
+        # 评分 = 变道三场景（obstacle/merge/cutin）通过数 + 横向误差惩罚，
+        # 最优组再跑 curve 确认弯道精度不退化。
+        print("LTV-MPC 参数扫描（变道三场景评分 + 弯道确认）...")
+        grid_qy    = [10.0, 20.0, 40.0]
+        grid_qpsi  = [20.0, 40.0, 80.0]
+        grid_r     = [0.25, 0.5, 1.0]
+        grid_qd    = [1.0, 2.0]
+        best = None
+        for qy in grid_qy:
+            for qp in grid_qpsi:
+                for rd in grid_r:
+                    for qd in grid_qd:
+                        cfg = LtvMpcConfig()
+                        cfg.q_y, cfg.q_psi, cfg.r_ddelta, cfg.q_delta = qy, qp, rd, qd
+                        cfg.qf_y, cfg.qf_psi = 2 * qy, 2 * qp
+                        ro = run_obstacle_avoid_scenario(use_mpc=True, mpc_cfg=cfg)
+                        rm = run_merge_scenario(use_mpc=True, mpc_cfg=cfg)
+                        rc = run_cutin_scenario(use_mpc=True, mpc_cfg=cfg)
+                        passed = sum(1 for r in (ro, rm, rc) if r.success)
+                        # 从 summary 提取 final_y_err 做细分（obstacle/merge 有该项）
+                        yerr = 0.0
+                        for r in (ro, rm):
+                            m = re.search(r'final_y_err=([0-9.]+)', r.summary)
+                            if m: yerr += float(m.group(1))
+                        score = passed * 100.0 - yerr * 10.0
+                        tag = f"q_y={qy} q_psi={qp} r={rd} q_d={qd}"
+                        if passed == 3:
+                            print(f"  {tag}: 3/3 yerr={yerr:.2f} score={score:.1f}")
+                        if best is None or score > best[0]:
+                            best = (score, tag, cfg)
+        score, tag, cfg = best
+        print(f"\n最优: {tag} (score={score:.1f})")
+        print("弯道确认:")
+        rcurve = run_curve_scenario(kappa=0.005, target_speed=12.0, duration=15.0,
+                                    use_mpc=True, mpc_cfg=cfg)
+        print_scene_result(rcurve, "曲线跟随 (kappa=0.005, R=200m, 12m/s)")
+        print(f"\n建议写入 param 默认值: ltv_q_y={cfg.q_y} ltv_q_psi={cfg.q_psi} "
+              f"ltv_r_ddelta={cfg.r_ddelta} mpc_q_delta={cfg.q_delta} "
+              f"mpc_qf_y={cfg.qf_y} mpc_qf_psi={cfg.qf_psi}")
         return
 
     if args.tune_uturn:

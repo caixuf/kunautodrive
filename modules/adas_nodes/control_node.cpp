@@ -178,7 +178,10 @@ struct ControlContext {
 
     /* LTV MPC 控制器（§10 替代已删除的 mpc_controller + LQR） */
     LtvMpcSolver* ltv_mpc{nullptr};
-    int use_ltv_mpc{1};         /* 是否启用 LTV MPC（默认启用；JSON ltv_mpc_enable 可关） */
+    int use_ltv_mpc{0};         /* 是否启用 LTV MPC。默认 0 = 巡航走已验证的
+                                 * Stanley（2026-08-15 用户裁决：MPC 路径已修复
+                                 * 且仿真 6/6，但实车链路未经 demo_evaluator 充分
+                                 * 回归前不作为默认）；JSON ltv_mpc_enable=1 显式启用 */
     LtvMpcConfig ltv_mpc_cfg;   /* MPC 配置 */
 
     };
@@ -903,9 +906,16 @@ protected:
                     int mh = (int)param_get_float("control.mpc_horizon");
                     if (mh > LTV_MPC_MAX_HORIZON) mh = LTV_MPC_MAX_HORIZON;
                     if (mh < 1) mh = 1;
+                    double e_y = -lat_err_n;
+                    /* 机动自适应转向包络（2026-08-15 仿真标定）：大横向误差
+                     * （变道/避障）用 2.4 m/s²（与 ROAD_GUARD 同档），巡航小误差
+                     * 用 1.4 m/s² 舒适包络。统一 1.4 在 12m/s 只给 0.026rad，
+                     * 变道最小可行时间贴边 + 增量式控制慢半拍 → 饱和摇摆
+                     * （control_sim obstacle 场景复现：y 超调 ±2m 甩到对向车道）。 */
+                    const double lat_env = (fabs(e_y) > 0.5) ? 2.4 : 1.4;
                     g.ltv_mpc_cfg.dt         = param_get_float("control.mpc_dt");
                     g.ltv_mpc_cfg.horizon    = mh;
-                    g.ltv_mpc_cfg.max_steer  = steer_limit_for_speed(fabs(g.current_speed), 1.4);
+                    g.ltv_mpc_cfg.max_steer  = steer_limit_for_speed(fabs(g.current_speed), lat_env);
                     g.ltv_mpc_cfg.max_dsteer = param_get_float("control.mpc_max_dsteer");
                     g.ltv_mpc_cfg.q_y        = param_get_float("control.ltv_q_y");
                     g.ltv_mpc_cfg.q_psi      = param_get_float("control.ltv_q_psi");
@@ -914,11 +924,13 @@ protected:
                     g.ltv_mpc_cfg.qf_y       = param_get_float("control.mpc_qf_y");
                     g.ltv_mpc_cfg.qf_psi     = param_get_float("control.mpc_qf_psi");
                     ltv_mpc_update_config(g.ltv_mpc, &g.ltv_mpc_cfg);
-                    double e_y = -lat_err_n;
                     double heading_error = g.ego_heading - ref_road_heading;
                     while (heading_error >  M_PI) heading_error -= 2.0 * M_PI;
                     while (heading_error < -M_PI) heading_error += 2.0 * M_PI;
-                    double e_psi = -heading_error;
+                    /* e_psi 约定 = ego_heading − ref_heading（左为正），与求解器
+                     * 模型 ė_y=v·e_psi 自洽；旧代码取反（ref−ego）导致航向反馈
+                     * 变正反馈，MPC 一启用就来回甩（2026-08-15 定位）。 */
+                    double e_psi = heading_error;
                     ltv_mpc_set_state(g.ltv_mpc, e_y, e_psi, g.prev_steer, g.current_speed);
                     double v_ref[LTV_MPC_MAX_HORIZON];
                     double kappa_ref[LTV_MPC_MAX_HORIZON];
@@ -935,8 +947,8 @@ protected:
                         /* mpc_steer_delta 是转向速率(rad/s)，须按步长积分得到本周期
                          * 转角增量（修复：此前漏乘 dt，每帧舵量被放大 ~20×）。 */
                         steer = g.prev_steer + mpc_steer_delta * g.ltv_mpc_cfg.dt;
-                        /* 与 Stanley 回退同口径：输出转角钉到巡航转向包络 */
-                        double mpc_limit = steer_limit_for_speed(fabs(g.current_speed), 1.4);
+                        /* 与 Stanley 回退同口径：输出转角钉到自适应转向包络 */
+                        double mpc_limit = steer_limit_for_speed(fabs(g.current_speed), lat_env);
                         if (steer >  mpc_limit) steer =  mpc_limit;
                         if (steer < -mpc_limit) steer = -mpc_limit;
                         g.prev_steer = steer;
@@ -1410,12 +1422,12 @@ static int control_init(MessageBus* bus, Transport* transport,
     param_register_float("control.mpc_dt",          0.025,  0.005, 0.1,   "LTV MPC 离散步长 (s)，应≈控制周期 40Hz=0.025");
     param_register_float("control.mpc_horizon",     60.0,   5.0,   (double)LTV_MPC_MAX_HORIZON, "LTV MPC 预测步数");
     param_register_float("control.mpc_max_dsteer",  0.5,    0.05,  3.0,   "LTV MPC 最大转向速率 (rad/s)");
-    param_register_float("control.mpc_q_delta",     2.0,    0.0,   20.0,  "LTV MPC 转角状态权重 (抑制大转角)");
+    param_register_float("control.mpc_q_delta",     1.0,    0.0,   20.0,  "LTV MPC 转角状态权重 (抑制大转角)");
     param_register_float("control.mpc_qf_y",        20.0,   0.0,   100.0, "LTV MPC 终端横向误差权重");
-    param_register_float("control.mpc_qf_psi",      40.0,   0.0,   200.0, "LTV MPC 终端航向误差权重");
+    param_register_float("control.mpc_qf_psi",      160.0,  0.0,   400.0, "LTV MPC 终端航向误差权重");
     param_register_float("control.ltv_q_y",         10.0,   0.0,   100.0, "LTV MPC 横向误差权重");
-    param_register_float("control.ltv_q_psi",       20.0,   0.0,   200.0, "LTV MPC 航向误差权重");
-    param_register_float("control.ltv_r_ddelta",    0.5,    0.0,   20.0,  "LTV MPC 转向速率权重 (平顺性)");
+    param_register_float("control.ltv_q_psi",       80.0,   0.0,   400.0, "LTV MPC 航向误差权重");
+    param_register_float("control.ltv_r_ddelta",    1.0,    0.0,   20.0,  "LTV MPC 转向速率权重 (平顺性)");
 
     /* 运行时从 param_registry 读取 (支持 flowctl param set 热重载)。
      * 全新初始化时此值等于上方注册的默认值（即 JSON 值或代码默认值）；
@@ -1473,10 +1485,9 @@ static int control_init(MessageBus* bus, Transport* transport,
     /* LTV MPC 初始化
      * 注意：此处只设初值。run() 每帧会按 param_registry 重新装配配置
      * （dt/horizon/max_steer/权重），故不要在此硬编码会覆盖 JSON 的开关——
-     * use_ltv_mpc 的默认值来自上方结构体初始化 {1}，JSON ltv_mpc_enable
-     * 在 set_params 阶段已写入，这里绝不能再清零（旧代码 g.use_ltv_mpc=0
-     * 会静默吞掉 JSON 启用意图，且 g.ltv_mpc_cfg=default_config 也会冲掉
-     * JSON 的 ltv_q_y 权重）。 */
+     * use_ltv_mpc 默认 0（Stanley，用户 2026-08-15 裁决），JSON
+     * ltv_mpc_enable=1 在 set_params 阶段显式启用；这里绝不能再清零
+     * （旧代码 g.use_ltv_mpc=0 会静默吞掉 JSON 启用意图）。 */
     g.ltv_mpc_cfg = ltv_mpc_default_config();
     g.ltv_mpc_cfg.wheelbase = g.wheelbase;
     g.ltv_mpc_cfg.horizon = 60;   /* 运行时节由 control.mpc_horizon 覆盖 */

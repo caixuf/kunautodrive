@@ -113,12 +113,14 @@ void ltv_mpc_set_state(LtvMpcSolver* solver,
 
 LtvMpcConfig ltv_mpc_default_config(void) {
     LtvMpcConfig cfg;
+    /* 2026-08-15 control_sim 扫参标定（变道三场景 3/3 + 弯道 6/6 全过）：
+     * q_psi/qf_psi 高权重点头抑制航向摇摆，r_ddelta=1.0 抑制速率抖动。 */
     cfg.q_y       = 10.0;
-    cfg.q_psi     = 20.0;
-    cfg.q_delta   = 2.0;
-    cfg.r_ddelta  = 0.5;
+    cfg.q_psi     = 80.0;
+    cfg.q_delta   = 1.0;
+    cfg.r_ddelta  = 1.0;
     cfg.qf_y      = 20.0;
-    cfg.qf_psi    = 40.0;
+    cfg.qf_psi    = 160.0;
     cfg.horizon   = 60;     /* 60 步 × dt=0.025 = 1.5s 预测时域 */
     cfg.dt        = 0.025;  /* 匹配 control_node 40Hz 控制周期 (25000µs) */
     cfg.wheelbase = 2.7;
@@ -178,7 +180,7 @@ int ltv_mpc_solve(LtvMpcSolver* solver, double* steer_out) {
         /* delta[k+1] = delta[k] + dt*ddelta */
         memset(A, 0, sizeof(A));
         A[0][0] = 1.0;  A[0][1] = v_safe * dt;  A[0][2] = 0.5 * v_safe * dt;
-        A[1][1] = 1.0;  A[1][2] = 0.5 * v_safe / L * dt;
+        A[1][1] = 1.0;  A[1][2] = v_safe / L * dt;  /* 与 plant v/L·tanδ 一致（旧 0.5 低估 2×横摆 authority） */
         A[2][2] = 1.0;
 
         B[0] = 0.0;  B[1] = 0.0;  B[2] = dt;
@@ -280,7 +282,7 @@ int ltv_mpc_solve(LtvMpcSolver* solver, double* steer_out) {
 
         double x_next[3];
         x_next[0] = x[0] + dt * (v_safe * x[1] + 0.5 * v_safe * x[2]);
-        x_next[1] = x[1] + dt * (0.5 * v_safe / L * x[2] - kk * v_safe);
+        x_next[1] = x[1] + dt * (v_safe / L * x[2] - kk * v_safe);
         x_next[2] = x[2] + dt * u;
 
         /* delta 限幅 */
