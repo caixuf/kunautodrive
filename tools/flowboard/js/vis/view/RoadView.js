@@ -26,7 +26,7 @@
 import { sampleEdgeNodes, edgeSampleCount as adaptiveEdgeSampleCount } from '../math/Curve.js';
 import { mergeGeometries } from '../math/GeometryMerge.js';
 import { LANE_WIDTH, DEFAULT_LANES, EDGE_TYPE, isTunnelEdge } from '../core/Constants.js';
-import { tangentToNormal, offsetAlongNormal, forwardENU } from '../math/Coord.js';
+import { tangentToNormal, offsetAlongNormal, forwardENU, worldToThree } from '../math/Coord.js';
 import { getTopology } from '../model/TopologyModel.js';
 import { SCENE } from '../theme/tokens.js';
 
@@ -477,32 +477,43 @@ export function createRoadView(scene) {
     const rampLanes = Math.max(1, edge.lanes || 1);
     const hw = (rampLanes * laneWidth) / 2;
 
+    // P2 车道对齐：匝道多为单车道，road.centerline 贴边时偏 ~1.75m
+    const rampLaneRec = _laneData && (_laneData[edge.name] || _laneData[String(edge.id)]);
+    let rampSpine = spine, rampHw = hw;
+    if (Array.isArray(rampLaneRec)) {
+      const env = laneGroupEnvelope(rampLaneRec, spine);
+      if (env) {
+        rampSpine = offsetSpine(spine, env.center);
+        rampHw = env.halfW;
+      }
+    }
+
     // 匝道路面（略浅色）
-    const road = ribbonGeo(spine, hw, Y_ROAD);
+    const road = ribbonGeo(rampSpine, rampHw, Y_ROAD);
 
     // 路肩
     const shoulderW = RAMP_SHOULDER_W;
-    const shoulderL = ribbonGeo(spine.map(c => ({
-      px: c.px + c.nx * (hw + shoulderW * 0.5), py: c.py, pz: c.pz + c.nz * (hw + shoulderW * 0.5),
+    const shoulderL = ribbonGeo(rampSpine.map(c => ({
+      px: c.px + c.nx * (rampHw + shoulderW * 0.5), py: c.py, pz: c.pz + c.nz * (rampHw + shoulderW * 0.5),
       nx: c.nx, nz: c.nz,
     })), shoulderW * 0.5, Y_SHOULDER);
-    const shoulderR = ribbonGeo(spine.map(c => ({
-      px: c.px - c.nx * (hw + shoulderW * 0.5), py: c.py, pz: c.pz - c.nz * (hw + shoulderW * 0.5),
+    const shoulderR = ribbonGeo(rampSpine.map(c => ({
+      px: c.px - c.nx * (rampHw + shoulderW * 0.5), py: c.py, pz: c.pz - c.nz * (rampHw + shoulderW * 0.5),
       nx: c.nx, nz: c.nz,
     })), shoulderW * 0.5, Y_SHOULDER);
 
     const whiteGeos = [];
     // 匝道两侧路缘边线（白实线，与静态 invariant「外沿=实线」一致）
-    const rampEdgeL = edgeLine(spine, hw - EDGE_INSET);
+    const rampEdgeL = edgeLine(rampSpine, rampHw - EDGE_INSET);
     if (rampEdgeL) whiteGeos.push(rampEdgeL);
-    const rampEdgeR = edgeLine(spine, -(hw - EDGE_INSET));
+    const rampEdgeR = edgeLine(rampSpine, -(rampHw - EDGE_INSET));
     if (rampEdgeR) whiteGeos.push(rampEdgeR);
 
-    // 多车道匝道内部车道分隔（白虚线）
+    // 多车道匝道内部车道分隔（白虚线，随车道对齐后的路面走）
     if (rampLanes > 1) {
       for (let k = 1; k < rampLanes; k++) {
-        const d = -hw + k * laneWidth;
-        for (const g of dashedLine(spine, d)) whiteGeos.push(g);
+        const d = -rampHw + k * laneWidth;
+        for (const g of dashedLine(rampSpine, d)) whiteGeos.push(g);
       }
     }
 
@@ -638,6 +649,38 @@ export function createRoadView(scene) {
     return { roadGeos: road ? [road] : [], whiteGeos, vergeGeos: verge ? [verge] : [] };
   }
 
+  /** 车道组几何包络（2026-08-15 P2 修正）：OSM 单向车行道数据里
+   *  road.centerline 贴着车行道一侧（车道组中心可偏 7m），而路面 ribbon 若仍
+   *  以 road.centerline 居中，车道标线会画到沥青外（用户截图报障）。
+   *  此处按 lane centerline 实测车道组横向范围，返回 {center, halfW}
+   *  （相对道路中心线 spine 的偏移与半宽），无数据/小偏差返回 null。 */
+  function laneGroupEnvelope(lanes, spine) {
+    if (!Array.isArray(lanes) || !lanes.length || spine.length < 2) return null;
+    const stations = [0, spine.length >> 1, spine.length - 1];
+    let latMin = Infinity, latMax = -Infinity;
+    for (const si of stations) {
+      const sp = spine[si];
+      for (const lane of lanes) {
+        const cl = lane && lane.centerline;
+        if (!Array.isArray(cl) || cl.length < 2) continue;
+        const w = (Number(lane.width) || LANE_WIDTH) / 2;
+        let bestD = Infinity, bestLat = 0;
+        for (const p of cl) {
+          const [tx, , tz] = worldToThree(p[0] || 0, p[1] || 0, p[2] || 0);
+          const d = Math.hypot(tx - sp.px, tz - sp.pz);
+          if (d < bestD) { bestD = d; bestLat = (tx - sp.px) * sp.nx + (tz - sp.pz) * sp.nz; }
+        }
+        if (bestLat - w < latMin) latMin = bestLat - w;
+        if (bestLat + w > latMax) latMax = bestLat + w;
+      }
+    }
+    if (!isFinite(latMin) || !isFinite(latMax)) return null;
+    const center = (latMin + latMax) / 2;
+    const halfW = (latMax - latMin) / 2;
+    if (Math.abs(center) < 0.15 || halfW < 1.0) return null;   // 居中对齐良好/退化 → 不动
+    return { center, halfW };
+  }
+
   /** 车道级标线（2026-08-15 P2）：lane_data 的 lanes[]{centerline,width,markings}
    *  直接成图——标线 = 车道边界数据本身，不是启发式 offset。
    *  side 语义（osm_to_map 数据契约）：相对**道路参考线**（centerline 折线）
@@ -706,8 +749,24 @@ export function createRoadView(scene) {
     const laneWidth = edge.lane_width || LANE_WIDTH;
     const hw = (lanes * laneWidth) / 2;
 
+    /* P2 车道对齐（2026-08-15，用户截图报障）：lane_data 存在且车道组中心
+     * 偏离 road.centerline 时（OSM 单向车行道 centerline 贴边，可偏 7m），
+     * 路面/路肩/人行道整体偏移到车道组包络——车道级标线本就画在车道数据上，
+     * 不偏移会悬在沥青外。启发式兜底路径（无 lane_data）不偏移，零回归。 */
+    const laneRec = _laneData && (_laneData[edge.name] || _laneData[String(edge.id)]);
+    let roadSpine = spine, roadHw = hw;
+    if (Array.isArray(laneRec)) {
+      const env = laneGroupEnvelope(laneRec, spine);
+      if (env) {
+        roadSpine = offsetSpine(spine, env.center);
+        roadHw = env.halfW;
+      }
+    }
+    const roadMarkSpine = (roadSpine === spine) ? markSpine
+      : filterSpineOutsideJunctions(roadSpine, edge.id);
+
     // 路面（不截断，贯穿路口）
-    const road = ribbonGeo(spine, hw, Y_ROAD);
+    const road = ribbonGeo(roadSpine, roadHw, Y_ROAD);
 
     /* 隧道/地道（2026-08-14）：只铺路面，不画标线/路肩/人行道。
      * 地下段若按地表道路全量渲染，俯视时会斜穿街区形成"假路/假路口"噪声
@@ -721,11 +780,11 @@ export function createRoadView(scene) {
       };
     }
 
-    // 路肩（路口边界停，逐段）
+    // 路肩（路口边界停，逐段；随车道对齐后的路面走）
     const shoulderGeos = [];
-    for (const seg of markSpine) {
-      const sL = ribbonGeo(offsetSpine(seg, hw + SHOULDER_W * 0.5), SHOULDER_W * 0.5, Y_SHOULDER);
-      const sR = ribbonGeo(offsetSpine(seg, -(hw + SHOULDER_W * 0.5)), SHOULDER_W * 0.5, Y_SHOULDER);
+    for (const seg of roadMarkSpine) {
+      const sL = ribbonGeo(offsetSpine(seg, roadHw + SHOULDER_W * 0.5), SHOULDER_W * 0.5, Y_SHOULDER);
+      const sR = ribbonGeo(offsetSpine(seg, -(roadHw + SHOULDER_W * 0.5)), SHOULDER_W * 0.5, Y_SHOULDER);
       if (sL) shoulderGeos.push(sL);
       if (sR) shoulderGeos.push(sR);
     }
@@ -739,7 +798,6 @@ export function createRoadView(scene) {
     // P2 车道级：lane_data 有该 road 的 lanes[] → 标线全部来自车道边界数据
     // （含外侧实线/双黄），下面两个启发式块整块跳过——offset 漂移/双偏移/
     // 穿路口问题连根消失；无数据走旧启发式（旧场景零回归）。
-    const laneRec = _laneData && (_laneData[edge.name] || _laneData[String(edge.id)]);
     const laneMarkingsMade = Array.isArray(laneRec)
       ? buildLaneMarkingsInto(laneRec, edge.id, whiteGeos, yellowGeos)
       : 0;
@@ -781,16 +839,16 @@ export function createRoadView(scene) {
       String(edge.name || '').toLowerCase().includes('urban');
 
     if (isUrban) {
-      for (const seg of markSpine) {
+      for (const seg of roadMarkSpine) {
         for (const side of [-1, 1]) {
-          const curb = ribbonGeo(offsetSpine(seg, side * (hw + SHOULDER_W + CURB_W * 0.5)),
+          const curb = ribbonGeo(offsetSpine(seg, side * (roadHw + SHOULDER_W + CURB_W * 0.5)),
             CURB_W * 0.5, Y_CURB);
           const sidewalk = ribbonGeo(offsetSpine(seg,
-            side * (hw + SHOULDER_W + CURB_W + SIDEWALK_W * 0.5)),
-          SIDEWALK_W * 0.5, Y_SIDEWALK);
+            side * (roadHw + SHOULDER_W + CURB_W + SIDEWALK_W * 0.5)),
+            SIDEWALK_W * 0.5, Y_SIDEWALK);
           const verge = ribbonGeo(offsetSpine(seg,
-            side * (hw + SHOULDER_W + CURB_W + SIDEWALK_W + VERGE_W * 0.5)),
-          VERGE_W * 0.5, Y_VERGE);
+            side * (roadHw + SHOULDER_W + CURB_W + SIDEWALK_W + VERGE_W * 0.5)),
+            VERGE_W * 0.5, Y_VERGE);
           if (curb) curbGeos.push(curb);
           if (sidewalk) sidewalkGeos.push(sidewalk);
           if (verge) vergeGeos.push(verge);

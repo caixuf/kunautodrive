@@ -543,4 +543,54 @@ console.log('--- 11. 车道级标线（lane_data 数据驱动）---');
     whiteZ.some((v) => v.y > 0.138 && Math.abs(v.x - 50) < 2.5));
 }
 
+// ── 12. P2 修正：车道组包络对齐路面（OSM 单向车行道 centerline 贴边）──
+console.log('--- 12. 车道组包络对齐（单向 2 车道偏 3.5m）---');
+{
+  // 单向 2 车道：lane 中心 THREE z=+1.75/+5.25（ENU y=-1.75/-5.25），
+  // 车道组占 z∈[0,7]，而 road.centerline 在 z=0（贴左沿）。
+  const lanes12 = [
+    { id: 'r.lane.1', index: 1, direction: 1, width: 3.5,
+      centerline: [[0, -1.75, 0], [100, -1.75, 0]],
+      markings: [{ type: 'solid_white', side: 'left' }, { type: 'dashed_white', side: 'right' }] },
+    { id: 'r.lane.2', index: 2, direction: 1, width: 3.5,
+      centerline: [[0, -5.25, 0], [100, -5.25, 0]],
+      markings: [{ type: 'solid_white', side: 'right' }] },
+  ];
+  const edges12 = [
+    { id: 'oneway_seg', name: 'oneway_seg', type: 'secondary', lanes: 2, lane_width: 3.5,
+      nodes: [[0, 0, 0], [100, 0, 0]], oneway: true },
+  ];
+  const scene = new THREE.Group();
+  createRoadView(scene).build({ edges: edges12, lane_data: { oneway_seg: lanes12 } });
+  // 沥青路面顶点 z 范围必须覆盖车道组 [0,7]，而不是对称的 ±3.5
+  let zMin = Infinity, zMax = -Infinity, roadVerts = 0;
+  scene.traverse((ch) => {
+    if (!ch.isMesh || ch.isInstancedMesh || !ch.material || !ch.material.color) return;
+    if (ch.material.color.getHex() !== SCENE.asphalt) return;
+    const pos = ch.geometry.getAttribute('position');
+    for (let i = 0; i < pos.count; i++) {
+      const z = pos.getZ(i);
+      if (z < zMin) zMin = z;
+      if (z > zMax) zMax = z;
+      roadVerts++;
+    }
+  });
+  ok(`路面覆盖车道组（z∈[${zMin.toFixed(1)}, ${zMax.toFixed(1)}] 应≈[0,7]）`,
+    roadVerts > 0 && zMin > -0.5 && zMax > 6.5 && zMax < 7.5);
+  // 车道标线（实线 z≈0/7、虚线 z≈3.5）必须全部落在沥青范围内
+  let strayMarkings = 0, markingVerts = 0;
+  scene.traverse((ch) => {
+    if (!ch.isMesh || ch.isInstancedMesh || !ch.material || !ch.material.color) return;
+    if (ch.material.color.getHex() !== 0xcccccc) return;
+    const pos = ch.geometry.getAttribute('position');
+    for (let i = 0; i < pos.count; i++) {
+      markingVerts++;
+      const z = pos.getZ(i);
+      if (z < -0.35 || z > 7.35) strayMarkings++;
+    }
+  });
+  ok(`标线全部在沥青内（${markingVerts} 顶点，悬外 ${strayMarkings}）`,
+    markingVerts > 10 && strayMarkings === 0);
+}
+
 done();
