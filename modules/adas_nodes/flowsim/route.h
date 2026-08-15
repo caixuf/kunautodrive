@@ -10,7 +10,7 @@
  *   Route route;
  *   route.build(roads);                       // 场景加载后构建一次
  *   int rid; double sl; int idx;
- *   route.locate(route_s, rid, sl, idx);      // 累计 s → (road_id, 段内 s, 段号)
+ *   route.locate(route_s, rid, sl, idx);      // 累计 s → (road_id, esmini s（含 s0 修剪偏移）, 段号)
  *   roads.frenet_to_world(rid, 0, sl, offset, wp);   // 再反算世界坐标
  */
 
@@ -24,13 +24,6 @@ namespace flowsim {
 
 class FlowRoadNetwork;
 
-/** route 的一段（= 一条 esmini road），带累计 s 起点。 */
-struct RouteSeg {
-    int    road_id{0};
-    double length{0.0};
-    double s_start{0.0};   /**< 该段在 route 坐标系里的累计 s 起点 */
-};
-
 /** 参考路径采样点：供 control_node Stanley 横向控制消费。
  *  - (x, y, h)   世界坐标 + 切线航向 rad
  *  - kappa      曲率 1/m（数值微分估计，0=直线，正=左弯，负=右弯）
@@ -41,6 +34,27 @@ struct RefPathPoint {
     double h{0.0};
     double kappa{0.0};
     double route_s{0.0};
+};
+
+/** route 的一段（= 一条 esmini road），带累计 s 起点。 */
+struct RouteSeg {
+    int    road_id{0};
+    double length{0.0};
+    double s_start{0.0};   /**< 该段在 route 坐标系里的累计 s 起点 */
+
+    /* 路口盒缺口合成连接段（2026-08-15 OSM 修复）：真实道路在路口盒边界断开
+     * （OSM way 在交叉口节点处分割，盒内无几何），chain 相邻段端点可差 10-25m。
+     * 急转角（fillet 半径 <10m）时两侧真实段各退 R·tan(dh/2) 修剪，缺口用
+     * 端点切线约束的三次 Hermite 折线桥接（切向量长取圆弧逼近 (4/3)R·tan(dh/4)，
+     * 保证 max|kappa| ≤ 1/R 可驾驶）；sample_ahead/project 直接插值折线，
+     * 不走 esmini 查询。无几何跳变 → ref_path 连续 → 路口转向可跟踪。 */
+    bool                      is_virtual{false};
+    std::vector<RefPathPoint> pts;         /**< 虚拟段折线（is_virtual 时有效） */
+
+    /** 真实段在 esmini road 上的起始 s（路口 fillet 修剪段首时 >0；
+     *  esmini 坐标 = s0 + route 局部 s；段末 = s0 + length，可被下一 junction
+     *  的 fillet 修短）。 */
+    double                    s0{0.0};
 };
 
 /**
@@ -82,6 +96,30 @@ public:
 
     /** (段号, 段内 s) → route 累计 s。参数非法返回 0。 */
     double to_route_s(int route_idx, double s_local) const;
+
+    /**
+     * route 累计 s → 世界位姿 (x, y, h)。真实段走 esmini frenet→world；
+     * 虚拟段（路口盒连接段）沿合成折线插值。sample_ahead / project 的统一入口。
+     * @return false = 查询失败（路网未加载/虚拟段为空）
+     */
+    bool sample_pose(FlowRoadNetwork& roads, double route_s,
+                     double& x, double& y, double& h) const;
+
+    /**
+     * 世界点 (x,y) → route 最近点投影，返回 route 累计 s。
+     * 为 OSM 平行对向车道/路口区域设计：nearest-road 投影（world_to_frenet）
+     * 会在平行车道洞/路口连接段之间跳变（陆家嘴双洞隧道实测 ego 被拽到
+     * 对向洞、route_s 跳变 1000m+），而 route 是唯一权威行进路径——把 ego
+     * 投到 route 几何上并用 hint 限定搜索窗口（跟踪单调性），投影即稳定。
+     *
+     * @param roads        路网（frenet→world 用）
+     * @param x, y         世界坐标
+     * @param hint_route_s 窗口中心（上帧结果）；<0 时全 route 扫描（初始化一次）
+     * @param window       搜索窗口半宽（m），hint>=0 时搜 [hint-window, hint+window]
+     * @return 最近点 route_s；路网全失败返回 -1
+     */
+    double project(FlowRoadNetwork& roads, double x, double y,
+                   double hint_route_s, double window = 150.0) const;
 
     /**
      * 在 route 上从 route_s_start 起向前采样 N 个参考点，跨段拼接。

@@ -29,16 +29,42 @@ export function resolveMapId(scenarioName) {
   return ALLOWED.has(stripped) ? stripped : null;
 }
 
-/** 由 map.json 构建消费索引：junctions 原样 + laneData 按 road.id 键控。 */
+/** 由 map.json 构建消费索引：junctions 原样 + laneData 按 road.id 键控
+ *  + edges（road 级，scene/frame 省略静态段时供 SceneDirector 合成 roadNetwork）
+ *  + buildings（OSM 建筑轮廓，BuildingView 渲染）。 */
 function buildIndex(map) {
   const rn = (map && map.road_network) || map || {};
   const roads = Array.isArray(rn.roads) ? rn.roads : [];
   const laneData = {};
-  for (const r of roads) {
-    if (r && r.id && Array.isArray(r.lanes) && r.lanes.length) laneData[r.id] = r.lanes;
+  const edges = [];
+  for (let i = 0; i < roads.length; i++) {
+    const r = roads[i];
+    if (!r || r.id == null) continue;
+    if (Array.isArray(r.lanes) && r.lanes.length) laneData[r.id] = r.lanes;
+    const cl = Array.isArray(r.centerline) ? r.centerline : [];
+    if (cl.length < 2) continue;
+    /* edge schema 对齐 scene_pub.cpp build_road_network_json（FrameValidator
+     * 必填：id/name/type/lanes/lane_width/nodes/oneway + length）；
+     * name 用字符串 road id —— lane_data 键控依赖它（RoadView laneGroupEnvelope）。 */
+    let length = 0;
+    for (let k = 0; k < cl.length - 1; k++) {
+      length += Math.hypot((cl[k + 1][0] || 0) - (cl[k][0] || 0), (cl[k + 1][1] || 0) - (cl[k][1] || 0));
+    }
+    edges.push({
+      id: i,
+      name: String(r.id),
+      type: r.type || 'urban',
+      lanes: Array.isArray(r.lanes) && r.lanes.length ? r.lanes.length : 2,
+      lane_width: Number(r.lane_width) || 3.5,
+      length,
+      oneway: !!r.oneway,
+      speed_limit: r.speed_limit,
+      nodes: cl.map((p) => [p[0] || 0, p[1] || 0, p[2] || 0]),
+    });
   }
   const junctions = Array.isArray(rn.junctions) ? rn.junctions : [];
-  return { junctions, laneData };
+  const buildings = Array.isArray(rn.buildings) ? rn.buildings : [];
+  return { junctions, laneData, edges, buildings };
 }
 
 /** 取当前场景的权威地图数据：已加载 → {junctions, laneData}；

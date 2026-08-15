@@ -158,7 +158,8 @@ export function createSceneDirector(scene) {
     }
     for (const w of v.warnings) _warnOnce(w.key, w.msg);
 
-    const { frame, rn, skipRoad, skipEgo, skipEntities } = v;
+    const { frame, skipRoad, skipEgo, skipEntities } = v;
+    let { rn } = v;
     if (Object.prototype.hasOwnProperty.call(frame, 'scenario_name')) {
       store.scenarioName = frame.scenario_name || '';
     }
@@ -169,10 +170,27 @@ export function createSceneDirector(scene) {
     if (typeof frame.weather === 'string') store.env.weather = frame.weather;
     if (Number.isFinite(frame.visibility_m)) store.env.visibilityM = frame.visibility_m;
 
+    /* OSM 大地图静态段通道（2026-08-15）：scene/frame 静态段超 64KB 总线
+     * 上限时 flowsim 省略 road_network（scene_pub.cpp），rn 为空 → 用
+     * MapData 权威地图合成 road 级 edges（同一 /api/map/preview 数据源）。
+     * md.edges 引用稳定，合成结果缓存到 md.synthRN，避免每帧新建对象
+     * 触发 roadNetworkHash 全量 stringify。小地图 frame 自带 rn，不走此分支。 */
+    if ((!rn || !Array.isArray(rn.edges) || rn.edges.length === 0) && !skipRoad) {
+      const md0 = mapDataForScenario(store.scenarioName);
+      if (md0 && md0.edges && md0.edges.length) {
+        if (!md0.synthRN) md0.synthRN = { edges: md0.edges };
+        rn = md0.synthRN;
+      }
+    }
+
     if (rn && !skipRoad) {
-      // OSM 建筑（单源真相）：从 scene frame 顶层 buildings[] 透传到 roadNetwork，
-      // 供 BuildingView 渲染真实轮廓（无则回退程序化天际线）。
+      // OSM 建筑（单源真相）：scene frame 顶层 buildings[] 优先；frame 省略时
+      // 回退 MapData 权威地图 buildings（大地图静态段省略场景）。
       if (frame && Array.isArray(frame.buildings)) rn.buildings = frame.buildings;
+      else if (!rn.buildings) {
+        const mdB = mapDataForScenario(store.scenarioName);
+        if (mdB && mdB.buildings && mdB.buildings.length) rn.buildings = mdB.buildings;
+      }
       /* P2 车道级数据：OSM 权威地图经 MapData 一次性取回后注入 map_junctions /
        * lane_data；注入标志位计入 roadNetworkHash → 数据到达帧恰好触发一次
        * view 重建。非 OSM 场景返回 null，走启发式兜底（零回归）。 */

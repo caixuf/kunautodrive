@@ -43,10 +43,16 @@ export function createSceneStore() {
 
 /** 计算 road_network 的 hash，用于 diff 检测。
  *  mj/ld 标志位：MapData 注入 map_junctions/lane_data 时改变 hash，
- *  恰好触发一次 view 重建（数据到达帧）。 */
+ *  恰好触发一次 view 重建（数据到达帧）。
+ *  WeakMap 缓存：OSM 大地图合成 rn（SceneDirector md.synthRN，引用稳定）
+ *  含数百 edge 数千节点，每帧 JSON.stringify 是 MB/s 级 GC 垃圾；
+ *  调用方约定 hash 后不再就地 mutate（注入都在 hash 前完成），可安全缓存。 */
+const _rnHashCache = new WeakMap();
 export function roadNetworkHash(rn) {
   if (!rn || !rn.edges) return '';
-  return JSON.stringify({
+  const cached = _rnHashCache.get(rn);
+  if (cached !== undefined) return cached;
+  const h = JSON.stringify({
     e: rn.edges.map(e => ({
       id: e.id ?? 0,
       name: e.name ?? '',
@@ -60,6 +66,8 @@ export function roadNetworkHash(rn) {
     mj: rn.map_junctions ? 1 : 0,
     ld: rn.lane_data ? 1 : 0,
   });
+  _rnHashCache.set(rn, h);
+  return h;
 }
 
 /**

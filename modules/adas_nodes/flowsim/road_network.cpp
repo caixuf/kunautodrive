@@ -104,7 +104,35 @@ bool FlowRoadNetwork::frenet_to_world(int road_id, int lane_id, double s, double
     out.x = pd.x;
     out.y = pd.y;
     out.z = pd.z;  // 高架 elevation（OpenDRIVE <elevationProfile>，平地场景恒为 0）
-    out.h = pd.h;
+
+    /* h 用几何差分计算，不用 pd.h（2026-08-15 OSM 修复）：
+     * esmini position handle 的航向是**有内部状态的**——RM_SetWorldXYHPosition
+     * （world_to_frenet，h 传 NaN）会污染该状态，后续 SetLanePosition 返回的
+     * pd.h 带历史垃圾（探针实测：同一 (181,0.3) 查询，干净句柄 7.88°，
+     * 污染后 239.5°；OSM 全 junction 路网下必现 → ref_path 切线瞬跳 180°，
+     * control 目标左右互抽 → ego 被拽离路面）。位置 x/y 不受影响。
+     * 切线 = 邻近两点弦方向（atan2），κ·Δs/2 阶误差可忽略。 */
+    double len = RM_GetRoadLength((id_t)road_id);
+    double ds = (len > 1.0) ? 0.5 : len * 0.5;
+    if (ds < 1e-3) {
+        out.h = pd.h;  /* 退化 road：保留原值（总比没有强） */
+        return true;
+    }
+    double s2 = s + ds;
+    bool backward = false;
+    if (s2 > len) { s2 = s - ds; backward = true; }
+    if (s2 < 0.0) s2 = 0.0;
+    if (RM_SetLanePosition(pos_handle_, (id_t)road_id, lane_id, offset, s2, false) < 0) {
+        out.h = pd.h;
+        return true;
+    }
+    RM_PositionData pd2;
+    if (RM_GetPositionData(pos_handle_, &pd2) < 0) {
+        out.h = pd.h;
+        return true;
+    }
+    double dx = pd2.x - pd.x, dy = pd2.y - pd.y;
+    out.h = backward ? std::atan2(-dy, -dx) : std::atan2(dy, dx);
     return true;
 }
 

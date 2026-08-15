@@ -15,6 +15,7 @@
 #define FLOWSIM_BUILDING_H
 
 #include <cstddef>
+#include <utility>
 #include <vector>
 
 namespace flowsim {
@@ -25,6 +26,11 @@ struct BuildingOBB {
     double len{0}, wid{0};   /**< OBB 长/宽（米），与 heading 对齐 */
     double heading{0};       /**< 主朝向（弧度，最长边方向） */
     double height{0};        /**< 高度（米，仅遮挡高度门控用） */
+    /* footprint 原始多边形（世界坐标）：碰撞窄相用。OBB 对旋转/异形
+     * footprint 严重高估（对角线建筑 OBB 面积可达 footprint 2-3 倍，
+     * 陆家嘴隧道上方建筑 OBB 盖住路面 → ego 正常行驶被误判撞楼）。
+     * 碰撞判定 = OBB SAT 粗筛 + 多边形精确窄相；poly 为空回退纯 OBB。 */
+    std::vector<std::pair<double,double>> poly;
 };
 
 /**

@@ -33,7 +33,11 @@ extern "C" {
 #endif
 
 /* ── 配置（与 Python 仿真常量一致）────────────────────────── */
-#define STG_S_HORIZON      50.0   /* 轨迹最小长度 m（视界随停点扩展） */
+#define STG_S_HORIZON      89.0   /* 轨迹最小长度 m（视界随停点扩展）。
+                                   * 需 ≥ 发布轨迹覆盖长度：frenet_plan 最多 50 点
+                                   * × ~2m ≈ 85m@13.8m/s。窗口短于轨迹时，窗口外
+                                   * 轨迹点继承窗口末速度（全速），弯前 a_lat=v²κ
+                                   * 超 5.0 → 可行性检查整帧 invalid（陆家嘴实测）。 */
 #define STG_S_RES           1.0   /* s 分辨率 m */
 #define STG_A_MAX           4.0   /* 最大减速度 m/s² */
 #define STG_A_LAT_MAX       5.0   /* 横向加速度上限 m/s²（与 §8.5 一致） */
@@ -41,7 +45,11 @@ extern "C" {
 #define STG_V_CAND_STEP     0.2   /* DP 候选速度离散步长 m/s */
 #define STG_W1              1.0   /* cost: (v-v_target)² */
 #define STG_W2              2.0   /* cost: a² */
-#define STG_CURVE_SAFETY    0.95  /* 曲率约束安全系数 */
+#define STG_CURVE_SAFETY    0.85  /* 曲率约束安全系数：v_lim = 0.85·sqrt(a_lat_max/κ)。
+                                   * 0.95 只剩 5% 余量，被速度剖面前视对齐（+0.3·v0
+                                   * 米位移）+ 5m 采样 κ 噪声吃掉 → 发布轨迹在弯心
+                                   * a_lat 恰超 5.0 → 可行性整帧 invalid（陆家嘴实测
+                                   * κ=0.101/v=7.2/a_lat=5.2）。0.85 留 ~15% 余量。 */
 #define STG_MAX_GRID        90    /* 视界扩展后的最大格数（50+40 停点） */
 #define STG_MAX_OBS          8    /* 本车道 ST 占据障碍物上限 */
 

@@ -460,6 +460,50 @@ def load_scenario_criteria_from_pipeline() -> tuple[dict, str | None, bool, dict
     return criteria, name, has_route, road, traffic_lights
 
 
+def road_network_from_map_file(scenario: dict, scenario_path: Path) -> dict | None:
+    """Build a road_network dict from the scenario's external OSM map file.
+
+    City-map scenarios (e.g. osm_lujiazui) carry no inline ``road_network``;
+    their static geometry lives in ``map_file`` (roads[].centerline polylines,
+    junction connector roads included). Without it the evaluator falls back to
+    the straight-road y≈0 heuristic and reports 400m+ bogus road departures
+    for a car legally driving the map (2026-08-15 陆家嘴实测).
+    """
+    if not isinstance(scenario, dict):
+        return None
+    inline = scenario.get("road_network")
+    if isinstance(inline, dict) and isinstance(inline.get("edges"), list):
+        return inline
+    map_file = scenario.get("map_file")
+    if not isinstance(map_file, str) or not map_file:
+        return None
+    map_path = Path(map_file)
+    if not map_path.is_absolute():
+        map_path = scenario_path.parent / map_path
+    data = load_json(map_path)
+    if not isinstance(data, dict):
+        return None
+    edges: list[dict] = []
+    for road in data.get("roads", []):
+        if not isinstance(road, dict):
+            continue
+        centerline = road.get("centerline")
+        if not isinstance(centerline, list) or len(centerline) < 2:
+            continue
+        lanes = road.get("lanes")
+        lane_count = len(lanes) if isinstance(lanes, list) and lanes else 1
+        edges.append({
+            "id": road.get("id", f"edge_{len(edges)}"),
+            "nodes": centerline,
+            "lane_width": float(road.get("lane_width", 3.5) or 3.5),
+            "lanes": lane_count,
+            "speed_limit": float(road.get("speed_limit", 0.0) or 0.0),
+        })
+    if not edges:
+        return None
+    return {"edges": edges}
+
+
 def load_pipeline_expected_edges() -> list[tuple[str, str, str]]:
     pipeline = load_json(runtime_pipeline_path()) or {}
     return expected_edges_from_pipeline(pipeline)
@@ -1583,8 +1627,14 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         warnings.append(f"large lane-center deviation during maneuver: {max_lane_error:.2f} m")
 
     # 掉头返程合法沿 −x 行驶：净 x 位移≈0，用累计路径长代替"前进距离"。
-    if uturn_detected:
-        progress = sum(abs(xs[i] - xs[i - 1]) for i in range(1, len(xs)))
+    # 城市路网（map_file 多 edge）路线转弯，净 x 位移同样不代表行驶里程。
+    _multi_edge_net = (
+        isinstance(scenario_road_network, dict)
+        and len(scenario_road_network.get("edges", [])) > 1
+    )
+    if uturn_detected or _multi_edge_net:
+        progress = sum(math.hypot(xs[i] - xs[i - 1], ys[i] - ys[i - 1])
+                       for i in range(1, len(xs)))
     else:
         progress = xs[-1] - xs[0] if len(xs) >= 2 else 0.0
     min_distance = float(criteria.get("min_distance_m", 0.0) or 0.0)
@@ -2436,6 +2486,12 @@ def main() -> int:
         if not _scn_path.is_absolute():
             _scn_path = ROOT / _scn_path
         _scn_dict = load_json(_scn_path)
+        if isinstance(_scn_dict, dict):
+            # 城市地图场景：从内联 road_network 或外部 map_file 构建评分
+            # 用的路网几何，注入 scenario 供 score()/sample_metrics() 使用。
+            _map_rn = road_network_from_map_file(_scn_dict, _scn_path)
+            if _map_rn is not None:
+                _scn_dict["road_network"] = _map_rn
 
     failures, warnings, summary = score(samples, runtime_launcher_stderr_path(), criteria,
                                          scenario_name, has_noa_route=has_noa_route,

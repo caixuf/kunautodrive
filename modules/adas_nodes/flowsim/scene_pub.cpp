@@ -481,18 +481,38 @@ char* build_scene_frame_json(const EntityPool& pool,
             }
         }
     }
-    if (!cfg.cached_road_network_json.empty()) {
+    /* 静态段体积门禁（2026-08-15 OSM 大地图修复）：
+     * 消息总线单消息上限 MSG_BUS_MAX_DATA_SIZE(64KB)。OSM 大地图（陆家嘴 491
+     * roads + 564 buildings ≈ 数百 KB 静态段）内嵌会让整帧 publish 返回
+     * ERR_OVERFLOW 被总线静默丢弃——ego/entities/scenario_name 全部到不了
+     * monitor，前端只剩 init() 的 1 条兜底直道。超过预算时省略静态段：
+     * 帧保持小体积照常流通，前端改经 /api/map/preview 拉权威地图合成 edges
+     * （MapData.js）。小地图（city_ring 等）维持内嵌，零回归。 */
+    const size_t static_bytes =
+        cfg.cached_road_network_json.size() + cfg.buildings_json.size();
+    const bool embed_static =
+        static_bytes + 8192 /* entities/ego/meta 余量 */ < MSG_BUS_MAX_DATA_SIZE;
+    if (!embed_static) {
+        static bool s_omit_logged = false;
+        if (!s_omit_logged) {
+            s_omit_logged = true;
+            LOG_INFO("flowsim", "scene/frame: static payload %zu bytes > bus limit, "
+                     "omitting road_network/buildings (frontend uses /api/map/preview)",
+                     static_bytes);
+        }
+    }
+    if (embed_static && !cfg.cached_road_network_json.empty()) {
         /* cJSON_AddRawToObject 会 strdup 字符串并作为 raw 子项添加，
          * cJSON_Delete(root) 时随 root 一起释放，无内存泄漏。 */
         cJSON_AddRawToObject(root, "road_network", cfg.cached_road_network_json.c_str());
-    } else {
+    } else if (embed_static) {
         /* 缓存失败（极少见，如首次 build 返回 nullptr）→ 降级为直接构建 */
         cJSON* rn = build_road_network_json(cfg);
         if (rn) cJSON_AddItemToObject(root, "road_network", rn);
     }
 
     /* OSM 建筑（静态）：emit 缓存的 raw buildings[] 给前端 BuildingView 渲染真实轮廓。 */
-    if (!cfg.buildings_json.empty()) {
+    if (embed_static && !cfg.buildings_json.empty()) {
         cJSON_AddRawToObject(root, "buildings", cfg.buildings_json.c_str());
     }
 

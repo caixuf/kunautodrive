@@ -343,10 +343,19 @@ static void on_trajectory(const Message* msg, void* user_data) {
     }
     g.maneuver_mode = mv;
 
-    /* 目标速度：巡航 = 轨迹末点（跟随减速/加速意图）；
-     * 机动 = ManeuverTracker 每帧刷新（见 tick）。 */
+    /* 目标速度：巡航 = 轨迹近窗 1.5s 内最小 v（跟随减速/加速意图）；
+     * 机动 = ManeuverTracker 每帧刷新（见 tick）。
+     * 旧实现取轨迹末点 v：末点在 80m/4s 外，弯后全速值让 PID 弯中还在
+     * 加速（陆家嘴实测 v=10.6 过 R=20 弯 → steer_limit_for_speed 按速
+     * 限幅到 0.034 ≪ 所需 0.135 → 转向被锁、车直冲路口 → ROAD_GUARD）。
+     * 近窗最小 v 把 ST 剖面的弯前减速提前透传到纵向 PID。 */
     if (!mv) {
-        g.target_speed = (double)traj.points[n_pts - 1].v;
+        double tv = (double)traj.points[n_pts - 1].v;
+        for (uint32_t i = 0; i < n_pts; i++) {
+            if ((double)traj.points[i].t_rel_us > 1500000.0) break;
+            if ((double)traj.points[i].v < tv) tv = (double)traj.points[i].v;
+        }
+        g.target_speed = tv;
     }
     g.has_target_speed = 1;
 
@@ -1016,8 +1025,13 @@ protected:
                     /* 机动模式放开限幅到满舵 0.60rad：巡航限幅 0.16rad 的转弯
                      * 半径 ≥16.7m，无法执行规划的掉头弧（0.45rad，R≈5.6m）。
                      * flowsim 物理层看到 |steer|>0.28 会同步 steer_override。 */
+                    /* 巡航横向加速度权限 1.4→4.0（2026-08-15 陆家嘴实测）：
+                     * ST 规划允许 a_lat≤4.25 (5×0.85 安全系数)，控制只准 1.4
+                     * → v=7.9 过 R=20 弯时限幅 0.061 ≪ 所需 0.135，转向被锁
+                     * 车直冲叉路。4.0 与规划预算对齐；直道上该限幅不约束
+                     * 微小修正（所需 a_lat≪1），不影响舒适性。 */
                     double steer_limit = g.maneuver_mode
-                        ? 0.60 : steer_limit_for_speed(abs_speed, 1.4);
+                        ? 0.60 : steer_limit_for_speed(abs_speed, 4.0);
                     if (steer >  steer_limit) steer =  steer_limit;
                     if (steer < -steer_limit) steer = -steer_limit;
                     steer = STEER_FILTER_NEW * steer + (1.0 - STEER_FILTER_NEW) * g.prev_steer;

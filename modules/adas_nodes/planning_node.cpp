@@ -159,6 +159,12 @@ struct PlanningContext {
     int           map_ref_count{0};
     uint64_t      last_map_ref_us{0};
     int           on_return{0};
+    /* route 终点停车（2026-08-15 陆家嘴）：ref_path 首点的 route_s + route
+     * 总长 → 终点在 ST 视界内时注入 stop_s，DP 自动刹停在终点前 5m。
+     * 旧行为：ref_path 到终点截断，车按巡航速度冲出 route 走廊 ~24m 后
+     * 被 ROAD_GUARD 拽停。behavior 已下发 U-turn 时跳过（掉头轨迹接管）。 */
+    double        route_total_s{-1.0};   /* road_end_x（route 累计长度） */
+    double        map_ref_rs0{-1.0};     /* ref_path 首点的 route_s */
     double cfg_highway_speed_mps{13.0}; /* CP->NP 升级所需的持续速度阈值 (m/s) */
 
     /* 道路几何（可选弯道，来自场景文件 "road"；全零 = 直道，行为不变） */
@@ -1122,6 +1128,8 @@ static void on_road_ref_path(const Message* msg, void* user_data) {
     if (!root) return;
     cJSON* reverse = cJSON_GetObjectItemCaseSensitive(root, "reverse");
     if (cJSON_IsBool(reverse)) g.on_return = cJSON_IsTrue(reverse) ? 1 : 0;
+    cJSON* jend = cJSON_GetObjectItemCaseSensitive(root, "road_end_x");
+    if (cJSON_IsNumber(jend)) g.route_total_s = jend->valuedouble;
     cJSON* points = cJSON_GetObjectItemCaseSensitive(root, "points");
     if (!cJSON_IsArray(points)) {
         cJSON_Delete(root);
@@ -1132,12 +1140,17 @@ static void on_road_ref_path(const Message* msg, void* user_data) {
     int out_n = 0;
     double accum_s = 0.0;
     double prev_x = 0.0, prev_y = 0.0;
+    double rs0 = -1.0;
     for (int i = 0; i < n; ++i) {
         cJSON* pt = cJSON_GetArrayItem(points, i);
         if (!cJSON_IsObject(pt)) continue;
         cJSON* jx = cJSON_GetObjectItemCaseSensitive(pt, "x");
         cJSON* jy = cJSON_GetObjectItemCaseSensitive(pt, "y");
         if (!cJSON_IsNumber(jx) || !cJSON_IsNumber(jy)) continue;
+        if (out_n == 0) {
+            cJSON* jrs = cJSON_GetObjectItemCaseSensitive(pt, "rs");
+            if (cJSON_IsNumber(jrs)) rs0 = jrs->valuedouble;
+        }
         double x = jx->valuedouble;
         double y = jy->valuedouble;
         if (out_n > 0) {
@@ -1154,6 +1167,7 @@ static void on_road_ref_path(const Message* msg, void* user_data) {
     }
     g.map_ref_count = out_n;
     if (out_n >= 2) g.last_map_ref_us = clock_now_us();
+    g.map_ref_rs0 = rs0;
     cJSON_Delete(root);
 }
 
@@ -2312,6 +2326,23 @@ protected:
                         }
                     }
 
+                    /* route 终点停车：终点在 ST 视界内时注入 stop_s，DP 自动
+                     * 刹停在终点前 5m（旧行为：ref_path 截断后车冲出 route
+                     * 走廊 ~24m 被 ROAD_GUARD 拽停，陆家嘴实测）。
+                     * behavior 已下发 U-turn / 返程中跳过：掉头轨迹自带停走。 */
+                    {
+                        bool uturn_cmd = g.has_behavior &&
+                            g.current_behavior.command == BEH_U_TURN;
+                        if (!uturn_cmd && !g.on_return &&
+                            g.route_total_s > 1.0 && g.map_ref_rs0 >= 0.0) {
+                            double stop_d = g.route_total_s - g.map_ref_rs0 - 5.0;
+                            if (stop_d > 0.0 && stop_d < 89.0 &&
+                                (stg.stop_s < 0.0 || stop_d < stg.stop_s)) {
+                                stg.stop_s = stop_d;
+                            }
+                        }
+                    }
+
                     /* 同向/静止障碍 → ST 图移动/静止占据（M2，planning 重生）。
                      * 只画本车道 ± 半路宽内（跨车道决策是 behavior 职责）：
                      * 对向车（沿向速度 < -2）不进图 —— 同车道头对头是逆行
@@ -2380,6 +2411,17 @@ protected:
                             if (idx < 0) idx = 0;
                             if (idx >= stg_res.n) idx = stg_res.n - 1;
                             points[i].v = (float)stg_res.v_out[idx];
+                        }
+                        /* 自洽钳幅：前视位移会把"过弯后加速段"的 v 贴到弯心 κ 上
+                         * （实测 κ=0.099 配 v=7.2 → a_lat=5.1 → 整帧 invalid）。
+                         * 按本点 κ 逐点钳 v ≤ 0.9·sqrt(a_lat_max/|κ|)——发布轨迹
+                         * 永不违反自身可行性检查（不变量：检查通过构造即真）。 */
+                        for (int i = 0; i < n_pts; i++) {
+                            double k = fabs((double)points[i].kappa);
+                            if (k > 1e-6) {
+                                double vmax = 0.9 * sqrt(5.0 / k);
+                                if ((double)points[i].v > vmax) points[i].v = (float)vmax;
+                            }
                         }
                     } else {
                         /* ST 图失败 → 保留 1961 线性斜坡（已在 spd_out） */
@@ -2463,6 +2505,18 @@ publish_trajectory:
             if (!traj.valid) {
                 LOG_WARN("planning", "#%d trajectory FAILED feasibility check — publishing invalid",
                          g.plan_count);
+                /* 定位哪条约束挂了：κ 超限 / a_lat 超限 / v 非法，打印首违点 */
+                for (int i = 0; i < n_pts && i < 64; i++) {
+                    double k = fabs((double)traj.points[i].kappa);
+                    double v = (double)traj.points[i].v;
+                    double al = v * v * k;
+                    if (k > 0.25 || al > 5.0 || v < -0.5 || v > g.cfg_max_speed * 1.1) {
+                        LOG_WARN("planning",
+                                 "  feasibility first-violation: pt[%d] s=%.1f kappa=%.3f v=%.1f a_lat=%.2f (lim κ0.25 a5.0)",
+                                 i, (double)traj.points[i].s, k, v, al);
+                        break;
+                    }
+                }
             }
 
             uint8_t buf[4096];

@@ -174,6 +174,11 @@ struct FlowSimContext {
      * 同步 esmini position。由 lane_id 符号自动推导，不再由硬编码状态机设置。 */
     bool                   u_turn_active{false};
 
+    /* ego 在 route 上的累计 s 跟踪 hint（route.project 的窗口中心）。
+     * -1 = 未初始化（首次全 route 扫描）。OSM 平行对向车道/路口区域内
+     * nearest-road 投影会在道路间跳变，route 投影 + 单调 hint 才稳定。 */
+    double                 ego_route_s_hint{-1.0};
+
     /* 机动模式（off-rails）：掉头/倒车期间自行车模型是位姿唯一权威。
      * 进入：control 命令 |steer|>0.28（超巡航钳位域，只能是掉头轨迹）或倒挡。
      * 退出：转向需求消失 且 车头与车道方向夹角 < 20°（对齐后才重新上轨）。
@@ -226,6 +231,7 @@ static void reset_runtime_state() {
     g.roads_loaded = false;
     g.last_road_geom_road_id = -9999;
     g.last_road_geom_lane_count = -1;
+    g.ego_route_s_hint = -1.0;
     g.static_digest = flowsim::StaticDigest();
     g.prev_dynamic_digest = flowsim::DynamicDigest();
     g.digest_initialized = false;
@@ -484,22 +490,30 @@ static void apply_actor_override(flowsim::Entity& e,
 
 /* Compute ego's cumulative s along the central route.
  *
- * 性能优化：ego.road_pos 是本地 esmini position handle，frenet() 查询是 O(1)
- * 本地操作；而 world_to_frenet 是 O(roads) 全网扫描（遍历所有 road 找最近）。
- * 主循环每帧原本调用 world_to_frenet 3 次（apply_scenario_scripts /
- * publish_ref_path / Step 3 NPC AI），60Hz 下冗余全网扫描。
- *
- * 此 helper 优先用 ego.road_pos.frenet()（road_pos.ok() 时），仅在 road_pos
- * 未初始化或查询失败时回退到 world_to_frenet。返回 -1.0 表示 ego 不在 route 上。 */
+ * 实现：Route::project 把 ego 世界坐标投到 route 几何上（hint 限窗，跟踪单调）。
+ * 历史实现用 nearest-road 投影（road_pos.frenet / world_to_frenet → index_of
+ * 反查 route），OSM 平行对向车道洞/路口连接段处 nearest-road 跳变会导致
+ * route_s 跳变/丢失（-1）。route 投影与路网投影解耦，天然免疫。
+ * 返回 -1.0 表示 route 不可用（未加载路网/空 route）。 */
 static double compute_ego_route_s() {
     if (!g.route.ok() || !g.roads_loaded) return -1.0;
     const flowsim::Entity& ego = g.pool[0];
-    flowsim::FrenetPos ef;
-    bool ok = ego.road_pos.ok() ? ego.road_pos.frenet(ef)
-                                 : g.roads.world_to_frenet(ego.x, ego.y, ef);
-    if (!ok) return -1.0;
-    int ei = g.route.index_of(ef.road_id);
-    return (ei >= 0) ? g.route.to_route_s(ei, ef.s) : -1.0;
+    /* route 几何投影（2026-08-15 OSM 修复）：不再用 nearest-road 投影反查
+     * route（world_to_frenet → index_of）。OSM 平行对向车道洞/路口连接段
+     * 会让 nearest-road 跳变到 route 上的另一条 road（陆家嘴双洞隧道：
+     * ego 在东洞被吸到西洞，route_s 从 ~200m 跳变 ~2500m，ref_path 瞬间
+     * 指向 2km 外 → 车被拽离路面）。route 是唯一权威行进路径，直接投到
+     * route 几何上 + 单调 hint 限窗，投影天然稳定。 */
+    double rs = g.route.project(g.roads, ego.x, ego.y, g.ego_route_s_hint);
+    /* 跳变观测（OSM 调试）：投影结果离 hint 超过 20m 即记录，定位 route_s
+     * 跳变来源。确认稳定后可移除。 */
+    if (rs >= 0.0 && g.ego_route_s_hint >= 0.0 &&
+        std::fabs(rs - g.ego_route_s_hint) > 20.0) {
+        LOG_WARN("flowsim", "[ROUTE_S_JUMP] %.1f→%.1f ego(%.1f,%.1f) h=%.2f",
+                 g.ego_route_s_hint, rs, ego.x, ego.y, ego.heading);
+    }
+    if (rs >= 0.0) g.ego_route_s_hint = rs;
+    return rs;
 }
 
 static void apply_scenario_scripts(double sim_time_s) {
@@ -1852,18 +1866,70 @@ protected:
                 flowsim::step_bicycle(ego, FLOWSIM_DT_SEC,
                                       ego.throttle, ego.brake, ego.steer);
             }
-            /* 掉头对向车道标志（2026-08 修复）：由「车头方向」判定，不再用
-             * lane_id 符号。旧判定 (lane_id > 0) 在"同向道路跨中心线"（4 车道
-             * 同向 y 跨 ±5.25，OpenDRIVE lane_id 正=左）时把 y>0 的车道误判为
-             * 对向 → ego 变道到超车道（y=+1.75）即触发返程逻辑 → ref_path 反向
-             * + esmini 反向同步 → 启动即逆行（2026-08-03 实测 lane=1 逆行）。
-             * 语义正确的判据：返程 = 车头朝 -x（heading≈±π，掉头完成后的
-             * 行驶方向），与车道编号无关。 */
-            if (!g.off_rails && ego.road_pos.ok()) {
-                double hn = ego.heading;
-                while (hn >  M_PI) hn -= 2.0 * M_PI;
-                while (hn < -M_PI) hn += 2.0 * M_PI;
-                g.u_turn_active = (std::fabs(hn) > M_PI * 0.5);
+            /* 掉头对向车道标志（2026-08-15 OSM 修复）：与「route 切线航向」比较，
+             * 不再与世界 x 轴或 nearest-road 切线比较。两个旧判据在 OSM 路网都
+             * 会误判：世界轴向假定道路东西向（南/北向道路 |h|≈π/2 逐帧翻转）；
+             * nearest-road 在平行对向车道洞/路口区跳变（ego 在东洞、切线取西洞
+             * → 差 176° → 误判返程）。route 是唯一权威行进路径，其切线即 ego
+             * 应行驶方向：返程 = 车头与 route 切线对折角 >90°。
+             * 直道 U-turn 场景 route 沿道路，判据行为不变。 */
+            if (!g.off_rails) {
+                double ref_h = 0.0;
+                bool   have_ref = false;
+                int    ref_rid = -1;
+                double ref_sl = -1.0;
+                double ref_rs = -1.0;
+                if (g.route.ok() && g.roads_loaded) {
+                    double rs = compute_ego_route_s();
+                    if (rs >= 0.0) {
+                        /* 统一走 sample_pose：虚拟 fillet 段 locate 返回 rid=-1，
+                         * 直接 frenet_to_world 必失败 → 回退 nearest-road 拿到
+                         * 对向/叉路切线 → dh≈180° 误置 u_turn_active → ref_path
+                         * 反向 → 车在路口掉头逆行（陆家嘴 2026-08-15 实测）。
+                         * sample_pose 对虚拟段插值折线，切线恒为行进方向。 */
+                        flowsim::WorldPos rwp;
+                        if (g.route.sample_pose(g.roads, rs, rwp.x, rwp.y, rwp.h)) {
+                            ref_h = rwp.h;
+                            have_ref = true;
+                            ref_rs = rs;
+                            /* 翻转观测：投影点世界坐标与 ego 实际位置对比，
+                             * 可区分"投影跳变"与"切线异常" */
+                            if (std::fabs(rwp.h - ego.heading) > M_PI * 0.45) {
+                                int rid = 0, ridx = -1; double sl = 0.0;
+                                g.route.locate(rs, rid, sl, ridx);
+                                ref_rid = rid; ref_sl = sl;
+                                LOG_WARN("flowsim", "[REFH_DBG] rid=%d sl=%.1f → world(%.2f,%.2f) h=%.1f° | ego(%.2f,%.2f) h=%.1f° | rs=%.1f",
+                                         rid, sl, rwp.x, rwp.y, rwp.h * 180.0 / M_PI,
+                                         ego.x, ego.y, ego.heading * 180.0 / M_PI, rs);
+                            }
+                        }
+                    }
+                }
+                if (!have_ref && ego.road_pos.ok()) {
+                    flowsim::WorldPos rwp;
+                    if (ego.road_pos.world(rwp)) {
+                        ref_h = rwp.h;
+                        have_ref = true;
+                    }
+                }
+                if (have_ref) {
+                    double dh = ego.heading - ref_h;
+                    while (dh >  M_PI) dh -= 2.0 * M_PI;
+                    while (dh < -M_PI) dh += 2.0 * M_PI;
+                    /* 迟滞翻转：>100° 置位、<80° 清除（之间保持）。直角路口
+                     * 转弯 dh 实测可到 ±90°，无迟滞时阈值附近逐帧抖动
+                     * （陆家嘴 84° 弯实测 rs 投影失败期 dh=±90° 振荡）。 */
+                    double adh = std::fabs(dh);
+                    bool new_flag = g.u_turn_active ? (adh > M_PI * 80.0 / 180.0)
+                                                    : (adh > M_PI * 100.0 / 180.0);
+                    if (new_flag != g.u_turn_active) {
+                        LOG_INFO("flowsim", "[UTURN_FLAG] %d→%d dh=%.1f° ego_h=%.1f° ref_h=%.1f° rs=%.1f rid=%d sl=%.1f ego(%.1f,%.1f)",
+                                 (int)g.u_turn_active, (int)new_flag,
+                                 dh * 180.0 / M_PI, ego.heading * 180.0 / M_PI,
+                                 ref_h * 180.0 / M_PI, ref_rs, ref_rid, ref_sl, ego.x, ego.y);
+                    }
+                    g.u_turn_active = new_flag;
+                }
             }
 
             /* Phase 2: ego 用 road_pos 推进纵向 + set_offset 做横向变道。
@@ -1903,13 +1969,17 @@ protected:
                         ego.lane_id = fp.lane_id;
                         ego.s = fp.s;
                         ego.offset = fp.offset;
-                        /* 同上方修复：车头方向判定（lane_id 符号在跨中心线
-                         * 同向道路误判对向 → 启动即逆行） */
+                        /* 同上方修复：与道路切线比较（lane_id 符号与世界轴向
+                         * 都会误判——前者跨中心线同向路误判对向，后者 OSM 任意
+                         * 朝向道路 |h|≈π/2 处逐帧翻转） */
                         {
-                            double hn = ego.heading;
-                            while (hn >  M_PI) hn -= 2.0 * M_PI;
-                            while (hn < -M_PI) hn += 2.0 * M_PI;
-                            g.u_turn_active = (std::fabs(hn) > M_PI * 0.5);
+                            flowsim::WorldPos rwp;
+                            if (g.roads.frenet_to_world(fp.road_id, 0, fp.s, 0.0, rwp)) {
+                                double dh = ego.heading - rwp.h;
+                                while (dh >  M_PI) dh -= 2.0 * M_PI;
+                                while (dh < -M_PI) dh += 2.0 * M_PI;
+                                g.u_turn_active = (std::fabs(dh) > M_PI * 0.5);
+                            }
                         }
                         exit_lat_m = fp.offset;
                         double ref_off = flowsim::offset_from_lane_internal(
@@ -2481,6 +2551,105 @@ static bool build_route_via_astar(void) {
     return true;
 }
 
+/* ── 压路建筑过滤（2026-08-15 陆家嘴修复）────────────────────
+ * OSM 建筑 footprint 与车行道 2D 相交只可能是两类：隧道上方建筑（真实
+ * 存在，但 2D 仿真无法表达"路上楼"层级）或 OSM 数据瑕疵。两类在 2D 地面
+ * 仿真里都不应参与碰撞——陆家嘴人民路隧道上方 b_10639412 footprint 南角
+ * 伸进路面（隧道在地下），ego 正常行驶被判 COLLISION ego↔building1。
+ * 规则：footprint 与任一 road 可行驶面（中心线 ± 半宽）相交 → 从碰撞列表
+ * 剔除。仅影响 g.buildings 碰撞列表；前端渲染/感知遮挡的原始数据不受影响。 */
+static bool s_point_in_poly(double px, double py,
+                            const std::vector<std::pair<double,double>>& poly) {
+    bool inside = false;
+    const size_t n = poly.size();
+    for (size_t i = 0, j = n - 1; i < n; j = i++) {
+        double xi = poly[i].first,  yi = poly[i].second;
+        double xj = poly[j].first,  yj = poly[j].second;
+        if ((yi > py) != (yj > py)) {
+            double xint = (xj - xi) * (py - yi) / (yj - yi) + xi;
+            if (px < xint) inside = !inside;
+        }
+    }
+    return inside;
+}
+
+static double s_point_seg_dist(double px, double py,
+                               double ax, double ay, double bx, double by) {
+    double abx = bx - ax, aby = by - ay;
+    double L2 = abx * abx + aby * aby;
+    double t = (L2 > 1e-12) ? ((px - ax) * abx + (py - ay) * aby) / L2 : 0.0;
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+    double cx = ax + abx * t, cy = ay + aby * t;
+    return std::hypot(px - cx, py - cy);
+}
+
+static void filter_buildings_over_roads(void) {
+    if (!g.roads_loaded || g.buildings.empty()) return;
+    const size_t nb = g.buildings.size();
+    /* 预计算各建筑 AABB（粗筛） */
+    std::vector<double> bx0(nb), bx1(nb), by0(nb), by1(nb);
+    for (size_t bi = 0; bi < nb; ++bi) {
+        const auto& poly = g.buildings[bi].poly;
+        if (poly.empty()) { bx0[bi] = 1e18; bx1[bi] = -1e18;
+                            by0[bi] = 1e18; by1[bi] = -1e18; continue; }
+        double x0 = 1e18, x1 = -1e18, y0 = 1e18, y1 = -1e18;
+        for (const auto& p : poly) {
+            if (p.first  < x0) x0 = p.first;
+            if (p.first  > x1) x1 = p.first;
+            if (p.second < y0) y0 = p.second;
+            if (p.second > y1) y1 = p.second;
+        }
+        bx0[bi] = x0; bx1[bi] = x1; by0[bi] = y0; by1[bi] = y1;
+    }
+    std::vector<char> drop(nb, 0);
+    const int nroad = g.roads.road_count();
+    for (int ri = 0; ri < nroad; ++ri) {
+        flowsim::RoadInfo info;
+        if (!g.roads.road_info(ri, info) || info.length <= 0.0) continue;
+        for (double s = 0.0; s <= info.length + 1e-6; s += 5.0) {
+            flowsim::WorldPos wp;
+            if (!g.roads.frenet_to_world((int)info.id, 0, s, 0.0, wp)) continue;
+            double lw = g.roads.lane_width((int)info.id, 0, s);
+            if (lw < 1.0 || lw > 10.0) lw = 3.5;
+            int lanes = g.roads.drivable_lane_count((int)info.id, s);
+            if (lanes < 1) lanes = 1;
+            double half_w = lanes * 0.5 * lw + 1.0;  /* 可行驶半宽 + 1m 余量 */
+            for (size_t bi = 0; bi < nb; ++bi) {
+                if (drop[bi]) continue;
+                const auto& poly = g.buildings[bi].poly;
+                if (poly.size() < 3) continue;
+                if (wp.x < bx0[bi] - half_w || wp.x > bx1[bi] + half_w ||
+                    wp.y < by0[bi] - half_w || wp.y > by1[bi] + half_w) continue;
+                /* 精确：点在多边形内，或到任意边距离 < half_w */
+                bool hit = s_point_in_poly(wp.x, wp.y, poly);
+                if (!hit) {
+                    for (size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++) {
+                        if (s_point_seg_dist(wp.x, wp.y,
+                                             poly[j].first, poly[j].second,
+                                             poly[i].first, poly[i].second) < half_w) {
+                            hit = true; break;
+                        }
+                    }
+                }
+                if (hit) drop[bi] = 1;
+            }
+        }
+    }
+    size_t out = 0;
+    int ndrop = 0;
+    for (size_t bi = 0; bi < nb; ++bi) {
+        if (drop[bi]) { ++ndrop; continue; }
+        g.buildings[out++] = g.buildings[bi];
+    }
+    g.buildings.resize(out);
+    if (ndrop > 0) {
+        LOG_INFO("flowsim",
+                 "filtered %d/%d buildings overlapping carriageway (tunnel-overpass/data artifact) from collision list",
+                 ndrop, (int)nb);
+    }
+}
+
 /* ── TaskBase 包装器（宏生成）— 必须在 flowsim_init 前展开 ──────── */
 EXPORT_COROUTINE_TASK(FlowSimTask, flowsim)
 
@@ -2631,12 +2800,47 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
                 if (build_route_via_astar()) {
                     LOG_INFO("flowsim", "central route via A*: %d segments, %.0fm total",
                              g.route.count(), g.route.total_length());
+                    /* 虚拟连接段诊断：逐段打印折线长度与峰值曲率（采样差分），
+                     * 验证 fillet 是否达到 R≈10m 设计（κ≤0.1）。 */
+                    for (int si = 0; si < g.route.count(); ++si) {
+                        const flowsim::RouteSeg& sg = g.route.seg(si);
+                        if (!sg.is_virtual || sg.pts.size() < 3) continue;
+                        double kmax = 0.0;
+                        for (size_t pi = 1; pi + 1 < sg.pts.size(); ++pi) {
+                            double h0 = sg.pts[pi - 1].h, h1 = sg.pts[pi + 1].h;
+                            double dh = h1 - h0;
+                            while (dh >  M_PI) dh -= 2.0 * M_PI;
+                            while (dh < -M_PI) dh += 2.0 * M_PI;
+                            double ds = std::hypot(sg.pts[pi + 1].x - sg.pts[pi - 1].x,
+                                                   sg.pts[pi + 1].y - sg.pts[pi - 1].y);
+                            if (ds > 1e-6) {
+                                double k = std::fabs(dh / ds);
+                                if (k > kmax) kmax = k;
+                            }
+                        }
+                        LOG_INFO("flowsim",
+                                 "  vseg[%d] s0=%.1f len=%.1fm pts=%d kappa_max=%.3f (R=%.1fm)",
+                                 si, sg.s_start, sg.length, (int)sg.pts.size(),
+                                 kmax, kmax > 1e-6 ? 1.0 / kmax : 1e9);
+                        const flowsim::RefPathPoint& pa = sg.pts.front();
+                        const flowsim::RefPathPoint& pb = sg.pts.back();
+                        double dh_deg = (pb.h - pa.h) * 180.0 / M_PI;
+                        while (dh_deg > 180.0)  dh_deg -= 360.0;
+                        while (dh_deg < -180.0) dh_deg += 360.0;
+                        LOG_INFO("flowsim",
+                                 "    endpts: (%.1f,%.1f h=%.0f°) → (%.1f,%.1f h=%.0f°) chord=%.1fm dh=%.0f°",
+                                 pa.x, pa.y, pa.h * 180.0 / M_PI,
+                                 pb.x, pb.y, pb.h * 180.0 / M_PI,
+                                 std::hypot(pb.x - pa.x, pb.y - pa.y), dh_deg);
+                    }
                 } else if (g.route.build(g.roads)) {
                     LOG_INFO("flowsim", "central route built: %d segments, %.0fm total",
                              g.route.count(), g.route.total_length());
                 } else {
                     LOG_WARN("flowsim", "route build failed — NPC lane-follow off (straight fallback)");
                 }
+                /* 压路建筑剔除（隧道上方建筑/数据瑕疵不参与碰撞） */
+                filter_buildings_over_roads();
             } else {
                 LOG_WARN("flowsim", "esmini load failed for %s — NPC AI falls back to lateral distance",
                          xodr.c_str());

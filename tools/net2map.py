@@ -817,10 +817,10 @@ def main() -> int:
     if inherit and os.path.isfile(inherit):
         with open(inherit, encoding="utf-8") as f:
             old = json.load(f)
+        # buildings 不在 net.xml 中（来自 OSM2World），继承既有避免重复跑；
+        # landmarks（traffic_lights/stop_lines/construction_zones）由 net 重新
+        # 生成，绝不继承旧值——否则旧空 traffic_lights 会覆盖本次新生成的红绿灯。
         doc["buildings"] = old.get("buildings", [])
-        old_lm = old.get("landmarks")
-        if isinstance(old_lm, dict):
-            doc["landmarks"] = old_lm
 
     # 全路网几何邻接兜底：SUMO connection 只连「road→内部connector→road」，
     # 贪心 main 链直接拼真实 road，相邻真实 road 间缺 lane 后继 → A*/ego 路口断链。
