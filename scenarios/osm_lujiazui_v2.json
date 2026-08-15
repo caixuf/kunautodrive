@@ -1,0 +1,37 @@
+{
+  "name": "osm_lujiazui_v2",
+  "description": "OSM 路网（SUMO netconvert，net2map.py 生成）：ego 沿 route 'main' 行驶。",
+  "map_file": "../maps/osm_lujiazui_v2/map.json",
+  "route_file": "../maps/osm_lujiazui_v2/routes.json",
+  "route_id": "main",
+  "random_seed": 202608,
+  "duration_s": 120,
+  "lighting": "day",
+  "weather": "clear",
+  "visibility_m": 1200,
+  "npc_lane_change": true,
+  "ego": {
+    "x": -655.031,
+    "y": 442.524,
+    "heading": 2.0377,
+    "init_speed": 10.0,
+    "target_speed": 13.0,
+    "wheelbase": 2.7,
+    "length": 4.6,
+    "width": 2.0,
+    "max_steer": 0.6
+  },
+  "actors": [],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 120,
+    "min_avg_speed_mps": 3.0,
+    "min_distance_m": 450
+  },
+  "route": [],
+  "scenarios": [],
+  "choreography": {
+    "loop_period_s": 999,
+    "beats": []
+  }
+}
