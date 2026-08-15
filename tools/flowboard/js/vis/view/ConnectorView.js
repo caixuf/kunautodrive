@@ -57,7 +57,9 @@ export function createConnectorView(scene) {
     if (!roadNetwork || !roadNetwork.edges) return;
 
     const edges = roadNetwork.edges;
-    const junctions = roadNetwork.junctions || [];
+    /* fork/merge 转向记录走 map_junctions（map.json 原样透传）；
+     * roadNetwork.junctions 保留给 {x,y,z,radius} 路口中心格式（JunctionDetect 用）。 */
+    const junctions = roadNetwork.map_junctions || [];
 
     // ── 1. LaneTaper：相邻 edge 车道数/宽度不同 ──
     for (let i = 0; i < edges.length - 1; i++) {
@@ -79,11 +81,12 @@ export function createConnectorView(scene) {
     const topo = getTopology(roadNetwork);
     const centers = topo ? topo.centers : [];
     const byId = topo ? topo.byId : new Map();
-    _buildJunctionPatch(topo, centers);
+    _buildJunctionPatch(topo, centers, junctions);
 
-    // ── 2c. 转向连接曲线：按 fork junctions[] 的 connecting_roads[].turn 画
-    //  车辆转向路径（左转向左弯/右转向右弯/直行平直），颜色区分转向类型。──
-    if (junctions.length) _buildTurnConnectors(junctions, roadNetwork, centers, byId);
+    // ── 2c. 转向连接曲线已删除（2026-08-15，P1 渠化替代）：旧实现按 fork turn 画
+    //  彩色 ribbon，但 incoming_road 是 base 路名、byId 键是分段 edge id，键型
+    //  不匹配导致其从未渲染过任何东西（死代码）；正确的数据版 = 2b 内的
+    //  转向引导虚线（connectingRoads 前缀匹配 + 二次贝塞尔导流线）。 ──
 
     // ── 3. RampMerge：ramp_curve 类型 + junctions 里有 merge ──
     const mergeJunctions = junctions.filter(j => j.type === 'merge');
@@ -158,33 +161,26 @@ export function createConnectorView(scene) {
   }
 
   /** 2b. 交叉口路面补齐：在每个检测到的路口中心铺一块**真实路口多边形**。
-   *  2026-08-14：路面 ribbon 不再截断（RoadView 贯穿路口），patch 不再是
-   *  "补缺口"的唯一手段，改为颜色统一（沥青底色覆盖四路重叠的杂乱边缘）；
-   *  polygon 角点 / 斑马线 / 停止线统一用 walkFromJunction 沿 arm 折线做
-   *  径向出圈取位置与局部切线——曲路上位置贴路、朝向贴弯（旧端段直线外推在
-   *  急弯引道上方向偏差达 72°，斑马线斜切路面）。
-   *  拓扑（centers/arms/折线点）来自 TopologyModel 单一事实源（P0 收敛）。
-   *  斑马线/停止线保持 InstancedMesh 合批；路口多边形合并为单个 BufferGeometry。 */
-  function _buildJunctionPatch(topo, centers) {
+   *  拓扑（centers/arms/折线点）来自 TopologyModel 单一事实源；
+   *  标线用 walkFromJunction 径向出圈取位置与局部切线（曲路贴弯）；
+   *  polygon 圆角化（Chaikin 2 次切角）；转向导流线用 junctionData 的 turn。 */
+  function _buildJunctionPatch(topo, centers, junctionData) {
     if (!topo || !centers.length) return;
 
-    // 路口多边形（全部合并进一个 BufferGeometry，静态路网单 mesh）+ 标线实例
+    // 路口多边形（合并单 mesh）+ 斑马线/停止线/导流线 InstancedMesh
     const polyPositions = [], polyIndices = [];
     const crossInstances = [];    // {x, z, rotY, len, w}
     const stopInstances = [];     // {x, z, rotY, len, w}
+    const guideInstances = [];    // {x, z, rotY, len, w} 转向引导虚线
 
     for (let ci = 0; ci < centers.length; ci++) {
       const c = centers[ci];
-
-      // ── 本路口所有 arm（TopologyModel 缓存：折线点 + 半宽 + 从哪端进路口）──
-      const arms = topo.armsOfJunction(ci);   // [{edgeId, fromEnd, pts, hw, roadW, edge}]
+      const arms = topo.armsOfJunction(ci);
       if (arms.length >= 2) {
-        // 边界点：walk 到 radius 弧长处（路实际穿出路口圆的位置）± 该处法线*半宽，
-        // 按绕中心的角度排序围成凸多边形（十字路口 → 八边形，非正方形）。
         const pts = [];
         for (const a of arms) {
           const w = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, c.radius);
-          const pxn = -w.uz, pzn = w.ux;           // XZ 平面法线
+          const pxn = -w.uz, pzn = w.ux;
           const bx = w.x + pxn * a.hw;
           const bz = w.z + pzn * a.hw;
           const tx = w.x - pxn * a.hw;
@@ -193,50 +189,57 @@ export function createConnectorView(scene) {
           pts.push({ x: tx, z: tz, ang: Math.atan2(tz - c.z, tx - c.x) }); // exempt: 排序用，非 heading 计算
         }
         pts.sort((a, b) => a.ang - b.ang);
+        /* 圆角化：Chaikin 2 次迭代切角，路口铺装从硬八边形变成圆角矩形
+         * （向高德路口第一眼观感对齐），凸多边形保持扇形三角化成立。 */
+        let smooth = pts;
+        for (let iter = 0; iter < 2; iter++) {
+          const next = [];
+          for (let i = 0; i < smooth.length; i++) {
+            const p = smooth[i], q = smooth[(i + 1) % smooth.length];
+            next.push({ x: p.x * 0.75 + q.x * 0.25, z: p.z * 0.75 + q.z * 0.25 });
+            next.push({ x: p.x * 0.25 + q.x * 0.75, z: p.z * 0.25 + q.z * 0.75 });
+          }
+          smooth = next;
+        }
         const base = polyPositions.length / 3;
-        for (const p of pts) {
-          polyPositions.push(p.x, PATCH_Y, p.z);
-        }
-        // 扇形三角化（中心 → 相邻顶点，凸多边形成立）
-        for (let i = 1; i < pts.length - 1; i++) {
-          polyIndices.push(base, base + i, base + i + 1);
-        }
+        for (const p of smooth) polyPositions.push(p.x, PATCH_Y, p.z);
+        for (let i = 1; i < smooth.length - 1; i++) polyIndices.push(base, base + i, base + i + 1);
       }
 
-      // ── 斑马线 + 停止线：沿各 arm 折线 walk 到路口外弧长处，位置贴曲路、
-      //  朝向取该处局部切线。隧道/地道引道（行人不可穿越）跳过。 ──
-      for (const a of arms) {
-        if (isTunnelEdge(a.edge)) continue;   // 隧道/地道引道：行人不可穿越
-        // 斑马线中心：walk 到路口多边形外侧的路面上（跨整幅路），不贴 patch 边缘
+      // ── 斑马线 + 停止线 + 转向导流线 ──
+      // P1 路口渠化：先算本路口的转向连接（fork incoming→connecting 双 arm 都在
+      // 本路口才算），停止线按来车归属——只有作为某条转向路径来车端的 arm 才画
+      // （单行道驶出侧/纯出口 arm 不画）；无 turn 数据时回退每个 arm 全画。
+      // 斑马线行人过街与车流方向无关，保持每个 arm 都画。
+      const conns = connectingRoads(ci, arms, junctionData);
+      const incomingIdx = new Set();
+      for (const conn of conns) {
+        if (conn.fromIdx != null && conn.toIdx != null) incomingIdx.add(conn.fromIdx);
+      }
+      for (let ai = 0; ai < arms.length; ai++) {
+        const a = arms[ai];
+        if (isTunnelEdge(a.edge)) continue;
         const wc = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, c.radius + 2.0);
-        // GB 5768.3 5.8：斑马线条纹应与道路中心线平行（与车同向），条纹沿道路
-        // 长度短（交叉口 ≥2m），跨道路方向铺多条条带。
-        const rotY = directionToRotationY(wc.ux, wc.uz);   // 条纹长轴沿道路（平行行车）
+        const rotY = directionToRotationY(wc.ux, wc.uz);
         const step = CROSSWALK_STRIPE_W + CROSSWALK_GAP;
         const stripeCount = Math.max(2, Math.round(a.roadW / step));
-        const nx = -wc.uz, nz = wc.ux;                     // 跨道路方向（铺条）
+        const nx = -wc.uz, nz = wc.ux;
         for (let i = 0; i < stripeCount; i++) {
           const across = (i - (stripeCount - 1) / 2) * step;
-          crossInstances.push({
-            x: wc.x + nx * across,
-            z: wc.z + nz * across,
-            rotY,
-            len: CROSSWALK_LENGTH,
-            w: CROSSWALK_STRIPE_W,
-          });
+          crossInstances.push({ x: wc.x + nx * across, z: wc.z + nz * across, rotY, len: CROSSWALK_LENGTH, w: CROSSWALK_STRIPE_W });
         }
-        // 停止线：GB 5768.3 5.19 白色实线横跨**来车方向半幅**路面（垂直行车），
-        // 位于斑马线外侧（来向更远一点）。来向 = -u，右行制下来车半幅在来向右侧
-        // （THREE 方向 (ux,uz) 的右侧 = (-uz,ux)；来向 -u 的右侧 = (uz,-ux)）。
+        if (incomingIdx.size && !incomingIdx.has(ai)) continue;   // 非来车 arm：无停止线
         const ws = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, c.radius + 2.0 + CROSSWALK_LENGTH + 1.5);
         const halfW = a.roadW * 0.25;
-        stopInstances.push({
-          x: ws.x + ws.uz * halfW,
-          z: ws.z - ws.ux * halfW,
-          rotY: directionToRotationY(ws.ux, ws.uz) + Math.PI / 2,
-          len: a.roadW * 0.5,
-          w: STOP_LINE_W,
-        });
+        stopInstances.push({ x: ws.x + ws.uz * halfW, z: ws.z - ws.ux * halfW, rotY: directionToRotationY(ws.ux, ws.uz) + Math.PI / 2, len: a.roadW * 0.5, w: STOP_LINE_W });
+      }
+      // 转向引导线：本路口每个 fork junction 的 incoming→connecting 路径
+      for (const conn of conns) {
+        if (conn.fromIdx == null || conn.toIdx == null) continue;
+        const fa = arms[conn.fromIdx], ta = arms[conn.toIdx];
+        const p0 = walkFromJunction(fa.pts, fa.fromEnd, c.x, c.z, c.radius + 2.5);
+        const p1 = walkFromJunction(ta.pts, ta.fromEnd, c.x, c.z, c.radius + 2.5);
+        _drawTurnGuide(p0, p1, conn.turn, guideInstances);
       }
     }
 
@@ -285,72 +288,91 @@ export function createConnectorView(scene) {
       mesh.receiveShadow = true;
       group.add(mesh);
     }
+
+    // 转向引导虚线（白，左转专用）：左转弯导流线，与停止线同高防 z-fight
+    if (guideInstances.length) {
+      const geo = getBox(1, 0.02, 1);
+      const mat = getStdMaterial(MERGE_LINE_COLOR, 0.6, 0.0);
+      const mesh = new THREE.InstancedMesh(geo, mat, guideInstances.length);
+      const dummy = new THREE.Object3D();
+      guideInstances.forEach((s, i) => {
+        dummy.position.set(s.x, STOP_Y, s.z);
+        dummy.rotation.y = s.rotY;
+        dummy.scale.set(s.len, 1, s.w);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(i, dummy.matrix);
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.receiveShadow = true;
+      group.add(mesh);
+    }
   }
 
-  /** 2c. 转向连接曲线：按 fork junctions[] 的 connecting_roads[].turn 画车辆转向
-   *  路径（左转向左弯/右转向右弯/直行平直），颜色区分转向类型。仅作连通可视化
-   *  提示，不参与碰撞/几何。坐标走 worldToThree（与 JunctionDetect 一致）。 */
-  const TURN_COLOR = { straight: 0xffffff, left: 0xffcc33, right: 0x66ff99, uturn: 0xff6633 };
-
-  function _nodePoint(node) {
-    if (!node) return null;
-    if (Array.isArray(node)) {
-      const [x, , z] = worldToThree(node[0] || 0, node[1] || 0, node[2] || 0);
-      return { x, z };
+  /** 本路口的转向连接列表：fork 记录里 incoming_road 与 connecting_road 都有
+   *  arm 在本路口的，才算本路口的转向路径。返回 [{fromIdx, toIdx, turn}]。
+   *  incoming_road 是 base 路名（如 "东泰路"），arm edgeId 可能是其分段
+   *  （"东泰路_47279978"）——来车匹配 = 精确相等 OR `base_` 前缀（下划线
+   *  分隔防"东泰路北段"类误配）；一条双向路的所有分段 arm 都是来车端。 */
+  function connectingRoads(ci, arms, junctionData) {
+    const out = [];
+    if (!Array.isArray(junctionData) || !junctionData.length) return out;
+    const armIdx = new Map();   // edgeId -> arms 下标
+    arms.forEach((a, i) => { if (!armIdx.has(a.edgeId)) armIdx.set(a.edgeId, i); });
+    const fromIndices = (incoming) => {
+      const id = String(incoming);
+      const prefix = id + '_';
+      const idxs = [];
+      arms.forEach((a, i) => {
+        if (a.edgeId === id || a.edgeId.startsWith(prefix)) idxs.push(i);
+      });
+      return idxs;
+    };
+    for (const f of junctionData) {
+      if (!f || f.type !== 'fork') continue;
+      const fromIdxs = fromIndices(f.incoming_road);
+      if (!fromIdxs.length) continue;
+      for (const conn of (f.connecting_roads || [])) {
+        const toIdx = armIdx.get(String(conn.id));
+        if (toIdx == null) continue;
+        for (const fromIdx of fromIdxs) {
+          if (toIdx === fromIdx) continue;
+          out.push({ fromIdx, toIdx, turn: conn.turn || 'straight' });
+        }
+      }
     }
-    if (typeof node === 'object') {
-      const [x, , z] = worldToThree(node.x || 0, node.y || 0, node.z || 0);
-      return { x, z };
-    }
-    return null;
+    return out;
   }
 
-  /** edge 在路口端的端点（THREE XZ），useEnd=true 取末节点，否则首节点。 */
-  function _edgeEndpoint(edge, useEnd) {
-    const nodes = edge.nodes;
-    if (!Array.isArray(nodes) || nodes.length < 2) return null;
-    return _nodePoint(useEnd ? nodes[nodes.length - 1] : nodes[0]);
-  }
-
-  /** 由折线生成扁平 ribbon（XZ 平面，左法线偏移），合批成单 mesh 加入 group。 */
-  function _ribbonFromPoints(points, halfW, y, color) {
-    if (points.length < 2) return;
-    const positions = [];
-    for (let i = 0; i < points.length; i++) {
-      const prev = points[Math.max(0, i - 1)];
-      const next = points[Math.min(points.length - 1, i + 1)];
-      let tx = next.x - prev.x, tz = next.z - prev.z;
-      const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
-      const nx = -tz, nz = tx;   // XZ 左法线
-      positions.push(points[i].x + nx * halfW, y, points[i].z + nz * halfW);
-      positions.push(points[i].x - nx * halfW, y, points[i].z - nz * halfW);
-    }
-    const indices = [];
-    for (let i = 0; i < points.length - 1; i++) {
-      const a = i * 2, b = i * 2 + 1, c = (i + 1) * 2, d = (i + 1) * 2 + 1;
-      indices.push(a, b, c, b, d, c);
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geo.setIndex(indices);
-    geo.computeVertexNormals();
-    const mesh = new THREE.Mesh(geo, getStdMaterial(color, 0.7, 0.0));
-    mesh.receiveShadow = true;
-    group.add(mesh);
-  }
-
-  /** 二次贝塞尔：p0(进路口端) → 控制点(按转向弯) → p1(出路口端)，采样成 ribbon。 */
-  function _drawTurnCurve(p0, p1, turn, color) {
-    const mx = (p0.x + p1.x) / 2, mz = (p0.z + p1.z) / 2;
-    const dx = p1.x - p0.x, dz = p1.z - p0.z;
-    const len = Math.hypot(dx, dz) || 1;
-    const nx = -dz / len, nz = dx / len;   // 左法线
-    const bend = 0.45 * len;
+  /** 左转弯引导虚线：从来车 arm 停止线锚点到目标 arm 锚点的二次贝塞尔，
+   *  按 1m 实线 + 1m 间隔铺虚线段。控制点 = 两臂切线交点（平行退化为中点）。
+   *  p0 的 walk 方向朝路口外，交通进入路口 = -u0；p1 朝路口外 = +u1（驶离）。 */
+  function _drawTurnGuide(p0, p1, turn, out) {
+    if (turn !== 'left') return;   // 只画左转导流（直行/右转不画，避免杂乱）
+    const d0x = -p0.ux, d0z = -p0.uz;    // 入路口方向
+    const d1x = p1.ux, d1z = p1.uz;      // 出路口方向
+    /* 几何一致性过滤：数据说左转，实际转向也必须是左。incoming_road 前缀
+     * 匹配会把同路 continuation 段也拉进候选（从该 arm 出发的同目标连接
+     * 几何上是右转 = 幽灵导流），用转向符号剔除。
+     * ENU 左转 = THREE XZ 有向角为负（y 轴翻转）。 */
+    const cross = d0x * d1z - d0z * d1x;
+    const dot = d0x * d1x + d0z * d1z;
+    if (Math.atan2(cross, dot) > -0.3) return;   // exempt: 转向符号判定，非 heading 输出
+    // 两切线交点：p0 + t·d0 = p1 + s·d1
+    const det = d0x * (-d1z) - d0z * (-d1x);
     let ctrl;
-    if (turn === 'left') ctrl = { x: mx + nx * bend, z: mz + nz * bend };
-    else if (turn === 'right') ctrl = { x: mx - nx * bend, z: mz - nz * bend };
-    else ctrl = { x: mx, z: mz };          // straight / uturn → 平直
-    const N = 14, pts = [];
+    if (Math.abs(det) < 1e-6) {
+      ctrl = { x: (p0.x + p1.x) / 2, z: (p0.z + p1.z) / 2 };
+    } else {
+      const t = ((p1.x - p0.x) * (-d1z) - (p1.z - p0.z) * (-d1x)) / det;
+      ctrl = { x: p0.x + d0x * t, z: p0.z + d0z * t };
+      // 交点退化保护：控制点距路口过远（>3 倍 arm 距）时退回中点
+      const span = Math.hypot(p1.x - p0.x, p1.z - p0.z);
+      if (Math.hypot(ctrl.x - p0.x, ctrl.z - p0.z) > span * 3) {
+        ctrl = { x: (p0.x + p1.x) / 2, z: (p0.z + p1.z) / 2 };
+      }
+    }
+    // 二次贝塞尔采样 + 按弧长铺 1m on / 1m off 虚线
+    const N = 32, pts = [];
     for (let i = 0; i <= N; i++) {
       const t = i / N, u = 1 - t;
       pts.push({
@@ -358,35 +380,21 @@ export function createConnectorView(scene) {
         z: u * u * p0.z + 2 * u * t * ctrl.z + t * t * p1.z,
       });
     }
-    _ribbonFromPoints(pts, 0.18, 0.14, color);
-  }
-
-  function _buildTurnConnectors(junctions, roadNetwork, centers, byId) {
-    const edges = roadNetwork.edges || [];
-    const edgeMap = new Map(edges.map((e) => [String(e.id), e]));
-    for (const fork of junctions) {
-      if (fork.type !== 'fork') continue;
-      const inId = String(fork.incoming_road);
-      const inEntry = byId.get(inId);
-      if (!inEntry) continue;
-      const ci = inEntry.start != null ? inEntry.start : inEntry.end;
-      if (ci == null) continue;
-      const inEdge = edgeMap.get(inId);
-      if (!inEdge) continue;
-      const p0 = _edgeEndpoint(inEdge, inEntry.end === ci);
-      if (!p0) continue;
-      for (const conn of (fork.connecting_roads || [])) {
-        const cId = String(conn.id);
-        const cEntry = byId.get(cId);
-        if (!cEntry) continue;
-        if (!(cEntry.start === ci || cEntry.end === ci)) continue;
-        const cEdge = edgeMap.get(cId);
-        if (!cEdge) continue;
-        const p1 = _edgeEndpoint(cEdge, cEntry.end === ci);
-        if (!p1) continue;
-        const turn = conn.turn || 'straight';
-        _drawTurnCurve(p0, p1, turn, TURN_COLOR[turn] || TURN_COLOR.straight);
+    let acc = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const dx = pts[i].x - pts[i - 1].x, dz = pts[i].z - pts[i - 1].z;
+      const l = Math.hypot(dx, dz);
+      if (l < 1e-9) continue;
+      const segStart = acc, segEnd = acc + l;
+      // 本段覆盖的 on 区间 [k*2, k*2+1)
+      for (let s0 = Math.ceil(segStart / 2) * 2; s0 < segEnd; s0 += 2) {
+        const s1 = Math.min(s0 + 1.0, segEnd);
+        const t0 = (s0 - segStart) / l, t1 = (s1 - segStart) / l;
+        const mx = (pts[i - 1].x + dx * t0 + pts[i - 1].x + dx * t1) / 2;
+        const mz = (pts[i - 1].z + dz * t0 + pts[i - 1].z + dz * t1) / 2;
+        out.push({ x: mx, z: mz, rotY: directionToRotationY(dx, dz), len: (s1 - s0), w: 0.15 });
       }
+      acc = segEnd;
     }
   }
 

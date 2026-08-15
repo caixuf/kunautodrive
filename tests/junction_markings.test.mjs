@@ -305,4 +305,95 @@ console.log('--- 7. 护栏弯道打结防护（R=6 发卡，内侧偏移 4m 收�
     beams > 0 && minLen >= 0.7);
 }
 
+// ── 8. P1 渠化：map_junctions 转向导流线 + 停止线来车归属 + 幽灵导流剔除 ──
+console.log('--- 8. 转向导流线（fork 数据驱动 + 几何一致性过滤）---');
+{
+  // 十字：main_rd(W) + main_rd_1001(E，前缀分段) + side_rd(S) + other_rd(N)
+  const cross8 = [
+    { id: 'main_rd',      name: 'main_rd',      type: 'secondary', lanes: 2, lane_width: 3.5, nodes: [[-40, 0, 0], [0, 0, 0]],  oneway: false },
+    { id: 'main_rd_1001', name: 'main_rd_1001', type: 'secondary', lanes: 2, lane_width: 3.5, nodes: [[0, 0, 0], [40, 0, 0]],   oneway: false },
+    { id: 'side_rd',      name: 'side_rd',      type: 'secondary', lanes: 2, lane_width: 3.5, nodes: [[0, -30, 0], [0, 0, 0]],  oneway: false },
+    { id: 'other_rd',     name: 'other_rd',     type: 'secondary', lanes: 2, lane_width: 3.5, nodes: [[0, 0, 0], [0, 30, 0]],   oneway: false },
+  ];
+  const mapJunctions = [
+    // W→N 几何上是真左转（E 臂前缀候选 W→... 同目标是几何右转，必须被剔除）
+    { id: 0, type: 'fork', incoming_road: 'main_rd',
+      connecting_roads: [{ id: 'other_rd', turn: 'left' }, { id: 'main_rd_1001', turn: 'straight' }] },
+    // S→W 真左转
+    { id: 1, type: 'fork', incoming_road: 'side_rd',
+      connecting_roads: [{ id: 'main_rd', turn: 'left' }] },
+  ];
+  const scene = new THREE.Group();
+  createConnectorView(scene).build({ edges: cross8, map_junctions: mapJunctions });
+
+  // 白色实例里：scale.z≈0.15 = 导流虚线段；scale.z≈0.45 = 停止线
+  const guides = [], stops = [];
+  scene.traverse((ch) => {
+    if (!ch.isInstancedMesh || !ch.material || !ch.material.color) return;
+    if (ch.material.color.getHex() !== 0xffffff) return;
+    const m = new THREE.Matrix4();
+    for (let i = 0; i < ch.count; i++) {
+      ch.getMatrixAt(i, m);
+      const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+      m.decompose(p, q, s);
+      if (Math.abs(s.z - 0.15) < 0.02) guides.push({ x: p.x, z: p.z });
+      else if (Math.abs(s.z - 0.45) < 0.02) stops.push({ x: p.x, z: p.z });
+    }
+  });
+  // 导流锚点 = walk(radius+2.5)：radius=5.0（2×3.5+1.0+0.5）→ 距中心 7.5m。
+  // W→N 曲线连接 (-7.5,0) 与 (0,-7.5)；S→W 曲线连接 (0,7.5) 与 (-7.5,0)。
+  const nearG = (g, tx, tz) => Math.hypot(g.x - tx, g.z - tz) < 3.5;
+  ok(`左转导流线已生成（${guides.length} 段）`, guides.length >= 10);
+  ok('W→N 导流抵 W 臂锚点', guides.some((g) => nearG(g, -7.5, 0)));
+  ok('W→N 导流抵 N 臂锚点', guides.some((g) => nearG(g, 0, -7.5)));
+  ok('S→W 导流抵 S 臂锚点', guides.some((g) => nearG(g, 0, 7.5)));
+  // 幽灵导流：E 臂（main_rd_1001 前缀候选）→ N 几何是右转，E 锚点附近不得有导流
+  ok('E 臂锚点无幽灵导流（几何一致性过滤）', !guides.some((g) => nearG(g, 7.5, 0)));
+  ok('NE 象限无幽灵导流', !guides.some((g) => g.x > 2 && g.z < -2));
+
+  // 停止线归属：main_rd/main_rd_1001/side_rd 是来车臂（各 1 条），
+  // other_rd 无 incoming fork = 纯出口臂 → 无停止线。
+  // 停止线锚点 = walk(radius+6) 处 + 来向右侧半幅（THREE XZ：u 朝路口外，
+  // 右侧 = (uz,-ux)×halfW）：W 臂 z≈+1.9、E 臂 z≈−1.9、S 臂 x≈+1.9、N 臂 x≈−1.9。
+  const near = (x, z, tx, tz, r) => Math.hypot(x - tx, z - tz) < r;
+  const wStop = stops.filter((s) => near(s.x, s.z, -13, 1.9, 4)).length;
+  const eStop = stops.filter((s) => near(s.x, s.z, 13, -1.9, 4)).length;
+  const sStop = stops.filter((s) => near(s.x, s.z, 1.9, 13, 4)).length;
+  const nStop = stops.filter((s) => near(s.x, s.z, -1.9, -13, 5)).length;
+  ok(`来车臂停止线齐（W=${wStop} E=${eStop} S=${sStop}）`, wStop >= 1 && eStop >= 1 && sStop >= 1);
+  ok(`纯出口臂无停止线（N=${nStop}）`, nStop === 0);
+}
+
+// ── 9. P1 渠化：路口多边形 Chaikin 圆角化（8 顶点 → 32 顶点，保持在路口域内）──
+console.log('--- 9. 路口多边形圆角化 ---');
+{
+  const cross9 = [
+    { id: 'hwy_w', name: 'hwy_w', type: 'highway', lanes: 2, lane_width: 3.5, nodes: [[-60, 0, 0], [0, 0, 0]], oneway: false },
+    { id: 'hwy_e', name: 'hwy_e', type: 'highway', lanes: 2, lane_width: 3.5, nodes: [[0, 0, 0], [60, 0, 0]], oneway: false },
+    { id: 'side_s', name: 'side_s', type: 'secondary', lanes: 2, lane_width: 3.5, nodes: [[0, -30, 0], [0, 0, 0]], oneway: false },
+    { id: 'side_n', name: 'side_n', type: 'secondary', lanes: 2, lane_width: 3.5, nodes: [[0, 0, 0], [0, 30, 0]], oneway: false },
+  ];
+  const { centers } = detectJunctions({ edges: cross9 });
+  const JC = centers[0];
+  const scene = new THREE.Group();
+  createConnectorView(scene).build({ edges: cross9 });
+  let patch = null;
+  scene.traverse((ch) => {
+    if (ch.isInstancedMesh || !ch.isMesh || !ch.material || !ch.material.color) return;
+    if (ch.material.color.getHex() === 0x2a2a2a) patch = ch;
+  });
+  const vc = patch ? patch.geometry.getAttribute('position').count : 0;
+  // 4 臂 × 2 边界点 = 8 → Chaikin ×2 → 32；顶点须在路口域内（不外鼓不塌陷）
+  ok(`圆角化顶点数（${vc} = 8×2²）`, vc === 32);
+  let inDomain = true;
+  if (patch) {
+    const pos = patch.geometry.getAttribute('position');
+    for (let i = 0; i < pos.count; i++) {
+      const d = Math.hypot(pos.getX(i) - JC.x, pos.getZ(i) - JC.z);
+      if (d > JC.radius + 8 || d < 2) { inDomain = false; break; }
+    }
+  }
+  ok('圆角顶点保持在路口域内', inDomain);
+}
+
 done();
