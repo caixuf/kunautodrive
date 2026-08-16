@@ -85,8 +85,15 @@ function junctionsFromData(roadNetwork, dataJunctions) {
  *   byId 把每个 edge.id 映射到其起点/终点所属的中心索引（无则 null）。 */
 export function detectJunctions(roadNetwork) {
   // ── 优先数据层 junction（scene_pub 单一事实源）──
+  // 但数据层必须带可用坐标（x/y/z）；否则 junctionsFromData 会把全部中心
+  // 塌缩到原点（worldToThree(0,0)）→ 路口铺装/斑马线/停止线/转向导流全算到
+  // 世界原点、路口聚类+裁剪彻底失效（本仓库 osm_lujiazui_v2 的 junctions[]
+  // 只带 id/type/incoming_road/connecting_roads，无坐标）。此时几何端点聚类
+  // 兜底（基于 edge 真实几何）反而正确，故回退。
   const dataJ = Array.isArray(roadNetwork?.junctions) ? roadNetwork.junctions : [];
-  if (dataJ.length) return junctionsFromData(roadNetwork, dataJ);
+  const dataHasCoords = dataJ.length &&
+    dataJ.some((j) => j.x != null || j.y != null || j.z != null);
+  if (dataHasCoords) return junctionsFromData(roadNetwork, dataJ);
 
   // ── 兜底：端点几何聚类 ──
   const centers = [];

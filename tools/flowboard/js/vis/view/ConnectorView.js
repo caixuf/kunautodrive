@@ -65,15 +65,39 @@ export function createConnectorView(scene) {
      * roadNetwork.junctions 保留给 {x,y,z,radius} 路口中心格式（JunctionDetect 用）。 */
     const junctions = roadNetwork.map_junctions || [];
 
+    // 拓扑（单一事实源）：路口中心 / edge↔路口映射，供 LaneTaper 邻接与
+    // JunctionPatch 共用。须先于 1. LaneTaper 计算（旧实现依赖 id 连续，现用拓扑）。
+    const topo = getTopology(roadNetwork);
+    const centers = topo ? topo.centers : [];
+    const byId = topo ? topo.byId : new Map();
+
     // ── 1. LaneTaper：相邻 edge 车道数/宽度不同 ──
-    for (let i = 0; i < edges.length - 1; i++) {
-      const a = edges[i], b = edges[i + 1];
-      // 只处理顺序相连的 edge（id 连续），跳过匝道等跳跃 edge
-      if (b.id !== a.id + 1) continue;
+    // 邻接判定用拓扑（edge 末端与另一 edge 始端落在同一路口中心），不再依赖
+    // id 连续（id 连续只是巧合，真实过渡多在路口/弯道处 id 不连续，旧实现漏判）。
+    const edgeMap = new Map(edges.map((e) => [String(e.id), e]));
+    const endEdges = new Map();   // centerIdx -> [在此结束的 edgeId]
+    if (topo) {
+      for (const e of edges) {
+        const entry = topo.byId.get(String(e.id));
+        if (entry && entry.end != null) {
+          if (!endEdges.has(entry.end)) endEdges.set(entry.end, []);
+          endEdges.get(entry.end).push(String(e.id));
+        }
+      }
+    }
+    for (const e of edges) {
+      const entry = topo ? topo.byId.get(String(e.id)) : null;
+      if (!entry || entry.start == null) continue;
+      const a = e;
       const widthA = (a.lanes || DEFAULT_LANES) * (a.lane_width || LANE_WIDTH);
-      const widthB = (b.lanes || DEFAULT_LANES) * (b.lane_width || LANE_WIDTH);
-      if (Math.abs(widthA - widthB) < 0.1) continue;
-      _buildLaneTaper(a, b, widthA, widthB);
+      for (const bId of (endEdges.get(entry.start) || [])) {
+        if (bId === String(a.id)) continue;
+        const b = edgeMap.get(bId);
+        if (!b) continue;
+        const widthB = (b.lanes || DEFAULT_LANES) * (b.lane_width || LANE_WIDTH);
+        if (Math.abs(widthA - widthB) < 0.1) continue;
+        _buildLaneTaper(a, b, widthA, widthB, topo, entry.start);
+      }
     }
 
     // ── 2. JunctionCap 已废弃（2026-08-14）：路面 ribbon 不再截断，intersection
@@ -82,9 +106,6 @@ export function createConnectorView(scene) {
 
     // ── 2b. 交叉口路面补齐：在每个检测到的路口中心铺一块**真实路口多边形**
     //  沥青路面（比路宽大一点，覆盖四向收口后的缺口）+ 四个方向斑马线 ──
-    const topo = getTopology(roadNetwork);
-    const centers = topo ? topo.centers : [];
-    const byId = topo ? topo.byId : new Map();
     _buildJunctionPatch(topo, centers, junctions, roadNetwork.lane_data);
 
     // ── 2c. 转向连接曲线已删除（2026-08-15，P1 渠化替代）：旧实现按 fork turn 画
@@ -104,9 +125,13 @@ export function createConnectorView(scene) {
       }
     }
 
-    // ── 4. ViaductPier：elevation_profile 中 h > 0.5 的段 ──
+    // ── 4. ViaductPier：高架（bridge）edge 按 centerline.z 落墩 ──
+    // 数据契约：本仓库 map.json 的 edge 携带 bridge/tunnel 布尔 + centerline.z
+    // （osm2kmap.apply_osm_elevation 写 6.0*max(1,layer) / -4），**不产出**
+    // elevation_profile。旧实现读 elevation_profile → 永远跳过（死代码）。
+    // 现改为消费 bridge 标记 + edge.nodes z：高架（h>0.5）每隔 20m 落一根桥墩。
     for (const edge of edges) {
-      if (!edge.elevation_profile) continue;
+      if (!edge.bridge) continue;
       _buildViaductPier(edge);
     }
 
@@ -138,20 +163,35 @@ export function createConnectorView(scene) {
   }
 
   /** 1. LaneTaper：锥形过渡路面
-   *  在 edgeA 终点位置生成一个梯形（宽 widthA → widthB），长度 5m */
-  function _buildLaneTaper(edgeA, edgeB, widthA, widthB) {
-    // 推断接缝位置：用 edgeA 的 nodes 末点，或 length_m 累计
-    const pos = _getEdgeEnd(edgeA);
-    if (!pos) return;
+   *  在 edgeA→edgeB 的接缝（拓扑路口中心）生成一个梯形（宽 widthA → widthB），
+   *  长 5m，沿"进入→离开"的贯穿方向铺设（弯道/路口也贴方向，不假设沿 +X 直伸）。 */
+  function _buildLaneTaper(edgeA, edgeB, widthA, widthB, topo, centerIdx) {
+    // 接缝位置：优先路口中心（拓扑），否则 edgeA 末端
+    let cx, cz, dirx, dirz;
+    const ca = topo && topo.centers && topo.centers[centerIdx];
+    if (ca) {
+      cx = ca.x; cz = ca.z;
+      // 贯穿方向 = 进入中心方向（a 末段切线）+ 离开中心方向（b 首段切线）平均
+      const ta = _edgeDir(edgeA, false);
+      const tb = _edgeDir(edgeB, true);
+      dirx = ta.x + tb.x; dirz = ta.z + tb.z;
+      const l = Math.hypot(dirx, dirz) || 1; dirx /= l; dirz /= l;
+    } else {
+      const pos = _getEdgeEnd(edgeA);
+      if (!pos) return;
+      cx = pos.x; cz = pos.z; dirx = 1; dirz = 0;
+    }
 
     const taperLen = 5;
     const hA = widthA / 2, hB = widthB / 2;
-    // 梯形顶点（沿 X 轴铺路假设）
+    const nx = -dirz, nz = dirx;   // 沿行驶方向的左法线（横向偏移）
+    const back = -taperLen / 2, front = taperLen / 2;
+    // 梯形顶点：front（下游 edgeB 侧）宽 widthB，back（上游 edgeA 侧）宽 widthA
     const positions = [
-      pos.x - taperLen/2, 0.11, pos.z + hA,   // 左后
-      pos.x - taperLen/2, 0.11, pos.z - hA,   // 右后
-      pos.x + taperLen/2, 0.11, pos.z + hB,   // 左前
-      pos.x + taperLen/2, 0.11, pos.z - hB,   // 右前
+      cx + dirx * back + nx * hA, 0.11, cz + dirz * back + nz * hA,   // 左后
+      cx + dirx * back - nx * hA, 0.11, cz + dirz * back - nz * hA,   // 右后
+      cx + dirx * front + nx * hB, 0.11, cz + dirz * front + nz * hB, // 左前
+      cx + dirx * front - nx * hB, 0.11, cz + dirz * front - nz * hB, // 右前
     ];
     const indices = [0, 1, 2, 1, 3, 2];
     const geo = new THREE.BufferGeometry();
@@ -162,6 +202,21 @@ export function createConnectorView(scene) {
     const mesh = new THREE.Mesh(geo, mat);
     mesh.receiveShadow = true;
     group.add(mesh);
+  }
+
+  /** edge 在末端(end=false) 或首端(start=true) 的局部切线方向（THREE XZ）。
+   *  ENU→THREE：THREE.x=ENU.x, THREE.z=-ENU.y。 */
+  function _edgeDir(edge, fromStart) {
+    const nodes = (edge.nodes || []).map((n) =>
+      Array.isArray(n) ? [n[0] || 0, n[1] || 0, n[2] || 0]
+        : [n.x || 0, n.y || 0, n.z || 0]);
+    if (nodes.length < 2) return { x: 1, z: 0 };
+    const a = fromStart ? nodes[0] : nodes[nodes.length - 2];
+    const b = fromStart ? nodes[1] : nodes[nodes.length - 1];
+    const dx = (b[0] - a[0]) || 0;
+    const dz = -((b[1] - a[1]) || 0);
+    const l = Math.hypot(dx, dz) || 1;
+    return { x: dx / l, z: dz / l };
   }
 
   /** 2b. 交叉口路面补齐：在每个检测到的路口中心铺一块**真实路口多边形**。
@@ -317,26 +372,44 @@ export function createConnectorView(scene) {
     // 车道引导 → 交叉处"断档/混乱"。这里把 lane_data 中 connector（id 形如
     // road_j...）的 lane centerline 画成白色车道线，交叉口内部就有了连贯的
     // 真实转向引导（直行/左/右转各按其车道几何）。
+    //
+    // 2026-08-16 修复（本会话）：原实现把每条约 7.8m 的 connector 整条、以
+    // 平铺 STOP_Y 画成实心白 quad，且不裁剪到路口 → 全图 connector 横竖交织
+    // 成"白网"（7054 段，全部在路口圆外，因为 junctions[] 缺坐标导致路口中心
+    // 全塌缩到原点）。现改为：① 每段只在"落入某路口圆内"才画（拓扑中心现在
+    // 由 JunctionDetect 几何聚类得到真实位置），路口外溢出段剔除；② 跟随
+    // centerline.z 高程（隧道/高架内线随路面下沉/抬升），不再平铺 STOP_Y。
     const connectorLineGeos = [];
-    if (laneData) {
+    const LINE_DY = 0.16;   // 标线高出路面的微量（防 z-fight），叠加在路面高程上
+    if (laneData && centers.length) {
+      // 段中点是否落在任一真实路口圆内（拓扑中心现在坐标正确）
+      const inAnyJunction = (x, z) => {
+        for (const c of centers) {
+          if (Math.hypot(x - c.x, z - c.z) <= (c.radius || 0)) return true;
+        }
+        return false;
+      };
       for (const [rid, lanes] of Object.entries(laneData)) {
         if (!String(rid).startsWith('road_j')) continue;   // connector 专属前缀
         for (const lane of lanes || []) {
           const cl = lane && lane.centerline;
           if (!Array.isArray(cl) || cl.length < 2) continue;
-          const pts = cl.map((p) => [p[0] || 0, -(p[1] || 0)]);   // ENU→THREE
+          const pts = cl.map((p) => [p[0] || 0, -(p[1] || 0), (p[2] || 0)]);   // ENU→THREE，保留高程
           for (let i = 0; i < pts.length - 1; i++) {
             const ax = pts[i][0], az = pts[i][1], bx = pts[i + 1][0], bz = pts[i + 1][1];
+            const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+            if (!inAnyJunction(mx, mz)) continue;   // 路口外溢出段：不画，消除白网
             const dx = bx - ax, dz = bz - az;
             const l = Math.hypot(dx, dz) || 1;
             const nx = -dz / l, nz = dx / l;   // 左法线
             const w = 0.14;
+            const y = (pts[i][2] + pts[i + 1][2]) / 2 + LINE_DY;   // 跟随路面高程
             connectorLineGeos.push(quadGeo(
               ax + nx * w, az + nz * w,
               ax - nx * w, az - nz * w,
               bx - nx * w, bz - nz * w,
               bx + nx * w, bz + nz * w,
-              STOP_Y,
+              y,
             ));
           }
         }
@@ -491,38 +564,63 @@ export function createConnectorView(scene) {
     }
   }
 
-  /** 4. ViaductPier：高架桥墩（每隔 20m 一根圆柱） */
+  /** 4. ViaductPier：高架桥墩（每隔 20m 一根圆柱）
+   *  数据契约：edge.nodes 是 ENU [x,y,z]，z 即高程（osm2kmap 写
+   *  6.0*max(1,layer)）。沿 edge 弧长每 20m 取一点，高程 h>0.5（高架）才落墩，
+   *  桥墩从地面 y=0 立到路面下沿 y=h。曲线/弯道路也按弧长真实取点（不再假设沿
+   *  +X 直伸），位置走 worldToThree。 */
   function _buildViaductPier(edge) {
-    const elev = edge.elevation_profile || [];
-    if (elev.length === 0) return;
-    const start = _getEdgeStart(edge);
-    if (!start) return;
+    const nodes = (edge.nodes || []).map((n) =>
+      Array.isArray(n) ? [n[0] || 0, n[1] || 0, n[2] || 0]
+        : [n.x || 0, n.y || 0, n.z || 0]);
+    if (nodes.length < 2) return;
+
+    // 累计弧长 + 各点高程（ENU z）
+    const cum = [0];
+    for (let i = 1; i < nodes.length; i++) {
+      cum.push(cum[i - 1] + Math.hypot(
+        (nodes[i][0] - nodes[i - 1][0]) || 0, (nodes[i][1] - nodes[i - 1][1]) || 0));
+    }
+    const total = cum[cum.length - 1] || (edge.length_m || 0);
+    if (total <= 0) return;
+
+    // 弧长 s 处插值 ENU(x,y) 与高程 z
+    const sampleAt = (s) => {
+      if (s <= 0) return { x: nodes[0][0], y: nodes[0][1], z: nodes[0][2] };
+      if (s >= total) {
+        const n = nodes[nodes.length - 1];
+        return { x: n[0], y: n[1], z: n[2] };
+      }
+      for (let i = 1; i < cum.length; i++) {
+        if (cum[i] >= s) {
+          const t = (s - cum[i - 1]) / ((cum[i] - cum[i - 1]) || 1);
+          return {
+            x: nodes[i - 1][0] + (nodes[i][0] - nodes[i - 1][0]) * t,
+            y: nodes[i - 1][1] + (nodes[i][1] - nodes[i - 1][1]) * t,
+            z: nodes[i - 1][2] + (nodes[i][2] - nodes[i - 1][2]) * t,
+          };
+        }
+      }
+      const n = nodes[nodes.length - 1];
+      return { x: n[0], y: n[1], z: n[2] };
+    };
 
     const pierMat = getStdMaterial(PIER_COLOR, 0.9, 0.0);
-    const pierGeo = getCylinder(0.6, 0.8, 1);  // 高度 1，后续按 elevation 缩放
-    let prevS = 0, prevH = elev[0].h || 0;
-
-    // 沿 edge 每 20m 放一根桥墩，高度按 elevation_profile 插值
-    const totalLen = edge.length_m || 100;
-    for (let s = 10; s < totalLen; s += 20) {
-      // 找到 s 对应的 elevation
-      let h = prevH;
-      for (let i = 1; i < elev.length; i++) {
-        if (s <= elev[i].s) {
-          const t = (s - prevS) / (elev[i].s - prevS || 1);
-          h = prevH + (elev[i].h - prevH) * t;
-          break;
-        }
-        prevS = elev[i].s; prevH = elev[i].h;
-      }
-      if (h < 0.5) continue;  // 低于 0.5m 不需要桥墩
-
+    const pierGeo = getCylinder(0.6, 0.8, 1);  // 高度 1，后续按 h 缩放
+    let lastS = -1e9;
+    for (let s = 10; s < total; s += 20) {
+      const p = sampleAt(s);
+      const h = p.z || 0;
+      if (h < 0.5) continue;                 // 仅高架（地面/隧道不落墩）
+      if (s - lastS < 20) continue;
+      const [tx, , tz] = worldToThree(p.x, p.y, h);  // 桥墩顶到路面下沿
       const pier = new THREE.Mesh(pierGeo, pierMat);
-      pier.position.set(start.x + s, h / 2, start.z);
+      pier.position.set(tx, h / 2, tz);      // 圆柱高 h，span 0→h
       pier.scale.y = h;
       pier.castShadow = true;
       pier.receiveShadow = true;
       group.add(pier);
+      lastS = s;
     }
   }
 
