@@ -16,7 +16,11 @@ const ALIAS = { osm_city_map: 'osm_test' };
 
 let _loadedMapId = null;   // 已成功加载的 map id
 let _inflight = false;     // 有 fetch 进行中
-let _failed = new Set();   // 拉取失败过的 map id（会话内不再重试，防 404 刷请求）
+/* 拉取失败冷却（替代旧版永久 _failed）：失败后冷却期内不再重试（防 404 刷请求），
+ * 冷却过后自动重试——服务器短暂不可用 / CWD 未就绪等瞬时故障可自行恢复，
+ * 不再永久回退到"无 lanes → 路居中左缘 → 全图左偏"。 */
+const RETRY_COOLDOWN_MS = 5000;
+let _failedAt = new Map();  // mapId -> 上次失败时间戳
 let _data = null;          // {junctions: Array, laneData: {roadId: lanes[]}}
 
 /** scenario_name → allowlist map id（不匹配返回 null = 无权威地图） */
@@ -77,7 +81,9 @@ function buildIndex(map) {
  *  非 OSM 场景 / 拉取失败 → 永久 null（调用方走兜底）。 */
 export function mapDataForScenario(scenarioName) {
   const id = resolveMapId(scenarioName);
-  if (!id || _failed.has(id)) return null;
+  if (!id) return null;
+  // 冷却期内不重试（防 404 刷请求）；冷却过后自动重试，瞬时故障自恢复。
+  if (_failedAt.has(id) && Date.now() - _failedAt.get(id) < RETRY_COOLDOWN_MS) return null;
   if (_loadedMapId === id && _data) return _data;
   if (_inflight) return null;
   _inflight = true;
@@ -91,11 +97,12 @@ export function mapDataForScenario(scenarioName) {
       if (res && res.ok && res.map) {
         _data = buildIndex(res.map);
         _loadedMapId = id;
+        _failedAt.delete(id);
       } else {
-        _failed.add(id);
+        _failedAt.set(id, Date.now());
       }
     })
-    .catch(() => { _failed.add(id); })
+    .catch(() => { _failedAt.set(id, Date.now()); })
     .finally(() => { _inflight = false; });
   return null;
 }
@@ -110,6 +117,6 @@ export function setMapData(mapId, map) {
 export function resetMapData() {
   _loadedMapId = null;
   _inflight = false;
-  _failed = new Set();
+  _failedAt = new Map();
   _data = null;
 }

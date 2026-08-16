@@ -218,6 +218,33 @@ export function createRoadView(scene) {
     return geo;
   }
 
+  /* 阶段5 瓦片合批（支撑震撼大图）：按 500m 网格分桶，每桶独立 mesh
+   * （自带包围球）→ three 默认 frustumCulled 跳过屏外 tile，大图缩放/
+   * 平移不再全量绘制。材质按表面类型各一份，跨 tile 共享、重建时幂等 dispose。 */
+  const TILE_SIZE_M = 500;
+  function addMergedByTile(geometries, material) {
+    if (!geometries || !geometries.length) return;
+    const buckets = new Map();
+    for (const g of geometries) {
+      g.computeBoundingBox();
+      const bb = g.boundingBox;
+      const cx = (bb.min.x + bb.max.x) * 0.5;
+      const cz = (bb.min.z + bb.max.z) * 0.5;
+      const key = Math.floor(cx / TILE_SIZE_M) + ':' + Math.floor(cz / TILE_SIZE_M);
+      let b = buckets.get(key);
+      if (!b) { b = []; buckets.set(key, b); }
+      b.push(g);
+    }
+    for (const b of buckets.values()) {
+      const merged = mergeGeometries(b);
+      if (!merged) continue;
+      const mesh = new THREE.Mesh(merged, material);
+      mesh.receiveShadow = true;
+      mesh.frustumCulled = true;   // 屏外 tile 自动跳过
+      roadGroup.add(mesh);
+    }
+  }
+
   /** 把中心线整体横向偏移 d（沿各点法线方向）。
    *  2026-08-14 曲率钳制：急弯处（局部曲率半径 R < |d|）偏移折线会回折自相交
    *  → 车道线/边线"打结"（OSM S 弯实测）。按每点局部曲率半径把偏移量钳到
@@ -447,8 +474,10 @@ export function createRoadView(scene) {
     for (let i = 0; i < points.length; i += 3) {
       const px = points[i], py = points[i + 1], pz = points[i + 2];
       let tx = 1, tz = 0;
+      // 向后差分必须用上一点的 z（i-1），不是 i-2（那是上一点的 y/up）。两点直道
+      // 各点 y=0，误用 i-2 会让末站位切线竖向翻转、法线翻转 → 末站位横向投影反相。
       if (i + 6 < points.length) { tx = points[i + 3] - px; tz = points[i + 5] - pz; }
-      else if (i >= 3) { tx = px - points[i - 3]; tz = pz - points[i - 2]; }
+      else if (i >= 3) { tx = px - points[i - 3]; tz = pz - points[i - 1]; }
       const [nx, nz] = tangentToNormal(tx, tz);
       spine.push({ px, py, pz, nx, nz });
     }
@@ -657,27 +686,50 @@ export function createRoadView(scene) {
   function laneGroupEnvelope(lanes, spine) {
     if (!Array.isArray(lanes) || !lanes.length || spine.length < 2) return null;
     const stations = [0, spine.length >> 1, spine.length - 1];
-    let latMin = Infinity, latMax = -Infinity;
+    const stationCenters = [];
+    let halfW = 0;
     for (const si of stations) {
       const sp = spine[si];
+      let latMin = Infinity, latMax = -Infinity;
       for (const lane of lanes) {
         const cl = lane && lane.centerline;
         if (!Array.isArray(cl) || cl.length < 2) continue;
         const w = (Number(lane.width) || LANE_WIDTH) / 2;
-        let bestD = Infinity, bestLat = 0;
+        let bestAlong = Infinity, bestLat = 0;
         for (const p of cl) {
-          const [tx, , tz] = worldToThree(p[0] || 0, p[1] || 0, p[2] || 0);
-          const d = Math.hypot(tx - sp.px, tz - sp.pz);
-          if (d < bestD) { bestD = d; bestLat = (tx - sp.px) * sp.nx + (tz - sp.pz) * sp.nz; }
+          /* 帧一致性：sp 是 THREE 帧（sp.px=ENU.east、sp.pz=-ENU.north）；
+           * lane.centerline 仍是 ENU(east,north,0)，必须转成 THREE 帧再比：
+           * THREE.x = p[0]，THREE.z = -(p[1])（不能用 p[2]，那是 ENU.up=0）。
+           * 横向偏移取"沿路纵向最近点"的垂距，而非欧氏最近点：对平行车道曲线，
+           * 欧氏最近点常落在曲线端点、混入纵向分量使 bestLat≈0，曲线路尤其
+           * 退化（6 条窄/曲路被误判居中→不偏移→与标线错位）。(p-sp)·n 是点到
+           * spine 切线直线的带符号垂距，与纵向位置无关；取 |纵向投影| 最小的点
+           * 即垂足，其垂距 = 真实车道组偏移（含正负方向）。切线 = (n_z,-n_x)。 */
+          const lx = p[0] || 0, lz = -(p[1] || 0);
+          const dx = lx - sp.px, dz = lz - sp.pz;
+          const along = dx * sp.nz + dz * (-sp.nx);   // 投影到切线
+          const lat = dx * sp.nx + dz * sp.nz;        // 带符号垂距
+          if (Math.abs(along) < bestAlong) { bestAlong = Math.abs(along); bestLat = lat; }
         }
         if (bestLat - w < latMin) latMin = bestLat - w;
         if (bestLat + w > latMax) latMax = bestLat + w;
       }
+      if (!isFinite(latMin) || !isFinite(latMax)) continue;
+      stationCenters.push((latMin + latMax) / 2);
+      const sh = (latMax - latMin) / 2;
+      if (sh > halfW) halfW = sh;
     }
-    if (!isFinite(latMin) || !isFinite(latMax)) return null;
-    const center = (latMin + latMax) / 2;
-    const halfW = (latMax - latMin) / 2;
-    if (Math.abs(center) < 0.15 || halfW < 1.0) return null;   // 居中对齐良好/退化 → 不动
+    if (stationCenters.length === 0) return null;
+    const cMin = Math.min(...stationCenters), cMax = Math.max(...stationCenters);
+    const center = (cMin + cMax) / 2;
+    /* 一致性守卫：平行车道组在各站位的横向偏移应稳定；急弯/环道/掉头路会让
+     * lane centerline 相对 spine 大幅摆动，cMax-cMin 很大——这种路无法用单一
+     * 偏移 ribbon 表达，放弃偏移、回退 buildStandardRoad 的默认半宽（不偏移），
+     * 否则会生成上百米宽的畸形 ribbon。 */
+    if (cMax - cMin > 4.0) return null;
+    /* center≈0 表示 road.centerline 本就是车道组中心（旧图/居中约定）→
+     * 不偏移、零回归。 */
+    if (Math.abs(center) < 0.15) return null;
     return { center, halfW };
   }
 
@@ -986,9 +1038,7 @@ export function createRoadView(scene) {
         metalness: 0.02,
         side: THREE.DoubleSide,
       });
-      const mesh = new THREE.Mesh(mergeGeometries(roadGeos), mat);
-      mesh.receiveShadow = true;
-      roadGroup.add(mesh);
+      addMergedByTile(roadGeos, mat);
     }
 
     // 匝道路面（略浅色）
@@ -1002,9 +1052,7 @@ export function createRoadView(scene) {
         metalness: 0.02,
         side: THREE.DoubleSide,
       });
-      const mesh = new THREE.Mesh(mergeGeometries(rampGeos), mat);
-      mesh.receiveShadow = true;
-      roadGroup.add(mesh);
+      addMergedByTile(rampGeos, mat);
     }
 
     // 隧道/地道路面（暗色、无标线：俯视读作地下走廊，不斜穿街区抢眼）
@@ -1015,33 +1063,25 @@ export function createRoadView(scene) {
         metalness: 0.0,
         side: THREE.DoubleSide,
       });
-      const mesh = new THREE.Mesh(mergeGeometries(tunnelGeos), mat);
-      mesh.receiveShadow = true;
-      roadGroup.add(mesh);
+      addMergedByTile(tunnelGeos, mat);
     }
 
     // 路肩
     if (shoulderGeos.length) {
-      const mat = new THREE.MeshStandardMaterial({
+      addMergedByTile(shoulderGeos, new THREE.MeshStandardMaterial({
         color: SHOULDER_COLOR,
         roughness: 0.85,
         metalness: 0.05,
         side: THREE.DoubleSide,
-      });
-      const mesh = new THREE.Mesh(mergeGeometries(shoulderGeos), mat);
-      mesh.receiveShadow = true;
-      roadGroup.add(mesh);
+      }));
     }
 
-    // 城市路缘石、人行道和绿化带分别合批，静态路网不随帧更新。
+    // 城市路缘石、人行道和绿化带分别合批（瓦片化，见 addMergedByTile），静态路网不随帧更新。
     const addSurface = function(geometries, color, roughness) {
       if (!geometries.length) return;
-      const mat = new THREE.MeshStandardMaterial({
+      addMergedByTile(geometries, new THREE.MeshStandardMaterial({
         color, roughness, metalness: 0, side: THREE.DoubleSide,
-      });
-      const mesh = new THREE.Mesh(mergeGeometries(geometries), mat);
-      mesh.receiveShadow = true;
-      roadGroup.add(mesh);
+      }));
     };
     addSurface(curbGeos, CURB_COLOR, 0.78);
     addSurface(sidewalkGeos, SIDEWALK_COLOR, 0.92);
@@ -1056,7 +1096,7 @@ export function createRoadView(scene) {
         side: THREE.DoubleSide,
         polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
       });
-      roadGroup.add(new THREE.Mesh(mergeGeometries(whiteLineGeos), mat));
+      addMergedByTile(whiteLineGeos, mat);
     }
 
     // 黄色中心线
@@ -1068,7 +1108,7 @@ export function createRoadView(scene) {
         side: THREE.DoubleSide,
         polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
       });
-      roadGroup.add(new THREE.Mesh(mergeGeometries(yellowLineGeos), mat));
+      addMergedByTile(yellowLineGeos, mat);
     }
 
     built = true;

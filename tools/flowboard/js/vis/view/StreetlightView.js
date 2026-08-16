@@ -18,10 +18,10 @@
  *   所以这里直接用 p.x / p.z，不要再调 worldToThree。
  */
 
-import { sampleEdgeNodes } from '../math/Curve.js';
 import { getStdMaterial, createEmissiveMaterial } from '../core/AssetFactory.js';
-import { LANE_WIDTH, DEFAULT_LANES, EDGE_TYPE } from '../core/Constants.js';
-import { tangentToNormal, directionToRotationY } from '../math/Coord.js';
+import { EDGE_TYPE } from '../core/Constants.js';
+import { directionToRotationY } from '../math/Coord.js';
+import { computeEdgeAxis } from '../model/RoadAxis.js';
 import { getTopology } from '../model/TopologyModel.js';
 
 const LAMP_SPACING = 40;   // 路灯间距（米）
@@ -68,36 +68,17 @@ export function createStreetlightView(scene) {
       // 高架场景路灯由 ViaductView 内置，这里跳过
       if (edge.type === EDGE_TYPE.VIADUCT_HIGHWAY || edge.name === EDGE_TYPE.VIADUCT_HIGHWAY) continue;
 
-      let nodes = edge.nodes;
-      if (!nodes || nodes.length < 2) continue;
-      if (nodes[0] && typeof nodes[0] === 'object' && !Array.isArray(nodes[0])) {
-        nodes = nodes.map(n => [n.x || 0, n.y || 0, n.z || 0]);
-      }
+      /* 共享路轴（单一事实源）：road.centerline 是最左车道左缘，须由 computeEdgeAxis
+       * 推导 TRUE 中心 spine + 车道组半宽。路灯相对 TRUE 中心偏移，才不会压路 /
+       * 与 RoadView 错位。lane_data 缺失时 fromLanes=false、居中回退（零回归）。 */
+      const axis = computeEdgeAxis(edge, roadNetwork.lane_data);
+      if (!axis.ok || axis.spine.length < 2) continue;
+      const spine = axis.spine;
+      for (let i = 0; i < spine.length; i++) spine[i].cum = axis.cum[i];
+      const halfWidth = axis.halfWidth;
 
-      const points = sampleEdgeNodes(nodes, 24);
-      const lanes = edge.lanes || 2;
-      const laneWidth = edge.lane_width || LANE_WIDTH;
-      const halfWidth = (lanes * laneWidth) / 2;
-
-      // 中心线 spine + 沿弧长 march，每 LAMP_SPACING 米放一盏
-      const spine = [];
-      for (let i = 0; i < points.length; i += 3) {
-        const px = points[i], py = points[i + 1], pz = points[i + 2];
-        let tx = 1, tz = 0;
-        if (i + 6 < points.length) { tx = points[i + 3] - px; tz = points[i + 5] - pz; }
-        else if (i >= 3) { tx = px - points[i - 3]; tz = pz - points[i - 2]; }
-        const [nx, nz] = tangentToNormal(tx, tz);
-        spine.push({ px, py, pz, nx, nz, cum: 0 });
-      }
-      if (spine.length < 2) continue;
-
-      // 沿弧长累计
-      for (let i = 1; i < spine.length; i++) {
-        const dx = spine[i].px - spine[i - 1].px;
-        const dz = spine[i].pz - spine[i - 1].pz;
-        spine[i].cum = spine[i - 1].cum + Math.sqrt(dx * dx + dz * dz);
-      }
-      const totalLen = spine[spine.length - 1].cum;
+      // 沿弧长 march，每 LAMP_SPACING 米放一盏
+      const totalLen = axis.cum[axis.cum.length - 1];
       const count = Math.floor(totalLen / LAMP_SPACING);
       if (count === 0) continue;
 
@@ -110,7 +91,7 @@ export function createStreetlightView(scene) {
         const s = spine[j];
         // 交替两侧：偶数 i 放左侧（+1），奇数 i 放右侧（-1）
         const side = (i % 2 === 0) ? 1 : -1;
-        // 路灯位置：中心线 + 法线 × (halfWidth + LAMP_OFFSET) × side
+        // 路灯位置：TRUE 中心 + 法线 × (halfWidth + LAMP_OFFSET) × side
         const x = s.px + s.nx * (halfWidth + LAMP_OFFSET) * side;
         const z = s.pz + s.nz * (halfWidth + LAMP_OFFSET) * side;
         if (topo && topo.nearJunction(x, z, 2.0)) continue;   // 路口避让

@@ -9,10 +9,9 @@
  *   - 纳入 vis:check（SceneDirector 注册）
  */
 
-import { sampleEdgeNodes } from '../math/Curve.js';
 import { getStdMaterial } from '../core/AssetFactory.js';
-import { LANE_WIDTH, EDGE_TYPE } from '../core/Constants.js';
-import { tangentToNormal } from '../math/Coord.js';
+import { EDGE_TYPE } from '../core/Constants.js';
+import { computeEdgeAxis } from '../model/RoadAxis.js';
 import { getTopology } from '../model/TopologyModel.js';
 
 const TREE_SPACING = 30;
@@ -26,6 +25,28 @@ const COLOR_TRUNK  = 0x5c3a1e;
 const COLOR_CANOPY_LOWER = 0x245f2a;
 const COLOR_CANOPY_UPPER = 0x3d8035;
 
+/** 点是否落在某多边形内（射线法）。多边形顶点支持 [x,y,z] / [x,z] / {x,z}；
+ * 约定 z 取第三分量（x,y,z）或第二分量（x,z），与多数几何数组一致。
+ * 阶段6 植被按用地落位：landuse（forest/grass 多边形）由 DSL 枢纽 net2map
+ * 从 OSM landuse/natural 抽取，坐标系与 spine（THREE x,z）一致（方案 §阶段6）。 */
+function pointInPolygon(x, z, poly) {
+  if (!Array.isArray(poly) || poly.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const pi = poly[i], pj = poly[j];
+    if (!pi || !pj) continue;
+    const xi = Array.isArray(pi) ? pi[0] : pi.x;
+    const zi = Array.isArray(pi) ? (pi.length > 2 ? pi[2] : pi[1]) : pi.z;
+    const xj = Array.isArray(pj) ? pj[0] : pj.x;
+    const zj = Array.isArray(pj) ? (pj.length > 2 ? pj[2] : pj[1]) : pj.z;
+    const denom = (zj - zi) || 1e-9;
+    const intersect = ((zi > z) !== (zj > z)) &&
+      (x < (xj - xi) * (z - zi) / denom + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
 export function inferTreeSlots(roadNetwork) {
   const slots = [];
   if (!roadNetwork?.edges?.length) return slots;
@@ -36,37 +57,26 @@ export function inferTreeSlots(roadNetwork) {
   const topo = getTopology(roadNetwork);
   const nearJunction = (x, z) => !!(topo && topo.nearJunction(x, z, 2.0));
 
+  /* 阶段6 植被按用地落位（安全消费，零回归）：landuse 多边形存在时，只在
+   * 绿地（forest/grass）内种树，去掉"每条路两侧必种树"的邻近启发式；
+   * landuse 缺失（当前 osm_lujiazui_v2 等地图暂未抽取）→ 保持两侧都种，行为不变。
+   * DSL 枢纽抽取落地后自动点亮，无需回改本 view。 */
+  const landuse = Array.isArray(roadNetwork.landuse) ? roadNetwork.landuse : null;
+  const inLanduse = (x, z) => !landuse || landuse.some((poly) => pointInPolygon(x, z, poly));
+
   for (const edge of roadNetwork.edges) {
     if (edge.type === EDGE_TYPE.VIADUCT_HIGHWAY || edge.name === EDGE_TYPE.VIADUCT_HIGHWAY) continue;
 
-    let nodes = edge.nodes;
-    if (!nodes || nodes.length < 2) continue;
-    if (nodes[0] && typeof nodes[0] === 'object' && !Array.isArray(nodes[0])) {
-      nodes = nodes.map(n => [n.x || 0, n.y || 0, n.z || 0]);
-    }
-
-    const points = sampleEdgeNodes(nodes, 24);
-    const lanes = edge.lanes || 2;
-    const laneWidth = edge.lane_width || LANE_WIDTH;
-    const halfWidth = (lanes * laneWidth) / 2;
-
-    const spine = [];
-    for (let i = 0; i < points.length; i += 3) {
-      const px = points[i], py = points[i + 1], pz = points[i + 2];
-      let tx = 1, tz = 0;
-      if (i + 6 < points.length) { tx = points[i + 3] - px; tz = points[i + 5] - pz; }
-      else if (i >= 3) { tx = px - points[i - 3]; tz = pz - points[i - 2]; }
-      const [nx, nz] = tangentToNormal(tx, tz);
-      spine.push({ px, py, pz, nx, nz, cum: 0 });
-    }
-    if (spine.length < 2) continue;
-
-    for (let i = 1; i < spine.length; i++) {
-      const dx = spine[i].px - spine[i - 1].px;
-      const dz = spine[i].pz - spine[i - 1].pz;
-      spine[i].cum = spine[i - 1].cum + Math.sqrt(dx * dx + dz * dz);
-    }
-    const totalLen = spine[spine.length - 1].cum;
+    /* 共享路轴（单一事实源）：road.centerline 是最左车道左缘，须由 computeEdgeAxis
+     * 推导 TRUE 中心 spine + 车道组半宽。家具相对 TRUE 中心偏移，才不会压路 /
+     * 与 RoadView 错位（此前各视图各自从 edge.nodes 建 spine、按 lane count 估半宽，
+     * 路整体左偏、树/灯落于沥青上）。lane_data 缺失时 fromLanes=false、居中回退。 */
+    const axis = computeEdgeAxis(edge, roadNetwork.lane_data);
+    if (!axis.ok || axis.spine.length < 2) continue;
+    const spine = axis.spine;
+    for (let i = 0; i < spine.length; i++) spine[i].cum = axis.cum[i];
+    const halfWidth = axis.halfWidth;
+    const totalLen = axis.cum[axis.cum.length - 1];
     const count = Math.floor((totalLen - TREE_PHASE) / TREE_SPACING) + 1;
     if (count <= 0) continue;
 
@@ -81,6 +91,7 @@ export function inferTreeSlots(roadNetwork) {
         const x = s.px + s.nx * (halfWidth + TREE_OFFSET) * side;
         const z = s.pz + s.nz * (halfWidth + TREE_OFFSET) * side;
         if (nearJunction(x, z)) continue;   // 路口避让
+        if (!inLanduse(x, z)) continue;      // 阶段6：仅绿地内种树
         const variant = ((i * 17 + (side > 0 ? 7 : 3)) % 11) / 10;
         slots.push({ x, z, py: s.py, side, arc: targetArc, variant });
       }

@@ -29,7 +29,7 @@ export function createSceneStore() {
       isNight: false,
       lighting: 'day',
       weather: 'clear',
-      visibilityM: 1000,
+      visibilityM: 20000,
     },
 
     // ── 性能档位 ──

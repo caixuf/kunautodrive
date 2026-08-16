@@ -20,7 +20,10 @@ export function createCameraRig(canvas) {
     58,                                    // FOV, closer to a wide real driving camera
     (canvas.clientWidth || 1) / (canvas.clientHeight || 1),  // aspect
     0.5,                                   // near
-    2000                                   // far
+    /* far 原 2000m：陆家嘴大地图对角 ~7.8km，2000m 远裁面把整张地图远端直接
+     * 剪掉，配合低可见度雾根本看不到城市全景。提到 15000m 覆盖全图仍有余量
+     * （无地面/海面大平面，不会引发远处共面 z-fighting）。 */
+    15000                                  // far
   );
 
   /* BEV（鸟瞰）正交相机：平行投影，无透视畸变，俯视 ego 且车头朝屏幕上方

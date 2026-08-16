@@ -18,10 +18,10 @@
  *   所以这里直接用 p.x / p.z，不要再调 worldToThree。
  */
 
-import { sampleEdgeNodes } from '../math/Curve.js';
 import { getStdMaterial } from '../core/AssetFactory.js';
-import { LANE_WIDTH, DEFAULT_LANES, EDGE_TYPE } from '../core/Constants.js';
-import { tangentToNormal, directionToRotationY } from '../math/Coord.js';
+import { EDGE_TYPE } from '../core/Constants.js';
+import { directionToRotationY } from '../math/Coord.js';
+import { computeEdgeAxis } from '../model/RoadAxis.js';
 import { getTopology } from '../model/TopologyModel.js';
 
 /* 波形梁护栏观感（2026-08-14 升级）：旧版 0.18m 双板间距 0.45m（0.75/0.30），
@@ -75,34 +75,16 @@ export function createBarrierView(scene) {
        * 也让十字路口视觉一团糟。 */
       if (edge.type !== EDGE_TYPE.HIGHWAY && String(edge.name || '').toLowerCase().indexOf('highway') === -1) continue;
 
-      let nodes = edge.nodes;
-      if (!nodes || nodes.length < 2) continue;
-      if (nodes[0] && typeof nodes[0] === 'object' && !Array.isArray(nodes[0])) {
-        nodes = nodes.map(n => [n.x || 0, n.y || 0, n.z || 0]);
-      }
+      /* 共享路轴（单一事实源）：road.centerline 是最左车道左缘，须由 computeEdgeAxis
+       * 推导 TRUE 中心 spine + 车道组半宽。护栏相对 TRUE 中心偏移，才不会压路 /
+       * 与 RoadView 错位。lane_data 缺失时 fromLanes=false、居中回退（零回归）。 */
+      const axis = computeEdgeAxis(edge, roadNetwork.lane_data);
+      if (!axis.ok || axis.spine.length < 2) continue;
+      const spine = axis.spine;
+      for (let i = 0; i < spine.length; i++) spine[i].cum = axis.cum[i];
+      const halfWidth = axis.halfWidth;
 
-      const points = sampleEdgeNodes(nodes);
-      const lanes = edge.lanes || 2;
-      const laneWidth = edge.lane_width || LANE_WIDTH;
-      const halfWidth = (lanes * laneWidth) / 2;
-
-      // 中心线 spine + 沿弧长 march
-      const spine = [];
-      for (let i = 0; i < points.length; i += 3) {
-        const px = points[i], py = points[i + 1], pz = points[i + 2];
-        let tx = 1, tz = 0;
-        if (i + 6 < points.length) { tx = points[i + 3] - px; tz = points[i + 5] - pz; }
-        else if (i >= 3) { tx = px - points[i - 3]; tz = pz - points[i - 2]; }
-        const [nx, nz] = tangentToNormal(tx, tz);
-        spine.push({ px, py, pz, nx, nz, cum: 0 });
-      }
-      if (spine.length < 2) continue;
-      for (let i = 1; i < spine.length; i++) {
-        const dx = spine[i].px - spine[i - 1].px;
-        const dz = spine[i].pz - spine[i - 1].pz;
-        spine[i].cum = spine[i - 1].cum + Math.sqrt(dx * dx + dz * dz);
-      }
-      const totalLen = spine[spine.length - 1].cum;
+      const totalLen = axis.cum[axis.cum.length - 1];
       const postCount = Math.floor(totalLen / POST_SPACING);
       if (postCount === 0) continue;
 

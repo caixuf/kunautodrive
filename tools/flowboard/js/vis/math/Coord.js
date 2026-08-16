@@ -116,6 +116,18 @@ export function directionToRotationY(dx, dz) {
 // 道路相关辅助
 // ═══════════════════════════════════════════════════════════
 
+/** 两个 THREE 空间方向向量 (dx1,dz1)、(dx2,dz2) 的带符号夹角（弧度，[-π,π]）。
+ *  用于 spine 曲率钳制，避免急弯自相交打结（替代裸 atan2(cross, dot)）。 */
+export function signedAngleBetween(dx1, dz1, dx2, dz2) {
+  // atan2 对两参数共用正比例因子不变，故无需先归一化向量。
+  return Math.atan2(dx1 * dz2 - dz1 * dx2, dx1 * dx2 + dz1 * dz2);
+}
+
+/** 弦长 + 对应圆心角 → 半径（R = chord / (2·sin(θ/2))）。曲率钳制用。 */
+export function radiusFromChord(chord, angle) {
+  return chord / (2 * Math.sin(Math.abs(angle) / 2));
+}
+
 /** 沿法线方向偏移（THREE 空间）
  *  用于道路中心线 spine 的横向偏移（路灯、护栏、车道线等）。
  *  @param {number} px     中心线点 X（THREE 坐标）

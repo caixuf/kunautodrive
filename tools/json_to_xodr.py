@@ -220,6 +220,23 @@ def build_polyline_road(rid: int, name: str, nodes: list, lanes: int,
     pts = [(float(p[0]), float(p[1]), float(p[2]) if len(p) > 2 else 0.0)
            for p in nodes]
     n = len(pts)
+    # 退化中心线（OSM/SUMO 导出的零长边：首末点重合或总长≈0）防护。
+    # 若直接生成 0 长 <geometry>，esmini 加载 .xodr 报
+    # "Road::GetGeometry index 0 out of range [0:0]"，整张路网初始化损坏，
+    # ego 无法 world_to_frenet / 路由 → 全程刹车不动。给一条最小长度(1m)直线桩，
+    # 方向取首末点连线（重合则沿 +x），足以让 esmini 正常加载。
+    total = sum(math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1])
+                for i in range(max(n - 1, 0)))
+    if total < 1.0:
+        dx = (pts[-1][0] - pts[0][0]) if n >= 2 else 0.0
+        dy = (pts[-1][1] - pts[0][1]) if n >= 2 else 0.0
+        if math.hypot(dx, dy) < 1e-6:
+            dx, dy = 1.0, 0.0
+        hdg = math.atan2(dy, dx)
+        road = Road(rid, name, 1.0, lanes, lane_width, speed, [
+            GeometrySeg(0.0, pts[0][0], pts[0][1], hdg, 1.0, 0.0),
+        ])
+        return road, RoadState(pts[0][0] + math.cos(hdg), pts[0][1] + math.sin(hdg), hdg)
     if n < 2:
         # 退化：退回直线
         return build_straight_road(rid, name, 1000.0, lanes, lane_width,
