@@ -458,6 +458,11 @@ def roads_from_road_network(rn_cfg: dict) -> tuple[list[Road], list[Junction]]:
         start_states[eid] = RoadState(r.geoms[0].x, r.geoms[0].y, r.geoms[0].hdg) if r.geoms else state
         main_edge_ids.append((eid, skip_main_link))
 
+    # 全量 id→Road 索引（含 connecting road），供 junction 循环里 O(1) 查表，
+    # 取代原先"对每个 junction 扫描全部 roads"的 O(J×R×C) 嵌套循环
+    # （42516 路 × 12027 路口 × 数条 connecting_road → 上千亿次 c.get/any，
+    # 占转换耗时 95%+）。road_by_id 在 junction 循环里增量同步（下方 append 处）。
+    road_by_id = {r.id: r for r in roads}
     # 为顺序拼接的主路 edge 串接 successor/predecessor link（OpenDRIVE 拓扑连贯性）。
     # 这是仿真世界"车开不出收费广场"等问题的根因：road 0/1/2/3/4 之前完全断头。
     # 跳过 fork connecting_road（其 link 由 junctions 接管）。
@@ -511,28 +516,25 @@ def roads_from_road_network(rn_cfg: dict) -> tuple[list[Road], list[Junction]]:
             conns: list[tuple[int, Optional[int]]] = []
             conn_lane_links: dict[int, list[tuple[int, int]]] = {}  # cid -> [(from,to)]
             # 找 incoming road 对象（用 road id 匹配）
-            inc_road = None
-            for r in roads:
-                if r.id == incoming:
-                    inc_road = r
-                    break
+            inc_road = road_by_id.get(incoming)
             # 判断 fork 在 incoming 的哪一端：connecting road 几何起点 vs
             # incoming 终点/起点（city_grid 拆段模型里一个 road 段两端各一交叉口，
             # 需区分末端 fork（successor）与起点 fork（predecessor））。
             inc_end = end_states.get(incoming)
             inc_start = start_states.get(incoming)
             fork_at_end: Optional[bool] = None
-            for r2 in roads:
-                if not r2.geoms:
+            # 直接按 connecting_road id 查 road_by_id，避免扫描全部 roads
+            for c in jcfg.get("connecting_roads", []):
+                r2 = road_by_id.get(int(c.get("id", -1)))
+                if r2 is None or not r2.geoms:
                     continue
-                if any(int(c.get("id", -1)) == r2.id for c in jcfg.get("connecting_roads", [])):
-                    cs = (r2.geoms[0].x, r2.geoms[0].y)
-                    if inc_end and abs(cs[0] - inc_end.x) + abs(cs[1] - inc_end.y) < 4.0:
-                        fork_at_end = True
-                    elif inc_start and abs(cs[0] - inc_start.x) + abs(cs[1] - inc_start.y) < 4.0:
-                        fork_at_end = False
-                    if fork_at_end is not None:
-                        break
+                cs = (r2.geoms[0].x, r2.geoms[0].y)
+                if inc_end and abs(cs[0] - inc_end.x) + abs(cs[1] - inc_end.y) < 4.0:
+                    fork_at_end = True
+                    break
+                elif inc_start and abs(cs[0] - inc_start.x) + abs(cs[1] - inc_start.y) < 4.0:
+                    fork_at_end = False
+                    break
             if inc_road is not None:
                 if fork_at_end is True:
                     inc_road.successor_junction = jid
@@ -552,11 +554,7 @@ def roads_from_road_network(rn_cfg: dict) -> tuple[list[Road], list[Junction]]:
                 # 分支各自从分叉点起算，互不影响：拷贝起点状态
                 # 如果连接道路 id 已存在（已在 edges 中定义），则更新它的
                 # junction_id/predecessor 而非重新构建。
-                existing = None
-                for r in roads:
-                    if r.id == cid:
-                        existing = r
-                        break
+                existing = road_by_id.get(cid)
                 if existing:
                     cr = existing
                     cr.junction_id = jid
@@ -576,6 +574,7 @@ def roads_from_road_network(rn_cfg: dict) -> tuple[list[Road], list[Junction]]:
                     cr.predecessor_junction = jid
                     cr.elevation_profile = list(c.get("elevation_profile") or [])
                     roads.append(cr)
+                    road_by_id[cr.id] = cr
                 # 若配置了 target_road，分支末端接续到目标主路
                 tgt = c.get("target_road")
                 if tgt is not None:
@@ -622,12 +621,11 @@ def roads_from_road_network(rn_cfg: dict) -> tuple[list[Road], list[Junction]]:
             conn_sp = DEFAULT_SPEED
             conn_lw = DEFAULT_LANE_WIDTH
             conn_lanes = 1
-            for rd in roads:
-                if rd.id == incoming:
-                    conn_sp = rd.speed_limit
-                    conn_lw = rd.lane_width
-                    conn_lanes = rd.lane_count
-                    break
+            rd = road_by_id.get(incoming)
+            if rd is not None:
+                conn_sp = rd.speed_limit
+                conn_lw = rd.lane_width
+                conn_lanes = rd.lane_count
 
             # 从 incoming road 终点起构建短过渡段（几何接续，拓扑独立）
             conn_len = 5.0
@@ -638,6 +636,7 @@ def roads_from_road_network(rn_cfg: dict) -> tuple[list[Road], list[Junction]]:
             if target >= 0:
                 conn_road.successor = target
             roads.append(conn_road)
+            road_by_id[conn_road.id] = conn_road
             end_states[conn_rid] = conn_end
 
             conns2: list[tuple[int, Optional[int]]] = [(conn_rid, target if target >= 0 else None)]
