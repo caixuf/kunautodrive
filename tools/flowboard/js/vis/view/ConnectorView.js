@@ -16,6 +16,7 @@ import { getBox, getCylinder, getStdMaterial } from '../core/AssetFactory.js';
 import { LANE_WIDTH, DEFAULT_LANES, isTunnelEdge } from '../core/Constants.js';
 import { worldToThree, forwardENU, directionToRotationY } from '../math/Coord.js';
 import { getTopology, walkFromJunction } from '../model/TopologyModel.js';
+import { mergeGeometries } from '../math/GeometryMerge.js';
 import { SCENE } from '../theme/tokens.js';
 
 /* 配色全部来自 theme/tokens.js（P3 设计 token 单一事实源）。
@@ -84,7 +85,7 @@ export function createConnectorView(scene) {
     const topo = getTopology(roadNetwork);
     const centers = topo ? topo.centers : [];
     const byId = topo ? topo.byId : new Map();
-    _buildJunctionPatch(topo, centers, junctions);
+    _buildJunctionPatch(topo, centers, junctions, roadNetwork.lane_data);
 
     // ── 2c. 转向连接曲线已删除（2026-08-15，P1 渠化替代）：旧实现按 fork turn 画
     //  彩色 ribbon，但 incoming_road 是 base 路名、byId 键是分段 edge id，键型
@@ -167,7 +168,7 @@ export function createConnectorView(scene) {
    *  拓扑（centers/arms/折线点）来自 TopologyModel 单一事实源；
    *  标线用 walkFromJunction 径向出圈取位置与局部切线（曲路贴弯）；
    *  polygon 圆角化（Chaikin 2 次切角）；转向导流线用 junctionData 的 turn。 */
-  function _buildJunctionPatch(topo, centers, junctionData) {
+  function _buildJunctionPatch(topo, centers, junctionData, laneData) {
     if (!topo || !centers.length) return;
 
     // 路口多边形（合并单 mesh）+ 斑马线/停止线/导流线 InstancedMesh
@@ -309,6 +310,59 @@ export function createConnectorView(scene) {
       mesh.receiveShadow = true;
       group.add(mesh);
     }
+
+    // ── 交叉口内部转向车道线（2026-08-16 用户报障"交叉处车道线混乱"）──
+    // net2map 把 SUMO 路口内部 connector（OSM→SUMO 真实转向车道）输出成 road，
+    // 此前被 MapData 整条跳过（不铺路面），交叉口内部只剩斑马线/停止线、无
+    // 车道引导 → 交叉处"断档/混乱"。这里把 lane_data 中 connector（id 形如
+    // road_j...）的 lane centerline 画成白色车道线，交叉口内部就有了连贯的
+    // 真实转向引导（直行/左/右转各按其车道几何）。
+    const connectorLineGeos = [];
+    if (laneData) {
+      for (const [rid, lanes] of Object.entries(laneData)) {
+        if (!String(rid).startsWith('road_j')) continue;   // connector 专属前缀
+        for (const lane of lanes || []) {
+          const cl = lane && lane.centerline;
+          if (!Array.isArray(cl) || cl.length < 2) continue;
+          const pts = cl.map((p) => [p[0] || 0, -(p[1] || 0)]);   // ENU→THREE
+          for (let i = 0; i < pts.length - 1; i++) {
+            const ax = pts[i][0], az = pts[i][1], bx = pts[i + 1][0], bz = pts[i + 1][1];
+            const dx = bx - ax, dz = bz - az;
+            const l = Math.hypot(dx, dz) || 1;
+            const nx = -dz / l, nz = dx / l;   // 左法线
+            const w = 0.14;
+            connectorLineGeos.push(quadGeo(
+              ax + nx * w, az + nz * w,
+              ax - nx * w, az - nz * w,
+              bx - nx * w, bz - nz * w,
+              bx + nx * w, bz + nz * w,
+              STOP_Y,
+            ));
+          }
+        }
+      }
+    }
+    if (connectorLineGeos.length) {
+      const merged = mergeGeometries(connectorLineGeos);
+      connectorLineGeos.forEach((g) => g.dispose && g.dispose());
+      if (merged) {
+        group.add(new THREE.Mesh(merged, getStdMaterial(MERGE_LINE_COLOR, 0.6, 0.0)));
+      }
+    }
+  }
+
+  /** 由 4 个角点（任意顺序，双三角）生成一个 quad 白线几何（标线层 y）。
+   *  与车道标线同材质族，供交叉口内部 connector 转向线复用。 */
+  function quadGeo(x0, z0, x1, z1, x2, z2, x3, z3, y) {
+    const positions = [x0, y, z0, x1, y, z1, x2, y, z2, x3, y, z3];
+    const uvs = [0, 0, 1, 0, 1, 1, 0, 1];
+    const indices = [0, 2, 1, 1, 2, 3];
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    return geo;
   }
 
   /** 本路口的转向连接列表：fork 记录里 incoming_road 与 connecting_road 都有

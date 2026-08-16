@@ -45,11 +45,13 @@ function buildIndex(map) {
     const r = roads[i];
     if (!r || r.id == null) continue;
     /* net2map 把 SUMO 路口内部 connector（sumo_id 以 ':' 开头）也输出成 road。
-     * 这些是路口内部短连接：渲染成路面会在每个路口缠成一团、污染路口几何聚类
-     * （树/护栏/路灯槽位判定跟着错），而路口本身由 junction patch 覆盖。渲染层
-     * 直接跳过，只保留真实道路。同步不计入 laneData（内部连接不单独画标线）。 */
-    if (r.sumo_id && String(r.sumo_id).startsWith(':')) continue;
+     * 渲染成路面会在每个路口缠成一团、污染路口几何聚类（树/护栏/路灯槽位判定
+     * 跟着错），路口本身由 junction patch 覆盖——故不进 edges（不铺路面）。
+     * 但 connector 是 OSM→SUMO 的真实转向车道（lane successors 串起转向），
+     * 2026-08-16 起保留其 laneData，供 ConnectorView 在交叉口内部画转向引导线
+     * （此前整条跳过 → 交叉处无车道线"混乱"）。 */
     if (Array.isArray(r.lanes) && r.lanes.length) laneData[r.id] = r.lanes;
+    if (r.sumo_id && String(r.sumo_id).startsWith(':')) continue;
     const cl = Array.isArray(r.centerline) ? r.centerline : [];
     if (cl.length < 2) continue;
     /* edge schema 对齐 scene_pub.cpp build_road_network_json（FrameValidator
@@ -69,6 +71,8 @@ function buildIndex(map) {
       oneway: !!r.oneway,
       speed_limit: r.speed_limit,
       nodes: cl.map((p) => [p[0] || 0, p[1] || 0, p[2] || 0]),
+      tunnel: r.tunnel != null,    // elevation_patch 补的 OSM tunnel 标记
+      bridge: r.bridge != null,    // elevation_patch 补的 OSM bridge 标记
     });
   }
   const junctions = Array.isArray(rn.junctions) ? rn.junctions : [];

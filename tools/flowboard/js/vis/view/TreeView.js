@@ -47,6 +47,60 @@ function pointInPolygon(x, z, poly) {
   return inside;
 }
 
+/* ── 路面避让（2026-08-16 用户报障"树长在道路上"）─────────────────
+ * v2 是 SUMO 单方向车道地图：每条 edge 的路面 = centerline 向行进方向
+ * 右侧铺 lane 宽；两条对向 edge 并排时中间区域被两侧路面连续覆盖，edge
+ * 外侧 3m 的树槽位会压到对向 edge 的路面（osm_lujiazui_v2 实测 1605/5507
+ * = 29% 压路）。修复：收集全路网每条 edge 的路面带（spine ± halfWidth），
+ * 空间网格索引，槽位落在**任何**路面带内即丢弃——树不该长在沥青上。
+ * 对交叉口重叠 / axis 误差等一切"压路"成因同样有效。 */
+const BAND_CELL = 12;   // 网格单元边长（m），3×3 邻域覆盖 halfW+3 ≤ 15m
+
+function distToSeg(px, pz, x1, z1, x2, z2) {
+  const abx = x2 - x1, abz = z2 - z1;
+  const len2 = abx * abx + abz * abz || 1e-9;
+  let t = ((px - x1) * abx + (pz - z1) * abz) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (x1 + t * abx), pz - (z1 + t * abz));
+}
+
+function buildRoadBandGrid(rn) {
+  const grid = new Map();   // "cx,cz" -> [{x1,z1,x2,z2,hw}]
+  for (const edge of rn.edges) {
+    const axis = computeEdgeAxis(edge, rn.lane_data);
+    if (!axis.ok || axis.spine.length < 2) continue;
+    const spine = axis.spine;
+    for (let i = 0; i < spine.length - 1; i++) {
+      const a = spine[i], b = spine[i + 1];
+      const s = { x1: a.px, z1: a.pz, x2: b.px, z2: b.pz, hw: axis.halfWidth };
+      const minX = Math.min(s.x1, s.x2) - s.hw, maxX = Math.max(s.x1, s.x2) + s.hw;
+      const minZ = Math.min(s.z1, s.z2) - s.hw, maxZ = Math.max(s.z1, s.z2) + s.hw;
+      for (let cx = Math.floor(minX / BAND_CELL); cx <= Math.floor(maxX / BAND_CELL); cx++) {
+        for (let cz = Math.floor(minZ / BAND_CELL); cz <= Math.floor(maxZ / BAND_CELL); cz++) {
+          const k = cx + ',' + cz;
+          if (!grid.has(k)) grid.set(k, []);
+          grid.get(k).push(s);
+        }
+      }
+    }
+  }
+  return grid;
+}
+
+function onAnyRoadBand(x, z, grid) {
+  const cx = Math.floor(x / BAND_CELL), cz = Math.floor(z / BAND_CELL);
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dz = -1; dz <= 1; dz++) {
+      const segs = grid.get((cx + dx) + ',' + (cz + dz));
+      if (!segs) continue;
+      for (const s of segs) {
+        if (distToSeg(x, z, s.x1, s.z1, s.x2, s.z2) < s.hw) return true;
+      }
+    }
+  }
+  return false;
+}
+
 export function inferTreeSlots(roadNetwork) {
   const slots = [];
   if (!roadNetwork?.edges?.length) return slots;
@@ -63,6 +117,9 @@ export function inferTreeSlots(roadNetwork) {
    * DSL 枢纽抽取落地后自动点亮，无需回改本 view。 */
   const landuse = Array.isArray(roadNetwork.landuse) ? roadNetwork.landuse : null;
   const inLanduse = (x, z) => !landuse || landuse.some((poly) => pointInPolygon(x, z, poly));
+
+  /* 路面避让（2026-08-16）：全路网路面带索引，槽位压到任何沥青即丢弃。 */
+  const bandGrid = buildRoadBandGrid(roadNetwork);
 
   for (const edge of roadNetwork.edges) {
     if (edge.type === EDGE_TYPE.VIADUCT_HIGHWAY || edge.name === EDGE_TYPE.VIADUCT_HIGHWAY) continue;
@@ -91,6 +148,7 @@ export function inferTreeSlots(roadNetwork) {
         const x = s.px + s.nx * (halfWidth + TREE_OFFSET) * side;
         const z = s.pz + s.nz * (halfWidth + TREE_OFFSET) * side;
         if (nearJunction(x, z)) continue;   // 路口避让
+        if (onAnyRoadBand(x, z, bandGrid)) continue;   // 2026-08-16 路面避让：树不上沥青
         if (!inLanduse(x, z)) continue;      // 阶段6：仅绿地内种树
         const variant = ((i * 17 + (side > 0 ? 7 : 3)) % 11) / 10;
         slots.push({ x, z, py: s.py, side, arc: targetArc, variant });
