@@ -849,7 +849,8 @@ static bool dispatch_request(int fd, MonitorServer* ms,
                  strcmp(map_id, "city_grid") == 0 ||
                  strcmp(map_id, "osm_test") == 0 ||
                  strcmp(map_id, "osm_lujiazui") == 0 ||
-                 strcmp(map_id, "osm_lujiazui_v2") == 0);
+                 strcmp(map_id, "osm_lujiazui_v2") == 0 ||
+                 strcmp(map_id, "osm_zhengdong") == 0);
             if (!allowed) {
                 send_response(fd, "400 Bad Request", "application/json",
                               "{\"ok\":false,\"error\":\"map is not allowlisted\"}");
@@ -924,7 +925,7 @@ static bool dispatch_request(int fd, MonitorServer* ms,
                     if (!getcwd(root_dir, sizeof(root_dir))) root_dir[0] = '\0';
                     pid_t pid = fork();
                     if (pid == 0) {
-                        if (root_dir[0]) chdir(root_dir);
+                        if (root_dir[0]) (void)chdir(root_dir);
                         const char* scenario = (strcmp(map_id_run, "city_grid") == 0)
                             ? "scenarios/city_grid_map.json"
                             : "scenarios/city_ring_map.json";
