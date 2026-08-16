@@ -10,7 +10,7 @@
  */
 
 /* monitor_server /api/map/preview 的 allowlist 地图（新增地图需同步两侧） */
-const ALLOWED = new Set(['city_ring', 'city_center', 'city_grid', 'osm_test', 'osm_lujiazui', 'osm_lujiazui_v2']);
+const ALLOWED = new Set(['city_ring', 'city_center', 'city_grid', 'osm_test', 'osm_lujiazui', 'osm_lujiazui_v2', 'osm_zhengdong']);
 /* scenario_name 与 map 目录名不一致的别名表 */
 const ALIAS = { osm_city_map: 'osm_test' };
 

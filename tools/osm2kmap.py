@@ -52,6 +52,7 @@ import math
 import os
 import re
 import sys
+import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -874,10 +875,14 @@ def extract_way_id(sumo_id: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def fetch_osm_bridge_tunnel(ref_lat: float, ref_lon: float, radius_m: int = 4000):
+def fetch_osm_bridge_tunnel(ref_lat: float, ref_lon: float, radius_m: int = 5000,
+                             max_retries: int = 4):
     """Overpass around 一次拉取区域内带 bridge/tunnel/layer 的 way 元数据。
     返回 {way_id: {layer:int|None, bridge:bool, tunnel:bool, name:str|None}}。
-    网络失败抛异常（由调用方决定是否静默跳过）。"""
+    网络失败抛异常（由调用方决定是否静默跳过）。
+
+    健壮性：每个端点独立重试（含指数退避），缓解 Overpass 偶发的
+    504/429；全部端点都耗尽才抛异常给调用方静默跳过。"""
     query = f"""
     [out:json][timeout:60];
     (
@@ -890,32 +895,35 @@ def fetch_osm_bridge_tunnel(ref_lat: float, ref_lon: float, radius_m: int = 4000
     data = urllib.parse.urlencode({"data": query}).encode()
     last_ex = None
     for ep in OVERPASS_ENDPOINTS:
-        try:
-            req = urllib.request.Request(
-                ep, data=data,
-                headers={"User-Agent": "osm2kmap-elevation/1.0"})
-            with urllib.request.urlopen(req, timeout=60) as r:
-                resp = json.load(r)
-            result = {}
-            for elem in resp.get("elements", []):
-                if elem.get("type") != "way":
-                    continue
-                tags = elem.get("tags", {})
-                layer = None
-                if "layer" in tags:
-                    try:
-                        layer = int(tags["layer"])
-                    except (ValueError, TypeError):
-                        pass
-                result[elem["id"]] = {
-                    "layer": layer,
-                    "bridge": "bridge" in tags,
-                    "tunnel": "tunnel" in tags,
-                    "name": tags.get("name"),
-                }
-            return result
-        except Exception as ex:  # noqa: BLE001 —— 端点级重试，最后抛给调用方
-            last_ex = ex
+        for attempt in range(1, max_retries + 1):
+            try:
+                req = urllib.request.Request(
+                    ep, data=data,
+                    headers={"User-Agent": "osm2kmap-elevation/1.0"})
+                with urllib.request.urlopen(req, timeout=90) as r:
+                    resp = json.load(r)
+                result = {}
+                for elem in resp.get("elements", []):
+                    if elem.get("type") != "way":
+                        continue
+                    tags = elem.get("tags", {})
+                    layer = None
+                    if "layer" in tags:
+                        try:
+                            layer = int(tags["layer"])
+                        except (ValueError, TypeError):
+                            pass
+                    result[elem["id"]] = {
+                        "layer": layer,
+                        "bridge": "bridge" in tags,
+                        "tunnel": "tunnel" in tags,
+                        "name": tags.get("name"),
+                    }
+                return result
+            except Exception as ex:  # noqa: BLE001 —— 端点级/重试级异常，最后抛给调用方
+                last_ex = ex
+                if attempt < max_retries:
+                    time.sleep(2 ** attempt)  # 2,4,8 秒指数退避
     raise last_ex if last_ex else RuntimeError("Overpass 全部端点失败")
 
 
