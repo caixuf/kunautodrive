@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
-"""net2map.py — SUMO net.xml → FlowEngine map.json（车道级几何直出）。
+"""osm2kmap.py — SUMO net.xml → .kmap 道路 DSL（车道级几何直出，只产 DSL 不写 map.json）。
+
+> 遵 docs/MAP_GENERATION_MODULE.md §3.1、§5：本文件是从旧 `net2map.py` 重构而来，
+> **不再自己写 map.json**。地图契约唯一写入方是 `tools/map_compiler.py`（单一编译器）。
+> netconvert 是 osm2kmap 内部的几何引擎（成熟开源，非独立入口），本文件把 SUMO
+> net.xml 的车道级几何/路口 connector/lane successors 翻译为 `.kmap` DSL 声明，
+> 再由 `map_compiler.py` 编译成等价的运行时 map.json。
 
 背景：osm_to_map.py 手搓车道几何（中心线偏移合成 + 路口聚类），陆家嘴实测
 "很多路看着很奇怪"。SUMO netconvert 吃同一份 OSM 直接产出车道级精确形状
-（含路口内部连接车道 shape），本脚本把它翻译成 map.json 契约，
+（含路口内部连接车道 shape），本脚本走 DSL 枢纽把它们落进运行时契约，
 flowsim(json_to_xodr) / flowboard(/api/map/preview) / A*(astar_route) /
-评估器(road_network_from_map_file) 全部零改动消费。
+评估器(road_network_from_map_file) 消费的是编译后的 map.json，零改动。
 
 坐标链：net.xml shape（UTM − netOffset）→ 加回 |netOffset| 得 UTM → pyproj
 逆投影到 WGS84 → 项目统一 ENU 近似（与 osm_to_map.wgs84_to_enu 同公式，
 需 --ref-lat/--ref-lon 与当初建图一致），保证新旧地图同坐标系。
 
-契约要点（与 json_to_xodr.load_scenario / scene_pub / astar_route 对齐）：
+契约要点（与 json_to_xodr.load_scenario / scene_pub / astar_route 对齐，经 map_compiler 落地）：
   * 每个 SUMO edge（单方向）→ 一条 road，oneway=true；
     centerline = 车行道**行进方向左边界**（最左车道中心线左移半宽），
     json_to_xodr 把 oneway 车道全部放参考线右侧，几何自洽。
@@ -24,15 +30,17 @@ flowsim(json_to_xodr) / flowboard(/api/map/preview) / A*(astar_route) /
     相位时长由该 link 在程序各相位灯色累加、phase_offset 取首次变绿时刻，同路口
     N-S/E-W 天然错峰。runtime 单周期相位机可复现标准 2 相位，多相位退化为近似。
 
-用法：
-  python3 tools/net2map.py /tmp/lujiazui.net.xml --out maps/osm_lujiazui_v2 \
+用法（重构图：产出 .kmap，再由 map_compiler 编译成 map.json）：
+  python3 tools/osm2kmap.py /tmp/lujiazui.net.xml --out maps/osm_lujiazui_v2 \
       --ref-lat 31.235 --ref-lon 121.5 [--buildings-from maps/osm_lujiazui/map.json] \
       [--scenario scenarios/osm_lujiazui_v2.json]
+  python3 tools/map_compiler.py maps/osm_lujiazui_v2/map.kmap -o maps/osm_lujiazui_v2/map.json
 
-产出（与 osm_to_map 同契约，下游零改动消费）：
-  <out>/map.json      — 车道级路网（roads + junctions + landmarks + buildings）
+产出：
+  <out>/map.kmap      — 道路 + 车道 + junction + traffic light + building 的 DSL 声明
   <out>/routes.json   — main 路线 = 最长几何连接真实道路链（自动生成）
   --scenario 可选写出 scenarios/<map_id>.json 场景入口（默认不写，沿用既有）
+  最终 map.json 由 `map_compiler.py` 编译 map.kmap 得到（单一写入方）。
 
 依赖：pyproj（pip install pyproj）。
 """
@@ -44,6 +52,8 @@ import math
 import os
 import re
 import sys
+import urllib.parse
+import urllib.request
 import xml.etree.ElementTree as ET
 
 # ── 与 osm_to_map.py 相同的 ENU 近似参数 ─────────────────────
@@ -467,7 +477,7 @@ def write_scenario(out_dir: str, scenario_path: str, map_id: str,
     ex, ey, eh = scenario_ego(chain_roads)
     scenario = {
         "name": map_id,
-        "description": "OSM 路网（SUMO netconvert，net2map.py 生成）：ego 沿 route 'main' 行驶。",
+        "description": "OSM 路网（SUMO netconvert，osm2kmap.py 生成 .kmap，map_compiler.py 编译）：ego 沿 route 'main' 行驶。",
         "map_file": os.path.join(rel, "map.json"),
         "route_file": os.path.join(rel, "routes.json"),
         "route_id": "main",
@@ -831,7 +841,7 @@ class NetConverter:
             "schema_version": 1,
             "map_id": "",  # 由调用方填
             "name": "",
-            "generator": "net2map.py (SUMO netconvert)",
+            "generator": "osm2kmap.py (SUMO netconvert)",
             "roads": roads,
             "connections": [],
             "junctions": junctions_out,
@@ -842,14 +852,229 @@ class NetConverter:
         }
 
 
+# ── OSM 桥隧/层高（2026-08-16：让立交/隧道分层，遵 DSL 枢纽）────────────
+# SUMO netconvert 丢弃 OSM 的 bridge/tunnel/layer 标签 → map.json centerline
+# z 全 0，立体路网压在平面上。这里按 road.sumo_id 里保留的 OSM way id 回查
+# Overpass（可选步骤：离线/失败静默跳过，零回归），把桥/隧/层高写进
+# centerline 与 lane centerline 的第三分量 z —— serialize_kmap 已输出
+# Point { x; y; z }，map_compiler 编译后 map.json 带高度，前端 sampleEdgeNodes
+# 与 json_to_xodr elevationProfile 都消费。桥 = 6m×max(1,layer)；隧道固定 -4m
+# （避免 layer=-3 造成 -15m 深坑断层）。
+OVERPASS_ENDPOINTS = [
+    "https://overpass.private.coffee/api/interpreter",
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+]
+
+
+def extract_way_id(sumo_id: str) -> int | None:
+    """从 SUMO edge id 提取 OSM way ID。connector（:123_0）提取的是 junction
+    id 而非 way id，Overpass 查不到会自然跳过（不影响）。"""
+    m = re.search(r"(\d+)", str(sumo_id))
+    return int(m.group(1)) if m else None
+
+
+def fetch_osm_bridge_tunnel(ref_lat: float, ref_lon: float, radius_m: int = 4000):
+    """Overpass around 一次拉取区域内带 bridge/tunnel/layer 的 way 元数据。
+    返回 {way_id: {layer:int|None, bridge:bool, tunnel:bool, name:str|None}}。
+    网络失败抛异常（由调用方决定是否静默跳过）。"""
+    query = f"""
+    [out:json][timeout:60];
+    (
+      way(around:{radius_m},{ref_lat},{ref_lon})[highway][bridge];
+      way(around:{radius_m},{ref_lat},{ref_lon})[highway][tunnel];
+      way(around:{radius_m},{ref_lat},{ref_lon})[highway][layer];
+    );
+    out tags center 10000;
+    """
+    data = urllib.parse.urlencode({"data": query}).encode()
+    last_ex = None
+    for ep in OVERPASS_ENDPOINTS:
+        try:
+            req = urllib.request.Request(
+                ep, data=data,
+                headers={"User-Agent": "osm2kmap-elevation/1.0"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                resp = json.load(r)
+            result = {}
+            for elem in resp.get("elements", []):
+                if elem.get("type") != "way":
+                    continue
+                tags = elem.get("tags", {})
+                layer = None
+                if "layer" in tags:
+                    try:
+                        layer = int(tags["layer"])
+                    except (ValueError, TypeError):
+                        pass
+                result[elem["id"]] = {
+                    "layer": layer,
+                    "bridge": "bridge" in tags,
+                    "tunnel": "tunnel" in tags,
+                    "name": tags.get("name"),
+                }
+            return result
+        except Exception as ex:  # noqa: BLE001 —— 端点级重试，最后抛给调用方
+            last_ex = ex
+    raise last_ex if last_ex else RuntimeError("Overpass 全部端点失败")
+
+
+def apply_osm_elevation(roads: list, ref_lat: float, ref_lon: float) -> int:
+    """把 OSM 桥隧/层高应用到 roads 的 centerline z（整条抬/沉固定高度）。
+    返回应用了高程的 road 数。失败抛异常（调用方静默跳过）。"""
+    way_ids = {extract_way_id(r.get("sumo_id")) for r in roads}
+    way_ids.discard(None)
+    if not way_ids:
+        return 0
+    meta = fetch_osm_bridge_tunnel(ref_lat, ref_lon)
+    if not meta:
+        return 0
+
+    def elev_of(info) -> float | None:
+        if info["tunnel"]:
+            return -4.0
+        if info["bridge"]:
+            return 6.0 * max(1, info["layer"] or 1)
+        if info["layer"] is not None:
+            return 6.0 * max(1, info["layer"]) if info["layer"] > 0 else -4.0
+        return None
+
+    n = 0
+    for r in roads:
+        wid = extract_way_id(r.get("sumo_id"))
+        if wid is None or wid not in meta:
+            continue
+        info = meta[wid]
+        elev = elev_of(info)
+        if elev is None and not info["name"] and not info["tunnel"] and not info["bridge"]:
+            continue
+        changed = False
+        if elev is not None:
+            for p in r.get("centerline", []):
+                if len(p) < 3:
+                    p.append(elev)
+                else:
+                    p[2] = elev
+            for lane in r.get("lanes", []):
+                for p in lane.get("centerline", []):
+                    if len(p) < 3:
+                        p.append(elev)
+                    else:
+                        p[2] = elev
+            changed = True
+        if info["tunnel"] and "tunnel" not in r:
+            r["tunnel"] = True
+            changed = True
+        if info["bridge"] and "bridge" not in r:
+            r["bridge"] = True
+            changed = True
+        if info["name"] and not r.get("name"):
+            r["name"] = info["name"]
+            changed = True
+        if changed:
+            n += 1
+    return n
+
+
+def _fmt(v) -> str:
+    """DSL 数值格式化：int 原样、float 四舍五入到 3 位、其余 str()。
+
+    与 map_compiler.close_road 的 round(p,3) 一致，保证编译回写逐坐标一致。
+    """
+    if isinstance(v, bool):
+        return str(v).lower()
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        return repr(round(v, 3))
+    return str(v)
+
+
+def serialize_kmap(doc: dict, map_id: str, name: str) -> str:
+    """把 convert() 产出的 doc → .kmap 道路 DSL 文本，可由 map_compiler.compile_map 编译回等价契约。
+
+    唯一写入方是 map_compiler.py；本函数只产 DSL。序列化时丢弃 net2map/osm2kmap
+    内部注解（generator/_stats/sumo_id/target_road）——它们不是运行时契约，
+    下游只读 roads/lanes/successors/junctions/landmarks/buildings。
+
+    Lane 用**显式 Point 中心线 + width**覆盖派生的 offset 几何（SUMO 每车道精确形状），
+    Junction/TrafficLight/Building 用顶层声明，全部落进 compiler 输出。
+    """
+    L = []
+    L.append("Map {")
+    L.append(f"    id: {map_id}")
+    L.append(f"    name: {json.dumps(name)}")
+    L.append("    schema_version: 1")
+    for r in doc.get("roads", []):
+        L.append(f"    Road {r['id']} {{")
+        L.append(f"        type: {r.get('type', 'urban')}")
+        L.append(f"        speedLimit: {_fmt(r.get('speed_limit', 0))}")
+        L.append(f"        laneWidth: {_fmt(r.get('lane_width', 3.2))}")
+        L.append(f"        oneWay: {str(r.get('oneway', True)).lower()}")
+        L.append(f"        lanes: {len(r.get('lanes', []))}")
+        L.append(f"        name: {json.dumps(r.get('name') or '')}")
+        if r.get("bridge"):
+            L.append(f"        bridge: true")
+        if r.get("tunnel"):
+            L.append(f"        tunnel: true")
+        for pt in r.get("centerline", []):
+            z = pt[2] if len(pt) > 2 else 0
+            L.append(f"        Point {{ x: {_fmt(pt[0])}; y: {_fmt(pt[1])}; z: {_fmt(z)} }}")
+        for ln in r.get("lanes", []):
+            L.append("        Lane {")
+            L.append(f"            index: {ln['index']}")
+            L.append(f"            direction: {ln.get('direction', 1)}")
+            L.append(f"            width: {_fmt(ln.get('width', r.get('lane_width', 3.2)))}")
+            succ = ln.get("successors") or []
+            if succ:
+                L.append(f"            successors: [{', '.join(json.dumps(s) for s in succ)}]")
+            for mk in ln.get("markings", []):
+                L.append(f"            Marking {{ type: {mk['type']}; side: {mk.get('side', 'both')} }}")
+            for pt in ln.get("centerline", []):
+                z = pt[2] if len(pt) > 2 else 0
+                L.append(f"            Point {{ x: {_fmt(pt[0])}; y: {_fmt(pt[1])}; z: {_fmt(z)} }}")
+            L.append("        }")
+        L.append("    }")
+    for v in doc.get("connections", []):
+        L.append(f"    Connection {{ from: {v['from_road']}; to: {v['to_road']}; "
+                 f"type: {v.get('type', 'continue')} }}")
+    for j in doc.get("junctions", []):
+        L.append("    Junction {")
+        L.append(f"        id: {_fmt(j['id'])}")
+        L.append(f"        type: {j.get('type', 'fork')}")
+        L.append(f"        incoming_road: {j['incoming_road']}")
+        for cr in j.get("connecting_roads", []):
+            L.append(f"        ConnectingRoad {{ id: {cr['id']}; turn: {cr.get('turn', 'straight')} }}")
+        for pt in j.get("shape", []):
+            L.append(f"        ShapePoint {{ x: {_fmt(pt[0])}; y: {_fmt(pt[1])} }}")
+        L.append("    }")
+    for tl in doc.get("landmarks", {}).get("traffic_lights", []):
+        L.append("    TrafficLight {")
+        for k in ("id", "x", "y_lane", "heading", "red_s", "yellow_s", "green_s", "phase_offset_s"):
+            if k in tl:
+                L.append(f"        {k}: {_fmt(tl[k])}")
+        L.append("    }")
+    for b in doc.get("buildings", []):
+        L.append("    Building {")
+        L.append(f"        id: {b['id']}")
+        for k in ("x", "y", "rotation", "height"):
+            if k in b:
+                L.append(f"        {k}: {_fmt(b[k])}")
+        for fp in b.get("footprint", []):
+            L.append(f"        FootprintPoint {{ x: {_fmt(fp[0])}; y: {_fmt(fp[1])} }}")
+        L.append("    }")
+    L.append("}")
+    return "\n".join(L) + "\n"
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="SUMO net.xml → FlowEngine map.json")
+    ap = argparse.ArgumentParser(description="SUMO net.xml → .kmap 道路 DSL（仅供 map_compiler 编译成 map.json）")
     ap.add_argument("net", help="netconvert 输出的 .net.xml")
-    ap.add_argument("--out", required=True, help="输出地图目录（写 map.json）")
+    ap.add_argument("--out", required=True, help="输出地图目录（写 map.kmap + routes.json）")
     ap.add_argument("--ref-lat", type=float, required=True, help="ENU 原点纬度")
     ap.add_argument("--ref-lon", type=float, required=True, help="ENU 原点经度")
     ap.add_argument("--buildings-from", default=None,
-                    help="可选：从既有 map.json 拷贝 buildings/landmarks")
+                    help="可选：从既有 map.json 拷贝 buildings（经 Building DSL 进 .kmap）")
     ap.add_argument("--scenario", default=None,
                     help="可选：写出场景入口 scenarios/<map_id>.json（默认不写）")
     ap.add_argument("--map-id", default=None, help="默认取 --out 目录基名")
@@ -888,16 +1113,29 @@ def main() -> int:
     n_clamped = clamp_vehicle_lane_width(doc["roads"])
     doc["junctions"], n_pruned = sanitize_successors(doc["roads"], doc["junctions"])
 
+    # 桥隧/层高（可选，Overpass 离线/失败静默跳过 → 零回归）：SUMO 丢弃 OSM
+    # bridge/tunnel/layer，这里按 sumo_id 回查 OSM，把高度写进 centerline z
+    # （前端 sampleEdgeNodes / json_to_xodr elevationProfile 消费）。
+    n_elev = 0
+    try:
+        n_elev = apply_osm_elevation(doc["roads"], args.ref_lat, args.ref_lon)
+    except Exception as ex:  # noqa: BLE001
+        print(f"  [WARN] OSM 桥隧高程采集失败（跳过，不影响生成）: {ex}",
+              file=sys.stderr)
+    print(f"  桥隧/层高: {n_elev} 条 road 应用高程")
+
     stats = doc.pop("_stats")
     os.makedirs(args.out, exist_ok=True)
-    out_path = os.path.join(args.out, "map.json")
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(doc, f, ensure_ascii=False)
+    # 单一写入方：本工具只产 .kmap DSL，map.json 必须由 map_compiler.py 编译（§3.1/§5）。
+    kmap_path = os.path.join(args.out, "map.kmap")
+    kmap_text = serialize_kmap(doc, map_id, doc["name"])
+    with open(kmap_path, "w", encoding="utf-8") as f:
+        f.write(kmap_text)
 
     n_lanes = sum(len(r["lanes"]) for r in doc["roads"])
-    n_conn = sum(1 for r in doc["roads"] if r["sumo_id"].startswith(":"))
+    n_conn = sum(1 for r in doc["roads"] if str(r["sumo_id"]).startswith(":"))
     n_succ = sum(len(l["successors"]) for r in doc["roads"] for l in r["lanes"])
-    print("wrote %s" % out_path)
+    print("wrote %s (%d lines)" % (kmap_path, kmap_text.count("\n")))
     print("  roads: %d（其中路口 connector %d）" % (len(doc["roads"]), n_conn))
     print("  lanes: %d（lane successors %d 条）" % (n_lanes, n_succ))
     print("  junctions: %d, buildings: %d, traffic_lights: %d" %
@@ -933,7 +1171,8 @@ def main() -> int:
     if args.scenario:
         write_scenario(args.out, os.path.abspath(args.scenario), map_id, chain_roads)
 
-    print("下一步：")
+    print("下一步（DSL 枢纽：map.json 由单一编译器产出）：")
+    print("  python3 tools/map_compiler.py %s -o %s" % (kmap_path, os.path.join(args.out, "map.json")))
     print("  python3 tools/astar_route.py %s --from-lane <A> --to-lane <B> --write"
           % args.out)
     return 0

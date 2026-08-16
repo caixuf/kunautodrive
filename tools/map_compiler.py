@@ -96,6 +96,7 @@ def compile_map(source: Path) -> dict:
         "schema_version": 1,
         "map_id": source.stem,
         "name": source.stem,
+        "generator": "map_compiler.py (DSL hub — single writer)",
         "roads": [],
         "connections": [],
         "junctions": [],
@@ -104,6 +105,7 @@ def compile_map(source: Path) -> dict:
             "stop_lines": [],
             "construction_zones": [],
         },
+        "buildings": [],
     }
     map_id = None
 
@@ -129,6 +131,15 @@ def compile_map(source: Path) -> dict:
             base = _derive_lane(road["id"], center, idx, is_opp, per_side, oneway, lw)
             over = lane_ids.get((idx, base["direction"]))
             if over is not None:
+                if "width" in over:
+                    base["width"] = over["width"]
+                if "_centerline" in over:           # 显式每车道几何（osm2kmap/SUMO 精确形状）
+                    base["centerline"] = [
+                        [round(float(p[0]), 3), round(float(p[1]), 3),
+                         round(float(p[2]) if len(p) > 2 else 0.0, 3)]
+                        for p in over["_centerline"]]
+                    if len(base["centerline"]) < 2:
+                        raise ValueError(f"{source}: road {road['id']} lane needs two Points")
                 if "direction" in over:
                     base["direction"] = over["direction"]
                 if "successors" in over:
@@ -138,6 +149,7 @@ def compile_map(source: Path) -> dict:
             lanes.append(base)
         road["lanes"] = lanes
         road["centerline"] = [[round(p[0], 3), round(p[1], 3), round(p[2], 3)] for p in center]
+        road.pop("nodes", None)   # nodes 是编译中间量，运行时契约只认 centerline/lanes
         if road.get("_elevation"):
             road["elevation_profile"] = road.pop("_elevation")
         for key in ("type", "speed_limit"):
@@ -176,6 +188,12 @@ def compile_map(source: Path) -> dict:
                     "to_road": obj.get("to"),
                     "type": obj.get("type", "continue"),
                 })
+            elif kind == "junction":
+                result["junctions"].append(obj)
+            elif kind == "trafficlight":
+                result["landmarks"]["traffic_lights"].append(obj)
+            elif kind == "building":
+                result["buildings"].append(obj)
             continue
         if line.startswith("Map") and line.endswith("{"):
             stack.append(("map", result))
@@ -191,6 +209,15 @@ def compile_map(source: Path) -> dict:
         if line == "Connection {" and cur_block() == "map":
             stack.append(("connection", {}))
             continue
+        if line == "Junction {" and cur_block() == "map":
+            stack.append(("junction", {"id": None, "connecting_roads": [], "shape": []}))
+            continue
+        if line == "TrafficLight {" and cur_block() == "map":
+            stack.append(("trafficlight", {}))
+            continue
+        if line == "Building {" and cur_block() == "map":
+            stack.append(("building", {"footprint": []}))
+            continue
         match = re.match(r"Point\s*\{([^}]*)\}", line)
         if match and cur_block() == "road":
             fields = dict(re.findall(r"(\w+)\s*:\s*([^;]+)", match.group(1)))
@@ -199,6 +226,33 @@ def compile_map(source: Path) -> dict:
                 value(fields.get("y", "0")),
                 value(fields.get("z", "0")),
             ])
+            continue
+        match = re.match(r"Point\s*\{([^}]*)\}", line)
+        if match and cur_block() == "lane":
+            fields = dict(re.findall(r"(\w+)\s*:\s*([^;]+)", match.group(1)))
+            cur().setdefault("_centerline", []).append([
+                value(fields.get("x", "0")),
+                value(fields.get("y", "0")),
+                value(fields.get("z", "0")),
+            ])
+            continue
+        match = re.match(r"ConnectingRoad\s*\{([^}]*)\}", line)
+        if match and cur_block() == "junction":
+            fields = _block_fields(match.group(1))
+            cur()["connecting_roads"].append({
+                "id": value(fields["id"]),
+                "turn": value(fields.get("turn", "straight")),
+            })
+            continue
+        match = re.match(r"ShapePoint\s*\{([^}]*)\}", line)
+        if match and cur_block() == "junction":
+            fields = _block_fields(match.group(1))
+            cur()["shape"].append([value(fields["x"]), value(fields["y"])])
+            continue
+        match = re.match(r"FootprintPoint\s*\{([^}]*)\}", line)
+        if match and cur_block() == "building":
+            fields = _block_fields(match.group(1))
+            cur()["footprint"].append([value(fields["x"]), value(fields["y"])])
             continue
         match = re.match(r"Elevation\s*\{([^}]*)\}", line)
         if match and cur_block() == "road":
