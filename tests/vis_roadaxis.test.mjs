@@ -7,7 +7,8 @@
  *      真中心与三车道中心均值吻合。
  *   2. 多段中心线（CatmullRom 采样路径）：末点差分修复（points[i-2]→points[i-1]）
  *      后 spine 不再翻转，fromLanes=true、无 NaN。这正是"路整体左偏"根因修复。
- *   3. 居中约定路（centerline 本就是车道组中心）：fromLanes=false、不偏移（安全兜底）。
+ *   3. 居中约定路（centerline 本就是车道组中心）：车道组包络测得中心≈0 →
+ *      fromLanes=true、offset=0 不偏移，但保留包络实测半宽（不再回退 n·laneWidth/2）。
  *
  * 全图规模量化验证（osm_lujiazui_v2 9675 路，含 OLD buggy 复刻对比）为手动脚本，
  * 见下方注释；核心不变量已在此单测覆盖。
@@ -72,7 +73,7 @@ const centered = {
   ],
 };
 const r3 = computeRoadAxis(centered);
-ok('居中路 fromLanes=false（不偏移）', r3.fromLanes === false);
+ok('居中路 fromLanes=true（车道组包络测得中心≈0 → 不偏移但保留半宽）', r3.fromLanes === true);
 ok('居中路 spine 保持 centerline（起点 px≈0）', Math.abs(r3.spine[0].px) < 0.5);
 
 // ── computeEdgeAxis 便捷入口（家具视图用）──
@@ -96,7 +97,7 @@ const elevated = {
 };
 const r5 = computeRoadAxis(elevated);
 ok('elevation 消费：spine py 抬升到 12.5', r5.spine.every(p => Math.abs(p.py - 12.5) < 1e-6));
-ok('elevation 消费：fromLanes/几何不受影响', r5.fromLanes === false && r5.ok === true);
+ok('elevation 消费：fromLanes=true（包络测得中心≈0 同居中约定）且 ok', r5.fromLanes === true && r5.ok === true);
 
 const leveled = { ...centered, level: -3 };
 const r6 = computeRoadAxis(leveled);

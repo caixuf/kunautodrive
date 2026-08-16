@@ -174,7 +174,12 @@ export function computeRoadAxis(road) {
   }
 
   const laneWidth = Number(road.lane_width) || LANE_WIDTH_DEFAULT;
-  const laneCount = Array.isArray(road.lanes) ? road.lanes.length
+  /* 注意：laneCount 必须区分「空数组（无车道数据）」与「有车道」。computeEdgeAxis
+   * 对无 lane_data 的 edge 传 lanes=[]，若用 Array.isArray(road.lanes)?len:... 会
+   * 得到 0 → fallbackHw=0 → 家具按 halfWidth=0 落位直接压在路面上（实测 straight_
+   * road S 弯 277/277 压路）。空数组按"未知车道数"处理，用 lanes_count 兜底。 */
+  const laneCount = (Array.isArray(road.lanes) && road.lanes.length)
+    ? road.lanes.length
     : (Number(road.lanes_count) || 2);
   const fallbackHw = laneCount * laneWidth / 2;
 

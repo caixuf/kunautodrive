@@ -255,6 +255,60 @@ def generate_connectivity(roads: list[dict], junctions: list[dict],
                         cl["successors"].append(sid)
 
 
+def clamp_vehicle_lane_width(roads: list[dict], min_w: float = 2.75) -> int:
+    """SUMO netconvert 常把 OSM `width`（双向合计）按方向拆半（如 3.2m 双向路
+    → 每向 1.6m），机动车道 1.6m 渲染成发丝路，密集核心区"密度感"全无。对过窄
+    车道做下限钳制（min_w），road.lane_width 与每个 lane.width 同步。返回被钳制的
+    车道数（诊断用）。"""
+    n = 0
+    for r in roads:
+        lanes = r.get("lanes") or []
+        if not lanes:
+            continue
+        if (r.get("lane_width") or 0) < min_w:
+            r["lane_width"] = min_w
+            n += 1
+        for l in lanes:
+            if (l.get("width") or 0) < min_w:
+                l["width"] = min_w
+                n += 1
+    return n
+
+
+def sanitize_successors(roads: list[dict], junctions: list[dict]) -> tuple[list[dict], int]:
+    """净化 lane successors / junction 引用：drop 指向「未被发射的 road/lane」的
+    悬空引用。
+
+    根因：convert() 第一步（connection → successors）用 `lane_lid()` 拼目标 id 时，
+    只查了 `lane_index_map`（有可驾驶车道），没校验该 edge 是否真的会被 emit——
+    被 SKIP_EDGE_TYPES 跳过或可驾驶车道全被过滤的 edge，其车道 id 依然进了 succ。
+    结果 map.json 里出现大量指向不存在道路的 successors（osm_lujiazui_v2 实测
+    6709 条 → 1086 条缺席道路），A*/json_to_xodr 消费时断链。
+
+    这里在全部道路 emit 之后统一净化：successors 只保留真实存在的 lane id；
+    junctions 丢弃引用缺席道路的 incoming/connecting（连着不存在道路的路口无意义）。
+    返回 (净化后的 junctions, 剪掉的 successor 条数)。"""
+    emitted_roads = {r["id"] for r in roads}
+    emitted_lanes = {l["id"] for r in roads for l in (r.get("lanes") or [])}
+    pruned = 0
+    for r in roads:
+        for l in (r.get("lanes") or []):
+            succ = l.get("successors") or []
+            keep = [s for s in succ if s in emitted_lanes]
+            pruned += len(succ) - len(keep)
+            l["successors"] = keep
+    out: list[dict] = []
+    for j in junctions:
+        conns = [c for c in j.get("connecting_roads", [])
+                 if c.get("id") in emitted_roads]
+        if j.get("incoming_road") not in emitted_roads or not conns:
+            continue
+        jj = dict(j)
+        jj["connecting_roads"] = conns
+        out.append(jj)
+    return out, pruned
+
+
 def _build_successor_graph(roads: list[dict]):
     """从 lane successors 推出「真实 road → 真实 road」有向邻接（跳过路口内部
     connector）。net2map 的 road 已是 SUMO 单方向 edge，lane successors 经内部
@@ -828,6 +882,12 @@ def main() -> int:
     gen_junc = detect_junctions(doc["roads"])
     generate_connectivity(doc["roads"], gen_junc)
 
+    # 发射后净化（顺序：先 clamp 车道宽，再清悬空引用）：
+    #  1) 车道宽度下限（SUMO 双向拆半 bug：1.6m 发丝路 → 钳到 2.75m）；
+    #  2) successors/junction 引用净化（指向未发射 road/lane 的悬空引用 → drop）。
+    n_clamped = clamp_vehicle_lane_width(doc["roads"])
+    doc["junctions"], n_pruned = sanitize_successors(doc["roads"], doc["junctions"])
+
     stats = doc.pop("_stats")
     os.makedirs(args.out, exist_ok=True)
     out_path = os.path.join(args.out, "map.json")
@@ -843,6 +903,8 @@ def main() -> int:
     print("  junctions: %d, buildings: %d, traffic_lights: %d" %
           (len(doc["junctions"]), len(doc["buildings"]),
            len(doc["landmarks"]["traffic_lights"])))
+    print("  clamped lanes to %.2fm: %d（SUMO 双向拆半 width bug）" % (2.75, n_clamped))
+    print("  pruned dangling successor refs: %d（指向未发射 road/lane）" % n_pruned)
     print("  skipped non-vehicle edges: %d" % stats["skipped_non_vehicle_edges"])
 
     # ── routes.json（main 路线 = 最长几何连接真实道路链） ──

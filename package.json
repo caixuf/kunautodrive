@@ -6,7 +6,7 @@
     "vis:check:invariant": "node --import ./tests/support/three-preload.mjs tests/vis_coord_property.test.mjs",
     "vis:check:grep": "node tests/vis_grep_enforce.mjs",
     "vis:check:junction": "node --import ./tests/support/three-real-preload.mjs tests/junction_markings.test.mjs",
-    "vis:check:smoke": "for t in tests/vis_*.test.mjs; do echo \"--- $t ---\" && node --import ./tests/support/three-preload.mjs \"$t\" || exit 1; done",
+    "vis:check:smoke": "node tests/run_vis_smoke.mjs",
     "vis:check:all": "npm run vis:check && npm run vis:check:invariant && npm run vis:check:grep && npm run vis:check:junction && npm run vis:check:smoke"
   }
 }

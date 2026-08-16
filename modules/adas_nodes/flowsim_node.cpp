@@ -2940,7 +2940,12 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
     g.scene_pub_cfg.curve_length_m = g.curve_length_m;
     g.scene_pub_cfg.curve_offset_m = g.curve_offset_m;
     g.scene_pub_cfg.lane_width     = g.lane_width;
-    g.scene_pub_cfg.lane_count     = 2;
+    /* lane_count：从场景配置读取（scenario_loader 从 road_network.edges[0].lanes
+     * 提取）。旧实现硬编码 2，导致 4 车道 straight_road / 3 车道 urban 段的
+     * legacy scene_pub 路径（非 esmini）把 halfWidth 算成 3.5m 而非 7m，
+     * 路灯/树等家具落到路面内。esmini 路径用 info.drivable_lanes 不受此影响。 */
+    g.scene_pub_cfg.lane_count     = (g.scenario && g.scenario->road.lanes > 0)
+                                     ? g.scenario->road.lanes : 2;
     g.scene_pub_cfg.roads          = g.roads_loaded ? &g.roads : nullptr;
     g.scene_pub_cfg.type_id        = SCENE_FRAME_TYPE_ID;
     /* Task 4：把场景 JSON 的 lighting 字段透传到 scene/frame topic，

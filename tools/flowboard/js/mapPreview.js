@@ -60,6 +60,25 @@ function initOrbitModeSwitch(hint) {
   setOrbitLeftAction('rotate');
 }
 
+/* 城市核心取景：有真实 OSM 建筑时，相机聚焦到建筑密集区（= 城市核心），
+ * 而不是整条 route 的 5km 跨度（含大片郊区/高速走廊，画面显得空旷稀疏）。
+ * 用每栋建筑的 footprint 质心（无 footprint 用 x/y）算 bbox；heading 固定 0
+ * （城市俯视不随某条路的方向倾斜）。无建筑（旧地图/程序化）回退 route 取景。 */
+function buildingFocus(buildings) {
+  const pts = [];
+  for (const b of buildings) {
+    const fp = Array.isArray(b.footprint) ? b.footprint : null;
+    if (fp && fp.length) {
+      let cx = 0, cy = 0;
+      for (const p of fp) { cx += p[0]; cy += p[1]; }
+      pts.push([cx / fp.length, cy / fp.length, 0]);
+    } else {
+      pts.push([b.x || 0, b.y || 0, 0]);
+    }
+  }
+  return { ...routeFocus(pts), heading: 0 };
+}
+
 function routeFocus(path) {
   if (!path.length) {
     return { centerX: 0, centerY: 0, centerZ: 0, heading: 0, height: 80 };
@@ -111,7 +130,10 @@ function toTopo(map, routes, routeId) {
       speed_limit: road.speed_limit,
     };
   });
-  const focus = routeFocus(routePath);
+  /* 取景：有真实建筑 → 聚焦城市核心（建筑密集区）；否则回退 route 全跨度。 */
+  const focus = (Array.isArray(map.buildings) && map.buildings.length)
+    ? buildingFocus(map.buildings)
+    : routeFocus(routePath);
   const first = routePath[0] || (edges[0] && edges[0].nodes[0] ? edges[0].nodes[0] : [0, 0, 0]);
   /* P1 路口渠化：map.json 的 junctions[]（fork + connecting_roads[].turn）
    * 透传给 ConnectorView 画转向导流线/按来车归属停止线；无数据时几何兜底。
