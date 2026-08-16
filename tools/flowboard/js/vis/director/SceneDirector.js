@@ -22,7 +22,6 @@ import { createStreetlightView } from '../view/StreetlightView.js';
 import { createBarrierView } from '../view/BarrierView.js';
 import { createConstructionView } from '../view/ConstructionView.js';
 import { createTreeView } from '../view/TreeView.js';
-import { createJunctionView } from '../view/JunctionView.js';
 import { createBuildingView } from '../view/BuildingView.js';
 import { createLabelView } from '../view/LabelView.js';
 import { createPerceptionView } from '../view/PerceptionView.js';
@@ -69,7 +68,6 @@ ViewRegistry.register('streetlight',  createStreetlightView);
 ViewRegistry.register('barrier',      createBarrierView);
 ViewRegistry.register('construction', createConstructionView);
 ViewRegistry.register('tree',         createTreeView);
-ViewRegistry.register('junction',    createJunctionView);
 ViewRegistry.register('building',     createBuildingView);
 ViewRegistry.register('label',        createLabelView);
 ViewRegistry.register('perception',   createPerceptionView);
@@ -110,7 +108,7 @@ export function createSceneDirector(scene) {
    * 不再保留 9 个顶层 const —— ViewRegistry 是单一事实来源，避免双份引用。 */
   for (const [layerName, viewNames] of [
     ['env',   ['ground', 'viaduct']],
-    ['road',  ['road', 'streetlight', 'barrier', 'connector', 'tree', 'junction', 'construction', 'roadFacility', 'streetFurniture']],
+    ['road',  ['road', 'streetlight', 'barrier', 'connector', 'tree', 'construction', 'roadFacility', 'streetFurniture']],
     ['agent', ['vehicle', 'label', 'perception', 'effect', 'trajectory']],
     ['infra', ['trafficLight', 'etcGate']],
   ]) {
@@ -209,7 +207,6 @@ export function createSceneDirector(scene) {
         );
 
         ViewRegistry.safeCall('road', 'build', rn);
-        ViewRegistry.safeCall('junction', 'build', rn);
         ViewRegistry.safeCall('construction', 'build', rn, frame.construction_zones);
         ViewRegistry.safeCall('ground', 'build', 20000);
         ViewRegistry.safeCall('streetFurniture', 'build', rn);

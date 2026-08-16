@@ -176,9 +176,10 @@ console.log('--- 4. 隧道/地道 arm 不画斑马线 ---');
 }
 
 // ── 5. 真实大地图回归：OSM 陆家嘴全图斑马线朝向（曾 974/5548 条纹 >15°）──
-console.log('--- 5. OSM 陆家嘴真实图（skip 若缺图）---');
+// 2026-08-16：路径切到 v2 地图（旧 maps/osm_lujiazui/ 已随场景删除）。
+console.log('--- 5. OSM 陆家嘴 v2 真实图（skip 若缺图）---');
 {
-  const mapPath = pathResolve(ROOT, 'maps/osm_lujiazui/map.json');
+  const mapPath = pathResolve(ROOT, 'maps/osm_lujiazui_v2/map.json');
   if (!existsSync(mapPath)) {
     ok('osm_lujiazui 缺图跳过', true);
   } else {
@@ -591,6 +592,49 @@ console.log('--- 12. 车道组包络对齐（单向 2 车道偏 3.5m）---');
   });
   ok(`标线全部在沥青内（${markingVerts} 顶点，悬外 ${strayMarkings}）`,
     markingVerts > 10 && strayMarkings === 0);
+}
+
+// ── 13. 防撞桶只在真断头（孤端）：弯道接缝/闭合环不铺桶 ──
+console.log('--- 13. 防撞桶真断头判定（弯道接缝/闭合环）---');
+{
+  // 红桶色 = SCENE.barrelRed（Cylinder Mesh，非 Instanced）
+  const countBarrels = (scene) => {
+    let n = 0;
+    scene.traverse((ch) => {
+      if (!ch.isMesh || ch.isInstancedMesh || !ch.material || !ch.material.color) return;
+      if (ch.material.color.getHex() === 0xd02020) n++;
+    });
+    return n;
+  };
+
+  // 13a. 弯道连续接缝：edgeA 终点 (20,0) 与 edgeB 起点 (20,0) 精确重合
+  // （连续连接/弯道转折），两端 (0,0)/(40,0) 是地图边界孤端 → 只应在边界铺桶。
+  {
+    const scene = new THREE.Group();
+    createConnectorView(scene).build({
+      edges: [
+        { id: 'curve_a', name: 'curve_a', type: 'secondary', lanes: 2, lane_width: 3.5,
+          nodes: [[0, 0, 0], [10, 10, 0], [20, 0, 0]], oneway: false },
+        { id: 'curve_b', name: 'curve_b', type: 'secondary', lanes: 2, lane_width: 3.5,
+          nodes: [[20, 0, 0], [30, 10, 0], [40, 0, 0]], oneway: false },
+      ],
+    });
+    ok(`弯道接缝只铺 2 个边界桶（${countBarrels(scene)}）`, countBarrels(scene) === 2);
+  }
+
+  // 13b. 双 edge 闭合环：每端都有跨 edge 邻接端点 → 0 桶（防满街防撞桶）
+  {
+    const scene = new THREE.Group();
+    createConnectorView(scene).build({
+      edges: [
+        { id: 'ring_a', name: 'ring_a', type: 'secondary', lanes: 2, lane_width: 3.5,
+          nodes: [[0, 0, 0], [20, 0, 0], [40, 0, 0], [40, 20, 0], [20, 20, 0]], oneway: false },
+        { id: 'ring_b', name: 'ring_b', type: 'secondary', lanes: 2, lane_width: 3.5,
+          nodes: [[20, 20, 0], [0, 20, 0], [0, 0, 0]], oneway: false },
+      ],
+    });
+    ok(`闭合环 0 个防撞桶（${countBarrels(scene)}）`, countBarrels(scene) === 0);
+  }
 }
 
 done();

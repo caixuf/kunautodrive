@@ -1,6 +1,14 @@
 /**
  * JunctionView.js — 路口铺面 + 人行横道 + 停止线（阶段3 路口渲染）
  *
+ * @deprecated superseded-by=ConnectorView._buildJunctionPatch remove-by=2026-09-16
+ *
+ * 2026-08-16：ConnectorView._buildJunctionPatch 已是本功能的超集
+ * （Chaikin 圆角化 + InstancedMesh 高效批处理 + 来车停止线归属 +
+ * 左转导流虚线段 + 几何一致性过滤），故本视图停用。
+ * SceneDirector 中对应的 'junction' safeCall 已移除，不再调用 build。
+ * 源码保留至 2026-09-16 作为参考，后续删除。
+ *
  * 背景（为何需要）：之前路口只靠路面 ribbon 贯穿 + 家具/标线在路口边界停，
  * 没有独立的路口铺面。两条垂直路在中心交叉成「+」，四角（路缘之间、对角方向）
  * 是空地，俯视露出地面/草地缝隙，即用户 2026-08-14 报的「烂路口 / 毛边」。
