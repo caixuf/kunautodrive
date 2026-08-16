@@ -432,6 +432,34 @@ endif()
 # planning_node: Frenet 轨迹规划 (FlowCoro 协程版)
 # 采用 FlowCoroTask（线程池 resume）：Frenet 轨迹规划为重计算，同步 resume 会阻塞
 # 消息总线分发线程导致 drops，故改用线程池 resume。
+# ── Eigen3 detection (Frenet planner needs the headers) ──
+# Accept any of: system find_package, top-level downloaded tree, vendored
+# third_party/eigen, or the system libeigen3-dev install path directly.
+# Previously we only looked at ${FLOWENGINE_BUILD}/_deps/eigen-src, which is
+# EMPTY when the top-level build used the system Eigen (find_package succeeded
+# without downloading) — so a machine WITH libeigen3-dev installed still fell
+# back to "no Eigen". Now we probe all four sources.
+set(_EIGEN_INC "")
+find_package(Eigen3 3.3 QUIET NO_MODULE)
+if(Eigen3_FOUND AND Eigen3_INCLUDE_DIRS)
+    set(_EIGEN_INC "${Eigen3_INCLUDE_DIRS}")
+    message(STATUS "Eigen found (system, find_package): ${_EIGEN_INC}")
+elseif(EXISTS "${FLOWENGINE_BUILD}/_deps/eigen-src/Eigen/Core")
+    set(_EIGEN_INC "${FLOWENGINE_BUILD}/_deps/eigen-src")
+    message(STATUS "Eigen found (downloaded): ${_EIGEN_INC}")
+elseif(EXISTS "${FLOW_ROOT}/third_party/eigen/Eigen/Core")
+    set(_EIGEN_INC "${FLOW_ROOT}/third_party/eigen")
+    message(STATUS "Eigen found (vendored): ${_EIGEN_INC}")
+elseif(EXISTS "/usr/include/eigen3/Eigen/Core")
+    set(_EIGEN_INC "/usr/include/eigen3")
+    message(STATUS "Eigen found (system /usr/include/eigen3): ${_EIGEN_INC}")
+elseif(EXISTS "/usr/local/include/eigen3/Eigen/Core")
+    set(_EIGEN_INC "/usr/local/include/eigen3")
+    message(STATUS "Eigen found (system /usr/local/include/eigen3): ${_EIGEN_INC}")
+else()
+    message(STATUS "Eigen NOT found — Frenet planner will fall back")
+endif()
+
 find_library(FRENET_BRIDGE
     NAMES frenet_bridge
     HINTS ${FLOWENGINE_BUILD}/lib ${FLOWENGINE_BUILD}/lib/Release ${FLOWENGINE_BUILD}/lib/Debug
@@ -445,19 +473,20 @@ find_library(FRENET_PLANNER
 add_library(planning_node SHARED planning_node.cpp st_graph.c)
 target_compile_definitions(planning_node PRIVATE FLOWCORO_INTEGRATION)
 target_compile_options(planning_node PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fcoroutines>)
-if(FRENET_BRIDGE AND FRENET_PLANNER)
+if(FRENET_BRIDGE AND FRENET_PLANNER AND _EIGEN_INC)
     target_link_libraries(planning_node ${NODE_LINK_LIBS}
         ${FRENET_BRIDGE} ${FRENET_PLANNER} ${NODE_CXX_RT})
     target_include_directories(planning_node PRIVATE
         ${FLOW_ROOT}/third_party/frenet_planner/src
         ${FLOW_ROOT}/third_party/frenet_planner/src/FrenetOptimalTrajectory
-        ${FLOWENGINE_BUILD}/_deps/eigen-src   # Eigen3 headers (downloaded)
+        ${_EIGEN_INC}
     )
     target_compile_definitions(planning_node PRIVATE HAVE_FRENET)
-    message(STATUS "planning_node: frenet_bridge found at ${FRENET_BRIDGE}")
+    message(STATUS "planning_node: frenet_bridge=${FRENET_BRIDGE}; eigen=${_EIGEN_INC}")
 else()
     target_link_libraries(planning_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
-    message(STATUS "planning_node: building in fallback mode (no frenet/Eigen)")
+    message(STATUS "planning_node: building in fallback mode "
+        "(frenet_bridge=${FRENET_BRIDGE}, frenet_planner=${FRENET_PLANNER}, eigen=${_EIGEN_INC})")
 endif()
 
 add_executable(test_planning_coordinates test_planning_coordinates.cpp)

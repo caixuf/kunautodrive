@@ -131,7 +131,14 @@ function laneGroupEnvelope(lanes, spine, laneWidth) {
   const cMin = Math.min(...stationCenters), cMax = Math.max(...stationCenters);
   const center = (cMin + cMax) / 2;
   if (cMax - cMin > CONSISTENCY_MAX) return null;   // 非平行/环道 → 回退居中
-  if (Math.abs(center) < CENTER_EPS) return null;    // centerline 本就是中心 → 不偏移
+  if (Math.abs(center) < CENTER_EPS) {
+    /* centerline 本就是车道组中心 → 不偏移（offset=0），但务必保留 envelope 算出的
+     * 精确半宽 halfW，而非回退 laneCount*laneWidth/2（仅当车道严格按 lane_width 紧贴
+     * 排布时才相等；存在中央分隔带/车道宽不一致时回退值会偏小，使家具/路缘落进沥青）。
+     * 典型触发：net2map 已把 road.centerline 对齐到车道组中心（如 osm_lujiazui_v2 的
+     * 2664 条路），此处分支避免回退、直接用真实半宽。offset=0 保证路网位置零回归。 */
+    return { center: 0, halfW };
+  }
   return { center, halfW };
 }
 

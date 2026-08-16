@@ -356,7 +356,7 @@ set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 find_package(Eigen3 3.3 QUIET NO_MODULE)
 if(Eigen3_FOUND)
     set(FLOWENGINE_HAVE_EIGEN TRUE)
-    message(STATUS "Eigen found (system) — frenet planner will be built")
+    message(STATUS "Eigen found (system, find_package) — frenet planner will be built")
 elseif(EXISTS "${_EIGEN_SRC_DIR}/Eigen/Core")
     # Eigen is header-only: just expose the include dir, no need to add_subdirectory
     # (Eigen's CMakeLists.txt creates an "uninstall" target that conflicts with cJSON's)
@@ -366,6 +366,22 @@ elseif(EXISTS "${_EIGEN_SRC_DIR}/Eigen/Core")
     endif()
     set(FLOWENGINE_HAVE_EIGEN TRUE)
     message(STATUS "Eigen found (local/downloaded) — frenet planner will be built")
+elseif(EXISTS "/usr/include/eigen3/Eigen/Core" OR EXISTS "/usr/local/include/eigen3/Eigen/Core")
+    # libeigen3-dev headers ARE installed, but the CMake config package
+    # (Eigen3Config.cmake) wasn't found by find_package (e.g. config not shipped
+    # on this distro / non-standard prefix). Eigen is header-only, so just expose
+    # the include dir via the imported target other targets (frenet_bridge /
+    # frenet_planner) already consume.
+    if(NOT TARGET Eigen3::Eigen)
+        add_library(Eigen3::Eigen INTERFACE IMPORTED GLOBAL)
+        if(EXISTS "/usr/include/eigen3/Eigen/Core")
+            target_include_directories(Eigen3::Eigen INTERFACE "/usr/include/eigen3")
+        else()
+            target_include_directories(Eigen3::Eigen INTERFACE "/usr/local/include/eigen3")
+        endif()
+    endif()
+    set(FLOWENGINE_HAVE_EIGEN TRUE)
+    message(STATUS "Eigen found (system headers /usr/include/eigen3) — frenet planner will be built")
 else()
     set(FLOWENGINE_HAVE_EIGEN FALSE)
     message(STATUS "Eigen not available — building without frenet planner. "

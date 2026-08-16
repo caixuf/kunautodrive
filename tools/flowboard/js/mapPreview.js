@@ -131,6 +131,11 @@ function toTopo(map, routes, routeId) {
   return {metrics: {scene: {
     t_us: 0,
     lighting: 'day',
+    /* OSM 真实建筑（单源真相）：透传 map.buildings[]（footprint/height），
+     * 与 live showcase 路径（sceneAdapter.js）一致。SceneDirector 读取
+     * frame.buildings → rn.buildings → BuildingView 按真实轮廓挤出。
+     * 不传则 BuildingView 回退到程序化天际线（hash 随机盒体，看起来"胡来"）。 */
+    buildings: Array.isArray(map.buildings) ? map.buildings : [],
     road_network: {edges, map_junctions: mapJunctions, lane_data: laneData},
     ego: {type: 'ego', id: 0, x: focus.centerX, y: focus.centerY, z: focus.centerZ,
       heading: focus.heading, speed: 0, vx: 0, vy: 0, length: 4.6, width: 2,

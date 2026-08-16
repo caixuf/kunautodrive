@@ -361,7 +361,7 @@ set -o pipefail  # scoped to this build block only — restored via `set +o pipe
                  # below once both `cmake --build ... | tail -1` calls are done, so
                  # a build failure surfaces (pipeline exit = cmake's, not tail's)
                  # without changing pipe-failure semantics for the rest of the script.
-if ! cmake --build "$BUILD_DIR" --target flow_launcher flow_node_host flowmond -j"$NPROC" 2>&1 | tail -1; then
+if ! cmake --build "$BUILD_DIR" --target flow_launcher flow_node_host flowmond frenet_bridge frenet_planner -j"$NPROC" 2>&1 | tail -1; then
   echo "  ✗ Build failed for flow_launcher/flow_node_host/flowmond — re-run without the trailing"
   echo "    'tail -1' filter (cmake --build \"$BUILD_DIR\" --target flow_launcher flow_node_host flowmond) to see the full error."
   exit 1
@@ -405,9 +405,12 @@ echo "  ✓ Build complete"
 # this loud instead of a one-line cmake log nobody reads.
 if echo "$ADAS_CFG_LOG" | grep -q "planning_node: building in fallback mode"; then
   echo ""
-  echo "  ⚠ WARNING: Frenet planner NOT built (Eigen3 not found) — ego will"
-  echo "    NEVER change lanes or overtake, even with a clear adjacent lane."
-  echo "    Fix: sudo apt install libeigen3-dev, then re-run this script."
+  echo "  ⚠ WARNING: Frenet planner NOT built — planning_node in fallback (lane-keep only) mode."
+  echo "    The configure log above reports the ACTUAL reason (frenet_bridge / frenet_planner libs"
+  echo "    and/or Eigen). Common fixes:"
+  echo "      - Eigen missing:        sudo apt install libeigen3-dev"
+  echo "      - frenet libs missing:  they are built by the main project (frenet_bridge /"
+  echo "                              frenet_planner targets); this script now builds them too."
   echo ""
 fi
 if [ -n "$BUILD_LOCK" ] && command -v flock >/dev/null 2>&1; then
