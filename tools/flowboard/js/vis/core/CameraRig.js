@@ -14,6 +14,7 @@ const MapControls = OrbitControlsModule.MapControls || OrbitControls;
  * roadGroup 在 roadHash 变化时才重建，setFromObject 每帧重新算只是为
  * clamp ego 的 x 边界，没必要每帧分配新对象。 */
 const _roadBBox = new THREE.Box3();
+let _roadBBoxOwner = null;
 
 export function createCameraRig(canvas) {
   const camera = new THREE.PerspectiveCamera(
@@ -105,8 +106,13 @@ export function createCameraRig(canvas) {
     // switch 分支里都被各自的 const c 覆盖，属于死代码 + 白算一次 Box3。
     // map/orbit 分支需要时各自调 getCenter（已走 SceneStore WeakMap 缓存）。
     let hasBBox = false;
-    if (roadGroup && roadGroup.children && roadGroup.children.length > 0) {
+    /* roadGroup 只在 roadHash 变化时重建。不要每帧 setFromObject 遍历整张
+     * OSM 路网；郑东地图会把数百/数千个 tile mesh 的包围盒重复算 60 次/秒。 */
+    if (roadGroup && roadGroup !== _roadBBoxOwner && roadGroup.children && roadGroup.children.length > 0) {
       _roadBBox.setFromObject(roadGroup);
+      _roadBBoxOwner = roadGroup;
+      hasBBox = isFinite(_roadBBox.min.x) && isFinite(_roadBBox.max.x);
+    } else if (roadGroup === _roadBBoxOwner) {
       hasBBox = isFinite(_roadBBox.min.x) && isFinite(_roadBBox.max.x);
     }
     if (hasBBox) {

@@ -22,6 +22,35 @@ const EXTRA_URBAN_M = 3.6;      // 城市路额外截断量（路缘+人行道+�
 const EXTRA_BASE_M = 1.0;       // 非城市路额外截断量
 const REACH_MARGIN_M = 0.5;
 
+/* 大地图的 junction 数量可达上万。路口匹配只需检查附近格子，不能让每个
+ * endpoint 都扫描整个 centers 数组（42k roads × 12k junctions 会卡死主线程）。 */
+function spatialGrid(centers, cellSize = CLUSTER_RADIUS_M) {
+  const grid = new Map();
+  const key = (x, z) => `${Math.floor(x / cellSize)},${Math.floor(z / cellSize)}`;
+  for (let i = 0; i < centers.length; i++) {
+    const c = centers[i];
+    const k = key(c.x, c.z);
+    let bucket = grid.get(k);
+    if (!bucket) { bucket = []; grid.set(k, bucket); }
+    bucket.push(i);
+  }
+  return { grid, key, cellSize };
+}
+
+function nearbyCenterIndices(index, x, z, radius) {
+  const range = Math.ceil(radius / index.cellSize) + 1;
+  const cx = Math.floor(x / index.cellSize);
+  const cz = Math.floor(z / index.cellSize);
+  const out = [];
+  for (let dx = -range; dx <= range; dx++) {
+    for (let dz = -range; dz <= range; dz++) {
+      const bucket = index.grid.get(`${cx + dx},${cz + dz}`);
+      if (bucket) out.push(...bucket);
+    }
+  }
+  return out;
+}
+
 /** node → THREE 坐标（ENU→THREE 翻转统一走 worldToThree）。
  *  node 形如 [x_ENU, y_North, z_Up]（或 {x,y,z} 对象）。 */
 function nodePoint(node) {
@@ -45,6 +74,7 @@ function dist2(a, b) {
  *  构建 byId: Map<edgeId, {start:中心索引|null, end:中心索引|null}>。 */
 function matchEdgesToCenters(edges, centers) {
   const byId = new Map();
+  const index = spatialGrid(centers);
   for (const edge of edges) {
     if (!edge || !Array.isArray(edge.nodes) || edge.nodes.length < 2) continue;
     const id = String(edge?.id ?? '');
@@ -53,7 +83,11 @@ function matchEdgesToCenters(edges, centers) {
     const start = nodePoint(nodes[0]);
     const end = nodePoint(nodes[nodes.length - 1]);
     let sIdx = null, eIdx = null, sBest = Infinity, eBest = Infinity;
-    for (let i = 0; i < centers.length; i++) {
+    const candidates = new Set([
+      ...nearbyCenterIndices(index, start?.x || 0, start?.z || 0, CLUSTER_RADIUS_M),
+      ...nearbyCenterIndices(index, end?.x || 0, end?.z || 0, CLUSTER_RADIUS_M),
+    ]);
+    for (const i of candidates) {
       const dS = start ? dist2(start, centers[i]) : Infinity;
       const dE = end ? dist2(end, centers[i]) : Infinity;
       if (dS < sBest) { sBest = dS; sIdx = i; }
@@ -71,8 +105,33 @@ function matchEdgesToCenters(edges, centers) {
  *  每个 junction: {id, x, y, z, radius, n, roads:[road_id...]}（ENU 坐标）。 */
 function junctionsFromData(roadNetwork, dataJunctions) {
   const centers = dataJunctions.map((j) => {
-    const [x, yUp, z] = worldToThree(Number(j.x) || 0, Number(j.y) || 0, Number(j.z) || 0);
-    return { x, z, radius: Number(j.radius) || 8 };
+    let x = Number(j.x), y = Number(j.y), z = Number(j.z);
+    /* osm2kmap 的 fork 契约携带 shape 而不是 x/y/z。优先用 polygon 质心，
+     * 否则这些 junction 会错误地全部落在世界原点。 */
+    if (![x, y, z].some(Number.isFinite) && Array.isArray(j.shape) && j.shape.length) {
+      let sx = 0, sy = 0, sz = 0, count = 0;
+      for (const p of j.shape) {
+        if (!Array.isArray(p) || p.length < 2) continue;
+        sx += Number(p[0]) || 0;
+        sy += Number(p[1]) || 0;
+        sz += Number(p[2]) || 0;
+        count++;
+      }
+      if (count) { x = sx / count; y = sy / count; z = sz / count; }
+    }
+    const [tx, , tz] = worldToThree(Number.isFinite(x) ? x : 0,
+      Number.isFinite(y) ? y : 0, Number.isFinite(z) ? z : 0);
+    let radius = Number(j.radius);
+    if (!Number.isFinite(radius) && Array.isArray(j.shape) && j.shape.length) {
+      radius = 0;
+      for (const p of j.shape) {
+        if (Array.isArray(p) && p.length >= 2) {
+          radius = Math.max(radius, Math.hypot((Number(p[0]) || 0) - x,
+            (Number(p[1]) || 0) - y));
+        }
+      }
+    }
+    return { x: tx, z: tz, radius: Number.isFinite(radius) ? Math.max(8, radius) : 8 };
   });
   const edges = Array.isArray(roadNetwork?.edges) ? roadNetwork.edges : [];
   const byId = matchEdgesToCenters(edges, centers);
@@ -92,7 +151,8 @@ export function detectJunctions(roadNetwork) {
   // 兜底（基于 edge 真实几何）反而正确，故回退。
   const dataJ = Array.isArray(roadNetwork?.junctions) ? roadNetwork.junctions : [];
   const dataHasCoords = dataJ.length &&
-    dataJ.some((j) => j.x != null || j.y != null || j.z != null);
+    dataJ.some((j) => j.x != null || j.y != null || j.z != null ||
+      (Array.isArray(j.shape) && j.shape.length > 0));
   if (dataHasCoords) return junctionsFromData(roadNetwork, dataJ);
 
   // ── 兜底：端点几何聚类 ──
@@ -123,9 +183,11 @@ export function detectJunctions(roadNetwork) {
 
   // ── 第二遍：贪心聚类（遍历序即可，网格端点天然成簇）──
   const centerIndexByEndpoint = [];   // 每个 endpoint → center 索引
+  const grid = spatialGrid(centers);
   for (const ep of endpoints) {
     let best = -1, bestDist = Infinity;
-    for (let i = 0; i < centers.length; i++) {
+    const candidates = nearbyCenterIndices(grid, ep.x, ep.z, CLUSTER_RADIUS_M);
+    for (const i of candidates) {
       const d = dist2(ep, centers[i]);
       if (d < bestDist) { bestDist = d; best = i; }
     }
@@ -138,8 +200,13 @@ export function detectJunctions(roadNetwork) {
       c.z = (c.z * (c.n - 1) + ep.z) / c.n;
       c.radius = Math.max(c.radius || 0, ep.reach);
     } else {
+      const index = centers.length;
       centers.push({ x: ep.x, z: ep.z, n: 1, radius: ep.reach });
-      centerIndexByEndpoint.push(centers.length - 1);
+      const k = grid.key(ep.x, ep.z);
+      let bucket = grid.grid.get(k);
+      if (!bucket) { bucket = []; grid.grid.set(k, bucket); }
+      bucket.push(index);
+      centerIndexByEndpoint.push(index);
     }
   }
 

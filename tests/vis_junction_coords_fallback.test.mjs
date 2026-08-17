@@ -70,6 +70,23 @@ const [ex, , ez] = worldToThree(CROSS.x, CROSS.y, 0);   // 期望中心 THREE �
   }
 })();
 
+// ── 2b. junction shape → 直接消费多边形质心 ──
+(() => {
+  const rn = {
+    edges: buildEdges(),
+    junctions: [{ id: 0, type: 'fork', shape: [
+      [95, 195, 0], [105, 195, 0], [105, 205, 0], [95, 205, 0],
+    ] }],
+  };
+  const { centers } = detectJunctions(rn);
+  ok('带 shape junction 检出路口', centers.length === 1);
+  if (centers.length === 1) {
+    ok('shape 质心落在真实交叉口', Math.abs(centers[0].x - ex) < 1e-6 &&
+      Math.abs(centers[0].z - ez) < 1e-6);
+    ok('shape 自动推导半径', (centers[0].radius || 0) >= 8);
+  }
+})();
+
 // ── 3. 无 junctions → 几何聚类兜底同样正确 ──
 (() => {
   const rn = { edges: buildEdges() };

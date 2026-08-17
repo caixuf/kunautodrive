@@ -10,8 +10,7 @@
  */
 
 import { getStdMaterial, getCylinder, getBox } from '../core/AssetFactory.js';
-import { DEFAULT_LANES, LANE_WIDTH } from '../core/Constants.js';
-import { detectJunctions } from './JunctionDetect.js';
+import { getTopology } from '../model/TopologyModel.js';
 
 const SIGN_POLE_H = 1.2;
 const SIGN_PLATE = 0.35;
@@ -39,11 +38,10 @@ export function createStreetFurnitureView(scene) {
     clear();
     if (!roadNetwork || !roadNetwork.edges) return;
 
-    const { centers, byId } = detectJunctions(roadNetwork);
+    /* 与其它静态 View 共享已缓存的拓扑，避免大地图重复做路口检测。 */
+    const topology = getTopology(roadNetwork);
+    const centers = topology ? topology.centers : [];
     if (!centers.length) return;
-
-    // 统计每个路口关联的 edge 数，确定家具密度
-    const edgeMap = new Map(roadNetwork.edges.map((e) => [String(e.id), e]));
 
     // ── 停止标志（Stop Sign）：每个路口边上放 1~2 个 ──
     const stopSigns = []; // {x, z, rotY}

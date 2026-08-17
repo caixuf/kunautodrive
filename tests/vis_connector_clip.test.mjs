@@ -1,17 +1,18 @@
 /**
- * vis_connector_clip.test.mjs — connector 转向车道线裁剪到路口回归（真实 three）
+ * vis_connector_clip.test.mjs — 路口内部 connector 不再渲染白线回归
  *
- * 锁死 2026-08-16 修复（用户报障"交叉处车道线混乱"→白网）：ConnectorView 把
- * lane_data 中 road_j connector 的 lane centerline 画成白色车道线。原实现整条
- * 平铺 STOP_Y、不裁剪 → 因 junctions[] 缺坐标导致 792 个路口中心塌缩到原点，
- * 7054 段 connector 线横竖交织成全图"白网"。
+ * 锁死两次"交叉处车道线混乱"→ 白网：
+ *   - 2026-08-16：road_j connector 中心线整条平铺 STOP_Y 且不裁剪 → 全图白网
+ *   - 2026-08-18：connector 中心线裁剪到路口圆后仍会与真实 lane marking /
+ *     斑马线 / 停止线叠加（截图仍乱）。最终收敛：SUMO connector 是导航拓扑，
+ *     **不是可见车道边界**，一律不画白线。真实转向导流统一由 fork turn 数据生成。
  *
- * 修复后（配合 JunctionDetect 几何聚类还原真实路口中心）：每段只在"落入某路口
- * 圆内"才画、且跟随 centerline.z 高程。本测试锁：
- *   1. 完全落在路口内的 connector → 全部画出
- *   2. 完全在路口外的 connector → 一条都不画（白网消除）
- *   3. 跨边界的 connector → 仅路口内那段画出（裁剪生效）
- *   4. 画出的所有顶点都在某路口圆内（无溢出）
+ * 本测试锁：
+ *   1. 无论 connector 中心线在路口内/外/跨界，都不产生白线 mesh（白网消失）
+ *   2. 路口铺装（沥青色）与斑马线/停止线（instanced）仍正常生成
+ *
+ * 用真实 three（three-real-preload）——路口几何断言需要可遍历的 scene 树，
+ * three-shim 的 children 是空数组无法验证 mesh 存在。
  */
 
 import { createConnectorView }
@@ -20,7 +21,7 @@ import { detectJunctions } from '../tools/flowboard/js/vis/view/JunctionDetect.j
 import { SCENE } from '../tools/flowboard/js/vis/theme/tokens.js';
 import { ok, done } from './test-utils.mjs';
 
-console.log('=== connector 转向车道线裁剪回归 ===\n');
+console.log('=== connector 不再渲染白线 ===\n');
 
 // 十字路口：四条 arm 汇聚于 ENU(0,0) → 真实 THREE 中心 (0,0)，半径≈7.6m
 const edges = [
@@ -31,48 +32,38 @@ const edges = [
 ];
 const { centers } = detectJunctions({ edges });
 ok('合成十字检出 1 个路口', centers.length === 1);
-const JC = centers[0];
 
-// lane_data：三个 connector
+// lane_data：三个 connector（路口内 / 路口外 / 跨界）
 const lane_data = {
-  // 完全在路口内（ENU (0,0)→(0,6)，THREE 距离≤6 < 半径）→ 2 段都画
   road_j_inside: [{ centerline: [[0, 0, 0], [0, 3, 0], [0, 6, 0]] }],
-  // 完全在路口外（ENU (100,100) 附近，远离任何路口）→ 不画
   road_j_outside: [{ centerline: [[100, 100, 0], [100, 103, 0]] }],
-  // 跨边界：ENU (0,0)→(0,20)，前段在圆内、后段在圆外 → 仅圆内那段画
   road_j_cross: [{ centerline: [[0, 0, 0], [0, 6, 0], [0, 20, 0]] }],
 };
 
 const scene = new THREE.Group();
 createConnectorView(scene).build({ edges, lane_data, map_junctions: [] });
 
-// 提取 connector 白线 mesh（普通 Mesh、MERGE_LINE_COLOR）
-let connMesh = null;
+// 提取所有非 instanced mesh
+const meshes = [];
 scene.traverse((ch) => {
   if (ch.isInstancedMesh) return;
-  if (!ch.geometry || !ch.material || !ch.material.color) return;
-  if (ch.material.color.getHex() === SCENE.guideLine) connMesh = ch;
+  if (ch.geometry && ch.material) meshes.push(ch);
 });
-ok('connector 白线 mesh 已生成', connMesh !== null);
 
-function vertsOf(mesh) {
-  const pos = mesh.geometry.getAttribute('position');
-  const out = [];
-  for (let i = 0; i < pos.count; i++) out.push({ x: pos.getX(i), z: pos.getZ(i) });
-  return out;
-}
+const whiteLines = meshes.filter((m) =>
+  m.material && m.material.color && m.material.color.getHex() === SCENE.guideLine);
+ok('connector 中心线不生成白线 mesh', whiteLines.length === 0);
 
-if (connMesh) {
-  const verts = vertsOf(connMesh);
-  // road_j_inside: 2 段 ×4 顶点 = 8；road_j_cross: 1 段（圆内） ×4 = 4；
-  // road_j_outside: 0。合计 12 顶点。
-  ok('仅路口内的段被画出（12 顶点 = inside2段+cross1段）', verts.length === 12);
-  // 所有顶点都在某路口圆内（无溢出白网）
-  const allInside = verts.every((v) =>
-    centers.some((c) => Math.hypot(v.x - c.x, v.z - c.z) <= (c.radius || 0) + 1e-6));
-  ok('画出的顶点全部落在路口圆内（裁剪生效）', allInside);
-}
-// 路口外 connector 不得贡献顶点
-ok('路口外 connector 无顶点（白网消除）', connMesh ? vertsOf(connMesh).length === 12 : false);
+// 路口铺装（沥青色）仍然存在 —— 标线层只是被收敛，不是整块消失
+const patchMesh = meshes.find((m) =>
+  m.material && m.material.color && m.material.color.getHex() === SCENE.asphalt);
+ok('路口沥青铺装仍生成', !!patchMesh);
+
+// 斑马线 / 停止线 instanced 仍然生成（真实语义标线保留）
+let crossInstanced = 0;
+scene.traverse((ch) => {
+  if (ch.isInstancedMesh) crossInstanced++;
+});
+ok('斑马线/停止线 instanced 仍生成', crossInstanced > 0);
 
 done();

@@ -1,6 +1,7 @@
 import './bootstrap.js';
 import { init3DScene, resize3D, update3D, setCameraMode, resetMapView, setOrbitLeftAction } from './vis/main.js';
 import { headingBetweenPoints } from './vis/math/Coord.js';
+import { selectRoadsForPreview } from './vis/model/MapData.js';
 
 function clonePoint(point) {
   return [Number(point[0] || 0), Number(point[1] || 0), Number(point[2] || 0)];
@@ -109,10 +110,9 @@ function routeFocus(path) {
 
 function toTopo(map, routes, routeId) {
   const route = routes.find((item) => item.id === routeId);
-  /* 全量路网：预览显示整张地图的全部 road 段（不再按 route.road_chain
-   * 过滤）。只有整张路网铺开，用户才能看到网格城市的真实密度，
-   * 而不是孤零零一条大道 + 大片草地。route 仍用于相机聚焦与轨迹线。 */
-  const roads = (map.roads || []);
+  /* 小地图保持全量；超大地图由 selectRoadsForPreview 保留路线及其 250m
+   * 走廊，避免把整张城市路网一次性作为高精度 3D 细节。route 仍用于取景与轨迹线。 */
+  const roads = selectRoadsForPreview(map.roads || [], route);
   const routePath = buildRoutePath(map, route || {});
   const edges = roads.map((road, index) => {
     const lanes = Array.isArray(road.lanes) ? road.lanes : [];

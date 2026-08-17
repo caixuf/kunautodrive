@@ -23,6 +23,49 @@ const RETRY_COOLDOWN_MS = 5000;
 let _failedAt = new Map();  // mapId -> 上次失败时间戳
 let _data = null;          // {junctions: Array, laneData: {roadId: lanes[]}}
 
+const LARGE_MAP_ROAD_LIMIT = 5000;
+const PREVIEW_CORRIDOR_CELL_M = 250;
+
+/** SUMO 内部连接器在 map_compiler 后可能没有 sumo_id，road_j 前缀是当前
+ * 编译产物保留下来的稳定语义。connector 仍进入 laneData 供导航消费，
+ * 但绝不能进入可见道路 edges。 */
+export function isInternalRoad(road) {
+  return !!road && (road.internal === true ||
+    (road.sumo_id && String(road.sumo_id).startsWith(':')) ||
+    String(road.id || '').startsWith('road_j'));
+}
+
+/** 超大地图只取路线周边走廊，避免把整张城市路网当成一帧 3D 细节图。
+ * 小地图保持全量；路线本身永远保留，走廊按中心线空间格保留约 250m 邻域。 */
+export function selectRoadsForPreview(roads, route) {
+  if (!Array.isArray(roads) || roads.length <= LARGE_MAP_ROAD_LIMIT ||
+      !Array.isArray(route?.road_chain) || route.road_chain.length === 0) return roads || [];
+  const routeIds = new Set(route.road_chain);
+  const cells = new Set();
+  const cell = PREVIEW_CORRIDOR_CELL_M;
+  for (const road of roads) {
+    if (!routeIds.has(road?.id)) continue;
+    for (const p of (road.centerline || road.nodes || [])) {
+      if (Array.isArray(p)) cells.add(`${Math.floor((p[0] || 0) / cell)},${Math.floor((p[1] || 0) / cell)}`);
+    }
+  }
+  if (!cells.size) return roads;
+  return roads.filter((road) => {
+    if (routeIds.has(road?.id)) return true;
+    return (road.centerline || road.nodes || []).some((p) => {
+      if (!Array.isArray(p)) return false;
+      const cx = Math.floor((p[0] || 0) / cell);
+      const cy = Math.floor((p[1] || 0) / cell);
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          if (cells.has(`${cx + dx},${cy + dy}`)) return true;
+        }
+      }
+      return false;
+    });
+  });
+}
+
 /** scenario_name → allowlist map id（不匹配返回 null = 无权威地图） */
 export function resolveMapId(scenarioName) {
   if (!scenarioName) return null;
@@ -36,9 +79,10 @@ export function resolveMapId(scenarioName) {
 /** 由 map.json 构建消费索引：junctions 原样 + laneData 按 road.id 键控
  *  + edges（road 级，scene/frame 省略静态段时供 SceneDirector 合成 roadNetwork）
  *  + buildings（OSM 建筑轮廓，BuildingView 渲染）。 */
-function buildIndex(map) {
+function buildIndex(map, routes) {
   const rn = (map && map.road_network) || map || {};
-  const roads = Array.isArray(rn.roads) ? rn.roads : [];
+  const roads = selectRoadsForPreview(Array.isArray(rn.roads) ? rn.roads : [],
+    Array.isArray(routes?.routes) ? routes.routes[0] : null);
   const laneData = {};
   const edges = [];
   for (let i = 0; i < roads.length; i++) {
@@ -51,7 +95,7 @@ function buildIndex(map) {
      * 2026-08-16 起保留其 laneData，供 ConnectorView 在交叉口内部画转向引导线
      * （此前整条跳过 → 交叉处无车道线"混乱"）。 */
     if (Array.isArray(r.lanes) && r.lanes.length) laneData[r.id] = r.lanes;
-    if (r.sumo_id && String(r.sumo_id).startsWith(':')) continue;
+    if (isInternalRoad(r)) continue;
     const cl = Array.isArray(r.centerline) ? r.centerline : [];
     if (cl.length < 2) continue;
     /* edge schema 对齐 scene_pub.cpp build_road_network_json（FrameValidator
@@ -99,7 +143,7 @@ export function mapDataForScenario(scenarioName) {
     .then((r) => (r.ok ? r.json() : null))
     .then((res) => {
       if (res && res.ok && res.map) {
-        _data = buildIndex(res.map);
+        _data = buildIndex(res.map, res.routes);
         _loadedMapId = id;
         _failedAt.delete(id);
       } else {

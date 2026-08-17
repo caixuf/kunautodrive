@@ -17,6 +17,7 @@ const TESTS = join(ROOT, 'tests');
 
 const REAL_THREE = new Set([
   'vis_roadaxis.test.mjs',  // 精确 CatmullRom 几何断言
+  'vis_connector_clip.test.mjs',  // 路口 mesh/instanced 断言需要真实 scene 树
 ]);
 
 const tests = readdirSync(TESTS)

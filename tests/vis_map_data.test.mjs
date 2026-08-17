@@ -8,8 +8,8 @@
  * fetch 路径（live 拉取）不在此测（无头环境），由 junction_markings 的
  * lane_data 消费测试 + 浏览器验证兜底。
  */
-import { resolveMapId, setMapData, resetMapData, mapDataForScenario }
-  from '../tools/flowboard/js/vis/model/MapData.js';
+import { resolveMapId, setMapData, resetMapData, mapDataForScenario,
+  selectRoadsForPreview } from '../tools/flowboard/js/vis/model/MapData.js';
 import { ok, done } from './test-utils.mjs';
 
 console.log('=== MapData 数据通道 ===\n');
@@ -38,6 +38,27 @@ ok('laneData 只收有 lanes 的 road',
   md && Object.keys(md.laneData).length === 1 && Array.isArray(md.laneData['东泰路']));
 ok('junctions 原样透传', md && md.junctions.length === 1 && md.junctions[0].type === 'fork');
 ok('别名场景取同一地图', mapDataForScenario('osm_city_map') === null);   // 未加载 osm_test → null（会触发 fetch，无头环境失败转 _failed）
+
+// ── 4. 超大地图走廊 LOD ──
+(() => {
+  const roads = [
+    { id: 'route', centerline: [[0, 0, 0], [100, 0, 0]] },
+    { id: 'near', centerline: [[200, 0, 0], [300, 0, 0]] },
+    { id: 'far', centerline: [[10000, 10000, 0], [10100, 10000, 0]] },
+  ];
+  for (let i = 0; i < 4996; i++) roads.push({
+    id: 'filler_' + i, centerline: [[10000 + i, 10000, 0], [10001 + i, 10000, 0]],
+  });
+  const selected = selectRoadsForPreview(roads, { road_chain: ['route'] });
+  ok('小于大图阈值不误裁剪', selected.length === roads.length);
+  const large = roads.concat(Array.from({ length: 3 }, (_, i) => ({
+    id: 'large_filler_' + i, centerline: [[12000 + i, 12000, 0], [12001 + i, 12000, 0]],
+  })));
+  const largeSelected = selectRoadsForPreview(large, { road_chain: ['route'] });
+  ok('超大图保留路线', largeSelected.some((r) => r.id === 'route'));
+  ok('超大图保留路线走廊', largeSelected.some((r) => r.id === 'near'));
+  ok('超大图剔除远端细节', !largeSelected.some((r) => r.id === 'far'));
+})();
 
 resetMapData();
 ok('reset 后未加载场景返回 null', mapDataForScenario('city_ring') === null);

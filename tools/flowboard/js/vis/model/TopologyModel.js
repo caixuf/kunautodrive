@@ -103,13 +103,24 @@ function _build(rn) {
     return out;
   }
 
+  /* 预建 junction → edge 引用。若 armsOfJunction 每次都扫描整个 byId，
+   * 大地图会退化成 O(junctions × edges)。 */
+  const _edgeRefsByJunction = new Map();
+  for (const [edgeId, entry] of byId) {
+    for (const ci of [entry.start, entry.end]) {
+      if (ci == null) continue;
+      let refs = _edgeRefsByJunction.get(ci);
+      if (!refs) { refs = []; _edgeRefsByJunction.set(ci, refs); }
+      if (!refs.some((ref) => ref.edgeId === edgeId)) refs.push({ edgeId, entry });
+    }
+  }
+
   // 路口 arm 列表（每路口只算一次）：{edgeId, fromEnd, pts, hw, roadW, edge}
   const _armsCache = new Map();
   function armsOfJunction(ci) {
     if (_armsCache.has(ci)) return _armsCache.get(ci);
     const arms = [];
-    for (const [edgeId, entry] of byId) {
-      if (entry.start !== ci && entry.end !== ci) continue;
+    for (const { edgeId, entry } of (_edgeRefsByJunction.get(ci) || [])) {
       const edge = edgeMap.get(edgeId);
       const pts = edgePts(edgeId);
       if (!edge || !pts) continue;
@@ -156,9 +167,36 @@ function _build(rn) {
     return false;
   }
 
+  /* nearJunction 是树/路灯槽位的热路径。中心网格把每次查询从全量 centers
+   * 降为附近少数候选，尤其重要于 OSM 大地图。 */
+  const CENTER_CELL = 64;
+  const centerGrid = new Map();
+  let maxCenterRadius = 0;
+  for (let i = 0; i < centers.length; i++) {
+    const c = centers[i];
+    maxCenterRadius = Math.max(maxCenterRadius, c.radius || 0);
+    const key = `${Math.floor(c.x / CENTER_CELL)},${Math.floor(c.z / CENTER_CELL)}`;
+    let bucket = centerGrid.get(key);
+    if (!bucket) { bucket = []; centerGrid.set(key, bucket); }
+    bucket.push(i);
+  }
+
   /** 点距**任何**路口中心 < 半径+margin（路灯/树槽位避让，不带 edge 语境） */
   function nearJunction(x, z, margin = 0) {
-    return centers.some((c) => Math.hypot(x - c.x, z - c.z) < (c.radius || 0) + margin);
+    const range = Math.ceil((maxCenterRadius + margin) / CENTER_CELL) + 1;
+    const cx = Math.floor(x / CENTER_CELL);
+    const cz = Math.floor(z / CENTER_CELL);
+    for (let dx = -range; dx <= range; dx++) {
+      for (let dz = -range; dz <= range; dz++) {
+        const bucket = centerGrid.get(`${cx + dx},${cz + dz}`);
+        if (!bucket) continue;
+        for (const i of bucket) {
+          const c = centers[i];
+          if (Math.hypot(x - c.x, z - c.z) < (c.radius || 0) + margin) return true;
+        }
+      }
+    }
+    return false;
   }
 
   return {
