@@ -18,6 +18,12 @@ const TESTS = join(ROOT, 'tests');
 const REAL_THREE = new Set([
   'vis_roadaxis.test.mjs',  // 精确 CatmullRom 几何断言
   'vis_connector_clip.test.mjs',  // 路口 mesh/instanced 断言需要真实 scene 树
+  // 以下两个测试逐 mesh 断言几何（position.count / material.color.getHex /
+  // position.y / scale.y）。shim 是递归 Proxy：count 恒为 Proxy≠4、getHex()
+  // 返回 Proxy≠色值 → 永远数不到 mesh（vis_lane_taper 曾 1/2、vis_viaduct_pier
+  // 曾 1/4 假红，2026-08-18 修复）。必须走真实 three。
+  'vis_lane_taper.test.mjs',    // 锥形 mesh 拓扑邻接断言
+  'vis_viaduct_pier.test.mjs',  // 桥墩 position/scale/color 断言
 ]);
 
 const tests = readdirSync(TESTS)

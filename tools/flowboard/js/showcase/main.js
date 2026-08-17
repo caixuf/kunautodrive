@@ -21,6 +21,10 @@ import {
 import { scenarioToTopoData } from '/tools/flowboard/js/showcase/sceneAdapter.js';
 
 const SCENES_URL = '/tools/flowboard/showcase/scenes.json';
+// 大地图（build_showcase.py 判定 >5MB 不内联，scenes.json 里只有 map_skipped 标记）
+// 经 flowmond 的 POST /api/map/preview 懒加载，避免 scenes.json 撑爆 GitHub 100MB 限制。
+const MAP_PREVIEW_URL = '/api/map/preview';
+const MAP_SKIP_CACHE = {};   // map_file -> Promise<map|null>
 
 const els = {
   list: document.getElementById('scene-list'),
@@ -37,6 +41,35 @@ let activeIndex = -1;
 function setMsg(text) {
   if (els.msg) els.msg.textContent = text || '';
   if (els.msg) els.msg.style.display = text ? 'block' : 'none';
+}
+
+/** 解析场景 map_file（如 ../maps/osm_zhengdong/map.json）得到 mapId（osm_zhengdong）。 */
+function mapIdFromFile(mapFile) {
+  if (!mapFile) return null;
+  const m = /\/maps\/([^/]+)\/map\.json$/.exec(String(mapFile).replace(/\\/g, '/'));
+  return m ? m[1] : null;
+}
+
+/** 大地图懒加载（scenes.json 未内联时）：经 /api/map/preview 拉权威 map。 */
+function loadSkippedMap(raw) {
+  if (!raw || !raw.map_file) return Promise.resolve(null);
+  const mapFile = raw.map_file;
+  if (MAP_SKIP_CACHE[mapFile]) return MAP_SKIP_CACHE[mapFile];
+  const mapId = mapIdFromFile(mapFile);
+  if (!mapId) {
+    MAP_SKIP_CACHE[mapFile] = Promise.resolve(null);
+    return MAP_SKIP_CACHE[mapFile];
+  }
+  MAP_SKIP_CACHE[mapFile] = fetch(MAP_PREVIEW_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ map: mapId }),
+    cache: 'no-cache',
+  })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((res) => (res && res.ok && res.map ? res.map : null))
+    .catch(() => null);
+  return MAP_SKIP_CACHE[mapFile];
 }
 
 /** 选中并渲染第 i 个场景。 */
@@ -62,10 +95,26 @@ function selectScene(i) {
   }
 
   try {
-    update3D(scenarioToTopoData(s.raw, s.map));
-    // 场景切换后把相机重置到新路网中心/ego。
-    resetCamera();
-    setMsg('');
+    if (s.map) {
+      // 小地图已内联（scenes.json）
+      update3D(scenarioToTopoData(s.raw, s.map));
+      resetCamera();
+      setMsg('');
+    } else if (s.map_skipped && s.raw && s.raw.map_file) {
+      // 大地图未内联：懒加载 /api/map/preview，加载期间显示进度
+      setMsg('加载大地图…');
+      loadSkippedMap(s.raw).then((map) => {
+        if (activeIndex !== i) return;   // 切换期间已点到别的场景
+        update3D(scenarioToTopoData(s.raw, map));
+        resetCamera();
+        setMsg(map ? '' : '大地图加载失败，请改在仪表盘「地图预览」中查看');
+      });
+    } else {
+      // 无 map_file 的普通场景
+      update3D(scenarioToTopoData(s.raw, null));
+      resetCamera();
+      setMsg('');
+    }
   } catch (err) {
     console.error('[showcase] 渲染场景失败:', err);
     setMsg('渲染失败: ' + err.message);

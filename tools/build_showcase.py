@@ -29,6 +29,11 @@ SCENARIOS_DIR = os.path.join(REPO_ROOT, "scenarios")
 SUITE_PATH = os.path.join(SCENARIOS_DIR, "suite.json")
 OUT_PATH = os.path.join(REPO_ROOT, "tools", "flowboard", "showcase", "scenes.json")
 
+# 单张内联 map 的上限。scenes.json 会被 git 跟踪，GitHub 单文件 100MB 硬限制
+# （50MB 起警告）——osm_zhengdong 的 map.json 70MB，内联会直接撑爆无法 push；
+# 现有 osm_lujiazui_v2 6.2MB 仍内联（>8MB 才跳过），历史行为不变。
+MAP_EMBED_MAX_BYTES = 8 * 1024 * 1024  # >8MB 的大地图不内联，改走 /api/map/preview
+
 
 def load_json(path):
     with open(path, "r", encoding="utf-8") as f:
@@ -73,7 +78,13 @@ def build_manifest():
         if map_file:
             map_path = os.path.normpath(os.path.join(SCENARIOS_DIR, map_file))
             if os.path.isfile(map_path):
-                entry["map"] = load_json(map_path)
+                if os.path.getsize(map_path) <= MAP_EMBED_MAX_BYTES:
+                    entry["map"] = load_json(map_path)
+                else:
+                    # 大地图（如 osm_zhengdong 70MB）内联会把 scenes.json 撑过
+                    # GitHub 100MB 单文件硬限制、无法 push；只内联小地图，大地图
+                    # 由前端走 POST /api/map/preview 懒加载（showcase/main.js）。
+                    entry["map_skipped"] = True
         scenes.append(entry)
     return {
         "generated_by": "tools/build_showcase.py",
