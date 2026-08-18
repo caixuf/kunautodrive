@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "map_id": "beijing_guomao",
+  "name": "Beijing Guomao CBD",
+  "roads": [
+    {
+      "id": "chang_an_ave",
+      "type": "urban",
+      "speed_limit": 15.0,
+      "oneway": false,
+      "centerline": [[-800, 0, 0], [-400, 0, 0], [0, 0, 0], [400, 0, 0], [800, 0, 0]],
+      "lanes": 4,
+      "lane_width": 3.5
+    },
+    {
+      "id": "guomao_st",
+      "type": "urban",
+      "speed_limit": 12.0,
+      "oneway": false,
+      "centerline": [[0, -600, 0], [0, -300, 0], [0, 0, 0], [0, 300, 0], [0, 600, 0]],
+      "lanes": 3,
+      "lane_width": 3.5
+    },
+    {
+      "id": "jianwai_st",
+      "type": "urban",
+      "speed_limit": 12.0,
+      "oneway": true,
+      "centerline": [[-400, -200, 0], [-200, -200, 0], [0, -200, 0], [200, -200, 0], [400, -200, 0]],
+      "lanes": 2,
+      "lane_width": 3.5
+    },
+    {
+      "id": "huawei_st",
+      "type": "urban",
+      "speed_limit": 12.0,
+      "oneway": true,
+      "centerline": [[-400, 200, 0], [-200, 200, 0], [0, 200, 0], [200, 200, 0], [400, 200, 0]],
+      "lanes": 2,
+      "lane_width": 3.5
+    },
+    {
+      "id": "north_ring",
+      "type": "urban",
+      "speed_limit": 15.0,
+      "oneway": false,
+      "centerline": [[-800, 400, 0], [-400, 400, 0], [0, 400, 0], [400, 400, 0], [800, 400, 0]],
+      "lanes": 3,
+      "lane_width": 3.5
+    },
+    {
+      "id": "south_ring",
+      "type": "urban",
+      "speed_limit": 15.0,
+      "oneway": false,
+      "centerline": [[-800, -400, 0], [-400, -400, 0], [0, -400, 0], [400, -400, 0], [800, -400, 0]],
+      "lanes": 3,
+      "lane_width": 3.5
+    }
+  ],
+  "connections": [],
+  "junctions": [],
+  "buildings": [
+    {"id": "cctv_tower", "x": -300, "y": 250, "height": 234, "footprint": [[-320, 230], [-280, 230], [-280, 270], [-320, 270]]},
+    {"id": "world_trade", "x": 200, "y": 150, "height": 330, "footprint": [[180, 130], [220, 130], [220, 170], [180, 170]]},
+    {"id": "china_central", "x": -150, "y": -150, "height": 250, "footprint": [[-170, -170], [-130, -170], [-130, -130], [-170, -130]]}
+  ]
+}

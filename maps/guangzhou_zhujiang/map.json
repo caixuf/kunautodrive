@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "map_id": "guangzhou_zhujiang",
+  "name": "Guangzhou Zhujiang New Town",
+  "roads": [
+    {
+      "id": "huanshi_road",
+      "type": "urban",
+      "speed_limit": 15.0,
+      "oneway": false,
+      "centerline": [[-800, 0, 0], [-400, 0, 0], [0, 0, 0], [400, 0, 0], [800, 0, 0]],
+      "lanes": 4,
+      "lane_width": 3.5
+    },
+    {
+      "id": "huacheng_ave",
+      "type": "urban",
+      "speed_limit": 12.0,
+      "oneway": false,
+      "centerline": [[0, -600, 0], [0, -300, 0], [0, 0, 0], [0, 300, 0], [0, 600, 0]],
+      "lanes": 3,
+      "lane_width": 3.5
+    },
+    {
+      "id": "pearl_river_st",
+      "type": "urban",
+      "speed_limit": 12.0,
+      "oneway": true,
+      "centerline": [[-400, -200, 0], [-200, -200, 0], [0, -200, 0], [200, -200, 0], [400, -200, 0]],
+      "lanes": 2,
+      "lane_width": 3.5
+    },
+    {
+      "id": "xingsheng_road",
+      "type": "urban",
+      "speed_limit": 12.0,
+      "oneway": true,
+      "centerline": [[-400, 200, 0], [-200, 200, 0], [0, 200, 0], [200, 200, 0], [400, 200, 0]],
+      "lanes": 2,
+      "lane_width": 3.5
+    },
+    {
+      "id": "tianhe_road",
+      "type": "urban",
+      "speed_limit": 15.0,
+      "oneway": false,
+      "centerline": [[-800, 400, 0], [-400, 400, 0], [0, 400, 0], [400, 400, 0], [800, 400, 0]],
+      "lanes": 3,
+      "lane_width": 3.5
+    },
+    {
+      "id": "jinghai_road",
+      "type": "urban",
+      "speed_limit": 15.0,
+      "oneway": false,
+      "centerline": [[-800, -400, 0], [-400, -400, 0], [0, -400, 0], [400, -400, 0], [800, -400, 0]],
+      "lanes": 3,
+      "lane_width": 3.5
+    }
+  ],
+  "connections": [],
+  "junctions": [],
+  "buildings": [
+    {"id": "canton_tower", "x": -300, "y": -250, "height": 604, "footprint": [[-320, -270], [-280, -270], [-280, -230], [-320, -230]]},
+    {"id": "ifc", "x": 200, "y": 150, "height": 440, "footprint": [[180, 130], [220, 130], [220, 170], [180, 170]]},
+    {"id": "ctf_finance", "x": -150, "y": 250, "height": 530, "footprint": [[-170, 230], [-130, 230], [-130, 270], [-170, 270]]}
+  ]
+}

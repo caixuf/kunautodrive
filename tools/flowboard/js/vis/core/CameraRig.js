@@ -45,12 +45,14 @@ export function createCameraRig(canvas) {
   const orbitControls = new OrbitControls(camera, canvas);
   orbitControls.enabled = false;
   orbitControls.screenSpacePanning = true;   // 平移沿屏幕平面，俯视预览"手抓地图"更直观
-  orbitControls.zoomToCursor = true;
+  orbitControls.zoomToCursor = false;        // 关闭光标缩放，避免鼠标不在canvas时缩放失效
   orbitControls.mouseButtons.RIGHT = -1;     // 禁用右键（避免 contextmenu 冲突），左键用 P/Space 切换旋转/平移
   orbitControls.target.set(0, 0, 0);
   orbitControls.minDistance = 2;             // 近距离限制，防止穿入地面
-  orbitControls.maxDistance = 8000;          // 远距离限制，防止飞出地图太远
-  orbitControls.zoomSpeed = 1.5;            // 提高缩放灵敏度，近距离时仍有响应
+  orbitControls.maxDistance = 15000;         // 远距离限制，支持大地图缩放
+  orbitControls.zoomSpeed = 2.0;            // 提高缩放灵敏度，近距离时仍有响应
+  orbitControls.dampingFactor = 0.08;        // 阻尼系数，平滑缩放
+  orbitControls.enableDamping = true;        // 启用阻尼，改善缩放手感
   orbitControls.update();
 
   // mapControls 已废弃——复用 orbitControls + enableRotate=false 替代

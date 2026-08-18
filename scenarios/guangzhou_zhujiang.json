@@ -1,0 +1,37 @@
+{
+  "name": "guangzhou_zhujiang",
+  "description": "广州珠江新城CBD，含广州塔、IFC等地标",
+  "map_file": "../maps/guangzhou_zhujiang/map.json",
+  "route_file": null,
+  "route_id": "main",
+  "random_seed": 202608,
+  "duration_s": 120,
+  "lighting": "day",
+  "weather": "clear",
+  "visibility_m": 2000,
+  "npc_lane_change": true,
+  "ego": {
+    "x": -600,
+    "y": 0,
+    "heading": 0,
+    "init_speed": 10.0,
+    "target_speed": 13.0,
+    "wheelbase": 2.7,
+    "length": 4.6,
+    "width": 2.0,
+    "max_steer": 0.6
+  },
+  "actors": [],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 120,
+    "min_avg_speed_mps": 3.0,
+    "min_distance_m": 450
+  },
+  "route": [],
+  "scenarios": [],
+  "choreography": {
+    "loop_period_s": 999,
+    "beats": []
+  }
+}
