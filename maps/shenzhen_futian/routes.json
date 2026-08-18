@@ -1,0 +1,1 @@
+{"map_id": "shenzhen_futian", "routes": [{"id": "main", "name": "深南大道主路", "kind": "main", "road_chain": ["shennan_blvd"], "lane_direction": 1}], "reserved_turns": []}

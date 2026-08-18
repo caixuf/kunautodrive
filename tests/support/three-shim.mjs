@@ -205,6 +205,11 @@ class _Vector3 {
   add(o) { if (o) { this.x += Number(o.x)||0; this.y += Number(o.y)||0; this.z += Number(o.z)||0; } return this; }
   addScalar(s = 0) { const n = Number(s)||0; this.x += n; this.y += n; this.z += n; return this; }
   addVectors(a, b) { this.x = (Number(a?.x)||0) + (Number(b?.x)||0); this.y = (Number(a?.y)||0) + (Number(b?.y)||0); this.z = (Number(a?.z)||0) + (Number(b?.z)||0); return this; }
+  /* OrbitControls.update() 每帧 scope.object.position.addScaledVector(scope.target, ±1)
+   * 做"相机相对 target 平移"，缺少该方法会让 CameraRig 集成测试直接抛
+   * "scope.target.addScaledVector is not a function"（9413ccc 引入 zoomToCursor/
+   * enableDamping 改动后 update 路径走到）。真实 three 实现同此。 */
+  addScaledVector(v, s = 1) { const n = Number(s)||0; if (v) { this.x += (Number(v.x)||0) * n; this.y += (Number(v.y)||0) * n; this.z += (Number(v.z)||0) * n; } return this; }
   sub(o) { if (o) { this.x -= Number(o.x)||0; this.y -= Number(o.y)||0; this.z -= Number(o.z)||0; } return this; }
   subScalar(s = 0) { const n = Number(s)||0; this.x -= n; this.y -= n; this.z -= n; return this; }
   subVectors(a, b) { this.x = (Number(a?.x)||0) - (Number(b?.x)||0); this.y = (Number(a?.y)||0) - (Number(b?.y)||0); this.z = (Number(a?.z)||0) - (Number(b?.z)||0); return this; }

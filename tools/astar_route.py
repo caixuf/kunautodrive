@@ -92,7 +92,12 @@ class LaneGraph:
         # 先注册所有 lane 及其几何
         for road in roads:
             rid = road.get("id")
-            for lane in road.get("lanes", []):
+            lanes = road.get("lanes", [])
+            # 占位/展示地图（如 beijing_guomao 等 CBD 图）用整型车道数而非 lane 数组，
+            # 无车道级几何/successors，无法建车道图——跳过（scenarioctl 契约允许 numeric）。
+            if not isinstance(lanes, list):
+                continue
+            for lane in lanes:
                 lid = lane.get("id")
                 cl = lane.get("centerline", [])
                 self.lanes[lid] = {
@@ -106,7 +111,10 @@ class LaneGraph:
                 self.adj.setdefault(lid, [])
         # 再填 successor 边（跨 road 的 lane 引用已在 map 内，见 extract_city_map.check）
         for road in roads:
-            for lane in road.get("lanes", []):
+            lanes = road.get("lanes", [])
+            if not isinstance(lanes, list):
+                continue
+            for lane in lanes:
                 lid = lane.get("id")
                 for succ in lane.get("successors", []):
                     if succ in lane_ids:

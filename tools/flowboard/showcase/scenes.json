@@ -1,6 +1,6 @@
 {
   "generated_by": "tools/build_showcase.py",
-  "count": 20,
+  "count": 24,
   "scenarios": [
     {
       "file": "scenarios/straight_road.json",
@@ -4903,6 +4903,680 @@
             }
           ]
         }
+      }
+    },
+    {
+      "file": "scenarios/beijing_guomao.json",
+      "name": "beijing_guomao",
+      "description": "北京国贸CBD核心区，含央视大楼、国贸大厦等地标",
+      "duration_s": 120,
+      "enabled": true,
+      "raw": {
+        "name": "beijing_guomao",
+        "description": "北京国贸CBD核心区，含央视大楼、国贸大厦等地标",
+        "map_file": "../maps/beijing_guomao/map.json",
+        "route_file": "../maps/beijing_guomao/routes.json",
+        "route_id": "main",
+        "random_seed": 202608,
+        "duration_s": 120,
+        "lighting": "day",
+        "weather": "clear",
+        "visibility_m": 2000,
+        "npc_lane_change": true,
+        "ego": {
+          "x": -600,
+          "y": 0,
+          "heading": 0,
+          "init_speed": 10.0,
+          "target_speed": 13.0,
+          "wheelbase": 2.7,
+          "length": 4.6,
+          "width": 2.0,
+          "max_steer": 0.6
+        },
+        "actors": [],
+        "pass_criteria": {
+          "no_collision": true,
+          "max_duration_s": 120,
+          "min_avg_speed_mps": 3.0,
+          "min_distance_m": 450
+        },
+        "route": [],
+        "scenarios": [],
+        "choreography": {
+          "loop_period_s": 999,
+          "beats": []
+        }
+      },
+      "map": {
+        "schema_version": 1,
+        "map_id": "beijing_guomao",
+        "name": "Beijing Guomao CBD",
+        "roads": [
+          {
+            "id": "chang_an_ave",
+            "type": "urban",
+            "speed_limit": 15.0,
+            "oneway": false,
+            "centerline": [
+              [
+                -800,
+                0,
+                0
+              ],
+              [
+                -400,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0
+              ],
+              [
+                400,
+                0,
+                0
+              ],
+              [
+                800,
+                0,
+                0
+              ]
+            ],
+            "lanes": 4,
+            "lane_width": 3.5
+          },
+          {
+            "id": "guomao_st",
+            "type": "urban",
+            "speed_limit": 12.0,
+            "oneway": false,
+            "centerline": [
+              [
+                0,
+                -600,
+                0
+              ],
+              [
+                0,
+                -300,
+                0
+              ],
+              [
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                300,
+                0
+              ],
+              [
+                0,
+                600,
+                0
+              ]
+            ],
+            "lanes": 3,
+            "lane_width": 3.5
+          },
+          {
+            "id": "jianwai_st",
+            "type": "urban",
+            "speed_limit": 12.0,
+            "oneway": true,
+            "centerline": [
+              [
+                -400,
+                -200,
+                0
+              ],
+              [
+                -200,
+                -200,
+                0
+              ],
+              [
+                0,
+                -200,
+                0
+              ],
+              [
+                200,
+                -200,
+                0
+              ],
+              [
+                400,
+                -200,
+                0
+              ]
+            ],
+            "lanes": 2,
+            "lane_width": 3.5
+          },
+          {
+            "id": "huawei_st",
+            "type": "urban",
+            "speed_limit": 12.0,
+            "oneway": true,
+            "centerline": [
+              [
+                -400,
+                200,
+                0
+              ],
+              [
+                -200,
+                200,
+                0
+              ],
+              [
+                0,
+                200,
+                0
+              ],
+              [
+                200,
+                200,
+                0
+              ],
+              [
+                400,
+                200,
+                0
+              ]
+            ],
+            "lanes": 2,
+            "lane_width": 3.5
+          },
+          {
+            "id": "north_ring",
+            "type": "urban",
+            "speed_limit": 15.0,
+            "oneway": false,
+            "centerline": [
+              [
+                -800,
+                400,
+                0
+              ],
+              [
+                -400,
+                400,
+                0
+              ],
+              [
+                0,
+                400,
+                0
+              ],
+              [
+                400,
+                400,
+                0
+              ],
+              [
+                800,
+                400,
+                0
+              ]
+            ],
+            "lanes": 3,
+            "lane_width": 3.5
+          },
+          {
+            "id": "south_ring",
+            "type": "urban",
+            "speed_limit": 15.0,
+            "oneway": false,
+            "centerline": [
+              [
+                -800,
+                -400,
+                0
+              ],
+              [
+                -400,
+                -400,
+                0
+              ],
+              [
+                0,
+                -400,
+                0
+              ],
+              [
+                400,
+                -400,
+                0
+              ],
+              [
+                800,
+                -400,
+                0
+              ]
+            ],
+            "lanes": 3,
+            "lane_width": 3.5
+          }
+        ],
+        "connections": [],
+        "junctions": [],
+        "buildings": [
+          {
+            "id": "cctv_tower",
+            "x": -300,
+            "y": 250,
+            "height": 234,
+            "footprint": [
+              [
+                -320,
+                230
+              ],
+              [
+                -280,
+                230
+              ],
+              [
+                -280,
+                270
+              ],
+              [
+                -320,
+                270
+              ]
+            ]
+          },
+          {
+            "id": "world_trade",
+            "x": 200,
+            "y": 150,
+            "height": 330,
+            "footprint": [
+              [
+                180,
+                130
+              ],
+              [
+                220,
+                130
+              ],
+              [
+                220,
+                170
+              ],
+              [
+                180,
+                170
+              ]
+            ]
+          },
+          {
+            "id": "china_central",
+            "x": -150,
+            "y": -150,
+            "height": 250,
+            "footprint": [
+              [
+                -170,
+                -170
+              ],
+              [
+                -130,
+                -170
+              ],
+              [
+                -130,
+                -130
+              ],
+              [
+                -170,
+                -130
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "file": "scenarios/chengdu_tianfu.json",
+      "name": "chengdu_tianfu",
+      "description": "成都天府新区CBD，含天府软件园、金融城等地标",
+      "duration_s": 120,
+      "enabled": true,
+      "raw": {
+        "name": "chengdu_tianfu",
+        "description": "成都天府新区CBD，含天府软件园、金融城等地标",
+        "map_file": "../maps/chengdu_tianfu/map.json",
+        "route_file": "../maps/chengdu_tianfu/routes.json",
+        "route_id": "main",
+        "random_seed": 202608,
+        "duration_s": 120,
+        "lighting": "day",
+        "weather": "clear",
+        "visibility_m": 2000,
+        "npc_lane_change": true,
+        "ego": {
+          "x": -600,
+          "y": 0,
+          "heading": 0,
+          "init_speed": 10.0,
+          "target_speed": 13.0,
+          "wheelbase": 2.7,
+          "length": 4.6,
+          "width": 2.0,
+          "max_steer": 0.6
+        },
+        "actors": [],
+        "pass_criteria": {
+          "no_collision": true,
+          "max_duration_s": 120,
+          "min_avg_speed_mps": 3.0,
+          "min_distance_m": 450
+        },
+        "route": [],
+        "scenarios": [],
+        "choreography": {
+          "loop_period_s": 999,
+          "beats": []
+        }
+      },
+      "map": {
+        "schema_version": 1,
+        "map_id": "chengdu_tianfu",
+        "name": "Chengdu Tianfu New Area",
+        "roads": [
+          {
+            "id": "tianfu_ave",
+            "type": "urban",
+            "speed_limit": 15.0,
+            "oneway": false,
+            "centerline": [
+              [
+                -800,
+                0,
+                0
+              ],
+              [
+                -400,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0
+              ],
+              [
+                400,
+                0,
+                0
+              ],
+              [
+                800,
+                0,
+                0
+              ]
+            ],
+            "lanes": 4,
+            "lane_width": 3.5
+          },
+          {
+            "id": "jinsha_road",
+            "type": "urban",
+            "speed_limit": 12.0,
+            "oneway": false,
+            "centerline": [
+              [
+                0,
+                -600,
+                0
+              ],
+              [
+                0,
+                -300,
+                0
+              ],
+              [
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                300,
+                0
+              ],
+              [
+                0,
+                600,
+                0
+              ]
+            ],
+            "lanes": 3,
+            "lane_width": 3.5
+          },
+          {
+            "id": "gaoke_road",
+            "type": "urban",
+            "speed_limit": 12.0,
+            "oneway": true,
+            "centerline": [
+              [
+                -400,
+                -200,
+                0
+              ],
+              [
+                -200,
+                -200,
+                0
+              ],
+              [
+                0,
+                -200,
+                0
+              ],
+              [
+                200,
+                -200,
+                0
+              ],
+              [
+                400,
+                -200,
+                0
+              ]
+            ],
+            "lanes": 2,
+            "lane_width": 3.5
+          },
+          {
+            "id": "tianfu_software",
+            "type": "urban",
+            "speed_limit": 12.0,
+            "oneway": true,
+            "centerline": [
+              [
+                -400,
+                200,
+                0
+              ],
+              [
+                -200,
+                200,
+                0
+              ],
+              [
+                0,
+                200,
+                0
+              ],
+              [
+                200,
+                200,
+                0
+              ],
+              [
+                400,
+                200,
+                0
+              ]
+            ],
+            "lanes": 2,
+            "lane_width": 3.5
+          },
+          {
+            "id": "huoguang_road",
+            "type": "urban",
+            "speed_limit": 15.0,
+            "oneway": false,
+            "centerline": [
+              [
+                -800,
+                400,
+                0
+              ],
+              [
+                -400,
+                400,
+                0
+              ],
+              [
+                0,
+                400,
+                0
+              ],
+              [
+                400,
+                400,
+                0
+              ],
+              [
+                800,
+                400,
+                0
+              ]
+            ],
+            "lanes": 3,
+            "lane_width": 3.5
+          },
+          {
+            "id": "zhonghe_road",
+            "type": "urban",
+            "speed_limit": 15.0,
+            "oneway": false,
+            "centerline": [
+              [
+                -800,
+                -400,
+                0
+              ],
+              [
+                -400,
+                -400,
+                0
+              ],
+              [
+                0,
+                -400,
+                0
+              ],
+              [
+                400,
+                -400,
+                0
+              ],
+              [
+                800,
+                -400,
+                0
+              ]
+            ],
+            "lanes": 3,
+            "lane_width": 3.5
+          }
+        ],
+        "connections": [],
+        "junctions": [],
+        "buildings": [
+          {
+            "id": "tianfu_tower",
+            "x": 300,
+            "y": 250,
+            "height": 280,
+            "footprint": [
+              [
+                280,
+                230
+              ],
+              [
+                320,
+                230
+              ],
+              [
+                320,
+                270
+              ],
+              [
+                280,
+                270
+              ]
+            ]
+          },
+          {
+            "id": "scbd_center",
+            "x": -200,
+            "y": 150,
+            "height": 350,
+            "footprint": [
+              [
+                -220,
+                130
+              ],
+              [
+                -180,
+                130
+              ],
+              [
+                -180,
+                170
+              ],
+              [
+                -220,
+                170
+              ]
+            ]
+          },
+          {
+            "id": "software_park",
+            "x": 100,
+            "y": -100,
+            "height": 120,
+            "footprint": [
+              [
+                80,
+                -120
+              ],
+              [
+                120,
+                -120
+              ],
+              [
+                120,
+                -80
+              ],
+              [
+                80,
+                -80
+              ]
+            ]
+          }
+        ]
       }
     },
     {
@@ -234950,6 +235624,343 @@
           "stop_lines": [],
           "construction_zones": []
         }
+      }
+    },
+    {
+      "file": "scenarios/guangzhou_zhujiang.json",
+      "name": "guangzhou_zhujiang",
+      "description": "广州珠江新城CBD，含广州塔、IFC等地标",
+      "duration_s": 120,
+      "enabled": true,
+      "raw": {
+        "name": "guangzhou_zhujiang",
+        "description": "广州珠江新城CBD，含广州塔、IFC等地标",
+        "map_file": "../maps/guangzhou_zhujiang/map.json",
+        "route_file": "../maps/guangzhou_zhujiang/routes.json",
+        "route_id": "main",
+        "random_seed": 202608,
+        "duration_s": 120,
+        "lighting": "day",
+        "weather": "clear",
+        "visibility_m": 2000,
+        "npc_lane_change": true,
+        "ego": {
+          "x": -600,
+          "y": 0,
+          "heading": 0,
+          "init_speed": 10.0,
+          "target_speed": 13.0,
+          "wheelbase": 2.7,
+          "length": 4.6,
+          "width": 2.0,
+          "max_steer": 0.6
+        },
+        "actors": [],
+        "pass_criteria": {
+          "no_collision": true,
+          "max_duration_s": 120,
+          "min_avg_speed_mps": 3.0,
+          "min_distance_m": 450
+        },
+        "route": [],
+        "scenarios": [],
+        "choreography": {
+          "loop_period_s": 999,
+          "beats": []
+        }
+      },
+      "map": {
+        "schema_version": 1,
+        "map_id": "guangzhou_zhujiang",
+        "name": "Guangzhou Zhujiang New Town",
+        "roads": [
+          {
+            "id": "huanshi_road",
+            "type": "urban",
+            "speed_limit": 15.0,
+            "oneway": false,
+            "centerline": [
+              [
+                -800,
+                0,
+                0
+              ],
+              [
+                -400,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0
+              ],
+              [
+                400,
+                0,
+                0
+              ],
+              [
+                800,
+                0,
+                0
+              ]
+            ],
+            "lanes": 4,
+            "lane_width": 3.5
+          },
+          {
+            "id": "huacheng_ave",
+            "type": "urban",
+            "speed_limit": 12.0,
+            "oneway": false,
+            "centerline": [
+              [
+                0,
+                -600,
+                0
+              ],
+              [
+                0,
+                -300,
+                0
+              ],
+              [
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                300,
+                0
+              ],
+              [
+                0,
+                600,
+                0
+              ]
+            ],
+            "lanes": 3,
+            "lane_width": 3.5
+          },
+          {
+            "id": "pearl_river_st",
+            "type": "urban",
+            "speed_limit": 12.0,
+            "oneway": true,
+            "centerline": [
+              [
+                -400,
+                -200,
+                0
+              ],
+              [
+                -200,
+                -200,
+                0
+              ],
+              [
+                0,
+                -200,
+                0
+              ],
+              [
+                200,
+                -200,
+                0
+              ],
+              [
+                400,
+                -200,
+                0
+              ]
+            ],
+            "lanes": 2,
+            "lane_width": 3.5
+          },
+          {
+            "id": "xingsheng_road",
+            "type": "urban",
+            "speed_limit": 12.0,
+            "oneway": true,
+            "centerline": [
+              [
+                -400,
+                200,
+                0
+              ],
+              [
+                -200,
+                200,
+                0
+              ],
+              [
+                0,
+                200,
+                0
+              ],
+              [
+                200,
+                200,
+                0
+              ],
+              [
+                400,
+                200,
+                0
+              ]
+            ],
+            "lanes": 2,
+            "lane_width": 3.5
+          },
+          {
+            "id": "tianhe_road",
+            "type": "urban",
+            "speed_limit": 15.0,
+            "oneway": false,
+            "centerline": [
+              [
+                -800,
+                400,
+                0
+              ],
+              [
+                -400,
+                400,
+                0
+              ],
+              [
+                0,
+                400,
+                0
+              ],
+              [
+                400,
+                400,
+                0
+              ],
+              [
+                800,
+                400,
+                0
+              ]
+            ],
+            "lanes": 3,
+            "lane_width": 3.5
+          },
+          {
+            "id": "jinghai_road",
+            "type": "urban",
+            "speed_limit": 15.0,
+            "oneway": false,
+            "centerline": [
+              [
+                -800,
+                -400,
+                0
+              ],
+              [
+                -400,
+                -400,
+                0
+              ],
+              [
+                0,
+                -400,
+                0
+              ],
+              [
+                400,
+                -400,
+                0
+              ],
+              [
+                800,
+                -400,
+                0
+              ]
+            ],
+            "lanes": 3,
+            "lane_width": 3.5
+          }
+        ],
+        "connections": [],
+        "junctions": [],
+        "buildings": [
+          {
+            "id": "canton_tower",
+            "x": -300,
+            "y": -250,
+            "height": 604,
+            "footprint": [
+              [
+                -320,
+                -270
+              ],
+              [
+                -280,
+                -270
+              ],
+              [
+                -280,
+                -230
+              ],
+              [
+                -320,
+                -230
+              ]
+            ]
+          },
+          {
+            "id": "ifc",
+            "x": 200,
+            "y": 150,
+            "height": 440,
+            "footprint": [
+              [
+                180,
+                130
+              ],
+              [
+                220,
+                130
+              ],
+              [
+                220,
+                170
+              ],
+              [
+                180,
+                170
+              ]
+            ]
+          },
+          {
+            "id": "ctf_finance",
+            "x": -150,
+            "y": 250,
+            "height": 530,
+            "footprint": [
+              [
+                -170,
+                230
+              ],
+              [
+                -130,
+                230
+              ],
+              [
+                -130,
+                270
+              ],
+              [
+                -170,
+                270
+              ]
+            ]
+          }
+        ]
       }
     },
     {
@@ -560872,6 +561883,343 @@
         }
       },
       "map_skipped": true
+    },
+    {
+      "file": "scenarios/shenzhen_futian.json",
+      "name": "shenzhen_futian",
+      "description": "深圳福田CBD核心区，含平安金融中心、KK100等地标",
+      "duration_s": 120,
+      "enabled": true,
+      "raw": {
+        "name": "shenzhen_futian",
+        "description": "深圳福田CBD核心区，含平安金融中心、KK100等地标",
+        "map_file": "../maps/shenzhen_futian/map.json",
+        "route_file": "../maps/shenzhen_futian/routes.json",
+        "route_id": "main",
+        "random_seed": 202608,
+        "duration_s": 120,
+        "lighting": "day",
+        "weather": "clear",
+        "visibility_m": 2000,
+        "npc_lane_change": true,
+        "ego": {
+          "x": -600,
+          "y": 0,
+          "heading": 0,
+          "init_speed": 10.0,
+          "target_speed": 13.0,
+          "wheelbase": 2.7,
+          "length": 4.6,
+          "width": 2.0,
+          "max_steer": 0.6
+        },
+        "actors": [],
+        "pass_criteria": {
+          "no_collision": true,
+          "max_duration_s": 120,
+          "min_avg_speed_mps": 3.0,
+          "min_distance_m": 450
+        },
+        "route": [],
+        "scenarios": [],
+        "choreography": {
+          "loop_period_s": 999,
+          "beats": []
+        }
+      },
+      "map": {
+        "schema_version": 1,
+        "map_id": "shenzhen_futian",
+        "name": "Shenzhen Futian CBD",
+        "roads": [
+          {
+            "id": "shennan_blvd",
+            "type": "urban",
+            "speed_limit": 15.0,
+            "oneway": false,
+            "centerline": [
+              [
+                -800,
+                0,
+                0
+              ],
+              [
+                -400,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0
+              ],
+              [
+                400,
+                0,
+                0
+              ],
+              [
+                800,
+                0,
+                0
+              ]
+            ],
+            "lanes": 4,
+            "lane_width": 3.5
+          },
+          {
+            "id": "fuhua_road",
+            "type": "urban",
+            "speed_limit": 12.0,
+            "oneway": false,
+            "centerline": [
+              [
+                0,
+                -600,
+                0
+              ],
+              [
+                0,
+                -300,
+                0
+              ],
+              [
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                300,
+                0
+              ],
+              [
+                0,
+                600,
+                0
+              ]
+            ],
+            "lanes": 3,
+            "lane_width": 3.5
+          },
+          {
+            "id": "yitian_st",
+            "type": "urban",
+            "speed_limit": 12.0,
+            "oneway": true,
+            "centerline": [
+              [
+                -400,
+                -200,
+                0
+              ],
+              [
+                -200,
+                -200,
+                0
+              ],
+              [
+                0,
+                -200,
+                0
+              ],
+              [
+                200,
+                -200,
+                0
+              ],
+              [
+                400,
+                -200,
+                0
+              ]
+            ],
+            "lanes": 2,
+            "lane_width": 3.5
+          },
+          {
+            "id": "binhe_road",
+            "type": "urban",
+            "speed_limit": 12.0,
+            "oneway": true,
+            "centerline": [
+              [
+                -400,
+                200,
+                0
+              ],
+              [
+                -200,
+                200,
+                0
+              ],
+              [
+                0,
+                200,
+                0
+              ],
+              [
+                200,
+                200,
+                0
+              ],
+              [
+                400,
+                200,
+                0
+              ]
+            ],
+            "lanes": 2,
+            "lane_width": 3.5
+          },
+          {
+            "id": "xingye_road",
+            "type": "urban",
+            "speed_limit": 15.0,
+            "oneway": false,
+            "centerline": [
+              [
+                -800,
+                400,
+                0
+              ],
+              [
+                -400,
+                400,
+                0
+              ],
+              [
+                0,
+                400,
+                0
+              ],
+              [
+                400,
+                400,
+                0
+              ],
+              [
+                800,
+                400,
+                0
+              ]
+            ],
+            "lanes": 3,
+            "lane_width": 3.5
+          },
+          {
+            "id": "minying_road",
+            "type": "urban",
+            "speed_limit": 15.0,
+            "oneway": false,
+            "centerline": [
+              [
+                -800,
+                -400,
+                0
+              ],
+              [
+                -400,
+                -400,
+                0
+              ],
+              [
+                0,
+                -400,
+                0
+              ],
+              [
+                400,
+                -400,
+                0
+              ],
+              [
+                800,
+                -400,
+                0
+              ]
+            ],
+            "lanes": 3,
+            "lane_width": 3.5
+          }
+        ],
+        "connections": [],
+        "junctions": [],
+        "buildings": [
+          {
+            "id": "pingan_tower",
+            "x": 250,
+            "y": 150,
+            "height": 599,
+            "footprint": [
+              [
+                230,
+                130
+              ],
+              [
+                270,
+                130
+              ],
+              [
+                270,
+                170
+              ],
+              [
+                230,
+                170
+              ]
+            ]
+          },
+          {
+            "id": "kk100",
+            "x": -200,
+            "y": 250,
+            "height": 442,
+            "footprint": [
+              [
+                -220,
+                230
+              ],
+              [
+                -180,
+                230
+              ],
+              [
+                -180,
+                270
+              ],
+              [
+                -220,
+                270
+              ]
+            ]
+          },
+          {
+            "id": "coco_park",
+            "x": 100,
+            "y": -100,
+            "height": 100,
+            "footprint": [
+              [
+                80,
+                -120
+              ],
+              [
+                120,
+                -120
+              ],
+              [
+                120,
+                -80
+              ],
+              [
+                80,
+                -80
+              ]
+            ]
+          }
+        ]
+      }
     }
   ]
 }

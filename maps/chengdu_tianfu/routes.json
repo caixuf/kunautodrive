@@ -1,0 +1,1 @@
+{"map_id": "chengdu_tianfu", "routes": [{"id": "main", "name": "天府大道主路", "kind": "main", "road_chain": ["tianfu_ave"], "lane_direction": 1}], "reserved_turns": []}

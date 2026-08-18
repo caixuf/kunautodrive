@@ -2,7 +2,7 @@
   "name": "shenzhen_futian",
   "description": "深圳福田CBD核心区，含平安金融中心、KK100等地标",
   "map_file": "../maps/shenzhen_futian/map.json",
-  "route_file": null,
+  "route_file": "../maps/shenzhen_futian/routes.json",
   "route_id": "main",
   "random_seed": 202608,
   "duration_s": 120,

@@ -1,0 +1,1 @@
+{"map_id": "beijing_guomao", "routes": [{"id": "main", "name": "长安街主路", "kind": "main", "road_chain": ["chang_an_ave"], "lane_direction": 1}], "reserved_turns": []}
