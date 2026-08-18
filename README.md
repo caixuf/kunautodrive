@@ -8,6 +8,16 @@
 ![C](https://img.shields.io/badge/C-11-555555)
 ![C++](https://img.shields.io/badge/C++-20-659ad2)
 
+## 演示截图
+
+<!--
+  截图约定：把真实截图放到 docs/screenshots/dashboard_3d.png（16:9、宽 >= 1280px、
+  单张 < 2MB），内容为 bash scripts/demo.sh 后浏览器 http://localhost:8800 的
+  3D 仪表盘实拍（建议含车辆在场景中巡航/变道），不要用示意图或占位图。
+-->
+
+<img src="docs/screenshots/dashboard_3d.png" alt="KunAutoDrive 3D 仪表盘" width="100%">
+
 ## 先看这里
 
 KunAutoDrive 当前是**仿真优先、可复现的实验与集成平台**：感知、融合、规划、
