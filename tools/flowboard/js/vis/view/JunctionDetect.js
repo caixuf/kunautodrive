@@ -115,24 +115,87 @@ function matchEdgesToCenters(edges, centers) {
   return byId;
 }
 
-/** 数据层路口（scene_pub junctions[]）：直接消费中心 + radius，不做几何聚类。
- *  每个 junction: {id, x, y, z, radius, n, roads:[road_id...]}（ENU 坐标）。 */
-function junctionsFromData(roadNetwork, dataJunctions) {
-  const centers = dataJunctions.map((j) => {
-    let x = Number(j.x), y = Number(j.y), z = Number(j.z);
-    /* osm2kmap 的 fork 契约携带 shape 而不是 x/y/z。优先用 polygon 质心，
-     * 否则这些 junction 会错误地全部落在世界原点。 */
-    if (![x, y, z].some(Number.isFinite) && Array.isArray(j.shape) && j.shape.length) {
-      let sx = 0, sy = 0, sz = 0, count = 0;
-      for (const p of j.shape) {
+/** 多边形面积加权质心（Shoelace 公式）：比简单顶点平均准确，消除形状偏斜
+ *  导致的 2-7m 质心偏移。输入 ENU [x,y] 顶点列表，返回 {x,y}。 */
+function polygonCentroid(shape) {
+  if (!shape || shape.length < 3) {
+    // 退化：两点或空 → 简单平均
+    let sx = 0, sy = 0, n = 0;
+    for (const p of shape || []) {
+      if (!Array.isArray(p) || p.length < 2) continue;
+      sx += Number(p[0]) || 0; sy += Number(p[1]) || 0; n++;
+    }
+    return n ? { x: sx / n, y: sy / n } : null;
+  }
+  let A2 = 0, Cx = 0, Cy = 0;
+  const n = shape.length;
+  for (let i = 0; i < n; i++) {
+    const [x0, y0] = [Number(shape[i][0]) || 0, Number(shape[i][1]) || 0];
+    const [x1, y1] = [Number(shape[(i + 1) % n][0]) || 0, Number(shape[(i + 1) % n][1]) || 0];
+    const cross = x0 * y1 - x1 * y0;
+    A2 += cross;
+    Cx += (x0 + x1) * cross;
+    Cy += (y0 + y1) * cross;
+  }
+  if (Math.abs(A2) < 1e-12) {
+    // 面积为零（共线）→ 退化为简单平均
+    let sx = 0, sy = 0;
+    for (const p of shape) { sx += Number(p[0]) || 0; sy += Number(p[1]) || 0; }
+    return { x: sx / n, y: sy / n };
+  }
+  return { x: Cx / (3 * A2), y: Cy / (3 * A2) };
+}
+
+/** 内部连接器几何质心：从 fork 契约的 connecting_roads 提取 road_j* 的
+ *  lane centerline，所有内部连接器点云的均值比 shape polygon 更贴近真实
+ *  车辆通过路径。laneData 不存在时回退 shape 质心。 */
+function connectorGeometryCentroid(j, roadNetwork) {
+  const laneData = roadNetwork?.lane_data;
+  if (!laneData || !j.connecting_roads?.length) return null;
+  let sx = 0, sy = 0, count = 0;
+  for (const cr of j.connecting_roads) {
+    const lanes = laneData[cr.id];
+    if (!Array.isArray(lanes)) continue;
+    for (const lane of lanes) {
+      const cl = lane?.centerline;
+      if (!Array.isArray(cl) || cl.length < 2) continue;
+      for (const p of cl) {
         if (!Array.isArray(p) || p.length < 2) continue;
         sx += Number(p[0]) || 0;
         sy += Number(p[1]) || 0;
-        sz += Number(p[2]) || 0;
         count++;
       }
-      if (count) { x = sx / count; y = sy / count; z = sz / count; }
     }
+  }
+  return count > 0 ? { x: sx / count, y: sy / count } : null;
+}
+
+/** 数据层路口（scene_pub junctions[] / map_preview map_junctions[]）：
+ *  直接消费中心 + radius，不做几何聚类。
+ *  每个 junction: {id, x, y, z, radius, shape, connecting_roads, ...}（ENU 坐标）。
+ *
+ *  质心计算优先级（降偏移 2.7-6.9m）：
+ *    1. 显式 x/y/z（live 数据层直接提供）
+ *    2. 内部连接器几何点云均值（connecting_roads 的 lane centerline）
+ *    3. shape polygon 面积加权质心（Shoelace 公式）
+ *    4. shape polygon 简单平均（退化兜底） */
+function junctionsFromData(roadNetwork, dataJunctions) {
+  const centers = dataJunctions.map((j) => {
+    let x = Number(j.x), y = Number(j.y), z = Number(j.z);
+
+    // 优先级 1：显式坐标
+    if (![x, y, z].some(Number.isFinite)) {
+      // 优先级 2：内部连接器几何质心
+      const cc = connectorGeometryCentroid(j, roadNetwork);
+      if (cc) { x = cc.x; y = cc.y; z = 0; }
+      else if (Array.isArray(j.shape) && j.shape.length) {
+        // 优先级 3：shape polygon 面积加权质心
+        const pc = polygonCentroid(j.shape);
+        if (pc) { x = pc.x; y = pc.y; }
+        z = 0;
+      }
+    }
+
     const [tx, , tz] = worldToThree(Number.isFinite(x) ? x : 0,
       Number.isFinite(y) ? y : 0, Number.isFinite(z) ? z : 0);
     const py = Number.isFinite(z) ? z : 0;
@@ -160,16 +223,18 @@ function junctionsFromData(roadNetwork, dataJunctions) {
  *   byId 把每个 edge.id 映射到其起点/终点所属的中心索引（无则 null）。 */
 export function detectJunctions(roadNetwork) {
   // ── 优先数据层 junction（scene_pub 单一事实源）──
-  // 但数据层必须带可用坐标（x/y/z）；否则 junctionsFromData 会把全部中心
-  // 塌缩到原点（worldToThree(0,0)）→ 路口铺装/斑马线/停止线/转向导流全算到
-  // 世界原点、路口聚类+裁剪彻底失效（本仓库 osm_lujiazui_v2 的 junctions[]
-  // 只带 id/type/incoming_road/connecting_roads，无坐标）。此时几何端点聚类
-  // 兜底（基于 edge 真实几何）反而正确，故回退。
+  // 数据源优先级：
+  //   1. road_network.junctions[]（live 路径：scene_pub 数据层预计算）
+  //   2. road_network.map_junctions[]（map preview 路径：osm2kmap fork 契约，
+  //      携带 shape 多边形，前端直接消费真实路口多边形）
+  // 两者必须带可用坐标（x/y/z 或 shape）；否则回退几何端点聚类。
   const dataJ = Array.isArray(roadNetwork?.junctions) ? roadNetwork.junctions : [];
-  const dataHasCoords = dataJ.length &&
-    dataJ.some((j) => j.x != null || j.y != null || j.z != null ||
+  const mapJ = Array.isArray(roadNetwork?.map_junctions) ? roadNetwork.map_junctions : [];
+  const allDataJ = [...dataJ, ...mapJ];
+  const dataHasCoords = allDataJ.length &&
+    allDataJ.some((j) => j.x != null || j.y != null || j.z != null ||
       (Array.isArray(j.shape) && j.shape.length > 0));
-  if (dataHasCoords) return junctionsFromData(roadNetwork, dataJ);
+  if (dataHasCoords) return junctionsFromData(roadNetwork, allDataJ);
 
   // ── 兜底：端点几何聚类 ──
   const centers = [];

@@ -8,7 +8,7 @@
   "duration_s": 120,
   "lighting": "day",
   "weather": "clear",
-  "visibility_m": 1200,
+  "visibility_m": 3000,
   "npc_lane_change": true,
   "ego": {
     "x": 248.802,

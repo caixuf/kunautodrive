@@ -145,9 +145,12 @@ function toTopo(map, routes, routeId) {
   const mapJunctions = Array.isArray(map.junctions) ? map.junctions : [];
   /* P2 车道级渲染：roads[].lanes[]（centerline/width/markings）按 road.id
    * 键控注入 road_network.lane_data，RoadView 直接消费（与 live 路径的
-   * MapData 注入同形同键）。 */
+   * MapData 注入同形同键）。
+   * laneData 必须包含内部 connector（road_j*）的 lanes —— ConnectorView
+   * 需要 connector 的 successors 来解析 fork turn 的目标 arm（OSM 大地图
+   * fork.connecting_roads 全是 road_j，不在 edges/arms 里，走不通直查）。 */
   const laneData = {};
-  for (const road of roads) {
+  for (const road of (map.roads || [])) {
     if (road && road.id && Array.isArray(road.lanes) && road.lanes.length) {
       laneData[road.id] = road.lanes;
     }

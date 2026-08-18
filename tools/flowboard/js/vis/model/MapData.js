@@ -24,8 +24,8 @@ let _failedAt = new Map();  // mapId -> 上次失败时间戳
 let _data = null;          // {junctions: Array, laneData: {roadId: lanes[]}}
 
 const LARGE_MAP_ROAD_LIMIT = 5000;
-const PREVIEW_CORRIDOR_CELL_M = 250;
-const BUILDING_CORRIDOR_M = 250;   // 建筑只保留选中路网走廊内，防数万栋楼全量渲染
+const PREVIEW_CORRIDOR_CELL_M = 800;   // 扩大走廊范围至 800m，显示更多远处道路细节
+const BUILDING_CORRIDOR_M = 800;       // 建筑也保留至 800m 走廊内
 
 /** SUMO 内部连接器在 map_compiler 后可能没有 sumo_id，road_j 前缀是当前
  * 编译产物保留下来的稳定语义。connector 仍进入 laneData 供导航消费，

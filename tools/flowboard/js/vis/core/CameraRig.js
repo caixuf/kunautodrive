@@ -40,24 +40,25 @@ export function createCameraRig(canvas) {
   let mapAutoFollow = false;
 
   // D-2: OrbitControls — 初始 disabled，仅 orbit 模式启用
+  // 只创建 orbitControls，在 map 模式下也复用它（禁用 rotate），
+  // 避免两个 controls 同时绑定 canvas 导致事件冲突/缩放卡住。
   const orbitControls = new OrbitControls(camera, canvas);
   orbitControls.enabled = false;
   orbitControls.screenSpacePanning = true;   // 平移沿屏幕平面，俯视预览"手抓地图"更直观
   orbitControls.zoomToCursor = true;
   orbitControls.mouseButtons.RIGHT = -1;     // 禁用右键（避免 contextmenu 冲突），左键用 P/Space 切换旋转/平移
   orbitControls.target.set(0, 0, 0);
+  orbitControls.minDistance = 2;             // 近距离限制，防止穿入地面
+  orbitControls.maxDistance = 8000;          // 远距离限制，防止飞出地图太远
+  orbitControls.zoomSpeed = 1.5;            // 提高缩放灵敏度，近距离时仍有响应
   orbitControls.update();
 
-  const mapControls = new MapControls(camera, canvas);
-  mapControls.enabled = false;
-  mapControls.enableRotate = false;
-  mapControls.screenSpacePanning = true;
-  mapControls.zoomToCursor = true;
-  mapControls.mouseButtons.RIGHT = -1;       // 同上：禁用右键，左键平移/滚轮缩放
-  mapControls.target.set(0, 0, 0);
-  mapControls.update();
+  // mapControls 已废弃——复用 orbitControls + enableRotate=false 替代
+  // （保留引用以防外部代码引用，但不再绑定 canvas）
+  const mapControls = orbitControls;
 
-  mapControls.addEventListener('start', () => {
+  // map 和 orbit 都复用 orbitControls，start 事件统一处理
+  orbitControls.addEventListener('start', () => {
     if (mode === 'map') mapAutoFollow = false;
   });
 
@@ -170,11 +171,11 @@ export function createCameraRig(canvas) {
       case 'map': {
         if (needsControlSnap || mapAutoFollow) {
           camera.position.set(mapTargetX, mapTargetY + mapHeight, mapTargetZ);
-          mapControls.target.set(mapTargetX, mapTargetY, mapTargetZ);
+          orbitControls.target.set(mapTargetX, mapTargetY, mapTargetZ);
           camera.lookAt(mapTargetX, mapTargetY, mapTargetZ);
           needsControlSnap = false;
         }
-        mapControls.update();
+        orbitControls.update();
         break;
       }
       case 'orbit': {
@@ -216,8 +217,13 @@ export function createCameraRig(canvas) {
       mode = m;
       needsControlSnap = (mode === 'map' || mode === 'orbit');
       mapAutoFollow = (mode === 'map');
-      orbitControls.enabled = (mode === 'orbit');
-      mapControls.enabled = (mode === 'map');
+      // map 和 orbit 都复用 orbitControls（map 模式下禁用旋转）
+      orbitControls.enabled = (mode === 'map' || mode === 'orbit');
+      if (mode === 'map') {
+        orbitControls.enableRotate = false;    // map 模式：只平移+缩放
+      } else {
+        orbitControls.enableRotate = true;     // orbit 模式：旋转+平移+缩放
+      }
     }
   }
 
@@ -235,12 +241,11 @@ export function createCameraRig(canvas) {
    * 键盘切换（见 mapPreview.js），避免右键平移与浏览器上下文菜单冲突。 */
   function setOrbitLeftAction(action) {
     const mapMode = mode === 'map';
+    // map 和 orbit 都复用 orbitControls，无需同时设置两个
     if (action === 'pan') {
       orbitControls.mouseButtons.LEFT = THREE.MOUSE.PAN;
-      mapControls.mouseButtons.LEFT = THREE.MOUSE.PAN;
     } else {
       orbitControls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
-      mapControls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
     }
     return mapMode ? 'map' : (action === 'pan' ? 'pan' : 'rotate');
   }
@@ -260,8 +265,7 @@ export function createCameraRig(canvas) {
   function reset(roadGroup) {
     orbitControls.target.set(0, 0, 0);
     orbitControls.update();
-    mapControls.target.set(0, 0, 0);
-    mapControls.update();
+    // mapControls 已合并到 orbitControls，无需重复 reset
     needsControlSnap = (mode === 'map' || mode === 'orbit');
     mapAutoFollow = (mode === 'map');
 

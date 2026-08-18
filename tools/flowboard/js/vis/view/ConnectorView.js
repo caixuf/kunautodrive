@@ -104,8 +104,9 @@ export function createConnectorView(scene) {
     //  的 _buildJunctionPatch 重叠渲染且方向错，删除。 ──
 
     // ── 2b. 交叉口路面补齐：在每个检测到的路口中心铺一块**真实路口多边形**
-    //  沥青路面（比路宽大一点，覆盖四向收口后的缺口）+ 四个方向斑马线 ──
-    _buildJunctionPatch(topo, centers, junctions);
+    //  沥青路面（比路宽大一点，覆盖四向收口后的缺口）+ 四个方向斑马线。
+    //  laneData 供 connectingRoads 解析内部 connector → 真实 edge 的转向路径。 ──
+    _buildJunctionPatch(topo, centers, junctions, roadNetwork.lane_data || null);
 
     // ── 2c. 转向连接曲线已删除（2026-08-15，P1 渠化替代）：旧实现按 fork turn 画
     //  彩色 ribbon，但 incoming_road 是 base 路名、byId 键是分段 edge id，键型
@@ -132,6 +133,15 @@ export function createConnectorView(scene) {
     for (const edge of edges) {
       if (!edge.bridge) continue;
       _buildViaductPier(edge);
+    }
+
+    // ── 4b. BridgeRamp：桥隧端点坡道渐变过渡（消除 6m 悬崖） ──
+    // osm2kmap 写桥高 = 6.0*max(1,layer)，端点处从地面直跳 6m → 侧面
+    // 看到悬崖断面。在桥/隧 edge 的首尾端检测高程跳变（>2m），沿路面向
+    // 地面方向延伸 30m 坡道，路面 ribbon 从地面高程线性过渡到桥面高程。
+    for (const edge of edges) {
+      if (!edge.bridge && !isTunnelEdge(edge)) continue;
+      _buildBridgeRamp(edge);
     }
 
     // ── 5. BarrierEndCap：只在**真断头端点**（孤端）放防撞桶 ──
@@ -222,7 +232,7 @@ export function createConnectorView(scene) {
    *  拓扑（centers/arms/折线点）来自 TopologyModel 单一事实源；
    *  标线用 walkFromJunction 径向出圈取位置与局部切线（曲路贴弯）；
    *  polygon 圆角化（Chaikin 2 次切角）；转向导流线用 junctionData 的 turn。 */
-  function _buildJunctionPatch(topo, centers, junctionData) {
+  function _buildJunctionPatch(topo, centers, junctionData, laneData) {
     if (!topo || !centers.length) return;
 
     // 路口多边形（合并单 mesh）+ 斑马线/停止线/导流线 InstancedMesh
@@ -270,7 +280,7 @@ export function createConnectorView(scene) {
       // 本路口才算），停止线按来车归属——只有作为某条转向路径来车端的 arm 才画
       // （单行道驶出侧/纯出口 arm 不画）；无 turn 数据时回退每个 arm 全画。
       // 斑马线行人过街与车流方向无关，保持每个 arm 都画。
-      const conns = connectingRoads(ci, arms, junctionData);
+      const conns = connectingRoads(ci, arms, junctionData, laneData);
       const incomingIdx = new Set();
       for (const conn of conns) {
         if (conn.fromIdx != null && conn.toIdx != null) incomingIdx.add(conn.fromIdx);
@@ -375,8 +385,28 @@ export function createConnectorView(scene) {
    *  arm 在本路口的，才算本路口的转向路径。返回 [{fromIdx, toIdx, turn}]。
    *  incoming_road 是 base 路名（如 "东泰路"），arm edgeId 可能是其分段
    *  （"东泰路_47279978"）——来车匹配 = 精确相等 OR `base_` 前缀（下划线
-   *  分隔防"东泰路北段"类误配）；一条双向路的所有分段 arm 都是来车端。 */
-  function connectingRoads(ci, arms, junctionData) {
+   *  分隔防"东泰路北段"类误配）；一条双向路的所有分段 arm 都是来车端。
+   *
+   *  OSM 大地图（郑东等）：fork 的 connecting_roads 全部是 SUMO 内部 connector
+   *  （road_j*），它们不在 edges/arms 列表中。直接 lookup armIdx.get(conn.id)
+   *  必定 null → 全部跳过 → 转向导流线/停止线归属永远画不出来。
+   *  修复：connector 走不通直查时，从 laneData 取其 lane successors →
+   *  提取 base road id → 在 armIdx 里找目标 arm。 */
+  function resolveConnectorTarget(connId, laneData, armIdx) {
+    const lanes = laneData && laneData[connId];
+    if (!Array.isArray(lanes)) return [];
+    const found = [];
+    for (const lane of lanes) {
+      for (const s of (lane.successors || [])) {
+        const base = String(s).split('.lane.')[0];
+        const idx = armIdx.get(base);
+        if (idx != null && !found.includes(idx)) found.push(idx);
+      }
+    }
+    return found;
+  }
+
+  function connectingRoads(ci, arms, junctionData, laneData) {
     const out = [];
     if (!Array.isArray(junctionData) || !junctionData.length) return out;
     const armIdx = new Map();   // edgeId -> arms 下标
@@ -395,11 +425,15 @@ export function createConnectorView(scene) {
       const fromIdxs = fromIndices(f.incoming_road);
       if (!fromIdxs.length) continue;
       for (const conn of (f.connecting_roads || [])) {
-        const toIdx = armIdx.get(String(conn.id));
-        if (toIdx == null) continue;
-        for (const fromIdx of fromIdxs) {
-          if (toIdx === fromIdx) continue;
-          out.push({ fromIdx, toIdx, turn: conn.turn || 'straight' });
+        let toIdxs = armIdx.has(String(conn.id)) ? [armIdx.get(String(conn.id))] : [];
+        if (!toIdxs.length) {
+          toIdxs = resolveConnectorTarget(String(conn.id), laneData, armIdx);
+        }
+        for (const toIdx of toIdxs) {
+          for (const fromIdx of fromIdxs) {
+            if (toIdx === fromIdx) continue;
+            out.push({ fromIdx, toIdx, turn: conn.turn || 'straight' });
+          }
         }
       }
     }
@@ -555,6 +589,80 @@ export function createConnectorView(scene) {
       group.add(pier);
       lastS = s;
     }
+  }
+
+  /** 4b. BridgeRamp：桥隧端点坡道渐变过渡（消除 6m 悬崖）。
+   *  沿 edge 节点序列扫描高程跳变（相邻节点高差 >2m），在跳变方向反向
+   *  延伸 RAMP_LEN 米，生成梯形坡道 mesh（从地面高程线性过渡到桥面高程）。
+   *  路面 ribbon 宽 = edge 全宽 + 路肩，高程沿线性插值，两片三角形即可。
+   *  只处理首尾端——中间高程渐变由 edge.nodes 本身描述（SUMO 已插值）。 */
+  function _buildBridgeRamp(edge) {
+    const nodes = (edge.nodes || []).map((n) =>
+      Array.isArray(n) ? [n[0] || 0, n[1] || 0, n[2] || 0]
+        : [n.x || 0, n.y || 0, n.z || 0]);
+    if (nodes.length < 2) return;
+
+    const laneW = Number(edge.lane_width) || 3.5;
+    const lanes = Number(edge.lanes) || 2;
+    const halfW = (lanes * laneW) / 2 + 0.6;  // 含路肩余量
+    const RAMP_LEN = 30;   // 坡道长度 (m)
+    const THRESHOLD = 2.0; // 高程跳变阈值 (m)
+
+    // 检测首端高程跳变：nodes[0] 与 nodes[1] 的高差
+    const h0 = nodes[0][2] || 0;
+    const h1 = nodes[1][2] || 0;
+    const hEnd = nodes[nodes.length - 1][2] || 0;
+    const hPrev = nodes[nodes.length - 2][2] || 0;
+
+    const rampMat = getStdMaterial(TAPER_COLOR, 0.92, 0.0);
+
+    // 首端坡道：从外部（地面）向内（桥面）过渡
+    if (Math.abs(h1 - h0) > THRESHOLD) {
+      _buildRampSegment(nodes, 0, 1, halfW, h0, RAMP_LEN, rampMat, false);
+    }
+    // 末端坡道：从内部（桥面）向外部（地面）过渡
+    if (Math.abs(hEnd - hPrev) > THRESHOLD) {
+      _buildRampSegment(nodes, nodes.length - 1, nodes.length - 2, halfW, hEnd, RAMP_LEN, rampMat, true);
+    }
+  }
+
+  /** 构建单侧坡道渐变段：从端点向外延伸 rampLen 米，高程从端点高程
+   *  线性过渡到地面高程（0）。polyline 沿端点切线方向外推。 */
+  function _buildRampSegment(nodes, tipIdx, adjIdx, halfW, tipH, rampLen, mat, atEnd) {
+    const tip = nodes[tipIdx], adj = nodes[adjIdx];
+    if (!tip || !adj) return;
+    // 切线方向（ENU XY）→ 外推方向
+    const dx = tip[0] - adj[0], dy = tip[1] - adj[1];
+    const dl = Math.hypot(dx, dy) || 1;
+    const ux = dx / dl, uy = dy / dl;   // 沿路方向单位向量
+    // 法线方向（垂直于路面）
+    const nx = -uy, ny = ux;
+
+    // 4 个顶点：端点两侧 + 外推端两侧
+    const steps = 4;  // 梯形分段数（保持简单）
+    const positions = [];
+    const indices = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const ex = tip[0] + ux * rampLen * t;
+      const ey = tip[1] + uy * rampLen * t;
+      const h = tipH * (1 - t);  // 线性过渡到地面
+      const [lx, , lz] = worldToThree(ex + nx * halfW, ey + ny * halfW, 0);
+      const [rx, , rz] = worldToThree(ex - nx * halfW, ey - ny * halfW, 0);
+      positions.push(lx, h, lz, rx, h, rz);
+    }
+    const vertCount = (steps + 1) * 2;
+    for (let i = 0; i < steps; i++) {
+      const base = i * 2;
+      indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.receiveShadow = true;
+    group.add(mesh);
   }
 
   /** 5. BarrierEndCap：防撞桶（红白圆柱）只放在真断头（孤端）端点。
