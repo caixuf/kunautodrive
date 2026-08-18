@@ -1,7 +1,20 @@
 # KunAutoDrive 文档导航
 
-本页是 `docs/` 的**唯一导航入口**。根目录 [README](../README.md) 只保留项目概览、
+本页是 `docs/` 的**导航入口**。根目录 [README](../README.md) 只保留项目概览、
 快速运行和常用入口；模块事实、契约和操作说明以本页指定的文档为准。
+
+## 阅读方式
+
+`docs/` 现在以「一本书」的形式组织：
+
+| 入口 | 用途 |
+|------|------|
+| [**KunAutoDrive 技术全书**（BOOK.md）](BOOK.md) | **通读用**：总序 + 九卷分卷目录 + 每卷导读 + 五条阅读路线 |
+| [**术语表**（GLOSSARY.md）](GLOSSARY.md) | 查术语：全书反复出现的名词一句话定义 |
+| [**全书索引**（INDEX.md）](INDEX.md) | 检索用：按「任务 / 主题 / 文件」三种方式找文档 |
+| 本页（README.md） | 快速导航：按模块查阅权威文档 |
+
+新手从 [BOOK.md](BOOK.md) 的「新人线」读起；老手直接用 [INDEX.md](INDEX.md) 检索。
 
 ## 按模块查阅
 
@@ -41,3 +54,5 @@
 - 修改 API 或 JSON 字段，更新相应契约文档；其中 `road_network` 只在
   [FlowBoard Scene 契约](FLOWBOARD_SCENE_CONTRACT.md) 定义。
 - `FLOWREC.md` 是 flowrec 的独立权威文档；本导航只建立入口，不复制其内容。
+- **新增 / 删除 / 重命名文档**时，同步维护 [BOOK.md](BOOK.md)（卷目录登记一行）与
+  [INDEX.md](INDEX.md)（三类索引里的引用），避免「书」与磁盘脱节。

@@ -19,11 +19,23 @@
 #ifndef O_TRUNC
 #define O_TRUNC  0x0200
 #endif
+#ifndef O_EXCL
+#define O_EXCL   0x0400
+#endif
 #ifndef O_APPEND
 #define O_APPEND 0x0008
 #endif
+#ifndef O_BINARY
+#define O_BINARY 0x8000
+#endif
 #ifndef O_NOCTTY
 #define O_NOCTTY 0
+#endif
+#ifndef _S_IREAD
+#define _S_IREAD 0x0100
+#endif
+#ifndef _S_IWRITE
+#define _S_IWRITE 0x0080
 #endif
 #ifndef F_GETFL
 #define F_GETFL 3

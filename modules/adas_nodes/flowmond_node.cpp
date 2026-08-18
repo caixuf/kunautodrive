@@ -160,12 +160,13 @@ static int flowmond_init(MessageBus* bus, Transport* transport,
     return 0;
 }
 
-/* 后台线程：监控 /tmp/flow_topology.json 并注入到 monitor_server，
- * 使 3D scene 数据（自车、障碍物、弯道等）能通过 HTTP API 获取。 */
+/* 后台线程：监控 topology JSON 文件并注入到 monitor_server，
+ * 使 3D scene 数据（自车、障碍物、弯道等）能通过 HTTP API 获取。
+ * 使用 flowengine_state_file() 获取跨平台路径（Windows: %TEMP%）。 */
 static pthread_t g_watcher_thread;
 static volatile int g_watcher_running = 0;
 static void* dashboard_file_watcher(void*) {
-    const char* path = "/tmp/flow_topology.json";
+    const char* path = flowengine_state_file();
     uint64_t last_mtime = 0;
     while (g_watcher_running) {
         struct stat st;

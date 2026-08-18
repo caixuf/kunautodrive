@@ -165,3 +165,4 @@ build-win-vs/
 build-mingw/
 # Offline Eigen vendor tree (header-only; prefer build/_deps clone or this local cache)
 third_party/eigen/
+.mimocode

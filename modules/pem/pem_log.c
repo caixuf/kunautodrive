@@ -185,7 +185,7 @@ static int open_segment(PemLog* log, uint64_t now_us) {
         snprintf(log->current_path, sizeof(log->current_path), "%s_%s_%03u.pem",
                  log->base_path, stamp, log->sequence++);
 #if defined(_WIN32)
-        fd = _open(log->current_path, _O_CREAT | _O_EXCL | _O_WRONLY | _O_BINARY,
+        fd = _open(log->current_path, O_CREAT | O_EXCL | O_WRONLY | O_BINARY,
                    _S_IREAD | _S_IWRITE);
 #else
         fd = open(log->current_path, O_CREAT | O_EXCL | O_WRONLY, 0644);
