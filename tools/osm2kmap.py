@@ -1021,6 +1021,11 @@ def serialize_kmap(doc: dict, map_id: str, name: str) -> str:
         L.append(f"        oneWay: {str(r.get('oneway', True)).lower()}")
         L.append(f"        lanes: {len(r.get('lanes', []))}")
         L.append(f"        name: {json.dumps(r.get('name') or '')}")
+        if r.get("internal") or str(r.get("sumo_id", "")).startswith(":"):
+            # 路口内部 connector：导航拓扑，不是可见道路。显式写 internal，
+            # 前端/下游据此跳过铺路面渲染，不再依赖 road_j 命名前缀特例。
+            # 已有 internal 键（编译产物）直接透传，保证 serialize→compile 幂等。
+            L.append(f"        internal: true")
         if r.get("bridge"):
             L.append(f"        bridge: true")
         if r.get("tunnel"):

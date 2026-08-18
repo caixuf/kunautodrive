@@ -9,7 +9,7 @@
  * lane_data 消费测试 + 浏览器验证兜底。
  */
 import { resolveMapId, setMapData, resetMapData, mapDataForScenario,
-  selectRoadsForPreview } from '../tools/flowboard/js/vis/model/MapData.js';
+  selectRoadsForPreview, selectBuildingsForPreview } from '../tools/flowboard/js/vis/model/MapData.js';
 import { ok, done } from './test-utils.mjs';
 
 console.log('=== MapData 数据通道 ===\n');
@@ -58,6 +58,22 @@ ok('别名场景取同一地图', mapDataForScenario('osm_city_map') === null); 
   ok('超大图保留路线', largeSelected.some((r) => r.id === 'route'));
   ok('超大图保留路线走廊', largeSelected.some((r) => r.id === 'near'));
   ok('超大图剔除远端细节', !largeSelected.some((r) => r.id === 'far'));
+})();
+
+// ── 5. 建筑走廊过滤 ──
+(() => {
+  const roads = [
+    { id: 'route', centerline: [[0, 0, 0], [100, 0, 0]] },
+    { id: 'far', centerline: [[10000, 10000, 0], [10100, 10000, 0]] },
+  ];
+  const buildings = [
+    { id: 'b_near', footprint: [[10, -10], [10, 10], [-10, 10], [-10, -10]] },   // 走廊内
+    { id: 'b_far', footprint: [[5950, 6000], [6050, 6000], [6050, 6050], [5950, 6050]] },  // 远离所有路
+  ];
+  const near = selectBuildingsForPreview(buildings, roads);
+  ok('建筑走廊内保留', near.some((b) => b.id === 'b_near'));
+  ok('建筑走廊外剔除', !near.some((b) => b.id === 'b_far'));
+  ok('无道路时建筑不误裁剪', selectBuildingsForPreview(buildings, []).length === buildings.length);
 })();
 
 resetMapData();

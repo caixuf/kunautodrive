@@ -70,6 +70,16 @@ function dist2(a, b) {
   return Math.hypot(a.x - b.x, a.z - b.z);
 }
 
+/* 高度层：立体交通里同一 XY 会有地面/高架/隧道多条路。端点聚簇必须带高度层，
+ * 否则高架桥面与桥下地面路被当成同一路口 → 斑马线/停止线/铺装跨层重叠。
+ * osm2kmap 写桥高 = 6m×layer，故按 6m 步长分桶；隧道固定 -4m。 */
+const LEVEL_TOL_M = 0.5;
+const LEVEL_STEP_M = 6.0;
+function levelOf(py) {
+  if (!Number.isFinite(py) || Math.abs(py) <= LEVEL_TOL_M) return 0;
+  return Math.round(py / LEVEL_STEP_M);
+}
+
 /** 把 edge 的起点/终点匹配到最近的路口中心（<= CLUSTER_RADIUS_M），
  *  构建 byId: Map<edgeId, {start:中心索引|null, end:中心索引|null}>。 */
 function matchEdgesToCenters(edges, centers) {
@@ -83,13 +93,17 @@ function matchEdgesToCenters(edges, centers) {
     const start = nodePoint(nodes[0]);
     const end = nodePoint(nodes[nodes.length - 1]);
     let sIdx = null, eIdx = null, sBest = Infinity, eBest = Infinity;
+    const sLv = start ? levelOf(start.yUp) : 0;
+    const eLv = end ? levelOf(end.yUp) : 0;
     const candidates = new Set([
       ...nearbyCenterIndices(index, start?.x || 0, start?.z || 0, CLUSTER_RADIUS_M),
       ...nearbyCenterIndices(index, end?.x || 0, end?.z || 0, CLUSTER_RADIUS_M),
     ]);
     for (const i of candidates) {
-      const dS = start ? dist2(start, centers[i]) : Infinity;
-      const dE = end ? dist2(end, centers[i]) : Infinity;
+      const c = centers[i];
+      if (c.level != null && c.level !== sLv && c.level !== eLv) continue;   // 高度层不符
+      const dS = start ? dist2(start, c) : Infinity;
+      const dE = end ? dist2(end, c) : Infinity;
       if (dS < sBest) { sBest = dS; sIdx = i; }
       if (dE < eBest) { eBest = dE; eIdx = i; }
     }
@@ -121,6 +135,7 @@ function junctionsFromData(roadNetwork, dataJunctions) {
     }
     const [tx, , tz] = worldToThree(Number.isFinite(x) ? x : 0,
       Number.isFinite(y) ? y : 0, Number.isFinite(z) ? z : 0);
+    const py = Number.isFinite(z) ? z : 0;
     let radius = Number(j.radius);
     if (!Number.isFinite(radius) && Array.isArray(j.shape) && j.shape.length) {
       radius = 0;
@@ -131,7 +146,8 @@ function junctionsFromData(roadNetwork, dataJunctions) {
         }
       }
     }
-    return { x: tx, z: tz, radius: Number.isFinite(radius) ? Math.max(8, radius) : 8 };
+    return { x: tx, z: tz, py, level: levelOf(py),
+      radius: Number.isFinite(radius) ? Math.max(8, radius) : 8 };
   });
   const edges = Array.isArray(roadNetwork?.edges) ? roadNetwork.edges : [];
   const byId = matchEdgesToCenters(edges, centers);
@@ -177,8 +193,8 @@ export function detectJunctions(roadNetwork) {
 
     const start = nodePoint(nodes[0]);
     const end = nodePoint(nodes[nodes.length - 1]);
-    if (start) endpoints.push({ ...start, edgeId: id, isStart: true, reach });
-    if (end) endpoints.push({ ...end, edgeId: id, isStart: false, reach });
+    if (start) endpoints.push({ ...start, level: levelOf(start.yUp), edgeId: id, isStart: true, reach });
+    if (end) endpoints.push({ ...end, level: levelOf(end.yUp), edgeId: id, isStart: false, reach });
   }
 
   // ── 第二遍：贪心聚类（遍历序即可，网格端点天然成簇）──
@@ -188,7 +204,9 @@ export function detectJunctions(roadNetwork) {
     let best = -1, bestDist = Infinity;
     const candidates = nearbyCenterIndices(grid, ep.x, ep.z, CLUSTER_RADIUS_M);
     for (const i of candidates) {
-      const d = dist2(ep, centers[i]);
+      const c = centers[i];
+      if (c.level !== ep.level) continue;   // 高度层不符：高架/地面/隧道不混簇
+      const d = dist2(ep, c);
       if (d < bestDist) { bestDist = d; best = i; }
     }
     if (best >= 0 && bestDist <= CLUSTER_RADIUS_M) {
@@ -198,10 +216,11 @@ export function detectJunctions(roadNetwork) {
       c.n = (c.n || 0) + 1;
       c.x = (c.x * (c.n - 1) + ep.x) / c.n;
       c.z = (c.z * (c.n - 1) + ep.z) / c.n;
+      c.py = (c.py * (c.n - 1) + (ep.yUp || 0)) / c.n;
       c.radius = Math.max(c.radius || 0, ep.reach);
     } else {
       const index = centers.length;
-      centers.push({ x: ep.x, z: ep.z, n: 1, radius: ep.reach });
+      centers.push({ x: ep.x, z: ep.z, py: ep.yUp || 0, level: ep.level, n: 1, radius: ep.reach });
       const k = grid.key(ep.x, ep.z);
       let bucket = grid.grid.get(k);
       if (!bucket) { bucket = []; grid.grid.set(k, bucket); }
@@ -227,7 +246,11 @@ export function detectJunctions(roadNetwork) {
   for (let i = 0; i < centers.length; i++) {
     if ((centers[i].n || 0) >= 3) {
       validIdx.set(i, validCenters.length);
-      validCenters.push({ x: centers[i].x, z: centers[i].z, radius: centers[i].radius || 0 });
+      validCenters.push({
+        x: centers[i].x, z: centers[i].z,
+        py: centers[i].py || 0, level: centers[i].level || 0,
+        radius: centers[i].radius || 0,
+      });
     }
   }
   for (const [edgeId, entry] of byId) {

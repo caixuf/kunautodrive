@@ -41,9 +41,9 @@ DEFAULT_SCENARIO = os.path.join(PROJECT_ROOT, "scenarios", "osm_city_map.json")
 # 注：overpass-api.de 对数据中心 IP 返回 406（Apache WAF 拦截），
 # 故默认从可用的镜像（kumi/private.coffee）开始。
 OVERPASS_ENDPOINTS = [
+    "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",
-    "https://overpass-api.de/api/interpreter",
 ]
 
 # ── WGS84 → ENU 近似投影参数 ───────────────────────────────

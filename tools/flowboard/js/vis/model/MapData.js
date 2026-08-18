@@ -25,6 +25,7 @@ let _data = null;          // {junctions: Array, laneData: {roadId: lanes[]}}
 
 const LARGE_MAP_ROAD_LIMIT = 5000;
 const PREVIEW_CORRIDOR_CELL_M = 250;
+const BUILDING_CORRIDOR_M = 250;   // 建筑只保留选中路网走廊内，防数万栋楼全量渲染
 
 /** SUMO 内部连接器在 map_compiler 后可能没有 sumo_id，road_j 前缀是当前
  * 编译产物保留下来的稳定语义。connector 仍进入 laneData 供导航消费，
@@ -33,6 +34,68 @@ export function isInternalRoad(road) {
   return !!road && (road.internal === true ||
     (road.sumo_id && String(road.sumo_id).startsWith(':')) ||
     String(road.id || '').startsWith('road_j'));
+}
+
+/** 建筑走廊过滤：只保留 centroid 距任一选中道路中心线折线 < BUILDING_CORRIDOR_M
+ * 的建筑。与 selectRoadsForPreview 同走廊语义，防止数万栋全城楼进渲染。
+ * footprint 质心优先，缺失用 b.x/b.y。 */
+export function selectBuildingsForPreview(buildings, roads) {
+  if (!Array.isArray(buildings) || !buildings.length) return buildings || [];
+  if (!Array.isArray(roads) || !roads.length) return buildings;
+  const cell = 100;
+  const grid = new Map();
+  const cellKey = (x, y) => `${Math.floor(x / cell)},${Math.floor(y / cell)}`;
+  const addSeg = (x0, y0, x1, y1) => {
+    const seg = { x0, y0, x1, y1 };
+    const minX = Math.min(x0, x1), maxX = Math.max(x0, x1);
+    const minY = Math.min(y0, y1), maxY = Math.max(y0, y1);
+    for (let cx = Math.floor(minX / cell); cx <= Math.floor(maxX / cell); cx++) {
+      for (let cy = Math.floor(minY / cell); cy <= Math.floor(maxY / cell); cy++) {
+        const k = cx + ',' + cy;
+        let bucket = grid.get(k);
+        if (!bucket) { bucket = []; grid.set(k, bucket); }
+        bucket.push(seg);
+      }
+    }
+  };
+  for (const road of roads) {
+    const pts = (road && (road.centerline || road.nodes)) || [];
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i];
+      if (Array.isArray(a) && Array.isArray(b)) {
+        addSeg(Number(a[0]) || 0, Number(a[1]) || 0, Number(b[0]) || 0, Number(b[1]) || 0);
+      }
+    }
+  }
+  const near = (x, y) => {
+    const cx = Math.floor(x / cell), cy = Math.floor(y / cell);
+    let best = Infinity;
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const segs = grid.get((cx + dx) + ',' + (cy + dy));
+        if (!segs) continue;
+        for (const s of segs) {
+          const abx = s.x1 - s.x0, aby = s.y1 - s.y0;
+          const len2 = abx * abx + aby * aby || 1e-9;
+          const t = Math.max(0, Math.min(1, ((x - s.x0) * abx + (y - s.y0) * aby) / len2));
+          const d = Math.hypot(x - (s.x0 + abx * t), y - (s.y0 + aby * t));
+          if (d < best) best = d;
+        }
+      }
+    }
+    return best < BUILDING_CORRIDOR_M;
+  };
+  return buildings.filter((b) => {
+    const fp = Array.isArray(b.footprint) ? b.footprint : null;
+    let bx, by;
+    if (fp && fp.length) {
+      bx = fp.reduce((s, p) => s + (Number(p[0]) || 0), 0) / fp.length;
+      by = fp.reduce((s, p) => s + (Number(p[1]) || 0), 0) / fp.length;
+    } else {
+      bx = Number(b.x) || 0; by = Number(b.y) || 0;
+    }
+    return near(bx, by);
+  });
 }
 
 /** 超大地图只取路线周边走廊，避免把整张城市路网当成一帧 3D 细节图。
@@ -120,7 +183,8 @@ function buildIndex(map, routes) {
     });
   }
   const junctions = Array.isArray(rn.junctions) ? rn.junctions : [];
-  const buildings = Array.isArray(rn.buildings) ? rn.buildings : [];
+  const buildings = selectBuildingsForPreview(
+    Array.isArray(rn.buildings) ? rn.buildings : [], roads);
   return { junctions, laneData, edges, buildings };
 }
 

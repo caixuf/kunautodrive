@@ -117,7 +117,8 @@ export function createBarrierView(scene) {
           // 立柱旋转：让 box 沿道路切向
           // 切线 = (tx, tz) = (nz, -nx)（从法线 nx=-tz/l, nz=tx/l 反推）
           const rotY = directionToRotationY(s.nz, -s.nx);
-          posts.push({ x, y: POST_H / 2, z, rotY });
+          const py = s.py || 0;   // 高架护栏随路面高程
+          posts.push({ x, y: py + POST_H / 2, z, rotY });
 
           // 横梁段（除链首外，每根立柱连一段到前一根）
           if (prev) {
@@ -128,8 +129,8 @@ export function createBarrierView(scene) {
             const len = Math.sqrt(dx * dx + dz * dz);
             if (len > 0.01) {
               const beamRotY = directionToRotationY(dx, dz);
-              upperBeamSegs.push({ x: midX, z: midZ, len, rotY: beamRotY });
-              lowerBeamSegs.push({ x: midX, z: midZ, len, rotY: beamRotY });
+              upperBeamSegs.push({ x: midX, z: midZ, len, rotY: beamRotY, py });
+              lowerBeamSegs.push({ x: midX, z: midZ, len, rotY: beamRotY, py });
             }
           }
           prev = { x, z };
@@ -162,14 +163,14 @@ export function createBarrierView(scene) {
     for (let i = 0; i < M; i++) {
       const b = upperBeamSegs[i];
       const scale = b.len / SEGMENT_LEN;
-      dummy.position.set(b.x, BEAM_UPPER_Y, b.z);
+      dummy.position.set(b.x, (b.py || 0) + BEAM_UPPER_Y, b.z);
       dummy.rotation.set(0, b.rotY, 0);
       dummy.scale.set(scale, 1, 1);
       dummy.updateMatrix();
       upperBeamMesh.setMatrixAt(i, dummy.matrix);
 
       const lb = lowerBeamSegs[i];
-      dummy.position.set(lb.x, BEAM_LOWER_Y, lb.z);
+      dummy.position.set(lb.x, (lb.py || 0) + BEAM_LOWER_Y, lb.z);
       dummy.rotation.set(0, lb.rotY, 0);
       dummy.scale.set(lb.len / SEGMENT_LEN, 1, 1);
       dummy.updateMatrix();

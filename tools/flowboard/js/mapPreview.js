@@ -1,7 +1,7 @@
 import './bootstrap.js';
 import { init3DScene, resize3D, update3D, setCameraMode, resetMapView, setOrbitLeftAction } from './vis/main.js';
 import { headingBetweenPoints } from './vis/math/Coord.js';
-import { selectRoadsForPreview } from './vis/model/MapData.js';
+import { selectRoadsForPreview, selectBuildingsForPreview, isInternalRoad } from './vis/model/MapData.js';
 
 function clonePoint(point) {
   return [Number(point[0] || 0), Number(point[1] || 0), Number(point[2] || 0)];
@@ -111,8 +111,10 @@ function routeFocus(path) {
 function toTopo(map, routes, routeId) {
   const route = routes.find((item) => item.id === routeId);
   /* 小地图保持全量；超大地图由 selectRoadsForPreview 保留路线及其 250m
-   * 走廊，避免把整张城市路网一次性作为高精度 3D 细节。route 仍用于取景与轨迹线。 */
-  const roads = selectRoadsForPreview(map.roads || [], route);
+   * 走廊，避免把整张城市路网一次性作为高精度 3D 细节。route 仍用于取景与轨迹线。
+   * SUMO 路口内部 connector（road_j*）只服务导航拓扑，预览同样不渲染为普通道路。 */
+  const roads = selectRoadsForPreview(map.roads || [], route)
+    .filter((road) => !isInternalRoad(road));
   const routePath = buildRoutePath(map, route || {});
   const edges = roads.map((road, index) => {
     const lanes = Array.isArray(road.lanes) ? road.lanes : [];
@@ -156,8 +158,10 @@ function toTopo(map, routes, routeId) {
     /* OSM 真实建筑（单源真相）：透传 map.buildings[]（footprint/height），
      * 与 live showcase 路径（sceneAdapter.js）一致。SceneDirector 读取
      * frame.buildings → rn.buildings → BuildingView 按真实轮廓挤出。
+     * 仅保留选中路网走廊内的建筑，防数万栋全城楼进渲染。
      * 不传则 BuildingView 回退到程序化天际线（hash 随机盒体，看起来"胡来"）。 */
-    buildings: Array.isArray(map.buildings) ? map.buildings : [],
+    buildings: selectBuildingsForPreview(
+      Array.isArray(map.buildings) ? map.buildings : [], roads),
     road_network: {edges, map_junctions: mapJunctions, lane_data: laneData},
     ego: {type: 'ego', id: 0, x: focus.centerX, y: focus.centerY, z: focus.centerZ,
       heading: focus.heading, speed: 0, vx: 0, vy: 0, length: 4.6, width: 2,

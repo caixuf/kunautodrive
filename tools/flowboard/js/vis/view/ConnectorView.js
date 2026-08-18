@@ -233,6 +233,7 @@ export function createConnectorView(scene) {
 
     for (let ci = 0; ci < centers.length; ci++) {
       const c = centers[ci];
+      const baseY = c.py || 0;   // 高架/隧道路口的标线随路面高程，不再钉在地面
       const arms = topo.armsOfJunction(ci);
       if (arms.length >= 2) {
         const pts = [];
@@ -260,7 +261,7 @@ export function createConnectorView(scene) {
           smooth = next;
         }
         const base = polyPositions.length / 3;
-        for (const p of smooth) polyPositions.push(p.x, PATCH_Y, p.z);
+        for (const p of smooth) polyPositions.push(p.x, baseY + PATCH_Y, p.z);
         for (let i = 1; i < smooth.length - 1; i++) polyIndices.push(base, base + i, base + i + 1);
       }
 
@@ -284,12 +285,12 @@ export function createConnectorView(scene) {
         const nx = -wc.uz, nz = wc.ux;
         for (let i = 0; i < stripeCount; i++) {
           const across = (i - (stripeCount - 1) / 2) * step;
-          crossInstances.push({ x: wc.x + nx * across, z: wc.z + nz * across, rotY, len: CROSSWALK_LENGTH, w: CROSSWALK_STRIPE_W });
+          crossInstances.push({ x: wc.x + nx * across, z: wc.z + nz * across, y: baseY + CROSS_Y, rotY, len: CROSSWALK_LENGTH, w: CROSSWALK_STRIPE_W });
         }
         if (incomingIdx.size && !incomingIdx.has(ai)) continue;   // 非来车 arm：无停止线
         const ws = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, c.radius + 2.0 + CROSSWALK_LENGTH + 1.5);
         const halfW = a.roadW * 0.25;
-        stopInstances.push({ x: ws.x + ws.uz * halfW, z: ws.z - ws.ux * halfW, rotY: directionToRotationY(ws.ux, ws.uz) + Math.PI / 2, len: a.roadW * 0.5, w: STOP_LINE_W });
+        stopInstances.push({ x: ws.x + ws.uz * halfW, z: ws.z - ws.ux * halfW, y: baseY + STOP_Y, rotY: directionToRotationY(ws.ux, ws.uz) + Math.PI / 2, len: a.roadW * 0.5, w: STOP_LINE_W });
       }
       // 转向引导线：本路口每个 fork junction 的 incoming→connecting 路径
       for (const conn of conns) {
@@ -297,7 +298,7 @@ export function createConnectorView(scene) {
         const fa = arms[conn.fromIdx], ta = arms[conn.toIdx];
         const p0 = walkFromJunction(fa.pts, fa.fromEnd, c.x, c.z, c.radius + 2.5);
         const p1 = walkFromJunction(ta.pts, ta.fromEnd, c.x, c.z, c.radius + 2.5);
-        _drawTurnGuide(p0, p1, conn.turn, guideInstances);
+        _drawTurnGuide(p0, p1, conn.turn, baseY + STOP_Y, guideInstances);
       }
     }
 
@@ -319,7 +320,7 @@ export function createConnectorView(scene) {
       const mesh = new THREE.InstancedMesh(geo, mat, crossInstances.length);
       const dummy = new THREE.Object3D();
       crossInstances.forEach((s, i) => {
-        dummy.position.set(s.x, CROSS_Y, s.z);
+        dummy.position.set(s.x, s.y, s.z);
         dummy.rotation.y = s.rotY;
         dummy.scale.set(s.len, 1, s.w);
         dummy.updateMatrix();
@@ -336,7 +337,7 @@ export function createConnectorView(scene) {
       const mesh = new THREE.InstancedMesh(geo, mat, stopInstances.length);
       const dummy = new THREE.Object3D();
       stopInstances.forEach((s, i) => {
-        dummy.position.set(s.x, STOP_Y, s.z);
+        dummy.position.set(s.x, s.y, s.z);
         dummy.rotation.y = s.rotY;
         dummy.scale.set(s.len, 1, s.w);
         dummy.updateMatrix();
@@ -354,7 +355,7 @@ export function createConnectorView(scene) {
       const mesh = new THREE.InstancedMesh(geo, mat, guideInstances.length);
       const dummy = new THREE.Object3D();
       guideInstances.forEach((s, i) => {
-        dummy.position.set(s.x, STOP_Y, s.z);
+        dummy.position.set(s.x, s.y, s.z);
         dummy.rotation.y = s.rotY;
         dummy.scale.set(s.len, 1, s.w);
         dummy.updateMatrix();
@@ -408,7 +409,7 @@ export function createConnectorView(scene) {
   /** 左转弯引导虚线：从来车 arm 停止线锚点到目标 arm 锚点的二次贝塞尔，
    *  按 1m 实线 + 1m 间隔铺虚线段。控制点 = 两臂切线交点（平行退化为中点）。
    *  p0 的 walk 方向朝路口外，交通进入路口 = -u0；p1 朝路口外 = +u1（驶离）。 */
-  function _drawTurnGuide(p0, p1, turn, out) {
+  function _drawTurnGuide(p0, p1, turn, y, out) {
     if (turn !== 'left') return;   // 只画左转导流（直行/右转不画，避免杂乱）
     const d0x = -p0.ux, d0z = -p0.uz;    // 入路口方向
     const d1x = p1.ux, d1z = p1.uz;      // 出路口方向
@@ -454,7 +455,7 @@ export function createConnectorView(scene) {
         const t0 = (s0 - segStart) / l, t1 = (s1 - segStart) / l;
         const mx = (pts[i - 1].x + dx * t0 + pts[i - 1].x + dx * t1) / 2;
         const mz = (pts[i - 1].z + dz * t0 + pts[i - 1].z + dz * t1) / 2;
-        out.push({ x: mx, z: mz, rotY: directionToRotationY(dx, dz), len: (s1 - s0), w: 0.15 });
+        out.push({ x: mx, z: mz, y, rotY: directionToRotationY(dx, dz), len: (s1 - s0), w: 0.15 });
       }
       acc = segEnd;
     }

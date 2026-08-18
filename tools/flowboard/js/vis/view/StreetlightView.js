@@ -95,7 +95,7 @@ export function createStreetlightView(scene) {
         const x = s.px + s.nx * (halfWidth + LAMP_OFFSET) * side;
         const z = s.pz + s.nz * (halfWidth + LAMP_OFFSET) * side;
         if (topo && topo.nearJunction(x, z, 2.0)) continue;   // 路口避让
-        slots.push({ x, z, nx: s.nx, nz: s.nz, side });
+        slots.push({ x, z, nx: s.nx, nz: s.nz, side, py: s.py || 0 });
       }
     }
 
@@ -121,10 +121,10 @@ export function createStreetlightView(scene) {
     const dummy = new THREE.Object3D();
     for (let i = 0; i < N; i++) {
       const s = slots[i];
-      // ── 杆：竖直立在 (x, 0, z) ──
+      // ── 杆：竖直立在路面高程（s.py，高架/引道路灯随路抬升）──
       // 注意：sampleEdgeNodes 已做 ENU→THREE 交换，p.x / p.z 已是 THREE 坐标，
       // 不要再调 worldToThree（会双交换让灯钻地底）
-      dummy.position.set(s.x, POLE_H / 2, s.z);
+      dummy.position.set(s.x, s.py + POLE_H / 2, s.z);
       dummy.rotation.set(0, 0, 0);
       dummy.updateMatrix();
       poleMesh.setMatrixAt(i, dummy.matrix);
@@ -134,19 +134,19 @@ export function createStreetlightView(scene) {
       const dirX = -s.nx * s.side;
       const dirZ = -s.nz * s.side;
       const armRotY = directionToRotationY(dirX, dirZ);  // 旋转使 BoxGeometry 的 +X 朝向 dir
-      dummy.position.set(s.x + dirX * ARM_LEN / 2, POLE_H, s.z + dirZ * ARM_LEN / 2);
+      dummy.position.set(s.x + dirX * ARM_LEN / 2, s.py + POLE_H, s.z + dirZ * ARM_LEN / 2);
       dummy.rotation.set(0, armRotY, 0);
       dummy.updateMatrix();
       armMesh.setMatrixAt(i, dummy.matrix);
 
       // ── 灯头：在悬臂末端，朝下照路 ──
-      dummy.position.set(s.x + dirX * ARM_LEN, POLE_H - 0.15, s.z + dirZ * ARM_LEN);
+      dummy.position.set(s.x + dirX * ARM_LEN, s.py + POLE_H - 0.15, s.z + dirZ * ARM_LEN);
       dummy.rotation.set(0, armRotY, 0);
       dummy.updateMatrix();
       headMesh.setMatrixAt(i, dummy.matrix);
 
       // ── 灯光辉光：在灯头位置 ──
-      dummy.position.set(s.x + dirX * ARM_LEN, POLE_H - 0.2, s.z + dirZ * ARM_LEN);
+      dummy.position.set(s.x + dirX * ARM_LEN, s.py + POLE_H - 0.2, s.z + dirZ * ARM_LEN);
       dummy.rotation.set(0, 0, 0);
       dummy.updateMatrix();
       glowMesh.setMatrixAt(i, dummy.matrix);
