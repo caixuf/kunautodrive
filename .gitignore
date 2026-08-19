@@ -170,3 +170,6 @@ third_party/eigen/
 # 地图走廊裁剪生成物（corridor_map.py 生成，部署时跑脚本重建）
 maps/*/map_corridor.json
 maps/*/segments/
+
+# 路口渲染调试产物（render_junction.mjs 输出）
+tests/out/

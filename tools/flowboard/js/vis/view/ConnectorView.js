@@ -391,7 +391,16 @@ export function createConnectorView(scene) {
    *  （road_j*），它们不在 edges/arms 列表中。直接 lookup armIdx.get(conn.id)
    *  必定 null → 全部跳过 → 转向导流线/停止线归属永远画不出来。
    *  修复：connector 走不通直查时，从 laneData 取其 lane successors →
-   *  提取 base road id → 在 armIdx 里找目标 arm。 */
+   *  提取 base road id → 在 armIdx 里找目标 arm。
+   *
+   *  fork→路口 1:1 归属（2026-08-19 修复 fork 鬼连接）：
+   *  SUMO 语义：fork 转向发生在 incoming_road.to_node = edge 末端。一条 road
+   *  段两端各接一个路口、同时是两端 arm（fromEnd 一真一假），旧 prefix+altId
+   *  无脑匹配让同一 fork 在两端各画一次——40–100m 外的鬼停止线/导流线。
+   *  refined 匹配规则：
+   *    exact/前缀（主匹配）→ fromEnd===true（转向在末端）
+   *    altId 兜底（road_r→road_）→ fromEnd===false（forward 边的 to_node =
+   *      reverse 边的 from_node，reverse 终点侧路口里 forward 边是起端） */
   function resolveConnectorTarget(connId, laneData, armIdx) {
     const lanes = laneData && laneData[connId];
     if (!Array.isArray(lanes)) return [];
@@ -411,17 +420,22 @@ export function createConnectorView(scene) {
     if (!Array.isArray(junctionData) || !junctionData.length) return out;
     const armIdx = new Map();   // edgeId -> arms 下标
     arms.forEach((a, i) => { if (!armIdx.has(a.edgeId)) armIdx.set(a.edgeId, i); });
+    // 匹配规则见函数头注释：主匹配 fromEnd===true；altId（road_r→road_）兜底要求 fromEnd===false。
     const fromIndices = (incoming) => {
       const id = String(incoming);
-      const prefix = id + '_';
-      // 支持 road_r* 和 road_* 两个版本（SUMO 正/反向 edge）
-      const altId = id.startsWith('road_r') ? id.replace('road_r', 'road_') : id;
-      const altPrefix = altId + '_';
+      const isReverse = id.startsWith('road_r');
+      const altId = isReverse ? id.replace('road_r', 'road_') : id;
+      const idPrefix = id + '_';
+      const altPrefix = isReverse ? altId + '_' : null;
       const idxs = [];
-      arms.forEach((a, i) => {
-        if (a.edgeId === id || a.edgeId.startsWith(prefix) ||
-            a.edgeId === altId || a.edgeId.startsWith(altPrefix)) idxs.push(i);
-      });
+      for (let i = 0; i < arms.length; i++) {
+        const a = arms[i];
+        if (a.edgeId === id) { if (a.fromEnd) idxs.push(i); continue; }
+        if (a.edgeId.startsWith(idPrefix)) { if (a.fromEnd) idxs.push(i); continue; }
+        if (altPrefix && (a.edgeId === altId || a.edgeId.startsWith(altPrefix))) {
+          if (!a.fromEnd) idxs.push(i);
+        }
+      }
       return idxs;
     };
     for (const f of junctionData) {

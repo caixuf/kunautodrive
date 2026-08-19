@@ -356,16 +356,18 @@ console.log('--- 8. 转向导流线（fork 数据驱动 + 几何一致性过滤�
   ok('E 臂锚点无幽灵导流（几何一致性过滤）', !guides.some((g) => nearG(g, 7.5, 0)));
   ok('NE 象限无幽灵导流', !guides.some((g) => g.x > 2 && g.z < -2));
 
-  // 停止线归属：main_rd/main_rd_1001/side_rd 是来车臂（各 1 条），
-  // other_rd 无 incoming fork = 纯出口臂 → 无停止线。
+  // 停止线归属：来车臂仅由 fork.incoming_road 精确/前缀命中的 arm 算。
+  // 修复 fork 鬼连接（2026-08-19）后，main_rd_1001 是同路出口臂、不是来车端，
+  // E 臂停止线消失——靠 bug 注入的 eStop>=1 已不再成立。
   // 停止线锚点 = walk(radius+6) 处 + 来向右侧半幅（THREE XZ：u 朝路口外，
-  // 右侧 = (uz,-ux)×halfW）：W 臂 z≈+1.9、E 臂 z≈−1.9、S 臂 x≈+1.9、N 臂 x≈−1.9。
+  // 右侧 = (uz,-ux)×halfW）：W 臂 z≈+1.9、S 臂 x≈+1.9。
   const near = (x, z, tx, tz, r) => Math.hypot(x - tx, z - tz) < r;
   const wStop = stops.filter((s) => near(s.x, s.z, -13, 1.9, 4)).length;
   const eStop = stops.filter((s) => near(s.x, s.z, 13, -1.9, 4)).length;
   const sStop = stops.filter((s) => near(s.x, s.z, 1.9, 13, 4)).length;
   const nStop = stops.filter((s) => near(s.x, s.z, -1.9, -13, 5)).length;
-  ok(`来车臂停止线齐（W=${wStop} E=${eStop} S=${sStop}）`, wStop >= 1 && eStop >= 1 && sStop >= 1);
+  ok(`来车臂停止线齐（W=${wStop} S=${sStop}）`, wStop >= 1 && sStop >= 1);
+  ok(`同路出口臂无停止线（E=${eStop}，修 fork 鬼连接后应=0）`, eStop === 0);
   ok(`纯出口臂无停止线（N=${nStop}）`, nStop === 0);
 }
 
