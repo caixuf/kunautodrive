@@ -224,10 +224,105 @@ export function setMapData(mapId, map) {
   _loadedMapId = mapId;
 }
 
+/* 阶段4：按段加载能力（大图扩展）。
+ * 郑东走廊已压缩到 12.4MB 一次性加载足够快，默认仍走走廊基线（零回归）。
+ * loadSegment/fetchSegmentIndex 提供"按段拉取并合并"的完整能力，供未来
+ * 整城级大图（走廊本身超大时）流式加载当前段。段文件只含 roads，junctions/
+ * buildings 仍需走廊基线提供。前端判段需段几何，而几何已含在走廊基线里，
+ * 故当前规模下走廊即最优加载单元——此能力为规模化预埋。
+ */
+
+let _segIndex = null;        // {n_segments, segment_len_m, segments:[{index,road_ids,size}]}
+let _loadedSegs = new Set(); // 已加载段号
+
+/** 拉取并缓存段索引（index.json，segment=-1）。失败返回 null（走走廊兜底）。 */
+export function fetchSegmentIndex(mapId) {
+  if (_segIndex) return Promise.resolve(_segIndex);
+  return fetch('/api/map/segment', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ map: mapId, segment: -1 }),
+  })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((res) => {
+      if (res && res.ok && res.map && res.map.n_segments) {
+        _segIndex = res.map;
+        return _segIndex;
+      }
+      return null;
+    })
+    .catch(() => null);
+}
+
+/** 加载单个段，把 roads 合并进 _data.edges/laneData。
+ *  返回 Promise<bool>：true=成功合并；false=段不存在或失败（忽略，走走廊兜底）。 */
+export function loadSegment(mapId, idx) {
+  if (!_data || _loadedSegs.has(idx)) return Promise.resolve(false);
+  _loadedSegs.add(idx);
+  return fetch('/api/map/segment', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ map: mapId, segment: idx }),
+  })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((res) => {
+      if (res && res.ok && res.map && Array.isArray(res.map.roads)) {
+        mergeSegmentRoads(res.map.roads);
+        return true;
+      }
+      _loadedSegs.delete(idx);   // 失败可重试
+      return false;
+    })
+    .catch(() => { _loadedSegs.delete(idx); return false; });
+}
+
+/** 把一段 roads 转成 edges + laneData 并合并进 _data（复用 buildIndex 的 edge 派生）。
+ *  段 road 已含 detail/centerline/lanes。合并后不触发重建——由 SceneDirector
+ *  每帧读 _data 检测 edges 变化 → roadNetworkHash 变化 → RoadView 重建。 */
+function mergeSegmentRoads(roads) {
+  if (!_data) return;
+  for (const r of roads) {
+    if (!r || r.id == null) continue;
+    if (!Array.isArray(r.lanes) || !r.lanes.length) {
+      if (_data.laneData[r.id]) delete _data.laneData[r.id];
+    } else {
+      _data.laneData[r.id] = r.lanes;
+    }
+    if (isInternalRoad(r)) continue;
+    const cl = Array.isArray(r.centerline) ? r.centerline : [];
+    if (cl.length < 2) continue;
+    const existing = _data.edges.find((e) => e.name === String(r.id));
+    let length = existing ? existing.length : 0;
+    if (!existing) {
+      for (let k = 0; k < cl.length - 1; k++) {
+        length += Math.hypot((cl[k + 1][0] || 0) - (cl[k][0] || 0), (cl[k + 1][1] || 0) - (cl[k][1] || 0));
+      }
+    }
+    const edge = {
+      id: existing ? existing.id : _data.edges.length,
+      name: String(r.id),
+      type: r.type || 'urban',
+      lanes: Array.isArray(r.lanes) && r.lanes.length ? r.lanes.length : 2,
+      lane_width: Number(r.lane_width) || 3.5,
+      length,
+      oneway: !!r.oneway,
+      speed_limit: r.speed_limit,
+      nodes: cl.map((p) => [p[0] || 0, p[1] || 0, p[2] || 0]),
+      tunnel: r.tunnel != null,
+      bridge: r.bridge != null,
+      detail: r.detail || 'high',
+    };
+    if (existing) Object.assign(existing, edge);
+    else _data.edges.push(edge);
+  }
+}
+
 /** 测试辅助：复位全部缓存。 */
 export function resetMapData() {
   _loadedMapId = null;
   _inflight = false;
   _failedAt = new Map();
   _data = null;
+  _segIndex = null;
+  _loadedSegs = new Set();
 }
