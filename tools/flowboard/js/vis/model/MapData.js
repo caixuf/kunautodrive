@@ -6,7 +6,8 @@
  * 并缓存，由 SceneDirector 注入 roadNetwork（map_junctions / lane_data）。
  *
  * 数据到达会改变 roadNetworkHash（含注入标志位）→ 恰好触发一次 view 重建；
- * 非 OSM 场景 resolveMapId 返回 null，全程走启发式兜底（零回归）。
+ * 非 OSM 场景 C 端检查 maps/<id>/map.json 不存在 → 拉取失败冷却，走启发式兜底
+ * （f3fd00d 动态地图发现后 resolveMapId 不再本地判 null，零回归）。
  */
 
 /* scenario_name 与 map 目录名不一致的别名表 */

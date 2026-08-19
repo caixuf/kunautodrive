@@ -1,7 +1,8 @@
 /** vis_map_data.test.mjs — MapData（P2 车道级数据通道）纯函数回归
  *
  * 锁三件事：
- *   1. resolveMapId 场景名 → allowlist 地图 id（直连/别名/去 _map 后缀/不匹配 null）
+ *   1. resolveMapId 场景名 → 地图 id（别名表 + 动态直传，C 端检查存在性；
+ *      f3fd00d 起不再本地 allowlist：去 _map 后缀 / 非 OSM 返回 null 均移除）
  *   2. setMapData 注入后 mapDataForScenario 返回 {junctions, laneData} 索引
  *   3. laneData 只收有 lanes 的 road；junctions 原样透传
  *
@@ -17,8 +18,9 @@ console.log('=== MapData 数据通道 ===\n');
 // ── 1. resolveMapId ──
 ok('场景名直连（osm_lujiazui）', resolveMapId('osm_lujiazui') === 'osm_lujiazui');
 ok('别名（osm_city_map → osm_test）', resolveMapId('osm_city_map') === 'osm_test');
-ok('去 _map 后缀（city_ring_map → city_ring）', resolveMapId('city_ring_map') === 'city_ring');
-ok('非 OSM 场景返回 null（straight_road）', resolveMapId('straight_road') === null);
+// f3fd00d「动态地图发现」后：不再本地去 _map 后缀 / 判非 OSM，一律直传由 C 端检查
+ok('动态直传不再去 _map 后缀（city_ring_map）', resolveMapId('city_ring_map') === 'city_ring_map');
+ok('动态直传非 OSM 场景（straight_road）', resolveMapId('straight_road') === 'straight_road');
 ok('空场景名返回 null', resolveMapId('') === null && resolveMapId(undefined) === null);
 
 // ── 2/3. setMapData + 索引 ──
@@ -46,7 +48,9 @@ ok('别名场景取同一地图', mapDataForScenario('osm_city_map') === null); 
     { id: 'near', centerline: [[200, 0, 0], [300, 0, 0]] },
     { id: 'far', centerline: [[10000, 10000, 0], [10100, 10000, 0]] },
   ];
-  for (let i = 0; i < 4996; i++) roads.push({
+  // 2403101 把 LARGE_MAP_ROAD_LIMIT 5000→50000（郑东全量渲染）。
+  // 小图 = 49999 条（≤50000 全量）；大图 = 50002 条（>50000 才触发走廊裁剪）。
+  for (let i = 0; i < 49996; i++) roads.push({
     id: 'filler_' + i, centerline: [[10000 + i, 10000, 0], [10001 + i, 10000, 0]],
   });
   const selected = selectRoadsForPreview(roads, { road_chain: ['route'] });
