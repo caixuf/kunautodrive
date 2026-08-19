@@ -60,9 +60,9 @@ export function createConnectorView(scene) {
     if (!roadNetwork || !roadNetwork.edges) return;
 
     const edges = roadNetwork.edges;
-    /* fork/merge 转向记录走 map_junctions（map.json 原样透传）；
-     * roadNetwork.junctions 保留给 {x,y,z,radius} 路口中心格式（JunctionDetect 用）。 */
-    const junctions = roadNetwork.map_junctions || [];
+    /* fork/merge 转向记录：优先 map_junctions（map.json 原样透传），
+     * 其次 junctions（map_compiler 生成）。两者都是 fork 契约格式。 */
+    const junctions = roadNetwork.map_junctions || roadNetwork.junctions || [];
 
     // 拓扑（单一事实源）：路口中心 / edge↔路口映射，供 LaneTaper 邻接与
     // JunctionPatch 共用。须先于 1. LaneTaper 计算（旧实现依赖 id 连续，现用拓扑）。
