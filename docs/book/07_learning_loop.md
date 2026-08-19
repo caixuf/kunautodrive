@@ -38,13 +38,13 @@ apply(throttle, steer)
 这就是**影子模式（shadow mode）**：
 
 ```
-        ┌─────────────────────────────────┐
-真实控制：  人写的规则 → 规划 → 控制 → 车   ← 车一直由它开（安全）
-        └─────────────────────────────────┘
-        ┌─────────────────────────────────┐
-影子模型：  模型 → 预测动作 → 只记录，不执行  ← 模型在旁"看"（怎么错都不影响车）
-        └─────────────────────────────────┘
-           对比：模型预测 vs 真实执行 → 算偏差 → 决定要不要让它上场
+        +-------------------------------------+
+Real control:  rules -> planning -> control -> car   <-- car always driven by rules (safe)
+        +-------------------------------------+
+        +-------------------------------------+
+Shadow model:  model -> predicted action -> log only  <-- model watches (no safety impact)
+        +-------------------------------------+
+           compare: model prediction vs rule execution -> compute delta -> decide if ready
 ```
 
 **影子模式的两条铁律**：
@@ -61,6 +61,7 @@ apply(throttle, steer)
 
 ```
 Stage 0  data_recorder  采集：把「规则开车」的样子录下来（状态 + 动作 = 样本）
+Stage 1  train (offboard) 训练：在笔记本/服务器上训练模型
 Stage 2  inference      影子推理：模型在旁预测，只记录不执行
 Stage 3  learner        车端微调（可选）：在车上继续学
 Stage 4  model_ota      OTA：新模型热替换、A-B 对比、回滚
@@ -72,24 +73,97 @@ Stage 4  model_ota      OTA：新模型热替换、A-B 对比、回滚
 样本：
 
 ```
-{特征（这帧车看到了什么）, 动作（规则系统这帧做了什么）}
+{features (what the car saw this frame), action (what the rule system did this frame)}
 ```
 
-**样本 = 特征 + 标签**。特征通常是 23 维（定位、障碍物、行为状态），标签是动作
-（5 维）。一句话：**你采集的是「规则开车的录像」，模型要学的是从录像里学会开车。**
+**样本 = 特征 + 标签**。特征是 23 维向量，包含：
+- 定位：x, y, heading, speed
+- 障碍物：最近前车的距离、速度、横向偏移
+- 行为状态：当前是跟车/变道/停车
+- 规划输出：目标速度、曲率、到停止线距离
+- 红绿灯：当前灯色、到停止线距离
+
+标签是 5 维动作：throttle, brake, steer, target_speed, 状态机状态。
+
+**一句话：你采集的是「规则开车的录像」，模型要学的是从录像里学会开车。**
 
 **为什么学规则而不学人类？** 因为规则系统**可复现**——同一帧，规则永远给同样的动作，
 样本没有噪声。人类开车则不可复现。**学一个确定性的老师，比学一个随机的老师容易得多。**
 
-### 阶段 2：影子推理——模型开始"看"
+**数据格式**：JSONL（每行一个 JSON 对象），存储在 `runs/<timestamp>/` 目录。
+每个文件约 1MB（120s 场景，20Hz，~2400 帧）。
+
+### 阶段 1：训练——tiny MLP 的极简实现
+
+训练的核心是 `tiny_mlp.h`——一个纯 C 的单隐层 MLP 推理内核，478 行，零框架依赖。
+
+**为什么用纯 C 而不是 PyTorch？** 因为车端推理不能依赖 Python 运行时。`tiny_mlp.h`
+实现了：加载权重、前向推理、SGD 更新、保存模型。一个头文件搞定。
+
+```
+输入层(23) -> 隐藏层(32, ReLU) -> 输出层(5)
+参数量：23*32 + 32 + 32*5 + 5 = 933 个浮点数
+模型大小：~4KB
+```
+
+训练流程：
+```bash
+# 一键训练（自动调度对应 backend）
+python3 tools/train_demo_model.py
+
+# 或直接指定 backend
+python3 tools/train_e2e/train.py --backend tiny    # tiny_mlp 纯 C
+python3 tools/train_e2e/train.py --backend torch    # PyTorch
+python3 tools/train_e2e/train.py --backend temporal  # 时序模型
+```
+
+训练后产出 `model.bin`（tiny_mlp 格式）或 `model.onnx`（ONNX 格式），放入
+`models/` 目录。
+
+### 阶段 2：影子推理——模型开始「看」
 
 训练完之后，模型以 `inference` 节点的身份上线——但**只发布 `inference/trajectory`
 供对比，绝不接入控制**。它和规则系统同时开车，你看两条轨迹差多少。
 
-### 阶段 3→4：晋级与 OTA——模型"上场"
+`inference_node.cpp`（1166 行）每帧：
+1. 从 `perception/obstacles` + `fusion/localization` + `planning/trajectory`
+   构建 23 维特征向量
+2. 调用 `tiny_mlp_forward()` 得到 5 维预测动作
+3. 发布 `inference/trajectory`（模型预测的未来 50 个航点）
+4. 发布 `inference/metrics`（模型置信度、延迟、与规则的偏差）
+
+**评估指标**：
+- 轨迹偏差：模型预测 vs 规则执行的平均横向偏差
+- 碰撞率：模型预测轨迹是否碰撞
+- 停滞率：模型预测是否会导致停车
+
+### 阶段 3：车端微调（可选）
+
+`learner_node.c` 实现车端在线学习：SGD 更新，增量训练。用途：
+- 新场景适应（模型从未见过的路口）
+- 个性化（不同驾驶风格）
+
+但**默认不启用**——车端学习的风险太高（学坏了直接影响后续驾驶）。
+
+### 阶段 4：OTA——模型「上场」
 
 只有当影子评估证明「模型和规则几乎一样好（甚至更好）」时，才允许晋级。晋级后通过
-`model_ota` 热替换——注意 OTA 也支持**回滚**：新模型一上场就表现糟糕，一键切回旧版。
+`model_ota` 热替换：
+
+```
+models/
+  model_v1.bin    (当前生产模型)
+  model_v2.bin    (新训练模型，待评估)
+  promote.log     (晋级记录)
+```
+
+`modelctl.py` 管理模型生命周期：
+```bash
+python3 tools/modelctl.py list              # 列出所有模型
+python3 tools/modelctl.py inspect model_v2  # 检查模型元信息
+python3 tools/modelctl.py promote model_v2  # 晋级为生产模型
+python3 tools/modelctl.py rollback          # 回滚到上一版本
+```
 
 **为什么 OTA 必须支持回滚？** 因为「影子评估通过」不代表「真车一定好」——你永远无法
 在仿真里穷尽所有情况。**回滚是「评估错了」的后悔药。** 没有回滚的 OTA，等于一次豪赌。
@@ -116,20 +190,37 @@ Stage 4  model_ota      OTA：新模型热替换、A-B 对比、回滚
 让老师在这些歪的地方重新示范。**这就是「自我对弈」：模型越开越好的过程，也是数据
 越来越针对弱点的过程。**
 
+**项目目前的进度**：Stage 0（采集）和 Stage 2（影子推理）已实现；Stage 3（车端微调）
+有基础实现但默认不启用；DAgger 循环尚未完整实现。这是 roadmap 上的下一项。
+
 ## 动手实践
 
 ```bash
-# 1. 跑一遍完整闭环（采集 → 训练 → 影子评估 → 晋级）
-python3 ci/train_pipeline.py
+# 1. 采集数据（跑一个场景，录下规则开车的样本）
+#    data_recorder_node 会在 /tmp/flow_runs/ 下生成 JSONL 文件
 
-# 2. 只做影子评估（不采集、不训练）
-python3 ci/train_pipeline.py --shadow-only
+# 2. 训练模型
+python3 tools/train_demo_model.py
 
-# 3. 看推理节点的影子轨迹（在 FlowBoard 上对比两条轨迹：规则 vs 模型）
+# 3. 影子评估（跑同一场景，对比规则 vs 模型的轨迹）
+#    inference_node 发布 inference/trajectory，在 FlowBoard 上可视化
+
+# 4. 检查模型质量
+#    看 inference/metrics 的偏差指标
+#    如果偏差 < 阈值，可以考虑 promote
 ```
 
 **观察**：影子模式下，模型预测的轨迹和规则执行的轨迹，大部分重叠，偶尔偏离。那些
 「偏离」的地方，就是模型还没学会的地方——也是「该继续采集」的信号。
+
+## 常见陷阱
+
+1. **模型不能直接接控制**：必须经过影子评估。否则「学歪了 = 撞人」。
+2. **学规则 vs 学人类**：规则可复现（确定性），人类不可复现。先学规则，再考虑人类。
+3. **OTA 必须可回滚**：影子评估通过 != 真车一定好。
+4. **tiny_mlp 够用再上 PyTorch**：4KB 模型在车端推理 <0.1ms，PyTorch 100MB+
+   推理 >10ms。
+5. **分布漂移**：模型越开越歪，用 DAgger 循环修正。
 
 ## 小结
 
@@ -137,7 +228,8 @@ python3 ci/train_pipeline.py --shadow-only
 
 - **致命错误**：把模型直接接方向盘 = 把模型的错误和车的安全绑在一起。
 - **影子模式**：模型先旁路「看」，评估通过才「开」——错误不影响安全。
-- **四阶段闭环**：采集（学规则的录像）→ 影子推理（旁路对比）→ 晋级 → OTA（可回滚）。
+- **四阶段闭环**：采集（学规则的录像）-> 影子推理（旁路对比）-> 晋级 -> OTA（可回滚）。
+- **tiny_mlp**：纯 C 单隐层 MLP，4KB 模型，零框架依赖，车端推理 <0.1ms。
 - **评估器分数就是 RL 回报**：你不需要另造评估体系。
 - **行为克隆的天花板**：分布漂移——越开越歪，用 DAgger 自我对弈治。
 
@@ -150,6 +242,8 @@ python3 ci/train_pipeline.py --shadow-only
 3. **挑战**：模型在影子模式下「看」了 1000 公里，评估它和规则系统几乎一致。但规则
    系统本身有 bug（比如某个路口会卡死）。模型会学到这个 bug 吗？——这就是「学规则」
    的隐含风险。怎么防？（提示：想想卷九的「门禁有效」）
+4. **进阶**：读 `tiny_mlp.h` 的 `tiny_mlp_forward`，理解单隐层 MLP 的前向计算。
+   如果把隐藏层从 32 扩到 128，参数量和推理时间各变多少？
 
 ---
 
