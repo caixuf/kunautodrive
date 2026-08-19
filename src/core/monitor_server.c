@@ -903,6 +903,66 @@ static bool dispatch_request(int fd, MonitorServer* ms,
             close(fd);
             return false;
         }
+
+        /* POST /api/map/segment -> serve one corridor segment slice（阶段4 按需加载）。
+         * body: {"map":"<id>", "segment":N}
+         * 读 maps/<id>/segments/map_seg_<N>.json；不存在回退 404（前端走全走廊兜底）。 */
+        if (strcmp(path, "/api/map/segment") == 0) {
+            char* body = read_post_body(fd, req, req_len, 1024);
+            cJSON* root = body ? cJSON_Parse(body) : NULL;
+            cJSON* jmap = root ? cJSON_GetObjectItemCaseSensitive(root, "map") : NULL;
+            cJSON* jseg = root ? cJSON_GetObjectItemCaseSensitive(root, "segment") : NULL;
+            const char* map_id = cJSON_IsString(jmap) ? jmap->valuestring : NULL;
+            bool valid_id = map_id && strlen(map_id) > 0 && strlen(map_id) < 64;
+            if (valid_id) {
+                for (const char* p = map_id; *p; p++) {
+                    char cc = *p;
+                    if (!((cc >= 'a' && cc <= 'z') || (cc >= 'A' && cc <= 'Z') ||
+                          (cc >= '0' && cc <= '9') || cc == '_' || cc == '-')) {
+                        valid_id = false;
+                        break;
+                    }
+                }
+            }
+            long seg_idx = cJSON_IsNumber(jseg) ? (long)jseg->valuedouble : -1;
+            if (!valid_id || seg_idx < 0) {
+                send_response(fd, "400 Bad Request", "application/json",
+                              "{\"ok\":false,\"error\":\"invalid map/segment\"}");
+            } else {
+                char seg_path[PATH_MAX];
+                /* segment=-1 特例：返回 segments/index.json（段清单） */
+                if (seg_idx == -1)
+                    snprintf(seg_path, sizeof(seg_path), "maps/%s/segments/index.json", map_id);
+                else
+                    snprintf(seg_path, sizeof(seg_path), "maps/%s/segments/map_seg_%ld.json",
+                             map_id, seg_idx);
+                size_t seg_len = 0;
+                char* seg_json = read_file(seg_path, &seg_len);
+                if (!seg_json) {
+                    send_response(fd, "404 Not Found", "application/json",
+                                  "{\"ok\":false,\"error\":\"segment not found\"}");
+                } else {
+                    size_t total = seg_len + 24;
+                    char* response = (char*)malloc(total);
+                    if (!response) {
+                        free(seg_json);
+                        send_response(fd, "500 Internal Server Error", "application/json",
+                                      "{\"ok\":false,\"error\":\"out of memory\"}");
+                    } else {
+                        int n = snprintf(response, total, "{\"ok\":true,\"map\":%s}", seg_json);
+                        send_response_full(fd, "200 OK", "application/json", response,
+                                           false, "no-cache", true, accept_encoding);
+                        free(response);
+                        free(seg_json);
+                        (void)n;
+                    }
+                }
+            }
+            cJSON_Delete(root);
+            free(body);
+            close(fd);
+            return false;
+        }
 #if !defined(_WIN32)
         /* POST /api/sim/run → start one allowlisted map route from FlowBoard.
          * POSIX-only：fork/execl/waitpid 在原生 Windows(mingw) 不存在，

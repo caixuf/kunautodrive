@@ -169,3 +169,4 @@ third_party/eigen/
 
 # 地图走廊裁剪生成物（corridor_map.py 生成，部署时跑脚本重建）
 maps/*/map_corridor.json
+maps/*/segments/

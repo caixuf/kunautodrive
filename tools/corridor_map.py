@@ -31,6 +31,9 @@ BUILDING_CORRIDOR_M = 800
 # LOD 分级（阶段3）：距路线中心线 < LOD_HIGH_CELL 的 road 标 high 细节，
 # 走廊远区（250~800m）标 low —— 前端只铺路面不画标线，降 draw call。
 LOD_HIGH_CELL_M = 250
+# 分段（阶段4）：按路线累计弧长切段，每段目标长度（m）。
+# 前端按 ego 进度只加载当前段 + 前后邻段，替代一次性拉全走廊。
+SEGMENT_LEN_M = 2000
 
 
 def is_internal_road(road):
@@ -182,6 +185,102 @@ def select_buildings_for_preview(buildings, roads):
     return out
 
 
+def _road_length(road):
+    cl = road.get("centerline") or road.get("nodes") or []
+    return sum(
+        math.hypot((cl[i + 1][0] or 0) - (cl[i][0] or 0), (cl[i + 1][1] or 0) - (cl[i][1] or 0))
+        for i in range(len(cl) - 1)
+    )
+
+
+def _road_midpoint(road):
+    """road 中点 ENU（用于非路线 road 归属段判定）"""
+    cl = road.get("centerline") or road.get("nodes") or []
+    if not cl:
+        return None
+    i = len(cl) // 2
+    return (cl[i][0] or 0, cl[i][1] or 0)
+
+
+def _assign_road_to_segment(roads, chain_cum, chain_positions):
+    """给每条 corridor road 标 segment 下标。
+    - 路线 road：按累计弧长落在 chain_cum 的哪段
+    - 非路线 road：按中点找最近的路线 road，继承其 segment（重叠段重复归属）
+    返回 {seg_idx: [road_index, ...]}"""
+    seg_of = {}          # chain road id -> seg idx
+    for cid, (idx, _cum0, _cum1) in chain_cum.items():
+        seg_of[cid] = idx
+
+    segs = {}
+    # 路线 road 直接归属
+    for rid, (idx, _cum0, _cum1) in chain_cum.items():
+        segs.setdefault(idx, []).append(rid)
+    # 非路线 road：中点找最近路线 road
+    chain_pts = chain_positions  # {rid: (x,y)}
+    for rid, road in enumerate(roads):
+        if road.get("id") in seg_of:
+            continue
+        mid = _road_midpoint(road)
+        if mid is None:
+            continue
+        best, bestseg = float("inf"), None
+        for crid, (x, y) in chain_pts.items():
+            d = math.hypot(mid[0] - x, mid[1] - y)
+            if d < best:
+                best, bestseg = d, seg_of[crid]
+        if bestseg is not None:
+            segs.setdefault(bestseg, []).append(road.get("id"))
+    return segs
+
+
+def split_segments(roads, route, out_dir):
+    """按路线累计弧长切成 SEGMENT_LEN_M 段，写出每段切片 + index.json。
+    返回段数。roads 为已走廊裁剪的列表；route 提供 road_chain。"""
+    chain = (route or {}).get("road_chain") or []
+    road_by_id = {r.get("id"): r for r in roads}
+    # 路线 road 累计弧长
+    chain_cum = {}   # rid -> (seg_idx, cum_start, cum_end)
+    chain_pos = {}   # rid -> (x,y) 中点
+    cum = 0.0
+    seg = 0
+    seg_end = SEGMENT_LEN_M
+    for cid in chain:
+        rd = road_by_id.get(cid)
+        if not rd:
+            continue
+        L = _road_length(rd)
+        if cum + L > seg_end and cum > 0:
+            seg += 1
+            seg_end = (seg + 1) * SEGMENT_LEN_M
+        chain_cum[cid] = (seg, cum, cum + L)
+        mp = _road_midpoint(rd)
+        if mp:
+            chain_pos[cid] = mp
+        cum += L
+    nseg = seg + 1
+
+    seg_roads = _assign_road_to_segment(roads, chain_cum, chain_pos)
+
+    rn = {}
+    # 顶层元数据（从首段继承即可，roads 由各段覆盖）
+    base = roads[0] if roads else {}
+    os.makedirs(out_dir, exist_ok=True)
+    index = {"n_segments": nseg, "segment_len_m": SEGMENT_LEN_M, "segments": []}
+    for s in range(nseg):
+        ids = seg_roads.get(s, [])
+        slice_roads = [road_by_id[i] for i in ids if i in road_by_id]
+        # 该段 roads 的 buildings（走廊已过滤，此处按段 roads 再过滤）
+        seg_path = os.path.join(out_dir, f"map_seg_{s}.json")
+        payload = {"roads": slice_roads}
+        with open(seg_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        index["segments"].append({"index": s, "road_ids": ids, "size": len(slice_roads)})
+        print(f"  seg {s}: {len(slice_roads)} roads, {os.path.getsize(seg_path)/1e6:.1f}MB")
+    with open(os.path.join(out_dir, "index.json"), "w", encoding="utf-8") as f:
+        json.dump(index, f, ensure_ascii=False)
+    return nseg
+
+
 def corridor_map(map_path, routes_path, out_path):
     with open(map_path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -225,9 +324,11 @@ def corridor_map(map_path, routes_path, out_path):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="按路线走廊裁剪 map.json")
+    ap = argparse.ArgumentParser(description="按路线走廊裁剪/分段 map.json")
     ap.add_argument("map_dir", help="maps/<map_id> 目录")
     ap.add_argument("--out", help="输出路径（默认 <map_dir>/map_corridor.json）")
+    ap.add_argument("--segments", action="store_true",
+                    help="额外按路线弧长分段到 <map_dir>/segments/（阶段4 按需加载）")
     args = ap.parse_args()
 
     map_path = os.path.join(args.map_dir, "map.json")
@@ -237,6 +338,17 @@ def main():
         print(f"error: {map_path} 不存在", file=sys.stderr)
         sys.exit(1)
     corridor_map(map_path, routes_path, out_path)
+
+    if args.segments:
+        with open(routes_path, "r", encoding="utf-8") as f:
+            routes = json.load(f)
+        route = routes["routes"][0] if routes.get("routes") else None
+        with open(out_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        rn = data.get("road_network") if isinstance(data.get("road_network"), dict) else data
+        n = split_segments(rn.get("roads") or [], route,
+                           os.path.join(args.map_dir, "segments"))
+        print(f"segments: {n} 个（每段~{SEGMENT_LEN_M}m，index.json 已生成）")
 
 
 if __name__ == "__main__":
