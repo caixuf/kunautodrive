@@ -8,6 +8,9 @@
  *   - EffectComposer: GTAO + Bloom + OutputPass + SMAA
  */
 
+/* 当前 Bloom pass 引用（createComposer 时赋值，setBloomTech 切换 real/tech 参数） */
+let _bloomPass = null;
+
 export function createRenderer(canvas) {
   const renderer = new THREE.WebGLRenderer({
     canvas, antialias: true, powerPreference: 'high-performance'
@@ -53,7 +56,9 @@ export function createComposer(renderer, scene, camera) {
     composer.addPass(gtao);
   }
 
-  // 3. Bloom — 只让灯/发光体辉光（阈值 0.8 滤掉普通表面）
+  // 3. Bloom — 只让灯/发光体辉光（阈值 0.8 滤掉普通表面）。
+  //    real 写实风默认保守（threshold 1.0 只让真车灯/高亮发光）；
+  //    SR/BEV 科技风由 setBloomTech 切到激进（threshold 0.8，标线/路牌也辉光）。
   if (THREE.UnrealBloomPass) {
     const bloom = new THREE.UnrealBloomPass(
       new THREE.Vector2(window.innerWidth, window.innerHeight),
@@ -61,6 +66,9 @@ export function createComposer(renderer, scene, camera) {
       0.4,   // radius：柔和扩散
       1.0    // threshold：只让 emissive > 1.0 发光（真车灯），普通表面不过阈
     );
+    bloom.userData.realParams = { strength: 0.6, radius: 0.4, threshold: 1.0 };
+    bloom.userData.techParams = { strength: 0.7, radius: 0.45, threshold: 0.8 };
+    _bloomPass = bloom;
     composer.addPass(bloom);
   }
 
@@ -172,4 +180,17 @@ export function resetRendererInfo(renderer) {
   if (renderer && renderer.info) {
     renderer.info.reset();
   }
+}
+
+/** SR/BEV 科技风：切换 Bloom 参数。
+ *  tech=true → 激进（threshold 0.8，标线/路牌辉光），SR/BEV 视角用；
+ *  tech=false → 保守（threshold 1.0，只真车灯），透视写实风默认。 */
+export function setBloomTech(tech) {
+  if (!_bloomPass) return;
+  const p = _bloomPass;
+  const t = tech ? p.userData.techParams : p.userData.realParams;
+  if (!t) return;
+  p.strength = t.strength;
+  p.radius = t.radius;
+  p.threshold = t.threshold;
 }

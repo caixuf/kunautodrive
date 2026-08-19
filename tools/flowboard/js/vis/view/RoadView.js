@@ -39,6 +39,8 @@ const SIDEWALK_COLOR = SCENE.sidewalk;
 const VERGE_COLOR = SCENE.verge;
 const LINE_WHITE = SCENE.lineWhite;
 const LINE_YELLOW = SCENE.lineYellow;
+const LINE_EMISSIVE_WHITE = SCENE.lineEmissiveWhite;
+const LINE_EMISSIVE_YELLOW = SCENE.lineEmissiveYellow;
 const RAMP_COLOR = SCENE.rampSurface;
 const TUNNEL_COLOR = SCENE.tunnel;
 
@@ -188,6 +190,10 @@ export function createRoadView(scene) {
   let stats = { rampTransitions: 0 };
   let _topo = null;    // TopologyModel（P0 单一事实源，build 时按 hash 缓存共享）
   let _laneData = null; // P2 车道级 lane_data（MapData/预览注入，无则启发式兜底）
+  /* 标线材质引用（SR/BEV 科技风发光用）：build 时赋值，setMarkingEmissive 改。
+   * real 风 emissiveIntensity=0（不发光，保持写实）；SR/BEV 风抬高配合 Bloom 辉光。 */
+  let _whiteLineMat = null;
+  let _yellowLineMat = null;
 
   // 确保纹理已生成
   _buildAsphaltTextures();
@@ -1087,15 +1093,19 @@ export function createRoadView(scene) {
     addSurface(sidewalkGeos, SIDEWALK_COLOR, 0.92);
     addSurface(vergeGeos, VERGE_COLOR, 1.0);
 
-    // 白色车道线
+    // 白色车道线（材质引用存 _whiteLineMat；emissive 由 setMarkingEmissive 控制，
+    //   real 风默认 0 不发光，SR/BEV 风抬高配合 Bloom 出霓虹辉光）
     if (whiteLineGeos.length) {
       const mat = new THREE.MeshStandardMaterial({
         color: LINE_WHITE,
         roughness: 0.6,
         metalness: 0.05,
+        emissive: LINE_EMISSIVE_WHITE,  // 冷白蓝自发光（色值不动 color，绕开测试锁定）
+        emissiveIntensity: 0,        // real 风默认关闭，SR/BEV 风由 setter 打开
         side: THREE.DoubleSide,
         polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
       });
+      _whiteLineMat = mat;
       addMergedByTile(whiteLineGeos, mat);
     }
 
@@ -1105,9 +1115,12 @@ export function createRoadView(scene) {
         color: LINE_YELLOW,
         roughness: 0.6,
         metalness: 0.05,
+        emissive: LINE_EMISSIVE_YELLOW,  // 黄线自发光，辉光略弱于白线（黄光更"警告"）
+        emissiveIntensity: 0,
         side: THREE.DoubleSide,
         polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
       });
+      _yellowLineMat = mat;
       addMergedByTile(yellowLineGeos, mat);
     }
 
@@ -1118,5 +1131,12 @@ export function createRoadView(scene) {
   function isBuilt() { return built; }
   function getStats() { return { ...stats }; }
 
-  return { build, getRoadGroup, isBuilt, getStats };
+  /** SR/BEV 科技风：设置标线自发光强度（配合 Bloom 辉光）。
+   *  whiteI/yellowI 传 0 = real 写实风（不发光）；>0 = 霓虹科技风。 */
+  function setMarkingEmissive(whiteI, yellowI) {
+    if (_whiteLineMat) _whiteLineMat.emissiveIntensity = whiteI;
+    if (_yellowLineMat) _yellowLineMat.emissiveIntensity = yellowI;
+  }
+
+  return { build, getRoadGroup, isBuilt, getStats, setMarkingEmissive };
 }

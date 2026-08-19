@@ -505,6 +505,7 @@ export function createSceneDirector(scene) {
    * 保留 main.js 实际还在调的 4 个：getRoadView/getViaductView/
    * getVehicleView + getStore。 */
   const getRoadView    = () => ViewRegistry.get('road');
+  const getGroundView  = () => ViewRegistry.get('ground');
   const getViaductView = () => ViewRegistry.get('viaduct');
   const getVehicleView = () => ViewRegistry.get('vehicle');
 
@@ -521,6 +522,6 @@ export function createSceneDirector(scene) {
   }
 
   return { init, update, tickAnimation, dispose,
-           getStore, getRoadView, getViaductView, getVehicleView,
+           getStore, getRoadView, getGroundView, getViaductView, getVehicleView,
            getRootLayer, getLayer, resetWarnings };
 }

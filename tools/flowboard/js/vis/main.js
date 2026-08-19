@@ -9,7 +9,7 @@
  *            closeNPCDetail, setPerfTier } from './vis/main.js';
  */
 
-import { createRenderer, createComposer, renderFrame, resize, getRendererInfo, resetRendererInfo, setComposerGTAOPassEnabled, setResolutionScale, isSoftwareRenderer } from './core/Renderer.js';
+import { createRenderer, createComposer, renderFrame, resize, getRendererInfo, resetRendererInfo, setComposerGTAOPassEnabled, setResolutionScale, isSoftwareRenderer, setBloomTech } from './core/Renderer.js';
 import { createCameraRig } from './core/CameraRig.js';
 import { createLighting, updateSunShadow } from './core/Lighting.js';
 import { createSkyEnv } from './core/SkyEnv.js';
@@ -69,6 +69,21 @@ let _lastReportTs = 0;   // 上报节流：每 5s 最多上报一次可视化健
 
 /** 暴露 scene 对象（app.js 直接 import scene3d）*/
 export let scene3d = null;
+
+/** 同步后处理 pass 状态：档位 + 相机模式共同决定 GTAO。
+ *  档位：medium 关 GTAO（最贵一趟），low/ultra 整条管线禁用。
+ *  相机：BEV（正交）与 GTAO 不兼容，切过去时关 GTAO；其余视角按档位。
+ *  在 _applyPerfTier 与 setCameraMode 两处调用，保证切档/切视角后状态一致。 */
+function _syncPostProc() {
+  if (!_composer) return;
+  const isLow = _perfTier === 'low';
+  const isUltra = _perfTier === 'ultra';
+  const isMedium = _perfTier === 'medium';
+  const bev = !!( _cameraRig && _cameraRig.isBev() );
+  // low/ultra 时 composer 整体禁用走 renderer 旁路，此处只需管 medium/high 下
+  // 的 GTAO：medium 关（性能）、BEV 关（正交不兼容），high+透视才开。
+  setComposerGTAOPassEnabled(_composer, !isLow && !isUltra && !isMedium && !bev);
+}
 
 // ── 导出给 app.js 的接口 ──
 
@@ -298,11 +313,10 @@ function _startRenderLoop() {
       // 天空穹顶跟随相机 + 雨粒子动画（真实帧间 dt，高刷屏下速度不失真）
       _skyEnv.tick(dtSec);
 
-      // BEV 用正交俯视相机；为避开透视专用的 Composer/GTAO（与正交相机不兼容
-      // 且俯视示意也不需要接触阴影/辉光），BEV 直接渲染绕过后处理管线。
+      // BEV（正交）GTAO 由 _syncPostProc 关掉（正交不兼容），但保留
+      // Bloom+SMAA → 车道线/车灯在 BEV 下也有辉光。low/ultra 仍走旁路。
       const activeCam = _cameraRig.getActiveCamera();
-      const bev = _cameraRig.isBev();
-      const noPost = _perfTier === 'low' || _perfTier === 'ultra' || bev;
+      const noPost = _perfTier === 'low' || _perfTier === 'ultra';
       if (noPost) {
         _renderer.render(_scene, activeCam);
       } else {
@@ -568,6 +582,23 @@ export function setRenderPaused(paused) {
 /** 切换视角 */
 export function setCameraMode(mode) {
   if (_cameraRig) _cameraRig.setMode(mode);
+  _syncPostProc();   // BEV 切走 GTAO，其余视角按档位恢复
+  _applySceneStyle(mode);  // BEV 升级 SR 科技风，其余视角恢复写实风
+}
+
+/** 应用场景风格：BEV（升级后的 SR 视角）用科技风，其余视角保持写实风。
+ *  通过各 View 暴露的 setter 动态改材质，不建两套场景、不污染原 3D 界面。 */
+function _applySceneStyle(mode) {
+  if (!_director) return;
+  const tech = mode === 'bev';
+  // 标线发光：SR/BEV 抬高 emissive 配合 Bloom 出霓虹辉光，透视恢复 0（写实）
+  const road = _director.getRoadView();
+  if (road && road.setMarkingEmissive) road.setMarkingEmissive(tech ? 0.9 : 0, tech ? 0.55 : 0);
+  // 地面：SR/BEV 深色冷底，透视还原纯纹理
+  const ground = _director.getGroundView();
+  if (ground && ground.setTechMode) ground.setTechMode(tech);
+  // Bloom：SR/BEV 激进（标线辉光），透视保守
+  setBloomTech(tech);
 }
 
 /** 重置相机 */
@@ -638,17 +669,9 @@ function _applyPerfTier(tier) {
   /* ultra 额外压低渲染分辨率（0.5x），CSS 拉伸到全屏 —— 最后兜底 */
   if (isUltra) setResolutionScale(_renderer, 0.5);
 
-  /* 后处理：low/ultra 禁用整个 composer（直接渲染），medium 关 GTAO 保留 Bloom+SMAA */
-  if (_composer) {
-    if (noPost) {
-      // 禁掉所有 pass，让渲染走 renderer.render 旁路（见渲染循环）
-      for (const p of _composer.passes) p.enabled = false;
-    } else {
-      for (const p of _composer.passes) p.enabled = true;
-      // medium 单独关掉最贵的 GTAO
-      setComposerGTAOPassEnabled(_composer, !isMedium);
-    }
-  }
+  /* 后处理：low/ultra 禁用整个 composer（直接渲染），medium/BEV 关 GTAO
+   * 保留 Bloom+SMAA（见 _syncPostProc） */
+  _syncPostProc();
 }
 
 /* ── PHM 降级/上报回调（由 PerfMonitor watchdog 驱动）──

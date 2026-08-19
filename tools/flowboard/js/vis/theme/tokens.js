@@ -26,6 +26,12 @@ export const SCENE = {
   pier: 0x6b6b6b,         // 桥墩
   barrelRed: 0xd02020,    // 防撞桶红
   barrelWhite: 0xf0f0f0,  // 防撞桶白
+  /* SR/BEV 科技风专用（非锁定语义色，可随换肤调整）：
+   *  - lineEmissiveWhite/Yellow：标线自发光色（配合 Bloom 出霓虹辉光）
+   *  - srGroundTint：SR/BEV 深色冷底，压暗地面让标线/车灯突出 */
+  lineEmissiveWhite: 0x9fb8d8,
+  lineEmissiveYellow: 0xffd700,
+  srGroundTint: 0x39424d,
 };
 
 /* ── 仪表盘 UI 调色板（CSS 字符串，与 css/style.css :root 变量一一对应）── */

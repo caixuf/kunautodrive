@@ -11,6 +11,7 @@
 import { SCENE } from '../theme/tokens.js';
 
 const GROUND_BASE = SCENE.groundBase;  // 城市地块基底（偏土绿，比纯草更中性）
+const SR_GROUND_TINT = SCENE.srGroundTint;  // SR/BEV 深色冷底 tint
 let _groundTexture = null;
 
 /* 程序化卫星图质感：模拟 OSM 风格俯视——深色街道带 + 灰色建筑块 +
@@ -145,5 +146,19 @@ export function createGroundView(scene) {
 
   function getMesh() { return mesh; }
 
-  return { build, getMesh };
+  /* SR/BEV 科技风：深色冷底。real 写实风用原纹理；tech 时把材质整体乘一个
+   * 深冷灰 tint（color 与 map 相乘），地面压暗变冷，标线/车灯更突出。 */
+  function setTechMode(tech) {
+    if (!mesh || !mesh.material) return;
+    const mat = mesh.material;
+    if (tech) {
+      mat.color.setHex(SR_GROUND_TINT);   // 深蓝冷灰
+      mat.needsUpdate = true;
+    } else {
+      mat.color.setHex(0xffffff);   // 还原为纯纹理色
+      mat.needsUpdate = true;
+    }
+  }
+
+  return { build, getMesh, setTechMode };
 }
