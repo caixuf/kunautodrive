@@ -178,6 +178,7 @@ function buildIndex(map, routes) {
       nodes: cl.map((p) => [p[0] || 0, p[1] || 0, p[2] || 0]),
       tunnel: r.tunnel != null,    // elevation_patch 补的 OSM tunnel 标记
       bridge: r.bridge != null,    // elevation_patch 补的 OSM bridge 标记
+      detail: r.detail || 'high',  // LOD 分级（corridor_map.py 生成，缺省高细节零回归）
     });
   }
   const junctions = Array.isArray(rn.junctions) ? rn.junctions : [];

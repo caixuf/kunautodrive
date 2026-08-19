@@ -835,6 +835,15 @@ export function createRoadView(scene) {
       };
     }
 
+    /* LOD 分级（阶段3）：走廊远区（detail='low'，corridor_map.py 标注）只铺
+     * 路面不画标线/路肩/人行道 → 降 draw call。high/缺省零回归。 */
+    if (edge.detail === 'low') {
+      return {
+        roadGeos: [road], shoulderGeos: [], curbGeos: [], sidewalkGeos: [],
+        vergeGeos: [], whiteGeos: [], yellowGeos: [], spine, cum: buildCumulative(spine),
+      };
+    }
+
     // 路肩（路口边界停，逐段；随车道对齐后的路面走）
     const shoulderGeos = [];
     for (const seg of roadMarkSpine) {

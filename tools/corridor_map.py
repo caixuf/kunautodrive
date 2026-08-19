@@ -28,6 +28,9 @@ import sys
 LARGE_MAP_ROAD_LIMIT = 5000
 PREVIEW_CORRIDOR_CELL_M = 800
 BUILDING_CORRIDOR_M = 800
+# LOD 分级（阶段3）：距路线中心线 < LOD_HIGH_CELL 的 road 标 high 细节，
+# 走廊远区（250~800m）标 low —— 前端只铺路面不画标线，降 draw call。
+LOD_HIGH_CELL_M = 250
 
 
 def is_internal_road(road):
@@ -99,6 +102,49 @@ def _segment_grid(roads, cell=100):
     return grid
 
 
+def tag_lod_detail(roads, route):
+    """LOD 分级（阶段3）：给每条 road 标 detail='high'|'low'。
+    high = 距路线 road_chain 中心线 < LOD_HIGH_CELL 格邻域（约 ±250m）；
+    走廊远区（250~800m）标 low → 前端只铺路面不画标线，降 draw call。
+    road_chain 上的 road 恒 high。"""
+    if not isinstance(roads, list) or not roads:
+        return
+    road_chain = (route or {}).get("road_chain") or []
+    if not road_chain:
+        for r in roads:
+            r["detail"] = "high"
+        return
+    route_ids = set(road_chain)
+    cell = LOD_HIGH_CELL_M
+    cells = set()
+    for road in roads:
+        if road.get("id") not in route_ids:
+            continue
+        for p in (road.get("centerline") or road.get("nodes") or []):
+            if isinstance(p, (list, tuple)) and p:
+                cells.add((math.floor((p[0] or 0) / cell), math.floor((p[1] or 0) / cell)))
+    for road in roads:
+        if road.get("id") in route_ids:
+            road["detail"] = "high"
+            continue
+        high = False
+        for p in (road.get("centerline") or road.get("nodes") or []):
+            if not isinstance(p, (list, tuple)) or not p:
+                continue
+            cx = math.floor((p[0] or 0) / cell)
+            cy = math.floor((p[1] or 0) / cell)
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    if (cx + dx, cy + dy) in cells:
+                        high = True
+                        break
+                if high:
+                    break
+            if high:
+                break
+        road["detail"] = "high" if high else "low"
+
+
 def select_buildings_for_preview(buildings, roads):
     """复刻 MapData.selectBuildingsForPreview：footprint 质心优先，缺失用 b.x/b.y"""
     if not isinstance(buildings, list) or not buildings:
@@ -156,6 +202,7 @@ def corridor_map(map_path, routes_path, out_path):
     sel_roads = select_roads_for_preview(roads, route)
     if sel_roads is not roads:
         rn["roads"] = sel_roads
+    tag_lod_detail(rn["roads"], route)   # 阶段3 LOD：标 high/low 细节
     after_roads = len(rn["roads"])
 
     if "buildings" in rn:
