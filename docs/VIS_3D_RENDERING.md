@@ -79,9 +79,68 @@
 8. **降档三重防误触发**：6000ms 暖机 + document.hidden 重置 + setActive(false)；独立 setInterval watchdog。
 9. **glTF 不重复 clone**：getModel() 返回即 Group。
 
-## 8. 文档覆盖现状
+## 8. SR 科技风（BEV 升级）+ 地图规模化（样式表/走廊/LOD/分段）
 
-- `docs/VISUALIZATION_ARCHITECTURE.md`：总体架构/数据流/SceneDirector/Layer 树/DeadReckon，VehicleView 的 SU7 模型/车漆/灯光有简略说明（L590-607）。**未覆盖**：车轮 kingpin 转向/滚动/modulo、车牌 GA36-2018、贴地 roadHeightAt、camera 跟随细节、PerfMonitor 降档、map preview。
+> 借鉴 OsmAnd `.obf` 分块 + f4map 数据驱动样式，向 HSD SR 观感与任意规模地图演进。
+
+### 8.1 BEV 升级 SR 科技风（风格上下文，不污染透视）
+
+BEV（正交俯视）此前绕过整条后处理（`main.js` 的 noPost 含 bev），观感最素。
+现按**风格上下文**（`sr` / `real`）动态改材质，不建两套场景：
+
+| 文件 | 机制 |
+|------|------|
+| `main.js` `_applySceneStyle(mode)` | BEV→`sr` 风格，其余视角→`real`；读 `STYLE` 表 |
+| `main.js` `_syncPostProc()` | GTAO 按「档位+相机」关（BEV 正交不兼容 GTAO，但保留 Bloom+SMAA） |
+| `core/Renderer.js` `setBloomTech()` | BEV 激进（threshold 0.8，标线/路牌辉光）/ 透视保守（1.0 只车灯） |
+| `view/RoadView.js` `setMarkingEmissive()` | BEV 抬高标线 emissive / 透视归 0 |
+| `view/GroundView.js` `setTechMode()` | BEV 深色冷底 tint / 透视还原纯纹理 |
+
+**关键**：BEV 走 Bloom+SMAA（去 noPost），GTAO 仍关——正交相机与 GTAO 不兼容，
+且俯视示意不需要接触阴影。`Renderer.setBloomTech` 用 `userData.realParams/techParams`
+存两组参数。
+
+### 8.2 声明式样式表（换肤即换表）
+
+`theme/roadStyle.js` 是标线视觉的单一事实源，两级结构：
+- `MARKING`：标线语义 → 基础视觉参数（color/emissive），来自 `tokens.js` SCENE token
+- `STYLE`：整套风格集（`real` 写实 / `sr` 科技），控制标线发光强度、地面 tint、Bloom 激进与否
+
+`RoadView` 标线材质 color/emissive 从 `MARKING` 取；`main.js` `_applySceneStyle` 读
+`STYLE` 选风格。**换肤 = 新增一张 `STYLE` 表，view 零改动**（AIGC 一键换肤的正确架构）。
+3D 配色仍只能来自 `tokens.js` SCENE（grep 门禁），SR 专用色（`lineEmissive*`/`srGroundTint`）
+也在 SCENE 里，非测试锁定语义色可随换肤调。
+
+### 8.3 路线走廊瓦片化（带宽优化）
+
+`tools/corridor_map.py`：预处理复刻前端 `MapData.selectRoadsForPreview` 走廊语义
+（`road_chain` + 800m 空间格邻域 + 同走廊 buildings），生成 `map_corridor.json`。
+郑东实测 **76.5MB→12.4MB（84% 削减）**，roads 42516→12435、buildings 8112→2299。
+`monitor_server.c` `/api/map/preview` 优先读 `map_corridor.json`，不存在回退全量
+`map.json`（小图零变化，前端零改动）。生成物不入库（`.gitignore`），部署时跑脚本。
+
+### 8.4 LOD 分级
+
+`corridor_map.py` 给每条 road 标 `detail='high'|'low'`（high=距路线<250m 格邻域或
+`road_chain` 本身；走廊 250-800m 远区=low）。`MapData` 投影到 edge；
+`RoadView.buildStandardRoad` 对 `detail='low'` **只铺路面**（跳过标线/路肩/人行道）。
+郑东 high 4550 / low 7885（low 占 63%），降标线 draw call。`detail` 缺省 `'high'` 零回归。
+
+### 8.5 按段按需加载（规模化预埋）
+
+`corridor_map.py --segments`：按路线累计弧长（~2000m/段）切成段，写
+`maps/<id>/segments/map_seg_N.json` + `index.json`（段→road_ids）。
+`monitor_server.c` 新增 `POST /api/map/segment {map, segment}`（segment=-1 返回
+index）。前端 `MapData.js` 提供 `fetchSegmentIndex`/`loadSegment` 按段拉取合并进
+`_data.edges/laneData`。
+
+**诚实边界**：郑东走廊已压到 12.4MB 一次性加载足够快，默认仍走走廊基线（零回归）。
+段加载为**未来整城级大图**（走廊本身超大时）流式加载预埋；段文件只含 roads，
+junctions/buildings 仍需走廊基线提供。
+
+## 9. 文档覆盖现状
+
+- `docs/VISUALIZATION_ARCHITECTURE.md`：总体架构/数据流/SceneDirector/Layer 树/DeadReckon，VehicleView 的 SU7 模型/车漆/灯光有简略说明（L590-607）。**未覆盖**：车轮 kingpin 转向/滚动/modulo、车牌 GA36-2018、贴地 roadHeightAt、camera 跟随细节、PerfMonitor 降档、map preview、SR 科技风、地图规模化。
 - `docs/VIS_MODULE_GUIDE.md`："怎么写模块"规范，不含具体车辆/相机/性能经验；module 清单表格已更新（MapOverlayView → MinimapHUD）。
 - `docs/TROUBLESHOOTING_3D_DASHBOARD.md`：3D 加载失败根因（SSE 多行 JSON 被 EventSource 丢弃），与渲染层无关。
 - `docs/FLOWBOARD_CONTRACT.md`：纯数据层契约。

@@ -64,6 +64,9 @@ sim_world → sensor_model → perception → fusion → planning → control �
 | `modules/adas_nodes/st_graph.c` | ST 图 + DP 速度规划（红灯墙/动态障碍/曲率限速，移植自 speed_planner_sim.py 11/11 PASS） |
 | `modules/adas_nodes/maneuver_tracker.h` | 机动跟随器（掉头/泊车：弧长推进 + D/R 挡位 + 倒挡横向反号，header-only 可单测） |
 | `tools/flowboard/index.html` | 前端仪表盘（3D+2D+图表+D3 拓扑，ES modules） |
+| `tools/flowboard/js/vis/theme/roadStyle.js` | 标线视觉声明式样式表（MARKING 语义 + STYLE 双风格：real 写实 / sr 科技，换肤即换表） |
+| `tools/flowboard/js/vis/model/MapData.js` | OSM 权威地图加载 + 走廊过滤 + 按段加载能力（fetchSegmentIndex/loadSegment） |
+| `tools/corridor_map.py` | 路线走廊瓦片化 + LOD 标注 + 分段（郑东 76.5MB→12.4MB，`--segments` 生成段） |
 | `tools/foxglove_bridge.py` | Foxglove Studio WebSocket 桥接 |
 | `ci/evaluators/demo_evaluator.py` | 回归评估器：采样 JSON 并自动评分（碰撞/偏航/停滞/频率） |
 | `tools/pipeline_check.py` | 离线管道完整性检查：不启动 demo，秒级验证 9 类 32 项指标 |
@@ -579,11 +582,13 @@ frame: THREE  | up: +Y | 单位: m | ENU→THREE: [x, z, -y] | ego_centered: tru
 
 ```
 tools/flowboard/js/vis/
-├── main.js           — 入口
+├── main.js           — 入口（含 _applySceneStyle 风格上下文：BEV→sr / 透视→real）
 ├── core/             — 核心渲染框架（SceneDirector, CameraRig, Lighting, Constants, Layer, Renderer, SkyEnv, ViewRegistry, AssetFactory, DeadReckon）
 ├── director/         — 场景导演（SceneDirector, FrameValidator）
 ├── view/             — 3D 视图（VehicleView, RoadView, GroundView, ViaductView, BarrierView, TreeView, TrafficLightView, ETCGateView, StreetlightView, ConnectorView, VehicleLights, EffectView, TrajectoryView）
 ├── math/             — 坐标/几何工具（Coord.js — 唯一事实源, Curve, GeometryMerge, RoadHeight）
+├── theme/            — 设计 token 单一事实源（tokens.js）+ 标线视觉样式表（roadStyle.js: MARKING/STYLE）
+├── model/            — 数据模型（MapData.js 权威地图+走廊+按段加载, TopologyModel, RoadAxis）
 └── store/            — 场景状态（SceneStore）
 ```
 
