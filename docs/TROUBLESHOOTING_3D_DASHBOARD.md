@@ -79,10 +79,10 @@ demo.sh 是**前台**脚本（监控循环持续打印）。在终端按 **Ctrl+
 
 ## 已知边界与后续建议（按优先级）
 
-1. **64KB 静默截断风险（同类症状会复发）**：`build_cached_dashboard_json` 复制上限
-   为 `MONITOR_HTTP_BUF_SIZE`(64KB)；场景/节点继续增长导致 JSON 超限时会截断成非法
-   JSON，前端又会回到"无数据"。建议后续在注入时 minify（可再省 ~30%）或超限时丢弃
-   本帧保留上一帧完整 JSON，并打 WARN 日志。
+1. ~~**64KB 静默截断风险**~~ **[已解决]**：`MONITOR_HTTP_BUF_SIZE` 已从 64KB
+   扩至 128KB（`src/core/monitor_server.c`），郑东 70MB map.json 路径下的
+   大场景 JSON 不再截断。同类症状如再复发，可进一步在注入时 minify（省 ~30%）
+   或超限时丢弃本帧保留上一帧完整 JSON + WARN 日志。
 2. **更深层修法（可选重构）**：SSE 标准做法是按行 `data: ` 前缀分帧（任意 payload
    均安全）；或让 monitor_node 对桥接通道发 `cJSON_PrintUnformatted`（文件保持
    formatted 供人读）。当前修法选择 SSE 出口单点压平，影响面最小。

@@ -322,7 +322,7 @@ const headMat = createEmissiveMaterial(0xfff4d6, 1.0); // 独立（每帧改 int
 | VehicleLights | `vis/view/VehicleLights.js` | 简单 | 车灯位掩码解析工具模块（非 View，被 VehicleView 调用） |
 | LabelView | `vis/view/LabelView.js` | 简单 | Sprite 文字标签，跟随 entity 显示 speed + ai_state |
 | PerceptionView | `vis/view/PerceptionView.js` | 中等 | 3D 角标框 + 检测射线 + 雷达扫描，LineSegments 批量 draw call |
-| MapOverlayView | `vis/view/MapOverlayView.js` | 中等 | Canvas 2D 小地图 + HUD 叠加层 |
+| MinimapHUD | `vis/MinimapHUD.js` | 中等 | Canvas 2D 小地图 + HUD 叠加层（非 View 子类，独立于 view/） |
 
 ## 10. 待设计模块清单（候选）
 
@@ -330,6 +330,5 @@ const headMat = createEmissiveMaterial(0xfff4d6, 1.0); // 独立（每帧改 int
 |------|-------|------|
 | PedestrianView | entity.type='pedestrian' | 行人模型（gltf 或程序化胶囊） |
 | SignView | edge.signs[] | 交通标志牌（限速/匝道预警/ETC 预告） |
-| JunctionView | rn.junctions[] | 路口区域（斑马线 + 停止线 + 导流线） |
 | SkylineView | env | 远景天际线建筑剪影 |
 | WeatherView | env.weather | 雨/雪/雾粒子 |

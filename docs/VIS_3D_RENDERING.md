@@ -82,6 +82,6 @@
 ## 8. 文档覆盖现状
 
 - `docs/VISUALIZATION_ARCHITECTURE.md`：总体架构/数据流/SceneDirector/Layer 树/DeadReckon，VehicleView 的 SU7 模型/车漆/灯光有简略说明（L590-607）。**未覆盖**：车轮 kingpin 转向/滚动/modulo、车牌 GA36-2018、贴地 roadHeightAt、camera 跟随细节、PerfMonitor 降档、map preview。
-- `docs/VIS_MODULE_GUIDE.md`："怎么写模块"规范，不含具体车辆/相机/性能经验；module 清单表格已过时（MapOverlayView 已更名 MinimapHUD）。
+- `docs/VIS_MODULE_GUIDE.md`："怎么写模块"规范，不含具体车辆/相机/性能经验；module 清单表格已更新（MapOverlayView → MinimapHUD）。
 - `docs/TROUBLESHOOTING_3D_DASHBOARD.md`：3D 加载失败根因（SSE 多行 JSON 被 EventSource 丢弃），与渲染层无关。
 - `docs/FLOWBOARD_CONTRACT.md`：纯数据层契约。
