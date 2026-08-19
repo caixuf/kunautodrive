@@ -217,6 +217,95 @@ function junctionsFromData(roadNetwork, dataJunctions) {
   return { centers, byId };
 }
 
+/** fork 数据 → 路口中心（OSM 大地图根治断裂，2026-08-19）
+ *
+ * 郑东等 OSM 大地图：map_junctions 是 SUMO fork 契约（incoming_road +
+ * connecting_roads[{id:road_j*,turn}]），无 x/y/z/shape，几何聚类漏检 71%
+ * 路口 → road_j* 内部 connector 被 isInternalRoad 过滤 + patch 不生成 →
+ * 道路在路口处断。
+ *
+ * 中心 = fork.incoming_road 的终点节点（SUMO to_node = 路口），与 edge 端点
+ * 天然对齐（arms 匹配率高），比 connector 质心稳（长 connector 会把质心拖偏
+ * 数米）。多 fork 共享同一终点（同路口多连接记录）按 2m 格去重。
+ *
+ * 触发条件：map_junctions 有 fork 且至少一个 connector 能在 lane_data 解析出
+ * centerline（不能只看 lane_data 对象存在——空对象必须回退，防误伤测试）。
+ */
+function forksFromData(roadNetwork, dataJunctions) {
+  const laneData = roadNetwork?.lane_data || {};
+  const edges = Array.isArray(roadNetwork?.edges) ? roadNetwork.edges : [];
+  const edgeMap = new Map(edges.map((e) => [String(e.id), e]));
+  const centers = [];
+
+  const groups = new Map();   // key "x,y"(2m 格) → {x,y,z,radius,n}
+
+  for (const j of dataJunctions || []) {
+    if (!j || j.type !== 'fork') continue;
+    const conns = Array.isArray(j.connecting_roads) ? j.connecting_roads : [];
+
+    // 解析 connector centerline（触发条件：至少一个可解析）
+    const cls = [];
+    for (const c of conns) {
+      const lanes = c && laneData[c.id];
+      if (Array.isArray(lanes) && lanes.length) {
+        const cl = lanes[0] && lanes[0].centerline;
+        if (Array.isArray(cl) && cl.length >= 2) cls.push(cl);
+      }
+    }
+    if (!cls.length) continue;
+
+    // 中心：优先 incoming_road 终点节点（SUMO to_node），否则 connector 中点平均
+    let cx, cy, cz;
+    const incoming = String(j.incoming_road || '');
+    const inEdge = edgeMap.get(incoming);
+    if (inEdge && Array.isArray(inEdge.nodes) && inEdge.nodes.length) {
+      const last = inEdge.nodes[inEdge.nodes.length - 1];
+      const arr = Array.isArray(last) ? last : [last.x || 0, last.y || 0, last.z || 0];
+      cx = Number(arr[0]) || 0; cy = Number(arr[1]) || 0; cz = Number(arr[2]) || 0;
+    } else {
+      let sx = 0, sy = 0, sz = 0, n = 0;
+      for (const cl of cls) {
+        for (const p of cl) {
+          if (!Array.isArray(p) || p.length < 2) continue;
+          sx += Number(p[0]) || 0; sy += Number(p[1]) || 0; sz += Number(p[2]) || 0; n++;
+        }
+      }
+      if (!n) continue;
+      cx = sx / n; cy = sy / n; cz = sz / n;
+    }
+
+    // radius：覆盖 connector 内部（半长 + 3），钳制避免超长 connector 巨型 patch
+    let maxHalf = 0;
+    for (const cl of cls) {
+      const a = cl[0], b = cl[cl.length - 1];
+      const half = Math.hypot((Number(b[0]) || 0) - (Number(a[0]) || 0),
+        (Number(b[1]) || 0) - (Number(a[1]) || 0)) / 2;
+      if (half > maxHalf) maxHalf = half;
+    }
+    const radius = Math.max(8, Math.min(maxHalf + 3, 20));
+
+    const key = `${Math.round(cx / 2)},${Math.round(cy / 2)}`;   // 2m 格去重
+    const g = groups.get(key);
+    if (g) {
+      g.radius = Math.max(g.radius, radius);
+      g.n++;
+      g.x = (g.x * (g.n - 1) + cx) / g.n;
+      g.y = (g.y * (g.n - 1) + cy) / g.n;
+      g.z = Math.max(g.z, cz);
+    } else {
+      groups.set(key, { x: cx, y: cy, z: cz, radius, n: 1 });
+    }
+  }
+  if (!groups.size) return { centers: [], byId: new Map() };
+
+  for (const g of groups.values()) {
+    const [tx, , tz] = worldToThree(g.x, g.y, g.z);
+    centers.push({ x: tx, z: tz, py: g.z, level: levelOf(g.z), radius: g.radius });
+  }
+  const byId = matchEdgesToCenters(edges, centers);
+  return { centers, byId };
+}
+
 /** 检测 road_network 中的所有交叉口中心。
  *  @returns {{centers:Array<{x,z,radius}>, byId:Map<string,{start:number|null,end:number|null}>}}
  *   centers 为交叉口中心列表（radius = 需截断半径，含路肩/人行道余量）；
@@ -224,10 +313,12 @@ function junctionsFromData(roadNetwork, dataJunctions) {
 export function detectJunctions(roadNetwork) {
   // ── 优先数据层 junction（scene_pub 单一事实源）──
   // 数据源优先级：
-  //   1. road_network.junctions[]（live 路径：scene_pub 数据层预计算）
-  //   2. road_network.map_junctions[]（map preview 路径：osm2kmap fork 契约，
-  //      携带 shape 多边形，前端直接消费真实路口多边形）
-  // 两者必须带可用坐标（x/y/z 或 shape）；否则回退几何端点聚类。
+  //   1. road_network.junctions[]（live 路径：scene_pub 数据层预计算，带坐标）
+  //   2. road_network.map_junctions[]（map preview 路径：osm2kmap fork 契约）
+  //   3. map_junctions fork + laneData connector 可解析（OSM 大地图，新增）
+  //      郑东等大地图 fork 无 x/y/z/shape，几何聚类漏检 71% 路口 → 道路断裂。
+  //      用 fork 的 incoming_road 终点（SUMO to_node）直接定路口中心，绕开聚类。
+  // 前两者必须带可用坐标（x/y/z 或 shape）；否则尝试 fork 路径；再回退几何聚类。
   const dataJ = Array.isArray(roadNetwork?.junctions) ? roadNetwork.junctions : [];
   const mapJ = Array.isArray(roadNetwork?.map_junctions) ? roadNetwork.map_junctions : [];
   const allDataJ = [...dataJ, ...mapJ];
@@ -235,6 +326,10 @@ export function detectJunctions(roadNetwork) {
     allDataJ.some((j) => j.x != null || j.y != null || j.z != null ||
       (Array.isArray(j.shape) && j.shape.length > 0));
   if (dataHasCoords) return junctionsFromData(roadNetwork, allDataJ);
+
+  // ── fork 数据 → centers（OSM 大地图根治断裂）──
+  const forkCenters = forksFromData(roadNetwork, mapJ);
+  if (forkCenters && forkCenters.centers.length) return forkCenters;
 
   // ── 兜底：端点几何聚类 ──
   const centers = [];

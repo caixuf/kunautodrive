@@ -21,7 +21,7 @@ const RETRY_COOLDOWN_MS = 5000;
 let _failedAt = new Map();  // mapId -> 上次失败时间戳
 let _data = null;          // {junctions: Array, laneData: {roadId: lanes[]}}
 
-const LARGE_MAP_ROAD_LIMIT = 5000;
+const LARGE_MAP_ROAD_LIMIT = 50000;
 const PREVIEW_CORRIDOR_CELL_M = 800;   // 扩大走廊范围至 800m，显示更多远处道路细节
 const BUILDING_CORRIDOR_M = 800;       // 建筑也保留至 800m 走廊内
 

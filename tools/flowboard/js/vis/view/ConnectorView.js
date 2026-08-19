@@ -163,9 +163,19 @@ export function createConnectorView(scene) {
       endpointLocs.push({ x: sx, z: sz, id: String(e.id) });
       endpointLocs.push({ x: ex, z: ez, id: String(e.id) });
     }
+    /* isDeadEnd 空间网格（消 O(E²)≈5.9 亿次距离）：郑东 12102 edge × 2 端点全量
+     * 扫描互相判距。按 8m cell 分组，isDeadEnd 只查邻近 3×3 cell。 */
+    const EP_CELL = 8;
+    const endpointGrid = new Map();
+    for (const ep of endpointLocs) {
+      const k = `${Math.floor(ep.x / EP_CELL)},${Math.floor(ep.z / EP_CELL)}`;
+      let bucket = endpointGrid.get(k);
+      if (!bucket) { bucket = []; endpointGrid.set(k, bucket); }
+      bucket.push(ep);
+    }
     for (const edge of edges) {
       if (edge.type === 'ramp_curve' || edge.type === 'intersection') continue;
-      _buildBarrierEndCap(edge, byId, endpointLocs);
+      _buildBarrierEndCap(edge, byId, endpointLocs, endpointGrid, EP_CELL);
     }
 
     built = true;
@@ -232,8 +242,47 @@ export function createConnectorView(scene) {
    *  拓扑（centers/arms/折线点）来自 TopologyModel 单一事实源；
    *  标线用 walkFromJunction 径向出圈取位置与局部切线（曲路贴弯）；
    *  polygon 圆角化（Chaikin 2 次切角）；转向导流线用 junctionData 的 turn。 */
+  /* fork 索引（消 connectingRoads 的 O(J×F)）：郑东 12027 fork × 11763 路口
+   * 全遍历 = 1.4 亿次 fromIndices。预建 Map<key, [forkIdx]>，
+   * key ∈ {incoming, incoming+'_', altId, altId+'_'}；查询时按 arm.edgeId
+   * 的下划线前缀族查候选，只对候选跑 fromIndices（前缀/fromEnd 语义不变）。 */
+  const buildForkIndex = (junctionDataArr) => {
+    const idx = new Map();
+    junctionDataArr.forEach((f, fi) => {
+      if (!f || f.type !== 'fork') return;
+      const id = String(f.incoming_road || '');
+      if (!id) return;
+      const isRev = id.startsWith('road_r');
+      const altId = isRev ? id.replace('road_r', 'road_') : id;
+      for (const key of [id, id + '_', altId, altId + '_']) {
+        let arr = idx.get(key);
+        if (!arr) { arr = []; idx.set(key, arr); }
+        arr.push(fi);
+      }
+    });
+    return idx;
+  };
+  /** arm.edgeId 的下划线前缀族 + altId（road_r→road_）前缀族 */
+  const edgePrefixKeys = (edgeId) => {
+    const keys = new Set();
+    const add = (s) => {
+      if (!s) return;
+      const parts = s.split('_');
+      let cur = '';
+      for (let i = 0; i < parts.length; i++) {
+        cur = cur ? cur + '_' + parts[i] : parts[i];
+        keys.add(cur);
+      }
+    };
+    add(edgeId);
+    if (edgeId && edgeId.startsWith('road_r')) add(edgeId.replace('road_r', 'road_'));
+    return [...keys];
+  };
+
   function _buildJunctionPatch(topo, centers, junctionData, laneData) {
     if (!topo || !centers.length) return;
+
+    const forkIndex = buildForkIndex(junctionData);
 
     // 路口多边形（合并单 mesh）+ 斑马线/停止线/导流线 InstancedMesh
     const polyPositions = [], polyIndices = [];
@@ -280,7 +329,7 @@ export function createConnectorView(scene) {
       // 本路口才算），停止线按来车归属——只有作为某条转向路径来车端的 arm 才画
       // （单行道驶出侧/纯出口 arm 不画）；无 turn 数据时回退每个 arm 全画。
       // 斑马线行人过街与车流方向无关，保持每个 arm 都画。
-      const conns = connectingRoads(ci, arms, junctionData, laneData);
+      const conns = connectingRoads(ci, arms, junctionData, laneData, forkIndex);
       const incomingIdx = new Set();
       for (const conn of conns) {
         if (conn.fromIdx != null && conn.toIdx != null) incomingIdx.add(conn.fromIdx);
@@ -415,7 +464,7 @@ export function createConnectorView(scene) {
     return found;
   }
 
-  function connectingRoads(ci, arms, junctionData, laneData) {
+  function connectingRoads(ci, arms, junctionData, laneData, forkIndex) {
     const out = [];
     if (!Array.isArray(junctionData) || !junctionData.length) return out;
     const armIdx = new Map();   // edgeId -> arms 下标
@@ -438,7 +487,20 @@ export function createConnectorView(scene) {
       }
       return idxs;
     };
-    for (const f of junctionData) {
+    // 候选 fork：由 arms 的 edgeId 前缀族查 forkIndex（消 O(J×F)）。索引查不到
+    // 时（live 路径 arm.edgeId=数字串）回退全遍历——但该场景 fork 少，代价小。
+    let candidates = junctionData;
+    if (forkIndex && forkIndex.size && arms.length) {
+      const candSet = new Set();
+      for (const a of arms) {
+        for (const key of edgePrefixKeys(a.edgeId)) {
+          const arr = forkIndex.get(key);
+          if (arr) for (const fi of arr) candSet.add(fi);
+        }
+      }
+      if (candSet.size) candidates = [...candSet].sort((a, b) => a - b).map((fi) => junctionData[fi]);
+    }
+    for (const f of candidates) {
       if (!f || f.type !== 'fork') continue;
       const fromIdxs = fromIndices(f.incoming_road);
       if (!fromIdxs.length) continue;
@@ -685,11 +747,11 @@ export function createConnectorView(scene) {
 
   /** 5. BarrierEndCap：防撞桶（红白圆柱）只放在真断头（孤端）端点。
    *  byId: Map<edgeId,{start,end}>（≥3 臂路口中心索引或 null），用于跳过路口。
-   *  endpointLocs: 所有 edge 端点（THREE 坐标 + edge id），孤端判定用。
+   *  endpointGrid: 端点空间网格（8m cell，消 isDeadEnd 的 O(E²) 全量扫描）。
    *  断头 = 端点既不属于 ≥3 臂路口，又无任何其他 edge 端点在邻接容差内
    *  （连续连接/弯道转折/环形路段间两端点重合 → 有邻接 → 不是断头）。
    *  位置用端点切线的右法线（沿道路外侧），不再硬编码 +z。 */
-  function _buildBarrierEndCap(edge, byId, endpointLocs) {
+  function _buildBarrierEndCap(edge, byId, endpointLocs, endpointGrid, epCell) {
     const entry = byId ? byId.get(String(edge.id)) : null;
     const nodes = (edge.nodes || []).map((n) =>
       Array.isArray(n) ? n : [n.x || 0, n.y || 0, n.z || 0]);
@@ -710,12 +772,19 @@ export function createConnectorView(scene) {
       group.add(white);
     };
 
-    // 端点是否真断头：不属于 ≥3 臂路口 + 无任何邻接端点
+    // 端点是否真断头：不属于 ≥3 臂路口 + 无任何邻接端点（查邻近 3×3 cell）
     const isDeadEnd = (node) => {
       const [x, , z] = worldToThree(node[0] || 0, node[1] || 0, node[2] || 0);
-      for (const ep of endpointLocs) {
-        if (ep.id === String(edge.id)) continue;
-        if (Math.hypot(ep.x - x, ep.z - z) < DEAD_END_TOL_M) return false;
+      const cx = Math.floor(x / epCell), cz = Math.floor(z / epCell);
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dz = -1; dz <= 1; dz++) {
+          const bucket = endpointGrid.get(`${cx + dx},${cz + dz}`);
+          if (!bucket) continue;
+          for (const ep of bucket) {
+            if (ep.id === String(edge.id)) continue;
+            if (Math.hypot(ep.x - x, ep.z - z) < DEAD_END_TOL_M) return false;
+          }
+        }
       }
       return true;
     };
