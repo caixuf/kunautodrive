@@ -245,13 +245,14 @@ RoadView 按 500m 网格分桶，每桶合并成单个 BufferGeometry。frustumC
 
 ## 3D 侧门禁
 
-`npm run vis:check:all` 是合并门槛，四件事：
+`npm run vis:check:all` 是合并门槛，五件事：
 
 ```bash
 npm run vis:check          # 1. 模块加载 + ESLint + tick 冒烟
 npm run vis:check:invariant # 2. 坐标 property-test
 npm run vis:check:grep     # 3. grep 门禁（裸 -y / atan2 / 魔法数）
 npm run vis:check:junction # 4. 路口标线几何回归
+npm run vis:check:smoke    # 5. 3D 连续 5 帧不抛错
 ```
 
 260+ 测试，0 fail 才可合并。

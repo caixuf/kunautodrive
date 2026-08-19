@@ -167,7 +167,7 @@ static double idm_desired_speed(double v, double gap, double target_v,
 | `idm_safe_gap_base` | 5.0 m | 静止安全间距 |
 | `idm_safe_gap_time` | 1.5 s | 跟车时距 |
 | `accel_rate` | 1.5 m/s² | 自由流加速度 |
-| `follow_decel_factor` | 3.5 m/s² | 跟车减速度基准 |
+| `follow_decel_factor` | 3.0 m/s² | 跟车减速度基准 |
 
 前车搜索逻辑（`find_lead`）优先用 route_s 比较（沿路弧长），没有 route 时用车头
 方向投影——这保证了对向车不会被误判为前车。
@@ -175,7 +175,7 @@ static double idm_desired_speed(double v, double gap, double target_v,
 ### MOBIL 变道模型（已禁用）
 
 项目曾实现完整的 MOBIL（Minimizing Overall Braking Induced by Lane change）变道模型，
-但因用户需求「NPC 各守其道不变道」已用 `#if 0` 禁用。完整代码保留在 `npc_ai.cpp` 中，
+但因用户需求「NPC 各守其道不变道」已用 `enable_mobil{false}` 配置禁用。完整代码保留在 `npc_ai.cpp` 中，
 包含：
 
 - `mobil_gain()`：变道收益函数 `gain = a'_c - a_c + politeness × (a'_n - a_n + a'_o - a_o)`
@@ -297,7 +297,7 @@ else                   → Red
 
 ### NPC 响应红绿灯
 
-`check_npc_scene_events` 检查每个 NPC 前方 60m 内是否有红灯/黄灯：
+`check_npc_scene_events` 检查每个 NPC 前方 80m 内是否有红灯/黄灯：
 - 制动距离 = v² / (2×max_brake)
 - 若最近红灯 < 制动距离 + 5m → 触发 `NpcEvent::TL_Red`，进入 `StopForTL` 状态
 - 灯转绿 → `NpcEvent::TL_Green`，恢复巡航

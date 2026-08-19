@@ -76,14 +76,14 @@ Stage 4  model_ota      OTA：新模型热替换、A-B 对比、回滚
 {features (what the car saw this frame), action (what the rule system did this frame)}
 ```
 
-**样本 = 特征 + 标签**。特征是 23 维向量，包含：
-- 定位：x, y, heading, speed
-- 障碍物：最近前车的距离、速度、横向偏移
-- 行为状态：当前是跟车/变道/停车
-- 规划输出：目标速度、曲率、到停止线距离
-- 红绿灯：当前灯色、到停止线距离
+**样本 = 特征 + 标签**。特征是 23 维向量（`data_recorder_node.c` `features_v3`）：
+- 自车状态（4 维）：ego_v, ego_y, ego_heading, ego_yaw_rate
+- 最近前车（5 维）：front0_x, front0_y, front0_vx, front0_type, front0_conf
+- 次近前车（5 维）：front1_x, front1_y, front1_vx, front1_type, front1_conf
+- 控制信号（2 维）：control_brake, control_emergency_stop
+- 场景上下文（7 维）：tl_state, tl_distance, road_curvature, speed_limit, lane_count, lane_width, ego_lane_offset
 
-标签是 5 维动作：throttle, brake, steer, target_speed, 状态机状态。
+标签是单值：`planning_target_speed`（规划的目标速度）。
 
 **一句话：你采集的是「规则开车的录像」，模型要学的是从录像里学会开车。**
 
