@@ -29,6 +29,7 @@ import { LANE_WIDTH, DEFAULT_LANES, EDGE_TYPE, isTunnelEdge } from '../core/Cons
 import { tangentToNormal, offsetAlongNormal, forwardENU, worldToThree } from '../math/Coord.js';
 import { getTopology } from '../model/TopologyModel.js';
 import { SCENE } from '../theme/tokens.js';
+import { MARKING } from '../theme/roadStyle.js';
 
 /* 配色全部来自 theme/tokens.js（P3 设计 token 单一事实源）：
  * 路面/匝道/路肩/人行道/路缘石五级明度拉开（16→20→33→51→66%）。 */
@@ -37,10 +38,6 @@ const SHOULDER_COLOR = SCENE.shoulder;
 const CURB_COLOR = SCENE.curb;
 const SIDEWALK_COLOR = SCENE.sidewalk;
 const VERGE_COLOR = SCENE.verge;
-const LINE_WHITE = SCENE.lineWhite;
-const LINE_YELLOW = SCENE.lineYellow;
-const LINE_EMISSIVE_WHITE = SCENE.lineEmissiveWhite;
-const LINE_EMISSIVE_YELLOW = SCENE.lineEmissiveYellow;
 const RAMP_COLOR = SCENE.rampSurface;
 const TUNNEL_COLOR = SCENE.tunnel;
 
@@ -1097,11 +1094,11 @@ export function createRoadView(scene) {
     //   real 风默认 0 不发光，SR/BEV 风抬高配合 Bloom 出霓虹辉光）
     if (whiteLineGeos.length) {
       const mat = new THREE.MeshStandardMaterial({
-        color: LINE_WHITE,
+        color: MARKING.white.color,
         roughness: 0.6,
         metalness: 0.05,
-        emissive: LINE_EMISSIVE_WHITE,  // 冷白蓝自发光（色值不动 color，绕开测试锁定）
-        emissiveIntensity: 0,        // real 风默认关闭，SR/BEV 风由 setter 打开
+        emissive: MARKING.white.emissive,   // 冷白蓝自发光（色值不动 color，绕开测试锁定）
+        emissiveIntensity: 0,               // real 风默认关闭，SR/BEV 风由 setter 打开
         side: THREE.DoubleSide,
         polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
       });
@@ -1112,10 +1109,10 @@ export function createRoadView(scene) {
     // 黄色中心线
     if (yellowLineGeos.length) {
       const mat = new THREE.MeshStandardMaterial({
-        color: LINE_YELLOW,
+        color: MARKING.yellow.color,
         roughness: 0.6,
         metalness: 0.05,
-        emissive: LINE_EMISSIVE_YELLOW,  // 黄线自发光，辉光略弱于白线（黄光更"警告"）
+        emissive: MARKING.yellow.emissive,   // 黄线自发光，辉光略弱于白线
         emissiveIntensity: 0,
         side: THREE.DoubleSide,
         polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,

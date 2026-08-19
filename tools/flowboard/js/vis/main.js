@@ -19,6 +19,7 @@ import { clearCache } from './core/AssetFactory.js';
 import { initModels } from './view/VehicleView.js';
 import { createStatsView } from './view/StatsView.js';
 import { createMinimapHUD } from './MinimapHUD.js';
+import { STYLE } from './theme/roadStyle.js';
 
 // ── 模块级状态（只此一处，取代旧架构 51 个 let）──
 let _scene = null;
@@ -587,18 +588,22 @@ export function setCameraMode(mode) {
 }
 
 /** 应用场景风格：BEV（升级后的 SR 视角）用科技风，其余视角保持写实风。
- *  通过各 View 暴露的 setter 动态改材质，不建两套场景、不污染原 3D 界面。 */
+ *  通过各 View 暴露的 setter 动态改材质，不建两套场景、不污染原 3D 界面。
+ *  风格参数全部来自 theme/roadStyle.js 的 STYLE 表（换肤即换表）。 */
 function _applySceneStyle(mode) {
   if (!_director) return;
-  const tech = mode === 'bev';
+  const style = STYLE[mode === 'bev' ? 'sr' : 'real'];
+  if (!style) return;
   // 标线发光：SR/BEV 抬高 emissive 配合 Bloom 出霓虹辉光，透视恢复 0（写实）
   const road = _director.getRoadView();
-  if (road && road.setMarkingEmissive) road.setMarkingEmissive(tech ? 0.9 : 0, tech ? 0.55 : 0);
+  if (road && road.setMarkingEmissive) {
+    road.setMarkingEmissive(style.markingEmissiveWhite, style.markingEmissiveYellow);
+  }
   // 地面：SR/BEV 深色冷底，透视还原纯纹理
   const ground = _director.getGroundView();
-  if (ground && ground.setTechMode) ground.setTechMode(tech);
+  if (ground && ground.setTechMode) ground.setTechMode(!!style.groundTint);
   // Bloom：SR/BEV 激进（标线辉光），透视保守
-  setBloomTech(tech);
+  setBloomTech(style.bloomTech);
 }
 
 /** 重置相机 */
