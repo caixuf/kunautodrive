@@ -837,23 +837,28 @@ static bool dispatch_request(int fd, MonitorServer* ms,
     /* POST: /api/training/start|promote → fork+exec modelctl.py */
     if (strcmp(method, "POST") == 0) {
         /* POST /api/map/preview -> serve the authoritative map and routes
-         * to the official FlowBoard preview without duplicating geometry. */
+         * to the official FlowBoard preview without duplicating geometry.
+         * 动态检查 maps/<map_id>/map.json 是否存在，不再硬编码 allowlist。 */
         if (strcmp(path, "/api/map/preview") == 0) {
             char* body = read_post_body(fd, req, req_len, 1024);
             cJSON* root = body ? cJSON_Parse(body) : NULL;
             cJSON* map = root ? cJSON_GetObjectItemCaseSensitive(root, "map") : NULL;
             const char* map_id = cJSON_IsString(map) ? map->valuestring : NULL;
-            bool allowed = map_id &&
-                (strcmp(map_id, "city_ring") == 0 ||
-                 strcmp(map_id, "city_center") == 0 ||
-                 strcmp(map_id, "city_grid") == 0 ||
-                 strcmp(map_id, "osm_test") == 0 ||
-                 strcmp(map_id, "osm_lujiazui") == 0 ||
-                 strcmp(map_id, "osm_lujiazui_v2") == 0 ||
-                 strcmp(map_id, "osm_zhengdong") == 0);
-            if (!allowed) {
+            /* 安全校验：map_id 只允许字母、数字、下划线、连字符 */
+            bool valid_id = map_id && strlen(map_id) > 0 && strlen(map_id) < 64;
+            if (valid_id) {
+                for (const char* p = map_id; *p; p++) {
+                    char c = *p;
+                    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                          (c >= '0' && c <= '9') || c == '_' || c == '-')) {
+                        valid_id = false;
+                        break;
+                    }
+                }
+            }
+            if (!valid_id) {
                 send_response(fd, "400 Bad Request", "application/json",
-                              "{\"ok\":false,\"error\":\"map is not allowlisted\"}");
+                              "{\"ok\":false,\"error\":\"invalid map id\"}");
             } else {
                 size_t map_len = 0, routes_len = 0;
                 char map_path[PATH_MAX];
@@ -866,7 +871,7 @@ static bool dispatch_request(int fd, MonitorServer* ms,
                     free(map_json);
                     free(routes_json);
                     send_response(fd, "404 Not Found", "application/json",
-                                  "{\"ok\":false,\"error\":\"map data unavailable\"}");
+                                  "{\"ok\":false,\"error\":\"map not found\"}");
                 } else {
                     size_t total = map_len + routes_len + 32;
                     char* response = (char*)malloc(total);

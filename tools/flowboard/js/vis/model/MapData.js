@@ -9,8 +9,6 @@
  * 非 OSM 场景 resolveMapId 返回 null，全程走启发式兜底（零回归）。
  */
 
-/* monitor_server /api/map/preview 的 allowlist 地图（新增地图需同步两侧） */
-const ALLOWED = new Set(['city_ring', 'city_center', 'city_grid', 'osm_test', 'osm_lujiazui', 'osm_lujiazui_v2', 'osm_zhengdong']);
 /* scenario_name 与 map 目录名不一致的别名表 */
 const ALIAS = { osm_city_map: 'osm_test' };
 
@@ -129,14 +127,14 @@ export function selectRoadsForPreview(roads, route) {
   });
 }
 
-/** scenario_name → allowlist map id（不匹配返回 null = 无权威地图） */
+/** scenario_name → map id（动态，不再需要硬编码 allowlist） */
 export function resolveMapId(scenarioName) {
   if (!scenarioName) return null;
   const name = String(scenarioName);
-  if (ALLOWED.has(name)) return name;
+  // 先查别名表
   if (ALIAS[name]) return ALIAS[name];
-  const stripped = name.replace(/_map$/, '');
-  return ALLOWED.has(stripped) ? stripped : null;
+  // 直接返回 scenario_name，C端会动态检查 maps/<id>/map.json 是否存在
+  return name;
 }
 
 /** 由 map.json 构建消费索引：junctions 原样 + laneData 按 road.id 键控
