@@ -166,3 +166,6 @@ build-mingw/
 # Offline Eigen vendor tree (header-only; prefer build/_deps clone or this local cache)
 third_party/eigen/
 .mimocode
+
+# 地图走廊裁剪生成物（corridor_map.py 生成，部署时跑脚本重建）
+maps/*/map_corridor.json

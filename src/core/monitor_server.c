@@ -863,9 +863,15 @@ static bool dispatch_request(int fd, MonitorServer* ms,
                 size_t map_len = 0, routes_len = 0;
                 char map_path[PATH_MAX];
                 char routes_path[PATH_MAX];
-                snprintf(map_path, sizeof(map_path), "maps/%s/map.json", map_id);
-                snprintf(routes_path, sizeof(routes_path), "maps/%s/routes.json", map_id);
+                /* 阶段2 瓦片化：优先读走廊裁剪版 map_corridor.json（corridor_map.py
+                 * 生成，郑东 76.5MB→12.4MB）；不存在则回退全量 map.json（小图零变化）。 */
+                snprintf(map_path, sizeof(map_path), "maps/%s/map_corridor.json", map_id);
                 char* map_json = read_file(map_path, &map_len);
+                if (!map_json) {
+                    snprintf(map_path, sizeof(map_path), "maps/%s/map.json", map_id);
+                    map_json = read_file(map_path, &map_len);
+                }
+                snprintf(routes_path, sizeof(routes_path), "maps/%s/routes.json", map_id);
                 char* routes_json = read_file(routes_path, &routes_len);
                 if (!map_json || !routes_json) {
                     free(map_json);
