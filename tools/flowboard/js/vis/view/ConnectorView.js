@@ -414,9 +414,13 @@ export function createConnectorView(scene) {
     const fromIndices = (incoming) => {
       const id = String(incoming);
       const prefix = id + '_';
+      // 支持 road_r* 和 road_* 两个版本（SUMO 正/反向 edge）
+      const altId = id.startsWith('road_r') ? id.replace('road_r', 'road_') : id;
+      const altPrefix = altId + '_';
       const idxs = [];
       arms.forEach((a, i) => {
-        if (a.edgeId === id || a.edgeId.startsWith(prefix)) idxs.push(i);
+        if (a.edgeId === id || a.edgeId.startsWith(prefix) ||
+            a.edgeId === altId || a.edgeId.startsWith(altPrefix)) idxs.push(i);
       });
       return idxs;
     };
