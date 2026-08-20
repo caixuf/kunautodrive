@@ -294,7 +294,19 @@ export function createConnectorView(scene) {
       const c = centers[ci];
       const baseY = c.py || 0;   // 高架/隧道路口的标线随路面高程，不再钉在地面
       const arms = topo.armsOfJunction(ci);
-      if (arms.length >= 2) {
+      /* 段边界 vs 真实交叉口（郑东 OSM 大地图）：
+       *  - 2 臂且两臂路口侧端点重合（<1.5m）→ SUMO 分段段边界，路面 ribbon
+       *    贯穿已连续，画 patch 反而把路"切"成段段盖板 → 跳过
+       *  - 2 臂但端点有 gap（≥1.5m）→ 同路两段没接上，需 patch 补空隙
+       *  - ≥3 臂 → 真实交叉口，总是 patch */
+      const isSegBoundary = arms.length === 2;
+      if (isSegBoundary) {
+        const p0 = arms[0].pts[arms[0].fromEnd ? arms[0].pts.length - 1 : 0];
+        const p1 = arms[1].pts[arms[1].fromEnd ? arms[1].pts.length - 1 : 0];
+        if (Math.hypot(p0.x - p1.x, p0.z - p1.z) < 1.5) continue;
+      }
+      if (arms.length < 2) continue;
+      {
         const pts = [];
         for (const a of arms) {
           const w = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, c.radius);
@@ -324,7 +336,9 @@ export function createConnectorView(scene) {
         for (let i = 1; i < smooth.length - 1; i++) polyIndices.push(base, base + i, base + i + 1);
       }
 
-      // ── 斑马线 + 停止线 + 转向导流线 ──
+      // ── 斑马线 + 停止线 + 转向导流线（只给 ≥3 臂真实交叉口）──
+      // 2 臂 gap 段边界只是补空隙，不是交叉口，不画行人/停止线。
+      if (arms.length >= 3) {
       // P1 路口渠化：先算本路口的转向连接（fork incoming→connecting 双 arm 都在
       // 本路口才算），停止线按来车归属——只有作为某条转向路径来车端的 arm 才画
       // （单行道驶出侧/纯出口 arm 不画）；无 turn 数据时回退每个 arm 全画。
@@ -358,6 +372,7 @@ export function createConnectorView(scene) {
         const p0 = walkFromJunction(fa.pts, fa.fromEnd, c.x, c.z, c.radius + 2.5);
         const p1 = walkFromJunction(ta.pts, ta.fromEnd, c.x, c.z, c.radius + 2.5);
         _drawTurnGuide(p0, p1, conn.turn, baseY + STOP_Y, guideInstances);
+      }
       }
     }
 
