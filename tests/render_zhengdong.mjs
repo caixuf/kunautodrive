@@ -7,7 +7,7 @@ import { createConnectorView } from '../tools/flowboard/js/vis/view/ConnectorVie
 import { isInternalRoad } from '../tools/flowboard/js/vis/model/MapData.js';
 import { Raster } from './support/png.js';
 
-const map = JSON.parse(readFileSync(new URL('../maps/osm_zhengdong/map.json', import.meta.url), 'utf8'));
+const map = JSON.parse(readFileSync(new URL(process.env.ZD_MAP || '../maps/osm_zhengdong/map.json', import.meta.url), 'utf8'));
 const roads = map.roads.filter((r) => !isInternalRoad(r));
 const edges = roads.map((road, index) => {
   const lanes = Array.isArray(road.lanes) ? road.lanes : [];
@@ -49,7 +49,7 @@ console.log('mesh color → triangles (sorted desc):');
 for (const [k, v] of sorted) console.log(`  0x${Number(k).toString(16).padStart(6, '0')} → ${v} tris`);
 
 // ── 渲染路面（提亮）确认有无 gap ──
-const CX = -2000, CZ = -2000, PAD = 2500, METER = 1;
+const CX = -1000, CZ = -1000, PAD = 800, METER = 2.5;
 const x0 = CX - PAD, x1 = CX + PAD, z0 = CZ - PAD, z1 = CZ + PAD;
 const W = Math.round((x1 - x0) * METER), H = Math.round((z1 - z0) * METER);
 const r = new Raster(W, H);

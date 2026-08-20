@@ -318,6 +318,14 @@ def main() -> int:
     parser.add_argument("-o", "--output", type=Path, required=True)
     args = parser.parse_args()
     compiled = compile_map(args.source)
+    # 端点吸附（SUMO fork 拓扑）：相连路段端点精确重合，根治 OSM 断口
+    try:
+        from fix_map_endpoints import snap_endpoints
+        stats = snap_endpoints(compiled)
+        if stats["snapped"]:
+            print(f"  snapped {stats['snapped']} endpoints / {stats['groups']} junctions")
+    except Exception as exc:  # 吸附失败不阻断编译（数据无 fork 拓扑时跳过）
+        print(f"  [warn] endpoint snap skipped: {exc}")
     args.output.write_text(json.dumps(compiled, indent=2) + "\n", encoding="utf-8")
     print(f"compiled {args.source} -> {args.output}")
     return 0

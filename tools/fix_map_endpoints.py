@@ -88,48 +88,38 @@ def build_successors(map_data: dict) -> dict[str, set[str]]:
     return succ
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description="吸附 OSM 地图相连路段端点")
-    ap.add_argument("map_json", help="maps/<id>/map.json")
-    ap.add_argument("--out", default=None, help="输出路径（默认原地覆盖）")
-    args = ap.parse_args()
+def snap_endpoints(map_data: dict, cell: float = 2.0) -> dict:
+    """按 SUMO fork 拓扑吸附相连路段端点（原地修改 map_data['roads']）。
 
-    path = args.map_json
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
-
-    roads = data["roads"]
+    用并查集把「同一 SUMO node」的端点归组（incoming_road 终点 ↔ connector
+    successors 起点 ↔ 反向边对应端），每组吸附到平均坐标。
+    返回 {"snapped": int, "groups": int}。
+    """
+    roads = map_data["roads"]
     by_id = {r["id"]: r for r in roads}
-    succ = build_successors(data)
+    succ = build_successors(map_data)
 
     uf = UnionFind()
 
     def link(rid_a, last_a, rid_b, last_b):
-        """断言 (rid_a,last_a) 与 (rid_b,last_b) 是同一 SUMO node，union 之。"""
         if rid_a in by_id and rid_b in by_id:
             uf.union((rid_a, last_a), (rid_b, last_b))
 
-    # ── 遍历 fork 拓扑，把"同一节点"的端点 union ──
-    for j in data.get("junctions", []):
+    for j in map_data.get("junctions", []):
         if j.get("type") != "fork":
             continue
         inc = str(j.get("incoming_road", ""))
         if inc not in by_id:
             continue
-        # incoming_road 终点 = 叉口 to-node
-        #   反向边起点 = 同一 node
         inc_r = reverse_id(inc)
         if inc_r:
             link(inc, True, inc_r, False)
-        #   每个 successor 的起点 = 同一 node（经 connector 连接）
         for sid in succ.get(inc, ()):
             link(inc, True, sid, False)
-            # successor 反向边终点 = 同一 node
             sid_r = reverse_id(sid)
             if sid_r:
                 link(sid, False, sid_r, True)
 
-    # ── 每组算平均锚点并吸附 ──
     groups: dict = defaultdict(list)
     for (rid, last), root in uf.parent.items():
         p = road_pt(by_id[rid], last)
@@ -152,11 +142,25 @@ def main() -> int:
                 continue
             set_pt(by_id[rid], last, ax, ay)
             snapped += 1
+    return {"snapped": snapped, "groups": moved_groups}
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="吸附 OSM 地图相连路段端点")
+    ap.add_argument("map_json", help="maps/<id>/map.json")
+    ap.add_argument("--out", default=None, help="输出路径（默认原地覆盖）")
+    args = ap.parse_args()
+
+    path = args.map_json
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    stats = snap_endpoints(data)
 
     out = args.out or path
     with open(out, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
-    print(f"{path}: 吸附 {snapped} 端点 / {moved_groups} 叉口组 → {out}")
+    print(f"{path}: 吸附 {stats['snapped']} 端点 / {stats['groups']} 叉口组 → {out}")
     return 0
 
 
