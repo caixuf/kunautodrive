@@ -33,13 +33,8 @@ sys.path.insert(0, ROOT)
 
 from tools.astar_route import check as check_route  # noqa: E402
 
-# ── 已知断链白名单（地图 id → 原因）。命中时只 WARN，不阻断。
-#   * city_center —— 半成品示例图：所有 road 的 lane successors 为空（无拓扑），
-#     无任何场景引用，仅作 DSL 骨架演示。
-#   * osm_test —— 陆家嘴环路 main 链在 1192341089→1211164735 断开：两段环路
-#     端点几何 gap 14.7m（1192341089.end 精确接花园石桥路），OSM 原始数据在
-#     该处不连续。待 osm_to_map 连通性生成修复后移除。
-KNOWN_BROKEN = {"city_center", "osm_test"}
+# ── 已知断链白名单（已全部修复，白名单已清空）
+KNOWN_BROKEN: set[str] = set()
 
 
 def referenced_maps() -> set[str]:

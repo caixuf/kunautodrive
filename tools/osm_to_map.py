@@ -445,33 +445,51 @@ def _road_end_headings(road: dict) -> tuple:
 
 
 def detect_junctions(roads: list[dict], snap: float = 25.0) -> list[dict]:
-    """端点几何聚类找路口：把彼此 ≤snap 的 road 端点聚成一簇。
+    """端点几何聚类找路口：使用连通分量（Union-Find）把彼此 <=snap 的 road 端点聚成稳定一簇。
 
-    返回 [{x, y, members:[(road_idx, is_end)]}]，仅保留 ≥2 条不同 road
-    的真实路口（2 端点簇是地图边界直连，非路口）。与 city_grid「每段端点各
-    一 fork」的约定一致。"""
+    返回 [{x, y, members:[(road_idx, is_end)]}]，仅保留 >=2 条不同 road
+    的真实路口。彻底消除因顺序添加导致的聚类中心漂移与漏聚问题。"""
     eps = []
     for i, r in enumerate(roads):
         s, e, _sh, _eh = _road_end_headings(r)
         eps.append((s[0], s[1], i, False))
         eps.append((e[0], e[1], i, True))
-    clusters = []  # {"x", "y", "members"}
-    for (x, y, i, is_end) in eps:
-        best, bd = -1, snap * snap
-        for ci, c in enumerate(clusters):
-            d = (x - c["x"]) ** 2 + (y - c["y"]) ** 2
-            if d < bd:
-                bd = d
-                best = ci
-        if best >= 0:
-            c = clusters[best]
-            n = len(c["members"])
-            c["x"] = (c["x"] * n + x) / (n + 1)
-            c["y"] = (c["y"] * n + y) / (n + 1)
-            c["members"].append((i, is_end))
-        else:
-            clusters.append({"x": x, "y": y, "members": [(i, is_end)]})
-    return [c for c in clusters if len({m[0] for m in c["members"]}) >= 2]
+
+    n = len(eps)
+    parent = list(range(n))
+
+    def find(x):
+        if parent[x] != x:
+            parent[x] = find(parent[x])
+        return parent[x]
+
+    def union(x, y):
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            parent[rx] = ry
+
+    snap_sq = snap * snap
+    for i in range(n):
+        xi, yi, _ri, _ = eps[i]
+        for j in range(i + 1, n):
+            xj, yj, _rj, _ = eps[j]
+            if (xi - xj) ** 2 + (yi - yj) ** 2 <= snap_sq:
+                union(i, j)
+
+    groups: dict[int, list[int]] = {}
+    for i in range(n):
+        root = find(i)
+        groups.setdefault(root, []).append(i)
+
+    clusters = []
+    for member_indices in groups.values():
+        members = [(eps[idx][2], eps[idx][3]) for idx in member_indices]
+        if len({m[0] for m in members}) >= 2:
+            cx = sum(eps[idx][0] for idx in member_indices) / len(member_indices)
+            cy = sum(eps[idx][1] for idx in member_indices) / len(member_indices)
+            clusters.append({"x": cx, "y": cy, "members": members})
+
+    return clusters
 
 
 def _angle_diff(a: float, b: float) -> float:

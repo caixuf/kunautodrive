@@ -76,7 +76,11 @@
               "side": "right"
             }
           ],
-          "successors": []
+          "successors": [
+            "financial_street.lane.1",
+            "riverside_boulevard.lane.1",
+            "downtown_underpass.lane.1"
+          ]
         },
         {
           "id": "central_avenue.lane.2",
@@ -116,7 +120,11 @@
               "side": "right"
             }
           ],
-          "successors": []
+          "successors": [
+            "financial_street.lane.2",
+            "riverside_boulevard.lane.2",
+            "downtown_underpass.lane.2"
+          ]
         },
         {
           "id": "central_avenue.lane.3",
@@ -156,7 +164,11 @@
               "side": "right"
             }
           ],
-          "successors": []
+          "successors": [
+            "financial_street.lane.2",
+            "riverside_boulevard.lane.2",
+            "downtown_underpass.lane.2"
+          ]
         },
         {
           "id": "central_avenue.lane.101",
@@ -951,7 +963,27 @@
       "type": "underpass"
     }
   ],
-  "junctions": [],
+  "junctions": [
+    {
+      "id": 0,
+      "type": "fork",
+      "incoming_road": "central_avenue",
+      "connecting_roads": [
+        {
+          "id": "downtown_underpass",
+          "turn": "straight"
+        },
+        {
+          "id": "financial_street",
+          "turn": "left"
+        },
+        {
+          "id": "riverside_boulevard",
+          "turn": "straight"
+        }
+      ]
+    }
+  ],
   "landmarks": {
     "traffic_lights": [],
     "stop_lines": [],

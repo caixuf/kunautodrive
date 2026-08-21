@@ -674,21 +674,31 @@ export function draw2D() {
 export function switchSceneView(mode) {
   var c2d = document.getElementById('scene2d');
   var c3d = document.getElementById('scene3d');
+  var camBtns = document.getElementById('cam-mode-btns');
+  var envLighting = document.getElementById('env-lighting');
+  var envSelects = envLighting ? envLighting.parentElement : null;
+
   document.querySelectorAll('#scene-view-btns .toggle-btn').forEach(function (b) {
     b.classList.toggle('active', b.dataset.view === mode);
   });
-  // BEV（鸟瞰）：复用 3D 引擎的正交俯视相机渲染，显示道路/车模/轨迹/感知叠层。
-  // 旧的 Canvas-2D 仍保留为无 WebGL 兜底，但默认 2d 按钮进入 BEV。
-  if (mode === '2d' || mode === 'bev') {
-    if (c2d) c2d.style.display = 'none';
-    if (c3d) c3d.style.display = '';
-    if (_2d.animId) { cancelAnimationFrame(_2d.animId); _2d.active = false; }
-    init3DScene();
-    setTimeout(function () { resize3D(); setCameraMode('bev'); }, 100);
+
+  // 2D HMI（极速轻量模式）：直接使用 Canvas-2D 渲染极客科技风 ADAS HMI，极低 CPU/GPU 负载
+  if (mode === '2d' || mode === 'hmi') {
+    if (c3d) c3d.style.display = 'none';
+    if (camBtns) camBtns.style.display = 'none';
+    if (envSelects) envSelects.style.display = 'none';
+    if (c2d) {
+      c2d.style.display = '';
+      init2DFallback(true);
+    }
     return;
   }
+
+  // 3D 渲染模式
   if (c2d) c2d.style.display = 'none';
   if (c3d) c3d.style.display = '';
+  if (camBtns) camBtns.style.display = '';
+  if (envSelects) envSelects.style.display = '';
   if (_2d.animId) { cancelAnimationFrame(_2d.animId); _2d.active = false; }
   init3DScene();
   setTimeout(function () { resize3D(); setCameraMode(mode === '3d' ? 'chase' : mode); }, 100);

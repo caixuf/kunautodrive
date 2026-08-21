@@ -2482,10 +2482,8 @@ function initAll() {
   // 3. Initialize 2D canvas (will be shown if 3D fails to load)
   init2D();
 
-  // 3.5 同步默认 view 状态为 '3d'，避免某些路径（WebGL 异步失败 / context lost
-  // 时调用了 init2DFallback）激活 2D canvas 后 #scene2d 与 #scene3d 同时显示。
-  // 这里以 active 按钮为准，强制把 display 状态对齐一次。
-  try { switchSceneView('3d'); } catch (_) {}
+  // 3.5 默认启动 2D HMI 极速轻量模式（低性能开销），用户可按需切换 3D
+  try { switchSceneView('2d'); } catch (_) {}
 
   // 4. Initialize charts
   initCharts();
