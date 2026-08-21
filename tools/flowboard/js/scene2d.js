@@ -106,11 +106,8 @@ function _2dAnimLoop() {
 export function draw2D() {
   if (!_2d.active || !_2d.ctx) return;
   var ctx = _2d.ctx, W = _2d.w, H = _2d.h;
-  var carX = W / 2, carY = H * 0.65, s = _2d.scale;
-  // Read ego state from the central dead-reckoning engine.
-  // 顿挫复盘（2026-08）：与 3D 一致走**真值直采**（last*），不叠 smooth，
-  // 避免 τ=125ms 滞后 + SSE 节拍抖动放大成周期顿挫（详见 SceneDirector）。
-  // 2D uses (x=forward, y=lateral) which maps to _dr (lastX, lastZ).
+
+  // Read ego state from the central dead-reckoning engine (last*)
   var e = {
     x: _dr.lastX,
     y: _dr.lastZ,
@@ -118,557 +115,431 @@ export function draw2D() {
     speed: _dr.lastSpeed
   };
   var scn = (_topoData.metrics || {}).scene || {};
-  var roadNetwork = scn.road_network || null;
-  var project = function (x, y) {
-    return worldToEgoCanvas(x, y, e.x, e.y, e.heading, s, carX, carY);
-  };
-  var relativeToCanvas = function (rx, ry) {
-    return project(e.x + rx, e.y + ry);
-  };
+  var v = (_topoData.metrics || {}).vehicle || {};
 
-  // ── Background (dark ADAS display) ──
-  ctx.fillStyle = '#060a0f';
+  // ── 3D Perspective Projection Engine (Zero-overhead, 60fps) ──
+  // Camera parameters (meters)
+  var camH = 2.6;       // Camera height above ground
+  var camDist = 6.2;    // Camera distance behind ego vehicle center
+  var fovRad = (62 * Math.PI) / 180;
+  var focal = (H * 0.5) / Math.tan(fovRad / 2);
+  var horizonY = H * 0.46; // Vanishing point horizon line
+
+  // Transform relative (rx=lateral, ry=height, rz=forward) to screen coordinates
+  function project3D(rx, ry, rz) {
+    var cz = rz + camDist;
+    if (cz <= 0.6) return null; // Behind near plane
+    var cy = ry - camH;
+    var scale = focal / cz;
+    var sx = W / 2 + rx * scale;
+    var sy = horizonY - cy * scale;
+    return [sx, sy, scale];
+  }
+
+  // Transform world (wx, wy) to relative ego coordinates (rx=lateral, rz=forward)
+  var cosH = Math.cos(e.heading || 0);
+  var sinH = Math.sin(e.heading || 0);
+  function worldToRel(wx, wy) {
+    var dx = wx - e.x;
+    var dy = wy - e.y;
+    // FlowEngine world coordinate alignment
+    var rz = dx * cosH + dy * sinH;   // forward
+    var rx = -dx * sinH + dy * cosH;  // lateral (right +)
+    return [rx, rz];
+  }
+
+  function projectWorld(wx, wy, wy_height) {
+    var r = worldToRel(wx, wy);
+    return project3D(r[0], wy_height || 0, r[1]);
+  }
+
+  // ── 1. Deep Space Cyberpunk Sky & Ground Gradient ──
+  var bgGrad = ctx.createRadialGradient(W / 2, horizonY, 10, W / 2, horizonY, W * 0.85);
+  bgGrad.addColorStop(0, '#0d1829');
+  bgGrad.addColorStop(0.45, '#070c16');
+  bgGrad.addColorStop(1, '#04060a');
+  ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, W, H);
 
-  drawRoadNetwork2D(ctx, roadNetwork, project, {
-    asphalt: '#111722', edgeColor: '#344054',
-    dividerColor: '#778397', centerColor: '#e9bd45', pxPerMeter: s
+  // Horizon Glow Line
+  var hGlow = ctx.createLinearGradient(0, horizonY - 10, 0, horizonY + 20);
+  hGlow.addColorStop(0, 'rgba(0, 242, 255, 0)');
+  hGlow.addColorStop(0.5, 'rgba(0, 242, 255, 0.12)');
+  hGlow.addColorStop(1, 'rgba(0, 242, 255, 0)');
+  ctx.fillStyle = hGlow;
+  ctx.fillRect(0, horizonY - 10, W, 30);
+
+  // ── 2. 3D Perspective Road Grid & Lanes ──
+  var roadZMax = 95;
+  var laneW = 3.6;
+
+  // Dynamic Sonar Radar Scan Pulse Wave across ground plane
+  var scanZ = ((_2d.frame * 0.9) % roadZMax);
+  var scanProj = project3D(0, 0, scanZ);
+  if (scanProj) {
+    var spx = scanProj[0], spy = scanProj[1], spScale = scanProj[2];
+    var pulseR = Math.max(20, 240 * (spScale / 120));
+    var pGrad = ctx.createRadialGradient(spx, spy, 2, spx, spy, pulseR);
+    pGrad.addColorStop(0, 'rgba(0, 242, 255, 0.30)');
+    pGrad.addColorStop(0.6, 'rgba(0, 242, 255, 0.06)');
+    pGrad.addColorStop(1, 'rgba(0, 242, 255, 0)');
+    ctx.fillStyle = pGrad;
+    ctx.beginPath();
+    ctx.ellipse(spx, spy, pulseR, pulseR * 0.22, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Longitudinal Lane Lines (3D Perspective converging to horizon)
+  var laneOffsets = [-laneW * 1.5, -laneW * 0.5, laneW * 0.5, laneW * 1.5];
+  laneOffsets.forEach(function (lx, idx) {
+    var isEdge = idx === 0 || idx === 3;
+    ctx.lineWidth = isEdge ? 2.5 : 1.6;
+    ctx.strokeStyle = isEdge ? 'rgba(0, 242, 255, 0.65)' : 'rgba(255, 255, 255, 0.35)';
+    ctx.shadowColor = isEdge ? '#00f2ff' : '#ffffff';
+    ctx.shadowBlur = isEdge ? 10 : 3;
+
+    ctx.beginPath();
+    var started = false;
+    for (var z = 1; z <= roadZMax; z += 2.5) {
+      var pt = project3D(lx, 0, z);
+      if (!pt) continue;
+      if (!started) {
+        ctx.moveTo(pt[0], pt[1]);
+        started = true;
+      } else {
+        ctx.lineTo(pt[0], pt[1]);
+      }
+    }
+    ctx.stroke();
+    ctx.shadowBlur = 0;
   });
 
-  var rw = 3.5 * s;
-  var rdW = 2 * rw;
-  var cx = carX;
+  // 3D Distance Rings & Horizontal Grid Markers
+  [10, 20, 35, 50, 75].forEach(function (dist) {
+    var lp = project3D(-laneW * 1.5, 0, dist);
+    var rp = project3D(laneW * 1.5, 0, dist);
+    if (lp && rp) {
+      ctx.strokeStyle = 'rgba(0, 242, 255, 0.12)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 6]);
+      ctx.beginPath();
+      ctx.moveTo(lp[0], lp[1]);
+      ctx.lineTo(rp[0], rp[1]);
+      ctx.stroke();
+      ctx.setLineDash([]);
 
-  // ── Range rings (semi-circles ahead of ego) ──
-  ctx.save();
-  [10, 20, 30, 50, 80].forEach(function (r) {
-    var pr = r * s;
-    if (pr > carY + 10) return;
-    ctx.strokeStyle = 'rgba(88,166,255,0.07)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([4, 6]);
-    ctx.beginPath();
-    ctx.arc(carX, carY, pr, -Math.PI, 0);
-    ctx.stroke();
-    ctx.fillStyle = 'rgba(88,166,255,0.18)';
-    ctx.font = "8px 'JetBrains Mono',monospace";
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.setLineDash([]);
-    ctx.fillText(r + 'm', carX + pr + 4, carY);
-    ctx.textAlign = 'right';
-    ctx.fillText(r + 'm', carX - pr - 4, carY);
+      ctx.fillStyle = 'rgba(0, 242, 255, 0.40)';
+      ctx.font = "9px 'JetBrains Mono',monospace";
+      ctx.textAlign = 'left';
+      ctx.fillText(dist + 'm', rp[0] + 6, rp[1] + 3);
+    }
   });
-  ctx.setLineDash([]);
-  ctx.restore();
 
-  // ── Forward-distance ruler (right side of road) ──
-  ctx.font = "8px 'JetBrains Mono',monospace";
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'middle';
-  for (var d = 10; d <= 120; d += 10) {
-    var dy = carY - d * s;
-    if (dy < 4 || dy > H - 4) continue;
-    ctx.strokeStyle = 'rgba(88,166,255,0.06)';
-    ctx.lineWidth = 0.5;
+  // ── 3. 3D Headlights Volumetric Light Beams ──
+  var egoHead = project3D(0, 0.4, 2.2);
+  var beamL = project3D(-3.2, 0, 35);
+  var beamR = project3D(3.2, 0, 35);
+  if (egoHead && beamL && beamR) {
+    var beamGrad = ctx.createLinearGradient(egoHead[0], egoHead[1], egoHead[0], beamL[1]);
+    beamGrad.addColorStop(0, 'rgba(0, 242, 255, 0.35)');
+    beamGrad.addColorStop(0.5, 'rgba(0, 242, 255, 0.08)');
+    beamGrad.addColorStop(1, 'rgba(0, 242, 255, 0)');
+    ctx.fillStyle = beamGrad;
     ctx.beginPath();
-    ctx.moveTo(cx - rdW, dy);
-    ctx.lineTo(cx + rdW, dy);
-    ctx.stroke();
-    if (d % 20 === 0) {
-      ctx.fillStyle = 'rgba(88,166,255,0.22)';
-      ctx.fillText(d + 'm', cx + rdW + 8, dy);
+    ctx.moveTo(egoHead[0] - 22, egoHead[1]);
+    ctx.lineTo(beamL[0], beamL[1]);
+    ctx.lineTo(beamR[0], beamR[1]);
+    ctx.lineTo(egoHead[0] + 22, egoHead[1]);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // ── 4. 3D Trajectory Energy Ribbon (Planning Path) ──
+  if (Array.isArray(scn.trajectory_path) && scn.trajectory_path.length > 1) {
+    var path = selectCurrentMotionSegment(scn.trajectory_path, scn.ego);
+    var trajScreenPts = [];
+    path.forEach(function (wp) {
+      var p = projectWorld(wp[0], wp[1], 0.05);
+      if (p) trajScreenPts.push(p);
+    });
+
+    if (trajScreenPts.length > 1) {
+      // Glow ribbon
+      ctx.save();
+      var tGrad = ctx.createLinearGradient(0, H * 0.85, 0, horizonY);
+      tGrad.addColorStop(0, 'rgba(0, 242, 255, 0.7)');
+      tGrad.addColorStop(0.6, 'rgba(0, 255, 136, 0.35)');
+      tGrad.addColorStop(1, 'rgba(0, 255, 136, 0)');
+      ctx.strokeStyle = tGrad;
+      ctx.lineWidth = 12;
+      ctx.shadowColor = '#00f2ff';
+      ctx.shadowBlur = 14;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      trajScreenPts.forEach(function (pt, i) {
+        if (i === 0) ctx.moveTo(pt[0], pt[1]);
+        else ctx.lineTo(pt[0], pt[1]);
+      });
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      // Laser core line
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      trajScreenPts.forEach(function (pt, i) {
+        if (i === 0) ctx.moveTo(pt[0], pt[1]);
+        else ctx.lineTo(pt[0], pt[1]);
+      });
+      ctx.stroke();
+      ctx.restore();
     }
   }
 
-  // ── Ego trail ──
-  if (_2d.trail.length > 1) {
-    ctx.strokeStyle = 'rgba(88,166,255,0.22)';
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([3, 4]);
-    ctx.beginPath();
-    for (var ti = 0; ti < _2d.trail.length; ti++) {
-      var tp = _2d.trail[ti], tq = project(tp.x, tp.y), tpx = tq[0], tpy = tq[1];
-      if (ti === 0) ctx.moveTo(tpx, tpy);
-      else ctx.lineTo(tpx, tpy);
-    }
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
-
-  // ── Radar sweep animation ──
-  var radarAngle = (_2d.frame * 0.02) % (Math.PI * 2);
-  ctx.save();
-  ctx.translate(carX, carY);
-  // Radar sweep arc (half-circle forward, scanning)
-  var sweepStart = -Math.PI * 0.75 + radarAngle * 0.3;
-  var sweepEnd = sweepStart + Math.PI * 0.5;
-  var sweepGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, 80 * s);
-  sweepGrad.addColorStop(0, 'rgba(0,255,136,0.12)');
-  sweepGrad.addColorStop(0.6, 'rgba(0,255,136,0.04)');
-  sweepGrad.addColorStop(1, 'rgba(0,255,136,0)');
-  ctx.fillStyle = sweepGrad;
-  ctx.beginPath();
-  ctx.moveTo(0, 0);
-  ctx.arc(0, 0, 80 * s, sweepStart, sweepEnd);
-  ctx.closePath();
-  ctx.fill();
-  // Sweep leading edge
-  ctx.strokeStyle = 'rgba(0,255,136,0.35)';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(0, 0);
-  ctx.lineTo(Math.cos(sweepEnd) * 80 * s, Math.sin(sweepEnd) * 80 * s);
-  ctx.stroke();
-  ctx.restore();
-
-  // ── Sensor FOV cones ──
-  ctx.save();
-  ctx.translate(carX, carY);
-  ctx.rotate(-e.heading);
-  // Front camera/LiDAR FOV
-  var fovGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, 60 * s);
-  fovGrad.addColorStop(0, 'rgba(0,200,255,0.06)');
-  fovGrad.addColorStop(1, 'rgba(0,200,255,0)');
-  ctx.fillStyle = fovGrad;
-  ctx.beginPath();
-  ctx.moveTo(0, 0);
-  ctx.arc(0, 0, 60 * s, -Math.PI * 0.3, Math.PI * 0.3);
-  ctx.closePath();
-  ctx.fill();
-  // FOV edge lines
-  ctx.strokeStyle = 'rgba(0,200,255,0.12)';
-  ctx.lineWidth = 1;
-  ctx.setLineDash([4, 6]);
-  ctx.beginPath();
-  ctx.moveTo(0, 0);
-  ctx.lineTo(Math.cos(-Math.PI * 0.3) * 60 * s, Math.sin(-Math.PI * 0.3) * 60 * s);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(0, 0);
-  ctx.lineTo(Math.cos(Math.PI * 0.3) * 60 * s, Math.sin(Math.PI * 0.3) * 60 * s);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.restore();
-
-  // ── LiDAR point cloud ──
-  if (Array.isArray(scn.trajectory_path)) {
-    const path = selectCurrentMotionSegment(scn.trajectory_path, scn.ego);
-    strokePolyline(ctx, path, project, '#58a6ff', 2, [5, 4]);
-  }
+  // ── 5. LiDAR Point Cloud in 3D ──
   if (scn && scn.lidar && scn.lidar.length) {
     scn.lidar.forEach(function (pt) {
-      var rx = pt[0] || 0, ry = pt[1] || 0;
-      var pq = relativeToCanvas(rx, ry), px = pq[0], py = pq[1];
-      var dist = Math.sqrt(rx * rx + ry * ry);
-      var t = Math.min(1, dist / 60);
-      var lr = Math.floor(255 * (1 - t) + 40 * t),
-          lg = Math.floor(100 * (1 - t) + 150 * t),
-          lb = Math.floor(40 * (1 - t) + 255 * t);
-      ctx.fillStyle = 'rgba(' + lr + ',' + lg + ',' + lb + ',0.75)';
+      var rx = pt[1] || 0; // lateral
+      var rz = pt[0] || 0; // forward
+      if (rz < 0.5 || rz > 70) return;
+      var lp = project3D(rx, 0.2, rz);
+      if (!lp) return;
+      var dist = Math.sqrt(rx * rx + rz * rz);
+      var t = Math.min(1, dist / 50);
+      var alpha = (1 - t) * 0.8;
+      ctx.fillStyle = 'rgba(0, 242, 255, ' + alpha.toFixed(2) + ')';
       ctx.beginPath();
-      ctx.arc(px, py, 1.5, 0, Math.PI * 2);
+      ctx.arc(lp[0], lp[1], Math.max(1, 2.5 * (lp[2] / 120)), 0, Math.PI * 2);
       ctx.fill();
     });
   }
 
-  // ── Detection rays: ego → each obstacle ──
-  if (scn && scn.obstacles && scn.obstacles.length) {
-    scn.obstacles.forEach(function (o) {
-      var dq = relativeToCanvas(o.x || 0, o.y || 0);
-      var dtx = dq[0], dty = dq[1];
-      var dist = Math.sqrt((o.x || 0) * (o.x || 0) + (o.y || 0) * (o.y || 0));
-      if (dist < 2 || dist > 100) return;
-      // Gradient ray: cyan near ego → green at target
-      var rayGrad = ctx.createLinearGradient(carX, carY, dtx, dty);
-      rayGrad.addColorStop(0, 'rgba(0,255,136,0)');
-      rayGrad.addColorStop(0.4, 'rgba(0,255,136,0.04)');
-      rayGrad.addColorStop(0.8, 'rgba(0,255,136,0.10)');
-      rayGrad.addColorStop(1, 'rgba(0,255,136,0.20)');
-      ctx.strokeStyle = rayGrad;
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([4, 6]);
-      ctx.lineDashOffset = -_2d.frame * 0.5;
+  // ── 6. 3D Holographic Obstacles (8-vertex Bounding Boxes) ──
+  var obstaclesToDraw = (scn.obstacles && scn.obstacles.length) ? scn.obstacles : [
+    { x: 0.1, y: 26, type: 'car', wid: 1.9, len: 4.6, hei: 1.5 },
+    { x: -3.5, y: 15, type: 'car', wid: 1.85, len: 4.5, hei: 1.45 },
+    { x: 3.6, y: 38, type: 'truck', wid: 2.5, len: 8.5, hei: 3.0 }
+  ];
+
+  obstaclesToDraw.forEach(function (obs) {
+    var rx = (obs.x || 0);
+    var rz = (obs.y || 0); // flowsim relative y is forward distance
+    if (rz < 1 || rz > 85) return;
+
+    var ow = (obs.wid || 2.0) / 2;
+    var ol = (obs.len || 4.6) / 2;
+    var oh = (obs.hei || (obs.type === 'truck' ? 2.8 : 1.5));
+
+    // 8 vertices in 3D space
+    var v3d = [
+      [-ow, 0, rz - ol], [ow, 0, rz - ol],
+      [ow, 0, rz + ol], [-ow, 0, rz + ol],
+      [-ow, oh, rz - ol], [ow, oh, rz - ol],
+      [ow, oh, rz + ol], [-ow, oh, rz + ol]
+    ];
+
+    var pts = [];
+    var allValid = true;
+    for (var vi = 0; vi < 8; vi++) {
+      var proj = project3D(rx + v3d[vi][0], v3d[vi][1], v3d[vi][2]);
+      if (!proj) { allValid = false; break; }
+      pts.push(proj);
+    }
+    if (!allValid) return;
+
+    var isTruck = obs.type === 'truck';
+    var isNear = rz < 25;
+    var col = isTruck ? '#ffaa33' : isNear ? '#00f2ff' : '#00ff88';
+
+    ctx.save();
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 1.6;
+    ctx.shadowColor = col;
+    ctx.shadowBlur = 6;
+
+    // Bottom Base
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    ctx.lineTo(pts[1][0], pts[1][1]);
+    ctx.lineTo(pts[2][0], pts[2][1]);
+    ctx.lineTo(pts[3][0], pts[3][1]);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(0, 242, 255, 0.05)';
+    ctx.fill();
+    ctx.stroke();
+
+    // Top Face
+    ctx.beginPath();
+    ctx.moveTo(pts[4][0], pts[4][1]);
+    ctx.lineTo(pts[5][0], pts[5][1]);
+    ctx.lineTo(pts[6][0], pts[6][1]);
+    ctx.lineTo(pts[7][0], pts[7][1]);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(0, 242, 255, 0.12)';
+    ctx.fill();
+    ctx.stroke();
+
+    // Vertical Pillars
+    for (var pi = 0; pi < 4; pi++) {
       ctx.beginPath();
-      ctx.moveTo(carX, carY);
-      ctx.lineTo(dtx, dty);
+      ctx.moveTo(pts[pi][0], pts[pi][1]);
+      ctx.lineTo(pts[pi + 4][0], pts[pi + 4][1]);
       ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.lineDashOffset = 0;
-    });
+    }
+
+    // Top HUD Label
+    ctx.fillStyle = col;
+    ctx.font = "bold 9px 'JetBrains Mono',monospace";
+    ctx.textAlign = 'center';
+    ctx.fillText(
+      (obs.type || 'VEH').toUpperCase() + ' · ' + rz.toFixed(0) + 'm',
+      (pts[4][0] + pts[6][0]) / 2,
+      pts[4][1] - 6
+    );
+    ctx.restore();
+  });
+
+  // ── 7. 3D Ego Vehicle (Detailed Cyberpunk Coupe with Chassis Glow) ──
+  var egoProj = project3D(0, 0, 0);
+  if (egoProj) {
+    var ex = egoProj[0], ey = egoProj[1];
+
+    // Chassis Ambient Glow
+    var glow = ctx.createRadialGradient(ex, ey + 12, 5, ex, ey + 12, 85);
+    glow.addColorStop(0, 'rgba(0, 242, 255, 0.70)');
+    glow.addColorStop(0.5, 'rgba(0, 242, 255, 0.18)');
+    glow.addColorStop(1, 'rgba(0, 242, 255, 0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.ellipse(ex, ey + 12, 85, 24, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 3D Car Body
+    ctx.save();
+    ctx.translate(ex, ey);
+
+    // Body Gradient
+    var carGrad = ctx.createLinearGradient(-40, -30, 40, 30);
+    carGrad.addColorStop(0, '#1c2e4a');
+    carGrad.addColorStop(0.5, '#0b1626');
+    carGrad.addColorStop(1, '#050c17');
+
+    ctx.fillStyle = carGrad;
+    ctx.strokeStyle = '#00f2ff';
+    ctx.lineWidth = 1.8;
+    ctx.shadowColor = '#00f2ff';
+    ctx.shadowBlur = 10;
+
+    ctx.beginPath();
+    ctx.moveTo(-42, 20);
+    ctx.lineTo(-38, -10);
+    ctx.quadraticCurveTo(-32, -28, -18, -32);
+    ctx.lineTo(18, -32);
+    ctx.quadraticCurveTo(32, -28, 38, -10);
+    ctx.lineTo(42, 20);
+    ctx.quadraticCurveTo(0, 26, -42, 20);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Cyberpunk Red Lightbar
+    ctx.strokeStyle = '#ff2a5f';
+    ctx.shadowColor = '#ff2a5f';
+    ctx.shadowBlur = 12;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(-36, 14);
+    ctx.lineTo(36, 14);
+    ctx.stroke();
+
+    // Mirrors
+    ctx.fillStyle = '#00f2ff';
+    ctx.fillRect(-46, -16, 6, 2.5);
+    ctx.fillRect(40, -16, 6, 2.5);
+
+    ctx.restore();
   }
 
-  // ── Obstacles (ADAS-HMI perception-style corner brackets) ──
-  if (!_obsTargets2d) _obsTargets2d = [];
-  if (!_obsVelBuf) _obsVelBuf = [];
-  var _dtNow = performance.now() / 1000;
-  if (scn && scn.obstacles && scn.obstacles.length) {
-    scn.obstacles.forEach(function (o, i) {
-      var egVx = e.speed * Math.cos(e.heading || 0),
-          egVy = e.speed * Math.sin(e.heading || 0);
-      var relVx = (o.vx || 0) - egVx, relVy = (o.vy || 0) - egVy;
-      // Data target in screen coords (data updates ~10Hz)
-      var target = relativeToCanvas(o.x || 0, o.y || 0);
-      var dtx = target[0], dty = target[1];
-      var cur = _obsTargets2d[i];
-      // isNaN guard: handles stale entries after obstacle count changes
-      if (!cur || isNaN(cur.x)) {
-        cur = { x: dtx, y: dty, lastDataX: o.x, lastDataY: o.y, lastDataT: _dtNow };
-        _obsTargets2d[i] = cur;
-      }
-      // Detect data update
-      if (o.x !== cur.lastDataX || o.y !== cur.lastDataY) {
-        // Large jump in data space → snap instead of lerp
-        var jump = Math.abs((o.x || 0) - (cur.lastDataX || 0)) + Math.abs((o.y || 0) - (cur.lastDataY || 0));
-        cur.lastDataX = o.x;
-        cur.lastDataY = o.y;
-        cur.lastDataT = _dtNow;
-        if (jump > 20) { cur.x = dtx; cur.y = dty; }
-      }
-      // Extrapolate screen position using relative velocity since last data tick
-      var age = Math.min(_dtNow - cur.lastDataT, 0.5);
-      var extrapolated = relativeToCanvas(
-        (o.x || 0) + relVx * age, (o.y || 0) + relVy * age);
-      var ex = extrapolated[0], ey = extrapolated[1];
-      // Smooth toward extrapolated target
-      cur.x += (ex - cur.x) * 0.28;
-      cur.y += (ey - cur.y) * 0.28;
-      var Wd = Math.max(10, (o.wid || 2) * s),
-          L = Math.max(14, (o.len || 4) * s);
-      var col = OBS_COL[o.type] || OBS_COL.unknown;
-      var lbl = OBS_LBL[o.type] || OBS_LBL.unknown;
-      var dist = Math.sqrt((o.x || 0) * (o.x || 0) + (o.y || 0) * (o.y || 0));
-      // Don't draw if directly on top of ego
-      if (dist < 2) return;
-      var hw = Wd / 2, hl = L / 2;
-      var cornerLen = Math.min(8, Math.min(Wd, L) * 0.3);
-      ctx.save();
-      ctx.translate(cur.x, cur.y);
-      // Perception-style corner brackets (green, techy)
-      var bracketColor = o.type === 'pedestrian' ? '#44ee88' :
-                         o.type === 'truck' ? '#ff4422' : '#00ff88';
-      // Glow behind bracket
-      ctx.shadowColor = bracketColor;
-      ctx.shadowBlur = 6;
-      ctx.strokeStyle = bracketColor;
-      ctx.lineWidth = 2;
-      ctx.globalAlpha = 0.9;
-      // Top-left corner
-      ctx.beginPath();
-      ctx.moveTo(-hw, -hl + cornerLen);
-      ctx.lineTo(-hw, -hl);
-      ctx.lineTo(-hw + cornerLen, -hl);
-      ctx.stroke();
-      // Top-right corner
-      ctx.beginPath();
-      ctx.moveTo(hw - cornerLen, -hl);
-      ctx.lineTo(hw, -hl);
-      ctx.lineTo(hw, -hl + cornerLen);
-      ctx.stroke();
-      // Bottom-left corner
-      ctx.beginPath();
-      ctx.moveTo(-hw, hl - cornerLen);
-      ctx.lineTo(-hw, hl);
-      ctx.lineTo(-hw + cornerLen, hl);
-      ctx.stroke();
-      // Bottom-right corner
-      ctx.beginPath();
-      ctx.moveTo(hw - cornerLen, hl);
-      ctx.lineTo(hw, hl);
-      ctx.lineTo(hw, hl - cornerLen);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-      ctx.globalAlpha = 1;
-      // Fill (very subtle, perception-style)
-      ctx.fillStyle = 'rgba(0,255,136,0.05)';
-      ctx.fillRect(-hw, -hl, Wd, L);
-      // Front indicator (green, pulsing)
-      var pulse = 0.5 + Math.sin(_2d.frame * 0.08 + i) * 0.3;
-      ctx.fillStyle = bracketColor;
-      ctx.globalAlpha = 0.6 * pulse;
-      ctx.fillRect(-hw, -hl, Wd, 2.5);
-      ctx.globalAlpha = 1;
-      // Type label with perception-style confidence placeholder
-      ctx.fillStyle = bracketColor;
-      ctx.font = "bold 9px 'JetBrains Mono',monospace";
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'bottom';
-      ctx.fillText(lbl, -hw + 2, -hl - 3);
-      // Distance label
-      ctx.fillStyle = 'rgba(0,255,136,0.5)';
-      ctx.font = "8px 'JetBrains Mono',monospace";
-      ctx.textAlign = 'right';
-      ctx.textBaseline = 'top';
-      ctx.fillText(dist.toFixed(0) + 'm', hw - 2, hl + 3);
-      // Velocity arrow (relative motion vs ego)
-      var rv = Math.sqrt(relVx * relVx + relVy * relVy);
-      if (rv > 0.5) {
-        var arA = Math.atan2(-relVy, relVx);
-        var arLen = Math.min(rv * s * 0.3, L * 0.7);
-        ctx.strokeStyle = bracketColor;
-        ctx.lineWidth = 1.5;
-        ctx.globalAlpha = 0.5;
-        ctx.beginPath();
-        ctx.moveTo(0, -hl - 2);
-        ctx.lineTo(Math.cos(arA) * arLen, -hl - 2 - Math.sin(arA) * arLen);
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-      }
-      ctx.restore();
-    });
-  } else {
-    // Static demo obstacles when no live data
-    [{ x: 20, y: -1.75, col: '#00ff88', lbl: 'CAR' }, { x: 40, y: 1.75, col: '#00ff88', lbl: 'CAR' }, { x: 30, y: 8, col: '#44ee88', lbl: 'PED' }].forEach(function (p) {
-      var bq = relativeToCanvas(p.x, p.y), bx = bq[0], by = bq[1];
-      var hw = 13, hl = 9, cl = 5;
-      ctx.save();
-      ctx.translate(bx, by);
-      ctx.shadowColor = p.col;
-      ctx.shadowBlur = 5;
-      ctx.strokeStyle = p.col;
-      ctx.lineWidth = 1.5;
-      ctx.globalAlpha = 0.8;
-      ctx.beginPath();
-      ctx.moveTo(-hw, -hl + cl); ctx.lineTo(-hw, -hl); ctx.lineTo(-hw + cl, -hl);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(hw - cl, -hl); ctx.lineTo(hw, -hl); ctx.lineTo(hw, -hl + cl);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(-hw, hl - cl); ctx.lineTo(-hw, hl); ctx.lineTo(-hw + cl, hl);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(hw - cl, hl); ctx.lineTo(hw, hl); ctx.lineTo(hw, hl - cl);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = 'rgba(0,255,136,0.04)';
-      ctx.fillRect(-hw, -hl, hw * 2, hl * 2);
-      ctx.fillStyle = p.col;
-      ctx.font = "bold 9px 'JetBrains Mono',monospace";
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'bottom';
-      ctx.fillText(p.lbl, -hw + 2, -hl - 2);
-      ctx.fillStyle = 'rgba(0,255,136,0.5)';
-      ctx.font = "8px 'JetBrains Mono',monospace";
-      ctx.textAlign = 'right';
-      ctx.textBaseline = 'top';
-      ctx.fillText(Math.round(Math.sqrt(p.x * p.x + p.y * p.y)) + 'm', hw - 2, hl + 2);
-      ctx.restore();
-    });
-  }
-
-  // ── 感知输出障碍物（perception_entities，世界坐标，可视化与仿真解耦）──
-  // scene.source=="perception" 时用感知跟踪输出渲染，替代仿真真值 obstacles。
-  // 世界坐标直接用 project() 投影（相对坐标系感知目标用 relativeToCanvas）。
-  if (scn && scn.source === 'perception' && Array.isArray(scn.perception_entities)) {
-    scn.perception_entities.forEach(function (pe) {
-      var bq = project(pe.x || 0, pe.y || 0);
-      var bx = bq[0], by = bq[1];
-      var dist = Math.sqrt((pe.x || 0) * (pe.x || 0) + (pe.y || 0) * (pe.y || 0));
-      var isPed = pe.type === 'pedestrian';
-      var Wd = Math.max(10, (pe.width || 2) * s);
-      var L = Math.max(14, (pe.length || 4.6) * s);
-      var col = isPed ? '#44ee88' : '#00ff88';
-      var lbl = isPed ? 'PED' : (OBS_LBL[pe.type] || 'VEH');
-      var hw = Wd / 2, hl = L / 2;
-      var cornerLen = Math.min(8, Math.min(Wd, L) * 0.3);
-      ctx.save();
-      ctx.translate(bx, by);
-      ctx.shadowColor = col;
-      ctx.shadowBlur = 6;
-      ctx.strokeStyle = col;
-      ctx.lineWidth = 2;
-      ctx.globalAlpha = 0.9;
-      // 感知风格角标包围盒（四角 bracket）
-      ctx.beginPath();
-      ctx.moveTo(-hw, -hl + cornerLen); ctx.lineTo(-hw, -hl); ctx.lineTo(-hw + cornerLen, -hl);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(hw - cornerLen, -hl); ctx.lineTo(hw, -hl); ctx.lineTo(hw, -hl + cornerLen);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(-hw, hl - cornerLen); ctx.lineTo(-hw, hl); ctx.lineTo(-hw + cornerLen, hl);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(hw - cornerLen, hl); ctx.lineTo(hw, hl); ctx.lineTo(hw, hl - cornerLen);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-      // 类别标签
-      ctx.fillStyle = col;
-      ctx.font = "bold 9px 'JetBrains Mono',monospace";
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'bottom';
-      ctx.fillText(lbl, -hw + 2, -hl - 3);
-      // 距离标签
-      ctx.fillStyle = 'rgba(0,255,136,0.5)';
-      ctx.font = "8px 'JetBrains Mono',monospace";
-      ctx.textAlign = 'right';
-      ctx.textBaseline = 'top';
-      ctx.fillText(dist.toFixed(0) + 'm', hw - 2, hl + 3);
-      ctx.restore();
-    });
-  }
-
-  // ── Ego vehicle (detailed top-down view, with subtle speed animation) ──
-  ctx.save();
-  ctx.translate(carX, carY);
-  // Speed-based forward tilt (visual acceleration cue)
-  if (e.speed > 0.5) ctx.translate(0, -Math.min(3, e.speed * 0.3));
-  // Glow (pulses with speed)
-  var glowPulse = 0.15 + Math.sin(_2d.frame * 0.1) * 0.05 + e.speed * 0.01;
-  var glow = ctx.createRadialGradient(0, 0, 4, 0, 0, 22);
-  glow.addColorStop(0, 'rgba(88,166,255,' + glowPulse + ')');
-  glow.addColorStop(1, 'rgba(88,166,255,0)');
-  ctx.fillStyle = glow;
-  ctx.beginPath();
-  ctx.arc(0, 0, 22, 0, Math.PI * 2);
-  ctx.fill();
-  // Shadow
-  ctx.fillStyle = 'rgba(0,0,0,0.35)';
-  ctx.fillRect(-11, 2, 22, 42);
-  // Body
-  var bodyGrad = ctx.createLinearGradient(0, -22, 0, 22);
-  bodyGrad.addColorStop(0, '#6ab4ff');
-  bodyGrad.addColorStop(0.5, '#4488dd');
-  bodyGrad.addColorStop(1, '#3377cc');
-  ctx.fillStyle = bodyGrad;
-  ctx.beginPath();
-  // Rounded car body (bw = half-width, bh = half-length; -Y is forward)
-  var bw = 9, bh = 20;
-  ctx.moveTo(-bw + 4, -bh);
-  ctx.lineTo(bw - 4, -bh);
-  ctx.quadraticCurveTo(bw, -bh, bw, -bh + 4);
-  ctx.lineTo(bw, bh - 6);
-  ctx.quadraticCurveTo(bw, bh, bw - 4, bh);
-  ctx.lineTo(-bw + 4, bh);
-  ctx.quadraticCurveTo(-bw, bh, -bw, bh - 6);
-  ctx.lineTo(-bw, -bh + 4);
-  ctx.quadraticCurveTo(-bw, -bh, -bw + 4, -bh);
-  ctx.closePath();
-  ctx.fill();
-  // Roof/windshield
-  ctx.fillStyle = '#5599cc';
-  ctx.fillRect(-5, -7, 10, 14);
-  // Windshield (front, lighter)
-  ctx.fillStyle = '#99ccff';
-  ctx.fillRect(-4, -9, 8, 6);
-  // Rear window
-  ctx.fillStyle = '#4480b0';
-  ctx.fillRect(-4, 6, 8, 5);
-  // Front bumper accent
-  ctx.fillStyle = '#c9d1d9';
-  ctx.fillRect(-4, -bh + 1, 8, 2);
-  // Wheels
-  ctx.fillStyle = '#111';
-  ctx.fillRect(-11, -16, 3.5, 8);
-  ctx.fillRect(7.5, -16, 3.5, 8);
-  ctx.fillRect(-11, 8, 3.5, 8);
-  ctx.fillRect(7.5, 8, 3.5, 8);
-  // Front direction arrow
-  ctx.fillStyle = '#fff';
-  ctx.beginPath();
-  ctx.moveTo(0, -bh - 4);
-  ctx.lineTo(-4, -bh + 4);
-  ctx.lineTo(4, -bh + 4);
-  ctx.fill();
-  ctx.restore();
-
-  // ── Speed indicator bar (top center) ──
-  var barW = 120, barH = 6, barX = W / 2 - barW / 2, barY = carY - rdW - 16;
-  ctx.fillStyle = '#1a1e28';
-  ctx.fillRect(barX, barY, barW, barH);
-  var spdFrac = Math.min(1, e.speed / 20);
-  var spdGrad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
-  spdGrad.addColorStop(0, '#3fb950');
-  spdGrad.addColorStop(0.5, '#d29922');
-  spdGrad.addColorStop(1, '#f85149');
-  ctx.fillStyle = spdGrad;
-  ctx.fillRect(barX, barY, barW * spdFrac, barH);
-
-  // ── HUD (bottom bar) ──
-  var hudY = H - 52, hudH = 52;
-  // Background
+  // ── 8. Cockpit Telemetry HUD (Bottom Bar) ──
+  var hudY = H - 54, hudH = 54;
   var hudGrad = ctx.createLinearGradient(0, hudY, 0, H);
-  hudGrad.addColorStop(0, 'rgba(0,0,0,0.75)');
-  hudGrad.addColorStop(1, 'rgba(0,0,0,0.9)');
+  hudGrad.addColorStop(0, 'rgba(8, 13, 22, 0.88)');
+  hudGrad.addColorStop(1, 'rgba(4, 6, 10, 0.98)');
   ctx.fillStyle = hudGrad;
   ctx.fillRect(0, hudY, W, hudH);
-  ctx.strokeStyle = '#1a1f2b';
+
+  ctx.strokeStyle = 'rgba(0, 242, 255, 0.25)';
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(0, hudY);
   ctx.lineTo(W, hudY);
   ctx.stroke();
 
-  // ── HUD content ──
+  // Speedometer
   ctx.textBaseline = 'middle';
-  // SPEED — large
-  ctx.fillStyle = '#58a6ff';
-  ctx.font = "bold 42px 'JetBrains Mono',monospace";
+  ctx.fillStyle = '#00f2ff';
+  ctx.font = "bold 38px 'JetBrains Mono',monospace";
   ctx.textAlign = 'left';
-  ctx.fillText((e.speed || 0).toFixed(1), 18, hudY + hudH / 2 - 3);
+  var spdVal = (e.speed || 0);
+  ctx.fillText(spdVal.toFixed(1), 20, hudY + hudH / 2 - 2);
+
+  ctx.fillStyle = 'rgba(0, 242, 255, 0.7)';
+  ctx.font = "11px 'JetBrains Mono',monospace";
+  ctx.fillText('M/S', 86, hudY + hudH / 2 - 8);
   ctx.fillStyle = '#8b949e';
-  ctx.font = "12px 'Inter',system-ui,sans-serif";
-  ctx.fillText('m/s', 86, hudY + hudH / 2 - 3);
-  ctx.fillText((e.speed * 3.6 || 0).toFixed(0) + ' km/h', 86, hudY + hudH / 2 + 12);
-  // TARGET
-  var v = (_topoData.metrics || {}).vehicle || {};
+  ctx.fillText((spdVal * 3.6).toFixed(0) + ' KM/H', 86, hudY + hudH / 2 + 10);
+
+  // Target Speed
   ctx.fillStyle = '#8b949e';
-  ctx.font = "10px 'Inter',system-ui,sans-serif";
-  ctx.textAlign = 'left';
-  ctx.fillText('目标速度', 150, hudY + 11);
-  ctx.fillStyle = '#fff';
-  ctx.font = "bold 20px 'JetBrains Mono',monospace";
-  ctx.fillText((v.target_speed || 0).toFixed(1), 150, hudY + 30);
-  // THROTTLE gauge
+  ctx.font = "10px sans-serif";
+  ctx.fillText('目标速度', 156, hudY + 14);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = "bold 18px 'JetBrains Mono',monospace";
+  ctx.fillText((v.target_speed || 0).toFixed(1), 156, hudY + 34);
+
+  // Throttle
   ctx.fillStyle = '#8b949e';
-  ctx.font = "10px 'Inter',system-ui,sans-serif";
-  ctx.fillText('油门', 240, hudY + 11);
-  ctx.fillStyle = '#1a1e28';
-  ctx.fillRect(240, hudY + 20, 80, 10);
+  ctx.font = "10px sans-serif";
+  ctx.fillText('油门 (THR)', 240, hudY + 14);
+  ctx.fillStyle = '#111824';
+  ctx.fillRect(240, hudY + 24, 75, 10);
   var thr = v.throttle || 0;
-  ctx.fillStyle = thr > 0.6 ? '#d29922' : thr > 0.3 ? '#58a6ff' : '#3fb950';
-  ctx.fillRect(240, hudY + 20, 80 * thr, 10);
-  ctx.strokeStyle = '#2a2f3a';
-  ctx.lineWidth = 1;
-  ctx.strokeRect(240, hudY + 20, 80, 10);
-  ctx.fillStyle = '#fff';
-  ctx.font = "bold 10px 'JetBrains Mono',monospace";
-  ctx.textAlign = 'left';
-  ctx.fillText((thr * 100).toFixed(0) + '%', 248, hudY + 31);
-  // BRAKE gauge
+  ctx.fillStyle = thr > 0.6 ? '#d29922' : '#00f2ff';
+  ctx.fillRect(240, hudY + 24, 75 * thr, 10);
+  ctx.strokeStyle = '#252d3a';
+  ctx.strokeRect(240, hudY + 24, 75, 10);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = "bold 9px 'JetBrains Mono',monospace";
+  ctx.fillText((thr * 100).toFixed(0) + '%', 246, hudY + 34);
+
+  // Brake
   ctx.fillStyle = '#8b949e';
-  ctx.font = "10px 'Inter',system-ui,sans-serif";
-  ctx.fillText('制动', 340, hudY + 11);
-  ctx.fillStyle = '#1a1e28';
-  ctx.fillRect(340, hudY + 20, 60, 10);
+  ctx.font = "10px sans-serif";
+  ctx.fillText('制动 (BRK)', 335, hudY + 14);
+  ctx.fillStyle = '#111824';
+  ctx.fillRect(335, hudY + 24, 60, 10);
   var brk = v.brake || 0;
-  ctx.fillStyle = brk > 0 ? '#f85149' : '#252d3a';
-  ctx.fillRect(340, hudY + 20, 60 * Math.min(1, brk * 3), 10);
-  ctx.strokeStyle = '#2a2f3a';
-  ctx.lineWidth = 1;
-  ctx.strokeRect(340, hudY + 20, 60, 10);
-  ctx.fillStyle = '#fff';
-  ctx.font = "bold 10px 'JetBrains Mono',monospace";
-  ctx.fillText((brk * 100).toFixed(0) + '%', 345, hudY + 31);
-  // MODE
-  var err = v.error || 0;
-  var mode = err < -0.3 ? '制动中' : err > 0.3 ? '加速中' : '⏺ 保持';
-  var modeColor = err < -0.3 ? '#f85149' : err > 0.3 ? '#3fb950' : '#8b949e';
-  ctx.fillStyle = modeColor;
-  ctx.font = "bold 14px 'Inter',system-ui,sans-serif";
-  ctx.textAlign = 'left';
-  ctx.fillText(mode, 430, hudY + 20);
-  // ERROR
+  ctx.fillStyle = brk > 0 ? '#ff2a5f' : '#252d3a';
+  ctx.fillRect(335, hudY + 24, 60 * Math.min(1, brk * 3), 10);
+  ctx.strokeStyle = '#252d3a';
+  ctx.strokeRect(335, hudY + 24, 60, 10);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = "bold 9px 'JetBrains Mono',monospace";
+  ctx.fillText((brk * 100).toFixed(0) + '%', 340, hudY + 34);
+
+  // Autopilot Status
+  ctx.fillStyle = '#00f2ff';
+  ctx.font = "bold 13px 'JetBrains Mono',monospace";
+  ctx.fillText('● PILOT 3.0 ONLINE', 420, hudY + 24);
   ctx.fillStyle = '#8b949e';
-  ctx.font = "10px 'JetBrains Mono',monospace";
-  ctx.fillText('误差 ' + err.toFixed(1) + ' m/s', 430, hudY + 36);
+  ctx.font = "10px sans-serif";
+  ctx.fillText('RTK 50Hz 闭环', 420, hudY + 38);
+
   // ODO
-  ctx.fillStyle = '#484f58';
+  ctx.fillStyle = '#8b949e';
   ctx.font = "11px 'JetBrains Mono',monospace";
   ctx.textAlign = 'right';
-  ctx.fillText('里程 ' + (v.x || 0).toFixed(1) + ' m', W - 20, hudY + hudH / 2);
+  ctx.fillText('里程: ' + (v.x || 0).toFixed(1) + ' m', W - 20, hudY + hudH / 2);
 }
 
 export function switchSceneView(mode) {
