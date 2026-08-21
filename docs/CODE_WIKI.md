@@ -625,4 +625,4 @@ steer   = cte_term - heading_term - yaw_damp + ff + delta_ff
 | [CALIBRATION_GUIDE.md](CALIBRATION_GUIDE.md) | 标定指南（含 k_vy 等） |
 | [LEARNING_LOOP.md](LEARNING_LOOP.md) | 车端学习闭环 |
 | [README.md](README.md) | 完整中文文档导航 |
-| `docs/tutorials/` 目录 | 16 篇深度教程（OOP in C、插件、消息总线、IPC、协程、Fusion 等） |
+| `docs/book/` 目录 | 16 篇深度教程（OOP in C、插件、消息总线、IPC、协程、Fusion 等） |

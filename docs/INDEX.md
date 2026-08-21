@@ -16,23 +16,23 @@
 ### 改代码 / 加功能
 | 我想… | 去 |
 |------|-----|
-| 加一个新节点 | [tutorials/02_plugin_system.md](tutorials/02_plugin_system.md) |
-| 加一个新 topic / 消息类型 | [tutorials/03_message_bus.md](tutorials/03_message_bus.md) + [tutorials/07_serializer.md](tutorials/07_serializer.md) |
+| 加一个新节点 | [book/02_plugin_system.md](book/02_plugin_system.md) |
+| 加一个新 topic / 消息类型 | [book/03_message_bus.md](book/03_message_bus.md) + [book/07_serializer.md](book/07_serializer.md) |
 | 加一个可调参数 | [API_QUICK_REFERENCE.md](API_QUICK_REFERENCE.md)（ParamRegistry） |
 | 接第三方算法库（YOLO/Eigen…） | [ALGORITHM_INTEGRATION.md](ALGORITHM_INTEGRATION.md) |
-| 让节点跨进程通信 | [tutorials/04_ipc_channel.md](tutorials/04_ipc_channel.md) |
-| 写一个状态机 | [tutorials/08_state_machine.md](tutorials/08_state_machine.md) |
-| 新增一个仿真场景 | [tutorials/16_flowsim_scenario_design.md](tutorials/16_flowsim_scenario_design.md) |
+| 让节点跨进程通信 | [book/04_ipc_channel.md](book/04_ipc_channel.md) |
+| 写一个状态机 | [book/08_state_machine.md](book/08_state_machine.md) |
+| 新增一个仿真场景 | [book/16_flowsim_scenario_design.md](book/16_flowsim_scenario_design.md) |
 | 新增一个地图 | [MAP_GENERATION_MODULE.md](MAP_GENERATION_MODULE.md) + [MAP_ENGINE_ROUTING.md](MAP_ENGINE_ROUTING.md) |
 | 新增一个 3D View | [VIS_MODULE_GUIDE.md](VIS_MODULE_GUIDE.md) |
 | 调控制器参数（仿真/真车） | [CALIBRATION_GUIDE.md](CALIBRATION_GUIDE.md) |
-| 训练并部署一个驾驶模型 | [LEARNING_LOOP.md](LEARNING_LOOP.md) + [tutorials/13_e2e_learning_loop.md](tutorials/13_e2e_learning_loop.md) |
+| 训练并部署一个驾驶模型 | [LEARNING_LOOP.md](LEARNING_LOOP.md) + [book/13_e2e_learning_loop.md](book/13_e2e_learning_loop.md) |
 
 ### 调试 / 验证
 | 我想… | 去 |
 |------|-----|
 | 改完代码快速检查管道 | [ALGORITHM_VERIFY_PATTERN.md](ALGORITHM_VERIFY_PATTERN.md)（`pipeline_check.py`） |
-| 整条链 45s 行为回归 | [tutorials/12_demo_evaluator.md](tutorials/12_demo_evaluator.md) |
+| 整条链 45s 行为回归 | [book/12_demo_evaluator.md](book/12_demo_evaluator.md) |
 | 场景矩阵批量回归 | [SIMULATION_GUIDE.md](SIMULATION_GUIDE.md)（scenario_regression） |
 | 检查地图连通性 | [MAP_ENGINE_ROUTING.md](MAP_ENGINE_ROUTING.md)（check_map_connectivity） |
 | 前端 3D 门禁 | [VIS_MODULE_GUIDE.md](VIS_MODULE_GUIDE.md)（`npm run vis:check:all`） |
@@ -45,7 +45,7 @@
 |------|-----|
 | 部署到真车 | [HARDWARE_DEPLOYMENT.md](HARDWARE_DEPLOYMENT.md) |
 | 组装 RC 小车 | [RC_CAR_HARDWARE_CHECKLIST.md](RC_CAR_HARDWARE_CHECKLIST.md) |
-| 接 CAN 执行器 | [tutorials/15_socketcan_actuator.md](tutorials/15_socketcan_actuator.md) |
+| 接 CAN 执行器 | [book/15_socketcan_actuator.md](book/15_socketcan_actuator.md) |
 | 接真实 SLAM | [HARDWARE_DEPLOYMENT.md](HARDWARE_DEPLOYMENT.md)（FAST-LIO2） |
 | 看硬件调试命令 | [HARDWARE_DEPLOYMENT.md](HARDWARE_DEPLOYMENT.md) §调试 |
 
@@ -53,14 +53,14 @@
 
 | 主题 | 教程（原理/入门） | 参考（契约/细节） |
 |------|------------------|-------------------|
-| C 面向对象 | [tutorials/01_oop_in_c.md](tutorials/01_oop_in_c.md) | [CODE_WIKI.md](CODE_WIKI.md) |
-| 消息总线 | [tutorials/03_message_bus.md](tutorials/03_message_bus.md) | [API_QUICK_REFERENCE.md](API_QUICK_REFERENCE.md) §Message Bus |
-| 传输/IPC | [tutorials/04_ipc_channel.md](tutorials/04_ipc_channel.md) | [MONITORING_ARCHITECTURE.md](MONITORING_ARCHITECTURE.md) |
-| 时钟/时间 | [tutorials/06_clock_service.md](tutorials/06_clock_service.md) | [API_QUICK_REFERENCE.md](API_QUICK_REFERENCE.md) |
-| 序列化 | [tutorials/07_serializer.md](tutorials/07_serializer.md) | [FLOWBOARD_SCENE_CONTRACT.md](FLOWBOARD_SCENE_CONTRACT.md) |
-| 状态机 | [tutorials/08_state_machine.md](tutorials/08_state_machine.md) | [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（8 状态 FSM） |
-| 协程 | [tutorials/11_coroutine.md](tutorials/11_coroutine.md) | [ALGORITHM_STACK.md](ALGORITHM_STACK.md) |
-| 融合/定位 | [tutorials/10_fusion.md](tutorials/10_fusion.md) | [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（EKF） |
+| C 面向对象 | [book/01_oop_in_c.md](book/01_oop_in_c.md) | [CODE_WIKI.md](CODE_WIKI.md) |
+| 消息总线 | [book/03_message_bus.md](book/03_message_bus.md) | [API_QUICK_REFERENCE.md](API_QUICK_REFERENCE.md) §Message Bus |
+| 传输/IPC | [book/04_ipc_channel.md](book/04_ipc_channel.md) | [MONITORING_ARCHITECTURE.md](MONITORING_ARCHITECTURE.md) |
+| 时钟/时间 | [book/06_clock_service.md](book/06_clock_service.md) | [API_QUICK_REFERENCE.md](API_QUICK_REFERENCE.md) |
+| 序列化 | [book/07_serializer.md](book/07_serializer.md) | [FLOWBOARD_SCENE_CONTRACT.md](FLOWBOARD_SCENE_CONTRACT.md) |
+| 状态机 | [book/08_state_machine.md](book/08_state_machine.md) | [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（8 状态 FSM） |
+| 协程 | [book/11_coroutine.md](book/11_coroutine.md) | [ALGORITHM_STACK.md](ALGORITHM_STACK.md) |
+| 融合/定位 | [book/10_fusion.md](book/10_fusion.md) | [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（EKF） |
 | 感知/跟踪 | — | [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（DBSCAN/卡尔曼） |
 | 行为决策 | — | [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（FSM） |
 | 规划（轨迹+速度） | [PLANNING_SPEED_UPGRADE_DESIGN.md](PLANNING_SPEED_UPGRADE_DESIGN.md) | [ALGORITHM_STACK.md](ALGORITHM_STACK.md) |
@@ -69,9 +69,9 @@
 | 仿真物理 | [FLOWSIM_PHYSICS.md](FLOWSIM_PHYSICS.md) | [SIM_DIGEST.md](SIM_DIGEST.md) |
 | 地图生成 | [MAP_GENERATION_MODULE.md](MAP_GENERATION_MODULE.md) | [MAP_ENGINE_ROUTING.md](MAP_ENGINE_ROUTING.md) |
 | 可视化/3D | [VISUALIZATION_ARCHITECTURE.md](VISUALIZATION_ARCHITECTURE.md) | [VIS_3D_RENDERING.md](VIS_3D_RENDERING.md) |
-| 学习闭环 | [tutorials/13_e2e_learning_loop.md](tutorials/13_e2e_learning_loop.md) | [LEARNING_LOOP.md](LEARNING_LOOP.md) |
+| 学习闭环 | [book/13_e2e_learning_loop.md](book/13_e2e_learning_loop.md) | [LEARNING_LOOP.md](LEARNING_LOOP.md) |
 | 数据采集 | [FLOWREC.md](FLOWREC.md) | [DATA_CLOSED_LOOP.md](DATA_CLOSED_LOOP.md) |
-| 验证/门禁 | [tutorials/12_demo_evaluator.md](tutorials/12_demo_evaluator.md) | [ALGORITHM_VERIFY_PATTERN.md](ALGORITHM_VERIFY_PATTERN.md) |
+| 验证/门禁 | [book/12_demo_evaluator.md](book/12_demo_evaluator.md) | [ALGORITHM_VERIFY_PATTERN.md](ALGORITHM_VERIFY_PATTERN.md) |
 
 ## 三、按文件：每个文档一句话定位
 
@@ -108,4 +108,4 @@
 | [VIS_3D_RENDERING.md](VIS_3D_RENDERING.md) | 渲染经验沉淀（性能/贴地/相机） |
 | [VIS_MODULE_GUIDE.md](VIS_MODULE_GUIDE.md) | 新增 View 的规范 + 前端门禁 |
 | [map_engine_boundary.md](map_engine_boundary.md) | esmini vs 自研 MapEngine 职责边界 |
-| tutorials/01–16 | 16 篇循序渐进教程（见 [BOOK.md](BOOK.md) 卷二/卷四/卷七/卷八/卷九） |
+| book/01–16 | 16 篇循序渐进教程（见 [BOOK.md](BOOK.md) 卷二/卷四/卷七/卷八/卷九） |

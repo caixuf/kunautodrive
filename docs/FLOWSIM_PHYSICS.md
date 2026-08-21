@@ -55,5 +55,5 @@
 ## 6. 文档覆盖现状
 
 - `docs/SIMULATION_GUIDE.md`：运动学模型（:108-111）、collision 日志 grep（:79）。**未覆盖** OBB 算法/响应/护栏/重力。
-- `docs/tutorials/16_flowsim_scenario_design.md`：高架 elevation/z 抬升约定（:38,45）、碰撞/幽灵变道调试（:61,114）。
+- `docs/book/16_flowsim_scenario_design.md`：高架 elevation/z 抬升约定（:38,45）、碰撞/幽灵变道调试（:61,114）。
 - `docs/DATA_CLOSED_LOOP.md`：完全未涉及物理。

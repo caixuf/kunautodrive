@@ -129,7 +129,7 @@ open http://localhost:8800
 `scene` 数据结构与坐标系约定详见
 [FlowBoard Scene 契约](FLOWBOARD_SCENE_CONTRACT.md)。
 完整的离线问题根因分析与鲁棒性设计详见
-[tutorials/12_demo_evaluator.md](tutorials/12_demo_evaluator.md)。
+[book/12_demo_evaluator.md](book/12_demo_evaluator.md)。
 
 ## 场景矩阵回归（仿真即测试）
 

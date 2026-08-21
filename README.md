@@ -199,24 +199,23 @@ bash build.sh release
 完整的中文模块导航、权威文档归属和教程入口见 [docs/README.md](docs/README.md)。
 其中 [flowrec](docs/FLOWREC.md) 是配置化 topic 留存节点的独立说明。
 
-## 技术专著与实战教程（tutorials/）
+## 技术专著与实战教程（book/）
 
-《KunAutoDrive：从零构建高性能自动驾驶系统与仿真引擎》（中间件内核 FlowEngine 实战专著），完整 5 大卷索引：
+《KunAutoDrive：从零构建高性能自动驾驶系统与仿真引擎》（中间件内核 FlowEngine 实战专著），完整 5 大卷索引见 [docs/BOOK.md](docs/BOOK.md)：
 
 | 卷号 | 专卷主题 | 包含章节 |
 |------|---------|---------|
-| **第一卷** | **微内核与系统编程底座** | [01 语言面向对象](docs/tutorials/01_oop_in_c.md) · [02 dlopen 插件化](docs/tutorials/02_plugin_system.md) · [03 进程内消息总线](docs/tutorials/03_message_bus.md) · [04 共享内存 IPC](docs/tutorials/04_ipc_channel.md) · [05 数据持久化 Bag](docs/tutorials/05_bag_recording.md) · [06 统一时钟服务](docs/tutorials/06_clock_service.md) · [07 类型安全序列化](docs/tutorials/07_serializer.md) |
-| **第二卷** | **执行流与高级调度** | [08 反射式状态机](docs/tutorials/08_state_machine.md) · [09 服务发现与拓扑](docs/tutorials/09_discovery.md) · [10 FlowCoro 协程框架](docs/tutorials/10_coroutine.md) · [11 DAG 混合调度器](docs/tutorials/11_scheduler.md) |
-| **第三卷** | **ADAS 算法栈从理论到实现** | [12 点云聚类与跟踪](docs/tutorials/12_lidar_tracking.md) · [13 多传感器融合 EKF](docs/tutorials/13_sensor_fusion.md) · [14 行为决策与 NOA](docs/tutorials/14_behavior_decision.md) · [15 轨迹与速度规划](docs/tutorials/15_trajectory_planning.md) · [16 跟踪控制与 MPC](docs/tutorials/16_tracking_control.md) · [17 协程安全包络](docs/tutorials/17_safety_envelope.md) |
-| **第四卷** | **仿真验证、学习闭环与运维** | [18 FlowSim 场景设计](docs/tutorials/18_flowsim_scenario_design.md) · [19 端到端学习闭环](docs/tutorials/19_e2e_learning_loop.md) · [20 flowmond 3D 监控](docs/tutorials/20_flowmond_3d_vis.md) · [21 黑盒回归评估体系](docs/tutorials/21_demo_evaluator.md) |
-| **第五卷** | **真车部署与硬件落地** | [附录 A SocketCAN 与 PWM 执行器落地指南](docs/tutorials/22_socketcan_actuator.md) |
-`libflowengine_*` 等保留为 ABI/API 兼容名称，不应作为普通重命名目标。
+| **第一卷** | **微内核与系统编程底座** | [01 语言面向对象](docs/book/01_oop_in_c.md) · [02 dlopen 插件化](docs/book/02_plugin_system.md) · [03 进程内消息总线](docs/book/03_message_bus.md) · [04 共享内存 IPC](docs/book/04_ipc_channel.md) · [05 数据持久化 Bag](docs/book/05_bag_recording.md) · [06 统一时钟服务](docs/book/06_clock_service.md) · [07 类型安全序列化](docs/book/07_serializer.md) |
+| **第二卷** | **执行流与高级调度** | [08 反射式状态机](docs/book/08_state_machine.md) · [09 服务发现与拓扑](docs/book/09_discovery.md) · [10 FlowCoro 协程框架](docs/book/10_coroutine.md) · [11 DAG 混合调度器](docs/book/11_scheduler.md) |
+| **第三卷** | **ADAS 算法栈从理论到实现** | [12 点云聚类与跟踪](docs/book/12_lidar_tracking.md) · [13 多传感器融合 EKF](docs/book/13_sensor_fusion.md) · [14 行为决策与 NOA](docs/book/14_behavior_decision.md) · [15 轨迹与速度规划](docs/book/15_trajectory_planning.md) · [16 跟踪控制与 MPC](docs/book/16_tracking_control.md) · [17 协程安全包络](docs/book/17_safety_envelope.md) |
+| **第四卷** | **仿真验证、学习闭环与运维** | [18 FlowSim 场景设计](docs/book/18_flowsim_scenario_design.md) · [19 端到端学习闭环](docs/book/19_e2e_learning_loop.md) · [20 flowmond 3D 监控](docs/book/20_flowmond_3d_vis.md) · [21 黑盒回归评估体系](docs/book/21_demo_evaluator.md) |
+| **第五卷** | **真车部署与硬件落地** | [附录 A SocketCAN 与 PWM 执行器落地指南](docs/book/22_socketcan_actuator.md) |
 
-MIT License。
-=======
+---
+
 ## 核心技术文档
 
-> 完整文档索引见 [docs/README.md](docs/README.md) —— 按主题分组的全部文档 + 22 篇专著教程入口。
+> 完整文档索引见 [docs/README.md](docs/README.md) —— 按主题分组的全部文档 + 22 篇专著专章入口。
 
 | 文档 | 主题 |
 |-----|-------|
@@ -243,5 +242,4 @@ MIT License。
 
 ## 许可证
 
-MIT
->>>>>>> 1e032a45 (docs: rewrite complete 5-volume 22-chapter technical book for FlowEngine)
+MIT License. 产品与仓库名称为 **KunAutoDrive**。`FLOWENGINE_*`、`flowengine_core` 和 `libflowengine_*` 等保留为 ABI/API 兼容名称，不应作为普通重命名目标。

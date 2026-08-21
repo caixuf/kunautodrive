@@ -61,5 +61,5 @@ flowsim(60Hz 真值) → sensor_model(FOV/遮挡/噪声) → perception(DBSCAN)
 
 想把 OpenCV/YOLO、Eigen、OSQP 等外部算法库接成插件节点？集成模式
 （dlopen 插件 API、topic 订阅发布、构建方法）见
-[tutorials/02_plugin_system.md](tutorials/02_plugin_system.md) 与
+[book/02_plugin_system.md](book/02_plugin_system.md) 与
 [ALGORITHM_INTEGRATION.md](ALGORITHM_INTEGRATION.md)。本仓库不内置这些依赖。

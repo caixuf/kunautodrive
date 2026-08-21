@@ -91,7 +91,7 @@ sim_world → sensor_model → perception → fusion → planning → control �
 | `tools/modelctl.py` | artifact 管理（list / inspect / diff / promote / ota） |
 | `docs/LEARNING_LOOP.md` | 车端学习闭环架构 |
 
-> 深入教程见 `docs/tutorials/` 目录（16 篇，覆盖 OOP in C、插件系统、消息总线、IPC、Bag、Clock、
+> 深入教程见 `docs/book/` 目录（16 篇，覆盖 OOP in C、插件系统、消息总线、IPC、Bag、Clock、
 > Serializer、State Machine、Discovery、Fusion、Coroutine、Demo Evaluator、E2E Learning Loop、
 > Dead Reckoning、SocketCAN Actuator、FlowSim 场景设计）；vis 模块设计见 `docs/VIS_MODULE_GUIDE.md`。
 

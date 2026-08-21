@@ -114,4 +114,4 @@ python3 tools/trace_incident.py
   `ci/evaluators/scenario_regression.py`、`ci/evaluators/test_param_regression.py`、
   `tools/quick_verify.py`、`tools/auto_tune_mpc.py`、`tools/trace_incident.py`
 - 门禁自测：`ci/evaluators/test_evaluator_gate.py`
-- 教程：`docs/tutorials/12_demo_evaluator.md`（评估器设计 + 4 个深层故障模式）
+- 教程：`docs/book/12_demo_evaluator.md`（评估器设计 + 4 个深层故障模式）

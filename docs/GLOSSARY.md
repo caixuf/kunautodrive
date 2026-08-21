@@ -10,20 +10,20 @@
 |------|-----------|------|
 | **KunAutoDrive / FlowEngine** | 轻量级自动驾驶中间件：消息总线 + 调度器 + 传输层 + ADAS 参考实现 | [BOOK](BOOK.md) 总序 |
 | **pipeline** | 由 `flow_launcher` 按 `config/pipeline.json` 加载的一组插件节点组成的完整链路 | [PIPELINE_ARCHITECTURE.md](PIPELINE_ARCHITECTURE.md) |
-| **节点（Node / NodePlugin）** | 一个编译为 `.so`、实现插件接口、订阅/发布 topic 的处理单元（如 flowsim、control） | [tutorials/02_plugin_system.md](tutorials/02_plugin_system.md) |
-| **topic** | 消息总线上的命名通道，节点按名订阅/发布（如 `vehicle/state`、`control/cmd`） | [tutorials/03_message_bus.md](tutorials/03_message_bus.md) |
-| **QoS** | 订阅匹配 + 消息策略（depth、drop_oldest 等） | [tutorials/03_message_bus.md](tutorials/03_message_bus.md) |
+| **节点（Node / NodePlugin）** | 一个编译为 `.so`、实现插件接口、订阅/发布 topic 的处理单元（如 flowsim、control） | [book/02_plugin_system.md](book/02_plugin_system.md) |
+| **topic** | 消息总线上的命名通道，节点按名订阅/发布（如 `vehicle/state`、`control/cmd`） | [book/03_message_bus.md](book/03_message_bus.md) |
+| **QoS** | 订阅匹配 + 消息策略（depth、drop_oldest 等） | [book/03_message_bus.md](book/03_message_bus.md) |
 | **flow_launcher** | 配置驱动启动器：读 pipeline.json，dlopen 加载插件节点 | [PIPELINE_ARCHITECTURE.md](PIPELINE_ARCHITECTURE.md) |
 | **flowctl** | CLI 工具：list / inspect / dashboard / param / bag 等子命令 | [API_QUICK_REFERENCE.md](API_QUICK_REFERENCE.md) |
 | **flowmond** | 监控守护进程：HTTP 仪表盘（8800）+ IPC/文件桥接 + 自动重连 | [MONITORING_ARCHITECTURE.md](MONITORING_ARCHITECTURE.md) |
 | **FlowRegistry** | 统一元信息注册中心（Task/Topic/Type/Plugin/Schema） | [API_QUICK_REFERENCE.md](API_QUICK_REFERENCE.md) |
 | **ParamRegistry** | 参数系统（int/float/bool/string、范围校验、hot-reload） | [API_QUICK_REFERENCE.md](API_QUICK_REFERENCE.md) |
-| **clock_now_us()** | 唯一合法时间源（CLOCK_MONOTONIC，可注入），替代裸 `clock_gettime` | [tutorials/06_clock_service.md](tutorials/06_clock_service.md) |
-| **node_pump()** | 节点主循环的标准写法（协程 executor + 休眠泵），禁止裸忙等 | [tutorials/11_coroutine.md](tutorials/11_coroutine.md) |
-| **FlowCoro** | 免锁协程运行时，安全层/行为层等节点的调度骨架 | [tutorials/11_coroutine.md](tutorials/11_coroutine.md) |
-| **Bag** | 通用录制/回放格式，`flowctl bag play` 回放给算法 | [tutorials/05_bag_recording.md](tutorials/05_bag_recording.md) |
-| **Serializer** | 消息编解码层（跨版本/跨语言） | [tutorials/07_serializer.md](tutorials/07_serializer.md) |
-| **Discovery** | 节点/服务互相发现的机制 | [tutorials/09_discovery.md](tutorials/09_discovery.md) |
+| **clock_now_us()** | 唯一合法时间源（CLOCK_MONOTONIC，可注入），替代裸 `clock_gettime` | [book/06_clock_service.md](book/06_clock_service.md) |
+| **node_pump()** | 节点主循环的标准写法（协程 executor + 休眠泵），禁止裸忙等 | [book/11_coroutine.md](book/11_coroutine.md) |
+| **FlowCoro** | 免锁协程运行时，安全层/行为层等节点的调度骨架 | [book/11_coroutine.md](book/11_coroutine.md) |
+| **Bag** | 通用录制/回放格式，`flowctl bag play` 回放给算法 | [book/05_bag_recording.md](book/05_bag_recording.md) |
+| **Serializer** | 消息编解码层（跨版本/跨语言） | [book/07_serializer.md](book/07_serializer.md) |
+| **Discovery** | 节点/服务互相发现的机制 | [book/09_discovery.md](book/09_discovery.md) |
 
 ## 二、算法链（ADAS）
 
@@ -34,7 +34,7 @@
 | **sensor_model** | 传感器模型：FOV/遮挡/噪声（LiDAR/GPS/Camera） | [PIPELINE_ARCHITECTURE.md](PIPELINE_ARCHITECTURE.md) |
 | **perception** | 感知：DBSCAN 点云聚类 + RANSAC 地面去除 | [ALGORITHM_STACK.md](ALGORITHM_STACK.md) |
 | **object_tracker** | 卡尔曼多目标跟踪（20Hz） | [ALGORITHM_STACK.md](ALGORITHM_STACK.md) |
-| **fusion / EKF** | GPS+IMU 定位融合（5 维 EKF：x, y, v, heading, yaw_rate） | [tutorials/10_fusion.md](tutorials/10_fusion.md) |
+| **fusion / EKF** | GPS+IMU 定位融合（5 维 EKF：x, y, v, heading, yaw_rate） | [book/10_fusion.md](book/10_fusion.md) |
 | **behavior_planner** | 8 状态 FSM 行为决策（跟车/变道/停车/让行/掉头），只决定「做什么」 | [ALGORITHM_STACK.md](ALGORITHM_STACK.md) |
 | **navigation** | 路由步骤 + 行进方向（消费 flowsim `ref_path.reverse`） | [ALGORITHM_STACK.md](ALGORITHM_STACK.md) |
 | **planning** | 速度与轨迹的唯一权威（Frenet 轨迹 + ST 图 DP 速度 + 掉头 N 把方向） | [PLANNING_SPEED_UPGRADE_DESIGN.md](PLANNING_SPEED_UPGRADE_DESIGN.md) |
@@ -57,9 +57,9 @@
 
 | 术语 | 一句话定义 | 深入 |
 |------|-----------|------|
-| **场景（scenario）** | `scenarios/*.json` 定义的仿真场景（actor + ego 配置） | [tutorials/16_flowsim_scenario_design.md](tutorials/16_flowsim_scenario_design.md) |
+| **场景（scenario）** | `scenarios/*.json` 定义的仿真场景（actor + ego 配置） | [book/16_flowsim_scenario_design.md](book/16_flowsim_scenario_design.md) |
 | **场景矩阵（suite）** | `scenarios/suite.json` 组织的批量回归场景集 | [SIMULATION_GUIDE.md](SIMULATION_GUIDE.md) |
-| **demo_evaluator** | 黑盒回归评估器：采样拓扑 JSON 自动评分（碰撞/偏航/停滞/频率） | [tutorials/12_demo_evaluator.md](tutorials/12_demo_evaluator.md) |
+| **demo_evaluator** | 黑盒回归评估器：采样拓扑 JSON 自动评分（碰撞/偏航/停滞/频率） | [book/12_demo_evaluator.md](book/12_demo_evaluator.md) |
 | **scenario_regression** | 场景矩阵批量回归 + 基线对比（退化即 FAIL） | [SIMULATION_GUIDE.md](SIMULATION_GUIDE.md) |
 | **pipeline_check** | L0 秒级离线管道完整性检查（9 类 32 项指标） | [ALGORITHM_VERIFY_PATTERN.md](ALGORITHM_VERIFY_PATTERN.md) |
 | **test_param_regression** | 参数回归 A/B：保存 baseline，改参后检测退化 | [ALGORITHM_VERIFY_PATTERN.md](ALGORITHM_VERIFY_PATTERN.md) |
@@ -107,6 +107,6 @@
 | **promote gate** | 影子评估通过才晋级的门禁 | [LEARNING_LOOP.md](LEARNING_LOOP.md) |
 | **flowrec** | 配置化留存节点（数据采集） | [FLOWREC.md](FLOWREC.md) |
 | **waypoint_follower** | 航点跟随（RC 小车 L2，Pure Pursuit） | [HARDWARE_DEPLOYMENT.md](HARDWARE_DEPLOYMENT.md) |
-| **SocketCAN / CAN** | 车端执行器总线（油门/转向） | [tutorials/15_socketcan_actuator.md](tutorials/15_socketcan_actuator.md) |
+| **SocketCAN / CAN** | 车端执行器总线（油门/转向） | [book/15_socketcan_actuator.md](book/15_socketcan_actuator.md) |
 | **FAST-LIO2** | 可选真实 SLAM 后端（slam_node 占位可接） | [HARDWARE_DEPLOYMENT.md](HARDWARE_DEPLOYMENT.md) |
-| **dead reckoning** | 航位推算：GPS 丢帧时的位姿外推 | [tutorials/14_dead_reckoning.md](tutorials/14_dead_reckoning.md) |
+| **dead reckoning** | 航位推算：GPS 丢帧时的位姿外推 | [book/14_dead_reckoning.md](book/14_dead_reckoning.md) |
