@@ -199,9 +199,49 @@ bash build.sh release
 完整的中文模块导航、权威文档归属和教程入口见 [docs/README.md](docs/README.md)。
 其中 [flowrec](docs/FLOWREC.md) 是配置化 topic 留存节点的独立说明。
 
-## 兼容性与许可证
+## 技术专著与实战教程（tutorials/）
 
-产品与仓库名称为 **KunAutoDrive**。`FLOWENGINE_*`、`flowengine_core` 和
+《FlowEngine：从零构建高性能自动驾驶中间件与仿真系统》（工业级实战专著），完整 5 大卷索引：
+
+| 卷号 | 专卷主题 | 包含章节 |
+|------|---------|---------|
+| **第一卷** | **微内核与系统编程底座** | [01 语言面向对象](docs/tutorials/01_oop_in_c.md) · [02 dlopen 插件化](docs/tutorials/02_plugin_system.md) · [03 进程内消息总线](docs/tutorials/03_message_bus.md) · [04 共享内存 IPC](docs/tutorials/04_ipc_channel.md) · [05 数据持久化 Bag](docs/tutorials/05_bag_recording.md) · [06 统一时钟服务](docs/tutorials/06_clock_service.md) · [07 类型安全序列化](docs/tutorials/07_serializer.md) |
+| **第二卷** | **执行流与高级调度** | [08 反射式状态机](docs/tutorials/08_state_machine.md) · [09 服务发现与拓扑](docs/tutorials/09_discovery.md) · [10 FlowCoro 协程框架](docs/tutorials/10_coroutine.md) · [11 DAG 混合调度器](docs/tutorials/11_scheduler.md) |
+| **第三卷** | **ADAS 算法栈从理论到实现** | [12 点云聚类与跟踪](docs/tutorials/12_lidar_tracking.md) · [13 多传感器融合 EKF](docs/tutorials/13_sensor_fusion.md) · [14 行为决策与 NOA](docs/tutorials/14_behavior_decision.md) · [15 轨迹与速度规划](docs/tutorials/15_trajectory_planning.md) · [16 跟踪控制与 MPC](docs/tutorials/16_tracking_control.md) · [17 协程安全包络](docs/tutorials/17_safety_envelope.md) |
+| **第四卷** | **仿真验证、学习闭环与运维** | [18 FlowSim 场景设计](docs/tutorials/18_flowsim_scenario_design.md) · [19 端到端学习闭环](docs/tutorials/19_e2e_learning_loop.md) · [20 flowmond 3D 监控](docs/tutorials/20_flowmond_3d_vis.md) · [21 黑盒回归评估体系](docs/tutorials/21_demo_evaluator.md) |
+| **第五卷** | **真车部署与硬件落地** | [附录 A SocketCAN 与 PWM 执行器落地指南](docs/tutorials/22_socketcan_actuator.md) |
 `libflowengine_*` 等保留为 ABI/API 兼容名称，不应作为普通重命名目标。
 
 MIT License。
+=======
+## 核心技术文档
+
+> 完整文档索引见 [docs/README.md](docs/README.md) —— 按主题分组的全部文档 + 22 篇专著教程入口。
+
+| 文档 | 主题 |
+|-----|-------|
+| [Quick Start](docs/QUICK_START.md) | 30 分钟教程 |
+| [Technical Design](docs/TECHNICAL_DESIGN.md) | 架构设计 |
+| [API Quick Reference](docs/API_QUICK_REFERENCE.md) | C API 参考 |
+| [Simulation Guide](docs/SIMULATION_GUIDE.md) | 仿真测试指南 |
+| [Visualization Architecture](docs/VISUALIZATION_ARCHITECTURE.md) | flowmond + vis/ 模块树（Layer + ViewRegistry + Qt 对象树）|
+| [Vis Module Guide](docs/VIS_MODULE_GUIDE.md) | vis/ 模块接口契约 + 设计 AI 提示词模板 |
+| [Monitoring Architecture](docs/MONITORING_ARCHITECTURE.md) | flowmond + stats bridge |
+| [Pipeline Architecture](docs/PIPELINE_ARCHITECTURE.md) | Pipeline 设计 |
+| [Algorithm Stack](docs/ALGORITHM_STACK.md) | 算法总览（各模块真实算法 × 文件对照） |
+| [Algorithm Integration](docs/ALGORITHM_INTEGRATION.md) | 算法集成指南 |
+| [Planning Speed Upgrade](docs/PLANNING_SPEED_UPGRADE_DESIGN.md) | ST 图 + DP 速度规划设计 |
+| [FlowBoard Contract](docs/FLOWBOARD_CONTRACT.md) | 仪表盘数据契约 |
+| [FlowBoard Scene Contract](docs/FLOWBOARD_SCENE_CONTRACT.md) | scene 数据契约 |
+| [FlowSim 仿真指南](docs/SIMULATION_GUIDE.md) | flowsim 仿真模式对照 |
+| [Hardware Deployment](docs/HARDWARE_DEPLOYMENT.md) | 硬件部署 |
+| [RC Car Hardware Checklist](docs/RC_CAR_HARDWARE_CHECKLIST.md) | RC 小车硬件落地清单 |
+| [Learning Loop](docs/LEARNING_LOOP.md) | 仿真内学习闭环 |
+| [Troubleshooting 3D Dashboard](docs/TROUBLESHOOTING_3D_DASHBOARD.md) | 3D 仪表盘故障排查 |
+
+---
+
+## 许可证
+
+MIT
+>>>>>>> 1e032a45 (docs: rewrite complete 5-volume 22-chapter technical book for FlowEngine)

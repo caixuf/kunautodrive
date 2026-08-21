@@ -629,6 +629,10 @@ function normalizeServerUrl(raw) {
       return current.origin;
     }
   } catch (_) {}
+  // Windows 本机部署下优先 IPv4，规避部分环境 localhost 走 ::1 导致连接不稳。
+  url = url.replace(/^https?:\/\/localhost(?=[:\/]|$)/i, function(m) {
+    return m.toLowerCase().startsWith('https') ? 'https://127.0.0.1' : 'http://127.0.0.1'; // exempt
+  });
   return url;
 }
 
