@@ -85,9 +85,9 @@
 
 > 更多运行期故障速查见 [CLAUDE.md](../CLAUDE.md) 的「常见故障模式」表。
 
-## FlowEngine 专著与实战教程（tutorials/）
+## KunAutoDrive 技术专著与实战教程（tutorials/）
 
-《FlowEngine：从零构建高性能自动驾驶中间件与仿真系统》（工业级实战专著），按系统分卷组织：
+《KunAutoDrive：从零构建高性能自动驾驶系统与仿真引擎》（中间件内核 FlowEngine 实战专著），按系统分卷组织：
 
 ### 第一卷：微内核与系统编程底座 (Core & OS Primitives)
 | 章节 | 专章教程 | 核心主题与深度解析 |
