@@ -49,8 +49,8 @@ const RULES = [
     dir: JS_DIR,
     exempt: /\/\/\s*exempt|directionToRotationY|Coord\./,
     // Coord.js 是 directionToRotationY 实现本身；
-    // app.js / scene2d.js 是 GPS history 推算 + 2D canvas 箭头，非 3D 朝向
-    fileExempt: /\/math\/Coord\.js$|\/app\.js$|\/scene2d\.js$/,
+    // app.js 是 GPS history 推算，非 3D 朝向
+    fileExempt: /\/math\/Coord\.js$|\/app\.js$/,
   },
   {
     name: '裸 Math.sin/cos 手算偏移',
@@ -67,8 +67,8 @@ const RULES = [
     // DeadReckon.js = 热路径外推（避免函数调用开销）；
     // SkyEnv.js = 太阳位置（圆弧轨迹，非道路偏移）；
     // CameraRig.js = 相机相对 ego 位姿（非路上物体放置）；
-    // app.js / scene2d.js / models.js = 2D canvas / GPS / 动画
-    fileExempt: /\/math\/Coord\.js$|\/core\/DeadReckon\.js$|\/core\/SkyEnv\.js$|\/core\/CameraRig\.js$|\/app\.js$|\/scene2d\.js$|\/models\.js$/,
+    // app.js / models.js = GPS / 动画
+    fileExempt: /\/math\/Coord\.js$|\/core\/DeadReckon\.js$|\/core\/SkyEnv\.js$|\/core\/CameraRig\.js$|\/app\.js$|\/models\.js$/,
   },
   {
     name: '裸 .position.set 配魔法数',

@@ -436,9 +436,7 @@ export function createSceneDirector(scene) {
    *     → tickDeadReckon() 推进 _dr.smooth*
    *     → 把 smooth* 写入 store.ego（覆盖 x/y/heading/speed，保留 _simX 等原始字段）
    *     → rootLayer.update(store, now) 递归 update agent/infra 层所有 view
-   *
-   * 2D（scene2d.js）仍直接调 tickDeadReckon + 读 _dr.smooth*，与 3D 共享同一
-   * _dr 全局单例，保证 3D/2D 视图 ego 位置完全同步。
+   * _dr 全局单例维护死推算状态，保证 ego 位置与朝向在帧间平滑推进。
    *
    * @param {number} now 当前 performance.now() 毫秒（传给 view.update 需要 simTime）
    */

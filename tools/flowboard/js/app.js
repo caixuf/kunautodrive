@@ -3,7 +3,6 @@
 // ═══════════════════════════════════════════════════════════════
 // Imports from sub-modules
 import { init3DScene, resize3D, update3D, sceneReady, scene3d, setTopoData as setTopoData3D, setDebugCam, setCameraMode, resetCamera, resetMapView, closeNPCDetail, setPerfTier, togglePerfOverlay, toggleMinimap, setRenderPaused } from './vis/main.js';
-import { init2D, init2DFallback, draw2D, switchSceneView, _2d as _2dState, setTopoData as setTopoData2D } from './scene2d.js';
 import { initCharts, updateCharts, onChartTopicChange, onChartRangeChange, setTopoData as setTopoDataChart } from './charts.js';
 import { safeCall, reportDiag, clearDiag, _auditSceneMaterials } from './utils.js';
 import { updateDeadReckon, _dr, initDeadReckon, tickDeadReckon } from './vis/core/DeadReckon.js';
@@ -529,7 +528,6 @@ function showEl(id, show) {
  */
 function setTopoData(d) {
   setTopoData3D(d);
-  setTopoData2D(d);
   setTopoDataChart(d);
 }
 
@@ -542,8 +540,7 @@ var COLORS = {1:'#3fb950',2:'#58a6ff',4:'#d29922',8:'#bc8cff',0:'#f85149'};
 // Global State
 // ═══════════════════════════════════════════════════════════════
 //
-// Phase 4.9 cleanup: previously scattered window.* assignments across
-// scene2d.js / vis/main.js / vis/core/DeadReckon.js / utils.js / charts.js.
+// Phase 4.9 cleanup: previously scattered window.* assignments across modules.
 // Now all global state lives in a single `flowboard` namespace object
 // — this is the ONLY thing attached to window from this app.
 // Internal modules talk to each other via ES module imports.
@@ -1400,7 +1397,7 @@ function updateAll() {
   // Failures surface in the diagnostic bar instead of being silently swallowed.
   //
   // Phase 4.9: push topoData into the per-module stores first so each renderer
-  // (scene2d, scene3d, charts) reads from its own module-scoped var.
+  // (scene3d, charts) reads from its own module-scoped var.
   setTopoData(topoData);
 
   const now = performance.now();
@@ -2407,12 +2404,6 @@ function sync2DTarget() {
     }
     updateDeadReckon(v.x || 0, v.y || 0, v.speed || 0, heading);
   }
-
-  // ── 2D trail (only maintained while the 2D renderer is active) ──
-  // Phase 4.9: use imported _2dState from scene2d.js instead of window._2d.
-  if (!_2dState || !_2dState.active) return;
-  _2dState.trail.push({ x: _dr.lastX, y: _dr.lastZ });
-  if (_2dState.trail.length > 120) _2dState.trail.shift();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2480,16 +2471,10 @@ function initAll() {
   // 1. Initialize D3 topology graph
   initTopo();
 
-  // 2. Initialize 3D scene (Three.js — loads asynchronously, falls back to 2D)
+  // 2. Initialize 3D scene (Three.js)
   init3DScene();
 
-  // 3. Initialize 2D canvas (will be shown if 3D fails to load)
-  init2D();
-
-  // 3.5 默认启动 2D HMI 极速轻量模式（低性能开销），用户可按需切换 3D
-  try { switchSceneView('2d'); } catch (_) {}
-
-  // 4. Initialize charts
+  // 3. Initialize charts
   initCharts();
 
   // 5. Restore saved UI state
@@ -2700,10 +2685,16 @@ window.flowboard = {
   setPerfMode: setPerfMode,
   selectPerfProc: selectPerfProc,
   selectPerfThread: selectPerfThread,
-  // scene view switch
+  // scene view switch (3D / BEV)
   switchSceneView: function (mode) {
-    // delegated to scene2d module
-    import('./scene2d.js').then(function (m) { m.switchSceneView(mode); });
+    document.querySelectorAll('#scene-view-btns .toggle-btn').forEach(function (b) {
+      b.classList.toggle('active', b.dataset.view === mode);
+    });
+    if (mode === '2d' || mode === 'bev') {
+      setCameraMode('bev');
+    } else {
+      setCameraMode('chase');
+    }
   },
   // C.1: 3D camera controls
   setCameraMode: setCameraMode,
@@ -2749,7 +2740,6 @@ window.flowboard = {
   onChartRangeChange: function () { /* delegated via charts.js */ },
   // debug exports (read-only refs for console inspection)
   _dr: _dr,
-  _2d: _2dState,
   _topoData: function () { return topoData; },
   _auditMaterials: function () { return _auditSceneMaterials(scene3d); }
 };

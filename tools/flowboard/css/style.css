@@ -129,10 +129,9 @@ body[data-workspace="operate"] .ws-perf{display:none!important}
 #scene3d-card{flex-shrink:0;display:flex;flex-direction:column;min-height:520px}
 #scene3d-card .card-body{flex:1;min-height:480px;padding:0;display:flex;overflow:hidden}
 #scene3d{flex:1;min-height:480px;background:#5588aa;position:relative;aspect-ratio:16/9;width:100%}
-#scene2d{flex:1;min-height:480px;background:#090c10;position:relative;aspect-ratio:16/9;width:100%}
 /* canvas 显式 width/height: 100% + display:block，避免 inline canvas
  * 底部 4px 空隙和 css 高度与 setSize 物理 height 不一致 */
-#scene3d canvas,#scene2d canvas{display:block;width:100%!important;height:100%!important}
+#scene3d canvas{display:block;width:100%!important;height:100%!important}
 #scene3d::before{
   content:"";position:absolute;inset:0;pointer-events:none;z-index:0;
   background:radial-gradient(circle at 50% 8%, #7a42ff22, transparent 45%);
@@ -267,13 +266,13 @@ input:focus,select:focus{border-color:#58a6ff}
   #topo{height:300px}
   #detail-panel{width:100vw;right:-100vw}
   /* Keep scene canvases within the visible viewport so the car is never cropped */
-  #scene3d,#scene2d{min-height:220px}
+  #scene3d{min-height:220px}
 }
 @media (max-width:500px){
   #sidebar{padding:10px;gap:8px}
   .mini-stat .val{font-size:14px}
   .card-header h2{font-size:11px}
   button{padding:6px 12px;font-size:11px}
-  #scene3d,#scene2d{min-height:180px}
+  #scene3d{min-height:180px}
 }
 ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:#0d1117}::-webkit-scrollbar-thumb{background:#1a1f2b;border-radius:3px}
