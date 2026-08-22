@@ -62,40 +62,102 @@ export function createStreetlightView(scene) {
      * 视觉上与路口渠化冲突。距路口中心 < radius + 2m 的槽位丢弃（与 TreeView 同 margin）。 */
     const topo = getTopology(roadNetwork);
 
-    // ── 第一遍：收集所有放置点 ──
-    const slots = [];  // [{x, z, nx, nz, side: +1|-1}]
+    // ── 第一遍：收集所有有效路轴供碰撞检测 ──
+    const allAxes = [];
     for (const edge of roadNetwork.edges) {
-      // 高架场景路灯由 ViaductView 内置，这里跳过
       if (edge.type === EDGE_TYPE.VIADUCT_HIGHWAY || edge.name === EDGE_TYPE.VIADUCT_HIGHWAY) continue;
-
-      /* 共享路轴（单一事实源）：road.centerline 是最左车道左缘，须由 computeEdgeAxis
-       * 推导 TRUE 中心 spine + 车道组半宽。路灯相对 TRUE 中心偏移，才不会压路 /
-       * 与 RoadView 错位。lane_data 缺失时 fromLanes=false、居中回退（零回归）。 */
       const axis = computeEdgeAxis(edge, roadNetwork.lane_data);
-      if (!axis.ok || axis.spine.length < 2) continue;
-      const spine = axis.spine;
-      for (let i = 0; i < spine.length; i++) spine[i].cum = axis.cum[i];
-      const halfWidth = axis.halfWidth;
+      if (axis.ok && axis.spine.length >= 2) {
+        for (let i = 0; i < axis.spine.length; i++) axis.spine[i].cum = axis.cum[i];
+        let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+        for (const p of axis.spine) {
+          if (p.px < minX) minX = p.px;
+          if (p.px > maxX) maxX = p.px;
+          if (p.pz < minZ) minZ = p.pz;
+          if (p.pz > maxZ) maxZ = p.pz;
+        }
+        allAxes.push({
+          edge,
+          axis,
+          halfW: axis.halfWidth,
+          isOneWay: edge.oneway === true,
+          minX, maxX, minZ, maxZ,
+        });
+      }
+    }
 
-      // 沿弧长 march，每 LAMP_SPACING 米放一盏
+    /** 空间几何碰撞检测：判断点 (x, z, py) 是否落在任何同层路段（或本体弯道内侧）的沥青车道或安全外缘内 */
+    function isInsideAnyRoad(x, z, py) {
+      for (const item of allAxes) {
+        const hw = item.halfW + 0.15; // 道路边缘 0.15m 安全红线
+        // AABB 粗筛：1 个指令跳过 99.9% 远端不相交道路，瞬时完成万级大图碰撞计算
+        if (x < item.minX - hw || x > item.maxX + hw || z < item.minZ - hw || z > item.maxZ + hw) {
+          continue;
+        }
+        const spine = item.axis.spine;
+        for (let k = 0; k < spine.length - 1; k++) {
+          const p1 = spine[k], p2 = spine[k + 1];
+          // 若纵向高程差异 >= 2.5m（立体交叉上跨/下穿），不在同一空间水平面
+          const segPy = ((p1.py || 0) + (p2.py || 0)) * 0.5;
+          if (Math.abs(py - segPy) >= 2.5) continue;
+
+          const dx = p2.px - p1.px, dz = p2.pz - p1.pz;
+          const len2 = dx * dx + dz * dz;
+          if (len2 < 1e-4) continue;
+          const t = Math.max(0, Math.min(1, ((x - p1.px) * dx + (z - p1.pz) * dz) / len2));
+          const projX = p1.px + dx * t;
+          const projZ = p1.pz + dz * t;
+          const dist2 = (x - projX) * (x - projX) + (z - projZ) * (z - projZ);
+          if (dist2 < hw * hw) return true; // 落在任何道路沥青路面内
+        }
+      }
+      return false;
+    }
+
+    // ── 第二遍：收集所有合法路灯放置点 ──
+    const slots = [];  // [{x, z, nx, nz, side: +1|-1, py}]
+    for (const item of allAxes) {
+      const { edge, axis, halfW, isOneWay } = item;
+      const spine = axis.spine;
       const totalLen = axis.cum[axis.cum.length - 1];
+
+      // 短接驳段/路口弯道（< 28m）不布设路灯，避免堵在路口转角或三角分流岛
+      if (totalLen < 28) continue;
+
       const count = Math.floor(totalLen / LAMP_SPACING);
       if (count === 0) continue;
 
       for (let i = 0; i < count; i++) {
         const targetArc = (i + 0.5) * LAMP_SPACING;
-        // 找到 spine 中 cum >= targetArc 的点
         let j = 1;
         while (j < spine.length && spine[j].cum < targetArc) j++;
         if (j >= spine.length) j = spine.length - 1;
         const s = spine[j];
-        // 交替两侧：偶数 i 放左侧（+1），奇数 i 放右侧（-1）
-        const side = (i % 2 === 0) ? 1 : -1;
-        // 路灯位置：TRUE 中心 + 法线 × (halfWidth + LAMP_OFFSET) × side
-        const x = s.px + s.nx * (halfWidth + LAMP_OFFSET) * side;
-        const z = s.pz + s.nz * (halfWidth + LAMP_OFFSET) * side;
-        if (topo && topo.nearJunction(x, z, 2.0)) continue;   // 路口避让
-        slots.push({ x, z, nx: s.nx, nz: s.nz, side, py: s.py || 0 });
+        const py = s.py || 0;
+
+        // 单行道/分幅道路：始终布设在右侧路肩（side = -1），严禁插在左侧车道隔离带与对向车道之间
+        // 双向道路：优先交替，但若左侧与其他车道重叠，自动回退到右侧
+        let side = isOneWay ? -1 : (i % 2 === 0 ? 1 : -1);
+        let x = s.px + s.nx * (halfW + LAMP_OFFSET) * side;
+        let z = s.pz + s.nz * (halfW + LAMP_OFFSET) * side;
+
+        // 若选定的位置侵入了相邻其他道路或弯道内侧路面
+        if (isInsideAnyRoad(x, z, py)) {
+          if (!isOneWay && side === 1) {
+            // 尝试换到右侧
+            side = -1;
+            x = s.px + s.nx * (halfW + LAMP_OFFSET) * side;
+            z = s.pz + s.nz * (halfW + LAMP_OFFSET) * side;
+            if (isInsideAnyRoad(x, z, py)) continue; // 两侧均受阻则放弃
+          } else {
+            continue; // 单行道右侧仍受阻则丢弃
+          }
+        }
+
+        // 路口红线避让（距路口边界 < 3.0m 丢弃）
+        if (topo && topo.nearJunction(x, z, 3.0)) continue;
+
+        slots.push({ x, z, nx: s.nx, nz: s.nz, side, py });
       }
     }
 
@@ -114,9 +176,13 @@ export function createStreetlightView(scene) {
     const glowMat = createEmissiveMaterial(COLOR_GLOW, 1.2);
 
     poleMesh = new THREE.InstancedMesh(poleGeo, poleMat, N);
+    poleMesh.name = 'streetlight_pole';
     armMesh  = new THREE.InstancedMesh(armGeo, armMat, N);
+    armMesh.name = 'streetlight_arm';
     headMesh = new THREE.InstancedMesh(headGeo, headMat, N);
+    headMesh.name = 'streetlight_head';
     glowMesh = new THREE.InstancedMesh(glowGeo, glowMat, N);
+    glowMesh.name = 'streetlight_glow';
 
     const dummy = new THREE.Object3D();
     for (let i = 0; i < N; i++) {

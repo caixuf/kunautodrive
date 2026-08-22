@@ -603,8 +603,10 @@ console.log('--- 13. 防撞桶真断头判定（弯道接缝/闭合环）---');
   const countBarrels = (scene) => {
     let n = 0;
     scene.traverse((ch) => {
-      if (!ch.isMesh || ch.isInstancedMesh || !ch.material || !ch.material.color) return;
-      if (ch.material.color.getHex() === 0xd02020) n++;
+      if (!ch.material || !ch.material.color) return;
+      if (ch.material.color.getHex() !== 0xd02020) return;
+      if (ch.isInstancedMesh) n += ch.count;
+      else if (ch.isMesh) n++;
     });
     return n;
   };

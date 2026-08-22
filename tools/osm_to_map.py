@@ -645,8 +645,51 @@ def generate(lat: float, lon: float, radius: int,
             dropped += 1
             continue
 
-        # WGS84 → ENU（z=0）
-        enu = [list(wgs84_to_enu(py, px, lat, lon)) + [0.0] for px, py in pts]
+        osmid = w.get("id")
+        # 唯一 road id：优先 name，否则 way_<osmid>；重名时后缀 osmid
+        name = (tags.get("name") or "").strip()
+        base = name if name else "way_%s" % osmid
+        rid = base
+        if rid in used_ids:
+            rid = "%s_%s" % (base, osmid)
+        used_ids.add(rid)
+
+        # 高程与桥隧属性解析
+        layer_val = tags.get("layer")
+        layer_int = None
+        if layer_val is not None:
+            try:
+                layer_int = int(str(layer_val).strip())
+            except (ValueError, TypeError):
+                layer_int = None
+
+        bridge_tag = tags.get("bridge")
+        is_bridge = (bridge_tag in ("yes", "true", "viaduct", "cantilever", "cable_stayed", "suspension", "aqueduct")) or ("bridge" in tags)
+        tunnel_tag = tags.get("tunnel")
+        is_tunnel = (tunnel_tag in ("yes", "true", "building_passage", "avalanche_protector")) or ("tunnel" in tags)
+
+        if any(kw in name for k in ["隧道", "地道", "下穿", "地下"] if (kw := k)):
+            is_tunnel = True
+        elif any(kw in name for k in ["高架", "快速路", "大桥", "特大桥", "立交", "跨线桥", "Flyover", "Viaduct", "Elevated"] if (kw := k)):
+            is_bridge = True
+
+        if highway in ("motorway", "motorway_link") and not is_tunnel:
+            is_bridge = True
+
+        # 计算高程 z (ENU)
+        if is_tunnel or (layer_int is not None and layer_int < 0):
+            z = -4.0 * max(1, abs(layer_int or 1))
+            is_tunnel = True
+            is_bridge = False
+        elif is_bridge or (layer_int is not None and layer_int > 0):
+            z = 6.0 * max(1, layer_int or 1)
+            is_bridge = True
+            is_tunnel = False
+        else:
+            z = 0.0
+
+        # WGS84 → ENU（z）
+        enu = [list(wgs84_to_enu(py, px, lat, lon)) + [z] for px, py in pts]
 
         # 裁剪到查询半径内（丢弃穿过区域的超长 way 的越界点）
         enu = clip_to_radius(enu, radius, 0.0, 0.0)
@@ -661,15 +704,6 @@ def generate(lat: float, lon: float, radius: int,
         if length < 5.0:
             dropped += 1
             continue
-
-        osmid = w.get("id")
-        # 唯一 road id：优先 name，否则 way_<osmid>；重名时后缀 osmid
-        name = (tags.get("name") or "").strip()
-        base = name if name else "way_%s" % osmid
-        rid = base
-        if rid in used_ids:
-            rid = "%s_%s" % (base, osmid)
-        used_ids.add(rid)
 
         # oneway：'yes'/'true'/'1' 正向；'-1'/'reverse' 反向（反转几何后按正向处理）
         oneway_val = tags.get("oneway", "").strip()
@@ -695,6 +729,9 @@ def generate(lat: float, lon: float, radius: int,
             "lane_width": lane_width,
             "lanes": lanes_total,
             "nodes": enu,
+            "bridge": is_bridge if is_bridge else None,
+            "tunnel": is_tunnel if is_tunnel else None,
+            "layer": layer_int,
         }
         roads.append(build_road(edge, i))
 
@@ -716,7 +753,11 @@ def generate(lat: float, lon: float, radius: int,
     main_chain = build_main_chain(roads)  # 仅用于 routes.json 的 main 路线定义
 
     # 建筑：单源真相（footprint+height+xy+rotation），供仿真核碰撞/遮挡 + 前端渲染共用。
-    buildings = fetch_buildings(lat, lon, radius)
+    try:
+        buildings = fetch_buildings(lat, lon, radius)
+    except Exception as e:
+        print("  建筑拉取跳过 (网络或超时): %s" % e)
+        buildings = []
 
     map_doc = {
         "schema_version": 1,

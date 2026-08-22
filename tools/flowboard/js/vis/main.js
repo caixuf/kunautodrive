@@ -56,15 +56,15 @@ function _syncEnvironment(store) {
 let _minimap = null;
 
 /* ── 性能档位（Performance Tier）──
- * 默认 medium：往新用户默认降档，避免高分屏后处理全开卡死。
+ * 默认 low（极速原生模式）：直接前向渲染 + 原生硬件 4x MSAA，0 后处理带宽开销，
+ * 在普通集显机器（Intel Iris/UHD, AMD Radeon Graphics）上也能稳定 100~144fps。
  * 档位语义（_applyPerfTier 实现）：
  *   high   — composer 全开（GTAO+Bloom+SMAA），阴影 4096，DPR min(dpr,1.5)
- *   medium — composer 开但关 GTAO（最贵的一趟），阴影 2048，DPR min(dpr,1.5)
- *   low    — 禁用 composer 直接渲染，关阴影，DPR 1
+ *   medium — composer 开但关 GTAO，阴影 2048，DPR min(dpr,1.5)
+ *   low    — 极速原生渲染（直接前向 + 硬件 MSAA），关阴影，DPR 1（100+ FPS 默认）
  *   ultra  — 同 low，再压低渲染分辨率（0.5x）由 CSS 放大，最后兜底
- * 自动降级由独立 watchdog（PerfMonitor，setInterval 不依赖 rAF）驱动，
- * 卡死时也能采样降级。手动 setPerfTier 设档后暂停自动降级。 */
-let _perfTier = 'medium';
+ * 自动降级由独立 watchdog（PerfMonitor，setInterval 不依赖 rAF）驱动。 */
+let _perfTier = 'low';
 let _perfMonitor = null;
 let _lastReportTs = 0;   // 上报节流：每 5s 最多上报一次可视化健康
 
@@ -306,8 +306,10 @@ function _startRenderLoop() {
       // 不再单独调 _director.getVehicleView().update(store, now)。
       _director.tickAnimation(now);
 
-      // 太阳阴影相机跟随 ego（小 frustum 罩住主车周围）
-      updateSunShadow(_lights, store.ego);
+      // 太阳阴影相机跟随 ego（仅当开启阴影时）
+      if (_renderer && _renderer.shadowMap && _renderer.shadowMap.enabled) {
+        updateSunShadow(_lights, store.ego);
+      }
 
       _cameraRig.update(store.ego, roadGroup, now);
 

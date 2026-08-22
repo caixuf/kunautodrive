@@ -9,6 +9,7 @@ import { sampleEdgeNodes } from '../math/Curve.js';
 import { directionToRotationY, tangentToNormal } from '../math/Coord.js';
 import { EDGE_TYPE, LANE_WIDTH } from '../core/Constants.js';
 import { getCityModel, initCityModelCache } from '../../models.js';
+import { mergeGeometries } from '../math/GeometryMerge.js';
 
 const SPACING = { high: 55, medium: 80, low: 120 };
 // 楼体完整落在路肩外的草地上，并给行道树/人行空间留出视觉缓冲。
@@ -134,7 +135,7 @@ export function createBuildingView(scene) {
   let lastStore = null;
 
   function build(roadNetwork, store = {}) {
-    const tier = store.perfTier || 'high';
+    const tier = store.perfTier || 'low';
     const cityBudget = CITY_MODEL_BUDGET[tier] || 0;
     /* 首次 build 时启动城市模型加载（fire-and-forget）。加载完成后若
      * 路网未变则重建一次以切换到 glTF 建筑；低档位不下载真实模型。 */
@@ -163,7 +164,7 @@ export function createBuildingView(scene) {
       const facade = new THREE.MeshStandardMaterial({
         color: 0x8998a8, roughness: 0.78, metalness: 0.04, map: buildingTexture(),
       });
-      let realMeshes = 0;
+      const buildingGeos = [];
       for (const b of realBuildings) {
         const fp = Array.isArray(b.footprint) ? b.footprint : null;
         if (!fp || fp.length < 3) continue;
@@ -176,15 +177,18 @@ export function createBuildingView(scene) {
         shape.closePath();
         const geo = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false });
         geo.rotateX(-Math.PI / 2);  // 挤出方向 +Z → +Y（向上），footprint 已是世界坐标
-        const mesh = new THREE.Mesh(geo, facade);
-        mesh.castShadow = tier === 'high';
-        mesh.receiveShadow = true;
-        group.add(mesh);
-        realMeshes++;
+        buildingGeos.push(geo);
       }
-      if (realMeshes > 0) {
-        console.log('[vis] rendered ' + realMeshes + ' OSM buildings (real footprints)');
-        return;  // 真实建筑已渲染，跳过程序化天际线
+      if (buildingGeos.length > 0) {
+        const merged = mergeGeometries(buildingGeos);
+        const mesh = new THREE.Mesh(merged, facade);
+        mesh.castShadow = tier === 'high';
+        mesh.receiveShadow = tier === 'high';
+        mesh.frustumCulled = true;
+        group.add(mesh);
+        for (const g of buildingGeos) g.dispose();
+        console.log('[vis] rendered ' + buildingGeos.length + ' OSM buildings (merged into 1 draw call)');
+        return;  // 真实建筑已合并渲染，跳过程序化天际线
       }
     }
 

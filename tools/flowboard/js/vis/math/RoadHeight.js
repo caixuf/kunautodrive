@@ -70,13 +70,14 @@ function _closestOnEdge(nodes, px, py) {
   return { dist: Math.sqrt(minDist), t: minT, z: minZ };
 }
 
-/** 路面高度查询主函数 */
-export function roadHeightAt(store, x, y) {
+/** 路面高度查询主函数（支持 3D 竖向分层匹配） */
+export function roadHeightAt(store, x, y, currentZ) {
   const rn = store && store.roadNetwork;
   if (!rn || !rn.edges || !rn.edges.length) return 0;
   
-  let minDist = Infinity;
+  let minScore = Infinity;
   let resultZ = 0;
+  const hasCurrentZ = Number.isFinite(currentZ);
   
   for (const edge of rn.edges) {
     const nodes = edge.nodes;
@@ -88,13 +89,19 @@ export function roadHeightAt(store, x, y) {
     
     const { dist, z } = _closestOnEdge(nodes, x, y);
     
-    if (dist <= halfWidth + 3 && dist < minDist) {
-      minDist = dist;
-      resultZ = z;
+    if (dist <= halfWidth + 4.0) {
+      // 3D 竖向分层匹配：若传入当前车辆高程，优先吸附到同高度层的道路，
+      // 防止桥下地面道路与桥面重叠时车辆在地面和高架间穿梭。
+      const zDiff = hasCurrentZ ? Math.abs(z - currentZ) * 2.0 : 0;
+      const score = dist + zDiff;
+      if (score < minScore) {
+        minScore = score;
+        resultZ = z;
+      }
     }
   }
   
-  return resultZ;
+  return minScore < Infinity ? resultZ : 0;
 }
 
 /** 简单版本：按 edge 起点到终点的距离比例插值，不做投影 */

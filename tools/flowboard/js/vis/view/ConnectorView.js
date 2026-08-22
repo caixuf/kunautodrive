@@ -16,6 +16,7 @@ import { getBox, getCylinder, getStdMaterial } from '../core/AssetFactory.js';
 import { LANE_WIDTH, DEFAULT_LANES, isTunnelEdge } from '../core/Constants.js';
 import { worldToThree, forwardENU, directionToRotationY } from '../math/Coord.js';
 import { getTopology, walkFromJunction } from '../model/TopologyModel.js';
+import { mergeGeometries } from '../math/GeometryMerge.js';
 import { SCENE } from '../theme/tokens.js';
 
 /* 配色全部来自 theme/tokens.js（P3 设计 token 单一事实源）。
@@ -24,6 +25,7 @@ const TAPER_COLOR  = SCENE.asphalt;   // 锥形过渡路面（同沥青色）
 const JUNCTION_COLOR = SCENE.asphalt; // 路口区域与路面同色（2026-08-14 无缝，不再像补丁块）
 const CROSSWALK_COLOR = SCENE.crosswalk; // 斑马线白
 const MERGE_LINE_COLOR = SCENE.guideLine; // 导流线白
+const ARROW_COLOR      = SCENE.lineWhite; // 地面导向箭头与菱形白
 const PIER_COLOR   = SCENE.pier;      // 桥墩灰
 const BARREL_RED   = SCENE.barrelRed;   // 防撞桶红
 const BARREL_WHITE = SCENE.barrelWhite;   // 防撞桶白
@@ -125,33 +127,67 @@ export function createConnectorView(scene) {
       }
     }
 
-    // ── 4. ViaductPier：高架（bridge）edge 按 centerline.z 落墩 ──
-    // 数据契约：本仓库 map.json 的 edge 携带 bridge/tunnel 布尔 + centerline.z
-    // （osm2kmap.apply_osm_elevation 写 6.0*max(1,layer) / -4），**不产出**
-    // elevation_profile。旧实现读 elevation_profile → 永远跳过（死代码）。
-    // 现改为消费 bridge 标记 + edge.nodes z：高架（h>0.5）每隔 20m 落一根桥墩。
+    // ── 4. ViaductPier：高架（bridge/z>=1.5）edge 自适应多柱桥墩与盖梁收集 ──
+    const pierInstances = [];
+    const capInstances = [];
     for (const edge of edges) {
-      if (!edge.bridge) continue;
-      _buildViaductPier(edge);
+      const nodes = Array.isArray(edge.nodes) ? edge.nodes : [];
+      const maxZ = nodes.reduce((m, n) => Math.max(m, Array.isArray(n) ? (n[2] || 0) : (n.z || 0)), 0);
+      if (!edge.bridge && maxZ < 1.5) continue;
+      _collectViaductPiers(edge, pierInstances, capInstances);
+    }
+    if (pierInstances.length > 0) {
+      const pierGeo = getCylinder(0.6, 0.75, 1);
+      const pierMat = getStdMaterial(PIER_COLOR, 0.9, 0.0);
+      const pierMesh = new THREE.InstancedMesh(pierGeo, pierMat, pierInstances.length);
+      const dummy = new THREE.Object3D();
+      pierInstances.forEach((p, i) => {
+        dummy.position.set(p.tx, p.h / 2, p.tz);
+        dummy.scale.set(p.radius || 1, p.h, p.radius || 1);
+        dummy.updateMatrix();
+        pierMesh.setMatrixAt(i, dummy.matrix);
+      });
+      pierMesh.instanceMatrix.needsUpdate = true;
+      pierMesh.frustumCulled = true;
+      group.add(pierMesh);
+    }
+    if (capInstances.length > 0) {
+      const capGeo = getBox(1, 1, 1);
+      const capMat = getStdMaterial(PIER_COLOR, 0.92, 0.0);
+      const capMesh = new THREE.InstancedMesh(capGeo, capMat, capInstances.length);
+      const dummyCap = new THREE.Object3D();
+      capInstances.forEach((c, i) => {
+        dummyCap.position.set(c.tx, c.ty, c.tz);
+        dummyCap.rotation.y = c.rotY;
+        dummyCap.scale.set(c.len, c.h, c.w);
+        dummyCap.updateMatrix();
+        capMesh.setMatrixAt(i, dummyCap.matrix);
+      });
+      capMesh.instanceMatrix.needsUpdate = true;
+      capMesh.frustumCulled = true;
+      group.add(capMesh);
     }
 
     // ── 4b. BridgeRamp：桥隧端点坡道渐变过渡（消除 6m 悬崖） ──
-    // osm2kmap 写桥高 = 6.0*max(1,layer)，端点处从地面直跳 6m → 侧面
-    // 看到悬崖断面。在桥/隧 edge 的首尾端检测高程跳变（>2m），沿路面向
-    // 地面方向延伸 30m 坡道，路面 ribbon 从地面高程线性过渡到桥面高程。
+    const rampGeos = [];
     for (const edge of edges) {
-      if (!edge.bridge && !isTunnelEdge(edge)) continue;
-      _buildBridgeRamp(edge);
+      const nodes = Array.isArray(edge.nodes) ? edge.nodes : [];
+      const maxZ = nodes.reduce((m, n) => Math.max(m, Array.isArray(n) ? (n[2] || 0) : (n.z || 0)), 0);
+      if (!edge.bridge && !isTunnelEdge(edge) && maxZ < 1.5) continue;
+      _collectBridgeRamps(edge, rampGeos);
+    }
+    if (rampGeos.length > 0) {
+      const mergedRampGeo = mergeGeometries(rampGeos);
+      if (mergedRampGeo) {
+        const rampMat = getStdMaterial(TAPER_COLOR, 0.92, 0.0);
+        const rampMesh = new THREE.Mesh(mergedRampGeo, rampMat);
+        rampMesh.frustumCulled = true;
+        group.add(rampMesh);
+      }
+      for (const g of rampGeos) g.dispose();
     }
 
     // ── 5. BarrierEndCap：只在**真断头端点**（孤端）放防撞桶 ──
-    //  2026-08-14：旧实现对每个 edge 起止点都放，OSM 地图每条 way 是一个
-    //  edge、端点几乎都在路口/连续处 → 防撞桶铺满全图。改为 byId 判定：
-    //  entry.start/end == null 才是断头路/地图边界。
-    //  2026-08（本会话）：byId 只识别 ≥3 臂路口簇，2 端点接缝（连续连接/
-    //  弯道转折/环形路段间）被剔成 null → 连接处/弯路仍铺桶（用户报障）。
-    //  补"孤端检测"：端点无任何其他 edge 端点在邻接容差内才是真断头；
-    //  连续接缝/弯道转折/路口汇聚都有邻接端点 → 不放桶。
     const endpointLocs = [];
     for (const e of edges) {
       if (!Array.isArray(e.nodes) || e.nodes.length < 2) continue;
@@ -163,8 +199,6 @@ export function createConnectorView(scene) {
       endpointLocs.push({ x: sx, z: sz, id: String(e.id) });
       endpointLocs.push({ x: ex, z: ez, id: String(e.id) });
     }
-    /* isDeadEnd 空间网格（消 O(E²)≈5.9 亿次距离）：郑东 12102 edge × 2 端点全量
-     * 扫描互相判距。按 8m cell 分组，isDeadEnd 只查邻近 3×3 cell。 */
     const EP_CELL = 8;
     const endpointGrid = new Map();
     for (const ep of endpointLocs) {
@@ -173,9 +207,37 @@ export function createConnectorView(scene) {
       if (!bucket) { bucket = []; endpointGrid.set(k, bucket); }
       bucket.push(ep);
     }
+    const barrelLocs = [];
     for (const edge of edges) {
       if (edge.type === 'ramp_curve' || edge.type === 'intersection') continue;
-      _buildBarrierEndCap(edge, byId, endpointLocs, endpointGrid, EP_CELL);
+      _collectBarrierEndCaps(edge, byId, endpointLocs, endpointGrid, EP_CELL, barrelLocs);
+    }
+    if (barrelLocs.length > 0) {
+      const redGeo = getCylinder(0.3, 0.35, 0.4);
+      const redMat = getStdMaterial(BARREL_RED, 0.6, 0.1);
+      const redMesh = new THREE.InstancedMesh(redGeo, redMat, barrelLocs.length);
+      const dummyRed = new THREE.Object3D();
+      barrelLocs.forEach((loc, i) => {
+        dummyRed.position.set(loc.x, 0.3, loc.z);
+        dummyRed.updateMatrix();
+        redMesh.setMatrixAt(i, dummyRed.matrix);
+      });
+      redMesh.instanceMatrix.needsUpdate = true;
+      redMesh.frustumCulled = true;
+      group.add(redMesh);
+
+      const whiteGeo = getCylinder(0.3, 0.3, 0.3);
+      const whiteMat = getStdMaterial(BARREL_WHITE, 0.6, 0.1);
+      const whiteMesh = new THREE.InstancedMesh(whiteGeo, whiteMat, barrelLocs.length);
+      const dummyWhite = new THREE.Object3D();
+      barrelLocs.forEach((loc, i) => {
+        dummyWhite.position.set(loc.x, 0.75, loc.z);
+        dummyWhite.updateMatrix();
+        whiteMesh.setMatrixAt(i, dummyWhite.matrix);
+      });
+      whiteMesh.instanceMatrix.needsUpdate = true;
+      whiteMesh.frustumCulled = true;
+      group.add(whiteMesh);
     }
 
     built = true;
@@ -284,11 +346,12 @@ export function createConnectorView(scene) {
 
     const forkIndex = buildForkIndex(junctionData);
 
-    // 路口多边形（合并单 mesh）+ 斑马线/停止线/导流线 InstancedMesh
+    // 路口多边形（合并单 mesh）+ 斑马线/停止线/导流线/导向箭头 InstancedMesh
     const polyPositions = [], polyIndices = [];
     const crossInstances = [];    // {x, z, rotY, len, w}
     const stopInstances = [];     // {x, z, rotY, len, w}
     const guideInstances = [];    // {x, z, rotY, len, w} 转向引导虚线
+    const arrowInstances = [];    // {x, z, rotY, len, w} 地面导向箭头与人行预告菱形
 
     for (let ci = 0; ci < centers.length; ci++) {
       const c = centers[ci];
@@ -336,13 +399,9 @@ export function createConnectorView(scene) {
         for (let i = 1; i < smooth.length - 1; i++) polyIndices.push(base, base + i, base + i + 1);
       }
 
-      // ── 斑马线 + 停止线 + 转向导流线（只给 ≥3 臂真实交叉口）──
-      // 2 臂 gap 段边界只是补空隙，不是交叉口，不画行人/停止线。
+      // ── 斑马线 + 停止线 + 导向箭头 + 转向导流线（只给 ≥3 臂真实交叉口）──
+      // 2 臂 gap 段边界只是补空隙，不是交叉口，不画行人/停止线/箭头。
       if (arms.length >= 3) {
-      // P1 路口渠化：先算本路口的转向连接（fork incoming→connecting 双 arm 都在
-      // 本路口才算），停止线按来车归属——只有作为某条转向路径来车端的 arm 才画
-      // （单行道驶出侧/纯出口 arm 不画）；无 turn 数据时回退每个 arm 全画。
-      // 斑马线行人过街与车流方向无关，保持每个 arm 都画。
       const conns = connectingRoads(ci, arms, junctionData, laneData, forkIndex);
       const incomingIdx = new Set();
       for (const conn of conns) {
@@ -360,10 +419,44 @@ export function createConnectorView(scene) {
           const across = (i - (stripeCount - 1) / 2) * step;
           crossInstances.push({ x: wc.x + nx * across, z: wc.z + nz * across, y: baseY + CROSS_Y, rotY, len: CROSSWALK_LENGTH, w: CROSSWALK_STRIPE_W });
         }
-        if (incomingIdx.size && !incomingIdx.has(ai)) continue;   // 非来车 arm：无停止线
+        if (incomingIdx.size && !incomingIdx.has(ai)) continue;   // 非来车 arm：无停止线与来车标线
         const ws = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, c.radius + 2.0 + CROSSWALK_LENGTH + 1.5);
         const halfW = a.roadW * 0.25;
         stopInstances.push({ x: ws.x + ws.uz * halfW, z: ws.z - ws.ux * halfW, y: baseY + STOP_Y, rotY: directionToRotationY(ws.ux, ws.uz) + Math.PI / 2, len: a.roadW * 0.5, w: STOP_LINE_W });
+
+        // ── 地面导向箭头（GB 5768.3 5.14）与人行横道预告菱形（5.16）──
+        const isOneWay = a.edge && a.edge.oneway === true;
+        const totalLanes = Math.max(1, Number(a.edge && a.edge.lanes) || 2);
+        const apprLanes = isOneWay ? totalLanes : Math.max(1, Math.floor(totalLanes / 2));
+        const laneW = Number(a.edge && a.edge.lane_width) || (a.roadW / totalLanes);
+
+        for (const dist of [16.0, 32.0]) {
+          const wa = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, c.radius + 2.0 + CROSSWALK_LENGTH + dist);
+          const ux = -wa.ux, uz = -wa.uz; // 车道来车前向单位向量
+          const rx = uz, rz = -ux;        // 来车方向右侧法线
+          for (let k = 0; k < apprLanes; k++) {
+            const lOffset = isOneWay
+              ? (k + 0.5 - apprLanes * 0.5) * laneW
+              : (k + 0.5) * laneW;
+            const lx = wa.x + rx * lOffset;
+            const lz = wa.z + rz * lOffset;
+            let turnType = 'straight';
+            if (apprLanes === 1) turnType = 'straight_left';
+            else if (apprLanes === 2) turnType = (k === 0) ? 'straight_left' : 'straight_right';
+            else turnType = (k === 0) ? 'left' : (k === apprLanes - 1) ? 'right' : 'straight';
+            _drawGroundArrow(lx, baseY + STOP_Y, lz, ux, uz, turnType, arrowInstances);
+          }
+        }
+        // 人行横道预告菱形（距斑马线 42m）
+        const wd = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, c.radius + 2.0 + CROSSWALK_LENGTH + 42.0);
+        const uxd = -wd.ux, uzd = -wd.uz;
+        const rxd = uzd, rzd = -uxd;
+        for (let k = 0; k < apprLanes; k++) {
+          const lOffset = isOneWay
+            ? (k + 0.5 - apprLanes * 0.5) * laneW
+            : (k + 0.5) * laneW;
+          _drawDiamondMarking(wd.x + rxd * lOffset, baseY + STOP_Y, wd.z + rzd * lOffset, uxd, uzd, arrowInstances);
+        }
       }
       // 转向引导线：本路口每个 fork junction 的 incoming→connecting 路径
       for (const conn of conns) {
@@ -437,6 +530,25 @@ export function createConnectorView(scene) {
       });
       mesh.instanceMatrix.needsUpdate = true;
       mesh.receiveShadow = true;
+      group.add(mesh);
+    }
+
+    // 地面导向箭头与人行预告菱形（白，GB 5768.3 标线标准）
+    if (arrowInstances.length) {
+      const geo = getBox(1, 0.02, 1);
+      const mat = getStdMaterial(ARROW_COLOR, 0.6, 0.0);
+      const mesh = new THREE.InstancedMesh(geo, mat, arrowInstances.length);
+      const dummy = new THREE.Object3D();
+      arrowInstances.forEach((s, i) => {
+        dummy.position.set(s.x, s.y, s.z);
+        dummy.rotation.y = s.rotY;
+        dummy.scale.set(s.len, 1, s.w);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(i, dummy.matrix);
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.receiveShadow = true;
+      mesh.frustumCulled = true;
       group.add(mesh);
     }
 
@@ -590,6 +702,118 @@ export function createConnectorView(scene) {
     }
   }
 
+  /** 地面导向箭头生成（GB 5768.3 5.14）：直行、左转、右转、直行+左转、直行+右转 */
+  function _drawGroundArrow(x, y, z, ux, uz, turnType, out) {
+    // ux, uz: 沿车道行驶前向单位向量 (THREE x, z)
+    // nx, nz: 车道左侧法向单位向量 (THREE x, z)
+    const nx = -uz, nz = ux;
+    const rotForward = directionToRotationY(ux, uz);
+
+    // 1. 直行主干与箭头 (Straight stem + head)
+    if (turnType === 'straight' || turnType === 'straight_left' || turnType === 'straight_right') {
+      // 主干
+      out.push({ x: x - ux * 0.4, y, z: z - uz * 0.4, rotY: rotForward, len: 2.6, w: 0.22 });
+      // 左翼倒刺 (向左偏 28 度)
+      const bux_l = ux * 0.88 + nx * 0.47, buz_l = uz * 0.88 + nz * 0.47;
+      out.push({
+        x: x + ux * 0.95 + nx * 0.28, y, z: z + uz * 0.95 + nz * 0.28,
+        rotY: directionToRotationY(bux_l, buz_l), len: 1.1, w: 0.20,
+      });
+      // 右翼倒刺 (向右偏 28 度)
+      const bux_r = ux * 0.88 - nx * 0.47, buz_r = uz * 0.88 - nz * 0.47;
+      out.push({
+        x: x + ux * 0.95 - nx * 0.28, y, z: z + uz * 0.95 - nz * 0.28,
+        rotY: directionToRotationY(bux_r, buz_r), len: 1.1, w: 0.20,
+      });
+    }
+
+    // 2. 左转弯曲主干与箭头 (Left hook + head)
+    if (turnType === 'left' || turnType === 'straight_left' || turnType === 'turn') {
+      const isCombo = turnType === 'straight_left';
+      const ox = isCombo ? x + nx * 0.40 : x;
+      const oz = isCombo ? z + nz * 0.40 : z;
+      // 纵向直干段
+      out.push({ x: ox - ux * 0.6, y, z: oz - uz * 0.6, rotY: rotForward, len: 1.8, w: 0.22 });
+      // 左转弧线折线段 (向左 60 度)
+      const lux = ux * 0.50 + nx * 0.866, luz = uz * 0.50 + nz * 0.866;
+      out.push({
+        x: ox + ux * 0.35 + nx * 0.55, y, z: oz + uz * 0.35 + nz * 0.55,
+        rotY: directionToRotationY(lux, luz), len: 1.4, w: 0.22,
+      });
+      // 箭头头部 (纯向左 90度，带两侧倒刺)
+      const tipX = ox + ux * 0.50 + nx * 1.15;
+      const tipZ = oz + uz * 0.50 + nz * 1.15;
+      out.push({ x: tipX - nx * 0.2, y, z: tipZ - nz * 0.2, rotY: directionToRotationY(nx, nz), len: 0.7, w: 0.22 });
+      const tipBux1 = nx * 0.866 + ux * 0.5, tipBuz1 = nz * 0.866 + uz * 0.5;
+      out.push({ x: tipX - nx * 0.15 + ux * 0.25, y, z: tipZ - nz * 0.15 + uz * 0.25, rotY: directionToRotationY(tipBux1, tipBuz1), len: 0.8, w: 0.20 });
+      const tipBux2 = nx * 0.866 - ux * 0.5, tipBuz2 = nz * 0.866 - uz * 0.5;
+      out.push({ x: tipX - nx * 0.15 - ux * 0.25, y, z: tipZ - nz * 0.15 - uz * 0.25, rotY: directionToRotationY(tipBux2, tipBuz2), len: 0.8, w: 0.20 });
+    }
+
+    // 3. 右转弯曲主干与箭头 (Right hook + head)
+    if (turnType === 'right' || turnType === 'straight_right') {
+      const isCombo = turnType === 'straight_right';
+      const ox = isCombo ? x - nx * 0.40 : x;
+      const oz = isCombo ? z - nz * 0.40 : z;
+      // 纵向直干段
+      out.push({ x: ox - ux * 0.6, y, z: oz - uz * 0.6, rotY: rotForward, len: 1.8, w: 0.22 });
+      // 右转弧线折线段 (向右 60 度)
+      const rux = ux * 0.50 - nx * 0.866, ruz = uz * 0.50 - nz * 0.866;
+      out.push({
+        x: ox + ux * 0.35 - nx * 0.55, y, z: oz + uz * 0.35 - nz * 0.55,
+        rotY: directionToRotationY(rux, ruz), len: 1.4, w: 0.22,
+      });
+      // 箭头头部 (纯向右 90度，带两侧倒刺)
+      const tipX = ox + ux * 0.50 - nx * 1.15;
+      const tipZ = oz + uz * 0.50 - nz * 1.15;
+      out.push({ x: tipX + nx * 0.2, y, z: tipZ + nz * 0.2, rotY: directionToRotationY(-nx, -nz), len: 0.7, w: 0.22 });
+      const tipBux1 = -nx * 0.866 + ux * 0.5, tipBuz1 = -nz * 0.866 + uz * 0.5;
+      out.push({ x: tipX + nx * 0.15 + ux * 0.25, y, z: tipZ + nz * 0.15 + uz * 0.25, rotY: directionToRotationY(tipBux1, tipBuz1), len: 0.8, w: 0.20 });
+      const tipBux2 = -nx * 0.866 - ux * 0.5, tipBuz2 = -nz * 0.866 - uz * 0.5;
+      out.push({ x: tipX + nx * 0.15 - ux * 0.25, y, z: tipZ + nz * 0.15 - uz * 0.25, rotY: directionToRotationY(tipBux2, tipBuz2), len: 0.8, w: 0.20 });
+    }
+  }
+
+  /** 人行横道预告菱形标线（GB 5768.3 5.16） */
+  function _drawDiamondMarking(x, y, z, ux, uz, out) {
+    const nx = -uz, nz = ux;
+    const halfL = 1.4, halfW = 0.55, w = 0.18;
+    const len = Math.hypot(halfL, halfW);
+
+    // 4 条边构成长轴 2.8m、短轴 1.1m 的标准菱形
+    // 1. 前左边
+    const e1x = -ux * halfL + nx * halfW, e1z = -uz * halfL + nz * halfW;
+    out.push({
+      x: x + ux * (halfL * 0.5) + nx * (halfW * 0.5), y,
+      z: z + uz * (halfL * 0.5) + nz * (halfW * 0.5),
+      rotY: directionToRotationY(e1x, e1z), len, w,
+    });
+
+    // 2. 前右边
+    const e2x = -ux * halfL - nx * halfW, e2z = -uz * halfL - nz * halfW;
+    out.push({
+      x: x + ux * (halfL * 0.5) - nx * (halfW * 0.5), y,
+      z: z + uz * (halfL * 0.5) - nz * (halfW * 0.5),
+      rotY: directionToRotationY(e2x, e2z), len, w,
+    });
+
+    // 3. 后左边
+    const e3x = ux * halfL + nx * halfW, e3z = uz * halfL + nz * halfW;
+    out.push({
+      x: x - ux * (halfL * 0.5) + nx * (halfW * 0.5), y,
+      z: z - uz * (halfL * 0.5) + nz * (halfW * 0.5),
+      rotY: directionToRotationY(e3x, e3z), len, w,
+    });
+
+    // 4. 后右边
+    const e4x = ux * halfL - nx * halfW, e4z = uz * halfL - nz * halfW;
+    out.push({
+      x: x - ux * (halfL * 0.5) - nx * (halfW * 0.5), y,
+      z: z - uz * (halfL * 0.5) - nz * (halfW * 0.5),
+      rotY: directionToRotationY(e4x, e4z), len, w,
+    });
+  }
+
   /** 3. RampMerge：喇叭口导流线（三角形 + 白色斜线） */
   function _buildRampMerge(rampEdge, mainEdge) {
     const rampEnd = _getEdgeEnd(rampEdge);
@@ -626,18 +850,17 @@ export function createConnectorView(scene) {
     }
   }
 
-  /** 4. ViaductPier：高架桥墩（每隔 20m 一根圆柱）
-   *  数据契约：edge.nodes 是 ENU [x,y,z]，z 即高程（osm2kmap 写
-   *  6.0*max(1,layer)）。沿 edge 弧长每 20m 取一点，高程 h>0.5（高架）才落墩，
-   *  桥墩从地面 y=0 立到路面下沿 y=h。曲线/弯道路也按弧长真实取点（不再假设沿
-   *  +X 直伸），位置走 worldToThree。 */
-  function _buildViaductPier(edge) {
+  /** 4. ViaductPier：高架桥墩与盖梁收集（支持单柱/双柱自适应与真实盖梁） */
+  function _collectViaductPiers(edge, pierInstances, capInstances) {
     const nodes = (edge.nodes || []).map((n) =>
       Array.isArray(n) ? [n[0] || 0, n[1] || 0, n[2] || 0]
         : [n.x || 0, n.y || 0, n.z || 0]);
     if (nodes.length < 2) return;
 
-    // 累计弧长 + 各点高程（ENU z）
+    const laneW = Number(edge.lane_width) || 3.5;
+    const lanes = Math.max(1, Number(edge.lanes) || 2);
+    const halfW = (lanes * laneW) / 2 + 0.6;
+
     const cum = [0];
     for (let i = 1; i < nodes.length; i++) {
       cum.push(cum[i - 1] + Math.hypot(
@@ -646,7 +869,6 @@ export function createConnectorView(scene) {
     const total = cum[cum.length - 1] || (edge.length_m || 0);
     if (total <= 0) return;
 
-    // 弧长 s 处插值 ENU(x,y) 与高程 z
     const sampleAt = (s) => {
       if (s <= 0) return { x: nodes[0][0], y: nodes[0][1], z: nodes[0][2] };
       if (s >= total) {
@@ -667,31 +889,51 @@ export function createConnectorView(scene) {
       return { x: n[0], y: n[1], z: n[2] };
     };
 
-    const pierMat = getStdMaterial(PIER_COLOR, 0.9, 0.0);
-    const pierGeo = getCylinder(0.6, 0.8, 1);  // 高度 1，后续按 h 缩放
     let lastS = -1e9;
-    for (let s = 10; s < total; s += 20) {
+    for (let s = 12; s < total; s += 22) {
       const p = sampleAt(s);
       const h = p.z || 0;
-      if (h < 0.5) continue;                 // 仅高架（地面/隧道不落墩）
+      if (h < 0.8) continue;
       if (s - lastS < 20) continue;
-      const [tx, , tz] = worldToThree(p.x, p.y, h);  // 桥墩顶到路面下沿
-      const pier = new THREE.Mesh(pierGeo, pierMat);
-      pier.position.set(tx, h / 2, tz);      // 圆柱高 h，span 0→h
-      pier.scale.y = h;
-      pier.castShadow = true;
-      pier.receiveShadow = true;
-      group.add(pier);
+
+      const pNext = sampleAt(Math.min(total, s + 1.0));
+      const [tx, , tz] = worldToThree(p.x, p.y, h);
+      const [tnx, , tnz] = worldToThree(pNext.x, pNext.y, pNext.z || h);
+      const dx = tnx - tx, dz = tnz - tz;
+      const dl = Math.hypot(dx, dz) || 1;
+      const ux = dx / dl, uz = dz / dl;
+      const nx = -uz, nz = ux;
+      const rotY = directionToRotationY(ux, uz);
+
+      if (halfW < 6.0) {
+        // 窄路面/单向匝道：单圆柱墩 + 顶部梯形盖梁
+        pierInstances.push({ tx, tz, h: h - 0.3, radius: 0.75 });
+        if (capInstances) {
+          capInstances.push({
+            tx, ty: h - 0.35, tz,
+            len: Math.max(1.8, halfW * 1.4), h: 0.65, w: 1.5,
+            rotY,
+          });
+        }
+      } else {
+        // 宽幅主线高架：双柱门式墩 + 跨线连续重型盖梁
+        const colOffset = halfW * 0.48;
+        pierInstances.push({ tx: tx - nx * colOffset, tz: tz - nz * colOffset, h: h - 0.4, radius: 0.75 });
+        pierInstances.push({ tx: tx + nx * colOffset, tz: tz + nz * colOffset, h: h - 0.4, radius: 0.75 });
+        if (capInstances) {
+          capInstances.push({
+            tx, ty: h - 0.45, tz,
+            len: halfW * 1.95, h: 0.85, w: 1.9,
+            rotY,
+          });
+        }
+      }
       lastS = s;
     }
   }
 
-  /** 4b. BridgeRamp：桥隧端点坡道渐变过渡（消除 6m 悬崖）。
-   *  沿 edge 节点序列扫描高程跳变（相邻节点高差 >2m），在跳变方向反向
-   *  延伸 RAMP_LEN 米，生成梯形坡道 mesh（从地面高程线性过渡到桥面高程）。
-   *  路面 ribbon 宽 = edge 全宽 + 路肩，高程沿线性插值，两片三角形即可。
-   *  只处理首尾端——中间高程渐变由 edge.nodes 本身描述（SUMO 已插值）。 */
-  function _buildBridgeRamp(edge) {
+  /** 4b. BridgeRamp：桥隧端点坡道渐变过渡（消除 6m 悬崖）几何收集 */
+  function _collectBridgeRamps(edge, rampGeos) {
     const nodes = (edge.nodes || []).map((n) =>
       Array.isArray(n) ? [n[0] || 0, n[1] || 0, n[2] || 0]
         : [n.x || 0, n.y || 0, n.z || 0]);
@@ -699,54 +941,45 @@ export function createConnectorView(scene) {
 
     const laneW = Number(edge.lane_width) || 3.5;
     const lanes = Number(edge.lanes) || 2;
-    const halfW = (lanes * laneW) / 2 + 0.6;  // 含路肩余量
-    const RAMP_LEN = 30;   // 坡道长度 (m)
-    const THRESHOLD = 2.0; // 高程跳变阈值 (m)
+    const halfW = (lanes * laneW) / 2 + 0.6;
+    const RAMP_LEN = 30;
+    const THRESHOLD = 2.0;
 
-    // 检测首端高程跳变：nodes[0] 与 nodes[1] 的高差
     const h0 = nodes[0][2] || 0;
     const h1 = nodes[1][2] || 0;
     const hEnd = nodes[nodes.length - 1][2] || 0;
     const hPrev = nodes[nodes.length - 2][2] || 0;
 
-    const rampMat = getStdMaterial(TAPER_COLOR, 0.92, 0.0);
-
-    // 首端坡道：从外部（地面）向内（桥面）过渡
     if (Math.abs(h1 - h0) > THRESHOLD) {
-      _buildRampSegment(nodes, 0, 1, halfW, h0, RAMP_LEN, rampMat, false);
+      const geo = _createRampSegmentGeo(nodes, 0, 1, halfW, h0, RAMP_LEN);
+      if (geo) rampGeos.push(geo);
     }
-    // 末端坡道：从内部（桥面）向外部（地面）过渡
     if (Math.abs(hEnd - hPrev) > THRESHOLD) {
-      _buildRampSegment(nodes, nodes.length - 1, nodes.length - 2, halfW, hEnd, RAMP_LEN, rampMat, true);
+      const geo = _createRampSegmentGeo(nodes, nodes.length - 1, nodes.length - 2, halfW, hEnd, RAMP_LEN);
+      if (geo) rampGeos.push(geo);
     }
   }
 
-  /** 构建单侧坡道渐变段：从端点向外延伸 rampLen 米，高程从端点高程
-   *  线性过渡到地面高程（0）。polyline 沿端点切线方向外推。 */
-  function _buildRampSegment(nodes, tipIdx, adjIdx, halfW, tipH, rampLen, mat, atEnd) {
+  function _createRampSegmentGeo(nodes, tipIdx, adjIdx, halfW, tipH, rampLen) {
     const tip = nodes[tipIdx], adj = nodes[adjIdx];
-    if (!tip || !adj) return;
-    // 切线方向（ENU XY）→ 外推方向
+    if (!tip || !adj) return null;
     const dx = tip[0] - adj[0], dy = tip[1] - adj[1];
     const dl = Math.hypot(dx, dy) || 1;
-    const ux = dx / dl, uy = dy / dl;   // 沿路方向单位向量
-    // 法线方向（垂直于路面）
+    const ux = dx / dl, uy = dy / dl;
     const nx = -uy, ny = ux;
 
-    // 4 个顶点：端点两侧 + 外推端两侧
-    const steps = 4;  // 梯形分段数（保持简单）
+    const steps = 4;
     const positions = [];
     const indices = [];
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
       const ex = tip[0] + ux * rampLen * t;
       const ey = tip[1] + uy * rampLen * t;
-      const h = tipH * (1 - t);  // 线性过渡到地面
+      const h = tipH * (1 - t);
       const [lx, , lz] = worldToThree(ex + nx * halfW, ey + ny * halfW, 0);
       const [rx, , rz] = worldToThree(ex - nx * halfW, ey - ny * halfW, 0);
       positions.push(lx, h, lz, rx, h, rz);
     }
-    const vertCount = (steps + 1) * 2;
     for (let i = 0; i < steps; i++) {
       const base = i * 2;
       indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
@@ -755,39 +988,16 @@ export function createConnectorView(scene) {
     geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geo.setIndex(indices);
     geo.computeVertexNormals();
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.receiveShadow = true;
-    group.add(mesh);
+    return geo;
   }
 
-  /** 5. BarrierEndCap：防撞桶（红白圆柱）只放在真断头（孤端）端点。
-   *  byId: Map<edgeId,{start,end}>（≥3 臂路口中心索引或 null），用于跳过路口。
-   *  endpointGrid: 端点空间网格（8m cell，消 isDeadEnd 的 O(E²) 全量扫描）。
-   *  断头 = 端点既不属于 ≥3 臂路口，又无任何其他 edge 端点在邻接容差内
-   *  （连续连接/弯道转折/环形路段间两端点重合 → 有邻接 → 不是断头）。
-   *  位置用端点切线的右法线（沿道路外侧），不再硬编码 +z。 */
-  function _buildBarrierEndCap(edge, byId, endpointLocs, endpointGrid, epCell) {
+  /** 5. BarrierEndCap：防撞桶收集 */
+  function _collectBarrierEndCaps(edge, byId, endpointLocs, endpointGrid, epCell, barrelLocs) {
     const entry = byId ? byId.get(String(edge.id)) : null;
     const nodes = (edge.nodes || []).map((n) =>
       Array.isArray(n) ? n : [n.x || 0, n.y || 0, n.z || 0]);
     if (nodes.length < 2) return;
 
-    const put = (pos, outward) => {
-      const redGeo = getCylinder(0.3, 0.35, 0.4);
-      const redMat = getStdMaterial(BARREL_RED, 0.6, 0.1);
-      const red = new THREE.Mesh(redGeo, redMat);
-      red.position.set(pos.x + outward.x * 0.5, 0.3, pos.z + outward.z * 0.5);
-      red.castShadow = true;
-      group.add(red);
-
-      const whiteGeo = getCylinder(0.3, 0.3, 0.3);
-      const whiteMat = getStdMaterial(BARREL_WHITE, 0.6, 0.1);
-      const white = new THREE.Mesh(whiteGeo, whiteMat);
-      white.position.set(pos.x + outward.x * 0.5, 0.75, pos.z + outward.z * 0.5);
-      group.add(white);
-    };
-
-    // 端点是否真断头：不属于 ≥3 臂路口 + 无任何邻接端点（查邻近 3×3 cell）
     const isDeadEnd = (node) => {
       const [x, , z] = worldToThree(node[0] || 0, node[1] || 0, node[2] || 0);
       const cx = Math.floor(x / epCell), cz = Math.floor(z / epCell);
@@ -804,17 +1014,14 @@ export function createConnectorView(scene) {
       return true;
     };
 
-    // 起点断头：切线 = nodes[0]→nodes[1]，向外 = -切线 的右法线
     const startDead = entry ? entry.start == null : true;
     if (startDead && isDeadEnd(nodes[0])) {
       const [sx, , sz] = worldToThree(nodes[0][0] || 0, nodes[0][1] || 0, nodes[0][2] || 0);
       const [nx1, , nz1] = worldToThree(nodes[1][0] || 0, nodes[1][1] || 0, nodes[1][2] || 0);
       const tx = nx1 - sx, tz = nz1 - sz;
       const tl = Math.hypot(tx, tz) || 1;
-      // 右法线（切线右侧）= (-tz, tx)/tl；起点向外取右法线
-      put({ x: sx, z: sz }, { x: -tz / tl, z: tx / tl });
+      barrelLocs.push({ x: sx - (tz / tl) * 0.5, z: sz + (tx / tl) * 0.5 });
     }
-    // 终点断头：切线 = nodes[n-2]→nodes[n-1]，向外 = 右法线
     const endDead = entry ? entry.end == null : true;
     if (endDead && isDeadEnd(nodes[nodes.length - 1])) {
       const a = nodes[nodes.length - 2], b = nodes[nodes.length - 1];
@@ -822,7 +1029,7 @@ export function createConnectorView(scene) {
       const [bx, , bz] = worldToThree(b[0] || 0, b[1] || 0, b[2] || 0);
       const tx = bx - ax, tz = bz - az;
       const tl = Math.hypot(tx, tz) || 1;
-      put({ x: bx, z: bz }, { x: -tz / tl, z: tx / tl });
+      barrelLocs.push({ x: bx - (tz / tl) * 0.5, z: bz + (tx / tl) * 0.5 });
     }
   }
 

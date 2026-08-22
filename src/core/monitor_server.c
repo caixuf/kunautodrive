@@ -995,12 +995,18 @@ static bool dispatch_request(int fd, MonitorServer* ms,
                     if (!getcwd(root_dir, sizeof(root_dir))) root_dir[0] = '\0';
                     pid_t pid = fork();
                     if (pid == 0) {
-                        if (root_dir[0]) (void)chdir(root_dir);
-                        const char* scenario = (strcmp(map_id_run, "city_grid") == 0)
-                            ? "scenarios/city_grid_map.json"
-                            : "scenarios/city_ring_map.json";
+                        char scenario_path[256];
+                        if (strcmp(map_id_run, "osm_munich") == 0) {
+                            snprintf(scenario_path, sizeof(scenario_path), "scenarios/osm_munich.json");
+                        } else if (strcmp(map_id_run, "city_grid") == 0) {
+                            snprintf(scenario_path, sizeof(scenario_path), "scenarios/city_grid_map.json");
+                        } else if (strcmp(map_id_run, "osm_lujiazui_v2") == 0) {
+                            snprintf(scenario_path, sizeof(scenario_path), "scenarios/osm_lujiazui_v2.json");
+                        } else {
+                            snprintf(scenario_path, sizeof(scenario_path), "scenarios/city_ring_map.json");
+                        }
                         execl("/bin/bash", "bash", "scripts/demo.sh", "60",
-                              "--scenario", scenario,
+                              "--scenario", scenario_path,
                               "--route", route_id, "--no-browser", (char*)NULL);
                         _exit(127);
                     }

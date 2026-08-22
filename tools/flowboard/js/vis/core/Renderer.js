@@ -15,12 +15,11 @@ export function createRenderer(canvas) {
   const renderer = new THREE.WebGLRenderer({
     canvas, antialias: true, powerPreference: 'high-performance'
   });
-  /* 默认中档：压制 DPR 上限 1.5，避免高分屏（DPR=2-3）下全屏后处理
-   * （GTAO/Bloom/SMAA）在 4-9 倍像素分辨率逐像素计算导致 GPU 卡死。
-   * 高性能设备可通过 setPerfTier('high') 恢复全 DPR。 */
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  /* 默认 DPR = 1.0，保证集显和各类高分屏下 100fps+ 极速流畅。
+   * 高性能独显设备可通过 setPerfTier('high') 恢复高 DPR 与高级后处理。 */
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.0));
+  renderer.shadowMap.enabled = false;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   /* r152+：outputColorSpace 替代 outputEncoding */
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;

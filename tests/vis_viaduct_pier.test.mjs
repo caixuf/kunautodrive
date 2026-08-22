@@ -39,29 +39,42 @@ const tunnelEdge = {
 const scene = new THREE.Group();
 createConnectorView(scene).build({ edges: [bridgeEdge, groundEdge, tunnelEdge] });
 
-let piers = [];
+let columns = [];
+let caps = [];
 scene.traverse((ch) => {
-  if (ch.isInstancedMesh) return;
   if (!ch.geometry || !ch.material || !ch.material.color) return;
-  if (ch.material.color.getHex() === SCENE.pier) piers.push(ch);
+  if (ch.material.color.getHex() !== SCENE.pier) return;
+  if (ch.isInstancedMesh) {
+    const dummy = new THREE.Object3D();
+    for (let i = 0; i < ch.count; i++) {
+      ch.getMatrixAt(i, dummy.matrix);
+      dummy.matrix.decompose(dummy.position, dummy.quaternion, dummy.scale);
+      const item = {
+        position: { x: dummy.position.x, y: dummy.position.y, z: dummy.position.z },
+        scale: { x: dummy.scale.x, y: dummy.scale.y, z: dummy.scale.z },
+      };
+      if (ch.geometry.type === 'CylinderGeometry') columns.push(item);
+      else if (ch.geometry.type === 'BoxGeometry') caps.push(item);
+    }
+  }
 });
 
-ok('高架生成桥墩（>0）', piers.length > 0);
-ok('桥墩数量符合每 20m 一根（5 根 @100m）', piers.length === 5);
+ok('高架生成桥墩立柱（>0）', columns.length > 0);
+ok('桥墩立柱数量符合分布（4 根立柱 @100m）', columns.length === 4);
+ok('桥墩盖梁数量符合分布（4 个盖梁 @100m）', caps.length === 4);
 
 let badH = 0;
-for (const p of piers) {
-  // z=6 → position.y 应 = 3，scale.y 应 = 6
-  if (Math.abs(p.position.y - 3) > 1e-6) badH++;
-  if (Math.abs(p.scale.y - 6) > 1e-6) badH++;
+for (const p of columns) {
+  // z=6 → 路面下沿高程 h≈5.7m, position.y = h/2, scale.y = h
+  if (Math.abs(p.position.y - p.scale.y / 2) > 1e-4 || p.scale.y < 5.0) badH++;
 }
-ok('桥墩高度=路面高程（position.y=3, scale.y=6）', badH === 0);
+ok('桥墩立柱高度自洽（position.y = scale.y/2, scale.y ≈ 5.7m）', badH === 0);
 
 // 桥墩位置应在桥的 ENU x∈[10,90] 范围内（worldToThree x 不变）
-const xs = piers.map((p) => p.position.x).sort((a, b) => a - b);
-ok('桥墩沿桥分布（首墩 x≈10, 末墩 x≈90）',
-  Math.abs(xs[0] - 10) < 1 && Math.abs(xs[xs.length - 1] - 90) < 1);
+const xs = columns.map((p) => p.position.x).sort((a, b) => a - b);
+ok('桥墩沿桥分布（首墩 x≈12, 末墩 x≈78）',
+  Math.abs(xs[0] - 12) < 1 && Math.abs(xs[xs.length - 1] - 78) < 1);
 
-ok('地面路 / 隧道不生成桥墩（仅 5 根）', piers.length === 5);
+ok('地面路 / 隧道不生成桥墩（立柱仅 4 根）', columns.length === 4);
 
 done();

@@ -24,15 +24,31 @@ export function drawRoadNetwork2D(ctx, roadNetwork, project, options = {}) {
   const dividerColor = options.dividerColor || '#d6d9df';
   const centerColor = options.centerColor || '#f2c94c';
   const pxPerMeter = Number(options.pxPerMeter) || 1;
+  const egoX = options.egoX;
+  const egoY = options.egoY;
+  const range = options.range;
+  const hasFilter = Number.isFinite(egoX) && Number.isFinite(egoY) && Number.isFinite(range) && range > 0;
+  const maxDist = range * 1.5;
 
   for (const edge of roadNetwork.edges) {
     const points = edgeNodesENU(edge);
     if (points.length < 2) continue;
+
+    if (hasFilter) {
+      let inRange = false;
+      for (let i = 0; i < points.length; i++) {
+        if (Math.hypot(points[i][0] - egoX, points[i][1] - egoY) <= maxDist) {
+          inRange = true;
+          break;
+        }
+      }
+      if (!inRange) continue;
+    }
+
     const laneWidth = Number(edge.lane_width) || 3.5;
     const lanes = Math.max(1, Number(edge.lanes) || 2);
     const roadWidth = laneWidth * lanes;
 
-    strokePolyline(ctx, points, project, asphalt, roadWidth * pxPerMeter, []);
     strokePolyline(ctx, points, project, edgeColor,
       (roadWidth + 0.4) * pxPerMeter, []);
     strokePolyline(ctx, points, project, asphalt, roadWidth * pxPerMeter, []);

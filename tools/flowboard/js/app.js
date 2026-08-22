@@ -15,6 +15,9 @@ function setText(id, val) {
 }
 
 const MAP_ROUTES = {
+  osm_munich: [
+    { id: 'main', name: '主线（Lerchenauer Straße 1.8km 连续干道）', scenario: 'scenarios/osm_munich.json' },
+  ],
   city_ring: [
     { id: 'main', name: '主线（地面→匝道→高架→返回）', scenario: 'scenarios/city_ring_map.json' },
     { id: 'on_ramp', name: '上匝道（草稿）', scenario: 'scenarios/city_ring_map.json', draft: true },
@@ -98,7 +101,9 @@ async function fetchMapRoutes(mapId) {
       return {
         id: item.id,
         name: item.name || item.id,
-        scenario: mapId === 'city_ring' && item.draft !== true ? 'scenarios/city_ring_map.json' : '',
+        scenario: (item.draft !== true && item.validated !== false)
+          ? (mapId === 'city_ring' ? 'scenarios/city_ring_map.json' : 'scenarios/' + mapId + '.json')
+          : '',
         draft: item.draft === true || item.validated === false,
       };
     });
@@ -153,7 +158,7 @@ async function runSelectedRoute() {
     var response = await fetch(serverUrl + '/api/sim/run', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ route: item.id })
+      body: JSON.stringify({ route: item.id, map: map.value })
     });
     var result = await response.json();
     if (!response.ok || !result.ok) {
@@ -2224,7 +2229,7 @@ async function startTraining() {
 async function setEnvironment() {
   var lighting = document.getElementById('env-lighting').value;
   var weather = document.getElementById('env-weather').value;
-  var visibility = {clear:1000, overcast:500, rain:180, snow:120, fog:60}[weather] || 1000;
+  var visibility = {clear:1200, cloudy:1000, overcast:600, rain:220, storm:100, snow:150, fog:50, sandstorm:80}[weather] || 1000;
   try {
     var r = await fetch(serverUrl + '/api/environment', {
       method: 'POST',

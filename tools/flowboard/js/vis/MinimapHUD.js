@@ -88,6 +88,7 @@ export function createMinimapHUD(container) {
       {
         asphalt: '#253246', edgeColor: '#44546d', dividerColor: '#8392aa',
         pxPerMeter: Math.min(W, H) / (2 * _range),
+        egoX: cx, egoY: cy, range: _range,
       });
 
     const activePath = selectCurrentMotionSegment(store.trajectoryPath, ego);

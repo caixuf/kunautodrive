@@ -38,7 +38,7 @@ function adaptRoadNetwork(rn) {
   }
   const edges = rn.edges.map((e, i) => ({
     id: e.id != null ? e.id : i,
-    name: e.name != null ? e.name : 'edge_' + i,
+    name: e.name != null ? e.name : (e.id != null ? String(e.id) : 'edge_' + i),
     type: e.type || 'road',
     lanes: e.lanes || 4,
     lane_width: e.lane_width || 3.5,
@@ -57,13 +57,14 @@ function adaptRoadNetwork(rn) {
  * 可视化与仿真解耦：主仪表盘在独立地图模式下用它生成 road_network，
  * 替代从 metrics.scene 读取的仿真路网。纯函数，零 THREE 依赖。
  * @param {object} map  map.json（{roads:[{id,type,lanes[],centerline,...}]}）
- * @returns {{edges: Array}}
+ * @returns {{edges: Array, lane_data: Object, junctions: Array}}
  */
 export function mapToRoadNetwork(map) {
   if (!map || !Array.isArray(map.roads)) return { edges: [] };
-  return adaptRoadNetwork({
+  const res = adaptRoadNetwork({
     edges: map.roads.map((road) => ({
       ...road,
+      name: road.id || road.name,
       nodes: road.centerline || road.nodes,
       lanes: Array.isArray(road.lanes) ? road.lanes.length : road.lanes,
       lane_width: Array.isArray(road.lanes) && road.lanes[0]
@@ -71,6 +72,16 @@ export function mapToRoadNetwork(map) {
       length: road.length_m,
     })),
   });
+  const laneData = {};
+  for (const road of map.roads) {
+    if (Array.isArray(road.lanes)) {
+      if (road.id != null) laneData[String(road.id)] = road.lanes;
+      if (road.name != null) laneData[String(road.name)] = road.lanes;
+    }
+  }
+  res.lane_data = laneData;
+  res.junctions = map.junctions || [];
+  return res;
 }
 
 /** ego 定义 → scene.ego（速度归零，静态快照）。 */

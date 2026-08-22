@@ -338,7 +338,6 @@ export function createTrajectoryView(scene) {
     geo.attributes.position.needsUpdate = true;
     geo.attributes.color.needsUpdate = true;
     geo.setDrawRange(0, 6 * (n - 1));
-    geo.computeVertexNormals();
     return totalLen;
   }
 

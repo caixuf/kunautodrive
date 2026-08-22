@@ -791,7 +791,7 @@ export function createVehicleView(scene, renderer, modelCache) {
       // + 渲染路面厚度偏移(RoadView.Y_ROAD，车道线防 z-fight 的微抬升)。
       // 用道路高度而非数据 z，保证道路高度变化（匝道/高架）时车辆始终贴合路面，
       // 轮子不会陷入路面也不会悬空。
-      const roadZ = store ? roadHeightAt(store, ex, ey) : (vehicleData.z || 0);
+      const roadZ = store ? roadHeightAt(store, ex, ey, vehicleData.z) : (vehicleData.z || 0);
       const ty = roadZ + VEHICLE_GROUND_Y;
       entry.group.position.set(tx, ty, tz);
       entry.group.rotation.set(0, headingToRotationY(vehicleData.heading || vehicleData.yaw || 0), 0);

@@ -7,6 +7,8 @@
     "vis:check:grep": "node tests/vis_grep_enforce.mjs",
     "vis:check:junction": "node --import ./tests/support/three-real-preload.mjs tests/junction_markings.test.mjs && node --import ./tests/support/three-real-preload.mjs tests/junction_fork_alignment.test.mjs",
     "vis:check:smoke": "node tests/run_vis_smoke.mjs",
-    "vis:check:all": "npm run vis:check && npm run vis:check:invariant && npm run vis:check:grep && npm run vis:check:junction && npm run vis:check:smoke"
+    "vis:audit": "node --import ./tests/support/three-real-preload.mjs tests/vis_audit_route.test.mjs",
+    "vis:check:all": "npm run vis:check && npm run vis:check:invariant && npm run vis:check:grep && npm run vis:check:junction && npm run vis:audit && npm run vis:check:smoke",
+    "dev": "python3 -m http.server 8080 -d tools/flowboard"
   }
 }

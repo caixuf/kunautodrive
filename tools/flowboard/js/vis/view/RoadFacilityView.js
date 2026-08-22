@@ -138,10 +138,12 @@ export function inferRoadFacilities(roadNetwork, entities, scenarioName = '') {
   const edges = Array.isArray(roadNetwork?.edges) ? roadNetwork.edges : [];
   const allEntities = Array.isArray(entities) ? entities : [];
 
+  const isExamOrParking = scenarioName.toLowerCase().includes('parking') ||
+    scenarioName.toLowerCase().includes('exam');
+
   for (const edge of edges) {
     const name = String(edge?.name || '').toLowerCase();
-    const type = String(edge?.type || '').toLowerCase();
-    if (!(name.includes('exam') || name.includes('parking') || type === 'urban')) continue;
+    if (!isExamOrParking && !(name.includes('exam') || name.includes('parking'))) continue;
     for (const point of samplePolyline(roadNodes(edge), ARROW_SPACING, MAX_ARROWS_PER_EDGE)) {
       const stem = offsetPoint(point.x, point.y, point.heading, -0.8, 0);
       addMark(layout, stem.x, stem.y, point.heading, 2.8, 0.28);
@@ -173,8 +175,6 @@ export function inferRoadFacilities(roadNetwork, entities, scenarioName = '') {
       0,
       isOneWay ? 0 : laneDirection * stopLineWidth * 0.5,
     );
-    // A stop line is one solid bar across the approaching carriageway. The
-    // old repeated stripes resembled an incorrectly positioned crosswalk.
     addMark(layout, stopCenter.x, stopCenter.y, heading + Math.PI * 0.5, stopLineWidth, 0.38);
     layout.stopLines++;
     if (light.crosswalk !== false) {
@@ -246,9 +246,9 @@ export function createRoadFacilityView(scene) {
       e && (e.type === 'tl' || e.type === 'traffic_light' ||
         (['car', 'suv', 'truck'].includes(e.type) && Math.abs(e.speed || 0) < 0.2)));
     const signature = `${store.scenarioName || ''}|${store.roadHash || ''}|` + fixed.map(e =>
-      `${e.type}:${e.id}:${Math.round((e.x || 0) * 10)}:${Math.round((e.y || 0) * 10)}:` +
-      `${Math.round((e.stop_x || 0) * 10)}:${Math.round((e.stop_y || 0) * 10)}:` +
-      `${Math.round((e.heading || 0) * 100)}`).join(',');
+      `${e.type}:${e.id}:${Math.round(e.x || 0)}:${Math.round(e.y || 0)}:` +
+      `${Math.round(e.stop_x || 0)}:${Math.round(e.stop_y || 0)}:` +
+      `${Math.round((e.heading || 0) * 10)}`).join(',');
     if (signature === lastSignature) return;
     lastSignature = signature;
     clear();

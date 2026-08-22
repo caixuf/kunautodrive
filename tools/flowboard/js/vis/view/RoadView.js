@@ -221,6 +221,150 @@ export function createRoadView(scene) {
     return geo;
   }
 
+  /** 从中心线样点 + 半宽构建高架桥 3D 斜腹板梯形箱梁、悬臂翼缘板与混凝土防撞侧墙。
+   *  centers: [{px,py,pz,nx,nz}], halfW: 道路半宽 (m) */
+  function bridgeDeckGeo(centers, halfW) {
+    if (!centers || centers.length < 2) return null;
+    const positions = [], indices = [], uvs = [];
+    const totalW = halfW + SHOULDER_W + 0.35;
+    const bottomW = Math.max(2.2, totalW * 0.62);
+    const deckDepth = Math.max(0.65, Math.min(1.6, halfW * 0.12 + 0.45));
+    const flangeDepth = 0.22;
+    const wallThick = 0.32;
+    const wallHeight = 0.85;
+
+    for (let k = 0; k < centers.length; k++) {
+      const c = centers[k];
+      const py = c.py;
+      const nx = c.nx, nz = c.nz;
+      const px = c.px, pz = c.pz;
+
+      // 0: 左底
+      positions.push(px - nx * bottomW, py - deckDepth, pz - nz * bottomW);
+      // 1: 右底
+      positions.push(px + nx * bottomW, py - deckDepth, pz + nz * bottomW);
+      // 2: 左翼缘底
+      positions.push(px - nx * totalW, py - flangeDepth, pz - nz * totalW);
+      // 3: 右翼缘底
+      positions.push(px + nx * totalW, py - flangeDepth, pz + nz * totalW);
+      // 4: 左防撞墙顶外
+      positions.push(px - nx * totalW, py + wallHeight, pz - nz * totalW);
+      // 5: 左防撞墙顶内
+      positions.push(px - nx * (totalW - wallThick), py + wallHeight, pz - nz * (totalW - wallThick));
+      // 6: 右防撞墙顶内
+      positions.push(px + nx * (totalW - wallThick), py + wallHeight, pz + nz * (totalW - wallThick));
+      // 7: 右防撞墙顶外
+      positions.push(px + nx * totalW, py + wallHeight, pz + nz * totalW);
+
+      uvs.push(0, k, 1, k, 0, k, 1, k, 0, k, 0.1, k, 0.9, k, 1, k);
+    }
+
+    const segs = centers.length - 1;
+    for (let k = 0; k < segs; k++) {
+      const b0 = k * 8;
+      const b1 = (k + 1) * 8;
+
+      // 底板 (0-1)
+      indices.push(b0 + 0, b1 + 0, b0 + 1);
+      indices.push(b0 + 1, b1 + 0, b1 + 1);
+
+      // 左斜腹板 (0-2)
+      indices.push(b0 + 0, b0 + 2, b1 + 0);
+      indices.push(b1 + 0, b0 + 2, b1 + 2);
+
+      // 右斜腹板 (1-3)
+      indices.push(b0 + 1, b1 + 1, b0 + 3);
+      indices.push(b0 + 3, b1 + 1, b1 + 3);
+
+      // 左侧墙外立面 (2-4)
+      indices.push(b0 + 2, b0 + 4, b1 + 2);
+      indices.push(b1 + 2, b0 + 4, b1 + 4);
+
+      // 左侧墙顶面 (4-5)
+      indices.push(b0 + 4, b0 + 5, b1 + 4);
+      indices.push(b1 + 4, b0 + 5, b1 + 5);
+
+      // 右侧墙外立面 (3-7)
+      indices.push(b0 + 3, b1 + 3, b0 + 7);
+      indices.push(b0 + 7, b1 + 3, b1 + 7);
+
+      // 右侧墙顶面 (6-7)
+      indices.push(b0 + 6, b1 + 6, b0 + 7);
+      indices.push(b0 + 7, b1 + 6, b1 + 7);
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    return geo;
+  }
+
+  /** 从中心线样点 + 半宽构建隧道洞身衬砌结构（两侧深色侧墙 + 顶部拱顶板）。 */
+  function tunnelStructureGeo(centers, halfW) {
+    if (!centers || centers.length < 2) return null;
+    const positions = [], indices = [], uvs = [];
+    const totalW = halfW + SHOULDER_W + 0.3;
+    const wallThick = 0.35;
+    const wallH = 5.2;
+
+    for (let k = 0; k < centers.length; k++) {
+      const c = centers[k];
+      const py = c.py;
+      const nx = c.nx, nz = c.nz;
+      const px = c.px, pz = c.pz;
+
+      // 0: 左外底
+      positions.push(px - nx * (totalW + wallThick), py, pz - nz * (totalW + wallThick));
+      // 1: 左内底
+      positions.push(px - nx * totalW, py, pz - nz * totalW);
+      // 2: 左内顶
+      positions.push(px - nx * totalW, py + wallH, pz - nz * totalW);
+      // 3: 左外顶
+      positions.push(px - nx * (totalW + wallThick), py + wallH + wallThick, pz - nz * (totalW + wallThick));
+      // 4: 右外顶
+      positions.push(px + nx * (totalW + wallThick), py + wallH + wallThick, pz + nz * (totalW + wallThick));
+      // 5: 右内顶
+      positions.push(px + nx * totalW, py + wallH, pz + nz * totalW);
+      // 6: 右内底
+      positions.push(px + nx * totalW, py, pz + nz * totalW);
+      // 7: 右外底
+      positions.push(px + nx * (totalW + wallThick), py, pz + nz * (totalW + wallThick));
+
+      uvs.push(0, k, 0.1, k, 0.1, k + 1, 0, k + 1, 1, k + 1, 0.9, k + 1, 0.9, k, 1, k);
+    }
+
+    const segs = centers.length - 1;
+    for (let k = 0; k < segs; k++) {
+      const b0 = k * 8;
+      const b1 = (k + 1) * 8;
+
+      // 左内侧墙 (1-2)
+      indices.push(b0 + 1, b0 + 2, b1 + 1);
+      indices.push(b1 + 1, b0 + 2, b1 + 2);
+
+      // 右内侧墙 (6-5)
+      indices.push(b0 + 6, b1 + 6, b0 + 5);
+      indices.push(b0 + 5, b1 + 6, b1 + 5);
+
+      // 内顶板 (2-5)
+      indices.push(b0 + 2, b0 + 5, b1 + 2);
+      indices.push(b1 + 2, b0 + 5, b1 + 5);
+
+      // 外顶板 (3-4)
+      indices.push(b0 + 3, b1 + 3, b0 + 4);
+      indices.push(b0 + 4, b1 + 3, b1 + 4);
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    return geo;
+  }
+
   /* 阶段5 瓦片合批（支撑震撼大图）：按 500m 网格分桶，每桶独立 mesh
    * （自带包围球）→ three 默认 frustumCulled 跳过屏外 tile，大图缩放/
    * 平移不再全量绘制。材质按表面类型各一份，跨 tile 共享、重建时幂等 dispose。 */
@@ -382,6 +526,72 @@ export function createRoadView(scene) {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    return [geo];
+  }
+
+  /** 自定义 dash/gap 虚线（如待转区 1m/1m、高速 6m/9m） */
+  function dashedLineWithParams(spine, d, dashLen = DASH, gapLen = GAP) {
+    const centers = offsetSpine(spine, d);
+    const cum = buildCumulative(centers);
+    const total = cum[cum.length - 1];
+    const positions = [], indices = [], uvs = [];
+    const hw = LINE_W / 2;
+    let quads = 0;
+    for (let s = 0; s < total; s += dashLen + gapLen) {
+      const end = Math.min(s + dashLen, total);
+      if (end - s < 0.1) continue;
+      const a = sampleSpineAt(centers, cum, s);
+      const b = sampleSpineAt(centers, cum, end);
+      const nx = a.nx, nz = a.nz;
+      const base = positions.length / 3;
+      positions.push(a.px + nx * hw, a.py + Y_MARK, a.pz + nz * hw);
+      positions.push(a.px - nx * hw, a.py + Y_MARK, a.pz - nz * hw);
+      positions.push(b.px + nx * hw, b.py + Y_MARK, b.pz + nz * hw);
+      positions.push(b.px - nx * hw, b.py + Y_MARK, b.pz - nz * hw);
+      uvs.push(0, 0, 1, 0, 0, 1, 1, 1);
+      indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
+      quads++;
+    }
+    if (quads === 0) return [];
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    return [geo];
+  }
+
+  /** 车行道纵向减速标线（GB 5768.3 5.17）：车道线两侧菱形减速块 */
+  function decelerationLine(spine, d) {
+    const centers = offsetSpine(spine, d);
+    const cum = buildCumulative(centers);
+    const total = cum[cum.length - 1];
+    const positions = [], indices = [];
+    const dHw = 0.20, dLen = 1.4;
+    let quads = 0;
+    for (let s = 0; s < total; s += 3.0) {
+      const end = Math.min(s + dLen, total);
+      if (end - s < 0.2) continue;
+      const mid = sampleSpineAt(centers, cum, (s + end) / 2);
+      const nx = mid.nx, nz = mid.nz;
+      const tx = -nz, tz = nx;
+      for (const side of [-1, 1]) {
+        const off = side * 0.35;
+        const cx = mid.px + nx * off, cz = mid.pz + nz * off;
+        const base = positions.length / 3;
+        positions.push(cx - tx * (dLen * 0.5), mid.py + Y_MARK, cz - tz * (dLen * 0.5));
+        positions.push(cx - nx * dHw, mid.py + Y_MARK, cz - nz * dHw);
+        positions.push(cx + nx * dHw, mid.py + Y_MARK, cz + nz * dHw);
+        positions.push(cx + tx * (dLen * 0.5), mid.py + Y_MARK, cz + tz * (dLen * 0.5));
+        indices.push(base, base + 1, base + 2, base + 1, base + 3, base + 2);
+        quads++;
+      }
+    }
+    if (quads === 0) return [];
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geo.setIndex(indices);
     geo.computeVertexNormals();
     return [geo];
@@ -549,10 +759,18 @@ export function createRoadView(scene) {
       }
     }
 
+    const maxRampZ = spine.reduce((m, p) => Math.max(m, p.py || 0), 0);
+    const isRampElevated = edge.bridge === true || maxRampZ >= 1.5;
+    const rampCurbGeos = [];
+    if (isRampElevated) {
+      const deck = bridgeDeckGeo(rampSpine, rampHw);
+      if (deck) rampCurbGeos.push(deck);
+    }
+
     return {
       roadGeos: [road],
       shoulderGeos: [shoulderL, shoulderR].filter(Boolean),
-      curbGeos: [], sidewalkGeos: [], vergeGeos: [],
+      curbGeos: rampCurbGeos, sidewalkGeos: [], vergeGeos: [],
       whiteGeos, spine, cum: buildCumulative(spine),
     };
   }
@@ -775,6 +993,16 @@ export function createRoadView(scene) {
             const r = solidLine(seg, CENTER_GAP);
             if (l) { yellowGeos.push(l); made++; }
             if (r) { yellowGeos.push(r); made++; }
+          } else if (mk.type === 'single_yellow') {
+            const g = solidLine(seg, 0);
+            if (g) { yellowGeos.push(g); made++; }
+          } else if (mk.type === 'dashed_yellow') {
+            for (const g of dashedLine(seg, 0)) { yellowGeos.push(g); made++; }
+          } else if (mk.type === 'left_turn_waiting') {
+            for (const g of dashedLineWithParams(seg, 0, 1.0, 1.0)) { whiteGeos.push(g); made++; }
+          } else if (mk.type === 'deceleration') {
+            for (const g of decelerationLine(seg, 0)) { whiteGeos.push(g); made++; }
+            for (const g of dashedLine(seg, 0)) { whiteGeos.push(g); made++; }
           }
         }
       }
@@ -899,23 +1127,37 @@ export function createRoadView(scene) {
     const curbGeos = [];
     const sidewalkGeos = [];
     const vergeGeos = [];
-    const isUrban = edge.type === EDGE_TYPE.URBAN ||
-      String(edge.name || '').toLowerCase().includes('urban');
 
-    if (isUrban) {
-      for (const seg of roadMarkSpine) {
-        for (const side of [-1, 1]) {
-          const curb = ribbonGeo(offsetSpine(seg, side * (roadHw + SHOULDER_W + CURB_W * 0.5)),
-            CURB_W * 0.5, Y_CURB);
-          const sidewalk = ribbonGeo(offsetSpine(seg,
-            side * (roadHw + SHOULDER_W + CURB_W + SIDEWALK_W * 0.5)),
-            SIDEWALK_W * 0.5, Y_SIDEWALK);
-          const verge = ribbonGeo(offsetSpine(seg,
-            side * (roadHw + SHOULDER_W + CURB_W + SIDEWALK_W + VERGE_W * 0.5)),
-            VERGE_W * 0.5, Y_VERGE);
-          if (curb) curbGeos.push(curb);
-          if (sidewalk) sidewalkGeos.push(sidewalk);
-          if (verge) vergeGeos.push(verge);
+    const minZ = spine.reduce((m, p) => Math.min(m, p.py || 0), 0);
+    const maxZ = spine.reduce((m, p) => Math.max(m, p.py || 0), 0);
+    const isElevated = edge.bridge === true || maxZ >= 1.5;
+    const isTunnel = edge.tunnel === true || isTunnelEdge(edge) || minZ <= -1.5;
+
+    if (isElevated) {
+      const deck = bridgeDeckGeo(roadSpine, roadHw);
+      if (deck) curbGeos.push(deck);
+    } else if (isTunnel) {
+      const tube = tunnelStructureGeo(roadSpine, roadHw);
+      if (tube) curbGeos.push(tube);
+    } else {
+      const isUrban = edge.type === EDGE_TYPE.URBAN ||
+        String(edge.name || '').toLowerCase().includes('urban');
+
+      if (isUrban) {
+        for (const seg of roadMarkSpine) {
+          for (const side of [-1, 1]) {
+            const curb = ribbonGeo(offsetSpine(seg, side * (roadHw + SHOULDER_W + CURB_W * 0.5)),
+              CURB_W * 0.5, Y_CURB);
+            const sidewalk = ribbonGeo(offsetSpine(seg,
+              side * (roadHw + SHOULDER_W + CURB_W + SIDEWALK_W * 0.5)),
+              SIDEWALK_W * 0.5, Y_SIDEWALK);
+            const verge = ribbonGeo(offsetSpine(seg,
+              side * (roadHw + SHOULDER_W + CURB_W + SIDEWALK_W + VERGE_W * 0.5)),
+              VERGE_W * 0.5, Y_VERGE);
+            if (curb) curbGeos.push(curb);
+            if (sidewalk) sidewalkGeos.push(sidewalk);
+            if (verge) vergeGeos.push(verge);
+          }
         }
       }
     }

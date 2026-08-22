@@ -78,6 +78,7 @@ ViewRegistry.register('streetFurniture', createStreetFurnitureView);
 
 export function createSceneDirector(scene) {
   const store = createSceneStore();
+  store.perfTier = 'low';
   /* 实例化所有已注册 View。instantiateAll 内部已有 try/catch，
    * 工厂本身抛错不会炸整个 director。 */
   ViewRegistry.instantiateAll(scene);

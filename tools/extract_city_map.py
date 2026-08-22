@@ -50,10 +50,17 @@ def offset_lane(center, offset):
 
 def _markings(road_id, idx, is_opp, per_side, oneway):
     """按车道位置推断标线（前端按类型渲染的语义数据）。
-    右侧最外侧=实线白边；对向分隔(中心线)=双黄；其余=白虚线。"""
+    最左/最右外侧=实线白边；双向路对向分隔(中心线)=双黄；车道间=白虚线。"""
     mk = []
-    if not is_opp:
-        if idx == 1 and not oneway:
+    if oneway:
+        if idx == 1:
+            mk.append({"type": "solid_white", "side": "left"})
+        if idx == per_side:
+            mk.append({"type": "solid_white", "side": "right"})
+        else:
+            mk.append({"type": "dashed_white", "side": "right"})
+    elif not is_opp:
+        if idx == 1:
             mk.append({"type": "double_yellow", "side": "left"})
         if idx == per_side:
             mk.append({"type": "solid_white", "side": "right"})
@@ -89,6 +96,12 @@ def build_road(edge, rid):
     }
     if elev:
         road["elevation_profile"] = [{"s": float(e["s"]), "z": float(e["h"])} for e in elev]
+    if edge.get("bridge"):
+        road["bridge"] = True
+    if edge.get("tunnel"):
+        road["tunnel"] = True
+    if edge.get("layer") is not None:
+        road["layer"] = edge["layer"]
 
     if oneway:
         per_side = lanes_total
@@ -99,10 +112,16 @@ def build_road(edge, rid):
                     [(i, True) for i in range(1, per_side + 1)]
 
     for idx, is_opp in lane_defs:
-        if not is_opp:
+        if oneway:
+            # 单向路：车道对称居中分布在 OSM 中心线两侧，与路口节点精确无缝衔接
+            offset = (idx - (lanes_total + 1) * 0.5) * lw
+            direction = 1
+        elif not is_opp:
+            # 双向路前进方向：分布在右半幅
             offset = (idx - 0.5) * lw
             direction = 1
         else:
+            # 双向路对向：分布在左半幅
             offset = -(idx - 0.5) * lw
             direction = -1
         lane_id = "%s.lane.%d" % (road["id"], idx if not is_opp else 100 + idx)

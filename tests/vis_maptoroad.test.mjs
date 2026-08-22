@@ -38,19 +38,19 @@ console.log('=== 独立 HD map → road_network 门禁 ===\n');
     ok(`[${mid}] road_network.edges 是数组`, Array.isArray(rn.edges));
     ok(`[${mid}] edges 非空`, rn.edges.length > 0);
     totalEdges += rn.edges.length;
-    // 每个 edge 必须含 RoadView 消费的字段
+    let invalidEdges = 0;
     for (const e of rn.edges) {
-      ok(`[${mid}] edge '${e.name}' 有 nodes`, Array.isArray(e.nodes) && e.nodes.length >= 2);
-      ok(`[${mid}] edge '${e.name}' 有 lanes`, typeof e.lanes === 'number' && e.lanes > 0);
-      ok(`[${mid}] edge '${e.name}' 有 lane_width`, typeof e.lane_width === 'number' && e.lane_width > 0);
-      ok(`[${mid}] edge '${e.name}' 有 type`, typeof e.type === 'string' && e.type.length > 0);
-      ok(`[${mid}] edge '${e.name}' 有 oneway`, typeof e.oneway === 'boolean');
-      // nodes 三元组 [x,y,z]
-      const first = e.nodes[0];
-      ok(`[${mid}] edge '${e.name}' nodes[0] 是三元组`,
+      const first = e.nodes?.[0];
+      const valid = Array.isArray(e.nodes) && e.nodes.length >= 2 &&
+        typeof e.lanes === 'number' && e.lanes > 0 &&
+        typeof e.lane_width === 'number' && e.lane_width > 0 &&
+        typeof e.type === 'string' && e.type.length > 0 &&
+        typeof e.oneway === 'boolean' &&
         Array.isArray(first) && first.length === 3 &&
-        typeof first[0] === 'number' && typeof first[1] === 'number');
+        typeof first[0] === 'number' && typeof first[1] === 'number';
+      if (!valid) invalidEdges++;
     }
+    ok(`[${mid}] 全部 ${rn.edges.length} 条 edge 字段完整合规`, invalidEdges === 0);
   }
   ok('总 edge 数 > 0', totalEdges > 0);
 }
