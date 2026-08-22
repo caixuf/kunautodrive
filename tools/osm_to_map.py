@@ -398,62 +398,52 @@ def base_name(road_id: str) -> str:
     return m.group(1) if m else road_id
 
 
-def build_main_chain(roads: list[dict], snap: float = 30.0) -> list[dict]:
-    """构造 main 路线链：同路名 way 组内贪心连接，取总长最大的组。
-
-    OSM 把长街道在交叉口拆成多条 way（共享端点节点），同 base 名的 way
-    几乎必然是同一街道的连续段；组内用「端点距离 ≤snap」贪心接链。
-    组内无连接（≥2 段）时退化为全局最长单 road。
+def build_main_chain(roads: list[dict]) -> list[dict]:
+    """构造 main 路线链：沿着已生成的车道级后继（successors）拓扑图，寻找
+    全路网中最长连续且连通的道路链。保证主线每一段都 100% 具备后继连通性。
     """
     if not roads:
         return []
 
-    def ep(r: dict, which: int):
-        cl = r["centerline"]
-        return (cl[0][0], cl[0][1]) if which == 0 else (cl[-1][0], cl[-1][1])
-
-    def chain_for(group: list) -> list:
-        chain = [max(group, key=road_length)]
-        rem = [r for r in group if r["id"] != chain[0]["id"]]
-        while rem:
-            head = ep(chain[0], 0)
-            tail = ep(chain[-1], -1)
-            best = None  # (dist, road, how)
-            for r in rem:
-                for ri in (0, -1):
-                    p = ep(r, ri)
-                    d_head = math.hypot(p[0] - head[0], p[1] - head[1])
-                    d_tail = math.hypot(p[0] - tail[0], p[1] - tail[1])
-                    if d_head <= snap and (best is None or d_head < best[0]):
-                        best = (d_head, r, "prepend")
-                    if d_tail <= snap and (best is None or d_tail < best[0]):
-                        best = (d_tail, r, "append")
-            if best is None:
-                break
-            _d, r, how = best
-            if how == "prepend":
-                chain.insert(0, r)
-            else:
-                chain.append(r)
-            rem.remove(r)
-        return chain
-
-    groups = {}
+    road_by_id = {r["id"]: r for r in roads}
+    adj: dict[str, list[str]] = {}
     for r in roads:
-        groups.setdefault(base_name(r["id"]), []).append(r)
+        succ_roads = set()
+        for l in r.get("lanes", []):
+            if l.get("direction") == 1:
+                for s in l.get("successors", []):
+                    target_rid = s.split(".lane.")[0]
+                    if target_rid in road_by_id and target_rid != r["id"]:
+                        succ_roads.add(target_rid)
+        adj[r["id"]] = sorted(succ_roads)
 
-    best_chain = []
+    best_path = []
     best_len = -1.0
-    for group in groups.values():
-        if len(group) < 2:
-            continue
-        c = chain_for(group)
-        if len(c) >= 2:
-            L = sum(road_length(r) for r in c)
-            if L > best_len:
-                best_len = L
-                best_chain = c
-    return best_chain if best_chain else [max(roads, key=road_length)]
+
+    for start_r in roads:
+        path = [start_r["id"]]
+        cur_len = road_length(start_r)
+        visited = {start_r["id"]}
+        curr = start_r["id"]
+        while True:
+            curr_base = base_name(curr)
+            succs = [s for s in adj.get(curr, []) if s not in visited]
+            if not succs:
+                break
+            same_base = [s for s in succs if base_name(s) == curr_base]
+            nxt = max(same_base, key=lambda x: road_length(road_by_id[x])) if same_base else max(succs, key=lambda x: road_length(road_by_id[x]))
+            path.append(nxt)
+            visited.add(nxt)
+            cur_len += road_length(road_by_id[nxt])
+            curr = nxt
+        if cur_len > best_len:
+            best_len = cur_len
+            best_path = path
+
+    if not best_path:
+        best_path = [max(roads, key=road_length)["id"]]
+
+    return [road_by_id[rid] for rid in best_path]
 
 
 def _road_end_headings(road: dict) -> tuple:
