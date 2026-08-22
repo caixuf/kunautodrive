@@ -87,6 +87,30 @@ def wgs84_to_enu(lat: float, lon: float, ref_lat: float, ref_lon: float) -> tupl
     return x, y
 
 
+def smooth_polyline_kinks(pts: list, max_kink_angle_deg: float = 120.0,
+                          min_seg_len: float = 1.5) -> list:
+    """去除折线中因 OSM 离散化/采集噪点产生的尖锐毛刺（短边夹角 > 120° 反向折叠）。"""
+    if len(pts) <= 2:
+        return pts
+    out = [pts[0]]
+    for i in range(1, len(pts) - 1):
+        p_prev = out[-1]
+        p_curr = pts[i]
+        p_next = pts[i + 1]
+        v1x, v1y = p_curr[0] - p_prev[0], p_curr[1] - p_prev[1]
+        v2x, v2y = p_next[0] - p_curr[0], p_next[1] - p_curr[1]
+        l1, l2 = math.hypot(v1x, v1y), math.hypot(v2x, v2y)
+        if l1 > 1e-4 and l2 > 1e-4:
+            dot = (v1x * v2x + v1y * v2y) / (l1 * l2)
+            dot = max(-1.0, min(1.0, dot))
+            angle = math.degrees(math.acos(dot))
+            if angle > max_kink_angle_deg and (l1 < min_seg_len or l2 < min_seg_len):
+                continue
+        out.append(p_curr)
+    out.append(pts[-1])
+    return out
+
+
 def parse_lanes(value: str) -> int:
     """解析 OSM lanes tag（如 '2'、'4'、'2;2'），缺失/非法回退 2。"""
     if not value:
@@ -626,6 +650,7 @@ def generate(lat: float, lon: float, radius: int,
 
         # 裁剪到查询半径内（丢弃穿过区域的超长 way 的越界点）
         enu = clip_to_radius(enu, radius, 0.0, 0.0)
+        enu = smooth_polyline_kinks(enu)
         if len(enu) < 2:
             dropped += 1
             continue

@@ -149,6 +149,93 @@ def offset_left(pts: list[tuple[float, float]], d: float) -> list[tuple[float, f
     return out
 
 
+def _pt3(p: list | tuple) -> list[float]:
+    return [float(p[0]), float(p[1]), float(p[2]) if len(p) > 2 else 0.0]
+
+
+def resample(pts: list, n: int) -> list[list[float]]:
+    """把折线按弧长重采样为 n 个点（端点保形）。"""
+    pts = [_pt3(p) for p in pts]
+    if n <= 1:
+        return [pts[0] for _ in range(max(n, 1))]
+    m = len(pts)
+    if m == 1:
+        return [pts[0] for _ in range(n)]
+    seg = [math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1])
+           for i in range(m - 1)]
+    total = sum(seg) or 1e-9
+    cum = [0.0]
+    for s in seg:
+        cum.append(cum[-1] + s)
+    out = []
+    for k in range(n):
+        target = total * k / (n - 1)
+        i = 0
+        while i < len(seg) - 1 and cum[i + 1] < target:
+            i += 1
+        t = (target - cum[i]) / (seg[i] if seg[i] > 0 else 1e-9)
+        x = pts[i][0] + (pts[i + 1][0] - pts[i][0]) * t
+        y = pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t
+        z = pts[i][2] + (pts[i + 1][2] - pts[i][2]) * t
+        out.append([round(x, 3), round(y, 3), round(z, 3)])
+    return out
+
+
+def lane_group_center(road: dict) -> list[list[float]] | None:
+    """重算 road.centerline 为车道组几何中心；无法计算返回 None。"""
+    lanes = road.get("lanes")
+    if not isinstance(lanes, list) or not lanes:
+        return None
+    cls = [l.get("centerline") for l in lanes if isinstance(l, dict) and l.get("centerline")]
+    cls = [c for c in cls if len(c) >= 2]
+    if not cls:
+        return None
+    n = len(road.get("centerline", []))
+    if n < 2:
+        return None
+    r = road["centerline"]
+    r0, r1 = _pt3(r[0]), _pt3(r[-1])
+    rdx, rdy = r1[0] - r0[0], r1[1] - r0[1]
+    aligned = []
+    for cl in cls:
+        c = [_pt3(p) for p in cl]
+        c0, c1 = c[0], c[-1]
+        if (c1[0] - c0[0]) * rdx + (c1[1] - c0[1]) * rdy < 0:
+            c = c[::-1]
+        aligned.append(resample(c, n))
+    new = []
+    for i in range(n):
+        x = sum(a[i][0] for a in aligned) / len(aligned)
+        y = sum(a[i][1] for a in aligned) / len(aligned)
+        z = sum(a[i][2] for a in aligned) / len(aligned)
+        new.append([round(x, 3), round(y, 3), round(z, 3)])
+    return new
+
+
+def smooth_polyline_kinks(pts: list[list[float]], max_kink_angle_deg: float = 120.0,
+                          min_seg_len: float = 1.5) -> list[list[float]]:
+    """去除折线中因 OSM 离散化/采集噪点产生的尖锐毛刺（短边夹角 > 120° 反向折叠）。"""
+    if len(pts) <= 2:
+        return pts
+    out = [pts[0]]
+    for i in range(1, len(pts) - 1):
+        p_prev = out[-1]
+        p_curr = pts[i]
+        p_next = pts[i + 1]
+        v1x, v1y = p_curr[0] - p_prev[0], p_curr[1] - p_prev[1]
+        v2x, v2y = p_next[0] - p_curr[0], p_next[1] - p_curr[1]
+        l1, l2 = math.hypot(v1x, v1y), math.hypot(v2x, v2y)
+        if l1 > 1e-4 and l2 > 1e-4:
+            dot = (v1x * v2x + v1y * v2y) / (l1 * l2)
+            dot = max(-1.0, min(1.0, dot))
+            angle = math.degrees(math.acos(dot))
+            if angle > max_kink_angle_deg and (l1 < min_seg_len or l2 < min_seg_len):
+                continue
+        out.append(p_curr)
+    out.append(pts[-1])
+    return out
+
+
 def lane_drivable(lane: ET.Element) -> bool:
     """SUMO lane 是否机动车道（过滤人行道/自行车道/纯公交道）。"""
     allow = lane.get("allow")
@@ -318,6 +405,157 @@ def sanitize_successors(roads: list[dict], junctions: list[dict]) -> tuple[list[
         jj["connecting_roads"] = conns
         out.append(jj)
     return out, pruned
+
+
+def prune_and_shortcircuit_micro_roads(roads: list[dict], junctions: list[dict],
+                                       min_len: float = 0.5) -> tuple[list[dict], list[dict], int]:
+    """剔除长度小于 min_len 的退化零长路段，并短路后继关系以保持拓扑连通。"""
+    prune_rids = set()
+    for r in roads:
+        cl = r.get("centerline") or []
+        if len(cl) < 2:
+            prune_rids.add(r["id"])
+            continue
+        L = sum(math.hypot(cl[i + 1][0] - cl[i][0], cl[i + 1][1] - cl[i][1])
+                for i in range(len(cl) - 1))
+        if L < min_len:
+            prune_rids.add(r["id"])
+
+    if not prune_rids:
+        return roads, junctions, 0
+
+    # 建立短路映射：micro_lane -> [target_lanes]
+    shortcircuit: dict[str, list[str]] = {}
+    for r in roads:
+        if r["id"] in prune_rids:
+            for l in r.get("lanes", []):
+                shortcircuit[l["id"]] = l.get("successors", [])
+
+    # 更新剩余 road 的 successors（短路跳过被删道路）
+    for r in roads:
+        if r["id"] in prune_rids:
+            continue
+        for l in r.get("lanes", []):
+            new_succ = []
+            for s in l.get("successors", []):
+                if s in shortcircuit:
+                    for t in shortcircuit[s]:
+                        if t not in new_succ and t not in shortcircuit:
+                            new_succ.append(t)
+                else:
+                    if s not in new_succ:
+                        new_succ.append(s)
+            l["successors"] = new_succ
+
+    kept_roads = [r for r in roads if r["id"] not in prune_rids]
+    return kept_roads, junctions, len(prune_rids)
+
+
+def smooth_elevation_transitions(roads: list[dict]) -> int:
+    """平滑桥隧与地面道路之间的垂直跳变，生成坡度渐变过渡（消除 >1m 高程断崖）。
+
+    对于内部连接器（internal connector）或匝道（link/ramp），当其连接不同高程的
+    道路时（如桥梁 z=6m 到地面 z=0m），按沿程累计弧长线性插值 z 坐标。
+    """
+    lane_to_road = {}
+    for r in roads:
+        for l in r.get("lanes", []):
+            lane_to_road[l["id"]] = r
+
+    preds: dict[str, list[str]] = {}
+    for r in roads:
+        for l in r.get("lanes", []):
+            for s in l.get("successors", []):
+                preds.setdefault(s, []).append(l["id"])
+
+    smoothed_count = 0
+    for r in roads:
+        is_internal = r.get("internal") or str(r.get("sumo_id", "")).startswith(":") or r.get("id", "").startswith("road_j")
+        is_link = "link" in str(r.get("type", "")).lower() or "ramp" in str(r.get("type", "")).lower()
+        if not (is_internal or is_link):
+            continue
+
+        lanes = r.get("lanes", [])
+        if not lanes:
+            continue
+
+        pred_zs = []
+        for l in lanes:
+            for pid in preds.get(l["id"], []):
+                pr = lane_to_road.get(pid)
+                if pr:
+                    plane = next((x for x in pr.get("lanes", []) if x["id"] == pid), None)
+                    if plane and plane.get("centerline"):
+                        pcl = plane["centerline"]
+                        pred_zs.append(pcl[-1][2] if len(pcl[-1]) > 2 else 0.0)
+
+        succ_zs = []
+        for l in lanes:
+            for sid in l.get("successors", []):
+                sr = lane_to_road.get(sid)
+                if sr:
+                    slane = next((x for x in sr.get("lanes", []) if x["id"] == sid), None)
+                    if slane and slane.get("centerline"):
+                        scl = slane["centerline"]
+                        succ_zs.append(scl[0][2] if len(scl[0]) > 2 else 0.0)
+
+        if not pred_zs and not succ_zs:
+            continue
+
+        z_start = sum(pred_zs) / len(pred_zs) if pred_zs else (sum(succ_zs) / len(succ_zs) if succ_zs else 0.0)
+        z_end = sum(succ_zs) / len(succ_zs) if succ_zs else z_start
+
+        if abs(z_start - z_end) > 0.05 or abs(z_start) > 0.05 or abs(z_end) > 0.05:
+            cl = r.get("centerline", [])
+            n_pts = len(cl)
+            if n_pts >= 2:
+                cum = [0.0]
+                for i in range(n_pts - 1):
+                    cum.append(cum[-1] + math.hypot(cl[i + 1][0] - cl[i][0], cl[i + 1][1] - cl[i][1]))
+                tot = cum[-1] if cum[-1] > 1e-6 else 1.0
+                for i in range(n_pts):
+                    t = cum[i] / tot
+                    z_val = round(z_start + t * (z_end - z_start), 3)
+                    if len(cl[i]) < 3:
+                        cl[i].append(z_val)
+                    else:
+                        cl[i][2] = z_val
+
+            for lane in lanes:
+                lcl = lane.get("centerline", [])
+                ln_pts = len(lcl)
+                if ln_pts >= 2:
+                    lcum = [0.0]
+                    for i in range(ln_pts - 1):
+                        lcum.append(lcum[-1] + math.hypot(lcl[i + 1][0] - lcl[i][0], lcl[i + 1][1] - lcl[i][1]))
+                    ltot = lcum[-1] if lcum[-1] > 1e-6 else 1.0
+                    for i in range(ln_pts):
+                        t = lcum[i] / ltot
+                        z_val = round(z_start + t * (z_end - z_start), 3)
+                        if len(lcl[i]) < 3:
+                            lcl[i].append(z_val)
+                        else:
+                            lcl[i][2] = z_val
+            smoothed_count += 1
+    return smoothed_count
+
+
+MAJOR_TYPES = {"primary", "secondary", "urban"}
+
+
+def filter_road_hierarchy(roads: list[dict], junctions: list[dict], min_class: str = "all",
+                          forced_roads: set[str] | None = None) -> tuple[list[dict], list[dict], int]:
+    """按道路等级过滤（如只保留快速路/主干/次干），强制保留指定路线路段以保连通。"""
+    if min_class == "all":
+        return roads, junctions, 0
+    forced = forced_roads or set()
+    kept = []
+    for r in roads:
+        rtype = str(r.get("type", "urban")).lower()
+        if r["id"] in forced or rtype in MAJOR_TYPES or r.get("internal"):
+            kept.append(r)
+    dropped = len(roads) - len(kept)
+    return kept, junctions, dropped
 
 
 def _build_successor_graph(roads: list[dict]):
@@ -796,6 +1034,16 @@ class NetConverter:
                 "lanes": lane_entries,
                 "sumo_id": eid,
             }
+            # 车道组物理中心线对齐（居中计算）
+            centered_cl = lane_group_center(road)
+            if centered_cl is not None:
+                road["centerline"] = centered_cl
+
+            # 折线尖锐毛刺去噪平滑
+            road["centerline"] = smooth_polyline_kinks(road["centerline"])
+            for lane in road["lanes"]:
+                lane["centerline"] = smooth_polyline_kinks(lane["centerline"])
+
             if is_internal:
                 tgt = target_of_internal.get(eid)
                 if tgt is not None and tgt in self.road_id:
@@ -1091,6 +1339,12 @@ def main() -> int:
     ap.add_argument("--scenario", default=None,
                     help="可选：写出场景入口 scenarios/<map_id>.json（默认不写）")
     ap.add_argument("--map-id", default=None, help="默认取 --out 目录基名")
+    ap.add_argument("--min-road-len", type=float, default=0.5,
+                    help="过滤短于此长度（米）的退化道路段（默认 0.5m）")
+    ap.add_argument("--filter-major-only", action="store_true",
+                    help="过滤住宅小区/支路小道，仅保留 primary/secondary/urban 及路线必须段")
+    ap.add_argument("--min-road-class", default="all",
+                    choices=["all", "major"], help="道路分级过滤（all: 全量; major: 仅主干）")
     args = ap.parse_args()
 
     conv = NetConverter(args.net, args.ref_lat, args.ref_lon)
@@ -1120,22 +1374,37 @@ def main() -> int:
     gen_junc = detect_junctions(doc["roads"])
     generate_connectivity(doc["roads"], gen_junc)
 
-    # 发射后净化（顺序：先 clamp 车道宽，再清悬空引用）：
+    # 发射后几何净化（顺序）：
     #  1) 车道宽度下限（SUMO 双向拆半 bug：1.6m 发丝路 → 钳到 2.75m）；
-    #  2) successors/junction 引用净化（指向未发射 road/lane 的悬空引用 → drop）。
+    #  2) 退化微短段过滤并短路后继（消除 <0.5m 退化点）；
+    #  3) 道路等级分级过滤（可选，精简大地图 60%+ 住宅路）；
+    #  4) successors/junction 引用净化（指向未发射 road/lane 的悬空引用 → drop）。
     n_clamped = clamp_vehicle_lane_width(doc["roads"])
+    doc["roads"], doc["junctions"], n_micro_pruned = prune_and_shortcircuit_micro_roads(
+        doc["roads"], doc["junctions"], min_len=args.min_road_len
+    )
+
+    min_cls = "major" if args.filter_major_only else args.min_road_class
+    if min_cls != "all":
+        chain_ids_pre = set(build_main_chain(doc["roads"]))
+        doc["roads"], doc["junctions"], n_filtered = filter_road_hierarchy(
+            doc["roads"], doc["junctions"], min_class=min_cls, forced_roads=chain_ids_pre
+        )
+    else:
+        n_filtered = 0
+
     doc["junctions"], n_pruned = sanitize_successors(doc["roads"], doc["junctions"])
 
-    # 桥隧/层高（可选，Overpass 离线/失败静默跳过 → 零回归）：SUMO 丢弃 OSM
-    # bridge/tunnel/layer，这里按 sumo_id 回查 OSM，把高度写进 centerline z
-    # （前端 sampleEdgeNodes / json_to_xodr elevationProfile 消费）。
+    # 桥隧/层高与坡度平滑（Overpass 离线/失败静默跳过 → 零回归）：
     n_elev = 0
+    n_smoothed_elev = 0
     try:
         n_elev = apply_osm_elevation(doc["roads"], args.ref_lat, args.ref_lon)
+        n_smoothed_elev = smooth_elevation_transitions(doc["roads"])
     except Exception as ex:  # noqa: BLE001
         print(f"  [WARN] OSM 桥隧高程采集失败（跳过，不影响生成）: {ex}",
               file=sys.stderr)
-    print(f"  桥隧/层高: {n_elev} 条 road 应用高程")
+    print(f"  桥隧/层高: {n_elev} 条 road 应用高程，{n_smoothed_elev} 处坡度平滑过渡")
 
     stats = doc.pop("_stats")
     os.makedirs(args.out, exist_ok=True)
@@ -1155,6 +1424,9 @@ def main() -> int:
           (len(doc["junctions"]), len(doc["buildings"]),
            len(doc["landmarks"]["traffic_lights"])))
     print("  clamped lanes to %.2fm: %d（SUMO 双向拆半 width bug）" % (2.75, n_clamped))
+    print("  pruned micro/degenerate roads: %d" % n_micro_pruned)
+    if n_filtered:
+        print("  filtered minor/residential roads: %d" % n_filtered)
     print("  pruned dangling successor refs: %d（指向未发射 road/lane）" % n_pruned)
     print("  skipped non-vehicle edges: %d" % stats["skipped_non_vehicle_edges"])
 
