@@ -313,12 +313,13 @@ function _startRenderLoop() {
 
       _cameraRig.update(store.ego, roadGroup, now);
 
+      const activeCam = _cameraRig.getActiveCamera();
+
       // 天空穹顶跟随相机 + 雨粒子动画（真实帧间 dt，高刷屏下速度不失真）
-      _skyEnv.tick(dtSec);
+      _skyEnv.tick(dtSec, activeCam);
 
       // BEV（正交）GTAO 由 _syncPostProc 关掉（正交不兼容），但保留
       // Bloom+SMAA → 车道线/车灯在 BEV 下也有辉光。low/ultra 仍走旁路。
-      const activeCam = _cameraRig.getActiveCamera();
       const noPost = _perfTier === 'low' || _perfTier === 'ultra';
       if (noPost) {
         _renderer.render(_scene, activeCam);

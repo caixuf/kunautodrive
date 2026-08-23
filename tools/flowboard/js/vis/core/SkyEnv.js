@@ -484,13 +484,17 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
   function isDay() { return _dayMode; }
 
   function setCamera(cam) {
+    if (_camera === cam) return;
     _camera = cam;
     if (rainMesh && rainCount > 0) _buildRainMesh(rainCount);
     if (snowMesh && snowCount > 0) _buildSnowMesh(snowCount);
   }
 
   // ── 每帧渲染 tick ──
-  function tick(dt) {
+  function tick(dt, activeCam) {
+    if (activeCam && _camera !== activeCam) {
+      _camera = activeCam;
+    }
     const delta = dt || 0.016;
     _elapsedTime += delta;
     skyMat.uniforms.uTime.value = _elapsedTime;
@@ -526,6 +530,11 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
     const cz = _camera ? _camera.position.z : 0;
     const halfArea = PRECIP_AREA * 0.5;
 
+    // 动态计算降水包络垂直范围：BEV/Top 等高空相机以路面 (y=0) 为基准，追逐/驾驶员视角贴近相机
+    const isHighCam = cy > 30.0;
+    const topY = isHighCam ? 24.0 : (cy + 24.0);
+    const bottomY = isHighCam ? -1.0 : Math.max(-1.0, cy - 8.0);
+
     // ── 雨丝与地面涟漪动画（动态包络跟随相机） ──
     if (rainMesh && rainCount > 0) {
       const pos = rainMesh.geometry.attributes.position;
@@ -550,10 +559,10 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
         if (arr[idx + 2] > cz + halfArea) { arr[idx + 2] -= PRECIP_AREA; arr[idx + 5] -= PRECIP_AREA; }
         else if (arr[idx + 2] < cz - halfArea) { arr[idx + 2] += PRECIP_AREA; arr[idx + 5] += PRECIP_AREA; }
 
-        // 雨滴触地（y < 0）→ 回收至相机天顶并触发地面水花涟漪
-        if (arr[idx + 4] < 0) {
+        // 雨滴触地（y < bottomY）→ 回收至天顶并触发地面水花涟漪
+        if (arr[idx + 4] < bottomY) {
           const newX = cx + (Math.random() - 0.5) * PRECIP_AREA;
-          const newY = cy + 24.0 + Math.random() * 8.0;
+          const newY = topY + Math.random() * 8.0;
           const newZ = cz + (Math.random() - 0.5) * PRECIP_AREA;
 
           arr[idx]     = newX;
@@ -621,9 +630,7 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
         if (arr[idx + 2] > cz + halfArea) arr[idx + 2] -= PRECIP_AREA;
         else if (arr[idx + 2] < cz - halfArea) arr[idx + 2] += PRECIP_AREA;
 
-        // 垂直循环：下落至地面下方后回到相机上方
-        const bottomY = Math.max(-1.0, cy - 8.0);
-        const topY = cy + 24.0;
+        // 垂直循环：下落至地面下方后回到天顶
         if (arr[idx + 1] < bottomY) {
           arr[idx + 1] = topY + Math.random() * 4.0;
           arr[idx]     = cx + (Math.random() - 0.5) * PRECIP_AREA;

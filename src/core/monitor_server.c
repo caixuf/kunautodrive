@@ -1166,14 +1166,21 @@ static bool dispatch_request(int fd, MonitorServer* ms,
                 ? cJSON_GetObjectItemCaseSensitive(root, "visibility_m") : NULL;
             bool valid_light = cJSON_IsString(lighting) &&
                 (strcmp(lighting->valuestring, "day") == 0 ||
+                 strcmp(lighting->valuestring, "dawn") == 0 ||
+                 strcmp(lighting->valuestring, "morning") == 0 ||
+                 strcmp(lighting->valuestring, "noon") == 0 ||
+                 strcmp(lighting->valuestring, "afternoon") == 0 ||
                  strcmp(lighting->valuestring, "dusk") == 0 ||
                  strcmp(lighting->valuestring, "night") == 0);
             bool valid_weather = cJSON_IsString(weather) &&
                 (strcmp(weather->valuestring, "clear") == 0 ||
-                 strcmp(weather->valuestring, "rain") == 0 ||
-                 strcmp(weather->valuestring, "snow") == 0 ||
+                 strcmp(weather->valuestring, "cloudy") == 0 ||
                  strcmp(weather->valuestring, "overcast") == 0 ||
-                 strcmp(weather->valuestring, "fog") == 0);
+                 strcmp(weather->valuestring, "rain") == 0 ||
+                 strcmp(weather->valuestring, "storm") == 0 ||
+                 strcmp(weather->valuestring, "snow") == 0 ||
+                 strcmp(weather->valuestring, "fog") == 0 ||
+                 strcmp(weather->valuestring, "sandstorm") == 0);
             bool valid_visibility = cJSON_IsNumber(visibility) &&
                 visibility->valuedouble >= 10.0 && visibility->valuedouble <= 5000.0;
             if (valid_light && valid_weather && valid_visibility) {

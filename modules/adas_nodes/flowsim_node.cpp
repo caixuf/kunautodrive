@@ -1624,7 +1624,8 @@ protected:
                         if (cJSON_IsString(jl)) {
                             if (strcmp(jl->valuestring, "night") == 0)
                                 g.scene_pub_cfg.lighting = SCENARIO_LIGHT_NIGHT;
-                            else if (strcmp(jl->valuestring, "dusk") == 0)
+                            else if (strcmp(jl->valuestring, "dusk") == 0 ||
+                                     strcmp(jl->valuestring, "dawn") == 0)
                                 g.scene_pub_cfg.lighting = SCENARIO_LIGHT_DUSK;
                             else
                                 g.scene_pub_cfg.lighting = SCENARIO_LIGHT_DAY;
@@ -2260,10 +2261,12 @@ protected:
              * 在 scene_pub 之前调用，确保当前帧 lights 已更新。 */
             const bool dark = g.scene_pub_cfg.lighting != SCENARIO_LIGHT_DAY;
             const bool weather_lights =
-                g.scene_pub_cfg.weather == "rain" || g.scene_pub_cfg.weather == "snow" ||
-                g.scene_pub_cfg.weather == "fog" || g.scene_pub_cfg.visibility_m < 200.0;
+                g.scene_pub_cfg.weather == "rain" || g.scene_pub_cfg.weather == "storm" ||
+                g.scene_pub_cfg.weather == "snow" || g.scene_pub_cfg.weather == "fog" ||
+                g.scene_pub_cfg.weather == "sandstorm" || g.scene_pub_cfg.visibility_m < 200.0;
             const bool foggy =
-                g.scene_pub_cfg.weather == "fog" || g.scene_pub_cfg.visibility_m < 100.0;
+                g.scene_pub_cfg.weather == "fog" || g.scene_pub_cfg.weather == "sandstorm" ||
+                g.scene_pub_cfg.visibility_m < 100.0;
             flowsim::VehicleActor::update_all_lights(
                 g.pool, dark || weather_lights, foggy);
             /* 游戏模式允许在白天手动开近光；夜间/低能见度仍由环境规则强制开启。 */

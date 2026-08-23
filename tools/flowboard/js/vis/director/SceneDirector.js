@@ -445,22 +445,14 @@ export function createSceneDirector(scene) {
     tickDeadReckon();
     if (store.ego && _dr.init) {
       const egoZ = store.ego.z;
-      /* 顿挫复盘（2026-08 定案）：ego 一律**真值直采**（last*），不再走
-       * smooth（指数平滑+速度外推）。相机在 CameraRig 已刚性锁定 ego
-       * （chase 下车相对画面固定），ego 的平滑是画蛇添足——τ=125ms 相位
-       * 滞后 + SSE 20Hz 节拍抖动被放大成"忽快忽慢"的周期顿挫。raw 对比已
-       * 证实：?raw=1（last* 直采）无顿挫，默认（smooth*）顿挫。NPC 仍走
-       * tickEntityDeadReckon 平滑插值（它们不锁相机，需要 20Hz→60fps
-       * 插值）。 */
-      store.ego.x = _dr.lastX;
-      store.ego.y = _dr.lastZ;
-      store.ego.heading = _dr.lastHeading;
-      store.ego.speed = _dr.lastSpeed;
+      /* 帧率与时钟同步：自车、相机与 NPC 统一按仿真时间轴（_simClock）
+       * 60Hz 速度外推与指数平滑（smooth*），消除自车离散阶跃与 NPC 连续插值
+       * 之间的相位撕裂，根治超车近距离观察时的相对抖动。 */
+      store.ego.x = _dr.smoothX;
+      store.ego.y = _dr.smoothZ;
+      store.ego.heading = _dr.smoothHeading;
+      store.ego.speed = _dr.smoothSpeed;
       store.ego.z = egoZ;
-      // 车轮里程用平滑位姿（smooth*）而非 raw last*：lastX 只在 SSE tick 落点
-      // 变化（心跳去重），两次 tick 之间恒定 → 直接积分会让车轮台阶式跳动。
-      // smoothX 每帧外推 + 指数平滑、帧率无关地推进，车轮因此匀速滚动。
-      // 仅供给 VehicleView 里程使用，相机/世界仍锚定 raw lastX（无顿挫定案）。
       store.ego.smoothX = _dr.smoothX;
       store.ego.smoothZ = _dr.smoothZ;
       store.ego.smoothHeading = _dr.smoothHeading;
