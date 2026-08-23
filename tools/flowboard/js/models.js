@@ -375,29 +375,29 @@ function _lampMaterialsBySide(mesh) {
 
 function _isSu7EmissiveMaterial(material) {
   if (!material) return false;
-  var materialName = (material.name || '').toLowerCase();
-  return materialName.indexOf('car_ight') >= 0 ||
-    (!materialName && material.emissive);
+  var name = (material.name || '').toLowerCase();
+  // 严格排除非发光件：枪灰反光碗(M_iron)、熏黑灯腔(M_body_smoothblack)、玻璃(Car_window)与车漆
+  if (name.indexOf('iron') >= 0 ||
+      name.indexOf('black') >= 0 ||
+      name.indexOf('window') >= 0 ||
+      name.indexOf('body') >= 0 ||
+      name.indexOf('chepai') >= 0) {
+    return false;
+  }
+  return name.indexOf('car_ight') >= 0 ||
+    name.indexOf('light') >= 0 ||
+    name.indexOf('lamp') >= 0 ||
+    (!name && !!material.emissive);
 }
 
 function _prepareSu7EmissiveMaterial(material) {
   if (!_isSu7EmissiveMaterial(material)) return false;
-  /* sm_car's Car_ight uses a 4x4 emissiveMap. MeshStandardMaterial multiplies
-   * this texture with emissive color and intensity, so the authored mask can
-   * reduce runtime white/red/amber commands to black. The real lamp geometry
-   * and base-color lens texture stay intact; only the dynamic emission mask
-   * is removed. */
+  /* sm_car 的 Car_ight 对应 SU7 水滴大灯内部四分区十字/"米"字导光条与 4 透镜矩阵 LED。
+   * 保留原生基础漫反射贴图（baseColorTexture）与微棱镜漫射特性，仅清除非受控的静态遮罩。 */
   if (material.emissiveMap) {
     material.emissiveMap = null;
     material.needsUpdate = true;
   }
-  /* Keep the lamp DEPTH-TESTED against the car body (depthTest stays true) so it
-   * is NOT visible through the body from the opposite side. The lamp is drawn in
-   * the transparent pass (transparent=true) with a high renderOrder (set in
-   * _adaptSu7LightNodes) so it lands on top of the lens glass; depthWrite=false
-   * stops the glow from occluding other transparent surfaces. The glass itself
-   * is told not to write depth (see _adaptSu7LightNodes) so it cannot dim the
-   * lamp sitting ~3mm behind it. */
   if (material.transparent !== undefined) material.transparent = true;
   if (material.depthWrite !== undefined) material.depthWrite = false;
   return true;
@@ -407,10 +407,22 @@ function _normalizeSu7NodeName(name) {
   return String(name || '').toLowerCase().replace(/[._\-\s]/g, '');
 }
 
-function _hasSu7Ancestor(mesh, names) {
-  var parent = mesh && mesh.parent;
+function _nodeMatchesAny(name, targetNames) {
+  var norm = _normalizeSu7NodeName(name);
+  for (var i = 0; i < targetNames.length; i++) {
+    var t = targetNames[i];
+    if (norm === t) return true;
+    if (t.length >= 6 && norm.indexOf(t) >= 0) return true;
+  }
+  return false;
+}
+
+function _matchSu7NodeOrAncestor(mesh, targetNames) {
+  if (!mesh) return false;
+  if (_nodeMatchesAny(mesh.name, targetNames)) return true;
+  var parent = mesh.parent;
   while (parent) {
-    if (names.indexOf(_normalizeSu7NodeName(parent.name)) >= 0) return true;
+    if (_nodeMatchesAny(parent.name, targetNames)) return true;
     parent = parent.parent;
   }
   return false;
@@ -422,38 +434,73 @@ function _adaptSu7LightNodes(group) {
     if (!mesh.userData) mesh.userData = {};
     _splitSu7LampGeometry(mesh);
     mesh.userData.su7LightKind = kind;
-    var isGlass = /lightglass/i.test(mesh.name || '');
     var emissiveMaterials = [];
     var materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     materials.forEach(function(material) {
       if (!material) return;
-      if (_prepareSu7EmissiveMaterial(material)) emissiveMaterials.push(material);
-      // The source lens normals are not guaranteed to face every camera angle.
-      // Double-sided, non-tonemapped emission keeps the real lens visible
-      // without replacing its geometry or emissive texture.
-      if (THREE.DoubleSide !== undefined) material.side = THREE.DoubleSide;
-      if (material.toneMapped !== undefined) material.toneMapped = false;
-      // The lamp lens glass (LightGlass.004 / LightGlass) sits ~3mm in front of
-      // the emissive Light mesh. A transparent glass that writes depth would
-      // occlude (and dim) the front turn/head light behind it. Transparent glass
-      // must not write depth, so the emissive lamp (higher renderOrder, set just
-      // below) can draw on top of it without see-through (depthTest stays on).
-      if (isGlass && material.depthWrite !== undefined) material.depthWrite = false;
+      var matName = (material.name || '').toLowerCase();
+      if (_prepareSu7EmissiveMaterial(material)) {
+        emissiveMaterials.push(material);
+        if (THREE.DoubleSide !== undefined) material.side = THREE.DoubleSide;
+        if (material.toneMapped !== undefined) material.toneMapped = false;
+      } else if (matName.indexOf('iron') >= 0) {
+        // SU7 水滴大灯 4 透镜枪灰色金属反光碗与光学固定支架
+        if (material.metalness !== undefined) material.metalness = 0.85;
+        if (material.roughness !== undefined) material.roughness = 0.18;
+        if (material.emissive) material.emissive.setHex(0x000000);
+        if (material.emissiveIntensity !== undefined) material.emissiveIntensity = 0.0;
+      } else if (matName.indexOf('black') >= 0) {
+        // ADB 矩阵深邃熏黑灯腔基座
+        if (material.metalness !== undefined) material.metalness = 0.25;
+        if (material.roughness !== undefined) material.roughness = 0.25;
+        if (material.emissive) material.emissive.setHex(0x000000);
+        if (material.emissiveIntensity !== undefined) material.emissiveIntensity = 0.0;
+      }
     });
-    // Draw the lamp over its (transparent, depth-write-disabled) lens glass so
-    // the front halo is not washed out. depthTest stays on, so the body still
-    // occludes the lamp from the opposite side — no see-through to the tail lights.
-    if (mesh.renderOrder !== undefined) mesh.renderOrder = 10;
+    if (mesh.renderOrder !== undefined) mesh.renderOrder = 11;
     mesh.userData.su7LampMaterials = emissiveMaterials;
     mesh.userData.su7LampSideMaterials = _lampMaterialsBySide(mesh);
   }
+
+  function prepareGlass(mesh, isRear) {
+    if (!mesh) return;
+    if (mesh.renderOrder !== undefined) mesh.renderOrder = 10;
+    var materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    materials.forEach(function(mat) {
+      if (!mat) return;
+      // 真实透光聚碳酸酯水滴灯罩玻璃（前透明高光纯白，后烟熏红晶），不发光但折射透光
+      if (mat.transparent !== undefined) mat.transparent = true;
+      if (mat.opacity !== undefined) mat.opacity = isRear ? 0.35 : 0.18;
+      if (mat.roughness !== undefined) mat.roughness = 0.04;
+      if (mat.metalness !== undefined) mat.metalness = 0.06;
+      if (mat.clearcoat !== undefined) mat.clearcoat = 1.0;
+      if (mat.clearcoatRoughness !== undefined) mat.clearcoatRoughness = 0.04;
+      if (mat.depthWrite !== undefined) mat.depthWrite = false;
+      if (mat.depthTest !== undefined) mat.depthTest = true;
+      if (THREE.DoubleSide !== undefined) mat.side = THREE.DoubleSide;
+      if (mat.color && !isRear) mat.color.setHex(0xffffff);
+      if (mat.emissive) mat.emissive.setHex(0x000000);
+      if (mat.emissiveIntensity !== undefined) mat.emissiveIntensity = 0.0;
+    });
+  }
+
   group.traverse(function(c) {
     if (!c.isMesh) return;
-    var normalizedName = _normalizeSu7NodeName(c.name);
-    var isFront = ['light', 'light002', 'lightglass004'].indexOf(normalizedName) >= 0 ||
-      _hasSu7Ancestor(c, ['light', 'lightglass004']);
-    var isRear = ['light003', 'lightglass'].indexOf(normalizedName) >= 0 ||
-      _hasSu7Ancestor(c, ['light003', 'lightglass']);
+    var isFrontGlass = _matchSu7NodeOrAncestor(c, ['lightglass004']);
+    var isRearGlass = !isFrontGlass && _matchSu7NodeOrAncestor(c, ['lightglass']);
+
+    if (isFrontGlass) {
+      prepareGlass(c, false);
+      return;
+    }
+    if (isRearGlass) {
+      prepareGlass(c, true);
+      return;
+    }
+
+    var isRear = _matchSu7NodeOrAncestor(c, ['light003', 'brakelight']);
+    var isFront = !isRear && _matchSu7NodeOrAncestor(c, ['light', 'light002', 'headlight']);
+
     if (isFront) {
       front.push(c);
       prepare(c, 'head');
@@ -462,6 +509,26 @@ function _adaptSu7LightNodes(group) {
       prepare(c, 'brake');
     }
   });
+
+  // SU7 后扩散器中央后雾灯（GB 4785 强制国标高穿透红色后雾灯）
+  if (THREE && THREE.PlaneGeometry && THREE.MeshBasicMaterial && typeof group.add === 'function') {
+    var fogGeo = new THREE.PlaneGeometry(0.24, 0.08);
+    var fogMat = new THREE.MeshBasicMaterial({
+      color: 0xff0000,
+      transparent: true,
+      opacity: 0.95,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    var fogMesh = new THREE.Mesh(fogGeo, fogMat);
+    fogMesh.rotation.y = Math.PI / 2;
+    fogMesh.position.set(-2.55, 0.33, 0.0);
+    fogMesh.renderOrder = 12;
+    fogMesh.visible = false;
+    group.add(fogMesh);
+    group.userData.rearFogLight = fogMesh;
+  }
+
   if (front.length) group.userData.headlights = front;
   if (rear.length) group.userData.brakeLights = rear;
   group.userData.su7RawLights = front.length > 0 && rear.length > 0
@@ -491,12 +558,28 @@ function _setLightMeshMaterials(meshes, intensity, colorHex) {
   }
 }
 
+function _getSu7LampMaterials(mesh) {
+  if (!mesh) return [];
+  var mats = Array.isArray(mesh.material) ? mesh.material : (mesh.material ? [mesh.material] : []);
+  var emissive = [];
+  for (var i = 0; i < mats.length; i++) {
+    var m = mats[i];
+    if (m && _prepareSu7EmissiveMaterial(m)) {
+      emissive.push(m);
+    }
+  }
+  return emissive;
+}
+
 function _setSu7LightMeshMaterials(meshes, intensity, colorHex) {
   for (var i = 0; i < meshes.length; i++) {
     var mesh = meshes[i];
-    if (mesh) mesh.visible = true;
-    var materials = mesh && mesh.userData && mesh.userData.su7LampMaterials;
-    if (!materials || !materials.length) continue;
+    if (!mesh) continue;
+    mesh.visible = true;
+    var materials = _getSu7LampMaterials(mesh);
+    if (!materials.length && mesh.material) {
+      materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    }
     for (var j = 0; j < materials.length; j++) {
       var material = materials[j];
       if (!_prepareSu7EmissiveMaterial(material)) continue;
@@ -515,15 +598,12 @@ function _setSu7LightMeshMaterials(meshes, intensity, colorHex) {
 function _setSu7LightMeshSideMaterials(meshes, side, intensity, colorHex) {
   for (var i = 0; i < meshes.length; i++) {
     var mesh = meshes[i];
-    if (mesh) mesh.visible = true;
-    var sideMaterials = mesh && mesh.userData && mesh.userData.su7LampSideMaterials;
+    if (!mesh) continue;
+    mesh.visible = true;
+    var sideMaterials = _lampMaterialsBySide(mesh);
     var materials = sideMaterials && sideMaterials[side];
     if (!materials || !materials.length) {
-      // Keep unsupported/legacy glTF variants functional. Only a mesh that
-      // was not split may use the whole authored lens as the fallback.
-      if (!mesh || !mesh.userData || !mesh.userData.su7LampSideSplit) {
-        _setSu7LightMeshMaterials([mesh], intensity, colorHex);
-      }
+      _setSu7LightMeshMaterials([mesh], intensity, colorHex);
       continue;
     }
     for (var j = 0; j < materials.length; j++) {
@@ -562,10 +642,16 @@ function _buildVehicleFromGltf(name, gltf) {
   gltf.scene.children.forEach(function(child) {
     group.add(child.clone());
   });
-  // 克隆 material（每个实例独立）
+  // 克隆 material（每个实例独立，支持数组材质）
   group.traverse(function(c) {
     if (c.isMesh && c.material) {
-      c.material = c.material.clone();
+      if (Array.isArray(c.material)) {
+        c.material = c.material.map(function(m) {
+          return m && m.clone ? m.clone() : m;
+        });
+      } else if (c.material.clone) {
+        c.material = c.material.clone();
+      }
     }
   });
 
@@ -865,25 +951,52 @@ export function _setVehicleLights(group, state, blinkPhase) {
    * semantic turn-signal nodes. The mesh is grouped by its authored local Z
    * coordinate, so a turn signal changes only the corresponding real lamp
    * geometry instead of painting a floating rectangular overlay. */
+  // 车尾后雾灯控制（独立后雾灯节点）
+  if (ud.rearFogLight) {
+    ud.rearFogLight.visible = !!state.fog;
+  }
+
   if (ud.su7RawLights) {
-    var frontIntensity = state.head ? 8.0 : 0.05;
-    var rearIntensity = state.brake ? 6.0 : 0.05;
-    _setSu7LightMeshMaterials(ud.su7RawLights.front, frontIntensity, 0xfff4cf);
-    _setSu7LightMeshMaterials(ud.su7RawLights.rear, rearIntensity, 0xff211c);
-    if (blinkOn && state.turnL) {
-      _setSu7LightMeshSideMaterials(ud.su7RawLights.front, 'left', 10.0, 0xffa21a);
-      _setSu7LightMeshSideMaterials(ud.su7RawLights.rear, 'left', 10.0, 0xffa21a);
+    // 基础前大灯与日行灯状态（未转向的一侧保持此状态）：
+    // - 近光大灯开启：7.5 强悍高亮暖白矩阵光束（视觉对比度极高）
+    // - 示廓灯/示宽灯开启：2.5 晶莹轮廓光
+    // - 昼间行车（熄灯默认）：0.6 柔和水滴十字日行灯微光（不遮盖大灯开启效果）
+    var baseFrontIntensity = state.head ? 7.5 : (state.clearance ? 2.5 : 0.6);
+    var baseFrontColor = state.head ? 0xfffaee : 0xffffff;
+
+    var isRearOn = !!(state.brake || state.clearance || state.head || state.fog);
+    var baseRearIntensity = (state.brake && state.fog) ? 9.0 : (state.fog ? 8.0 : (state.brake ? 5.5 : (isRearOn ? 2.5 : 0.6)));
+    var baseRearColor = state.fog ? 0xff0000 : 0xff211c;
+
+    // 先重置两侧为基础灯光
+    _setSu7LightMeshSideMaterials(ud.su7RawLights.front, 'left', baseFrontIntensity, baseFrontColor);
+    _setSu7LightMeshSideMaterials(ud.su7RawLights.front, 'right', baseFrontIntensity, baseFrontColor);
+    _setSu7LightMeshSideMaterials(ud.su7RawLights.rear, 'left', baseRearIntensity, baseRearColor);
+    _setSu7LightMeshSideMaterials(ud.su7RawLights.rear, 'right', baseRearIntensity, baseRearColor);
+
+    // 左侧转向灯激活：亮闪 6.5 琥珀金，暗闪 0.05（日行灯避让闪烁，醒目分明）
+    if (state.turnL) {
+      var turnLIntensity = blinkOn ? 6.5 : 0.05;
+      var turnLColor = 0xff9000;
+      _setSu7LightMeshSideMaterials(ud.su7RawLights.front, 'left', turnLIntensity, turnLColor);
+      _setSu7LightMeshSideMaterials(ud.su7RawLights.rear, 'left', turnLIntensity, turnLColor);
     }
-    if (blinkOn && state.turnR) {
-      _setSu7LightMeshSideMaterials(ud.su7RawLights.front, 'right', 10.0, 0xffa21a);
-      _setSu7LightMeshSideMaterials(ud.su7RawLights.rear, 'right', 10.0, 0xffa21a);
+
+    // 右侧转向灯激活：亮闪 6.5 琥珀金，暗闪 0.05（日行灯避让闪烁，醒目分明）
+    if (state.turnR) {
+      var turnRIntensity = blinkOn ? 6.5 : 0.05;
+      var turnRColor = 0xff9000;
+      _setSu7LightMeshSideMaterials(ud.su7RawLights.front, 'right', turnRIntensity, turnRColor);
+      _setSu7LightMeshSideMaterials(ud.su7RawLights.rear, 'right', turnRIntensity, turnRColor);
     }
   } else {
     // Keep the source lens and texture, but make the state change unambiguous
     // against the bright outdoor HDRI and the renderer's ACES exposure.
     if (ud.brakeLights) {
-      var bi = state.brake ? 6.0 : 0.08;
-      _setLightMeshMaterials(ud.brakeLights, bi, 0xff211c);
+      var isRearOnGeneric = !!(state.brake || state.clearance || state.head || state.fog);
+      var bi = (state.brake && state.fog) ? 10.0 : (state.fog ? 8.5 : (state.brake ? 6.0 : (isRearOnGeneric ? 2.2 : 0.08)));
+      var rearCol = state.fog ? 0xff0000 : 0xff211c;
+      _setLightMeshMaterials(ud.brakeLights, bi, rearCol);
     }
     // 转向灯：亮闪 6.0（更醒目），灭 0.05
     if (ud.turnSignals) {
@@ -897,9 +1010,9 @@ export function _setVehicleLights(group, state, blinkPhase) {
       setSide(state.turnL, ['FL', 'RL']);
       setSide(state.turnR, ['FR', 'RR']);
     }
-    // 大灯：亮 8.0（补足白天 HDRI 下的视觉占比），灭 0.05
-    if (ud.headlights && state.head !== undefined) {
-      var hi = state.head ? 8.0 : 0.05;
+    // 大灯 / 示廓灯
+    if (ud.headlights) {
+      var hi = state.head ? 8.0 : (state.clearance ? 2.5 : 0.05);
       _setLightMeshMaterials(ud.headlights, hi, 0xfff4cf);
     }
   }

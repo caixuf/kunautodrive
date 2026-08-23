@@ -2263,15 +2263,17 @@ protected:
             const bool weather_lights =
                 g.scene_pub_cfg.weather == "rain" || g.scene_pub_cfg.weather == "storm" ||
                 g.scene_pub_cfg.weather == "snow" || g.scene_pub_cfg.weather == "fog" ||
-                g.scene_pub_cfg.weather == "sandstorm" || g.scene_pub_cfg.visibility_m < 200.0;
+                g.scene_pub_cfg.weather == "sandstorm" || g.scene_pub_cfg.visibility_m <= 500.0;
+            // 雾灯仅在遇雾/沙尘/雷暴或能见度 <= 200m（GB 4785 交规标准）时开启，避免晴天夜间眩目
             const bool foggy =
                 g.scene_pub_cfg.weather == "fog" || g.scene_pub_cfg.weather == "sandstorm" ||
-                g.scene_pub_cfg.visibility_m < 100.0;
+                g.scene_pub_cfg.weather == "storm" || g.scene_pub_cfg.visibility_m <= 200.0;
             flowsim::VehicleActor::update_all_lights(
                 g.pool, dark || weather_lights, foggy);
             /* 游戏模式允许在白天手动开近光；夜间/低能见度仍由环境规则强制开启。 */
             if (g.ego_low_beam.load(std::memory_order_relaxed)) {
                 ego.lights.set_low_beam(true);
+                ego.lights.set_clearance(true);
             }
 
             /* ── Step 6: 推进逻辑时钟 ── */

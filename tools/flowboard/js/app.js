@@ -374,7 +374,6 @@ function updateGameLightButtons() {
 }
 
 function toggleGameLight(kind) {
-  if (!gameMode) return;
   if (kind === 'low') {
     gameLights.lowBeam = !gameLights.lowBeam;
   } else if (kind === 'left') {
@@ -390,7 +389,23 @@ function toggleGameLight(kind) {
     return;
   }
   updateGameLightButtons();
-  queueGameControl();
+  if (gameMode) {
+    queueGameControl();
+  }
+  // 同步用户手动灯光控制到 3D 渲染 store
+  var visStore = (window.__vis && window.__vis.store) ||
+                 (window.__vis && window.__vis.director && window.__vis.director.getStore && window.__vis.director.getStore());
+  if (visStore) {
+    var mask = 0;
+    if (gameLights.turnSignal === 1) mask |= 0x01;
+    if (gameLights.turnSignal === 2) mask |= 0x02;
+    if (gameLights.hazard) mask |= 0x04;
+    if (gameLights.lowBeam) mask |= 0x10;
+    visStore.userLightOverride = mask;
+    if (visStore.ego) {
+      visStore.ego.lights = ((visStore.ego.lights || 0) & ~(0x01 | 0x02 | 0x04 | 0x10)) | mask;
+    }
+  }
 }
 
 function startGameControlLoop() {
@@ -2622,7 +2637,7 @@ document.addEventListener('keydown', function(ev) {
 
   const key = ev.key.toLowerCase();
 
-  if (gameMode && (key === 'l' || key === 'q' || key === 'e' || key === 'h')) {
+  if (key === 'l' || (gameMode && (key === 'q' || key === 'e' || key === 'h'))) {
     toggleGameLight(key === 'l' ? 'low'
       : (key === 'q' ? 'left' : (key === 'e' ? 'right' : 'hazard')));
     ev.preventDefault();

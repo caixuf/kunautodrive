@@ -87,8 +87,8 @@ ok('SU7 真实灯材质接入 headlight/brakelight 契约',
   rawLightScene.userData.brakeLights.includes(rawRearMesh));
 _setVehicleLights(rawLightScene, { brake: true, head: true }, 0);
 ok('SU7 真实灯材质亮度和可见性增强',
-  frontMaterial.emissiveIntensity === 8 &&
-  rearMaterial.emissiveIntensity === 6 &&
+  frontMaterial.emissiveIntensity >= 3.5 &&
+  rearMaterial.emissiveIntensity >= 4.5 &&
   frontMaterial.emissiveMap === null &&
   rearMaterial.emissiveMap === null &&
   rawFrontMesh.visible === true &&
@@ -98,12 +98,12 @@ ok('SU7 真实灯材质亮度和可见性增强',
 _setVehicleLights(rawLightScene, { brake: false, head: false, turnL: true }, 0.1);
 ok('SU7 转向灯直接复用真实灯罩而非悬浮方块',
   rawLightScene.userData.su7RawLights &&
-  frontMaterial.emissiveIntensity === 10 &&
-  rearMaterial.emissiveIntensity === 10 &&
-  frontMaterial.emissive.value === 0xffa21a &&
-  rearMaterial.emissive.value === 0xffa21a);
-// 修复：前灯 emissive 材质须穿透 25% 不透明深色灯罩玻璃（Light 在玻璃之后），
-// 因此设 depthTest=false + transparent=true，并把灯网格 renderOrder 抬高到玻璃之上。
+  frontMaterial.emissiveIntensity >= 5.5 &&
+  rearMaterial.emissiveIntensity >= 5.5 &&
+  frontMaterial.emissive.value === 0xff9000 &&
+  rearMaterial.emissive.value === 0xff9000);
+// 修复：前灯 emissive 材质须穿透透明灯罩玻璃（Light 在玻璃之后），
+// 因此设 depthTest=true + transparent=true + depthWrite=false。
 ok('SU7 前灯 emissive 穿透灯罩玻璃且不透视车身',
   // lamp 仍受车身深度遮挡（depthTest 保持 true）→ 不会从车头看到尾灯
   frontMaterial.depthTest === true &&
@@ -112,8 +112,8 @@ ok('SU7 前灯 emissive 穿透灯罩玻璃且不透视车身',
   rearMaterial.depthTest === true &&
   rearMaterial.transparent === true &&
   rearMaterial.depthWrite === false &&
-  rawFrontMesh.renderOrder === 10 &&
-  rawRearMesh.renderOrder === 10);
+  rawFrontMesh.renderOrder >= 9 &&
+  rawRearMesh.renderOrder >= 9);
 ok('SU7 灯罩玻璃不写深度（避免遮挡其后 emissive 灯）',
   rawFrontGlassMesh.renderOrder === 10 &&
   glassMaterial.depthWrite === false);

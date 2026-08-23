@@ -14,7 +14,7 @@
  * （车轮转向/滚动、方向盘、刹车灯/转向灯/大灯控制）
  */
 
-import { deriveLightState, LIGHT_TURN_LEFT, LIGHT_TURN_RIGHT, LIGHT_HAZARD, LIGHT_HIGH_BEAM, LIGHT_LOW_BEAM } from './VehicleLights.js';
+import { deriveLightState, LIGHT_TURN_LEFT, LIGHT_TURN_RIGHT, LIGHT_HAZARD, LIGHT_HIGH_BEAM, LIGHT_LOW_BEAM, LIGHT_CLEARANCE, LIGHT_FOG } from './VehicleLights.js';
 import { getStdMaterial } from '../core/AssetFactory.js';
 import { initModelCache, getModel, _setVehicleLights, _relinkWheelUserData } from '../../models.js';
 import { worldToThree, headingToRotationY, forwardENU } from '../math/Coord.js';
@@ -29,6 +29,7 @@ const LIGHT_OFF = new THREE.Color(0x111111);
 const LIGHT_BRAKE_ON = new THREE.Color(0xff0000);
 const LIGHT_TURN_ON = new THREE.Color(0xff8800);
 const LIGHT_HEAD_ON = new THREE.Color(0xffffcc);
+const LIGHT_FOG_ON = new THREE.Color(0xffea66);
 
 // 车辆接地偏移：车辆模型原点=路面(y=0，轮子下缘≈0)，而渲染路面画在
 // RoadView.Y_ROAD=0.10（车道线/边线防 z-fight 的微抬升）。车辆 y 取所在位置
@@ -100,25 +101,38 @@ function createVehicleLights(vehicleGroup, options = {}) {
   const turnRR = _makeRectMesh(GEO_TURN, LIGHT_OFF, rearTurn.x, rearTurn.y,  TURN_Z);
   const headL  = _makeRectMesh(GEO_HEAD, LIGHT_OFF, HEAD_X,  HEAD_Y, -HEAD_Z);
   const headR  = _makeRectMesh(GEO_HEAD, LIGHT_OFF, HEAD_X,  HEAD_Y,  HEAD_Z);
+  const fogRear = _makeRectMesh(new THREE.PlaneGeometry(0.24, 0.08), LIGHT_OFF, BRAKE_X, 0.32, 0.0);
 
   // 熄灯时隐藏，避免暗色灯片显示为车身边缘的黑方块
   brakeL.visible = brakeR.visible = false;
   turnFL.visible = turnFR.visible = turnRL.visible = turnRR.visible = false;
   headL.visible = headR.visible = false;
+  fogRear.visible = false;
 
-  group.add(brakeL, brakeR, turnFL, turnFR, turnRL, turnRR, headL, headR);
+  group.add(brakeL, brakeR, turnFL, turnFR, turnRL, turnRR, headL, headR, fogRear);
 
   return {
     group,
-    update(v, nowMs) {
-      const s = deriveLightState(v.lights || 0, v.brake || 0);
+    update(v, nowMs, env) {
+      const s = deriveLightState(v.lights || 0, v.brake || 0, env);
       const blinkOn = nowMs === undefined
         ? true
         : (((nowMs / 1000) * 1.5) % 1) < 0.5;
-      brakeL.visible = showBrakeOverlay && s.brake;
-      brakeR.visible = showBrakeOverlay && s.brake;
+
+      // 刹车与示廓尾灯：刹车亮红(opacity 1.0)，示廓/大灯开启时常亮(opacity 0.45 示位红)
+      const isTail = s.clearance || s.head || s.fog;
+      brakeL.visible = showBrakeOverlay && (s.brake || isTail);
+      brakeR.visible = showBrakeOverlay && (s.brake || isTail);
       brakeL.material.color.copy(LIGHT_BRAKE_ON);
       brakeR.material.color.copy(LIGHT_BRAKE_ON);
+      brakeL.material.opacity = s.brake ? 1.0 : 0.45;
+      brakeR.material.opacity = s.brake ? 1.0 : 0.45;
+
+      // 车尾中央后雾灯（GB 4785 强制红色后雾灯，穿透雨雪浓雾）
+      fogRear.visible = showBrakeOverlay && s.fog;
+      fogRear.material.color.setHex(0xff0000);
+      fogRear.material.opacity = 1.0;
+
       const turnL = showTurnOverlay && s.turnL && blinkOn;
       const turnR = showTurnOverlay && s.turnR && blinkOn;
       turnFL.visible = turnRL.visible = turnL;
@@ -127,6 +141,8 @@ function createVehicleLights(vehicleGroup, options = {}) {
       turnFR.material.color.copy(LIGHT_TURN_ON);
       turnRL.material.color.copy(LIGHT_TURN_ON);
       turnRR.material.color.copy(LIGHT_TURN_ON);
+
+      // 前大灯
       headL.visible = showHeadOverlay && s.head;
       headR.visible = showHeadOverlay && s.head;
       headL.material.color.copy(LIGHT_HEAD_ON);
@@ -175,8 +191,19 @@ function _ensureEnvMap(renderer, scene) {
   return _envMap;
 }
 
+function _isLightMesh(mesh) {
+  if (!mesh) return false;
+  const name = (mesh.name || '').toLowerCase();
+  if (name.includes('light') || name.includes('lamp') || name.includes('lens') || name.includes('fog')) return true;
+  const mat = mesh.material;
+  const matName = Array.isArray(mat) ? mat.map(m => m && m.name || '').join(' ') : (mat && mat.name || '');
+  if (/car_ight|light|lamp|emissive|fog/i.test(matName)) return true;
+  return false;
+}
+
 /** 判断 mesh 是否是车身（需要车漆升级） */
 function _isBodyMesh(mesh) {
+  if (_isLightMesh(mesh)) return false;
   const name = mesh.name || '';
   return BODY_KEYWORDS.some(kw => name.includes(kw));
 }
@@ -926,22 +953,66 @@ export function createVehicleView(scene, renderer, modelCache) {
         }
       }
 
+      const userOverride = (id === 'ego' && store.userLightOverride !== undefined) ? store.userLightOverride : 0;
+      const effectiveLights = (v.lights || 0) | userOverride;
+      const ls = deriveLightState(effectiveLights, v.brake || 0, store.env);
+
       // 模型和 fallback 都复用同一套可见灯光反馈；有语义 emissive 节点
       // 的模型同时保留其材质亮度控制。
       if (entry.lights) {
-        entry.lights.update(v, now);
+        entry.lights.update({ ...v, lights: effectiveLights }, now, store.env);
       }
 
-      // glTF 模型 emissive 灯光（含 ads_indicator 小蓝灯）
+      // glTF 模型 emissive 灯光（含 ads_indicator 小蓝灯与后雾灯）
       const vis = _getVisGroup(entry);
       if (vis && vis.userData &&
           (vis.userData.su7RawLights ||
+           vis.userData.rearFogLight ||
            vis.userData.brakeLights ||
            vis.userData.turnSignals ||
            vis.userData.headlights ||
            vis.userData.adsIndicators)) {
-        const ls = deriveLightState(v.lights || 0, v.brake || 0);
         _setVehicleLights(vis, ls, now !== undefined ? now / 1000 : undefined);
+      }
+
+      // 前大灯真实光学光束与铺路光斑：大灯开启时真实照亮前方道路并投射光毯
+      if (id === 'ego' && entry.group) {
+        if (!entry.headlightSpot && THREE && typeof THREE.SpotLight === 'function') {
+          const spot = new THREE.SpotLight(0xfffbe8, 0, 75, Math.PI / 3.8, 0.7, 1.0);
+          spot.position.set(2.45, 0.70, 0.0);
+          const target = new THREE.Object3D();
+          target.position.set(30.0, -0.2, 0.0);
+          entry.group.add(spot);
+          entry.group.add(target);
+          spot.target = target;
+          entry.headlightSpot = spot;
+
+          // 铺路光毯（前大灯开启时投射在车头前方的梯形路面高光，强化视觉反馈）
+          if (THREE.PlaneGeometry && THREE.MeshBasicMaterial) {
+            const carpetGeo = new THREE.PlaneGeometry(8.0, 32.0);
+            const carpetMat = new THREE.MeshBasicMaterial({
+              color: 0xfffbee,
+              transparent: true,
+              opacity: 0.0,
+              depthWrite: false,
+              blending: THREE.AdditiveBlending,
+              side: THREE.DoubleSide,
+            });
+            const carpetMesh = new THREE.Mesh(carpetGeo, carpetMat);
+            carpetMesh.rotation.x = -Math.PI / 2;
+            carpetMesh.rotation.z = -Math.PI / 2;
+            carpetMesh.position.set(18.5, 0.03, 0.0);
+            carpetMesh.renderOrder = 8;
+            entry.group.add(carpetMesh);
+            entry.headlightCarpet = carpetMesh;
+          }
+        }
+        if (entry.headlightSpot) {
+          entry.headlightSpot.intensity = ls.head ? (ls.fog ? 350.0 : 250.0) : 0.0;
+        }
+        if (entry.headlightCarpet && entry.headlightCarpet.material) {
+          entry.headlightCarpet.material.opacity = ls.head ? (store.env && store.env.isNight ? 0.35 : 0.22) : 0.0;
+        }
       }
     };
 

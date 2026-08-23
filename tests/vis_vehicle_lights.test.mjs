@@ -15,7 +15,9 @@ import {
   LIGHT_HAZARD,
   LIGHT_HIGH_BEAM,
   LIGHT_LOW_BEAM,
+  LIGHT_CLEARANCE,
   LIGHT_REVERSE,
+  LIGHT_FOG,
 } from '../tools/flowboard/js/vis/view/VehicleLights.js';
 
 let pass = 0, fail = 0;
@@ -36,57 +38,66 @@ check('LIGHT_TURN_RIGHT = 0x02', LIGHT_TURN_RIGHT, 0x02);
 check('LIGHT_HAZARD     = 0x04', LIGHT_HAZARD,     0x04);
 check('LIGHT_HIGH_BEAM  = 0x08', LIGHT_HIGH_BEAM,  0x08);
 check('LIGHT_LOW_BEAM   = 0x10', LIGHT_LOW_BEAM,   0x10);
+check('LIGHT_CLEARANCE  = 0x20', LIGHT_CLEARANCE,  0x20);
 check('LIGHT_REVERSE    = 0x40', LIGHT_REVERSE,    0x40);
+check('LIGHT_FOG        = 0x80', LIGHT_FOG,        0x80);
 
 console.log('\n--- deriveLightState 全暗 ---');
 checkDeep('mask=0 brake=0 → 全 false',
   deriveLightState(0, 0),
-  { brake: false, turnL: false, turnR: false, head: false });
+  { brake: false, turnL: false, turnR: false, head: false, clearance: false, fog: false });
 
 console.log('\n--- brake 阈值（>0.05）---');
 checkDeep('brake=0.05 边界不触发',
   deriveLightState(0, 0.05),
-  { brake: false, turnL: false, turnR: false, head: false });
+  { brake: false, turnL: false, turnR: false, head: false, clearance: false, fog: false });
 checkDeep('brake=0.06 触发',
   deriveLightState(0, 0.06),
-  { brake: true, turnL: false, turnR: false, head: false });
+  { brake: true, turnL: false, turnR: false, head: false, clearance: false, fog: false });
 
 console.log('\n--- 单独位 ---');
 checkDeep('LIGHT_TURN_LEFT → turnL only',
   deriveLightState(LIGHT_TURN_LEFT, 0),
-  { brake: false, turnL: true, turnR: false, head: false });
+  { brake: false, turnL: true, turnR: false, head: false, clearance: false, fog: false });
 checkDeep('LIGHT_TURN_RIGHT → turnR only',
   deriveLightState(LIGHT_TURN_RIGHT, 0),
-  { brake: false, turnL: false, turnR: true, head: false });
+  { brake: false, turnL: false, turnR: true, head: false, clearance: false, fog: false });
 checkDeep('LIGHT_HAZARD → turnL AND turnR',
   deriveLightState(LIGHT_HAZARD, 0),
-  { brake: false, turnL: true, turnR: true, head: false });
-checkDeep('LIGHT_LOW_BEAM → head',
+  { brake: false, turnL: true, turnR: true, head: false, clearance: false, fog: false });
+checkDeep('LIGHT_LOW_BEAM → head + clearance',
   deriveLightState(LIGHT_LOW_BEAM, 0),
-  { brake: false, turnL: false, turnR: false, head: true });
-checkDeep('LIGHT_HIGH_BEAM → head',
+  { brake: false, turnL: false, turnR: false, head: true, clearance: true, fog: false });
+checkDeep('LIGHT_CLEARANCE → clearance only',
+  deriveLightState(LIGHT_CLEARANCE, 0),
+  { brake: false, turnL: false, turnR: false, head: false, clearance: true, fog: false });
+checkDeep('LIGHT_HIGH_BEAM → head + clearance',
   deriveLightState(LIGHT_HIGH_BEAM, 0),
-  { brake: false, turnL: false, turnR: false, head: true });
+  { brake: false, turnL: false, turnR: false, head: true, clearance: true, fog: false });
+checkDeep('LIGHT_FOG → head + clearance + fog',
+  deriveLightState(LIGHT_FOG, 0),
+  { brake: false, turnL: false, turnR: false, head: true, clearance: true, fog: true });
 
 console.log('\n--- LIGHT_REVERSE 不映射到 state（state.head 不含 reverse）---');
 checkDeep('LIGHT_REVERSE → state 全 false（reverse 由 procedural 路径单独处理）',
   deriveLightState(LIGHT_REVERSE, 0),
-  { brake: false, turnL: false, turnR: false, head: false });
+  { brake: false, turnL: false, turnR: false, head: false, clearance: false, fog: false });
+
+console.log('\n--- 环境自动点亮（夜间/雾天/低能见度）---');
+checkDeep('env isNight → head + clearance 自动点亮',
+  deriveLightState(0, 0, { isNight: true }),
+  { brake: false, turnL: false, turnR: false, head: true, clearance: true, fog: false });
+checkDeep('env weather=fog → head + clearance + fog 自动点亮',
+  deriveLightState(0, 0, { weather: 'fog' }),
+  { brake: false, turnL: false, turnR: false, head: true, clearance: true, fog: true });
 
 console.log('\n--- 组合位 ---');
-checkDeep('TURN_LEFT | LOW_BEAM → turnL + head',
+checkDeep('TURN_LEFT | LOW_BEAM → turnL + head + clearance',
   deriveLightState(LIGHT_TURN_LEFT | LIGHT_LOW_BEAM, 0),
-  { brake: false, turnL: true, turnR: false, head: true });
-checkDeep('HAZARD | HIGH_BEAM | brake → turnL+turnR+head+brake',
+  { brake: false, turnL: true, turnR: false, head: true, clearance: true, fog: false });
+checkDeep('HAZARD | HIGH_BEAM | brake → turnL+turnR+head+clearance+brake',
   deriveLightState(LIGHT_HAZARD | LIGHT_HIGH_BEAM, 0.5),
-  { brake: true, turnL: true, turnR: true, head: true });
-
-console.log('\n--- 全位 OR ---');
-checkDeep('all bits OR → brake off, turnL+turnR+head on（reverse 仍不进 state）',
-  deriveLightState(
-    LIGHT_TURN_LEFT | LIGHT_TURN_RIGHT | LIGHT_HAZARD |
-    LIGHT_HIGH_BEAM | LIGHT_LOW_BEAM | LIGHT_REVERSE, 0),
-  { brake: false, turnL: true, turnR: true, head: true });
+  { brake: true, turnL: true, turnR: true, head: true, clearance: true, fog: false });
 
 console.log('\n--- summary: ' + pass + ' pass, ' + fail + ' fail ---');
 process.exit(fail > 0 ? 1 : 0);

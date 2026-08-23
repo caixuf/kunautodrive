@@ -21,8 +21,9 @@ void VehicleActor::update_ego_lights(Entity& ego, bool low_visibility, bool fogg
      * 从 ControlCmd（决策下发）设置，此处不覆盖、不清除。VehicleActor 只补充
      * 非决策类灯光：夜间近光灯、倒车灯等。 */
 
-    /* 近光灯：夜间自动开启 */
+    /* 近光灯、示廓灯与雾灯：夜间/雨雪/低能见度自动开启 */
     ego.lights.set_low_beam(low_visibility);
+    ego.lights.set_clearance(low_visibility || foggy);
     ego.lights.set_fog(foggy);
 
     /* 转向灯兜底：当 ControlCmd 未下发任何转向意图（无 left/right/hazard 任一位）
@@ -96,6 +97,7 @@ void VehicleActor::update_npc_lights(Entity& npc, bool low_visibility, bool fogg
             break;
     }
     npc.lights.set_low_beam(low_visibility);
+    npc.lights.set_clearance(low_visibility || foggy);
     npc.lights.set_fog(foggy);
 }
 
