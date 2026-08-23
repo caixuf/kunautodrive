@@ -56,6 +56,11 @@ struct VehicleLights {
         return mask & (lights::TURN_LEFT | lights::TURN_RIGHT | lights::HAZARD);
     }
 
+    /// 清除转向相关灯光（左转/右转/双闪），不影响大灯/示廓灯/雾灯（BCM 车身域灯光）
+    void clear_turn() {
+        mask &= ~(lights::TURN_LEFT | lights::TURN_RIGHT | lights::HAZARD);
+    }
+
     // ── 设置（按 spec §5.3 规则由 control_node / actor 调用）──
     void set_turn_left(bool on)  { set_bit(lights::TURN_LEFT, on); }
     void set_turn_right(bool on) { set_bit(lights::TURN_RIGHT, on); }

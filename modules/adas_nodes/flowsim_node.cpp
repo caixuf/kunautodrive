@@ -1818,12 +1818,12 @@ protected:
                 ego.steer    = g.ego_steer.load(std::memory_order_relaxed);
             }
             /* 灯光指令：从 ControlCmd 决策下发（意图先行），非 steer 反推。
-             * 在 VehicleActor::update_all_lights 之前设置，VehicleActor 只补
-             * 夜间近光灯等非决策灯光。 */
+             * 遵循 ADAS 智驾域与 BCM 车身域职责边界：ADAS 仅操作转向灯/双闪，
+             * 绝不得清空或覆盖 BCM 负责的近光大灯/示廓灯/雾灯。 */
             {
                 uint8_t ts = g.ego_turn_signal.load(std::memory_order_relaxed);
                 bool    hz = g.ego_hazard.load(std::memory_order_relaxed);
-                ego.lights.clear();
+                ego.lights.clear_turn();
                 if (ts == 1)      ego.lights.set_turn_left(true);
                 else if (ts == 2) ego.lights.set_turn_right(true);
                 if (hz)           ego.lights.set_hazard(true);
@@ -2255,9 +2255,10 @@ protected:
                                            g.cycle);
             }
 
-            /* ── Step 5.5: 车灯信号派生 ──
-             * 从 ego 的 steer/brake/speed 和 NPC 的 ai_state 派生车灯位掩码，
-             * 写入 Entity.lights。scene_pub 序列化为 JSON "lights" 字段传给前端。
+            /* ── Step 5.5: 车身域控 (BCM) 车灯信号仲裁 ──
+             * 由 VehicleActor 统一仲裁驾驶员手动控制（manual_ego_low）与 AUTO 自动感应
+             * （环境暗光/雨雪低能见度/浓雾），写入 Entity.lights。
+             * scene_pub 序列化为 JSON "lights" 字段传给前端。
              * 在 scene_pub 之前调用，确保当前帧 lights 已更新。 */
             const bool dark = g.scene_pub_cfg.lighting != SCENARIO_LIGHT_DAY;
             const bool weather_lights =
@@ -2268,13 +2269,9 @@ protected:
             const bool foggy =
                 g.scene_pub_cfg.weather == "fog" || g.scene_pub_cfg.weather == "sandstorm" ||
                 g.scene_pub_cfg.weather == "storm" || g.scene_pub_cfg.visibility_m <= 200.0;
+            const bool manual_ego_low = g.ego_low_beam.load(std::memory_order_relaxed);
             flowsim::VehicleActor::update_all_lights(
-                g.pool, dark || weather_lights, foggy);
-            /* 游戏模式允许在白天手动开近光；夜间/低能见度仍由环境规则强制开启。 */
-            if (g.ego_low_beam.load(std::memory_order_relaxed)) {
-                ego.lights.set_low_beam(true);
-                ego.lights.set_clearance(true);
-            }
+                g.pool, dark || weather_lights, foggy, manual_ego_low);
 
             /* ── Step 6: 推进逻辑时钟 ── */
             clock_advance_us(FLOWSIM_DT_US);

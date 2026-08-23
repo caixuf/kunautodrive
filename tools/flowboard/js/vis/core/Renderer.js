@@ -65,8 +65,10 @@ export function createComposer(renderer, scene, camera) {
       0.4,   // radius：柔和扩散
       1.0    // threshold：只让 emissive > 1.0 发光（真车灯），普通表面不过阈
     );
-    bloom.userData.realParams = { strength: 0.6, radius: 0.4, threshold: 1.0 };
-    bloom.userData.techParams = { strength: 0.7, radius: 0.45, threshold: 0.8 };
+    bloom.userData = {
+      realParams: { strength: 0.6, radius: 0.4, threshold: 1.0 },
+      techParams: { strength: 0.7, radius: 0.45, threshold: 0.8 },
+    };
     _bloomPass = bloom;
     composer.addPass(bloom);
   }

@@ -254,7 +254,7 @@ GET /api/health    → 探活: {status, source, age_sec}
 | heading | vehicle/state | float64 | 朝向弧度（物理仿真真值） |
 | speed | vehicle/state | float64 | 车速 m/s（物理仿真真值） |
 | steer | vehicle/state | float64 | 方向盘转角（物理仿真真值） |
-| lights | scene/frame | int32 | 车灯位掩码：bit0=左转, bit1=右转, bit2=双闪, bit3=远光, bit4=近光, bit6=倒车, bit7=雾灯 |
+| lights | scene/frame | int32 | 车灯位掩码（BCM 车身域控）：bit0=左转, bit1=右转, bit2=双闪, bit3=远光, bit4=近光, bit5=示廓灯, bit6=倒车, bit7=雾灯 |
 | brake | scene/frame | float64 | 刹车量 0..1 |
 | throttle | scene/frame | float64 | 油门量 0..1 |
 | vx, vy | scene/frame | float64 | 速度分量 m/s |

@@ -953,8 +953,9 @@ export function createVehicleView(scene, renderer, modelCache) {
         }
       }
 
-      const userOverride = (id === 'ego' && store.userLightOverride !== undefined) ? store.userLightOverride : 0;
-      const effectiveLights = (v.lights || 0) | userOverride;
+      const userOverride = (id === 'ego' && store.userLightOverride !== undefined && store.userLightOverride !== null)
+        ? store.userLightOverride : null;
+      const effectiveLights = (userOverride !== null) ? userOverride : (v.lights || 0);
       const ls = deriveLightState(effectiveLights, v.brake || 0, store.env);
 
       // 模型和 fallback 都复用同一套可见灯光反馈；有语义 emissive 节点
@@ -975,13 +976,13 @@ export function createVehicleView(scene, renderer, modelCache) {
         _setVehicleLights(vis, ls, now !== undefined ? now / 1000 : undefined);
       }
 
-      // 前大灯真实光学光束与铺路光斑：大灯开启时真实照亮前方道路并投射光毯
+      // 前大灯真实光学光束与铺路光斑：大灯开启时真实照亮前方道路并投射光毯与立体光锥
       if (id === 'ego' && entry.group) {
         if (!entry.headlightSpot && THREE && typeof THREE.SpotLight === 'function') {
-          const spot = new THREE.SpotLight(0xfffbe8, 0, 75, Math.PI / 3.8, 0.7, 1.0);
+          const spot = new THREE.SpotLight(0xfffbe8, 0, 85, Math.PI / 3.6, 0.7, 1.0);
           spot.position.set(2.45, 0.70, 0.0);
           const target = new THREE.Object3D();
-          target.position.set(30.0, -0.2, 0.0);
+          target.position.set(35.0, -0.2, 0.0);
           entry.group.add(spot);
           entry.group.add(target);
           spot.target = target;
@@ -989,7 +990,7 @@ export function createVehicleView(scene, renderer, modelCache) {
 
           // 铺路光毯（前大灯开启时投射在车头前方的梯形路面高光，强化视觉反馈）
           if (THREE.PlaneGeometry && THREE.MeshBasicMaterial) {
-            const carpetGeo = new THREE.PlaneGeometry(8.0, 32.0);
+            const carpetGeo = new THREE.PlaneGeometry(9.0, 36.0);
             const carpetMat = new THREE.MeshBasicMaterial({
               color: 0xfffbee,
               transparent: true,
@@ -1001,17 +1002,63 @@ export function createVehicleView(scene, renderer, modelCache) {
             const carpetMesh = new THREE.Mesh(carpetGeo, carpetMat);
             carpetMesh.rotation.x = -Math.PI / 2;
             carpetMesh.rotation.z = -Math.PI / 2;
-            carpetMesh.position.set(18.5, 0.03, 0.0);
+            carpetMesh.position.set(20.0, 0.03, 0.0);
             carpetMesh.renderOrder = 8;
             entry.group.add(carpetMesh);
             entry.headlightCarpet = carpetMesh;
           }
+
+          // 左右前大灯 3D 立体光学光锥（Volumetric Light Beams，夜间/雾天穿透黑夜）
+          if (THREE.CylinderGeometry && THREE.MeshBasicMaterial) {
+            const beamGeo = new THREE.CylinderGeometry(0.12, 1.9, 30.0, 16, 1, true);
+            beamGeo.rotateZ(-Math.PI / 2);
+            beamGeo.translate(15.0, 0, 0); // 几何中心向 +X 前移 15m，使原点对齐车灯位置
+            const beamMat = new THREE.MeshBasicMaterial({
+              color: 0xfffaee,
+              transparent: true,
+              opacity: 0.0,
+              depthWrite: false,
+              blending: THREE.AdditiveBlending,
+              side: THREE.DoubleSide,
+            });
+            const beamL = new THREE.Mesh(beamGeo, beamMat);
+            beamL.position.set(2.25, 0.68, -0.72);
+            beamL.rotation.y = -0.02;
+            beamL.renderOrder = 9;
+
+            const beamR = new THREE.Mesh(beamGeo, beamMat);
+            beamR.position.set(2.25, 0.68, 0.72);
+            beamR.rotation.y = 0.02;
+            beamR.renderOrder = 9;
+
+            const beamsGroup = new THREE.Group();
+            beamsGroup.add(beamL, beamR);
+            entry.group.add(beamsGroup);
+            entry.headlightBeams = beamsGroup;
+            entry.headlightBeamMat = beamMat;
+          }
         }
         if (entry.headlightSpot) {
-          entry.headlightSpot.intensity = ls.head ? (ls.fog ? 350.0 : 250.0) : 0.0;
+          entry.headlightSpot.intensity = ls.head ? (ls.fog ? 400.0 : 300.0) : 0.0;
         }
         if (entry.headlightCarpet && entry.headlightCarpet.material) {
-          entry.headlightCarpet.material.opacity = ls.head ? (store.env && store.env.isNight ? 0.35 : 0.22) : 0.0;
+          entry.headlightCarpet.material.opacity = ls.head ? (store.env && store.env.isNight ? 0.45 : 0.25) : 0.0;
+        }
+        if (entry.headlightBeamMat) {
+          let beamOpacity = 0.0;
+          if (ls.head) {
+            if (ls.fog) {
+              beamOpacity = 0.50;
+            } else if (store.env && store.env.isNight) {
+              beamOpacity = 0.35;
+            } else {
+              beamOpacity = 0.12;
+            }
+          }
+          entry.headlightBeamMat.opacity = beamOpacity;
+          if (entry.headlightBeams) {
+            entry.headlightBeams.visible = beamOpacity > 0.001;
+          }
         }
       }
     };

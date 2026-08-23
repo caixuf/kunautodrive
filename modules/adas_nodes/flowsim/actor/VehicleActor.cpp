@@ -16,14 +16,17 @@ static constexpr double SPEED_REVERSE_THRESHOLD = 0.5;  // m/s，低于此速度
  * sim_time_s 是仿真秒数，取模 86400 得到当天时间。
  * 18:00-06:00（64800s - 21600s 跨午夜）开近光灯。
  * 场景无真实昼夜循环时，这个逻辑可被 config 覆盖。 */
-void VehicleActor::update_ego_lights(Entity& ego, bool low_visibility, bool foggy) {
-    /* 注意：ego.lights 的 turn_signal / hazard 已在 flowsim_node 主循环中
-     * 从 ControlCmd（决策下发）设置，此处不覆盖、不清除。VehicleActor 只补充
-     * 非决策类灯光：夜间近光灯、倒车灯等。 */
+void VehicleActor::update_ego_lights(Entity& ego, bool low_visibility, bool foggy, bool manual_low_beam) {
+    /* 注意：ego.lights 的 turn_signal / hazard 由 ADAS 决策下发或驾驶员拨杆设置，
+     * 此处不覆盖、不清除。VehicleActor 承担 BCM 车身域控职责，仲裁大灯、示廓灯与雾灯：
+     *  1. 车主手动开大灯（manual_low_beam）：最高优先级，强制常亮；
+     *  2. AUTO 自动感应：在未手动开大灯时，由环境光照/能见度（low_visibility）自适应点亮；
+     *  3. 雾灯：由恶劣天气传感器（foggy）驱动。 */
+    bool low_beam_on = manual_low_beam || low_visibility;
+    bool clearance_on = manual_low_beam || low_visibility || foggy;
 
-    /* 近光灯、示廓灯与雾灯：夜间/雨雪/低能见度自动开启 */
-    ego.lights.set_low_beam(low_visibility);
-    ego.lights.set_clearance(low_visibility || foggy);
+    ego.lights.set_low_beam(low_beam_on);
+    ego.lights.set_clearance(clearance_on);
     ego.lights.set_fog(foggy);
 
     /* 转向灯兜底：当 ControlCmd 未下发任何转向意图（无 left/right/hazard 任一位）
@@ -32,12 +35,10 @@ void VehicleActor::update_ego_lights(Entity& ego, bool low_visibility, bool fogg
      * 触发场景：
      *   - control_node 在 Cruise/Follow 状态下不发 turn_signal（默认 0），但
      *     Stanley 横向控制仍会输出非零 steer（变道/弯道跟随）。
-     *   - 旧实现下 ego.lights 任何转向灯都不亮，前端看不到「车在转弯」的视觉反馈。
-     *
-     * 设计原则（意图优先级）：
-     *   1. ControlCmd 显式下发 turn_signal/hazard → 直接采用，本兜底完全跳过；
-     *   2. ControlCmd 未下发（any_turn==false）→ 按 steer 方向补转向灯；
-     *   3. 兜底仅填充空缺位，不覆盖任何已设定位（用 set_xxx(true)，没有 set_xxx(false)）。
+     *   - 设计原则（意图优先级）：
+     *     1. ControlCmd 显式下发 turn_signal/hazard → 直接采用，本兜底完全跳过；
+     *     2. ControlCmd 未下发（any_turn==false）→ 按 steer 方向补转向灯；
+     *     3. 兜底仅填充空缺位，不覆盖任何已设定位。
      *
      * 阈值 STEER_TURN_THRESHOLD 与 NPC 一致（0.1 rad ≈ 5.7°），低于此视为直线行驶。
      * 静止或倒车状态不触发，避免低速泊车时方向盘乱转导致灯乱闪。 */
@@ -101,13 +102,13 @@ void VehicleActor::update_npc_lights(Entity& npc, bool low_visibility, bool fogg
     npc.lights.set_fog(foggy);
 }
 
-void VehicleActor::update_all_lights(EntityPool& pool, bool low_visibility, bool foggy) {
+void VehicleActor::update_all_lights(EntityPool& pool, bool low_visibility, bool foggy, bool manual_ego_low_beam) {
     for (int i = 0; i < pool.size(); ++i) {
         Entity& e = pool[i];
         if (!e.active || !e.is_vehicle()) continue;
 
         if (e.type == EntityType::Ego) {
-            update_ego_lights(e, low_visibility, foggy);
+            update_ego_lights(e, low_visibility, foggy, manual_ego_low_beam);
         } else {
             update_npc_lights(e, low_visibility, foggy);
         }

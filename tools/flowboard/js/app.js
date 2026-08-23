@@ -538,6 +538,12 @@ async function toggleGameMode() {
   if (gameMode) {
     setCameraMode('driver');
     startGameControlLoop();
+  } else {
+    var visStore = (window.__vis && window.__vis.store) ||
+                   (window.__vis && window.__vis.director && window.__vis.director.getStore && window.__vis.director.getStore());
+    if (visStore) {
+      delete visStore.userLightOverride;
+    }
   }
   gameTogglePending = false;
 }

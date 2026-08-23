@@ -91,13 +91,22 @@ checkDeep('env weather=fog → head + clearance + fog 自动点亮',
   deriveLightState(0, 0, { weather: 'fog' }),
   { brake: false, turnL: false, turnR: false, head: true, clearance: true, fog: true });
 
-console.log('\n--- 组合位 ---');
+console.log('\n--- 组合位 & BCM 域控解耦测试 ---');
 checkDeep('TURN_LEFT | LOW_BEAM → turnL + head + clearance',
   deriveLightState(LIGHT_TURN_LEFT | LIGHT_LOW_BEAM, 0),
   { brake: false, turnL: true, turnR: false, head: true, clearance: true, fog: false });
 checkDeep('HAZARD | HIGH_BEAM | brake → turnL+turnR+head+clearance+brake',
   deriveLightState(LIGHT_HAZARD | LIGHT_HIGH_BEAM, 0.5),
   { brake: true, turnL: true, turnR: true, head: true, clearance: true, fog: false });
+checkDeep('白天手动开启近光（LOW_BEAM in day）→ head + clearance 强制常亮',
+  deriveLightState(LIGHT_LOW_BEAM, 0, { isNight: false, lighting: 'day', weather: 'clear' }),
+  { brake: false, turnL: false, turnR: false, head: true, clearance: true, fog: false });
+checkDeep('白天驾驶员关灯（mask=0 in day）→ head 不亮',
+  deriveLightState(0, 0, { isNight: false, lighting: 'day', weather: 'clear' }),
+  { brake: false, turnL: false, turnR: false, head: false, clearance: false, fog: false });
+checkDeep('智驾变道发转向灯时保持大灯（TURN_RIGHT | LOW_BEAM）→ turnR + head + clearance',
+  deriveLightState(LIGHT_TURN_RIGHT | LIGHT_LOW_BEAM, 0, { isNight: false, lighting: 'day' }),
+  { brake: false, turnL: false, turnR: true, head: true, clearance: true, fog: false });
 
 console.log('\n--- summary: ' + pass + ' pass, ' + fail + ' fail ---');
 process.exit(fail > 0 ? 1 : 0);

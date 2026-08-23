@@ -35,6 +35,7 @@ import { sampleEdgeNodes } from '../math/Curve.js';
 import { tangentToNormal, offsetAlongNormal, signedAngleBetween, radiusFromChord } from '../math/Coord.js';
 
 const LANE_WIDTH_DEFAULT = 3.5;
+const _warnedRoadIds = new Set();
 
 /* 一致性守卫（移植自 RoadView.laneGroupEnvelope）：
  * 各站位横向偏移应稳定；急弯/环道/掉头路 lane centerline 相对 spine 大幅摆动
@@ -212,9 +213,13 @@ export function computeRoadAxis(road) {
     return { ok: true, fromLanes: false, spine: applyElevation(spine), cum, halfWidth: fallbackHw, leftEdge: left, rightEdge: right };
   }
 
-  // 3) 无 lanes：以 centerline 为居中、警告，绝不静默左偏
-  if (typeof console !== 'undefined' && console.warn) {
-    console.warn('[RoadAxis] road 无 lanes，以 centerline 居中（不偏移、零回归）', road && road.id);
+  // 3) 无 lanes：以 centerline 为居中、警告（单次去重，避免每帧刷屏），绝不静默左偏
+  const roadIdStr = String((road && road.id) || '0');
+  if (!_warnedRoadIds.has(roadIdStr)) {
+    _warnedRoadIds.add(roadIdStr);
+    if (typeof console !== 'undefined' && console.warn) {
+      console.warn('[RoadAxis] road 无 lanes，以 centerline 居中（不偏移、零回归）', road && road.id);
+    }
   }
   const cum = buildCumulative(spine);
   const { left, right } = edgesFromSpine(spine, fallbackHw);
