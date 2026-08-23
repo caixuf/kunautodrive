@@ -376,15 +376,17 @@ function _lampMaterialsBySide(mesh) {
 function _isSu7EmissiveMaterial(material) {
   if (!material) return false;
   var name = (material.name || '').toLowerCase();
-  // 严格排除非发光件：枪灰反光碗(M_iron)、熏黑灯腔(M_body_smoothblack)、玻璃(Car_window)与车漆
-  if (name.indexOf('iron') >= 0 ||
-      name.indexOf('black') >= 0 ||
+  // 严格排除非发光件：熏黑灯腔(M_body_smoothblack)、玻璃(Car_window)与车漆/车牌
+  if (name.indexOf('smoothblack') >= 0 ||
+      name.indexOf('frostedblack') >= 0 ||
       name.indexOf('window') >= 0 ||
       name.indexOf('body') >= 0 ||
       name.indexOf('chepai') >= 0) {
     return false;
   }
+  // M_iron 对应 SU7 水滴大灯内部 4 颗矩阵 LED 透镜发光柱核心单元；Car_ight 对应水滴外圈与十字导光带
   return name.indexOf('car_ight') >= 0 ||
+    name.indexOf('iron') >= 0 ||
     name.indexOf('light') >= 0 ||
     name.indexOf('lamp') >= 0 ||
     (!name && !!material.emissive);
@@ -392,11 +394,21 @@ function _isSu7EmissiveMaterial(material) {
 
 function _prepareSu7EmissiveMaterial(material) {
   if (!_isSu7EmissiveMaterial(material)) return false;
-  /* sm_car 的 Car_ight 对应 SU7 水滴大灯内部四分区十字/"米"字导光条与 4 透镜矩阵 LED。
-   * 保留原生基础漫反射贴图（baseColorTexture）与微棱镜漫射特性，仅清除非受控的静态遮罩。 */
+  var name = (material.name || '').toLowerCase();
+  /* sm_car 的 Car_ight 对应水滴大灯内部十字/"米"字导光条；
+   * M_iron 对应水滴大灯内 4 颗矩阵 LED 透镜发光柱核心单元。
+   * 保留原生基础漫反射贴图与微棱镜漫射特性，仅清除非受控的静态遮罩。 */
   if (material.emissiveMap) {
     material.emissiveMap = null;
     material.needsUpdate = true;
+  }
+  if (material.color) material.color.setHex(0xffffff);
+  if (name.indexOf('iron') >= 0) {
+    // 4 颗透镜柱纯白高透光学材质特性
+    if (material.metalness !== undefined) material.metalness = 0.02;
+    if (material.roughness !== undefined) material.roughness = 0.02;
+    if (material.clearcoat !== undefined) material.clearcoat = 1.0;
+    if (material.clearcoatRoughness !== undefined) material.clearcoatRoughness = 0.02;
   }
   if (material.transparent !== undefined) material.transparent = true;
   if (material.depthWrite !== undefined) material.depthWrite = false;
@@ -443,12 +455,6 @@ function _adaptSu7LightNodes(group) {
         emissiveMaterials.push(material);
         if (THREE.DoubleSide !== undefined) material.side = THREE.DoubleSide;
         if (material.toneMapped !== undefined) material.toneMapped = false;
-      } else if (matName.indexOf('iron') >= 0) {
-        // SU7 水滴大灯 4 透镜枪灰色金属反光碗与光学固定支架
-        if (material.metalness !== undefined) material.metalness = 0.85;
-        if (material.roughness !== undefined) material.roughness = 0.18;
-        if (material.emissive) material.emissive.setHex(0x000000);
-        if (material.emissiveIntensity !== undefined) material.emissiveIntensity = 0.0;
       } else if (matName.indexOf('black') >= 0) {
         // ADB 矩阵深邃熏黑灯腔基座
         if (material.metalness !== undefined) material.metalness = 0.25;
@@ -457,30 +463,40 @@ function _adaptSu7LightNodes(group) {
         if (material.emissiveIntensity !== undefined) material.emissiveIntensity = 0.0;
       }
     });
-    if (mesh.renderOrder !== undefined) mesh.renderOrder = 11;
+    if (mesh.renderOrder !== undefined && (!mesh.userData || !mesh.userData.isGlass)) {
+      mesh.renderOrder = 9;
+    }
     mesh.userData.su7LampMaterials = emissiveMaterials;
     mesh.userData.su7LampSideMaterials = _lampMaterialsBySide(mesh);
   }
 
   function prepareGlass(mesh, isRear) {
     if (!mesh) return;
+    if (!mesh.userData) mesh.userData = {};
+    mesh.userData.isGlass = true;
     if (mesh.renderOrder !== undefined) mesh.renderOrder = 10;
     var materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     materials.forEach(function(mat) {
       if (!mat) return;
-      // 真实透光聚碳酸酯水滴灯罩玻璃（前透明高光纯白，后烟熏红晶），不发光但折射透光
-      if (mat.transparent !== undefined) mat.transparent = true;
-      if (mat.opacity !== undefined) mat.opacity = isRear ? 0.35 : 0.18;
-      if (mat.roughness !== undefined) mat.roughness = 0.04;
-      if (mat.metalness !== undefined) mat.metalness = 0.06;
-      if (mat.clearcoat !== undefined) mat.clearcoat = 1.0;
-      if (mat.clearcoatRoughness !== undefined) mat.clearcoatRoughness = 0.04;
-      if (mat.depthWrite !== undefined) mat.depthWrite = false;
-      if (mat.depthTest !== undefined) mat.depthTest = true;
-      if (THREE.DoubleSide !== undefined) mat.side = THREE.DoubleSide;
-      if (mat.color && !isRear) mat.color.setHex(0xffffff);
-      if (mat.emissive) mat.emissive.setHex(0x000000);
-      if (mat.emissiveIntensity !== undefined) mat.emissiveIntensity = 0.0;
+      var matName = (mat.name || '').toLowerCase();
+      if (matName.indexOf('window') >= 0 || matName.indexOf('glass') >= 0) {
+        // 极高透光水滴灯罩玻璃（前灯 0.03 纯白晶莹透亮，后尾灯烟熏红晶 0.35），透光率 97% 完全透射内部 4 颗透镜发光柱
+        if (mat.transparent !== undefined) mat.transparent = true;
+        if (mat.opacity !== undefined) mat.opacity = isRear ? 0.35 : 0.03;
+        if (mat.roughness !== undefined) mat.roughness = 0.01;
+        if (mat.metalness !== undefined) mat.metalness = 0.0;
+        if (mat.clearcoat !== undefined) mat.clearcoat = 1.0;
+        if (mat.clearcoatRoughness !== undefined) mat.clearcoatRoughness = 0.01;
+        if (mat.depthWrite !== undefined) mat.depthWrite = false;
+        if (mat.depthTest !== undefined) mat.depthTest = true;
+        if (THREE.DoubleSide !== undefined) mat.side = THREE.DoubleSide;
+        if (mat.color && !isRear) mat.color.setHex(0xffffff);
+        if (mat.emissive) mat.emissive.setHex(0x000000);
+        if (mat.emissiveIntensity !== undefined) mat.emissiveIntensity = 0.0;
+      } else if (_prepareSu7EmissiveMaterial(mat)) {
+        if (THREE.DoubleSide !== undefined) mat.side = THREE.DoubleSide;
+        if (mat.toneMapped !== undefined) mat.toneMapped = false;
+      }
     });
   }
 
@@ -491,10 +507,16 @@ function _adaptSu7LightNodes(group) {
 
     if (isFrontGlass) {
       prepareGlass(c, false);
+      // LightGlass.004 包含两部分：Car_window (玻璃) 与 Car_ight (透镜外环水晶)。
+      // 玻璃部分透光，同时将 mesh 也注册进 front 发光链路，使得外环水晶与内部4发光柱一体点亮
+      front.push(c);
+      prepare(c, 'head');
       return;
     }
     if (isRearGlass) {
       prepareGlass(c, true);
+      rear.push(c);
+      prepare(c, 'brake');
       return;
     }
 
@@ -587,6 +609,9 @@ function _setSu7LightMeshMaterials(meshes, intensity, colorHex) {
       if (material.emissiveIntensity !== undefined) {
         material.emissiveIntensity = intensity;
       }
+      if (material.color && colorHex === 0xffffff) {
+        material.color.setHex(0xffffff);
+      }
       if (material.toneMapped !== undefined) material.toneMapped = false;
       if (THREE.DoubleSide !== undefined && material.side !== undefined) {
         material.side = THREE.DoubleSide;
@@ -612,6 +637,9 @@ function _setSu7LightMeshSideMaterials(meshes, side, intensity, colorHex) {
       if (material.emissive) material.emissive.setHex(colorHex);
       if (material.emissiveIntensity !== undefined) {
         material.emissiveIntensity = intensity;
+      }
+      if (material.color && colorHex === 0xffffff) {
+        material.color.setHex(0xffffff);
       }
       if (material.toneMapped !== undefined) material.toneMapped = false;
       if (THREE.DoubleSide !== undefined && material.side !== undefined) {
@@ -957,15 +985,15 @@ export function _setVehicleLights(group, state, blinkPhase) {
   }
 
   if (ud.su7RawLights) {
-    // 基础前大灯与日行灯状态（未转向的一侧保持此状态）：
-    // - 近光大灯开启：7.5 强悍高亮暖白矩阵光束（视觉对比度极高）
-    // - 示廓灯/示宽灯开启：2.5 晶莹轮廓光
-    // - 昼间行车（熄灯默认）：0.6 柔和水滴十字日行灯微光（不遮盖大灯开启效果）
-    var baseFrontIntensity = state.head ? 7.5 : (state.clearance ? 2.5 : 0.6);
-    var baseFrontColor = state.head ? 0xfffaee : 0xffffff;
+    // 基础前大灯与日行灯状态（纯净白透钻石冰晶，完全匹配真实 SU7 ADB 矩阵透镜发光）：
+    // - 近光大灯开启：24.0 强悍璀璨纯白矩阵光束（4颗透镜发光柱+十字光带原生网格极高纯白透射，触发强烈 Bloom 辉光）
+    // - 示廓灯/示宽灯开启：10.0 晶莹纯白轮廓光
+    // - 昼间行车（默认日行灯 DRL）：6.0 晶莹透亮水滴十字日行灯（白天阳光下亦晶透可见，显著发光）
+    var baseFrontIntensity = state.head ? 24.0 : (state.clearance ? 10.0 : 6.0);
+    var baseFrontColor = 0xffffff;
 
     var isRearOn = !!(state.brake || state.clearance || state.head || state.fog);
-    var baseRearIntensity = (state.brake && state.fog) ? 9.0 : (state.fog ? 8.0 : (state.brake ? 5.5 : (isRearOn ? 2.5 : 0.6)));
+    var baseRearIntensity = (state.brake && state.fog) ? 10.0 : (state.fog ? 8.5 : (state.brake ? 6.0 : (isRearOn ? 2.8 : 0.6)));
     var baseRearColor = state.fog ? 0xff0000 : 0xff211c;
 
     // 先重置两侧为基础灯光
@@ -974,17 +1002,17 @@ export function _setVehicleLights(group, state, blinkPhase) {
     _setSu7LightMeshSideMaterials(ud.su7RawLights.rear, 'left', baseRearIntensity, baseRearColor);
     _setSu7LightMeshSideMaterials(ud.su7RawLights.rear, 'right', baseRearIntensity, baseRearColor);
 
-    // 左侧转向灯激活：亮闪 6.5 琥珀金，暗闪 0.05（日行灯避让闪烁，醒目分明）
+    // 左侧转向灯激活：亮闪 12.0 琥珀金，暗闪 0.05（日行灯避让闪烁，醒目分明）
     if (state.turnL) {
-      var turnLIntensity = blinkOn ? 6.5 : 0.05;
+      var turnLIntensity = blinkOn ? 12.0 : 0.05;
       var turnLColor = 0xff9000;
       _setSu7LightMeshSideMaterials(ud.su7RawLights.front, 'left', turnLIntensity, turnLColor);
       _setSu7LightMeshSideMaterials(ud.su7RawLights.rear, 'left', turnLIntensity, turnLColor);
     }
 
-    // 右侧转向灯激活：亮闪 6.5 琥珀金，暗闪 0.05（日行灯避让闪烁，醒目分明）
+    // 右侧转向灯激活：亮闪 12.0 琥珀金，暗闪 0.05（日行灯避让闪烁，醒目分明）
     if (state.turnR) {
-      var turnRIntensity = blinkOn ? 6.5 : 0.05;
+      var turnRIntensity = blinkOn ? 12.0 : 0.05;
       var turnRColor = 0xff9000;
       _setSu7LightMeshSideMaterials(ud.su7RawLights.front, 'right', turnRIntensity, turnRColor);
       _setSu7LightMeshSideMaterials(ud.su7RawLights.rear, 'right', turnRIntensity, turnRColor);

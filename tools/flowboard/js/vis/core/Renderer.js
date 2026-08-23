@@ -61,13 +61,13 @@ export function createComposer(renderer, scene, camera) {
   if (THREE.UnrealBloomPass) {
     const bloom = new THREE.UnrealBloomPass(
       new THREE.Vector2(window.innerWidth, window.innerHeight),
-      0.6,   // strength：适中，不让非灯体发糊
-      0.4,   // radius：柔和扩散
-      1.0    // threshold：只让 emissive > 1.0 发光（真车灯），普通表面不过阈
+      1.0,   // strength：适中饱满，让矩阵大灯与发光透镜柱光芒四射
+      0.5,   // radius：柔和扩散光晕
+      0.85   // threshold：只让 emissive 高亮发光体辉光
     );
     bloom.userData = {
-      realParams: { strength: 0.6, radius: 0.4, threshold: 1.0 },
-      techParams: { strength: 0.7, radius: 0.45, threshold: 0.8 },
+      realParams: { strength: 1.0, radius: 0.5, threshold: 0.85 },
+      techParams: { strength: 1.1, radius: 0.55, threshold: 0.75 },
     };
     _bloomPass = bloom;
     composer.addPass(bloom);
@@ -189,7 +189,7 @@ export function resetRendererInfo(renderer) {
 export function setBloomTech(tech) {
   if (!_bloomPass) return;
   const p = _bloomPass;
-  const t = tech ? p.userData.techParams : p.userData.realParams;
+  const t = p.userData ? (tech ? p.userData.techParams : p.userData.realParams) : null;
   if (!t) return;
   p.strength = t.strength;
   p.radius = t.radius;

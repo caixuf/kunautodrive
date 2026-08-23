@@ -53,12 +53,20 @@ const GEO_TURN  = new THREE.PlaneGeometry(0.22, 0.12);  // 转向灯：更大更
 const GEO_HEAD  = new THREE.PlaneGeometry(0.26, 0.14);  // 近光灯：宽大明显
 
 function _makeRectMesh(geo, color, x, y, z) {
-  const mat = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, transparent: true, opacity: 0.9 });
+  const mat = new THREE.MeshBasicMaterial({
+    color,
+    side: THREE.DoubleSide,
+    transparent: true,
+    opacity: 0.95,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
   const m = new THREE.Mesh(geo, mat);
   // Vehicles are X-forward in the shared ENU/THREE contract; place the
   // rectangular light on the front/rear YZ face rather than the old Z face.
   m.rotation.y = Math.PI / 2;
   m.position.set(x, y, z);
+  m.renderOrder = 14;
   return m;
 }
 
@@ -90,6 +98,11 @@ function createVehicleLights(vehicleGroup, options = {}) {
     ['Light.003', 'Light003', 'LightGlass'],
     { x: TURN_X - 0.12, y: TURN_REAR_Y });
 
+  const isSu7 = (vehicleGroup && vehicleGroup.userData && vehicleGroup.userData.modelType === 'su7');
+  const headX = isSu7 ? 2.28 : HEAD_X;
+  const headY = isSu7 ? 0.70 : HEAD_Y;
+  const headZ = isSu7 ? 0.72 : HEAD_Z;
+
   // In the shared X-forward frame, left is -Z and right is +Z. Keep each
   // pair on the same front/rear face; the previous wiring swapped X/Z and
   // put one brake/turn/head lamp at the wrong end of the car.
@@ -99,8 +112,8 @@ function createVehicleLights(vehicleGroup, options = {}) {
   const turnFR = _makeRectMesh(GEO_TURN, LIGHT_OFF, frontTurn.x, frontTurn.y,  TURN_Z);
   const turnRL = _makeRectMesh(GEO_TURN, LIGHT_OFF, rearTurn.x, rearTurn.y, -TURN_Z);
   const turnRR = _makeRectMesh(GEO_TURN, LIGHT_OFF, rearTurn.x, rearTurn.y,  TURN_Z);
-  const headL  = _makeRectMesh(GEO_HEAD, LIGHT_OFF, HEAD_X,  HEAD_Y, -HEAD_Z);
-  const headR  = _makeRectMesh(GEO_HEAD, LIGHT_OFF, HEAD_X,  HEAD_Y,  HEAD_Z);
+  const headL  = _makeRectMesh(GEO_HEAD, LIGHT_OFF, headX, headY, -headZ);
+  const headR  = _makeRectMesh(GEO_HEAD, LIGHT_OFF, headX, headY,  headZ);
   const fogRear = _makeRectMesh(new THREE.PlaneGeometry(0.24, 0.08), LIGHT_OFF, BRAKE_X, 0.32, 0.0);
 
   // 熄灯时隐藏，避免暗色灯片显示为车身边缘的黑方块
@@ -142,11 +155,14 @@ function createVehicleLights(vehicleGroup, options = {}) {
       turnRL.material.color.copy(LIGHT_TURN_ON);
       turnRR.material.color.copy(LIGHT_TURN_ON);
 
-      // 前大灯
-      headL.visible = showHeadOverlay && s.head;
-      headR.visible = showHeadOverlay && s.head;
-      headL.material.color.copy(LIGHT_HEAD_ON);
-      headR.material.color.copy(LIGHT_HEAD_ON);
+      // 前大灯：近光高亮璀璨白光(0xfffaee, opacity 0.95)，示廓开启时微光(0.40)
+      const isHeadOn = s.head || s.clearance;
+      headL.visible = showHeadOverlay && isHeadOn;
+      headR.visible = showHeadOverlay && isHeadOn;
+      headL.material.color.copy(s.head ? LIGHT_HEAD_ON : new THREE.Color(0xffeedd));
+      headR.material.color.copy(s.head ? LIGHT_HEAD_ON : new THREE.Color(0xffeedd));
+      headL.material.opacity = s.head ? 0.95 : 0.40;
+      headR.material.opacity = s.head ? 0.95 : 0.40;
     }
   };
 }
@@ -784,8 +800,8 @@ export function createVehicleView(scene, renderer, modelCache) {
       entry.group = _createGltfVehicle(gltf, id, type);
       vehicleGroup.add(entry.group);
 
-      // SU7 原始 Light/LightGlass 节点复用真实材质；仅在没有真实灯节点
-      // 的 fallback 模型上创建灯光网格，避免悬浮方块覆盖精细车身。
+      // SU7 与 glTF 真实车辆：完全由真实 3D 灯罩与 4 透镜矩阵几何发光（emissive），
+      // 绝不在精致模型表面叠加扁平悬浮 PlaneGeometry 贴片；仅在 procedural fallback 简模上叠加灯光
       const ud = entry.group.userData || {};
       const hasCompleteSemanticLights = ud.brakeLights && ud.turnSignals && ud.headlights;
       const hasRawSu7Lights = !!ud.su7RawLights;
@@ -976,23 +992,41 @@ export function createVehicleView(scene, renderer, modelCache) {
         _setVehicleLights(vis, ls, now !== undefined ? now / 1000 : undefined);
       }
 
-      // 前大灯真实光学光束与铺路光斑：大灯开启时真实照亮前方道路并投射光毯与立体光锥
+      // 真实环境物理光照系统：大灯铺路切线光斑、双前灯物理投影光源、车尾刹车红光与立体空间光锥
       if (id === 'ego' && entry.group) {
-        if (!entry.headlightSpot && THREE && typeof THREE.SpotLight === 'function') {
-          const spot = new THREE.SpotLight(0xfffbe8, 0, 85, Math.PI / 3.6, 0.7, 1.0);
-          spot.position.set(2.45, 0.70, 0.0);
-          const target = new THREE.Object3D();
-          target.position.set(35.0, -0.2, 0.0);
-          entry.group.add(spot);
-          entry.group.add(target);
-          spot.target = target;
-          entry.headlightSpot = spot;
+        if (!entry.headlightSpotL && THREE && typeof THREE.SpotLight === 'function') {
+          // 1. 左右前大灯真实物理 SpotLight 光源（真实照亮前方道路、车道线与周围场景）
+          const spotL = new THREE.SpotLight(0xfffcf0, 0, 90, Math.PI / 3.4, 0.8, 1.2);
+          spotL.position.set(2.35, 0.70, -0.68);
+          const targetL = new THREE.Object3D();
+          targetL.position.set(38.0, -0.1, -0.80);
+          entry.group.add(spotL);
+          entry.group.add(targetL);
+          spotL.target = targetL;
+          entry.headlightSpotL = spotL;
 
-          // 铺路光毯（前大灯开启时投射在车头前方的梯形路面高光，强化视觉反馈）
+          const spotR = new THREE.SpotLight(0xfffcf0, 0, 90, Math.PI / 3.4, 0.8, 1.2);
+          spotR.position.set(2.35, 0.70, 0.68);
+          const targetR = new THREE.Object3D();
+          targetR.position.set(38.0, -0.1, 0.80);
+          entry.group.add(spotR);
+          entry.group.add(targetR);
+          spotR.target = targetR;
+          entry.headlightSpotR = spotR;
+
+          // 2. 车尾刹车地面物理点光源（刹车时照亮车尾地表与后车）
+          if (THREE.PointLight) {
+            const brakeLight = new THREE.PointLight(0xff1800, 0, 14, 1.5);
+            brakeLight.position.set(-2.40, 0.60, 0.0);
+            entry.group.add(brakeLight);
+            entry.brakePointLight = brakeLight;
+          }
+
+          // 3. 铺路光毯（前大灯开启时投射在车头前方的宽幅切线地面高光）
           if (THREE.PlaneGeometry && THREE.MeshBasicMaterial) {
-            const carpetGeo = new THREE.PlaneGeometry(9.0, 36.0);
+            const carpetGeo = new THREE.PlaneGeometry(11.0, 42.0);
             const carpetMat = new THREE.MeshBasicMaterial({
-              color: 0xfffbee,
+              color: 0xfffaee,
               transparent: true,
               opacity: 0.0,
               depthWrite: false,
@@ -1002,17 +1036,35 @@ export function createVehicleView(scene, renderer, modelCache) {
             const carpetMesh = new THREE.Mesh(carpetGeo, carpetMat);
             carpetMesh.rotation.x = -Math.PI / 2;
             carpetMesh.rotation.z = -Math.PI / 2;
-            carpetMesh.position.set(20.0, 0.03, 0.0);
+            carpetMesh.position.set(22.0, 0.03, 0.0);
             carpetMesh.renderOrder = 8;
             entry.group.add(carpetMesh);
             entry.headlightCarpet = carpetMesh;
+
+            // 车尾刹车地表红色光晕
+            const brakeCarpetGeo = new THREE.PlaneGeometry(3.6, 4.8);
+            const brakeCarpetMat = new THREE.MeshBasicMaterial({
+              color: 0xff1100,
+              transparent: true,
+              opacity: 0.0,
+              depthWrite: false,
+              blending: THREE.AdditiveBlending,
+              side: THREE.DoubleSide,
+            });
+            const brakeCarpetMesh = new THREE.Mesh(brakeCarpetGeo, brakeCarpetMat);
+            brakeCarpetMesh.rotation.x = -Math.PI / 2;
+            brakeCarpetMesh.rotation.z = -Math.PI / 2;
+            brakeCarpetMesh.position.set(-3.6, 0.03, 0.0);
+            brakeCarpetMesh.renderOrder = 8;
+            entry.group.add(brakeCarpetMesh);
+            entry.brakeCarpet = brakeCarpetMesh;
           }
 
-          // 左右前大灯 3D 立体光学光锥（Volumetric Light Beams，夜间/雾天穿透黑夜）
+          // 4. 左右前大灯 3D 立体光学光锥（Volumetric Light Beams，从透镜柱射出穿透黑夜）
           if (THREE.CylinderGeometry && THREE.MeshBasicMaterial) {
-            const beamGeo = new THREE.CylinderGeometry(0.12, 1.9, 30.0, 16, 1, true);
+            const beamGeo = new THREE.CylinderGeometry(0.12, 2.0, 32.0, 16, 1, true);
             beamGeo.rotateZ(-Math.PI / 2);
-            beamGeo.translate(15.0, 0, 0); // 几何中心向 +X 前移 15m，使原点对齐车灯位置
+            beamGeo.translate(16.0, 0, 0); // 几何中心向 +X 前移 16m，原点对齐透镜位置
             const beamMat = new THREE.MeshBasicMaterial({
               color: 0xfffaee,
               transparent: true,
@@ -1022,12 +1074,12 @@ export function createVehicleView(scene, renderer, modelCache) {
               side: THREE.DoubleSide,
             });
             const beamL = new THREE.Mesh(beamGeo, beamMat);
-            beamL.position.set(2.25, 0.68, -0.72);
+            beamL.position.set(2.26, 0.70, -0.72);
             beamL.rotation.y = -0.02;
             beamL.renderOrder = 9;
 
             const beamR = new THREE.Mesh(beamGeo, beamMat);
-            beamR.position.set(2.25, 0.68, 0.72);
+            beamR.position.set(2.26, 0.70, 0.72);
             beamR.rotation.y = 0.02;
             beamR.renderOrder = 9;
 
@@ -1038,19 +1090,30 @@ export function createVehicleView(scene, renderer, modelCache) {
             entry.headlightBeamMat = beamMat;
           }
         }
-        if (entry.headlightSpot) {
-          entry.headlightSpot.intensity = ls.head ? (ls.fog ? 400.0 : 300.0) : 0.0;
+
+        // 光源与光效实时强度更新
+        const spotIntensity = ls.head ? (ls.fog ? 450.0 : 350.0) : 0.0;
+        if (entry.headlightSpotL) entry.headlightSpotL.intensity = spotIntensity;
+        if (entry.headlightSpotR) entry.headlightSpotR.intensity = spotIntensity;
+
+        if (entry.brakePointLight) {
+          entry.brakePointLight.intensity = ls.brake ? 180.0 : (ls.head ? 25.0 : 0.0);
         }
+
         if (entry.headlightCarpet && entry.headlightCarpet.material) {
-          entry.headlightCarpet.material.opacity = ls.head ? (store.env && store.env.isNight ? 0.45 : 0.25) : 0.0;
+          entry.headlightCarpet.material.opacity = ls.head ? (store.env && store.env.isNight ? 0.48 : 0.28) : 0.0;
         }
+        if (entry.brakeCarpet && entry.brakeCarpet.material) {
+          entry.brakeCarpet.material.opacity = ls.brake ? 0.38 : (ls.head ? 0.08 : 0.0);
+        }
+
         if (entry.headlightBeamMat) {
           let beamOpacity = 0.0;
           if (ls.head) {
             if (ls.fog) {
-              beamOpacity = 0.50;
+              beamOpacity = 0.55;
             } else if (store.env && store.env.isNight) {
-              beamOpacity = 0.35;
+              beamOpacity = 0.38;
             } else {
               beamOpacity = 0.12;
             }
