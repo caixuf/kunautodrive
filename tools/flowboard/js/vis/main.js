@@ -37,19 +37,35 @@ let _lastMinimapDrawMs = 0;
 let _renderPaused = false;
 const MINIMAP_INTERVAL_MS = 1000 / 30;
 
+let _userEnvOverride = null;
+
+export function setUserEnvironment(env) {
+  _userEnvOverride = env ? { ...env } : null;
+  if (_director) {
+    const store = _director.getStore();
+    if (store && env) {
+      if (env.lighting) store.env.lighting = env.lighting;
+      if (env.weather) store.env.weather = env.weather;
+      if (env.visibilityM) store.env.visibilityM = env.visibilityM;
+      store.env.userOverride = { ...env };
+    }
+    _syncEnvironment(store);
+  }
+}
+
 function _syncEnvironment(store) {
   if (!_skyEnv || !store) return;
   const env = store.env || {};
-  /* 默认可见度从 1000m 提到 20000m：原 1000m 相当于"浓雾"默认值，
-   * FogExp2 在 ~1km 处就衰减到 5%，整张 7.8km 对角的大地图被雾吞没，
-   * 看不到城市全景。20000m 是晴好天气的真实能见度，远景仅余轻微大气透视。
-   * 仿真若经 frame.visibility_m 显式给低能见度（雾天/传感器），仍会覆盖此默认值。 */
-  const visibilityM = Number.isFinite(env.visibilityM) && env.visibilityM > 0
-    ? env.visibilityM : 20000;
-  const environmentKey = `${env.lighting || 'day'}|${env.weather || 'clear'}|${Math.round(visibilityM)}`;
+  const lighting = (_userEnvOverride && _userEnvOverride.lighting) || env.lighting || 'day';
+  const weather = (_userEnvOverride && _userEnvOverride.weather) || env.weather || 'clear';
+  let visibilityM = (_userEnvOverride && _userEnvOverride.visibilityM) || env.visibilityM;
+  if (!Number.isFinite(visibilityM) || visibilityM <= 0) {
+    visibilityM = 20000;
+  }
+  const environmentKey = `${lighting}|${weather}|${Math.round(visibilityM)}`;
   if (environmentKey === _lastEnvironmentKey) return;
-  _skyEnv.setTimeOfDay(env.lighting === 'day' ? 'noon' : env.lighting);
-  _skyEnv.setWeather(env.weather || 'clear');
+  _skyEnv.setTimeOfDay(lighting === 'day' ? 'noon' : lighting);
+  _skyEnv.setWeather(weather);
   _skyEnv.setVisibility(visibilityM);
   _lastEnvironmentKey = environmentKey;
 }

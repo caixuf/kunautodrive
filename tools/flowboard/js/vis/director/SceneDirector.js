@@ -164,12 +164,19 @@ export function createSceneDirector(scene) {
     if (Object.prototype.hasOwnProperty.call(frame, 'scenario_name')) {
       store.scenarioName = frame.scenario_name || '';
     }
-    if (typeof frame.lighting === 'string') {
-      store.env.lighting = frame.lighting;
-      store.env.isNight = frame.lighting === 'night';
+    if (store.env.userOverride) {
+      if (store.env.userOverride.lighting) store.env.lighting = store.env.userOverride.lighting;
+      if (store.env.userOverride.weather) store.env.weather = store.env.userOverride.weather;
+      if (Number.isFinite(store.env.userOverride.visibilityM)) store.env.visibilityM = store.env.userOverride.visibilityM;
+      store.env.isNight = store.env.lighting === 'night';
+    } else {
+      if (typeof frame.lighting === 'string') {
+        store.env.lighting = frame.lighting;
+        store.env.isNight = frame.lighting === 'night';
+      }
+      if (typeof frame.weather === 'string') store.env.weather = frame.weather;
+      if (Number.isFinite(frame.visibility_m)) store.env.visibilityM = frame.visibility_m;
     }
-    if (typeof frame.weather === 'string') store.env.weather = frame.weather;
-    if (Number.isFinite(frame.visibility_m)) store.env.visibilityM = frame.visibility_m;
 
     /* OSM 大地图静态段通道（2026-08-15）：scene/frame 静态段超 64KB 总线
      * 上限时 flowsim 省略 road_network（scene_pub.cpp），rn 为空 → 用

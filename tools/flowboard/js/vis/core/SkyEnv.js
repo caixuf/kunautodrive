@@ -236,8 +236,10 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
       opacity: 0.4,
       side: THREE.DoubleSide,
       depthWrite: false,
+      fog: false,
     });
     rippleMesh = new THREE.InstancedMesh(ringGeo, ringMat, MAX_RIPPLES);
+    rippleMesh.frustumCulled = false;
     rippleMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     const dummy = new THREE.Object3D();
     dummy.position.set(0, -999, 0);
@@ -288,13 +290,15 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
     geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
 
     const mat = new THREE.LineBasicMaterial({
-      color: 0x99bbff,
+      color: 0xb0d0ff,
       transparent: true,
-      opacity: 0.55,
+      opacity: 0.70,
       depthWrite: false,
+      fog: false,
     });
 
     rainMesh = new THREE.LineSegments(geo, mat);
+    rainMesh.frustumCulled = false;
     rainMesh.userData.velocities = velocities;
     rainMesh.userData.streakLen = streakLen;
     rainMesh.userData.windTiltX = windTiltX;
@@ -358,15 +362,17 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
 
     const mat = new THREE.PointsMaterial({
       color: 0xffffff,
-      size: 0.85,
+      size: 1.0,
       map: _getSnowTexture() || null,
       transparent: true,
       opacity: 0.95,
       depthWrite: false,
       sizeAttenuation: true,
+      fog: false,
     });
 
     snowMesh = new THREE.Points(geo, mat);
+    snowMesh.frustumCulled = false;
     snowMesh.userData.speeds = speeds;
     snowMesh.userData.seeds = seeds;
     scene.add(snowMesh);
@@ -552,14 +558,26 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
         arr[idx + 1] -= speed;
         arr[idx + 4] -= speed;
 
-        // 水平环形跟随相机
-        if (arr[idx] > cx + halfArea) { arr[idx] -= PRECIP_AREA; arr[idx + 3] -= PRECIP_AREA; }
-        else if (arr[idx] < cx - halfArea) { arr[idx] += PRECIP_AREA; arr[idx + 3] += PRECIP_AREA; }
+        // 水平环形跟随相机（支持任意车速与瞬移，确保粒子永不脱离相机包络）
+        const dx = arr[idx] - cx;
+        const dz = arr[idx + 2] - cz;
+        if (dx > halfArea) {
+          const shift = Math.ceil((dx - halfArea) / PRECIP_AREA) * PRECIP_AREA;
+          arr[idx] -= shift; arr[idx + 3] -= shift;
+        } else if (dx < -halfArea) {
+          const shift = Math.ceil((-dx - halfArea) / PRECIP_AREA) * PRECIP_AREA;
+          arr[idx] += shift; arr[idx + 3] += shift;
+        }
 
-        if (arr[idx + 2] > cz + halfArea) { arr[idx + 2] -= PRECIP_AREA; arr[idx + 5] -= PRECIP_AREA; }
-        else if (arr[idx + 2] < cz - halfArea) { arr[idx + 2] += PRECIP_AREA; arr[idx + 5] += PRECIP_AREA; }
+        if (dz > halfArea) {
+          const shift = Math.ceil((dz - halfArea) / PRECIP_AREA) * PRECIP_AREA;
+          arr[idx + 2] -= shift; arr[idx + 5] -= shift;
+        } else if (dz < -halfArea) {
+          const shift = Math.ceil((-dz - halfArea) / PRECIP_AREA) * PRECIP_AREA;
+          arr[idx + 2] += shift; arr[idx + 5] += shift;
+        }
 
-        // 雨滴触地（y < bottomY）→ 回收至天顶并触发地面水花涟漪
+        // 垂直循环：下落至地面下方或超出当前天顶高度时回收
         if (arr[idx + 4] < bottomY) {
           const newX = cx + (Math.random() - 0.5) * PRECIP_AREA;
           const newY = topY + Math.random() * 8.0;
@@ -583,6 +601,10 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
               rip.scale = 0.15;
             }
           }
+        } else if (arr[idx + 4] > topY + 12.0) {
+          const newY = bottomY + Math.random() * (topY - bottomY);
+          arr[idx + 1] = newY;
+          arr[idx + 4] = newY - streakLen;
         }
       }
       pos.needsUpdate = true;
@@ -624,18 +646,30 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
         arr[idx + 2] += Math.cos(_elapsedTime * 1.2 + seeds[i]) * delta * 1.2;
 
         // 水平环形跟随相机
-        if (arr[idx] > cx + halfArea) arr[idx] -= PRECIP_AREA;
-        else if (arr[idx] < cx - halfArea) arr[idx] += PRECIP_AREA;
+        const dx = arr[idx] - cx;
+        const dz = arr[idx + 2] - cz;
+        if (dx > halfArea) {
+          const shift = Math.ceil((dx - halfArea) / PRECIP_AREA) * PRECIP_AREA;
+          arr[idx] -= shift;
+        } else if (dx < -halfArea) {
+          const shift = Math.ceil((-dx - halfArea) / PRECIP_AREA) * PRECIP_AREA;
+          arr[idx] += shift;
+        }
 
-        if (arr[idx + 2] > cz + halfArea) arr[idx + 2] -= PRECIP_AREA;
-        else if (arr[idx + 2] < cz - halfArea) arr[idx + 2] += PRECIP_AREA;
+        if (dz > halfArea) {
+          const shift = Math.ceil((dz - halfArea) / PRECIP_AREA) * PRECIP_AREA;
+          arr[idx + 2] -= shift;
+        } else if (dz < -halfArea) {
+          const shift = Math.ceil((-dz - halfArea) / PRECIP_AREA) * PRECIP_AREA;
+          arr[idx + 2] += shift;
+        }
 
         // 垂直循环：下落至地面下方后回到天顶
         if (arr[idx + 1] < bottomY) {
           arr[idx + 1] = topY + Math.random() * 4.0;
           arr[idx]     = cx + (Math.random() - 0.5) * PRECIP_AREA;
           arr[idx + 2] = cz + (Math.random() - 0.5) * PRECIP_AREA;
-        } else if (arr[idx + 1] > topY + 6.0) {
+        } else if (arr[idx + 1] > topY + 10.0) {
           arr[idx + 1] = bottomY + Math.random() * (topY - bottomY);
         }
       }

@@ -2,12 +2,20 @@
 // FlowBoard — Entry Point ES Module
 // ═══════════════════════════════════════════════════════════════
 // Imports from sub-modules
-import { init3DScene, resize3D, update3D, sceneReady, scene3d, setTopoData as setTopoData3D, setDebugCam, setCameraMode, resetCamera, resetMapView, closeNPCDetail, setPerfTier, togglePerfOverlay, toggleMinimap, setRenderPaused } from './vis/main.js';
+import { init3DScene, resize3D, update3D, sceneReady, scene3d, setTopoData as setTopoData3D, setDebugCam, setCameraMode, resetCamera, resetMapView, closeNPCDetail, setPerfTier, togglePerfOverlay, toggleMinimap, setRenderPaused, setUserEnvironment } from './vis/main.js';
 import { initCharts, updateCharts, onChartTopicChange, onChartRangeChange, setTopoData as setTopoDataChart } from './charts.js';
 import { safeCall, reportDiag, clearDiag, _auditSceneMaterials } from './utils.js';
 import { updateDeadReckon, _dr, initDeadReckon, tickDeadReckon } from './vis/core/DeadReckon.js';
 import { selectCurrentMotionSegment } from './vis/math/Trajectory.js';
 import { mapToRoadNetwork } from './showcase/sceneAdapter.js';
+
+var userEnv = { lighting: null, weather: null, visibility_m: null };
+try {
+  userEnv.lighting = localStorage.getItem('flowboard_user_lighting') || null;
+  userEnv.weather = localStorage.getItem('flowboard_user_weather') || null;
+  var _savedVis = localStorage.getItem('flowboard_user_visibility');
+  if (_savedVis) userEnv.visibility_m = Number(_savedVis);
+} catch (_) {}
 
 function setText(id, val) {
   var el = document.getElementById(id);
@@ -1420,8 +1428,14 @@ function updateAll() {
     var sceneEnv = (topoData.metrics || {}).scene || {};
     var lightingSelect = document.getElementById('env-lighting');
     var weatherSelect = document.getElementById('env-weather');
-    if (lightingSelect && sceneEnv.lighting) lightingSelect.value = sceneEnv.lighting;
-    if (weatherSelect && sceneEnv.weather) weatherSelect.value = sceneEnv.weather;
+    if (lightingSelect) {
+      if (userEnv.lighting) lightingSelect.value = userEnv.lighting;
+      else if (sceneEnv.lighting) lightingSelect.value = sceneEnv.lighting;
+    }
+    if (weatherSelect) {
+      if (userEnv.weather) weatherSelect.value = userEnv.weather;
+      else if (sceneEnv.weather) weatherSelect.value = sceneEnv.weather;
+    }
   }
 
   // 表格（topicStats / processTopics）：节流 1Hz，且只在 analyze 工作区更新
@@ -2230,6 +2244,20 @@ async function setEnvironment() {
   var lighting = document.getElementById('env-lighting').value;
   var weather = document.getElementById('env-weather').value;
   var visibility = {clear:1200, cloudy:1000, overcast:600, rain:220, storm:100, snow:150, fog:50, sandstorm:80}[weather] || 1000;
+  userEnv.lighting = lighting;
+  userEnv.weather = weather;
+  userEnv.visibility_m = visibility;
+  try {
+    localStorage.setItem('flowboard_user_lighting', lighting);
+    localStorage.setItem('flowboard_user_weather', weather);
+    localStorage.setItem('flowboard_user_visibility', String(visibility));
+  } catch (_) {}
+
+  // 立即在前端 3D 渲染生效并永久保持（优先于后端数据）
+  if (typeof setUserEnvironment === 'function') {
+    setUserEnvironment({ lighting: lighting, weather: weather, visibilityM: visibility });
+  }
+
   try {
     var r = await fetch(serverUrl + '/api/environment', {
       method: 'POST',
@@ -2498,6 +2526,23 @@ function initAll() {
         });
       });
     } catch(e) {}
+    // Restore persistent user environment (weather/lighting)
+    if (userEnv.lighting) {
+      var elL = document.getElementById('env-lighting');
+      if (elL) elL.value = userEnv.lighting;
+    }
+    if (userEnv.weather) {
+      var elW = document.getElementById('env-weather');
+      if (elW) elW.value = userEnv.weather;
+    }
+    if (userEnv.lighting || userEnv.weather) {
+      setUserEnvironment({
+        lighting: userEnv.lighting,
+        weather: userEnv.weather,
+        visibilityM: userEnv.visibility_m
+      });
+    }
+
     // Ensure 3D card is always open on load
     var sc = document.getElementById('scene3d-card');
     if (sc) sc.classList.remove('collapsed');
