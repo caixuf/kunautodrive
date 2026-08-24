@@ -221,5 +221,9 @@ async function boot() {
   }
 }
 
-window.addEventListener('resize', resize3D);
-boot();
+export { toTopo, buildRoutePath, routeFocus, buildingFocus };
+
+if (typeof window !== 'undefined' && document.getElementById('scene3d-canvas')) {
+  window.addEventListener('resize', resize3D);
+  boot();
+}

@@ -51,6 +51,12 @@ LAUNCHER_STDOUT="${FLOW_LAUNCHER_STDOUT:-/tmp/flow_launcher_stdout.txt}"
 LAUNCHER_STDERR="${FLOW_LAUNCHER_STDERR:-/tmp/flow_launcher_stderr.txt}"
 SKIP_SERVICES="${FLOW_SKIP_SERVICES:-0}"
 SKIP_GLOBAL_CLEANUP="${FLOW_SKIP_GLOBAL_CLEANUP:-0}"
+for _arg in "$@"; do
+  if [ "$_arg" = "--skip-services" ]; then
+    SKIP_SERVICES=1
+    SKIP_GLOBAL_CLEANUP=1
+  fi
+done
 BUILD_LOCK="${FLOW_BUILD_LOCK:-}"
 SKIP_BUILD="${FLOW_SKIP_BUILD:-0}"
 

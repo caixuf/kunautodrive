@@ -1005,9 +1005,9 @@ static bool dispatch_request(int fd, MonitorServer* ms,
                         } else {
                             snprintf(scenario_path, sizeof(scenario_path), "scenarios/city_ring_map.json");
                         }
-                        execl("/bin/bash", "bash", "scripts/demo.sh", "60",
+                        execl("/bin/bash", "bash", "scripts/demo.sh", "0",
                               "--scenario", scenario_path,
-                              "--route", route_id, "--no-browser", (char*)NULL);
+                              "--route", route_id, "--no-browser", "--skip-services", (char*)NULL);
                         _exit(127);
                     }
                     if (pid > 0) {

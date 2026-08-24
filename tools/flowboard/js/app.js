@@ -8,6 +8,7 @@ import { safeCall, reportDiag, clearDiag, _auditSceneMaterials } from './utils.j
 import { updateDeadReckon, _dr, initDeadReckon, tickDeadReckon } from './vis/core/DeadReckon.js';
 import { selectCurrentMotionSegment } from './vis/math/Trajectory.js';
 import { mapToRoadNetwork } from './showcase/sceneAdapter.js';
+import { toTopo } from './mapPreview.js';
 
 var userEnv = { lighting: null, weather: null, visibility_m: null };
 try {
@@ -184,14 +185,34 @@ async function previewSelectedRoute() {
   var map = document.getElementById('map-choice');
   var route = document.getElementById('route-choice');
   if (!map || !route) return;
-  var modal = document.getElementById('map-preview-modal');
-  var frame = document.getElementById('map-preview-frame');
-  if (modal && frame) {
-    setRenderPaused(true);
-    modal.style.display = 'block';
-    frame.src = '/tools/flowboard/map_preview.html?map=' +
-      encodeURIComponent(map.value) + '&route=' + encodeURIComponent(route.value) +
-      '&v=20260812isolated2';
+  var mapId = map.value;
+  var routeId = route.value;
+  toast('正在主视口载入 ' + mapId + ' 地图…');
+  try {
+    var response = await fetch('/api/map/preview', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({map: mapId}),
+      cache: 'no-store',
+    });
+    var result = await response.json();
+    if (!response.ok || !result.ok || !result.map) throw new Error(result && result.error ? result.error : 'map load failed');
+    var topoData = toTopo(result.map, result.routes ? result.routes.routes : [], routeId);
+    update3D(topoData);
+    setCameraMode('orbit');
+    resetMapView();
+    toast('已直接在主 3D 视口载入：' + mapId + ' · ' + (routeId || 'main'));
+  } catch (err) {
+    console.warn('Direct 3D map load failed, fallback to modal:', err);
+    var modal = document.getElementById('map-preview-modal');
+    var frame = document.getElementById('map-preview-frame');
+    if (modal && frame) {
+      setRenderPaused(true);
+      modal.style.display = 'block';
+      frame.src = '/tools/flowboard/map_preview.html?map=' +
+        encodeURIComponent(map.value) + '&route=' + encodeURIComponent(route.value) +
+        '&v=20260812isolated2';
+    }
   }
 }
 
