@@ -3,13 +3,13 @@
 > **本章导读**：
 > 自动驾驶规划系统通常遵循“分层分级（Hierarchical）”架构：上层**行为决策（Behavior Decision）**负责解决离散的宏观策略问题（“现在应该跟车还是变道？是在路口让行还是执行掉头？”），下层**轨迹生成（Trajectory Generation）**负责解决连续的时空曲线拟合与动态避障。
 >
-> FlowEngine 设计了支持多场景模式演进的分层行为决策机（Behavior FSM），并在真实 ADAS Pipeline 中打通了 **导航驱动的 NOA 主动变道（Navigation on Autopilot）** 与 **8 状态驾驶模式仲裁**。
+> KunAutoDrive 设计了支持多场景模式演进的分层行为决策机（Behavior FSM），并在真实 ADAS Pipeline 中打通了 **导航驱动的 NOA 主动变道（Navigation on Autopilot）** 与 **8 状态驾驶模式仲裁**。
 
 ---
 
-## 1. 驾驶模式分层状态机体系（NA ➔ NOA）
+## 1. 驾驶模式分层状态机体系（NA → NOA）
 
-FlowEngine 定义了 5 个驾驶模式能级（Mode Ladder），并由仲裁器（Mode Transition Guard）根据传感器与场景就绪条件自动晋级或安全降级：
+KunAutoDrive 定义了 5 个驾驶模式能级（Mode Ladder），并由仲裁器（Mode Transition Guard）根据传感器与场景就绪条件自动晋级或安全降级：
 
 ```
 驾驶模式能级阶梯:

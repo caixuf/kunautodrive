@@ -3,7 +3,7 @@
 > **本章导读**：
 > 控制模块（Control Module）是自动驾驶系统的“四肢”。无论上层的感知、定位与规划多么完美，如果底层的横向转向角（Steering Angle）与纵向油门/刹车（Throttle/Brake）无法精确、平稳、无超调地跟踪期望轨迹，车辆就会发生画龙振荡（Snaking）甚至冲出车道。
 >
-> FlowEngine 控制器 `control_node.cpp` 实现了 **Stanley 几何前馈反馈横向控制器**、**线性时变模型预测控制（LTV MPC）** 以及专为狭窄掉头和倒车泊车设计的 **特殊机动跟踪器（ManeuverTracker）**。
+> KunAutoDrive 控制器 `control_node.cpp` 实现了 **Stanley 几何前馈反馈横向控制器**、**线性时变模型预测控制（LTV MPC）** 以及专为狭窄掉头和倒车泊车设计的 **特殊机动跟踪器（ManeuverTracker）**。
 
 ---
 
@@ -35,7 +35,7 @@ $$\delta(t) = \psi_e(t) + \arctan\left( \frac{k \cdot e_y(t)}{v(t) + k_{\text{so
 
 ## 2. 线性时变模型预测控制（LTV MPC）
 
-在高车速（$> 60\text{ km/h}$）或大侧向加速度工况下，由于轮胎存在侧偏角（Tire Slip Angle），纯几何 Stanley 算法会出现稳态横偏。FlowEngine 在 `src/core/ltv_mpc.c` 中实现了基于自行车动力学模型的 LTV MPC：
+在高车速（$> 60\text{ km/h}$）或大侧向加速度工况下，由于轮胎存在侧偏角（Tire Slip Angle），纯几何 Stanley 算法会出现稳态横偏。KunAutoDrive 在 `src/core/ltv_mpc.c` 中实现了基于自行车动力学模型的 LTV MPC：
 
 ### 2.1 状态空间方程
 $$X = \begin{bmatrix} e_y \\ \dot{e}_y \\ e_\psi \\ \dot{e}_\psi \end{bmatrix}, \quad \dot{X} = A X + B u + C \rho$$
@@ -51,7 +51,7 @@ $$\min_U \sum_{k=0}^{N_p} \left( X_k^T Q X_k + u_k^T R u_k + \Delta u_k^T R_{\De
 
 在自动驾驶中，**掉头（U-Turn）、平行泊车（Parking）、倒车（Reverse）** 属于非连续参考线的特殊工况。传统轨迹规划器无法直接在此类工况下生成连续单向多项式。
 
-FlowEngine 采用基于航路点状态机的 `ManeuverTracker`（`include/maneuver_tracker.h`）：
+KunAutoDrive 采用基于航路点状态机的 `ManeuverTracker`（`include/maneuver_tracker.h`）：
 
 ```c
 typedef enum {
@@ -75,7 +75,7 @@ typedef struct {
 
 在实车调试中，控制周期微小的调度抖动会导致转向角产生 $\sim 1.6\text{ Hz}$ 的极限环（Limit Cycle）左摇右晃。
 
-FlowEngine 在 `control_node.cpp` 中引入了一阶滞后低通滤波与横摆阻尼：
+KunAutoDrive 在 `control_node.cpp` 中引入了一阶滞后低通滤波与横摆阻尼：
 ```c
 #define STEER_FILTER_NEW   0.5f  /* 新值权重 50% (-3dB @ 1.2Hz) */
 #define STEER_FILTER_PREV  0.5f  /* 历史值权重 50% */

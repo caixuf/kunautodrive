@@ -263,14 +263,14 @@ OSM 建筑 ──OSM2World(adapter)──▶ building DSL ──bld_compiler─�
 
 ## 9. 反模式清单（明确禁止，review 红线）
 
-- ❌ **OSM 直连运行时**：`net2map.py` / `osm_to_map.py` 直接 `json.dump(map.json)`。
+- **OSM 直连运行时**：`net2map.py` / `osm_to_map.py` 直接 `json.dump(map.json)`。
   → 必须改为先产 `.kmap`，再交 `map_compiler.py`。
-- ❌ **多编译器并存**：除 `map_compiler.py` 外任何程序写 map.json 契约。
-- ❌ **渲染 `if/else + 正则` 分叉**：`edge.type` 用正则匹配选渲染分支（旧
+- **多编译器并存**：除 `map_compiler.py` 外任何程序写 map.json 契约。
+- **渲染 `if/else + 正则` 分叉**：`edge.type` 用正则匹配选渲染分支（旧
   `book/16_flowsim_scenario_design.md` 警告过的反模式）。→ 改用 `type → 模块注册表`。
-- ❌ **`:` 命名特例**：路口内部 connector 以 `:` 混在 road 列表。→ 显式 Connection 类型。
-- ❌ **场景内嵌地图几何**：场景脚本携带道路点。→ 只引用 `map_id`。
-- ❌ **建筑寄生 OSM 入口**：建筑只能从 `--buildings-from` 继承。→ 独立 building DSL 通道。
+- **`:` 命名特例**：路口内部 connector 以 `:` 混在 road 列表。→ 显式 Connection 类型。
+- **场景内嵌地图几何**：场景脚本携带道路点。→ 只引用 `map_id`。
+- **建筑寄生 OSM 入口**：建筑只能从 `--buildings-from` 继承。→ 独立 building DSL 通道。
 
 ---
 

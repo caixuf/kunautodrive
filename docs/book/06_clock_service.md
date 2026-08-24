@@ -3,7 +3,7 @@
 > **本章导读**：
 > 在自动驾驶系统中，时间戳（Timestamp）是多传感器融合与控制闭环的“灵魂”。传感器采样（LiDAR 10Hz、GPS 20Hz、IMU 100Hz）如果缺乏统一且确定性的时间基准，会导致严重的**时序对齐偏差（Temporal Misalignment）**与滤波发散。
 >
-> FlowEngine 提供了统一的 `ClockService`，不仅严格规范了全链路 **`uint64_t timestamp_us`（微秒）** 语义，还实现了**真实物理时钟与仿真步进时钟的无缝切换**，确保仿真实验在数学上 100% 可复现。
+> KunAutoDrive 提供了统一的 `ClockService`，不仅严格规范了全链路 **`uint64_t timestamp_us`（微秒）** 语义，还实现了**真实物理时钟与仿真步进时钟的无缝切换**，确保仿真实验在数学上 100% 可复现。
 
 ---
 
@@ -13,7 +13,7 @@
 
 ```
                       ┌────────────────────────────────────────────────────────┐
-                      │              FlowEngine 统一时钟三层源                  │
+                      │              KunAutoDrive 统一时钟三层源                  │
                       ├────────────────────────────────────────────────────────┤
   1. 逻辑调度时间     │  clock_now_us()                                        │
      (算法消费)       │  • 实车模式: 返回真实 CLOCK_MONOTONIC 单调时间          │
@@ -33,7 +33,7 @@
 
 ## 2. 全链路微秒语义规范（`timestamp_us`）
 
-In FlowEngine 中，所有数据结构（`Message`、`Pose`、`LidarFrame`、`ImuData`）必须遵守以下时间戳铁律：
+In KunAutoDrive 中，所有数据结构（`Message`、`Pose`、`LidarFrame`、`ImuData`）必须遵守以下时间戳铁律：
 
 1. **类型统一**：必须为 `uint64_t`，单位严格为**微秒（μs）**，禁止出现秒（`double`）或毫秒（`ms`）的混用。
 2. **GNSS 采集时刻优先（Acquisition Time Priority）**：
@@ -76,7 +76,7 @@ sequenceDiagram
 - 在同一个仿真 tick 内，发布与消费处于同一逻辑时刻，计算出的传输延迟 `latency = now - msg_ts` **恒为 0**！
 - 跨 tick 处理时，延迟又突然跃升为 20ms 的整数倍。这使 **Topic 统计（p50/p99 延迟监控）彻底失效**。
 
-FlowEngine 通过引入 `clock_now_monotonic_wall_us()` 解决此痛点：
+KunAutoDrive 通过引入 `clock_now_monotonic_wall_us()` 解决此痛点：
 - **算法决策逻辑** 消费 `clock_now_us()`（保证确定性）；
 - **总线 QoS / 遥测系统** 消费 `clock_now_monotonic_wall_us()`（保证真实物理时延统计的准确性）。
 
@@ -129,4 +129,4 @@ uint64_t cost_us = clock_now_monotonic_wall_us() - t_start;
 
 ---
 
-*下一章预告：第 07 章将深入探讨 FlowEngine 的数据契约基石——零反射类型安全序列化层（Serializer & IDL Codegen）。*
+*下一章预告：第 07 章将深入探讨 KunAutoDrive 的数据契约基石——零反射类型安全序列化层（Serializer & IDL Codegen）。*

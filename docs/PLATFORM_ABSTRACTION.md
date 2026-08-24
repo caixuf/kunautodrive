@@ -69,11 +69,11 @@
 
 | 原语 | Linux | macOS | QNX |
 |------|-------|-------|-----|
-| 实时/单调时钟 | ✅ | ✅ | 编译守卫 |
-| 当前线程命名 | ✅ | ✅（compat shim） | 不支持 |
-| 共享内存 IPC（shm_open + process-shared pthread sync） | ✅ | ✅（compat fallback） | 不支持 |
-| Robust mutex 恢复 | ✅ | 不支持（no-op 降级） | 不支持 |
-| CPU 亲和性 | ✅ | 不支持 | 不支持 |
+| 实时/单调时钟 | 支持 | [OK] | 编译守卫 |
+| 当前线程命名 | 支持 | 支持（compat shim） | 不支持 |
+| 共享内存 IPC（shm_open + process-shared pthread sync） | 支持 | 支持（compat fallback） | 不支持 |
+| Robust mutex 恢复 | 支持 | 不支持（no-op 降级） | 不支持 |
+| CPU 亲和性 | 支持 | 不支持 | 不支持 |
 
 **QNX 行为**：当 `FLOWENGINE_TARGET_QNX` 或 `__QNXNTO__` 选中时，
 `ipc_channel_open` 在分配共享内存前以 `ENOTSUP` 失败。这是有意设计——

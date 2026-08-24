@@ -3,14 +3,14 @@
 > **本章导读**：
 > 在自动驾驶大型工程中，代码的“小改动”极易引发不可预知的“大倒退”（Regression）。例如：修改了横向控制的滤波系数，可能在直线道路上表现更平滑，但在急弯处却导致车辆冲出车道；微调了感知阈值，可能降低了静态假目标误检，却在暴雨场景下导致行人漏检。
 >
-> FlowEngine 构建了完备的 **分层自动化回归评估体系**：从毫秒级的 **L0 静态流水线校验（`pipeline_check.py`）**，到秒级的 **L1 单元测试（CTest）**，再到分钟级的 **端到端黑盒仿真评估器（`demo_evaluator.py`）** 与 **参数敏感度扫描**，筑牢软件质量的护城河。
+> KunAutoDrive 构建了完备的 **分层自动化回归评估体系**：从毫秒级的 **L0 静态流水线校验（`pipeline_check.py`）**，到秒级的 **L1 单元测试（CTest）**，再到分钟级的 **端到端黑盒仿真评估器（`demo_evaluator.py`）** 与 **参数敏感度扫描**，筑牢软件质量的护城河。
 
 ---
 
 ## 1. 软件质量守护：三层金字塔验证阶梯
 
 ```
-FlowEngine 质量验证阶梯:
+KunAutoDrive 质量验证阶梯:
   ┌─────────────────────────────────────────────────────────────┐
   │  L2 / End-to-End 黑盒回归评估 (demo_evaluator.py, 3~5 分钟) │
   │  • 多场景全栈仿真 (高速、城区、十字路口、掉头、匝道)         │
@@ -81,7 +81,7 @@ python3 tools/demo_evaluator.py --report build/evaluation_report.json
 ## 4. 参数敏感度扫描（Sensitivity Grid Search）
 
 在规控算法中，存在大量需要调优的超参数（如 Stanley 增益 $k$、LTV MPC 预测时域 $N_p$、TTC 阈值）。
-FlowEngine 支持基于网格搜索（Grid Search）的参数敏感度自动扫描：
+KunAutoDrive 支持基于网格搜索（Grid Search）的参数敏感度自动扫描：
 
 ```bash
 # 自动扫描 Stanley 增益 k 从 0.5 到 2.0 对横向误差与 Jerk 的影响

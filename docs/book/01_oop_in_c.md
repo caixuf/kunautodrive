@@ -3,7 +3,7 @@
 > **本章导读**：
 > 现代高性能自动驾驶与机器人中间件对**启动延迟、内存占用、实时确定性与 ABI 稳定性**有着严苛的要求。虽然 C++ 提供了原生的面向对象（OOP）机制，但在微内核底座（Microkernel Foundation）与跨语言 FFI 插件边界处，纯 C11 依然是性能最高、最易排错、无隐藏运行时开销（Zero Overhead）的首选语言。
 >
-> **KunAutoDrive** 采用 **FlowEngine** 作为其底层高性能 C11 微内核。本章将深入剖析系统如何仅凭 C11 原生语言特性，优雅且严谨地实现**封装（Encapsulation）、单继承（Single Inheritance）、多态虚表（vtable Dispatch）与运行时生命周期管理**。
+> **KunAutoDrive** 采用 **KunAutoDrive** 作为其底层高性能 C11 微内核。本章将深入剖析系统如何仅凭 C11 原生语言特性，优雅且严谨地实现**封装（Encapsulation）、单继承（Single Inheritance）、多态虚表（vtable Dispatch）与运行时生命周期管理**。
 
 ---
 
@@ -13,11 +13,11 @@
 - **C++ 原生类**：语法便利，但伴随着庞大的标准库依赖、名称修饰（Name Mangling）导致的 ABI 不稳定问题、异常处理（Exception Handling）带来的不确定耗时栈展开，以及难以跨语言（如 Rust / Python / Zig）透明绑定。
 - **纯 C 过程式**：虽然轻量高效，但如果缺乏结构化抽象，系统模块膨胀后将沦为全局变量与裸指针的灾难。
 
-KunAutoDrive 采用的策略是：**“C11 FlowEngine 微内核抽象底座 + C++20 FlowCoro 协程/规控外壳”**。通过在 C 语言中模拟结构清晰的 OOP 范式，既保留了极高的抽象表达力，又拥有以下核心优势：
+KunAutoDrive 采用的策略是：**“C11 KunAutoDrive 微内核抽象底座 + C++20 FlowCoro 协程/规控外壳”**。通过在 C 语言中模拟结构清晰的 OOP 范式，既保留了极高的抽象表达力，又拥有以下核心优势：
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│             KunAutoDrive / FlowEngine C-OOP 核心价值        │
+│             KunAutoDrive C-OOP 核心价值        │
 ├───────────────────┬─────────────────────────────────────────┤
 │ 1. 内存布局完全透明 │ 每一字节的 offsetof 清晰可见，无隐藏开销 │
 │ 2. 零成本抽象       │ 虚函数调用仅一次间接寻址，无虚表多重跳跃│
@@ -66,7 +66,7 @@ C 语言实现安全继承的核心基石，来自于 ISO C 标准对结构体�
 
 ### 3.1 封装：数据与行为的边界划分
 
-在 FlowEngine 中，模块数据被组织在 Typedef Struct 中，而接口规范定义为独立的函数指针集。
+在 KunAutoDrive 中，模块数据被组织在 Typedef Struct 中，而接口规范定义为独立的函数指针集。
 
 ```c
 /* include/task_interface.h */
@@ -91,7 +91,7 @@ typedef struct {
 
 ### 3.2 多态：函数指针表（vtable）模拟
 
-FlowEngine 将所有可被子类重写的行为统一声明在 `TaskInterface` 虚函数表中：
+KunAutoDrive 将所有可被子类重写的行为统一声明在 `TaskInterface` 虚函数表中：
 
 ```c
 /* include/task_interface.h */
@@ -135,7 +135,7 @@ typedef struct {
 
 ## 4. 虚函数多态分发机制与便利宏
 
-直接调用 `task->vtable->method(task)` 虽然直观，但若子类未实现某个可选方法（指针为 `NULL`）会导致段错误（Segfault）。FlowEngine 封装了高效且安全的调用宏：
+直接调用 `task->vtable->method(task)` 虽然直观，但若子类未实现某个可选方法（指针为 `NULL`）会导致段错误（Segfault）。KunAutoDrive 封装了高效且安全的调用宏：
 
 ```c
 /* include/task_interface.h */
@@ -177,7 +177,7 @@ sequenceDiagram
 
 ## 5. 真实工程实战：编写一个派生插件任务
 
-以下演示如何基于 FlowEngine C-OOP 规范，从零实现一个自定义传感器采集任务。
+以下演示如何基于 KunAutoDrive C-OOP 规范，从零实现一个自定义传感器采集任务。
 
 ```c
 #include <stdio.h>
@@ -251,7 +251,7 @@ TaskBase* sensor_task_create(const char* name, const char* ip) {
 
 ### 避坑 1：绝对禁止让 `TaskBase` 偏离首成员
 ```c
-/* ❌ 错误示范：编译器会在 offsetof(base) 插入偏移量 */
+/* 错误示范：编译器会在 offsetof(base) 插入偏移量 */
 typedef struct {
     int invalid_padding;
     TaskBase base; // 危险！(TaskBase*)ptr != (MyTask*)ptr
@@ -262,10 +262,10 @@ typedef struct {
 ### 避坑 2：虚表必须声明为 `static const`
 虚函数表包含一组固定的函数指针，应该存放在程序的只读数据段（`.rodata`），避免在运行时被意外修改造成安全漏洞或悬挂指针：
 ```c
-/* ✅ 正确规范 */
+/* 正确规范 */
 static const TaskInterface MY_VTABLE = { ... };
 
-/* ❌ 错误规范：每次动态分配虚表，浪费内存且易被非法篡改 */
+/* 错误规范：每次动态分配虚表，浪费内存且易被非法篡改 */
 task->vtable = malloc(sizeof(TaskInterface));
 ```
 
@@ -298,4 +298,4 @@ void task_destroy(TaskBase* task) {
 
 ---
 
-*下一章预告：第 02 章将深入探讨 FlowEngine 如何将这些 C-OOP 任务封装为动态链接库（`.so`），并通过 `dlopen` 与微内核插件体系实现零停机热插拔。*
+*下一章预告：第 02 章将深入探讨 KunAutoDrive 如何将这些 C-OOP 任务封装为动态链接库（`.so`），并通过 `dlopen` 与微内核插件体系实现零停机热插拔。*

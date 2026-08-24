@@ -3,7 +3,7 @@
 > **本章导读**：
 > 在第一代机器人系统（如 ROS 1）中，中心化的 Master 节点（`roscore`）是整个系统的单点故障源（SPOF）。一旦 Master 异常退出，所有节点之间的通信将彻底陷入瘫痪。
 >
-> FlowEngine 借鉴了 DDS RTPS 的去中心化思想，在微内核层实现了基于 **UDP 组播信标（Multicast Beacon）**的轻量级服务发现协议 `DiscoveryManager`。每个 ADAS 节点在启动时自动宣告自身的 Pub/Sub 能力，动态构建**全网拓扑图（Topology Graph）**，并在节点异常离线时触发毫秒级拓扑自愈。
+> KunAutoDrive 借鉴了 DDS RTPS 的去中心化思想，在微内核层实现了基于 **UDP 组播信标（Multicast Beacon）**的轻量级服务发现协议 `DiscoveryManager`。每个 ADAS 节点在启动时自动宣告自身的 Pub/Sub 能力，动态构建**全网拓扑图（Topology Graph）**，并在节点异常离线时触发毫秒级拓扑自愈。
 
 ---
 
@@ -17,7 +17,7 @@
                                 │ (一旦宕机，全网瘫痪)
                                 ▼
 
-去中心化组播对等架构 (FlowEngine Discovery):
+去中心化组播对等架构 (KunAutoDrive Discovery):
 ┌─────────────────────────────────────────────────────────────┐
 │  UDP Multicast Group (239.255.0.100:5500)                   │
 │                                                             │
@@ -106,7 +106,7 @@ typedef struct {
 ```
 
 ### 4.1 自动依赖同步与等待（Dependency Sync）
-在启动复杂的 Pipeline 时，规划节点通常必须等待感知和融合节点完全上线后才能启动计算。FlowEngine 提供了确定性等待 API：
+在启动复杂的 Pipeline 时，规划节点通常必须等待感知和融合节点完全上线后才能启动计算。KunAutoDrive 提供了确定性等待 API：
 
 ```c
 const char* required_nodes[] = { "perception_node", "fusion_node" };
@@ -143,4 +143,4 @@ LOG_INFO("Discovery", "自动建立跨进程 IPC 管道数量: %d", channel_coun
 
 ---
 
-*下一章预告：第 10 章将进入 FlowEngine 的异步性能巅峰——基于 C++20 原生协程的 FlowCoro 调度框架。*
+*下一章预告：第 10 章将进入 KunAutoDrive 的异步性能巅峰——基于 C++20 原生协程的 FlowCoro 调度框架。*

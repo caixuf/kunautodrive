@@ -199,17 +199,17 @@ flowrec_node
 
 | 功能 | cyber_monitor | KunAutoDrive |
 |------|-------------|------------|
-| Topic 列表 | ✅ | ✅ flowmond + flowctl |
-| 实时发布频率 | ✅ | ✅ 内嵌 HTTP SSE |
-| 延迟统计 | ✅ | ✅ per-topic p50/p99 |
-| 丢包统计 | ✅ | ✅ per-topic drop |
-| 拓扑可视化 | ✅ | ✅ FlowBoard D3 力导向 |
-| **跨进程统计聚合** | ✅ | ✅ stats_bridge IPC（同机）|
-| **配置驱动采集** | ⚠️ 硬编码 | ✅ flowrec NodePlugin + JSON params |
-| **触发条件录制** | ❌ | ✅ topic_value + pre/post buffer |
-| **独立监控进程** | ✅ | ✅ flowmond |
-| **告警规则** | ⚠️ | ✅ rule engine |
-| **WebSocket 推送** | ❌ | ✅ 实时 Dashboard |
+| Topic 列表 | 支持 | 支持 flowmond + flowctl |
+| 实时发布频率 | 支持 | 支持 内嵌 HTTP SSE |
+| 延迟统计 | 支持 | 支持 per-topic p50/p99 |
+| 丢包统计 | 支持 | 支持 per-topic drop |
+| 拓扑可视化 | 支持 | 支持 FlowBoard D3 力导向 |
+| **跨进程统计聚合** | 支持 | 支持 stats_bridge IPC（同机）|
+| **配置驱动采集** | 硬编码 | 支持 flowrec NodePlugin + JSON params |
+| **触发条件录制** | 不支持 | 支持 topic_value + pre/post buffer |
+| **独立监控进程** | 支持 | 支持 flowmond |
+| **告警规则** | 部分支持 | 支持 rule engine |
+| **WebSocket 推送** | 不支持 | 支持 实时 Dashboard |
 
 ## 快速开始
 

@@ -1,9 +1,9 @@
 # 第 19 章：端到端学习闭环与模型准入（E2E Learning Loop & DAgger）
 
 > **本章导读**：
-> 传统的模块化自动驾驶（规则感知 ➔ 规则规划 ➔ 规则控制）在面对复杂的长尾 Corner Case（如不规则施工路障、非标交通手势）时容易陷入“补丁堆积”的维护困境。将端到端模仿学习（Imitation Learning）与强化学习（RL）引入规控 Pipeline 是当下的技术趋势。
+> 传统的模块化自动驾驶（规则感知 → 规则规划 → 规则控制）在面对复杂的长尾 Corner Case（如不规则施工路障、非标交通手势）时容易陷入“补丁堆积”的维护困境。将端到端模仿学习（Imitation Learning）与强化学习（RL）引入规控 Pipeline 是当下的技术趋势。
 >
-> FlowEngine 构建了完整的 **端到端学习闭环（E2E Learning Loop）**：包含 **Expert 数据采集录制、v3 59 维时序特征工程、tiny-MLP / PyTorch 模型训练、数据集聚合（DAgger）、ONNX 影子旁路评估（Shadow Mode）以及严格的自动化 Promote 准入门禁**。
+> KunAutoDrive 构建了完整的 **端到端学习闭环（E2E Learning Loop）**：包含 **Expert 数据采集录制、v3 59 维时序特征工程、tiny-MLP / PyTorch 模型训练、数据集聚合（DAgger）、ONNX 影子旁路评估（Shadow Mode）以及严格的自动化 Promote 准入门禁**。
 
 ---
 
@@ -43,7 +43,7 @@
 
 ## 2. v3 特征工程体系规范
 
-为了消除特征工程的模糊性，FlowEngine 在 `tools/train_e2e/feature_schema.py` 中严格冻结了 **v3 特征体系（59 维/帧）**：
+为了消除特征工程的模糊性，KunAutoDrive 在 `tools/train_e2e/feature_schema.py` 中严格冻结了 **v3 特征体系（59 维/帧）**：
 
 | 维度区间 | 物理含义 | 关键字段举例 |
 | :--- | :--- | :--- |
@@ -66,7 +66,7 @@ $$\text{Output} = [\text{throttle } (0 \sim 1), \text{ brake } (0 \sim 1), \text
 
 纯离线模仿学习存在**分布偏移（Distribution Shift）**的固有缺陷：模型一旦在某个微小误差下偏离专家轨迹，就会陷入未见过的状态空间（OOD），导致误差指数级累积并最终冲出车道。
 
-FlowEngine 实现了 **DAgger（Dataset Aggregation）** 迭代流水线：
+KunAutoDrive 实现了 **DAgger（Dataset Aggregation）** 迭代流水线：
 
 ```mermaid
 flowchart TD

@@ -44,14 +44,14 @@ KunAutoDrive 不做算法，只做算法的"插座"。
 
 | 能力 | 状态 | 详情 |
 |------|------|------|
-| **Pub/Sub** | ✅ 完全使用 | 全部 12 节点通过 `transport_publish/subscribe` 通信 |
-| **Topic 发现** | ✅ 使用 | `discovery_advertise()` 在 init 时广播 |
-| **心跳 + 降级阶梯** | ✅ 已接入 | 9 个原因码，supervisor 自动递进 L0-L3 |
-| **反压检测** | ✅ 已接入 | control/safety_control 发布前检查 `topic_is_full` |
-| **消息驱动 select_for** | ✅ 已接入 | control/planning/fusion 用 `select_for` 替代 sleep_us polling |
-| **Req/Reply** | ✅ 已接入 | safety_control 注册 `safety/status` 服务，control 每 5s 查询 |
-| **Choreo 调度** | ⚠️ 部分接入 | 默认 pipeline 已启用 `mode: choreo`；节点由 `node_start_managed()` 注册，输入 topic 已绑定 Choreo trigger。节点执行循环仍以 `select_for`/队列轮询为主，尚未全面改为 `scheduler_choreo_wait()` 数据驱动 |
-| **零拷贝** | ✅ Stereo 已接入 | `sensor/stereo` 单进程路由使用异步 loaned buffer；IPC/REMOTE 自动回退为复制传输。同步 `publish_zero_copy` 仍仅用于短回调 |
+| **Pub/Sub** | 完全使用 | 全部 12 节点通过 `transport_publish/subscribe` 通信 |
+| **Topic 发现** | 使用 | `discovery_advertise()` 在 init 时广播 |
+| **心跳 + 降级阶梯** | 已接入 | 9 个原因码，supervisor 自动递进 L0-L3 |
+| **反压检测** | 已接入 | control/safety_control 发布前检查 `topic_is_full` |
+| **消息驱动 select_for** | 已接入 | control/planning/fusion 用 `select_for` 替代 sleep_us polling |
+| **Req/Reply** | 已接入 | safety_control 注册 `safety/status` 服务，control 每 5s 查询 |
+| **Choreo 调度** | 部分接入 | 默认 pipeline 已启用 `mode: choreo`；节点由 `node_start_managed()` 注册，输入 topic 已绑定 Choreo trigger。节点执行循环仍以 `select_for`/队列轮询为主，尚未全面改为 `scheduler_choreo_wait()` 数据驱动 |
+| **零拷贝** | Stereo 已接入 | `sensor/stereo` 单进程路由使用异步 loaned buffer；IPC/REMOTE 自动回退为复制传输。同步 `publish_zero_copy` 仍仅用于短回调 |
 
 ### 零拷贝接入边界
 
@@ -146,13 +146,13 @@ algorithm_activate_for_mode(&sm, SM_MODE_CP, plugins);
 
 ## 不推荐的做法
 
-- ❌ 在 KunAutoDrive 内部写复杂的数学运算
-- ❌ 把算法编译进核心库（应该作为独立 .so 插件）
-- ❌ 用 C 写矩阵运算（用 Eigen/Ceres 等经过验证的库）
+- 在 KunAutoDrive 内部写复杂的数学运算
+- 把算法编译进核心库（应该作为独立 .so 插件）
+- 用 C 写矩阵运算（用 Eigen/Ceres 等经过验证的库）
 
 ## 推荐的做法
 
-- ✅ 算法作为独立 .so，通过 AlgorithmInterface 接入
-- ✅ 状态机负责模式编排（NA→ACC→CP→NP→NOA）
-- ✅ KunAutoDrive 负责调度、通信、监控
-- ✅ 第三方库负责数学运算
+- 算法作为独立 .so，通过 AlgorithmInterface 接入
+- 状态机负责模式编排（NA→ACC→CP→NP→NOA）
+- KunAutoDrive 负责调度、通信、监控
+- 第三方库负责数学运算

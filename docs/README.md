@@ -87,7 +87,7 @@
 
 ## KunAutoDrive 技术专著与实战教程（book/）
 
-《KunAutoDrive：从零构建高性能自动驾驶系统与仿真引擎》（中间件内核 FlowEngine 实战专著），按系统分卷组织（总目录见 [BOOK.md](BOOK.md)）：
+《KunAutoDrive：从零构建高性能自动驾驶系统与仿真引擎》（中间件内核 KunAutoDrive 实战专著），按系统分卷组织（总目录见 [BOOK.md](BOOK.md)）：
 
 ### 第一卷：微内核与系统编程底座 (Core & OS Primitives)
 | 章节 | 专章教程 | 核心主题与深度解析 |

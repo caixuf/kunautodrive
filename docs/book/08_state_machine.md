@@ -1,9 +1,9 @@
 # 第 08 章：反射式状态机（Reflective State Machine）
 
 > **本章导读**：
-> 无论是底层任务节点的生命周期管控（`INITIALIZED` ➔ `RUNNING` ➔ `STOPPING`），还是上层 ADAS 复杂行为决策（跟车、变道、让行、掉头、紧急停车），有限状态机（FSM）都是控制逻辑的定海神针。
+> 无论是底层任务节点的生命周期管控（`INITIALIZED` → `RUNNING` → `STOPPING`），还是上层 ADAS 复杂行为决策（跟车、变道、让行、掉头、紧急停车），有限状态机（FSM）都是控制逻辑的定海神针。
 >
-> 传统的硬编码 `switch-case` 状态机存在“黑盒不可见、难以排错、死锁后无法追溯”的致命痛点。FlowEngine 设计了**反射式状态机（Reflective State Machine）**：它不仅驱动状态流转，还在内存中完整自描述其**转移矩阵（Transition Matrix）、Guard 守卫条件、Entry/Exit 钩子与环形历史追踪器**，实现完全透明的白盒内省。
+> 传统的硬编码 `switch-case` 状态机存在“黑盒不可见、难以排错、死锁后无法追溯”的致命痛点。KunAutoDrive 设计了**反射式状态机（Reflective State Machine）**：它不仅驱动状态流转，还在内存中完整自描述其**转移矩阵（Transition Matrix）、Guard 守卫条件、Entry/Exit 钩子与环形历史追踪器**，实现完全透明的白盒内省。
 
 ---
 
@@ -19,7 +19,7 @@
 │        缺漏分支时静默失败或异常锁死。                    │
 └──────────────────────────────────────────────────────────┘
 
-FlowEngine 反射式 FSM (自描述白盒):
+KunAutoDrive 反射式 FSM (自描述白盒):
 ┌──────────────────────────────────────────────────────────┐
 │  ReflectiveStateMachine                                  │
 │   ├── current_state: RUNNING                             │
@@ -145,7 +145,7 @@ if (ret == SM_OK) {
 
 ## 5. 运行时反射与可观测性 API
 
-FlowEngine 提供了强大的在线自省函数，使得运维工具 `flowctl` 和 Web 仪表盘能一键提取状态拓扑：
+KunAutoDrive 提供了强大的在线自省函数，使得运维工具 `flowctl` 和 Web 仪表盘能一键提取状态拓扑：
 
 ```c
 // 1. 查询当前是否允许执行某事件 (O(1) 预判)

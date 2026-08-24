@@ -8,7 +8,7 @@
 
 | 术语 | 一句话定义 | 深入 |
 |------|-----------|------|
-| **KunAutoDrive / FlowEngine** | 轻量级自动驾驶中间件：消息总线 + 调度器 + 传输层 + ADAS 参考实现 | [BOOK](BOOK.md) 总序 |
+| **KunAutoDrive** | 轻量级自动驾驶中间件：消息总线 + 调度器 + 传输层 + ADAS 参考实现 | [BOOK](BOOK.md) 总序 |
 | **pipeline** | 由 `flow_launcher` 按 `config/pipeline.json` 加载的一组插件节点组成的完整链路 | [PIPELINE_ARCHITECTURE.md](PIPELINE_ARCHITECTURE.md) |
 | **节点（Node / NodePlugin）** | 一个编译为 `.so`、实现插件接口、订阅/发布 topic 的处理单元（如 flowsim、control） | [book/02_plugin_system.md](book/02_plugin_system.md) |
 | **topic** | 消息总线上的命名通道，节点按名订阅/发布（如 `vehicle/state`、`control/cmd`） | [book/03_message_bus.md](book/03_message_bus.md) |

@@ -3,7 +3,7 @@
 > **本章导读**：
 > 在自动驾驶系统中，多进程架构（Multi-process Isolation）是实现故障隔离与高可靠性的必要手段。然而，传统的跨进程通信（如 TCP Socket、Unix Domain Socket、管道）不可避免地存在**内核态上下文切换（Context Switch）与多次内存拷贝**的性能损耗。
 >
-> FlowEngine 基于 **POSIX 共享内存（`shm_open` + `mmap`）**与**健壮互斥锁（Robust Mutex）**构建了亚微秒级延迟的 `IpcChannel`，不仅实现了大吞吐数据的零拷贝跨进程流动，还具备**进程异常崩溃自愈（Crash Resilience）**能力。
+> KunAutoDrive 基于 **POSIX 共享内存（`shm_open` + `mmap`）**与**健壮互斥锁（Robust Mutex）**构建了亚微秒级延迟的 `IpcChannel`，不仅实现了大吞吐数据的零拷贝跨进程流动，还具备**进程异常崩溃自愈（Crash Resilience）**能力。
 
 ---
 
@@ -15,7 +15,7 @@
 | :--- | :---: | :---: | :---: | :---: |
 | **TCP / UDP Loopback** | 2~4 次 (用户态⇄内核态) | 频繁 | 100 ~ 500 μs | 低 (内核自动回收套接字) |
 | **Unix Domain Socket (AF_UNIX)** | 2 次 | 频繁 | 30 ~ 80 μs | 中 |
-| **POSIX SHM (FlowEngine)** | **0 次 (直接共享物理内存页)** | **0 次 (用户态互斥锁)** | **< 2 μs** | 需 Robust Mutex 支持 |
+| **POSIX SHM (KunAutoDrive)** | **0 次 (直接共享物理内存页)** | **0 次 (用户态互斥锁)** | **< 2 μs** | 需 Robust Mutex 支持 |
 
 ---
 
@@ -97,7 +97,7 @@ sequenceDiagram
 
 在多进程共享内存系统中，最致命的隐患是：**如果持有互斥锁的进程在临界区内突然被 `kill -9` 杀死，该互斥锁将被永久死锁！**
 
-FlowEngine 采用 **POSIX Robust Mutex（健壮互斥锁）** 机制彻底解决此难题：
+KunAutoDrive 采用 **POSIX Robust Mutex（健壮互斥锁）** 机制彻底解决此难题：
 
 ```c
 /* 初始化进程间共享的健壮互斥锁 */
@@ -131,7 +131,7 @@ if (rc == EOWNERDEAD) {
 
 ## 5. 跨进程大 JSON 分块传输（Dashboard Bridge）
 
-当传输全局监控拓扑与 3D 渲染包（可能高达数兆字节）时，FlowEngine 在 `src/core/dashboard_bridge.c` 中实现了**分块重组传输协议（Chunked Transfer Protocol）**：
+当传输全局监控拓扑与 3D 渲染包（可能高达数兆字节）时，KunAutoDrive 在 `src/core/dashboard_bridge.c` 中实现了**分块重组传输协议（Chunked Transfer Protocol）**：
 - 发送方将大 JSON 分割为若干小于 64KB 的 Chunk，附带 `chunk_idx` 与 `chunk_total`；
 - 接收方守护进程 `flowmond` 在本地预分配拼装缓冲区，按序列号组装，并在最后一帧到达时完成整体解析并推送到前端 Web 客户端。
 
@@ -145,8 +145,8 @@ POSIX `shm_open` 创建的共享内存独立于进程生命周期。即使所有
 
 ### 避坑 2：多读者广播场景下的慢读者（Slow Consumer）处理
 当 Publisher 发布速度远快于 Subscriber 读取速度时，环形缓冲区将被覆盖。
-- FlowEngine 采用 **Drop-Oldest（丢弃最老）** 原则：Subscriber 发现本地读取序号 `read_seq` 严重落后于 `header->write_seq - slot_count` 时，自动跳跃指针至最新窗口，并将落后的差值累加到 `drop_count` 遥测指标中，避免读取脏数据。
+- KunAutoDrive 采用 **Drop-Oldest（丢弃最老）** 原则：Subscriber 发现本地读取序号 `read_seq` 严重落后于 `header->write_seq - slot_count` 时，自动跳跃指针至最新窗口，并将落后的差值累加到 `drop_count` 遥测指标中，避免读取脏数据。
 
 ---
 
-*下一章预告：第 05 章将讲解 FlowEngine 数据持久化核心——Bag v2 与标准 MCAP 格式的录制与回放引擎。*
+*下一章预告：第 05 章将讲解 KunAutoDrive 数据持久化核心——Bag v2 与标准 MCAP 格式的录制与回放引擎。*

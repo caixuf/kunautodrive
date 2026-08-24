@@ -3,7 +3,7 @@
 > **本章导读**：
 > 在自动驾驶与机器人系统的全生命周期中，“可复现性（Reproducibility）”是算法迭代与责任认定的第一生命线。如果无法在事后毫秒级精确重演现场传感器数据，那么任何偶发性事故（如 Corner Case 误刹车或漏检）都将沦为无法定位的玄学悬案。
 >
-> FlowEngine 构建了完备的数据持久化子系统：不仅拥有自研的 **Bag v2 高性能时序二进制文件格式**，还全面兼容国际标准的 **MCAP 规范（开放容器格式）**，无缝对接 Foxglove Studio 与离线回放评估管道。
+> KunAutoDrive 构建了完备的数据持久化子系统：不仅拥有自研的 **Bag v2 高性能时序二进制文件格式**，还全面兼容国际标准的 **MCAP 规范（开放容器格式）**，无缝对接 Foxglove Studio 与离线回放评估管道。
 
 ---
 
@@ -41,7 +41,7 @@
 
 ## 2. Bag v2 二进制存储规范深入推导
 
-FlowEngine 自研的 Bag v2 格式针对 SSD 顺序写入进行了深度优化，包含**文件头（Header）、数据记录流（Records）与尾部索引区（Index Chunk）**：
+KunAutoDrive 自研的 Bag v2 格式针对 SSD 顺序写入进行了深度优化，包含**文件头（Header）、数据记录流（Records）与尾部索引区（Index Chunk）**：
 
 ```
 Bag v2 文件二进制布局：
@@ -72,7 +72,7 @@ Bag v2 文件二进制布局：
 
 ## 3. MCAP 标准格式支持（Foxglove 生态打通）
 
-除了轻量的自研 Bag v2，FlowEngine 在 `src/core/mcap_writer.c` 中完整实现了 **MCAP（Open Source Container Format for Multimodal Data）** 标准：
+除了轻量的自研 Bag v2，KunAutoDrive 在 `src/core/mcap_writer.c` 中完整实现了 **MCAP（Open Source Container Format for Multimodal Data）** 标准：
 - **Schema Chunk**：记录 IDL 数据结构定义（Protobuf / JSON Schema）；
 - **Channel Chunk**：定义 Topic 名称与编码格式；
 - **Message Chunk**：高压缩比的数据时序载荷；
@@ -158,7 +158,7 @@ flowctl bag info out.bag
 
 ### 避坑 1：进程被杀死时的“头部未回填（Unfinalized Header）”灾难
 - **问题**：在顺序写入过程中，`msg_count` 和 `duration_us` 随着录制动态增加，只有在 `bag_writer_close()` 时才会 `fseek(0)` 回填 Header。如果车辆断电或进程被强杀，Header 中的 `msg_count` 仍为 0。
-- **FlowEngine 解决方案**：`BagReader` 在打开文件时执行**向前容错扫描**——若发现 `index_offset == 0`，则自动从头顺序扫描记录并在线重建索引，实现零损坏恢复。
+- **KunAutoDrive 解决方案**：`BagReader` 在打开文件时执行**向前容错扫描**——若发现 `index_offset == 0`，则自动从头顺序扫描记录并在线重建索引，实现零损坏恢复。
 
 ### 避坑 2：回放时千万不要使用 `CLOCK_REALTIME` 做差值
 - 车辆真车运行或回放跨越整点 NTP 对时时，系统时间可能向前或向后跳跃。所有时延计算必须严格依赖 `CLOCK_MONOTONIC` 单调时钟。

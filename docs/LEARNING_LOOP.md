@@ -255,9 +255,9 @@ python3 tools/learning_loop.py --eval-only <name_or_dir> --eval-duration 30 --pr
 
 打开 `http://localhost:8800` 后：
 
-1. `🛠 Ops Console` → `Bag 文件` + `回灌 Bag`：直接触发 `flowctl bag play <file>`
-2. `🛠 Ops Console` → `Eval 模型名` + `跑 Eval-Only`：触发 `learning_loop.py --eval-only`
-3. `🛠 Ops Console` → `跑完整学习闭环`：触发 `learning_loop.py --collect ... --backend ...`
+1. `Ops Console` → `Bag 文件` + `回灌 Bag`：直接触发 `flowctl bag play <file>`
+2. `Ops Console` → `Eval 模型名` + `跑 Eval-Only`：触发 `learning_loop.py --eval-only`
+3. `Ops Console` → `跑完整学习闭环`：触发 `learning_loop.py --collect ... --backend ...`
 
 可在同一面板查看 `Bag Log / Learning Loop Log`，并用 `停止回灌/停止学习任务` 中断后台任务。
 
@@ -518,10 +518,10 @@ python3 tools/modelctl.py ota status
 
 | 阶段 | 方向 | 技术点 | 状态 |
 |------|------|--------|------|
-| 3 | `learner_node` 车端增量微调 | 持续学习 / on-device SGD / 资源受限调度 | ✅ 已实现 |
-| 4 | 模型 OTA + 版本管理 | Discovery + Transport 灰度发布 / 回滚 / A-B 对比 | ✅ 已实现 |
-| 5 | **端到端 v3** | 59 维特征 / 多隐层 MLP / 5 维输出 / 时序窗口 / 感知统计 / 场景上下文 | ✅ 已实现 |
-| — | 推理内核升级 | 把 `tiny_mlp_forward()` 做成可切换后端：新增 ONNX Runtime 后端，契约不变 | ✅ 已实现（ONNX；TensorRT 不做） |
+| 3 | `learner_node` 车端增量微调 | 持续学习 / on-device SGD / 资源受限调度 | 已实现 |
+| 4 | 模型 OTA + 版本管理 | Discovery + Transport 灰度发布 / 回滚 / A-B 对比 | 已实现 |
+| 5 | **端到端 v3** | 59 维特征 / 多隐层 MLP / 5 维输出 / 时序窗口 / 感知统计 / 场景上下文 | 已实现 |
+| — | 推理内核升级 | 把 `tiny_mlp_forward()` 做成可切换后端：新增 ONNX Runtime 后端，契约不变 | 已实现（ONNX；TensorRT 不做） |
 
 > v3 已全面上线，默认使用 59 维特征、多隐层 MLP、5 维输出（throttle/brake/steer/lane_change/confidence）。
 

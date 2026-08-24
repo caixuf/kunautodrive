@@ -15,11 +15,11 @@
 
 | 期 | 状态 | commit |
 |----|------|--------|
-| P0 TopologyModel + 护栏/家具收敛 | ✅ | dcb3eb7 |
-| P1a 路口渠化（圆角多边形/导流虚线/停止线归属） | ✅ | 3cf2665 |
-| P1b 匝道渠化（45° 斜纹全宽/绿色隔离带/主路边线连续） | ✅ | 372a261 |
-| P2 车道级标线（lane 边界成图 + MapData 通道） | ✅ | bcea0c6 |
-| P3 设计系统（tokens + SVG 图标 + 配色分层 + token 门禁） | ✅ | 272a317 |
+| P0 TopologyModel + 护栏/家具收敛 | 支持 | dcb3eb7 |
+| P1a 路口渠化（圆角多边形/导流虚线/停止线归属） | 支持 | 3cf2665 |
+| P1b 匝道渠化（45° 斜纹全宽/绿色隔离带/主路边线连续） | 支持 | 372a261 |
+| P2 车道级标线（lane 边界成图 + MapData 通道） | 支持 | bcea0c6 |
+| P3 设计系统（tokens + SVG 图标 + 配色分层 + token 门禁） | 支持 | 272a317 |
 
 ## TL;DR
 
@@ -153,7 +153,7 @@ map.json（车道级，已有）
 ### P3 — 设计系统 + UI 专业化（1-2 个 PR）
 
 - **SVG 图标库**替 emoji：统一 24px viewBox、1.5px 描边、单色素描风
-  （参考 Lucide/Feather 规范），消灭 emoji 跨平台渲染差异（🛰📊 在 Windows/macOS
+  （参考 Lucide/Feather 规范），消灭 emoji 跨平台渲染差异（在 Windows/macOS
   长相不同 = "幼稚感"的最大来源）；
 - **设计 token**（`js/vis/theme/tokens.js` + CSS 变量）：色彩（深色底 + 科技蓝主色 +
   语义色 success/warn/danger）、字阶（11/12/13/16/20）、间距（4 的倍数）、圆角

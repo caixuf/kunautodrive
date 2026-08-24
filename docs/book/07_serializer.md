@@ -4,7 +4,7 @@
 > **本章导读**：
 > 在底层的 C/C++ 消息传输中，最危险的隐患莫过于“裸指针强制转换（`void*` Cast）”。如果发布者发送了 `ImuData`，而订阅者误按 `GpsData` 解引用，将直接引发内存越界与灾难性控制失误。然而，传统的序列化方案（如 Google Protobuf / ROS2 CDR）在嵌入式与微内核环境中又显得过于厚重且伴随多次内存拷贝。
 >
-> FlowEngine 设计了一套**零反射、亚纳秒级开销的类型安全序列化层**：通过 **FNV-1a 编译期哈希 Type ID**、**IDL 代码生成器（`msg_codegen.py`）** 与 **`msg_cast<T>` 访问器**，在保证极致零拷贝性能的同时，实现了绝对的编译期与运行时类型安全。
+> KunAutoDrive 设计了一套**零反射、亚纳秒级开销的类型安全序列化层**：通过 **FNV-1a 编译期哈希 Type ID**、**IDL 代码生成器（`msg_codegen.py`）** 与 **`msg_cast<T>` 访问器**，在保证极致零拷贝性能的同时，实现了绝对的编译期与运行时类型安全。
 
 ---
 
@@ -14,13 +14,13 @@
 | :--- | :---: | :---: | :---: | :---: |
 | **Google Protobuf** | 2~3 次 (对象⇄Buffer) | 高 (重型 C++ 运行时) | 极强 | 强 (类型严格) |
 | **ROS2 CDR (FastDDS)** | 1~2 次 | 中 (依赖 Dynamic Types) | 强 | 强 |
-| **FlowEngine 零反射 IDL** | **0 次 (直接内联内存映射)** | **0 (纯宏 + FNV-1a Hash)** | 强 (C/C++/Python/JS) | **绝对安全 (ID 校验)** |
+| **KunAutoDrive 零反射 IDL** | **0 次 (直接内联内存映射)** | **0 (纯宏 + FNV-1a Hash)** | 强 (C/C++/Python/JS) | **绝对安全 (ID 校验)** |
 
 ---
 
 ## 2. 核心原理：FNV-1a 32 位类型哈希
 
-FlowEngine 将消息类型名称（如 `"sensor/LidarFrame"`）通过 **FNV-1a 哈希算法** 在编译期映射为一个确定性的 `uint32_t type_id`：
+KunAutoDrive 将消息类型名称（如 `"sensor/LidarFrame"`）通过 **FNV-1a 哈希算法** 在编译期映射为一个确定性的 `uint32_t type_id`：
 
 ```c
 /* 算法定义：初始基准值 2166136261，乘数 16777619 */
@@ -46,7 +46,7 @@ static inline uint32_t fnv1a_hash(const uint8_t* data, size_t len) {
 
 ## 3. IDL 消息定义与自动化代码生成
 
-FlowEngine 采用声明式 IDL 格式（`msg/flow_types.msg`），通过 Python 代码生成器 `tools/msg_codegen.py` 自动产出 C 头文件与 JSON 序列化器。
+KunAutoDrive 采用声明式 IDL 格式（`msg/flow_types.msg`），通过 Python 代码生成器 `tools/msg_codegen.py` 自动产出 C 头文件与 JSON 序列化器。
 
 ### 3.1 IDL 语法示例
 ```

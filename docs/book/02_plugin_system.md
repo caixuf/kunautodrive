@@ -3,7 +3,7 @@
 > **本章导读**：
 > 在自动驾驶系统中，感知、规划、控制等算法模块迭代极为频繁。如果采用传统的“单一大二进制（Monolithic Binary）”编译方式，任何一个节点的参数微调或代码修改都需要全量重新编译，不仅构建耗时，而且极易导致符号冲突与全局状态污染。
 >
-> FlowEngine 采用基于 `dlopen` 的**微内核插件化（Plugin Architecture）**设计。每个 ADAS 节点（如 `planning_node.so`、`fusion_node.so`）均作为独立共享库动态加载，通过显式**依赖注入（Dependency Injection）**与 **ABI 版本契约门禁**，实现极高的模块解耦与热插拔能力。
+> KunAutoDrive 采用基于 `dlopen` 的**微内核插件化（Plugin Architecture）**设计。每个 ADAS 节点（如 `planning_node.so`、`fusion_node.so`）均作为独立共享库动态加载，通过显式**依赖注入（Dependency Injection）**与 **ABI 版本契约门禁**，实现极高的模块解耦与热插拔能力。
 
 ---
 
@@ -19,7 +19,7 @@
 │  缺陷：改一个算法重新编译整个项目；全局变量交织导致难以单测 │
 └──────────────────────────────────────────────────────────┘
 
-FlowEngine 插件化微内核架构 (Microkernel + Plugins):
+KunAutoDrive 插件化微内核架构 (Microkernel + Plugins):
 ┌──────────────────────────────────────────────────────────┐
 │  flow_launcher (配置驱动微内核宿主)                       │
 │    │  读取 config/pipeline.json                          │
@@ -34,7 +34,7 @@ FlowEngine 插件化微内核架构 (Microkernel + Plugins):
 
 ## 2. 插件契约与 ABI 门禁机制
 
-为了保证动态加载的安全性，FlowEngine 定义了标准结构体 `NodePlugin` 与 ABI 校验宏。
+为了保证动态加载的安全性，KunAutoDrive 定义了标准结构体 `NodePlugin` 与 ABI 校验宏。
 
 ### 2.1 节点描述符定义（include/node_plugin.h）
 
@@ -90,7 +90,7 @@ flowchart TD
 
 ## 3. 依赖注入（Dependency Injection）模式
 
-FlowEngine 插件内部**绝对禁止使用全局变量**（如 `extern MessageBus g_bus`）。所有系统基础设施在 `init()` 阶段由宿主统一注入：
+KunAutoDrive 插件内部**绝对禁止使用全局变量**（如 `extern MessageBus g_bus`）。所有系统基础设施在 `init()` 阶段由宿主统一注入：
 
 ```c
 /* 节点插件初始化签名 */
@@ -147,7 +147,7 @@ void* handle = dlopen(so_path, RTLD_NOW | RTLD_LOCAL);
 
 ## 6. 实战演练：编写一个标准的 ADAS 插件节点
 
-以下是一个完整符合 FlowEngine 标准的示例节点：
+以下是一个完整符合 KunAutoDrive 标准的示例节点：
 
 ```c
 /* modules/adas_nodes/example_filter_node.c */

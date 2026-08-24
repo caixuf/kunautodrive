@@ -3,7 +3,7 @@
 > **本章导读**：
 > 在自动驾驶系统中，节点往往需要同时等待多个异构传感器数据（如等待点云、等待 GPS、等待控制应答、设置超时看门狗）。在传统的异步 C 语言编程中，这通常会导致严重的**回调地狱（Callback Hell）**——业务状态被强行打散到数十个全局变量与回调函数中，状态同步和停机清理极易引发死锁与内存泄漏。
 >
-> FlowEngine 构建了基于 **C++20 原生协程（Coroutines TS）** 的高性能通信运行时 **FlowCoro**。通过将 `MessageBus` 的 Pub/Sub、Req/Reply、Timer 与多路 Select 封装为标准 Awaitable 原语，开发者可以用**同步直序（Sequential）的代码逻辑编写高性能非阻塞异步系统**。
+> KunAutoDrive 构建了基于 **C++20 原生协程（Coroutines TS）** 的高性能通信运行时 **FlowCoro**。通过将 `MessageBus` 的 Pub/Sub、Req/Reply、Timer 与多路 Select 封装为标准 Awaitable 原语，开发者可以用**同步直序（Sequential）的代码逻辑编写高性能非阻塞异步系统**。
 
 ---
 
@@ -136,7 +136,7 @@ EXPORT_COROUTINE_TASK(CoroFusionNode, coro_fusion_node)
 
 在协程被挂起等待消息的同时，若宿主进程发起了 `stop()` 停机指令，如何保证协程干净退出而不发生资源泄漏？
 
-FlowEngine 在 `coroutine_task.h` 中实现了 **CAS（Compare-And-Swap）原子恢复守卫 `AwaitCtl`**：
+KunAutoDrive 在 `coroutine_task.h` 中实现了 **CAS（Compare-And-Swap）原子恢复守卫 `AwaitCtl`**：
 
 - **互斥唤醒**：消息到达、超时定时器触发、外部停机信号三者并发竞争恢复权；
 - **唯一恢复保证**：原子 CAS 确保同一个挂起句柄 `std::coroutine_handle<>` 在其生命周期内**有且仅被 resume 一次**，彻底消除了“双重恢复（Double Resume）引发的段错误”。

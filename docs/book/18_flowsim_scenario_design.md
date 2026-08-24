@@ -3,13 +3,13 @@
 > **本章导读**：
 > 自动驾驶算法在实车上路之前，必须在仿真环境中经历数百万公里的虚拟测试。高保真度的仿真器不仅要模拟车辆动力学，还要能生成包含多车道、交叉路口、匝道汇入以及具备智能交互行为的交通流（NPC Actors）。
 >
-> FlowEngine 内置了自主研发的离散动力学轻量级仿真器 **FlowSim**。本章深入讲解 **多 Edge 路网拓扑建模、Junction 连接道、NPC 交互状态机以及与 OpenDRIVE 标准高精地图格式的转换桥接**。
+> KunAutoDrive 内置了自主研发的离散动力学轻量级仿真器 **FlowSim**。本章深入讲解 **多 Edge 路网拓扑建模、Junction 连接道、NPC 交互状态机以及与 OpenDRIVE 标准高精地图格式的转换桥接**。
 
 ---
 
 ## 1. FlowSim 场景 DSL 数据模型
 
-FlowEngine 的场景由声明式 JSON 文件（如 `scenarios/city_to_highway_full.json`）定义，包含四大核心要素：
+KunAutoDrive 的场景由声明式 JSON 文件（如 `scenarios/city_to_highway_full.json`）定义，包含四大核心要素：
 
 ```json
 {
@@ -80,9 +80,9 @@ stateDiagram-v2
 
 ## 4. OpenDRIVE 标准高精地图双向转换桥接
 
-为了复用工业界标准的 OpenDRIVE（`.xodr`）高精地图，FlowEngine 在 `modules/adas_nodes/flowsim/esmini_stub.cpp` 中实现了转换桥接层：
+为了复用工业界标准的 OpenDRIVE（`.xodr`）高精地图，KunAutoDrive 在 `modules/adas_nodes/flowsim/esmini_stub.cpp` 中实现了转换桥接层：
 - 解析 OpenDRIVE 的 `<planView>` 中的 Line、Spiral、Arc 几何原语；
-- 将 `<laneSection>` 的车道宽度多项式采样为 FlowEngine 的 `RoadNetwork::Edge`；
+- 将 `<laneSection>` 的车道宽度多项式采样为 KunAutoDrive 的 `RoadNetwork::Edge`；
 - 将 `<junction>` 拓扑解析为内部交叉路口拓扑矩阵。
 
 ---

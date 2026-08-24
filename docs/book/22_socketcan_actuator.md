@@ -3,7 +3,7 @@
 > **本章导读**：
 > 软件仿真的终点是物理世界的真车落地。无论是在 1:10 比例的 RC 智能小车（树莓派 / Jetson Orin Nano 底盘），还是在真实的乘用车/商用车线控底盘上，控制指令最终都必须通过物理电气接口（如 CAN 总线或 PWM 脉宽调制信号）发送给电子调速器（ESC）与转向舵机/线控转向机（EPS）。
 >
-> 本附录详细梳理从 **FlowEngine 软件流水线到硬件电气接口的最后一公里**：涵盖 **Linux SocketCAN 内核网络驱动、MCP2515 SPI-CAN 模块配置、PCA9685 PWM 舵机驱动以及真车安全互锁规范**。
+> 本附录详细梳理从 **KunAutoDrive 软件流水线到硬件电气接口的最后一公里**：涵盖 **Linux SocketCAN 内核网络驱动、MCP2515 SPI-CAN 模块配置、PCA9685 PWM 舵机驱动以及真车安全互锁规范**。
 
 ---
 
@@ -11,7 +11,7 @@
 
 ```
   ┌─────────────────────────────────────────────────────────────┐
-  │         FlowEngine 软件流水线 (IPC / MessageBus)            │
+  │         KunAutoDrive 软件流水线 (IPC / MessageBus)            │
   │  control_node ──► safety_control_node (TTC 限幅) ──►        │
   └──────────────────────────────┬──────────────────────────────┘
                                  │ control/cmd (ControlCmd 消息)
@@ -144,4 +144,4 @@ void set_servo_pulse(int i2c_fd, uint8_t channel, float normalized_val) {
 
 ---
 
-*全书完结。祝您在 FlowEngine 的高性能自动驾驶与仿真开发之旅中取得丰硕成果！*
+*全书完结。祝您在 KunAutoDrive 的高性能自动驾驶与仿真开发之旅中取得丰硕成果！*

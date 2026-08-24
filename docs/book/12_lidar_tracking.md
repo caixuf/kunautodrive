@@ -3,7 +3,7 @@
 > **本章导读**：
 > 激光雷达（LiDAR）每秒输出成千上万个离散的三维空间点云。如果直接将这些稀疏点输入给上层规划，规划器将因算力崩溃而无法处理。感知前端必须完成两大核心任务：**空间聚类（Clustering）**将离散点聚合成独立的目标实体（Bounding Box），以及**时间序列目标追踪（Tracking）**为不同帧之间的同一个障碍物赋予持久的全局 ID 与精确的速度矢量估计。
 >
-> FlowEngine 感知算法栈采用 **DBSCAN 密度聚类** 与 **基于匈牙利算法匹配的扩展卡尔曼滤波追踪器（Kalman Tracker）**，实现了低延迟、抗遮挡、动静态自识别的多目标追踪引擎。
+> KunAutoDrive 感知算法栈采用 **DBSCAN 密度聚类** 与 **基于匈牙利算法匹配的扩展卡尔曼滤波追踪器（Kalman Tracker）**，实现了低延迟、抗遮挡、动静态自识别的多目标追踪引擎。
 
 ---
 
@@ -102,7 +102,7 @@ flowchart LR
 
 上层规划器对静态障碍物（如路桩、路沿、违停车辆）与动态障碍物（如对向来车、变道行人）的避让策略截然不同。
 
-FlowEngine 在 `modules/adas_nodes/object_tracker_node.c` 中设计了基于速度积分的时序分类器：
+KunAutoDrive 在 `modules/adas_nodes/object_tracker_node.c` 中设计了基于速度积分的时序分类器：
 ```c
 #define STATIC_SPEED_THRESHOLD 0.5f   /* m/s 以下视为低速候选 */
 #define STATIC_FRAMES_MIN      20u    /* 连续 20 帧 (1.0s) 低速才判定为真静态 */

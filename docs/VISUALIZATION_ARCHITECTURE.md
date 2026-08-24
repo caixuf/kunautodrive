@@ -200,7 +200,7 @@ GET /api/health    → 探活: {status, source, age_sec}
 │  on_scene_frame():                    on_vehicle_state():        │
 │   ├─ 缓存 road_network  JSON           ├─ 缓存 vehicle/state JSON│
 │   ├─ 缓存 entities 数组 JSON           └─ 提取 ego_road_id      │
-│   └─ 从 entities 提取 ego JSON ★                               │
+│   └─ 从 entities 提取 ego JSON *                               │
 │                                                                  │
 │  export_dashboard_json():                                        │
 │    scene.ego = {                                                 │
@@ -824,7 +824,7 @@ scenarios/*.json  ──build_showcase.py──►  tools/flowboard/showcase/sce
 python3 tools/build_showcase.py         # 场景改动后重新生成清单
 # 启动 flowmond（scripts/demo.sh 或 ./build/bin/flowmond --html-path ...）后：
 #   浏览器打开 http://localhost:8800/tools/flowboard/showcase.html
-#   （或从主面板 FlowBoard 左上角「🎬 综合 3D 场景展示」入口进入）
+#   （或从主面板 FlowBoard 左上角「综合 3D 场景展示」入口进入）
 ```
 
 ### 门禁

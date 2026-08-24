@@ -3,7 +3,7 @@
 > **本章导读**：
 > 自动驾驶系统的核心特征是**数据流驱动（Dataflow-Driven）**：激光雷达点云（10Hz/数十KB）、相机图像（30Hz）、GPS/IMU（100Hz）以及规控高频循环（50~100Hz）在同一系统内并发涌流。
 >
-> FlowEngine 的 `MessageBus` 是整个进程内通信的枢纽。它不仅支持标准的**发布/订阅（Pub/Sub）**与**请求/应答（Req/Reply RPC）**，还内置了**零动态分配内存池、环形缓冲队列、QoS 策略管理以及延迟/频率统计指标**。
+> KunAutoDrive 的 `MessageBus` 是整个进程内通信的枢纽。它不仅支持标准的**发布/订阅（Pub/Sub）**与**请求/应答（Req/Reply RPC）**，还内置了**零动态分配内存池、环形缓冲队列、QoS 策略管理以及延迟/频率统计指标**。
 
 ---
 
@@ -67,7 +67,7 @@ typedef struct Message {
 
 ### 2.1 内存池优化：杜绝频繁 `malloc/free`
 在 100Hz 高频消息吞吐下，频繁调用操作系统 `malloc(64KB)` 会导致严重的内存碎片和不可控的内核系统调用延迟。
-FlowEngine 采用 **Free-List 内存池（Free Message Pool）**：
+KunAutoDrive 采用 **Free-List 内存池（Free Message Pool）**：
 - 当发布消息时，从 `bus->free_pool` 弹出一个预分配好的 `Message` 块。
 - 消费者在分发完成后，将指针重新归还给 `free_pool`。
 - **整个生命周期 0 次动态内存分配**。
@@ -137,7 +137,7 @@ if (ret == 0) {
 
 ## 5. QoS 服务质量与丢弃策略
 
-在真实传感器涌流中，若下游处理较慢（如复杂的点云聚类耗时 80ms，而传感器以 20ms 周期输入），队列势必堆积。FlowEngine 支持针对单个 Topic 配置 QoS：
+在真实传感器涌流中，若下游处理较慢（如复杂的点云聚类耗时 80ms，而传感器以 20ms 周期输入），队列势必堆积。KunAutoDrive 支持针对单个 Topic 配置 QoS：
 
 ```c
 typedef enum {

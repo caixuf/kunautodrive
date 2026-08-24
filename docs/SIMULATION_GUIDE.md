@@ -55,7 +55,7 @@ python3 tools/carla_bridge.py check
 适配器只负责 simulator I/O，统一输出 `flowengine.simulator_capabilities.v1`
 契约：仿真时钟 `SimulationClock`、传感器 `SensorPacket`/`SensorBatch` 和
 `ControlCommand` → `carla.VehicleControl` 映射。规划、限速、安全闸门和评估仍
-复用 FlowEngine 的 planning/control/safety/evaluator 链路；`check` 在缺少
+复用 KunAutoDrive 的 planning/control/safety/evaluator 链路；`check` 在缺少
 CARLA Python API 时返回非零，CI 可据此选择性启用外部后端。
 
 ## 场景库
