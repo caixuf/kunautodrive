@@ -2564,6 +2564,16 @@ function initAll() {
       });
     }
 
+    // Restore persistent user performance / quality tier
+    try {
+      var savedTier = localStorage.getItem('flowboard_perf_tier');
+      if (savedTier && ['high', 'medium', 'low', 'ultra'].includes(savedTier)) {
+        setPerfTier(savedTier);
+        var elTier = document.getElementById('perf-tier-select');
+        if (elTier) elTier.value = savedTier;
+      }
+    } catch (_e) {}
+
     // Ensure 3D card is always open on load
     var sc = document.getElementById('scene3d-card');
     if (sc) sc.classList.remove('collapsed');
@@ -2772,6 +2782,12 @@ window.flowboard = {
   resetCamera: resetCamera,
   resetMapView: resetMapView,
   setPerfTier: setPerfTier,
+  onPerfTierChange: function(tier) {
+    setPerfTier(tier);
+    try {
+      localStorage.setItem('flowboard_perf_tier', tier);
+    } catch (_e) {}
+  },
   // minimap
   toggleMinimap: toggleMinimap,
   toggleGameMode: toggleGameMode,

@@ -55,19 +55,17 @@ export function createComposer(renderer, scene, camera) {
     composer.addPass(gtao);
   }
 
-  // 3. Bloom — 只让灯/发光体辉光（阈值 0.8 滤掉普通表面）。
-  //    real 写实风默认保守（threshold 1.0 只让真车灯/高亮发光）；
-  //    SR/BEV 科技风由 setBloomTech 切到激进（threshold 0.8，标线/路牌也辉光）。
+  // 3. Bloom — 仅对高亮车灯提供柔和高质感辉光，杜绝全屏过曝与光污染
   if (THREE.UnrealBloomPass) {
     const bloom = new THREE.UnrealBloomPass(
       new THREE.Vector2(window.innerWidth, window.innerHeight),
-      1.0,   // strength：适中饱满，让矩阵大灯与发光透镜柱光芒四射
-      0.5,   // radius：柔和扩散光晕
-      0.85   // threshold：只让 emissive 高亮发光体辉光
+      0.35,  // strength：克制细腻的汽车透镜辉光
+      0.40,  // radius：紧凑自然的边缘扩散
+      0.90   // threshold：精准过滤非发光材质
     );
     bloom.userData = {
-      realParams: { strength: 1.0, radius: 0.5, threshold: 0.85 },
-      techParams: { strength: 1.1, radius: 0.55, threshold: 0.75 },
+      realParams: { strength: 0.35, radius: 0.40, threshold: 0.90 },
+      techParams: { strength: 0.45, radius: 0.45, threshold: 0.85 },
     };
     _bloomPass = bloom;
     composer.addPass(bloom);

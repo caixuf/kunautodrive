@@ -504,7 +504,31 @@ class GTAOPass extends Pass {
 
 			cache.set( object, object.visible );
 
-			if ( object.isPoints || object.isLine ) object.visible = false;
+			if ( ! object.visible ) return;
+
+			// 排除不参与环境光遮蔽（AO）计算的非实体/透明对象：
+			// 1. 点、线（车道线、雷达扫描射线、检测框、轨迹线等）
+			// 2. 精灵（实体头顶文字标签 Sprite、车灯透镜光晕 Sprite、HUD 图标等）
+			// 3. 半透明/透明材质、不写深度的网格（雷达扫描扇形 sweepMesh、铺路光毯 carpetMesh、光锥 beamMesh）
+			// 4. 覆盖层/非 0 渲染层（renderOrder > 0）
+			if (
+				object.isPoints ||
+				object.isLine ||
+				object.isLineSegments ||
+				object.isLineLoop ||
+				object.isSprite ||
+				( object.isMesh && (
+					object.renderOrder > 0 ||
+					( object.material && (
+						object.material.transparent === true ||
+						object.material.depthWrite === false ||
+						object.material.opacity < 0.99 ||
+						( Array.isArray( object.material ) && object.material.some( m => m && ( m.transparent || m.depthWrite === false || m.opacity < 0.99 ) ) )
+					) )
+				) )
+			) {
+				object.visible = false;
+			}
 
 		} );
 

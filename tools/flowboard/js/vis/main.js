@@ -72,15 +72,16 @@ function _syncEnvironment(store) {
 let _minimap = null;
 
 /* ── 性能档位（Performance Tier）──
- * 默认 low（极速原生模式）：直接前向渲染 + 原生硬件 4x MSAA，0 后处理带宽开销，
- * 在普通集显机器（Intel Iris/UHD, AMD Radeon Graphics）上也能稳定 100~144fps。
+ * 默认 medium（高画质流畅模式）：GTAO 关、Bloom + SMAA + 阴影 2048 全开，
+ * 在绝大多数现代 GPU（含近 5 年集显与各类核显/独显）上轻松跑满 100~144fps。
+ * 软件渲染（WSL/纯 CPU）在 init3DScene 时会自动检测并安全降级到 low 档。
  * 档位语义（_applyPerfTier 实现）：
  *   high   — composer 全开（GTAO+Bloom+SMAA），阴影 4096，DPR min(dpr,1.5)
- *   medium — composer 开但关 GTAO，阴影 2048，DPR min(dpr,1.5)
- *   low    — 极速原生渲染（直接前向 + 硬件 MSAA），关阴影，DPR 1（100+ FPS 默认）
+ *   medium — composer 开但关 GTAO，阴影 2048，DPR min(dpr,1.5)（兼顾璀璨车灯辉光与超高帧率）
+ *   low    — 极速原生渲染（直接前向 + 硬件 MSAA），关阴影，DPR 1（软件渲染安全兜底）
  *   ultra  — 同 low，再压低渲染分辨率（0.5x）由 CSS 放大，最后兜底
  * 自动降级由独立 watchdog（PerfMonitor，setInterval 不依赖 rAF）驱动。 */
-let _perfTier = 'low';
+let _perfTier = 'medium';
 let _perfMonitor = null;
 let _lastReportTs = 0;   // 上报节流：每 5s 最多上报一次可视化健康
 

@@ -37,7 +37,8 @@ const rawRearLights = (model.nodes || []).filter(node =>
 ok('SU7 真实灯节点前后位置自洽',
   rawFrontLights.every(node => node.translation && node.translation[0] > 0) &&
   rawRearLights.every(node => node.translation && node.translation[0] < 0));
-const frontMaterial = {
+const frontStripMaterial = {
+  name: 'Car_ight',
   emissive: { setHex(value) { this.value = value; } },
   emissiveMap: {},
   emissiveIntensity: 1,
@@ -47,7 +48,20 @@ const frontMaterial = {
   transparent: false,
   depthWrite: true,
 };
+const frontLensMaterial = {
+  name: 'M_iron',
+  emissive: { setHex(value) { this.value = value; } },
+  emissiveMap: {},
+  emissiveIntensity: 1,
+  toneMapped: true,
+  side: 0,
+  depthTest: true,
+  transparent: false,
+  depthWrite: true,
+};
+const frontMaterial = [frontStripMaterial, frontLensMaterial];
 const rearMaterial = {
+  name: 'Car_ight',
   emissive: { setHex(value) { this.value = value; } },
   emissiveMap: {},
   emissiveIntensity: 1,
@@ -87,28 +101,31 @@ ok('SU7 真实灯材质接入 headlight/brakelight 契约',
   rawLightScene.userData.brakeLights.includes(rawRearMesh));
 _setVehicleLights(rawLightScene, { brake: true, head: true }, 0);
 ok('SU7 真实灯材质亮度和可见性增强',
-  frontMaterial.emissiveIntensity >= 3.5 &&
-  rearMaterial.emissiveIntensity >= 4.5 &&
-  frontMaterial.emissiveMap === null &&
+  frontStripMaterial.emissiveIntensity >= 3.5 &&
+  frontLensMaterial.emissiveIntensity >= 5.0 &&
+  rearMaterial.emissiveIntensity >= 4.0 &&
+  frontStripMaterial.emissiveMap === null &&
   rearMaterial.emissiveMap === null &&
   rawFrontMesh.visible === true &&
   rawRearMesh.visible === true &&
-  frontMaterial.toneMapped === false &&
+  frontStripMaterial.toneMapped === false &&
   rearMaterial.toneMapped === false);
-_setVehicleLights(rawLightScene, { brake: false, head: false, turnL: true }, 0.1);
-ok('SU7 转向灯直接复用真实灯罩而非悬浮方块',
+_setVehicleLights(rawLightScene, { brake: false, head: true, turnL: true }, 0.1);
+ok('SU7 转向灯只亮横条导光条，矩阵大灯透镜保持高亮白光',
   rawLightScene.userData.su7RawLights &&
-  frontMaterial.emissiveIntensity >= 5.5 &&
-  rearMaterial.emissiveIntensity >= 5.5 &&
-  frontMaterial.emissive.value === 0xff9000 &&
+  frontStripMaterial.emissiveIntensity >= 4.0 &&
+  frontStripMaterial.emissive.value === 0xff9000 &&
+  frontLensMaterial.emissive.value === 0xffffff &&
+  frontLensMaterial.emissiveIntensity >= 5.0 &&
+  rearMaterial.emissiveIntensity >= 4.0 &&
   rearMaterial.emissive.value === 0xff9000);
 // 修复：前灯 emissive 材质须穿透透明灯罩玻璃（Light 在玻璃之后），
 // 因此设 depthTest=true + transparent=true + depthWrite=false。
 ok('SU7 前灯 emissive 穿透灯罩玻璃且不透视车身',
   // lamp 仍受车身深度遮挡（depthTest 保持 true）→ 不会从车头看到尾灯
-  frontMaterial.depthTest === true &&
-  frontMaterial.transparent === true &&
-  frontMaterial.depthWrite === false &&
+  frontStripMaterial.depthTest === true &&
+  frontStripMaterial.transparent === true &&
+  frontStripMaterial.depthWrite === false &&
   rearMaterial.depthTest === true &&
   rearMaterial.transparent === true &&
   rearMaterial.depthWrite === false &&

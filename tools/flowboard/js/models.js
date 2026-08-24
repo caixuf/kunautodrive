@@ -532,7 +532,7 @@ function _adaptSu7LightNodes(group) {
     }
   });
 
-  // SU7 后扩散器中央后雾灯（GB 4785 强制国标高穿透红色后雾灯）
+  // SU7 后扩散器中央独立后雾灯（GB 4785 独立雾灯，严格仅 state.fog 开启，转向灯绝不触发）
   if (THREE && THREE.PlaneGeometry && THREE.MeshBasicMaterial && typeof group.add === 'function') {
     var fogGeo = new THREE.PlaneGeometry(0.24, 0.08);
     var fogMat = new THREE.MeshBasicMaterial({
@@ -620,14 +620,64 @@ function _setSu7LightMeshMaterials(meshes, intensity, colorHex) {
   }
 }
 
+function _setSu7FrontLampSideMaterials(meshes, side, isHead, isClearance, isTurn, blinkOn) {
+  for (var i = 0; i < meshes.length; i++) {
+    var mesh = meshes[i];
+    if (!mesh) continue;
+    mesh.visible = true;
+    var sideMaterials = _lampMaterialsBySide(mesh);
+    var hasSideSplit = !!(sideMaterials && sideMaterials[side] && sideMaterials[side].length);
+    var materials = hasSideSplit ? sideMaterials[side] : _getSu7LampMaterials(mesh);
+    if (!materials.length && mesh.material) {
+      materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    }
+    if (!hasSideSplit && side === 'right' && !isTurn) {
+      continue;
+    }
+    for (var j = 0; j < materials.length; j++) {
+      var material = materials[j];
+      if (!_prepareSu7EmissiveMaterial(material)) continue;
+      var matName = (material.name || '').toLowerCase();
+      var isIron = matName.indexOf('iron') >= 0;
+
+      if (isIron) {
+        // 4 颗矩阵 LED 透镜发光柱核心单元（M_iron）：
+        // - 大灯开启时：5.5 质感纯白透镜发光（夜间/昏暗时清晰照亮，大白天不刺眼）
+        // - 大灯关闭时：0.0 熄灭（白天仅日行灯发光）
+        var lensIntensity = isHead ? 5.5 : 0.0;
+        if (material.emissive) material.emissive.setHex(0xffffff);
+        if (material.emissiveIntensity !== undefined) material.emissiveIntensity = lensIntensity;
+        if (material.color) material.color.setHex(0xffffff);
+      } else {
+        // 水滴十字/横条日行灯兼转向灯导光条（Car_ight）：
+        // - 转向灯激活时：仅该横条闪烁琥珀金 0xff9000
+        // - 转向灯未激活时：纯白发光（大灯 4.0 / 示廓 2.2 / 日间 DRL 1.6）
+        var stripColor = isTurn ? 0xff9000 : 0xffffff;
+        var stripIntensity = isTurn
+          ? (blinkOn ? 4.5 : 0.05)
+          : (isHead ? 4.0 : (isClearance ? 2.2 : 1.6));
+        if (material.emissive) material.emissive.setHex(stripColor);
+        if (material.emissiveIntensity !== undefined) material.emissiveIntensity = stripIntensity;
+        if (material.color && stripColor === 0xffffff) material.color.setHex(0xffffff);
+      }
+      if (material.toneMapped !== undefined) material.toneMapped = false;
+      if (THREE.DoubleSide !== undefined && material.side !== undefined) {
+        material.side = THREE.DoubleSide;
+      }
+    }
+  }
+}
+
 function _setSu7LightMeshSideMaterials(meshes, side, intensity, colorHex) {
   for (var i = 0; i < meshes.length; i++) {
     var mesh = meshes[i];
     if (!mesh) continue;
     mesh.visible = true;
     var sideMaterials = _lampMaterialsBySide(mesh);
-    var materials = sideMaterials && sideMaterials[side];
+    var hasSideSplit = !!(sideMaterials && sideMaterials[side] && sideMaterials[side].length);
+    var materials = hasSideSplit ? sideMaterials[side] : null;
     if (!materials || !materials.length) {
+      if (!hasSideSplit && side === 'right' && colorHex !== 0xff9000) continue;
       _setSu7LightMeshMaterials([mesh], intensity, colorHex);
       continue;
     }
@@ -979,58 +1029,47 @@ export function _setVehicleLights(group, state, blinkPhase) {
    * semantic turn-signal nodes. The mesh is grouped by its authored local Z
    * coordinate, so a turn signal changes only the corresponding real lamp
    * geometry instead of painting a floating rectangular overlay. */
-  // 车尾后雾灯控制（独立后雾灯节点）
+  // 独立后雾灯：严格仅在 state.fog（恶劣浓雾天气/雾灯信号）为 true 时点亮，转向灯绝不触发
   if (ud.rearFogLight) {
     ud.rearFogLight.visible = !!state.fog;
   }
 
   if (ud.su7RawLights) {
-    // 基础前大灯与日行灯状态（纯净白透钻石冰晶，完全匹配真实 SU7 ADB 矩阵透镜发光）：
-    // - 近光大灯开启：24.0 强悍璀璨纯白矩阵光束（4颗透镜发光柱+十字光带原生网格极高纯白透射，触发强烈 Bloom 辉光）
-    // - 示廓灯/示宽灯开启：10.0 晶莹纯白轮廓光
-    // - 昼间行车（默认日行灯 DRL）：6.0 晶莹透亮水滴十字日行灯（白天阳光下亦晶透可见，显著发光）
-    var baseFrontIntensity = state.head ? 24.0 : (state.clearance ? 10.0 : 6.0);
-    var baseFrontColor = 0xffffff;
-
+    // 基础尾灯与示廓状态：
+    // - 刹车时：4.5 纯正鲜明刹车红
+    // - 雾天时：4.0 穿透红
+    // - 尾灯开启（夜间/示廓/大灯）：1.2 优雅暗红质感示位灯
+    // - 白天默认关闭：0.08
     var isRearOn = !!(state.brake || state.clearance || state.head || state.fog);
-    var baseRearIntensity = (state.brake && state.fog) ? 10.0 : (state.fog ? 8.5 : (state.brake ? 6.0 : (isRearOn ? 2.8 : 0.6)));
-    var baseRearColor = state.fog ? 0xff0000 : 0xff211c;
+    var baseRearIntensity = (state.brake && state.fog) ? 5.0 : (state.fog ? 4.0 : (state.brake ? 4.5 : (isRearOn ? 1.2 : 0.08)));
+    var baseRearColor = state.fog ? 0xff0000 : 0xff1e1a;
 
-    // 先重置两侧为基础灯光
-    _setSu7LightMeshSideMaterials(ud.su7RawLights.front, 'left', baseFrontIntensity, baseFrontColor);
-    _setSu7LightMeshSideMaterials(ud.su7RawLights.front, 'right', baseFrontIntensity, baseFrontColor);
-    _setSu7LightMeshSideMaterials(ud.su7RawLights.rear, 'left', baseRearIntensity, baseRearColor);
-    _setSu7LightMeshSideMaterials(ud.su7RawLights.rear, 'right', baseRearIntensity, baseRearColor);
+    // 前大灯与转向灯解耦：转向灯只点亮横向导光条（Car_ight），4颗矩阵透镜（M_iron）保持纯白大灯
+    _setSu7FrontLampSideMaterials(ud.su7RawLights.front, 'left', !!state.head, !!state.clearance, !!state.turnL, blinkOn);
+    _setSu7FrontLampSideMaterials(ud.su7RawLights.front, 'right', !!state.head, !!state.clearance, !!state.turnR, blinkOn);
 
-    // 左侧转向灯激活：亮闪 12.0 琥珀金，暗闪 0.05（日行灯避让闪烁，醒目分明）
-    if (state.turnL) {
-      var turnLIntensity = blinkOn ? 12.0 : 0.05;
-      var turnLColor = 0xff9000;
-      _setSu7LightMeshSideMaterials(ud.su7RawLights.front, 'left', turnLIntensity, turnLColor);
-      _setSu7LightMeshSideMaterials(ud.su7RawLights.rear, 'left', turnLIntensity, turnLColor);
-    }
+    // 车尾灯与后转向灯
+    var rearLIntensity = state.turnL ? (blinkOn ? 4.8 : 0.05) : baseRearIntensity;
+    var rearLColor = state.turnL ? 0xff9000 : baseRearColor;
+    _setSu7LightMeshSideMaterials(ud.su7RawLights.rear, 'left', rearLIntensity, rearLColor);
 
-    // 右侧转向灯激活：亮闪 12.0 琥珀金，暗闪 0.05（日行灯避让闪烁，醒目分明）
-    if (state.turnR) {
-      var turnRIntensity = blinkOn ? 12.0 : 0.05;
-      var turnRColor = 0xff9000;
-      _setSu7LightMeshSideMaterials(ud.su7RawLights.front, 'right', turnRIntensity, turnRColor);
-      _setSu7LightMeshSideMaterials(ud.su7RawLights.rear, 'right', turnRIntensity, turnRColor);
-    }
+    var rearRIntensity = state.turnR ? (blinkOn ? 4.8 : 0.05) : baseRearIntensity;
+    var rearRColor = state.turnR ? 0xff9000 : baseRearColor;
+    _setSu7LightMeshSideMaterials(ud.su7RawLights.rear, 'right', rearRIntensity, rearRColor);
   } else {
     // Keep the source lens and texture, but make the state change unambiguous
     // against the bright outdoor HDRI and the renderer's ACES exposure.
     if (ud.brakeLights) {
       var isRearOnGeneric = !!(state.brake || state.clearance || state.head || state.fog);
-      var bi = (state.brake && state.fog) ? 10.0 : (state.fog ? 8.5 : (state.brake ? 6.0 : (isRearOnGeneric ? 2.2 : 0.08)));
-      var rearCol = state.fog ? 0xff0000 : 0xff211c;
+      var bi = (state.brake && state.fog) ? 5.0 : (state.fog ? 4.0 : (state.brake ? 4.5 : (isRearOnGeneric ? 1.2 : 0.05)));
+      var rearCol = state.fog ? 0xff0000 : 0xff1e1a;
       _setLightMeshMaterials(ud.brakeLights, bi, rearCol);
     }
-    // 转向灯：亮闪 6.0（更醒目），灭 0.05
+    // 转向灯：亮闪 4.8，灭 0.05
     if (ud.turnSignals) {
       var ts = ud.turnSignals;
       var setSide = function(on, keys) {
-        var intensity = on ? (blinkOn ? 6.0 : 0.05) : 0.05;
+        var intensity = on ? (blinkOn ? 4.8 : 0.05) : 0.05;
         for (var k = 0; k < keys.length; k++) {
           if (ts[keys[k]]) _setLightMeshMaterial(ts[keys[k]], intensity, 0xff8a18);
         }
@@ -1040,8 +1079,8 @@ export function _setVehicleLights(group, state, blinkPhase) {
     }
     // 大灯 / 示廓灯
     if (ud.headlights) {
-      var hi = state.head ? 8.0 : (state.clearance ? 2.5 : 0.05);
-      _setLightMeshMaterials(ud.headlights, hi, 0xfff4cf);
+      var hi = state.head ? 5.0 : (state.clearance ? 2.0 : 0.05);
+      _setLightMeshMaterials(ud.headlights, hi, 0xffffff);
     }
   }
   // 自动驾驶小蓝灯（ads_indicator）：车尾左右各一，量产 ADS 标志。

@@ -82,6 +82,96 @@ function _findTurnAnchor(vehicleGroup, names, fallback) {
   return { x: node.position.x + outward, y: node.position.y };
 }
 
+let _headlightCarpetTex = null;
+function getHeadlightCarpetTexture() {
+  if (_headlightCarpetTex) return _headlightCarpetTex;
+  if (typeof document === 'undefined' || !document.createElement) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(0, 0, 512, 512);
+
+  // 双透镜近光聚光核心 + ECE Z型低高切线光形（左低右高防眩）
+  const gL = ctx.createRadialGradient(180, 140, 0, 180, 140, 240);
+  gL.addColorStop(0.0, 'rgba(255, 255, 255, 1.0)');
+  gL.addColorStop(0.18, 'rgba(255, 250, 240, 0.95)');
+  gL.addColorStop(0.45, 'rgba(240, 245, 255, 0.65)');
+  gL.addColorStop(0.75, 'rgba(220, 235, 255, 0.25)');
+  gL.addColorStop(1.0, 'rgba(0, 0, 0, 0.0)');
+  ctx.fillStyle = gL;
+  ctx.beginPath();
+  ctx.arc(180, 140, 240, 0, Math.PI * 2);
+  ctx.fill();
+
+  const gR = ctx.createRadialGradient(332, 120, 0, 332, 120, 260);
+  gR.addColorStop(0.0, 'rgba(255, 255, 255, 1.0)');
+  gR.addColorStop(0.18, 'rgba(255, 250, 240, 0.95)');
+  gR.addColorStop(0.50, 'rgba(240, 245, 255, 0.70)');
+  gR.addColorStop(0.80, 'rgba(220, 235, 255, 0.30)');
+  gR.addColorStop(1.0, 'rgba(0, 0, 0, 0.0)');
+  ctx.fillStyle = gR;
+  ctx.beginPath();
+  ctx.arc(332, 120, 260, 0, Math.PI * 2);
+  ctx.fill();
+
+  const gSpread = ctx.createRadialGradient(256, 80, 10, 256, 120, 340);
+  gSpread.addColorStop(0.0, 'rgba(255, 255, 255, 0.85)');
+  gSpread.addColorStop(0.35, 'rgba(245, 248, 255, 0.50)');
+  gSpread.addColorStop(0.70, 'rgba(200, 220, 255, 0.18)');
+  gSpread.addColorStop(1.0, 'rgba(0, 0, 0, 0.0)');
+  ctx.fillStyle = gSpread;
+  ctx.beginPath();
+  ctx.arc(256, 120, 340, 0, Math.PI * 2);
+  ctx.fill();
+
+  _headlightCarpetTex = new THREE.CanvasTexture(canvas);
+  return _headlightCarpetTex;
+}
+
+let _headlightFlareTex = null;
+function getHeadlightFlareTexture() {
+  if (_headlightFlareTex) return _headlightFlareTex;
+  if (typeof document === 'undefined' || !document.createElement) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  g.addColorStop(0.0, 'rgba(255, 255, 255, 1.0)');
+  g.addColorStop(0.15, 'rgba(255, 252, 245, 0.90)');
+  g.addColorStop(0.40, 'rgba(210, 235, 255, 0.45)');
+  g.addColorStop(0.70, 'rgba(150, 190, 255, 0.15)');
+  g.addColorStop(1.0, 'rgba(0, 0, 0, 0.0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(64, 64, 64, 0, Math.PI * 2);
+  ctx.fill();
+  _headlightFlareTex = new THREE.CanvasTexture(canvas);
+  return _headlightFlareTex;
+}
+
+let _headlightBeamTex = null;
+function getHeadlightBeamTexture() {
+  if (_headlightBeamTex) return _headlightBeamTex;
+  if (typeof document === 'undefined' || !document.createElement) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  const g = ctx.createLinearGradient(0, 0, 256, 0);
+  g.addColorStop(0.0, 'rgba(255, 255, 255, 1.0)');
+  g.addColorStop(0.08, 'rgba(255, 250, 245, 0.90)');
+  g.addColorStop(0.35, 'rgba(230, 242, 255, 0.55)');
+  g.addColorStop(0.70, 'rgba(180, 215, 255, 0.20)');
+  g.addColorStop(1.0, 'rgba(0, 0, 0, 0.0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 256, 64);
+  _headlightBeamTex = new THREE.CanvasTexture(canvas);
+  return _headlightBeamTex;
+}
+
 /** 为车辆模型创建灯光网格组。
  *  @param {THREE.Group} vehicleGroup 车辆模型根节点
  *  @param {{brake?: boolean, turn?: boolean, head?: boolean}} options
@@ -114,15 +204,13 @@ function createVehicleLights(vehicleGroup, options = {}) {
   const turnRR = _makeRectMesh(GEO_TURN, LIGHT_OFF, rearTurn.x, rearTurn.y,  TURN_Z);
   const headL  = _makeRectMesh(GEO_HEAD, LIGHT_OFF, headX, headY, -headZ);
   const headR  = _makeRectMesh(GEO_HEAD, LIGHT_OFF, headX, headY,  headZ);
-  const fogRear = _makeRectMesh(new THREE.PlaneGeometry(0.24, 0.08), LIGHT_OFF, BRAKE_X, 0.32, 0.0);
 
   // 熄灯时隐藏，避免暗色灯片显示为车身边缘的黑方块
   brakeL.visible = brakeR.visible = false;
   turnFL.visible = turnFR.visible = turnRL.visible = turnRR.visible = false;
   headL.visible = headR.visible = false;
-  fogRear.visible = false;
 
-  group.add(brakeL, brakeR, turnFL, turnFR, turnRL, turnRR, headL, headR, fogRear);
+  group.add(brakeL, brakeR, turnFL, turnFR, turnRL, turnRR, headL, headR);
 
   return {
     group,
@@ -140,11 +228,6 @@ function createVehicleLights(vehicleGroup, options = {}) {
       brakeR.material.color.copy(LIGHT_BRAKE_ON);
       brakeL.material.opacity = s.brake ? 1.0 : 0.45;
       brakeR.material.opacity = s.brake ? 1.0 : 0.45;
-
-      // 车尾中央后雾灯（GB 4785 强制红色后雾灯，穿透雨雪浓雾）
-      fogRear.visible = showBrakeOverlay && s.fog;
-      fogRear.material.color.setHex(0xff0000);
-      fogRear.material.opacity = 1.0;
 
       const turnL = showTurnOverlay && s.turnL && blinkOn;
       const turnR = showTurnOverlay && s.turnR && blinkOn;
@@ -996,37 +1079,71 @@ export function createVehicleView(scene, renderer, modelCache) {
       if (id === 'ego' && entry.group) {
         if (!entry.headlightSpotL && THREE && typeof THREE.SpotLight === 'function') {
           // 1. 左右前大灯真实物理 SpotLight 光源（真实照亮前方道路、车道线与周围场景）
-          const spotL = new THREE.SpotLight(0xfffcf0, 0, 90, Math.PI / 3.4, 0.8, 1.2);
+          const spotL = new THREE.SpotLight(0xfffdf5, 0, 120, Math.PI / 3.0, 0.8, 1.0);
           spotL.position.set(2.35, 0.70, -0.68);
           const targetL = new THREE.Object3D();
-          targetL.position.set(38.0, -0.1, -0.80);
+          targetL.position.set(45.0, -0.1, -0.80);
           entry.group.add(spotL);
           entry.group.add(targetL);
           spotL.target = targetL;
           entry.headlightSpotL = spotL;
 
-          const spotR = new THREE.SpotLight(0xfffcf0, 0, 90, Math.PI / 3.4, 0.8, 1.2);
+          const spotR = new THREE.SpotLight(0xfffdf5, 0, 120, Math.PI / 3.0, 0.8, 1.0);
           spotR.position.set(2.35, 0.70, 0.68);
           const targetR = new THREE.Object3D();
-          targetR.position.set(38.0, -0.1, 0.80);
+          targetR.position.set(45.0, -0.1, 0.80);
           entry.group.add(spotR);
           entry.group.add(targetR);
           spotR.target = targetR;
           entry.headlightSpotR = spotR;
 
-          // 2. 车尾刹车地面物理点光源（刹车时照亮车尾地表与后车）
+          // 2. 车头左右大灯透镜晶莹光晕 (Lens Corona Glow Flare Sprites)
+          if (THREE.Sprite && THREE.SpriteMaterial) {
+            const flareTex = getHeadlightFlareTexture();
+            const flareMatL = new THREE.SpriteMaterial({
+              map: flareTex,
+              color: 0xffffff,
+              transparent: true,
+              opacity: 0.0,
+              blending: THREE.AdditiveBlending,
+              depthWrite: false,
+            });
+            const flareL = new THREE.Sprite(flareMatL);
+            flareL.position.set(2.32, 0.70, -0.68);
+            flareL.scale.set(0.95, 0.95, 1.0);
+            entry.group.add(flareL);
+            entry.headlightFlareL = flareL;
+
+            const flareMatR = new THREE.SpriteMaterial({
+              map: flareTex,
+              color: 0xffffff,
+              transparent: true,
+              opacity: 0.0,
+              blending: THREE.AdditiveBlending,
+              depthWrite: false,
+            });
+            const flareR = new THREE.Sprite(flareMatR);
+            flareR.position.set(2.32, 0.70, 0.68);
+            flareR.scale.set(0.95, 0.95, 1.0);
+            entry.group.add(flareR);
+            entry.headlightFlareR = flareR;
+          }
+
+          // 3. 车尾刹车地面物理点光源（刹车时照亮车尾地表与后车）
           if (THREE.PointLight) {
-            const brakeLight = new THREE.PointLight(0xff1800, 0, 14, 1.5);
+            const brakeLight = new THREE.PointLight(0xff1800, 0, 16, 1.2);
             brakeLight.position.set(-2.40, 0.60, 0.0);
             entry.group.add(brakeLight);
             entry.brakePointLight = brakeLight;
           }
 
-          // 3. 铺路光毯（前大灯开启时投射在车头前方的宽幅切线地面高光）
+          // 4. 铺路光毯（前大灯开启时投射在车头前方的宽幅切线地面高光）
           if (THREE.PlaneGeometry && THREE.MeshBasicMaterial) {
-            const carpetGeo = new THREE.PlaneGeometry(11.0, 42.0);
+            const carpetGeo = new THREE.PlaneGeometry(14.0, 52.0);
+            const carpetTex = getHeadlightCarpetTexture();
             const carpetMat = new THREE.MeshBasicMaterial({
-              color: 0xfffaee,
+              color: 0xffffff,
+              map: carpetTex,
               transparent: true,
               opacity: 0.0,
               depthWrite: false,
@@ -1036,7 +1153,7 @@ export function createVehicleView(scene, renderer, modelCache) {
             const carpetMesh = new THREE.Mesh(carpetGeo, carpetMat);
             carpetMesh.rotation.x = -Math.PI / 2;
             carpetMesh.rotation.z = -Math.PI / 2;
-            carpetMesh.position.set(22.0, 0.03, 0.0);
+            carpetMesh.position.set(26.0, 0.03, 0.0);
             carpetMesh.renderOrder = 8;
             entry.group.add(carpetMesh);
             entry.headlightCarpet = carpetMesh;
@@ -1060,13 +1177,15 @@ export function createVehicleView(scene, renderer, modelCache) {
             entry.brakeCarpet = brakeCarpetMesh;
           }
 
-          // 4. 左右前大灯 3D 立体光学光锥（Volumetric Light Beams，从透镜柱射出穿透黑夜）
+          // 5. 左右前大灯 3D 立体光学光锥（Volumetric Light Beams，从透镜柱射出穿透黑夜）
           if (THREE.CylinderGeometry && THREE.MeshBasicMaterial) {
-            const beamGeo = new THREE.CylinderGeometry(0.12, 2.0, 32.0, 16, 1, true);
+            const beamGeo = new THREE.CylinderGeometry(0.12, 2.4, 38.0, 16, 1, true);
             beamGeo.rotateZ(-Math.PI / 2);
-            beamGeo.translate(16.0, 0, 0); // 几何中心向 +X 前移 16m，原点对齐透镜位置
+            beamGeo.translate(19.0, 0, 0); // 几何中心向 +X 前移 19m，原点对齐透镜位置
+            const beamTex = getHeadlightBeamTexture();
             const beamMat = new THREE.MeshBasicMaterial({
-              color: 0xfffaee,
+              color: 0xfffdf5,
+              map: beamTex,
               transparent: true,
               opacity: 0.0,
               depthWrite: false,
@@ -1091,31 +1210,59 @@ export function createVehicleView(scene, renderer, modelCache) {
           }
         }
 
-        // 光源与光效实时强度更新
-        const spotIntensity = ls.head ? (ls.fog ? 450.0 : 350.0) : 0.0;
+        // 环境感知与昼夜判定
+        const isNight = !!(store.env && (store.env.isNight || store.env.lighting === 'night'));
+        const isDim = isNight || !!(store.env && (store.env.lighting === 'dusk' || store.env.lighting === 'dawn')) || !!ls.fog;
+
+        // 1. 物理 SpotLight 光源：白天关闭，仅在夜间/黄昏/浓雾且大灯开启时柔和照亮前方道路
+        const spotIntensity = ls.head
+          ? (ls.fog ? 320.0 : (isNight ? 220.0 : (isDim ? 120.0 : 0.0)))
+          : 0.0;
         if (entry.headlightSpotL) entry.headlightSpotL.intensity = spotIntensity;
         if (entry.headlightSpotR) entry.headlightSpotR.intensity = spotIntensity;
 
-        if (entry.brakePointLight) {
-          entry.brakePointLight.intensity = ls.brake ? 180.0 : (ls.head ? 25.0 : 0.0);
+        // 2. 透镜光晕（Flare Sprite）：白天仅柔和晶莹点缀(0.20)，夜间自然发光(0.50)
+        const flareOp = ls.head
+          ? (isDim ? 0.50 : 0.20)
+          : (ls.clearance ? (isDim ? 0.18 : 0.08) : 0.0);
+        if (entry.headlightFlareL && entry.headlightFlareL.material) {
+          entry.headlightFlareL.material.opacity = flareOp;
+          entry.headlightFlareL.visible = flareOp > 0.001;
+        }
+        if (entry.headlightFlareR && entry.headlightFlareR.material) {
+          entry.headlightFlareR.material.opacity = flareOp;
+          entry.headlightFlareR.visible = flareOp > 0.001;
         }
 
+        // 3. 车尾刹车地面物理点光源
+        if (entry.brakePointLight) {
+          entry.brakePointLight.intensity = ls.brake ? 35.0 : (isDim && ls.head ? 4.0 : 0.0);
+        }
+
+        // 4. 铺路光毯：大白天完全隐藏，仅夜间/雾天显现自然沥青路面漫反射切线光斑
         if (entry.headlightCarpet && entry.headlightCarpet.material) {
-          entry.headlightCarpet.material.opacity = ls.head ? (store.env && store.env.isNight ? 0.48 : 0.28) : 0.0;
+          const carpetOp = ls.head
+            ? (ls.fog ? 0.45 : (isNight ? 0.38 : (isDim ? 0.20 : 0.0)))
+            : 0.0;
+          entry.headlightCarpet.material.opacity = carpetOp;
+          entry.headlightCarpet.visible = carpetOp > 0.001;
         }
         if (entry.brakeCarpet && entry.brakeCarpet.material) {
-          entry.brakeCarpet.material.opacity = ls.brake ? 0.38 : (ls.head ? 0.08 : 0.0);
+          const brakeCarpetOp = ls.brake ? (isDim ? 0.35 : 0.20) : (isDim && ls.head ? 0.08 : 0.0);
+          entry.brakeCarpet.material.opacity = brakeCarpetOp;
+          entry.brakeCarpet.visible = brakeCarpetOp > 0.001;
         }
 
+        // 5. 3D 立体空间光锥：白天完全隐藏，仅在浓雾/夜间显现淡淡的丁达尔穿透光
         if (entry.headlightBeamMat) {
           let beamOpacity = 0.0;
           if (ls.head) {
             if (ls.fog) {
-              beamOpacity = 0.55;
-            } else if (store.env && store.env.isNight) {
-              beamOpacity = 0.38;
-            } else {
-              beamOpacity = 0.12;
+              beamOpacity = 0.32;
+            } else if (isNight) {
+              beamOpacity = 0.14;
+            } else if (isDim) {
+              beamOpacity = 0.08;
             }
           }
           entry.headlightBeamMat.opacity = beamOpacity;

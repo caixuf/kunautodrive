@@ -42,6 +42,7 @@ export function createPerceptionView(scene) {
     depthWrite: false,
   });
   const boxMesh = new THREE.LineSegments(boxGeo, boxMat);
+  boxMesh.renderOrder = 22;
   boxMesh.frustumCulled = false;
   scene.add(boxMesh);
 
@@ -56,11 +57,12 @@ export function createPerceptionView(scene) {
   const rayMat = new THREE.LineBasicMaterial({
     vertexColors: true,
     transparent: true,
-    opacity: 0.3,
+    opacity: 0.5,
     depthTest: false,
     depthWrite: false,
   });
   const rayMesh = new THREE.LineSegments(rayGeo, rayMat);
+  rayMesh.renderOrder = 23;
   rayMesh.frustumCulled = false;
   scene.add(rayMesh);
 
@@ -71,12 +73,14 @@ export function createPerceptionView(scene) {
   const sweepMat = new THREE.MeshBasicMaterial({
     color: BOX_COLOR,
     transparent: true,
-    opacity: 0.06,
+    opacity: 0.08,
     side: THREE.DoubleSide,
     depthWrite: false,
     depthTest: false,
+    blending: THREE.AdditiveBlending,
   });
   const sweepMesh = new THREE.Mesh(sweepGeo, sweepMat);
+  sweepMesh.renderOrder = 20;
   sweepMesh.frustumCulled = false;
   scene.add(sweepMesh);
 
@@ -87,11 +91,12 @@ export function createPerceptionView(scene) {
   const sweepEdgeMat = new THREE.LineBasicMaterial({
     color: BOX_COLOR,
     transparent: true,
-    opacity: 0.25,
+    opacity: 0.65,
     depthWrite: false,
     depthTest: false,
   });
   const sweepEdgeMesh = new THREE.Line(sweepEdgeGeo, sweepEdgeMat);
+  sweepEdgeMesh.renderOrder = 21;
   sweepEdgeMesh.frustumCulled = false;
   scene.add(sweepEdgeMesh);
 

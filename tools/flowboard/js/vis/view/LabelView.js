@@ -26,6 +26,7 @@ function _createLabelSprite(texture) {
     sizeAttenuation: true,
   });
   const sprite = new THREE.Sprite(material);
+  sprite.renderOrder = 30;
   sprite.scale.set(LABEL_SCALE, LABEL_SCALE * (CANVAS_H / CANVAS_W), 1);
   return sprite;
 }
