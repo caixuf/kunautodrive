@@ -115,17 +115,7 @@ export function createConnectorView(scene) {
     //  不匹配导致其从未渲染过任何东西（死代码）；正确的数据版 = 2b 内的
     //  转向引导虚线（connectingRoads 前缀匹配 + 二次贝塞尔导流线）。 ──
 
-    // ── 3. RampMerge：ramp_curve 类型 + junctions 里有 merge ──
-    const mergeJunctions = junctions.filter(j => j.type === 'merge');
-    for (const edge of edges) {
-      if (edge.type !== 'ramp_curve') continue;
-      // 查找该 ramp 对应的 merge junction
-      const mj = mergeJunctions.find(j => j.incoming_road === edge.id);
-      if (mj) {
-        const targetEdge = edges.find(e => e.id === mj.target_road);
-        if (targetEdge) _buildRampMerge(edge, targetEdge);
-      }
-    }
+    // ── 3. 匝道过渡导流已统一由 RoadView.js 沿真实曲线生成，此处无需重复绘制 ──
 
     // ── 4. ViaductPier：高架（bridge/z>=1.5）edge 自适应多柱桥墩与盖梁收集 ──
     const pierInstances = [];
@@ -424,13 +414,17 @@ export function createConnectorView(scene) {
         const halfW = a.roadW * 0.25;
         stopInstances.push({ x: ws.x + ws.uz * halfW, z: ws.z - ws.ux * halfW, y: baseY + STOP_Y, rotY: directionToRotationY(ws.ux, ws.uz) + Math.PI / 2, len: a.roadW * 0.5, w: STOP_LINE_W });
 
-        // ── 地面导向箭头（GB 5768.3 5.14）与人行横道预告菱形（5.16）──
+        // ── 地面导向箭头（GB 5768.3 5.14 标准导向车道标线）──
         const isOneWay = a.edge && a.edge.oneway === true;
         const totalLanes = Math.max(1, Number(a.edge && a.edge.lanes) || 2);
         const apprLanes = isOneWay ? totalLanes : Math.max(1, Math.floor(totalLanes / 2));
         const laneW = Number(a.edge && a.edge.lane_width) || (a.roadW / totalLanes);
+        const armLen = Number(a.edge && a.edge.length_m) || 50;
 
-        for (const dist of [16.0, 32.0]) {
+        // 根据路段长度自适应箭头排布：短路段 1 组，长路段（>70m）2 组，避免密集重叠
+        const arrowDists = armLen > 70 ? [18.0, 50.0] : (armLen > 25 ? [18.0] : [10.0]);
+
+        for (const dist of arrowDists) {
           const wa = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, c.radius + 2.0 + CROSSWALK_LENGTH + dist);
           const ux = -wa.ux, uz = -wa.uz; // 车道来车前向单位向量
           const rx = uz, rz = -ux;        // 来车方向右侧法线
@@ -446,16 +440,6 @@ export function createConnectorView(scene) {
             else turnType = (k === 0) ? 'left' : (k === apprLanes - 1) ? 'right' : 'straight';
             _drawGroundArrow(lx, baseY + STOP_Y, lz, ux, uz, turnType, arrowInstances);
           }
-        }
-        // 人行横道预告菱形（距斑马线 42m）
-        const wd = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, c.radius + 2.0 + CROSSWALK_LENGTH + 42.0);
-        const uxd = -wd.ux, uzd = -wd.uz;
-        const rxd = uzd, rzd = -uxd;
-        for (let k = 0; k < apprLanes; k++) {
-          const lOffset = isOneWay
-            ? (k + 0.5 - apprLanes * 0.5) * laneW
-            : (k + 0.5) * laneW;
-          _drawDiamondMarking(wd.x + rxd * lOffset, baseY + STOP_Y, wd.z + rzd * lOffset, uxd, uzd, arrowInstances);
         }
       }
       // 转向引导线：本路口每个 fork junction 的 incoming→connecting 路径
@@ -843,42 +827,6 @@ export function createConnectorView(scene) {
       z: z - uz * (halfL * 0.5) - nz * (halfW * 0.5),
       rotY: directionToRotationY(e4x, e4z), len, w,
     });
-  }
-
-  /** 3. RampMerge：喇叭口导流线（三角形 + 白色斜线） */
-  function _buildRampMerge(rampEdge, mainEdge) {
-    const rampEnd = _getEdgeEnd(rampEdge);
-    const mainStart = _getEdgeStart(mainEdge);
-    if (!rampEnd || !mainStart) return;
-
-    // 三角形导流带（连接 ramp 终点和主路边缘）
-    const rampWidth = (rampEdge.lanes || 1) * (rampEdge.lane_width || 3.0);
-    const mainWidth = (mainEdge.lanes || DEFAULT_LANES) * (mainEdge.lane_width || LANE_WIDTH);
-    const positions = [
-      rampEnd.x, 0.11, rampEnd.z + rampWidth/2,
-      rampEnd.x, 0.11, rampEnd.z - rampWidth/2,
-      mainStart.x + 10, 0.11, mainStart.z - mainWidth/2,
-    ];
-    const indices = [0, 1, 2];
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geo.setIndex(indices);
-    geo.computeVertexNormals();
-    const mat = getStdMaterial(TAPER_COLOR, 0.92, 0.0);
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.receiveShadow = true;
-    group.add(mesh);
-
-    // 导流斜线（5 条白色短线）
-    const lineMat = getStdMaterial(MERGE_LINE_COLOR, 0.5, 0.0);
-    for (let i = 0; i < 5; i++) {
-      const t = i / 5;
-      const lineGeo = getBox(0.15, 0.02, 1.5);
-      const line = new THREE.Mesh(lineGeo, lineMat);
-      line.position.set(rampEnd.x + t * 10, 0.16, rampEnd.z - rampWidth/2 + t * 1.5);
-      line.rotation.y = Math.PI / 6;
-      group.add(line);
-    }
   }
 
   /** 4. ViaductPier：高架桥墩与盖梁收集（支持单柱/双柱自适应与真实盖梁） */
