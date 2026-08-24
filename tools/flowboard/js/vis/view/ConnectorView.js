@@ -704,73 +704,104 @@ export function createConnectorView(scene) {
 
   /** 地面导向箭头生成（GB 5768.3 5.14）：直行、左转、右转、直行+左转、直行+右转 */
   function _drawGroundArrow(x, y, z, ux, uz, turnType, out) {
-    // ux, uz: 沿车道行驶前向单位向量 (THREE x, z)
+    // ux, uz: 车道来车前向单位向量 (THREE x, z)
     // nx, nz: 车道左侧法向单位向量 (THREE x, z)
     const nx = -uz, nz = ux;
     const rotForward = directionToRotationY(ux, uz);
 
-    // 1. 直行主干与箭头 (Straight stem + head)
+    // 1. 直行主干与箭头 (Straight stem + head chevron meeting perfectly at tip)
     if (turnType === 'straight' || turnType === 'straight_left' || turnType === 'straight_right') {
-      // 主干
-      out.push({ x: x - ux * 0.4, y, z: z - uz * 0.4, rotY: rotForward, len: 2.6, w: 0.22 });
-      // 左翼倒刺 (向左偏 28 度)
-      const bux_l = ux * 0.88 + nx * 0.47, buz_l = uz * 0.88 + nz * 0.47;
+      const tipX = x + ux * 1.5, tipZ = z + uz * 1.5;
+      // 主干直条 (中心位于 x, 长度 3.0，前端止于 tip)
+      out.push({ x: x, y, z: z, rotY: rotForward, len: 3.0, w: 0.24 });
+
+      // 左翼倒刺 (从 tip 顶点向后偏左 30 度倒折: vector = -ux*cos(30°) + nx*sin(30°))
+      const wvx_l = -ux * 0.866 + nx * 0.50, wvz_l = -uz * 0.866 + nz * 0.50;
       out.push({
-        x: x + ux * 0.95 + nx * 0.28, y, z: z + uz * 0.95 + nz * 0.28,
-        rotY: directionToRotationY(bux_l, buz_l), len: 1.1, w: 0.20,
+        x: tipX + wvx_l * 0.55, y, z: tipZ + wvz_l * 0.55,
+        rotY: directionToRotationY(wvx_l, wvz_l), len: 1.1, w: 0.22,
       });
-      // 右翼倒刺 (向右偏 28 度)
-      const bux_r = ux * 0.88 - nx * 0.47, buz_r = uz * 0.88 - nz * 0.47;
+
+      // 右翼倒刺 (从 tip 顶点向后偏右 30 度倒折: vector = -ux*cos(30°) - nx*sin(30°))
+      const wvx_r = -ux * 0.866 - nx * 0.50, wvz_r = -uz * 0.866 - nz * 0.50;
       out.push({
-        x: x + ux * 0.95 - nx * 0.28, y, z: z + uz * 0.95 - nz * 0.28,
-        rotY: directionToRotationY(bux_r, buz_r), len: 1.1, w: 0.20,
+        x: tipX + wvx_r * 0.55, y, z: tipZ + wvz_r * 0.55,
+        rotY: directionToRotationY(wvx_r, wvz_r), len: 1.1, w: 0.22,
       });
     }
 
     // 2. 左转弯曲主干与箭头 (Left hook + head)
     if (turnType === 'left' || turnType === 'straight_left' || turnType === 'turn') {
       const isCombo = turnType === 'straight_left';
-      const ox = isCombo ? x + nx * 0.40 : x;
-      const oz = isCombo ? z + nz * 0.40 : z;
-      // 纵向直干段
-      out.push({ x: ox - ux * 0.6, y, z: oz - uz * 0.6, rotY: rotForward, len: 1.8, w: 0.22 });
-      // 左转弧线折线段 (向左 60 度)
-      const lux = ux * 0.50 + nx * 0.866, luz = uz * 0.50 + nz * 0.866;
+      const ox = isCombo ? x + nx * 0.45 : x;
+      const oz = isCombo ? z + nz * 0.45 : z;
+
+      // 纵向直干段 (从 ox - ux*1.5 到 ox)
+      out.push({ x: ox - ux * 0.75, y, z: oz - uz * 0.75, rotY: rotForward, len: 1.5, w: 0.24 });
+
+      // 左转圆弧过渡段 (45度折角)
+      const lux = ux * 0.707 + nx * 0.707, luz = uz * 0.707 + nz * 0.707;
       out.push({
-        x: ox + ux * 0.35 + nx * 0.55, y, z: oz + uz * 0.35 + nz * 0.55,
-        rotY: directionToRotationY(lux, luz), len: 1.4, w: 0.22,
+        x: ox + ux * 0.35 + nx * 0.35, y, z: oz + uz * 0.35 + nz * 0.35,
+        rotY: directionToRotationY(lux, luz), len: 1.0, w: 0.24,
       });
-      // 箭头头部 (纯向左 90度，带两侧倒刺)
-      const tipX = ox + ux * 0.50 + nx * 1.15;
-      const tipZ = oz + uz * 0.50 + nz * 1.15;
-      out.push({ x: tipX - nx * 0.2, y, z: tipZ - nz * 0.2, rotY: directionToRotationY(nx, nz), len: 0.7, w: 0.22 });
-      const tipBux1 = nx * 0.866 + ux * 0.5, tipBuz1 = nz * 0.866 + uz * 0.5;
-      out.push({ x: tipX - nx * 0.15 + ux * 0.25, y, z: tipZ - nz * 0.15 + uz * 0.25, rotY: directionToRotationY(tipBux1, tipBuz1), len: 0.8, w: 0.20 });
-      const tipBux2 = nx * 0.866 - ux * 0.5, tipBuz2 = nz * 0.866 - uz * 0.5;
-      out.push({ x: tipX - nx * 0.15 - ux * 0.25, y, z: tipZ - nz * 0.15 - uz * 0.25, rotY: directionToRotationY(tipBux2, tipBuz2), len: 0.8, w: 0.20 });
+
+      // 水平左向主干 (纯向左 nx, nz, 延伸到 tip)
+      const tipX = ox + ux * 0.70 + nx * 1.50;
+      const tipZ = oz + uz * 0.70 + nz * 1.50;
+      out.push({
+        x: tipX - nx * 0.40, y, z: tipZ - nz * 0.40,
+        rotY: directionToRotationY(nx, nz), len: 0.8, w: 0.24,
+      });
+
+      // 箭头头部倒刺 (从 tip 顶点向后右、后左 30度折回)
+      const b1x = -nx * 0.866 + ux * 0.50, b1z = -nz * 0.866 + uz * 0.50;
+      out.push({
+        x: tipX + b1x * 0.45, y, z: tipZ + b1z * 0.45,
+        rotY: directionToRotationY(b1x, b1z), len: 0.9, w: 0.22,
+      });
+      const b2x = -nx * 0.866 - ux * 0.50, b2z = -nz * 0.866 - uz * 0.50;
+      out.push({
+        x: tipX + b2x * 0.45, y, z: tipZ + b2z * 0.45,
+        rotY: directionToRotationY(b2x, b2z), len: 0.9, w: 0.22,
+      });
     }
 
     // 3. 右转弯曲主干与箭头 (Right hook + head)
     if (turnType === 'right' || turnType === 'straight_right') {
       const isCombo = turnType === 'straight_right';
-      const ox = isCombo ? x - nx * 0.40 : x;
-      const oz = isCombo ? z - nz * 0.40 : z;
-      // 纵向直干段
-      out.push({ x: ox - ux * 0.6, y, z: oz - uz * 0.6, rotY: rotForward, len: 1.8, w: 0.22 });
-      // 右转弧线折线段 (向右 60 度)
-      const rux = ux * 0.50 - nx * 0.866, ruz = uz * 0.50 - nz * 0.866;
+      const ox = isCombo ? x - nx * 0.45 : x;
+      const oz = isCombo ? z - nz * 0.45 : z;
+
+      // 纵向直干段 (从 ox - ux*1.5 到 ox)
+      out.push({ x: ox - ux * 0.75, y, z: oz - uz * 0.75, rotY: rotForward, len: 1.5, w: 0.24 });
+
+      // 右转圆弧过渡段 (45度折角)
+      const rux = ux * 0.707 - nx * 0.707, ruz = uz * 0.707 - nz * 0.707;
       out.push({
-        x: ox + ux * 0.35 - nx * 0.55, y, z: oz + uz * 0.35 - nz * 0.55,
-        rotY: directionToRotationY(rux, ruz), len: 1.4, w: 0.22,
+        x: ox + ux * 0.35 - nx * 0.35, y, z: oz + uz * 0.35 - nz * 0.35,
+        rotY: directionToRotationY(rux, ruz), len: 1.0, w: 0.24,
       });
-      // 箭头头部 (纯向右 90度，带两侧倒刺)
-      const tipX = ox + ux * 0.50 - nx * 1.15;
-      const tipZ = oz + uz * 0.50 - nz * 1.15;
-      out.push({ x: tipX + nx * 0.2, y, z: tipZ + nz * 0.2, rotY: directionToRotationY(-nx, -nz), len: 0.7, w: 0.22 });
-      const tipBux1 = -nx * 0.866 + ux * 0.5, tipBuz1 = -nz * 0.866 + uz * 0.5;
-      out.push({ x: tipX + nx * 0.15 + ux * 0.25, y, z: tipZ + nz * 0.15 + uz * 0.25, rotY: directionToRotationY(tipBux1, tipBuz1), len: 0.8, w: 0.20 });
-      const tipBux2 = -nx * 0.866 - ux * 0.5, tipBuz2 = -nz * 0.866 - uz * 0.5;
-      out.push({ x: tipX + nx * 0.15 - ux * 0.25, y, z: tipZ + nz * 0.15 - uz * 0.25, rotY: directionToRotationY(tipBux2, tipBuz2), len: 0.8, w: 0.20 });
+
+      // 水平右向主干 (纯向右 -nx, -nz, 延伸到 tip)
+      const tipX = ox + ux * 0.70 - nx * 1.50;
+      const tipZ = oz + uz * 0.70 - nz * 1.50;
+      out.push({
+        x: tipX + nx * 0.40, y, z: tipZ + nz * 0.40,
+        rotY: directionToRotationY(-nx, -nz), len: 0.8, w: 0.24,
+      });
+
+      // 箭头头部倒刺 (从 tip 顶点向后右、后左 30度折回)
+      const b1x = nx * 0.866 + ux * 0.50, b1z = nz * 0.866 + uz * 0.50;
+      out.push({
+        x: tipX + b1x * 0.45, y, z: tipZ + b1z * 0.45,
+        rotY: directionToRotationY(b1x, b1z), len: 0.9, w: 0.22,
+      });
+      const b2x = nx * 0.866 - ux * 0.50, b2z = nz * 0.866 - uz * 0.50;
+      out.push({
+        x: tipX + b2x * 0.45, y, z: tipZ + b2z * 0.45,
+        rotY: directionToRotationY(b2x, b2z), len: 0.9, w: 0.22,
+      });
     }
   }
 

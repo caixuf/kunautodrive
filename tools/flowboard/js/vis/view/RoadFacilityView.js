@@ -142,15 +142,13 @@ export function inferRoadFacilities(roadNetwork, entities, scenarioName = '') {
     scenarioName.toLowerCase().includes('exam');
 
   for (const edge of edges) {
-    const name = String(edge?.name || '').toLowerCase();
-    if (!isExamOrParking && !(name.includes('exam') || name.includes('parking'))) continue;
     for (const point of samplePolyline(roadNodes(edge), ARROW_SPACING, MAX_ARROWS_PER_EDGE)) {
-      const stem = offsetPoint(point.x, point.y, point.heading, -0.8, 0);
+      const stem = offsetPoint(point.x, point.y, point.heading, -0.2, 0);
       addMark(layout, stem.x, stem.y, point.heading, 2.8, 0.28);
       for (const side of [-1, 1]) {
-        const head = offsetPoint(point.x, point.y, point.heading, 0.8, side * 0.45);
+        const head = offsetPoint(point.x, point.y, point.heading, 0.85, side * 0.25);
         addMark(layout, head.x, head.y,
-          point.heading + side * Math.PI * 0.25, 1.5, 0.28);
+          point.heading + Math.PI - side * Math.PI * 0.20, 1.1, 0.26);
       }
       layout.arrows++;
     }
