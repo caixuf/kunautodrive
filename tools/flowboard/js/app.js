@@ -153,6 +153,8 @@ function onRouteChoiceChange() {
 }
 
 async function runSelectedRoute() {
+  _isMapPreviewActive = false;
+  _hidePreviewBanner();
   var map = document.getElementById('map-choice');
   var route = document.getElementById('route-choice');
   var items = map ? (MAP_ROUTE_CACHE[map.value] || MAP_ROUTES[map.value] || []) : [];
@@ -181,6 +183,48 @@ async function runSelectedRoute() {
   }
 }
 
+let _isMapPreviewActive = false;
+
+function _showPreviewBanner(mapId, routeId) {
+  let banner = document.getElementById('map-preview-live-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'map-preview-live-banner';
+    banner.style.cssText = 'position:absolute;top:12px;left:50%;transform:translateX(-50%);background:rgba(18,22,28,0.9);backdrop-filter:blur(8px);border:1px solid rgba(56,139,253,0.4);border-radius:20px;padding:6px 14px;color:#fff;font-size:12px;display:flex;align-items:center;gap:10px;z-index:90;box-shadow:0 4px 16px rgba(0,0,0,0.5);';
+    const canvasWrap = document.getElementById('scene3d') || document.body;
+    canvasWrap.appendChild(banner);
+  }
+  banner.innerHTML = `<span>🗺️ 大地图路线预览：<strong>${mapId}</strong> · ${routeId || 'main'}</span>` +
+    `<button id="btn-run-preview" style="background:#238636;color:#fff;border:none;padding:4px 12px;border-radius:12px;cursor:pointer;font-size:11px;font-weight:600;display:flex;align-items:center;gap:4px;">▶ 运行此路线</button>` +
+    `<button id="btn-exit-preview" style="background:rgba(255,255,255,0.15);color:#ccc;border:none;padding:4px 10px;border-radius:12px;cursor:pointer;font-size:11px;">✕ 恢复实时流</button>`;
+  banner.style.display = 'flex';
+  const runBtn = document.getElementById('btn-run-preview');
+  if (runBtn) {
+    runBtn.onclick = function (e) {
+      e.stopPropagation();
+      runSelectedRoute();
+    };
+  }
+  const exitBtn = document.getElementById('btn-exit-preview');
+  if (exitBtn) {
+    exitBtn.onclick = function (e) {
+      e.stopPropagation();
+      exitMapPreview();
+    };
+  }
+}
+
+function _hidePreviewBanner() {
+  const banner = document.getElementById('map-preview-live-banner');
+  if (banner) banner.style.display = 'none';
+}
+
+function exitMapPreview() {
+  _isMapPreviewActive = false;
+  _hidePreviewBanner();
+  toast('已恢复实时数据流');
+}
+
 async function previewSelectedRoute() {
   var map = document.getElementById('map-choice');
   var route = document.getElementById('route-choice');
@@ -198,9 +242,11 @@ async function previewSelectedRoute() {
     var result = await response.json();
     if (!response.ok || !result.ok || !result.map) throw new Error(result && result.error ? result.error : 'map load failed');
     var topoData = toTopo(result.map, result.routes ? result.routes.routes : [], routeId);
+    _isMapPreviewActive = true;
     update3D(topoData);
     setCameraMode('orbit');
     resetMapView();
+    _showPreviewBanner(mapId, routeId);
     toast('已直接在主 3D 视口载入：' + mapId + ' · ' + (routeId || 'main'));
   } catch (err) {
     console.warn('Direct 3D map load failed, fallback to modal:', err);
@@ -1488,10 +1534,12 @@ function updateAll() {
   }
 
   if (in3D) {
-    // Feed dead reckoning FIRST so update3D reads fresh _dr.lastX/Z for
-    // obstacle / LiDAR world-anchoring without a one-frame lag.
-    safeCall('deadreckon', sync2DTarget);
-    safeCall('scene3d', function () { update3D(topoData); });
+    if (!_isMapPreviewActive) {
+      // Feed dead reckoning FIRST so update3D reads fresh _dr.lastX/Z for
+      // obstacle / LiDAR world-anchoring without a one-frame lag.
+      safeCall('deadreckon', sync2DTarget);
+      safeCall('scene3d', function () { update3D(topoData); });
+    }
   }
 
   if (doDomUpdate) {

@@ -190,9 +190,9 @@ export function updateDeadReckon(x, z, speed, heading, vx, vy, yawRate, dataTs) 
     _dr.hasYawRate = hasYaw;
     if (hasYaw) { _dr.lastYawRate = yawRate; }
     _dr.lastTime = now;
-    _dr.dataTime = hasTs ? dataTs : null;
-    if (!_dr.init) {
-      // First sample: snap smooth to truth so we do not lerp from (0,0).
+    var jumpDist = Math.hypot(x - _dr.lastX, z - _dr.lastZ);
+    if (!_dr.init || jumpDist > 15.0) {
+      // First sample or large teleport / map switch: snap smooth to truth so we do not lerp across maps.
       _dr.smoothX = x;
       _dr.smoothZ = z;
       _dr.smoothHeading = heading;

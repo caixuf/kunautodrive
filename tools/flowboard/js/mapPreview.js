@@ -137,6 +137,11 @@ function toTopo(map, routes, routeId) {
     ? buildingFocus(map.buildings)
     : routeFocus(routePath);
   const first = routePath[0] || (edges[0] && edges[0].nodes[0] ? edges[0].nodes[0] : [0, 0, 0]);
+  const second = routePath[1] || (edges[0] && edges[0].nodes[1] ? edges[0].nodes[1] : first);
+  const egoHeading = headingBetweenPoints(
+    Number(first[0] || 0), Number(first[1] || 0),
+    Number(second[0] || 0), Number(second[1] || 0),
+  );
   /* P1 路口渠化：map.json 的 junctions[]（fork + connecting_roads[].turn）
    * 透传给 ConnectorView 画转向导流线/按来车归属停止线；无数据时几何兜底。
    * 字段名必须叫 map_junctions 而不是 junctions——junctions 是 {x,y,z,radius}
@@ -166,8 +171,12 @@ function toTopo(map, routes, routeId) {
     buildings: selectBuildingsForPreview(
       Array.isArray(map.buildings) ? map.buildings : [], roads),
     road_network: {edges, map_junctions: mapJunctions, lane_data: laneData},
-    ego: {type: 'ego', id: 0, x: focus.centerX, y: focus.centerY, z: focus.centerZ,
-      heading: focus.heading, speed: 0, vx: 0, vy: 0, length: 4.6, width: 2,
+    ego: {type: 'ego', id: 0,
+      x: Number(first[0] || 0),
+      y: Number(first[1] || 0),
+      z: Number(first[2] || 0),
+      heading: Number.isFinite(egoHeading) ? egoHeading : 0,
+      speed: 0, vx: 0, vy: 0, length: 4.6, width: 2,
       map_view_height: focus.height,
       map_view_target_x: focus.centerX,
       map_view_target_y: focus.centerY,

@@ -386,8 +386,12 @@ double Route::project(FlowRoadNetwork& roads, double x, double y,
 
     double lo = 0.0, hi = total_;
     if (hint_route_s >= 0.0) {
-        lo = hint_route_s - window;
-        hi = hint_route_s + window;
+        /* 单调跟随窗口：后视 10m（容忍小幅倒车/倒溜），前视 35m（容忍高速巡航），
+         * 避免全网 ±150m 扫描跳变到 15m 外的平行对向车道或折返匝道。 */
+        double back_win = (window < 10.0) ? window : 10.0;
+        double fwd_win  = (window < 35.0) ? window : 35.0;
+        lo = hint_route_s - back_win;
+        hi = hint_route_s + fwd_win;
         if (lo < 0.0)    lo = 0.0;
         if (hi > total_) hi = total_;
     }

@@ -226,9 +226,10 @@ if [ -z "$SCENARIO" ]; then
   SCENARIO="$DEFAULT_SCENARIO"
 fi
 if [ -n "$SCENARIO" ]; then
-  # mktemp 模板差异:GNU 接受 XXXX 后带后缀,BSD(macOS)只认结尾的 X(否则
-  # 原样建出 "pipeline_XXXX.json" 并残留、阻塞下次 mkstemp)。用 -t + 结尾 X 的
-  # 可移植写法先建无后缀临时文件,再改名加 .json —— 两平台一致。
+  # 统一终止旧的 flow_launcher 仿真进程，确保新场景独占运行
+  pkill -9 -x flow_launcher 2>/dev/null || true
+  sleep 0.2
+
   PIPELINE_TMP="$(mktemp /tmp/pipeline_XXXXXX)" || { echo "  ✗ mktemp failed"; exit 1; }
   mv "$PIPELINE_TMP" "$PIPELINE_TMP.json"
   PIPELINE_TMP="$PIPELINE_TMP.json"
@@ -241,31 +242,27 @@ if [ -n "$SCENARIO" ]; then
     jq --arg route_id "$ROUTE_ID" '.route_id = $route_id' "$SCENARIO_ABS" > "$ROUTE_SCENARIO_TMP"
     SCENARIO_ABS="$ROUTE_SCENARIO_TMP"
   fi
-  # `params` is itself a JSON string, so its inner quotes are escaped.
-  sed 's|\\\"scenario_file\\\": \\\"[^\\\"]*\\\"|\\\"scenario_file\\\": \\\"'"$SCENARIO_ABS"'\\\"|g' \
-    "$PIPELINE_ORIG" > "$PIPELINE_TMP"
-  if [ -n "$START_S" ] || [ -n "$START_D" ]; then
-    python3 - "$PIPELINE_TMP" "$START_S" "$START_D" <<'PY'
-import json
-import sys
 
-path, start_s, start_d = sys.argv[1:]
-with open(path, encoding="utf-8") as f:
+  # 统一 JSON 解析与注入，彻底消除 sed 换行与转义失效问题
+  python3 - "$PIPELINE_ORIG" "$PIPELINE_TMP" "$SCENARIO_ABS" "${START_S:-}" "${START_D:-}" <<'PY'
+import json, sys
+src, dst, scenario, start_s, start_d = sys.argv[1:6]
+with open(src, "r", encoding="utf-8") as f:
     pipeline = json.load(f)
 for process in pipeline.get("processes", []):
-    if process.get("name") != "flowsim":
-        continue
-    params = json.loads(process.get("params", "{}"))
-    if start_s:
-        params["start_s"] = float(start_s)
-    if start_d:
-        params["start_d"] = float(start_d)
-    process["params"] = json.dumps(params, separators=(",", ":"))
-with open(path, "w", encoding="utf-8") as f:
-    json.dump(pipeline, f, indent=2)
+    if process.get("name") == "flowsim":
+        raw = process.get("params", "{}")
+        params = json.loads(raw) if isinstance(raw, str) else (raw or {})
+        params["scenario_file"] = scenario
+        if start_s:
+            params["start_s"] = float(start_s)
+        if start_d:
+            params["start_d"] = float(start_d)
+        process["params"] = json.dumps(params, ensure_ascii=False)
+with open(dst, "w", encoding="utf-8") as f:
+    json.dump(pipeline, f, indent=2, ensure_ascii=False)
 PY
-    echo "  Start override: s=${START_S:-scenario} d=${START_D:-0}"
-  fi
+
   PIPELINE="$PIPELINE_TMP"
   echo "  Scenario: $SCENARIO_ABS"
 fi
@@ -439,8 +436,11 @@ cleanup() {
   echo ""
   echo "───[Cleanup] Shutting down..."
 
-  terminate_pids "${TAIL_BEH_PID:-}" "${LAUNCHER_PID:-}" "${BRIDGE_PID:-}" "${SERVER_PID:-}"
-  if [ -f "$PID_FILE" ]; then
+  terminate_pids "${TAIL_BEH_PID:-}" "${LAUNCHER_PID:-}" "${BRIDGE_PID:-}"
+  if [ "$SKIP_SERVICES" != "1" ]; then
+    terminate_pids "${SERVER_PID:-}"
+  fi
+  if [ "$SKIP_GLOBAL_CLEANUP" != "1" ] && [ -f "$PID_FILE" ]; then
     terminate_recorded_pids
     rm -f "$PID_FILE"
   fi
@@ -607,14 +607,26 @@ while true; do
   # 限时模式: 达到时长后退出循环
   if [ "$DURATION" -gt 0 ] 2>/dev/null && [ $ELAPSED -ge $DURATION ]; then break; fi
   if ! process_alive "$LAUNCHER_PID"; then
+    # 检查是否有新场景 pipeline 被热切换拉起（如从 FlowBoard Web 点击运行新路线）
+    for _ in {1..10}; do
+      NEW_PID="$(pgrep -n -x flow_launcher 2>/dev/null || true)"
+      if [ -n "$NEW_PID" ] && [ "$NEW_PID" != "$LAUNCHER_PID" ] && process_alive "$NEW_PID"; then
+        echo -e "\n  \033[32m✓ [demo] 切换至新路线仿真 (PID $NEW_PID)\033[0m"
+        LAUNCHER_PID="$NEW_PID"
+        LAUNCHER_STARTED_AT=$(date +%s)
+        break
+      fi
+      sleep 0.4
+    done
+    if [ "$LAUNCHER_PID" = "$NEW_PID" ] 2>/dev/null; then
+      continue
+    fi
+
     set +e
-    wait "$LAUNCHER_PID"
+    wait "$LAUNCHER_PID" 2>/dev/null
     LAUNCHER_RC=$?
     set -e
     LAUNCHER_RUNTIME=$(( $(date +%s) - LAUNCHER_STARTED_AT ))
-    # flow_launcher exits by itself when --duration elapses. Compare against
-    # launcher wall time, not the live-monitor counter: dashboard setup happens
-    # after launcher start and can make ELAPSED several seconds behind.
     if [ "$LAUNCHER_RC" -ne 0 ] || [ "$DURATION" -le 0 ] 2>/dev/null || [ $LAUNCHER_RUNTIME -lt $((DURATION - 2)) ]; then
       PIPELINE_EXITED_EARLY=true
       echo ""
