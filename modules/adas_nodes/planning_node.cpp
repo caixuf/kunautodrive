@@ -1903,12 +1903,16 @@ protected:
                     g.current_behavior.target_lane_idx < n_lanes &&
                     (g.current_behavior.command == BEH_LEFT_CHANGE || g.current_behavior.command == BEH_RIGHT_CHANGE)) {
                     g.target_lane_offset = lane_center_offset(g.current_behavior.target_lane_idx, n_lanes, lane_w);
-                } else if (g.map_ref_count > 0 && !g.has_behavior) {
-                    /* OSM / 地图路线巡航模式（无显式变道行为时）：
-                     * map_ref 是规划车道权威中心线（route centerline），
-                     * 自车沿路线中心线行驶，目标横向 offset 恒为 0.0，
-                     * 避免因沿途 road segment 的 lane_count 变化（如 2->3->4 车道）
-                     * 导致 target_lane_offset 产生 ±1.75m/±3.5m 阶跃跳变。 */
+                } else if (g.map_ref_count > 0 && !g.has_behavior && !g.has_navigation) {
+                    /* OSM / 地图路线巡航模式：既无 behavior_planner、也无
+                     * navigation 路线步骤（lane_change/branch/merge）时，说明这是
+                     * 纯路线跟随场景（如 city_comprehensive），map_ref 即权威中心线，
+                     * 自车沿路线中心线行驶，目标横向 offset 恒为 0.0，避免因沿途
+                     * road segment 的 lane_count 变化（如 2->3->4 车道）导致
+                     * target_lane_offset 产生 ±1.75m/±3.5m 阶跃跳变。
+                     * 注意：普通车道跟随场景（如 straight_road，其 route 含变道步骤
+                     * → has_navigation=1）不进入此分支，仍走最近车道分支，避免被
+                     * 强制压到道路中心线（分隔线）上"跑偏"。 */
                     g.target_lane_offset = 0.0;
                 } else {
                     /* 巡航/跟车：计算 ego 当前最近车道，目标其中心。
