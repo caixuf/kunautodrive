@@ -2878,31 +2878,6 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
                       g.start_s, g.start_d);
             return -1;
         }
-    } else if (g.route.ok() && g.roads_loaded) {
-        /* 路线自动对齐：将自车精确对齐到 route 起点 (s=0.0) 车道中心与切线航向，
-         * 确保自车朝向与路线一致、停在正确起点道路上。
-         * 触发条件：
-         *   1) ego 未配置 (0,0,0)；或
-         *   2) ego 朝向与路线切线方向明显相反（>90°）—— 说明 scenario 里
-         *      配置的朝向写错/逆行（如 straight_road 的 heading=π 而路线朝 +x）。
-         * 仅按「朝向不一致」snap，避免把已正确就位（如 city_comprehensive 在
-         * 20m 处、朝向已对的车道）的 ego 错误地拉回路线原点。 */
-        bool ego_unset = (g.scenario->ego.x == 0.0 && g.scenario->ego.y == 0.0 && g.scenario->ego.heading == 0.0);
-        flowsim::WorldPos rwp;
-        if (g.route.sample_pose(g.roads, 0.0, rwp.x, rwp.y, rwp.h)) {
-            double dh = g.scenario->ego.heading - rwp.h;
-            while (dh >  M_PI) dh -= 2.0 * M_PI;
-            while (dh < -M_PI) dh += 2.0 * M_PI;
-            bool heading_off = std::fabs(dh) > M_PI / 2.0;
-            if (ego_unset || heading_off) {
-                g.scenario->ego.x = rwp.x;
-                g.scenario->ego.y = rwp.y;
-                g.scenario->ego.heading = rwp.h;
-                LOG_INFO("flowsim", "route start snap: %s -> route origin (%.2f, %.2f, h=%.1f°)",
-                         ego_unset ? "unset ego" : "heading mismatch",
-                         rwp.x, rwp.y, rwp.h * 180.0 / M_PI);
-            }
-        }
     }
 
     /* 填充 EntityPool（ego + actors + 红绿灯 + ETC 门架）。

@@ -52,14 +52,22 @@ export function roadNetworkHash(rn) {
   if (!rn || !rn.edges) return '';
   const cached = _rnHashCache.get(rn);
   if (cached !== undefined) return cached;
-  const edges = rn.edges;
-  const len = edges.length;
-  if (len === 0) return 'empty';
-  const first = edges[0] || {};
-  const last = edges[len - 1] || {};
-  const sig = `${len}_${first.id ?? 0}_${last.id ?? 0}_${first.lanes ?? 0}_${last.lanes ?? 0}_${rn.map_junctions ? 1 : 0}_${rn.lane_data ? 1 : 0}`;
-  _rnHashCache.set(rn, sig);
-  return sig;
+  const h = JSON.stringify({
+    e: rn.edges.map(e => ({
+      id: e.id ?? 0,
+      name: e.name ?? '',
+      type: e.type ?? '',
+      lanes: e.lanes ?? 0,
+      lane_width: e.lane_width ?? 0,
+      length: e.length ?? e.length_m ?? 0,
+      one_way: e.one_way ?? false,
+      nodes: e.nodes ?? [],
+    })),
+    mj: rn.map_junctions ? 1 : 0,
+    ld: rn.lane_data ? 1 : 0,
+  });
+  _rnHashCache.set(rn, h);
+  return h;
 }
 
 /**

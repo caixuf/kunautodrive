@@ -984,39 +984,45 @@ static bool dispatch_request(int fd, MonitorServer* ms,
             } else {
                 pthread_mutex_lock(&g_route_demo_mu);
                 if (g_route_demo_pid > 0) {
-                    kill(g_route_demo_pid, SIGTERM);
-                    waitpid(g_route_demo_pid, NULL, WNOHANG);
-                    g_route_demo_pid = 0;
+                    if (waitpid(g_route_demo_pid, NULL, WNOHANG) > 0) g_route_demo_pid = 0;
                 }
-                char root_dir[512];
-                if (!getcwd(root_dir, sizeof(root_dir))) root_dir[0] = '\0';
-                pid_t pid = fork();
-                if (pid == 0) {
-                    char scenario_path[256];
-                    snprintf(scenario_path, sizeof(scenario_path), "scenarios/%s.json", map_id_run);
-                    if (access(scenario_path, F_OK) != 0) {
-                        if (strcmp(map_id_run, "city_grid") == 0) {
-                            snprintf(scenario_path, sizeof(scenario_path), "scenarios/city_grid_map.json");
-                        } else if (strcmp(map_id_run, "city_ring") == 0) {
-                            snprintf(scenario_path, sizeof(scenario_path), "scenarios/city_ring_map.json");
-                        } else {
-                            snprintf(scenario_path, sizeof(scenario_path), "scenarios/straight_road.json");
-                        }
-                    }
-                    execl("/bin/bash", "bash", "scripts/run_scenario.sh", scenario_path, route_id ? route_id : "", (char*)NULL);
-                    _exit(127);
-                } else if (pid > 0) {
-                    g_route_demo_pid = pid;
+                if (g_route_demo_pid > 0) {
                     pthread_mutex_unlock(&g_route_demo_mu);
-                    char response[128];
-                    snprintf(response, sizeof(response),
-                             "{\"ok\":true,\"pid\":%ld,\"route\":\"%s\"}",
-                             (long)pid, route_id);
-                    send_response(fd, "200 OK", "application/json", response);
+                    send_response(fd, "409 Conflict", "application/json",
+                                  "{\"ok\":false,\"error\":\"a route demo is already running\"}");
                 } else {
-                    pthread_mutex_unlock(&g_route_demo_mu);
-                    send_response(fd, "500 Internal Server Error", "application/json",
-                                  "{\"ok\":false,\"error\":\"failed to start demo\"}");
+                    char root_dir[512];
+                    if (!getcwd(root_dir, sizeof(root_dir))) root_dir[0] = '\0';
+                    pid_t pid = fork();
+                    if (pid == 0) {
+                        char scenario_path[256];
+                        if (strcmp(map_id_run, "osm_munich") == 0) {
+                            snprintf(scenario_path, sizeof(scenario_path), "scenarios/osm_munich.json");
+                        } else if (strcmp(map_id_run, "city_grid") == 0) {
+                            snprintf(scenario_path, sizeof(scenario_path), "scenarios/city_grid_map.json");
+                        } else if (strcmp(map_id_run, "osm_lujiazui_v2") == 0) {
+                            snprintf(scenario_path, sizeof(scenario_path), "scenarios/osm_lujiazui_v2.json");
+                        } else {
+                            snprintf(scenario_path, sizeof(scenario_path), "scenarios/city_ring_map.json");
+                        }
+                        execl("/bin/bash", "bash", "scripts/demo.sh", "0",
+                              "--scenario", scenario_path,
+                              "--route", route_id, "--no-browser", "--skip-services", (char*)NULL);
+                        _exit(127);
+                    }
+                    if (pid > 0) {
+                        g_route_demo_pid = pid;
+                        pthread_mutex_unlock(&g_route_demo_mu);
+                        char response[128];
+                        snprintf(response, sizeof(response),
+                                 "{\"ok\":true,\"pid\":%ld,\"route\":\"%s\"}",
+                                 (long)pid, route_id);
+                        send_response(fd, "200 OK", "application/json", response);
+                    } else {
+                        pthread_mutex_unlock(&g_route_demo_mu);
+                        send_response(fd, "500 Internal Server Error", "application/json",
+                                      "{\"ok\":false,\"error\":\"failed to start demo\"}");
+                    }
                 }
             }
             cJSON_Delete(root);

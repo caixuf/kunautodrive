@@ -1056,21 +1056,6 @@ target_include_directories(test_maneuver_tracker PRIVATE ${GEN_DIR} modules/adas
 add_test(NAME maneuver_tracker_tests COMMAND test_maneuver_tracker)
 set_tests_properties(maneuver_tracker_tests PROPERTIES TIMEOUT 10)
 
-# ── BEV 感知前/后处理单元测试（纯算法，bev_pre.c/bev_post.c，无 transport/param 依赖）──
-add_executable(test_bev_pre_post tests/test_bev_pre_post.c
-    modules/adas_nodes/bev_pre.c modules/adas_nodes/bev_post.c)
-target_link_libraries(test_bev_pre_post m)
-add_dependencies(test_bev_pre_post msg_codegen)
-target_include_directories(test_bev_pre_post PRIVATE ${GEN_DIR} modules/adas_nodes)
-add_test(NAME bev_pre_post_tests COMMAND test_bev_pre_post)
-set_tests_properties(bev_pre_post_tests PROPERTIES TIMEOUT 10)
-
-if(Python3_EXECUTABLE)
-    add_test(NAME bev_pipeline_py_tests
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/bev_pipeline.py)
-    set_tests_properties(bev_pipeline_py_tests PROPERTIES TIMEOUT 10)
-endif()
-
 # ── EKF 融合 / EKF-SLAM 纯 C 单元测试 ──
 # 这两个测试文件此前存在却未进门禁：test_ekf_slam 只在 adas_nodes 子项目里有
 # add_executable 而无 add_test（且子项目不 enable_testing()、不被标准 ctest 覆盖）；

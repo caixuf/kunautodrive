@@ -27,7 +27,6 @@
     {"file": "scenarios/lane_change_traffic.json", "duration_s": 45, "enabled": true,
      "baseline_tolerances": {"stagnation_duration_s": {"max_abs_increase": 10.0}}},
     {"file": "scenarios/urban_challenge.json",     "duration_s": 60, "enabled": true},
-    {"file": "scenarios/city_comprehensive.json",  "duration_s": 40, "enabled": true},
     {"file": "scenarios/multi_light.json",         "duration_s": 60, "enabled": true,
      "baseline_tolerances": {"stagnation_duration_s": {"max_abs_increase": 12.0}}},
     {"file": "scenarios/dense_npc.json",           "duration_s": 45, "enabled": true},

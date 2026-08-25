@@ -448,7 +448,7 @@ static bool query_ref_at(double ego_x, double ego_y,
         double d2 = dx * dx + dy * dy;
         if (d2 < best_d2) { best_d2 = d2; best = &p; }
     }
-    if (!best || best_d2 > 100.0 /* >10m, ego 偏离参考 */) {
+    if (!best || best_d2 > 25.0 /* >5m, ego 偏离参考 */) {
         pthread_mutex_unlock(&g.ref_path_mtx);
         return false;
     }
@@ -628,23 +628,15 @@ protected:
             bool ref_ok = query_ref_at(g.ego_x, g.ego_y,
                                        road_cx, road_c, ref_road_heading, ref_kappa);
             if (!ref_ok) {
-                /* ref_path 不可用：优先回退到轨迹首点（离 ego 最近的点）几何，避免使用前视点造成虚高横向偏差 */
+                /* ref_path 不可用：回退到轨迹前视点几何，否则 heading/kappa 归零 */
                 ref_road_heading = 0.0;
                 ref_kappa = 0.0;
-                pthread_mutex_lock(&g.ref_path_mtx);
-                if (!g.ref_path.empty()) {
-                    road_cx = g.ref_path.front().x + g.ref_path.front().l * sin(g.ref_path.front().h);
-                    road_c  = g.ref_path.front().y - g.ref_path.front().l * cos(g.ref_path.front().h);
-                    ref_road_heading = g.ref_path.front().h;
-                    ref_kappa = g.ref_path.front().kappa;
-                    ref_ok = true;
-                } else if (g.has_planning) {
+                if (g.has_planning) {
                     road_cx = g.target_road_center_x;
                     road_c = g.target_road_center_y;
                     ref_road_heading = g.target_path_heading;
                     ref_kappa = g.target_path_kappa;
                 }
-                pthread_mutex_unlock(&g.ref_path_mtx);
             }
             g.road_center_x = road_cx;
             g.road_center_y = road_c;
@@ -1073,13 +1065,19 @@ protected:
 
             /* ── Safety overrides ── */
 
-            /* 偏离目标车道中心的真实垂直偏距（沿参考线法向投影，任意方向道路通用）。
-             * 旧实现用世界系 |ego_y - target_y|，在斜向/南北向大地图（如 osm_munich）
-             * 上因坐标系倾斜产生上百米虚假误差，误触发 ROAD_GUARD 锁死方向盘绕圈。 */
-            double y_from_target = fabs(lat_err_n);
+            /* 目标车道中心 = 道路中心 + 横向偏移在世界系的投影。
+             * lane_d 是 trajectory 前视点的 Frenet 横向 offset（参考线法向），
+             * 映射到世界 y 需乘 cos(ref_road_heading)：前进(h=0) → +lane_d；
+             * 掉头返程(h=π) → -lane_d。与第 313 行 road_c 的推导
+             * (target_path_y - lane_d*cos(h)) 互逆，返程时符号自洽——否则
+             * target_lane_center 落到对侧车道、y_from_target 虚高 >3m 误触
+             * ROAD_GUARD，把在正确车道正常行驶的 ego 强行限速打转。 */
+            double target_lane_center = road_c + g.lane_d * cos(ref_road_heading);
 
             /* 接近路沿增强拉回：偏离目标车道中心 >4.5 时限制 steer 幅度，
-             * 避免大 steer 冲出路沿。 */
+             * 避免大 steer 冲出路沿。旧实现用 |ego_y - road_c|，对 4 车道
+             * 外车道（y=±5.25）永远 >4.5 → steer 被永久限幅。 */
+            double y_from_target = fabs(g.ego_y - target_lane_center);
             if (y_from_target > 4.5 && !g.maneuver_mode) {
                 const double near_edge_limit = 0.165;
                 if (steer >  near_edge_limit) steer =  near_edge_limit;
@@ -1088,7 +1086,8 @@ protected:
             }
 
             /* 超速保护已移除：planning 负责不超速（command_speed ≤ cfg_max_speed），
-             * safety_control 层有 TTC 限幅。control 是纯轨迹跟随器，不做速度决策。 */
+             * safety_control 层有 TTC 限幅。control 是纯轨迹跟随器，不做速度决策。
+             * 原超速限幅用 cfg_cruise_speed 做阈值，但 control 不应有自己的巡航速度。 */
 
             /* 全域速度死锁恢复 */
             if (g.speed_zero_timer > SPEED_ZERO_RECOVER_S &&
@@ -1098,14 +1097,17 @@ protected:
                 brake    = 0.0;
                 mode     = "SPEED_ZERO_RECOVERY";
                 g.speed_zero_timer = 0.0;
-                LOG_WARN("control", ">>> SPEED_ZERO RECOVERY: throttle bump at (%.1f,%.1f) tgt=%.1f",
-                         g.ego_x, g.ego_y, g.target_speed);
+                LOG_WARN("control", ">>> SPEED_ZERO RECOVERY: throttle bump at y=%.2f (ego@(%.1f,%.1f)) tgt=%.1f",
+                         g.ego_y, g.ego_x, g.ego_y, g.target_speed);
             }
 
             /* ROAD_GUARD：车辆偏离目标车道中心过远时强制回正。
-             * 当 planning 轨迹有效时信任 Stanley 控制器循迹，阈值放宽到 6.0m；仅在极端出轨或无轨迹时紧急介入。 */
-            double guard_thresh = g.has_planning ? 6.0 : ROAD_GUARD_THRESHOLD_M;
-            if (y_from_target > guard_thresh && !g.maneuver_mode) {
+             * road_c 现在是道路中心 y（不含横向偏移），目标车道中心 = road_c + lane_d。
+             * 旧实现检查 |ego_y - road_c|，对 4 车道外车道（y=±5.25）永远触发。
+             * 机动期豁免：掉头本来就要横穿整条路，y_from_target 必然 >3m，
+             * 不豁免则 ROAD_GUARD 抢走执行权（钳 steer=0.16 + 乱设油门），
+             * 掉头永不完成（2026-08-03 demo6 实测车被拽出路面到 y=-11）。 */
+            if (y_from_target > ROAD_GUARD_THRESHOLD_M && !g.maneuver_mode) {
                 double steer_limit = steer_limit_for_speed(fabs(g.current_speed), 2.4);
                 /* 用参考系投影误差 lat_err_n：正误差=左打对前进/返程都成立。
                  * 旧实现用世界系 lat_error，假设车头恒朝 +x，掉头返程时打反

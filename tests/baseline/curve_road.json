@@ -3,27 +3,27 @@
   "result": "PASS",
   "failures": [],
   "warnings": [
-    "shadow_speed_mae not gated: model output contract is direct_control, not target_speed"
+    "message drops detected: 16 (rate 0.07%)"
   ],
   "summary": {
     "scenario": "curve_road",
-    "samples": 263,
-    "duration_s": 59.83454203605652,
-    "x_delta_m": 1095.5197906979781,
-    "avg_speed_mps": 19.131785417207837,
-    "max_speed_mps": 20.399603250170326,
-    "max_lane_error_m": 1.7499764185966706,
-    "max_lane_error_at_s": 11.579118013381958,
-    "max_lane_error_y": -1.0911283301500325,
-    "max_lane_error_speed_mps": 20.305355341900285,
-    "min_road_margin_m": 4.272006901030957,
-    "min_road_margin_at_s": 0.0,
+    "samples": 97,
+    "duration_s": 44.8999400138855,
+    "x_delta_m": 823.9033141257498,
+    "avg_speed_mps": 18.766228551823396,
+    "max_speed_mps": 20.401932248373,
+    "max_lane_error_m": 1.7487018253028928,
+    "max_lane_error_at_s": 1.510941982269287,
+    "max_lane_error_y": -1.7615025063046006,
+    "max_lane_error_speed_mps": 5.44021041470793,
+    "min_road_margin_m": 4.569216026714308,
+    "min_road_margin_at_s": 42.10617780685425,
     "steer_saturation_ratio": 0.0,
-    "yaw_rate_rms_radps": 0.031233235832147547,
-    "max_yaw_rate_radps": 0.2020473321033919,
-    "heading_flip_rate_hz": 0.08356377152493256,
-    "low_speed_ratio": 0.026615969581749048,
-    "stagnation_duration_s": 1.5027530193328857,
+    "yaw_rate_rms_radps": 0.00979476438218371,
+    "max_yaw_rate_radps": 0.02309595078386658,
+    "heading_flip_rate_hz": 0.08908697870783308,
+    "low_speed_ratio": 0.041237113402061855,
+    "stagnation_duration_s": 1.510941982269287,
     "lane_change_count": 2,
     "has_noa_route": false,
     "driver_modes_seen": [
@@ -34,31 +34,26 @@
     ],
     "reached_noa": false,
     "route_lane_active": true,
-    "steer_rate_rms_per_s": 0.053107266616339965,
-    "max_steer_rate_per_s": 0.5917631679277853,
-    "steer_flip_rate_hz": 0.01671275430498651,
+    "steer_rate_rms_per_s": 0.0057590340958901965,
+    "max_steer_rate_per_s": 0.01610850249850695,
+    "steer_flip_rate_hz": 0.0,
     "max_npc_speed_mps": 0.0,
     "max_npc_lateral_speed_mps": 0.0,
     "collision_topic_pub": 0,
     "topic_freq_hz": {
-      "vehicle/state": 58.429,
-      "sensor/lidar": 19.893,
-      "sensor/gps": 9.906,
-      "fusion/localization": 54.732,
-      "planning/trajectory": 14.597,
-      "control/raw_cmd": 20.64,
-      "control/cmd": 20.925
+      "vehicle/state": 59.353,
+      "sensor/lidar": 19.967,
+      "sensor/gps": 9.981,
+      "fusion/localization": 19.969,
+      "planning/trajectory": 14.822,
+      "control/raw_cmd": 26.586,
+      "control/cmd": 22.329
     },
     "inference_topic_active": true,
-    "inference_freq_hz": 19.812,
-    "shadow_speed_mae_settled": null,
-    "shadow_speed_mae_full": 6.787057328122313,
-    "shadow_settled_samples": 0,
-    "shadow_gate_supported": false,
-    "shadow_gate_ready": false,
+    "inference_freq_hz": 19.889,
+    "shadow_speed_mae_settled": 1.288946454017148,
     "has_traffic_lights": false,
     "red_light_violation": false,
-    "red_light_violation_details": [],
     "green_phase_max_stop_s": 0.0,
     "recognition_rate_vehicle": 1.0,
     "recognition_rate_vru": 1.0,
@@ -74,23 +69,23 @@
     "perceived_track_count": 0,
     "liveness": {
       "speed": {
-        "unique": 238,
+        "unique": 91,
         "dead": false
       },
       "x": {
-        "unique": 238,
+        "unique": 91,
         "dead": false
       },
       "y": {
-        "unique": 238,
+        "unique": 91,
         "dead": false
       },
       "heading": {
-        "unique": 192,
+        "unique": 79,
         "dead": false
       },
       "steer_signed": {
-        "unique": 131,
+        "unique": 58,
         "dead": false
       },
       "lane_count": {
@@ -110,18 +105,6 @@
     "committed_lane": -1,
     "target_lane": -1,
     "blocked": false,
-    "worthwhile": false,
-    "formal_metrics": {
-      "trajectory_metric_type": "closed_loop_lane_tracking",
-      "trajectory_ade_m": 1.6770119132207923,
-      "trajectory_fde_m": 1.743396061525072,
-      "comfort_accel_rms_mps2": 0.9376293247879182,
-      "comfort_jerk_p95_mps3": 0.549347236579782,
-      "comfort_jerk_max_mps3": 2.48363778395172,
-      "timing_sample_period_mean_s": 0.25246642209306547,
-      "timing_sample_period_p99_s": 0.26796903610229494,
-      "timing_sample_count": 263
-    },
-    "safety_evidence_present": false
+    "worthwhile": false
   }
 }

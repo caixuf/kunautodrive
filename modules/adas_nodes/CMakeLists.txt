@@ -534,15 +534,8 @@ target_link_libraries(pem_collector_node ${NODE_LINK_LIBS} ${NODE_CXX_RT} FlowEn
 # 定义 HAVE_ONNXRUNTIME 并链接 ORT，inference_node 可加载 .onnx 模型；未开启或未找到
 # 时 onnx_backend.cpp 编成降级桩（load→-1），运行时自动回退 tiny-MLP，行为零变化。
 # 后端切换只影响「前向计算」一步，特征组装/输出映射/影子逻辑完全复用（见 onnx_backend.h）。
-#
-# BEV 感知另有一套「多模态张量后端」bev_onnx_backend（见其 .h），与 onnx_backend 并存：
-#   - onnx_backend 供 inference_node 控制环用（rank1/2 单入单出，语义对齐 tiny_mlp_forward）
-#   - bev_onnx_backend 供 BEV 检测头用（多入多出、NCHW 保形），两者都在下同一
-#     ENABLE_ONNX/HAVE_ONNXRUNTIME 开关下编译，未开启时各自编降级桩，行为零变化。
-# 统一编进 inference_node 目标，复用同一套 ORT 查找/链接，避免重复 find_package。
 option(ENABLE_ONNX "Enable ONNX Runtime inference backend (requires onnxruntime)" OFF)
-add_library(inference_node SHARED inference_node.cpp onnx_backend.cpp bev_onnx_backend.cpp
-                                bev_pre.c bev_post.c)
+add_library(inference_node SHARED inference_node.cpp onnx_backend.cpp)
 target_compile_definitions(inference_node PRIVATE FLOWCORO_INTEGRATION)
 target_compile_options(inference_node PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fcoroutines>)
 target_link_libraries(inference_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
@@ -567,28 +560,6 @@ if(ENABLE_ONNX)
         else()
             message(WARNING "ENABLE_ONNX=ON 但未找到 onnxruntime，onnx_backend 编为降级桩，运行时回退 tiny-MLP")
         endif()
-    endif()
-endif()
-
-# bev_detection_node: BEV 多模态感知检测节点（影子模式，FlowCoro 协程版）
-# 链路：vehicle/state+road/geometry → bev_pre_rasterize → bev_onnx_backend 前向 →
-#       解码 → bev_post_to_obstacle_list → 发布 bev/obstacles（shadow，不覆盖
-#       perception/obstacles）。无模型/未编译 ORT 时真值直通基线，链路始终可运行。
-# 与 inference_node 共享同一套 ORT 查找/链接（bev_onnx_backend 编进本目标自持一份，
-# 插件各自 dlopen，避免跨 .so 符号依赖），回调均在线程池 resume 上执行。
-add_library(bev_detection_node SHARED bev_detection_node.cpp
-                                    bev_onnx_backend.cpp bev_pre.c bev_post.c)
-target_compile_definitions(bev_detection_node PRIVATE FLOWCORO_INTEGRATION)
-target_compile_options(bev_detection_node PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fcoroutines>)
-target_link_libraries(bev_detection_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
-if(ENABLE_ONNX)
-    if(onnxruntime_FOUND)
-        target_compile_definitions(bev_detection_node PRIVATE HAVE_ONNXRUNTIME)
-        target_link_libraries(bev_detection_node onnxruntime::onnxruntime)
-    elseif(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIB)
-        target_compile_definitions(bev_detection_node PRIVATE HAVE_ONNXRUNTIME)
-        target_include_directories(bev_detection_node PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
-        target_link_libraries(bev_detection_node ${ONNXRUNTIME_LIB})
     endif()
 endif()
 
@@ -793,7 +764,6 @@ set(FLOWENGINE_NODE_PLUGIN_TARGETS
     safety_control_node
     monitor_node
     inference_node
-    bev_detection_node
     data_recorder_node
     flowrec_node
     learner_node

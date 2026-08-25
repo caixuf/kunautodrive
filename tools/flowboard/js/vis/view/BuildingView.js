@@ -164,45 +164,30 @@ export function createBuildingView(scene) {
       const facade = new THREE.MeshStandardMaterial({
         color: 0x8998a8, roughness: 0.78, metalness: 0.04, map: buildingTexture(),
       });
-      const chunks = new Map();
-      let totalGeos = 0;
+      const buildingGeos = [];
       for (const b of realBuildings) {
         const fp = Array.isArray(b.footprint) ? b.footprint : null;
         if (!fp || fp.length < 3) continue;
         const h = Number(b.height) > 0 ? Number(b.height) : 12;
         const shape = new THREE.Shape();
-        let cx = 0, cy = 0;
         for (let i = 0; i < fp.length; i++) {
           const wx = fp[i][0], wy = fp[i][1];
-          cx += wx; cy += wy;
           if (i === 0) shape.moveTo(wx, wy); else shape.lineTo(wx, wy);
         }
-        cx /= fp.length; cy /= fp.length;
         shape.closePath();
         const geo = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false });
         geo.rotateX(-Math.PI / 2);  // 挤出方向 +Z → +Y（向上），footprint 已是世界坐标
-        const chunkKey = `${Math.floor(cx / 150)},${Math.floor(cy / 150)}`;
-        if (!chunks.has(chunkKey)) chunks.set(chunkKey, []);
-        chunks.get(chunkKey).push(geo);
-        totalGeos++;
+        buildingGeos.push(geo);
       }
-      for (const [key, chunkGeos] of chunks.entries()) {
-        if (chunkGeos.length > 0) {
-          const merged = mergeGeometries(chunkGeos);
-          if (merged) {
-            merged.computeBoundingBox();
-            merged.computeBoundingSphere();
-            const mesh = new THREE.Mesh(merged, facade);
-            mesh.castShadow = tier === 'high';
-            mesh.receiveShadow = tier === 'high';
-            mesh.frustumCulled = true;
-            group.add(mesh);
-          }
-          for (const g of chunkGeos) g.dispose();
-        }
-      }
-      if (totalGeos > 0) {
-        console.log('[vis] rendered ' + totalGeos + ' OSM buildings in ' + chunks.size + ' spatial chunks (frustum culling enabled)');
+      if (buildingGeos.length > 0) {
+        const merged = mergeGeometries(buildingGeos);
+        const mesh = new THREE.Mesh(merged, facade);
+        mesh.castShadow = tier === 'high';
+        mesh.receiveShadow = tier === 'high';
+        mesh.frustumCulled = true;
+        group.add(mesh);
+        for (const g of buildingGeos) g.dispose();
+        console.log('[vis] rendered ' + buildingGeos.length + ' OSM buildings (merged into 1 draw call)');
         return;  // 真实建筑已合并渲染，跳过程序化天际线
       }
     }

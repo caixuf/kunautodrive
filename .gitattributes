@@ -1,8 +1,0 @@
-# 行尾规范（2026-08-25 事故修复）：本仓库此前被一次性批量转成 CRLF，
-# 导致 scripts/*.sh 的 shebang `#!/bin/bash\r` 在 Linux/WSL 下找不到解释器，
-# demo.sh 无法启动、默认场景全挂。
-# 强制脚本 LF：shebang 依赖精确解释器路径，任何 CRLF 都会在 Linux 下致命。
-*.sh  text eol=lf
-*.py  text eol=lf
-# 其余文本按 git 默认规范化（仓库统一 LF，本地按平台检出）。
-* text=auto

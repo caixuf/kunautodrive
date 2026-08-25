@@ -312,28 +312,6 @@
       "params": "{\"max_speed\":20.0,\"frequency_hz\":20.0,\"model_path\":\"tools/train/model.txt\",\"control_mode\":\"shadow\"}"
     },
     {
-      "name": "bev_detection",
-      "library_path": "build/lib/libbev_detection_node.so",
-      "auto_start": true,
-      "subscribe": [
-        "vehicle/state",
-        "road/geometry",
-        "model_ota/active"
-      ],
-      "publish": [
-        {
-          "topic": "bev/obstacles",
-          "type": "ObstacleList",
-          "qos": {
-            "depth": 1,
-            "policy": "drop_oldest",
-            "reliability": "best_effort"
-          }
-        }
-      ],
-      "params": "{\"frequency_hz\":10.0,\"enable\":true,\"model_path\":\"\"}"
-    },
-    {
       "name": "data_recorder",
       "library_path": "build/lib/libdata_recorder_node.so",
       "auto_start": true,
