@@ -115,6 +115,15 @@ perception 误检/漏检障碍物
 - [ ] 修 planning `target_lane_offset` 的 `!g.has_navigation` 守护。
 - [ ] 默认场景 + city_comprehensive 双场景回归通过后再合 `main`。
 
+## 7. 更远的方向：迈向 L3
+
+本文只覆盖"把 `main` 修回已知可用"这一步。更长远的目标是让系统接近真正 L3 并随
+仿真持续进化，详见 **`docs/ROADMAP_L3.md`**，其中把模型+规则混合、雷达+视觉多模态、
+OSM 自动建图、NPC 自动交通流、仿真闭环引擎拆为 5 个方向并给出依赖节奏。
+`UPGRADE_DIRECTION.md`（近期回归修复）与 `ROADMAP_L3.md`（长期路线图）互补：
+近期稳 `main`，中长期按路线图在特性分支推进。
+
 ---
 
-*注：本文为方向性记录，不是修复补丁。当前 `main` 应停留在 `a065f26` 已知可用状态。*
+*注：本文为方向性记录，不是修复补丁。当前 `main` 应停留在 `a065f26` 已知可用状态；
+长期演进见 `docs/ROADMAP_L3.md`。*
