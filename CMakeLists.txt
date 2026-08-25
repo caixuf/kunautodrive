@@ -1065,6 +1065,12 @@ target_include_directories(test_bev_pre_post PRIVATE ${GEN_DIR} modules/adas_nod
 add_test(NAME bev_pre_post_tests COMMAND test_bev_pre_post)
 set_tests_properties(bev_pre_post_tests PROPERTIES TIMEOUT 10)
 
+if(Python3_EXECUTABLE)
+    add_test(NAME bev_pipeline_py_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/bev_pipeline.py)
+    set_tests_properties(bev_pipeline_py_tests PROPERTIES TIMEOUT 10)
+endif()
+
 # ── EKF 融合 / EKF-SLAM 纯 C 单元测试 ──
 # 这两个测试文件此前存在却未进门禁：test_ekf_slam 只在 adas_nodes 子项目里有
 # add_executable 而无 add_test（且子项目不 enable_testing()、不被标准 ctest 覆盖）；

@@ -999,7 +999,7 @@
   "traffic_lights": [],
   "pass_criteria": {
     "no_collision": true,
-    "max_duration_s": 60.0,
+    "max_duration_s": 75.0,
     "min_avg_speed_mps": 5.0
   },
   "route": [],

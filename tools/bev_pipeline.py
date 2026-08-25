@@ -54,15 +54,15 @@ def prior_to_type(p):
     return best
 
 
-def grid_res():
-    res_x = 2.0 * RANGE_X / H       # m / 格 (前向)
-    res_y = 2.0 * RANGE_Y_HALF / W # m / 格 (横向)
+def grid_res(w=W, h=H):
+    res_x = 2.0 * RANGE_X / w       # m / 格 (前向)
+    res_y = 2.0 * RANGE_Y_HALF / h # m / 格 (横向)
     return res_x, res_y
 
 
 def project_cell(xb, yb, w=W, h=H):
     """世界车体系(x_body,y_body) → (ix, iy)。图外返回 None。（镜像 bev_pre.c project_cell）"""
-    res_x, res_y = grid_res()
+    res_x, res_y = grid_res(w, h)
     c = int(math.floor((xb + RANGE_X) / res_x))
     r = int(math.floor((RANGE_Y_HALF - yb) / res_y))
     if c < 0 or c >= w or r < 0 or r >= h:
@@ -75,48 +75,48 @@ def idx(ch, r, c, w=W, h=H):
     return ((ch * h) + r) * w + c
 
 
-def rasterize(obs, ego_x=0.0, ego_y=0.0, ego_h=0.0):
+def rasterize(obs, ego_x=0.0, ego_y=0.0, ego_h=0.0, w=W, h=H):
     """镜像 bev_pre_rasterize。obs: [(x,y,vx,vy,type)] 世界系。返回平铺 NCHW float 列表。"""
-    feat = [0.0] * (CHANNELS * H * W)
+    feat = [0.0] * (CHANNELS * h * w)
     ch = math.cos(ego_h)
     sh = math.sin(ego_h)
-    res_x, res_y = grid_res()
+    res_x, res_y = grid_res(w, h)
     for (ox, oy, ovx, ovy, ot) in obs:
         dx, dy = ox - ego_x, oy - ego_y
         xb = dx * ch + dy * sh      # 前 +x
         yb = -dx * sh + dy * ch     # 左 +y
-        cell = project_cell(xb, yb)
+        cell = project_cell(xb, yb, w, h)
         if cell is None:
             continue
         c, r = cell
-        feat[idx(0, r, c)] = 1.0
+        feat[idx(0, r, c, w, h)] = 1.0
         spd = math.hypot(ovx * ch + ovy * sh, -ovx * sh + ovy * ch)
         vn = min(spd / V_SCALE, 1.0)
-        feat[idx(1, r, c)] = max(feat[idx(1, r, c)], vn)
+        feat[idx(1, r, c, w, h)] = max(feat[idx(1, r, c, w, h)], vn)
         tp = TYPE_PRIOR[ot]
-        feat[idx(2, r, c)] = max(feat[idx(2, r, c)], tp)
-        feat[idx(3, r, c)] += 0.5
+        feat[idx(2, r, c, w, h)] = max(feat[idx(2, r, c, w, h)], tp)
+        feat[idx(3, r, c, w, h)] += 0.5
     return feat
 
 
-def cell_center(c, r):
+def cell_center(c, r, w=W, h=H):
     """栅格 (ix,iy) 中心 → 车体系 (x_body,y_body)（project_cell 的逆）。"""
-    res_x, res_y = grid_res()
+    res_x, res_y = grid_res(w, h)
     xb = -RANGE_X + (c + 0.5) * res_x
     yb = RANGE_Y_HALF - (r + 0.5) * res_y
     return xb, yb
 
 
-def decode(feat, conf_thresh=0.5):
+def decode(feat, conf_thresh=0.5, w=W, h=H):
     """峰值解码：扫 ch0 占据格，3×3 邻域取质心 → 检测目标（车体系）。"""
-    res_x, res_y = grid_res()
-    occ = [[0] * W for _ in range(H)]
-    for r in range(H):
-        for c in range(W):
-            occ[r][c] = 1 if feat[idx(0, r, c)] >= conf_thresh else 0
+    res_x, res_y = grid_res(w, h)
+    occ = [[0] * w for _ in range(h)]
+    for r in range(h):
+        for c in range(w):
+            occ[r][c] = 1 if feat[idx(0, r, c, w, h)] >= conf_thresh else 0
 
     dets = []
-    visited = [[False] * W for _ in range(H)]
+    visited = [[False] * w for _ in range(h)]
     def grow(r0, c0):
         stack, comp = [(r0, c0)], []
         while stack:
@@ -128,12 +128,12 @@ def decode(feat, conf_thresh=0.5):
             for dr in (-1, 0, 1):
                 for dc in (-1, 0, 1):
                     nr, nc = r + dr, c + dc
-                    if 0 <= nr < H and 0 <= nc < W and not visited[nr][nc] and occ[nr][nc]:
+                    if 0 <= nr < h and 0 <= nc < w and not visited[nr][nc] and occ[nr][nc]:
                         stack.append((nr, nc))
         return comp
 
-    for r in range(H):
-        for c in range(W):
+    for r in range(h):
+        for c in range(w):
             if occ[r][c] and not visited[r][c]:
                 comp = grow(r, c)
                 if not comp:
@@ -146,10 +146,10 @@ def decode(feat, conf_thresh=0.5):
                 # ch2 取分量最强的类型先验
                 best_prior, best_t = -1.0, VEHICLE
                 for (tr, tc) in comp:
-                    p = feat[idx(2, tr, tc)]
+                    p = feat[idx(2, tr, tc, w, h)]
                     if p > best_prior:
                         best_prior, best_t = p, prior_to_type(p)
-                v_mag = max(feat[idx(1, tr, tc)] for (tr, tc) in comp)
+                v_mag = max(feat[idx(1, tr, tc, w, h)] for (tr, tc) in comp)
                 dets.append({"x": xb, "y": yb, "v": v_mag * V_SCALE, "type": best_t})
     return dets
 
@@ -237,7 +237,19 @@ def check_roundtrip(seed=7, n=14):
         if dets[best]["type"] != ot:
             return _fail(f"sparse: 类型 {ot} 解码为 {dets[best]['type']}")
         used[best] = True
-    print(f"PASS sparse-roundtrip: {n} 个稀疏障碍位置回译在栅格容差内且类型一致")
+    # ── 显式测试非正方形长方形栅格 (W!=H) ──
+    for custom_w, custom_h in [(64, 128), (120, 60)]:
+        feat_asym = rasterize(obs_world, ego_x, ego_y, ego_h, w=custom_w, h=custom_h)
+        dets_asym = decode(feat_asym, w=custom_w, h=custom_h)
+        res_xa, res_ya = grid_res(custom_w, custom_h)
+        tol_asym = math.hypot(res_xa, res_ya) * 1.01
+        if len(dets_asym) != n:
+            return _fail(f"asym ({custom_w}x{custom_h}): 期望 {n} 检测，实际 {len(dets_asym)}")
+        for (txb, tyb, ot) in truth:
+            best_d = min(math.hypot(d["x"] - txb, d["y"] - tyb) for d in dets_asym)
+            if best_d > tol_asym:
+                return _fail(f"asym ({custom_w}x{custom_h}): 真值({txb:.1f},{tyb:.1f}) 误差 {best_d:.2f}m>容差")
+        print(f"PASS asym-roundtrip ({custom_w}x{custom_h}): 非对称栅格坐标与分辨率映射完全精确")
     return 0
 
 

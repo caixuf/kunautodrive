@@ -156,6 +156,7 @@ struct PlanningContext {
     double        map_ref_x[128]{};
     double        map_ref_y[128]{};
     double        map_ref_s[128]{};
+    double        map_ref_kappa[128]{};
     int           map_ref_count{0};
     uint64_t      last_map_ref_us{0};
     int           on_return{0};
@@ -408,10 +409,11 @@ static bool frenet_to_cartesian(double s, double d,
         out_y = ref_y + d * cos(theta);
         out_heading = theta;
         /* kappa = 参考线切线转角差 / 段长（map_ref 是 ~5m 采样的 route centerline，
-         * 弯道处切线连续变化）。旧实现恒 0 → control 的 kappa 前馈 ff_term 丢失，
-         * 弯道全靠 heading 反馈追，横向误差大/抖动。 */
+         * 弯道处切线连续变化）。优先使用 flowsim 下发的精确解析曲率 map_ref_kappa。 */
         out_kappa = 0.0;
-        if (idx > 0) {
+        if (std::fabs(g.map_ref_kappa[idx]) > 1e-5 || std::fabs(g.map_ref_kappa[idx + 1]) > 1e-5) {
+            out_kappa = (1.0 - frac) * g.map_ref_kappa[idx] + frac * g.map_ref_kappa[idx + 1];
+        } else if (idx > 0) {
             double h_prev = atan2(ry0 - g.map_ref_y[idx - 1],
                                   rx0 - g.map_ref_x[idx - 1]);
             double h_cur = atan2(ry1 - ry0, rx1 - rx0);
@@ -1161,6 +1163,8 @@ static void on_road_ref_path(const Message* msg, void* user_data) {
         g.map_ref_x[out_n] = x;
         g.map_ref_y[out_n] = y;
         g.map_ref_s[out_n] = accum_s;
+        cJSON* jk = cJSON_GetObjectItemCaseSensitive(pt, "kappa");
+        g.map_ref_kappa[out_n] = (cJSON_IsNumber(jk)) ? jk->valuedouble : 0.0;
         prev_x = x;
         prev_y = y;
         out_n++;
@@ -1899,6 +1903,13 @@ protected:
                     g.current_behavior.target_lane_idx < n_lanes &&
                     (g.current_behavior.command == BEH_LEFT_CHANGE || g.current_behavior.command == BEH_RIGHT_CHANGE)) {
                     g.target_lane_offset = lane_center_offset(g.current_behavior.target_lane_idx, n_lanes, lane_w);
+                } else if (g.map_ref_count > 0 && !g.has_behavior) {
+                    /* OSM / 地图路线巡航模式（无显式变道行为时）：
+                     * map_ref 是规划车道权威中心线（route centerline），
+                     * 自车沿路线中心线行驶，目标横向 offset 恒为 0.0，
+                     * 避免因沿途 road segment 的 lane_count 变化（如 2->3->4 车道）
+                     * 导致 target_lane_offset 产生 ±1.75m/±3.5m 阶跃跳变。 */
+                    g.target_lane_offset = 0.0;
                 } else {
                     /* 巡航/跟车：计算 ego 当前最近车道，目标其中心。
                      * 只允许本方向合法车道（行进坐标系下右半幅，idx ≥ n_lanes/2）：
@@ -2468,8 +2479,8 @@ publish_trajectory:
             traj.valid = 1;  /* 默认有效 */
             if (n_wp > 1) {
                 for (int i = 0; i < n_pts && i < 64; i++) {
-                    /* kappa 超限检查 */
-                    if (fabs((double)traj.points[i].kappa) > 0.25) {  /* ~14deg steer equivalent */
+                    /* kappa 超限检查（允许城市路口/直角弯/机动低速大曲率，高曲线由 a_lat=v²κ≤5.0m/s² 约束） */
+                    if (fabs((double)traj.points[i].kappa) > 0.80) {
                         traj.valid = 0;
                         break;
                     }
@@ -2510,9 +2521,9 @@ publish_trajectory:
                     double k = fabs((double)traj.points[i].kappa);
                     double v = (double)traj.points[i].v;
                     double al = v * v * k;
-                    if (k > 0.25 || al > 5.0 || v < -0.5 || v > g.cfg_max_speed * 1.1) {
+                    if (k > 0.80 || al > 5.0 || v < -0.5 || v > g.cfg_max_speed * 1.1) {
                         LOG_WARN("planning",
-                                 "  feasibility first-violation: pt[%d] s=%.1f kappa=%.3f v=%.1f a_lat=%.2f (lim κ0.25 a5.0)",
+                                 "  feasibility first-violation: pt[%d] s=%.1f kappa=%.3f v=%.1f a_lat=%.2f (lim κ0.80 a5.0)",
                                  i, (double)traj.points[i].s, k, v, al);
                         break;
                     }

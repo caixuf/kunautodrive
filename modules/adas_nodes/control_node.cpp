@@ -448,7 +448,7 @@ static bool query_ref_at(double ego_x, double ego_y,
         double d2 = dx * dx + dy * dy;
         if (d2 < best_d2) { best_d2 = d2; best = &p; }
     }
-    if (!best || best_d2 > 25.0 /* >5m, ego 偏离参考 */) {
+    if (!best || best_d2 > 100.0 /* >10m, ego 偏离参考 */) {
         pthread_mutex_unlock(&g.ref_path_mtx);
         return false;
     }
@@ -628,15 +628,23 @@ protected:
             bool ref_ok = query_ref_at(g.ego_x, g.ego_y,
                                        road_cx, road_c, ref_road_heading, ref_kappa);
             if (!ref_ok) {
-                /* ref_path 不可用：回退到轨迹前视点几何，否则 heading/kappa 归零 */
+                /* ref_path 不可用：优先回退到轨迹首点（离 ego 最近的点）几何，避免使用前视点造成虚高横向偏差 */
                 ref_road_heading = 0.0;
                 ref_kappa = 0.0;
-                if (g.has_planning) {
+                pthread_mutex_lock(&g.ref_path_mtx);
+                if (!g.ref_path.empty()) {
+                    road_cx = g.ref_path.front().x + g.ref_path.front().l * sin(g.ref_path.front().h);
+                    road_c  = g.ref_path.front().y - g.ref_path.front().l * cos(g.ref_path.front().h);
+                    ref_road_heading = g.ref_path.front().h;
+                    ref_kappa = g.ref_path.front().kappa;
+                    ref_ok = true;
+                } else if (g.has_planning) {
                     road_cx = g.target_road_center_x;
                     road_c = g.target_road_center_y;
                     ref_road_heading = g.target_path_heading;
                     ref_kappa = g.target_path_kappa;
                 }
+                pthread_mutex_unlock(&g.ref_path_mtx);
             }
             g.road_center_x = road_cx;
             g.road_center_y = road_c;

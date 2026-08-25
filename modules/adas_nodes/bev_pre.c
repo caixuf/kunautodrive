@@ -26,8 +26,8 @@ void bev_pre_config_default(BevPreConfig* cfg) {
 static int project_cell(const BevPreConfig* cfg,
                         double x_body, double y_body,
                         int* ix, int* iy) {
-    const double res_x = (2.0 * cfg->range_x) / cfg->h;
-    const double res_y = (2.0 * cfg->range_y_half) / cfg->w;
+    const double res_x = (2.0 * cfg->range_x) / cfg->w;
+    const double res_y = (2.0 * cfg->range_y_half) / cfg->h;
 
     int c = (int)floor((x_body + cfg->range_x) / res_x);
     int r = (int)floor((cfg->range_y_half - y_body) / res_y);
@@ -37,7 +37,7 @@ static int project_cell(const BevPreConfig* cfg,
     return 1;
 }
 
-/* 通道索引：通道通道优先 NCHW，index = ((ch*H) + r)*W + c */
+/* 通道索引：通道优先 NCHW，index = ((ch*H) + r)*W + c */
 static size_t idx(const BevPreConfig* cfg, int ch, int r, int c) {
     return ((size_t)ch * (size_t)cfg->h + (size_t)r) * (size_t)cfg->w + (size_t)c;
 }
@@ -55,7 +55,7 @@ size_t bev_pre_rasterize(const BevPreConfig* cfg,
     memset(feat, 0, total * sizeof(float));
 
     const double ch = cos(ego_heading), sh = sin(ego_heading);
-    const double res_x = (2.0 * cfg->range_x) / H;
+    const double res_x = (2.0 * cfg->range_x) / W;
     /* 简化：单个 bbox 均匀覆盖一格，速度/类型写入该格 */
     for (int i = 0; i < n_obs; ++i) {
         const BevPreObs* o = &obs[i];

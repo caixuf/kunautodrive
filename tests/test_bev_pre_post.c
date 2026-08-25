@@ -117,10 +117,28 @@ static void test_post_truncate(void) {
     printf("PASS test_post_truncate (%d)\n", n);
 }
 
+static void test_pre_asymmetric(void) {
+    BevPreConfig cfg;
+    bev_pre_config_default(&cfg);
+    cfg.w = 16;  /* 宽 = 16 (前向网格数) */
+    cfg.h = 8;   /* 高 = 8 (横向网格数) */
+    cfg.range_x = 32.0;       /* 前后 32m -> res_x = 64/16 = 4m/格 */
+    cfg.range_y_half = 8.0;   /* 左右各 8m -> res_y = 16/8 = 2m/格 */
+
+    float feat[4 * 8 * 16];
+    /* 前方 10m，左侧 2m: xb=10 -> c = floor((10+32)/4) = 10, yb=2 -> r = floor((8-2)/2) = 3 */
+    BevPreObs obs[] = { {10.0, 2.0, 0.0, 0.0, BEV_OBJ_VEHICLE} };
+    bev_pre_rasterize(&cfg, 0, 0, 0.0, obs, 1, feat);
+    size_t i_occ = ((0 * 8 + 3) * 16 + 10);
+    assert(fabsf(feat[i_occ] - 1.0f) < 1e-4);
+    printf("PASS test_pre_asymmetric (w=16,h=8 idx=%zu)\n", i_occ);
+}
+
 int main(void) {
     test_pre_basic();
     test_pre_rotation();
     test_pre_outside();
+    test_pre_asymmetric();
     test_post_mapping();
     test_post_truncate();
     printf("ALL PASS test_bev_pre_post\n");

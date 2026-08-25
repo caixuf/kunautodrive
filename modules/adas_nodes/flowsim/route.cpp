@@ -143,6 +143,12 @@ bool Route::build_from_chain(FlowRoadNetwork& roads, const int* road_ids, int co
             if (ok_prev && ok_next) {
                 double gap = std::hypot(ns.x - pe.x, ns.y - pe.y);
                 double dh  = heading_gap(pe.h, ns.h);
+                if (gap > 35.0) {
+                    std::fprintf(stderr,
+                        "[route] build_from_chain failed: gap %.1fm between road %d and road %d exceeds 35m\n",
+                        gap, prev.road_id, it->id);
+                    return false;
+                }
                 /* 桥接触发：gap>2m 的几何断开，或 dh>10° 的航向跳变（含 gap≈0
                  * 的尖角——roads 在路口盒边界正好相接但方向差 87°，不桥接就是
                  * κ=∞ 折角，planning 可行性必失败）。 */

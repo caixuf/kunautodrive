@@ -100,6 +100,8 @@ struct BevDetectionContext {
     BevPreConfig precfg{};
     float*  feat{nullptr};          /* channels*h*w，init 时按 precfg 分配 */
     size_t  feat_elems{0};
+    float*  out_buf{nullptr};       /* 模型前向输出缓冲，init 时分配 */
+    static constexpr size_t kMaxOutFloats = 128 * 128 * 8;
 
     /* 解码目标（复用，避免每帧 realloc） */
     BevPostDet dets[BEV_POST_MAX_DET]{};
@@ -243,8 +245,8 @@ static void decode_heatmap(const BevOnnxBackend* b, float** out_seq) {
     const int H = g.precfg.h, W = g.precfg.w;
     const float* hm = out_seq[0];   /* 展平 NCHW，取 [0,0,:,:] → 索引 (r*W+c) */
     const double ch = cos(g.ego_heading), sh = sin(g.ego_heading);
-    const double res_x = (2.0 * g.precfg.range_x) / H;
-    const double res_y = (2.0 * g.precfg.range_y_half) / W;
+    const double res_x = (2.0 * g.precfg.range_x) / W;
+    const double res_y = (2.0 * g.precfg.range_y_half) / H;
 
     int n = 0;
     for (int r = 0; r < H && n < BEV_POST_MAX_DET; r++) {
@@ -351,11 +353,9 @@ protected:
                     const int64_t* in_shp[BEV_ONNX_MAX_IN] = { in_shape };
                     int in_rk[BEV_ONNX_MAX_IN] = { 4 };
 
-                    /* 输出缓冲：transient，仅解码后用。512KB 进 static 段避免爆栈 */
-                    static const int MAX_OUT_FLOATS = 128 * 128 * 8;
-                    static float out_buf[MAX_OUT_FLOATS];
+                    /* 输出缓冲：transient，仅解码后用（在 init 中堆分配） */
                     float* out_seq[BEV_ONNX_MAX_OUT];
-                    for (int i = 0; i < BEV_ONNX_MAX_OUT; i++) out_seq[i] = out_buf;
+                    for (int i = 0; i < BEV_ONNX_MAX_OUT; i++) out_seq[i] = g.out_buf ? g.out_buf : g.feat;
 
                     int n_out = bev_onnx_backend_forward(&g.onnx, in_bufs, in_shp, in_rk, out_seq);
                     if (n_out >= 1) {

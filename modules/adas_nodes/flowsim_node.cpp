@@ -2879,19 +2879,17 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
             return -1;
         }
     } else if (g.route.ok() && g.roads_loaded) {
-        /* 路线自动对齐：如果指定了 route（如 Web 切换路线/子路段），
-         * 若 scenario 中的 ego 坐标未配置或偏离 route 起点（>15m），
+        /* 路线自动对齐：如果 scenario 中的 ego 坐标未配置 (0,0,0)，
          * 自动将自车精确对齐到 route 起点 (s=0.0) 车道中心与切线航向，
          * 确保自车 100% 停在正确起点道路上。 */
-        flowsim::WorldPos rwp;
-        if (g.route.sample_pose(g.roads, 0.0, rwp.x, rwp.y, rwp.h)) {
-            double dist_to_start = std::hypot(g.scenario->ego.x - rwp.x,
-                                              g.scenario->ego.y - rwp.y);
-            if (dist_to_start > 15.0 || (g.scenario->ego.x == 0.0 && g.scenario->ego.y == 0.0)) {
+        bool ego_unset = (g.scenario->ego.x == 0.0 && g.scenario->ego.y == 0.0 && g.scenario->ego.heading == 0.0);
+        if (ego_unset) {
+            flowsim::WorldPos rwp;
+            if (g.route.sample_pose(g.roads, 0.0, rwp.x, rwp.y, rwp.h)) {
                 g.scenario->ego.x = rwp.x;
                 g.scenario->ego.y = rwp.y;
                 g.scenario->ego.heading = rwp.h;
-                LOG_INFO("flowsim", "route start snap: placed ego at route origin (%.2f, %.2f, h=%.1f°)",
+                LOG_INFO("flowsim", "route start snap: placed unset ego at route origin (%.2f, %.2f, h=%.1f°)",
                          rwp.x, rwp.y, rwp.h * 180.0 / M_PI);
             }
         }
