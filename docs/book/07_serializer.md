@@ -46,11 +46,11 @@ static inline uint32_t fnv1a_hash(const uint8_t* data, size_t len) {
 
 ## 3. IDL 消息定义与自动化代码生成
 
-KunAutoDrive 采用声明式 IDL 格式（`msg/flow_types.msg`），通过 Python 代码生成器 `tools/msg_codegen.py` 自动产出 C 头文件与 JSON 序列化器。
+KunAutoDrive 采用声明式 IDL 格式（`msg/adas_msgs.msg`），通过 Python 代码生成器 `tools/msg_codegen.py` 自动产出 C 头文件与 JSON 序列化器。
 
 ### 3.1 IDL 语法示例
 ```
-# msg/flow_types.msg
+# msg/adas_msgs.msg
 struct VehiclePose {
     uint64  timestamp_us
     float64 x
@@ -63,7 +63,7 @@ struct VehiclePose {
 
 ### 3.2 自动化流水线
 ```bash
-python3 tools/msg_codegen.py msg/flow_types.msg msg/generated/flow_types.h
+python3 tools/msg_codegen.py msg/adas_msgs.msg build/gen/adas_msgs_gen.h
 ```
 
 生成的代码包含：

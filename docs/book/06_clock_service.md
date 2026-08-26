@@ -33,7 +33,7 @@
 
 ## 2. 全链路微秒语义规范（`timestamp_us`）
 
-In KunAutoDrive 中，所有数据结构（`Message`、`Pose`、`LidarFrame`、`ImuData`）必须遵守以下时间戳铁律：
+在 KunAutoDrive 中，所有数据结构（`Message`、`Pose`、`LidarFrame`、`ImuData`）必须遵守以下时间戳铁律：
 
 1. **类型统一**：必须为 `uint64_t`，单位严格为**微秒（μs）**，禁止出现秒（`double`）或毫秒（`ms`）的混用。
 2. **GNSS 采集时刻优先（Acquisition Time Priority）**：
