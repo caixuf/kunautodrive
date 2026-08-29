@@ -386,9 +386,82 @@ private:
 };
 
 /**
+ * @brief 单合约行情落盘协程任务 (CoroSingleTickRecorderTask, 方案 A: 单合约单协程隔离)
+ * 独立监听单个合约的真值流 market/tick/{symbol}, 批量异步写入 SQLite ticks 表。
+ * 各合约通道物理隔离互不阻塞，单合约停摆不影响其他合约，recv_for(50000) 确保优雅停机秒级响应。
+ */
+class CoroSingleTickRecorderTask : public CoroutineTask {
+public:
+    CoroSingleTickRecorderTask(MessageBus* bus, std::string symbol,
+                               StorageManager* storage, size_t batch_size = 500)
+        : CoroutineTask(bus), symbol_(std::move(symbol)),
+          storage_(storage), batch_size_(batch_size) {
+        topic_ = "market/tick/" + symbol_;
+    }
+
+    Task run() override {
+        BusChannel channel(bus(), topic_.c_str(), 64);
+        last_flush_ = std::chrono::steady_clock::now();
+
+        while (!should_stop()) {
+            auto res = co_await channel.recv_for(50000); // 50ms 超时响应停机
+            if (res.ok()) {
+                const auto* t = reinterpret_cast<const QuantTickMsg*>(res.message.data);
+                TickData td;
+                td.symbol = t->symbol;
+                td.exchange = t->exchange;
+                td.timestamp_us = (t->timestamp_us != 0)
+                    ? static_cast<int64_t>(t->timestamp_us)
+                    : std::chrono::duration_cast<std::chrono::microseconds>(
+                          std::chrono::system_clock::now().time_since_epoch()).count();
+                td.last_price = t->last_price;
+                td.bid_price[0] = t->bid_price1;
+                td.ask_price[0] = t->ask_price1;
+                td.bid_volume[0] = t->bid_volume1;
+                td.ask_volume[0] = t->ask_volume1;
+                td.volume = t->volume;
+                td.open_interest = t->open_interest;
+
+                buffer_.push_back(std::move(td));
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+            const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_flush_).count();
+            if (buffer_.size() >= batch_size_ || (!buffer_.empty() && elapsed_ms >= 1000)) {
+                flush();
+            }
+        }
+        flush(); // 停机前冲刷残余
+        co_return;
+    }
+
+    uint64_t get_total_saved() const { return total_saved_; }
+
+private:
+    void flush() {
+        if (buffer_.empty() || !storage_) {
+            last_flush_ = std::chrono::steady_clock::now();
+            return;
+        }
+        if (storage_->save_ticks_batch(buffer_)) {
+            total_saved_ += buffer_.size();
+        }
+        buffer_.clear();
+        last_flush_ = std::chrono::steady_clock::now();
+    }
+
+    std::string symbol_;
+    std::string topic_;
+    StorageManager* storage_{nullptr};
+    size_t batch_size_{500};
+    std::vector<TickData> buffer_;
+    std::chrono::steady_clock::time_point last_flush_;
+    uint64_t total_saved_{0};
+};
+
+/**
  * @brief 行情落盘协程任务 (CoroTickRecorderTask, M3 行情侧)
- * 订阅融合真值流 market/tick/{symbol}, 缓冲批量后以单事务异步写入 SQLite ticks 表。
- * 攒批 + 单事务写入, 避免逐 tick 事务把微秒级总线拖成毫秒级。
+ * 兼容多合约监听模式与单合约转发
  */
 class CoroTickRecorderTask : public CoroutineTask {
 public:
@@ -402,12 +475,8 @@ public:
     }
 
     Task run() override {
-        std::cout << "[KunQuant::TickRecorder] 行情落盘协程启动, 监控 " << symbols_.size()
-                  << " 个合约, 批量阈值 " << batch_size_ << " 条 / 1 秒\n";
-
         if (symbols_.empty()) co_return;
 
-        // 常驻订阅: 每合约一条 BusChannel (持久订阅, 规避 when_any 逐次订阅生命周期竞态)
         std::vector<std::unique_ptr<BusChannel>> channels;
         channels.reserve(topics_.size());
         for (const auto& t : topics_) {
@@ -418,11 +487,20 @@ public:
         size_t round_robin = 0;
 
         while (!should_stop()) {
-            // 轮询式挂起等待; 未轮到的合约消息由 BusChannel 内部缓冲 (depth=64)
-            Message msg = co_await channels[round_robin % channels.size()]->recv();
+            auto res = co_await channels[round_robin % channels.size()]->recv_for(50000); // 50ms 超时
             round_robin++;
-            const auto* t = reinterpret_cast<const QuantTickMsg*>(msg.data);
+            if (!res.ok()) {
+                if (should_stop()) break;
+                // 空闲时检查是否有待刷新的残余数据
+                const auto now = std::chrono::steady_clock::now();
+                const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_flush_).count();
+                if (!buffer_.empty() && elapsed_ms >= 1000) {
+                    flush();
+                }
+                continue;
+            }
 
+            const auto* t = reinterpret_cast<const QuantTickMsg*>(res.message.data);
             TickData td;
             td.symbol = t->symbol;
             td.exchange = t->exchange;
@@ -447,8 +525,6 @@ public:
             }
         }
         flush(); // 停机前冲刷残余缓冲
-
-        std::cout << "[KunQuant::TickRecorder] 停机, 累计落盘 tick: " << total_saved_ << "\n";
         co_return;
     }
 

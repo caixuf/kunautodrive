@@ -281,11 +281,11 @@ int main(int argc, char* argv[]) {
     auto fusion_task = std::make_unique<kun::CoroMarketFusionTask>(bus, "rb2405", 0.03);
     ex.spawn(fusion_task->run(), "market_fusion_engine");
 
-    // 5.1 挂载行情落盘协程 (M3 行情侧): 订阅融合真值流, 批量异步写入 SQLite ticks 表
-    std::vector<std::string> watch_symbols;
-    for (const auto& s : cfg.symbols) watch_symbols.push_back(s.symbol);
-    auto tick_recorder = std::make_unique<kun::CoroTickRecorderTask>(bus, watch_symbols, &storage);
-    ex.spawn(tick_recorder->run(), "tick_recorder");
+    // 5.1 挂载行情落盘协程 (M3 行情侧): 为每个监控合约分配独立落盘协程，互不阻塞
+    for (const auto& s : cfg.symbols) {
+        auto tick_recorder = std::make_unique<kun::CoroSingleTickRecorderTask>(bus, s.symbol, &storage);
+        ex.spawn(tick_recorder->run(), "tick_recorder_" + s.symbol);
+    }
 
     // 启动新浪公网实时期货行情抓取节点
     std::cout << "[KunQuant Daemon] 启动新浪真实行情感知节点 (SinaMarketFetcher)...\n";
@@ -340,7 +340,15 @@ int main(int argc, char* argv[]) {
     if (server_thread.joinable()) server_thread.join();
     if (sim_publisher.joinable()) sim_publisher.join();
 
-    ex.shutdown();
+    // 有界宽限关停: request_stop 后给协程最多 2 秒自行退出 (落盘冲刷/收尾),
+    // 随后 ~RtExecutor 兜底销毁仍挂在死 topic 上的帧 (如跟单协程等待永不触发的 trade_rtn)。
+    // 注意: ex.shutdown() 的无限等待在此不可用 —— 有 parked 帧等外部 post_ready 且生产者已停。
+    ex.request_stop();
+    int grace_ms = 0;
+    while (!ex.is_finished() && grace_ms++ < 2000) {
+        ex.run();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     g_node_exec = nullptr;
     message_bus_destroy(bus);
 

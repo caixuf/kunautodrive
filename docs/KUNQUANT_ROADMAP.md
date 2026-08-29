@@ -132,11 +132,11 @@ flowchart TD
 |:---|:---|:---|:---|
 | **M1** | 消除非 POD 强转 UB、打通 GatewayPool 回报、撮合深度约束、部分成交与账务平今 | 全链路单测 `test_quant_closed_loop` 100% 通过；多账户跟单实测跑通 | **已完成** |
 | **M2** | C++ 原生实时行情抓取、多源数据融合节点 `CoroMarketFusionTask`、假刺针中值过滤 | `test_quant_market_fusion` 单测通过；实盘抓取新浪行情无尖刺污染 | **已完成** |
-| **M3** | SQLite (WAL 模式) 订单/成交/流水持久化、每日柜台结算单自动对账工具、YAML/JSON 配置化解耦 | `test_quant_storage_and_reconcile` 单测 100% 通过；进程强杀重启账务无损恢复；结算单对账 0 误差 | **已完成** |
+| **M3** | SQLite (WAL 模式) 订单/成交/流水持久化、每日柜台结算单自动对账工具、YAML/JSON 配置化解耦、**行情批量落盘**（ticks/bars 表 + `CoroTickRecorderTask` 协程：常驻 BusChannel 50ms 超时轮转 + 攒批单事务异步写，避免逐 tick 事务拖慢总线） | `test_quant_storage_and_reconcile` 单测 100% 通过；进程强杀重启账务无损恢复；结算单对账 0 误差；3000 tick 批量写单测通过；实测 12s 落 39 条融合真值 tick | **已完成** |
 | **M4** | 独立 `frontend/` 现代化工程 (Vue3+TS+lightweight-charts+AG Grid 架构)、RFC6455 WebSocket 桥接与 REST 契约 | 终端全量对接 KunAutoDrive 核心总线与 REST API；K 线、深度图与水下回撤分析图表全量就绪 | **已完成** |
 | **M5** | 独立 `ai_service` (OpenAI 协议抽象 + 本地 Stub 降级)、接入 CodeBuddy / DeepSeek API、每日复盘报告生成、§2-G 策略生成硬约束 | `test_ai_service.py` 单测 100% 通过；环境变量注入 Key 即可连云端；自动生成 Markdown 研报落盘 | **已完成** |
-| **M6** | 真实沙盒滚动回测适应度计算、Walk-Forward 验证、影子账户隔离试运行、策略草稿生成器（§2-G 三道门禁：Prompt 硬约束自动拼接 + 引擎断言 + 数据平移测试 CI） | `test_quant_m6_walk_forward_and_compliance` 单测 100% 通过；进化参数在影子盘稳定试运行；通过 §2-G 数据平移测试与零成本拦截 | **已完成** |
-| **M7** | 官方 CTP 交易 API 封装、断线重连与 1 秒 1 次查询限速流控、重复成交回报去重、程序化交易合规报备支持 | `test_quant_m7_ctp_gateway` 单测 100% 通过；柜台高频查询拦截与重传去重验证通过；已就绪对接 SimNow 与期货实盘 | **已完成** |
+| **M6** | 真实沙盒滚动回测适应度计算、Walk-Forward 验证、影子账户隔离试运行、策略草稿生成器（§2-G 三道门禁：Prompt 硬约束自动拼接 + 引擎断言 + **数据平移测试 v2**：未来扰动 + 决策日志比对，2026-08-30 升级并实测拦截"偷窥下一根K线"作弊策略） | `test_quant_m6_walk_forward_and_compliance` 单测 100% 通过；进化参数在影子盘稳定试运行；通过 §2-G 数据平移测试与零成本拦截 | **已完成** |
+| **M7** | 官方 CTP 交易 API 封装、断线重连与 1 秒 1 次查询限速流控、重复成交回报去重、程序化交易合规报备支持 | `test_quant_m7_ctp_gateway` 单测 100% 通过；柜台高频查询拦截与重传去重验证通过；已就绪对接 SimNow 与期货实盘 | **接口壳已完成（认证/登录为模拟桩，待接 CTP SDK 实测 SimNow）** |
 
 ---
 
