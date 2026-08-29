@@ -1,0 +1,30 @@
+[Unit]
+Description=KunQuant Pro Trading Engine & Web Terminal Daemon
+Documentation=https://github.com/caixuf/kunautodrive
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=caixuf
+Group=caixuf
+WorkingDirectory=/home/caixuf/MyCode/FlowEngine
+ExecStart=/home/caixuf/MyCode/FlowEngine/build/bin/kun_quant_server --port 8900 --static-dir tools/kunboard
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=3s
+
+# 高频交易 / 实时系统级性能与资源限制配置
+LimitNOFILE=65536
+LimitMEMLOCK=infinity
+CPUSchedulingPolicy=rr
+CPUSchedulingPriority=80
+Nice=-20
+
+# 日志配置
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kunquant
+
+[Install]
+WantedBy=multi-user.target
