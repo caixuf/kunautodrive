@@ -75,5 +75,74 @@ class TestAIService(unittest.TestCase):
         payload = res.get("request_payload", {})
         self.assertIn("严禁未来函数", payload.get("prompt", ""))
 
+    def test_focus_tracker_add_list_remove(self):
+        import tempfile
+        from ai_service.focus_tracker import FocusProductTracker
+
+        tmp = tempfile.mkdtemp()
+        cfg = AIConfig(
+            engine_db_path=os.path.join(tmp, "engine.db"),
+            focus_state_path=os.path.join(tmp, "focus.json"),
+            tasks_state_path=os.path.join(tmp, "tasks.json"),
+        )
+        tracker = FocusProductTracker(cfg)
+
+        # 1. 添加专项跟踪
+        res = tracker.add_focus("au2406", "黄金专项分析", "futures")
+        self.assertTrue(res["ok"])
+        self.assertFalse(res["snapshot"]["available"])  # 尚无数据
+
+        # 重复添加被拒
+        self.assertFalse(tracker.add_focus("au2406")["ok"])
+
+        # 2. 写入模拟 tick 后快照可用
+        import sqlite3
+        with sqlite3.connect(cfg.engine_db_path) as conn:
+            conn.execute("""CREATE TABLE ticks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT, exchange TEXT,
+                last_price REAL, bid_price1 REAL, ask_price1 REAL, bid_volume1 REAL,
+                ask_volume1 REAL, volume REAL, open_interest REAL, ts INTEGER NOT NULL)""")
+            base_ts = 1788000000000000
+            for i in range(100):
+                conn.execute(
+                    "INSERT INTO ticks (symbol, exchange, last_price, ts) VALUES ('au2406','SHFE',?,?)",
+                    (568.0 + i * 0.05, base_ts + i * 200000))
+        snap = tracker.snapshot("au2406")
+        self.assertTrue(snap["available"])
+        self.assertEqual(snap["tick_count"], 100)
+        self.assertAlmostEqual(snap["last_price"], 568.0 + 99 * 0.05, places=4)
+        self.assertGreater(snap["change_pct"], 0)
+
+        # 3. 任务创建与执行 (price_summary)
+        res = tracker.create_task("au2406", "price_summary", "黄金日线摘要")
+        self.assertTrue(res["ok"])
+        task_id = res["task"]["id"]
+        run_res = tracker.run_task(task_id)
+        self.assertTrue(run_res["ok"])
+        self.assertEqual(run_res["task"]["status"], "done")
+        self.assertEqual(run_res["task"]["result"]["summary"]["tick_count"], 100)
+
+        # 4. 非法任务类型被拒
+        self.assertFalse(tracker.create_task("au2406", "hack_the_planet")["ok"])
+
+        # 5. LLM 回复中的 ```task``` 块自动解析生成任务
+        reply = "好的，我来跟踪。\n```task {\"symbol\": \"au2406\", \"type\": \"volatility_report\", \"description\": \"黄金波动率\"}```"
+        created = tracker.extract_and_create_tasks(reply)
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0]["type"], "volatility_report")
+        run2 = tracker.run_task(created[0]["id"])
+        self.assertTrue(run2["ok"])
+        self.assertGreater(run2["task"]["result"]["annualized_vol_pct"], 0)
+
+        # 6. 移除跟踪
+        self.assertTrue(tracker.remove_focus("au2406")["ok"])
+        self.assertEqual(len(tracker.list_focus()), 0)
+
+    def test_focus_chat_context_injection(self):
+        from ai_service.focus_tracker import FocusProductTracker
+        tracker = FocusProductTracker()
+        ctx = tracker.focus_context_for_chat()
+        self.assertIn("专项跟踪产品", ctx)
+
 if __name__ == "__main__":
     unittest.main()

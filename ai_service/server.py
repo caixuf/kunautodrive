@@ -56,7 +56,7 @@ class AIServiceHandler(BaseHTTPRequestHandler):
             report_md = self.reporter.generate_report(body)
             self._send_json(200, {"status": "OK", "report": report_md})
 
-        el        if self.path == "/api/ai/chat":
+        elif self.path == "/api/ai/chat":
             prompt = body.get("message", "")
             context = body.get("context", "")
             focus_ctx = self.focus.focus_context_for_chat()

@@ -1,6 +1,7 @@
 {
   "server": {
     "port": 8900,
+    "ai_port": 8901,
     "static_dir": "tools/kunboard",
     "db_path": "data/kun_quant.db"
   },
@@ -37,8 +38,9 @@
       "name": "螺纹钢主力",
       "multiplier": 10,
       "price_tick": 1.0,
-      "margin_ratio": 0.10,
-      "commission_ratio": 0.0001
+      "margin_ratio": 0.1,
+      "commission_ratio": 0.0001,
+      "sina_code": "nf_RB0"
     },
     {
       "symbol": "cu2405",
@@ -47,7 +49,8 @@
       "multiplier": 5,
       "price_tick": 10.0,
       "margin_ratio": 0.12,
-      "commission_ratio": 0.00005
+      "commission_ratio": 5e-05,
+      "sina_code": "nf_CU0"
     },
     {
       "symbol": "ag2405",
@@ -56,7 +59,8 @@
       "multiplier": 15,
       "price_tick": 1.0,
       "margin_ratio": 0.12,
-      "commission_ratio": 0.00005
+      "commission_ratio": 5e-05,
+      "sina_code": "nf_AG0"
     },
     {
       "symbol": "au2406",
@@ -64,8 +68,9 @@
       "name": "沪金主力",
       "multiplier": 1000,
       "price_tick": 0.02,
-      "margin_ratio": 0.10,
-      "commission_ratio": 0.00005
+      "margin_ratio": 0.1,
+      "commission_ratio": 5e-05,
+      "sina_code": "nf_AU0"
     }
   ]
 }

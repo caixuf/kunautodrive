@@ -3,6 +3,8 @@
 #include <sstream>
 #include <cstring>
 #include <chrono>
+#include <cctype>
+#include <unordered_map>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -10,8 +12,30 @@
 
 namespace kun {
 
-SinaMarketFetcher::SinaMarketFetcher(MessageBus* bus, std::vector<std::string> symbols, int poll_interval_ms)
-    : bus_(bus), symbols_(std::move(symbols)), poll_interval_ms_(poll_interval_ms) {}
+// 通用推导规则 (机制): rb2405 → nf_RB0, au2406 → nf_AU0
+// 提取品种字母前缀并大写, 追加 "0" 表示主力连续; 特例由配置覆盖, 不在此硬编码。
+std::string SinaMarketFetcher::derive_sina_code(const std::string& symbol) {
+    std::string prefix;
+    for (char c : symbol) {
+        if (std::isalpha(static_cast<unsigned char>(c))) {
+            prefix += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        } else {
+            break;
+        }
+    }
+    if (prefix.empty()) return "nf_" + symbol;
+    return "nf_" + prefix + "0";
+}
+
+SinaMarketFetcher::SinaMarketFetcher(MessageBus* bus,
+                                     std::vector<std::pair<std::string, std::string>> symbol_codes,
+                                     int poll_interval_ms)
+    : bus_(bus), symbol_codes_(std::move(symbol_codes)), poll_interval_ms_(poll_interval_ms) {
+    // 空的 sina_code 用通用规则补齐
+    for (auto& [sym, code] : symbol_codes_) {
+        if (code.empty()) code = derive_sina_code(sym);
+    }
+}
 
 SinaMarketFetcher::~SinaMarketFetcher() {
     stop();
@@ -34,16 +58,9 @@ void SinaMarketFetcher::stop() {
 
 void SinaMarketFetcher::run_loop() {
     std::string query_param;
-    for (size_t i = 0; i < symbols_.size(); ++i) {
-        // 新浪期货代码规则：如 "rb2405" -> "nf_RB0" 或 "nf_RB2405"
-        std::string s = symbols_[i];
-        if (s == "rb2405") s = "nf_RB0";
-        else if (s == "cu2405") s = "nf_CU0";
-        else if (s == "ag2405") s = "nf_AG0";
-        else if (!s.starts_with("nf_")) s = "nf_" + s;
-
-        query_param += s;
-        if (i + 1 < symbols_.size()) query_param += ",";
+    for (size_t i = 0; i < symbol_codes_.size(); ++i) {
+        query_param += symbol_codes_[i].second;
+        if (i + 1 < symbol_codes_.size()) query_param += ",";
     }
 
     while (running_.load()) {
@@ -56,7 +73,11 @@ void SinaMarketFetcher::run_loop() {
 }
 
 bool SinaMarketFetcher::fetch_once() {
-    std::string query_param = "nf_RB0,nf_CU0,nf_AG0";
+    std::string query_param;
+    for (size_t i = 0; i < symbol_codes_.size(); ++i) {
+        query_param += symbol_codes_[i].second;
+        if (i + 1 < symbol_codes_.size()) query_param += ",";
+    }
     std::string resp = http_get_sina(query_param);
     if (resp.empty()) return false;
     parse_and_publish(resp);
@@ -90,7 +111,7 @@ std::string SinaMarketFetcher::http_get_sina(const std::string& query_symbols) {
     }
     freeaddrinfo(res);
 
-    std::string req = 
+    std::string req =
         "GET /list=" + query_symbols + " HTTP/1.1\r\n"
         "Host: hq.sinajs.cn\r\n"
         "Referer: https://finance.sina.com.cn\r\n"
@@ -117,6 +138,12 @@ std::string SinaMarketFetcher::http_get_sina(const std::string& query_symbols) {
 }
 
 void SinaMarketFetcher::parse_and_publish(const std::string& response_text) {
+    // 反查表: 用自己发出的请求码映射回内部 symbol (机制自洽, 零硬编码)
+    std::unordered_map<std::string, std::string> code_to_symbol;
+    for (const auto& [sym, code] : symbol_codes_) {
+        code_to_symbol[code] = sym;
+    }
+
     std::istringstream stream(response_text);
     std::string line;
 
@@ -130,12 +157,11 @@ void SinaMarketFetcher::parse_and_publish(const std::string& response_text) {
             continue;
         }
 
-        // 提取品种代码
-        std::string raw_symbol = line.substr(11, quote_start - 12); // e.g. "nf_RB0"
-        std::string symbol = "rb2405";
-        if (raw_symbol == "nf_RB0" || raw_symbol == "nf_RB2405") symbol = "rb2405";
-        else if (raw_symbol == "nf_CU0" || raw_symbol == "nf_CU2405") symbol = "cu2405";
-        else if (raw_symbol == "nf_AG0" || raw_symbol == "nf_AG2405") symbol = "ag2405";
+        // 提取新浪代码并反查内部 symbol; 未登记品种直接跳过 (防脏数据)
+        std::string raw_code = line.substr(11, quote_start - 12); // e.g. "nf_RB0"
+        auto it = code_to_symbol.find(raw_code);
+        if (it == code_to_symbol.end()) continue;
+        const std::string& symbol = it->second;
 
         std::string content = line.substr(quote_start + 1, quote_end - quote_start - 1);
         std::vector<std::string> tokens;
@@ -178,7 +204,7 @@ void SinaMarketFetcher::parse_and_publish(const std::string& response_text) {
             std::string topic = "market/source/sina/" + symbol;
             message_bus_publish(bus_, topic.c_str(), "SinaFetcher", &tick, sizeof(tick));
 
-        } catch (const std::exception& e) {
+        } catch (const std::exception&) {
             // 忽略非数字格式解析异常
         }
     }

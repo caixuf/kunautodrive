@@ -48,8 +48,8 @@ static void sig_handler(int sig) {
 
 class NativeHttpWsServer {
 public:
-    NativeHttpWsServer(int port, std::string static_dir, MessageBus* bus, StorageManager* storage)
-        : port_(port), static_dir_(std::move(static_dir)), bus_(bus), storage_(storage) {}
+    NativeHttpWsServer(int port, std::string static_dir, MessageBus* bus, StorageManager* storage, int ai_port = 8901)
+        : port_(port), static_dir_(std::move(static_dir)), bus_(bus), storage_(storage), ai_port_(ai_port) {}
 
     ~NativeHttpWsServer() {
         stop();
@@ -159,6 +159,13 @@ private:
             return;
         }
 
+        // 统一 AI 命名空间代理 (机制, 不含策略): /api/ 下除 C++ 原生端点外,
+        // 全部转发至内部 ai_service (ai_port)。Python 侧增删路由无需改动 C++。
+        if (path.rfind("/api/", 0) == 0 && path != "/api/status" && path != "/api/reconcile") {
+            proxy_to_ai_service(client_fd, request);
+            return;
+        }
+
         if (path == "/api/reconcile") {
             // 生成对账报告
             std::vector<TradeData> trades;
@@ -169,8 +176,8 @@ private:
             }
             auto rep = SettlementReconciler::reconcile("acc_master_simnow", "2026-08-30", trades, positions, {}, {}, 0.0, 0.0);
             std::string json = "{\"account_id\":\"acc_master_simnow\",\"matched\":" + std::string(rep.is_matched ? "true" : "false") +
-                               ",\"local_trades\":" + std::to_string(trades.size()) +
-                               ",\"local_positions\":" + std::to_string(positions.size()) + "}";
+                                ",\"local_trades\":" + std::to_string(trades.size()) +
+                                ",\"local_positions\":" + std::to_string(positions.size()) + "}";
             std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: " +
                                    std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;
             send(client_fd, response.c_str(), response.size(), MSG_NOSIGNAL);
@@ -206,11 +213,57 @@ private:
         close(client_fd);
     }
 
+    void proxy_to_ai_service(int client_fd, std::string raw_request) {
+        int ai_fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (ai_fd < 0) {
+            std::string err = "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 15\r\n\r\nAI Unavailable";
+            send(client_fd, err.c_str(), err.size(), MSG_NOSIGNAL);
+            close(client_fd);
+            return;
+        }
+
+        // 设置 20s 超时
+        timeval tv{20, 0};
+        setsockopt(ai_fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
+        setsockopt(ai_fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv));
+
+        sockaddr_in ai_addr{};
+        ai_addr.sin_family = AF_INET;
+        ai_addr.sin_port = htons(ai_port_);
+        inet_pton(AF_INET, "127.0.0.1", &ai_addr.sin_addr);
+
+        if (connect(ai_fd, (sockaddr*)&ai_addr, sizeof(ai_addr)) < 0) {
+            std::string err = "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"error\":\"AI service offline on 8901\"}";
+            send(client_fd, err.c_str(), err.size(), MSG_NOSIGNAL);
+            close(ai_fd);
+            close(client_fd);
+            return;
+        }
+
+        // 注入 Connection: close 确保 Python 处理完毕后主动关闭连接
+        size_t pos = raw_request.find("\r\n\r\n");
+        if (pos != std::string::npos) {
+            raw_request.insert(pos, "\r\nConnection: close");
+        }
+
+        send(ai_fd, raw_request.c_str(), raw_request.size(), MSG_NOSIGNAL);
+
+        char buf[8192];
+        ssize_t n;
+        while ((n = recv(ai_fd, buf, sizeof(buf), 0)) > 0) {
+            send(client_fd, buf, n, MSG_NOSIGNAL);
+        }
+
+        close(ai_fd);
+        close(client_fd);
+    }
+
     int port_;
     std::string static_dir_;
     MessageBus* bus_;
     StorageManager* storage_{nullptr};
     int server_fd_{-1};
+    int ai_port_{8901};   // 内部 ai_service 端口 (变与不变的分界: C++ 只认端口不认路由)
 };
 
 } // namespace kun
@@ -240,6 +293,8 @@ int main(int argc, char* argv[]) {
             static_dir = argv[++i];
         } else if (std::string(argv[i]) == "--db-path" && i + 1 < argc) {
             cfg.server.db_path = argv[++i];
+        } else if (std::string(argv[i]) == "--ai-port" && i + 1 < argc) {
+            cfg.server.ai_port = std::stoi(argv[++i]);
         }
     }
 
@@ -286,10 +341,15 @@ int main(int argc, char* argv[]) {
     spawned_tasks.push_back(std::move(follow_task));
 
     // 5. 挂载多源行情采集与数据融合协程任务 (原生 CoroutineTask + flowcoro 调度)
+    // 每个配置合约一条融合协程, 各自发布 market/tick/{symbol} 真值流
     std::cout << "[KunQuant Daemon] 启动多源行情感知与数据融合协程 (CoroMarketFusionTask)...\n";
-    auto fusion_task = std::make_unique<kun::CoroMarketFusionTask>(bus, "rb2405", 0.03);
-    ex.spawn(fusion_task->run(), "market_fusion_engine");
-    spawned_tasks.push_back(std::move(fusion_task));
+    std::vector<std::string> watch_symbols;
+    for (const auto& s : cfg.symbols) watch_symbols.push_back(s.symbol);
+    for (const auto& sym : watch_symbols) {
+        auto fusion_task = std::make_unique<kun::CoroMarketFusionTask>(bus, sym, 0.03);
+        ex.spawn(fusion_task->run(), "market_fusion_" + sym);
+        spawned_tasks.push_back(std::move(fusion_task));
+    }
 
     // 5.1 挂载行情落盘协程 (M3 行情侧): 为每个监控合约分配独立落盘协程，互不阻塞
     for (const auto& s : cfg.symbols) {
@@ -298,9 +358,11 @@ int main(int argc, char* argv[]) {
         spawned_tasks.push_back(std::move(tick_recorder));
     }
 
-    // 启动新浪公网实时期货行情抓取节点
+    // 启动新浪公网实时期货行情抓取节点 (品种→代码映射来自配置, 特例覆盖, 无硬编码)
     std::cout << "[KunQuant Daemon] 启动新浪真实行情感知节点 (SinaMarketFetcher)...\n";
-    kun::SinaMarketFetcher sina_fetcher(bus, {"rb2405", "cu2405", "ag2405"}, 1000);
+    std::vector<std::pair<std::string, std::string>> symbol_codes;
+    for (const auto& s : cfg.symbols) symbol_codes.emplace_back(s.symbol, s.sina_code);
+    kun::SinaMarketFetcher sina_fetcher(bus, symbol_codes, 1000);
     sina_fetcher.start();
 
     // 6. 挂载 AI 自适应进化协程引擎
@@ -309,7 +371,7 @@ int main(int argc, char* argv[]) {
     spawned_tasks.push_back(std::move(evolution_task));
 
     // 7. 挂载原生 HTTP 守护服务
-    kun::NativeHttpWsServer server(port, static_dir, bus, &storage);
+    kun::NativeHttpWsServer server(port, static_dir, bus, &storage, cfg.server.ai_port);
     if (!server.start()) {
         std::cerr << "[KunQuant Daemon] Failed to start native daemon.\n";
         return 1;

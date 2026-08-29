@@ -15,6 +15,7 @@ struct SymbolInfo {
     double price_tick{1.0};       // 最小变动价位
     double margin_ratio{0.10};    // 保证金比例 10%
     double commission_ratio{0.0001}; // 手续费率 (万一)
+    std::string sina_code;        // 新浪行情代码 (策略覆盖项, 如 "nf_AU0"; 空则用通用规则推导)
 };
 
 /**

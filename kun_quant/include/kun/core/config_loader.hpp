@@ -12,6 +12,7 @@ struct ServerConfig {
     int port{8900};
     std::string static_dir{"tools/kunboard"};
     std::string db_path{"data/kun_quant.db"};
+    int ai_port{8901};   // 内部 ai_service 端口 (仅 127.0.0.1 回环代理, 不对外暴露)
 };
 
 struct QuantAppConfig {
