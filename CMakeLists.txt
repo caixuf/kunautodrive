@@ -692,6 +692,128 @@ else()
 endif()
 target_compile_definitions(coro_correctness_test PRIVATE FLOWCORO_INTEGRATION)
 
+# ── 鲲量化 (KunQuant) 引擎与 flowcoro 演示 ───────────────────
+set(KUN_QUANT_SRCS
+    kun_quant/src/core/event_engine.cpp
+    kun_quant/src/core/config_loader.cpp
+    kun_quant/src/engine/position_manager.cpp
+    kun_quant/src/engine/risk_manager.cpp
+    kun_quant/src/engine/matching_engine.cpp
+    kun_quant/src/engine/storage_manager.cpp
+    kun_quant/src/engine/reconciler.cpp
+    kun_quant/src/engine/shadow_account.cpp
+    kun_quant/src/strategy/dual_ma_strategy.cpp
+    kun_quant/src/strategy/bollinger_strategy.cpp
+    kun_quant/src/strategy/compliance_checker.cpp
+    kun_quant/src/strategy/walk_forward_engine.cpp
+    kun_quant/src/backtest/performance.cpp
+    kun_quant/src/backtest/backtest_engine.cpp
+    kun_quant/src/gateway/sim_gateway.cpp
+    kun_quant/src/gateway/ctp_gateway.cpp
+    kun_quant/src/storage/db_adapter.cpp
+    kun_quant/src/storage/event_sourcing.cpp
+    kun_quant/src/cluster/distributed_bridge.cpp
+    kun_quant/src/market/regime_detector.cpp
+    kun_quant/src/engine/smart_order_router.cpp
+    kun_quant/src/market/market_fusion_node.cpp
+    kun_quant/src/market/sina_fetcher.cpp
+)
+add_library(kun_quant STATIC ${KUN_QUANT_SRCS})
+target_include_directories(kun_quant PUBLIC 
+    kun_quant/include
+    include
+    ${FLOWCORO_INCLUDE_DIR}
+)
+target_link_libraries(kun_quant PUBLIC flowengine_core flowcoro_headers sqlite3)
+
+add_executable(kun_quant_demo src/kun_quant_demo.cpp)
+if(WIN32)
+    target_link_libraries(kun_quant_demo kun_quant flowengine_core flowcoro_headers scheduler_cpp sqlite3)
+else()
+    target_link_libraries(kun_quant_demo kun_quant flowengine_core flowcoro_headers flowcoro_net scheduler_cpp pthread sqlite3)
+endif()
+target_include_directories(kun_quant_demo PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
+target_compile_definitions(kun_quant_demo PRIVATE FLOWCORO_INTEGRATION)
+
+add_executable(kun_quant_server src/kun_quant_server.cpp)
+if(WIN32)
+    target_link_libraries(kun_quant_server kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
+else()
+    target_link_libraries(kun_quant_server kun_quant flowengine_core flowcoro_headers flowcoro_net scheduler_cpp pthread sqlite3)
+endif()
+target_include_directories(kun_quant_server PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
+target_compile_definitions(kun_quant_server PRIVATE FLOWCORO_INTEGRATION)
+
+add_executable(test_quant_closed_loop tests/test_quant_closed_loop.cpp)
+if(WIN32)
+    target_link_libraries(test_quant_closed_loop kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
+else()
+    target_link_libraries(test_quant_closed_loop kun_quant flowengine_core flowcoro_headers flowcoro_net scheduler_cpp pthread sqlite3)
+endif()
+target_include_directories(test_quant_closed_loop PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
+target_compile_definitions(test_quant_closed_loop PRIVATE FLOWCORO_INTEGRATION)
+add_test(NAME test_quant_closed_loop COMMAND test_quant_closed_loop)
+
+add_executable(test_quant_market_fusion tests/test_quant_market_fusion.cpp)
+if(WIN32)
+    target_link_libraries(test_quant_market_fusion kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
+else()
+    target_link_libraries(test_quant_market_fusion kun_quant flowengine_core flowcoro_headers flowcoro_net scheduler_cpp pthread sqlite3)
+endif()
+target_include_directories(test_quant_market_fusion PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
+target_compile_definitions(test_quant_market_fusion PRIVATE FLOWCORO_INTEGRATION)
+add_test(NAME test_quant_market_fusion COMMAND test_quant_market_fusion)
+
+add_executable(test_quant_storage_and_reconcile tests/test_quant_storage_and_reconcile.cpp)
+if(WIN32)
+    target_link_libraries(test_quant_storage_and_reconcile kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
+else()
+    target_link_libraries(test_quant_storage_and_reconcile kun_quant flowengine_core flowcoro_headers flowcoro_net scheduler_cpp pthread sqlite3)
+endif()
+target_include_directories(test_quant_storage_and_reconcile PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
+target_compile_definitions(test_quant_storage_and_reconcile PRIVATE FLOWCORO_INTEGRATION)
+add_test(NAME test_quant_storage_and_reconcile COMMAND test_quant_storage_and_reconcile)
+
+add_executable(test_quant_m6_walk_forward_and_compliance tests/test_quant_m6_walk_forward_and_compliance.cpp)
+if(WIN32)
+    target_link_libraries(test_quant_m6_walk_forward_and_compliance kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
+else()
+    target_link_libraries(test_quant_m6_walk_forward_and_compliance kun_quant flowengine_core flowcoro_headers flowcoro_net scheduler_cpp pthread sqlite3)
+endif()
+target_include_directories(test_quant_m6_walk_forward_and_compliance PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
+target_compile_definitions(test_quant_m6_walk_forward_and_compliance PRIVATE FLOWCORO_INTEGRATION)
+add_test(NAME test_quant_m6_walk_forward_and_compliance COMMAND test_quant_m6_walk_forward_and_compliance)
+
+add_executable(test_quant_m7_ctp_gateway tests/test_quant_m7_ctp_gateway.cpp)
+if(WIN32)
+    target_link_libraries(test_quant_m7_ctp_gateway kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
+else()
+    target_link_libraries(test_quant_m7_ctp_gateway kun_quant flowengine_core flowcoro_headers flowcoro_net scheduler_cpp pthread sqlite3)
+endif()
+target_include_directories(test_quant_m7_ctp_gateway PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
+target_compile_definitions(test_quant_m7_ctp_gateway PRIVATE FLOWCORO_INTEGRATION)
+add_test(NAME test_quant_m7_ctp_gateway COMMAND test_quant_m7_ctp_gateway)
+
+add_executable(test_quant_enterprise_storage_and_distributed tests/test_quant_enterprise_storage_and_distributed.cpp)
+if(WIN32)
+    target_link_libraries(test_quant_enterprise_storage_and_distributed kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
+else()
+    target_link_libraries(test_quant_enterprise_storage_and_distributed kun_quant flowengine_core flowcoro_headers flowcoro_net scheduler_cpp pthread sqlite3)
+endif()
+target_include_directories(test_quant_enterprise_storage_and_distributed PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
+target_compile_definitions(test_quant_enterprise_storage_and_distributed PRIVATE FLOWCORO_INTEGRATION)
+add_test(NAME test_quant_enterprise_storage_and_distributed COMMAND test_quant_enterprise_storage_and_distributed)
+
+add_executable(test_quant_m8_advanced_redteam_defense tests/test_quant_m8_advanced_redteam_defense.cpp)
+if(WIN32)
+    target_link_libraries(test_quant_m8_advanced_redteam_defense kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
+else()
+    target_link_libraries(test_quant_m8_advanced_redteam_defense kun_quant flowengine_core flowcoro_headers flowcoro_net scheduler_cpp pthread sqlite3)
+endif()
+target_include_directories(test_quant_m8_advanced_redteam_defense PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
+target_compile_definitions(test_quant_m8_advanced_redteam_defense PRIVATE FLOWCORO_INTEGRATION)
+add_test(NAME test_quant_m8_advanced_redteam_defense COMMAND test_quant_m8_advanced_redteam_defense)
+
 # ── Config-driven Launcher ──
 # 读 config/pipeline.json → 按顺序 fork+exec 各节点进程
 # 是 e2e_demo --multi 的解耦升级版: 编排逻辑完全在配置文件里
