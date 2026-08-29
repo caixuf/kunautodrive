@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>鲲量化交易终端 - KunQuant Terminal</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="theme-dark">
+    <!-- 全局悬浮消息通知容器 (替代浏览器原生 alert) -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <div class="app-layout">
+        
+        <!-- 左侧折叠主导航栏 -->
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <div class="brand-badge">鲲</div>
+                <div class="brand-text">
+                    <div class="brand-name">鲲量化终端</div>
+                    <div class="brand-sub">KUNQUANT DESK</div>
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <button class="nav-item active" data-page="trading-desk">
+                    <span class="nav-label">综合交易大厅</span>
+                </button>
+                <button class="nav-item" data-page="strategy-hub">
+                    <span class="nav-label">协程策略工作台</span>
+                </button>
+                <button class="nav-item" data-page="backtest-lab">
+                    <span class="nav-label">策略历史回测</span>
+                </button>
+                <button class="nav-item" data-page="ai-evolution">
+                    <span class="nav-label">AI 选股与进化实验室</span>
+                </button>
+                <button class="nav-item" data-page="report-desk">
+                    <span class="nav-label">绩效分析与汇报台</span>
+                </button>
+                <button class="nav-item" data-page="risk-account">
+                    <span class="nav-label">账户风控与持仓</span>
+                </button>
+                <button class="nav-item" data-page="system-logs">
+                    <span class="nav-label">系统总线与日志</span>
+                </button>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="status-indicator-box">
+                    <div class="status-item">
+                        <span class="status-dot online"></span>
+                        <span class="status-text">CTP 柜台：已就绪</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-dot online"></span>
+                        <span class="status-text">FlowCoro：12 μs</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-dot online"></span>
+                        <span class="status-text" id="top-ai-status">AI 大脑：巡检中 (20m)</span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- 右侧主区域 -->
+        <div class="main-wrapper">
+            
+            <!-- 顶部全局资产看板与快捷搜索 -->
+            <header class="top-navbar">
+                <!-- 账户切换选择器 -->
+                <div class="account-selector-box">
+                    <select class="account-select" id="global-account-select">
+                        <option value="all">【全部账户聚合总览】</option>
+                        <option value="acc_master_simnow" selected>● [主账户] SimNow期货仿真 (188888)</option>
+                        <option value="acc_slave_zhongxin">○ [从账户1] 中信期货实盘 (089231 · 1.5x)</option>
+                        <option value="acc_slave_yongan">○ [从账户2] 永安期货实盘 (550123 · 0.8x)</option>
+                    </select>
+                </div>
+
+                <!-- 合约快速搜索框 -->
+                <div class="contract-search-box">
+                    <input type="text" id="global-search-input" placeholder="输入合约代码/拼音 (如 rb2405, IF)" autocomplete="off">
+                    <div class="search-dropdown" id="search-dropdown"></div>
+                </div>
+
+                <!-- 核心资产指标 -->
+                <div class="global-metrics-strip">
+                    <div class="metric-card">
+                        <span class="m-label">动态权益 (元)</span>
+                        <span class="m-val" id="top-equity">1,024,580.00</span>
+                    </div>
+                    <div class="metric-card">
+                        <span class="m-label">当日盯市盈亏</span>
+                        <span class="m-val text-up" id="top-pnl">+24,580.00 (+2.46%)</span>
+                    </div>
+                    <div class="metric-card">
+                        <span class="m-label">可用资金</span>
+                        <span class="m-val" id="top-available">782,100.00</span>
+                    </div>
+                    <div class="metric-card">
+                        <span class="m-label">保证金占用</span>
+                        <span class="m-val" id="top-margin">242,480.00 (23.6%)</span>
+                    </div>
+                </div>
+
+                <div class="top-actions">
+                    <button class="btn btn-panic" id="btn-global-panic" title="取消所有排队挂单并市价清仓">一键全撤平仓</button>
+                </div>
+            </header>
+
+            <!-- 主工作视图容器 -->
+            <main class="content-container">
+                
+                <!-- ================= 页面 1: 综合交易大厅 (借鉴 Futu / TradingView / VNPY 黄金布局) ================= -->
+                <section class="page-view active" id="page-trading-desk">
+                    <div class="desk-grid-layout">
+                        
+                        <!-- 左列：自选合约列表与盘口深度 (支持联动点击填单) -->
+                        <div class="desk-left-col">
+                            
+                            <!-- 自选行情列表 -->
+                            <div class="panel-card watchlist-panel">
+                                <div class="panel-header">
+                                    <span class="panel-title">自选资产市场</span>
+                                    <span class="panel-sub">多资产分类</span>
+                                </div>
+                                <div class="market-category-tabs">
+                                    <button class="cat-tab active" data-cat="all">全部</button>
+                                    <button class="cat-tab" data-cat="stock">A股</button>
+                                    <button class="cat-tab" data-cat="etf">ETF</button>
+                                    <button class="cat-tab" data-cat="futures">商品</button>
+                                    <button class="cat-tab" data-cat="index">期指</button>
+                                </div>
+                                <div class="table-wrap">
+                                    <table class="data-table" id="table-desk-watch">
+                                        <thead>
+                                            <tr>
+                                                <th>合约</th>
+                                                <th>最新价</th>
+                                                <th>涨跌幅</th>
+                                                <th>成交量</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="tbody-desk-watch"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <!-- L2 五档买卖深度盘口 (点击价格直接填入下单框) -->
+                            <div class="panel-card depth-panel">
+                                <div class="panel-header">
+                                    <span class="panel-title" id="depth-contract-label">五档盘口 (rb2405)</span>
+                                    <span class="hint-tag">点击盘口可快速填价</span>
+                                </div>
+                                <div class="depth-ladder-container">
+                                    <div class="depth-ladder ask-ladder" id="desk-asks"></div>
+                                    <div class="depth-mid-bar">
+                                        <span class="mid-title">最新成交</span>
+                                        <span class="mid-price text-up" id="desk-last-price">3625.0</span>
+                                        <span class="mid-chg text-up" id="desk-last-chg">+1.25%</span>
+                                    </div>
+                                    <div class="depth-ladder bid-ladder" id="desk-bids"></div>
+                                </div>
+                            </div>
+
+                        </div>
+
+                        <!-- 中列：K 线图表与底部持仓/委托抽屉 -->
+                        <div class="desk-center-col">
+                            
+                            <!-- K 线图卡片 -->
+                            <div class="panel-card chart-panel">
+                                <div class="panel-header chart-toolbar">
+                                    <div class="chart-symbol-info">
+                                        <span class="symbol-name" id="chart-symbol-name">螺纹钢主力 (rb2405)</span>
+                                        <div class="tf-selector">
+                                            <button class="tf-btn active" data-tf="1m">1分</button>
+                                            <button class="tf-btn" data-tf="5m">5分</button>
+                                            <button class="tf-btn" data-tf="15m">15分</button>
+                                            <button class="tf-btn" data-tf="1d">日线</button>
+                                        </div>
+                                    </div>
+                                    <div class="chart-toggles">
+                                        <label class="toggle-label"><input type="checkbox" id="toggle-ma" checked> 均线 (MA5/20)</label>
+                                        <label class="toggle-label"><input type="checkbox" id="toggle-boll" checked> 布林带 (BOLL)</label>
+                                        <label class="toggle-label"><input type="checkbox" id="toggle-signals" checked> 买卖点标记</label>
+                                    </div>
+                                </div>
+                                <div class="chart-canvas-container" id="market-canvas-container">
+                                    <canvas id="market-canvas"></canvas>
+                                    <div class="chart-hud-overlay" id="chart-hud">
+                                        <span>时间: <b id="hud-time">--</b></span>
+                                        <span>开: <b id="hud-open">--</b></span>
+                                        <span>高: <b id="hud-high">--</b></span>
+                                        <span>低: <b id="hud-low">--</b></span>
+                                        <span>收: <b id="hud-close">--</b></span>
+                                        <span>量: <b id="hud-vol">--</b></span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 底部 Tab：持仓明细、活跃挂单、今日成交、实时日志 -->
+                            <div class="panel-card bottom-dock-panel">
+                                <div class="dock-tabs">
+                                    <button class="dock-tab active" data-dock="positions">持仓明细 (<span id="dock-pos-count">2</span>)</button>
+                                    <button class="dock-tab" data-dock="orders">活跃挂单 (<span id="dock-order-count">2</span>)</button>
+                                    <button class="dock-tab" data-dock="trades">今日成交 (<span id="dock-trade-count">1</span>)</button>
+                                    <button class="dock-tab" data-dock="logs">实时日志</button>
+                                </div>
+
+                                <div class="dock-body">
+                                    <!-- 持仓面板 -->
+                                    <div class="dock-view active" id="dock-positions">
+                                        <div class="table-wrap">
+                                            <table class="data-table">
+                                                <thead>
+                                                    <tr>
+                                                        <th>合约代码</th>
+                                                        <th>多空方向</th>
+                                                        <th>总手数</th>
+                                                        <th>冻结</th>
+                                                        <th>持仓均价</th>
+                                                        <th>最新价</th>
+                                                        <th>保证金</th>
+                                                        <th>盯市盈亏</th>
+                                                        <th>快捷操作</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody id="tbody-dock-positions"></tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+
+                                    <!-- 挂单面板 -->
+                                    <div class="dock-view" id="dock-orders">
+                                        <div class="table-wrap">
+                                            <table class="data-table">
+                                                <thead>
+                                                    <tr>
+                                                        <th>报单号</th>
+                                                        <th>时间</th>
+                                                        <th>策略</th>
+                                                        <th>合约</th>
+                                                        <th>类型</th>
+                                                        <th>方向</th>
+                                                        <th>开平</th>
+                                                        <th>委托价</th>
+                                                        <th>已成/总数</th>
+                                                        <th>状态</th>
+                                                        <th>操作</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody id="tbody-dock-orders"></tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+
+                                    <!-- 成交面板 -->
+                                    <div class="dock-view" id="dock-trades">
+                                        <div class="table-wrap">
+                                            <table class="data-table">
+                                                <thead>
+                                                    <tr>
+                                                        <th>成交编号</th>
+                                                        <th>成交时间</th>
+                                                        <th>合约代码</th>
+                                                        <th>买卖方向</th>
+                                                        <th>开平</th>
+                                                        <th>成交价格</th>
+                                                        <th>手数</th>
+                                                        <th>手续费 (元)</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody id="tbody-dock-trades"></tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+
+                                    <!-- 日志面板 -->
+                                    <div class="dock-view" id="dock-logs">
+                                        <div class="stream-log-view" id="dock-log-container"></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                        </div>
+
+                        <!-- 右列：专业下单控制台 (借鉴专业期货软件：快捷填价、快捷手数、TWAP/VWAP拆单) -->
+                        <div class="desk-right-col">
+                            <div class="panel-card order-ticket-panel">
+                                <div class="panel-header">
+                                    <span class="panel-title">交易指令面板</span>
+                                    <span class="badge badge-success">事前风控已就绪</span>
+                                </div>
+                                <div class="order-ticket-body">
+                                    
+                                    <!-- 合约选择 -->
+                                    <div class="form-item">
+                                        <label class="form-label">交易标的</label>
+                                        <input type="text" class="form-input text-bold" id="ticket-symbol" value="rb2405">
+                                    </div>
+
+                                    <!-- 委托价格与快捷填价按钮 -->
+                                    <div class="form-item">
+                                        <div class="form-label-row">
+                                            <label class="form-label">委托价格 (元)</label>
+                                            <div class="quick-helpers">
+                                                <button class="quick-btn" id="btn-quick-ask">对手价</button>
+                                                <button class="quick-btn" id="btn-quick-bid">排队价</button>
+                                                <button class="quick-btn" id="btn-quick-last">最新价</button>
+                                            </div>
+                                        </div>
+                                        <div class="stepper-input">
+                                            <button class="stepper-btn" id="btn-price-minus">-</button>
+                                            <input type="number" class="form-input" id="ticket-price" value="3625.0" step="1.0">
+                                            <button class="stepper-btn" id="btn-price-plus">+</button>
+                                        </div>
+                                    </div>
+
+                                    <!-- 委托手数与快捷手数按钮 -->
+                                    <div class="form-item">
+                                        <div class="form-label-row">
+                                            <label class="form-label">委托手数 (手)</label>
+                                            <div class="quick-helpers">
+                                                <button class="quick-btn" data-vol="1">1手</button>
+                                                <button class="quick-btn" data-vol="5">5手</button>
+                                                <button class="quick-btn" data-vol="10">10手</button>
+                                                <button class="quick-btn" data-vol="20">20手</button>
+                                            </div>
+                                        </div>
+                                        <div class="stepper-input">
+                                            <button class="stepper-btn" id="btn-vol-minus">-</button>
+                                            <input type="number" class="form-input" id="ticket-volume" value="10" min="1">
+                                            <button class="stepper-btn" id="btn-vol-plus">+</button>
+                                        </div>
+                                    </div>
+
+                                    <!-- 执行算法与开平方向 -->
+                                    <div class="form-row-2col">
+                                        <div class="form-item">
+                                            <label class="form-label">算法执行模式</label>
+                                            <select class="form-select" id="ticket-type">
+                                                <option value="LIMIT">限价委托 (LIMIT)</option>
+                                                <option value="MARKET">市价委托 (MARKET)</option>
+                                                <option value="TWAP">FlowCoro TWAP 拆单</option>
+                                                <option value="VWAP">FlowCoro VWAP 拆单</option>
+                                            </select>
+                                        </div>
+                                        <div class="form-item">
+                                            <label class="form-label">开平操作</label>
+                                            <select class="form-select" id="ticket-offset">
+                                                <option value="OPEN">买/卖 开仓</option>
+                                                <option value="CLOSE">平仓</option>
+                                                <option value="CLOSE_TODAY">平今仓</option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <!-- 下单主动作大按钮 (买入开多 / 卖出开空) -->
+                                    <div class="order-action-buttons">
+                                        <button class="btn-trade btn-buy-main" id="btn-do-buy">
+                                            <span class="btn-trade-title">买入做多</span>
+                                            <span class="btn-trade-sub" id="sub-buy-info">看涨 · 多头开仓</span>
+                                        </button>
+                                        <button class="btn-trade btn-sell-main" id="btn-do-sell">
+                                            <span class="btn-trade-title">卖出做空</span>
+                                            <span class="btn-trade-sub" id="sub-sell-info">看跌 · 空头开仓</span>
+                                        </button>
+                                    </div>
+
+                                    <!-- 预估保证金与手续费 -->
+                                    <div class="order-summary-box">
+                                        <div class="summary-row">
+                                            <span>预估占用保证金:</span>
+                                            <b id="summary-margin">36,250.00 元</b>
+                                        </div>
+                                        <div class="summary-row">
+                                            <span>预估交易所规费:</span>
+                                            <b id="summary-comm">3.63 元</b>
+                                        </div>
+                                    </div>
+
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                </section>
+
+                <!-- ================= 页面 2: 协程策略工作台 ================= -->
+                <section class="page-view" id="page-strategy-hub">
+                    <div class="panel-card full-view-panel">
+                        <div class="panel-header">
+                            <div>
+                                <span class="panel-title">FlowCoro 协程量化策略实例管控</span>
+                                <span class="panel-sub">基于 C++20 单线程确定性调度引擎，零锁极速执行</span>
+                            </div>
+                            <button class="btn btn-primary" id="btn-add-strategy-modal">+ 创建策略实例</button>
+                        </div>
+                        <div class="table-wrap">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>策略实例 ID</th>
+                                        <th>策略名称</th>
+                                        <th>标的合约</th>
+                                        <th>调度模型</th>
+                                        <th>当前运行状态</th>
+                                        <th>当前多空持仓</th>
+                                        <th>累计收益 (元)</th>
+                                        <th>最大回撤</th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="tbody-strat-page"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ================= 页面 3: 策略历史回测 ================= -->
+                <section class="page-view" id="page-backtest-lab">
+                    <div class="backtest-grid-layout">
+                        
+                        <!-- 回测配置栏 -->
+                        <div class="panel-card bt-config-panel">
+                            <div class="panel-header">
+                                <span class="panel-title">回测参数设定</span>
+                            </div>
+                            <div class="bt-config-body">
+                                <div class="form-item">
+                                    <label class="form-label">选择回测策略</label>
+                                    <select class="form-select" id="bt-strat-select">
+                                        <option value="DualMA">双均线趋势跟踪策略 (DualMA Trend)</option>
+                                        <option value="Bollinger">布林通道突破策略 (Bollinger Breakout)</option>
+                                        <option value="Arbitrage">螺纹/热卷跨品种套利 (Spread Arbitrage)</option>
+                                    </select>
+                                </div>
+                                <div class="form-row-2col">
+                                    <div class="form-item">
+                                        <label class="form-label">标的合约</label>
+                                        <input type="text" class="form-input" id="bt-code" value="rb2405">
+                                    </div>
+                                    <div class="form-item">
+                                        <label class="form-label">初始资金 (元)</label>
+                                        <input type="number" class="form-input" id="bt-init-cap" value="1000000">
+                                    </div>
+                                </div>
+                                <div class="form-row-2col">
+                                    <div class="form-item">
+                                        <label class="form-label">滑点设定 (跳)</label>
+                                        <input type="number" class="form-input" id="bt-slip" value="1.0">
+                                    </div>
+                                    <div class="form-item">
+                                        <label class="form-label">手续费率</label>
+                                        <input type="text" class="form-input" id="bt-fee" value="0.0001">
+                                    </div>
+                                </div>
+
+                                <button class="btn btn-primary-lg" id="btn-execute-backtest">执行策略回测</button>
+
+                                <div class="bt-summary-panel">
+                                    <h4 class="sub-heading">回测绩效核心指标</h4>
+                                    <div class="bt-stat-grid">
+                                        <div class="stat-card">
+                                            <span class="s-label">累计收益率</span>
+                                            <span class="s-val text-up" id="bt-stat-return">+29.13%</span>
+                                        </div>
+                                        <div class="stat-card">
+                                            <span class="s-label">最大回撤 (MDD)</span>
+                                            <span class="s-val" id="bt-stat-mdd">0.04%</span>
+                                        </div>
+                                        <div class="stat-card">
+                                            <span class="s-label">夏普比率 (Sharpe)</span>
+                                            <span class="s-val text-gold" id="bt-stat-sharpe">32.63</span>
+                                        </div>
+                                        <div class="stat-card">
+                                            <span class="s-label">卡玛比率 (Calmar)</span>
+                                            <span class="s-val" id="bt-stat-calmar">691.75</span>
+                                        </div>
+                                        <div class="stat-card">
+                                            <span class="s-label">总成交笔数</span>
+                                            <span class="s-val" id="bt-stat-trades">50 笔</span>
+                                        </div>
+                                        <div class="stat-card">
+                                            <span class="s-label">总手续费</span>
+                                            <span class="s-val" id="bt-stat-comm">367.25 元</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 净值走势大图 -->
+                        <div class="panel-card bt-chart-panel">
+                            <div class="panel-header">
+                                <span class="panel-title">策略净值曲线 (Equity Curve)</span>
+                                <span class="badge badge-primary">严格防未来函数 · 开盘价撮合</span>
+                            </div>
+                            <div class="chart-canvas-container">
+                                <canvas id="backtest-canvas"></canvas>
+                            </div>
+                        </div>
+
+                    </div>
+                </section>
+
+                <!-- ================= 页面 4: 账户风控与持仓 ================= -->
+                <section class="page-view" id="page-risk-account">
+                    <div class="panel-card full-view-panel">
+                        <div class="panel-header">
+                            <div>
+                                <span class="panel-title">实盘多空持仓明细与保证金结算</span>
+                                <span class="panel-sub">持仓均价、今昨仓分离与逐日盯市盈亏</span>
+                            </div>
+                        </div>
+                        <div class="table-wrap">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>合约代码</th>
+                                        <th>持仓方向</th>
+                                        <th>总手数</th>
+                                        <th>冻结手数</th>
+                                        <th>昨仓 / 今仓</th>
+                                        <th>持仓均价</th>
+                                        <th>最新市价</th>
+                                        <th>占用保证金</th>
+                                        <th>盯市浮动盈亏</th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="tbody-account-page"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ================= 页面 5: AI 智能选股与进化实验室 ================= -->
+                <section class="page-view" id="page-ai-evolution">
+                    <div class="ai-view-grid">
+                        
+                        <!-- 上半部分: AI 实时趋势金股推荐雷达 -->
+                        <div class="panel-card ai-radar-panel">
+                            <div class="panel-header">
+                                <div class="header-left-title">
+                                    <span class="panel-title">AI 实时趋势金股推荐雷达 (Trend Radar)</span>
+                                    <span class="panel-sub">基于动量突破、均线共振与量价多因子评分实时推演</span>
+                                </div>
+                                <span class="badge badge-success">雷达实时扫描中 (全市场多资产)</span>
+                            </div>
+                            <div class="table-wrap">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>代码/名称</th>
+                                            <th>资产类型</th>
+                                            <th>趋势强度评分</th>
+                                            <th>AI 信号触发逻辑</th>
+                                            <th>建议入场价</th>
+                                            <th>建议止损位</th>
+                                            <th>目标盈利位</th>
+                                            <th>模型预估胜率</th>
+                                            <th>快捷操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="tbody-ai-radar"></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- 下半部分: 7x24h 在线模型参数自适应进化沙盒 -->
+                        <div class="panel-card ai-sandbox-panel">
+                            <div class="panel-header">
+                                <div class="header-left-title">
+                                    <span class="panel-title">7x24h 在线策略自我进化沙盒 (Walk-Forward Genetic Evolution)</span>
+                                    <span class="panel-sub">根据实盘模拟试错反馈，淘汰弱势参数，自动迭代进化</span>
+                                </div>
+                                <div class="evolution-header-stats">
+                                    <span class="evo-stat">进化代数: <b class="text-gold" id="evo-gen-count">Gen #48</b></span>
+                                    <span class="evo-stat">种群规模: <b id="evo-pop-size">20 组</b></span>
+                                    <span class="evo-stat">最优适应度: <b class="text-up" id="evo-best-fitness">94.8 分</b></span>
+                                    <span class="evo-stat">收敛参数: <b class="text-primary" id="evo-best-params">MA(4, 22) + 2.1x ATR</b></span>
+                                </div>
+                            </div>
+                            <div class="ai-sandbox-body">
+                                <div class="sandbox-pop-list">
+                                    <div class="sub-bar-title">当前活跃染色体种群 (按实盘适应度排序)</div>
+                                    <div class="table-wrap">
+                                        <table class="data-table">
+                                            <thead>
+                                                <tr>
+                                                    <th>染色体ID</th>
+                                                    <th>快线周期</th>
+                                                    <th>慢线周期</th>
+                                                    <th>止损 ATR</th>
+                                                    <th>止盈 ATR</th>
+                                                    <th>模拟盈亏</th>
+                                                    <th>适应度得分</th>
+                                                    <th>进化状态</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="tbody-evolution-pop"></tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                                <div class="sandbox-event-log">
+                                    <div class="sub-bar-title">实时基因变异与优胜劣汰事件流</div>
+                                    <div class="terminal-screen" id="evo-event-log"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                </section>
+
+                <!-- ================= 页面: 绩效分析与汇报台 (支持24h/多周期与模拟/实盘切换) ================= -->
+                <section class="page-view" id="page-report-desk">
+                    <div class="report-view-container">
+                        
+                        <!-- 顶部筛选与控制栏 -->
+                        <div class="report-top-bar">
+                            <div class="report-filter-group">
+                                <span class="filter-label">数据来源:</span>
+                                <div class="btn-group-segmented" id="report-source-selector">
+                                    <button class="seg-btn active" data-source="paper">7x24h 模拟盘进化数据</button>
+                                    <button class="seg-btn" data-source="live">实盘 CTP 交易数据</button>
+                                    <button class="seg-btn" data-source="backtest">策略历史回测基准</button>
+                                </div>
+                            </div>
+                            
+                            <div class="report-filter-group">
+                                <span class="filter-label">统计周期:</span>
+                                <div class="btn-group-segmented" id="report-time-selector">
+                                    <button class="seg-btn active" data-range="24h">最近 24 小时</button>
+                                    <button class="seg-btn" data-range="7d">最近 7 天</button>
+                                    <button class="seg-btn" data-range="30d">最近 30 天</button>
+                                    <button class="seg-btn" data-range="all">全部历史周期</button>
+                                </div>
+                            </div>
+
+                            <div class="report-actions ai-control-strip">
+                                <span class="badge badge-gold" id="ai-countdown-badge">下次自动巡检: 19:42</span>
+                                <span class="badge badge-secondary" id="ai-memory-badge">记忆规则: 3 条已激活</span>
+                                <button class="btn btn-primary btn-sm" id="btn-trigger-ai-now">呼叫 CodeBuddy 立即深度复盘</button>
+                                <button class="btn btn-secondary btn-sm" id="btn-export-report">导出分析简报</button>
+                            </div>
+                        </div>
+
+                        <!-- 核心绩效指标卡片网格 -->
+                        <div class="report-kpi-grid">
+                            <div class="kpi-card">
+                                <span class="kpi-label">期间累计盈亏 (净额)</span>
+                                <span class="kpi-val text-up" id="rep-total-pnl">+18,450.00 元</span>
+                                <span class="kpi-sub" id="rep-return-rate">收益率: +1.84%</span>
+                            </div>
+                            <div class="kpi-card">
+                                <span class="kpi-label">胜率 (Win Rate)</span>
+                                <span class="kpi-val text-gold" id="rep-win-rate">76.5%</span>
+                                <span class="kpi-sub" id="rep-win-trades">26 胜 / 8 负 (共 34 笔)</span>
+                            </div>
+                            <div class="kpi-card">
+                                <span class="kpi-label">盈亏比 (Profit / Loss)</span>
+                                <span class="kpi-val text-primary" id="rep-pl-ratio">2.84 : 1</span>
+                                <span class="kpi-sub">平均盈利 / 平均亏损</span>
+                            </div>
+                            <div class="kpi-card">
+                                <span class="kpi-label">最大动态回撤 (MDD)</span>
+                                <span class="kpi-val" id="rep-mdd">0.06%</span>
+                                <span class="kpi-sub" id="rep-mdd-val">回撤金额: -620.00 元</span>
+                            </div>
+                            <div class="kpi-card">
+                                <span class="kpi-label">年化夏普比率 (Sharpe)</span>
+                                <span class="kpi-val text-gold" id="rep-sharpe">3.42</span>
+                                <span class="kpi-sub">无风险利率: 2.0%</span>
+                            </div>
+                            <div class="kpi-card">
+                                <span class="kpi-label">产生交易规费</span>
+                                <span class="kpi-val" id="rep-comm">128.40 元</span>
+                                <span class="kpi-sub">交易所手续费与滑点</span>
+                            </div>
+                        </div>
+
+                        <!-- 双图表与分析结论网格 -->
+                        <div class="report-main-grid">
+                            
+                            <!-- 左侧图表区: 累计盈亏曲线 + 动态水下回撤图 -->
+                            <div class="panel-card report-charts-card">
+                                <div class="panel-header">
+                                    <span class="panel-title" id="rep-chart-title">24小时累计盈亏走势与动态回撤</span>
+                                    <span class="badge badge-primary">毫秒级盯市推演</span>
+                                </div>
+                                <div class="report-canvas-wrap">
+                                    <canvas id="report-equity-canvas"></canvas>
+                                </div>
+                            </div>
+
+                            <!-- 右侧分析结论区: 深度量化诊断与调优建议 -->
+                            <div class="panel-card report-diag-card">
+                                <div class="panel-header">
+                                    <div class="header-left-title">
+                                        <span class="panel-title">AI 大脑量化诊断结论与调优建议</span>
+                                        <span class="panel-sub" id="ai-model-tag">Tencent CodeBuddy · deepseek-v3 实盘推演</span>
+                                    </div>
+                                    <span class="badge badge-success" id="ai-report-status-badge">已完成 20min 周期巡检</span>
+                                </div>
+                                <div class="diag-content-body markdown-rendered" id="rep-diag-content">
+                                    <!-- 动态由 JS 填充 -->
+                                </div>
+                            </div>
+
+                        </div>
+
+                        <!-- 底部期间交易流水详单 -->
+                        <div class="panel-card report-trades-card">
+                            <div class="panel-header">
+                                <span class="panel-title">统计期间成交流水与单笔收益归因</span>
+                            </div>
+                            <div class="table-wrap">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>成交单号</th>
+                                            <th>时间</th>
+                                            <th>标的名称</th>
+                                            <th>方向</th>
+                                            <th>开平</th>
+                                            <th>成交均价</th>
+                                            <th>手数</th>
+                                            <th>单笔盈亏</th>
+                                            <th>累计盈亏 (元)</th>
+                                            <th>归因策略</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="tbody-report-trades"></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                    </div>
+                </section>
+
+                <!-- ================= 页面 6: 系统总线与日志 ================= -->
+                <section class="page-view" id="page-system-logs">
+                    <div class="system-grid-layout">
+                        
+                        <div class="panel-card log-panel">
+                            <div class="panel-header">
+                                <span class="panel-title">微秒级全链路事件日志终端</span>
+                                <button class="btn btn-secondary btn-sm" id="btn-clear-main-log">清空日志</button>
+                            </div>
+                            <div class="terminal-screen" id="main-log-screen"></div>
+                        </div>
+
+                        <div class="panel-card topo-panel">
+                            <div class="panel-header">
+                                <span class="panel-title">KunAutoDrive 节点拓扑与管道状态</span>
+                            </div>
+                            <div class="topo-diagram">
+                                <div class="topo-card">
+                                    <div class="topo-title">CTP 极速行情网关</div>
+                                    <div class="topo-desc">主题: market/tick/rb2405 (5 Hz)</div>
+                                </div>
+                                <div class="topo-arrow">↓</div>
+                                <div class="topo-card">
+                                    <div class="topo-title">事前风控拦截引擎</div>
+                                    <div class="topo-desc">自成交防范 / 报单流控限速 (拦截率 100%)</div>
+                                </div>
+                                <div class="topo-arrow">↓</div>
+                                <div class="topo-card">
+                                    <div class="topo-title">FlowCoro 协程调度核心</div>
+                                    <div class="topo-desc">确定性单线程调度 | 内存占用: 3.9 MB</div>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                </section>
+
+            </main>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
