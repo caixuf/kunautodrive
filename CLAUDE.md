@@ -2,15 +2,15 @@
 
 轻量级自动驾驶中间件，核心是一个 Pub/Sub 消息总线 + 调度器 + 传输层。
 
-> **开发流程：** 设计 → 执行 → 测试 → 迭代 → 清理 → 文档。详见 `.claude/skills/README.md`（入口路由）。
+> **开发流程：** 设计 → 执行 → 测试 → 迭代 → 清理 → 文档。详见 `~/.claude/skills/workflow/SKILL.md`（入口路由）。
 > 改完代码后必跑：`/verify` → `/code-review` → `/simplify` → commit → 更新文档。
 > **算法升级必先：** `/py-sim-first` — Python 仿真验证 → 参数扫描 → 再移植到 C++。
 >
 > **行为异常排查**（转向灯反/该停不停/该走不走/刹停到 0/改代码现象不变）→
-> 先看 `.claude/skills/debugging.md`（分层探针 + 值传播验证 + 状态锁死 + 缓存层检查，
+> 先看 `~/.claude/skills/debugging/SKILL.md`（分层探针 + 值传播验证 + 状态锁死 + 缓存层检查，
 > 2026-07 修 8 个连环 bug 的方法论），别凭直觉猜层。
 >
-> **重构类改动** commit body 必含 `Removed:` 段（详见 `.claude/skills/workflow.md` 第七节），纯新增/fix/docs 可省略。
+> **重构类改动** commit body 必含 `Removed:` 段（详见 `~/.claude/skills/workflow/SKILL.md` 第七节），纯新增/fix/docs 可省略。
 
 ## 架构
 
@@ -116,7 +116,7 @@ bash scripts/demo.sh --no-browser 15     # 不打开浏览器
 > **架构思想（上百 commit 沉淀）**：每个节点发布 debug JSON topic →
 > monitor 聚合到唯一公共数据源 `/tmp/flow_topology.json` → 仪表盘 / 评估器 /
 > trace_incident / flowctl 全部消费同一份数据，**黑盒评分 + 分层验证 + 门禁
-> 有效性自检**。完整方法论见 `.claude/skills/verification.md`。
+> 有效性自检**。完整方法论见 `~/.claude/skills/verification/SKILL.md`。
 
 ```bash
 # 分层验证阶梯（改完按此走）：
