@@ -4,9 +4,18 @@
 #include <thread>
 #include <chrono>
 #include <cstring>
+#include <atomic>
 #include "kun/core/types.hpp"
 #include "kun/gateway/ctp_gateway.hpp"
 #include "message_bus.h"
+
+// 总线下发是异步分片入队, 断言前轮询等待条件成立 (上限 1s)
+template <typename Pred>
+static void wait_for(Pred&& pred) {
+    for (int i = 0; i < 500 && !pred(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+}
 
 using namespace kun;
 
@@ -66,9 +75,9 @@ void test_ctp_trade_deduplication() {
     CtpGateway gw(bus, "acc_ctp_01", cfg);
     gw.connect();
 
-    static int bus_recv_trades = 0;
+    static std::atomic<int> bus_recv_trades{0};
     message_bus_subscribe(bus, "trader/acc_ctp_01/trade_rtn", [](const Message* /*msg*/, void* /*ud*/) {
-        bus_recv_trades++;
+        bus_recv_trades.fetch_add(1);
     }, nullptr);
 
     QuantTradeMsg t1{};
@@ -78,21 +87,24 @@ void test_ctp_trade_deduplication() {
     t1.price = 3620.0;
     t1.volume = 5.0;
 
-    // 1. 发送第 1 笔真实成交
+    // 1. 发送第 1 笔真实成交 (总线下发是异步的, 等待送达)
     gw.on_ctp_trade_raw(t1);
-    assert(bus_recv_trades == 1);
+    wait_for([&] { return bus_recv_trades.load() >= 1; });
+    assert(bus_recv_trades.load() == 1);
 
     // 2. 重复推送完全相同的成交帧 (模拟 CTP 断线重连重传)
     gw.on_ctp_trade_raw(t1);
     // 验证总线没有重复接收，去重计数增加
-    assert(bus_recv_trades == 1);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    assert(bus_recv_trades.load() == 1);
     assert(gw.get_duplicate_trades_filtered() == 1);
 
     // 3. 推送第 2 笔新成交
     QuantTradeMsg t2 = t1;
     t2.trade_id = 998802;
     gw.on_ctp_trade_raw(t2);
-    assert(bus_recv_trades == 2);
+    wait_for([&] { return bus_recv_trades.load() >= 2; });
+    assert(bus_recv_trades.load() == 2);
     assert(gw.get_duplicate_trades_filtered() == 1);
 
     gw.disconnect();

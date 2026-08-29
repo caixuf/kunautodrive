@@ -19,7 +19,7 @@ std::string ComplianceCheckResult::summary() const {
 }
 
 ComplianceCheckResult StrategyComplianceChecker::verify_strategy(
-    std::function<std::unique_ptr<IStrategy>()> factory,
+    StrategyFactory factory,
     const std::vector<BarData>& history_bars,
     double slippage,
     double commission_ratio,
@@ -58,7 +58,7 @@ ComplianceCheckResult StrategyComplianceChecker::verify_strategy(
 }
 
 bool StrategyComplianceChecker::detect_future_leakage(
-    std::function<std::unique_ptr<IStrategy>()> factory,
+    StrategyFactory factory,
     const std::vector<BarData>& history_bars,
     double& out_normal_sharpe,
     double& out_shifted_sharpe
@@ -71,10 +71,10 @@ bool StrategyComplianceChecker::detect_future_leakage(
     cfg.slippage_points = 1.0;
     cfg.commission_ratio = 0.0001;
 
-    // 1. 正常时间轴回测
+    // 1. 正常时间轴回测 (策略工厂拿到引擎真实使用的数据指针)
     BacktestEngine normal_engine(cfg);
     normal_engine.set_history_bars(history_bars);
-    normal_engine.set_strategy(factory());
+    normal_engine.set_strategy(factory(&history_bars));
     auto norm_perf = normal_engine.run();
     out_normal_sharpe = norm_perf.sharpe_ratio;
 
@@ -94,7 +94,7 @@ bool StrategyComplianceChecker::detect_future_leakage(
 
     BacktestEngine perturbed_engine(cfg);
     perturbed_engine.set_history_bars(perturbed_bars);
-    perturbed_engine.set_strategy(factory());
+    perturbed_engine.set_strategy(factory(&perturbed_bars));
     auto pert_perf = perturbed_engine.run();
     out_shifted_sharpe = pert_perf.sharpe_ratio;
 

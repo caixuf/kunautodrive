@@ -361,7 +361,9 @@ std::vector<OrderData> StorageManager::load_active_orders(const std::string& acc
     std::vector<OrderData> results;
     if (!db_) return results;
 
-    const char* sql = "SELECT order_id, symbol, exchange, strategy_name, direction, offset, status, price, total_volume, traded_volume, order_ref, update_time_us FROM orders WHERE account_id = ? AND status IN (0, 1);";
+    // 活跃单 = 未终结状态: 待提交(0)/已提交(1)/已接受(2)/部分成交(3)/待撤(5)
+    // 终结态: 全部成交(4)/已撤销(6)/拒单(7) 不参与重启恢复
+    const char* sql = "SELECT order_id, symbol, exchange, strategy_name, direction, offset, status, price, total_volume, traded_volume, order_ref, update_time_us FROM orders WHERE account_id = ? AND status IN (0, 1, 2, 3, 5);";
 
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return results;

@@ -3,6 +3,7 @@
 #include <vector>
 #include <cmath>
 #include <cstring>
+#include <atomic>
 #include <thread>
 #include <chrono>
 #include "kun/core/types.hpp"
@@ -33,7 +34,8 @@ void test_pod_memory_safety() {
     send_tick.bid_price1 = 3625.0;
     send_tick.ask_price1 = 3626.0;
 
-    static bool received = false;
+    // message_bus_publish 异步入队, 等总线派发线程送达后再断言
+    static std::atomic<bool> received{false};
     static QuantTickMsg recv_tick{};
 
     message_bus_subscribe(bus, "market/tick/rb2405", [](const Message* msg, void* /*ud*/) {
@@ -45,7 +47,10 @@ void test_pod_memory_safety() {
 
     message_bus_publish(bus, "market/tick/rb2405", "Publisher", &send_tick, sizeof(send_tick));
 
-    assert(received);
+    for (int i = 0; i < 500 && !received.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    assert(received.load());
     assert(std::strcmp(recv_tick.symbol, "rb2405") == 0);
     assert(std::abs(recv_tick.last_price - 3625.5) < 1e-4);
 
@@ -223,7 +228,8 @@ void test_gateway_pool_and_follow_trading() {
 
     pool.connect_all();
 
-    static bool slave_order_received = false;
+    // 总线回报与协程调度都是异步链路, 循环驱动 + 等待从账户委托到达
+    static std::atomic<bool> slave_order_received{false};
     static QuantOrderReqMsg slave_req{};
 
     message_bus_subscribe(bus, "trader/acc_slave/order_req", [](const Message* msg, void* /*ud*/) {
@@ -239,7 +245,12 @@ void test_gateway_pool_and_follow_trading() {
     auto follow_task = std::make_unique<CoroFollowTradingTask>(bus, "acc_master", slaves);
 
     flowcoro::rt::RtExecutor ex{{ .pin_cpu = -1 }};
+    g_node_exec = &ex; // awaitable 契约: spawn 前必须设置 TLS executor 指针
     ex.spawn(follow_task->run(), "follow_copier");
+
+    // 先驱动一轮调度, 让跟单协程挂起在 BusChannel 订阅上, 再注入成交回报
+    ex.run();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
     // 模拟主账户发生一次成交回报
     TradeData master_trade;
@@ -256,25 +267,27 @@ void test_gateway_pool_and_follow_trading() {
     // 触发 GatewayPool::on_trade，向 trader/acc_master/trade_rtn 广播 QuantTradeMsg
     pool.on_trade(master_trade);
 
-    // 驱动调度器执行一轮协程循环
-    for (int i = 0; i < 5; ++i) {
+    // 持续驱动调度器执行协程循环, 直到跟单委托到达 (上限 1s)
+    for (int i = 0; i < 500 && !slave_order_received.load(); ++i) {
         ex.run();
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
 
     // 验证从账户管道确实收到了按 1.5x 权重生成的跟单委托 (10手 * 1.5 = 15手)
-    assert(slave_order_received);
+    assert(slave_order_received.load());
     assert(std::strcmp(slave_req.symbol, "rb2405") == 0);
     assert(std::abs(slave_req.volume - 15.0) < 1e-4);
     assert(std::abs(slave_req.price - 3620.0) < 1e-4);
     assert(slave_req.direction == static_cast<uint8_t>(Direction::LONG));
 
     pool.disconnect_all();
+    g_node_exec = nullptr; // 清理 TLS, 避免后续测试读到悬挂指针
     message_bus_destroy(bus);
     std::cout << "  -> GatewayPool 回报发布与从账户 1.5x 自动跟单闭环测试 100% 通过!\n";
 }
 
 int main() {
+    std::cout.setf(std::ios::unitbuf); // 无缓冲输出, abort 时也能看到日志
     std::cout << "\n=========================================================\n";
     std::cout << "       KunQuant 交易闭环与真实可用性单元测试集            \n";
     std::cout << "=========================================================\n\n";

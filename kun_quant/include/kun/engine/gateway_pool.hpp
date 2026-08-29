@@ -36,6 +36,7 @@ public:
         gw->register_callback(this);
         gateways_[profile.account_id] = gw;
         profiles_[profile.account_id] = profile;
+        acc_order_.push_back(profile.account_id); // 记住注册顺序 (首个 = 主账户)
 
         // 订阅专属报单管道: trader/<account_id>/order_req
         std::string order_topic = "trader/" + profile.account_id + "/order_req";
@@ -98,8 +99,8 @@ public:
             auto it = order_to_account_.find(order.order_id);
             if (it != order_to_account_.end()) {
                 acc_id = it->second;
-            } else if (!profiles_.empty()) {
-                acc_id = profiles_.begin()->first;
+            } else if (!acc_order_.empty()) {
+                acc_id = acc_order_.front(); // 未知订单归属首个注册账户 (主账户)
             }
         }
         if (acc_id.empty()) return;
@@ -129,8 +130,8 @@ public:
             auto it = order_to_account_.find(trade.order_id);
             if (it != order_to_account_.end()) {
                 acc_id = it->second;
-            } else if (!profiles_.empty()) {
-                acc_id = profiles_.begin()->first;
+            } else if (!acc_order_.empty()) {
+                acc_id = acc_order_.front(); // 未知订单归属首个注册账户 (主账户)
             }
         }
         if (acc_id.empty()) return;
@@ -194,6 +195,7 @@ private:
     std::mutex mutex_;
     std::unordered_map<std::string, std::shared_ptr<SimGateway>> gateways_;
     std::unordered_map<std::string, AccountProfile> profiles_;
+    std::vector<std::string> acc_order_; // 注册顺序, 首个 = 主账户 (兜底归属用)
     std::unordered_map<uint64_t, std::string> order_to_account_;
 };
 

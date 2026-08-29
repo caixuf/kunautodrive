@@ -33,7 +33,13 @@ void PositionManager::on_trade(const TradeData& trade) {
         margin_ratio = info->margin_ratio;
     }
 
-    std::string key = trade.symbol + "_" + to_string(trade.direction);
+    // 持仓 key 归属: 开仓成交方向即持仓方向;
+    // 平仓成交回报方向是操作方向 (卖平/买平), 持仓方向为其反向
+    Direction pos_dir = trade.direction;
+    if (trade.offset != Offset::OPEN) {
+        pos_dir = (trade.direction == Direction::LONG) ? Direction::SHORT : Direction::LONG;
+    }
+    std::string key = trade.symbol + "_" + to_string(pos_dir);
     auto& pos = positions_[key];
     pos.symbol = trade.symbol;
     pos.exchange = trade.exchange;

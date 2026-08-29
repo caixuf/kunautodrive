@@ -13,7 +13,8 @@
 using namespace kun;
 
 /**
- * 作弊策略: 通过外部引用直接偷窥下一根 K 线的收盘价做决策 (典型未来函数 bug)
+ * 作弊策略: 偷窥下一根 K 线的收盘价做决策与挂单 (典型未来函数 bug)
+ * viewed_bars 是工厂注入的引擎实际数据指针, 平移测试扰动它 → 偷窥者决策必然改变
  * 用于验证 §2-G 数据平移测试 (v2 未来扰动 + 决策日志比对) 能将其拦截
  */
 class CheaterFutureStrategy : public IStrategy {
@@ -22,16 +23,17 @@ public:
         : IStrategy("Cheat_FuturePeek"), bars_(bars), symbol_(std::move(sym)) {}
 
     void on_bar(const BarData& bar) override {
-        if (bar.symbol != symbol_) return;
+        if (bar.symbol != symbol_ || !bars_) return;
         const int i = idx_++;
         if (i + 1 >= static_cast<int>(bars_->size()) || i % 2 != 0) return;
 
-        // 违规: 引用 i+1 时刻 (未来) 的收盘价决定当前信号
+        // 违规: 引用 i+1 时刻 (未来) 的收盘价决定当前信号与挂单价
+        // 注意: 挂单价必须编码未来数据 —— 若只影响方向, 方向在扰动下不变时决策日志无差异
         const double next_close = (*bars_)[i + 1].close_price;
         if (next_close > bar.close_price) {
-            buy(symbol_, bar.close_price, 1.0);
+            buy(symbol_, next_close * 0.999, 1.0);
         } else {
-            short_sell(symbol_, bar.close_price, 1.0);
+            short_sell(symbol_, next_close * 1.001, 1.0);
         }
     }
 
@@ -66,7 +68,7 @@ void test_strategy_compliance_checker() {
 
     // 1. 尝试 0 成本回测作弊
     auto res_zero_cost = StrategyComplianceChecker::verify_strategy(
-        []() { return std::make_unique<DualMaStrategy>("Cheat_ZeroCost", "rb2405", 5, 20, 1.0); },
+        [](const std::vector<BarData>*) { return std::make_unique<DualMaStrategy>("Cheat_ZeroCost", "rb2405", 5, 20, 1.0); },
         bars,
         0.0,    // 0 滑点
         0.0001, // 手续费
@@ -78,7 +80,7 @@ void test_strategy_compliance_checker() {
 
     // 2. 尝试无止损无限扛单作弊
     auto res_no_stop = StrategyComplianceChecker::verify_strategy(
-        []() { return std::make_unique<DualMaStrategy>("Cheat_NoStop", "rb2405", 5, 20, 1.0); },
+        [](const std::vector<BarData>*) { return std::make_unique<DualMaStrategy>("Cheat_NoStop", "rb2405", 5, 20, 1.0); },
         bars,
         1.0,
         0.0001,
@@ -90,7 +92,7 @@ void test_strategy_compliance_checker() {
 
     // 3. 正规策略合规通过
     auto res_clean = StrategyComplianceChecker::verify_strategy(
-        []() { return std::make_unique<DualMaStrategy>("Clean_DualMA", "rb2405", 5, 20, 1.0); },
+        [](const std::vector<BarData>*) { return std::make_unique<DualMaStrategy>("Clean_DualMA", "rb2405", 5, 20, 1.0); },
         bars,
         1.0,
         0.0001,
@@ -102,7 +104,7 @@ void test_strategy_compliance_checker() {
 
     // 4. 未来函数作弊策略: 偷窥下一根 K 线收盘价 → 必须被 v2 数据平移测试拦截
     auto res_cheat = StrategyComplianceChecker::verify_strategy(
-        [&bars]() { return std::make_unique<CheaterFutureStrategy>(&bars, "rb2405"); },
+        [](const std::vector<BarData>* viewed) { return std::make_unique<CheaterFutureStrategy>(viewed, "rb2405"); },
         bars,
         1.0,
         0.0001,

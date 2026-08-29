@@ -191,8 +191,10 @@ void test_settlement_reconciler_discrepancy_alert() {
 
 void test_config_loader() {
     std::cout << "[Test 4] 运行 quant_config.json 配置文件加载与解耦测试...\n";
+    // ctest 的 CWD 是 build 目录, 用编译期注入的源码根路径定位配置文件
+    std::string cfg_path = std::string(PROJECT_SOURCE_DIR) + "/kun_quant/config/quant_config.json";
     QuantAppConfig cfg;
-    bool ok = ConfigLoader::load_from_file("kun_quant/config/quant_config.json", cfg);
+    bool ok = ConfigLoader::load_from_file(cfg_path, cfg);
     assert(ok);
     assert(cfg.server.port == 8900);
     assert(cfg.accounts.size() >= 3);

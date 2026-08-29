@@ -65,17 +65,7 @@ public:
 
     bool execute(const std::string& sql) override {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!db_) return false;
-        char* err_msg = nullptr;
-        int rc = sqlite3_exec(db_, sql.c_str(), nullptr, nullptr, &err_msg);
-        if (rc != SQLITE_OK) {
-            if (err_msg) {
-                std::cerr << "[SqliteAdapter] SQL 执行错误: " << err_msg << " | SQL: " << sql << "\n";
-                sqlite3_free(err_msg);
-            }
-            return false;
-        }
-        return true;
+        return execute_unlocked(sql);
     }
 
     bool save_order(const OrderData& order) override {
@@ -256,8 +246,23 @@ public:
     }
 
 private:
+    // 仅在已持有 mutex_ 时调用 (connect()/init_schema() 会先持锁, 直接调 execute 会自死锁)
+    bool execute_unlocked(const std::string& sql) {
+        if (!db_) return false;
+        char* err_msg = nullptr;
+        int rc = sqlite3_exec(db_, sql.c_str(), nullptr, nullptr, &err_msg);
+        if (rc != SQLITE_OK) {
+            if (err_msg) {
+                std::cerr << "[SqliteAdapter] SQL 执行错误: " << err_msg << " | SQL: " << sql << "\n";
+                sqlite3_free(err_msg);
+            }
+            return false;
+        }
+        return true;
+    }
+
     void init_schema() {
-        execute(R"(
+        execute_unlocked(R"(
             CREATE TABLE IF NOT EXISTS orders (
                 order_id INTEGER PRIMARY KEY,
                 order_ref TEXT,

@@ -3,6 +3,9 @@
 #include <vector>
 #include <cmath>
 #include <cstring>
+#include <atomic>
+#include <chrono>
+#include <thread>
 #include "kun/core/types.hpp"
 #include "kun/market/market_fusion_node.hpp"
 #include "kun/market/sina_fetcher.hpp"
@@ -19,13 +22,15 @@ void test_multi_source_weighted_fusion() {
     fusion.start();
 
     // 订阅最终融合真值管道
-    static bool fused_recv = false;
+    // 注意: message_bus_publish 是异步分片入队, 需等总线派发线程送达后再断言;
+    // 每个源都会触发一次融合广播, 用计数等两个源的消息都到齐
+    static std::atomic<int> fused_count{0};
     static QuantTickMsg true_tick{};
 
     message_bus_subscribe(bus, "market/tick/rb2405", [](const Message* msg, void* /*ud*/) {
         if (msg && msg->data_size >= sizeof(QuantTickMsg)) {
             true_tick = *reinterpret_cast<const QuantTickMsg*>(msg->data);
-            fused_recv = true;
+            fused_count.fetch_add(1);
         }
     }, nullptr);
 
@@ -45,7 +50,10 @@ void test_multi_source_weighted_fusion() {
     tick_em.ask_price1 = 3621.0;
     fusion.on_source_tick("eastmoney", tick_em);
 
-    assert(fused_recv);
+    for (int i = 0; i < 500 && fused_count.load() < 2; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    assert(fused_count.load() >= 2);
     // 验证均价融合: (3620 + 3622) / 2 = 3621.0
     assert(std::abs(true_tick.last_price - 3621.0) < 1e-4);
     // 验证最优盘口: 最高买价=3620.0, 最低卖价=3621.0
@@ -107,7 +115,7 @@ void test_live_sina_fetcher() {
     std::cout << "[Test 3] 运行新浪真实期货 HTTP 行情抓取与解析测试...\n";
     MessageBus* bus = message_bus_create("test_bus_sina");
     
-    static bool received_sina = false;
+    static std::atomic<bool> received_sina{false};
     static QuantTickMsg sina_tick{};
 
     message_bus_subscribe(bus, "market/source/sina/rb2405", [](const Message* msg, void* /*ud*/) {
@@ -117,7 +125,8 @@ void test_live_sina_fetcher() {
         }
     }, nullptr);
 
-    SinaMarketFetcher fetcher(bus, {"rb2405", "cu2405", "ag2405"});
+    // sina_code 留空走通用推导规则 (品种前缀大写+0)
+    SinaMarketFetcher fetcher(bus, {{"rb2405", ""}, {"cu2405", ""}, {"ag2405", ""}});
     bool ok = fetcher.fetch_once();
     assert(ok);
 

@@ -31,6 +31,10 @@ struct ComplianceCheckResult {
  */
 class StrategyComplianceChecker {
 public:
+    /// 策略工厂: viewed_bars 是本次回测引擎实际使用的数据指针。
+    /// 诚实策略忽略它; 未来函数作弊策略偷窥它 → 扰动后决策日志必然变化而被拦截。
+    using StrategyFactory = std::function<std::unique_ptr<IStrategy>(const std::vector<BarData>* viewed_bars)>;
+
     /**
      * @brief 执行三道硬约束合规性与未来函数检测
      * @param factory 策略工厂函数
@@ -40,7 +44,7 @@ public:
      * @param stop_loss_pct 止损比例 (必须 > 0)
      */
     static ComplianceCheckResult verify_strategy(
-        std::function<std::unique_ptr<IStrategy>()> factory,
+        StrategyFactory factory,
         const std::vector<BarData>& history_bars,
         double slippage = 1.0,
         double commission_ratio = 0.0001,
@@ -53,7 +57,7 @@ public:
      * 说明策略决策依赖了未来数据 (如偷窥 bars[i+k]), 直接判作弊。
      */
     static bool detect_future_leakage(
-        std::function<std::unique_ptr<IStrategy>()> factory,
+        StrategyFactory factory,
         const std::vector<BarData>& history_bars,
         double& out_normal_sharpe,
         double& out_shifted_sharpe

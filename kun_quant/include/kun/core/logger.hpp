@@ -10,11 +10,13 @@
 
 namespace kun {
 
+// 枚举值加 LOG_ 前缀: DEBUG 会撞 flowcoro Debug 构建注入的 -DDEBUG 宏,
+// ERROR 会撞 Windows 头文件 (wingdi.h) 的 ERROR 宏 —— CI asan/mingw 双双翻车。
 enum class LogLevel {
-    DEBUG = 0,
-    INFO = 1,
-    WARN = 2,
-    ERROR = 3
+    LOG_DEBUG = 0,
+    LOG_INFO = 1,
+    LOG_WARN = 2,
+    LOG_ERROR = 3
 };
 
 class Logger {
@@ -47,10 +49,10 @@ public:
         const char* color_code = "\033[0m";
         const char* level_str = "INFO";
         switch (level) {
-            case LogLevel::DEBUG: color_code = "\033[36m"; level_str = "DEBUG"; break;
-            case LogLevel::INFO:  color_code = "\033[32m"; level_str = "INFO "; break;
-            case LogLevel::WARN:  color_code = "\033[33m"; level_str = "WARN "; break;
-            case LogLevel::ERROR: color_code = "\033[31m"; level_str = "ERROR"; break;
+            case LogLevel::LOG_DEBUG: color_code = "\033[36m"; level_str = "DEBUG"; break;
+            case LogLevel::LOG_INFO:  color_code = "\033[32m"; level_str = "INFO "; break;
+            case LogLevel::LOG_WARN:  color_code = "\033[33m"; level_str = "WARN "; break;
+            case LogLevel::LOG_ERROR: color_code = "\033[31m"; level_str = "ERROR"; break;
         }
 
         std::cout << color_code
@@ -64,13 +66,13 @@ public:
 
 private:
     Logger() = default;
-    LogLevel level_{LogLevel::INFO};
+    LogLevel level_{LogLevel::LOG_INFO};
     std::mutex mutex_;
 };
 
-#define KUN_LOG_DEBUG(tag, msg) kun::Logger::instance().log(kun::LogLevel::DEBUG, tag, msg)
-#define KUN_LOG_INFO(tag, msg)  kun::Logger::instance().log(kun::LogLevel::INFO, tag, msg)
-#define KUN_LOG_WARN(tag, msg)  kun::Logger::instance().log(kun::LogLevel::WARN, tag, msg)
-#define KUN_LOG_ERROR(tag, msg) kun::Logger::instance().log(kun::LogLevel::ERROR, tag, msg)
+#define KUN_LOG_DEBUG(tag, msg) kun::Logger::instance().log(kun::LogLevel::LOG_DEBUG, tag, msg)
+#define KUN_LOG_INFO(tag, msg)  kun::Logger::instance().log(kun::LogLevel::LOG_INFO, tag, msg)
+#define KUN_LOG_WARN(tag, msg)  kun::Logger::instance().log(kun::LogLevel::LOG_WARN, tag, msg)
+#define KUN_LOG_ERROR(tag, msg) kun::Logger::instance().log(kun::LogLevel::LOG_ERROR, tag, msg)
 
 } // namespace kun

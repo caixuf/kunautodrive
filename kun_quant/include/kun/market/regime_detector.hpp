@@ -56,11 +56,17 @@ public:
         }
 
         // 滞后滤波带逻辑 (Hysteresis Band)：
-        // 若候选状态与当前确认状态不同，需要连续 confirmation_bars_ 根确认
+        // 若候选状态与当前确认状态不同，趋势/震荡需要连续 confirmation_bars_ 根确认;
+        // 模糊过渡态 (UNCERTAIN_TRANSITION) 立即生效 —— 首次偏离即降仓防磨损,
+        // 否则趋势↔震荡切换的临界第一根 Bar 仍以满仓硬扛边界噪音。
         if (candidate_state != current_state_) {
-            if (candidate_state == pending_state_) {
+            if (candidate_state == MarketRegimeState::UNCERTAIN_TRANSITION) {
+                current_state_ = candidate_state;
+                pending_state_ = candidate_state;
+                pending_count_ = 0;
+            } else if (candidate_state == pending_state_) {
                 pending_count_++;
-                if (pending_count_ >= confirmation_bars_ || candidate_state == MarketRegimeState::UNCERTAIN_TRANSITION) {
+                if (pending_count_ >= confirmation_bars_) {
                     current_state_ = candidate_state;
                     pending_count_ = 0;
                 }
