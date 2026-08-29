@@ -57,6 +57,15 @@
       "price_tick": 1.0,
       "margin_ratio": 0.12,
       "commission_ratio": 0.00005
+    },
+    {
+      "symbol": "au2406",
+      "exchange": "SHFE",
+      "name": "沪金主力",
+      "multiplier": 1000,
+      "price_tick": 0.02,
+      "margin_ratio": 0.10,
+      "commission_ratio": 0.00005
     }
   ]
 }

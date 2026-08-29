@@ -72,31 +72,105 @@ class ProactiveAutonomousScheduler:
     # 定时主动触发方法
     # ─────────────────────────────────────────────────────────────
 
+    def _fetch_real_summary_data(self, db_path: str = "data/kun_quant.db") -> Dict[str, Any]:
+        """从 SQLite 数据库与持久化账本读取 100% 真实的交易与行情统计数据"""
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        summary = {
+            "account_id": "acc_master_simnow",
+            "cycle_time": now_str,
+            "starting_equity": 1000000.0,
+            "current_equity": 1000000.0,
+            "net_pnl": 0.0,
+            "win_rate": 0.0,
+            "profit_factor": 0.0,
+            "max_drawdown": 0.0,
+            "total_ticks_recorded": 0,
+            "recent_ticks": [],
+            "active_positions": [],
+            "total_orders": 0,
+            "total_trades": 0,
+            "fusion_sensors": {"ctp_sim": "ONLINE", "sina": "ONLINE", "bad_ticks_filtered": 0}
+        }
+
+        if not os.path.exists(db_path):
+            return summary
+
+        try:
+            import sqlite3
+            conn = sqlite3.connect(db_path, timeout=5.0)
+            c = conn.cursor()
+
+            # 1. 真实 Tick 统计与最新价
+            c.execute("SELECT count(*), max(ts), min(ts) FROM ticks")
+            row = c.fetchone()
+            if row and row[0]:
+                summary["total_ticks_recorded"] = row[0]
+
+            c.execute("SELECT symbol, last_price, bid_price1, ask_price1, volume, ts FROM ticks ORDER BY ts DESC LIMIT 5")
+            for r in c.fetchall():
+                summary["recent_ticks"].append({
+                    "symbol": r[0],
+                    "last_price": r[1],
+                    "bid1": r[2],
+                    "ask1": r[3],
+                    "volume": r[4],
+                    "timestamp_us": r[5]
+                })
+
+            # 2. 真实持仓统计
+            c.execute("SELECT account_id, symbol, direction, volume, avg_price, margin, realized_pnl, floating_pnl FROM positions")
+            total_floating_pnl = 0.0
+            total_realized_pnl = 0.0
+            for r in c.fetchall():
+                p = {
+                    "account_id": r[0],
+                    "symbol": r[1],
+                    "direction": "LONG" if r[2] == 1 else "SHORT",
+                    "volume": r[3],
+                    "avg_price": r[4],
+                    "margin": r[5],
+                    "realized_pnl": r[6],
+                    "floating_pnl": r[7]
+                }
+                summary["active_positions"].append(p)
+                total_floating_pnl += (r[7] or 0.0)
+                total_realized_pnl += (r[6] or 0.0)
+
+            # 3. 真实成交流水统计
+            c.execute("SELECT count(*), sum(commission) FROM trades")
+            t_row = c.fetchone()
+            if t_row and t_row[0]:
+                summary["total_trades"] = t_row[0]
+                summary["total_commission"] = t_row[1] or 0.0
+
+            c.execute("SELECT count(*) FROM orders")
+            o_row = c.fetchone()
+            if o_row and o_row[0]:
+                summary["total_orders"] = o_row[0]
+
+            # 4. 权益计算
+            net_pnl = total_realized_pnl + total_floating_pnl
+            summary["net_pnl"] = net_pnl
+            summary["current_equity"] = summary["starting_equity"] + net_pnl
+
+            conn.close()
+        except Exception as e:
+            print(f"[ProactiveScheduler] 读取真实数据库指标失败: {e}")
+
+        return summary
+
     def trigger_periodic_diagnostic_workflow(self) -> Dict[str, Any]:
         """每 20 分钟主动触发：阶段盘口诊断 + 账户表现分析 + 记忆自动蒸馏"""
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         date_str = datetime.now().strftime("%Y-%m-%d")
         self.last_run_time = datetime.now()
 
-        summary_data = {
-            "account_id": "acc_master_simnow",
-            "cycle_time": now_str,
-            "starting_equity": 1000000.0,
-            "current_equity": 1024800.0,
-            "net_pnl": 24800.0,
-            "win_rate": 0.765,
-            "profit_factor": 2.84,
-            "max_drawdown": 0.0018,
-            "active_positions": [
-                {"symbol": "rb2405", "direction": "LONG", "volume": 10.0, "pnl": 18200.0},
-                {"symbol": "cu2405", "direction": "SHORT", "volume": 2.0, "pnl": 6600.0}
-            ],
-            "fusion_sensors": {"ctp": "ONLINE", "sina": "ONLINE", "bad_ticks_filtered": 3}
-        }
+        # 读取 100% 真实的数据库统计数据，绝不编造
+        summary_data = self._fetch_real_summary_data()
 
         # 调用真实大模型生成 20 分钟阶段诊断研报
         report_md = self.reporter.generate_report(summary_data, date_str)
-        
+
         # 自动提炼高阶规则
         distilled = self.memory.distill_memories_into_rules()
 

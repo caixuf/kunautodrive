@@ -29,6 +29,11 @@ class AIConfig:
     use_stub_when_no_key: bool = True
     schedule_interval_sec: int = int(os.getenv("KUN_AI_SCHEDULE_INTERVAL_SEC", "1200"))
 
+    # 专项产品跟踪 (Focus Tracker) 数据源与状态持久化
+    engine_db_path: str = os.getenv("KUN_ENGINE_DB_PATH", "data/kun_quant.db")
+    focus_state_path: str = os.getenv("KUN_FOCUS_STATE_PATH", "data/ai_focus.json")
+    tasks_state_path: str = os.getenv("KUN_TASKS_STATE_PATH", "data/ai_tasks.json")
+
     # 云端 Background Agent 沙箱服务配置
     bg_agent_base_url: str = os.getenv("KUN_BG_AGENT_BASE_URL", "http://localhost:8080")
     bg_agent_sandbox_type: str = os.getenv("KUN_BG_SANDBOX_TYPE", "cvm")

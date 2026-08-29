@@ -9,6 +9,7 @@ from ai_service.memory import StrategyMemoryStore
 from ai_service.workflow_pipeline import EvolutionWorkflowPipeline
 from ai_service.background_agent_client import BackgroundAgentClient
 from ai_service.proactive_daemon import ProactiveAutonomousScheduler
+from ai_service.focus_tracker import FocusProductTracker
 
 class AIServiceHandler(BaseHTTPRequestHandler):
     memory = StrategyMemoryStore()
@@ -17,6 +18,7 @@ class AIServiceHandler(BaseHTTPRequestHandler):
     pipeline = EvolutionWorkflowPipeline(provider.config, memory)
     bg_agent_client = BackgroundAgentClient(provider.config)
     scheduler = ProactiveAutonomousScheduler(provider.config, memory, reporter)
+    focus = FocusProductTracker(provider.config, provider)
 
     def do_GET(self):
         if self.path == "/api/ai/health":
@@ -30,6 +32,13 @@ class AIServiceHandler(BaseHTTPRequestHandler):
         elif self.path == "/api/ai/memory/stats":
             stats = self.memory.get_memory_stats()
             self._send_json(200, {"status": "OK", "data": stats})
+        elif self.path == "/api/focus":
+            self._send_json(200, {"status": "OK", "focus": self.focus.list_focus()})
+        elif self.path.startswith("/api/tasks"):
+            status = None
+            if "status=" in self.path:
+                status = self.path.split("status=")[1].split("&")[0]
+            self._send_json(200, {"status": "OK", "tasks": self.focus.list_tasks(status)})
         else:
             self._send_json(404, {"error": "Not Found"})
 
@@ -47,15 +56,55 @@ class AIServiceHandler(BaseHTTPRequestHandler):
             report_md = self.reporter.generate_report(body)
             self._send_json(200, {"status": "OK", "report": report_md})
 
-        elif self.path == "/api/ai/chat":
+        el        if self.path == "/api/ai/chat":
             prompt = body.get("message", "")
             context = body.get("context", "")
+            focus_ctx = self.focus.focus_context_for_chat()
             messages = [
-                {"role": "system", "content": "你是 KunQuant 专属量化投研助手。回答专业、严谨、不讲空话。"},
+                {"role": "system", "content":
+                    "你是 KunQuant 专属量化投研助手。回答专业、严谨、不讲空话。\n"
+                    + focus_ctx},
                 {"role": "user", "content": f"上下文: {context}\n问题: {prompt}" if context else prompt}
             ]
             reply = self.provider.chat_completion(messages)
-            self._send_json(200, {"status": "OK", "reply": reply})
+            created_tasks = self.focus.extract_and_create_tasks(reply)
+            resp = {"status": "OK", "reply": reply}
+            if created_tasks:
+                resp["created_tasks"] = created_tasks
+            self._send_json(200, resp)
+
+        # ── 专项产品跟踪 (Focus Tracker) ──
+        elif self.path == "/api/focus/add":
+            res = self.focus.add_focus(
+                body.get("symbol", ""),
+                body.get("note", ""),
+                body.get("category", "futures"),
+            )
+            self._send_json(200 if res.get("ok") else 400, res)
+
+        elif self.path == "/api/focus/remove":
+            res = self.focus.remove_focus(body.get("symbol", ""))
+            self._send_json(200, res)
+
+        elif self.path == "/api/focus/snapshot":
+            self._send_json(200, {"status": "OK", "snapshot": self.focus.snapshot(body.get("symbol", ""))})
+
+        # ── AI 分析任务 ──
+        elif self.path == "/api/tasks/create":
+            res = self.focus.create_task(
+                body.get("symbol", ""),
+                body.get("type", ""),
+                body.get("description", ""),
+            )
+            self._send_json(200 if res.get("ok") else 400, res)
+
+        elif self.path == "/api/tasks/run":
+            res = self.focus.run_task(int(body.get("id", 0)))
+            self._send_json(200, res)
+
+        elif self.path == "/api/tasks/run_pending":
+            res = self.focus.run_pending()
+            self._send_json(200, {"status": "OK", "executed": len(res), "results": res})
 
         # 主动定时触发接口
         elif self.path == "/api/ai/proactive/daily_review":
