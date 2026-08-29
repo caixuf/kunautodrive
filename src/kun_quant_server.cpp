@@ -42,7 +42,7 @@ static std::atomic<bool> g_server_running{true};
 static StorageManager* g_storage_mgr = nullptr;
 
 static void sig_handler(int sig) {
-    (void)sig;
+    std::cout << "[KunQuant Daemon] Signal received: " << sig << std::endl;
     g_server_running.store(false);
 }
 
@@ -216,10 +216,15 @@ private:
 } // namespace kun
 
 int main(int argc, char* argv[]) {
-    // 忽略 SIGPIPE 信号，防止 Socket 意外断开引发进程崩溃
+    // 忽略终端作业控制与挂断信号，防止后台守护运行时意外退出
     std::signal(SIGPIPE, SIG_IGN);
+    std::signal(SIGHUP, SIG_IGN);
+    std::signal(SIGTTIN, SIG_IGN);
+    std::signal(SIGTTOU, SIG_IGN);
+    std::signal(SIGTSTP, SIG_IGN);
     std::signal(SIGINT, kun::sig_handler);
     std::signal(SIGTERM, kun::sig_handler);
+    std::signal(SIGQUIT, kun::sig_handler);
 
     // 0. 加载全局配置文件
     kun::QuantAppConfig cfg;
@@ -266,6 +271,9 @@ int main(int argc, char* argv[]) {
     }
     pool.connect_all();
 
+    // 协程任务对象池：确保协程运行期间 Task 对象生命周期常驻
+    std::vector<std::unique_ptr<CoroutineTask>> spawned_tasks;
+
     // 5. 挂载多账户主从跟单协程
     auto follow_task = std::make_unique<kun::CoroFollowTradingTask>(
         bus, "acc_master_simnow",
@@ -275,16 +283,19 @@ int main(int argc, char* argv[]) {
         }
     );
     ex.spawn(follow_task->run(), "follow_trading_engine");
+    spawned_tasks.push_back(std::move(follow_task));
 
     // 5. 挂载多源行情采集与数据融合协程任务 (原生 CoroutineTask + flowcoro 调度)
     std::cout << "[KunQuant Daemon] 启动多源行情感知与数据融合协程 (CoroMarketFusionTask)...\n";
     auto fusion_task = std::make_unique<kun::CoroMarketFusionTask>(bus, "rb2405", 0.03);
     ex.spawn(fusion_task->run(), "market_fusion_engine");
+    spawned_tasks.push_back(std::move(fusion_task));
 
     // 5.1 挂载行情落盘协程 (M3 行情侧): 为每个监控合约分配独立落盘协程，互不阻塞
     for (const auto& s : cfg.symbols) {
         auto tick_recorder = std::make_unique<kun::CoroSingleTickRecorderTask>(bus, s.symbol, &storage);
         ex.spawn(tick_recorder->run(), "tick_recorder_" + s.symbol);
+        spawned_tasks.push_back(std::move(tick_recorder));
     }
 
     // 启动新浪公网实时期货行情抓取节点
@@ -295,6 +306,7 @@ int main(int argc, char* argv[]) {
     // 6. 挂载 AI 自适应进化协程引擎
     auto evolution_task = std::make_unique<kun::CoroAdaptiveEvolutionTask>(bus, "rb2405", 20);
     ex.spawn(evolution_task->run(), "ai_adaptive_evolution");
+    spawned_tasks.push_back(std::move(evolution_task));
 
     // 7. 挂载原生 HTTP 守护服务
     kun::NativeHttpWsServer server(port, static_dir, bus, &storage);
