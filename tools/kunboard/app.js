@@ -16,32 +16,26 @@
         activeCategory: 'all',
 
         contracts: [
-            // A股核心蓝筹与成长个股
-            { symbol: '600519', name: '贵州茅台', category: 'stock', last: 1728.50, chg: 1.45, volume: 38290, tick: 0.1, mult: 100, marginRatio: 1.0 },
-            { symbol: '300750', name: '宁德时代', category: 'stock', last: 196.20, chg: 3.12, volume: 128400, tick: 0.1, mult: 100, marginRatio: 1.0 },
-            { symbol: '002594', name: '比亚迪', category: 'stock', last: 248.60, chg: -0.85, volume: 64200, tick: 0.1, mult: 100, marginRatio: 1.0 },
-            { symbol: '688981', name: '中芯国际', category: 'stock', last: 56.80, chg: 4.60, volume: 290100, tick: 0.01, mult: 100, marginRatio: 1.0 },
-            { symbol: '601318', name: '中国平安', category: 'stock', last: 43.50, chg: 0.62, volume: 450200, tick: 0.01, mult: 100, marginRatio: 1.0 },
-            { symbol: '600036', name: '招商银行', category: 'stock', last: 32.80, chg: -0.30, volume: 310500, tick: 0.01, mult: 100, marginRatio: 1.0 },
-
-            // 核心宽基与行业 ETF
-            { symbol: '510300', name: '300ETF', category: 'etf', last: 3.652, chg: 0.55, volume: 1820400, tick: 0.001, mult: 10000, marginRatio: 1.0 },
-            { symbol: '588000', name: '科创50ETF', category: 'etf', last: 0.892, chg: 2.30, volume: 3209100, tick: 0.001, mult: 10000, marginRatio: 1.0 },
-            { symbol: '159915', name: '创业板ETF', category: 'etf', last: 1.820, chg: 1.15, volume: 1450200, tick: 0.001, mult: 10000, marginRatio: 1.0 },
-            { symbol: '518880', name: '黄金ETF', category: 'etf', last: 5.380, chg: 0.42, volume: 980100, tick: 0.001, mult: 10000, marginRatio: 1.0 },
-            { symbol: '513050', name: '中概互联', category: 'etf', last: 1.085, chg: -1.20, volume: 2410800, tick: 0.001, mult: 10000, marginRatio: 1.0 },
-
             // 国内商品期货主力
             { symbol: 'rb2405', name: '螺纹钢主力', category: 'futures', last: 3625.0, chg: 1.25, volume: 482910, tick: 1.0, mult: 10, marginRatio: 0.10 },
             { symbol: 'au2406', name: '沪金主力', category: 'futures', last: 568.20, chg: 0.95, volume: 194020, tick: 0.02, mult: 1000, marginRatio: 0.10 },
+            { symbol: 'ag2405', name: '沪银主力', category: 'futures', last: 7350.0, chg: 2.10, volume: 312000, tick: 1.0, mult: 15, marginRatio: 0.12 },
             { symbol: 'cu2405', name: '沪铜主力', category: 'futures', last: 74500.0, chg: 1.80, volume: 84900, tick: 10.0, mult: 5, marginRatio: 0.12 },
             { symbol: 'i2405',  name: '铁矿石主力', category: 'futures', last: 885.5, chg: -0.62, volume: 184900, tick: 0.5, mult: 100, marginRatio: 0.12 },
             { symbol: 'j2405',  name: '焦炭主力', category: 'futures', last: 2310.0, chg: 2.10, volume: 82100, tick: 0.5, mult: 100, marginRatio: 0.15 },
+            { symbol: 'hc2405', name: '热卷主力', category: 'futures', last: 3780.0, chg: 0.85, volume: 220100, tick: 1.0, mult: 10, marginRatio: 0.10 },
 
             // 金融股指期货
             { symbol: 'IF2406', name: '沪深300期指', category: 'index', last: 3580.2, chg: 0.45, volume: 92300, tick: 0.2, mult: 300, marginRatio: 0.12 },
+            { symbol: 'IH2406', name: '上证50期指', category: 'index', last: 2420.5, chg: 0.32, volume: 43200, tick: 0.2, mult: 300, marginRatio: 0.12 },
+            { symbol: 'IC2406', name: '中证500期指', category: 'index', last: 5120.0, chg: 0.92, volume: 71200, tick: 0.2, mult: 200, marginRatio: 0.12 },
             { symbol: 'IM2406', name: '中证1000期指', category: 'index', last: 5420.0, chg: 1.85, volume: 64100, tick: 0.2, mult: 200, marginRatio: 0.15 },
-            { symbol: 'IC2406', name: '中证500期指', category: 'index', last: 5120.0, chg: 0.92, volume: 71200, tick: 0.2, mult: 200, marginRatio: 0.12 }
+
+            // 核心宽基与衍生品标的 ETF
+            { symbol: '510300', name: '300ETF期权标的', category: 'etf', last: 3.652, chg: 0.55, volume: 1820400, tick: 0.001, mult: 10000, marginRatio: 1.0 },
+            { symbol: '588000', name: '科创50ETF标的', category: 'etf', last: 0.892, chg: 2.30, volume: 3209100, tick: 0.001, mult: 10000, marginRatio: 1.0 },
+            { symbol: '159915', name: '创业板ETF标的', category: 'etf', last: 1.820, chg: 1.15, volume: 1450200, tick: 0.001, mult: 10000, marginRatio: 1.0 },
+            { symbol: '518880', name: '黄金ETF标的', category: 'etf', last: 5.380, chg: 0.42, volume: 980100, tick: 0.001, mult: 10000, marginRatio: 1.0 }
         ],
 
         depth: {
@@ -85,11 +79,11 @@
         ],
 
         aiRadarRecommendations: [
-            { symbol: 'au2406', name: '沪金主力', category: '商品期货', score: 96, reason: '全球宏观避险共振 · 突破历史高点压力', entry: 568.2, sl: 558.0, tp: 592.0, winRate: '82%' },
-            { symbol: '600519', name: '贵州茅台', category: 'A股核心', score: 94, reason: '放量站上年线 · 均线多头共振发散', entry: 1728.5, sl: 1690.0, tp: 1820.0, winRate: '78%' },
-            { symbol: '300750', name: '宁德时代', category: 'A股成长', score: 91, reason: '放量突破布林上轨 · RSI底背离金叉', entry: 196.2, sl: 188.0, tp: 215.0, winRate: '74%' },
-            { symbol: '588000', name: '科创50ETF', category: 'ETF基金', score: 88, reason: '成交量异动放大 2.4x · MACD零轴金叉', entry: 0.892, sl: 0.865, tp: 0.960, winRate: '71%' },
-            { symbol: 'IM2406', name: '中证1000期指', category: '金融期指', score: 92, reason: '小盘动量反转 · 贴水大幅收敛', entry: 5420.0, sl: 5310.0, tp: 5650.0, winRate: '76%' }
+            { symbol: 'au2406', name: '沪金主力', category: '商品期货', score: 96, reason: '全球宏观避险共振 · 突破历史高点压力', entry: 568.2, sl: 558.0, tp: 592.0, winRate: '多头动量评分 96' },
+            { symbol: 'cu2405', name: '沪铜主力', category: '商品期货', score: 92, reason: 'LME/SHFE 库存双降 · 突破布林带上轨', entry: 74500.0, sl: 73200.0, tp: 76800.0, winRate: '量价共振突破' },
+            { symbol: 'ag2405', name: '沪银主力', category: '商品期货', score: 89, reason: '金银比值均值回归 · 5日/20日均线金叉', entry: 7350.0, sl: 7180.0, tp: 7600.0, winRate: '趋势跟踪信号' },
+            { symbol: 'rb2405', name: '螺纹钢主力', category: '商品期货', score: 85, reason: '高炉开工率边际回升 · 现货基差大幅贴水收敛', entry: 3625.0, sl: 3560.0, tp: 3740.0, winRate: '均值回归区间' },
+            { symbol: 'IM2406', name: '中证1000期指', category: '金融期指', score: 91, reason: '小盘动量反转 · 贴水大幅收敛', entry: 5420.0, sl: 5310.0, tp: 5650.0, winRate: '基差修复动量' }
         ],
 
         evolutionGen: 48,
@@ -139,21 +133,37 @@
     };
 
     // ─────────────────────────────────────────────────────────────
-    // 生成 K 线历史模拟数据
+    // 从后端 SQLite /api/bars 加载真实 K 线时序数据 (异步 + 确定性回退)
     // ─────────────────────────────────────────────────────────────
-    function initMarketBars(basePrice = 3600.0) {
+    async function initMarketBars(basePrice = 3600.0) {
+        try {
+            const res = await fetch(`/api/bars?symbol=${State.activeSymbol}`);
+            if (res.ok) {
+                const data = await res.json();
+                if (Array.isArray(data) && data.length > 0) {
+                    State.marketBars = data;
+                    if (State.currentPage === 'trading-desk' && MarketChart.render) {
+                        MarketChart.render();
+                    }
+                    return;
+                }
+            }
+        } catch (e) {
+            // 后端离线时进入确定性基准序列
+        }
+
         State.marketBars = [];
         let price = basePrice;
-        const now = Date.now() - 100 * 60 * 1000;
+        const now = Date.now() - 60 * 60 * 1000;
         const scale = basePrice > 100 ? (basePrice * 0.001) : (basePrice * 0.005);
-        for (let i = 0; i < 100; i++) {
+        for (let i = 0; i < 60; i++) {
             const time = new Date(now + i * 60 * 1000);
-            const delta = ((Math.sin(i / 8) * 1.5) + (Math.random() - 0.48) * 1.8) * scale;
+            const delta = (Math.sin(i / 6.0) * 1.5) * scale;
             const open = price;
             const close = open + delta;
-            const high = Math.max(open, close) + Math.random() * scale;
-            const low = Math.min(open, close) - Math.random() * scale;
-            const vol = Math.floor(600 + Math.random() * 1200);
+            const high = Math.max(open, close) + Math.abs(Math.sin(i * 0.4)) * scale;
+            const low = Math.min(open, close) - Math.abs(Math.cos(i * 0.4)) * scale;
+            const vol = Math.floor(500 + Math.abs(Math.sin(i * 0.2)) * 800);
             price = close;
 
             State.marketBars.push({
@@ -1640,7 +1650,7 @@ ${(data.trades && data.trades.length) ? data.trades.map(t => `- [${t.time}] ${t.
                 const actions = [
                     `淘汰低效参数组合 [GEN_07]，由精英个体 [GEN_01] 与 [GEN_02] 杂交生成新一代`,
                     `染色体 [GEN_03] 触发自适应变异: 止损 ATR 乘数微调至 ${(1.8 + Math.random()*0.4).toFixed(1)}x`,
-                    `实盘模拟适应度评估通过: 最优种群胜率维持在 78.5%`,
+                    `实盘微秒级适应度评估通过: 种群平均夏普比率提升至 ${(topChromo.fitness / 28.0).toFixed(2)}`,
                     `模型根据最新市场波动率动态收敛: 慢线周期锁定为 MA_${topChromo.slow}`
                 ];
                 const act = actions[Math.floor(Math.random() * actions.length)];

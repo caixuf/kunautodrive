@@ -1,7 +1,7 @@
 import os
 import unittest
 import time
-from ai_service.ctp_bridge import CtpConfig, CtpExecutionGateway
+from ai_service.ctp_bridge import CtpConfig, CtpExecutionGateway, _RealCtpTraderSpi
 
 class TestCtpExecutionGateway(unittest.TestCase):
     def setUp(self):
@@ -54,6 +54,20 @@ class TestCtpExecutionGateway(unittest.TestCase):
         time.sleep(1.05)
         acc3 = self.gw.query_account_throttled()
         self.assertIsNotNone(acc3)
+
+    def test_real_spi_callbacks(self):
+        spi = _RealCtpTraderSpi(self.gw)
+        spi.OnFrontConnected()
+        self.assertTrue(self.gw.is_connected)
+
+        spi.OnRspAuthenticate(None, type('RspInfo', (), {'ErrorID': 0, 'ErrorMsg': 'Success'})(), 1, True)
+        self.assertTrue(self.gw.is_authenticated)
+
+        spi.OnRspUserLogin(None, type('RspInfo', (), {'ErrorID': 0, 'ErrorMsg': 'Success'})(), 2, True)
+        self.assertTrue(self.gw.is_logged_in)
+
+        spi.OnRspSettlementInfoConfirm(None, type('RspInfo', (), {'ErrorID': 0, 'ErrorMsg': 'Success'})(), 3, True)
+        self.assertTrue(self.gw.settlement_confirmed)
 
 if __name__ == "__main__":
     unittest.main()

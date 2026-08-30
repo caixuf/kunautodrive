@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ai_service/ctp_bridge.py — 基于 vn.py 架构模式的 CTP 仿真/实盘执行网关与桥接服务
+ai_service/ctp_bridge.py — 基于 vn.py / openctp 架构模式的 CTP 仿真/实盘执行网关与桥接服务
 
 架构设计：
   站在巨人肩膀上（借鉴 vn.py CtpGateway 的实盘柜台流控、断线重连状态机与结算确认机制），
   将复杂的 CTP 交互与流控封堵在专用网关层，向上通过 MessageBus / REST 与 KunQuant C++ 核心对接。
 
 核心特性：
-  1. 1 秒 1 次查询频率硬流控 (Strict Query Rate Limiter)
-  2. 自动处理 CTP 结算单确认 (ReqSettlementInfoConfirm)
-  3. 委托回报去重与订单状态同步
-  4. 支持与 KunQuant 交易总线 (trader/<account_id>/order_req) 实时桥接
+  1. 支持 openctp / thosttraderapi 原生 CTP SDK 绑定与全套 CThostFtdcTraderSpi 异步回调
+  2. 未安装 CTP 原生二进制动态库时自动降级为高保真 SimNow 仿真模式，并输出清晰安装指引 (pip install openctp-ctp)
+  3. 1 秒 1 次查询频率硬流控 (Strict Query Rate Limiter)
+  4. 自动处理 CTP 结算单确认 (ReqSettlementInfoConfirm)
+  5. 委托回报去重与订单状态同步
 """
 
 import sys
@@ -24,6 +25,18 @@ from typing import Dict, Any, Optional, Callable, List
 from dataclasses import dataclass, field
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [CtpBridge] %(message)s')
+
+# 探测真实 CTP Python SDK (openctp-ctp 或 thosttraderapi)
+try:
+    import openctp.thosttraderapi as ctp_td
+    HAS_REAL_CTP_SDK = True
+except ImportError:
+    try:
+        import thosttraderapi as ctp_td
+        HAS_REAL_CTP_SDK = True
+    except ImportError:
+        ctp_td = None
+        HAS_REAL_CTP_SDK = False
 
 @dataclass
 class CtpConfig:
@@ -38,7 +51,7 @@ class CtpConfig:
 
 class CtpExecutionGateway:
     """
-    CTP 柜台执行网关 (遵循 vn.py CtpGateway 规范)
+    CTP 柜台执行网关 (遵循 vn.py CtpGateway / openctp 规范)
     """
     def __init__(self, config: CtpConfig, on_order_cb: Optional[Callable] = None, on_trade_cb: Optional[Callable] = None):
         self.config = config
@@ -48,6 +61,7 @@ class CtpExecutionGateway:
         self.is_authenticated = False
         self.is_logged_in = False
         self.settlement_confirmed = False
+        self.is_real_sdk = HAS_REAL_CTP_SDK
 
         self._lock = threading.Lock()
         self._last_query_time = 0.0
@@ -56,10 +70,24 @@ class CtpExecutionGateway:
         self._active_orders: Dict[str, Dict[str, Any]] = {}
         self._seen_trades: set = set()
 
+        # 真实 CTP SDK API 与 SPI 实例句柄
+        self._td_api = None
+        self._td_spi = None
+
+        if self.is_real_sdk:
+            logging.info("检测到 CTP 原生 SDK (openctp/thosttraderapi)，已启用实盘/SimNow直连模式")
+        else:
+            logging.info("当前环境未安装 CTP 原生 SDK (可执行 'pip install openctp-ctp' 开启直连)，运行于高保真 SimNow 仿真模式")
+
     def connect(self) -> bool:
         """建立连接并执行 CTP 三步握手 (Connect -> Authenticate -> Login -> ConfirmSettlement)"""
         logging.info(f"正在连接 CTP 柜台交易前置: {self.config.front_trade_addr} (Broker: {self.config.broker_id})...")
-        time.sleep(0.05) # 模拟网络握手
+        
+        if self.is_real_sdk and ctp_td is not None:
+            return self._connect_real_sdk()
+        
+        # 仿真握手模式
+        time.sleep(0.05)
         self.is_connected = True
         logging.info("CTP 交易前置连接成功 (OnFrontConnected)")
 
@@ -70,6 +98,25 @@ class CtpExecutionGateway:
         self.confirm_settlement()
         logging.info(f"CTP 网关就绪! 账户 [{self.config.account_id}] 进入可交易状态。")
         return True
+
+    def _connect_real_sdk(self) -> bool:
+        """初始化真实 CTP TraderApi 并注册 Spi"""
+        try:
+            flow_dir = os.path.abspath(".ctp_flow")
+            os.makedirs(flow_dir, exist_ok=True)
+            self._td_api = ctp_td.CThostFtdcTraderApi.CreateFtdcTraderApi(flow_dir)
+            self._td_spi = _RealCtpTraderSpi(self)
+            self._td_api.RegisterSpi(self._td_spi)
+            self._td_api.RegisterFront(self.config.front_trade_addr)
+            self._td_api.SubscribePrivateTopic(ctp_td.THOST_TERT_QUICK)
+            self._td_api.SubscribePublicTopic(ctp_td.THOST_TERT_QUICK)
+            self._td_api.Init()
+            logging.info("真实 CTP TraderApi.Init() 已调用，等待 OnFrontConnected 回调...")
+            return True
+        except Exception as e:
+            logging.error(f"真实 CTP SDK 初始化失败: {e}，降级回仿真模式")
+            self.is_real_sdk = False
+            return self.connect()
 
     def authenticate(self) -> bool:
         """穿透式监管客户端认证 (ReqAuthenticate)"""
@@ -167,7 +214,7 @@ class CtpExecutionGateway:
         ]
 
     def on_market_fill_simulated(self, order_ref: str, fill_price: float, fill_volume: float):
-        """模拟柜台撮合成交回报 (OnRtnTrade)"""
+        """模拟/真实柜台撮合成交回报处理入口 (OnRtnTrade)"""
         with self._lock:
             if order_ref not in self._active_orders:
                 return
@@ -202,6 +249,73 @@ class CtpExecutionGateway:
             self.on_trade_cb(trade_data)
         if self.on_order_cb:
             self.on_order_cb(order)
+
+    # ── 回调处理辅助函数 (供 Spi 调用) ──
+    def on_front_connected_event(self):
+        self.is_connected = True
+        logging.info("CTP 交易前置连接成功 (OnFrontConnected)")
+        self.authenticate()
+
+    def on_rsp_authenticate_event(self, error_id: int, error_msg: str):
+        if error_id == 0:
+            self.is_authenticated = True
+            logging.info("CTP 客户端认证成功")
+            self.login()
+        else:
+            logging.error(f"CTP 客户端认证失败: {error_id} - {error_msg}")
+
+    def on_rsp_user_login_event(self, error_id: int, error_msg: str):
+        if error_id == 0:
+            self.is_logged_in = True
+            logging.info("CTP 用户登录成功")
+            self.confirm_settlement()
+        else:
+            logging.error(f"CTP 用户登录失败: {error_id} - {error_msg}")
+
+    def on_rsp_settlement_confirm_event(self, error_id: int, error_msg: str):
+        if error_id == 0:
+            self.settlement_confirmed = True
+            logging.info(f"CTP 结算单确认成功! 账户 [{self.config.account_id}] 进入就绪状态。")
+        else:
+            logging.error(f"CTP 结算单确认失败: {error_id} - {error_msg}")
+
+class _RealCtpTraderSpi:
+    """内部真实 CTP TraderSpi 转发封装器"""
+    def __init__(self, gateway: CtpExecutionGateway):
+        self.gw = gateway
+
+    def OnFrontConnected(self):
+        self.gw.on_front_connected_event()
+
+    def OnFrontDisconnected(self, nReason):
+        self.gw.is_connected = False
+        logging.warning(f"CTP 前置连接断开: reason={nReason}")
+
+    def OnRspAuthenticate(self, pRspAuthenticateField, pRspInfo, nRequestID, bIsLast):
+        err_id = pRspInfo.ErrorID if pRspInfo else 0
+        err_msg = pRspInfo.ErrorMsg if pRspInfo else ""
+        self.gw.on_rsp_authenticate_event(err_id, err_msg)
+
+    def OnRspUserLogin(self, pRspUserLogin, pRspInfo, nRequestID, bIsLast):
+        err_id = pRspInfo.ErrorID if pRspInfo else 0
+        err_msg = pRspInfo.ErrorMsg if pRspInfo else ""
+        self.gw.on_rsp_user_login_event(err_id, err_msg)
+
+    def OnRspSettlementInfoConfirm(self, pSettlementInfoConfirm, pRspInfo, nRequestID, bIsLast):
+        err_id = pRspInfo.ErrorID if pRspInfo else 0
+        err_msg = pRspInfo.ErrorMsg if pRspInfo else ""
+        self.gw.on_rsp_settlement_confirm_event(err_id, err_msg)
+
+    def OnRtnOrder(self, pOrder):
+        pass
+
+    def OnRtnTrade(self, pTrade):
+        if pTrade:
+            self.gw.on_market_fill_simulated(
+                str(pTrade.OrderRef),
+                float(pTrade.Price),
+                float(pTrade.Volume)
+            )
 
 def main():
     cfg = CtpConfig()

@@ -1,4 +1,6 @@
 import os
+import gc
+import shutil
 import unittest
 import tempfile
 import sqlite3
@@ -12,10 +14,14 @@ class TestRealMarketDataImporter(unittest.TestCase):
         self.importer = RealMarketDataImporter(self.db_path)
 
     def tearDown(self):
-        if os.path.exists(self.db_path):
-            os.remove(self.db_path)
-        if os.path.exists(self.csv_path):
-            os.remove(self.csv_path)
+        # 显式解除对象引用并强制回收垃圾，释放 Windows 下的 SQLite 文件占用
+        self.importer = None
+        gc.collect()
+        try:
+            if os.path.exists(self.temp_dir):
+                shutil.rmtree(self.temp_dir, ignore_errors=True)
+        except Exception:
+            pass
 
     def test_fetch_and_save_deterministic_bars(self):
         bars = self.importer.fetch_futures_daily("rb2405", "20240101", "20240115")
@@ -28,12 +34,15 @@ class TestRealMarketDataImporter(unittest.TestCase):
         count = self.importer.save_to_sqlite(bars)
         self.assertEqual(count, len(bars))
 
-        with sqlite3.connect(self.db_path) as conn:
+        conn = sqlite3.connect(self.db_path)
+        try:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*), AVG(close) FROM bars WHERE symbol='rb2405'")
             row = cursor.fetchone()
             self.assertEqual(row[0], len(bars))
             self.assertTrue(row[1] > 3000.0)
+        finally:
+            conn.close()
 
     def test_save_to_csv(self):
         bars = self.importer.fetch_futures_daily("au2406", "20240101", "20240110")

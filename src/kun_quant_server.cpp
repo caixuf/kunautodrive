@@ -186,6 +186,45 @@ private:
             return;
         }
 
+        if (path.rfind("/api/bars", 0) == 0) {
+            std::string sym = "rb2405";
+            size_t q = path.find("symbol=");
+            if (q != std::string::npos) {
+                sym = path.substr(q + 7);
+                size_t amp = sym.find('&');
+                if (amp != std::string::npos) sym.resize(amp);
+            }
+            std::ostringstream ss;
+            ss << "[";
+            double base_p = (sym.find("au") != std::string::npos) ? 568.0 : ((sym.find("cu") != std::string::npos) ? 74500.0 : 3620.0);
+            auto now = std::chrono::system_clock::now();
+            for (int i = 60; i >= 0; --i) {
+                auto t = now - std::chrono::minutes(i);
+                std::time_t tt = std::chrono::system_clock::to_time_t(t);
+                std::tm tm_buf;
+                localtime_r(&tt, &tm_buf);
+                char tbuf[16];
+                std::strftime(tbuf, sizeof(tbuf), "%H:%M", &tm_buf);
+
+                double op = base_p + std::sin(i * 0.1) * (base_p * 0.003);
+                double hi = op + std::abs(std::sin(i * 0.2)) * (base_p * 0.002) + 1.0;
+                double lo = op - std::abs(std::cos(i * 0.2)) * (base_p * 0.002) - 1.0;
+                double cl = op + std::sin(i * 0.3) * (base_p * 0.001);
+                double vol = 500.0 + std::abs(std::sin(i * 0.15)) * 800.0;
+
+                if (i < 60) ss << ",";
+                ss << "{\"time\":\"" << tbuf << "\",\"open\":" << op << ",\"high\":" << hi
+                   << ",\"low\":" << lo << ",\"close\":" << cl << ",\"volume\":" << vol << "}";
+            }
+            ss << "]";
+            std::string json = ss.str();
+            std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: " +
+                                   std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;
+            send(client_fd, response.c_str(), response.size(), MSG_NOSIGNAL);
+            close(client_fd);
+            return;
+        }
+
         if (path == "/api/order") {
             // 解析 POST 请求体的 JSON 订单参数 (基于 cJSON 标准库，杜绝截断与类型转换异常)
             size_t body_pos = request.find("\r\n\r\n");

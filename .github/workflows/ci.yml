@@ -99,7 +99,7 @@ jobs:
       - name: Test (C++ Suites)
         run: ctest --test-dir build --output-on-failure --timeout 60 -LE "benchmark|manual|stability|integration"
       - name: Test (Python AI & Quant Suites)
-        run: python3 -m unittest discover -s tests -p "test_ai_*.py"
+        run: python3 -m unittest discover -s tests -p "test_*.py"
 
   # ── ASAN (Address Sanitizer) ───────────────────────────────
   build-asan:

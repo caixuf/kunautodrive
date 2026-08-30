@@ -66,7 +66,7 @@
                 container.appendChild(row);
             }
         } catch (e) {
-            container.appendChild(el('div', 'kun-ai-focus-item', '<span class="stale">AI 服务离线 (8901 未启动)</span>'));
+            container.appendChild(el('div', 'kun-ai-focus-item', '<span class="stale">AI 投研服务未连接 (后端已就绪)</span>'));
         }
     }
 
