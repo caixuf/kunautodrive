@@ -229,12 +229,18 @@ public:
             }
         }
             if (pos_mgr) {
-                pos_mgr->on_trade(trade);
+                // 撮合引擎生成的成交缺时间戳, 落账前统一补上 (绩效按时间窗口过滤依赖此字段)
+                TradeData stamped = trade;
+                if (stamped.trade_time_us <= 0) {
+                    stamped.trade_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+                }
+                pos_mgr->on_trade(stamped);
 
                 // 成交落账 (SQLite 真实账本, 绩效分析数据源)
                 if (storage_) {
-                    storage_->save_trade(trade, acc_id);
-                    auto pos = pos_mgr->get_position(trade.symbol, pos_dir_of(trade));
+                    storage_->save_trade(stamped, acc_id);
+                    auto pos = pos_mgr->get_position(stamped.symbol, pos_dir_of(stamped));
                     if (!pos.symbol.empty()) {
                         storage_->save_position(pos, acc_id);
                     }
