@@ -15,6 +15,15 @@ if [ ! -f "$BIN" ]; then
     cmake --build "$ROOT/build" --target kun_quant_server -j"$(nproc)"
 fi
 
+# 防端口双绑分脑: systemd 服务已运行时拒绝启动 (SO_REUSEPORT 会让请求
+# 轮询命中两个不同版本的进程, 接口时好时坏)
+if systemctl is-active --quiet kunquant 2>/dev/null; then
+    echo "[!] 检测到 kunquant systemd 服务正在运行 (端口 8900)。"
+    echo "    为避免端口双绑分脑, 请先执行: sudo systemctl stop kunquant"
+    echo "    或直接使用: sudo systemctl restart kunquant"
+    exit 1
+fi
+
 echo "======================================================="
 echo "   鲲量化 (KunQuant) 生产级全栈服务启动脚本"
 echo "   前端/REST 端口: http://localhost:$PORT"
@@ -46,6 +55,8 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 export PYTHONPATH="$ROOT:${PYTHONPATH:-}"
+
+fuser -k "$PORT/tcp" "$AI_PORT/tcp" 2>/dev/null || true
 
 # 1. 启动 Python AI 投研与自主诊断守护服务 (8901)
 echo "[1/2] 正在启动 Python AI 投研后台微服务 (端口: $AI_PORT)..."

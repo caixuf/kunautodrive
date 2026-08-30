@@ -505,6 +505,114 @@ private:
             return;
         }
 
+        if (path.rfind("/api/trend", 0) == 0) {
+            // 趋势分析: 全部基于真实日线 (data/history CSV) 统计计算, 无任何预测性虚构。
+            // 输出均线排列/动量/波动率/关键位, 供手动小资金参考; 明示非投资建议。
+            std::string sym = "rb2405";
+            size_t q = path.find("symbol=");
+            if (q != std::string::npos) {
+                sym = path.substr(q + 7);
+                size_t amp = sym.find('&');
+                if (amp != std::string::npos) sym.resize(amp);
+            }
+            std::string family = sym;
+            while (!family.empty() && isdigit(static_cast<unsigned char>(family.back()))) family.pop_back();
+
+            std::vector<double> closes, highs, lows;
+            std::string last_date;
+            if (!family.empty()) {
+                std::ifstream csv("data/history/" + family + ".csv");
+                std::string line;
+                std::getline(csv, line);
+                while (std::getline(csv, line)) {
+                    if (line.empty()) continue;
+                    std::stringstream lss(line);
+                    std::string tok;
+                    std::vector<std::string> cols;
+                    while (std::getline(lss, tok, ',')) cols.push_back(tok);
+                    if (cols.size() < 7) continue;
+                    try {
+                        last_date = cols[1];
+                        closes.push_back(std::stod(cols[5]));
+                        highs.push_back(std::stod(cols[3]));
+                        lows.push_back(std::stod(cols[4]));
+                    } catch (...) { continue; }
+                }
+            }
+
+            auto ma_of = [&](int n) -> double {
+                if (closes.size() < static_cast<size_t>(n)) return 0.0;
+                double s = 0;
+                for (int i = 0; i < n; ++i) s += closes[closes.size() - 1 - i];
+                return s / n;
+            };
+
+            std::string json;
+            if (closes.size() < 60) {
+                json = "{\"ok\":false,\"reason\":\"真实日线数据不足 (60 根), 请先运行 fetch_history.py\"}";
+            } else {
+                double last = closes.back();
+                double ma5 = ma_of(5), ma10 = ma_of(10), ma20 = ma_of(20), ma60 = ma_of(60);
+                bool bull = ma5 > ma10 && ma10 > ma20 && ma20 > ma60 && last > ma5;
+                bool bear = ma5 < ma10 && ma10 < ma20 && ma20 < ma60 && last < ma5;
+                const char* trend = bull ? "BULL" : (bear ? "BEAR" : "RANGE");
+                const char* trend_cn = bull ? "多头趋势" : (bear ? "空头趋势" : "震荡市");
+
+                double mom = (closes[closes.size() - 21] > 0)
+                    ? (last / closes[closes.size() - 21] - 1.0) * 100.0 : 0.0;
+                double hi20 = *std::max_element(highs.end() - 20, highs.end());
+                double lo20 = *std::min_element(lows.end() - 20, lows.end());
+                double range_pos = (hi20 > lo20) ? (last - lo20) / (hi20 - lo20) * 100.0 : 50.0;
+
+                // 20 日波动率 (日收益率标准差)
+                double vol20 = 0.0;
+                {
+                    std::vector<double> rets;
+                    for (size_t i = closes.size() - 20; i < closes.size(); ++i) {
+                        if (closes[i - 1] > 0) rets.push_back((closes[i] - closes[i - 1]) / closes[i - 1]);
+                    }
+                    if (!rets.empty()) {
+                        double m = 0;
+                        for (double r : rets) m += r;
+                        m /= rets.size();
+                        double v = 0;
+                        for (double r : rets) v += (r - m) * (r - m);
+                        vol20 = std::sqrt(v / rets.size()) * 100.0;
+                    }
+                }
+
+                // 诚实的参考结论 (只陈述统计事实 + 常规应对思路, 不承诺未来)
+                std::string suggestion;
+                if (bull) {
+                    suggestion = "均线多头排列且价在 MA5 上方, 短期动能偏强。常规思路: 趋势跟随为主, 回踩 MA20 企稳可关注, 收盘跌破 MA20 视为趋势转弱信号离场。";
+                } else if (bear) {
+                    suggestion = "均线空头排列且价在 MA5 下方, 短期动能偏弱。常规思路: 不抄底不扛单, 反弹至 MA20 受压可关注做空, 收盘站上 MA20 视为转强信号离场。";
+                } else {
+                    suggestion = "均线缠绕无明确方向, 属震荡市。常规思路: 小资金以观望为佳, 或仅在区间上下沿轻仓高抛低吸并严格止损, 不追突破。";
+                }
+
+                std::ostringstream ss;
+                ss << std::fixed << std::setprecision(2);
+                ss << "{\"ok\":true,\"symbol\":\"" << sym << "\",\"last_date\":\"" << last_date
+                   << "\",\"last\":" << last
+                   << ",\"ma5\":" << ma5 << ",\"ma10\":" << ma10 << ",\"ma20\":" << ma20 << ",\"ma60\":" << ma60
+                   << ",\"trend\":\"" << trend << "\",\"trend_cn\":\"" << trend_cn << "\""
+                   << ",\"momentum_20d_pct\":" << mom
+                   << ",\"volatility_20d_pct\":" << vol20
+                   << ",\"high_20d\":" << hi20 << ",\"low_20d\":" << lo20
+                   << ",\"range_pos_pct\":" << range_pos
+                   << ",\"suggestion\":\"" << suggestion
+                   << " (统计截至 " << last_date << ", 数据源: 新浪真实日线)\""
+                   << ",\"disclaimer\":\"以上为历史数据统计参考, 不预测未来, 不构成投资建议。期货杠杆高, 小资金试仓务必轻仓+硬止损。\"}";
+                json = ss.str();
+            }
+            std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: " +
+                                   std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;
+            send(client_fd, response.c_str(), response.size(), MSG_NOSIGNAL);
+            close(client_fd);
+            return;
+        }
+
         if (path == "/api/reconcile") {
             // 生成对账报告
             std::vector<TradeData> trades;

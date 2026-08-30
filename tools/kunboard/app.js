@@ -622,6 +622,8 @@
 
             const fmt = (v) => v.toFixed(c.last < 10 ? 3 : (c.last < 100 ? 2 : 1));
 
+            this.loadTrend(symbol);
+
             // 盘口取真实落盘 tick 的 L1 (新浪仅一档), 不虚构五档
             fetch(`/api/tick?symbol=${symbol}`).then(r => r.ok ? r.json() : null).then(t => {
                 if (t && t.last) {
@@ -875,6 +877,38 @@
             line.innerHTML = `<span style="color:#64748b;">[${now}]</span> <span style="color:#38bdf8;font-weight:700;">[基因进化]</span> ${msg}`;
             box.appendChild(line);
             box.scrollTop = box.scrollHeight;
+        },
+
+        async loadTrend(symbol) {
+            const label = document.getElementById('trend-contract-label');
+            const body = document.getElementById('trend-body');
+            if (!label || !body) return;
+            label.innerText = `趋势分析 (${symbol})`;
+            body.innerHTML = '<div style="color:#64748b;">加载中…</div>';
+            try {
+                const res = await fetch(`/api/trend?symbol=${symbol}`);
+                const d = await res.json();
+                if (!d.ok) {
+                    body.innerHTML = `<div style="color:#f59e0b;">${d.reason || '数据不足'}</div>`;
+                    return;
+                }
+                const fmt = (v) => Number(v).toLocaleString('zh-CN', { maximumFractionDigits: 1 });
+                const trendColor = d.trend === 'BULL' ? '#22c55e' : (d.trend === 'BEAR' ? '#ef4444' : '#f59e0b');
+                const arrow = d.trend === 'BULL' ? '▲' : (d.trend === 'BEAR' ? '▼' : '─');
+                body.innerHTML = `
+                    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+                        <span style="font-size:16px;font-weight:700;color:${trendColor};">${arrow} ${d.trend_cn}</span>
+                        <span style="color:#64748b;">现价 ${fmt(d.last)} (截至 ${d.last_date})</span>
+                    </div>
+                    <div style="color:#94a3b8;">MA5 ${fmt(d.ma5)} · MA10 ${fmt(d.ma10)} · MA20 ${fmt(d.ma20)} · MA60 ${fmt(d.ma60)}</div>
+                    <div style="color:#94a3b8;">20日动量 <b class="${d.momentum_20d_pct >= 0 ? 'text-up' : 'text-down'}">${d.momentum_20d_pct >= 0 ? '+' : ''}${d.momentum_20d_pct}%</b>
+                         · 20日波动率 ${d.volatility_20d_pct}%
+                         · 区间位置 ${d.range_pos_pct}% (20日 ${fmt(d.low_20d)} ~ ${fmt(d.high_20d)})</div>
+                    <div style="margin-top:6px;color:#cbd5e1;">💡 ${d.suggestion}</div>
+                    <div style="margin-top:4px;color:#475569;font-size:11px;">⚠ ${d.disclaimer}</div>`;
+            } catch (e) {
+                body.innerHTML = '<div style="color:#ef4444;">趋势数据拉取失败 (服务离线?)</div>';
+            }
         },
 
         async updateReportView() {

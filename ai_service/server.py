@@ -160,8 +160,11 @@ class AIServiceHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         return
 
+class ReusableHTTPServer(HTTPServer):
+    allow_reuse_address = True
+
 def run_server(port: int = 8901):
-    server = HTTPServer(('0.0.0.0', port), AIServiceHandler)
+    server = ReusableHTTPServer(('0.0.0.0', port), AIServiceHandler)
     print(f"[KunQuant AI Proactive Service] Listening on http://0.0.0.0:{port}")
     try:
         server.serve_forever()
