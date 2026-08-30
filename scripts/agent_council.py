@@ -4,7 +4,7 @@ Three Departments & Six Ministries Council (三省六部联席议事中枢)
 Enables peer collaboration between:
 - Antigravity (中书省 · 首席架构与决策)
 - CodeBuddy (门下省 · 代码审议与封驳)
-- MiMoCode (尚书省/兵部 · 深度研判与全链路验证)
+- MiMoCode (尚书省 · 深度研判与全链路验证)
 """
 
 import sys
@@ -13,8 +13,9 @@ import json
 import argparse
 import os
 import concurrent.futures
+from typing import Dict, Optional
 
-def query_codebuddy(prompt: str, timeout: int = 60) -> str:
+def query_codebuddy(prompt: str, timeout: int = 90) -> str:
     """Invokes CodeBuddy non-interactively to perform peer review or task execution."""
     cmd = ["codebuddy", "-p", prompt]
     try:
@@ -28,7 +29,7 @@ def query_codebuddy(prompt: str, timeout: int = 60) -> str:
     except Exception as e:
         return f"[CodeBuddy Execution Exception]: {str(e)}"
 
-def query_mimo(prompt: str, timeout: int = 60) -> str:
+def query_mimo(prompt: str, timeout: int = 90) -> str:
     """Invokes Xiaomi MiMo non-interactively."""
     cmd = ["mimo", "run", prompt, "--dangerously-skip-permissions"]
     try:
@@ -42,7 +43,16 @@ def query_mimo(prompt: str, timeout: int = 60) -> str:
     except Exception as e:
         return f"[MiMo Execution Exception]: {str(e)}"
 
-def review_diff(git_diff_text: str, agent: str = "both") -> dict:
+def truncate_diff_cleanly(diff_text: str, max_chars: int = 5000) -> str:
+    """Truncates diff cleanly at line boundaries with clear indication."""
+    if len(diff_text) <= max_chars:
+        return diff_text
+    lines = diff_text[:max_chars].splitlines()
+    truncated = "\n".join(lines[:-1])
+    return f"{truncated}\n\n[... Diff truncated at line boundary for review context ...]"
+
+def review_diff(git_diff_text: str, agent: str = "both") -> Dict[str, str]:
+    clean_diff = truncate_diff_cleanly(git_diff_text)
     prompt = f"""【门下省/尚书省审议令】
 请作为审议官，对以下中书省提交的工程代码 Diff 进行独立审查：
 1. 是否存在内存泄漏、未定义行为、死锁或并发竞态风险？
@@ -50,20 +60,25 @@ def review_diff(git_diff_text: str, agent: str = "both") -> dict:
 3. 给出明确的“【封驳】(指出致命问题)”或“【可/准奏】(说明通过理由与注意事项)”结论。
 
 === CODE DIFF START ===
-{git_diff_text}
+{clean_diff}
 === CODE DIFF END ===
 """
-    results = {}
+    tasks = {}
     if agent in ["codebuddy", "both"]:
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future_cb = executor.submit(query_codebuddy, prompt) if agent in ["codebuddy", "both"] else None
-            future_mimo = executor.submit(query_mimo, prompt) if agent in ["mimo", "both"] else None
-            if future_cb:
-                results["CodeBuddy (门下省)"] = future_cb.result()
-            if future_mimo:
-                results["MiMo (尚书省)"] = future_mimo.result()
-    elif agent == "mimo":
-        results["MiMo (尚书省)"] = query_mimo(prompt)
+        tasks["CodeBuddy (门下省)"] = query_codebuddy
+    if agent in ["mimo", "both"]:
+        tasks["MiMo (尚书省)"] = query_mimo
+
+    results = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks) or 1) as executor:
+        future_map = {executor.submit(func, prompt): name for name, func in tasks.items()}
+        for future in concurrent.futures.as_completed(future_map):
+            name = future_map[future]
+            try:
+                results[name] = future.result()
+            except Exception as e:
+                results[name] = f"[Execution Error]: {e}"
+
     return results
 
 def main():
@@ -84,7 +99,7 @@ def main():
             print("No diff detected to review.")
             sys.exit(0)
         print(f">>> 联席议事中枢正在向 [{args.agent}] 呈递代码 Diff 审议...")
-        opinions = review_diff(diff_text[:4000], agent=args.agent)
+        opinions = review_diff(diff_text, agent=args.agent)
         for name, op in opinions.items():
             print(f"\n================ {name} 审议意见 ================")
             print(op)

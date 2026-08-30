@@ -69,9 +69,6 @@ class TestCtpExecutionGateway(unittest.TestCase):
         spi.OnRspSettlementInfoConfirm(None, type('RspInfo', (), {'ErrorID': 0, 'ErrorMsg': 'Success'})(), 3, True)
         self.assertTrue(self.gw.settlement_confirmed)
 
-if __name__ == "__main__":
-    unittest.main()
-
     def test_auto_reconnect_watchdog(self):
         spi = _RealCtpTraderSpi(self.gw)
         self.gw.connect()
@@ -87,3 +84,6 @@ if __name__ == "__main__":
         self.assertTrue(self.gw.is_connected)
         self.assertTrue(self.gw.is_logged_in)
         self.assertTrue(self.gw.settlement_confirmed)
+
+if __name__ == "__main__":
+    unittest.main()
