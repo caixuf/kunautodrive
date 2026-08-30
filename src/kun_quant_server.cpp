@@ -70,6 +70,9 @@ public:
 
         int opt = 1;
         setsockopt(server_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#ifdef SO_REUSEPORT
+        setsockopt(server_fd_, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+#endif
 
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
@@ -183,13 +186,6 @@ private:
             return;
         }
 
-        // 统一 AI 命名空间代理 (机制, 不含策略): /api/ 下除 C++ 原生端点外,
-        // 全部转发至内部 ai_service (ai_port)。Python 侧增删路由无需改动 C++。
-        if (path.rfind("/api/", 0) == 0 && path != "/api/status" && path != "/api/reconcile") {
-            proxy_to_ai_service(client_fd, request);
-            return;
-        }
-
         if (path == "/api/order") {
             // 解析 POST 请求体的 JSON 订单参数 (基于 cJSON 标准库，杜绝截断与类型转换异常)
             size_t body_pos = request.find("\r\n\r\n");
@@ -279,6 +275,13 @@ private:
                                    std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;
             send(client_fd, response.c_str(), response.size(), MSG_NOSIGNAL);
             close(client_fd);
+            return;
+        }
+
+        // 统一 AI 命名空间代理 (机制, 不含策略): /api/ 下除上述 C++ 原生端点外,
+        // 全部转发至内部 ai_service (ai_port)。Python 侧增删路由无需改动 C++。
+        if (path.rfind("/api/", 0) == 0) {
+            proxy_to_ai_service(client_fd, request);
             return;
         }
 

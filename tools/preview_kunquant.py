@@ -1,45 +1,26 @@
 #!/usr/bin/env python3
 """
-KunQuant Terminal Web Server
-Lightweight HTTP/WebSocket server for the KunQuant Professional Trading Desk
+KunQuant Terminal Launcher
+Starts the full-stack native C++ daemon + Python AI service + Web Trading Desk
 """
 
-import http.server
-import socketserver
 import os
 import sys
-import webbrowser
+import subprocess
 
-PORT = 8900
-WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools", "kunboard")
-
-class Handler(http.server.SimpleHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=WEB_DIR, **kwargs)
-
-    def log_message(self, format, *args):
-        # 简化日志输出
-        sys.stderr.write(f"[KunQuant UI Server] {args[0]} - {args[1]}\n")
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+START_SCRIPT = os.path.join(ROOT_DIR, "scripts", "start_quant.sh")
 
 def main():
-    os.chdir(WEB_DIR)
-    socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("", PORT), Handler) as httpd:
-        print(f"\n=======================================================")
-        print(f"  鲲量化 (KunQuant) 专业交易工作台已启动")
-        print(f"  URL: http://localhost:{PORT}")
-        print(f"=======================================================\n")
-        
-        if "--no-browser" not in sys.argv:
-            try:
-                webbrowser.open(f"http://localhost:{PORT}")
-            except Exception:
-                pass
-        
-        try:
-            httpd.serve_forever()
-        except KeyboardInterrupt:
-            print("\nServer stopped.")
+    if not os.path.exists(START_SCRIPT):
+        print(f"[!] 启动脚本未找到: {START_SCRIPT}")
+        sys.exit(1)
+    
+    cmd = [START_SCRIPT] + sys.argv[1:]
+    try:
+        subprocess.run(cmd)
+    except KeyboardInterrupt:
+        pass
 
 if __name__ == "__main__":
     main()
