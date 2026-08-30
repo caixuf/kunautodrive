@@ -2,6 +2,7 @@
 #include <sqlite3.h>
 #include <iostream>
 #include <filesystem>
+#include <algorithm>
 #include <sstream>
 
 namespace kun {
@@ -510,6 +511,46 @@ bool StorageManager::load_latest_account(const std::string& account_id, AccountD
     }
     sqlite3_finalize(stmt);
     return found;
+}
+
+std::vector<StorageManager::TickRow> StorageManager::load_ticks(const std::string& symbol, int limit) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<TickRow> results;
+    if (!db_) return results;
+
+    // 取最近 limit 条后翻转为升序, 供 K 线桶聚合
+    const char* sql = "SELECT symbol, exchange, last_price, bid_price1, ask_price1, bid_volume1, ask_volume1, volume, open_interest, ts "
+                      "FROM ticks WHERE symbol = ? ORDER BY ts DESC LIMIT ?;";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return results;
+    sqlite3_bind_text(stmt, 1, symbol.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 2, limit);
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        TickRow t;
+        t.symbol = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        t.exchange = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        t.last_price = sqlite3_column_double(stmt, 2);
+        t.bid1 = sqlite3_column_double(stmt, 3);
+        t.ask1 = sqlite3_column_double(stmt, 4);
+        t.bid_vol1 = sqlite3_column_double(stmt, 5);
+        t.ask_vol1 = sqlite3_column_double(stmt, 6);
+        t.volume = sqlite3_column_double(stmt, 7);
+        t.open_interest = sqlite3_column_double(stmt, 8);
+        t.ts = sqlite3_column_int64(stmt, 9);
+        results.push_back(t);
+    }
+    sqlite3_finalize(stmt);
+    std::reverse(results.begin(), results.end());
+    return results;
+}
+
+bool StorageManager::load_latest_tick(const std::string& symbol, TickRow& out) {
+    auto ticks = load_ticks(symbol, 1);
+    if (ticks.empty()) return false;
+    out = ticks.back();
+    return true;
 }
 
 } // namespace kun

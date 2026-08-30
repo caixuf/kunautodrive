@@ -409,6 +409,8 @@ public:
             auto res = co_await channel.recv_for(50000); // 50ms 超时响应停机
             if (res.ok()) {
                 const auto* t = reinterpret_cast<const QuantTickMsg*>(res.message.data);
+                // 只落盘真实行情; 历史回放 (exchange=REPLAY) 不计入真实 tick 账本
+                if (std::strcmp(t->exchange, "REPLAY") == 0) continue;
                 TickData td;
                 td.symbol = t->symbol;
                 td.exchange = t->exchange;

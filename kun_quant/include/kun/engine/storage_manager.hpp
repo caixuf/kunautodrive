@@ -43,6 +43,16 @@ public:
     std::vector<PositionData> load_positions(const std::string& account_id);
     bool load_latest_account(const std::string& account_id, AccountData& out_acc);
 
+    // 真实行情查询 (ticks 表为新浪实时行情落盘)
+    struct TickRow {
+        std::string symbol, exchange;
+        double last_price{0}, bid1{0}, ask1{0}, bid_vol1{0}, ask_vol1{0};
+        double volume{0}, open_interest{0};
+        int64_t ts{0};
+    };
+    std::vector<TickRow> load_ticks(const std::string& symbol, int limit = 20000); // 按时间升序
+    bool load_latest_tick(const std::string& symbol, TickRow& out);
+
     const std::string& get_db_path() const { return db_path_; }
 
 private:

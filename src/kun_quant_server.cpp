@@ -47,6 +47,49 @@ namespace kun {
 static std::atomic<bool> g_server_running{true};
 static StorageManager* g_storage_mgr = nullptr;
 
+// ── 历史数据快速回放 (把真实落盘 tick 按 N 倍速重新灌入总线) ──
+// 数据 100% 来自 ticks 表真实行情, 仅时间轴加速, 不生成任何合成价格。
+// exchange 标记 "REPLAY", 行情落盘协程据此跳过, 防止回放数据污染真实 tick 账本。
+static std::atomic<bool> g_replay_running{false};
+static std::string g_replay_symbol;
+static std::atomic<uint64_t> g_replay_pos{0};
+static std::atomic<uint64_t> g_replay_total{0};
+static MessageBus* g_replay_bus = nullptr;
+static std::thread g_replay_thread;
+
+static void replay_worker(std::string sym, double speed) {
+    auto ticks = g_storage_mgr ? g_storage_mgr->load_ticks(sym, 100000) : std::vector<StorageManager::TickRow>{};
+    if (ticks.size() < 2) { g_replay_running.store(false); return; }
+
+    uint64_t avg_dt_us = static_cast<uint64_t>(
+        (ticks.back().ts - ticks.front().ts) / (ticks.size() - 1));
+    if (avg_dt_us == 0) avg_dt_us = 500000;
+    uint64_t send_interval_us = std::max<uint64_t>(20000,  // 上限 50 tick/s 防总线过载
+        static_cast<uint64_t>(avg_dt_us / std::max(1.0, speed)));
+
+    g_replay_total.store(ticks.size());
+    g_replay_pos.store(0);
+    for (size_t i = 0; i < ticks.size() && g_replay_running.load() && g_server_running.load(); ++i) {
+        const auto& t = ticks[i];
+        QuantTickMsg msg{};
+        std::strncpy(msg.symbol, t.symbol.c_str(), sizeof(msg.symbol) - 1);
+        std::strncpy(msg.exchange, "REPLAY", sizeof(msg.exchange) - 1);
+        msg.timestamp_us = static_cast<uint64_t>(t.ts);
+        msg.last_price = t.last_price;
+        msg.bid_price1 = t.bid1;
+        msg.ask_price1 = t.ask1;
+        msg.bid_volume1 = t.bid_vol1;
+        msg.ask_volume1 = t.ask_vol1;
+        msg.volume = t.volume;
+        msg.open_interest = t.open_interest;
+        std::string topic = "market/tick/" + sym;
+        message_bus_publish(g_replay_bus, topic.c_str(), "HistoryReplay", &msg, sizeof(msg));
+        g_replay_pos.store(i + 1);
+        std::this_thread::sleep_for(std::chrono::microseconds(send_interval_us));
+    }
+    g_replay_running.store(false);
+}
+
 static void sig_handler(int sig) {
     std::cout << "[KunQuant Daemon] Signal received: " << sig << std::endl;
     g_server_running.store(false);
@@ -187,6 +230,134 @@ private:
         }
 
         if (path.rfind("/api/bars", 0) == 0) {
+            // 真实 K 线数据, 严禁 sin()/随机数合成:
+            //   tf=1d          → data/history/{品种}.csv (fetch_history.py 抓取的新浪日线)
+            //   tf=1m/5m/15m   → SQLite ticks 表真实落盘行情聚合 (OHLCV)
+            // 无数据时返回空数组, 前端如实显示空态。
+            std::string sym = "rb2405";
+            std::string tf = "1d";
+            size_t q = path.find("symbol=");
+            if (q != std::string::npos) {
+                sym = path.substr(q + 7);
+                size_t amp = sym.find('&');
+                if (amp != std::string::npos) sym.resize(amp);
+            }
+            q = path.find("tf=");
+            if (q != std::string::npos) {
+                tf = path.substr(q + 3);
+                size_t amp = tf.find('&');
+                if (amp != std::string::npos) tf.resize(amp);
+            }
+
+            auto emit_json = [&](const std::vector<std::string>& times,
+                                 const std::vector<double>& opens, const std::vector<double>& highs,
+                                 const std::vector<double>& lows, const std::vector<double>& closes,
+                                 const std::vector<double>& vols) {
+                constexpr size_t kMaxChartBars = 120; // 图表只取最近 N 根
+                size_t n = times.size();
+                size_t start = n > kMaxChartBars ? n - kMaxChartBars : 0;
+                std::ostringstream ss;
+                ss << "[";
+                for (size_t i = start; i < n; ++i) {
+                    if (i > start) ss << ",";
+                    ss << "{\"time\":\"" << times[i] << "\",\"open\":" << opens[i]
+                       << ",\"high\":" << highs[i] << ",\"low\":" << lows[i]
+                       << ",\"close\":" << closes[i] << ",\"volume\":" << vols[i] << "}";
+                }
+                ss << "]";
+                std::string json = ss.str();
+                std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: " +
+                                       std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;
+                send(client_fd, response.c_str(), response.size(), MSG_NOSIGNAL);
+                close(client_fd);
+            };
+
+            if (tf == "1m" || tf == "5m" || tf == "15m") {
+                // 真实落盘 tick → 分钟级 OHLCV 桶聚合。
+                // volume 为新浪当日累计量, 桶内取 max-min 增量 (负值防御为 0)。
+                int64_t bucket_s = (tf == "1m") ? 60 : (tf == "5m" ? 300 : 900);
+                std::vector<StorageManager::TickRow> ticks;
+                if (storage_) ticks = storage_->load_ticks(sym, 20000);
+                if (!ticks.empty()) {
+                    std::vector<std::string> times;
+                    std::vector<double> opens, highs, lows, closes, vols;
+                    int64_t cur_bucket = 0;
+                    double b_open = 0, b_high = -1e18, b_low = 1e18, b_close = 0, b_vol_min = 1e18, b_vol_max = -1e18;
+                    auto flush_bucket = [&]() {
+                        if (b_high < b_low) return; // 空桶
+                        times.push_back([bucket_start = cur_bucket * bucket_s]() {
+                            std::time_t tt = static_cast<std::time_t>(bucket_start);
+                            std::tm bt{};
+                            localtime_r(&tt, &bt);
+                            char buf[8];
+                            std::strftime(buf, sizeof(buf), "%H:%M", &bt);
+                            return std::string(buf);
+                        }());
+                        opens.push_back(b_open);
+                        highs.push_back(b_high);
+                        lows.push_back(b_low);
+                        closes.push_back(b_close);
+                        double dv = b_vol_max - b_vol_min;
+                        vols.push_back(dv > 0 ? dv : 0);
+                    };
+                    for (const auto& t : ticks) {
+                        int64_t bucket = t.ts / 1000000 / bucket_s;
+                        if (bucket != cur_bucket) {
+                            flush_bucket();
+                            cur_bucket = bucket;
+                            b_open = t.last_price;
+                            b_high = -1e18;
+                            b_low = 1e18;
+                            b_vol_min = 1e18;
+                            b_vol_max = -1e18;
+                        }
+                        b_high = std::max(b_high, t.last_price);
+                        b_low = std::min(b_low, t.last_price);
+                        b_close = t.last_price;
+                        b_vol_min = std::min(b_vol_min, t.volume);
+                        b_vol_max = std::max(b_vol_max, t.volume);
+                    }
+                    flush_bucket();
+                    emit_json(times, opens, highs, lows, closes, vols);
+                } else {
+                    emit_json({}, {}, {}, {}, {}, {});
+                }
+                return;
+            }
+
+            // tf=1d: 真实日线 CSV
+            std::string family = sym;
+            while (!family.empty() && isdigit(static_cast<unsigned char>(family.back()))) family.pop_back();
+
+            std::vector<std::string> times;
+            std::vector<double> opens, highs, lows, closes, vols;
+            if (!family.empty()) {
+                std::ifstream csv("data/history/" + family + ".csv");
+                std::string line;
+                std::getline(csv, line); // 表头
+                while (std::getline(csv, line)) {
+                    if (line.empty()) continue;
+                    std::stringstream lss(line);
+                    std::string tok;
+                    std::vector<std::string> cols;
+                    while (std::getline(lss, tok, ',')) cols.push_back(tok);
+                    if (cols.size() < 7) continue;
+                    try {
+                        times.push_back(cols[1]);
+                        opens.push_back(std::stod(cols[2]));
+                        highs.push_back(std::stod(cols[3]));
+                        lows.push_back(std::stod(cols[4]));
+                        closes.push_back(std::stod(cols[5]));
+                        vols.push_back(std::stod(cols[6]));
+                    } catch (...) { continue; } // 跳过脏行, 不伪造补齐
+                }
+            }
+            emit_json(times, opens, highs, lows, closes, vols);
+            return;
+        }
+
+        if (path.rfind("/api/tick", 0) == 0) {
+            // 最新真实行情快照 (新浪落盘 tick), 供前端实时面板轮询
             std::string sym = "rb2405";
             size_t q = path.find("symbol=");
             if (q != std::string::npos) {
@@ -194,30 +365,15 @@ private:
                 size_t amp = sym.find('&');
                 if (amp != std::string::npos) sym.resize(amp);
             }
-            std::ostringstream ss;
-            ss << "[";
-            double base_p = (sym.find("au") != std::string::npos) ? 568.0 : ((sym.find("cu") != std::string::npos) ? 74500.0 : 3620.0);
-            auto now = std::chrono::system_clock::now();
-            for (int i = 60; i >= 0; --i) {
-                auto t = now - std::chrono::minutes(i);
-                std::time_t tt = std::chrono::system_clock::to_time_t(t);
-                std::tm tm_buf;
-                localtime_r(&tt, &tm_buf);
-                char tbuf[16];
-                std::strftime(tbuf, sizeof(tbuf), "%H:%M", &tm_buf);
-
-                double op = base_p + std::sin(i * 0.1) * (base_p * 0.003);
-                double hi = op + std::abs(std::sin(i * 0.2)) * (base_p * 0.002) + 1.0;
-                double lo = op - std::abs(std::cos(i * 0.2)) * (base_p * 0.002) - 1.0;
-                double cl = op + std::sin(i * 0.3) * (base_p * 0.001);
-                double vol = 500.0 + std::abs(std::sin(i * 0.15)) * 800.0;
-
-                if (i < 60) ss << ",";
-                ss << "{\"time\":\"" << tbuf << "\",\"open\":" << op << ",\"high\":" << hi
-                   << ",\"low\":" << lo << ",\"close\":" << cl << ",\"volume\":" << vol << "}";
+            std::string json = "{}";
+            StorageManager::TickRow t;
+            if (storage_ && storage_->load_latest_tick(sym, t)) {
+                json = "{\"symbol\":\"" + t.symbol + "\",\"last\":" + std::to_string(t.last_price) +
+                       ",\"bid\":" + std::to_string(t.bid1) + ",\"ask\":" + std::to_string(t.ask1) +
+                       ",\"bid_vol\":" + std::to_string(t.bid_vol1) + ",\"ask_vol\":" + std::to_string(t.ask_vol1) +
+                       ",\"volume\":" + std::to_string(t.volume) +
+                       ",\"ts\":" + std::to_string(t.ts) + "}";
             }
-            ss << "]";
-            std::string json = ss.str();
             std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: " +
                                    std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;
             send(client_fd, response.c_str(), response.size(), MSG_NOSIGNAL);
@@ -295,6 +451,56 @@ private:
                                    std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;
             send(client_fd, response.c_str(), response.size(), MSG_NOSIGNAL);
             close(client_fd);
+            return;
+        }
+
+        if (path == "/api/replay" || path == "/api/replay/stop" || path == "/api/replay/status") {
+            // 历史数据快速回放: 把真实落盘 tick 按倍速重新发布至 market/tick/{sym},
+            // 策略/进化引擎/风控全链路即刻消费一个完整交易日的真实行情。仅加速时间轴, 无任何合成数据。
+            auto send_json = [&](const std::string& json) {
+                std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: " +
+                                       std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;
+                send(client_fd, response.c_str(), response.size(), MSG_NOSIGNAL);
+                close(client_fd);
+            };
+
+            if (path == "/api/replay/status") {
+                std::string json = std::string("{\"running\":") + (g_replay_running.load() ? "true" : "false") +
+                                   ",\"symbol\":\"" + g_replay_symbol + "\"" +
+                                   ",\"pos\":" + std::to_string(g_replay_pos.load()) +
+                                   ",\"total\":" + std::to_string(g_replay_total.load()) + "}";
+                send_json(json);
+                return;
+            }
+
+            if (path == "/api/replay/stop") {
+                g_replay_running.store(false);
+                send_json("{\"status\":\"STOPPING\"}");
+                return;
+            }
+
+            // POST /api/replay  {symbol, speed}
+            size_t body_pos = request.find("\r\n\r\n");
+            std::string body = (body_pos != std::string::npos) ? request.substr(body_pos + 4) : "";
+            std::string sym = "rb2405";
+            double speed = 600.0;
+            cJSON* root = cJSON_Parse(body.c_str());
+            if (root) {
+                cJSON* item = cJSON_GetObjectItem(root, "symbol");
+                if (cJSON_IsString(item) && item->valuestring) sym = item->valuestring;
+                item = cJSON_GetObjectItem(root, "speed");
+                if (cJSON_IsNumber(item) && item->valuedouble > 0) speed = item->valuedouble;
+                cJSON_Delete(root);
+            }
+            bool expected = false;
+            if (!g_replay_running.compare_exchange_strong(expected, true)) {
+                send_json("{\"error\":\"REPLAY_ALREADY_RUNNING\"}");
+                return;
+            }
+            g_replay_symbol = sym;
+            if (g_replay_thread.joinable()) g_replay_thread.join();
+            g_replay_thread = std::thread(replay_worker, sym, speed);
+            send_json("{\"status\":\"STARTED\",\"symbol\":\"" + sym + "\",\"speed\":" + std::to_string(speed) + "}");
             return;
         }
 
@@ -610,6 +816,7 @@ int main(int argc, char* argv[]) {
 
     // 2. 创建 KunAutoDrive 核心消息总线
     MessageBus* bus = message_bus_create("kunquant_daemon_bus");
+    kun::g_replay_bus = bus;
 
     // 3. 启动 flowcoro 协程运行时
     flowcoro::rt::RtExecutor ex{{ .pin_cpu = -1 }};

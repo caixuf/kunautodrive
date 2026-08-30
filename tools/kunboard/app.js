@@ -12,6 +12,7 @@
     const State = {
         currentPage: 'trading-desk',
         activeSymbol: 'rb2405',
+        activeTimeframe: '1m',
         activeTf: '1m',
         activeCategory: 'all',
 
@@ -133,11 +134,13 @@
     };
 
     // ─────────────────────────────────────────────────────────────
-    // 从后端 SQLite /api/bars 加载真实 K 线时序数据 (异步 + 确定性回退)
+    // 从后端 /api/bars 加载真实 K 线 (tf=1d 日线 CSV / 1m·5m·15m 真实落盘 tick 聚合)。
+    // 无数据时如实显示空态, 绝不伪造 K 线。
     // ─────────────────────────────────────────────────────────────
-    async function initMarketBars(basePrice = 3600.0) {
+    async function initMarketBars() {
+        const tf = State.activeTimeframe || '1d';
         try {
-            const res = await fetch(`/api/bars?symbol=${State.activeSymbol}`);
+            const res = await fetch(`/api/bars?symbol=${State.activeSymbol}&tf=${tf}`);
             if (res.ok) {
                 const data = await res.json();
                 if (Array.isArray(data) && data.length > 0) {
@@ -149,27 +152,11 @@
                 }
             }
         } catch (e) {
-            // 后端离线时进入确定性基准序列
+            console.error('[Bars] 真实行情加载失败:', e);
         }
-
-        State.marketBars = [];
-        let price = basePrice;
-        const now = Date.now() - 60 * 60 * 1000;
-        const scale = basePrice > 100 ? (basePrice * 0.001) : (basePrice * 0.005);
-        for (let i = 0; i < 60; i++) {
-            const time = new Date(now + i * 60 * 1000);
-            const delta = (Math.sin(i / 6.0) * 1.5) * scale;
-            const open = price;
-            const close = open + delta;
-            const high = Math.max(open, close) + Math.abs(Math.sin(i * 0.4)) * scale;
-            const low = Math.min(open, close) - Math.abs(Math.cos(i * 0.4)) * scale;
-            const vol = Math.floor(500 + Math.abs(Math.sin(i * 0.2)) * 800);
-            price = close;
-
-            State.marketBars.push({
-                time: time.toTimeString().substring(0, 5),
-                open, high, low, close, volume: vol
-            });
+        State.marketBars = []; // 后端无数据/离线 → 空态, 图表绘制提示文案
+        if (State.currentPage === 'trading-desk' && MarketChart.render) {
+            MarketChart.render();
         }
     }
 
@@ -250,13 +237,21 @@
         render() {
             const ctx = this.ctx;
             const bars = State.marketBars;
-            if (!ctx || !bars || bars.length === 0) return;
+            if (!ctx) return;
 
             const rect = this.canvas.parentElement.getBoundingClientRect();
             const w = rect.width;
             const h = rect.height;
-
             ctx.clearRect(0, 0, w, h);
+
+            if (!bars || bars.length === 0) {
+                // 无真实数据时如实提示, 绝不伪造 K 线填充
+                ctx.fillStyle = '#64748b';
+                ctx.font = '13px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText('暂无真实行情数据 — 请先运行 fetch_history.py 抓取或等待实时行情接入', w / 2, h / 2);
+                return;
+            }
 
             const chartH = h * 0.72;
             const volH = h * 0.22;
@@ -622,27 +617,23 @@
             const c = State.contracts.find(x => x.symbol === symbol);
             if (!c) return;
 
-            initMarketBars(c.last);
+            initMarketBars();
             MarketChart.resize();
 
-            const mid = c.last;
-            const tick = c.tick || 1.0;
             const fmt = (v) => v.toFixed(c.last < 10 ? 3 : (c.last < 100 ? 2 : 1));
 
-            State.depth.asks = [
-                { price: mid + tick * 5, vol: 140 },
-                { price: mid + tick * 4, vol: 95 },
-                { price: mid + tick * 3, vol: 230 },
-                { price: mid + tick * 2, vol: 310 },
-                { price: mid + tick * 1, vol: 80 }
-            ];
-            State.depth.bids = [
-                { price: mid - tick * 1, vol: 120 },
-                { price: mid - tick * 2, vol: 260 },
-                { price: mid - tick * 3, vol: 410 },
-                { price: mid - tick * 4, vol: 180 },
-                { price: mid - tick * 5, vol: 500 }
-            ];
+            // 盘口取真实落盘 tick 的 L1 (新浪仅一档), 不虚构五档
+            fetch(`/api/tick?symbol=${symbol}`).then(r => r.ok ? r.json() : null).then(t => {
+                if (t && t.last) {
+                    State.depth.asks = [{ price: t.ask, vol: t.ask_vol }];
+                    State.depth.bids = [{ price: t.bid, vol: t.bid_vol }];
+                    this.renderDepth();
+                } else {
+                    State.depth.asks = [];
+                    State.depth.bids = [];
+                    this.renderDepth();
+                }
+            }).catch(() => {});
 
             document.getElementById('chart-symbol-name').innerText = `${c.name} (${c.symbol})`;
             document.getElementById('depth-contract-label').innerText = `五档盘口 (${c.symbol})`;
@@ -1130,6 +1121,77 @@
         });
 
         // 快捷手数按钮
+        // K 线周期切换 (1分/5分/15分/日线) — 请求对应真实数据
+        document.querySelectorAll('.tf-btn[data-tf]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.tf-btn[data-tf]').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                State.activeTimeframe = btn.dataset.tf;
+                initMarketBars();
+            });
+        });
+
+        // 历史快速回放: 真实落盘 tick 按 600x 加速重新灌入策略引擎 (不产生任何合成数据)
+        const replayBtn = document.getElementById('btn-replay');
+        let replayPoller = null;
+        if (replayBtn) {
+            replayBtn.addEventListener('click', async () => {
+                if (replayBtn.dataset.running === '1') {
+                    await fetch('/api/replay/stop', { method: 'POST' });
+                    return; // 状态由轮询器刷新
+                }
+                const res = await fetch('/api/replay', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symbol: State.activeSymbol, speed: 600 })
+                });
+                const rep = await res.json();
+                if (rep.error === 'REPLAY_ALREADY_RUNNING') {
+                    Toast.show('历史回放已在运行中', 'warn');
+                    return;
+                }
+                replayBtn.dataset.running = '1';
+                replayBtn.innerText = '■ 停止回放';
+                Toast.show(`历史回放已启动: ${rep.symbol} @ ${rep.speed}x 真实行情加速`, 'success');
+                replayPoller = setInterval(async () => {
+                    try {
+                        const st = await (await fetch('/api/replay/status')).json();
+                        if (!st.running) {
+                            clearInterval(replayPoller);
+                            replayPoller = null;
+                            replayBtn.dataset.running = '0';
+                            replayBtn.innerText = '▶ 历史回放';
+                            Toast.show(`历史回放完成: 共回放 ${st.total} 条真实 tick`, 'info');
+                            initMarketBars(); // 刷新 K 线 (回放期间若有真实落盘)
+                        } else {
+                            replayBtn.innerText = `■ 停止回放 (${st.pos}/${st.total})`;
+                        }
+                    } catch (e) { /* 静默 */ }
+                }, 2000);
+            });
+        }
+
+        // 快捷填价: 对手价 (吃单价=ask1) / 排队价 (挂单价=bid1) / 最新价 — 全部取真实行情
+        const fillPrice = (v) => {
+            const el = document.getElementById('ticket-price');
+            if (el && v > 0) {
+                el.value = Number(v).toFixed(v < 10 ? 3 : (v < 100 ? 2 : 1));
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        };
+        document.getElementById('btn-quick-ask')?.addEventListener('click', () => {
+            const a = State.depth.asks[0];
+            if (a) fillPrice(a.price);
+        });
+        document.getElementById('btn-quick-bid')?.addEventListener('click', () => {
+            const b = State.depth.bids[0];
+            if (b) fillPrice(b.price);
+        });
+        document.getElementById('btn-quick-last')?.addEventListener('click', () => {
+            const c = State.contracts.find(x => x.symbol === State.activeSymbol);
+            if (c) fillPrice(c.last);
+        });
+
         document.querySelectorAll('.quick-btn[data-vol]').forEach(btn => {
             btn.addEventListener('click', () => {
                 const v = parseInt(btn.dataset.vol);
@@ -1597,69 +1659,43 @@ ${(data.trades && data.trades.length) ? data.trades.map(t => `- [${t.time}] ${t.
     // 行情模拟推流循环
     // ─────────────────────────────────────────────────────────────
     function startQuoteStream() {
-        setInterval(() => {
-            const last = State.marketBars[State.marketBars.length - 1];
-            if (!last) return;
+        // 真实行情轮询: 后端 /api/tick 返回新浪落盘的最新真实 tick 快照。
+        // 此处绝无 Math.random 造数 — 无真实数据时面板保持最后已知真实值。
+        setInterval(async () => {
+            try {
+                const res = await fetch(`/api/tick?symbol=${State.activeSymbol}`);
+                if (!res.ok) return;
+                const t = await res.json();
+                if (!t || !t.last) return;
 
-            const activeC = State.contracts.find(x => x.symbol === State.activeSymbol);
-            const tick = activeC?.tick || 1.0;
-            const delta = (Math.random() - 0.49) * tick * 1.5;
-            last.close += delta;
-            last.high = Math.max(last.high, last.close);
-            last.low = Math.min(last.low, last.close);
-            last.volume += Math.floor(Math.random() * 8);
+                const activeC = State.contracts.find(x => x.symbol === State.activeSymbol);
+                if (activeC) activeC.last = t.last;
 
-            const mid = last.close;
-            if (activeC) activeC.last = last.close;
+                const fmt = (v) => Number(v).toFixed(v < 10 ? 3 : (v < 100 ? 2 : 1));
+                const elLast = document.getElementById('desk-last-price');
+                if (elLast) elLast.innerText = fmt(t.last);
 
-            const fmt = (v) => v.toFixed(mid < 10 ? 3 : (mid < 100 ? 2 : 1));
-            document.getElementById('desk-last-price').innerText = fmt(last.close);
+                // 真实 L1 盘口 (新浪仅提供一档, 如实渲染一档, 不虚构五档)
+                State.depth.asks = [{ price: t.ask, vol: t.ask_vol }];
+                State.depth.bids = [{ price: t.bid, vol: t.bid_vol }];
 
-            State.depth.asks = [
-                { price: mid + tick * 5, vol: Math.floor(60 + Math.random() * 180) },
-                { price: mid + tick * 4, vol: Math.floor(90 + Math.random() * 220) },
-                { price: mid + tick * 3, vol: Math.floor(120 + Math.random() * 280) },
-                { price: mid + tick * 2, vol: Math.floor(140 + Math.random() * 320) },
-                { price: mid + tick * 1, vol: Math.floor(80 + Math.random() * 160) }
-            ];
-
-            State.depth.bids = [
-                { price: mid - tick * 1, vol: Math.floor(110 + Math.random() * 200) },
-                { price: mid - tick * 2, vol: Math.floor(160 + Math.random() * 290) },
-                { price: mid - tick * 3, vol: Math.floor(210 + Math.random() * 380) },
-                { price: mid - tick * 4, vol: Math.floor(190 + Math.random() * 310) },
-                { price: mid - tick * 5, vol: Math.floor(260 + Math.random() * 480) }
-            ];
-
-            if (State.currentPage === 'trading-desk') {
-                MarketChart.render();
-                UI.renderDepth();
-            }
-
-            // 驱动一次在线遗传算法代际进化演进 (每隔 3-4 秒发生一次实盘试错演进)
-            if (Math.random() < 0.25) {
-                State.evolutionGen++;
-                const elGen = document.getElementById('evo-gen-count');
-                if (elGen) elGen.innerText = `Gen #${State.evolutionGen}`;
-                
-                const topChromo = State.evolutionPop[0];
-                topChromo.fitness = Math.min(99.4, topChromo.fitness + (Math.random() * 0.4 - 0.15));
-                const elFitness = document.getElementById('evo-best-fitness');
-                if (elFitness) elFitness.innerText = `${topChromo.fitness.toFixed(1)} 分`;
-
-                const actions = [
-                    `淘汰低效参数组合 [GEN_07]，由精英个体 [GEN_01] 与 [GEN_02] 杂交生成新一代`,
-                    `染色体 [GEN_03] 触发自适应变异: 止损 ATR 乘数微调至 ${(1.8 + Math.random()*0.4).toFixed(1)}x`,
-                    `实盘微秒级适应度评估通过: 种群平均夏普比率提升至 ${(topChromo.fitness / 28.0).toFixed(2)}`,
-                    `模型根据最新市场波动率动态收敛: 慢线周期锁定为 MA_${topChromo.slow}`
-                ];
-                const act = actions[Math.floor(Math.random() * actions.length)];
-                UI.addEvoLog(act);
-                if (State.currentPage === 'ai-evolution') {
-                    UI.renderEvolutionPop();
+                // 实时更新最后一根 K 线 (基于真实 tick, 不做随机漂移)
+                const last = State.marketBars[State.marketBars.length - 1];
+                if (last && State.activeTimeframe === '1m') {
+                    last.close = t.last;
+                    last.high = Math.max(last.high, t.last);
+                    last.low = Math.min(last.low, t.last);
+                    last.volume = t.volume > 0 ? t.volume : last.volume;
                 }
+
+                if (State.currentPage === 'trading-desk') {
+                    MarketChart.render();
+                    UI.renderDepth();
+                }
+            } catch (e) {
+                // 后端离线/网络异常: 静默保持最后已知真实值
             }
-        }, 500);
+        }, 1000);
     }
 
     // ─────────────────────────────────────────────────────────────

@@ -1,8 +1,8 @@
 [Unit]
 Description=KunQuant Pro Trading Engine & Web Terminal Daemon
 Documentation=https://github.com/caixuf/kunautodrive
-After=network.target network-online.target
-Wants=network-online.target
+After=network.target network-online.target kunquant-ai.service
+Wants=network-online.target kunquant-ai.service
 
 [Service]
 Type=simple

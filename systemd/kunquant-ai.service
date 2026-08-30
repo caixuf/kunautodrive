@@ -1,0 +1,18 @@
+[Unit]
+Description=KunQuant AI 投研微服务 (ai_service, port 8901)
+After=network.target
+
+[Service]
+Type=simple
+User=caixuf
+Group=caixuf
+WorkingDirectory=/home/caixuf/MyCode/KunAutoDriver
+ExecStart=/usr/bin/python3 -m ai_service.server 8901
+Restart=always
+RestartSec=3s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kunquant-ai
+
+[Install]
+WantedBy=multi-user.target
