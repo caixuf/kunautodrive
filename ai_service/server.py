@@ -2,7 +2,7 @@ import json
 import os
 import sys
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from ai_service.config import AIConfig
 from ai_service.provider import LLMProvider
 from ai_service.daily_reporter import DailyReporter
@@ -167,8 +167,9 @@ class AIServiceHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         return
 
-class ReusableHTTPServer(HTTPServer):
+class ReusableHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
+    daemon_threads = True
 
 def run_server(port: int = 8901):
     # 真实行情数据自动抓取守护 (启动即抓全宇宙日线, 每 6 小时更新)

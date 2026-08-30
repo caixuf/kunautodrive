@@ -746,7 +746,7 @@ private:
         }
 
         // 设置 20s 超时
-        timeval tv{20, 0};
+        timeval tv{8, 0};
         setsockopt(ai_fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
         setsockopt(ai_fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv));
 
