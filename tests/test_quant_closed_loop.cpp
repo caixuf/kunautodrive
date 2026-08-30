@@ -292,6 +292,62 @@ void test_gateway_pool_and_follow_trading() {
     std::cout << "  -> GatewayPool 回报发布与从账户 1.5x 自动跟单闭环测试 100% 通过!\n";
 }
 
+void test_gateway_pool_pre_trade_risk_gate() {
+    std::cout << "[Test 6] 运行 GatewayPool 事前风控门禁 (Pre-Trade Risk Gate) 拦截测试...\n";
+    MessageBus* bus = message_bus_create("test_bus_risk_gate");
+    GatewayPool pool(bus);
+
+    AccountProfile prof{"acc_risk_test", "SimNow", AccountRole::MASTER, 1.0, 100000.0};
+    RiskRuleConfig risk_cfg;
+    risk_cfg.max_order_volume = 10.0; // 单笔最大 10 手
+
+    bool ok = pool.register_account(prof, risk_cfg);
+    assert(ok);
+    pool.connect_all();
+
+    static std::atomic<bool> rejected_rtn_received{false};
+    static QuantOrderRtnMsg rejected_rtn{};
+
+    message_bus_subscribe(bus, "trader/acc_risk_test/order_rtn", [](const Message* msg, void* /*ud*/) {
+        if (msg && msg->data_size >= sizeof(QuantOrderRtnMsg)) {
+            const auto* rtn = reinterpret_cast<const QuantOrderRtnMsg*>(msg->data);
+            if (rtn->status == static_cast<uint8_t>(OrderStatus::REJECTED)) {
+                rejected_rtn = *rtn;
+                rejected_rtn_received = true;
+            }
+        }
+    }, nullptr);
+
+    // 尝试发送超限委托 (50 手 > 10 手上限)
+    QuantOrderReqMsg req{};
+    req.order_req_id = 12345;
+    std::strncpy(req.symbol, "rb2405", sizeof(req.symbol) - 1);
+    req.direction = static_cast<uint8_t>(Direction::LONG);
+    req.offset = static_cast<uint8_t>(Offset::OPEN);
+    req.order_type = static_cast<uint8_t>(OrderType::LIMIT);
+    req.price = 3600.0;
+    req.volume = 50.0; // 违规超量
+
+    message_bus_publish(bus, "trader/acc_risk_test/order_req", "TestSender", &req, sizeof(req));
+
+    for (int i = 0; i < 500 && !rejected_rtn_received.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+
+    assert(rejected_rtn_received.load());
+    assert(rejected_rtn.status == static_cast<uint8_t>(OrderStatus::REJECTED));
+    assert(std::abs(rejected_rtn.total_volume - 50.0) < 1e-4);
+
+    // 验证柜台底层未收到该违规委托挂单
+    auto gw = pool.get_gateway("acc_risk_test");
+    assert(gw != nullptr);
+    assert(gw->get_active_orders().empty());
+
+    pool.disconnect_all();
+    message_bus_destroy(bus);
+    std::cout << "  -> GatewayPool 事前风控前置拦截与 REJECTED 拒单回报测试通过!\n";
+}
+
 int main() {
     std::cout.setf(std::ios::unitbuf); // 无缓冲输出, abort 时也能看到日志
     std::cout << "\n=========================================================\n";
@@ -303,9 +359,10 @@ int main() {
     test_position_accounting_and_close_today();
     test_performance_trade_pairing();
     test_gateway_pool_and_follow_trading();
+    test_gateway_pool_pre_trade_risk_gate();
 
     std::cout << "\n=========================================================\n";
-    std::cout << "       全部 5 组核心闭环单测 100% 断言通过!              \n";
+    std::cout << "       全部 6 组核心闭环单测 100% 断言通过!              \n";
     std::cout << "=========================================================\n\n";
     return 0;
 }

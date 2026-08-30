@@ -19,6 +19,7 @@
 #include "kun/market/market_fusion_node.hpp"
 #include "kun/market/sina_fetcher.hpp"
 #include "kun/backtest/performance.hpp"
+#include "cJSON.h"
 
 #include <iostream>
 #include <fstream>
@@ -186,6 +187,79 @@ private:
         // 全部转发至内部 ai_service (ai_port)。Python 侧增删路由无需改动 C++。
         if (path.rfind("/api/", 0) == 0 && path != "/api/status" && path != "/api/reconcile") {
             proxy_to_ai_service(client_fd, request);
+            return;
+        }
+
+        if (path == "/api/order") {
+            // 解析 POST 请求体的 JSON 订单参数 (基于 cJSON 标准库，杜绝截断与类型转换异常)
+            size_t body_pos = request.find("\r\n\r\n");
+            std::string body = (body_pos != std::string::npos) ? request.substr(body_pos + 4) : "";
+
+            std::string acc_id = "acc_master_simnow";
+            std::string sym = "rb2405";
+            double price = 0.0;
+            double volume = 1.0;
+            uint8_t direction = 0; // LONG
+            uint8_t offset = 0;    // OPEN
+
+            cJSON* root = cJSON_Parse(body.c_str());
+            if (root) {
+                cJSON* item = cJSON_GetObjectItem(root, "account_id");
+                if (cJSON_IsString(item) && item->valuestring) acc_id = item->valuestring;
+
+                item = cJSON_GetObjectItem(root, "symbol");
+                if (cJSON_IsString(item) && item->valuestring) sym = item->valuestring;
+
+                item = cJSON_GetObjectItem(root, "price");
+                if (cJSON_IsNumber(item)) price = item->valuedouble;
+
+                item = cJSON_GetObjectItem(root, "volume");
+                if (cJSON_IsNumber(item)) volume = item->valuedouble;
+
+                item = cJSON_GetObjectItem(root, "direction");
+                if (cJSON_IsString(item) && item->valuestring) {
+                    std::string d = item->valuestring;
+                    if (d == "SHORT" || d == "SELL" || d == "卖出") direction = 1;
+                } else if (cJSON_IsNumber(item)) {
+                    direction = static_cast<uint8_t>(item->valueint);
+                }
+
+                item = cJSON_GetObjectItem(root, "offset");
+                if (cJSON_IsString(item) && item->valuestring) {
+                    std::string off = item->valuestring;
+                    if (off == "CLOSE" || off == "平仓") offset = 1;
+                    else if (off == "CLOSE_TODAY" || off == "平今" || off == "平今仓") offset = 2;
+                } else if (cJSON_IsNumber(item)) {
+                    offset = static_cast<uint8_t>(item->valueint);
+                }
+
+                cJSON_Delete(root);
+            }
+
+            QuantOrderReqMsg req{};
+            static std::atomic<uint64_t> s_order_req_seq{20000};
+            req.order_req_id = s_order_req_seq.fetch_add(1);
+            std::strncpy(req.symbol, sym.c_str(), sizeof(req.symbol) - 1);
+            std::strncpy(req.exchange, "SHFE", sizeof(req.exchange) - 1);
+            std::strncpy(req.strategy_name, "ManualDesk", sizeof(req.strategy_name) - 1);
+            req.direction = direction;
+            req.offset = offset;
+            req.order_type = 0; // LIMIT
+            req.price = price;
+            req.volume = volume;
+
+            std::string topic = "trader/" + acc_id + "/order_req";
+            message_bus_publish(bus_, topic.c_str(), "HttpServerOrderDesk", &req, sizeof(req));
+
+            std::string json = "{\"status\":\"SUBMITTED\",\"order_req_id\":" + std::to_string(req.order_req_id) +
+                               ",\"account_id\":\"" + acc_id + "\",\"symbol\":\"" + sym +
+                               "\",\"direction\":" + std::to_string((int)direction) +
+                               ",\"price\":" + std::to_string(price) +
+                               ",\"volume\":" + std::to_string(volume) + "}";
+            std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: " +
+                                   std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;
+            send(client_fd, response.c_str(), response.size(), MSG_NOSIGNAL);
+            close(client_fd);
             return;
         }
 

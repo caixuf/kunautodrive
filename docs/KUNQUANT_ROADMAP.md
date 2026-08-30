@@ -145,8 +145,14 @@ flowchart TD
 
 ## 4. 关键技术决策记录 (ADR)
 
-1. **中间件基座**：全面基于 **KunAutoDrive** 高性能通信栈与 `flowcoro` 协程，严禁引入冗余状态机或第三方重型框架。
-2. **数据接入路径**：期货 CTP / SimNow 为主通道，公网 HTTP / SSE 为辅助校验源，不涉及高合规风险的未受监管品种。
+1. **ADR-1: 内核自研，外围借用成熟生态 (Core Proprietary Middleware + Ecosystem Leverage)**:
+   - **核心自研（差异化资产与护城河）**：全面基于 **KunAutoDrive** 高性能通信栈与 `flowcoro` C++20 确定性协程调度；保留自研内存总线（MessageBus 零拷贝环形队列）、仿真撮合引擎（盘口深度约束与部分成交）、期货账务系统（今昨仓/平今/冻结资金）、事前风控拦截门禁（5道前置检查）与 §2-G 防未来函数合规机试。
+   - **外围借用（站在巨人肩膀上，杜绝低效重复造轮子）**：
+     * **CTP 柜台接入**：借鉴 **vn.py CtpGateway** / **WonderTrader** 成熟状态机模型与 SimNow 测试流，通过独立桥接进程 (`ai_service/ctp_bridge.py`) 或 C++ 原生封装进行流控限速（1秒1次查询）、自动断线重连、去重与每日结算确认，杜绝从零自研柜台踩坑。
+     * **行情与数据工程**：接入 **AkShare / Tushare + SQLite / Parquet / DuckDB** 真实数据管道 (`tools/data_importer.py`)，彻底杜绝随机漫步伪造数据与单源爬虫网络波动。
+     * **基础库与协议层**：全面采用工业级标准组件（`cJSON`, 标准 POSIX/WinSock），杜绝手写字符串解析带来的 POST 截断与类型转换崩溃。
+     * **前端图表**：全面采用开源标准 `lightweight-charts`。
+2. **数据接入路径**：期货 CTP / SimNow 为主通道，公网真实数据与 AkShare 历史行情为基准源，不涉及高合规风险的未受监管品种。
 3. **AI 隔离原则**：大模型独立部署在交易路径外层，其输出必须经过静态规则引擎与回测验证后方可作为参考。
 4. **前端选型**：采用轻量级 `lightweight-charts` 与原生 WebSocket，杜绝商业闭源依赖。
 5. **AI 生成策略三道门禁**：Prompt 硬约束（自动拼接）→ 引擎断言（机试）→ 数据平移测试 CI + 人工 review；约束检查必须可自动执行，AI 口头自检不可信。

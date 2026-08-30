@@ -29,6 +29,10 @@ public:
     void query_account() override;
     void query_position() override;
 
+    std::vector<OrderData> get_active_orders() const {
+        return matching_engine_.get_active_orders();
+    }
+
     void set_tick_interval_ms(int ms) { tick_interval_ms_ = ms; }
     void add_mock_symbol(const std::string& symbol, double base_price);
 

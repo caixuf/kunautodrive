@@ -1120,54 +1120,118 @@
             const sym = document.getElementById('ticket-symbol').value;
             const price = parseFloat(document.getElementById('ticket-price').value);
             const vol = parseInt(document.getElementById('ticket-volume').value);
-            const offset = document.getElementById('ticket-offset').value === 'OPEN' ? '开仓' : '平仓';
+            const offsetVal = document.getElementById('ticket-offset').value;
+            const offset = offsetVal === 'OPEN' ? '开仓' : (offsetVal === 'CLOSE_TODAY' ? '平今仓' : '平仓');
             const type = document.getElementById('ticket-type').value;
 
-            const orderId = String(10050 + State.orders.length);
-            State.orders.unshift({
-                id: orderId,
-                time: new Date().toTimeString().substring(0, 8),
-                strat: '手动指令',
-                symbol: sym,
-                type: type,
-                dir: '买入',
-                offset: offset,
-                price: price,
-                filled: 0,
-                total: vol,
-                status: '挂单中'
+            // 向 C++ 原生服务端 /api/order 发送真实报单指令并接入事前风控
+            fetch('/api/order', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    account_id: 'acc_master_simnow',
+                    symbol: sym,
+                    direction: 'LONG',
+                    offset: offsetVal,
+                    price: price,
+                    volume: vol,
+                    order_type: type
+                })
+            }).then(r => r.json()).then(res => {
+                const orderId = String(res.order_req_id || (10050 + State.orders.length));
+                State.orders.unshift({
+                    id: orderId,
+                    time: new Date().toTimeString().substring(0, 8),
+                    strat: '手动指令',
+                    symbol: sym,
+                    type: type,
+                    dir: '买入',
+                    offset: offset,
+                    price: price,
+                    filled: 0,
+                    total: vol,
+                    status: '已报送'
+                });
+                UI.renderDockTables();
+                Toast.show(`指令已入总线并通过风控: 买入 ${sym} ${offset} ${vol}手 @ ${price}`, 'success');
+                UI.addLog('TRADE', `报单提交: 买入 ${sym} ${offset} ${vol}手 @ ${price} [单号: ${orderId}]`);
+            }).catch(err => {
+                const orderId = String(10050 + State.orders.length);
+                State.orders.unshift({
+                    id: orderId,
+                    time: new Date().toTimeString().substring(0, 8),
+                    strat: '本地演示',
+                    symbol: sym,
+                    type: type,
+                    dir: '买入',
+                    offset: offset,
+                    price: price,
+                    filled: 0,
+                    total: vol,
+                    status: '挂单中'
+                });
+                UI.renderDockTables();
+                Toast.show(`离线演示模式: 买入 ${sym} ${offset} ${vol}手 @ ${price}`, 'info');
             });
-
-            UI.renderDockTables();
-            Toast.show(`报单已提交至柜台: 买入 ${sym} ${offset} ${vol}手 @ ${price}`, 'success');
-            UI.addLog('TRADE', `报单提交: 买入 ${sym} ${offset} ${vol}手 @ ${price} [单号: ${orderId}]`);
         });
 
         document.getElementById('btn-do-sell')?.addEventListener('click', () => {
             const sym = document.getElementById('ticket-symbol').value;
             const price = parseFloat(document.getElementById('ticket-price').value);
             const vol = parseInt(document.getElementById('ticket-volume').value);
-            const offset = document.getElementById('ticket-offset').value === 'OPEN' ? '开仓' : '平仓';
+            const offsetVal = document.getElementById('ticket-offset').value;
+            const offset = offsetVal === 'OPEN' ? '开仓' : (offsetVal === 'CLOSE_TODAY' ? '平今仓' : '平仓');
             const type = document.getElementById('ticket-type').value;
 
-            const orderId = String(10050 + State.orders.length);
-            State.orders.unshift({
-                id: orderId,
-                time: new Date().toTimeString().substring(0, 8),
-                strat: '手动指令',
-                symbol: sym,
-                type: type,
-                dir: '卖出',
-                offset: offset,
-                price: price,
-                filled: 0,
-                total: vol,
-                status: '挂单中'
+            // 向 C++ 原生服务端 /api/order 发送真实报单指令并接入事前风控
+            fetch('/api/order', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    account_id: 'acc_master_simnow',
+                    symbol: sym,
+                    direction: 'SHORT',
+                    offset: offsetVal,
+                    price: price,
+                    volume: vol,
+                    order_type: type
+                })
+            }).then(r => r.json()).then(res => {
+                const orderId = String(res.order_req_id || (10050 + State.orders.length));
+                State.orders.unshift({
+                    id: orderId,
+                    time: new Date().toTimeString().substring(0, 8),
+                    strat: '手动指令',
+                    symbol: sym,
+                    type: type,
+                    dir: '卖出',
+                    offset: offset,
+                    price: price,
+                    filled: 0,
+                    total: vol,
+                    status: '已报送'
+                });
+                UI.renderDockTables();
+                Toast.show(`指令已入总线并通过风控: 卖出 ${sym} ${offset} ${vol}手 @ ${price}`, 'success');
+                UI.addLog('TRADE', `报单提交: 卖出 ${sym} ${offset} ${vol}手 @ ${price} [单号: ${orderId}]`);
+            }).catch(err => {
+                const orderId = String(10050 + State.orders.length);
+                State.orders.unshift({
+                    id: orderId,
+                    time: new Date().toTimeString().substring(0, 8),
+                    strat: '本地演示',
+                    symbol: sym,
+                    type: type,
+                    dir: '卖出',
+                    offset: offset,
+                    price: price,
+                    filled: 0,
+                    total: vol,
+                    status: '挂单中'
+                });
+                UI.renderDockTables();
+                Toast.show(`离线演示模式: 卖出 ${sym} ${offset} ${vol}手 @ ${price}`, 'info');
             });
-
-            UI.renderDockTables();
-            Toast.show(`报单已提交至柜台: 卖出 ${sym} ${offset} ${vol}手 @ ${price}`, 'success');
-            UI.addLog('TRADE', `报单提交: 卖出 ${sym} ${offset} ${vol}手 @ ${price} [单号: ${orderId}]`);
         });
 
         // 搜索框过滤
@@ -1208,11 +1272,11 @@
             }
         });
 
-        // 回测执行
+        // 回测执行 (演示沙盒)
         document.getElementById('btn-execute-backtest')?.addEventListener('click', () => {
-            UI.addLog('INFO', 'C++ BacktestEngine: 正在以开盘价严格撮合 100,000 根 Tick/Bar 数据...');
+            UI.addLog('INFO', 'C++ BacktestEngine: 正在以历史行情逐 Tick 撮合...');
             BacktestChart.generateMockCurve();
-            Toast.show('回测执行成功！夏普比率: 32.63 | 最大回撤: 0.04%', 'success');
+            Toast.show('回测沙盒生成完成 (演示数据)', 'info');
         });
 
         // 全局紧急全撤

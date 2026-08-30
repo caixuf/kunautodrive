@@ -3,6 +3,8 @@
 #include "kun/core/types.hpp"
 #include "kun/gateway/sim_gateway.hpp"
 #include "kun/engine/multi_account_router.hpp"
+#include "kun/engine/position_manager.hpp"
+#include "kun/engine/risk_manager.hpp"
 #include "message_bus.h"
 #include <memory>
 #include <unordered_map>
@@ -10,61 +12,91 @@
 #include <vector>
 #include <mutex>
 #include <iostream>
+#include <cstring>
+#include <chrono>
 
 namespace kun {
 
 /**
  * @brief 柜台网关池管理器 (GatewayPool)
  * 深度复用 FlowEngine MessageBus 的命名空间机制 (trader/<account_id>/*)
- * 支持多账户并行挂载、状态监控与统一断线重连
+ * 支持多账户并行挂载、状态监控、事前风控前置拦截 (Pre-Trade Risk Gate) 与统一断线重连
  */
 class GatewayPool : public IGatewayCallback {
 public:
+    struct AccountContext {
+        AccountProfile profile;
+        std::shared_ptr<SimGateway> gateway;
+        std::shared_ptr<PositionManager> pos_mgr;
+        std::shared_ptr<RiskManager> risk_mgr;
+    };
+
     explicit GatewayPool(MessageBus* bus) : bus_(bus) {}
     ~GatewayPool() override {
         disconnect_all();
     }
 
-    bool register_account(const AccountProfile& profile) {
+    bool register_account(const AccountProfile& profile, const RiskRuleConfig& risk_cfg = {}) {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (gateways_.find(profile.account_id) != gateways_.end()) {
+        if (accounts_.find(profile.account_id) != accounts_.end()) {
             return false;
         }
 
-        // 创建专属网关实例 (仿真或CTP)
-        auto gw = std::make_shared<SimGateway>(profile.account_id);
-        gw->register_callback(this);
-        gateways_[profile.account_id] = gw;
-        profiles_[profile.account_id] = profile;
+        auto ctx = std::make_shared<AccountContext>();
+        ctx->profile = profile;
+        ctx->gateway = std::make_shared<SimGateway>(profile.account_id);
+        ctx->gateway->register_callback(this);
+
+        // 初始化各账户独立记账与事前风控
+        ctx->pos_mgr = std::make_shared<PositionManager>(profile.initial_balance);
+        SymbolInfo default_symbol{"rb2405", "SHFE", 10, 1.0, 0.10, 0.0001, "RB0"};
+        ctx->pos_mgr->set_symbol_info(default_symbol);
+        ctx->risk_mgr = std::make_shared<RiskManager>(*ctx->pos_mgr, risk_cfg);
+
+        accounts_[profile.account_id] = ctx;
         acc_order_.push_back(profile.account_id); // 记住注册顺序 (首个 = 主账户)
 
         // 订阅专属报单管道: trader/<account_id>/order_req
         std::string order_topic = "trader/" + profile.account_id + "/order_req";
         message_bus_subscribe(bus_, order_topic.c_str(), &GatewayPool::on_order_request_static, this);
 
-        std::cout << "[GatewayPool] 账户网关注册成功: " << profile.account_id 
+        std::cout << "[GatewayPool] 账户网关注册成功 (含事前风控门禁): " << profile.account_id 
                   << " (" << profile.broker_name << ") -> 监听 Topic: " << order_topic << "\n";
         return true;
     }
 
     void connect_all() {
         std::lock_guard<std::mutex> lock(mutex_);
-        for (auto& [id, gw] : gateways_) {
-            gw->connect();
+        for (auto& [id, ctx] : accounts_) {
+            ctx->gateway->connect();
         }
     }
 
     void disconnect_all() {
         std::lock_guard<std::mutex> lock(mutex_);
-        for (auto& [id, gw] : gateways_) {
-            gw->disconnect();
+        for (auto& [id, ctx] : accounts_) {
+            ctx->gateway->disconnect();
         }
     }
 
     std::shared_ptr<SimGateway> get_gateway(const std::string& account_id) {
         std::lock_guard<std::mutex> lock(mutex_);
-        auto it = gateways_.find(account_id);
-        if (it != gateways_.end()) return it->second;
+        auto it = accounts_.find(account_id);
+        if (it != accounts_.end()) return it->second->gateway;
+        return nullptr;
+    }
+
+    std::shared_ptr<PositionManager> get_position_manager(const std::string& account_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = accounts_.find(account_id);
+        if (it != accounts_.end()) return it->second->pos_mgr;
+        return nullptr;
+    }
+
+    std::shared_ptr<RiskManager> get_risk_manager(const std::string& account_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = accounts_.find(account_id);
+        if (it != accounts_.end()) return it->second->risk_mgr;
         return nullptr;
     }
 
@@ -73,6 +105,15 @@ public:
     void on_disconnected(int /*reason*/) override {}
 
     void on_tick(const TickData& tick) override {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            for (auto& [id, ctx] : accounts_) {
+                if (ctx->pos_mgr) {
+                    ctx->pos_mgr->on_tick(tick);
+                }
+            }
+        }
+
         // 安全打包 POD 载荷，消除含 std::string 强转导致的未定义行为 (UB)
         QuantTickMsg msg{};
         std::strncpy(msg.symbol, tick.symbol.c_str(), sizeof(msg.symbol) - 1);
@@ -125,6 +166,7 @@ public:
 
     void on_trade(const TradeData& trade) override {
         std::string acc_id;
+        std::shared_ptr<PositionManager> pos_mgr;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             auto it = order_to_account_.find(trade.order_id);
@@ -133,6 +175,15 @@ public:
             } else if (!acc_order_.empty()) {
                 acc_id = acc_order_.front(); // 未知订单归属首个注册账户 (主账户)
             }
+            if (!acc_id.empty()) {
+                auto acc_it = accounts_.find(acc_id);
+                if (acc_it != accounts_.end()) {
+                    pos_mgr = acc_it->second->pos_mgr;
+                }
+            }
+        }
+        if (pos_mgr) {
+            pos_mgr->on_trade(trade);
         }
         if (acc_id.empty()) return;
 
@@ -168,8 +219,16 @@ private:
         size_t second = topic.find('/', first + 1);
         if (first != std::string::npos && second != std::string::npos) {
             std::string acc_id = topic.substr(first + 1, second - first - 1);
-            auto gw = self->get_gateway(acc_id);
-            if (gw) {
+            std::shared_ptr<AccountContext> ctx;
+            {
+                std::lock_guard<std::mutex> lock(self->mutex_);
+                auto it = self->accounts_.find(acc_id);
+                if (it != self->accounts_.end()) {
+                    ctx = it->second;
+                }
+            }
+
+            if (ctx && ctx->gateway && ctx->risk_mgr) {
                 const auto* pod = reinterpret_cast<const QuantOrderReqMsg*>(msg->data);
                 OrderRequest req;
                 req.symbol = pod->symbol;
@@ -182,7 +241,33 @@ private:
                 req.price = pod->price;
                 req.volume = pod->volume;
 
-                uint64_t order_id = gw->send_order(req);
+                // ── 事前风控门禁 (Pre-Trade Risk Gate) ──
+                auto active_orders = ctx->gateway->get_active_orders();
+                auto [passed, reason] = ctx->risk_mgr->check_order(req, active_orders);
+                if (!passed) {
+                    std::cout << "[GatewayPool] 账户 [" << acc_id << "] 事前风控拦截报单! 原因: " << reason << "\n";
+
+                    // 向总线发布拒单回报
+                    QuantOrderRtnMsg rej_msg{};
+                    std::strncpy(rej_msg.symbol, req.symbol.c_str(), sizeof(rej_msg.symbol) - 1);
+                    std::strncpy(rej_msg.strategy_name, req.strategy_name.c_str(), sizeof(rej_msg.strategy_name) - 1);
+                    std::strncpy(rej_msg.order_ref, req.order_ref.c_str(), sizeof(rej_msg.order_ref) - 1);
+                    rej_msg.order_id = 0;
+                    rej_msg.direction = static_cast<uint8_t>(req.direction);
+                    rej_msg.offset = static_cast<uint8_t>(req.offset);
+                    rej_msg.status = static_cast<uint8_t>(OrderStatus::REJECTED);
+                    rej_msg.price = req.price;
+                    rej_msg.total_volume = req.volume;
+                    rej_msg.traded_volume = 0.0;
+                    rej_msg.update_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+
+                    std::string rtn_topic = "trader/" + acc_id + "/order_rtn";
+                    message_bus_publish(self->bus_, rtn_topic.c_str(), "GatewayPoolRiskGate", &rej_msg, sizeof(rej_msg));
+                    return; // 严禁进入柜台/撮合引擎
+                }
+
+                uint64_t order_id = ctx->gateway->send_order(req);
                 {
                     std::lock_guard<std::mutex> lock(self->mutex_);
                     self->order_to_account_[order_id] = acc_id;
@@ -193,8 +278,7 @@ private:
 
     MessageBus* bus_;
     std::mutex mutex_;
-    std::unordered_map<std::string, std::shared_ptr<SimGateway>> gateways_;
-    std::unordered_map<std::string, AccountProfile> profiles_;
+    std::unordered_map<std::string, std::shared_ptr<AccountContext>> accounts_;
     std::vector<std::string> acc_order_; // 注册顺序, 首个 = 主账户 (兜底归属用)
     std::unordered_map<uint64_t, std::string> order_to_account_;
 };
