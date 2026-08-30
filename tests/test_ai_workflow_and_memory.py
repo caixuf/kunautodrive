@@ -50,7 +50,7 @@ class TestAIWorkflowAndMemory(unittest.TestCase):
     def test_workflow_pipeline_execution(self):
         pipeline = EvolutionWorkflowPipeline(memory_store=self.memory)
 
-        # 运行一次完整进化流水线
+        # 1. 运行进化流水线 (默认未提供回测结果，真实标记待评估，绝不伪造高夏普)
         res = pipeline.run_evolution_cycle(
             symbol="rb2405",
             market_features={"atr": 12.0, "trend_strength": 0.85},
@@ -58,14 +58,35 @@ class TestAIWorkflowAndMemory(unittest.TestCase):
         )
 
         self.assertEqual(res["regime"], "TRENDING")
-        self.assertEqual(res["verdict"], "ACCEPTED")
+        self.assertEqual(res["verdict"], "PENDING_EVALUATION")
+        self.assertIsNone(res["sharpe_ratio"])
         self.assertTrue(res["memory_id"] > 0)
         self.assertIn("lessons_learned", res)
 
-        # 验证记忆已被持久化到库中
+        # 验证记忆库不包含虚假 accepted 记录
         stats = self.memory.get_memory_stats()
         self.assertEqual(stats["total_memories"], 1)
-        self.assertEqual(stats["accepted_count"], 1)
+        self.assertEqual(stats["accepted_count"], 0)
+
+        # 2. 传入真实沙箱回测评估结果
+        eval_res = {
+            "sharpe_ratio": 1.85,
+            "max_drawdown": 0.035,
+            "win_rate": 0.68,
+            "lessons_learned": "真实回测参数通过双均线趋势检验"
+        }
+        res_evaluated = pipeline.run_evolution_cycle(
+            symbol="rb2405",
+            market_features={"atr": 12.0, "trend_strength": 0.85},
+            strategy_base_type="DualMA",
+            evaluation_result=eval_res
+        )
+        self.assertEqual(res_evaluated["verdict"], "ACCEPTED")
+        self.assertEqual(res_evaluated["sharpe_ratio"], 1.85)
+
+        stats_after = self.memory.get_memory_stats()
+        self.assertEqual(stats_after["total_memories"], 2)
+        self.assertEqual(stats_after["accepted_count"], 1)
 
 if __name__ == "__main__":
     unittest.main()

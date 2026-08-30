@@ -73,5 +73,43 @@ class TestAIProactiveAndDistillation(unittest.TestCase):
         self.assertIn("AI 策略热切换升级申请", msg)
         self.assertIn("超越基准 1.2x", msg)
 
+    def test_fetch_real_summary_data_direction_and_sensors(self):
+        import sqlite3
+        import tempfile
+        db_file = os.path.join(tempfile.mkdtemp(), "test_quant.db")
+        with sqlite3.connect(db_file) as conn:
+            conn.execute("""CREATE TABLE ticks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT, exchange TEXT,
+                last_price REAL, bid_price1 REAL, ask_price1 REAL, bid_volume1 REAL,
+                ask_volume1 REAL, volume REAL, open_interest REAL, ts INTEGER NOT NULL)""")
+            conn.execute("""CREATE TABLE positions (
+                account_id TEXT, symbol TEXT, direction INTEGER, volume REAL,
+                avg_price REAL, margin REAL, realized_pnl REAL, floating_pnl REAL)""")
+            conn.execute("""CREATE TABLE trades (
+                trade_id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER,
+                symbol TEXT, direction INTEGER, offset INTEGER, price REAL,
+                volume REAL, commission REAL, ts INTEGER NOT NULL)""")
+            conn.execute("""CREATE TABLE orders (order_id INTEGER PRIMARY KEY)""")
+
+            # 插入 0 (LONG) 和 1 (SHORT)
+            conn.execute("INSERT INTO positions VALUES ('acc_01', 'rb2405', 0, 10, 3600.0, 36000, 0, 500)")
+            conn.execute("INSERT INTO positions VALUES ('acc_01', 'cu2405', 1, 5, 75000.0, 45000, 0, -200)")
+            # 插入 1 条 tick
+            conn.execute("INSERT INTO ticks (symbol, last_price, ts) VALUES ('rb2405', 3620.0, 1000000)")
+
+        summary = self.scheduler._fetch_real_summary_data(db_path=db_file)
+        self.assertEqual(summary["total_ticks_recorded"], 1)
+        self.assertEqual(summary["fusion_sensors"]["sina"], "ONLINE")
+        self.assertEqual(len(summary["active_positions"]), 2)
+
+        # 断言 0 映射为 LONG, 1 映射为 SHORT
+        pos_rb = [p for p in summary["active_positions"] if p["symbol"] == "rb2405"][0]
+        pos_cu = [p for p in summary["active_positions"] if p["symbol"] == "cu2405"][0]
+        self.assertEqual(pos_rb["direction"], "LONG")
+        self.assertEqual(pos_cu["direction"], "SHORT")
+
+        if os.path.exists(db_file):
+            os.remove(db_file)
+
 if __name__ == "__main__":
     unittest.main()

@@ -549,7 +549,8 @@ int main(int argc, char* argv[]) {
     sina_fetcher.start();
 
     // 6. 挂载 AI 自适应进化协程引擎
-    auto evolution_task = std::make_unique<kun::CoroAdaptiveEvolutionTask>(bus, "rb2405", 20);
+    std::string main_sym = cfg.symbols.empty() ? "rb2405" : cfg.symbols[0].symbol;
+    auto evolution_task = std::make_unique<kun::CoroAdaptiveEvolutionTask>(bus, main_sym.c_str(), 20);
     ex.spawn(evolution_task->run(), "ai_adaptive_evolution");
     spawned_tasks.push_back(std::move(evolution_task));
 
@@ -565,24 +566,6 @@ int main(int argc, char* argv[]) {
         server.handle_connections();
     });
 
-    // 8. 辅助高频仿真行情源 (发布至 market/source/ctp_sim/rb2405 供融合节点加权验证)
-    std::thread sim_publisher([bus]() {
-        double p = 3625.0;
-        while (kun::g_server_running.load()) {
-            p += ((rand() % 100) - 49) * 0.05;
-            kun::QuantTickMsg tick{};
-            std::strncpy(tick.symbol, "rb2405", sizeof(tick.symbol) - 1);
-            std::strncpy(tick.exchange, "SHFE", sizeof(tick.exchange) - 1);
-            tick.last_price = p;
-            tick.bid_price1 = p - 1.0;
-            tick.ask_price1 = p + 1.0;
-            tick.bid_volume1 = 120.0;
-            tick.ask_volume1 = 150.0;
-            message_bus_publish(bus, "market/source/ctp_sim/rb2405", "CTP_SIM_GW", &tick, sizeof(tick));
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
-        }
-    });
-
     // 主协程驱动循环 (node_pump)
     while (kun::g_server_running.load()) {
         ex.run();
@@ -595,7 +578,6 @@ int main(int argc, char* argv[]) {
     server.stop();
 
     if (server_thread.joinable()) server_thread.join();
-    if (sim_publisher.joinable()) sim_publisher.join();
 
     // 有界宽限关停: request_stop 后给协程最多 2 秒自行退出 (落盘冲刷/收尾),
     // 随后 ~RtExecutor 兜底销毁仍挂在死 topic 上的帧 (如跟单协程等待永不触发的 trade_rtn)。

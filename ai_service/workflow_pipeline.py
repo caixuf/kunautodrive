@@ -39,7 +39,8 @@ class EvolutionWorkflowPipeline:
         self,
         symbol: str,
         market_features: Dict[str, Any],
-        strategy_base_type: str = "DualMA"
+        strategy_base_type: str = "DualMA",
+        evaluation_result: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         # ── 阶段 1: 行情诊断 ──
         regime = self.diagnose_market_regime(market_features)
@@ -70,19 +71,24 @@ class EvolutionWorkflowPipeline:
             sandbox_type="cvm"
         )
 
-        # ── 阶段 4: 沙箱回测与记忆沉淀 (模拟/实测评估) ──
-        # 根据形态模拟评估结果 (实际生产对接沙箱回传)
-        sim_sharpe = 1.85 if regime == "TRENDING" else 1.15
-        sim_mdd = 0.035
-        sim_win_rate = 0.68
-        is_passed = (sim_sharpe > 1.20 and sim_mdd < 0.05)
-
-        verdict = "ACCEPTED" if is_passed else "OVERFITTED"
-        lessons = (
-            f"在 {regime} 形态下采用中长周期均线平滑过滤假突破有效，回撤控制良好"
-            if is_passed else
-            f"在 {regime} 震荡形态下短均线频繁来回磨损手续费，需放大进场阈值"
-        )
+        # ── 阶段 4: 沙箱回测与记忆沉淀 (严禁硬编码虚构绩效) ──
+        if evaluation_result is not None:
+            sim_sharpe = evaluation_result.get("sharpe_ratio", 0.0)
+            sim_mdd = evaluation_result.get("max_drawdown", 0.0)
+            sim_win_rate = evaluation_result.get("win_rate", 0.0)
+            is_passed = (sim_sharpe > 1.20 and sim_mdd < 0.05)
+            verdict = "ACCEPTED" if is_passed else "OVERFITTED"
+            lessons = evaluation_result.get(
+                "lessons_learned",
+                (f"在 {regime} 形态下参数表现达标" if is_passed else f"在 {regime} 形态下回撤或收益未达门禁")
+            )
+        else:
+            # 未接真实回测引擎前如实返回待评估状态，不向记忆库写入虚构的 1.85 夏普
+            sim_sharpe = None
+            sim_mdd = None
+            sim_win_rate = None
+            verdict = "PENDING_EVALUATION"
+            lessons = f"策略草稿已生成，等待沙箱环境或历史回测引擎真实评估"
 
         # 记录本次进化经验到长期记忆库
         mem_id = self.memory.record_experience(
@@ -103,6 +109,7 @@ class EvolutionWorkflowPipeline:
             "verdict": verdict,
             "sharpe_ratio": sim_sharpe,
             "max_drawdown": sim_mdd,
+            "win_rate": sim_win_rate,
             "memory_id": mem_id,
             "lessons_learned": lessons,
             "agent_dispatch": agent_res

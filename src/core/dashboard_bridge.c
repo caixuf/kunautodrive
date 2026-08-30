@@ -212,6 +212,10 @@ static void on_raw_chunk(const Message* msg, void* user_data) {
     }
 }
 
+static BridgeSubState* s_sub_states[16];
+static IpcChannel*     s_sub_channels[16];
+static int             s_sub_count = 0;
+
 IpcChannel* dashboard_bridge_subscriber_open(DashboardJsonCallback callback,
                                               void* user_data) {
     BridgeSubState* st = (BridgeSubState*)calloc(1, sizeof(BridgeSubState));
@@ -233,5 +237,29 @@ IpcChannel* dashboard_bridge_subscriber_open(DashboardJsonCallback callback,
         return NULL;
     }
 
+    if (s_sub_count < 16) {
+        s_sub_channels[s_sub_count] = ch;
+        s_sub_states[s_sub_count]   = st;
+        s_sub_count++;
+    }
+
     return ch;
+}
+
+void dashboard_bridge_subscriber_close(IpcChannel* ch) {
+    if (!ch) return;
+    for (int i = 0; i < s_sub_count; i++) {
+        if (s_sub_channels[i] == ch) {
+            BridgeSubState* st = s_sub_states[i];
+            if (st) {
+                free(st->buf);
+                free(st);
+            }
+            s_sub_channels[i] = s_sub_channels[s_sub_count - 1];
+            s_sub_states[i]   = s_sub_states[s_sub_count - 1];
+            s_sub_count--;
+            break;
+        }
+    }
+    ipc_channel_close(ch);
 }

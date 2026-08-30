@@ -490,7 +490,7 @@ static void test_dashboard_bridge_single_chunk(void) {
     ASSERT(match, "reassembled JSON mismatch: '%s'", s.last ? s.last : "(null)");
 
     free(s.last);
-    ipc_channel_close(sub);
+    dashboard_bridge_subscriber_close(sub);
     ipc_channel_close(pub);
     PASS();
 }
@@ -538,7 +538,7 @@ static void test_dashboard_bridge_multi_chunk(void) {
 
     free(big);
     free(s.last);
-    ipc_channel_close(sub);
+    dashboard_bridge_subscriber_close(sub);
     ipc_channel_close(pub);
     PASS();
 }

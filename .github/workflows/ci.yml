@@ -91,13 +91,15 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq libcjson-dev python3
+          sudo apt-get install -y -qq libcjson-dev python3 libsqlite3-dev
       - name: Configure (Release)
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - name: Build
         run: cmake --build build -j$(nproc)
-      - name: Test
+      - name: Test (C++ Suites)
         run: ctest --test-dir build --output-on-failure --timeout 60 -LE "benchmark|manual|stability|integration"
+      - name: Test (Python AI & Quant Suites)
+        run: python3 -m unittest discover -s tests -p "test_ai_*.py"
 
   # ── ASAN (Address Sanitizer) ───────────────────────────────
   build-asan:
@@ -105,7 +107,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libcjson-dev python3
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libcjson-dev python3 libsqlite3-dev
       - name: Configure (ASAN)
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DENABLE_ASAN=ON
       - name: Build
@@ -307,7 +309,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libcjson-dev python3 lcov libeigen3-dev
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libcjson-dev python3 lcov libeigen3-dev libsqlite3-dev
       # ── Debug build + test ──
       - name: Configure (Debug)
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug

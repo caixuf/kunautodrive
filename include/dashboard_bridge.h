@@ -103,6 +103,12 @@ int dashboard_bridge_publish(IpcChannel* ch, const char* json, size_t len);
 IpcChannel* dashboard_bridge_subscriber_open(DashboardJsonCallback callback,
                                               void* user_data);
 
+/**
+ * Close the subscriber IPC channel and release all reassembly resources.
+ * @param ch Subscriber channel from dashboard_bridge_subscriber_open()
+ */
+void dashboard_bridge_subscriber_close(IpcChannel* ch);
+
 #ifdef __cplusplus
 }
 #endif

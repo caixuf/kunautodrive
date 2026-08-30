@@ -89,12 +89,13 @@ class ProactiveAutonomousScheduler:
             "active_positions": [],
             "total_orders": 0,
             "total_trades": 0,
-            "fusion_sensors": {"ctp_sim": "ONLINE", "sina": "ONLINE", "bad_ticks_filtered": 0}
+            "fusion_sensors": {"ctp_sim": "STANDBY", "sina": "UNKNOWN", "bad_ticks_filtered": 0}
         }
 
         if not os.path.exists(db_path):
             return summary
 
+        conn = None
         try:
             import sqlite3
             conn = sqlite3.connect(db_path, timeout=5.0)
@@ -105,6 +106,9 @@ class ProactiveAutonomousScheduler:
             row = c.fetchone()
             if row and row[0]:
                 summary["total_ticks_recorded"] = row[0]
+                summary["fusion_sensors"]["sina"] = "ONLINE"
+            else:
+                summary["fusion_sensors"]["sina"] = "OFFLINE"
 
             c.execute("SELECT symbol, last_price, bid_price1, ask_price1, volume, ts FROM ticks ORDER BY ts DESC LIMIT 5")
             for r in c.fetchall():
@@ -117,15 +121,16 @@ class ProactiveAutonomousScheduler:
                     "timestamp_us": r[5]
                 })
 
-            # 2. 真实持仓统计
+            # 2. 真实持仓统计 (严格对照 C++ Direction 枚举: 0=LONG, 1=SHORT, 2=NET)
             c.execute("SELECT account_id, symbol, direction, volume, avg_price, margin, realized_pnl, floating_pnl FROM positions")
             total_floating_pnl = 0.0
             total_realized_pnl = 0.0
             for r in c.fetchall():
+                dir_str = "LONG" if r[2] == 0 else ("SHORT" if r[2] == 1 else "NET")
                 p = {
                     "account_id": r[0],
                     "symbol": r[1],
-                    "direction": "LONG" if r[2] == 1 else "SHORT",
+                    "direction": dir_str,
                     "volume": r[3],
                     "avg_price": r[4],
                     "margin": r[5],
@@ -153,9 +158,11 @@ class ProactiveAutonomousScheduler:
             summary["net_pnl"] = net_pnl
             summary["current_equity"] = summary["starting_equity"] + net_pnl
 
-            conn.close()
         except Exception as e:
             print(f"[ProactiveScheduler] 读取真实数据库指标失败: {e}")
+        finally:
+            if conn:
+                conn.close()
 
         return summary
 

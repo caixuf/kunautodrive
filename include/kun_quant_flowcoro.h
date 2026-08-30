@@ -172,9 +172,11 @@ public:
         BusChannel trade_ch(bus(), master_trade_topic.c_str(), 64);
 
         while (!should_stop()) {
-            // 零 CPU 自旋挂起等待主账户成交
-            Message msg = co_await trade_ch.recv();
-            const auto* master_trade = reinterpret_cast<const QuantTradeMsg*>(msg.data);
+            // 零 CPU 挂起等待主账户成交; 50ms 超时保证停机时协程可协作退出
+            // (裸 recv() 在停机后永远等不到消息, executor 兜底销毁存在时序脆弱性)
+            auto res = co_await trade_ch.recv_for(50000);
+            if (!res.ok()) continue; // 超时空转, 回到循环头检查 should_stop
+            const auto* master_trade = reinterpret_cast<const QuantTradeMsg*>(res.message.data);
 
             std::cout << "[KunQuant::FollowTrading] 主账户 [" << master_id_ << "] 发生真实成交: "
                       << master_trade->symbol << " 方向=" << (int)master_trade->direction

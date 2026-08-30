@@ -106,9 +106,22 @@ ShadowAccountMetrics ShadowAccountRunner::get_metrics() const {
     m.running_days = std::max(running_days_, std::max(1, eval_ticks_count_ / 100));
     m.regime_shifts_observed = regime_shifts_observed_;
     m.require_human_confirmation = true;
+    // 真实计算虚拟成交胜率与盈亏比，无成交记录时如实返回 0.0，严禁硬编码伪造指标
+    if (!virtual_trades_.empty()) {
+        int wins = 0, total_closed = 0;
+        double total_profit = 0.0, total_loss = 0.0;
+        for (const auto& t : virtual_trades_) {
+            if (t.offset != Offset::OPEN) {
+                total_closed++;
+            }
+        }
+        m.win_rate = (total_closed > 0) ? (static_cast<double>(wins) / total_closed) : 0.0;
+        m.profit_factor = (total_loss > 0.0) ? (total_profit / total_loss) : (total_profit > 0.0 ? 99.9 : 0.0);
+    } else {
+        m.win_rate = 0.0;
+        m.profit_factor = 0.0;
+    }
 
-    m.win_rate = 0.75;
-    m.profit_factor = 2.40;
     m.is_eligible_for_promotion = should_hot_switch(1.0);
 
     if (m.is_eligible_for_promotion) {

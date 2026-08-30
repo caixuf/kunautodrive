@@ -404,6 +404,7 @@ static void test_sm_dynamic_rules(void) {
     ASSERT(statem_send_event(&sm, 99, NULL), "custom transition should succeed");
     ASSERT(statem_current(&sm) == SM_STATE_PAUSED, "should be PAUSED");
 
+    statem_cleanup(&sm);
     PASS();
 }
 
