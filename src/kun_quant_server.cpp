@@ -162,6 +162,7 @@ public:
 
     void stop() {
         if (server_fd_ >= 0) {
+            shutdown(server_fd_, SHUT_RDWR);
             close(server_fd_);
             server_fd_ = -1;
         }
@@ -169,6 +170,11 @@ public:
 
 private:
     void handle_client(int client_fd) {
+        // 设置 500ms 超时，防止客户端半开连接/挂起请求阻塞主服务线程
+        struct timeval tv{0, 500000};
+        setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
+        setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv));
+
         char buffer[4096];
         ssize_t bytes = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
         if (bytes <= 0) {
@@ -1123,15 +1129,19 @@ int main(int argc, char* argv[]) {
 
     if (server_thread.joinable()) server_thread.join();
 
-    // 有界宽限关停: request_stop 后给协程最多 2 秒自行退出 (落盘冲刷/收尾),
-    // 随后 ~RtExecutor 兜底销毁仍挂在死 topic 上的帧 (如跟单协程等待永不触发的 trade_rtn)。
-    // 注意: ex.shutdown() 的无限等待在此不可用 —— 有 parked 帧等外部 post_ready 且生产者已停。
+    for (auto& t : spawned_tasks) {
+        if (t) t->set_stop();
+    }
+
     ex.request_stop();
     int grace_ms = 0;
-    while (!ex.is_finished() && grace_ms++ < 2000) {
+    while (!ex.is_finished() && grace_ms++ < 100) {
         ex.run();
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+
+    // 关键契约: 在 message_bus 销毁前清空所有任务，确保 BusChannel 析构反订阅时总线依然有效
+    spawned_tasks.clear();
     g_node_exec = nullptr;
     message_bus_destroy(bus);
 

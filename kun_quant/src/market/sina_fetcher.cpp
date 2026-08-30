@@ -68,7 +68,12 @@ void SinaMarketFetcher::run_loop() {
         if (!resp.empty()) {
             parse_and_publish(resp);
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms_));
+        // 细粒度可中断 sleep, 保证 stop() 触发后能在 20ms 内即刻响应退出
+        int elapsed_ms = 0;
+        while (running_.load() && elapsed_ms < poll_interval_ms_) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            elapsed_ms += 20;
+        }
     }
 }
 

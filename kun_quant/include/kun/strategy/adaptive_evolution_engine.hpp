@@ -243,11 +243,31 @@ public:
             }
         }
 
-        // 3. 交叉与变异填充剩余个体
+        // 3. 随机新血注入 (Random Immigrants) 占 15% 席位，打破同质化局部死锁
+        size_t immigrant_count = std::max<size_t>(2, population_size_ * 0.15);
+        std::uniform_int_distribution<int> dist_fast(3, 14);
+        std::uniform_int_distribution<int> dist_slow(16, 60);
+        std::uniform_real_distribution<double> dist_sl(1.2, 3.5);
+        std::uniform_real_distribution<double> dist_tp(2.5, 7.0);
+
+        for (size_t k = 0; k < immigrant_count && new_pop.size() < population_size_; ++k) {
+            StrategyChromosome immigrant;
+            immigrant.id = static_cast<int>(new_pop.size() + 1);
+            immigrant.is_core_anchor = false;
+            immigrant.fast_window = dist_fast(rng_);
+            immigrant.slow_window = dist_slow(rng_);
+            immigrant.stop_loss_atr = dist_sl(rng_);
+            immigrant.take_profit_atr = dist_tp(rng_);
+            immigrant.passed_plateau_check = validate_parameter_plateau(immigrant);
+            immigrant.evaluate_fitness();
+            new_pop.push_back(immigrant);
+        }
+
+        // 4. 交叉与柯西重尾变异 (Cauchy Mutation) 填充剩余个体
         size_t parent_pool_size = new_pop.size();
         std::uniform_int_distribution<size_t> parent_dist(0, parent_pool_size - 1);
         std::uniform_real_distribution<double> mutate_prob(0.0, 1.0);
-        std::normal_distribution<double> mutate_delta(0.0, 1.0);
+        std::cauchy_distribution<double> cauchy_delta(0.0, 1.5); // 柯西重尾扰动，更易跳出局部极值
 
         while (new_pop.size() < population_size_) {
             const auto& p1 = new_pop[parent_dist(rng_)];
@@ -255,17 +275,20 @@ public:
 
             StrategyChromosome child;
             child.id = static_cast<int>(new_pop.size() + 1);
-            child.is_core_anchor = false; // 变异生成的个体非锚点
+            child.is_core_anchor = false;
             child.fast_window = (mutate_prob(rng_) > 0.5) ? p1.fast_window : p2.fast_window;
             child.slow_window = (mutate_prob(rng_) > 0.5) ? p1.slow_window : p2.slow_window;
             child.stop_loss_atr = (mutate_prob(rng_) > 0.5) ? p1.stop_loss_atr : p2.stop_loss_atr;
             child.take_profit_atr = (mutate_prob(rng_) > 0.5) ? p1.take_profit_atr : p2.take_profit_atr;
 
-            // 变异操作
-            if (mutate_prob(rng_) < 0.15) {
-                child.fast_window = std::clamp<int>(child.fast_window + static_cast<int>(std::round(mutate_delta(rng_))), 2, 15);
-                child.slow_window = std::clamp<int>(child.slow_window + static_cast<int>(std::round(mutate_delta(rng_) * 2)), 16, 60);
-                child.stop_loss_atr = std::clamp<double>(child.stop_loss_atr + mutate_delta(rng_) * 0.2, 1.0, 4.0);
+            // 柯西变异 (变异率提升至 25%)
+            if (mutate_prob(rng_) < 0.25) {
+                int f_step = static_cast<int>(std::round(cauchy_delta(rng_)));
+                int s_step = static_cast<int>(std::round(cauchy_delta(rng_) * 2.0));
+                child.fast_window = std::clamp<int>(child.fast_window + f_step, 2, 15);
+                child.slow_window = std::clamp<int>(child.slow_window + s_step, 16, 60);
+                child.stop_loss_atr = std::clamp<double>(child.stop_loss_atr + cauchy_delta(rng_) * 0.2, 1.0, 4.0);
+                child.take_profit_atr = std::clamp<double>(child.take_profit_atr + cauchy_delta(rng_) * 0.4, 2.0, 8.0);
             }
 
             child.passed_plateau_check = validate_parameter_plateau(child);
