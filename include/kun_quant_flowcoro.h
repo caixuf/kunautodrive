@@ -298,6 +298,115 @@ private:
     DualMaSignalEngine engine_;
 };
 
+/**
+ * @brief 5 分钟级双均线趋势策略协程 (CoroLiveDualMA5mTask) — A/B 对比 tick 版
+ * 复用同一个 DualMaSignalEngine 同构算子, 差异仅在喂价节奏与开仓过滤:
+ *   1. 信号周期: 真实 tick 聚合成 5 分钟 K 线, 每 bar 收盘喂一次价 → 信号数砍 ~95%
+ *   2. 趋势过滤: 只顺 MA20 大方向开仓 (close>MA20 才买开, close<MA20 才卖开)
+ *   3. 死区过滤: |MA5-MA20| < 0.1×ATR(14) 粘合期不开仓 (ATR 用真实 bar 高低幅)
+ * 平仓不设过滤 (交叉反向即离场)。
+ */
+class CoroLiveDualMA5mTask : public CoroutineTask {
+public:
+    CoroLiveDualMA5mTask(MessageBus* bus, std::string symbol,
+                          std::string account_id, int fast = 5, int slow = 20, double volume = 1.0)
+        : CoroutineTask(bus), symbol_(std::move(symbol)), account_id_(std::move(account_id)),
+          volume_(volume), engine_(fast, slow) {}
+
+    Task run() override {
+        std::cout << "[KunQuant::DualMA5m] 5分钟级双均线策略已启动! " << symbol_
+                  << " MA(" << engine_.fast_period() << "," << engine_.slow_period() << ") 账户: " << account_id_ << "\n";
+        std::string tick_topic = "market/tick/" + symbol_;
+        BusChannel tick_ch(bus(), tick_topic.c_str(), 64);
+
+        struct Bar { double open, high, low, close; };
+        std::deque<Bar> bars;
+        std::deque<double> true_ranges; // 每根完成 bar 的 H-L (ATR 估计)
+        int64_t cur_bucket = -1;
+        Bar cur{};
+        bool bar_active = false;
+        int state = 0;
+        uint64_t seq = 0;
+
+        auto send_order = [&](uint8_t dir, uint8_t offset, double price, const std::string& reason) {
+            QuantOrderReqMsg req{};
+            std::strncpy(req.symbol, symbol_.c_str(), sizeof(req.symbol) - 1);
+            std::strncpy(req.strategy_name, "LiveDualMA5m", sizeof(req.strategy_name) - 1);
+            req.order_req_id = ++seq;
+            req.direction = dir;
+            req.offset = offset;
+            req.order_type = 0; // LIMIT
+            req.price = price;
+            req.volume = volume_;
+            std::string topic = "trader/" + account_id_ + "/order_req";
+            message_bus_publish(bus(), topic.c_str(), "LiveDualMA5m", &req, sizeof(req));
+            std::cout << "[KunQuant::DualMA5m] " << reason << " -> 发出委托: " << symbol_
+                      << " " << (dir == 0 ? "买" : "卖")
+                      << " " << (offset == 0 ? "开仓" : "平仓")
+                      << " " << volume_ << "手 @ " << price << "\n";
+        };
+
+        while (!should_stop()) {
+            auto res = co_await tick_ch.recv_for(50000);
+            if (!res.ok() || res.message.data_size < sizeof(QuantTickMsg)) continue;
+            const auto* tick = reinterpret_cast<const QuantTickMsg*>(res.message.data);
+            const double px = tick->last_price;
+            if (px <= 0) continue;
+
+            // ── 真实 tick → 5 分钟 OHLC 桶聚合 ──
+            int64_t bucket = tick->timestamp_us > 0
+                ? tick->timestamp_us / 1000000 / 300
+                : static_cast<int64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                      std::chrono::system_clock::now().time_since_epoch()).count()) / 300;
+            if (bucket != cur_bucket) {
+                if (bar_active) {
+                    true_ranges.push_back(cur.high - cur.low);
+                    if (true_ranges.size() > 14) true_ranges.pop_front();
+                    bars.push_back(cur);
+                    if (bars.size() > 200) bars.pop_front();
+
+                    // ── bar 收盘 → 喂同构信号算子 ──
+                    auto signals = engine_.update_price(cur.close, state);
+                    double atr = 0;
+                    for (double tr : true_ranges) atr += tr;
+                    atr /= true_ranges.size();
+
+                    for (const auto& sig : signals) {
+                        bool is_open = (sig.type == SignalType::BUY_OPEN || sig.type == SignalType::SELL_OPEN);
+                        // 死区过滤: MA 粘合期不开仓 (平仓信号不受限)
+                        if (is_open && std::abs(sig.fast_ma - sig.slow_ma) <= 0.1 * atr) continue;
+                        // 趋势过滤: 只顺 MA20 大方向开仓
+                        if (sig.type == SignalType::BUY_OPEN && sig.price <= sig.slow_ma) continue;
+                        if (sig.type == SignalType::SELL_OPEN && sig.price >= sig.slow_ma) continue;
+
+                        switch (sig.type) {
+                            case SignalType::BUY_CLOSE:  send_order(0, 1, sig.price, sig.reason); state = 0; break;
+                            case SignalType::BUY_OPEN:   send_order(0, 0, sig.price, sig.reason); state = 1; break;
+                            case SignalType::SELL_CLOSE: send_order(1, 1, sig.price, sig.reason); state = 0; break;
+                            case SignalType::SELL_OPEN:  send_order(1, 0, sig.price, sig.reason); state = -1; break;
+                            default: break;
+                        }
+                    }
+                }
+                cur_bucket = bucket;
+                cur = {px, px, px, px};
+                bar_active = true;
+            } else {
+                cur.high = std::max(cur.high, px);
+                cur.low = std::min(cur.low, px);
+                cur.close = px;
+            }
+        }
+        co_return;
+    }
+
+private:
+    std::string symbol_;
+    std::string account_id_;
+    double volume_;
+    DualMaSignalEngine engine_;
+};
+
 } // namespace kun
 
 #include "kun/strategy/adaptive_evolution_engine.hpp"

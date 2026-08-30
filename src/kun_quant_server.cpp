@@ -956,7 +956,8 @@ int main(int argc, char* argv[]) {
     auto follow_task = std::make_unique<kun::CoroFollowTradingTask>(
         bus, "acc_master_simnow",
         std::vector<kun::CoroFollowTradingTask::SlaveConfig>{
-            {"acc_slave_zhongxin", 1.5},
+            // A/B 期间 zhongxin 账户专供 5m 策略独立测试, 暂不参与跟单
+            // {"acc_slave_zhongxin", 1.5},
             {"acc_slave_yongan", 0.8}
         }
     );
@@ -994,12 +995,18 @@ int main(int argc, char* argv[]) {
         }, nullptr);
     }
 
-    // 5.0.6 挂载实盘自动策略: 双均线金叉/死叉自动开平仓 (真实行情驱动, 事前风控把关)
+    // 5.0.6 挂载实盘自动策略 (真实行情驱动, 事前风控把关):
+    //   主账户: tick 级双均线 | 从账户 zhongxin: 5 分钟级双均线 (A/B 同一真实 tick 流)
     for (const auto& s : cfg.symbols) {
         auto strat = std::make_unique<kun::CoroLiveDualMAStradingTask>(
             bus, s.symbol, "acc_master_simnow", 5, 20, 1.0);
         ex.spawn(strat->run(), "live_dualma_" + s.symbol);
         spawned_tasks.push_back(std::move(strat));
+
+        auto strat5m = std::make_unique<kun::CoroLiveDualMA5mTask>(
+            bus, s.symbol, "acc_slave_zhongxin", 5, 20, 1.0);
+        ex.spawn(strat5m->run(), "live_dualma5m_" + s.symbol);
+        spawned_tasks.push_back(std::move(strat5m));
     }
 
     // 5.1 挂载行情落盘协程 (M3 行情侧): 为每个监控合约分配独立落盘协程，互不阻塞

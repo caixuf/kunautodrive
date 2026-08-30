@@ -78,7 +78,10 @@ std::pair<bool, std::string> RiskManager::check_order(const OrderRequest& req, c
         }
     } else {
         // 平仓检查：平仓手数不能大于现有持仓
-        auto cur_pos = pos_mgr_.get_position(req.symbol, req.direction);
+        // 注意: 报单方向是操作方向 (卖平/买平), 被平持仓方向为其反向 ——
+        // 用报单方向查仓会把卖平单全部误拦 (查的是空头仓, 实际持多头)
+        Direction pos_dir = (req.direction == Direction::LONG) ? Direction::SHORT : Direction::LONG;
+        auto cur_pos = pos_mgr_.get_position(req.symbol, pos_dir);
         if (req.volume > cur_pos.volume) {
             return {false, "Close volume " + std::to_string(req.volume) + " exceeds current position " + std::to_string(cur_pos.volume)};
         }
