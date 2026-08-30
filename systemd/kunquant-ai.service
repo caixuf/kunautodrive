@@ -7,6 +7,7 @@ Type=simple
 User=caixuf
 Group=caixuf
 WorkingDirectory=/home/caixuf/MyCode/KunAutoDriver
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3 -m ai_service.server 8901
 Restart=always
 RestartSec=3s
