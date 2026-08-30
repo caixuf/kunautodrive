@@ -1371,3 +1371,40 @@ html, body {
 @keyframes spin {
     to { transform: rotate(360deg); }
 }
+
+/* ================= 动态内容体滚动防线 (Dynamic Content Scroll Guard) ================= */
+/* 会随运行时数据增长的容器必须有界: max-height + overflow-y, 防止 panel-card
+   (overflow: hidden) 裁剪内容。新加动态面板时套用此模式。 */
+#trend-body {
+    max-height: 260px;
+    overflow-y: auto;
+    word-break: break-word;
+}
+
+#trend-body::-webkit-scrollbar,
+.diag-content-body::-webkit-scrollbar {
+    width: 6px;
+}
+
+#trend-body::-webkit-scrollbar-thumb,
+.diag-content-body::-webkit-scrollbar-thumb {
+    background: #2a3a52;
+    border-radius: 3px;
+}
+
+#trend-body::-webkit-scrollbar-thumb:hover,
+.diag-content-body::-webkit-scrollbar-thumb:hover {
+    background: #38bdf8;
+}
+
+/* 左列 (自选+盘口+趋势) 内容超高时列内滚动兜底, 防止 panel 被裁剪 */
+.desk-left-col {
+    overflow-y: auto;
+}
+.desk-left-col::-webkit-scrollbar {
+    width: 6px;
+}
+.desk-left-col::-webkit-scrollbar-thumb {
+    background: #2a3a52;
+    border-radius: 3px;
+}
