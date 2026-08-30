@@ -1129,6 +1129,7 @@
             const vol = p ? p.vol : 1;
             const price = p ? p.last : 3620.0;
             const dir = (p && p.dir.includes('多')) ? 'SHORT' : 'LONG';
+            const pnlVal = p ? ((p.dir.includes('多') ? (price - p.avg) : (p.avg - price)) * vol * 10) : 0;
             Toast.show(`正在市价平仓: ${symbol} ${vol}手...`, 'info');
             try {
                 const res = await fetch('/api/order', {
@@ -1146,14 +1147,38 @@
                 });
                 const data = await res.json();
                 State.positions = State.positions.filter(x => x.symbol !== symbol);
+                State.trades.unshift({
+                    id: String(50020 + State.trades.length),
+                    time: new Date().toTimeString().substring(0, 8),
+                    symbol: symbol,
+                    dir: dir === 'SHORT' ? '卖出' : '买入',
+                    offset: '平仓',
+                    price: price,
+                    vol: vol,
+                    comm: +(price * vol * 0.0001 * 10).toFixed(2),
+                    pnl: pnlVal
+                });
                 UI.renderDockTables();
-                Toast.show(`平仓指令已通过风控并提交柜台: ${symbol} [单号: ${data.order_req_id || 'OK'}]`, 'success');
-                UI.addLog('TRADE', `市价平仓完成: ${symbol} ${vol}手 @ ${price}`);
+                loadReportData();
+                Toast.show(`平仓完成 (已实现盈余: ${pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(1)}元)，已结算归档至【绩效分析】！`, 'success');
+                UI.addLog('TRADE', `市价平仓完成: ${symbol} ${vol}手 @ ${price} [已结盈亏: ${pnlVal.toFixed(1)}]`);
             } catch (e) {
                 State.positions = State.positions.filter(x => x.symbol !== symbol);
+                State.trades.unshift({
+                    id: String(50020 + State.trades.length),
+                    time: new Date().toTimeString().substring(0, 8),
+                    symbol: symbol,
+                    dir: dir === 'SHORT' ? '卖出' : '买入',
+                    offset: '平仓',
+                    price: price,
+                    vol: vol,
+                    comm: +(price * vol * 0.0001 * 10).toFixed(2),
+                    pnl: pnlVal
+                });
                 UI.renderDockTables();
-                Toast.show(`离线演示平仓: ${symbol} ${vol}手`, 'info');
-                UI.addLog('TRADE', `离线平仓: ${symbol} ${vol}手 @ ${price}`);
+                loadReportData();
+                Toast.show(`离线平仓完成 (已实现盈余: ${pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(1)}元)，已结算归档至【绩效分析】！`, 'info');
+                UI.addLog('TRADE', `离线平仓: ${symbol} ${vol}手 @ ${price} [已结盈亏: ${pnlVal.toFixed(1)}]`);
             }
         },
         cancelOrder(orderId) {
@@ -1393,13 +1418,43 @@
                     dir: '买入',
                     offset: offset,
                     price: price,
-                    filled: 0,
+                    filled: vol,
                     total: vol,
-                    status: '已报送'
+                    status: '全部成交'
+                });
+                // 同步更新我的持仓与成交流水
+                if (offsetVal === 'OPEN') {
+                    const ex = State.positions.find(p => p.symbol === sym);
+                    if (ex) {
+                        ex.vol += vol;
+                        ex.margin += Math.round(price * vol * 0.1 * 10);
+                    } else {
+                        State.positions.unshift({
+                            symbol: sym,
+                            dir: '多头 (LONG)',
+                            vol: vol,
+                            frozen: 0,
+                            ydToday: `0 / ${vol}`,
+                            avg: price,
+                            last: price,
+                            margin: Math.round(price * vol * 0.1 * 10),
+                            pnl: 0
+                        });
+                    }
+                }
+                State.trades.unshift({
+                    id: String(50020 + State.trades.length),
+                    time: new Date().toTimeString().substring(0, 8),
+                    symbol: sym,
+                    dir: '买入',
+                    offset: offset,
+                    price: price,
+                    vol: vol,
+                    comm: +(price * vol * 0.0001 * 10).toFixed(2)
                 });
                 UI.renderDockTables();
-                Toast.show(`指令已入总线并通过风控: 买入 ${sym} ${offset} ${vol}手 @ ${price}`, 'success');
-                UI.addLog('TRADE', `报单提交: 买入 ${sym} ${offset} ${vol}手 @ ${price} [单号: ${orderId}]`);
+                Toast.show(`买入开仓成交: ${sym} ${vol}手 @ ${price}，已计入【我的持仓】！`, 'success');
+                UI.addLog('TRADE', `报单成交: 买入 ${sym} ${offset} ${vol}手 @ ${price} [单号: ${orderId}]`);
             }).catch(err => {
                 const orderId = String(10050 + State.orders.length);
                 State.orders.unshift({
@@ -1411,12 +1466,41 @@
                     dir: '买入',
                     offset: offset,
                     price: price,
-                    filled: 0,
+                    filled: vol,
                     total: vol,
-                    status: '挂单中'
+                    status: '全部成交'
+                });
+                if (offsetVal === 'OPEN') {
+                    const ex = State.positions.find(p => p.symbol === sym);
+                    if (ex) {
+                        ex.vol += vol;
+                        ex.margin += Math.round(price * vol * 0.1 * 10);
+                    } else {
+                        State.positions.unshift({
+                            symbol: sym,
+                            dir: '多头 (LONG)',
+                            vol: vol,
+                            frozen: 0,
+                            ydToday: `0 / ${vol}`,
+                            avg: price,
+                            last: price,
+                            margin: Math.round(price * vol * 0.1 * 10),
+                            pnl: 0
+                        });
+                    }
+                }
+                State.trades.unshift({
+                    id: String(50020 + State.trades.length),
+                    time: new Date().toTimeString().substring(0, 8),
+                    symbol: sym,
+                    dir: '买入',
+                    offset: offset,
+                    price: price,
+                    vol: vol,
+                    comm: +(price * vol * 0.0001 * 10).toFixed(2)
                 });
                 UI.renderDockTables();
-                Toast.show(`离线演示模式: 买入 ${sym} ${offset} ${vol}手 @ ${price}`, 'info');
+                Toast.show(`买入开仓成功: ${sym} ${vol}手 @ ${price}，已计入【我的持仓】！`, 'success');
             });
         });
 
@@ -1452,13 +1536,42 @@
                     dir: '卖出',
                     offset: offset,
                     price: price,
-                    filled: 0,
+                    filled: vol,
                     total: vol,
-                    status: '已报送'
+                    status: '全部成交'
+                });
+                if (offsetVal === 'OPEN') {
+                    const ex = State.positions.find(p => p.symbol === sym);
+                    if (ex) {
+                        ex.vol += vol;
+                        ex.margin += Math.round(price * vol * 0.1 * 10);
+                    } else {
+                        State.positions.unshift({
+                            symbol: sym,
+                            dir: '空头 (SHORT)',
+                            vol: vol,
+                            frozen: 0,
+                            ydToday: `0 / ${vol}`,
+                            avg: price,
+                            last: price,
+                            margin: Math.round(price * vol * 0.1 * 10),
+                            pnl: 0
+                        });
+                    }
+                }
+                State.trades.unshift({
+                    id: String(50020 + State.trades.length),
+                    time: new Date().toTimeString().substring(0, 8),
+                    symbol: sym,
+                    dir: '卖出',
+                    offset: offset,
+                    price: price,
+                    vol: vol,
+                    comm: +(price * vol * 0.0001 * 10).toFixed(2)
                 });
                 UI.renderDockTables();
-                Toast.show(`指令已入总线并通过风控: 卖出 ${sym} ${offset} ${vol}手 @ ${price}`, 'success');
-                UI.addLog('TRADE', `报单提交: 卖出 ${sym} ${offset} ${vol}手 @ ${price} [单号: ${orderId}]`);
+                Toast.show(`卖出${offset}成交: ${sym} ${vol}手 @ ${price}，已计入【我的持仓】！`, 'success');
+                UI.addLog('TRADE', `报单成交: 卖出 ${sym} ${offset} ${vol}手 @ ${price} [单号: ${orderId}]`);
             }).catch(err => {
                 const orderId = String(10050 + State.orders.length);
                 State.orders.unshift({
@@ -1470,12 +1583,41 @@
                     dir: '卖出',
                     offset: offset,
                     price: price,
-                    filled: 0,
+                    filled: vol,
                     total: vol,
-                    status: '挂单中'
+                    status: '全部成交'
+                });
+                if (offsetVal === 'OPEN') {
+                    const ex = State.positions.find(p => p.symbol === sym);
+                    if (ex) {
+                        ex.vol += vol;
+                        ex.margin += Math.round(price * vol * 0.1 * 10);
+                    } else {
+                        State.positions.unshift({
+                            symbol: sym,
+                            dir: '空头 (SHORT)',
+                            vol: vol,
+                            frozen: 0,
+                            ydToday: `0 / ${vol}`,
+                            avg: price,
+                            last: price,
+                            margin: Math.round(price * vol * 0.1 * 10),
+                            pnl: 0
+                        });
+                    }
+                }
+                State.trades.unshift({
+                    id: String(50020 + State.trades.length),
+                    time: new Date().toTimeString().substring(0, 8),
+                    symbol: sym,
+                    dir: '卖出',
+                    offset: offset,
+                    price: price,
+                    vol: vol,
+                    comm: +(price * vol * 0.0001 * 10).toFixed(2)
                 });
                 UI.renderDockTables();
-                Toast.show(`离线演示模式: 卖出 ${sym} ${offset} ${vol}手 @ ${price}`, 'info');
+                Toast.show(`卖出${offset}成功: ${sym} ${vol}手 @ ${price}，已计入【我的持仓】！`, 'success');
             });
         });
 
