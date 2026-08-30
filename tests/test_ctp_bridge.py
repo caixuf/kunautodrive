@@ -71,3 +71,19 @@ class TestCtpExecutionGateway(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_auto_reconnect_watchdog(self):
+        spi = _RealCtpTraderSpi(self.gw)
+        self.gw.connect()
+        self.assertTrue(self.gw.is_connected)
+
+        # 模拟断线
+        spi.OnFrontDisconnected(4097)
+        self.assertFalse(self.gw.is_connected)
+        self.assertFalse(self.gw.is_logged_in)
+
+        # 验证重连看门狗在后台成功拉起并重新完成连接
+        time.sleep(1.2)
+        self.assertTrue(self.gw.is_connected)
+        self.assertTrue(self.gw.is_logged_in)
+        self.assertTrue(self.gw.settlement_confirmed)

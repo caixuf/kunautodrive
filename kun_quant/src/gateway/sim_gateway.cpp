@@ -76,6 +76,8 @@ void SimGateway::quote_generator_loop() {
     while (is_running_.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(tick_interval_ms_));
         if (!is_running_.load()) break;
+        // 内部报价关闭时 (已接入真实行情), 不再生成合成 tick
+        if (!internal_quotes_.load()) continue;
 
         for (const auto& symbol : subscribed_symbols_) {
             double& price = base_prices_[symbol];
@@ -105,6 +107,11 @@ void SimGateway::quote_generator_loop() {
             }
         }
     }
+}
+
+void SimGateway::on_external_tick(const TickData& tick) {
+    // 真实行情直接驱动撮合 (挂单按真实盘口成交)
+    matching_engine_.match_tick(tick);
 }
 
 } // namespace kun

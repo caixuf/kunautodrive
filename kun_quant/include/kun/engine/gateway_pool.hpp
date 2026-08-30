@@ -5,6 +5,7 @@
 #include "kun/engine/multi_account_router.hpp"
 #include "kun/engine/position_manager.hpp"
 #include "kun/engine/risk_manager.hpp"
+#include "kun/engine/storage_manager.hpp"
 #include "message_bus.h"
 #include <memory>
 #include <unordered_map>
@@ -31,7 +32,8 @@ public:
         std::shared_ptr<RiskManager> risk_mgr;
     };
 
-    explicit GatewayPool(MessageBus* bus) : bus_(bus) {}
+    explicit GatewayPool(MessageBus* bus, StorageManager* storage = nullptr)
+        : bus_(bus), storage_(storage) {}
     ~GatewayPool() override {
         disconnect_all();
     }
@@ -91,6 +93,50 @@ public:
         auto it = accounts_.find(account_id);
         if (it != accounts_.end()) return it->second->pos_mgr;
         return nullptr;
+    }
+
+    // 为账户设置合约参数 (乘数/保证金率, 供逐持仓精确记账)
+    void set_symbol_info(const std::string& account_id, const SymbolInfo& info) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = accounts_.find(account_id);
+        if (it != accounts_.end() && it->second->pos_mgr) {
+            it->second->pos_mgr->set_symbol_info(info);
+        }
+    }
+
+    // 关闭所有账户网关的内部随机报价 (接入真实行情后不再向总线发布合成 tick)
+    void disable_sim_quotes() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto& [id, ctx] : accounts_) {
+            ctx->gateway->set_internal_quotes(false);
+        }
+    }
+
+    // 真实行情喂单: 融合后的真实 tick 驱动各账户撮合引擎与盯市盈亏。
+    // 闭环: 策略挂单 → 真实价格成交 → on_trade 落账 → 绩效分析。
+    // 注意: 必须在池锁外调用网关/记账 — 撮合会同步回调 on_trade/on_order 再入池锁。
+    void feed_real_tick(const TickData& tick) {
+        std::vector<std::pair<std::shared_ptr<SimGateway>, std::shared_ptr<PositionManager>>> snapshot;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            snapshot.reserve(accounts_.size());
+            for (auto& [id, ctx] : accounts_) {
+                snapshot.emplace_back(ctx->gateway, ctx->pos_mgr);
+            }
+        }
+        for (auto& [gw, pm] : snapshot) {
+            if (gw) gw->on_external_tick(tick);
+            if (!pm) continue;
+            kun::BarData bar;
+            bar.symbol = tick.symbol;
+            bar.exchange = tick.exchange;
+            bar.close_price = tick.last_price;
+            bar.open_price = tick.last_price;
+            bar.high_price = tick.last_price;
+            bar.low_price = tick.last_price;
+            bar.volume = tick.volume;
+            pm->on_bar(bar); // 盯市盈亏 (公开接口)
+        }
     }
 
     std::shared_ptr<RiskManager> get_risk_manager(const std::string& account_id) {
@@ -182,9 +228,18 @@ public:
                 }
             }
         }
-        if (pos_mgr) {
-            pos_mgr->on_trade(trade);
-        }
+            if (pos_mgr) {
+                pos_mgr->on_trade(trade);
+
+                // 成交落账 (SQLite 真实账本, 绩效分析数据源)
+                if (storage_) {
+                    storage_->save_trade(trade, acc_id);
+                    auto pos = pos_mgr->get_position(trade.symbol, pos_dir_of(trade));
+                    if (!pos.symbol.empty()) {
+                        storage_->save_position(pos, acc_id);
+                    }
+                }
+            }
         if (acc_id.empty()) return;
 
         QuantTradeMsg msg{};
@@ -281,6 +336,15 @@ private:
     std::unordered_map<std::string, std::shared_ptr<AccountContext>> accounts_;
     std::vector<std::string> acc_order_; // 注册顺序, 首个 = 主账户 (兜底归属用)
     std::unordered_map<uint64_t, std::string> order_to_account_;
+    StorageManager* storage_{nullptr}; // 真实账本落盘 (成交/持仓快照)
+
+    // 成交回报方向映射为持仓方向: 开仓保持原方向, 平仓回报方向 (卖平/买平) 翻转为被平持仓方向
+    static Direction pos_dir_of(const TradeData& t) {
+        if (t.offset == Offset::OPEN) {
+            return t.direction;
+        }
+        return (t.direction == Direction::LONG) ? Direction::SHORT : Direction::LONG;
+    }
 };
 
 } // namespace kun

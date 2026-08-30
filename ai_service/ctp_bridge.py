@@ -279,6 +279,35 @@ class CtpExecutionGateway:
         else:
             logging.error(f"CTP 结算单确认失败: {error_id} - {error_msg}")
 
+    def on_front_disconnected_event(self, reason: int):
+        self.is_connected = False
+        self.is_authenticated = False
+        self.is_logged_in = False
+        self.settlement_confirmed = False
+        logging.warning(f"CTP 前置连接断开 (OnFrontDisconnected): reason={reason}，启动指数退避自动重连看门狗...")
+        self._start_reconnect_watchdog()
+
+    def _start_reconnect_watchdog(self):
+        """指数退避自动重连看门狗 (1s, 2s, 4s, 8s, ... 30s)"""
+        def _reconnect_loop():
+            delay = 1.0
+            max_delay = 30.0
+            attempt = 1
+            while not self.is_connected:
+                logging.info(f"[Watchdog] CTP 正在执行第 {attempt} 次自动重连尝试 (等待 {delay:.1f}s)...")
+                time.sleep(delay)
+                try:
+                    if self.connect():
+                        logging.info(f"[Watchdog] CTP 重连并完成登录结算确认成功!")
+                        break
+                except Exception as e:
+                    logging.warning(f"[Watchdog] 重连尝试失败: {e}")
+                attempt += 1
+                delay = min(delay * 2.0, max_delay)
+
+        t = threading.Thread(target=_reconnect_loop, daemon=True, name="CtpReconnectWatchdog")
+        t.start()
+
 class _RealCtpTraderSpi:
     """内部真实 CTP TraderSpi 转发封装器"""
     def __init__(self, gateway: CtpExecutionGateway):
@@ -288,8 +317,7 @@ class _RealCtpTraderSpi:
         self.gw.on_front_connected_event()
 
     def OnFrontDisconnected(self, nReason):
-        self.gw.is_connected = False
-        logging.warning(f"CTP 前置连接断开: reason={nReason}")
+        self.gw.on_front_disconnected_event(nReason)
 
     def OnRspAuthenticate(self, pRspAuthenticateField, pRspInfo, nRequestID, bIsLast):
         err_id = pRspInfo.ErrorID if pRspInfo else 0

@@ -46,6 +46,7 @@ namespace kun {
 
 static std::atomic<bool> g_server_running{true};
 static StorageManager* g_storage_mgr = nullptr;
+static GatewayPool* g_live_pool = nullptr; // 融合真值 → 网关池喂单 (实盘闭环)
 
 // ── 历史数据快速回放 (把真实落盘 tick 按 N 倍速重新灌入总线) ──
 // 数据 100% 来自 ticks 表真实行情, 仅时间轴加速, 不生成任何合成价格。
@@ -824,13 +825,21 @@ int main(int argc, char* argv[]) {
 
     // 4. 挂载多账户路由器与网关池 (深度复用 MessageBus 命名空间)
     kun::MultiAccountRouter router;
-    kun::GatewayPool pool(bus);
+    kun::GatewayPool pool(bus, &storage);
 
     for (const auto& acc : cfg.accounts) {
         router.add_account(acc);
         pool.register_account(acc);
+        // 注入全部合约参数 (乘数/保证金率), 保证逐持仓记账精确
+        for (const auto& s : cfg.symbols) {
+            pool.set_symbol_info(acc.account_id,
+                kun::SymbolInfo{s.symbol, s.exchange, s.multiplier, s.price_tick,
+                                 s.margin_ratio, s.commission_ratio, s.sina_code});
+        }
     }
     pool.connect_all();
+    pool.disable_sim_quotes(); // 已接入真实行情, 关闭网关内部随机报价
+    kun::g_live_pool = &pool;
 
     // 协程任务对象池：确保协程运行期间 Task 对象生命周期常驻
     std::vector<std::unique_ptr<CoroutineTask>> spawned_tasks;
@@ -855,6 +864,34 @@ int main(int argc, char* argv[]) {
         auto fusion_task = std::make_unique<kun::CoroMarketFusionTask>(bus, sym, 0.03);
         ex.spawn(fusion_task->run(), "market_fusion_" + sym);
         spawned_tasks.push_back(std::move(fusion_task));
+    }
+
+    // 5.0.5 订阅融合真值流 → 喂给网关池: 真实价格撮合挂单 + 逐 tick 盯市盈亏
+    for (const auto& sym : watch_symbols) {
+        std::string topic = "market/tick/" + sym;
+        message_bus_subscribe(bus, topic.c_str(), [](const Message* msg, void* /*ud*/) {
+            if (!msg || msg->data_size < sizeof(kun::QuantTickMsg) || !kun::g_live_pool) return;
+            const auto* t = reinterpret_cast<const kun::QuantTickMsg*>(msg->data);
+            kun::TickData td;
+            td.symbol = t->symbol;
+            td.exchange = t->exchange;
+            td.last_price = t->last_price;
+            td.bid_price[0] = t->bid_price1;
+            td.ask_price[0] = t->ask_price1;
+            td.bid_volume[0] = t->bid_volume1;
+            td.ask_volume[0] = t->ask_volume1;
+            td.volume = t->volume;
+            td.open_interest = t->open_interest;
+            kun::g_live_pool->feed_real_tick(td);
+        }, nullptr);
+    }
+
+    // 5.0.6 挂载实盘自动策略: 双均线金叉/死叉自动开平仓 (真实行情驱动, 事前风控把关)
+    for (const auto& s : cfg.symbols) {
+        auto strat = std::make_unique<kun::CoroLiveDualMAStradingTask>(
+            bus, s.symbol, "acc_master_simnow", 5, 20, 1.0);
+        ex.spawn(strat->run(), "live_dualma_" + s.symbol);
+        spawned_tasks.push_back(std::move(strat));
     }
 
     // 5.1 挂载行情落盘协程 (M3 行情侧): 为每个监控合约分配独立落盘协程，互不阻塞

@@ -36,10 +36,16 @@ public:
     void set_tick_interval_ms(int ms) { tick_interval_ms_ = ms; }
     void add_mock_symbol(const std::string& symbol, double base_price);
 
+    // 真实行情喂单: 用融合后的真实 tick 驱动撮合 (替代内部 rand 假行情)
+    void on_external_tick(const TickData& tick);
+    // 关闭内部随机报价生成器 (接入真实行情后, 不再向总线发布合成 tick)
+    void set_internal_quotes(bool on) { internal_quotes_.store(on); }
+
 private:
     void quote_generator_loop();
 
     std::atomic<bool> is_running_{false};
+    std::atomic<bool> internal_quotes_{true};
     std::thread quote_thread_;
     int tick_interval_ms_{200}; // 模拟 200ms Tick 刷新频率
 

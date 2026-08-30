@@ -24,6 +24,7 @@
 #include <string>
 #include "kun/core/types.hpp"
 #include "kun/engine/storage_manager.hpp"
+#include "kun/strategy/dual_ma_strategy.hpp"
 #include <chrono>
 #include <memory>
 #include <unordered_map>
@@ -156,7 +157,8 @@ class CoroFollowTradingTask : public CoroutineTask {
 public:
     struct SlaveConfig {
         char account_id[32];
-        double weight; // 资金分配系数 (如 1.5)
+        double weight{1.0}; // 资金分配系数 (如 1.5)
+        double slippage_tolerance_ticks{1.0}; // 滑点与流动性保护容忍跳数
     };
 
     CoroFollowTradingTask(MessageBus* bus, const char* master_account_id, std::vector<SlaveConfig> slaves)
@@ -214,6 +216,86 @@ private:
     char master_id_[32]{};
     std::vector<SlaveConfig> slaves_;
     uint64_t seq_{0};
+};
+
+/**
+ * @brief 实盘双均线自动交易协程 (CoroLiveDualMAStradingTask)
+ * 深度复用 DualMaSignalEngine 纯同构算子：与离线回测逻辑 100% 同构，
+ * 消费融合后的真实行情 (market/tick/{symbol}), 金叉/死叉自动开平仓,
+ * 报单发布至 trader/{account}/order_req, 经 GatewayPool 事前风控 + 撮合成交落账。
+ */
+class CoroLiveDualMAStradingTask : public CoroutineTask {
+public:
+    CoroLiveDualMAStradingTask(MessageBus* bus, std::string symbol,
+                                std::string account_id, int fast = 5, int slow = 20, double volume = 1.0)
+        : CoroutineTask(bus), symbol_(std::move(symbol)), account_id_(std::move(account_id)),
+          volume_(volume), engine_(fast, slow) {}
+
+    Task run() override {
+        std::cout << "[KunQuant::LiveDualMA] 实盘双均线策略已启动! " << symbol_
+                  << " MA(" << engine_.fast_period() << "," << engine_.slow_period() << ") 账户: " << account_id_ << "\n";
+        std::string tick_topic = "market/tick/" + symbol_;
+        BusChannel tick_ch(bus(), tick_topic.c_str(), 64);
+
+        int state = 0; // 0=空仓 1=多头 -1=空头
+        uint64_t seq = 0;
+
+        auto send_order = [&](uint8_t dir, uint8_t offset, double price, const std::string& reason) {
+            QuantOrderReqMsg req{};
+            std::strncpy(req.symbol, symbol_.c_str(), sizeof(req.symbol) - 1);
+            std::strncpy(req.strategy_name, "LiveDualMA", sizeof(req.strategy_name) - 1);
+            req.order_req_id = ++seq;
+            req.direction = dir;
+            req.offset = offset;
+            req.order_type = 0; // LIMIT
+            req.price = price;
+            req.volume = volume_;
+            std::string topic = "trader/" + account_id_ + "/order_req";
+            message_bus_publish(bus(), topic.c_str(), "LiveDualMA", &req, sizeof(req));
+            std::cout << "[KunQuant::LiveDualMA] " << reason << " -> 发出委托: " << symbol_
+                      << " " << (dir == 0 ? "买" : "卖")
+                      << " " << (offset == 0 ? "开仓" : "平仓")
+                      << " " << volume_ << "手 @ " << price << "\n";
+        };
+
+        while (!should_stop()) {
+            auto res = co_await tick_ch.recv_for(50000);
+            if (!res.ok() || res.message.data_size < sizeof(QuantTickMsg)) continue;
+            const auto* tick = reinterpret_cast<const QuantTickMsg*>(res.message.data);
+
+            // 复用纯同构信号算子计算金叉/死叉指令
+            auto signals = engine_.update_price(tick->last_price, state);
+            for (const auto& sig : signals) {
+                switch (sig.type) {
+                    case SignalType::BUY_CLOSE:
+                        send_order(0, 1, sig.price, sig.reason);
+                        state = 0;
+                        break;
+                    case SignalType::BUY_OPEN:
+                        send_order(0, 0, sig.price, sig.reason);
+                        state = 1;
+                        break;
+                    case SignalType::SELL_CLOSE:
+                        send_order(1, 1, sig.price, sig.reason);
+                        state = 0;
+                        break;
+                    case SignalType::SELL_OPEN:
+                        send_order(1, 0, sig.price, sig.reason);
+                        state = -1;
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+        co_return;
+    }
+
+private:
+    std::string symbol_;
+    std::string account_id_;
+    double volume_;
+    DualMaSignalEngine engine_;
 };
 
 } // namespace kun
