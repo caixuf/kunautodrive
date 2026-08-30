@@ -613,6 +613,75 @@ private:
             return;
         }
 
+        if (path.rfind("/api/universe", 0) == 0) {
+            // 合约宇宙: config/universe.json (唯一数据源) + 每品种 CSV 真实收盘价。
+            // 前端自选列表由此动态构建, 不再写死合约清单。
+            std::ifstream uf("config/universe.json");
+            std::string json = "[]";
+            if (uf) {
+                std::stringstream ubuf;
+                ubuf << uf.rdbuf();
+                cJSON* root = cJSON_Parse(ubuf.str().c_str());
+                cJSON* arr = root ? cJSON_GetObjectItem(root, "universe") : nullptr;
+                if (arr && cJSON_IsArray(arr)) {
+                    std::ostringstream ss;
+                    ss << "[";
+                    int n = cJSON_GetArraySize(arr);
+                    for (int i = 0; i < n; ++i) {
+                        cJSON* e = cJSON_GetArrayItem(arr);
+                        if (i > 0) ss << ",";
+                        auto str_field = [&](const char* k) -> std::string {
+                            cJSON* it = cJSON_GetObjectItem(e, k);
+                            return (it && it->valuestring) ? std::string(it->valuestring) : "";
+                        };
+                        auto num_field = [&](const char* k) -> double {
+                            cJSON* it = cJSON_GetObjectItem(e, k);
+                            return it ? it->valuedouble : 0.0;
+                        };
+                        std::string symbol = str_field("symbol");
+                        // CSV 真实日线收盘价与涨跌幅 (无数据则 last=0, 前端如实显示 --)
+                        double last_close = 0, prev_close = 0;
+                        std::string date;
+                        std::ifstream csv("data/history/" + symbol + ".csv");
+                        if (csv) {
+                            std::string line;
+                            std::getline(csv, line);
+                            while (std::getline(csv, line)) {
+                                if (line.empty()) continue;
+                                std::stringstream lss(line);
+                                std::string tok;
+                                std::vector<std::string> cols;
+                                while (std::getline(lss, tok, ',')) cols.push_back(tok);
+                                if (cols.size() < 6) continue;
+                                try {
+                                    prev_close = last_close;
+                                    last_close = std::stod(cols[5]);
+                                    date = cols[1];
+                                } catch (...) { continue; }
+                            }
+                        }
+                        double chg = (prev_close > 0) ? (last_close / prev_close - 1.0) * 100.0 : 0.0;
+                        ss << "{\"symbol\":\"" << symbol << "\",\"name\":\"" << str_field("name")
+                           << "\",\"category\":\"" << str_field("category")
+                           << "\",\"exchange\":\"" << str_field("exchange")
+                           << "\",\"tick\":" << num_field("tick")
+                           << ",\"mult\":" << num_field("multiplier")
+                           << ",\"last\":" << last_close
+                           << ",\"chg\":" << chg
+                           << ",\"date\":\"" << date << "\"}";
+                    }
+                    ss << "]";
+                    json = ss.str();
+                }
+                if (root) cJSON_Delete(root);
+            }
+            std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: " +
+                                   std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;
+            send(client_fd, response.c_str(), response.size(), MSG_NOSIGNAL);
+            close(client_fd);
+            return;
+        }
+
         if (path == "/api/reconcile") {
             // 生成对账报告
             std::vector<TradeData> trades;

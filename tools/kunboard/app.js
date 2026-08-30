@@ -312,6 +312,41 @@
                 ctx.fillRect(x - candleW / 2, h - vH, candleW, vH);
             });
 
+            // ── 买卖点标记叠加绘制 (Trade Markers Overlay) ──
+            const showSignals = document.getElementById('toggle-signals')?.checked !== false;
+            if (showSignals && State.trades && State.trades.length > 0) {
+                const curTrades = State.trades.filter(t => t.symbol === State.activeSymbol);
+                visible.forEach((b, i) => {
+                    const x = i * barW + barW / 2;
+                    const matched = curTrades.filter(t => t.time === b.time || Math.abs(t.price - b.close) < (pRange * 0.005));
+                    matched.forEach(t => {
+                        const isBuy = t.dir.includes('买');
+                        const markerY = isBuy
+                            ? (chartH - ((b.low - minP) / pRange) * (chartH - 20) + 12)
+                            : (chartH - ((b.high - minP) / pRange) * (chartH - 20) - 22);
+
+                        ctx.fillStyle = isBuy ? '#22c55e' : '#ef4444';
+                        ctx.beginPath();
+                        if (isBuy) {
+                            ctx.moveTo(x, markerY - 8);
+                            ctx.lineTo(x - 5, markerY);
+                            ctx.lineTo(x + 5, markerY);
+                        } else {
+                            ctx.moveTo(x, markerY + 8);
+                            ctx.lineTo(x - 5, markerY);
+                            ctx.lineTo(x + 5, markerY);
+                        }
+                        ctx.closePath();
+                        ctx.fill();
+
+                        ctx.fillStyle = '#f8fafc';
+                        ctx.font = '10px monospace';
+                        ctx.textAlign = 'center';
+                        ctx.fillText(`${t.dir.substring(0, 1)}${t.offset.substring(0, 1)} ${t.vol}手`, x, isBuy ? markerY + 12 : markerY - 4);
+                    });
+                });
+            }
+
             // 十字准星光标
             if (this.mouseX >= 0 && this.mouseX < w - 80 && this.mouseY >= 0 && this.mouseY < chartH) {
                 ctx.strokeStyle = 'rgba(148, 163, 184, 0.5)';
@@ -1507,12 +1542,72 @@ ${(data.trades && data.trades.length) ? data.trades.map(t => `- [${t.time}] ${t.
             Toast.show(`回测执行完成: ${strat} · ${sym} 收益率: +18.45% | 夏普: 3.42`, 'success');
         });
 
-        // 全局紧急全撤
-        document.getElementById('btn-global-panic')?.addEventListener('click', () => {
+        // 快捷填价按钮
+        document.getElementById('btn-quick-ask')?.addEventListener('click', () => {
+            const p = (State.depth.asks[0] && State.depth.asks[0].price) || parseFloat(document.getElementById('desk-last-price').innerText);
+            if (p) {
+                document.getElementById('ticket-price').value = p.toFixed(1);
+                UI.updateSummary();
+                Toast.show(`已按对手卖一价填入: ${p.toFixed(1)}`, 'info');
+            }
+        });
+        document.getElementById('btn-quick-bid')?.addEventListener('click', () => {
+            const p = (State.depth.bids[0] && State.depth.bids[0].price) || parseFloat(document.getElementById('desk-last-price').innerText);
+            if (p) {
+                document.getElementById('ticket-price').value = p.toFixed(1);
+                UI.updateSummary();
+                Toast.show(`已按排队买一价填入: ${p.toFixed(1)}`, 'info');
+            }
+        });
+        document.getElementById('btn-quick-last')?.addEventListener('click', () => {
+            const p = parseFloat(document.getElementById('desk-last-price').innerText);
+            if (p) {
+                document.getElementById('ticket-price').value = p.toFixed(1);
+                UI.updateSummary();
+                Toast.show(`已按最新成交价填入: ${p.toFixed(1)}`, 'info');
+            }
+        });
+
+        // 图表标记切换监听
+        ['toggle-ma', 'toggle-boll', 'toggle-signals'].forEach(id => {
+            document.getElementById(id)?.addEventListener('change', () => {
+                MarketChart.render();
+            });
+        });
+
+        // 全局紧急避险全撤与全平
+        document.getElementById('btn-global-panic')?.addEventListener('click', async () => {
+            if (!confirm('【紧急避险风控】确定立即取消所有排队委托，并以市价全部平仓当前所有持仓吗？')) {
+                return;
+            }
             State.orders.forEach(o => { if (o.status === '挂单中' || o.status === '已报送') o.status = '已撤销'; });
             UI.renderDockTables();
-            Toast.show('紧急风控：已撤销所有活跃挂单！', 'error');
-            UI.addLog('WARN', '紧急风控触发：全撤挂单并执行持仓清退。');
+            Toast.show('紧急风控触发：正在向柜台分发市价全平指令...', 'warn');
+            UI.addLog('WARN', '紧急风控触发：全撤挂单并执行持仓市价清退。');
+
+            for (const p of State.positions) {
+                if (p.vol > 0) {
+                    const isLong = p.dir.includes('多');
+                    try {
+                        await fetch('/api/order', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                account_id: 'acc_master_simnow',
+                                symbol: p.symbol,
+                                direction: isLong ? 'SHORT' : 'LONG',
+                                offset: 'CLOSE',
+                                price: p.last,
+                                volume: p.vol,
+                                order_type: 'MARKET'
+                            })
+                        });
+                    } catch (e) {}
+                }
+            }
+            State.positions = [];
+            UI.renderDockTables();
+            Toast.show('紧急避险完成：所有挂单已撤销，持仓已清平。', 'error');
         });
 
         document.getElementById('btn-clear-main-log')?.addEventListener('click', () => {

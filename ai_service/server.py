@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from ai_service.config import AIConfig
 from ai_service.provider import LLMProvider
@@ -55,6 +56,12 @@ class AIServiceHandler(BaseHTTPRequestHandler):
         if self.path == "/api/ai/report":
             report_md = self.reporter.generate_report(body)
             self._send_json(200, {"status": "OK", "report": report_md})
+
+        elif self.path == "/api/fetch_history":
+            # 手动触发全量行情抓取 (后台线程执行, 立即返回)
+            from market_data_auto import run_full_fetch
+            threading.Thread(target=run_full_fetch, daemon=True).start()
+            self._send_json(200, {"status": "STARTED"})
 
         elif self.path == "/api/ai/chat":
             prompt = body.get("message", "")
@@ -164,6 +171,13 @@ class ReusableHTTPServer(HTTPServer):
     allow_reuse_address = True
 
 def run_server(port: int = 8901):
+    # 真实行情数据自动抓取守护 (启动即抓全宇宙日线, 每 6 小时更新)
+    try:
+        from market_data_auto import start_background_fetcher
+        start_background_fetcher()
+    except Exception as e:  # noqa: BLE001
+        print(f"[KunQuant AI Proactive Service] 行情自动抓取启动失败: {e}")
+
     server = ReusableHTTPServer(('0.0.0.0', port), AIServiceHandler)
     print(f"[KunQuant AI Proactive Service] Listening on http://0.0.0.0:{port}")
     try:
