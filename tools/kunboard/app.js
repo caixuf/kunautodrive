@@ -172,80 +172,124 @@
     };
 
     // ─────────────────────────────────────────────────────────────
-    // K 线图 Canvas 高刷引擎 (支持十字光标追踪)
+    // K 线图 Canvas 双层高刷引擎 (分层渲染: 静态网格层 + 动态蜡烛层 + 十字光标层)
     // ─────────────────────────────────────────────────────────────
     const MarketChart = {
-        canvas: null,
-        ctx: null,
+        canvasBg: null,
+        ctxBg: null,
+        canvasMain: null,
+        ctxMain: null,
+        canvasOverlay: null,
+        ctxOverlay: null,
+
         mouseX: -1,
         mouseY: -1,
+        rAFPending: false,
+        lastW: 0,
+        lastH: 0,
 
         init() {
-            this.canvas = document.getElementById('market-canvas');
-            if (!this.canvas) return;
-            this.ctx = this.canvas.getContext('2d');
+            this.canvasBg = document.getElementById('market-canvas-bg');
+            this.canvasMain = document.getElementById('market-canvas-main');
+            this.canvasOverlay = document.getElementById('market-canvas-overlay');
 
-            window.addEventListener('resize', () => this.resize());
-            
-            this.canvas.addEventListener('mousemove', (e) => {
-                const rect = this.canvas.getBoundingClientRect();
+            if (!this.canvasMain) {
+                this.canvasMain = document.getElementById('market-canvas');
+            }
+            if (!this.canvasMain) return;
+
+            this.ctxBg = this.canvasBg ? this.canvasBg.getContext('2d') : null;
+            this.ctxMain = this.canvasMain.getContext('2d');
+            this.ctxOverlay = this.canvasOverlay ? this.canvasOverlay.getContext('2d') : null;
+
+            const targetInput = this.canvasOverlay || this.canvasMain;
+
+            targetInput.addEventListener('mousemove', (e) => {
+                const rect = targetInput.getBoundingClientRect();
                 this.mouseX = e.clientX - rect.left;
                 this.mouseY = e.clientY - rect.top;
-                this.render();
+                this.requestCrosshairRender();
             });
 
-            this.canvas.addEventListener('mouseleave', () => {
+            targetInput.addEventListener('mouseleave', () => {
                 this.mouseX = -1;
                 this.mouseY = -1;
-                this.render();
+                this.requestCrosshairRender();
             });
 
+            window.addEventListener('resize', () => this.resize());
             this.resize();
         },
 
         resize() {
-            if (!this.canvas) return;
-            const rect = this.canvas.parentElement.getBoundingClientRect();
+            if (!this.canvasMain) return;
+            const container = this.canvasMain.parentElement;
+            if (!container) return;
+            const rect = container.getBoundingClientRect();
             if (rect.width === 0 || rect.height === 0) return;
-            this.canvas.width = rect.width * window.devicePixelRatio;
-            this.canvas.height = rect.height * window.devicePixelRatio;
-            this.ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+
+            const dpr = window.devicePixelRatio || 1;
+            const w = rect.width;
+            const h = rect.height;
+            this.lastW = w;
+            this.lastH = h;
+
+            [this.canvasBg, this.canvasMain, this.canvasOverlay].forEach(c => {
+                if (!c) return;
+                c.width = w * dpr;
+                c.height = h * dpr;
+                const ctx = c.getContext('2d');
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            });
+
             this.render();
         },
 
+        requestCrosshairRender() {
+            if (this.rAFPending) return;
+            this.rAFPending = true;
+            requestAnimationFrame(() => {
+                this.rAFPending = false;
+                this.renderCrosshair(this.lastW, this.lastH);
+            });
+        },
+
         render() {
-            const ctx = this.ctx;
-            const bars = State.marketBars;
+            const w = this.lastW;
+            const h = this.lastH;
+            if (w === 0 || h === 0) return;
+            this.renderBackgroundAndGrid(w, h);
+            this.renderCandlesAndSignals(w, h);
+            this.renderCrosshair(w, h);
+        },
+
+        renderBackgroundAndGrid(w, h) {
+            const ctx = this.ctxBg || this.ctxMain;
             if (!ctx) return;
-
-            const rect = this.canvas.parentElement.getBoundingClientRect();
-            const w = rect.width;
-            const h = rect.height;
-            ctx.clearRect(0, 0, w, h);
-
-            if (!bars || bars.length === 0) {
-                // 无真实数据时如实提示, 绝不伪造 K 线填充
-                ctx.fillStyle = '#64748b';
-                ctx.font = '13px monospace';
-                ctx.textAlign = 'center';
-                ctx.fillText('暂无真实行情数据 — 请先运行 fetch_history.py 抓取或等待实时行情接入', w / 2, h / 2);
-                return;
+            if (this.ctxBg) {
+                ctx.clearRect(0, 0, w, h);
             }
 
             const chartH = h * 0.72;
-            const volH = h * 0.22;
+            const bars = State.marketBars;
+            if (!bars || bars.length === 0) {
+                if (!this.ctxBg) ctx.clearRect(0, 0, w, h);
+                ctx.fillStyle = '#64748b';
+                ctx.font = '13px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText('暂无真实行情数据 — 请等待实时行情接入', w / 2, h / 2);
+                return;
+            }
 
             let minP = Infinity, maxP = -Infinity;
-            let maxV = 0;
             const visible = bars.slice(-70);
             visible.forEach(b => {
                 minP = Math.min(minP, b.low);
                 maxP = Math.max(maxP, b.high);
-                maxV = Math.max(maxV, b.volume);
             });
             const pRange = maxP - minP || 1;
 
-            // 网格
+            // 静态网格与刻度
             ctx.strokeStyle = '#1a2436';
             ctx.lineWidth = 1;
             for (let i = 1; i <= 5; i++) {
@@ -261,10 +305,32 @@
                 ctx.textAlign = 'left';
                 ctx.fillText(p.toFixed(1), w - 65, y + 4);
             }
+        },
 
+        renderCandlesAndSignals(w, h) {
+            const ctx = this.ctxMain;
+            const bars = State.marketBars;
+            if (!ctx) return;
+
+            ctx.clearRect(0, 0, w, h);
+            if (!bars || bars.length === 0) return;
+
+            const chartH = h * 0.72;
+            const volH = h * 0.22;
+
+            let minP = Infinity, maxP = -Infinity;
+            let maxV = 0;
+            const visible = bars.slice(-70);
+            visible.forEach(b => {
+                minP = Math.min(minP, b.low);
+                maxP = Math.max(maxP, b.high);
+                maxV = Math.max(maxV, b.volume);
+            });
+            const pRange = maxP - minP || 1;
             const barW = (w - 80) / visible.length;
             const candleW = Math.max(3, barW * 0.75);
 
+            // 绘制蜡烛与成交量
             visible.forEach((b, i) => {
                 const x = i * barW + barW / 2;
                 const isUp = b.close >= b.open;
@@ -286,12 +352,12 @@
                 const bodyH = Math.max(2, Math.abs(yClose - yOpen));
                 ctx.fillRect(x - candleW / 2, topY, candleW, bodyH);
 
-                const vH = (b.volume / maxV) * (volH - 10);
+                const vH = (b.volume / Math.max(1, maxV)) * (volH - 10);
                 ctx.fillStyle = isUp ? 'rgba(244, 63, 94, 0.35)' : 'rgba(16, 185, 129, 0.35)';
                 ctx.fillRect(x - candleW / 2, h - vH, candleW, vH);
             });
 
-            // ── 买卖点标记叠加绘制 (Trade Markers Overlay) ──
+            // ── 买卖点标记叠加绘制 (Trade Markers) ──
             const showSignals = document.getElementById('toggle-signals')?.checked !== false;
             if (showSignals && State.trades && State.trades.length > 0) {
                 const curTrades = State.trades.filter(t => t.symbol === State.activeSymbol);
@@ -325,12 +391,27 @@
                     });
                 });
             }
+        },
 
-            // 十字准星光标
+        renderCrosshair(w, h) {
+            const ctx = this.ctxOverlay || this.ctxMain;
+            const bars = State.marketBars;
+            if (!ctx) return;
+
+            if (this.ctxOverlay) {
+                ctx.clearRect(0, 0, w, h);
+            }
+            if (!bars || bars.length === 0) return;
+
+            const chartH = h * 0.72;
+            const visible = bars.slice(-70);
+            const barW = (w - 80) / visible.length;
+
             if (this.mouseX >= 0 && this.mouseX < w - 80 && this.mouseY >= 0 && this.mouseY < chartH) {
-                ctx.strokeStyle = 'rgba(148, 163, 184, 0.5)';
+                ctx.strokeStyle = 'rgba(148, 163, 184, 0.6)';
+                ctx.lineWidth = 1;
                 ctx.setLineDash([4, 4]);
-                
+
                 // 竖线
                 ctx.beginPath();
                 ctx.moveTo(this.mouseX, 0);

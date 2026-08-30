@@ -201,7 +201,10 @@
                                     </div>
                                 </div>
                                 <div class="chart-canvas-container" id="market-canvas-container">
-                                    <canvas id="market-canvas"></canvas>
+                                    <canvas id="market-canvas-bg" class="chart-layer chart-layer-bg"></canvas>
+                                    <canvas id="market-canvas-main" class="chart-layer chart-layer-main"></canvas>
+                                    <canvas id="market-canvas-overlay" class="chart-layer chart-layer-overlay"></canvas>
+                                    <canvas id="market-canvas" style="display: none;"></canvas>
                                     <div class="chart-hud-overlay" id="chart-hud">
                                         <span>时间: <b id="hud-time">--</b></span>
                                         <span>开: <b id="hud-open">--</b></span>

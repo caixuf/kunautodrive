@@ -698,6 +698,30 @@ html, body {
     overflow: hidden;
 }
 
+.chart-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.chart-layer-bg {
+    z-index: 1;
+    pointer-events: none;
+}
+
+.chart-layer-main {
+    z-index: 2;
+    pointer-events: none;
+}
+
+.chart-layer-overlay {
+    z-index: 3;
+    cursor: crosshair;
+}
+
 #market-canvas {
     width: 100%;
     height: 100%;

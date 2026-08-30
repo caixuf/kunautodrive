@@ -59,32 +59,39 @@ class AutoQuantSessionScheduler:
 
         weekday = now.weekday() # 0 = Monday, 6 = Sunday
         time_hm = now.strftime("%H:%M")
-        is_trading_day = weekday < 5
 
-        # 周末判定 (周六 02:30 后至周日 20:50 前为完全休市)
-        if weekday == 5 and time_hm >= "02:30":
-            is_trading_day = False
-        elif weekday == 6 and time_hm < "20:50":
-            is_trading_day = False
+        # 准确判定是否处于合法交易时段（含周五夜盘延续至周六 02:30）
+        # 1. 周六 00:00 - 02:30 属于周五夜盘连续交易
+        if weekday == 5 and time_hm < "02:30":
+            is_trading_day = True
+            return MarketSessionState("TRADING", True, time_hm, "夜盘收盘清算", 3600)
+        elif weekday == 5 and "02:30" <= time_hm < "02:40":
+            is_trading_day = True
+            return MarketSessionState("POST_MARKET", True, time_hm, "进入周末休市", 600)
+        elif weekday == 5 or (weekday == 6 and time_hm < "20:50"):
+            # 周末完全休市 (周六 02:40 至周日 20:50)
+            return MarketSessionState("IDLE", False, time_hm, "等待周日夜盘开市准备", 1800)
+
+        is_trading_day = weekday < 5 or (weekday == 6 and time_hm >= "20:50")
 
         # 时段切分
-        # 1. 早盘前准备 (08:50 - 09:00)
-        if is_trading_day and "08:50" <= time_hm < "09:00":
+        # 1. 早盘前准备 (08:50 - 09:00，周一至周五)
+        if weekday < 5 and "08:50" <= time_hm < "09:00":
             return MarketSessionState("PRE_MARKET", True, time_hm, "日盘连续交易开市", 600)
-        # 2. 夜盘前准备 (20:50 - 21:00)
-        elif is_trading_day and "20:50" <= time_hm < "21:00":
+        # 2. 夜盘前准备 (20:50 - 21:00，周一至周五及周日晚)
+        elif "20:50" <= time_hm < "21:00":
             return MarketSessionState("PRE_MARKET", True, time_hm, "夜盘连续交易开市", 600)
-        # 3. 日盘连续交易 (09:00 - 15:00，包含 10:15-10:30, 11:30-13:30 小节休)
-        elif is_trading_day and "09:00" <= time_hm < "15:00":
+        # 3. 日盘连续交易 (09:00 - 15:00，周一至周五)
+        elif weekday < 5 and "09:00" <= time_hm < "15:00":
             return MarketSessionState("TRADING", True, time_hm, "日盘收盘清算", 3600)
-        # 4. 夜盘连续交易 (21:00 - 02:30 次日)
-        elif is_trading_day and ("21:00" <= time_hm or time_hm < "02:30"):
+        # 4. 夜盘连续交易 (21:00 - 24:00，或周一至周五 00:00 - 02:30)
+        elif ("21:00" <= time_hm) or (weekday < 5 and time_hm < "02:30"):
             return MarketSessionState("TRADING", True, time_hm, "夜盘收盘清算", 3600)
-        # 5. 日盘收盘清算 (15:00 - 15:15)
-        elif is_trading_day and "15:00" <= time_hm < "15:15":
+        # 5. 日盘收盘清算 (15:00 - 15:15，周一至周五)
+        elif weekday < 5 and "15:00" <= time_hm < "15:15":
             return MarketSessionState("POST_MARKET", True, time_hm, "进入休市待机", 900)
-        # 6. 夜盘收盘清算 (02:30 - 02:40)
-        elif is_trading_day and "02:30" <= time_hm < "02:40":
+        # 6. 夜盘收盘清算 (02:30 - 02:40，周一至周五)
+        elif weekday < 5 and "02:30" <= time_hm < "02:40":
             return MarketSessionState("POST_MARKET", True, time_hm, "进入休市待机", 600)
         else:
             return MarketSessionState("IDLE", is_trading_day, time_hm, "等待开盘准备时段", 1800)
@@ -143,19 +150,20 @@ class AutoQuantSessionScheduler:
     def _check_http_endpoint(self, url: str) -> bool:
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "KunQuantScheduler/1.0"})
-            with urllib.request.urlopen(req, timeout=1.5) as resp:
+            with urllib.request.urlopen(req, timeout=2.0) as resp:
                 return resp.status == 200
-        except Exception:
+        except Exception as e:
+            logging.debug(f"[HealthCheck] Endpoint {url} inaccessible: {e}")
             return False
 
     def _http_get_json(self, url: str) -> Optional[Dict[str, Any]]:
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "KunQuantScheduler/1.0"})
-            with urllib.request.urlopen(req, timeout=2.0) as resp:
+            with urllib.request.urlopen(req, timeout=3.0) as resp:
                 if resp.status == 200:
                     return json.loads(resp.read().decode('utf-8'))
-        except Exception:
-            pass
+        except Exception as e:
+            logging.warning(f"[HttpClient] GET {url} failed: {e}")
         return None
 
     def _http_post_json(self, url: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -165,8 +173,8 @@ class AutoQuantSessionScheduler:
             with urllib.request.urlopen(req, timeout=3.0) as resp:
                 if resp.status == 200:
                     return json.loads(resp.read().decode('utf-8'))
-        except Exception:
-            pass
+        except Exception as e:
+            logging.warning(f"[HttpClient] POST {url} failed: {e}")
         return None
 
     def start_daemon(self):
@@ -174,13 +182,16 @@ class AutoQuantSessionScheduler:
         if self.running:
             return
         self.running = True
+        self._stop_event = threading.Event()
         self._worker_thread = threading.Thread(target=self._scheduler_loop, daemon=True, name="AutoQuantScheduler")
         self._worker_thread.start()
         logging.info("7×24 小时全自动交易日调度器已启动。")
 
     def stop_daemon(self):
         self.running = False
-        if self._worker_thread and self._worker_thread.joinable():
+        if hasattr(self, '_stop_event'):
+            self._stop_event.set()
+        if self._worker_thread and self._worker_thread.is_alive():
             self._worker_thread.join(timeout=2.0)
 
     def _scheduler_loop(self):
@@ -194,7 +205,10 @@ class AutoQuantSessionScheduler:
             elif st.session_type == "POST_MARKET" and self.last_daily_report_date != today_str:
                 self.execute_post_market_workflow(today_str)
 
-            time.sleep(10)
+            if hasattr(self, '_stop_event'):
+                self._stop_event.wait(timeout=10)
+            else:
+                time.sleep(10)
 
 def main():
     scheduler = AutoQuantSessionScheduler()

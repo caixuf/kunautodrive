@@ -34,11 +34,23 @@ class TestAutoQuantSessionScheduler(unittest.TestCase):
         st_night = self.scheduler.evaluate_session_state(dt_night)
         self.assertEqual(st_night.session_type, "TRADING")
 
-        # 5. 测试周末完全休市 (周日 12:00)
+        # 5. 测试周五夜盘跨日延续时段 (周六 01:15，仍属周五夜盘连续交易)
+        dt_fri_night_cross = datetime.datetime(2026, 9, 5, 1, 15, 0)
+        st_fri_night = self.scheduler.evaluate_session_state(dt_fri_night_cross)
+        self.assertEqual(st_fri_night.session_type, "TRADING")
+        self.assertTrue(st_fri_night.is_trading_day)
+
+        # 6. 测试周末完全休市 (周日 12:00)
         dt_weekend = datetime.datetime(2026, 9, 6, 12, 0, 0)
         st_weekend = self.scheduler.evaluate_session_state(dt_weekend)
         self.assertEqual(st_weekend.session_type, "IDLE")
         self.assertFalse(st_weekend.is_trading_day)
+
+    def test_daemon_lifecycle(self):
+        self.scheduler.start_daemon()
+        self.assertTrue(self.scheduler.running)
+        self.scheduler.stop_daemon()
+        self.assertFalse(self.scheduler.running)
 
     def test_pre_and_post_market_execution(self):
         today = "2026-09-01"
