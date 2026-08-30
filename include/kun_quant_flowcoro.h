@@ -333,6 +333,7 @@ public:
             std::strncpy(req.symbol, symbol_.c_str(), sizeof(req.symbol) - 1);
             std::strncpy(req.strategy_name, "LiveDualMA5m", sizeof(req.strategy_name) - 1);
             req.order_req_id = ++seq;
+            pending_req_id_ = req.order_req_id; // 记录挂单, 下根 bar 收盘未成交则撤单重挂
             req.direction = dir;
             req.offset = offset;
             req.order_type = 0; // LIMIT
@@ -364,6 +365,16 @@ public:
                     if (true_ranges.size() > 14) true_ranges.pop_front();
                     bars.push_back(cur);
                     if (bars.size() > 200) bars.pop_front();
+
+                    // ── 撤单重挂: 上根 bar 的未成交挂单先撤 (陈旧限价单会永久阻塞策略) ──
+                    if (pending_req_id_ > 0) {
+                        QuantOrderReqMsg cancel{};
+                        std::strncpy(cancel.symbol, symbol_.c_str(), sizeof(cancel.symbol) - 1);
+                        cancel.order_req_id = pending_req_id_;
+                        std::string cancel_topic = "trader/" + account_id_ + "/cancel";
+                        message_bus_publish(bus(), cancel_topic.c_str(), "LiveDualMA5m", &cancel, sizeof(cancel));
+                        pending_req_id_ = 0;
+                    }
 
                     // ── bar 收盘 → 喂同构信号算子 ──
                     auto signals = engine_.update_price(cur.close, state);
@@ -404,6 +415,7 @@ private:
     std::string symbol_;
     std::string account_id_;
     double volume_;
+    uint64_t pending_req_id_{0}; // 未成交挂单的 order_req_id (0=无)
     DualMaSignalEngine engine_;
 };
 

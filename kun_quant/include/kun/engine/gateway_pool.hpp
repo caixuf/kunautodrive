@@ -62,6 +62,11 @@ public:
         std::string order_topic = "trader/" + profile.account_id + "/order_req";
         message_bus_subscribe(bus_, order_topic.c_str(), &GatewayPool::on_order_request_static, this);
 
+        // 撤单通道: 消息体复用 QuantOrderReqMsg, order_req_id = 要撤销的委托编号
+        // (按 order_ref 匹配活跃挂单)。策略"撤单重挂"依赖此通道。
+        std::string cancel_topic = "trader/" + profile.account_id + "/cancel";
+        message_bus_subscribe(bus_, cancel_topic.c_str(), &GatewayPool::on_cancel_request_static, this);
+
         std::cout << "[GatewayPool] 账户网关注册成功 (含事前风控门禁): " << profile.account_id 
                   << " (" << profile.broker_name << ") -> 监听 Topic: " << order_topic << "\n";
         return true;
@@ -270,6 +275,37 @@ public:
     void on_account(const AccountData& /*acc*/) override {}
 
 private:
+    // 撤单: 按 order_ref (= 策略侧 order_req_id) 匹配活跃挂单并撤销。
+    // 未成交的陈旧限价单若不撤, 会永远挂在撮合引擎里阻塞策略循环。
+    static void on_cancel_request_static(const Message* msg, void* user_data) {
+        auto* self = static_cast<GatewayPool*>(user_data);
+        if (!msg || !self || msg->data_size < sizeof(QuantOrderReqMsg)) return;
+
+        std::string topic(msg->topic);
+        size_t first = topic.find('/');
+        size_t second = topic.find('/', first + 1);
+        if (first == std::string::npos || second == std::string::npos) return;
+        std::string acc_id = topic.substr(first + 1, second - first - 1);
+
+        std::shared_ptr<SimGateway> gw;
+        {
+            std::lock_guard<std::mutex> lock(self->mutex_);
+            auto it = self->accounts_.find(acc_id);
+            if (it != self->accounts_.end()) gw = it->second->gateway;
+        }
+        if (!gw) return;
+
+        const auto* pod = reinterpret_cast<const QuantOrderReqMsg*>(msg->data);
+        std::string ref = std::to_string(pod->order_req_id);
+        for (const auto& o : gw->get_active_orders()) {
+            if (o.symbol == pod->symbol && o.order_ref == ref) {
+                gw->cancel_order(o.order_id);
+                std::cout << "[GatewayPool] 撤单成功: " << acc_id << " order_ref=" << ref
+                          << " @" << o.price << "\n";
+            }
+        }
+    }
+
     static void on_order_request_static(const Message* msg, void* user_data) {
         auto* self = static_cast<GatewayPool*>(user_data);
         if (!msg || !self || msg->data_size < sizeof(QuantOrderReqMsg)) return;
