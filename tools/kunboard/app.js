@@ -1759,7 +1759,22 @@ ${(data.trades && data.trades.length) ? data.trades.map(t => `- [${t.time}] ${t.
         init() {
             this.startCountdown();
             this.fetchMemoryStats();
+            this.fetchAiRadar();
+            setInterval(() => this.fetchAiRadar(), 300 * 1000); // 每 5 分钟动态刷新 AI 因子雷达
             this.bindEvents();
+        },
+
+        async fetchAiRadar() {
+            try {
+                const res = await fetch('/api/ai/radar');
+                if (res.ok) {
+                    const json = await res.json();
+                    if (json.recommendations && json.recommendations.length > 0) {
+                        State.aiRadarRecommendations = json.recommendations;
+                        UI.renderAiRadar();
+                    }
+                }
+            } catch (e) {}
         },
 
         bindEvents() {

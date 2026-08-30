@@ -33,6 +33,9 @@ class AIServiceHandler(BaseHTTPRequestHandler):
         elif self.path == "/api/ai/memory/stats":
             stats = self.memory.get_memory_stats()
             self._send_json(200, {"status": "OK", "data": stats})
+        elif self.path == "/api/ai/radar":
+            from ai_service.radar_screener import get_ai_radar_payload
+            self._send_json(200, get_ai_radar_payload())
         elif self.path == "/api/focus":
             self._send_json(200, {"status": "OK", "focus": self.focus.list_focus()})
         elif self.path.startswith("/api/tasks"):
