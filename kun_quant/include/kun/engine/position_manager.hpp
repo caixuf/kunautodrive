@@ -51,6 +51,14 @@ public:
     bool freeze_position(const std::string& symbol, Direction direction, double volume);
     void unfreeze_position(const std::string& symbol, Direction direction, double volume);
 
+    /**
+     * @brief 上期所/能源中心 (SHFE/INE) 昨今仓平仓决策器 (借鉴 vn.py 工业级算法)
+     * 自动拆分并优先平昨仓以极小化手续费，返回平仓拆单指令序列 [(Offset, Volume)]
+     */
+    std::vector<std::pair<Offset, double>> resolve_close_orders(
+        const std::string& symbol, const std::string& exchange,
+        Direction close_direction, double req_volume) const;
+
 private:
     void update_pnl(const std::string& symbol, double current_price);
 

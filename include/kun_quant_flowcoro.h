@@ -219,6 +219,106 @@ private:
 };
 
 /**
+ * @brief 智能超价追单执行协程 (CoroSmartChaseExecutionTask)
+ * 借鉴 WonderTrader 工业级 Cancel & Chase 状态机：
+ * 发出限价单后，监听成交与行情。若在指定超时 (如 200ms) 或挂单偏离对手价时未完全成交，
+ * 自动撤单并根据最新对手盘（买入用 Ask1 + 滑点跳数，卖出用 Bid1 - 滑点跳数）自动超价追单，
+ * 直至全量成交或达到最大追单次数，彻底解决突破单与跟单挂单悬空问题。
+ */
+class CoroSmartChaseExecutionTask : public CoroutineTask {
+public:
+    struct ChaseConfig {
+        std::string symbol;
+        std::string account_id;
+        uint8_t direction{0}; // 0=BUY, 1=SELL
+        uint8_t offset{0};    // 0=OPEN, 1=CLOSE
+        double initial_price{0.0};
+        double volume{1.0};
+        uint64_t timeout_us{200000}; // 200ms 超时未成交触发追单
+        int max_chase_attempts{3};   // 最多追单 3 次
+        double slippage_ticks{1.0};  // 追单超价值 (跳)
+        double price_tick{1.0};      // 最小变动价位
+    };
+
+    CoroSmartChaseExecutionTask(MessageBus* bus, ChaseConfig cfg)
+        : CoroutineTask(bus), cfg_(std::move(cfg)), remaining_volume_(cfg_.volume) {}
+
+    Task run() override {
+        std::string order_req_topic = "trader/" + cfg_.account_id + "/order_req";
+        std::string trade_rtn_topic = "trader/" + cfg_.account_id + "/trade_rtn";
+        std::string tick_topic = "market/tick/" + cfg_.symbol;
+
+        BusChannel trade_ch(bus(), trade_rtn_topic.c_str(), 64);
+        BusChannel tick_ch(bus(), tick_topic.c_str(), 64);
+
+        double cur_price = cfg_.initial_price;
+        int chase_count = 0;
+        uint64_t seq = 0;
+
+        while (!should_stop() && remaining_volume_ > 0 && chase_count <= cfg_.max_chase_attempts) {
+            // 1. 发送限价报单
+            QuantOrderReqMsg req{};
+            std::strncpy(req.symbol, cfg_.symbol.c_str(), sizeof(req.symbol) - 1);
+            std::strncpy(req.strategy_name, "SmartChaser", sizeof(req.strategy_name) - 1);
+            req.order_req_id = ++seq;
+            req.direction = cfg_.direction;
+            req.offset = cfg_.offset;
+            req.order_type = 0; // LIMIT
+            req.price = cur_price;
+            req.volume = remaining_volume_;
+
+            message_bus_publish(bus(), order_req_topic.c_str(), "SmartChaser", &req, sizeof(req));
+            std::cout << "[KunQuant::SmartChaser] " << (chase_count == 0 ? "首次发单" : "触发追单")
+                      << " [尝试 #" << chase_count << "] " << cfg_.symbol
+                      << " " << (cfg_.direction == 0 ? "买" : "卖")
+                      << " " << (cfg_.offset == 0 ? "开" : "平")
+                      << " " << remaining_volume_ << "手 @ " << cur_price << "\n";
+
+            // 2. 等待成交回报 (带超时判定)
+            auto res = co_await trade_ch.recv_for(cfg_.timeout_us);
+            if (res.ok() && res.message.data_size >= sizeof(QuantTradeMsg)) {
+                const auto* trade = reinterpret_cast<const QuantTradeMsg*>(res.message.data);
+                if (std::strcmp(trade->symbol, cfg_.symbol.c_str()) == 0 && trade->order_id == req.order_req_id) {
+                    remaining_volume_ -= trade->volume;
+                    std::cout << "  ↳ [SmartChaser] 成交 " << trade->volume << "手 @ " << trade->price
+                              << ", 剩余量: " << remaining_volume_ << "手\n";
+                    if (remaining_volume_ <= 0) break; // 全量成交
+                }
+            }
+
+            if (remaining_volume_ <= 0) break;
+
+            // 3. 超时未完全成交: 自动撤单并计算最新超价追单价
+            chase_count++;
+            if (chase_count > cfg_.max_chase_attempts) {
+                std::cout << "[KunQuant::SmartChaser] 达到最大追单限制 (" << cfg_.max_chase_attempts << ")，停止追单。\n";
+                break;
+            }
+
+            // 抓取最新 Tick 计算对手价
+            auto tick_res = co_await tick_ch.recv_for(50000);
+            if (tick_res.ok() && tick_res.message.data_size >= sizeof(QuantTickMsg)) {
+                const auto* t = reinterpret_cast<const QuantTickMsg*>(tick_res.message.data);
+                if (cfg_.direction == 0) {
+                    // 买入追单: 取卖一价 + 滑点跳数
+                    double ask1 = t->ask_price1 > 0 ? t->ask_price1 : t->last_price;
+                    cur_price = ask1 + cfg_.slippage_ticks * cfg_.price_tick;
+                } else {
+                    // 卖出追单: 取买一价 - 滑点跳数
+                    double bid1 = t->bid_price1 > 0 ? t->bid_price1 : t->last_price;
+                    cur_price = bid1 - cfg_.slippage_ticks * cfg_.price_tick;
+                }
+            }
+        }
+        co_return;
+    }
+
+private:
+    ChaseConfig cfg_;
+    double remaining_volume_{0.0};
+};
+
+/**
  * @brief 实盘双均线自动交易协程 (CoroLiveDualMAStradingTask)
  * 深度复用 DualMaSignalEngine 纯同构算子：与离线回测逻辑 100% 同构，
  * 消费融合后的真实行情 (market/tick/{symbol}), 金叉/死叉自动开平仓,

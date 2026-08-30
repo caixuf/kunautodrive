@@ -518,14 +518,16 @@ std::vector<StorageManager::TickRow> StorageManager::load_ticks(const std::strin
     std::vector<TickRow> results;
     if (!db_) return results;
 
-    // 取最近 limit 条后翻转为升序, 供 K 线桶聚合
+    // 取最近 limit 条后翻转为升序, 供 K 线桶聚合。
+    // 品种族前缀桥接: symbol='rb' 同时匹配 'rb' 与 'rb2405' 等具体月份合约
     const char* sql = "SELECT symbol, exchange, last_price, bid_price1, ask_price1, bid_volume1, ask_volume1, volume, open_interest, ts "
-                      "FROM ticks WHERE symbol = ? ORDER BY ts DESC LIMIT ?;";
+                      "FROM ticks WHERE (symbol = ? OR symbol GLOB ? || '[0-9][0-9][0-9][0-9]') ORDER BY ts DESC LIMIT ?;";
 
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return results;
     sqlite3_bind_text(stmt, 1, symbol.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(stmt, 2, limit);
+    sqlite3_bind_text(stmt, 2, (symbol + "[0-9][0-9][0-9][0-9]").c_str(), -1, SQLITE_TRANSIENT); // GLOB: 族代码+4位月份合约
+    sqlite3_bind_int(stmt, 3, limit);
 
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         TickRow t;

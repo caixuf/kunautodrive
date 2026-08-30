@@ -230,4 +230,47 @@ void PositionManager::unfreeze_position(const std::string& symbol, Direction dir
     }
 }
 
+std::vector<std::pair<Offset, double>> PositionManager::resolve_close_orders(
+    const std::string& symbol, const std::string& exchange,
+    Direction close_direction, double req_volume) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::pair<Offset, double>> result;
+    if (req_volume <= 0) return result;
+
+    // 平仓操作方向反向映射为被平持仓方向
+    Direction pos_dir = (close_direction == Direction::SHORT) ? Direction::LONG : Direction::SHORT;
+    std::string key = symbol + "_" + to_string(pos_dir);
+    auto it = positions_.find(key);
+    if (it == positions_.end() || it->second.volume <= 0) {
+        return result; // 无可平持仓
+    }
+
+    const auto& pos = it->second;
+    double max_avail = std::max(0.0, pos.volume - pos.frozen);
+    double to_close = std::min(req_volume, max_avail);
+    if (to_close <= 0) return result;
+
+    // 上期所 (SHFE) 与能源中心 (INE) 区分平今 / 平昨，且平昨手续费通常较低
+    if (exchange == "SHFE" || exchange == "INE") {
+        // 优先平昨仓 (降低手续费)
+        double yd_avail = std::max(0.0, pos.yd_volume);
+        double yd_close = std::min(to_close, yd_avail);
+        if (yd_close > 0) {
+            result.emplace_back(Offset::CLOSE_YESTERDAY, yd_close);
+        }
+
+        double rem = to_close - yd_close;
+        double td_avail = std::max(0.0, pos.today_volume);
+        double td_close = std::min(rem, td_avail);
+        if (td_close > 0) {
+            result.emplace_back(Offset::CLOSE_TODAY, td_close);
+        }
+    } else {
+        // 中金所 (CFFEX)、大商所 (DCE)、郑商所 (CZCE) 统一使用 Offset::CLOSE
+        result.emplace_back(Offset::CLOSE, to_close);
+    }
+
+    return result;
+}
+
 } // namespace kun

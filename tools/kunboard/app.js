@@ -16,28 +16,7 @@
         activeTf: '1m',
         activeCategory: 'all',
 
-        contracts: [
-            // 国内商品期货主力
-            { symbol: 'rb2405', name: '螺纹钢主力', category: 'futures', last: 3625.0, chg: 1.25, volume: 482910, tick: 1.0, mult: 10, marginRatio: 0.10 },
-            { symbol: 'au2406', name: '沪金主力', category: 'futures', last: 568.20, chg: 0.95, volume: 194020, tick: 0.02, mult: 1000, marginRatio: 0.10 },
-            { symbol: 'ag2405', name: '沪银主力', category: 'futures', last: 7350.0, chg: 2.10, volume: 312000, tick: 1.0, mult: 15, marginRatio: 0.12 },
-            { symbol: 'cu2405', name: '沪铜主力', category: 'futures', last: 74500.0, chg: 1.80, volume: 84900, tick: 10.0, mult: 5, marginRatio: 0.12 },
-            { symbol: 'i2405',  name: '铁矿石主力', category: 'futures', last: 885.5, chg: -0.62, volume: 184900, tick: 0.5, mult: 100, marginRatio: 0.12 },
-            { symbol: 'j2405',  name: '焦炭主力', category: 'futures', last: 2310.0, chg: 2.10, volume: 82100, tick: 0.5, mult: 100, marginRatio: 0.15 },
-            { symbol: 'hc2405', name: '热卷主力', category: 'futures', last: 3780.0, chg: 0.85, volume: 220100, tick: 1.0, mult: 10, marginRatio: 0.10 },
-
-            // 金融股指期货
-            { symbol: 'IF2406', name: '沪深300期指', category: 'index', last: 3580.2, chg: 0.45, volume: 92300, tick: 0.2, mult: 300, marginRatio: 0.12 },
-            { symbol: 'IH2406', name: '上证50期指', category: 'index', last: 2420.5, chg: 0.32, volume: 43200, tick: 0.2, mult: 300, marginRatio: 0.12 },
-            { symbol: 'IC2406', name: '中证500期指', category: 'index', last: 5120.0, chg: 0.92, volume: 71200, tick: 0.2, mult: 200, marginRatio: 0.12 },
-            { symbol: 'IM2406', name: '中证1000期指', category: 'index', last: 5420.0, chg: 1.85, volume: 64100, tick: 0.2, mult: 200, marginRatio: 0.15 },
-
-            // 核心宽基与衍生品标的 ETF
-            { symbol: '510300', name: '300ETF期权标的', category: 'etf', last: 3.652, chg: 0.55, volume: 1820400, tick: 0.001, mult: 10000, marginRatio: 1.0 },
-            { symbol: '588000', name: '科创50ETF标的', category: 'etf', last: 0.892, chg: 2.30, volume: 3209100, tick: 0.001, mult: 10000, marginRatio: 1.0 },
-            { symbol: '159915', name: '创业板ETF标的', category: 'etf', last: 1.820, chg: 1.15, volume: 1450200, tick: 0.001, mult: 10000, marginRatio: 1.0 },
-            { symbol: '518880', name: '黄金ETF标的', category: 'etf', last: 5.380, chg: 0.42, volume: 980100, tick: 0.001, mult: 10000, marginRatio: 1.0 }
-        ],
+        contracts: [], // 由 /api/universe 动态加载 (config/universe.json 唯一数据源)
 
         depth: {
             asks: [
@@ -706,14 +685,20 @@
                 ? State.contracts
                 : State.contracts.filter(c => c.category === State.activeCategory);
 
+            if (filtered.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#64748b;padding:12px;">该分类暂无合约</td></tr>`;
+                return;
+            }
+
             tbody.innerHTML = filtered.map(c => {
-                const fmt = (v) => v.toFixed(c.last < 10 ? 3 : (c.last < 100 ? 2 : 1));
+                const hasLive = c.last > 0; // 无 CSV/实时数据的品种如实显示 --
+                const fmt = (v) => v.toFixed(v < 10 ? 3 : (v < 100 ? 2 : 1));
                 return `
                     <tr class="${c.symbol === State.activeSymbol ? 'active-row' : ''}" data-symbol="${c.symbol}">
                         <td class="text-bold">${c.symbol} <span style="font-size:10px;color:#94a3b8;">${c.name}</span></td>
-                        <td class="${c.chg >= 0 ? 'text-up' : 'text-down'}">${fmt(c.last)}</td>
-                        <td class="${c.chg >= 0 ? 'text-up' : 'text-down'}">${c.chg >= 0 ? '+' : ''}${c.chg.toFixed(2)}%</td>
-                        <td>${c.volume.toLocaleString()}</td>
+                        <td class="${hasLive ? (c.chg >= 0 ? 'text-up' : 'text-down') : ''}">${hasLive ? fmt(c.last) : '--'}</td>
+                        <td class="${hasLive ? (c.chg >= 0 ? 'text-up' : 'text-down') : ''}">${hasLive ? (c.chg >= 0 ? '+' : '') + c.chg.toFixed(2) + '%' : '--'}</td>
+                        <td>${c.volume > 0 ? c.volume.toLocaleString() : '--'}</td>
                     </tr>
                 `;
             }).join('');
@@ -1787,6 +1772,40 @@ ${(data.trades && data.trades.length) ? data.trades.map(t => `- [${t.time}] ${t.
     // ─────────────────────────────────────────────────────────────
     // 行情模拟推流循环
     // ─────────────────────────────────────────────────────────────
+    // 自选合约宇宙: /api/universe 动态加载 (品种清单 + CSV 真实收盘价/涨跌幅)
+    async function loadUniverse() {
+        try {
+            const res = await fetch('/api/universe');
+            if (!res.ok) return;
+            const list = await res.json();
+            if (!Array.isArray(list) || list.length === 0) return;
+
+            // 保留当前选中合约与实时价 (若 universe 中存在)
+            const prevActive = State.activeSymbol;
+            State.contracts = list.map(u => ({
+                symbol: u.symbol,
+                name: u.name,
+                category: u.category || 'futures',
+                last: u.last > 0 ? u.last : 0,
+                chg: u.chg || 0,
+                volume: 0, // 成交量由实时流更新, 无实时源则显示 --
+                tick: u.tick || 1.0,
+                mult: u.mult || 10,
+                marginRatio: 0.10,
+                date: u.date || ''
+            }));
+
+            if (State.currentPage === 'trading-desk' && UI.renderWatchlist) {
+                UI.renderWatchlist();
+            }
+            if (prevActive && State.contracts.some(c => c.symbol === prevActive)) {
+                State.activeSymbol = prevActive;
+            }
+        } catch (e) {
+            console.error('[Universe] 合约宇宙加载失败:', e);
+        }
+    }
+
     function startQuoteStream() {
         // 真实行情轮询: 后端 /api/tick 返回新浪落盘的最新真实 tick 快照。
         // 此处绝无 Math.random 造数 — 无真实数据时面板保持最后已知真实值。
@@ -1831,6 +1850,8 @@ ${(data.trades && data.trades.length) ? data.trades.map(t => `- [${t.time}] ${t.
     // 入口
     // ─────────────────────────────────────────────────────────────
     window.addEventListener('DOMContentLoaded', () => {
+        loadUniverse();
+        setInterval(loadUniverse, 6 * 3600 * 1000); // 跟随 AI 抓取节奏刷新收盘价
         initMarketBars();
         Router.init();
         MarketChart.init();

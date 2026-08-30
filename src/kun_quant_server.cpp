@@ -628,7 +628,7 @@ private:
                     ss << "[";
                     int n = cJSON_GetArraySize(arr);
                     for (int i = 0; i < n; ++i) {
-                        cJSON* e = cJSON_GetArrayItem(arr);
+                        cJSON* e = cJSON_GetArrayItem(arr, i);
                         if (i > 0) ss << ",";
                         auto str_field = [&](const char* k) -> std::string {
                             cJSON* it = cJSON_GetObjectItem(e, k);

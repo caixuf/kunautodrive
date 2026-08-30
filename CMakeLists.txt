@@ -824,6 +824,16 @@ target_include_directories(test_quant_m8_advanced_redteam_defense PRIVATE kun_qu
 target_compile_definitions(test_quant_m8_advanced_redteam_defense PRIVATE FLOWCORO_INTEGRATION)
 add_test(NAME test_quant_m8_advanced_redteam_defense COMMAND test_quant_m8_advanced_redteam_defense)
 
+add_executable(test_quant_m9_industrial_borrowing tests/test_quant_m9_industrial_borrowing.cpp)
+if(WIN32)
+    target_link_libraries(test_quant_m9_industrial_borrowing kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
+else()
+    target_link_libraries(test_quant_m9_industrial_borrowing kun_quant flowengine_core flowcoro_headers flowcoro_net scheduler_cpp pthread sqlite3)
+endif()
+target_include_directories(test_quant_m9_industrial_borrowing PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
+target_compile_definitions(test_quant_m9_industrial_borrowing PRIVATE FLOWCORO_INTEGRATION)
+add_test(NAME test_quant_m9_industrial_borrowing COMMAND test_quant_m9_industrial_borrowing)
+
 # ── Config-driven Launcher ──
 # 读 config/pipeline.json → 按顺序 fork+exec 各节点进程
 # 是 e2e_demo --multi 的解耦升级版: 编排逻辑完全在配置文件里
