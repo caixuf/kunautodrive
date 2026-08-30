@@ -39,6 +39,7 @@ public:
     // 状态恢复与查询
     std::vector<OrderData> load_active_orders(const std::string& account_id);
     std::vector<TradeData> load_trades(const std::string& account_id, int limit = 1000);
+    std::vector<TradeData> load_all_trades(int limit = 100000); // 跨账户全量成交流水 (绩效分析用)
     std::vector<PositionData> load_positions(const std::string& account_id);
     bool load_latest_account(const std::string& account_id, AccountData& out_acc);
 

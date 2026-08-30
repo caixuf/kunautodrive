@@ -422,6 +422,38 @@ std::vector<TradeData> StorageManager::load_trades(const std::string& account_id
     return results;
 }
 
+std::vector<TradeData> StorageManager::load_all_trades(int limit) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<TradeData> results;
+    if (!db_) return results;
+
+    // 跨账户全量成交流水, 按时间正序 (绩效分析/净值曲线构建用)
+    const char* sql = "SELECT trade_id, order_id, symbol, exchange, strategy_name, direction, offset, price, volume, commission, trade_time_us FROM trades ORDER BY trade_time_us ASC LIMIT ?;";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return results;
+
+    sqlite3_bind_int(stmt, 1, limit);
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        TradeData t;
+        t.trade_id = sqlite3_column_int64(stmt, 0);
+        t.order_id = sqlite3_column_int64(stmt, 1);
+        t.symbol = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        t.exchange = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+        t.strategy_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+        t.direction = static_cast<Direction>(sqlite3_column_int(stmt, 5));
+        t.offset = static_cast<Offset>(sqlite3_column_int(stmt, 6));
+        t.price = sqlite3_column_double(stmt, 7);
+        t.volume = sqlite3_column_double(stmt, 8);
+        t.commission = sqlite3_column_double(stmt, 9);
+        t.trade_time_us = sqlite3_column_int64(stmt, 10);
+        results.push_back(t);
+    }
+    sqlite3_finalize(stmt);
+    return results;
+}
+
 std::vector<PositionData> StorageManager::load_positions(const std::string& account_id) {
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<PositionData> results;

@@ -744,6 +744,16 @@ endif()
 target_include_directories(kun_quant_server PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
 target_compile_definitions(kun_quant_server PRIVATE FLOWCORO_INTEGRATION)
 
+# ── 历史数据训练 CLI (Walk-Forward 滚动验证, 真实日线数据) ──
+add_executable(kun_quant_train src/kun_quant_train.cpp)
+if(WIN32)
+    target_link_libraries(kun_quant_train kun_quant flowengine_core flowcoro_headers scheduler_cpp sqlite3)
+else()
+    target_link_libraries(kun_quant_train kun_quant flowengine_core flowcoro_headers scheduler_cpp pthread sqlite3)
+endif()
+target_include_directories(kun_quant_train PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
+target_compile_definitions(kun_quant_train PRIVATE FLOWCORO_INTEGRATION)
+
 add_executable(test_quant_closed_loop tests/test_quant_closed_loop.cpp)
 if(WIN32)
     target_link_libraries(test_quant_closed_loop kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)

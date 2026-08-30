@@ -69,7 +69,7 @@ WalkForwardReport WalkForwardEngine::run_walk_forward(
         for (const auto& [f, s] : candidates) {
             BacktestEngine is_engine(cfg);
             is_engine.set_history_bars(is_bars);
-            is_engine.set_strategy(std::make_shared<DualMaStrategy>("IS_DualMA", "rb2405", f, s, 1.0));
+            is_engine.set_strategy(std::make_shared<DualMaStrategy>("IS_DualMA", all_bars.front().symbol, f, s, 1.0));
             auto perf = is_engine.run();
             if (perf.sharpe_ratio > best_is_sharpe) {
                 best_is_sharpe = perf.sharpe_ratio;
@@ -82,7 +82,7 @@ WalkForwardReport WalkForwardEngine::run_walk_forward(
         // 2. OOS 盲测验证
         BacktestEngine oos_engine(cfg);
         oos_engine.set_history_bars(oos_bars);
-        oos_engine.set_strategy(std::make_shared<DualMaStrategy>("OOS_DualMA", "rb2405", best_fast, best_slow, 1.0));
+        oos_engine.set_strategy(std::make_shared<DualMaStrategy>("OOS_DualMA", all_bars.front().symbol, best_fast, best_slow, 1.0));
         auto oos_perf = oos_engine.run();
 
         WalkForwardSliceResult slice_res;
@@ -133,7 +133,7 @@ bool WalkForwardEngine::check_parameter_plateau(
     for (const auto& [f, s] : neighbors) {
         BacktestEngine eng(cfg);
         eng.set_history_bars(bars);
-        eng.set_strategy(std::make_shared<DualMaStrategy>("Plateau_Test", "rb2405", f, s, 1.0));
+        eng.set_strategy(std::make_shared<DualMaStrategy>("Plateau_Test", bars.front().symbol, f, s, 1.0));
         auto perf = eng.run();
         sharpes.push_back(perf.sharpe_ratio);
     }

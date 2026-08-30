@@ -547,97 +547,58 @@
         }
     };
 
-    function generateReportData(source, range) {
-        let points = 24;
-        let baseGain = 18450;
-        let winRateVal = '76.5%';
-        let winTrades = '26 胜 / 8 负 (共 34 笔)';
-        let plRatio = '2.84 : 1';
-        let mddRate = '0.06%';
-        let mddAmt = '-620.00 元';
-        let sharpeVal = '3.42';
-        let commVal = '128.40 元';
+    // ── 真实绩效数据: 拉取 /api/report (SQLite 成交账本 FIFO 配对回放), 严禁前端伪造 ──
+    function fmtSigned(v, decimals = 2) {
+        return (v >= 0 ? '+' : '') + Number(v).toLocaleString('zh-CN', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+    }
 
-        if (range === '7d') {
-            points = 70;
-            baseGain = 86200;
-            winRateVal = '74.2%';
-            winTrades = '118 胜 / 41 负 (共 159 笔)';
-            plRatio = '2.62 : 1';
-            mddRate = '0.28%';
-            mddAmt = '-2,800.00 元';
-            sharpeVal = '3.15';
-            commVal = '542.10 元';
-        } else if (range === '30d') {
-            points = 120;
-            baseGain = 294500;
-            winRateVal = '72.8%';
-            winTrades = '452 胜 / 169 负 (共 621 笔)';
-            plRatio = '2.45 : 1';
-            mddRate = '0.65%';
-            mddAmt = '-6,500.00 元';
-            sharpeVal = '2.98';
-            commVal = '2,180.50 元';
-        } else if (range === 'all') {
-            points = 180;
-            baseGain = 512000;
-            winRateVal = '71.5%';
-            winTrades = '892 胜 / 356 负 (共 1248 笔)';
-            plRatio = '2.38 : 1';
-            mddRate = '0.88%';
-            mddAmt = '-8,800.00 元';
-            sharpeVal = '2.85';
-            commVal = '4,320.00 元';
+    async function loadReportData() {
+        try {
+            const res = await fetch('/api/report?range=' + encodeURIComponent(State.reportState.range || 'all'));
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const rep = await res.json();
+            const m = rep.metrics || {};
+            const hasData = !!rep.has_data;
+
+            State.reportData = {
+                pnlSeries: rep.pnlSeries || [],
+                drawdownSeries: rep.drawdownSeries || [],
+                hasData,
+                trades: (rep.trades || []).map(t => ({
+                    id: t.id,
+                    time: t.time,
+                    symbol: t.symbol,
+                    dir: t.dir,
+                    offset: t.offset,
+                    price: t.price,
+                    vol: t.vol,
+                    pnl: fmtSigned(t.pnl),
+                    pnlPositive: t.pnl >= 0,
+                    cumPnl: fmtSigned(t.cumPnl),
+                    cumPositive: t.cumPnl >= 0,
+                    strat: t.strat
+                })),
+                metrics: {
+                    totalPnl: fmtSigned(m.total_pnl || 0) + ' 元',
+                    returnRate: '收益率: ' + fmtSigned(m.return_rate || 0) + '%',
+                    winRate: hasData ? (m.win_rate || 0).toFixed(1) + '%' : '--',
+                    winTrades: hasData
+                        ? (m.win_trades || 0) + ' 胜 / ' + (m.lose_trades || 0) + ' 负 (共 ' + ((m.win_trades || 0) + (m.lose_trades || 0)) + ' 笔平仓回合)'
+                        : '暂无平仓回合',
+                    plRatio: hasData ? (m.profit_factor || 0).toFixed(2) + ' : 1' : '--',
+                    mdd: hasData ? (m.max_drawdown_pct || 0).toFixed(2) + '%' : '--',
+                    mddAmt: '回撤金额: ' + fmtSigned(-(m.max_drawdown_amt || 0)) + ' 元',
+                    sharpe: hasData ? (m.sharpe || 0).toFixed(2) : '--',
+                    comm: Number(m.commission || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 }) + ' 元'
+                }
+            };
+        } catch (err) {
+            console.error('[Report] 真实绩效数据拉取失败:', err);
+            State.reportData = { pnlSeries: [], drawdownSeries: [], hasData: false, trades: [], metrics: {
+                totalPnl: '-- 元', returnRate: '收益率: --', winRate: '--', winTrades: '服务不可达',
+                plRatio: '--', mdd: '--', mddAmt: '回撤金额: --', sharpe: '--', comm: '-- 元'
+            } };
         }
-
-        if (source === 'live') {
-            baseGain *= 0.92;
-            winRateVal = '73.1%';
-            mddRate = '0.12%';
-        } else if (source === 'backtest') {
-            baseGain *= 1.15;
-            winRateVal = '78.2%';
-            sharpeVal = '3.65';
-        }
-
-        const pnlSeries = [];
-        const drawdownSeries = [];
-        let cum = 0;
-        let peak = 0;
-        for (let i = 0; i < points; i++) {
-            const step = (baseGain / points) + (Math.random() - 0.44) * (baseGain / points * 0.8);
-            cum += step;
-            peak = Math.max(peak, cum);
-            const dd = Math.max(0, (peak - cum) / (peak + 1000000) * 100);
-            pnlSeries.push(cum);
-            drawdownSeries.push(dd);
-        }
-
-        const trades = [
-            { id: 'T9021', time: '14:52:10', symbol: 'au2406 沪金主力', dir: '买入', offset: '平仓', price: 568.2, vol: 10, pnl: '+4,200.00', cumPnl: '+18,450.00', strat: 'AI 动量突破' },
-            { id: 'T9020', time: '14:10:05', symbol: '600519 贵州茅台', dir: '买入', offset: '平仓', price: 1728.5, vol: 2, pnl: '+3,700.00', cumPnl: '+14,250.00', strat: '双均线趋势' },
-            { id: 'T9019', time: '13:30:18', symbol: 'rb2405 螺纹钢', dir: '买入', offset: '平仓', price: 3625.0, vol: 20, pnl: '+3,000.00', cumPnl: '+10,550.00', strat: 'FlowCoro TWAP' },
-            { id: 'T9018', time: '11:15:22', symbol: '300750 宁德时代', dir: '卖出', offset: '平仓', price: 196.2, vol: 5, pnl: '+2,100.00', cumPnl: '+7,550.00', strat: '布林带突破' },
-            { id: 'T9017', time: '10:05:40', symbol: 'i2405 铁矿石', dir: '买入', offset: '平仓', price: 885.5, vol: 10, pnl: '-620.00', cumPnl: '+5,450.00', strat: 'CTA 日内追踪' },
-            { id: 'T9016', time: '09:35:12', symbol: '510300 300ETF', dir: '买入', offset: '开仓', price: 3.652, vol: 50, pnl: '+6,070.00', cumPnl: '+6,070.00', strat: '网格对冲' }
-        ];
-
-        State.reportData = {
-            pnlSeries,
-            drawdownSeries,
-            trades,
-            metrics: {
-                totalPnl: (baseGain >= 0 ? '+' : '') + baseGain.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) + ' 元',
-                returnRate: '收益率: ' + (baseGain >= 0 ? '+' : '') + (baseGain / 1000000 * 100).toFixed(2) + '%',
-                winRate: winRateVal,
-                winTrades: winTrades,
-                plRatio: plRatio,
-                mdd: mddRate,
-                mddAmt: '回撤金额: ' + mddAmt,
-                sharpe: sharpeVal,
-                comm: commVal
-            }
-        };
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -913,8 +874,8 @@
             box.scrollTop = box.scrollHeight;
         },
 
-        updateReportView() {
-            generateReportData(State.reportState.source, State.reportState.range);
+        async updateReportView() {
+            await loadReportData();
             const m = State.reportData.metrics;
 
             const elTotalPnl = document.getElementById('rep-total-pnl');
@@ -936,53 +897,69 @@
             const elComm = document.getElementById('rep-comm');
             if (elComm) elComm.innerText = m.comm;
 
-            const rangeNames = { '24h': '最近 24 小时', '7d': '最近 7 天', '30d': '最近 30 天', 'all': '全部历史周期' };
-            const sourceNames = { 'paper': '7x24h 模拟盘进化数据', 'live': '实盘 CTP 交易数据', 'backtest': '策略历史回测基准' };
             const titleEl = document.getElementById('rep-chart-title');
             if (titleEl) {
-                titleEl.innerText = `${sourceNames[State.reportState.source]} · ${rangeNames[State.reportState.range]} 累计盈亏与动态回撤走势`;
+                titleEl.innerText = '真实成交账本 (SQLite 流水 FIFO 配对回放) · 累计盈亏与动态回撤走势';
             }
 
-            // 动态量化诊断分析结论
+            // 量化诊断: 仅陈述真实账本统计事实, 无数据时明确提示, 严禁虚构结论
             const diagBox = document.getElementById('rep-diag-content');
             if (diagBox) {
-                let diagHtml = `
-                    <div class="diag-item">
-                        <div class="diag-tag tag-positive">收益归因优良</div>
-                        <div class="diag-title">趋势动量与突破策略贡献了主要净利润</div>
-                        <div class="diag-desc">在【${rangeNames[State.reportState.range]}】统计周期内，系统基于 ${sourceNames[State.reportState.source]} 运行，总胜率达到 ${m.winRate}，盈亏比维持在 ${m.plRatio} 水平，开仓均价与滑点控制优良。</div>
-                    </div>
-                    <div class="diag-item">
-                        <div class="diag-tag tag-neutral">风控合规评估</div>
-                        <div class="diag-title">最大动态回撤严格控制在 ${m.mdd}，远低于 2.0% 预设红线</div>
-                        <div class="diag-desc">动态 ATR 追踪止损机制执行率 100%，单笔最大连续亏损未超过 2 笔，账户净值平稳运行在安全边际内。</div>
-                    </div>
-                    <div class="diag-item">
-                        <div class="diag-tag tag-advice">参数自适应进化建议</div>
-                        <div class="diag-title">建议根据当前市场波动率动态调整慢线周期</div>
-                        <div class="diag-desc">模型进化沙盒模拟测算表明：在当前市场低波震荡结构下，将慢线周期微调至 MA_24 可进一步平滑日内杂波磨损。</div>
-                    </div>
-                `;
-                diagBox.innerHTML = diagHtml;
+                if (!State.reportData.hasData) {
+                    diagBox.innerHTML = `
+                        <div class="diag-item">
+                            <div class="diag-tag tag-neutral">暂无真实成交</div>
+                            <div class="diag-title">账本中还没有已平仓回合</div>
+                            <div class="diag-desc">当前统计全部来自 SQLite 真实成交流水回放。启动策略 / 模拟盘或回测训练产生真实成交后, 本区域将给出基于事实的绩效归因。</div>
+                        </div>`;
+                } else {
+                    const m2 = State.reportData.metrics;
+                    const pf = parseFloat(m2.plRatio);
+                    const pfText = isNaN(pf) ? '无亏损回合' :
+                        (pf >= 1.5 ? `盈亏比 ${m2.plRatio}, 利润覆盖倍数健康` :
+                         pf >= 1.0 ? `盈亏比 ${m2.plRatio}, 盈利可覆盖亏损但安全垫偏薄` :
+                                     `盈亏比 ${m2.plRatio}, 亏损吞噬利润, 需复盘止损参数`);
+                    diagBox.innerHTML = `
+                        <div class="diag-item">
+                            <div class="diag-tag tag-positive">收益归因 (真实账本)</div>
+                            <div class="diag-title">累计已实现盈亏 ${m2.totalPnl}, 胜率 ${m2.winRate}</div>
+                            <div class="diag-desc">共 ${m2.winTrades}, 总手续费 ${m2.comm}。${pfText}。</div>
+                        </div>
+                        <div class="diag-item">
+                            <div class="diag-tag tag-neutral">风控合规评估</div>
+                            <div class="diag-title">账本口径最大动态回撤 ${m2.mdd} (${m2.mddAmt})</div>
+                            <div class="diag-desc">回撤基于平仓回合后的真实净值序列计算, 未包含浮动盈亏盯市, 实际日内波动可能更大。</div>
+                        </div>
+                        <div class="diag-item">
+                            <div class="diag-tag tag-advice">夏普比率 (真实回放)</div>
+                            <div class="diag-title">当前夏普 ${m2.sharpe}</div>
+                            <div class="diag-desc">样本为全部真实平仓回合。可用「历史数据训练」工具加载更长周期数据做 Walk-Forward 滚动验证, 提升统计置信度。</div>
+                        </div>`;
+                }
+
             }
 
             // 渲染交易流水
             const tbody = document.getElementById('tbody-report-trades');
             if (tbody) {
-                tbody.innerHTML = State.reportData.trades.map(t => `
-                    <tr>
-                        <td>${t.id}</td>
-                        <td>${t.time}</td>
-                        <td class="text-bold">${t.symbol}</td>
-                        <td class="${t.dir === '买入' ? 'text-up' : 'text-down'}">${t.dir}</td>
-                        <td>${t.offset}</td>
-                        <td>${t.price.toFixed(1)}</td>
-                        <td>${t.vol} 手</td>
-                        <td class="${t.pnl.startsWith('+') ? 'text-up' : 'text-down'} text-bold">${t.pnl}</td>
-                        <td class="text-up text-bold">${t.cumPnl}</td>
-                        <td><span class="badge badge-primary">${t.strat}</span></td>
-                    </tr>
-                `).join('');
+                if (!State.reportData.trades.length) {
+                    tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;color:#64748b;padding:16px;">暂无真实成交记录 — 全部指标严格来自账本, 不做任何虚构填充</td></tr>`;
+                } else {
+                    tbody.innerHTML = State.reportData.trades.map(t => `
+                        <tr>
+                            <td>${t.id}</td>
+                            <td>${t.time}</td>
+                            <td class="text-bold">${t.symbol}</td>
+                            <td class="${t.dir === '买入' ? 'text-up' : 'text-down'}">${t.dir}</td>
+                            <td>${t.offset}</td>
+                            <td>${Number(t.price).toFixed(1)}</td>
+                            <td>${t.vol} 手</td>
+                            <td class="${t.pnl.startsWith('+') ? 'text-up' : 'text-down'} text-bold">${t.pnl}</td>
+                            <td class="${t.cumPnl.startsWith('+') ? 'text-up' : 'text-down'} text-bold">${t.cumPnl}</td>
+                            <td><span class="badge badge-primary">${t.strat}</span></td>
+                        </tr>
+                    `).join('');
+                }
             }
 
             ReportChart.resize();
@@ -1249,17 +1226,6 @@
         document.getElementById('btn-clear-main-log')?.addEventListener('click', () => {
             document.getElementById('main-log-screen').innerHTML = '';
             Toast.show('日志终端已清空', 'info');
-        });
-
-        // 汇报台数据来源切换
-        document.querySelectorAll('#report-source-selector .seg-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                document.querySelectorAll('#report-source-selector .seg-btn').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                State.reportState.source = btn.dataset.source;
-                UI.updateReportView();
-                Toast.show(`已切换汇报数据源为: ${btn.innerText}`, 'info');
-            });
         });
 
         // 汇报台周期切换 (24h/7d/30d/all)

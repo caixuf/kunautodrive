@@ -44,8 +44,8 @@ public:
 #endif
 
         std::lock_guard<std::mutex> lock(mutex_);
-        
-        // ANSI Color
+
+        // ANSI Color (setfill('0') 是粘性状态, 必须恢复, 否则污染下游格式化输出)
         const char* color_code = "\033[0m";
         const char* level_str = "INFO";
         switch (level) {
@@ -55,6 +55,7 @@ public:
             case LogLevel::LOG_ERROR: color_code = "\033[31m"; level_str = "ERROR"; break;
         }
 
+        const char old_fill = std::cout.fill('0');
         std::cout << color_code
                   << "[" << std::put_time(&bt, "%Y-%m-%d %H:%M:%S")
                   << "." << std::setfill('0') << std::setw(3) << now_ms.count() << "] "
@@ -62,6 +63,7 @@ public:
                   << "[" << tag << "] "
                   << msg
                   << "\033[0m\n";
+        std::cout.fill(old_fill);
     }
 
 private:

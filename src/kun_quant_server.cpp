@@ -18,6 +18,7 @@
 #include "kun/engine/reconciler.hpp"
 #include "kun/market/market_fusion_node.hpp"
 #include "kun/market/sina_fetcher.hpp"
+#include "kun/backtest/performance.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -29,6 +30,10 @@
 #include <chrono>
 #include <cstring>
 #include <csignal>
+#include <unordered_map>
+#include <algorithm>
+#include <ctime>
+#include <cstdio>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -159,6 +164,24 @@ private:
             return;
         }
 
+        if (path.rfind("/api/report", 0) == 0) {
+            // 真实绩效分析: 全部指标与曲线均来自 SQLite 成交账本, 严禁任何虚构数据
+            // 支持统计周期过滤: /api/report?range=24h|7d|30d|all
+            std::string range = "all";
+            size_t q = path.find("range=");
+            if (q != std::string::npos) {
+                range = path.substr(q + 6);
+                size_t amp = range.find('&');
+                if (amp != std::string::npos) range.resize(amp);
+            }
+            std::string json = build_report_json(range);
+            std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: " +
+                                   std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;
+            send(client_fd, response.c_str(), response.size(), MSG_NOSIGNAL);
+            close(client_fd);
+            return;
+        }
+
         // 统一 AI 命名空间代理 (机制, 不含策略): /api/ 下除 C++ 原生端点外,
         // 全部转发至内部 ai_service (ai_port)。Python 侧增删路由无需改动 C++。
         if (path.rfind("/api/", 0) == 0 && path != "/api/status" && path != "/api/reconcile") {
@@ -264,6 +287,166 @@ private:
     StorageManager* storage_{nullptr};
     int server_fd_{-1};
     int ai_port_{8901};   // 内部 ai_service 端口 (变与不变的分界: C++ 只认端口不认路由)
+
+private:
+    /// 从 SQLite 成交账本构建真实绩效报告 (FIFO 开平配对)
+    /// range: 24h/7d/30d/all — 按平仓时间过滤统计窗口; 全部指标仅陈述账本事实
+    std::string build_report_json(const std::string& range = "all") {
+        std::ostringstream ss;
+        ss << std::fixed;
+
+        std::vector<TradeData> trades;
+        if (storage_) trades = storage_->load_all_trades();
+
+        constexpr double kInitialCapital = 1000000.0;
+
+        // FIFO 开平配对: 每笔平仓成交按配对量计算真实已实现盈亏;
+        // 开仓手续费按配对量比例摊入平仓回合 (成本随平仓兑现)
+        struct OpenPos { Direction dir; double price; double volume; double commission; };
+        std::unordered_map<std::string, std::vector<OpenPos>> open_queues;
+        struct ClosedTrip {
+            const TradeData* close;
+            double pnl;      // 价差毛盈亏
+            double comm;     // 摊入本回合的手续费 (开仓比例 + 平仓全额)
+        };
+        std::vector<ClosedTrip> all_trips;
+
+        for (const auto& t : trades) {
+            if (t.offset == Offset::OPEN) {
+                open_queues[t.symbol].push_back({t.direction, t.price, t.volume, t.commission});
+            } else {
+                auto& q = open_queues[t.symbol];
+                double to_close = t.volume;
+                double pnl = 0.0, comm = t.commission;
+                while (to_close > 0.0 && !q.empty()) {
+                    auto& op = q.front();
+                    double match_vol = std::min(op.volume, to_close);
+                    pnl += (op.dir == Direction::LONG)
+                        ? (t.price - op.price) * match_vol * 10.0
+                        : (op.price - t.price) * match_vol * 10.0;
+                    comm += op.commission * (match_vol / std::max(op.volume, 0.0001));
+                    op.volume -= match_vol;
+                    to_close -= match_vol;
+                    if (op.volume <= 0.0001) q.erase(q.begin());
+                }
+                all_trips.push_back({&t, pnl, comm});
+            }
+        }
+
+        // 统计窗口过滤 (按平仓时间, 真实时间维度)
+        int64_t now_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        int64_t cutoff_us = 0;
+        if (range == "24h") cutoff_us = now_us - 24LL * 3600 * 1000000;
+        else if (range == "7d") cutoff_us = now_us - 7LL * 24 * 3600 * 1000000;
+        else if (range == "30d") cutoff_us = now_us - 30LL * 24 * 3600 * 1000000;
+
+        std::vector<const ClosedTrip*> trips;
+        double total_in_window_comm = 0.0;
+        for (const auto& t : trades) {
+            bool is_close_leg = (t.offset != Offset::OPEN);
+            bool in_window = (cutoff_us <= 0) || (t.trade_time_us >= cutoff_us);
+            if (in_window && (cutoff_us <= 0 || is_close_leg)) total_in_window_comm += t.commission;
+        }
+        for (const auto& trip : all_trips) {
+            if (cutoff_us <= 0 || trip.close->trade_time_us >= cutoff_us) trips.push_back(&trip);
+        }
+
+        // 净值与累计盈亏曲线: 初始资金 + 累计净盈亏 (毛盈亏 - 摊入手续费)
+        std::vector<double> equity_history;
+        equity_history.reserve(trips.size() + 1);
+        equity_history.push_back(kInitialCapital);
+        std::vector<double> pnl_series, dd_series;
+        double cum_net = 0.0, peak_equity = kInitialCapital;
+        int wins = 0, losses = 0;
+        double total_profit = 0.0, total_loss = 0.0;
+        for (const auto* trip : trips) {
+            double net = trip->pnl - trip->comm;
+            cum_net += net;
+            double eq = kInitialCapital + cum_net;
+            equity_history.push_back(eq);
+            pnl_series.push_back(cum_net);
+            peak_equity = std::max(peak_equity, eq);
+            dd_series.push_back(peak_equity > 0 ? (peak_equity - eq) / peak_equity * 100.0 : 0.0);
+            if (net > 0.0) { wins++; total_profit += net; }
+            else { losses++; total_loss += std::abs(net); }
+        }
+
+        // 指标统计 (全部来自真实回合, 无任何虚构)
+        bool has_data = !trips.empty();
+        double mdd = 0.0, mdd_pct = 0.0, sharpe = 0.0, profit_factor = 0.0;
+        {
+            double peak = kInitialCapital;
+            std::vector<double> rets;
+            rets.reserve(equity_history.size());
+            for (size_t i = 1; i < equity_history.size(); ++i) {
+                peak = std::max(peak, equity_history[i]);
+                double dd = peak - equity_history[i];
+                if (peak > 0) mdd_pct = std::max(mdd_pct, dd / peak * 100.0);
+                mdd = std::max(mdd, dd);
+                if (equity_history[i - 1] > 0)
+                    rets.push_back((equity_history[i] - equity_history[i - 1]) / equity_history[i - 1]);
+            }
+            // 逐回合夏普: mean/std * sqrt(N) (不规则时间序列, 不做年化假装)
+            if (rets.size() >= 2) {
+                double mean = 0.0;
+                for (double r : rets) mean += r;
+                mean /= rets.size();
+                double var = 0.0;
+                for (double r : rets) var += (r - mean) * (r - mean);
+                double sd = std::sqrt(var / rets.size());
+                if (sd > 1e-12) sharpe = mean / sd * std::sqrt(static_cast<double>(rets.size()));
+            }
+            profit_factor = (total_loss > 0.0) ? (total_profit / total_loss) : (total_profit > 0 ? 99.9 : 0.0);
+        }
+
+        // ── JSON 输出 ──
+        ss << "{\"has_data\":" << (has_data ? "true" : "false")
+           << ",\"initial_capital\":" << kInitialCapital
+           << ",\"metrics\":{\"total_pnl\":" << cum_net
+           << ",\"return_rate\":" << ((kInitialCapital + cum_net - kInitialCapital) / kInitialCapital * 100.0)
+           << ",\"win_rate\":" << (wins + losses > 0 ? 100.0 * wins / (wins + losses) : 0.0)
+           << ",\"win_trades\":" << wins
+           << ",\"lose_trades\":" << losses
+           << ",\"profit_factor\":" << profit_factor
+           << ",\"max_drawdown_pct\":" << mdd_pct
+           << ",\"max_drawdown_amt\":" << mdd
+           << ",\"sharpe\":" << sharpe
+           << ",\"commission\":" << total_in_window_comm
+           << ",\"total_trades\":" << trips.size()
+           << "},\"pnlSeries\":[";
+        for (size_t i = 0; i < pnl_series.size(); ++i) {
+            ss << pnl_series[i] << (i + 1 < pnl_series.size() ? "," : "");
+        }
+        ss << "],\"drawdownSeries\":[";
+        for (size_t i = 0; i < dd_series.size(); ++i) {
+            ss << dd_series[i] << (i + 1 < dd_series.size() ? "," : "");
+        }
+        ss << "],\"trades\":[";
+        constexpr size_t kMaxRecent = 20;
+        size_t start = trips.size() > kMaxRecent ? trips.size() - kMaxRecent : 0;
+        bool first = true;
+        for (size_t i = start; i < trips.size(); ++i) {
+            const auto* trip = trips[i];
+            const auto* t = trip->close;
+            char time_buf[16]{};
+            std::time_t secs = static_cast<std::time_t>(t->trade_time_us / 1000000);
+            std::tm bt{};
+            localtime_r(&secs, &bt);
+            std::snprintf(time_buf, sizeof(time_buf), "%02d:%02d:%02d", bt.tm_hour, bt.tm_min, bt.tm_sec);
+            if (!first) ss << ",";
+            first = false;
+            ss << "{\"id\":\"T" << t->trade_id << "\",\"time\":\"" << time_buf
+               << "\",\"symbol\":\"" << t->symbol << "\",\"dir\":\""
+               << (t->direction == Direction::LONG ? "买入" : "卖出") << "\",\"offset\":\""
+               << (t->offset == Offset::OPEN ? "开仓" : "平仓") << "\",\"price\":"
+               << t->price << ",\"vol\":" << t->volume
+               << ",\"pnl\":" << (trip->pnl - trip->comm) << ",\"cumPnl\":" << pnl_series[i]
+               << ",\"strat\":\"" << (t->strategy_name.empty() ? "manual" : t->strategy_name) << "\"}";
+        }
+        ss << "]}";
+        return ss.str();
+    }
 };
 
 } // namespace kun

@@ -82,6 +82,8 @@ bool BacktestEngine::load_csv_data(const std::string& csv_filepath) {
                 bar.open_interest = std::stod(cols[idx++]);
             }
             bar.exchange = config_.symbol_info.exchange;
+            // CSV 日期列仅含日期 (长度<=10) 视为日线, 用于年化基数选择
+            bar.interval = (cols[idx - 5].size() <= 10) ? "1d" : "1m";
             history_bars_.push_back(bar);
         }
     }
@@ -134,7 +136,9 @@ PerformanceStats BacktestEngine::run() {
         config_.initial_capital,
         equity_history_,
         matching_engine_.get_all_trades(),
-        static_cast<int>(history_bars_.size())
+        static_cast<int>(history_bars_.size()),
+        0.02,
+        (history_bars_.empty() || history_bars_.front().interval == "1d") ? 252 : 57600
     );
 
     return stats;

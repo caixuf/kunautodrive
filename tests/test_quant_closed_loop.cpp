@@ -281,6 +281,12 @@ void test_gateway_pool_and_follow_trading() {
     assert(slave_req.direction == static_cast<uint8_t>(Direction::LONG));
 
     pool.disconnect_all();
+
+    // 销毁顺序契约: 先停协程并让 executor 回收挂起帧 (BusChannel 析构需在总线
+    // 存活时反订阅), 再销毁总线 — 否则 ASAN 检出 use-after-free
+    follow_task->set_stop();
+    ex.shutdown();
+    follow_task.reset();
     g_node_exec = nullptr; // 清理 TLS, 避免后续测试读到悬挂指针
     message_bus_destroy(bus);
     std::cout << "  -> GatewayPool 回报发布与从账户 1.5x 自动跟单闭环测试 100% 通过!\n";

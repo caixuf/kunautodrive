@@ -153,8 +153,10 @@ jobs:
           cmake -S . -B build-mingw -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64-x86_64.cmake \
             -DCMAKE_BUILD_TYPE=Release
-      - name: Build
-        run: cmake --build build-mingw -j$(nproc)
+      - name: Build (mingw-gate targets only)
+        # 只构建门禁校验的三个 Windows 二进制。全量构建会连带编译 kun_quant,
+        # 其 sqlite3 依赖在 mingw 交叉环境不可用 (ubuntu 无 mingw 版 sqlite3 dev)。
+        run: cmake --build build-mingw --target flow_launcher flowmond flowctl -j$(nproc)
       - name: Verify PE32+ Windows binaries were produced
         run: |
           set -e

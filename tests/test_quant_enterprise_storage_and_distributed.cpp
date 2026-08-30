@@ -4,6 +4,7 @@
 #include <thread>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
 #include "kun/storage/db_adapter.hpp"
 #include "kun/cluster/distributed_bridge.hpp"
 #include "kun/storage/event_sourcing.hpp"
@@ -16,6 +17,11 @@ void test_database_adapter_and_migration() {
     DbConfig cfg;
     cfg.type = DatabaseType::SQLITE_WAL;
     cfg.sqlite_path = "data/test_enterprise.db";
+
+    // 清理上次运行的残留 (含 WAL/SHM, 强杀进程可能留下脏日志导致断言失败)
+    for (const char* suffix : {"", "-wal", "-shm"}) {
+        std::filesystem::remove(std::string(cfg.sqlite_path) + suffix);
+    }
 
     auto db = create_database_adapter(cfg);
     assert(db != nullptr);
