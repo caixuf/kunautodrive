@@ -26,17 +26,21 @@ from dataclasses import dataclass, field
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [CtpBridge] %(message)s')
 
-# 探测真实 CTP Python SDK (openctp-ctp 或 thosttraderapi)
+# 探测真实 CTP Python SDK (openctp-ctp, openctp 或 thosttraderapi)
 try:
-    import openctp.thosttraderapi as ctp_td
+    import openctp_ctp.thosttraderapi as ctp_td
     HAS_REAL_CTP_SDK = True
 except ImportError:
     try:
-        import thosttraderapi as ctp_td
+        import openctp.thosttraderapi as ctp_td
         HAS_REAL_CTP_SDK = True
     except ImportError:
-        ctp_td = None
-        HAS_REAL_CTP_SDK = False
+        try:
+            import thosttraderapi as ctp_td
+            HAS_REAL_CTP_SDK = True
+        except ImportError:
+            ctp_td = None
+            HAS_REAL_CTP_SDK = False
 
 @dataclass
 class CtpConfig:
@@ -53,7 +57,7 @@ class CtpExecutionGateway:
     """
     CTP 柜台执行网关 (遵循 vn.py CtpGateway / openctp 规范)
     """
-    def __init__(self, config: CtpConfig, on_order_cb: Optional[Callable] = None, on_trade_cb: Optional[Callable] = None):
+    def __init__(self, config: CtpConfig, on_order_cb: Optional[Callable] = None, on_trade_cb: Optional[Callable] = None, use_real_sdk: Optional[bool] = None):
         self.config = config
         self.on_order_cb = on_order_cb
         self.on_trade_cb = on_trade_cb
@@ -61,7 +65,12 @@ class CtpExecutionGateway:
         self.is_authenticated = False
         self.is_logged_in = False
         self.settlement_confirmed = False
-        self.is_real_sdk = HAS_REAL_CTP_SDK
+        
+        if use_real_sdk is not None:
+            self.is_real_sdk = use_real_sdk and HAS_REAL_CTP_SDK
+        else:
+            # 默认配置下，若指定真实 CTP 前置且已安装 SDK，则启用实盘 SDK
+            self.is_real_sdk = HAS_REAL_CTP_SDK and not config.front_trade_addr.startswith("sim://")
 
         self._lock = threading.Lock()
         self._last_query_time = 0.0
@@ -77,7 +86,7 @@ class CtpExecutionGateway:
         if self.is_real_sdk:
             logging.info("检测到 CTP 原生 SDK (openctp/thosttraderapi)，已启用实盘/SimNow直连模式")
         else:
-            logging.info("当前环境未安装 CTP 原生 SDK (可执行 'pip install openctp-ctp' 开启直连)，运行于高保真 SimNow 仿真模式")
+            logging.info("CTP 网关运行于高保真 SimNow / 单元测试仿真模式")
 
     def connect(self) -> bool:
         """建立连接并执行 CTP 三步握手 (Connect -> Authenticate -> Login -> ConfirmSettlement)"""
@@ -308,9 +317,13 @@ class CtpExecutionGateway:
         t = threading.Thread(target=_reconnect_loop, daemon=True, name="CtpReconnectWatchdog")
         t.start()
 
-class _RealCtpTraderSpi:
+_BaseSpi = ctp_td.CThostFtdcTraderSpi if (ctp_td is not None and hasattr(ctp_td, 'CThostFtdcTraderSpi')) else object
+
+class _RealCtpTraderSpi(_BaseSpi):
     """内部真实 CTP TraderSpi 转发封装器"""
     def __init__(self, gateway: CtpExecutionGateway):
+        if _BaseSpi is not object:
+            super().__init__()
         self.gw = gateway
 
     def OnFrontConnected(self):

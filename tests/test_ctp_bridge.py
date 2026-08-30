@@ -5,13 +5,14 @@ from ai_service.ctp_bridge import CtpConfig, CtpExecutionGateway, _RealCtpTrader
 
 class TestCtpExecutionGateway(unittest.TestCase):
     def setUp(self):
-        self.cfg = CtpConfig(broker_id="9999", user_id="test_user_01", account_id="acc_test_simnow")
+        self.cfg = CtpConfig(broker_id="9999", user_id="test_user_01", account_id="acc_test_simnow", front_trade_addr="sim://test")
         self.orders = []
         self.trades = []
         self.gw = CtpExecutionGateway(
             config=self.cfg,
             on_order_cb=lambda o: self.orders.append(o),
-            on_trade_cb=lambda t: self.trades.append(t)
+            on_trade_cb=lambda t: self.trades.append(t),
+            use_real_sdk=False
         )
 
     def test_ctp_connection_and_handshake(self):

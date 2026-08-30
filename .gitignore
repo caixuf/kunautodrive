@@ -46,6 +46,8 @@ logs/
 *~
 .*.swp
 .*.swo
+.ctp_flow*
+*.con
 
 # IDE和编辑器文件
 .vscode/
