@@ -319,6 +319,39 @@ mutable std::vector<double> flat_port_inputs_; // [cell_idx * 2 + port]
 
 ---
 
+## 6.3 宏观自适应生态圈（EcoBiosphere）
+
+单有机体的细胞层进化之上，参考实现进一步构建了**多有机体宏观生态层**（`ecosystem_biosphere.hpp`），将种群动力学从"参数化的适应度函数"升级为**营养级能量流**：
+
+**四大生态位门类（Species Niche）**——对应真实市场中的四类功能主体：
+
+| 生态位 | 市场语义 | 能量来源 |
+|---|---|---|
+| 🌿 生产者 Producer | 做市商 / 流动性挂单提供者 | 环境养分池 |
+| 🐇 初级消费者 Herbivore | 趋势 / 动量跟随者 | 吸纳生产者流动性（放牧：单次 $\min(5,\ 5\%\ E_{\text{prey}})$） |
+| 🦅 顶级掠食者 Predator | 统计套利 / 价差夹逼者 | 猎杀消费者单腿暴露（捕食：单次 $\min(15,\ 20\%\ E_{\text{prey}})$） |
+| 🍄 分解者 Decomposer | 清算风控 / 破损资本回收者 | 分解死亡个体（能量归还养分池） |
+
+**四大生境（Biome）与气候季相**：每个生境绑定一类资产（黑色金属 / 贵金属 / 能源化工 / 智驾感知），气候在单边（春）、高波（夏）、震荡（秋）、冰冻（冬）四季间轮替（每 200 步），气候即"表观遗传环境开关"的宏观版本——不同季相下不同生态位获得相对适应度优势。
+
+**生态动力学**（`step_ecosystem()`）：
+1. **代谢**：每个个体每步消耗 `metabolic_rate` 能量，能量归零即死亡，残值 10.0 归还生境养分池（物质守恒）；
+2. **洛特卡-沃尔泰拉启发式捕食**：放牧与捕食事件产生带类型的能量转移记录（`LIQUIDITY_GRAZING / PREDATION / DECOMPOSITION`）；
+3. **生态位自平衡**：任一生态位存活数 < 3 时，自发消耗养分池繁殖新生个体——保证没有物种系统性灭绝，多样性不会塌缩；
+4. **香农多样性指数** $H = -\sum p_i \ln p_i$ 实时量化生态健康度。
+
+该层与细胞层的关系是**分形的**：细胞层在有机体内做拓扑形态发生，生态层在有机体间做种群能量演化——同一套"变异-选择-代谢-凋亡"语法在两个尺度上递归展开。生态圈状态通过 `GET /api/biosphere/status` 导出（每次拉取驱动一轮生命周期迭代），由全息观测台的生态球层实时渲染。
+
+## 6.4 量子波粒辐射诱变与隧穿突破（Quantum Radiation Mutagenesis & Tunneling）
+
+为彻底根除进化计算中容易陷入高维参数和拓扑“局部最优停滞（Local Plateau）”的顽疾，系统引入了**量子波粒辐射场引擎**（`quantum_radiation_field.hpp`）：
+
+1. **空间相干波函数干涉场**：由多源相干物质波叠加形成空间干涉图样 $\Psi(\mathbf{r}, t) = \sum A_k \cos(\mathbf{k} \cdot \mathbf{r} - \omega_k t + \phi_k)$，空间局域辐射强度正比于幅值平方 $I(\mathbf{r}) = |\Psi(\mathbf{r})|^2$；
+2. **高能宇宙射线粒子束打击**：空间随机生成离散光子包（能量 $E \ge 30\text{ keV}$，速度 $v \approx 120\text{ units/s}$），穿透 3D 培养基并与细胞碰撞，诱发硬电离原语突变与突触重排（Rewiring）；
+3. **量子隧穿跃迁**：对于适应度陷入停滞（$t_{\text{stagnant}} > 50$）且身处高辐射干涉区的机体，系统赋予非零量子隧穿概率 $P_{\text{tunnel}} = \min(0.50, 0.10 \times I_{\text{background}})$，瞬间穿透经典参数势垒并自发分裂新量子门控细胞，跃迁至全新适应度盆地。
+
+---
+
 ## 7. 实时生物发光全息观测台
 
 可视化层不是外挂装饰，而是架构的内生组件（参考实现：`tools/kunboard/cellular.html`）。有机体的物理属性在 C++ 侧即为一等公民（坐标、速度、发光、光子全部内嵌于数据结构），因此观测台呈现的是**真实模拟状态而非艺术想象**：
@@ -326,7 +359,7 @@ mutable std::vector<double> flat_port_inputs_; // [cell_idx * 2 + port]
 - **发光节点渲染**：颜色映射细胞功能分类——青色：感知受体；翠绿：代谢运算；紫色：门控神经元；绯红：效应器。发光强度 $\gamma_i$ 随膜电位 $u_i$ 动态缩放；
 - **流体力场模拟**：细胞悬浮于黏性 3D 培养基中，由兰纳-琼斯力场驱动，实时呈现器官的自组织凝聚过程；
 - **突触光子脉冲**：动作电位光子包在活跃连接上可见地传播（$\phi_{ij}$ 以 3.0 s$^{-1}$ 推进），市场 tick 到来的瞬间可以看见"神经冲动"沿通路奔涌；
-- **在线形态发生**：观测台可动态回放有丝分裂事件——观看新细胞从母通路出生、被力场重新排布、逐渐融入器官的全过程。
+- **量子干涉纹与粒子光轨**：全息观测台实时绘制空间干涉光纹与宇宙射线划过穹顶的离子光轨，直观呈现辐射吸收与结构诱变。
 
 ---
 
@@ -339,7 +372,7 @@ mutable std::vector<double> flat_port_inputs_; // [cell_idx * 2 + port]
 | 推理延迟 | — | ms 级（GPU 依赖） | **24.1 ns（纯 CPU）** |
 | 形式化验证 | 困难 | 几乎不可行 | **可行（有限类型系统 + 无环确定性）** |
 | 灾难性遗忘 | 无（种群记忆） | 有 | 无（精英保留 + 凋亡而非覆盖） |
-| 结构迁移适应 | 弱 | 需重训 | 表观开关 0 ms + 世代变异 |
+| 结构迁移适应 | 弱 | 需重训 | 表观开关 0 ms + 世代变异 + 量子隧穿突破 |
 
 ---
 
@@ -363,5 +396,32 @@ mutable std::vector<double> flat_port_inputs_; // [cell_idx * 2 + port]
 
 ---
 
-*Antigravity Research Lab & FlowEngine Engineering Council, 2026。*
+## 11. 参考文献与学术溯源（References & Theoretical Foundations）
+
+1. **形态发生与自组织（Morphogenesis & Self-Organization）**：
+   - Turing, A. M. (1952). *The Chemical Basis of Morphogenesis*. Philosophical Transactions of the Royal Society of London. Series B, Biological Sciences, 237(641), 37–72.
+   - Mordvintsev, A., Randazzo, E., Niklasson, E., & Levin, M. (2020). *Growing Neural Cellular Automata*. Distill, 5(2), e23. https://doi.org/10.23915/distill.00023
+   - Doursat, R., Sayama, H., & Michel, O. (2012). *Morphogenetic Engineering: Toward Programmable Self-Assembly of Complex Systems*. Springer.
+
+2. **力场动力学与分子物理（Force-Field Dynamics & Molecular Physics）**：
+   - Lennard-Jones, J. E. (1924). *On the Determination of Molecular Fields. II. From the Equation of State of a Gas*. Proceedings of the Royal Society of London. Series A, 106(738), 463–477.
+   - Fruchterman, T. M. J., & Reingold, E. M. (1991). *Graph Drawing by Force-Directed Placement*. Software: Practice and Experience, 21(11), 1129–1164.
+
+3. **量子启发式优化与辐射诱变（Quantum-Inspired Optimization & Mutagenesis）**：
+   - Kadowaki, T., & Nishimori, H. (1998). *Quantum Annealing in the Transverse Ising Model*. Physical Review E, 58(5), 5355–5363.
+   - Han, K. H., & Kim, J. H. (2002). *Quantum-Inspired Evolutionary Algorithm for a Class of Combinatorial Optimization Problems*. IEEE Transactions on Evolutionary Computation, 6(6), 580–593.
+   - Muller, H. J. (1927). *Artificial Transmutation of the Gene*. Science, 66(1699), 84–87.
+
+4. **市场生态学与种群动力学（Market Ecology & Population Dynamics）**：
+   - Farmer, J. D. (2002). *Market Force, Ecology, and Evolution*. Industrial and Corporate Change, 11(5), 895–953.
+   - Lotka, A. J. (1925). *Elements of Physical Biology*. Williams & Wilkins.
+   - Volterra, V. (1926). *Fluctuations in the Abundance of a Species considered Mathematically*. Nature, 118, 558–560.
+   - Shannon, C. E. (1948). *A Mathematical Theory of Communication*. Bell System Technical Journal, 27(3), 379–423.
+
+5. **市场微观结构与冲击成本定律（Market Microstructure & Slippage Laws）**：
+   - Almgren, R., & Chriss, N. (2000). *Optimal Execution of Portfolio Transactions*. Journal of Risk, 3, 5–40.
+   - Bouchaud, J. P., Gefen, Y., Potters, M., & Wyart, M. (2004). *Fluctuations and Response in Financial Markets: The Subtle Nature of ‘Random’ Price Changes*. Quantitative Finance, 4(2), 176–190.
+
+---
+*Antigravity Research Lab & FlowEngine Engineering Council, 2026。*  
 *参考实现：`kun_quant/include/kun/cellular/`，测试：`tests/test_flow_cellular_evolution.cpp`，观测台：`tools/kunboard/cellular.html`。*
