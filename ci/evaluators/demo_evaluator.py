@@ -1118,9 +1118,9 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
                     first_critical_ts[pid] = ts_i
                     critical_recorded.add(pid)
 
-    # 汇总识别率
+    # 汇总识别率 (无样本时为 0.0，避免虚假 100% 满分误导)
     def _rate(counts: list[int]) -> float:
-        return counts[0] / counts[1] if counts[1] > 0 else 1.0  # 无样本视为 1.0（不影响判定）
+        return counts[0] / counts[1] if counts[1] > 0 else 0.0
 
     rate_vehicle = _rate(layer_counts["vehicle"])
     rate_vru = _rate(layer_counts["vru"])

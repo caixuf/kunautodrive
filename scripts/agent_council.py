@@ -15,7 +15,7 @@ import os
 import concurrent.futures
 from typing import Dict, Optional
 
-def query_codebuddy(prompt: str, timeout: int = 90) -> str:
+def query_codebuddy(prompt: str, timeout: int = 180) -> str:
     """Invokes CodeBuddy non-interactively to perform peer review or task execution."""
     cmd = ["codebuddy", "-p", prompt]
     try:
@@ -29,7 +29,7 @@ def query_codebuddy(prompt: str, timeout: int = 90) -> str:
     except Exception as e:
         return f"[CodeBuddy Execution Exception]: {str(e)}"
 
-def query_mimo(prompt: str, timeout: int = 90) -> str:
+def query_mimo(prompt: str, timeout: int = 180) -> str:
     """Invokes Xiaomi MiMo non-interactively."""
     cmd = ["mimo", "run", prompt, "--dangerously-skip-permissions"]
     try:
@@ -43,6 +43,20 @@ def query_mimo(prompt: str, timeout: int = 90) -> str:
     except Exception as e:
         return f"[MiMo Execution Exception]: {str(e)}"
 
+def query_opencode(prompt: str, timeout: int = 180) -> str:
+    """Invokes OpenCode non-interactively (都察院 · 监察御史)."""
+    cmd = ["opencode", "run", prompt]
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
+        if res.returncode == 0:
+            return res.stdout.strip()
+        else:
+            return f"[OpenCode Error code {res.returncode}]: {res.stderr.strip()}"
+    except subprocess.TimeoutExpired:
+        return "[OpenCode Timeout]: Request exceeded timeout limit."
+    except Exception as e:
+        return f"[OpenCode Execution Exception]: {str(e)}"
+
 def truncate_diff_cleanly(diff_text: str, max_chars: int = 5000) -> str:
     """Truncates diff cleanly at line boundaries with clear indication."""
     if len(diff_text) <= max_chars:
@@ -51,9 +65,9 @@ def truncate_diff_cleanly(diff_text: str, max_chars: int = 5000) -> str:
     truncated = "\n".join(lines[:-1])
     return f"{truncated}\n\n[... Diff truncated at line boundary for review context ...]"
 
-def review_diff(git_diff_text: str, agent: str = "both") -> Dict[str, str]:
+def review_diff(git_diff_text: str, agent: str = "all") -> Dict[str, str]:
     clean_diff = truncate_diff_cleanly(git_diff_text)
-    prompt = f"""【门下省/尚书省审议令】
+    prompt = f"""【门下省/尚书省/都察院审议令】
 请作为审议官，对以下中书省提交的工程代码 Diff 进行独立审查：
 1. 是否存在内存泄漏、未定义行为、死锁或并发竞态风险？
 2. 是否存在状态机死锁或边界条件处理疏漏？
@@ -64,10 +78,12 @@ def review_diff(git_diff_text: str, agent: str = "both") -> Dict[str, str]:
 === CODE DIFF END ===
 """
     tasks = {}
-    if agent in ["codebuddy", "both"]:
+    if agent in ["codebuddy", "all"]:
         tasks["CodeBuddy (门下省)"] = query_codebuddy
-    if agent in ["mimo", "both"]:
+    if agent in ["mimo", "all"]:
         tasks["MiMo (尚书省)"] = query_mimo
+    if agent in ["opencode", "all"]:
+        tasks["OpenCode (都察院)"] = query_opencode
 
     results = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks) or 1) as executor:
@@ -86,7 +102,7 @@ def main():
     parser.add_argument("--review-diff", action="store_true", help="Submit current git diff for Council review")
     parser.add_argument("--task", type=str, help="Dispatch custom task to agents")
     parser.add_argument("--file", type=str, help="Review specific file")
-    parser.add_argument("--agent", choices=["codebuddy", "mimo", "both"], default="both", help="Target agent")
+    parser.add_argument("--agent", choices=["codebuddy", "mimo", "opencode", "all", "both"], default="all", help="Target agent")
     args = parser.parse_args()
 
     if args.review_diff:
@@ -106,24 +122,30 @@ def main():
             print("=" * 50)
     elif args.task:
         print(f">>> 派发任务至 [{args.agent}]: {args.task}")
-        if args.agent in ["codebuddy", "both"]:
-            print("\n--- CodeBuddy 响应 ---")
+        if args.agent in ["codebuddy", "all", "both"]:
+            print("\n--- CodeBuddy (门下省) 响应 ---")
             print(query_codebuddy(args.task))
-        if args.agent in ["mimo", "both"]:
-            print("\n--- MiMo 响应 ---")
+        if args.agent in ["mimo", "all", "both"]:
+            print("\n--- MiMo (尚书省) 响应 ---")
             print(query_mimo(args.task))
+        if args.agent in ["opencode", "all"]:
+            print("\n--- OpenCode (都察院) 响应 ---")
+            print(query_opencode(args.task))
     elif args.file:
         if os.path.exists(args.file):
             with open(args.file, "r", encoding="utf-8") as f:
                 content = f.read()
             prompt = f"【代码审查】请审查以下文件 ({args.file})：\n```\n{content[:4000]}\n```"
             print(f">>> 正在向 [{args.agent}] 提交文件审查: {args.file}...")
-            if args.agent in ["codebuddy", "both"]:
-                print("\n--- CodeBuddy 审议 ---")
+            if args.agent in ["codebuddy", "all", "both"]:
+                print("\n--- CodeBuddy (门下省) 审议 ---")
                 print(query_codebuddy(prompt))
-            if args.agent in ["mimo", "both"]:
-                print("\n--- MiMo 审议 ---")
+            if args.agent in ["mimo", "all", "both"]:
+                print("\n--- MiMo (尚书省) 审议 ---")
                 print(query_mimo(prompt))
+            if args.agent in ["opencode", "all"]:
+                print("\n--- OpenCode (都察院) 审议 ---")
+                print(query_opencode(prompt))
 
 if __name__ == "__main__":
     main()

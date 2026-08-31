@@ -119,7 +119,7 @@ class AutoQuantSessionScheduler:
         results["steps"]["daemon_health"] = "ONLINE" if daemon_health else "OFFLINE"
 
         # 3. 检查 AI 微服务健康状态
-        ai_health = self._check_http_endpoint(f"{self.ai_url}/api/ai/diagnose")
+        ai_health = self._check_http_endpoint(f"{self.ai_url}/api/ai/health")
         results["steps"]["ai_service_health"] = "ONLINE" if ai_health else "OFFLINE"
 
         self.last_premarket_checked = date_str
@@ -140,7 +140,7 @@ class AutoQuantSessionScheduler:
             results["steps"]["daily_report"] = "OFFLINE_FALLBACK"
 
         # 2. 触发 AI 微服务生成每日复盘研报
-        trigger_res = self._http_post_json(f"{self.ai_url}/api/ai/diagnose", {"action": "generate_daily_report", "date": date_str})
+        trigger_res = self._http_post_json(f"{self.ai_url}/api/ai/proactive/daily_review", {"date": date_str})
         results["steps"]["ai_daily_digest"] = "TRIGGERED" if trigger_res else "SKIPPED"
 
         self.last_daily_report_date = date_str

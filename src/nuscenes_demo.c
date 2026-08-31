@@ -211,7 +211,7 @@ int main(int argc, char** argv) {
                 "body{background:#111;color:#eee;font:14px monospace;margin:20px}"
                 "canvas{background:#000;border:1px solid #333}"
                 ".info{margin:10px 0}</style></head><body>"
-                "<h2>KITTI LiDAR + DBSCAN Clusters</h2>"
+                "<h2>nuScenes LiDAR + DBSCAN Clusters</h2>"
                 "<div class='info'>%d points → %d clusters | "
                 "eps=%.1f min_pts=%d | "
                 "<span style='color:#0f0'>█ vehicle</span> "
@@ -231,24 +231,26 @@ int main(int argc, char** argv) {
             for (int i = 0; i < n_pts; i += n_pts / 2000 + 1)
                 fprintf(hf, "ctx.fillRect(tx(%.1f),ty(%.1f),1,1);", pts[i].x, pts[i].y);
 
-            /* 画聚类 */
+            /* 画聚类 (支持全部聚类轮询配色) */
             const char* colors[] = {"#0f0","#ff0","#0ff","#f80","#f0f","#08f","#8f0","#f00"};
             fprintf(hf, "var clrs=['%s'", colors[0]);
             for (int i = 1; i < 8; i++) fprintf(hf, ",'%s'", colors[i]);
             fprintf(hf, "];");
 
-            for (int i = 0; i < n_clusters && i < 8; i++) {
+            for (int i = 0; i < n_clusters; i++) {
                 const ClusterBounds* cb = dbscan_get_cluster(&db, i);
                 if (!cb || cb->point_count < 3) continue;
+                double rx = cb->cx - cb->length / 2.0;
+                double ry = cb->cy + cb->width / 2.0;
+                double rw = cb->length / (xmax - xmin) * 1000.0;
+                double rh = cb->width / (ymax - ymin) * 500.0;
                 fprintf(hf,
                     "ctx.strokeStyle=clrs[%d];ctx.lineWidth=2;"
-                    "ctx.strokeRect(tx(%.1f),ty(%.1f),%.0f,%.0f);"
+                    "ctx.strokeRect(tx(%.1f),ty(%.1f),%.1f,%.1f);"
                     "ctx.fillStyle=clrs[%d];ctx.font='11px monospace';"
                     "ctx.fillText('%s(%d)',tx(%.1f)+2,ty(%.1f)-4);",
                     i % 8,
-                    cb->cx - cb->length/2, cb->cy + cb->width/2,
-                    cb->length / (xmax-xmin) * 1000,
-                    -cb->width / (ymax-ymin) * 500,
+                    rx, ry, rw, rh,
                     i % 8,
                     cb->cls == CLS_VEHICLE ? "V" : cb->cls == CLS_PEDESTRIAN ? "P" : "C",
                     cb->point_count,

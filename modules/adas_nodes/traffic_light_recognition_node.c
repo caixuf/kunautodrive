@@ -86,7 +86,8 @@ static void add_confidence_to_lights(cJSON* root) {
         if (!light) continue;
         cJSON* conf = cJSON_GetObjectItemCaseSensitive(light, "confidence");
         if (!conf) {
-            cJSON_AddNumberToObject(light, "confidence", 1.0);
+            cJSON_AddNumberToObject(light, "confidence", 0.96);
+            cJSON_AddBoolToObject(light, "is_synthetic", 1);
         }
     }
 }

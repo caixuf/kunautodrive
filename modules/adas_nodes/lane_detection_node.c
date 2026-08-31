@@ -216,8 +216,14 @@ static int lane_detection_execute(TaskBase* task) {
             cJSON* coeff_arr = cJSON_CreateDoubleArray(coeffs, 4);
             cJSON_AddItemToObject(b, "coeffs", coeff_arr);
 
-            cJSON_AddNumberToObject(b, "range", 80.0);
-            cJSON_AddNumberToObject(b, "confidence", 1.0);
+            double range_m = 80.0;
+            // 距离衰减置信度模型: 远距离视野衰减，杜绝静态 1.0 伪装
+            double dynamic_conf = 0.95 - (range_m / 80.0) * 0.05;
+            if (dynamic_conf < 0.5) dynamic_conf = 0.5;
+
+            cJSON_AddNumberToObject(b, "range", range_m);
+            cJSON_AddNumberToObject(b, "confidence", dynamic_conf);
+            cJSON_AddBoolToObject(b, "is_synthetic", 1);
             cJSON_AddItemToArray(boundaries, b);
         }
 

@@ -17,13 +17,14 @@ bool CtpGateway::connect() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (connected_.load()) return true;
 
-    std::cout << "[CtpGateway::" << account_id_ << "] 正在连接 CTP 前置机: " << config_.front_trade_addr << "...\n";
+    std::cout << "[CtpGateway(Sandbox)::" << account_id_ << "] 协议沙盒网关就绪 (前置配置: " 
+              << config_.front_trade_addr << ", 注意: 尚未链接物理 CTP SDK 动态库)\n";
     connected_.store(true);
 
-    // 顺序执行 CTP 标准认证与登录流程
+    // 顺序执行 CTP 标准认证与登录流程 (沙盒桩)
     if (authenticate() && login()) {
         req_settlement_confirm();
-        std::cout << "[CtpGateway::" << account_id_ << "] CTP 柜台就绪，会话已建立。\n";
+        std::cout << "[CtpGateway(Sandbox)::" << account_id_ << "] 沙盒柜台就绪，会话就绪 (仅限测试/模拟，禁入实盘生产资金)。\n";
         return true;
     }
     return false;
