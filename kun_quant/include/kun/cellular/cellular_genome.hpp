@@ -922,7 +922,10 @@ public:
         std::ostringstream ss;
         double safe_fitness = std::isfinite(fitness_score) ? fitness_score : 0.0;
         double total_e = 0.0;
-        for (const auto& c : cells) total_e += c.output_val * c.output_val;
+        for (const auto& c : cells) {
+            if (std::isfinite(c.output_val)) total_e += c.output_val * c.output_val;
+        }
+        if (!std::isfinite(total_e)) total_e = 0.0;
 
         ss << "{\n";
         ss << "  \"organism_id\": " << organism_id << ",\n";
