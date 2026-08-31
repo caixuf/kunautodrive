@@ -248,44 +248,59 @@ public:
     }
 
     // ========================================================================
-    // 5. 圣上御定：兰纳-琼斯力场物理引擎 (Lennard-Jones Force-Field Step)
+    // 5. 严格 12-6 兰纳-琼斯势能与力场微物理引擎 (Lennard-Jones 12-6 Potential Engine)
+    // V_LJ(r) = 4*epsilon * [ (sigma/r)^12 - (sigma/r)^6 ]
+    // F_LJ(r) = -grad V = (24*epsilon / r^2) * [ 2*(sigma/r)^12 - (sigma/r)^6 ] * r_vec
     // ========================================================================
     void step_force_field_physics(float dt = 0.016f) {
-        const float k_rep = 2500.0f;     // 近距离斥力系数 (r^-3)
-        const float k_spring = 0.08f;    // 突触弹簧系数
-        const float damping = 0.85f;     // 微流体阻尼
-        const float max_dist = 200.0f;   // 远距离力场截止半径
+        const float epsilon = 15.0f;       // 势阱深度 (Potential Well Depth)
+        const float sigma = 35.0f;         // 零势平衡距离 (Collision Diameter)
+        const float sigma6 = std::pow(sigma, 6.0f);
+        const float sigma12 = sigma6 * sigma6;
+        const float r_cut = 3.0f * sigma;  // 截断半径 (Cutoff Radius)
+        const float k_spring = 0.05f;      // 突触结构弹簧系数
+        const float damping = 0.85f;       // 黏性阻尼
 
-        // 1. 重置合力
+        // 1. 重置合力并衰减发光电位
         for (auto& c : cells) {
             c.fx = 0.0f; c.fy = 0.0f; c.fz = 0.0f;
-            // 生物发光自然衰减
             c.glow_charge *= 0.92f;
         }
 
-        // 2. 细胞间多体斥力场计算 (近斥远无)
+        // 2. 严格 12-6 兰纳-琼斯多体非键结势能力场 (3D 近斥中吸远无)
         for (size_t i = 0; i < cells.size(); ++i) {
             for (size_t j = i + 1; j < cells.size(); ++j) {
                 float dx = cells[j].x - cells[i].x;
                 float dy = cells[j].y - cells[i].y;
-                float dist_sq = dx * dx + dy * dy + 1e-4f;
+                float dz = cells[j].z - cells[i].z;
+                float dist_sq = dx * dx + dy * dy + dz * dz + 1e-4f;
                 float dist = std::sqrt(dist_sq);
 
-                if (dist < max_dist) {
-                    // 斥力 ~ 1 / dist^2
-                    float f_mag = k_rep / (dist_sq);
-                    float nx = dx / dist;
-                    float ny = dy / dist;
+                if (dist < r_cut && dist > 1.0f) {
+                    float r2 = dist_sq;
+                    float r6 = r2 * r2 * r2;
+                    float r12 = r6 * r6;
 
-                    cells[i].fx -= nx * f_mag;
-                    cells[i].fy -= ny * f_mag;
-                    cells[j].fx += nx * f_mag;
-                    cells[j].fy += ny * f_mag;
+                    // 12-6 势解析导数力标量: f_mag > 0 为斥力, f_mag < 0 为吸引力
+                    float sr6 = sigma6 / r6;
+                    float sr12 = sigma12 / r12;
+                    float f_mag = (24.0f * epsilon / r2) * (2.0f * sr12 - sr6);
+
+                    // 避免极端近距离数值发散溢出 (Force Cap)
+                    f_mag = std::clamp(f_mag, -50.0f, 300.0f);
+
+                    cells[i].fx -= dx * (f_mag / dist);
+                    cells[i].fy -= dy * (f_mag / dist);
+                    cells[i].fz -= dz * (f_mag / dist);
+
+                    cells[j].fx += dx * (f_mag / dist);
+                    cells[j].fy += dy * (f_mag / dist);
+                    cells[j].fz += dz * (f_mag / dist);
                 }
             }
         }
 
-        // 3. 突触弹簧引力场计算 (中等距离吸引成器官)
+        // 3. 突触弹簧引力场计算 (有向结构张力)
         std::unordered_map<uint16_t, size_t> id_map;
         for (size_t i = 0; i < cells.size(); ++i) id_map[cells[i].id] = i;
 
@@ -299,33 +314,41 @@ public:
 
                 float dx = c2.x - c1.x;
                 float dy = c2.y - c1.y;
-                float dist = std::sqrt(dx * dx + dy * dy + 1e-4f);
-                float displacement = dist - syn.rest_length;
+                float dz = c2.z - c1.z;
+                float dist = std::sqrt(dx * dx + dy * dy + dz * dz + 1e-4f);
 
-                // 胡克弹簧力
-                float f_spring = displacement * k_spring;
+                float delta = dist - syn.rest_length;
+                float spring_f = k_spring * delta;
+
                 float nx = dx / dist;
                 float ny = dy / dist;
+                float nz = dz / dist;
 
-                c1.fx += nx * f_spring;
-                c1.fy += ny * f_spring;
-                c2.fx -= nx * f_spring;
-                c2.fy -= ny * f_spring;
+                c1.fx += nx * spring_f;
+                c1.fy += ny * spring_f;
+                c1.fz += nz * spring_f;
+
+                c2.fx -= nx * spring_f;
+                c2.fy -= ny * spring_f;
+                c2.fz -= nz * spring_f;
 
                 // 推进神经放电光子动画
                 if (syn.photon_pos >= 0.0f) {
-                    syn.photon_pos += dt * 3.0f; // 速度
+                    syn.photon_pos += dt * 3.0f;
                     if (syn.photon_pos > 1.0f) syn.photon_pos = -1.0f;
                 }
             }
         }
 
-        // 4. 牛顿积分更新速度与位移
+        // 4. 牛顿第二定律积分推进 (Verlet Velocity Step)
         for (auto& c : cells) {
             c.vx = (c.vx + c.fx * dt) * damping;
             c.vy = (c.vy + c.fy * dt) * damping;
+            c.vz = (c.vz + c.fz * dt) * damping;
+
             c.x += c.vx * dt;
             c.y += c.vy * dt;
+            c.z += c.vz * dt;
         }
     }
 

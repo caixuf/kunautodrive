@@ -21,9 +21,9 @@ cd "${ROOT_DIR}"
 
 # 1. 运行全量 40 项全栈单元与集成测试套件
 echo ""
-echo ">>> [第一关] 执行全栈单元测试、太初细胞、生态圈与量子辐射演化套件..."
-ctest --test-dir build -R "test_quant|test_flow_cellular|test_flow_ecosystem|test_flow_quantum" --output-on-failure
-echo ">>> [第一关] 100% PASS! 全部量化、细胞、生态圈与量子辐射单测绿灯通过!"
+echo ">>> [第一关] 执行全栈单元测试、太初细胞、生态圈、量子辐射与 SOTA 对比套件..."
+ctest --test-dir build -R "test_quant|test_flow_cellular|test_flow_ecosystem|test_flow_quantum|test_flow_sota" --output-on-failure
+echo ">>> [第一关] 100% PASS! 全部量化、细胞、生态圈、量子辐射与 SOTA 对比单测绿灯通过!"
 
 # 2. 验证守护进程启动与优雅停机
 echo ""

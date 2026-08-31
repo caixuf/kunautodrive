@@ -113,10 +113,21 @@ public:
         std::uniform_real_distribution<float> dist_prob(0.0f, 1.0f);
         std::normal_distribution<double> dist_norm(0.0, 0.05);
 
-        // 1. 量子隧穿机制 (Quantum Tunneling): 若适应度停滞且处于高辐射干涉区，有概率隧穿势垒
-        if (stagnation_ticks > 50 && background_intensity > 0.5f) {
-            float p_tunnel = std::min(0.50f, 0.10f * background_intensity);
-            if (dist_prob(rng_) < p_tunnel) {
+        // 1. 严谨 WKB 量子势垒隧穿积分 (Wentzel-Kramers-Brillouin Barrier Tunneling Integral)
+        // T_WKB = exp( - (2 * L * sqrt(2 * m * Delta_V)) / (hbar_eff * (1.0 + I_radiation)) )
+        if (stagnation_ticks > 50 && background_intensity > 0.2f) {
+            const float m_eff = 1.0f;       // 有效拓扑质量
+            const float hbar_eff = 1.8f;    // 有效普朗克常数
+            const float L_barrier = 0.75f;  // 参数拓扑势垒宽度 (Hamming/Weight Distance)
+            
+            // 停滞时间越长，势垒相对动能差越大 (Delta_V)
+            float delta_v = std::clamp(static_cast<float>(stagnation_ticks - 50) * 0.05f, 0.1f, 4.0f);
+            float action_integral = (2.0f * L_barrier * std::sqrt(2.0f * m_eff * delta_v));
+            float tunneling_prob = std::exp(-action_integral / (hbar_eff * (1.0f + 0.5f * background_intensity)));
+            
+            tunneling_prob = std::clamp(tunneling_prob, 0.01f, 0.65f);
+
+            if (dist_prob(rng_) < tunneling_prob) {
                 perform_quantum_tunneling(org);
                 recent_events_.push_back({
                     org.organism_id, 0, x, y, z, background_intensity, "QUANTUM_TUNNELING"
@@ -165,6 +176,14 @@ public:
         ss << "{\n";
         ss << "  \"field_time\": " << time_ << ",\n";
         ss << "  \"wave_sources_count\": " << waves_.size() << ",\n";
+        ss << "  \"wave_sources\": [\n";
+        for (size_t i = 0; i < waves_.size(); ++i) {
+            const auto& w = waves_[i];
+            ss << "    {\"kx\": " << w.kx << ", \"ky\": " << w.ky << ", \"kz\": " << w.kz
+               << ", \"omega\": " << w.omega << ", \"amplitude\": " << w.amplitude
+               << ", \"phase\": " << w.phase << "}" << (i + 1 < waves_.size() ? "," : "") << "\n";
+        }
+        ss << "  ],\n";
         ss << "  \"active_cosmic_rays\": [\n";
         for (size_t i = 0; i < cosmic_rays_.size(); ++i) {
             const auto& r = cosmic_rays_[i];
@@ -228,13 +247,14 @@ private:
         size_t idx = dist_cell(rng_);
         auto& target = org.cells[idx];
 
-        // 若不是受体感知细胞，突变为其他代谢或门控细胞原语
+        // 若不是受体感知细胞，突变为其他代谢、门控或效应原语 (包含免疫锁与防御复位)
         if (target.type != CellType::SENSE_RAW_INPUT_0 && target.type != CellType::SENSE_RAW_INPUT_1) {
             static const CellType pool[] = {
                 CellType::OP_EMA, CellType::OP_DIFF, CellType::OP_INTEGRAL,
-                CellType::OP_SUB, CellType::GATE_HYSTERESIS, CellType::GATE_INHIBIT
+                CellType::OP_SUB, CellType::GATE_HYSTERESIS, CellType::GATE_INHIBIT,
+                CellType::ACT_IMMUNE_BLOCK, CellType::ACT_DEFENSIVE_RESET
             };
-            target.type = pool[rng_() % 6];
+            target.type = pool[rng_() % 8];
         }
 
         // 突触断裂与重连 (Rewiring)
