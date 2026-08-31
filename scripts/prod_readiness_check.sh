@@ -21,9 +21,9 @@ cd "${ROOT_DIR}"
 
 # 1. 运行全量 40 项全栈单元与集成测试套件
 echo ""
-echo ">>> [第一关] 执行全栈 40 项单元测试与红蓝对抗压测套件..."
-ctest --test-dir build -R "test_quant|test_flow_cellular" --output-on-failure
-echo ">>> [第一关] 100% PASS! 全部量化与细胞单测绿灯通过!"
+echo ">>> [第一关] 执行全栈单元测试、太初细胞与生态圈演化套件..."
+ctest --test-dir build -R "test_quant|test_flow_cellular|test_flow_ecosystem" --output-on-failure
+echo ">>> [第一关] 100% PASS! 全部量化、细胞与生态圈单测绿灯通过!"
 
 # 2. 验证守护进程启动与优雅停机
 echo ""
@@ -51,6 +51,15 @@ if [[ "${CELL_RESP}" != *"cells"* ]]; then
     exit 1
 fi
 echo "    ↳ /api/cellular/organism [200 OK] (包含完整力场坐标与发光电位)"
+
+echo ">>> 探测 /api/biosphere/status (宏观生态圈生境与食物网数据) ..."
+BIO_RESP=$(curl -sf http://localhost:8900/api/biosphere/status)
+if [[ "${BIO_RESP}" != *"shannon_diversity"* ]]; then
+    echo "❌ 错误: /api/biosphere/status 数据异常!"
+    kill -TERM ${SERVER_PID} || true
+    exit 1
+fi
+echo "    ↳ /api/biosphere/status [200 OK] (包含香农多样性指数、4大生境与物种丰度)"
 
 echo ">>> 探测 /api/report ..."
 curl -sf http://localhost:8900/api/report > /dev/null

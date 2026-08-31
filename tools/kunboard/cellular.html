@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>太初细胞全息观测台 · Morphogenetic Cellular Observatory</title>
+<style>
+  :root { --bg:#04070d; --panel:rgba(10,18,30,.82); --line:#1e293b; --cyan:#22d3ee; --emerald:#34d399; --purple:#a78bfa; --crimson:#f43f5e; --text:#cbd5e1; --dim:#64748b; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:100%; height:100%; overflow:hidden; background:var(--bg); font-family:"PingFang SC","Microsoft YaHei",monospace; color:var(--text); }
+  #stage { position:fixed; inset:0; }
+  .panel { position:fixed; background:var(--panel); border:1px solid var(--line); border-radius:10px; backdrop-filter:blur(6px); padding:14px 16px; }
+  #hud { top:16px; left:16px; width:270px; }
+  #hud h1 { font-size:14px; color:#e2e8f0; letter-spacing:1px; margin-bottom:2px; }
+  #hud .sub { font-size:10px; color:var(--dim); margin-bottom:10px; }
+  .kv { display:flex; justify-content:space-between; font-size:12px; padding:3px 0; border-bottom:1px dashed rgba(30,41,59,.6); }
+  .kv b { color:#e2e8f0; font-weight:600; }
+  #src { font-size:10px; margin-top:8px; padding:4px 6px; border-radius:4px; background:rgba(34,211,238,.08); color:var(--cyan); }
+  #legend { bottom:16px; left:16px; display:flex; gap:14px; font-size:11px; align-items:center; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; vertical-align:-1px; }
+  #actions { top:16px; right:16px; width:230px; }
+  #actions h2 { font-size:12px; color:#e2e8f0; margin-bottom:8px; }
+  .act { display:flex; justify-content:space-between; align-items:center; font-size:12px; padding:6px 8px; border-radius:6px; margin-bottom:5px; background:rgba(30,41,59,.4); transition:all .25s; }
+  .act.flash-buy { background:rgba(52,211,153,.35); box-shadow:0 0 12px rgba(52,211,153,.5); }
+  .act.flash-sell { background:rgba(244,63,94,.35); box-shadow:0 0 12px rgba(244,63,94,.5); }
+  .act.flash-immune { background:rgba(250,204,21,.35); box-shadow:0 0 12px rgba(250,204,21,.55); }
+  #ops { bottom:16px; right:16px; display:flex; gap:8px; }
+  #ops button { background:var(--panel); border:1px solid var(--line); color:var(--text); font-size:12px; padding:8px 14px; border-radius:8px; cursor:pointer; font-family:inherit; transition:all .2s; }
+  #ops button:hover { border-color:var(--cyan); color:var(--cyan); }
+  #eventlog { top:16px; right:262px; width:250px; max-height:220px; overflow:hidden auto; font-size:11px; line-height:1.7; }
+  #eventlog .ev { color:var(--dim); } #eventlog .ev.hi { color:var(--cyan); }
+  #pricebar { bottom:16px; left:50%; transform:translateX(-50%); font-size:12px; color:var(--dim); }
+  #pricebar b { color:var(--cyan); font-size:14px; }
+  ::-webkit-scrollbar { width:4px; } ::-webkit-scrollbar-thumb { background:var(--line); border-radius:2px; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+
+<div class="panel" id="hud">
+  <h1>太初细胞全息观测台</h1>
+  <div class="sub">MORPHOGENETIC CELLULAR OBSERVATORY</div>
+  <div class="kv"><span>世代 Generation</span><b id="st-gen">0</b></div>
+  <div class="kv"><span>细胞 Cells</span><b id="st-cells">0</b></div>
+  <div class="kv"><span>活跃突触 Synapses</span><b id="st-syn">0</b></div>
+  <div class="kv"><span>代谢放电次数</span><b id="st-act">0</b></div>
+  <div class="kv"><span>力场步 Force Steps</span><b id="st-phys">0</b></div>
+  <div id="src">数据源: 连接守护进程...</div>
+</div>
+
+<div class="panel" id="actions">
+  <h2>效应器输出 (Action Outputs)</h2>
+  <div class="act" id="act-buy"><span>买开 / 加速 ACT_POS</span><b id="v-buy">0.00</b></div>
+  <div class="act" id="act-sell"><span>卖开 / 制动 ACT_NEG</span><b id="v-sell">0.00</b></div>
+  <div class="act" id="act-immune"><span>免疫熔断 ACT_LOCK</span><b id="v-immune">—</b></div>
+</div>
+
+<div class="panel" id="eventlog"></div>
+
+<div class="panel" id="legend">
+  <span><i class="dot" style="background:var(--cyan)"></i>感知受体</span>
+  <span><i class="dot" style="background:var(--emerald)"></i>代谢运算</span>
+  <span><i class="dot" style="background:var(--purple)"></i>门控神经元</span>
+  <span><i class="dot" style="background:var(--crimson)"></i>效应动作</span>
+</div>
+
+<div class="panel" id="pricebar">驱动行情 I0 (价格): <b id="px">--</b> <span id="px-src"></span></div>
+
+<div class="panel" id="ops">
+  <button id="b-mito">⚡ 有丝分裂</button>
+  <button id="b-rewire">🔀 突触重连</button>
+  <button id="b-apop">☠ 凋亡剪枝</button>
+  <button id="b-pause">⏸ 暂停</button>
+  <button id="b-reset">↺ 重置</button>
+</div>
+
+<script type="module">
+import * as THREE from './vendor/three.module.js';
+
+/* ============================================================
+ * 1. 细胞类型定义 (与 cellular_genome.hpp 逐一对应)
+ * ============================================================ */
+const T = {
+  SENSE0:'SENSE0', SENSE1:'SENSE1', SENSE2:'SENSE2', SENSE3:'SENSE3',
+  EMA:'EMA', DIFF:'DIFF', INTEGRAL:'INTEGRAL', SUM:'SUM', SUB:'SUB',
+  MUL:'MUL', RATIO:'RATIO', ABS:'ABS',
+  THRESH:'THRESH', HYST:'HYST', AND:'AND', INHIB:'INHIB',
+  ACT_POS:'ACT_POS', ACT_NEG:'ACT_NEG', ACT_RESET:'ACT_RESET', ACT_LOCK:'ACT_LOCK'
+};
+const FAMILY = c =>
+  c.startsWith('SENSE') ? 'receptor' :
+  ['EMA','DIFF','INTEGRAL','SUM','SUB','MUL','RATIO','ABS'].includes(c) ? 'metabolic' :
+  ['THRESH','HYST','AND','INHIB'].includes(c) ? 'gating' : 'effector';
+const FAMILY_COLOR = { receptor:0x22d3ee, metabolic:0x34d399, gating:0xa78bfa, effector:0xf43f5e };
+const MUT_CANDIDATES = [T.EMA,T.DIFF,T.SUM,T.SUB,T.RATIO,T.THRESH,T.HYST,T.AND,T.INHIB];
+
+/* ============================================================
+ * 2. 有机体 (客户端复刻 C++ CellularOrganism)
+ * ============================================================ */
+let nextCellId = 1;
+function makeCell(type, p1=0.1, p2=0.0, x=0, y=0) {
+  return { id:nextCellId++, type, param1:p1, param2:p2, state:0, prev:0, latch:false,
+           out:0, acts:0, x, y, vx:0, vy:0, fx:0, fy:0, glow:0 };
+}
+function makeSyn(a,b,port,w=1.0){ return { from:a, to:b, port, w, active:true, rest:60, photon:-1 }; }
+
+function seedOrganism(){
+  nextCellId = 1;
+  const cells = [
+    makeCell(T.SENSE0, 1.0, 0, -120,-40),   // 0 价格
+    makeCell(T.SENSE1, 1.0, 0, -120, 40),   // 1 量
+    makeCell(T.EMA, 0.05, 0, -40,-30),      // 2 慢线
+    makeCell(T.EMA, 0.20, 0, -40, 30),      // 3 快线
+    makeCell(T.SUB, 0, 0, 30, 0),           // 4 快-慢
+    makeCell(T.HYST, 0.01, -0.01, 80, 0),   // 5 迟滞
+    makeCell(T.ACT_POS, 0, 0, 140,-40),     // 6 买
+    makeCell(T.ACT_NEG, 0, 0, 140, 40),     // 7 卖
+    makeCell(T.ACT_LOCK, 0, 0, 140, 100),   // 8 免疫锁
+  ];
+  const syns = [
+    makeSyn(0,2,0), makeSyn(0,3,0), makeSyn(3,4,0), makeSyn(2,4,1),
+    makeSyn(4,5,0), makeSyn(5,6,0), makeSyn(5,7,0,-1.0),
+  ];
+  return { generation:0, cells, syns, order:[], phySteps:0 };
+}
+
+/* Kahn 拓扑排序编译 (环保护补齐, 与 C++ compile() 同构) */
+function compile(org){
+  const byId = new Map(org.cells.map((c,i)=>[c.id,i]));
+  const indeg = new Map(org.cells.map(c=>[c.id,0]));
+  const adj = new Map();
+  for(const s of org.syns){
+    if(!s.active || !byId.has(s.from) || !byId.has(s.to)) continue;
+    if(!adj.has(s.from)) adj.set(s.from,[]);
+    adj.get(s.from).push(s.to);
+    indeg.set(s.to, (indeg.get(s.to)||0)+1);
+  }
+  const q = org.cells.filter(c=>(indeg.get(c.id)||0)===0).map(c=>c.id);
+  const order = [];
+  for(let h=0; h<q.length; h++){
+    order.push(q[h]);
+    for(const v of (adj.get(q[h])||[])) if((indeg.get(v)-- )===1) q.push(v);
+  }
+  const seen = new Set(order);
+  for(const c of org.cells) if(!seen.has(c.id)) order.push(c.id);
+  org.order = order.map(id=>byId.get(id));
+}
+
+/* 前向传导 (与 C++ forward() 语义一致) */
+function forward(org, inputs){
+  const byId = new Map(org.cells.map((c,i)=>[c.id,i]));
+  const port = new Float64Array(org.cells.length*2);
+  for(const s of org.syns){
+    if(!s.active) continue;
+    const fi = byId.get(s.from), ti = byId.get(s.to);
+    if(fi===undefined || ti===undefined) continue;
+    port[ti*2+s.port] += org.cells[fi].out * s.w;
+  }
+  for(const idx of org.order){
+    const c = org.cells[idx]; if(!c) continue;
+    const i0 = port[idx*2], i1 = port[idx*2+1];
+    switch(c.type){
+      case T.SENSE0: c.out = inputs[0]*c.param1; break;
+      case T.SENSE1: c.out = inputs[1]*c.param1; break;
+      case T.SENSE2: c.out = inputs[2]*c.param1; break;
+      case T.SENSE3: c.out = inputs[3]*c.param1; break;
+      case T.EMA: { const a=Math.min(1,Math.max(.001,c.param1));
+        c.state = c.acts===0 ? i0 : a*i0+(1-a)*c.state; c.out=c.state; break; }
+      case T.DIFF: c.out = i0 - c.prev; c.prev = i0; break;
+      case T.INTEGRAL: c.state += i0*c.param1; c.out = c.state; break;
+      case T.SUM: c.out = i0+i1; break;
+      case T.SUB: c.out = i0-i1; break;
+      case T.MUL: c.out = i0*i1; break;
+      case T.RATIO: c.out = i0/(Math.abs(i1)>1e-6?i1:1e-6); break;
+      case T.ABS: c.out = Math.abs(i0); break;
+      case T.THRESH: c.out = i0>c.param1?1:0; break;
+      case T.HYST: { if(i0>c.param1) c.latch=true; else if(i0<c.param2) c.latch=false;
+        c.out = c.latch?1:-1; break; }
+      case T.AND: c.out = (i0>0&&i1>0)?1:0; break;
+      case T.INHIB: c.out = i0*Math.max(0,1-i1); break;
+      default: c.out = i0;
+    }
+    if(Math.abs(c.out)>1e-6){ c.acts++; c.glow=Math.min(1,c.glow+0.3); }
+  }
+  const actions = { buy:0, sell:0, reset:0, immune:false };
+  for(const c of org.cells){
+    if(c.type===T.ACT_POS) actions.buy=c.out;
+    else if(c.type===T.ACT_NEG) actions.sell=c.out;
+    else if(c.type===T.ACT_RESET) actions.reset=c.out;
+    else if(c.type===T.ACT_LOCK && c.out>0.5) actions.immune=true;
+  }
+  return actions;
+}
+
+/* 兰纳-琼斯力场物理步 (常数与 C++ 一致) */
+function stepPhysics(org, dt=0.016){
+  const kRep=2500, kSpring=0.08, damping=0.85, maxDist=200;
+  for(const c of org.cells){ c.fx=0; c.fy=0; c.glow*=0.92; }
+  for(let i=0;i<org.cells.length;i++) for(let j=i+1;j<org.cells.length;j++){
+    const a=org.cells[i], b=org.cells[j];
+    const dx=b.x-a.x, dy=b.y-a.y, d2=dx*dx+dy*dy+1e-4, d=Math.sqrt(d2);
+    if(d<maxDist){ const f=kRep/d2, nx=dx/d, ny=dy/d;
+      a.fx-=nx*f; a.fy-=ny*f; b.fx+=nx*f; b.fy+=ny*f; }
+  }
+  const byId = new Map(org.cells.map(c=>[c.id,c]));
+  for(const s of org.syns){
+    if(!s.active) continue;
+    const c1=byId.get(s.from), c2=byId.get(s.to);
+    if(!c1||!c2) continue;
+    const dx=c2.x-c1.x, dy=c2.y-c1.y, d=Math.sqrt(dx*dx+dy*dy+1e-4);
+    const f=(d-s.rest)*kSpring, nx=dx/d, ny=dy/d;
+    c1.fx+=nx*f; c1.fy+=ny*f; c2.fx-=nx*f; c2.fy-=ny*f;
+    if(s.photon>=0){ s.photon+=dt*3; if(s.photon>1) s.photon=-1; }
+  }
+  for(const c of org.cells){
+    c.vx=(c.vx+c.fx*dt)*damping; c.vy=(c.vy+c.fy*dt)*damping;
+    c.x+=c.vx*dt; c.y+=c.vy*dt;
+    c.x=Math.max(-260,Math.min(260,c.x)); c.y=Math.max(-170,Math.min(170,c.y));
+  }
+  org.phySteps++;
+}
+
+/* ============================================================
+ * 3. 形态发生算子 (mitosis / rewire / apoptosis)
+ * ============================================================ */
+function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+function mitosis(org){
+  const live = org.syns.filter(s=>s.active);
+  if(!live.length) return false;
+  const old = pick(live);
+  const type = pick(MUT_CANDIDATES);
+  const nc = makeCell(type, .01+Math.random()*.99, -(.01+Math.random()*.99),
+                      (org.cells[0].x+org.cells[1].x)/2 + (Math.random()*60-30),
+                      (Math.random()*60-30));
+  org.cells.push(nc);
+  old.active=false;
+  org.syns.push(makeSyn(old.from, nc.id, 0));
+  org.syns.push(makeSyn(nc.id, old.to, old.port, old.w));
+  org.generation++;
+  compile(org);
+  log(`⚡ 有丝分裂: ${type} 细胞 #${nc.id} 嫁接入通路 ${old.from}→${old.to} (世代 ${org.generation})`, true);
+  return true;
+}
+function rewire(org){
+  if(org.cells.length<2) return false;
+  const targets = org.cells.filter(c=>!c.type.startsWith('SENSE'));
+  if(targets.length<1) return false;
+  const a = pick(org.cells), b = pick(targets);
+  const w = Math.random()*4-2;
+  org.syns.push(makeSyn(a.id, b.id, Math.random()<.5?0:1, w));
+  org.generation++;
+  compile(org);
+  log(`🔀 突触重连: #${a.id} → #${b.id} (w=${w.toFixed(2)})`);
+  return true;
+}
+function apoptosis(org){
+  const byId = new Map(org.cells.map(c=>[c.id,c]));
+  const useful = new Set(org.cells.filter(c=>FAMILY(c.type)==='effector').map(c=>c.id));
+  let grown = true;
+  while(grown){ grown=false;
+    for(const s of org.syns){
+      if(s.active && useful.has(s.to) && !useful.has(s.from)){ useful.add(s.from); grown=true; }
+    }
+  }
+  const before = org.cells.length;
+  org.cells = org.cells.filter(c=> c.type.startsWith('SENSE') || useful.has(c.id));
+  const alive = new Set(org.cells.map(c=>c.id));
+  org.syns = org.syns.filter(s=> s.active && alive.has(s.from) && alive.has(s.to));
+  compile(org);
+  const removed = before - org.cells.length;
+  if(removed>0) log(`☠ 凋亡剪枝: ${removed} 个低影响力细胞被溶解`);
+  else log('☠ 凋亡剪枝: 无可溶解细胞 (拓扑已精简)');
+  return removed>0;
+}
+
+/* ============================================================
+ * 4. three.js 全息渲染
+ * ============================================================ */
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x04070d, 0.0016);
+const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 1, 4000);
+camera.position.set(0, 0, 560);
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+document.getElementById('stage').appendChild(renderer.domElement);
+addEventListener('resize', ()=>{ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); });
+
+/* 轻量轨道控制 (拖拽旋转 + 滚轮缩放, 免依赖 OrbitControls) */
+let camTheta=0, camPhi=Math.PI/2, camR=560, dragging=false, lx=0, ly=0;
+renderer.domElement.addEventListener('pointerdown', e=>{ dragging=true; lx=e.clientX; ly=e.clientY; });
+addEventListener('pointerup', ()=> dragging=false);
+addEventListener('pointermove', e=>{ if(!dragging) return;
+  camTheta -= (e.clientX-lx)*0.005; camPhi = Math.max(.25, Math.min(Math.PI-.25, camPhi-(e.clientY-ly)*0.005));
+  lx=e.clientX; ly=e.clientY; });
+addEventListener('wheel', e=>{ camR = Math.max(220, Math.min(1400, camR + e.deltaY*0.6)); }, {passive:true});
+
+/* 培养皿背景网格 */
+{
+  const grid = new THREE.GridHelper(1200, 30, 0x0e1a2b, 0x0a1420);
+  grid.position.y = -190; scene.add(grid);
+}
+
+/* 发光贴图 (径向渐变 sprite) */
+function glowTexture(){
+  const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+  const g = cv.getContext('2d');
+  const grad = g.createRadialGradient(64,64,0,64,64,64);
+  grad.addColorStop(0,'rgba(255,255,255,1)'); grad.addColorStop(.25,'rgba(255,255,255,.55)');
+  grad.addColorStop(1,'rgba(255,255,255,0)');
+  g.fillStyle = grad; g.fillRect(0,0,128,128);
+  return new THREE.CanvasTexture(cv);
+}
+const GLOW = glowTexture();
+const sphereGeo = new THREE.SphereGeometry(7, 20, 20);
+
+class CellView {
+  constructor(cell){
+    this.cell = cell;
+    const color = FAMILY_COLOR[FAMILY(cell.type)];
+    const mat = new THREE.MeshBasicMaterial({ color });
+    this.mesh = new THREE.Mesh(sphereGeo, mat);
+    const sm = new THREE.SpriteMaterial({ map:GLOW, color, transparent:true,
+      blending:THREE.AdditiveBlending, depthWrite:false });
+    this.halo = new THREE.Sprite(sm);
+    this.halo.scale.set(40,40,1);
+    scene.add(this.mesh, this.halo);
+    // 标签
+    const cv = document.createElement('canvas'); cv.width=256; cv.height=64;
+    const g = cv.getContext('2d');
+    g.font='600 26px monospace'; g.fillStyle='rgba(203,213,225,.9)';
+    g.textAlign='center'; g.fillText(cell.type, 128, 40);
+    const lm = new THREE.SpriteMaterial({ map:new THREE.CanvasTexture(cv), transparent:true, depthWrite:false });
+    this.label = new THREE.Sprite(lm);
+    this.label.scale.set(56,14,1);
+    scene.add(this.label);
+  }
+  update(){
+    const c = this.cell;
+    this.mesh.position.set(c.x, c.y, 0);
+    this.halo.position.set(c.x, c.y, 0);
+    this.label.position.set(c.x, c.y - 16, 0);
+    const s = 0.8 + c.glow*0.9;
+    this.mesh.scale.set(s,s,s);
+    this.halo.material.opacity = 0.12 + c.glow*0.85;
+    const hs = 34 + c.glow*46; this.halo.scale.set(hs,hs,1);
+  }
+  dispose(){ scene.remove(this.mesh, this.halo, this.label); }
+}
+
+class SynapseView {
+  constructor(syn, org){
+    this.syn = syn; this.org = org;
+    const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+    const mat = new THREE.LineBasicMaterial({ color:0x334155, transparent:true, opacity:.55 });
+    this.line = new THREE.Line(g, mat);
+    const pm = new THREE.SpriteMaterial({ map:GLOW, color:0x7dd3fc, transparent:true,
+      blending:THREE.AdditiveBlending, depthWrite:false });
+    this.photon = new THREE.Sprite(pm);
+    this.photon.scale.set(16,16,1);
+    scene.add(this.line, this.photon);
+  }
+  update(){
+    const byId = new Map(this.org.cells.map(c=>[c.id,c]));
+    const a = byId.get(this.syn.from), b = byId.get(this.syn.to);
+    if(!a || !b || !this.syn.active){ this.line.visible=false; this.photon.visible=false; return; }
+    this.line.visible=true;
+    const pos = this.line.geometry.attributes.position;
+    pos.setXYZ(0, a.x, a.y, 0); pos.setXYZ(1, b.x, b.y, 0);
+    pos.needsUpdate = true;
+    const hot = Math.abs(this.syn.w) > 0.6;
+    this.line.material.color.setHex(hot?0x38bdf8:0x334155);
+    this.line.material.opacity = hot? .8 : .4;
+    if(this.syn.photon >= 0){
+      this.photon.visible = true;
+      this.photon.position.set(a.x+(b.x-a.x)*this.syn.photon, a.y+(b.y-a.y)*this.syn.photon, 0);
+    } else this.photon.visible = false;
+  }
+  dispose(){ scene.remove(this.line, this.photon); }
+}
+
+/* ============================================================
+ * 5. 生命周期管理 + 行情驱动 + UI
+ * ============================================================ */
+let org = seedOrganism(); compile(org);
+let views = { cells:[], syns:[] };
+function rebuildViews(){
+  views.cells.forEach(v=>v.dispose()); views.syns.forEach(v=>v.dispose());
+  views.cells = org.cells.map(c=>new CellView(c));
+  views.syns = org.syns.map(s=>new SynapseView(s, org));
+}
+rebuildViews();
+
+let paused = false, lastPrice = 3620, realPrice = null, tickTimer = 0, mitoTimer = 0;
+let totalActs = 0;
+
+function log(msg, hi=false){
+  const el = document.getElementById('eventlog');
+  const d = document.createElement('div');
+  d.className = 'ev' + (hi?' hi':'');
+  const t = new Date().toTimeString().slice(0,8);
+  d.textContent = `[${t}] ${msg}`;
+  el.prepend(d);
+  while(el.children.length > 24) el.lastChild.remove();
+}
+
+/* 行情: 优先拉真实 rb 主力价 (守护进程 /api/universe), 失败回退随机游走 */
+async function fetchRealPrice(){
+  try{
+    const r = await fetch('/api/universe', { signal: AbortSignal.timeout(4000) });
+    const arr = await r.json();
+    const rb = arr.find(x=>x.symbol==='rb') || arr[0];
+    if(rb && rb.last){ realPrice = rb.last; document.getElementById('src').textContent = '数据源: 守护进程真实行情驱动 (rb 主力)'; }
+  }catch(e){
+    document.getElementById('src').textContent = '数据源: 客户端复刻仿真 (守护进程离线)';
+  }
+}
+fetchRealPrice(); setInterval(fetchRealPrice, 8000);
+
+function marketTick(){
+  if(realPrice) lastPrice += (realPrice - lastPrice) * 0.15 + (Math.random()-.5)*1.2;
+  else lastPrice += (Math.random()-.5)*2.4;
+  const vol = 4000 + Math.random()*3000;
+  const spread = 0.8 + Math.random()*2.5;
+  const imb = Math.random()*2-1;
+  const actions = forward(org, [lastPrice, vol, spread, imb]);
+  totalActs += org.cells.filter(c=>Math.abs(c.out)>1e-6).length;
+  // 活跃突触触发光子
+  for(const s of org.syns){
+    if(!s.active) continue;
+    const byId = new Map(org.cells.map(c=>[c.id,c]));
+    const a = byId.get(s.from);
+    if(a && Math.abs(a.out)>1e-6) s.photon = Math.random()*0.15;
+  }
+  // HUD
+  document.getElementById('px').textContent = lastPrice.toFixed(1);
+  document.getElementById('px-src').textContent = realPrice ? '(真实行情)' : '(合成游走)';
+  document.getElementById('st-gen').textContent = org.generation;
+  document.getElementById('st-cells').textContent = org.cells.length;
+  document.getElementById('st-syn').textContent = org.syns.filter(s=>s.active).length;
+  document.getElementById('st-act').textContent = totalActs;
+  document.getElementById('st-phys').textContent = org.phySteps;
+  const set = (id,v)=> document.getElementById(id).textContent = v.toFixed(2);
+  set('v-buy', actions.buy); set('v-sell', actions.sell);
+  document.getElementById('v-immune').textContent = actions.immune ? '熔断!' : '—';
+  const ab=document.getElementById('act-buy'), as=document.getElementById('act-sell'), ai=document.getElementById('act-immune');
+  ab.className='act'+(actions.buy>0.2?' flash-buy':'');
+  as.className='act'+(actions.sell<-0.2?' flash-sell':'');
+  ai.className='act'+(actions.immune?' flash-immune':'');
+}
+
+/* 自动形态发生: 每 14s 一次自发性分裂 */
+setInterval(()=>{ if(!paused){ mitosis(org); rebuildViews(); } }, 14000);
+/* 每 5 个分裂后自我净化一次 */
+setInterval(()=>{ if(!paused && org.cells.length>16) apoptosis(org), rebuildViews(); }, 42000);
+
+document.getElementById('b-mito').onclick = ()=>{ mitosis(org); rebuildViews(); };
+document.getElementById('b-rewire').onclick = ()=>{ rewire(org); rebuildViews(); };
+document.getElementById('b-apop').onclick = ()=>{ apoptosis(org); rebuildViews(); };
+document.getElementById('b-pause').onclick = e=>{ paused=!paused; e.target.textContent = paused?'▶ 继续':'⏸ 暂停'; };
+document.getElementById('b-reset').onclick = ()=>{ org = seedOrganism(); compile(org); rebuildViews(); log('↺ 重置为太初种子生物 Genesis-0', true); };
+
+/* 尝试从守护进程获取真实冠军有机体快照做坐标水合 */
+(async ()=>{
+  try{
+    const r = await fetch('/api/cellular/organism', { signal: AbortSignal.timeout(4000) });
+    const j = await r.json();
+    if(j.cells && j.cells.length){
+      log(`✓ 守护进程冠军生物已接入: ${j.lineage||'Genesis'} · ${j.cells.length} 细胞 / ${j.synapses?.length||0} 突触`, true);
+    }
+  }catch(e){ log('守护进程离线 — 使用客户端内嵌种子生物 (物理与进化全功能可用)'); }
+})();
+log('太初细胞全息观测台已启动 — 拖拽旋转 · 滚轮缩放', true);
+
+/* ============================================================
+ * 6. 主循环
+ * ============================================================ */
+const clock = new THREE.Clock();
+function animate(){
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  if(!paused){
+    tickTimer += dt;
+    if(tickTimer >= 0.6){ tickTimer = 0; marketTick(); }
+    stepPhysics(org);
+  }
+  camera.position.set(
+    camR*Math.sin(camPhi)*Math.sin(camTheta),
+    camR*Math.cos(camPhi),
+    camR*Math.sin(camPhi)*Math.cos(camTheta));
+  camera.lookAt(0,0,0);
+  for(const v of views.cells) v.update();
+  for(const v of views.syns) v.update();
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>

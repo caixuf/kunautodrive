@@ -21,6 +21,7 @@
 #include "kun/market/secondary_fetcher.hpp"
 #include "kun/market/market_heartbeat_watchdog.hpp"
 #include "kun/backtest/performance.hpp"
+#include "kun/cellular/ecosystem_biosphere.hpp"
 #include "cJSON.h"
 
 #include <iostream>
@@ -224,6 +225,17 @@ private:
             auto org = kun::CellularOrganism::create_seed_organism(888);
             org.step_force_field_physics(0.016f);
             std::string json = org.to_json();
+            std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " +
+                                   std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;
+            send(client_fd, response.c_str(), response.size(), MSG_NOSIGNAL);
+            close(client_fd);
+            return;
+        }
+
+        if (path == "/api/biosphere/status" || path == "/api/biosphere") {
+            static kun::EcoBiosphere global_biosphere(8, 12345);
+            global_biosphere.step_ecosystem(1.0);
+            std::string json = global_biosphere.to_json();
             std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " +
                                    std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;
             send(client_fd, response.c_str(), response.size(), MSG_NOSIGNAL);
