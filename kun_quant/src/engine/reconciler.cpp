@@ -178,4 +178,55 @@ bool SettlementReconciler::parse_counter_csv(
     return true;
 }
 
+bool SettlementReconciler::validate_balance_invariant(
+    double initial_balance,
+    double current_balance,
+    const std::vector<TradeData>& trades,
+    double& out_calc_balance,
+    double& out_diff
+) {
+    double sum_commission = 0.0;
+    
+    // 计算已实现盈亏需要按照开平仓配对
+    std::unordered_map<std::string, std::vector<TradeData>> open_trades; // symbol -> open trades
+    double total_realized_pnl = 0.0;
+
+    for (const auto& t : trades) {
+        sum_commission += t.commission;
+
+        if (t.offset == Offset::OPEN) {
+            open_trades[t.symbol].push_back(t);
+        } else {
+            // 平仓单计算已实现盈亏 (FIFO)
+            auto& opens = open_trades[t.symbol];
+            double remaining_close = t.volume;
+            while (remaining_close > 0.0 && !opens.empty()) {
+                auto& op = opens.front();
+                double match_vol = std::min(remaining_close, op.volume);
+                double pnl = 0.0;
+                double multiplier = 10.0; // 默认乘数
+
+                if (op.direction == Direction::LONG) {
+                    pnl = (t.price - op.price) * match_vol * multiplier;
+                } else {
+                    pnl = (op.price - t.price) * match_vol * multiplier;
+                }
+                total_realized_pnl += pnl;
+
+                remaining_close -= match_vol;
+                op.volume -= match_vol;
+                if (op.volume <= 1e-6) {
+                    opens.erase(opens.begin());
+                }
+            }
+        }
+    }
+
+    out_calc_balance = initial_balance + total_realized_pnl - sum_commission;
+    out_diff = std::abs(out_calc_balance - current_balance);
+
+    // 允许 0.01 元的微小浮点误差
+    return (out_diff < 0.01);
+}
+
 } // namespace kun

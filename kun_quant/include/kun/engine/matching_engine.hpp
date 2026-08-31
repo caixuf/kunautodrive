@@ -23,6 +23,7 @@ public:
     void set_callbacks(OrderCallback on_order, TradeCallback on_trade);
     void set_slippage(double slippage_points) { slippage_points_ = slippage_points; }
     void set_commission_ratio(double ratio) { commission_ratio_ = ratio; }
+    void set_market_impact(double impact_coeff) { impact_coeff_ = impact_coeff; }
     void set_symbol_multiplier(const std::string& symbol, double multiplier) {
         std::lock_guard<std::mutex> lock(mutex_);
         multipliers_[symbol] = multiplier;
@@ -31,6 +32,9 @@ public:
         auto it = multipliers_.find(symbol);
         return (it != multipliers_.end()) ? it->second : 10.0;
     }
+
+    // 真实微观市场冲击成本计算模型: Delta_P = gamma * Price * sqrt(V_order / V_avail)
+    double calculate_market_impact(double volume, double available_depth, double base_price) const;
 
     // 接收订单请求
     uint64_t submit_order(const OrderRequest& req);
@@ -55,6 +59,7 @@ private:
 
     double slippage_points_{0.0};
     double commission_ratio_{0.0001};
+    double impact_coeff_{0.0005}; // 真实冲击成本系数 (0.05%)
 
     OrderCallback on_order_cb_;
     TradeCallback on_trade_cb_;

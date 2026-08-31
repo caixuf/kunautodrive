@@ -842,6 +842,16 @@ target_include_directories(test_flow_cellular_evolution PRIVATE kun_quant/includ
 target_compile_definitions(test_flow_cellular_evolution PRIVATE FLOWCORO_INTEGRATION)
 add_test(NAME test_flow_cellular_evolution COMMAND test_flow_cellular_evolution)
 
+add_executable(test_quant_campaign3_closed_loop tests/test_quant_campaign3_closed_loop.cpp)
+if(WIN32)
+    target_link_libraries(test_quant_campaign3_closed_loop kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
+else()
+    target_link_libraries(test_quant_campaign3_closed_loop kun_quant flowengine_core flowcoro_headers flowcoro_net scheduler_cpp pthread sqlite3)
+endif()
+target_include_directories(test_quant_campaign3_closed_loop PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
+target_compile_definitions(test_quant_campaign3_closed_loop PRIVATE FLOWCORO_INTEGRATION)
+add_test(NAME test_quant_campaign3_closed_loop COMMAND test_quant_campaign3_closed_loop)
+
 # ── Config-driven Launcher ──
 # 读 config/pipeline.json → 按顺序 fork+exec 各节点进程
 # 是 e2e_demo --multi 的解耦升级版: 编排逻辑完全在配置文件里

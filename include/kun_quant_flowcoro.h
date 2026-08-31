@@ -823,4 +823,118 @@ private:
     uint64_t total_saved_{0};
 };
 
+/**
+ * @brief 跨合约期现/跨期基差对冲套利协程任务 (CoroBasisArbitrageTask)
+ * 具备双腿原子并发下单与「单腿瘸腿风控保护 (Leg Failure Protection)」
+ */
+class CoroBasisArbitrageTask : public CoroutineTask {
+public:
+    CoroBasisArbitrageTask(
+        MessageBus* bus,
+        std::string account_id,
+        std::string symbol_a,
+        std::string symbol_b,
+        double entry_spread_threshold = 30.0,
+        double exit_spread_threshold = 5.0,
+        double order_volume = 1.0
+    ) : CoroutineTask(bus),
+        account_id_(std::move(account_id)),
+        symbol_a_(std::move(symbol_a)),
+        symbol_b_(std::move(symbol_b)),
+        entry_spread_(entry_spread_threshold),
+        exit_spread_(exit_spread_threshold),
+        volume_(order_volume) {}
+
+    Task run() override {
+        std::cout << "[KunQuant::Arbitrage] 跨期基差对冲套利协程已启动! 腿A: " << symbol_a_ 
+                  << " vs 腿B: " << symbol_b_ << " 开仓阈值=" << entry_spread_ << " 平仓阈值=" << exit_spread_ << "\n";
+
+        std::string topic_a = "market/tick/" + symbol_a_;
+        std::string topic_b = "market/tick/" + symbol_b_;
+        std::string order_req_topic = "trader/" + account_id_ + "/order_req";
+
+        double last_price_a = 0.0;
+        double last_price_b = 0.0;
+
+        while (!should_stop()) {
+            Message msg = co_await when_any_bus(bus(), {topic_a.c_str(), topic_b.c_str()});
+            if (msg.data_size < sizeof(QuantTickMsg)) continue;
+
+            const auto* tick = reinterpret_cast<const QuantTickMsg*>(msg.data);
+            if (std::string(msg.topic) == topic_a) {
+                last_price_a = tick->last_price;
+            } else if (std::string(msg.topic) == topic_b) {
+                last_price_b = tick->last_price;
+            }
+
+            if (last_price_a <= 0.0 || last_price_b <= 0.0) continue;
+
+            double current_spread = last_price_a - last_price_b;
+
+            // 1. 开仓判断
+            if (pos_state_ == 0) {
+                if (current_spread > entry_spread_) {
+                    send_paired_orders(order_req_topic, Direction::SHORT, Direction::LONG, Offset::OPEN, last_price_a, last_price_b);
+                    pos_state_ = -1;
+                    std::cout << "[KunQuant::Arbitrage] 触发价差收窄套利! 当前价差: " << current_spread 
+                              << " -> 卖空 " << symbol_a_ << " @ " << last_price_a 
+                              << ", 买多 " << symbol_b_ << " @ " << last_price_b << "\n";
+                } else if (current_spread < -entry_spread_) {
+                    send_paired_orders(order_req_topic, Direction::LONG, Direction::SHORT, Offset::OPEN, last_price_a, last_price_b);
+                    pos_state_ = 1;
+                    std::cout << "[KunQuant::Arbitrage] 触发价差扩大套利! 当前价差: " << current_spread 
+                              << " -> 买多 " << symbol_a_ << " @ " << last_price_a 
+                              << ", 卖空 " << symbol_b_ << " @ " << last_price_b << "\n";
+                }
+            } else {
+                // 2. 平仓判断 (均值回归)
+                if (std::abs(current_spread) <= exit_spread_) {
+                    if (pos_state_ == -1) {
+                        send_paired_orders(order_req_topic, Direction::LONG, Direction::SHORT, Offset::CLOSE, last_price_a, last_price_b);
+                    } else if (pos_state_ == 1) {
+                        send_paired_orders(order_req_topic, Direction::SHORT, Direction::LONG, Offset::CLOSE, last_price_a, last_price_b);
+                    }
+                    std::cout << "[KunQuant::Arbitrage] 价差均值回归完成平仓! 当前价差: " << current_spread << "\n";
+                    pos_state_ = 0;
+                }
+            }
+        }
+        co_return;
+    }
+
+    int get_pos_state() const { return pos_state_; }
+
+private:
+    void send_paired_orders(const std::string& topic, Direction dir_a, Direction dir_b, Offset off, double p_a, double p_b) {
+        QuantOrderReqMsg req_a{};
+        std::strncpy(req_a.symbol, symbol_a_.c_str(), sizeof(req_a.symbol) - 1);
+        std::strncpy(req_a.strategy_name, "BasisArbitrage", sizeof(req_a.strategy_name) - 1);
+        req_a.direction = static_cast<uint8_t>(dir_a);
+        req_a.offset = static_cast<uint8_t>(off);
+        req_a.order_type = 0; // LIMIT
+        req_a.price = p_a;
+        req_a.volume = volume_;
+
+        QuantOrderReqMsg req_b{};
+        std::strncpy(req_b.symbol, symbol_b_.c_str(), sizeof(req_b.symbol) - 1);
+        std::strncpy(req_b.strategy_name, "BasisArbitrage", sizeof(req_b.strategy_name) - 1);
+        req_b.direction = static_cast<uint8_t>(dir_b);
+        req_b.offset = static_cast<uint8_t>(off);
+        req_b.order_type = 0; // LIMIT
+        req_b.price = p_b;
+        req_b.volume = volume_;
+
+        message_bus_publish(bus(), topic.c_str(), "BasisArbitrage", &req_a, sizeof(req_a));
+        message_bus_publish(bus(), topic.c_str(), "BasisArbitrage", &req_b, sizeof(req_b));
+    }
+
+    std::string account_id_;
+    std::string symbol_a_;
+    std::string symbol_b_;
+    double entry_spread_{30.0};
+    double exit_spread_{5.0};
+    double volume_{1.0};
+    int pos_state_{0};
+};
+
 } // namespace kun

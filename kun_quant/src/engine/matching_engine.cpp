@@ -1,6 +1,7 @@
 #include "kun/engine/matching_engine.hpp"
 #include "kun/core/logger.hpp"
 #include <algorithm>
+#include <cmath>
 
 namespace kun {
 
@@ -64,6 +65,14 @@ bool MatchingEngine::cancel_order(uint64_t order_id) {
     return false;
 }
 
+double MatchingEngine::calculate_market_impact(double volume, double available_depth, double base_price) const {
+    if (impact_coeff_ <= 0.0 || volume <= 0.0) return 0.0;
+    double depth = std::max(1.0, available_depth);
+    // 平方根市场冲击模型: Delta_P = gamma * base_price * sqrt(volume / depth)
+    double impact = impact_coeff_ * base_price * std::sqrt(volume / depth);
+    return impact;
+}
+
 void MatchingEngine::match_tick(const TickData& tick) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (active_orders_.empty()) return;
@@ -125,11 +134,12 @@ void MatchingEngine::match_tick(const TickData& tick) {
                 continue;
             }
 
-            // 加入滑点模拟
+            // 加入真实固定滑点 + 动态市场冲击成本 (Market Impact)
+            double impact = calculate_market_impact(fill_vol, available_depth, fill_price);
             if (order.direction == Direction::LONG) {
-                fill_price += slippage_points_;
+                fill_price += (slippage_points_ + impact);
             } else {
-                fill_price -= slippage_points_;
+                fill_price -= (slippage_points_ + impact);
             }
 
             execute_fill(order, fill_price, fill_vol, tick.timestamp_us, tick.datetime_str);

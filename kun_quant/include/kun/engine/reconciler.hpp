@@ -70,6 +70,15 @@ public:
         std::vector<SettlementTradeRecord>& out_trades,
         std::vector<SettlementPositionRecord>& out_positions
     );
+
+    // 严格会计资金恒等式穿透检验: CurrentBalance == InitialBalance + Sum(RealizedPnL) - Sum(Commission)
+    static bool validate_balance_invariant(
+        double initial_balance,
+        double current_balance,
+        const std::vector<TradeData>& trades,
+        double& out_calc_balance,
+        double& out_diff
+    );
 };
 
 } // namespace kun
