@@ -1,4 +1,5 @@
 #include "kun/market/market_fusion_node.hpp"
+#include "kun/market/fusion_operator.hpp"
 #include <algorithm>
 #include <iostream>
 #include <cstring>
@@ -22,7 +23,6 @@ void MarketFusionNode::start() {
     running_ = true;
 
     // 订阅多源原始行情主题 (market/source/...)
-    // 支持通配前缀订阅
     message_bus_subscribe(bus_, "market/source/sina/rb2405", on_source_bus_msg, this);
     message_bus_subscribe(bus_, "market/source/eastmoney/rb2405", on_source_bus_msg, this);
     message_bus_subscribe(bus_, "market/source/ctp_sim/rb2405", on_source_bus_msg, this);
@@ -42,7 +42,6 @@ void MarketFusionNode::on_source_bus_msg(const Message* msg, void* user_data) {
     auto* self = static_cast<MarketFusionNode*>(user_data);
     if (!msg || !self || msg->data_size < sizeof(QuantTickMsg)) return;
 
-    // 解析 topic: "market/source/{source_name}/{symbol}"
     std::string topic(msg->topic);
     size_t first = topic.find('/');
     size_t second = topic.find('/', first + 1);
@@ -69,28 +68,14 @@ void MarketFusionNode::on_source_tick(const std::string& source_name, const Quan
     std::strncpy(telem.symbol, symbol.c_str(), sizeof(telem.symbol) - 1);
     telem.timestamp_us = now_us;
 
-    // 1. 离群值/异常假刺针检测 (Outlier Filtering)
-    auto& p_win = price_windows_[symbol];
-    bool is_outlier = false;
-
-    if (p_win.size() >= 3) {
-        std::vector<double> sorted(p_win.begin(), p_win.end());
-        std::sort(sorted.begin(), sorted.end());
-        double median = sorted[sorted.size() / 2];
-
-        double dev_pct = std::abs(tick.last_price - median) / median;
-        if (dev_pct > outlier_pct_threshold_) {
-            is_outlier = true;
-            telem.outliers_rejected++;
-            std::cout << "[MarketFusion] 触发异常刺针过滤! 源: " << source_name
-                      << " 标的: " << symbol << " 异常价=" << tick.last_price 
-                      << " 基准中值=" << median << " 偏离度=" << (dev_pct * 100.0) << "%\n";
-        }
+    // 1. 离群值/异常假刺针检测 (复用有状态通用算子)
+    if (fusion_ops_.find(symbol) == fusion_ops_.end()) {
+        fusion_ops_.emplace(symbol, MarketFusionOperator(outlier_pct_threshold_));
     }
-
-    if (!is_outlier) {
-        p_win.push_back(tick.last_price);
-        if (p_win.size() > 30) p_win.pop_front();
+    auto& op = fusion_ops_.at(symbol);
+    bool is_outlier = op.check_and_record_price(tick.last_price);
+    if (is_outlier) {
+        telem.outliers_rejected++;
     }
 
     // 2. 记录该数据源最新观测
@@ -105,60 +90,32 @@ void MarketFusionNode::fuse_and_publish(const std::string& symbol) {
     const auto& obs_map = observations_[symbol];
     if (obs_map.empty()) return;
 
-    double sum_weighted_price = 0.0;
-    double sum_weight = 0.0;
-    double best_bid = 0.0;
-    double best_ask = 9999999.0;
-    double total_vol = 0.0;
-    double total_oi = 0.0;
-    uint32_t valid_sources = 0;
-
-    for (const auto& [name, obs] : obs_map) {
-        if (obs.is_outlier) continue;
-
-        sum_weighted_price += obs.tick.last_price * obs.weight;
-        sum_weight += obs.weight;
-        total_vol = std::max(total_vol, obs.tick.volume);
-        total_oi = std::max(total_oi, obs.tick.open_interest);
-
-        if (obs.tick.bid_price1 > best_bid) {
-            best_bid = obs.tick.bid_price1;
-        }
-        if (obs.tick.ask_price1 > 0.0 && obs.tick.ask_price1 < best_ask) {
-            best_ask = obs.tick.ask_price1;
-        }
-
-        valid_sources++;
+    std::unordered_map<std::string, MarketObservation> standard_obs;
+    for (const auto& [k, v] : obs_map) {
+        standard_obs[k] = {v.source_name, v.tick, v.arrival_time_us, v.weight, v.is_outlier};
     }
 
-    if (sum_weight <= 0.0 || valid_sources == 0) return;
-
-    double fused_price = sum_weighted_price / sum_weight;
-    if (best_ask >= 9999990.0) best_ask = fused_price + 1.0;
-    if (best_bid <= 0.0) best_bid = fused_price - 1.0;
-
-    // 构造全局融合真值 QuantTickMsg
+    if (fusion_ops_.find(symbol) == fusion_ops_.end()) {
+        fusion_ops_.emplace(symbol, MarketFusionOperator(outlier_pct_threshold_));
+    }
+    auto& op = fusion_ops_.at(symbol);
     QuantTickMsg fused_tick{};
-    std::strncpy(fused_tick.symbol, symbol.c_str(), sizeof(fused_tick.symbol) - 1);
-    std::strncpy(fused_tick.exchange, "SHFE", sizeof(fused_tick.exchange) - 1);
-    fused_tick.timestamp_us = telemetries_[symbol].timestamp_us;
-    fused_tick.last_price = fused_price;
-    fused_tick.volume = total_vol;
-    fused_tick.open_interest = total_oi;
-    fused_tick.bid_price1 = best_bid;
-    fused_tick.bid_volume1 = 100.0;
-    fused_tick.ask_price1 = best_ask;
-    fused_tick.ask_volume1 = 100.0;
+    uint32_t valid_sources = 0;
+    double confidence = 0.0;
+
+    if (!op.compute_fused_tick(symbol, standard_obs, fused_tick, valid_sources, confidence)) {
+        return;
+    }
 
     fused_ticks_[symbol] = fused_tick;
 
     // 更新诊断遥测指标
     auto& telem = telemetries_[symbol];
-    telem.fused_last_price = fused_price;
-    telem.fused_bid1 = best_bid;
-    telem.fused_ask1 = best_ask;
+    telem.fused_last_price = fused_tick.last_price;
+    telem.fused_bid1 = fused_tick.bid_price1;
+    telem.fused_ask1 = fused_tick.ask_price1;
     telem.active_sources = valid_sources;
-    telem.confidence = (valid_sources >= 2) ? 0.98 : 0.75;
+    telem.confidence = confidence;
 
     // 4. 广播至核心行情总线 Topic (market/tick/{symbol})
     std::string topic = "market/tick/" + symbol;

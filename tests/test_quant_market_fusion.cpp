@@ -9,6 +9,10 @@
 #include "kun/core/types.hpp"
 #include "kun/market/market_fusion_node.hpp"
 #include "kun/market/sina_fetcher.hpp"
+#include "kun/market/secondary_fetcher.hpp"
+#include "kun/market/market_heartbeat_watchdog.hpp"
+#include "kun/engine/risk_manager.hpp"
+#include "kun/engine/position_manager.hpp"
 #include "message_bus.h"
 
 using namespace kun;
@@ -141,6 +145,98 @@ void test_live_sina_fetcher() {
     std::cout << "  -> 新浪真实行情抓取与 POD 解析测试通过!\n";
 }
 
+void test_secondary_market_fetcher() {
+    std::cout << "[Test 4] 运行第二备用行情源 (SecondaryMarketFetcher) 采集与总线发布测试...\n";
+    MessageBus* bus = message_bus_create("test_bus_sec");
+    
+    static std::atomic<bool> received_sec{false};
+    static QuantTickMsg sec_tick{};
+
+    message_bus_subscribe(bus, "market/source/secondary/rb2405", [](const Message* msg, void* /*ud*/) {
+        if (msg && msg->data_size >= sizeof(QuantTickMsg)) {
+            sec_tick = *reinterpret_cast<const QuantTickMsg*>(msg->data);
+            received_sec = true;
+        }
+    }, nullptr);
+
+    SecondaryMarketFetcher sec_fetcher(bus, {{"rb2405", "nf_RB0"}});
+    sec_fetcher.inject_raw_tick("rb2405", 3625.0, 50000.0, 120000.0, 3624.0, 3626.0, 10.0, 15.0);
+
+    for (int i = 0; i < 200 && !received_sec.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+
+    assert(received_sec.load());
+    assert(std::abs(sec_tick.last_price - 3625.0) < 1e-4);
+    assert(std::abs(sec_tick.bid_price1 - 3624.0) < 1e-4);
+    assert(std::abs(sec_tick.ask_price1 - 3626.0) < 1e-4);
+
+    message_bus_destroy(bus);
+    std::cout << "  -> 第二备用行情源接入与广播测试通过!\n";
+}
+
+void test_market_heartbeat_watchdog_and_stale_freeze() {
+    std::cout << "[Test 5] 运行数据断流看门狗 (MarketHeartbeatWatchdog) 与风控开仓冻结测试...\n";
+    
+    // 1. 初始化看门狗 (门限设为 50ms 方便单测)
+    MarketHeartbeatWatchdog watchdog(50);
+    uint64_t t0 = 1000000000ULL; // 基准时间微秒
+    watchdog.on_tick_received("rb2405", t0);
+
+    // 刚刚收到行情时，状态健康
+    assert(watchdog.is_symbol_healthy("rb2405", t0 + 20000)); // +20ms < 50ms
+    assert(!watchdog.is_symbol_healthy("rb2405", t0 + 80000)); // +80ms > 50ms -> 断流
+
+    // 2. 挂载到事前风控引擎进行开仓硬拦截测试
+    PositionManager pm(1000000.0);
+    RiskManager rm(pm);
+    rm.set_market_watchdog(&watchdog);
+
+    OrderRequest open_req;
+    open_req.symbol = "rb2405";
+    open_req.direction = Direction::LONG;
+    open_req.offset = Offset::OPEN;
+    open_req.price = 3500.0;
+    open_req.volume = 1.0;
+
+    // 当行情健康时 (当前时间模拟为 t0 + 10ms)
+    // 默认 check_order 取系统当前时间，这里注入健康心跳
+    watchdog.on_tick_received("rb2405", 0); // 注入当前真实时间
+    auto [passed_healthy, reason_healthy] = rm.check_order(open_req, {});
+    assert(passed_healthy);
+
+    // 模拟行情断流: 强行将最后一次 tick 时间设置为 10 秒前
+    uint64_t old_time_us = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()
+        ).count() - 10000000ULL
+    );
+    watchdog.on_tick_received("rb2405", old_time_us);
+
+    auto [passed_stale, reason_stale] = rm.check_order(open_req, {});
+    assert(!passed_stale);
+    assert(reason_stale.find("MARKET_STALE_FREEZE") != std::string::npos);
+
+    // 行情断流期间，平仓单依然允许执行（防止无法止损自救）
+    OrderRequest close_req;
+    close_req.symbol = "rb2405";
+    close_req.direction = Direction::SHORT;
+    close_req.offset = Offset::CLOSE;
+    close_req.price = 3500.0;
+    close_req.volume = 1.0;
+    // (空仓时被持仓不足拦截，而非被断流冻结拦截)
+    auto [close_passed, close_reason] = rm.check_order(close_req, {});
+    assert(!close_passed);
+    assert(close_reason.find("exceeds current position") != std::string::npos);
+
+    // 行情恢复正常，自动解除冻结
+    watchdog.on_tick_received("rb2405", 0);
+    auto [passed_recovered, reason_recovered] = rm.check_order(open_req, {});
+    assert(passed_recovered);
+
+    std::cout << "  -> 行情断流看门狗自动冻结开仓与自愈测试 100% 通过!\n";
+}
+
 int main() {
     std::cout << "\n=========================================================\n";
     std::cout << "       KunQuant 多源数据采集与行情融合单测集              \n";
@@ -149,9 +245,11 @@ int main() {
     test_multi_source_weighted_fusion();
     test_bad_tick_outlier_filtering();
     test_live_sina_fetcher();
+    test_secondary_market_fetcher();
+    test_market_heartbeat_watchdog_and_stale_freeze();
 
     std::cout << "\n=========================================================\n";
-    std::cout << "       全部行情采集与融合单测 100% 断言通过!             \n";
+    std::cout << "       全部 5 组行情采集、融合与断流防护单测 100% 通过!    \n";
     std::cout << "=========================================================\n\n";
     return 0;
 }

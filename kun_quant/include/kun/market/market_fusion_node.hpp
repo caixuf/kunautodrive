@@ -2,6 +2,7 @@
 
 #include "kun/core/types.hpp"
 #include "message_bus.h"
+#include "kun/market/fusion_operator.hpp"
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -79,8 +80,8 @@ private:
     
     // symbol -> (source_name -> latest observation)
     std::unordered_map<std::string, std::unordered_map<std::string, SourceTickObservation>> observations_;
-    // symbol -> rolling median price history (用于中值滤波基准)
-    std::unordered_map<std::string, std::deque<double>> price_windows_;
+    // symbol -> persistent fusion operator (有状态刺针过滤算子)
+    std::unordered_map<std::string, MarketFusionOperator> fusion_ops_;
     // symbol -> latest fused tick
     std::unordered_map<std::string, QuantTickMsg> fused_ticks_;
     // symbol -> telemetry stats
