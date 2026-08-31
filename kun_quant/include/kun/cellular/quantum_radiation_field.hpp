@@ -129,6 +129,7 @@ public:
 
             if (dist_prob(rng_) < tunneling_prob) {
                 perform_quantum_tunneling(org);
+                perform_morphogenetic_differentiation(org);
                 recent_events_.push_back({
                     org.organism_id, 0, x, y, z, background_intensity, "QUANTUM_TUNNELING"
                 });
@@ -147,6 +148,9 @@ public:
 
             if (dist_sq < 36.0f) { // 命中 6 单位半径散射截面
                 perform_hard_mutation(org);
+                if (ray.energy > 70.0f && stagnation_ticks > 5) {
+                    perform_morphogenetic_differentiation(org);
+                }
                 recent_events_.push_back({
                     org.organism_id, 0, x, y, z, ray.energy, "HARD_MUTATION"
                 });
@@ -247,14 +251,13 @@ private:
         size_t idx = dist_cell(rng_);
         auto& target = org.cells[idx];
 
-        // 若不是受体感知细胞，突变为其他代谢、门控或效应原语 (包含免疫锁与防御复位)
+        // 若不是受体感知细胞，突变为常规代谢、算术或基础门控原语 (绝不直接凭空撒入特化免疫效应器)
         if (target.type != CellType::SENSE_RAW_INPUT_0 && target.type != CellType::SENSE_RAW_INPUT_1) {
             static const CellType pool[] = {
                 CellType::OP_EMA, CellType::OP_DIFF, CellType::OP_INTEGRAL,
-                CellType::OP_SUB, CellType::GATE_HYSTERESIS, CellType::GATE_INHIBIT,
-                CellType::ACT_IMMUNE_BLOCK, CellType::ACT_DEFENSIVE_RESET
+                CellType::OP_SUB, CellType::OP_SUM, CellType::GATE_HYSTERESIS, CellType::GATE_INHIBIT
             };
-            target.type = pool[rng_() % 8];
+            target.type = pool[rng_() % 7];
         }
 
         // 突触断裂与重连 (Rewiring)
@@ -281,6 +284,34 @@ private:
             org.synapses.push_back({org.cells[0].id, new_id, 0, 1.2, true, 60.0f, -1.0f});
         }
         org.compile();
+    }
+
+    /**
+     * @brief 形态发生细胞特化 (Morphogenetic Epigenetic Differentiation)
+     * 当机体具备门控结构且承受持续外部逆向应激时，门控下游分化出免疫自锁/防御熔断效应器
+     */
+    void perform_morphogenetic_differentiation(CellularOrganism& org) {
+        for (const auto& c : org.cells) {
+            if (c.type == CellType::ACT_IMMUNE_BLOCK) return; // 已存在则无需重复分化
+        }
+        // 寻找机体内的门控前驱 (GATE_HYSTERESIS 或 GATE_INHIBIT)
+        int gate_idx = -1;
+        for (size_t i = 0; i < org.cells.size(); ++i) {
+            if (org.cells[i].type == CellType::GATE_HYSTERESIS || org.cells[i].type == CellType::GATE_INHIBIT) {
+                gate_idx = static_cast<int>(i);
+                break;
+            }
+        }
+        if (gate_idx >= 0) {
+            uint16_t immune_id = static_cast<uint16_t>(org.cells.size() + 200);
+            Cell immune_cell{immune_id, CellType::ACT_IMMUNE_BLOCK, 1.0, 0.0};
+            immune_cell.x = org.cells[gate_idx].x + 2.0f;
+            immune_cell.y = org.cells[gate_idx].y;
+            immune_cell.z = org.cells[gate_idx].z;
+            org.cells.push_back(immune_cell);
+            org.synapses.push_back({org.cells[gate_idx].id, immune_id, 0, 1.0, true, 60.0f, -1.0f});
+            org.compile();
+        }
     }
 
     std::mt19937 rng_;

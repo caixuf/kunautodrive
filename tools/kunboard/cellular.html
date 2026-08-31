@@ -61,7 +61,7 @@
 <div class="panel" id="bio">
   <h2>宏观生态圈 <span id="bio-step" style="color:#64748b;font-size:10px"></span></h2>
   <div class="kv"><span>香农多样性 H</span><b id="bio-shannon">--</b></div>
-  <div class="kv"><span>☢ 辐射诱变事件</span><b id="bio-rad-ev">0</b></div>
+  <div class="kv"><span>[RAD] 辐射诱变事件</span><b id="bio-rad-ev">0</b></div>
   <div class="kv"><span>活跃宇宙射线</span><b id="bio-rays">0</b></div>
   <div class="kv bio-niche"><i class="dot" style="background:#4ade80"></i><span style="flex:1">生产者 做市商</span><b id="bio-prod">0</b></div>
   <div class="kv bio-niche"><i class="dot" style="background:#38bdf8"></i><span style="flex:1">初级消费者 趋势派</span><b id="bio-herb">0</b></div>
@@ -82,13 +82,13 @@
 <div class="panel" id="pricebar">驱动行情 I0 (价格): <b id="px">--</b> <span id="px-src"></span></div>
 
 <div class="panel" id="ops">
-  <button id="b-mito">⚡ 有丝分裂</button>
-  <button id="b-rewire">🔀 突触重连</button>
-  <button id="b-apop">☠ 凋亡剪枝</button>
-  <button id="b-bio">🌐 生态圈</button>
-  <button id="b-rad">☢ 辐射场</button>
-  <button id="b-pause">⏸ 暂停</button>
-  <button id="b-reset">↺ 重置</button>
+  <button id="b-mito">[MITO] 有丝分裂</button>
+  <button id="b-rewire">[REWIRE] 突触重连</button>
+  <button id="b-apop">[APOP] 凋亡剪枝</button>
+  <button id="b-bio">[BIO] 生态圈</button>
+  <button id="b-rad">[RAD] 辐射场</button>
+  <button id="b-pause">[PAUSE] 暂停</button>
+  <button id="b-reset">[RESET] 重置</button>
 </div>
 
 <script>
@@ -581,9 +581,9 @@ async function pollBiosphere(){
     document.getElementById('bio-pred').textContent = j.niche_counts?.predators ?? 0;
     document.getElementById('bio-deco').textContent = j.niche_counts?.decomposers ?? 0;
     document.getElementById('bio-biomes').innerHTML = (j.biomes||[]).map(b=>{
-      const emo = b.climate.startsWith('Spring')?'🌸':b.climate.startsWith('Summer')?'⚡':b.climate.startsWith('Autumn')?'🍂':'❄️';
+      const tag = b.climate.startsWith('Spring')?'[SPRING]':b.climate.startsWith('Summer')?'[SUMMER]':b.climate.startsWith('Autumn')?'[AUTUMN]':'[WINTER]';
       const pct = Math.min(100, b.nutrient/12);
-      return `<div>${emo} ${b.name.replace('Biome-','')} · ${b.climate.split('(')[1]||''}
+      return `<div><span style="color:var(--cyan);font-weight:bold">${tag}</span> ${b.name.replace('Biome-','')} · ${b.climate.split('(')[1]||''}
         <div style="height:3px;background:#1e293b;border-radius:2px;margin-top:2px">
           <div style="width:${pct}%;height:100%;background:#22d3ee;border-radius:2px"></div></div></div>`;
     }).join('');
@@ -694,7 +694,7 @@ function pollRadiation(rad){
   if(rad.wave_sources?.length) setWaveUniforms(rad.wave_sources);
   document.getElementById('bio-rad-ev').textContent = rad.recent_events_count ?? 0;
   if((rad.recent_events_count ?? 0) > radPrevEvents){
-    log(`☢ 辐射诱变 ×${rad.recent_events_count - radPrevEvents} (软电离/硬突变/量子隧穿)`);
+    log(`[RAD_EVENT] 辐射诱变 ×${rad.recent_events_count - radPrevEvents} (软电离/硬突变/量子隧穿)`);
   }
   radPrevEvents = rad.recent_events_count ?? 0;
   const alive = new Set();

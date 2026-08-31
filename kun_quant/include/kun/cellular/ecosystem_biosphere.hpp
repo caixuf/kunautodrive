@@ -133,18 +133,25 @@ public:
 
     /**
      * @brief 驱动生态圈一轮完整的生命周期迭代
-     * 包含: 代谢消耗 -> 捕食与流动性共生 -> 气候季相变迁 -> 洛特卡-沃尔泰拉动态平衡 -> 凋亡分解与重注
+     * 包含: 代谢消耗 -> 市场盈亏与环境反馈 -> 捕食与流动性共生 -> 气候季相变迁 -> 洛特卡-沃尔泰拉动态平衡 -> 凋亡分解与重注
      */
-    void step_ecosystem(double dt = 1.0) {
+    void step_ecosystem(double dt = 1.0, double market_volatility = 0.15, double market_trend = 0.0, double market_pnl = 0.0) {
         std::uniform_real_distribution<float> dist_pos(-50.0f, 50.0f);
         recent_transfers_.clear();
 
-        // 1. 各个体前向计算与生命代谢
+        // 1. 各个体前向计算与生命代谢 (连通真实市场反馈)
         for (auto& agent : agents_) {
             if (!agent.is_alive) continue;
 
             agent.age_ticks++;
             agent.energy -= (agent.metabolic_rate * dt);
+
+            // 市场损益反馈机制: 个体若有正向收益则补充生命能量，亏损则加剧代谢
+            if (market_pnl > 0.0 && agent.niche == SpeciesNiche::HERBIVORE && market_trend > 0.0) {
+                agent.energy += std::min(10.0, market_pnl * 0.05);
+            } else if (market_pnl < 0.0 && agent.niche == SpeciesNiche::PREDATOR) {
+                agent.energy += std::min(10.0, -market_pnl * 0.05); // 掠食者在极端风险中获利
+            }
 
             // 物理力场模拟与位置更新
             agent.organism.step_force_field_physics(static_cast<float>(dt * 0.016));
@@ -171,13 +178,21 @@ public:
         // 3. 模拟物种间捕食与共生交互 (Lotka-Volterra 启发式)
         simulate_trophic_interactions();
 
-        // 4. 气候季相轮替 (根据时间演进或外部市场波动)
+        // 4. 气候季相与生境状态变迁 (动态响应外部市场波动与时间流逝)
         step_count_++;
-        if (step_count_ % 200 == 0) {
+        if (market_volatility > 0.35) {
+            for (auto& b : biomes_) b->set_climate(BiomeClimate::SUMMER_STORM);
+        } else if (std::abs(market_trend) > 0.05) {
+            for (auto& b : biomes_) b->set_climate(BiomeClimate::SPRING_TREND);
+        } else if (market_volatility < 0.08) {
+            for (auto& b : biomes_) b->set_climate(BiomeClimate::AUTUMN_DROUGHT);
+        } else if (market_pnl < -200.0) {
+            for (auto& b : biomes_) b->set_climate(BiomeClimate::WINTER_FREEZE);
+        } else if (step_count_ % 200 == 0) {
             rotate_biome_climates();
         }
 
-        // 5. 物种多样性与繁殖 (保持生态位不灭绝)
+        // 5. 物种多样性与繁殖 (保持生态位不灭绝, 真实继承父代基因)
         maintain_niche_equilibrium();
     }
 
@@ -234,7 +249,6 @@ public:
         ss << "{\n";
         ss << "  \"step\": " << step_count_ << ",\n";
         ss << "  \"shannon_diversity\": " << calculate_shannon_diversity() << ",\n";
-        ss << "  \"radiation\": " << radiation_field_.to_json() << ",\n";
 
         // 生境信息
         ss << "  \"biomes\": [\n";
@@ -246,7 +260,7 @@ public:
         }
         ss << "  ],\n";
 
-        // 辐射场状态
+        // 辐射场状态 (单一唯一键)
         ss << "  \"radiation\": " << radiation_field_.to_json() << ",\n";
 
         // 物种统计
@@ -377,37 +391,84 @@ private:
     void maintain_niche_equilibrium() {
         auto counts = get_niche_population();
         std::uniform_real_distribution<float> dist_pos(-40.0f, 40.0f);
+        std::normal_distribution<double> dist_mutate(0.0, 0.12);
 
         for (int niche_int = 0; niche_int < 4; ++niche_int) {
             auto niche = static_cast<SpeciesNiche>(niche_int);
-            // 若某生态位存活少于 3 个，自发利用环境公有养分池繁殖新生代
+            // 若某生态位存活少于 3 个，利用环境养分池繁育新生代 (优先继承亲代优良基因，保留进化积累)
             if (counts[niche] < 3) {
+                // 1. 寻找同生态位或全局最强健亲代
+                const EcoAgent* best_parent = nullptr;
+                double max_energy = -1.0;
+                for (const auto& a : agents_) {
+                    if (a.is_alive && a.niche == niche && a.energy > max_energy) {
+                        max_energy = a.energy;
+                        best_parent = &a;
+                    }
+                }
+                if (!best_parent) {
+                    for (const auto& a : agents_) {
+                        if (a.is_alive && a.energy > max_energy) {
+                            max_energy = a.energy;
+                            best_parent = &a;
+                        }
+                    }
+                }
+
                 EcoAgent newborn;
-                newborn.id = agents_.size() + 1000;
+                newborn.id = agents_.size() + 1000 + (rng_() % 1000);
                 newborn.niche = niche;
-                newborn.species_name = std::string(species_niche_to_string(niche)) + "-Seed";
-                newborn.energy = 100.0;
-                newborn.metabolic_rate = 0.08;
+                newborn.energy = 90.0;
+                newborn.metabolic_rate = 0.06;
                 newborn.is_alive = true;
                 newborn.x = dist_pos(rng_);
                 newborn.y = dist_pos(rng_);
                 newborn.z = dist_pos(rng_);
-                
-                Cell c0{0, CellType::SENSE_RAW_INPUT_0, 0.1, 0.0};
-                c0.x = -2.0f; c0.y = 0.0f; c0.z = 0.0f;
 
-                Cell c1{1, CellType::OP_EMA, 0.1, 0.0};
-                c1.x = 0.0f; c1.y = 0.0f; c1.z = 0.0f;
+                if (best_parent && !best_parent->organism.cells.empty()) {
+                    // 继承亲代拓扑与细胞基因 (True Lineage Accumulation)
+                    newborn.organism = best_parent->organism;
+                    newborn.organism.organism_id = newborn.id;
+                    newborn.organism.generation = best_parent->organism.generation + 1;
+                    newborn.species_name = best_parent->species_name + "-G" + std::to_string(newborn.organism.generation);
 
-                Cell c2{2, CellType::ACT_PRIMARY_POSITIVE, 1.0, 0.0};
-                c2.x = 2.0f; c2.y = 0.0f; c2.z = 0.0f;
+                    // 施加点变异与微重组 (突触权重扰动与参数漂移)
+                    for (auto& syn : newborn.organism.synapses) {
+                        if ((rng_() % 100) < 60) {
+                            syn.weight += dist_mutate(rng_);
+                            syn.weight = std::clamp(syn.weight, -3.0, 3.0);
+                        }
+                    }
+                    for (auto& c : newborn.organism.cells) {
+                        if ((rng_() % 100) < 40) {
+                            c.param1 += dist_mutate(rng_) * 0.05;
+                            c.param1 = std::clamp(c.param1, 0.01, 0.99);
+                        }
+                    }
+                    newborn.organism.compile();
+                } else {
+                    // 无亲代时创建生态位基础种子
+                    newborn.species_name = std::string(species_niche_to_string(niche)) + "-Seed";
+                    Cell c0{0, CellType::SENSE_RAW_INPUT_0, 0.1, 0.0};
+                    c0.x = -2.0f; c0.y = 0.0f; c0.z = 0.0f;
 
-                newborn.organism.cells = {c0, c1, c2};
-                newborn.organism.synapses = {
-                    Synapse{0, 1, 0, 0.5, true, 60.0f, -1.0f},
-                    Synapse{1, 2, 0, 0.5, true, 60.0f, -1.0f}
-                };
-                newborn.organism.compile();
+                    Cell c1{1, (niche == SpeciesNiche::PREDATOR) ? CellType::OP_DIFF : CellType::OP_EMA, 0.15, 0.0};
+                    c1.x = 0.0f; c1.y = 0.0f; c1.z = 0.0f;
+
+                    Cell c2{2, CellType::ACT_PRIMARY_POSITIVE, 1.0, 0.0};
+                    c2.x = 2.0f; c2.y = -1.0f; c2.z = 0.0f;
+
+                    Cell c3{3, CellType::ACT_PRIMARY_NEGATIVE, 1.0, 0.0};
+                    c3.x = 2.0f; c3.y = 1.0f; c3.z = 0.0f;
+
+                    newborn.organism.cells = {c0, c1, c2, c3};
+                    newborn.organism.synapses = {
+                        Synapse{0, 1, 0, 0.5, true, 60.0f, -1.0f},
+                        Synapse{1, 2, 0, 0.7, true, 60.0f, -1.0f},
+                        Synapse{1, 3, 0, -0.7, true, 60.0f, -1.0f}
+                    };
+                    newborn.organism.compile();
+                }
 
                 agents_.push_back(std::move(newborn));
             }
