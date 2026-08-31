@@ -79,8 +79,7 @@ public:
         if (last_fast_ma_ <= last_slow_ma_ && fast_ma > slow_ma) {
             if (current_pos_state < 0) {
                 signals.push_back({SignalType::BUY_CLOSE, price, fast_ma, slow_ma, "Golden Cross - Cover Short"});
-            }
-            if (current_pos_state <= 0) {
+            } else if (current_pos_state == 0) {
                 signals.push_back({SignalType::BUY_OPEN, price, fast_ma, slow_ma, "Golden Cross - Open Long"});
             }
         }
@@ -88,8 +87,7 @@ public:
         else if (last_fast_ma_ >= last_slow_ma_ && fast_ma < slow_ma) {
             if (current_pos_state > 0) {
                 signals.push_back({SignalType::SELL_CLOSE, price, fast_ma, slow_ma, "Death Cross - Sell Long"});
-            }
-            if (current_pos_state >= 0) {
+            } else if (current_pos_state == 0) {
                 signals.push_back({SignalType::SELL_OPEN, price, fast_ma, slow_ma, "Death Cross - Open Short"});
             }
         }
