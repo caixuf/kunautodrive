@@ -177,3 +177,6 @@ maps/*/segments/
 tests/out/
 .agents
 .codebuddy
+
+# 本地工作数据 (WorkBuddy 记忆/技能，不随仓库分发)
+.workbuddy/
