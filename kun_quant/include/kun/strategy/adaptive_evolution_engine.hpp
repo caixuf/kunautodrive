@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kun/core/types.hpp"
+#include "kun/cellular/cellular_genome.hpp"
 #include <string>
 #include <vector>
 #include <random>
@@ -120,7 +121,7 @@ struct TrendRecommendation {
 class AdaptiveEvolutionEngine {
 public:
     explicit AdaptiveEvolutionEngine(size_t population_size = 20)
-        : population_size_(population_size), rng_(std::random_device{}()) {
+        : population_size_(population_size), rng_(std::random_device{}()), morph_engine_(population_size) {
         init_population();
     }
 
@@ -165,11 +166,20 @@ public:
         generation_ = 1;
     }
 
-    void on_market_tick(double price) {
+    void on_market_tick(double price, double volume = 1000.0, double spread = 1.0, double imb = 0.0) {
         price_history_.push_back(price);
         if (price_history_.size() > 300) {
             price_history_.erase(price_history_.begin());
         }
+
+        // 推动细胞生命体代谢与力场物理步进
+        double inputs[4] = {price, volume, spread, imb};
+        for (auto& org : const_cast<std::vector<CellularOrganism>&>(morph_engine_.get_population())) {
+            auto acts = org.forward(inputs);
+            org.step_force_field_physics(0.016f);
+            org.fitness_score = acts.positive_action * 10.0 - acts.negative_action * 2.0;
+        }
+
         if (price_history_.size() < 30) return;
 
         double atr = std::max(1.0, std::abs(price_history_.back() - price_history_[price_history_.size() - 2]) * 2.0);
@@ -297,6 +307,9 @@ public:
         }
 
         population_ = std::move(new_pop);
+
+        // 同步推进太初细胞生命种群形态发生演化
+        morph_engine_.evolve_generation();
     }
 
     const StrategyChromosome& get_best_chromosome() const {
@@ -305,6 +318,14 @@ public:
 
     int get_generation() const { return generation_; }
     const std::vector<StrategyChromosome>& get_population() const { return population_; }
+
+    // === 太初细胞形态生命种群访问接口 ===
+    CellularOrganism& get_cellular_champion() { return morph_engine_.get_champion(); }
+    const CellularOrganism& get_cellular_champion() const { return const_cast<MorphogeneticEvolutionEngine&>(morph_engine_).get_champion(); }
+    const std::vector<CellularOrganism>& get_cellular_population() const { return morph_engine_.get_population(); }
+    std::string get_cellular_telemetry_json() const {
+        return const_cast<MorphogeneticEvolutionEngine&>(morph_engine_).get_champion().to_json();
+    }
 
 private:
     double compute_ma(int window) const {
@@ -320,6 +341,7 @@ private:
     size_t population_size_{20};
     int generation_{1};
     std::mt19937 rng_;
+    MorphogeneticEvolutionEngine morph_engine_;
     std::vector<StrategyChromosome> population_;
     std::vector<double> price_history_;
 };

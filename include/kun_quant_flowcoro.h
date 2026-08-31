@@ -25,6 +25,7 @@
 #include "kun/core/types.hpp"
 #include "kun/engine/storage_manager.hpp"
 #include "kun/strategy/dual_ma_strategy.hpp"
+#include "kun/market/fusion_operator.hpp"
 #include <chrono>
 #include <memory>
 #include <unordered_map>
@@ -544,24 +545,31 @@ public:
             Message msg = co_await tick_ch.recv();
             if (msg.data_size >= sizeof(QuantTickMsg)) {
                 const auto* tick = reinterpret_cast<const QuantTickMsg*>(msg.data);
-                engine_.on_market_tick(tick->last_price);
+                double spread = tick->ask_price1 - tick->bid_price1;
+                double imb = (tick->bid_volume1 - tick->ask_volume1) / 
+                             (std::abs(tick->bid_volume1 + tick->ask_volume1) > 1e-4 ? (tick->bid_volume1 + tick->ask_volume1) : 1.0);
+                engine_.on_market_tick(tick->last_price, tick->volume, spread, imb);
             }
             tick_counter++;
 
-            // 每收到 30 帧行情，推动一代参数种群进化
+            // 每收到 30 帧行情，推动一代参数种群与太初细胞形态发生演化
             if (tick_counter % 30 == 0) {
                 engine_.evolve_next_generation();
                 const auto& best = engine_.get_best_chromosome();
-                std::cout << "[KunQuant::AI] 策略进化至第 " << engine_.get_generation() << " 代! "
-                          << "最优参数: MA(" << best.fast_window << ", " << best.slow_window << ") "
+                auto& cell_champ = engine_.get_cellular_champion();
+                std::cout << "[KunQuant::AI] 双擎进化至第 " << engine_.get_generation() << " 代! "
+                          << "【太初细胞形态】: " << cell_champ.lineage_name 
+                          << " (细胞数=" << cell_champ.cells.size() << ", 突触数=" << cell_champ.synapses.size() << ") | "
+                          << "【标尺参数】: MA(" << best.fast_window << ", " << best.slow_window << ") "
                           << "止损=" << best.stop_loss_atr << "xATR "
-                          << "适应度得分=" << (int)best.fitness_score << "\n";
+                          << "适应度=" << (int)best.fitness_score << "\n";
             }
         }
         co_return;
     }
 
     const AdaptiveEvolutionEngine& get_engine() const { return engine_; }
+    AdaptiveEvolutionEngine& get_engine() { return engine_; }
 
 private:
     std::string symbol_;
@@ -575,25 +583,32 @@ private:
 class CoroMarketFusionTask : public CoroutineTask {
 public:
     CoroMarketFusionTask(MessageBus* bus, std::string symbol, double outlier_pct_threshold = 0.03)
-        : CoroutineTask(bus), symbol_(std::move(symbol)), outlier_pct_threshold_(outlier_pct_threshold) {}
+        : CoroutineTask(bus), symbol_(std::move(symbol)), fusion_op_(outlier_pct_threshold) {}
 
     Task run() override {
         std::cout << "[KunQuant::FusionTask] 多源行情融合协程任务已启动! 标的: " << symbol_ << "\n";
 
         std::string sina_topic = "market/source/sina/" + symbol_;
-        std::string sim_topic = "market/source/ctp_sim/" + symbol_;
+        std::string sec_topic  = "market/source/secondary/" + symbol_;
+        std::string sim_topic  = "market/source/ctp_sim/" + symbol_;
 
         BusChannel ch_sina(bus(), sina_topic.c_str(), 64);
+        BusChannel ch_sec(bus(), sec_topic.c_str(), 64);
         BusChannel ch_sim(bus(), sim_topic.c_str(), 64);
 
         while (!should_stop()) {
             // 使用 when_any_bus 零锁异步等待多源任意行情到达
-            Message msg = co_await when_any_bus(bus(), {sina_topic.c_str(), sim_topic.c_str()});
+            Message msg = co_await when_any_bus(bus(), {sina_topic.c_str(), sec_topic.c_str(), sim_topic.c_str()});
             if (msg.data_size < sizeof(QuantTickMsg)) continue;
 
             const auto* tick = reinterpret_cast<const QuantTickMsg*>(msg.data);
             std::string topic_str(msg.topic);
-            std::string src = (topic_str.find("sina") != std::string::npos) ? "sina" : "ctp_sim";
+            std::string src = "sina";
+            if (topic_str.find("secondary") != std::string::npos) {
+                src = "secondary";
+            } else if (topic_str.find("ctp_sim") != std::string::npos) {
+                src = "ctp_sim";
+            }
 
             process_source_tick(src, *tick);
         }
@@ -607,87 +622,36 @@ public:
             ).count()
         );
 
-        // 离群假刺针校验 (Outlier Rejection)
-        bool is_outlier = false;
-        if (price_window_.size() >= 3) {
-            std::vector<double> sorted(price_window_.begin(), price_window_.end());
-            std::sort(sorted.begin(), sorted.end());
-            double median = sorted[sorted.size() / 2];
-            double dev = std::abs(tick.last_price - median) / median;
-            if (dev > outlier_pct_threshold_) {
-                is_outlier = true;
-                outliers_rejected_++;
-                std::cout << "[KunQuant::FusionTask] 协程过滤假刺针! 源=" << src_name 
-                          << " 异常价=" << tick.last_price << " 基准=" << median << "\n";
-            }
-        }
-
-        if (!is_outlier) {
-            price_window_.push_back(tick.last_price);
-            if (price_window_.size() > 30) price_window_.pop_front();
+        // 离群假刺针校验 (复用通用算子)
+        bool is_outlier = fusion_op_.check_and_record_price(tick.last_price);
+        if (is_outlier) {
+            std::cout << "[KunQuant::FusionTask] 协程过滤假刺针! 源=" << src_name 
+                      << " 异常价=" << tick.last_price << "\n";
         }
 
         obs_[src_name] = {src_name, tick, now_us, 1.0, is_outlier};
         fuse_and_publish();
     }
 
-    uint32_t get_outliers_rejected() const { return outliers_rejected_; }
+    uint32_t get_outliers_rejected() const { return fusion_op_.get_outliers_rejected(); }
 
 private:
-    struct Obs {
-        std::string src;
-        QuantTickMsg tick;
-        uint64_t time_us;
-        double weight;
-        bool is_outlier;
-    };
+    std::string symbol_;
+    MarketFusionOperator fusion_op_;
+    std::unordered_map<std::string, MarketObservation> obs_;
 
     void fuse_and_publish() {
-        double sum_p = 0.0;
-        double sum_w = 0.0;
-        double best_bid = 0.0;
-        double best_ask = 9999999.0;
-        double total_vol = 0.0;
-        double total_oi = 0.0;
-        uint32_t valid = 0;
-
-        for (const auto& [name, ob] : obs_) {
-            if (ob.is_outlier) continue;
-            sum_p += ob.tick.last_price * ob.weight;
-            sum_w += ob.weight;
-            total_vol = std::max(total_vol, ob.tick.volume);
-            total_oi = std::max(total_oi, ob.tick.open_interest);
-            if (ob.tick.bid_price1 > best_bid) best_bid = ob.tick.bid_price1;
-            if (ob.tick.ask_price1 > 0.0 && ob.tick.ask_price1 < best_ask) best_ask = ob.tick.ask_price1;
-            valid++;
-        }
-
-        if (sum_w <= 0.0 || valid == 0) return;
-
-        double fused_price = sum_p / sum_w;
-        if (best_ask >= 9999990.0) best_ask = fused_price + 1.0;
-        if (best_bid <= 0.0) best_bid = fused_price - 1.0;
-
         QuantTickMsg true_tick{};
-        std::strncpy(true_tick.symbol, symbol_.c_str(), sizeof(true_tick.symbol) - 1);
-        std::strncpy(true_tick.exchange, "SHFE", sizeof(true_tick.exchange) - 1);
-        true_tick.last_price = fused_price;
-        true_tick.bid_price1 = best_bid;
-        true_tick.ask_price1 = best_ask;
-        true_tick.bid_volume1 = 100.0;
-        true_tick.ask_volume1 = 100.0;
-        true_tick.volume = total_vol;
-        true_tick.open_interest = total_oi;
+        uint32_t valid_sources = 0;
+        double confidence = 0.0;
+
+        if (!fusion_op_.compute_fused_tick(symbol_, obs_, true_tick, valid_sources, confidence)) {
+            return;
+        }
 
         std::string topic = "market/tick/" + symbol_;
         message_bus_publish(bus(), topic.c_str(), "CoroMarketFusionTask", &true_tick, sizeof(true_tick));
     }
-
-    std::string symbol_;
-    double outlier_pct_threshold_{0.03};
-    uint32_t outliers_rejected_{0};
-    std::unordered_map<std::string, Obs> obs_;
-    std::deque<double> price_window_;
 };
 
 /**

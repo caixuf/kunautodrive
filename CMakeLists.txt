@@ -717,6 +717,7 @@ set(KUN_QUANT_SRCS
     kun_quant/src/engine/smart_order_router.cpp
     kun_quant/src/market/market_fusion_node.cpp
     kun_quant/src/market/sina_fetcher.cpp
+    kun_quant/src/market/secondary_fetcher.cpp
 )
 add_library(kun_quant STATIC ${KUN_QUANT_SRCS})
 target_include_directories(kun_quant PUBLIC 
@@ -831,8 +832,15 @@ else()
     target_link_libraries(test_quant_m9_industrial_borrowing kun_quant flowengine_core flowcoro_headers flowcoro_net scheduler_cpp pthread sqlite3)
 endif()
 target_include_directories(test_quant_m9_industrial_borrowing PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
-target_compile_definitions(test_quant_m9_industrial_borrowing PRIVATE FLOWCORO_INTEGRATION)
-add_test(NAME test_quant_m9_industrial_borrowing COMMAND test_quant_m9_industrial_borrowing)
+add_executable(test_flow_cellular_evolution tests/test_flow_cellular_evolution.cpp)
+if(WIN32)
+    target_link_libraries(test_flow_cellular_evolution kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
+else()
+    target_link_libraries(test_flow_cellular_evolution kun_quant flowengine_core flowcoro_headers flowcoro_net scheduler_cpp pthread sqlite3)
+endif()
+target_include_directories(test_flow_cellular_evolution PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
+target_compile_definitions(test_flow_cellular_evolution PRIVATE FLOWCORO_INTEGRATION)
+add_test(NAME test_flow_cellular_evolution COMMAND test_flow_cellular_evolution)
 
 # ── Config-driven Launcher ──
 # 读 config/pipeline.json → 按顺序 fork+exec 各节点进程

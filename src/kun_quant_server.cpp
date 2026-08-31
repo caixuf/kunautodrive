@@ -18,6 +18,8 @@
 #include "kun/engine/reconciler.hpp"
 #include "kun/market/market_fusion_node.hpp"
 #include "kun/market/sina_fetcher.hpp"
+#include "kun/market/secondary_fetcher.hpp"
+#include "kun/market/market_heartbeat_watchdog.hpp"
 #include "kun/backtest/performance.hpp"
 #include "cJSON.h"
 
@@ -212,6 +214,17 @@ private:
         if (path == "/api/status") {
             std::string json = "{\"status\":\"RUNNING\",\"server\":\"KunQuant Native Daemon\",\"flowcoro\":\"ONLINE\",\"storage\":\"SQLITE_WAL\",\"multi_account\":3}";
             std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: " +
+                                   std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;
+            send(client_fd, response.c_str(), response.size(), MSG_NOSIGNAL);
+            close(client_fd);
+            return;
+        }
+
+        if (path == "/api/cellular/organism" || path == "/api/cellular/champion") {
+            auto org = kun::CellularOrganism::create_seed_organism(888);
+            org.step_force_field_physics(0.016f);
+            std::string json = org.to_json();
+            std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " +
                                    std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;
             send(client_fd, response.c_str(), response.size(), MSG_NOSIGNAL);
             close(client_fd);
@@ -751,8 +764,8 @@ private:
             return;
         }
 
-        // 设置 20s 超时
-        timeval tv{8, 0};
+        // 设置 300s 超时 (LLM 深度复盘报告可达 60s+，过短会被掐断导致前端报"AI 服务通信异常")
+        timeval tv{300, 0};
         setsockopt(ai_fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
         setsockopt(ai_fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv));
 
@@ -1050,12 +1063,18 @@ int main(int argc, char* argv[]) {
         spawned_tasks.push_back(std::move(fusion_task));
     }
 
-    // 5.0.5 订阅融合真值流 → 喂给网关池: 真实价格撮合挂单 + 逐 tick 盯市盈亏
+    // 5.0.4 初始化行情断流看门狗 (MarketHeartbeatWatchdog)
+    kun::MarketHeartbeatWatchdog watchdog(3000); // 3 秒断流门限
+
+    // 5.0.5 订阅融合真值流 → 喂给网关池: 真实价格撮合挂单 + 逐 tick 盯市盈亏 + 刷新看门狗心跳
     for (const auto& sym : watch_symbols) {
         std::string topic = "market/tick/" + sym;
-        message_bus_subscribe(bus, topic.c_str(), [](const Message* msg, void* /*ud*/) {
+        message_bus_subscribe(bus, topic.c_str(), [](const Message* msg, void* ud) {
             if (!msg || msg->data_size < sizeof(kun::QuantTickMsg) || !kun::g_live_pool) return;
             const auto* t = reinterpret_cast<const kun::QuantTickMsg*>(msg->data);
+            auto* wd = reinterpret_cast<kun::MarketHeartbeatWatchdog*>(ud);
+            if (wd) wd->on_tick_received(t->symbol);
+
             kun::TickData td;
             td.symbol = t->symbol;
             td.exchange = t->exchange;
@@ -1067,20 +1086,21 @@ int main(int argc, char* argv[]) {
             td.volume = t->volume;
             td.open_interest = t->open_interest;
             kun::g_live_pool->feed_real_tick(td);
-        }, nullptr);
+        }, &watchdog);
     }
 
     // 5.0.6 挂载实盘自动策略 (真实行情驱动, 事前风控把关):
-    //   主账户: tick 级双均线 | 从账户 zhongxin: 5 分钟级双均线 (A/B 同一真实 tick 流)
+    //   主账户: 5 分钟级双均线 (MA 5/20 + ATR 死区 + 趋势过滤)
+    //   从账户 sim1: 5 分钟级双均线 (MA 10/30 稳健型参数)
     for (const auto& s : cfg.symbols) {
-        auto strat = std::make_unique<kun::CoroLiveDualMAStradingTask>(
+        auto strat = std::make_unique<kun::CoroLiveDualMA5mTask>(
             bus, s.symbol, "acc_master_simnow", 5, 20, 1.0);
-        ex.spawn(strat->run(), "live_dualma_" + s.symbol);
+        ex.spawn(strat->run(), "live_dualma5m_master_" + s.symbol);
         spawned_tasks.push_back(std::move(strat));
 
         auto strat5m = std::make_unique<kun::CoroLiveDualMA5mTask>(
-            bus, s.symbol, "acc_slave_zhongxin", 5, 20, 1.0);
-        ex.spawn(strat5m->run(), "live_dualma5m_" + s.symbol);
+            bus, s.symbol, "acc_slave_sim1", 10, 30, 1.0);
+        ex.spawn(strat5m->run(), "live_dualma5m_slave_" + s.symbol);
         spawned_tasks.push_back(std::move(strat5m));
     }
 
@@ -1091,12 +1111,16 @@ int main(int argc, char* argv[]) {
         spawned_tasks.push_back(std::move(tick_recorder));
     }
 
-    // 启动新浪公网实时期货行情抓取节点 (品种→代码映射来自配置, 特例覆盖, 无硬编码)
+    // 启动新浪主行情源 + 备用第二行情源 (双源常明烽燧)
     std::cout << "[KunQuant Daemon] 启动新浪真实行情感知节点 (SinaMarketFetcher)...\n";
     std::vector<std::pair<std::string, std::string>> symbol_codes;
     for (const auto& s : cfg.symbols) symbol_codes.emplace_back(s.symbol, s.sina_code);
     kun::SinaMarketFetcher sina_fetcher(bus, symbol_codes, 1000);
     sina_fetcher.start();
+
+    std::cout << "[KunQuant Daemon] 启动第二备用行情感知节点 (SecondaryMarketFetcher)...\n";
+    kun::SecondaryMarketFetcher secondary_fetcher(bus, symbol_codes, 1000);
+    secondary_fetcher.start();
 
     // 6. 挂载 AI 自适应进化协程引擎
     std::string main_sym = cfg.symbols.empty() ? "rb2405" : cfg.symbols[0].symbol;
@@ -1125,6 +1149,7 @@ int main(int argc, char* argv[]) {
     // 优雅停机
     std::cout << "[KunQuant Daemon] Shutting down workers and closing sockets...\n";
     sina_fetcher.stop();
+    secondary_fetcher.stop();
     server.stop();
 
     if (server_thread.joinable()) server_thread.join();
@@ -1139,6 +1164,10 @@ int main(int argc, char* argv[]) {
         ex.run();
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+
+    // 关键生命周期契约：先断开网关连接并清空全局指针，确保在 message_bus 销毁前完成资源解绑
+    kun::g_live_pool = nullptr;
+    pool.disconnect_all();
 
     // 关键契约: 在 message_bus 销毁前清空所有任务，确保 BusChannel 析构反订阅时总线依然有效
     spawned_tasks.clear();
