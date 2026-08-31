@@ -548,9 +548,9 @@ public:
         }
 
         std::uniform_real_distribution<double> dist_weight(-2.0, 2.0);
-        std::uniform_int_distribution<uint8_t> dist_port(0, 1);
+        std::uniform_int_distribution<int> dist_port(0, 1);
 
-        org.synapses.push_back({from_id, to_id, dist_port(rng_), dist_weight(rng_), true, 60.0f, -1.0f});
+        org.synapses.push_back({from_id, to_id, static_cast<uint8_t>(dist_port(rng_)), dist_weight(rng_), true, 60.0f, -1.0f});
         org.compile();
         return true;
     }

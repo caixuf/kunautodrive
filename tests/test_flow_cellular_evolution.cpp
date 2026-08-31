@@ -15,7 +15,7 @@ void test_seed_organism_and_forward() {
     auto org = CellularOrganism::create_seed_organism(101);
     assert(org.cells.size() >= 8);
     assert(org.synapses.size() >= 7);
-    assert(org.is_compiled);
+    assert(org.is_compiled_);
 
     // 测算前向传导速度 (100,000 次循环)
     double inputs[4] = {3620.0, 5000.0, 1.0, 0.2};
@@ -78,7 +78,7 @@ void test_cellular_apoptosis_pruning() {
 
     std::cout << "  ↳ 初始细胞数: " << grown_cells << " -> 凋亡净化后存活细胞数: " << pruned_cells << "\n";
     assert(pruned_cells <= grown_cells);
-    assert(org.is_compiled);
+    assert(org.is_compiled_);
 
     std::cout << "  -> 细胞凋亡剪枝与自我净化机制测试通过!\n";
 }
@@ -98,8 +98,17 @@ void test_quant_cellular_adapter() {
     tick.ask_volume1 = 200.0;
 
     auto dec = adapter.process_tick(tick);
-    std::cout << "  ↳ 量化细胞网络决策输出: " << dec.explanation << " (目标价=" << dec.target_price << ")\n";
+    std::cout << "  ↳ 量化细胞网络首拍决策输出: " << dec.explanation << " (目标价=" << dec.target_price << ")\n";
     assert(dec.target_price == 3600.0);
+    // forward() 为同步一拍延迟语义 (先汇聚上一拍输出, 再按拓扑序激发): 首拍动作细胞电位为 0, 决策应为 HOLD
+    assert(dec.action == QuantCellularAdapter::TradeDecision::Action::HOLD);
+
+    // 次拍: 迟滞门初值 -1.0 经 -1.0 权重突触激励 ACT_PRIMARY_NEGATIVE, 应产生真实 SELL 决策路径
+    auto dec2 = adapter.process_tick(tick);
+    std::cout << "  ↳ 量化细胞网络次拍决策输出: " << dec2.explanation << "\n";
+    assert(dec2.action == QuantCellularAdapter::TradeDecision::Action::SELL_OPEN);
+    assert(!dec2.explanation.empty());
+    assert(dec2.confidence > 0.5);
 
     std::cout << "  -> 量化金融细胞演化适配器测试通过!\n";
 }
