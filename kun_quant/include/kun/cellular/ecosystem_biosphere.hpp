@@ -234,7 +234,8 @@ public:
         ss << "{\n";
         ss << "  \"step\": " << step_count_ << ",\n";
         ss << "  \"shannon_diversity\": " << calculate_shannon_diversity() << ",\n";
-        
+        ss << "  \"radiation\": " << radiation_field_.to_json() << ",\n";
+
         // 生境信息
         ss << "  \"biomes\": [\n";
         for (size_t i = 0; i < biomes_.size(); ++i) {

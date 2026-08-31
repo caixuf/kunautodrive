@@ -289,6 +289,28 @@ To solve the fundamental vulnerability of evolutionary algorithms becoming trapp
 
 ---
 
+### 6.4 The Quantum Radiation Mutagenesis Field (QuantumRadiationField)
+
+Above the ecosystem layer, the reference implementation introduces a **non-genetic environmental mutagenesis mechanism** (`quantum_radiation_field.hpp`) — radiation is not merely another mutation operator but a **spatially heterogeneous physical field** where mutation probability depends on the organism's position:
+
+**Multi-source coherent wave interference**. Three coherent wave sources form static interference fringes (constructive zones = high-radiation bands; destructive zones = quiet zones):
+
+$$\Psi(\mathbf{r}, t) = \sum_{k=1}^{3} A_k \cos(\mathbf{k}_k \cdot \mathbf{r} - \omega_k t + \phi_k), \qquad I(\mathbf{r}, t) = |\Psi(\mathbf{r}, t)|^2$$
+
+**Three mutation modes** (`irradiate_organism()`, applied to every alive agent each ecosystem step):
+
+| Mode | Trigger | Effect |
+|---|---|---|
+| **Soft Ionization** | $I > 1.2$ and $p < 0.15$ | All synaptic weights $+\mathcal{N}(0, 0.08^2)$ (clamped $\pm 3$); metabolic parameter jitter — plastic fine-tuning |
+| **Hard Mutation** | Cosmic-ray strike (cross-section radius 6.0) | Random cell type transversion (non-receptor) + random synapse sever/rewire — structural reconstruction |
+| **Quantum Tunneling** | Fitness stagnation > 50 ticks and $I > 0.5$, $p = \min(0.5,\ 0.1 I)$ | Full synaptic weight resampling $U(-1.5, 1.5)$ + injection of a new hysteresis gating cell — escape from local fitness plateaus |
+
+**Cosmic ray particle beams**: spawned each step with probability 0.35 from above the biome dome ($z = +70$, concurrency cap 8), energy $E \sim U(30, 100)$, velocity 100–150 units/step, maximum range 160, with 3D distance collision tests against agents in flight.
+
+**Design significance**: quantum tunneling is a physics-inspired answer to premature convergence in classical evolutionary algorithms — when a population is stuck at a local optimum (stagnation) and happens to reside in a high-interference zone, a jump-style topological reconstruction occurs with probability proportional to field intensity. The radiation field thus plays dual roles: **diversity generator** (spatial heterogeneity of interference fringes) and **escape mechanism** (tunneling).
+
+---
+
 ## 7. Real-Time Bioluminescent Holographic Observatory
 
 The visualization layer is an intrinsic architectural component (reference implementation: `tools/kunboard/cellular.html`). Physical properties are first-class citizens of the C++ data structures themselves (coordinates, velocities, glow, photons are embedded in `Cell`/`Synapse`), so the observatory renders **genuine simulation state, not artistic impression**:
