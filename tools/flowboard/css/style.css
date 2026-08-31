@@ -59,10 +59,16 @@ body[data-workspace="operate"] .ws-observe-analyze{display:none!important}
 body[data-workspace="perf"] .ws-observe,
 body[data-workspace="perf"] .ws-analyze,
 body[data-workspace="perf"] .ws-operate,
-body[data-workspace="perf"] .ws-observe-analyze{display:none!important}
-body[data-workspace="observe"] .ws-perf,
-body[data-workspace="analyze"] .ws-perf,
-body[data-workspace="operate"] .ws-perf{display:none!important}
+body[data-workspace="cellular"] .ws-observe,
+body[data-workspace="cellular"] .ws-analyze,
+body[data-workspace="cellular"] .ws-operate,
+body[data-workspace="cellular"] .ws-perf,
+body[data-workspace="cellular"] .ws-observe-analyze{display:none!important}
+body[data-workspace="cellular"] #cellular-mind-card{display:flex!important}
+body[data-workspace="observe"] .ws-cellular,
+body[data-workspace="analyze"] .ws-cellular,
+body[data-workspace="operate"] .ws-cellular,
+body[data-workspace="perf"] .ws-cellular{display:none!important}
 /* 性能分析窗口布局 */
 .perf-body{display:flex;flex-direction:column;gap:12px}
 .perf-sys-row{display:flex;gap:12px;flex-wrap:wrap}

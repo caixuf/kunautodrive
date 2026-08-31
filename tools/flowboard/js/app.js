@@ -773,8 +773,10 @@ function saveState() {
   } catch(e) {}
 }
 
+var cellularHologram = null;
+
 function switchWorkspace(mode) {
-  if (['observe','analyze','operate','perf'].indexOf(mode) < 0) mode = 'observe';
+  if (['observe','analyze','cellular','operate','perf'].indexOf(mode) < 0) mode = 'observe';
   workspaceMode = mode;
   document.body.setAttribute('data-workspace', mode);
   var nav = document.getElementById('workspace-nav');
@@ -785,6 +787,11 @@ function switchWorkspace(mode) {
   }
   if (mode === 'observe') setTimeout(resize3D, 120);
   if (mode === 'perf') setTimeout(updatePerf, 50);
+  if (mode === 'cellular') {
+    if (!cellularHologram && window.CellularMindHologram) {
+      cellularHologram = new window.CellularMindHologram('cellular-mind-viewport');
+    }
+  }
   saveState();
 }
 
@@ -2843,6 +2850,7 @@ window.flowboard = {
   // card collapse
   toggleCard: toggleCard,
   switchWorkspace: switchWorkspace,
+  get cellularHologram() { return cellularHologram; },
   // charts
   onChartTopicChange: function () { /* delegated via charts.js */ },
   onChartRangeChange: function () { /* delegated via charts.js */ },

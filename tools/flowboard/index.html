@@ -178,8 +178,21 @@
   <div id="workspace-nav" class="workspace-nav">
     <button class="ws-btn active" data-ws="observe" onclick="flowboard.switchWorkspace('observe')"><svg class="ic" aria-hidden="true"><use href="#i-radio"/></svg> 观察</button>
     <button class="ws-btn" data-ws="analyze" onclick="flowboard.switchWorkspace('analyze')"><svg class="ic" aria-hidden="true"><use href="#i-trending"/></svg> 分析</button>
+    <button class="ws-btn" data-ws="cellular" onclick="flowboard.switchWorkspace('cellular')"><svg class="ic" aria-hidden="true"><use href="#i-cpu"/></svg> 🧠 细胞体脑全息</button>
     <button class="ws-btn" data-ws="operate" onclick="flowboard.switchWorkspace('operate')"><svg class="ic" aria-hidden="true"><use href="#i-wrench"/></svg> 运维</button>
     <button class="ws-btn" data-ws="perf" onclick="flowboard.switchWorkspace('perf')"><svg class="ic" aria-hidden="true"><use href="#i-chart"/></svg> 性能分析</button>
+  </div>
+  <div class="card ws-block ws-cellular" id="cellular-mind-card" style="display:none;flex:1;min-height:550px;position:relative;flex-direction:column">
+    <div class="card-header" style="justify-content:space-between">
+      <h2><span class="dot" style="background:#7ee787"></span>细胞生命体 3D 全息神经脑 (Three.js WebGL Hologram)</h2>
+      <div style="display:flex;gap:6px">
+        <button class="sm" onclick="flowboard.cellularHologram && flowboard.cellularHologram.injectStrainStimulation()"><svg class="ic" aria-hidden="true"><use href="#i-zap"/></svg> ⚡ 注入应变刺激</button>
+        <button class="sm primary" onclick="flowboard.cellularHologram && flowboard.cellularHologram.triggerMitosis()"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg> 🧬 触发力敏有丝分裂</button>
+      </div>
+    </div>
+    <div class="card-body" style="padding:0;flex:1;position:relative;min-height:500px">
+      <div id="cellular-mind-viewport" style="width:100%;height:100%;min-height:500px;background:#06090e;position:relative;overflow:hidden"></div>
+    </div>
   </div>
   <div id="map-preview-modal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(1,4,9,.55);box-sizing:border-box">
     <div id="map-preview-panel" data-ratio="1.565" style="position:absolute;right:18px;top:18px;width:min(920px,64vw);height:min(588px,70vh);display:flex;flex-direction:column;background:#0d1117;border:1px solid #30363d;border-radius:12px;overflow:hidden;box-shadow:0 18px 48px rgba(0,0,0,.55)">
@@ -364,6 +377,7 @@
 }
 </script>
 <script src="/tools/d3.v7.min.js"></script>
+<script src="js/cellularMindHologram.js"></script>
 <script>
   function _updateCamBtns(btn) {
     var grp = document.getElementById('cam-mode-btns');

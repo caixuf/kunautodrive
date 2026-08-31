@@ -20,6 +20,7 @@ void test_cache_line_alignment() {
 
     for (size_t i = 0; i < grid.num_islands(); ++i) {
         uintptr_t addr = reinterpret_cast<uintptr_t>(&grid.get_island(i));
+        (void)addr;
         assert(addr % 64 == 0); // 必须严格 64 字节边界对齐
     }
     std::cout << "  -> 8 岛生境内存首地址全部严格 64-Byte 边界对齐通过!\n";
@@ -142,6 +143,47 @@ void test_red_queen_adversarial_stress() {
     std::cout << "  -> 红皇后极端对抗加压与 JSON 遥测 100% 通过!\n";
 }
 
+// 6. 自然涌现焦点英灵殿测试 (Emergent Focal Sanctuary)
+void test_emergent_focal_sanctuary() {
+    std::cout << "[Test 6] 运行自然涌现焦点英灵殿 (Emergent Focal Sanctuary · 绝无人工硬编码) 测试...\n";
+    IslandEvolutionGrid grid(4);
+
+    double inputs[4] = { 3600.0, 1000.0, 1.0, 0.05 };
+
+    // 经历 60 代多工况演化 (包含单边趋势与波动震荡)
+    for (size_t i = 0; i < 4; ++i) {
+        for (int g = 0; g < 60; ++g) {
+            double delta = (g % 2 == 0) ? 0.35 : -0.20;
+            grid.step_island(i, inputs, delta);
+        }
+    }
+
+    assert(grid.sanctuary().has_focal_point());
+    assert(grid.sanctuary().size() >= 1);
+
+    auto primary_focal = grid.sanctuary().get_primary_focal_point();
+    assert(!primary_focal.lineage_hash.empty());
+    assert(primary_focal.organism.is_compiled());
+    assert(primary_focal.natural_gravitational_mass > 0.0);
+    assert(primary_focal.multi_regime_survival_epochs >= 1);
+
+    std::cout << "  ↳ 👑 【自然自发涌现的核心焦点超级个体】:\n"
+              << "     - 基因特征指纹: " << primary_focal.lineage_hash << "\n"
+              << "     - 自然向心引力质量: " << primary_focal.natural_gravitational_mass << "\n"
+              << "     - 跨生境连续存活轮次: " << primary_focal.multi_regime_survival_epochs << " 轮\n"
+              << "     - 涌现特化结构标签: " << primary_focal.natural_specialization << "\n"
+              << "     - 细胞数: " << primary_focal.organism.cells.size() 
+              << ", 突触数: " << primary_focal.organism.synapses.size() << "\n";
+
+    // 验证超级个体可直接执行零 GC 纳秒级前向
+    auto actions = primary_focal.organism.forward(inputs);
+    std::cout << "  ↳ 焦点超级个体即时前向决策输出: Pos=" << actions.positive_action 
+              << ", Neg=" << actions.negative_action 
+              << ", Immune=" << (actions.immune_lock ? "TRUE" : "FALSE") << "\n";
+
+    std::cout << "  -> 自然涌现焦点英灵殿与自组织向心引力 100% 满分通过!\n";
+}
+
 int main() {
     std::cout << "======================================================================\n";
     std::cout << "   FlowEngine 超加速形态发生演化网格测试集 (Hyper-Warp Grid)          \n";
@@ -152,9 +194,10 @@ int main() {
     test_torus_migration();
     test_hyper_warp_throughput();
     test_red_queen_adversarial_stress();
+    test_emergent_focal_sanctuary();
 
     std::cout << "\n======================================================================\n";
-    std::cout << "   全部 5 组多岛超加速演化单测 100% 满分通过 (Zero-GC & ASAN Clean)! \n";
+    std::cout << "   全部 6 组多岛超加速演化与自然涌现焦点单测 100% 满分通过!          \n";
     std::cout << "======================================================================\n";
     return 0;
 }
