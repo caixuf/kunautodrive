@@ -1377,13 +1377,19 @@ public:
         }
 
         if (constraint_cfg_.skeleton_lock == SkeletonLockMode::LOCKED) {
-            // 受限骨架模式：受体永远免疫凋亡
+            // 受限骨架模式：受体与效应器器官细胞永远免疫凋亡，只凋亡中间无用悬空计算节点
             org.cells.erase(
                 std::remove_if(org.cells.begin(), org.cells.end(), [&](const Cell& c) {
                     if (c.type == CellType::SENSE_RAW_INPUT_0 ||
                         c.type == CellType::SENSE_RAW_INPUT_1 ||
                         c.type == CellType::SENSE_RAW_INPUT_2 ||
-                        c.type == CellType::SENSE_RAW_INPUT_3) return false;
+                        c.type == CellType::SENSE_RAW_INPUT_3 ||
+                        c.type == CellType::ACT_PRIMARY_POSITIVE ||
+                        c.type == CellType::ACT_PRIMARY_NEGATIVE ||
+                        c.type == CellType::ACT_DEFENSIVE_RESET ||
+                        c.type == CellType::ACT_IMMUNE_BLOCK ||
+                        c.type == CellType::PREDICT_SENSE_0 ||
+                        c.type == CellType::PREDICT_SENSE_1) return false;
                     return !useful_cells.count(c.id);
                 }),
                 org.cells.end()
@@ -1415,11 +1421,11 @@ public:
     void mutate(CellularOrganism& org) {
         std::uniform_real_distribution<double> dist(0.0, 1.0);
 
-        // 1. 若当前有机体突触不足 2 条 (如原始胚胎冷启动)，强制优先建立基础突触连接
+        // 1. 若当前有机体突触不足 4 条 (如原始胚胎冷启动)，强制优先建立基础突触连接
         size_t active_syns = 0;
         for (const auto& s : org.synapses) if (s.is_active) active_syns++;
-        if (active_syns < 2) {
-            mutate_add_synapse(org);
+        if (active_syns < 4) {
+            for (int i = 0; i < 3; ++i) mutate_add_synapse(org);
         }
 
         // 2. 突触权重与细胞参数微调 (细粒度梯度微扰，随停滞自适应增强)
@@ -1509,7 +1515,9 @@ public:
     }
 
     CellularOrganism& get_champion() { return population_[0]; }
+    const CellularOrganism& get_champion() const { return population_[0]; }
     const std::vector<CellularOrganism>& get_population() const { return population_; }
+    const std::vector<CellularOrganism>& population() const { return population_; }
     std::vector<CellularOrganism>& population() { return population_; }
     uint32_t get_stagnation_generations() const { return stagnation_generations_; }
     double get_adaptive_mutation_boost() const { return adaptive_mutation_boost_; }

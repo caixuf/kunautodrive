@@ -1203,14 +1203,26 @@ int main(int argc, char* argv[]) {
     // 细胞形态发生与生态圈 7x24 后台自主演化线程 (前端仅作为被动全息观察窗口)
     std::thread cellular_evo_thread([]() {
         uint64_t step_count = 0;
+        double sim_price = 3600.0;
+        std::mt19937_64 rng(42);
+        std::normal_distribution<double> price_dist(0.0, 0.6);
+
         while (kun::g_server_running.load()) {
+            sim_price += price_dist(rng);
+            double inputs[4] = { sim_price, 2000.0, 1.0, 0.05 };
+
             {
                 std::lock_guard<std::mutex> lk(kun::g_morph_mutex);
                 for (auto& org : kun::g_morph_engine.population()) {
                     org.step_force_field_physics(0.02f);
+                    auto acts = org.forward(inputs, true);
+                    double pnl = (acts.positive_action - acts.negative_action) * price_dist(rng) * 50.0;
+                    if (!std::isfinite(pnl)) pnl = 0.0;
+                    if (!std::isfinite(org.fitness_score)) org.fitness_score = 0.0;
+                    org.fitness_score = std::clamp(org.fitness_score * 0.95 + pnl, -500.0, 5000.0);
                 }
-                // 每 150 步 (约 3s) 推进一代形态发生演化
-                if (++step_count % 150 == 0) {
+                // 每 50 步 (约 1s) 推进一代形态发生演化
+                if (++step_count % 50 == 0) {
                     kun::g_morph_engine.evolve_generation();
                 }
             }

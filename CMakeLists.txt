@@ -923,6 +923,17 @@ target_include_directories(test_flow_seed_ablation PRIVATE kun_quant/include inc
 target_compile_definitions(test_flow_seed_ablation PRIVATE FLOWCORO_INTEGRATION)
 add_test(NAME test_flow_seed_ablation COMMAND test_flow_seed_ablation)
 
+add_executable(test_flow_hyper_acceleration tests/test_flow_hyper_acceleration.cpp)
+if(WIN32)
+    target_link_libraries(test_flow_hyper_acceleration kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
+else()
+    target_link_libraries(test_flow_hyper_acceleration kun_quant flowengine_core flowcoro_headers flowcoro_net scheduler_cpp pthread sqlite3)
+endif()
+target_include_directories(test_flow_hyper_acceleration PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
+target_compile_definitions(test_flow_hyper_acceleration PRIVATE FLOWCORO_INTEGRATION)
+add_test(NAME test_flow_hyper_acceleration COMMAND test_flow_hyper_acceleration)
+
+
 add_executable(test_flow_constraint_ablation tests/test_flow_constraint_ablation.cpp)
 if(WIN32)
     target_link_libraries(test_flow_constraint_ablation kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
