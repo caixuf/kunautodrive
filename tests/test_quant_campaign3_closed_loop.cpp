@@ -178,6 +178,8 @@ void test_basis_arbitrage_coroutine_loop() {
 
     arb_task->set_stop();
     ex.run();
+    ex.shutdown();
+    arb_task.reset();
     g_node_exec = nullptr;
     message_bus_destroy(bus);
 

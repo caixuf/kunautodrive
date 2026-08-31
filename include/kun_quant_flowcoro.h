@@ -853,17 +853,20 @@ public:
         std::string topic_b = "market/tick/" + symbol_b_;
         std::string order_req_topic = "trader/" + account_id_ + "/order_req";
 
+        BusQueueBridge bridge(bus(), {topic_a.c_str(), topic_b.c_str()});
+
         double last_price_a = 0.0;
         double last_price_b = 0.0;
 
         while (!should_stop()) {
-            Message msg = co_await when_any_bus(bus(), {topic_a.c_str(), topic_b.c_str()});
-            if (msg.data_size < sizeof(QuantTickMsg)) continue;
+            auto res = co_await bridge.recv_any_for(50000); // 50ms 超时响应停机
+            if (res.timed_out() || res.cancelled()) continue;
+            if (res.message.data_size < sizeof(QuantTickMsg)) continue;
 
-            const auto* tick = reinterpret_cast<const QuantTickMsg*>(msg.data);
-            if (std::string(msg.topic) == topic_a) {
+            const auto* tick = reinterpret_cast<const QuantTickMsg*>(res.message.data);
+            if (std::string(res.message.topic) == topic_a) {
                 last_price_a = tick->last_price;
-            } else if (std::string(msg.topic) == topic_b) {
+            } else if (std::string(res.message.topic) == topic_b) {
                 last_price_b = tick->last_price;
             }
 
