@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -33,12 +34,17 @@ enum class CellType : uint8_t {
     OP_MULTIPLY = 15,        // 增益调节与调制 (Input A * Input B)
     OP_RATIO = 16,           // 相对比率 (Input A / (Input B + eps))
     OP_ABS = 17,             // 绝对值幅度 (|Input A|)
+    OP_DELAY_N = 18,         // 延迟管道 (Sliding FIFO delay u(t) = x(t-k))
+    OP_OSCILLATOR = 19,      // 范德波尔相弛豫振荡器 (Van der Pol Oscillator)
+    OP_QUADRATIC = 20,       // 二次能量型 (Quadratic Lyapunov energy form)
     
     // 【门控逻辑神经元 (Gating / Threshold Neurons)】
-    GATE_THRESHOLD = 20,     // 阶跃阈值激活 (Input > param ? 1 : 0)
-    GATE_HYSTERESIS = 21,    // 迟滞比较器 (Schmitt Trigger，防震荡高频抖动)
-    GATE_AND = 22,           // 协同兴奋门 (Input A > 0 && Input B > 0)
-    GATE_INHIBIT = 23,       // 抑制性突触 (Input A * (1.0 - Input B))
+    GATE_THRESHOLD = 24,     // 阶跃阈值激活 (Input > param ? 1 : 0)
+    GATE_HYSTERESIS = 25,    // 迟滞比较器 (Schmitt Trigger，防震荡高频抖动)
+    GATE_AND = 26,           // 协同兴奋门 (Input A > 0 && Input B > 0)
+    GATE_INHIBIT = 27,       // 抑制性突触 (Input A * (1.0 - Input B))
+    GATE_DEADZONE = 28,      // 中心死区噪声门 (Central deadband noise gate)
+    GATE_MIN_MAX = 29,       // 极值包络门 (Extremum envelope gate)
     
     // 【效应/动作细胞 (Effector / Action)】
     ACT_PRIMARY_POSITIVE = 30, // 正向激发动作 (量化: 买开仓 / 智驾: 变道加速)
@@ -61,10 +67,15 @@ inline const char* to_string(CellType t) {
         case CellType::OP_MULTIPLY: return "Op_Multiply";
         case CellType::OP_RATIO: return "Op_Ratio";
         case CellType::OP_ABS: return "Op_Abs";
+        case CellType::OP_DELAY_N: return "Op_DelayN";
+        case CellType::OP_OSCILLATOR: return "Op_Oscillator";
+        case CellType::OP_QUADRATIC: return "Op_Quadratic";
         case CellType::GATE_THRESHOLD: return "Gate_Threshold";
         case CellType::GATE_HYSTERESIS: return "Gate_Hysteresis";
         case CellType::GATE_AND: return "Gate_And";
         case CellType::GATE_INHIBIT: return "Gate_Inhibit";
+        case CellType::GATE_DEADZONE: return "Gate_Deadzone";
+        case CellType::GATE_MIN_MAX: return "Gate_MinMax";
         case CellType::ACT_PRIMARY_POSITIVE: return "Act_PosAction";
         case CellType::ACT_PRIMARY_NEGATIVE: return "Act_NegAction";
         case CellType::ACT_DEFENSIVE_RESET: return "Act_DefReset";
@@ -116,7 +127,34 @@ struct Cell {
     float vx{0.0f}, vy{0.0f}, vz{0.0f};    // 速度矢量
     float fx{0.0f}, fy{0.0f}, fz{0.0f};    // 受到的合力 (兰纳-琼斯力场)
     float glow_charge{0.0f};               // 生物发光强度 (0.0 ~ 1.0, 脉冲放电后渐变衰减)
+
+    // === 高阶动态与零 GC 缓冲状态 (编译期内嵌连续内存，绝无堆分配) ===
+    double aux_state{0.0};                 // 辅助内部动力学状态 (如 OP_OSCILLATOR 的速度变量 s2)
+    double delay_buffer[16]{0.0};          // 静态滑动 FIFO 管道缓冲 (用于 OP_DELAY_N)
+    uint8_t delay_idx{0};                  // FIFO 环形缓冲区游标 (用于 OP_DELAY_N)
+
+    const char* type_name() const {
+        return to_string(type);
+    }
 };
+
+// ============================================================================
+// 3.5 初始胚胎发生模式 (Seed Initialization Mode)
+// ============================================================================
+enum class SeedInitMode : uint8_t {
+    HANDCRAFTED_PROGENITOR = 0, // Mode A: 9-cell Genesis seed (2 receptors, 3 metabolic, 1 gating, 3 effectors, 7 synapses)
+    MINIMAL_RANDOM_GRAPH = 1,   // Mode B: 3-4 cells (2 receptors + 1 random metabolic/gating + 1-2 effectors with random weights U(-2, 2))
+    DISCONNECTED_EMBRYO = 2     // Mode C: Pure receptors and effectors with no intermediate connections at gen-0
+};
+
+inline const char* to_string(SeedInitMode mode) {
+    switch (mode) {
+        case SeedInitMode::HANDCRAFTED_PROGENITOR: return "Handcrafted_Progenitor";
+        case SeedInitMode::MINIMAL_RANDOM_GRAPH: return "Minimal_Random_Graph";
+        case SeedInitMode::DISCONNECTED_EMBRYO: return "Disconnected_Embryo";
+        default: return "Unknown_Mode";
+    }
+}
 
 // ============================================================================
 // 4. 多细胞有机体 (CellularOrganism): 细胞拓扑决策图 (DAG) + 力场物理引擎
@@ -143,7 +181,12 @@ public:
         uint8_t to_port;
         double weight;
     };
+    struct CompiledActionCell {
+        size_t cell_idx;
+        CellType type;
+    };
     std::vector<CompiledSynapse> compiled_synapses_;
+    std::vector<CompiledActionCell> compiled_actions_;
     std::vector<size_t> execution_order_;
     mutable std::vector<double> flat_port_inputs_; // [cell_idx * 2 + port]
     bool is_compiled_{false};
@@ -159,11 +202,14 @@ public:
             c.prev_input = 0.0;
             c.latch_state = false;
             c.output_val = 0.0;
+            c.aux_state = 0.0;
+            std::fill(std::begin(c.delay_buffer), std::end(c.delay_buffer), 0.0);
+            c.delay_idx = 0;
         }
         std::fill(flat_port_inputs_.begin(), flat_port_inputs_.end(), 0.0);
     }
 
-    // 创建最简单细胞原生生物 (Archean Progenitor)
+    // 创建最简单细胞原生生物 (Archean Progenitor / Mode A: Handcrafted Progenitor)
     static CellularOrganism create_seed_organism(uint64_t id = 1) {
         CellularOrganism org;
         org.organism_id = id;
@@ -198,6 +244,95 @@ public:
 
         org.compile();
         return org;
+    }
+
+    static CellularOrganism create_handcrafted_progenitor(uint64_t id = 1) {
+        return create_seed_organism(id);
+    }
+
+    // Mode B: 最小随机图结构 (Minimal Random Graph: 3-4 cells: 2 receptors + 1 random metabolic/gating cell + 1 effector with random weights U(-2, 2))
+    static CellularOrganism create_minimal_random_graph(uint64_t id = 1, uint32_t seed = 42) {
+        CellularOrganism org;
+        org.organism_id = id;
+        org.generation = 0;
+        org.lineage_name = "MinimalRandom-" + std::to_string(id);
+
+        std::mt19937 prng(seed + static_cast<uint32_t>(id * 1013));
+        std::uniform_real_distribution<double> dist_w(-2.0, 2.0);
+        std::uniform_real_distribution<double> dist_param(-1.0, 1.0);
+
+        static const CellType candidates[] = {
+            CellType::OP_EMA, CellType::OP_DIFF, CellType::OP_INTEGRAL,
+            CellType::OP_SUM, CellType::OP_SUB, CellType::OP_MULTIPLY,
+            CellType::OP_RATIO, CellType::OP_ABS,
+            CellType::OP_DELAY_N, CellType::OP_OSCILLATOR, CellType::OP_QUADRATIC,
+            CellType::GATE_THRESHOLD, CellType::GATE_HYSTERESIS,
+            CellType::GATE_AND, CellType::GATE_INHIBIT,
+            CellType::GATE_DEADZONE, CellType::GATE_MIN_MAX
+        };
+        std::uniform_int_distribution<size_t> dist_type(0, sizeof(candidates) / sizeof(candidates[0]) - 1);
+        CellType mid_type = candidates[dist_type(prng)];
+
+        // 2 感知受体细胞
+        org.cells.push_back({0, CellType::SENSE_RAW_INPUT_0, 1.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, -100.0f, -30.0f, 0.0f});
+        org.cells.push_back({1, CellType::SENSE_RAW_INPUT_1, 1.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, -100.0f,  30.0f, 0.0f});
+
+        // 1 随机代谢/门控细胞
+        org.cells.push_back({2, mid_type, dist_param(prng), dist_param(prng), 0.0, 0.0, false, 0.0, 0, 0, 0.0f, 0.0f, 0.0f});
+
+        // 效应动作细胞 (3-4 cells: 1 积极动作 + 1 消极动作)
+        org.cells.push_back({3, CellType::ACT_PRIMARY_POSITIVE, 0.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, 100.0f, -30.0f, 0.0f});
+        org.cells.push_back({4, CellType::ACT_PRIMARY_NEGATIVE, 0.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, 100.0f,  30.0f, 0.0f});
+
+        // 随机突触连接 U(-2, 2)
+        std::uniform_int_distribution<int> dist_sense(0, 1);
+        uint16_t s_id = static_cast<uint16_t>(dist_sense(prng));
+        org.synapses.push_back({s_id, 2, 0, dist_w(prng), true, 60.0f, -1.0f});
+        org.synapses.push_back({static_cast<uint16_t>(1 - s_id), 2, 1, dist_w(prng), true, 60.0f, -1.0f});
+        org.synapses.push_back({2, 3, 0, dist_w(prng), true, 60.0f, -1.0f});
+        org.synapses.push_back({2, 4, 0, dist_w(prng), true, 60.0f, -1.0f});
+
+        org.compile();
+        return org;
+    }
+
+    // Mode C: 无连接原始胚胎 (Disconnected Embryo: pure receptors and effectors with no intermediate connections at gen-0)
+    static CellularOrganism create_disconnected_embryo(uint64_t id = 1) {
+        CellularOrganism org;
+        org.organism_id = id;
+        org.generation = 0;
+        org.lineage_name = "Embryo-" + std::to_string(id);
+
+        // 纯感知受体细胞
+        org.cells.push_back({0, CellType::SENSE_RAW_INPUT_0, 1.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, -120.0f, -60.0f, 0.0f});
+        org.cells.push_back({1, CellType::SENSE_RAW_INPUT_1, 1.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, -120.0f, -20.0f, 0.0f});
+        org.cells.push_back({2, CellType::SENSE_RAW_INPUT_2, 1.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, -120.0f,  20.0f, 0.0f});
+        org.cells.push_back({3, CellType::SENSE_RAW_INPUT_3, 1.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, -120.0f,  60.0f, 0.0f});
+
+        // 纯效应动作细胞
+        org.cells.push_back({4, CellType::ACT_PRIMARY_POSITIVE, 0.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, 120.0f, -60.0f, 0.0f});
+        org.cells.push_back({5, CellType::ACT_PRIMARY_NEGATIVE, 0.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, 120.0f, -20.0f, 0.0f});
+        org.cells.push_back({6, CellType::ACT_DEFENSIVE_RESET,  0.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, 120.0f,  20.0f, 0.0f});
+        org.cells.push_back({7, CellType::ACT_IMMUNE_BLOCK,     0.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, 120.0f,  60.0f, 0.0f});
+
+        // 突触完全为空 (0 connections at gen-0)
+        org.synapses.clear();
+
+        org.compile();
+        return org;
+    }
+
+    // 通用模式工厂分发器
+    static CellularOrganism create_by_mode(SeedInitMode mode, uint64_t id = 1, uint32_t seed = 42) {
+        switch (mode) {
+            case SeedInitMode::HANDCRAFTED_PROGENITOR:
+                return create_handcrafted_progenitor(id);
+            case SeedInitMode::MINIMAL_RANDOM_GRAPH:
+                return create_minimal_random_graph(id, seed);
+            case SeedInitMode::DISCONNECTED_EMBRYO:
+                return create_disconnected_embryo(id);
+        }
+        return create_seed_organism(id);
     }
 
     // 拓扑排序与扁平执行编译 (Flat Array Compilation: 消除所有运行期堆分配)
@@ -256,6 +391,18 @@ public:
 
         // 预分配扁平输入端口缓冲 (每个细胞 2 个端口)
         flat_port_inputs_.assign(cells.size() * 2, 0.0);
+
+        // 预编译效应动作细胞索引，消除前向运行期全细胞线性扫描
+        compiled_actions_.clear();
+        for (size_t i = 0; i < cells.size(); ++i) {
+            if (cells[i].type == CellType::ACT_PRIMARY_POSITIVE ||
+                cells[i].type == CellType::ACT_PRIMARY_NEGATIVE ||
+                cells[i].type == CellType::ACT_DEFENSIVE_RESET ||
+                cells[i].type == CellType::ACT_IMMUNE_BLOCK) {
+                compiled_actions_.push_back({i, cells[i].type});
+            }
+        }
+
         is_compiled_ = true;
         return true;
     }
@@ -376,20 +523,30 @@ public:
     ActionOutputs forward(const double inputs[4]) {
         if (!is_compiled_) compile();
 
-        // 1. 清空扁平输入端口缓冲
-        std::fill(flat_port_inputs_.begin(), flat_port_inputs_.end(), 0.0);
+        // 1. 清空扁平输入端口缓冲 (连续内存快速清零)
+        double* __restrict port_ptr = flat_port_inputs_.data();
+        std::memset(port_ptr, 0, flat_port_inputs_.size() * sizeof(double));
 
         // 2. 突触快速汇聚 (连续内存线性遍历)
-        for (const auto& syn : compiled_synapses_) {
-            double val = cells[syn.from_idx].output_val * syn.weight;
-            flat_port_inputs_[syn.to_idx * 2 + syn.to_port] += val;
+        Cell* __restrict cells_ptr = cells.data();
+        const auto* __restrict syn_ptr = compiled_synapses_.data();
+        const size_t num_synapses = compiled_synapses_.size();
+
+        for (size_t i = 0; i < num_synapses; ++i) {
+            const auto& syn = syn_ptr[i];
+            double val = cells_ptr[syn.from_idx].output_val * syn.weight;
+            port_ptr[syn.to_idx * 2 + syn.to_port] += val;
         }
 
         // 3. 按预编译拓扑顺序逐一激发细胞
-        for (size_t idx : execution_order_) {
-            auto& c = cells[idx];
-            double in0 = flat_port_inputs_[idx * 2 + 0];
-            double in1 = flat_port_inputs_[idx * 2 + 1];
+        const auto* __restrict order_ptr = execution_order_.data();
+        const size_t num_ordered = execution_order_.size();
+
+        for (size_t i = 0; i < num_ordered; ++i) {
+            size_t idx = order_ptr[i];
+            auto& c = cells_ptr[idx];
+            double in0 = port_ptr[idx * 2 + 0];
+            double in1 = port_ptr[idx * 2 + 1];
 
             switch (c.type) {
                 case CellType::SENSE_RAW_INPUT_0: c.output_val = inputs[0] * c.param1; break;
@@ -427,6 +584,43 @@ public:
                 case CellType::OP_ABS:
                     c.output_val = std::abs(in0);
                     break;
+                case CellType::OP_DELAY_N: {
+                    int k = std::clamp(static_cast<int>(std::floor(c.param1 * 16.0)), 1, 16);
+                    size_t read_idx = (static_cast<size_t>(c.delay_idx) + 16 - static_cast<size_t>(k)) & 15;
+                    c.output_val = c.delay_buffer[read_idx];
+                    c.delay_buffer[c.delay_idx & 15] = in0;
+                    c.delay_idx = static_cast<uint8_t>((c.delay_idx + 1) & 15);
+                    break;
+                }
+                case CellType::OP_OSCILLATOR: {
+                    // 范德波尔相弛豫振荡器:
+                    // dot_s1 = s2
+                    // dot_s2 = mu * (1 - s1^2) * s2 - s1 + I0
+                    // s1 = state_val, s2 = aux_state
+                    if (c.activation_count == 0 && std::abs(c.state_val) < 1e-6 && std::abs(c.aux_state) < 1e-6) {
+                        c.state_val = 0.1; // 启动微扰以激发生物起搏
+                    }
+                    double mu = (std::abs(c.param1) > 1e-4) ? std::clamp(std::abs(c.param1), 0.01, 5.0) : 1.0;
+                    double dt = (std::abs(c.param2) > 1e-4) ? std::clamp(std::abs(c.param2), 0.001, 0.2) : 0.05;
+
+                    double s1 = c.state_val;
+                    double s2 = c.aux_state;
+
+                    double ds1 = s2;
+                    double ds2 = mu * (1.0 - s1 * s1) * s2 - s1 + in0;
+
+                    s1 += ds1 * dt;
+                    s2 += ds2 * dt;
+
+                    c.state_val = std::clamp(s1, -10.0, 10.0);
+                    c.aux_state = std::clamp(s2, -10.0, 10.0);
+                    c.output_val = c.state_val;
+                    break;
+                }
+                case CellType::OP_QUADRATIC:
+                    // u = p1 * I0^2 + p2 * I0 * I1
+                    c.output_val = c.param1 * in0 * in0 + c.param2 * in0 * in1;
+                    break;
 
                 case CellType::GATE_THRESHOLD:
                     c.output_val = (in0 > c.param1) ? 1.0 : 0.0;
@@ -441,6 +635,14 @@ public:
                     break;
                 case CellType::GATE_INHIBIT:
                     c.output_val = in0 * std::max(0.0, 1.0 - in1);
+                    break;
+                case CellType::GATE_DEADZONE:
+                    // u = (|I0| > |p1|) ? I0 : 0.0
+                    c.output_val = (std::abs(in0) > std::abs(c.param1)) ? in0 : 0.0;
+                    break;
+                case CellType::GATE_MIN_MAX:
+                    // u = (p1 > 0.5) ? max(I0, I1) : min(I0, I1)
+                    c.output_val = (c.param1 > 0.5) ? std::max(in0, in1) : std::min(in0, in1);
                     break;
 
                 case CellType::ACT_PRIMARY_POSITIVE:
@@ -457,15 +659,14 @@ public:
             }
         }
 
-        // 收集最终动作信号
+        // 收集最终动作信号 (通过预编译索引直达效应神经元)
         ActionOutputs actions{};
-        for (const auto& c : cells) {
-            if (c.type == CellType::ACT_PRIMARY_POSITIVE) actions.positive_action = c.output_val;
-            else if (c.type == CellType::ACT_PRIMARY_NEGATIVE) actions.negative_action = c.output_val;
-            else if (c.type == CellType::ACT_DEFENSIVE_RESET) actions.defensive_reset = c.output_val;
-            else if (c.type == CellType::ACT_IMMUNE_BLOCK) {
-                if (c.output_val > 0.5) actions.immune_lock = true;
-            }
+        for (const auto& ac : compiled_actions_) {
+            double val = cells_ptr[ac.cell_idx].output_val;
+            if (ac.type == CellType::ACT_PRIMARY_POSITIVE) actions.positive_action = val;
+            else if (ac.type == CellType::ACT_PRIMARY_NEGATIVE) actions.negative_action = val;
+            else if (ac.type == CellType::ACT_DEFENSIVE_RESET) actions.defensive_reset = val;
+            else if (ac.type == CellType::ACT_IMMUNE_BLOCK && val > 0.5) actions.immune_lock = true;
         }
         return actions;
     }
@@ -509,15 +710,15 @@ public:
 // ============================================================================
 class MorphogeneticEvolutionEngine {
 public:
-    explicit MorphogeneticEvolutionEngine(size_t population_size = 20, uint32_t seed = 42)
-        : rng_(seed), population_size_(population_size) {
+    explicit MorphogeneticEvolutionEngine(size_t population_size = 20, uint32_t seed = 42, SeedInitMode init_mode = SeedInitMode::HANDCRAFTED_PROGENITOR)
+        : rng_(seed), population_size_(population_size), init_mode_(init_mode) {
         init_population();
     }
 
     void init_population() {
         population_.clear();
         for (size_t i = 0; i < population_size_; ++i) {
-            auto org = CellularOrganism::create_seed_organism(i + 1);
+            auto org = CellularOrganism::create_by_mode(init_mode_, i + 1, static_cast<uint32_t>(rng_()));
             if (i > 0) {
                 for (int m = 0; m < 3; ++m) mutate(org);
             }
@@ -525,18 +726,29 @@ public:
         }
     }
 
+    void set_init_mode(SeedInitMode mode) {
+        init_mode_ = mode;
+        init_population();
+    }
+
+    SeedInitMode get_init_mode() const { return init_mode_; }
+
     // ── 生物变异操作 1: 细胞分裂增殖 (Mitosis / Add Cell) ──
     bool mutate_add_cell(CellularOrganism& org) {
-        if (org.synapses.empty()) return false;
+        if (org.synapses.empty()) return mutate_add_synapse(org);
         std::uniform_int_distribution<size_t> dist_syn(0, org.synapses.size() - 1);
         size_t s_idx = dist_syn(rng_);
         auto& old_syn = org.synapses[s_idx];
         if (!old_syn.is_active) return false;
 
         static const CellType candidates[] = {
-            CellType::OP_EMA, CellType::OP_DIFF, CellType::OP_SUM, CellType::OP_SUB,
-            CellType::OP_RATIO, CellType::GATE_THRESHOLD, CellType::GATE_HYSTERESIS,
-            CellType::GATE_AND, CellType::GATE_INHIBIT
+            CellType::OP_EMA, CellType::OP_DIFF, CellType::OP_INTEGRAL,
+            CellType::OP_SUM, CellType::OP_SUB, CellType::OP_MULTIPLY,
+            CellType::OP_RATIO, CellType::OP_ABS,
+            CellType::OP_DELAY_N, CellType::OP_OSCILLATOR, CellType::OP_QUADRATIC,
+            CellType::GATE_THRESHOLD, CellType::GATE_HYSTERESIS,
+            CellType::GATE_AND, CellType::GATE_INHIBIT,
+            CellType::GATE_DEADZONE, CellType::GATE_MIN_MAX
         };
         std::uniform_int_distribution<size_t> dist_type(0, sizeof(candidates) / sizeof(candidates[0]) - 1);
         CellType new_type = candidates[dist_type(rng_)];
@@ -568,27 +780,30 @@ public:
     // ── 生物变异操作 2: 突触跨界重连 (Synaptic Rewiring) ──
     bool mutate_add_synapse(CellularOrganism& org) {
         if (org.cells.size() < 2) return false;
-        std::uniform_int_distribution<size_t> dist_cell(0, org.cells.size() - 1);
-        size_t idx_a = dist_cell(rng_);
-        size_t idx_b = dist_cell(rng_);
-        if (idx_a == idx_b) return false;
+        for (int retry = 0; retry < 10; ++retry) {
+            std::uniform_int_distribution<size_t> dist_cell(0, org.cells.size() - 1);
+            size_t idx_a = dist_cell(rng_);
+            size_t idx_b = dist_cell(rng_);
+            if (idx_a == idx_b) continue;
 
-        uint16_t from_id = org.cells[idx_a].id;
-        uint16_t to_id = org.cells[idx_b].id;
+            if (org.cells[idx_b].type == CellType::SENSE_RAW_INPUT_0 ||
+                org.cells[idx_b].type == CellType::SENSE_RAW_INPUT_1 ||
+                org.cells[idx_b].type == CellType::SENSE_RAW_INPUT_2 ||
+                org.cells[idx_b].type == CellType::SENSE_RAW_INPUT_3) {
+                continue;
+            }
 
-        if (org.cells[idx_b].type == CellType::SENSE_RAW_INPUT_0 ||
-            org.cells[idx_b].type == CellType::SENSE_RAW_INPUT_1 ||
-            org.cells[idx_b].type == CellType::SENSE_RAW_INPUT_2 ||
-            org.cells[idx_b].type == CellType::SENSE_RAW_INPUT_3) {
-            return false;
+            uint16_t from_id = org.cells[idx_a].id;
+            uint16_t to_id = org.cells[idx_b].id;
+
+            std::uniform_real_distribution<double> dist_weight(-2.0, 2.0);
+            std::uniform_int_distribution<int> dist_port(0, 1);
+
+            org.synapses.push_back({from_id, to_id, static_cast<uint8_t>(dist_port(rng_)), dist_weight(rng_), true, 60.0f, -1.0f});
+            org.compile();
+            return true;
         }
-
-        std::uniform_real_distribution<double> dist_weight(-2.0, 2.0);
-        std::uniform_int_distribution<int> dist_port(0, 1);
-
-        org.synapses.push_back({from_id, to_id, static_cast<uint8_t>(dist_port(rng_)), dist_weight(rng_), true, 60.0f, -1.0f});
-        org.compile();
-        return true;
+        return false;
     }
 
     // ── 生物变异操作 3: 细胞参数微调 + 突触可塑性 (Metabolic Drift & Plasticity) ──
@@ -663,12 +878,33 @@ public:
     // 综合变异入口
     void mutate(CellularOrganism& org) {
         std::uniform_real_distribution<double> dist(0.0, 1.0);
-        double r = dist(rng_);
-        if (r < 0.35) mutate_parameters(org);
-        else if (r < 0.70) mutate_add_synapse(org);
-        else mutate_add_cell(org);
 
-        if (dist(rng_) < 0.05) prune_apoptosis(org);
+        // 1. 若当前有机体突触不足 2 条 (如原始胚胎冷启动)，强制优先建立基础突触连接
+        size_t active_syns = 0;
+        for (const auto& s : org.synapses) if (s.is_active) active_syns++;
+        if (active_syns < 2) {
+            mutate_add_synapse(org);
+        }
+
+        // 2. 突触权重与细胞参数微调 (细粒度梯度微扰)
+        if (dist(rng_) < 0.80) {
+            mutate_parameters(org);
+        }
+
+        // 3. 突触结构重连 / 新增突触
+        if (dist(rng_) < 0.45) {
+            mutate_add_synapse(org);
+        }
+
+        // 4. 细胞分裂增殖 (插入代谢/门控算子神经元)
+        if (dist(rng_) < 0.30) {
+            mutate_add_cell(org);
+        }
+
+        // 5. 细胞自我凋亡与无用分支净化
+        if (dist(rng_) < 0.05) {
+            prune_apoptosis(org);
+        }
     }
 
     // ── 种群世代演化 (Evolve Next Generation) ──
@@ -705,6 +941,7 @@ public:
 private:
     std::mt19937 rng_;
     size_t population_size_{20};
+    SeedInitMode init_mode_{SeedInitMode::HANDCRAFTED_PROGENITOR};
     std::vector<CellularOrganism> population_;
 };
 

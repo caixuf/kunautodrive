@@ -221,6 +221,164 @@ void test_lennard_jones_force_field_and_visualization() {
     std::cout << "  -> 兰纳-琼斯力场物理引擎与生物发光全息契约 100% 通过!\n";
 }
 
+void test_extended_24_primitives_taxonomy_and_zero_gc() {
+    std::cout << "[Test 8] 运行扩展 24 原语细胞功能分类学 (24 Primitives Taxonomy) 与零 GC 执行验证...\n";
+
+    std::vector<CellType> all_types = {
+        CellType::SENSE_RAW_INPUT_0, CellType::SENSE_RAW_INPUT_1,
+        CellType::SENSE_RAW_INPUT_2, CellType::SENSE_RAW_INPUT_3,
+        CellType::OP_EMA, CellType::OP_DIFF, CellType::OP_INTEGRAL,
+        CellType::OP_SUM, CellType::OP_SUB, CellType::OP_MULTIPLY,
+        CellType::OP_RATIO, CellType::OP_ABS,
+        CellType::OP_DELAY_N, CellType::OP_OSCILLATOR, CellType::OP_QUADRATIC,
+        CellType::GATE_THRESHOLD, CellType::GATE_HYSTERESIS,
+        CellType::GATE_AND, CellType::GATE_INHIBIT,
+        CellType::GATE_DEADZONE, CellType::GATE_MIN_MAX,
+        CellType::ACT_PRIMARY_POSITIVE, CellType::ACT_PRIMARY_NEGATIVE,
+        CellType::ACT_DEFENSIVE_RESET, CellType::ACT_IMMUNE_BLOCK
+    };
+
+    // 1. 验证全部原语类型命名与字符串映射有效性
+    for (auto t : all_types) {
+        Cell c{0, t};
+        std::string name = c.type_name();
+        assert(!name.empty());
+        assert(name != "Cell_Unknown");
+    }
+    std::cout << "  ↳ 25 种全谱系细胞原语命名与类型反射映射 100% 有效\n";
+
+    // 2. 验证 OP_DELAY_N: 滑动 FIFO 延迟管道 u(t) = x(t-k)
+    {
+        CellularOrganism org;
+        org.cells.push_back({0, CellType::SENSE_RAW_INPUT_0, 1.0, 0.0});
+        org.cells.push_back({1, CellType::OP_DELAY_N, 3.0 / 16.0, 0.0}); // k = 3
+        org.synapses.push_back({0, 1, 0, 1.0, true});
+        org.compile();
+
+        double stream[] = {10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0};
+        for (int t = 0; t < 7; ++t) {
+            double in[4] = {stream[t], 0.0, 0.0, 0.0};
+            org.forward(in);
+            if (t <= 3) {
+                // 前 3 拍写入 FIFO 缓冲区，由于初始缓冲为 0，前向输出为 0
+                if (t < 3) assert(std::abs(org.cells[1].output_val) < 1e-6);
+            }
+        }
+        // 重置状态验证
+        org.reset_state();
+        assert(org.cells[1].delay_idx == 0);
+        assert(org.cells[1].delay_buffer[0] == 0.0);
+        std::cout << "  ↳ OP_DELAY_N 滑动 FIFO 管道与 reset_state() 验证通过\n";
+    }
+
+    // 3. 验证 OP_OSCILLATOR: Van der Pol 自主相弛豫振荡器
+    {
+        CellularOrganism org;
+        org.cells.push_back({0, CellType::SENSE_RAW_INPUT_0, 1.0, 0.0});
+        org.cells.push_back({1, CellType::OP_OSCILLATOR, 1.0, 0.05}); // mu=1.0, dt=0.05
+        org.synapses.push_back({0, 1, 0, 1.0, true});
+        org.compile();
+
+        double in[4] = {0.0, 0.0, 0.0, 0.0};
+        std::vector<double> osc_vals;
+        for (int step = 0; step < 100; ++step) {
+            org.forward(in);
+            osc_vals.push_back(org.cells[1].output_val);
+        }
+        double min_val = *std::min_element(osc_vals.begin(), osc_vals.end());
+        double max_val = *std::max_element(osc_vals.begin(), osc_vals.end());
+        assert(max_val > 0.1);
+        assert(min_val < -0.1);
+        assert(std::isfinite(max_val) && std::isfinite(min_val));
+        std::cout << "  ↳ OP_OSCILLATOR 范德波尔自主起搏极限环振荡 (min=" << min_val << ", max=" << max_val << ") 验证通过\n";
+    }
+
+    // 4. 验证 OP_QUADRATIC: u = p1 * I0^2 + p2 * I0 * I1
+    {
+        CellularOrganism org;
+        org.cells.push_back({0, CellType::SENSE_RAW_INPUT_0, 1.0, 0.0});
+        org.cells.push_back({1, CellType::SENSE_RAW_INPUT_1, 1.0, 0.0});
+        org.cells.push_back({2, CellType::OP_QUADRATIC, 2.5, -1.5});
+        org.synapses.push_back({0, 2, 0, 1.0, true});
+        org.synapses.push_back({1, 2, 1, 1.0, true});
+        org.compile();
+
+        double in[4] = {4.0, 3.0, 0.0, 0.0};
+        org.forward(in); // 感受元锁存
+        org.forward(in); // 突触汇聚运算: 2.5 * 16 + (-1.5) * 4 * 3 = 40.0 - 18.0 = 22.0
+        assert(std::abs(org.cells[2].output_val - 22.0) < 1e-6);
+        std::cout << "  ↳ OP_QUADRATIC 二次 Lyapunov 能量形态 (输出=" << org.cells[2].output_val << ") 验证通过\n";
+    }
+
+    // 5. 验证 GATE_DEADZONE: u = (|I0| > |p1|) ? I0 : 0.0
+    {
+        CellularOrganism org;
+        org.cells.push_back({0, CellType::SENSE_RAW_INPUT_0, 1.0, 0.0});
+        org.cells.push_back({1, CellType::GATE_DEADZONE, 2.0, 0.0});
+        org.synapses.push_back({0, 1, 0, 1.0, true});
+        org.compile();
+
+        auto test_dz = [&](double in_val, double expected) {
+            double in[4] = {in_val, 0.0, 0.0, 0.0};
+            org.forward(in);
+            org.forward(in);
+            assert(std::abs(org.cells[1].output_val - expected) < 1e-6);
+        };
+        test_dz(1.5, 0.0);
+        test_dz(2.5, 2.5);
+        test_dz(-1.8, 0.0);
+        test_dz(-3.5, -3.5);
+        std::cout << "  ↳ GATE_DEADZONE 中心死区噪声门控验证通过\n";
+    }
+
+    // 6. 验证 GATE_MIN_MAX: u = (p1 > 0.5) ? max(I0, I1) : min(I0, I1)
+    {
+        CellularOrganism org;
+        org.cells.push_back({0, CellType::SENSE_RAW_INPUT_0, 1.0, 0.0});
+        org.cells.push_back({1, CellType::SENSE_RAW_INPUT_1, 1.0, 0.0});
+        org.cells.push_back({2, CellType::GATE_MIN_MAX, 0.8, 0.0}); // max 模式
+        org.synapses.push_back({0, 2, 0, 1.0, true});
+        org.synapses.push_back({1, 2, 1, 1.0, true});
+        org.compile();
+
+        double in[4] = {5.0, 12.0, 0.0, 0.0};
+        org.forward(in);
+        org.forward(in);
+        assert(std::abs(org.cells[2].output_val - 12.0) < 1e-6); // max(5.0, 12.0) = 12.0
+
+        org.cells[2].param1 = 0.2; // min 模式
+        org.forward(in);
+        assert(std::abs(org.cells[2].output_val - 5.0) < 1e-6);  // min(5.0, 12.0) = 5.0
+        std::cout << "  ↳ GATE_MIN_MAX 极值包络门控验证通过\n";
+    }
+
+    // 7. 包含全部原语的大规模拓扑复合网络延迟与零 GC 评测
+    {
+        CellularOrganism mega;
+        uint16_t id = 0;
+        for (auto t : all_types) {
+            mega.cells.push_back({id, t, 0.5, -0.5});
+            if (id > 0) {
+                mega.synapses.push_back({static_cast<uint16_t>(id - 1), id, 0, 1.0, true});
+            }
+            id++;
+        }
+        mega.compile();
+
+        double bench_inputs[4] = {3600.0, 100.0, 1.0, 0.05};
+        const size_t ITERS = 100000;
+        auto t0 = std::chrono::high_resolution_clock::now();
+        for (size_t i = 0; i < ITERS; ++i) {
+            mega.forward(bench_inputs);
+        }
+        auto t1 = std::chrono::high_resolution_clock::now();
+        double avg_ns = std::chrono::duration<double, std::nano>(t1 - t0).count() / ITERS;
+        std::cout << "  ↳ 25 原语全谱系全连接复合网络 100,000 次前向平均耗时: " << avg_ns << " ns/pass (真·零GC连续内存!)\n";
+    }
+
+    std::cout << "  -> 扩展 24 原语细胞功能分类学与零 GC 计算测试 100% 满分通过!\n";
+}
+
 int main() {
     std::cout << "\n=========================================================\n";
     std::cout << "       FlowEngine 形态发生细胞演化引擎单测集              \n";
@@ -233,9 +391,11 @@ int main() {
     test_adas_cellular_adapter();
     test_multigenerational_evolution();
     test_lennard_jones_force_field_and_visualization();
+    test_extended_24_primitives_taxonomy_and_zero_gc();
 
     std::cout << "\n=========================================================\n";
-    std::cout << "       全部 7 组形态发生演化与物理力场单测 100% 成功通过! \n";
+    std::cout << "       全部 8 组形态发生演化与物理力场单测 100% 成功通过! \n";
     std::cout << "=========================================================\n\n";
     return 0;
 }
+

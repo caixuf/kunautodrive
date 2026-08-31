@@ -222,8 +222,8 @@ private:
  */
 class MazeEvolutionEngine {
 public:
-    explicit MazeEvolutionEngine(size_t population_size = 24, int maze_size = 21)
-        : pop_size_(population_size), maze_(maze_size, maze_size), morph_engine_(population_size) {
+    explicit MazeEvolutionEngine(size_t population_size = 24, int maze_size = 21, uint32_t seed = 42, SeedInitMode init_mode = SeedInitMode::HANDCRAFTED_PROGENITOR)
+        : pop_size_(population_size), maze_(maze_size, maze_size, seed), morph_engine_(population_size, seed, init_mode) {
         reset_simulation();
     }
 
@@ -304,6 +304,7 @@ public:
             }
         }
 
+        best_fitness_ = best_fit;
         success_rate_ = static_cast<float>(success_count) / static_cast<float>(pop_size_);
         champion_trail_ = agents_[champ_idx].trail;
         morph_engine_.evolve_generation();
@@ -358,9 +359,11 @@ public:
 
     const MazeEnvironment& get_maze() const { return maze_; }
     const MorphogeneticEvolutionEngine& morph_engine() const { return morph_engine_; }
+    MorphogeneticEvolutionEngine& morph_engine() { return morph_engine_; }
     const std::vector<MazeEnvironment::Agent>& get_agents() const { return agents_; }
     int get_generation() const { return generation_; }
     float get_success_rate() const { return success_rate_; }
+    float get_best_fitness() const { return best_fitness_; }
 
 private:
     size_t pop_size_{24};
@@ -368,6 +371,7 @@ private:
     int step_count_{0};
     int generation_{1};
     float success_rate_{0.0f};
+    float best_fitness_{-999.0f};
     MazeEnvironment maze_;
     MorphogeneticEvolutionEngine morph_engine_;
     std::vector<MazeEnvironment::Agent> agents_;

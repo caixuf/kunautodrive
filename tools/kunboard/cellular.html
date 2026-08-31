@@ -129,15 +129,21 @@ const T = {
   SENSE0:'SENSE0', SENSE1:'SENSE1', SENSE2:'SENSE2', SENSE3:'SENSE3',
   EMA:'EMA', DIFF:'DIFF', INTEGRAL:'INTEGRAL', SUM:'SUM', SUB:'SUB',
   MUL:'MUL', RATIO:'RATIO', ABS:'ABS',
+  DELAY_N:'DELAY_N', OSCILLATOR:'OSCILLATOR', QUADRATIC:'QUADRATIC',
   THRESH:'THRESH', HYST:'HYST', AND:'AND', INHIB:'INHIB',
+  DEADZONE:'DEADZONE', MIN_MAX:'MIN_MAX',
   ACT_POS:'ACT_POS', ACT_NEG:'ACT_NEG', ACT_RESET:'ACT_RESET', ACT_LOCK:'ACT_LOCK'
 };
 const FAMILY = c =>
-  c.startsWith('SENSE') ? 'receptor' :
-  ['EMA','DIFF','INTEGRAL','SUM','SUB','MUL','RATIO','ABS'].includes(c) ? 'metabolic' :
-  ['THRESH','HYST','AND','INHIB'].includes(c) ? 'gating' : 'effector';
+  c.startsWith('SENSE') || c.startsWith('Sense') ? 'receptor' :
+  (c.startsWith('Op_') || ['EMA','DIFF','INTEGRAL','SUM','SUB','MUL','RATIO','ABS','DELAY_N','OSCILLATOR','QUADRATIC'].includes(c)) ? 'metabolic' :
+  (c.startsWith('Gate_') || ['THRESH','HYST','AND','INHIB','DEADZONE','MIN_MAX'].includes(c)) ? 'gating' : 'effector';
 const FAMILY_COLOR = { receptor:0x22d3ee, metabolic:0x34d399, gating:0xa78bfa, effector:0xf43f5e };
-const MUT_CANDIDATES = [T.EMA,T.DIFF,T.SUM,T.SUB,T.RATIO,T.THRESH,T.HYST,T.AND,T.INHIB];
+const MUT_CANDIDATES = [
+  T.EMA, T.DIFF, T.INTEGRAL, T.SUM, T.SUB, T.MUL, T.RATIO, T.ABS,
+  T.DELAY_N, T.OSCILLATOR, T.QUADRATIC,
+  T.THRESH, T.HYST, T.AND, T.INHIB, T.DEADZONE, T.MIN_MAX
+];
 
 /* ============================================================
  * 2. 有机体 (客户端复刻 C++ CellularOrganism)
@@ -225,11 +231,35 @@ function forward(org, inputs){
       case T.MUL: c.out = i0*i1; break;
       case T.RATIO: c.out = i0/(Math.abs(i1)>1e-6?i1:1e-6); break;
       case T.ABS: c.out = Math.abs(i0); break;
+      case T.DELAY_N: {
+        if(!c.buf) { c.buf = new Float64Array(16); c.didx = 0; }
+        const k = Math.min(16, Math.max(1, Math.floor(c.param1 * 16)));
+        const rIdx = (c.didx + 16 - k) & 15;
+        c.out = c.buf[rIdx];
+        c.buf[c.didx & 15] = i0;
+        c.didx = (c.didx + 1) & 15;
+        break;
+      }
+      case T.OSCILLATOR: {
+        if(c.acts===0 && Math.abs(c.state||0)<1e-6 && Math.abs(c.aux||0)<1e-6) c.state = 0.1;
+        const mu = Math.abs(c.param1)>1e-4 ? Math.min(5, Math.max(0.01, Math.abs(c.param1))) : 1.0;
+        const dt = Math.abs(c.param2)>1e-4 ? Math.min(0.2, Math.max(0.001, Math.abs(c.param2))) : 0.05;
+        let s1 = c.state || 0, s2 = c.aux || 0;
+        const ds1 = s2, ds2 = mu * (1 - s1*s1) * s2 - s1 + i0;
+        s1 += ds1 * dt; s2 += ds2 * dt;
+        c.state = Math.min(10, Math.max(-10, s1));
+        c.aux = Math.min(10, Math.max(-10, s2));
+        c.out = c.state;
+        break;
+      }
+      case T.QUADRATIC: c.out = c.param1 * i0 * i0 + c.param2 * i0 * i1; break;
       case T.THRESH: c.out = i0>c.param1?1:0; break;
       case T.HYST: { if(i0>c.param1) c.latch=true; else if(i0<c.param2) c.latch=false;
         c.out = c.latch?1:-1; break; }
       case T.AND: c.out = (i0>0&&i1>0)?1:0; break;
       case T.INHIB: c.out = i0*Math.max(0,1-i1); break;
+      case T.DEADZONE: c.out = Math.abs(i0) > Math.abs(c.param1) ? i0 : 0; break;
+      case T.MIN_MAX: c.out = c.param1 > 0.5 ? Math.max(i0, i1) : Math.min(i0, i1); break;
       default: c.out = i0;
     }
     if(Math.abs(c.out)>1e-6){ c.acts++; c.glow=Math.min(1,c.glow+0.3); }
