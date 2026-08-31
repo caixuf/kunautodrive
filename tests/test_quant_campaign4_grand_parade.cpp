@@ -118,9 +118,9 @@ void test_phase2_redteam_adversarial_risk_defense() {
     std::cout << "  -> 第二营：红蓝对抗与硬熔断铁闸测试满分通过!\n";
 }
 
-// ── 检阅三：太初细胞演化高频前向与力场并发测试 ──
+// ── 检阅三：形态发生细胞演化高频前向与力场并发测试 ──
 void test_phase3_cellular_evolution_and_force_field_stress() {
-    std::cout << "[大阅兵 · 第三营] 运行太初细胞 50,000 轮演化与兰纳-琼斯力场并发压测...\n";
+    std::cout << "[大阅兵 · 第三营] 运行形态发生细胞 50,000 轮演化与兰纳-琼斯力场并发压测...\n";
     MorphogeneticEvolutionEngine engine(20, 77777);
 
     auto t0 = std::chrono::high_resolution_clock::now();
@@ -150,7 +150,7 @@ void test_phase3_cellular_evolution_and_force_field_stress() {
     assert(!champ.cells.empty());
     assert(champ.is_compiled());
 
-    std::cout << "  -> 第三营：太初细胞形态演化与力场并发压测满分通过!\n";
+    std::cout << "  -> 第三营：形态发生细胞演化与力场并发压测满分通过!\n";
 }
 
 // ── 检阅四：全系统三账户穿透对账与资金恒等式总校验 ──

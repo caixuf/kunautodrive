@@ -115,7 +115,7 @@ private:
 };
 
 /**
- * @brief 太初 · 宏观自适应生态圈引擎 (Macro EcoBiosphere Engine)
+ * @brief 宏观自适应生态圈引擎 (Macro EcoBiosphere Engine)
  */
 class EcoBiosphere {
 public:

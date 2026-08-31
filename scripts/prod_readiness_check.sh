@@ -21,7 +21,7 @@ cd "${ROOT_DIR}"
 
 # 1. 运行全量 40 项全栈单元与集成测试套件
 echo ""
-echo ">>> [第一关] 执行全栈单元测试、太初细胞、生态圈、量子辐射与 SOTA 对比套件..."
+echo ">>> [第一关] 执行全栈单元测试、形态发生细胞、生态圈、量子辐射与 SOTA 对比套件..."
 ctest --test-dir build -R "test_quant|test_flow_cellular|test_flow_ecosystem|test_flow_quantum|test_flow_sota" --output-on-failure
 echo ">>> [第一关] 100% PASS! 全部量化、细胞、生态圈、量子辐射与 SOTA 对比单测绿灯通过!"
 
@@ -43,7 +43,7 @@ echo ">>> 探测 /api/status ..."
 curl -sf http://localhost:8900/api/status > /dev/null
 echo "    ↳ /api/status [200 OK]"
 
-echo ">>> 探测 /api/cellular/organism (太初细胞全息观测舱数据) ..."
+echo ">>> 探测 /api/cellular/organism (形态发生细胞全息观测数据) ..."
 CELL_RESP=$(curl -sf http://localhost:8900/api/cellular/organism)
 if [[ "${CELL_RESP}" != *"cells"* ]]; then
     echo "❌ 错误: /api/cellular/organism 数据异常!"
@@ -74,5 +74,5 @@ echo ">>> [第三关] 守护进程零崩溃安全退出，内存与网关资源�
 
 echo ""
 echo "======================================================================"
-echo "  恭贺圣上！鲲量化系统四大战役全线大捷，生产准入 100% 满分通过！   "
+echo "  鲲量化系统生产准入检阅 100% 满分通过！   "
 echo "======================================================================"

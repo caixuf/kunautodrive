@@ -11,7 +11,7 @@
 using namespace kun;
 
 void test_seed_organism_and_forward() {
-    std::cout << "[Test 1] 运行太初种子生物 (Seed Organism) 编译与纳秒级前向计算测试...\n";
+    std::cout << "[Test 1] 运行种子形态生物 (Seed Organism) 编译与纳秒级前向计算测试...\n";
     auto org = CellularOrganism::create_seed_organism(101);
     assert(org.cells.size() >= 8);
     assert(org.synapses.size() >= 7);
@@ -223,7 +223,7 @@ void test_lennard_jones_force_field_and_visualization() {
 
 int main() {
     std::cout << "\n=========================================================\n";
-    std::cout << "       FlowEngine 太初细胞形态发生演化引擎单测集          \n";
+    std::cout << "       FlowEngine 形态发生细胞演化引擎单测集              \n";
     std::cout << "=========================================================\n\n";
 
     test_seed_organism_and_forward();
@@ -235,7 +235,7 @@ int main() {
     test_lennard_jones_force_field_and_visualization();
 
     std::cout << "\n=========================================================\n";
-    std::cout << "       全部 7 组太初细胞形态演化与物理力场单测 100% 成功通过! \n";
+    std::cout << "       全部 7 组形态发生演化与物理力场单测 100% 成功通过! \n";
     std::cout << "=========================================================\n\n";
     return 0;
 }

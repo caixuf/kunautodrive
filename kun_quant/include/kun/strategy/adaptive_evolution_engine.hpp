@@ -308,7 +308,7 @@ public:
 
         population_ = std::move(new_pop);
 
-        // 同步推进太初细胞生命种群形态发生演化
+        // 同步推进形态发生细胞生命种群演化
         morph_engine_.evolve_generation();
     }
 
@@ -319,7 +319,7 @@ public:
     int get_generation() const { return generation_; }
     const std::vector<StrategyChromosome>& get_population() const { return population_; }
 
-    // === 太初细胞形态生命种群访问接口 ===
+    // === 形态发生细胞生命种群访问接口 ===
     CellularOrganism& get_cellular_champion() { return morph_engine_.get_champion(); }
     const CellularOrganism& get_cellular_champion() const { return const_cast<MorphogeneticEvolutionEngine&>(morph_engine_).get_champion(); }
     const std::vector<CellularOrganism>& get_cellular_population() const { return morph_engine_.get_population(); }

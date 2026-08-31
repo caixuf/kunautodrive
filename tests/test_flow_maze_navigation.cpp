@@ -86,7 +86,7 @@ void test_morphogenetic_maze_learning_evolution() {
 
 int main() {
     std::cout << "\n=========================================================\n";
-    std::cout << "     FlowEngine 太初细胞迷宫空间学习与导航演化测试集      \n";
+    std::cout << "     FlowEngine 形态发生细胞迷宫空间学习与导航演化测试集   \n";
     std::cout << "=========================================================\n\n";
 
     test_maze_geometry_and_raycasts();
@@ -94,7 +94,7 @@ int main() {
     test_morphogenetic_maze_learning_evolution();
 
     std::cout << "\n=========================================================\n";
-    std::cout << "   全部 3 组太初细胞迷宫导航与学习单测 100% 满分通过!    \n";
+    std::cout << "   全部 3 组形态发生迷宫导航与学习单测 100% 满分通过!    \n";
     std::cout << "=========================================================\n\n";
     return 0;
 }

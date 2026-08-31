@@ -521,19 +521,25 @@ document.getElementById('b-rad').onclick = e=>{
   for(const v of radRays.values()){ v.sprite.visible = radVisible; v.trail.visible = radVisible; }
 };
 document.getElementById('b-pause').onclick = e=>{ paused=!paused; e.target.textContent = paused?'▶ 继续':'⏸ 暂停'; };
-document.getElementById('b-reset').onclick = ()=>{ org = seedOrganism(); compile(org); rebuildViews(); log('↺ 重置为太初种子生物 Genesis-0', true); };
+document.getElementById('b-reset').onclick = ()=>{ org = seedOrganism(); compile(org); rebuildViews(); log('↺ 重置为种子形态生物 Genesis-0', true); };
 
-/* 尝试从守护进程获取真实冠军有机体快照做坐标水合 */
-(async ()=>{
+/* 尝试从守护进程获取真实冠军有机体快照做坐标水合 (后台持续演化, 前端定时同步观察) */
+async function syncServerChampion() {
   try{
-    const r = await fetch('/api/cellular/organism', { signal: AbortSignal.timeout(4000) });
+    const r = await fetch('/api/cellular/organism', { signal: AbortSignal.timeout(3000) });
     const j = await r.json();
-    if(j.cells && j.cells.length){
-      log(`✓ 守护进程冠军生物已接入: ${j.lineage||'Genesis'} · ${j.cells.length} 细胞 / ${j.synapses?.length||0} 突触`, true);
+    if(j.cells && j.cells.length && (!org || j.generation !== org.generation || j.cells.length !== org.cells.length)){
+      org = j;
+      compile(org);
+      rebuildViews();
+      log(`✓ 同步后台冠军生物: ${j.lineage||'Genesis'} · G${j.generation||0} (${j.cells.length} 细胞 / ${j.synapses?.length||0} 突触)`, true);
     }
-  }catch(e){ log('守护进程离线 — 使用客户端内嵌种子生物 (物理与进化全功能可用)'); }
-})();
-log('太初细胞全息观测台已启动 — 拖拽旋转 · 滚轮缩放', true);
+  }catch(e){ /* 离线使用客户端内嵌种子生物 */ }
+}
+syncServerChampion();
+setInterval(syncServerChampion, 4000);
+
+log('形态发生细胞全息观测台已启动 — 拖拽旋转 · 滚轮缩放', true);
 
 /* ============================================================
  * 5.5 宏观生态圈层 (EcoBiosphere Dome) — 数据源 /api/biosphere/status

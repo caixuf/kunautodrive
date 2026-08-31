@@ -96,7 +96,7 @@ void test_biosphere_json_serialization() {
 
 int main() {
     std::cout << "\n=========================================================\n";
-    std::cout << "   太初 · 宏观自适应生态圈引擎 (EcoBiosphere) 单元测试集  \n";
+    std::cout << "     宏观自适应生态圈引擎 (EcoBiosphere) 单元测试集       \n";
     std::cout << "=========================================================\n\n";
 
     test_niche_initialization_and_diversity();
@@ -105,7 +105,7 @@ int main() {
     test_biosphere_json_serialization();
 
     std::cout << "\n=========================================================\n";
-    std::cout << "     太初生态圈全部 4 组单元测试 100% 满分通过!          \n";
+    std::cout << "       生态圈全部 4 组单元测试 100% 满分通过!            \n";
     std::cout << "=========================================================\n\n";
     return 0;
 }

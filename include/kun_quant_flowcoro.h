@@ -552,13 +552,13 @@ public:
             }
             tick_counter++;
 
-            // 每收到 30 帧行情，推动一代参数种群与太初细胞形态发生演化
+            // 每收到 30 帧行情，推动一代参数种群与形态发生细胞演化
             if (tick_counter % 30 == 0) {
                 engine_.evolve_next_generation();
                 const auto& best = engine_.get_best_chromosome();
                 auto& cell_champ = engine_.get_cellular_champion();
                 std::cout << "[KunQuant::AI] 双擎进化至第 " << engine_.get_generation() << " 代! "
-                          << "【太初细胞形态】: " << cell_champ.lineage_name 
+                          << "【形态发生细胞】: " << cell_champ.lineage_name 
                           << " (细胞数=" << cell_champ.cells.size() << ", 突触数=" << cell_champ.synapses.size() << ") | "
                           << "【标尺参数】: MA(" << best.fast_window << ", " << best.slow_window << ") "
                           << "止损=" << best.stop_loss_atr << "xATR "
