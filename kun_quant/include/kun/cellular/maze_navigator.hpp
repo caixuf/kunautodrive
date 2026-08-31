@@ -94,17 +94,63 @@ public:
         return grid_[gy * width_ + gx] == 1;
     }
 
-    // 投射光线测距
+    // 投射光线测距 (DDA Grid Raycasting - 高速网格遍历算法)
     float cast_ray(float start_x, float start_y, float angle, float max_range = 6.0f) const {
-        float step = 0.05f;
         float cos_a = std::cos(angle);
         float sin_a = std::sin(angle);
 
-        for (float dist = 0.05f; dist < max_range; dist += step) {
-            float cx = start_x + cos_a * dist;
-            float cy = start_y + sin_a * dist;
-            if (is_wall(cx, cy)) {
-                return dist / max_range; // 归一化 [0.0 ~ 1.0]
+        if (std::abs(cos_a) < 1e-6f && std::abs(sin_a) < 1e-6f) return 1.0f;
+
+        int map_x = static_cast<int>(std::floor(start_x));
+        int map_y = static_cast<int>(std::floor(start_y));
+
+        if (map_x < 0 || map_x >= width_ || map_y < 0 || map_y >= height_) return 0.0f;
+        if (grid_[map_y * width_ + map_x] == 1) return 0.0f;
+
+        float delta_dist_x = (std::abs(cos_a) < 1e-6f) ? 1e30f : std::abs(1.0f / cos_a);
+        float delta_dist_y = (std::abs(sin_a) < 1e-6f) ? 1e30f : std::abs(1.0f / sin_a);
+
+        float side_dist_x, side_dist_y;
+        int step_x, step_y;
+
+        if (cos_a < 0.0f) {
+            step_x = -1;
+            side_dist_x = (start_x - static_cast<float>(map_x)) * delta_dist_x;
+        } else {
+            step_x = 1;
+            side_dist_x = (static_cast<float>(map_x + 1.0f) - start_x) * delta_dist_x;
+        }
+
+        if (sin_a < 0.0f) {
+            step_y = -1;
+            side_dist_y = (start_y - static_cast<float>(map_y)) * delta_dist_y;
+        } else {
+            step_y = 1;
+            side_dist_y = (static_cast<float>(map_y + 1.0f) - start_y) * delta_dist_y;
+        }
+
+        float hit_dist = 0.0f;
+        while (hit_dist < max_range) {
+            if (side_dist_x < side_dist_y) {
+                hit_dist = side_dist_x;
+                side_dist_x += delta_dist_x;
+                map_x += step_x;
+            } else {
+                hit_dist = side_dist_y;
+                side_dist_y += delta_dist_y;
+                map_y += step_y;
+            }
+
+            if (hit_dist >= max_range) {
+                return 1.0f;
+            }
+
+            if (map_x < 0 || map_x >= width_ || map_y < 0 || map_y >= height_) {
+                return std::min(1.0f, hit_dist / max_range);
+            }
+
+            if (grid_[map_y * width_ + map_x] == 1) {
+                return std::min(1.0f, hit_dist / max_range);
             }
         }
         return 1.0f;
@@ -246,32 +292,35 @@ public:
         step_count_ = 0;
     }
 
-    void step_simulation() {
-        step_count_++;
-        auto& pop = morph_engine_.population();
+    void step_simulation(int substeps = 1, float dt = 0.12f) {
+        for (int step = 0; step < substeps; ++step) {
+            step_count_++;
+            auto& pop = morph_engine_.population();
 
-        bool all_done = true;
-        for (size_t i = 0; i < pop_size_ && i < pop.size(); ++i) {
-            auto& ag = agents_[i];
-            auto& org = pop[i];
+            bool all_done = true;
+            for (size_t i = 0; i < pop_size_ && i < pop.size(); ++i) {
+                auto& ag = agents_[i];
+                auto& org = pop[i];
 
-            if (ag.reached_goal) continue;
-            all_done = false;
+                if (ag.reached_goal) continue;
+                all_done = false;
 
-            double inputs[4] = {
-                ag.ray_dists[0],
-                ag.ray_dists[1],
-                ag.ray_dists[2],
-                ag.goal_bearing
-            };
+                double inputs[4] = {
+                    ag.ray_dists[0],
+                    ag.ray_dists[1],
+                    ag.ray_dists[2],
+                    ag.goal_bearing
+                };
 
-            auto acts = org.forward(inputs);
-            maze_.step_agent(ag, acts, 0.12f);
-        }
+                auto acts = org.forward(inputs);
+                maze_.step_agent(ag, acts, dt);
+            }
 
-        if (all_done || step_count_ >= max_steps_per_gen_) {
-            evaluate_and_evolve();
-            reset_simulation();
+            if (all_done || step_count_ >= max_steps_per_gen_) {
+                evaluate_and_evolve();
+                reset_simulation();
+                break;
+            }
         }
     }
 

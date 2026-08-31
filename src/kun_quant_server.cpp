@@ -1225,15 +1225,14 @@ int main(int argc, char* argv[]) {
         }
     });
 
-    // 迷宫 7x24 后台自主演化线程 (~80 步/秒, 约 2s 一代: 观感稳定不频闪;
-    // 通关约 1800 代 ≈ 1 小时持续运行, 无需打开任何界面)
+    // 迷宫 7x24 后台自主演化线程 (多子步批量推演: ~640 步/秒, 约 0.25s 一代: 提速 8x 极速收敛)
     std::thread maze_evo_thread([]() {
         while (kun::g_server_running.load()) {
             {
                 std::lock_guard<std::mutex> lk(kun::g_maze_mutex);
-                kun::g_maze_engine.step_simulation();
+                kun::g_maze_engine.step_simulation(4, 0.12f);
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(12));
+            std::this_thread::sleep_for(std::chrono::milliseconds(6));
         }
     });
 

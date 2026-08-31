@@ -43,6 +43,34 @@ static std::atomic<uint64_t> g_total_inferences{0};
 static std::atomic<uint64_t> g_total_cosmic_hits{0};
 static std::atomic<uint64_t> g_total_tunneling_events{0};
 
+// 零阻塞无锁快照双缓冲 (Atomic Snapshot Cache for Zero-Lock HTTP Reads)
+static std::shared_ptr<const std::string> g_snap_champ_json;
+static std::shared_ptr<const std::string> g_snap_pop_json;
+static std::shared_ptr<const std::string> g_snap_biosphere_json;
+static std::shared_ptr<const std::string> g_snap_quantum_json;
+static std::shared_ptr<const std::string> g_snap_maze_json;
+
+static inline void publish_champ_snap(const std::string& str) {
+    auto p = std::make_shared<const std::string>(str);
+    std::atomic_store(&g_snap_champ_json, p);
+}
+static inline void publish_pop_snap(const std::string& str) {
+    auto p = std::make_shared<const std::string>(str);
+    std::atomic_store(&g_snap_pop_json, p);
+}
+static inline void publish_biosphere_snap(const std::string& str) {
+    auto p = std::make_shared<const std::string>(str);
+    std::atomic_store(&g_snap_biosphere_json, p);
+}
+static inline void publish_quantum_snap(const std::string& str) {
+    auto p = std::make_shared<const std::string>(str);
+    std::atomic_store(&g_snap_quantum_json, p);
+}
+static inline void publish_maze_snap(const std::string& str) {
+    auto p = std::make_shared<const std::string>(str);
+    std::atomic_store(&g_snap_maze_json, p);
+}
+
 // MIME 类型解析
 static std::string get_mime_type(const std::string& path) {
     if (path.ends_with(".html")) return "text/html; charset=utf-8";
@@ -176,47 +204,71 @@ private:
             return;
         }
 
-        // 2. API: /api/cellular/organism 或 /api/cellular/champion
+        // 2. API: /api/cellular/organism 或 /api/cellular/champion (零锁快照读取)
         if (path == "/api/cellular/organism" || path == "/api/cellular/champion") {
-            std::lock_guard<std::mutex> lk(g_morph_mutex);
-            const auto& champ = g_morph_engine.get_champion();
-            send_response(client_fd, 200, "application/json; charset=utf-8", champ.to_json());
-            return;
-        }
-
-        // 3. API: /api/cellular/population
-        if (path == "/api/cellular/population") {
-            std::lock_guard<std::mutex> lk(g_morph_mutex);
-            std::ostringstream ss;
-            ss << "{\"population_size\":20,\"organisms\":[";
-            const auto& pop = g_morph_engine.population();
-            for (size_t i = 0; i < pop.size(); ++i) {
-                if (i > 0) ss << ",";
-                ss << pop[i].to_json();
+            auto snap = std::atomic_load(&g_snap_champ_json);
+            if (snap) {
+                send_response(client_fd, 200, "application/json; charset=utf-8", *snap);
+            } else {
+                std::lock_guard<std::mutex> lk(g_morph_mutex);
+                send_response(client_fd, 200, "application/json; charset=utf-8", g_morph_engine.get_champion().to_json());
             }
-            ss << "]}";
-            send_response(client_fd, 200, "application/json; charset=utf-8", ss.str());
             return;
         }
 
-        // 4. API: /api/biosphere/status
+        // 3. API: /api/cellular/population (零锁快照读取)
+        if (path == "/api/cellular/population") {
+            auto snap = std::atomic_load(&g_snap_pop_json);
+            if (snap) {
+                send_response(client_fd, 200, "application/json; charset=utf-8", *snap);
+            } else {
+                std::lock_guard<std::mutex> lk(g_morph_mutex);
+                std::ostringstream ss;
+                ss << "{\"population_size\":20,\"organisms\":[";
+                const auto& pop = g_morph_engine.population();
+                for (size_t i = 0; i < pop.size(); ++i) {
+                    if (i > 0) ss << ",";
+                    ss << pop[i].to_json();
+                }
+                ss << "]}";
+                send_response(client_fd, 200, "application/json; charset=utf-8", ss.str());
+            }
+            return;
+        }
+
+        // 4. API: /api/biosphere/status (零锁快照读取)
         if (path == "/api/biosphere/status" || path == "/api/biosphere") {
-            std::lock_guard<std::mutex> lk(g_biosphere_mutex);
-            send_response(client_fd, 200, "application/json; charset=utf-8", g_biosphere.to_json());
+            auto snap = std::atomic_load(&g_snap_biosphere_json);
+            if (snap) {
+                send_response(client_fd, 200, "application/json; charset=utf-8", *snap);
+            } else {
+                std::lock_guard<std::mutex> lk(g_biosphere_mutex);
+                send_response(client_fd, 200, "application/json; charset=utf-8", g_biosphere.to_json());
+            }
             return;
         }
 
-        // 5. API: /api/quantum/field
+        // 5. API: /api/quantum/field (零锁快照读取)
         if (path == "/api/quantum/field") {
-            std::lock_guard<std::mutex> lk(g_quantum_mutex);
-            send_response(client_fd, 200, "application/json; charset=utf-8", g_radiation_field.to_json());
+            auto snap = std::atomic_load(&g_snap_quantum_json);
+            if (snap) {
+                send_response(client_fd, 200, "application/json; charset=utf-8", *snap);
+            } else {
+                std::lock_guard<std::mutex> lk(g_quantum_mutex);
+                send_response(client_fd, 200, "application/json; charset=utf-8", g_radiation_field.to_json());
+            }
             return;
         }
 
-        // 6. API: /api/maze/status
+        // 6. API: /api/maze/status (零锁快照读取)
         if (path == "/api/maze/status" || path == "/api/maze") {
-            std::lock_guard<std::mutex> lk(g_maze_mutex);
-            send_response(client_fd, 200, "application/json; charset=utf-8", g_maze_engine.to_json());
+            auto snap = std::atomic_load(&g_snap_maze_json);
+            if (snap) {
+                send_response(client_fd, 200, "application/json; charset=utf-8", *snap);
+            } else {
+                std::lock_guard<std::mutex> lk(g_maze_mutex);
+                send_response(client_fd, 200, "application/json; charset=utf-8", g_maze_engine.to_json());
+            }
             return;
         }
 
@@ -297,10 +349,10 @@ int main(int argc, char* argv[]) {
 
     std::cout << "======================================================================\n";
     std::cout << "  FlowEngine Morphogenetic Cellular Cybernetics Standalone Daemon     \n";
-    std::cout << "  Version: 2.0 (24-Primitive Taxonomy & Force-Field Zero-GC Engine)  \n";
+    std::cout << "  Version: 2.1 (Accelerated Multi-Substep & Zero-Lock Snapshot Cache) \n";
     std::cout << "======================================================================\n";
 
-    // 线程 1: 7x24 形态发生代际进化与力场松弛 (50 Hz 物理 + 每 150 步演化一代)
+    // 线程 1: 7x24 形态发生代际进化与力场松弛 (极速高通量进化: 100 Hz + 每 30 步演化一代)
     std::thread evo_thread([]() {
         uint64_t tick_count = 0;
         double synthetic_price = 3600.0;
@@ -319,63 +371,95 @@ int main(int argc, char* argv[]) {
                     kun::g_total_inferences.fetch_add(1, std::memory_order_relaxed);
 
                     double pnl = (actions.positive_action - actions.negative_action) * step_dist(rng) * 100.0;
-                    org.fitness_score = std::max(-500.0, org.fitness_score * 0.95 + pnl);
+                    if (!std::isfinite(pnl)) pnl = 0.0;
+                    if (!std::isfinite(org.fitness_score)) org.fitness_score = 0.0;
+                    org.fitness_score = std::clamp(org.fitness_score * 0.95 + pnl, -500.0, 5000.0);
                 }
 
-                // 每 150 步 (约 3s) 演化一代
-                if (++tick_count % 150 == 0) {
+                // 每 30 步 (约 300ms) 演化一代，加速演化收敛
+                if (++tick_count % 30 == 0) {
                     kun::g_morph_engine.evolve_generation();
 
                     const auto& champ = kun::g_morph_engine.get_champion();
-                    if (champ.generation % 10 == 0) {
+                    if (champ.generation % 20 == 0) {
                         std::cout << "[GEN] Generation " << champ.generation
                                   << " | Champion ID=" << champ.organism_id
                                   << " | Cells=" << champ.cells.size()
                                   << " | Synapses=" << champ.synapses.size()
-                                  << " | Fitness=" << champ.fitness_score << std::endl;
+                                  << " | Fitness=" << champ.fitness_score
+                                  << " | MutBoost=" << kun::g_morph_engine.get_adaptive_mutation_boost() << std::endl;
                     }
                 }
+
+                // 定期发布无锁快照 (每 2 步刷新一次)
+                if (tick_count % 2 == 0) {
+                    kun::publish_champ_snap(kun::g_morph_engine.get_champion().to_json());
+                }
+                if (tick_count % 10 == 0) {
+                    std::ostringstream ss;
+                    ss << "{\"population_size\":20,\"organisms\":[";
+                    const auto& pop = kun::g_morph_engine.population();
+                    for (size_t i = 0; i < pop.size(); ++i) {
+                        if (i > 0) ss << ",";
+                        ss << pop[i].to_json();
+                    }
+                    ss << "]}";
+                    kun::publish_pop_snap(ss.str());
+                }
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(20)); // 50 Hz
+            std::this_thread::sleep_for(std::chrono::milliseconds(10)); // 100 Hz
         }
     });
 
-    // 线程 2: 宏观生态圈生境演化 (EcoBiosphere, 1Hz)
+    // 线程 2: 宏观生态圈生境演化 (EcoBiosphere, 5Hz 提速)
     std::thread biosphere_thread([]() {
+        uint64_t tick = 0;
         while (kun::g_running) {
             {
                 std::lock_guard<std::mutex> lk(kun::g_biosphere_mutex);
                 kun::g_biosphere.step_ecosystem(1.0);
+                if (++tick % 2 == 0) {
+                    kun::publish_biosphere_snap(kun::g_biosphere.to_json());
+                }
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
     });
 
-    // 线程 3: 量子辐射场波函数干涉与粒子轰击 (QuantumRadiationField, 20Hz)
+    // 线程 3: 量子辐射场波函数干涉与粒子轰击 (QuantumRadiationField, 25Hz)
     std::thread quantum_thread([]() {
+        uint64_t tick = 0;
         while (kun::g_running) {
             {
                 std::lock_guard<std::mutex> lk_q(kun::g_quantum_mutex);
                 std::lock_guard<std::mutex> lk_m(kun::g_morph_mutex);
 
-                kun::g_radiation_field.step(0.05f);
+                kun::g_radiation_field.step(0.04f);
 
                 for (auto& org : kun::g_morph_engine.population()) {
                     kun::g_radiation_field.irradiate_organism(org, 0.0f, 0.0f, 0.0f, 0);
                 }
+
+                if (++tick % 3 == 0) {
+                    kun::publish_quantum_snap(kun::g_radiation_field.to_json());
+                }
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            std::this_thread::sleep_for(std::chrono::milliseconds(40));
         }
     });
 
-    // 线程 4: 2D 连续力学迷宫空间自主寻径演化 (Maze Navigator, ~80 步/秒)
+    // 线程 4: 2D 连续力学迷宫空间自主寻径演化 (Maze Navigator: 批量子步 4 substeps/tick @ ~160Hz = ~640 步/秒)
     std::thread maze_thread([]() {
+        uint64_t tick = 0;
         while (kun::g_running) {
             {
                 std::lock_guard<std::mutex> lk(kun::g_maze_mutex);
-                kun::g_maze_engine.step_simulation();
+                kun::g_maze_engine.step_simulation(4, 0.12f);
+                if (++tick % 2 == 0) {
+                    kun::publish_maze_snap(kun::g_maze_engine.to_json());
+                }
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(12));
+            std::this_thread::sleep_for(std::chrono::milliseconds(6));
         }
     });
 

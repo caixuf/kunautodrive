@@ -122,30 +122,50 @@ def main():
             print("=" * 50)
     elif args.task:
         print(f">>> 派发任务至 [{args.agent}]: {args.task}")
+        tasks = {}
         if args.agent in ["codebuddy", "all", "both"]:
-            print("\n--- CodeBuddy (门下省) 响应 ---")
-            print(query_codebuddy(args.task))
+            tasks["CodeBuddy (门下省)"] = lambda p=args.task: query_codebuddy(p)
         if args.agent in ["mimo", "all", "both"]:
-            print("\n--- MiMo (尚书省) 响应 ---")
-            print(query_mimo(args.task))
+            tasks["MiMo (尚书省)"] = lambda p=args.task: query_mimo(p)
         if args.agent in ["opencode", "all"]:
-            print("\n--- OpenCode (都察院) 响应 ---")
-            print(query_opencode(args.task))
+            tasks["OpenCode (都察院)"] = lambda p=args.task: query_opencode(p)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks) or 1) as executor:
+            future_map = {executor.submit(func): name for name, func in tasks.items()}
+            for future in concurrent.futures.as_completed(future_map):
+                name = future_map[future]
+                try:
+                    res = future.result()
+                except Exception as e:
+                    res = f"[Execution Error]: {e}"
+                print(f"\n================ {name} 响应 ================")
+                print(res)
+                print("=" * 50)
     elif args.file:
         if os.path.exists(args.file):
             with open(args.file, "r", encoding="utf-8") as f:
                 content = f.read()
             prompt = f"【代码审查】请审查以下文件 ({args.file})：\n```\n{content[:4000]}\n```"
             print(f">>> 正在向 [{args.agent}] 提交文件审查: {args.file}...")
+            tasks = {}
             if args.agent in ["codebuddy", "all", "both"]:
-                print("\n--- CodeBuddy (门下省) 审议 ---")
-                print(query_codebuddy(prompt))
+                tasks["CodeBuddy (门下省)"] = lambda p=prompt: query_codebuddy(p)
             if args.agent in ["mimo", "all", "both"]:
-                print("\n--- MiMo (尚书省) 审议 ---")
-                print(query_mimo(prompt))
+                tasks["MiMo (尚书省)"] = lambda p=prompt: query_mimo(p)
             if args.agent in ["opencode", "all"]:
-                print("\n--- OpenCode (都察院) 审议 ---")
-                print(query_opencode(prompt))
+                tasks["OpenCode (都察院)"] = lambda p=prompt: query_opencode(p)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks) or 1) as executor:
+                future_map = {executor.submit(func): name for name, func in tasks.items()}
+                for future in concurrent.futures.as_completed(future_map):
+                    name = future_map[future]
+                    try:
+                        res = future.result()
+                    except Exception as e:
+                        res = f"[Execution Error]: {e}"
+                    print(f"\n================ {name} 审议意见 ================")
+                    print(res)
+                    print("=" * 50)
 
 if __name__ == "__main__":
     main()
