@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kun/cellular/cellular_genome.hpp"
+#include "kun/cellular/quantum_radiation_field.hpp"
 #include <vector>
 #include <string>
 #include <unordered_map>
@@ -158,16 +159,25 @@ public:
             }
         }
 
-        // 2. 模拟物种间捕食与共生交互 (Lotka-Volterra 启发式)
+        // 2. 推进量子波动干涉场与宇宙射线辐射演化
+        radiation_field_.step(static_cast<float>(dt));
+        for (auto& agent : agents_) {
+            if (!agent.is_alive) continue;
+            radiation_field_.irradiate_organism(
+                agent.organism, agent.x, agent.y, agent.z, static_cast<uint32_t>(agent.age_ticks)
+            );
+        }
+
+        // 3. 模拟物种间捕食与共生交互 (Lotka-Volterra 启发式)
         simulate_trophic_interactions();
 
-        // 3. 气候季相轮替 (根据时间演进或外部市场波动)
+        // 4. 气候季相轮替 (根据时间演进或外部市场波动)
         step_count_++;
         if (step_count_ % 200 == 0) {
             rotate_biome_climates();
         }
 
-        // 4. 物种多样性与繁殖 (保持生态位不灭绝)
+        // 5. 物种多样性与繁殖 (保持生态位不灭绝)
         maintain_niche_equilibrium();
     }
 
@@ -212,6 +222,7 @@ public:
     const std::vector<EcoAgent>& agents() const { return agents_; }
     const std::vector<std::shared_ptr<BiomeZone>>& biomes() const { return biomes_; }
     const std::vector<TrophicEnergyTransfer>& recent_transfers() const { return recent_transfers_; }
+    const QuantumRadiationField& radiation_field() const { return radiation_field_; }
     uint64_t step_count() const { return step_count_; }
 
     /**
@@ -233,6 +244,9 @@ public:
                << (i + 1 < biomes_.size() ? "," : "") << "\n";
         }
         ss << "  ],\n";
+
+        // 辐射场状态
+        ss << "  \"radiation\": " << radiation_field_.to_json() << ",\n";
 
         // 物种统计
         auto counts = get_niche_population();
@@ -400,6 +414,7 @@ private:
     }
 
     std::mt19937 rng_;
+    QuantumRadiationField radiation_field_{54321};
     std::vector<EcoAgent> agents_;
     std::vector<std::shared_ptr<BiomeZone>> biomes_;
     std::vector<TrophicEnergyTransfer> recent_transfers_;
