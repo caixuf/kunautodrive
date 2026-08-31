@@ -554,16 +554,36 @@
             ctx.arc(sx, sy, cellW * 0.25, 0, Math.PI * 2);
             ctx.fill();
 
-            // 4. 绘制冠军历史轨迹光带 (Champion Trail)
+            // 4. 绘制冠军历史轨迹光带 (视线检测: 拐角穿墙段自动断开, 不再出现"穿墙线")
             if (mazeState.champion_trail && mazeState.champion_trail.length > 1) {
+                const losClear = (x1, y1, x2, y2) => {
+                    const steps = Math.ceil(Math.hypot(x2 - x1, y2 - y1) / 0.2);
+                    for (let i = 1; i <= steps; ++i) {
+                        const t = i / steps;
+                        const cx = Math.floor(x1 + (x2 - x1) * t);
+                        const cy = Math.floor(y1 + (y2 - y1) * t);
+                        if (mazeState.grid[cy * mazeState.width + cx] === 1) return false;
+                    }
+                    return true;
+                };
+                // 路径点 (小光点): 即使线段断开也能看清走过的格子
+                ctx.fillStyle = 'rgba(255, 183, 0, 0.45)';
+                mazeState.champion_trail.forEach(pt => {
+                    ctx.beginPath();
+                    ctx.arc(pt[0] * cellW, pt[1] * cellH, 2, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+                // 连线段: 仅在视线可达时连接, 穿墙处断笔
                 ctx.strokeStyle = 'rgba(255, 183, 0, 0.6)';
                 ctx.lineWidth = 2;
+                let prev = null;
                 ctx.beginPath();
-                mazeState.champion_trail.forEach((pt, idx) => {
-                    const px = pt[0] * cellW;
-                    const py = pt[1] * cellH;
-                    if (idx === 0) ctx.moveTo(px, py);
-                    else ctx.lineTo(px, py);
+                mazeState.champion_trail.forEach(pt => {
+                    const px = pt[0] * cellW, py = pt[1] * cellH;
+                    if (prev === null) ctx.moveTo(px, py);
+                    else if (losClear(prev[0], prev[1], pt[0], pt[1])) ctx.lineTo(px, py);
+                    else { ctx.stroke(); ctx.beginPath(); ctx.moveTo(px, py); }
+                    prev = pt;
                 });
                 ctx.stroke();
             }
@@ -599,10 +619,10 @@
                 ctx.shadowBlur = 8;
 
                 ctx.beginPath();
-                ctx.moveTo(cellW * 0.4, 0);
-                ctx.lineTo(-cellW * 0.3, -cellW * 0.25);
-                ctx.lineTo(-cellW * 0.15, 0);
-                ctx.lineTo(-cellW * 0.3, cellW * 0.25);
+                ctx.moveTo(cellW * 0.28, 0);
+                ctx.lineTo(-cellW * 0.22, -cellW * 0.18);
+                ctx.lineTo(-cellW * 0.1, 0);
+                ctx.lineTo(-cellW * 0.22, cellW * 0.18);
                 ctx.closePath();
                 ctx.fill();
 
