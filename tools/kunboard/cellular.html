@@ -91,8 +91,34 @@
   <button id="b-reset">↺ 重置</button>
 </div>
 
+<script>
+/* 启动看门狗: 6s 后数据源仍是初始文案 => JS 模块未启动, 直接把原因写在数据源栏 */
+window.__cellErrs = [];
+window.addEventListener('error', function(e){ window.__cellErrs.push(e.message || String(e)); });
+setTimeout(function(){
+  var el = document.getElementById('src');
+  if (el && el.textContent.indexOf('连接守护进程') >= 0) {
+    el.textContent = '模块未启动: ' + (window.__cellErrs[0] || 'THREE 加载失败 / WebGL 不可用 / 浏览器过旧');
+    el.style.color = '#f43f5e';
+  }
+}, 6000);
+</script>
+
 <script type="module">
-import * as THREE from './vendor/three.module.js';
+/* THREE 加载兜底: 本地 vendor 失败(经代理访问时常见)自动切 CDN */
+let THREE;
+try {
+  THREE = await import('./vendor/three.module.js');
+} catch (e1) {
+  try {
+    THREE = await import('https://unpkg.com/three@0.160.0/build/three.module.js');
+    document.getElementById('src').textContent = '数据源: THREE 已切 CDN 兜底';
+  } catch (e2) {
+    document.getElementById('src').textContent = '模块未启动: THREE 本地与 CDN 均加载失败';
+    document.getElementById('src').style.color = '#f43f5e';
+    throw e2;
+  }
+}
 
 /* ============================================================
  * 1. 细胞类型定义 (与 cellular_genome.hpp 逐一对应)
@@ -123,6 +149,7 @@ function makeSyn(a,b,port,w=1.0){ return { from:a, to:b, port, w, active:true, r
 
 function seedOrganism(){
   nextCellId = 1;
+  // 显式 id 0..8, 与 C++ 种子拓扑一致 (突触按 id 引用, 感受器必须是 id 0)
   const cells = [
     makeCell(T.SENSE0, 1.0, 0, -120,-40),   // 0 价格
     makeCell(T.SENSE1, 1.0, 0, -120, 40),   // 1 量
@@ -134,6 +161,8 @@ function seedOrganism(){
     makeCell(T.ACT_NEG, 0, 0, 140, 40),     // 7 卖
     makeCell(T.ACT_LOCK, 0, 0, 140, 100),   // 8 免疫锁
   ];
+  cells.forEach((c,i)=>{ c.id = i; });
+  nextCellId = 9;
   const syns = [
     makeSyn(0,2,0), makeSyn(0,3,0), makeSyn(3,4,0), makeSyn(2,4,1),
     makeSyn(4,5,0), makeSyn(5,6,0), makeSyn(5,7,0,-1.0),
@@ -156,7 +185,11 @@ function compile(org){
   const order = [];
   for(let h=0; h<q.length; h++){
     order.push(q[h]);
-    for(const v of (adj.get(q[h])||[])) if((indeg.get(v)-- )===1) q.push(v);
+    for(const v of (adj.get(q[h])||[])){
+      const remain = (indeg.get(v)||0) - 1;
+      indeg.set(v, remain);
+      if(remain === 0) q.push(v);
+    }
   }
   const seen = new Set(order);
   for(const c of org.cells) if(!seen.has(c.id)) order.push(c.id);
