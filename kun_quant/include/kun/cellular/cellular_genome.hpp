@@ -591,7 +591,9 @@ public:
         return true;
     }
 
-    // ── 生物变异操作 3: 细胞参数微调 (Metabolic Drift) ──
+    // ── 生物变异操作 3: 细胞参数微调 + 突触可塑性 (Metabolic Drift & Plasticity) ──
+    // 权重微扰是连续控制类任务唯一存在的细粒度搜索梯度; 没有它, GA 只能靠
+    // 重连噪声(粗粒度)碰运气, 迷宫等任务百代内无法收敛 (实测 0% 通关)
     bool mutate_parameters(CellularOrganism& org) {
         if (org.cells.empty()) return false;
         std::uniform_int_distribution<size_t> dist_cell(0, org.cells.size() - 1);
@@ -600,6 +602,14 @@ public:
         std::normal_distribution<double> dist_noise(0.0, 0.05);
         c.param1 = std::clamp(c.param1 + dist_noise(rng_), -5.0, 5.0);
         c.param2 = std::clamp(c.param2 + dist_noise(rng_), -5.0, 5.0);
+
+        if (!org.synapses.empty()) {
+            std::uniform_int_distribution<size_t> dist_syn(0, org.synapses.size() - 1);
+            auto& syn = org.synapses[dist_syn(rng_)];
+            std::normal_distribution<double> dist_w(0.0, 0.15);
+            syn.weight = std::clamp(syn.weight + dist_w(rng_), -3.0, 3.0);
+            org.compile();  // 权重已编译进扁平执行结构, 改完必须重编译
+        }
         return true;
     }
 

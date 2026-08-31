@@ -253,7 +253,8 @@ private:
             static kun::MazeEvolutionEngine global_maze_engine(24, 21);
             static std::mutex g_maze_mutex;
             std::lock_guard<std::mutex> lk(g_maze_mutex);
-            global_maze_engine.step_simulation();
+            // 每次拉取推演 8 步: 500ms 轮询下约 10s 一代, 实测 ~1800 代通关 (约 5 小时持续演化)
+            for (int i = 0; i < 8; ++i) global_maze_engine.step_simulation();
             std::string json = global_maze_engine.to_json();
             std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " +
                                    std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;

@@ -131,8 +131,11 @@ public:
         agent.steps++;
 
         // 动力学控制: positive_action 驱动前进, negative_action 驱动转向
-        float thrust = static_cast<float>(acts.positive_action * 2.5);
-        float steer  = static_cast<float>(acts.negative_action * 3.0);
+        // 护栏: 积分细胞可能溢出至 inf/NaN, 先截断到有限区间
+        float thrust = std::clamp(static_cast<float>(acts.positive_action), -5.0f, 5.0f) * 2.5f;
+        float steer  = std::clamp(static_cast<float>(acts.negative_action), -5.0f, 5.0f) * 3.0f;
+        if (!std::isfinite(thrust)) thrust = 0.0f;
+        if (!std::isfinite(steer)) steer = 0.0f;
 
         if (acts.immune_lock) {
             // 碰撞免疫自锁：触发倒车与原地旋转脱困
@@ -141,14 +144,19 @@ public:
         }
 
         agent.theta += steer * dt;
-        while (agent.theta > 3.14159265f) agent.theta -= 6.2831853f;
-        while (agent.theta < -3.14159265f) agent.theta += 6.2831853f;
+        // 角度归一化: while 循环对 inf 会死循环 (inf -= 2π 仍为 inf), 必须用 fmod + 有限性检查
+        if (!std::isfinite(agent.theta)) agent.theta = 0.0f;
+        agent.theta = std::fmod(agent.theta + 3.14159265f, 6.2831853f);
+        if (agent.theta < 0.0f) agent.theta += 6.2831853f;
+        agent.theta -= 3.14159265f;
 
         float target_vx = std::cos(agent.theta) * thrust;
         float target_vy = std::sin(agent.theta) * thrust;
 
         agent.vx = agent.vx * 0.7f + target_vx * 0.3f;
         agent.vy = agent.vy * 0.7f + target_vy * 0.3f;
+        if (!std::isfinite(agent.vx)) agent.vx = 0.0f;
+        if (!std::isfinite(agent.vy)) agent.vy = 0.0f;
 
         float next_x = agent.x + agent.vx * dt;
         float next_y = agent.y + agent.vy * dt;
@@ -348,6 +356,7 @@ public:
     }
 
     const MazeEnvironment& get_maze() const { return maze_; }
+    const MorphogeneticEvolutionEngine& morph_engine() const { return morph_engine_; }
     const std::vector<MazeEnvironment::Agent>& get_agents() const { return agents_; }
     int get_generation() const { return generation_; }
     float get_success_rate() const { return success_rate_; }
