@@ -147,8 +147,21 @@ public:
     std::vector<size_t> execution_order_;
     mutable std::vector<double> flat_port_inputs_; // [cell_idx * 2 + port]
     bool is_compiled_{false};
+    bool is_compiled() const { return is_compiled_; }
 
     CellularOrganism() = default;
+
+    // 回合间状态重置: 清零动态膜电位与记忆, 保留基因组 (参数/拓扑/坐标) 不变。
+    // 无此重置则 EMA/迟滞等记忆细胞的跨回合残留会污染适应度评估 (评估噪声 → 精英保留失效)。
+    void reset_state() {
+        for (auto& c : cells) {
+            c.state_val = 0.0;
+            c.prev_input = 0.0;
+            c.latch_state = false;
+            c.output_val = 0.0;
+        }
+        std::fill(flat_port_inputs_.begin(), flat_port_inputs_.end(), 0.0);
+    }
 
     // 创建最简单细胞原生生物 (Archean Progenitor)
     static CellularOrganism create_seed_organism(uint64_t id = 1) {
@@ -677,6 +690,7 @@ public:
 
     CellularOrganism& get_champion() { return population_[0]; }
     const std::vector<CellularOrganism>& get_population() const { return population_; }
+    std::vector<CellularOrganism>& population() { return population_; }  // 任务训练器写入适应度用
 
 private:
     std::mt19937 rng_;

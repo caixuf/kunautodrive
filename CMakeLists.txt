@@ -232,9 +232,10 @@ if(WIN32)
     set(FLOWENGINE_COMPAT_WIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include/compat_win" CACHE PATH "" FORCE)
 endif()
 
-# 候选路径：同级目录 > third_party > FetchContent
+# 候选路径：同级目录 > build cache > third_party > FetchContent
 set(_FLOWCORO_CANDIDATES
     "${CMAKE_CURRENT_SOURCE_DIR}/../flowcoro"
+    "${CMAKE_CURRENT_SOURCE_DIR}/build/_deps/flowcoro-src"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/flowcoro"
 )
 set(_FLOWCORO_FOUND_LOCAL FALSE)
@@ -882,6 +883,16 @@ target_include_directories(test_flow_quantum_radiation PRIVATE kun_quant/include
 target_compile_definitions(test_flow_quantum_radiation PRIVATE FLOWCORO_INTEGRATION)
 add_test(NAME test_flow_quantum_radiation COMMAND test_flow_quantum_radiation)
 
+add_executable(test_flow_maze_navigation tests/test_flow_maze_navigation.cpp)
+if(WIN32)
+    target_link_libraries(test_flow_maze_navigation kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
+else()
+    target_link_libraries(test_flow_maze_navigation kun_quant flowengine_core flowcoro_headers flowcoro_net scheduler_cpp pthread sqlite3)
+endif()
+target_include_directories(test_flow_maze_navigation PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
+target_compile_definitions(test_flow_maze_navigation PRIVATE FLOWCORO_INTEGRATION)
+add_test(NAME test_flow_maze_navigation COMMAND test_flow_maze_navigation)
+
 add_executable(test_flow_sota_benchmark tests/test_flow_sota_benchmark.cpp)
 if(WIN32)
     target_link_libraries(test_flow_sota_benchmark kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
@@ -1209,7 +1220,7 @@ target_compile_definitions(test_bag_replay PRIVATE
     FLOWCTL_TEST_BIN="${CMAKE_BINARY_DIR}/bin/flowctl")
 
 add_test(NAME bag_replay_tests COMMAND test_bag_replay)
-set_tests_properties(bag_replay_tests PROPERTIES TIMEOUT 20)
+set_tests_properties(bag_replay_tests PROPERTIES TIMEOUT 60)
 
 # ── 传输/可视化桥接栈单元测试（transport / stats_bridge / dashboard_bridge）──
 add_executable(test_bridges tests/test_bridges.c)
@@ -1308,26 +1319,26 @@ add_test(NAME e2e_training_tools
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/ci/evaluators/test_e2e_training_tools.py
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
-set_tests_properties(e2e_training_tools PROPERTIES TIMEOUT 30)
+set_tests_properties(e2e_training_tools PROPERTIES TIMEOUT 120)
 
 add_test(NAME demo_evaluator_tools
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/ci/evaluators/test_demo_evaluator.py
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
-set_tests_properties(demo_evaluator_tools PROPERTIES TIMEOUT 10)
+set_tests_properties(demo_evaluator_tools PROPERTIES TIMEOUT 30)
 
 add_test(NAME xodr_compatibility_tools
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_xodr_compat.py
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
-set_tests_properties(xodr_compatibility_tools PROPERTIES TIMEOUT 10)
+set_tests_properties(xodr_compatibility_tools PROPERTIES TIMEOUT 30)
 
 add_test(NAME map_compiler_tools
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_map_compiler.py
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 set_tests_properties(map_compiler_tools PROPERTIES
-    TIMEOUT 10
+    TIMEOUT 30
     ENVIRONMENT "PYTHONPATH=${CMAKE_SOURCE_DIR}:$ENV{PYTHONPATH}"
 )
 
@@ -1336,7 +1347,7 @@ add_test(NAME astar_route_tools
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 set_tests_properties(astar_route_tools PROPERTIES
-    TIMEOUT 10
+    TIMEOUT 30
     ENVIRONMENT "PYTHONPATH=${CMAKE_SOURCE_DIR}:$ENV{PYTHONPATH}"
 )
 

@@ -22,6 +22,7 @@
 #include "kun/market/market_heartbeat_watchdog.hpp"
 #include "kun/backtest/performance.hpp"
 #include "kun/cellular/ecosystem_biosphere.hpp"
+#include "kun/cellular/maze_navigator.hpp"
 #include "cJSON.h"
 
 #include <iostream>
@@ -241,6 +242,32 @@ private:
             std::lock_guard<std::mutex> lk(g_biosphere_mutex);
             global_biosphere.step_ecosystem(1.0);
             std::string json = global_biosphere.to_json();
+            std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " +
+                                   std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;
+            send(client_fd, response.c_str(), response.size(), MSG_NOSIGNAL);
+            close(client_fd);
+            return;
+        }
+
+        if (path == "/api/maze/status" || path == "/api/maze") {
+            static kun::MazeEvolutionEngine global_maze_engine(24, 21);
+            static std::mutex g_maze_mutex;
+            std::lock_guard<std::mutex> lk(g_maze_mutex);
+            global_maze_engine.step_simulation();
+            std::string json = global_maze_engine.to_json();
+            std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " +
+                                   std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;
+            send(client_fd, response.c_str(), response.size(), MSG_NOSIGNAL);
+            close(client_fd);
+            return;
+        }
+
+        if (path == "/api/maze/reset") {
+            static kun::MazeEvolutionEngine global_maze_engine(24, 21);
+            static std::mutex g_maze_mutex;
+            std::lock_guard<std::mutex> lk(g_maze_mutex);
+            global_maze_engine.generate_new_maze();
+            std::string json = "{\"status\":\"OK\",\"message\":\"New maze generated and population reset\"}";
             std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " +
                                    std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;
             send(client_fd, response.c_str(), response.size(), MSG_NOSIGNAL);

@@ -500,31 +500,34 @@ static void test_disc_multicast_port_wire(void) {
         FAIL("discovery start failed");
         return;
     }
-    usleep(500000);
-
-    TopologyGraph left_graph;
-    TopologyGraph right_graph;
-    int left_rc = discovery_copy_topology(left, &left_graph);
-    int right_rc = discovery_copy_topology(right, &right_graph);
     bool left_received_right = false;
     bool right_received_left = false;
-    if (left_rc == 0) {
-        for (uint32_t i = 0; i < left_graph.node_count; i++) {
-            if (strcmp(left_graph.nodes[i].name, "wire_right") == 0 &&
-                left_graph.nodes[i].unicast_port == 17702) {
-                left_received_right = true;
-                break;
+
+    for (int retry = 0; retry < 50; retry++) {
+        usleep(50000);
+        TopologyGraph left_graph;
+        TopologyGraph right_graph;
+        int left_rc = discovery_copy_topology(left, &left_graph);
+        int right_rc = discovery_copy_topology(right, &right_graph);
+        if (left_rc == 0) {
+            for (uint32_t i = 0; i < left_graph.node_count; i++) {
+                if (strcmp(left_graph.nodes[i].name, "wire_right") == 0 &&
+                    left_graph.nodes[i].unicast_port == 17702) {
+                    left_received_right = true;
+                    break;
+                }
             }
         }
-    }
-    if (right_rc == 0) {
-        for (uint32_t i = 0; i < right_graph.node_count; i++) {
-            if (strcmp(right_graph.nodes[i].name, "wire_left") == 0 &&
-                right_graph.nodes[i].unicast_port == 17701) {
-                right_received_left = true;
-                break;
+        if (right_rc == 0) {
+            for (uint32_t i = 0; i < right_graph.node_count; i++) {
+                if (strcmp(right_graph.nodes[i].name, "wire_left") == 0 &&
+                    right_graph.nodes[i].unicast_port == 17701) {
+                    right_received_left = true;
+                    break;
+                }
             }
         }
+        if (left_received_right && right_received_left) break;
     }
 
     discovery_stop(left);

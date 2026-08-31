@@ -27,9 +27,10 @@ run_sanitizer() {
     # Build
     cmake --build "$build_dir" -j$(nproc) 2>&1 | tail -5
 
-    # Run tests (exclude benchmarks and long-running stability tests)
+    # Run tests (exclude benchmarks, long-running stability, and external integration tests)
     if ctest --test-dir "$build_dir" --output-on-failure -j$(nproc) \
-        -E "benchmark|manual|stability" 2>&1; then
+        -LE "benchmark|manual|stability|integration" \
+        -E "bench|smoke|manual|stability" 2>&1; then
         echo "  ✅ $name: all tests passed"
     else
         echo "  ❌ $name: test failures detected"

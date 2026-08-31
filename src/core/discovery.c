@@ -78,7 +78,7 @@ struct DiscoveryManager {
 
 static int serialize_beacon(uint8_t* buf, size_t buf_size,
                             uint8_t msg_type, DiscoveryManager* dm) {
-    if (buf_size < 128) return ERR_INVALID_PARAM;
+    if (buf_size < 64) return ERR_INVALID_PARAM;
     size_t off = 0;
 
     uint32_t magic = DISC_MAGIC;
@@ -115,7 +115,7 @@ static int serialize_beacon(uint8_t* buf, size_t buf_size,
 
 static int deserialize_beacon(const uint8_t* buf, size_t len,
                               uint8_t* msg_type, NodeInfo* node) {
-    if (len < 128) return ERR_INVALID_PARAM;
+    if (len < 55) return ERR_INVALID_PARAM;
 
     uint32_t magic;
     memcpy(&magic, buf, 4);
@@ -326,6 +326,13 @@ static void* recv_thread_fn(void* arg) {
                        node.capabilities, node.topic_count);
                 if (dm->change_cb)
                     dm->change_cb(&dm->topology, &node, true, dm->change_user_data);
+
+                /* 收到新节点 HELLO 时立即回发心跳信标，使双方瞬间完成双向拓扑发现 */
+                int rlen = serialize_beacon(buf, sizeof(buf), DISC_MSG_HEARTBEAT, dm);
+                if (rlen > 0) {
+                    sendto(dm->sock_fd, buf, (size_t)rlen, 0,
+                           (const struct sockaddr*)&dm->mcast_addr, sizeof(dm->mcast_addr));
+                }
                 break;
             }
             case DISC_MSG_HEARTBEAT: {
@@ -389,6 +396,9 @@ DiscoveryManager* discovery_create(const char* node_name, uint8_t capabilities) 
 
     int reuse = 1;
     setsockopt(dm->sock_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+#ifdef SO_REUSEPORT
+    setsockopt(dm->sock_fd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse));
+#endif
 #if defined(_WIN32)
     u_long nb = 1;
     ioctlsocket((SOCKET)dm->sock_fd, FIONBIO, &nb);
@@ -401,13 +411,28 @@ DiscoveryManager* discovery_create(const char* node_name, uint8_t capabilities) 
     dm->mcast_addr.sin_port        = htons(DISC_MULTICAST_PORT);
     bind(dm->sock_fd, (struct sockaddr*)&dm->mcast_addr, sizeof(dm->mcast_addr));
 
-    /* Join multicast group */
+    /* Join multicast group on INADDR_ANY and 127.0.0.1 */
     struct ip_mreq mreq;
     mreq.imr_multiaddr.s_addr = inet_addr(DISC_MULTICAST_GROUP);
     mreq.imr_interface.s_addr = htonl(INADDR_ANY);
     setsockopt(dm->sock_fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq));
 
-    /* Set multicast TTL */
+    struct ip_mreq mreq_loop;
+    mreq_loop.imr_multiaddr.s_addr = inet_addr(DISC_MULTICAST_GROUP);
+    mreq_loop.imr_interface.s_addr = inet_addr("127.0.0.1");
+    setsockopt(dm->sock_fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq_loop, sizeof(mreq_loop));
+
+    /* Set multicast outgoing interface to loopback for isolated/offline containers */
+    struct in_addr loop_if;
+    loop_if.s_addr = inet_addr("127.0.0.1");
+    if (setsockopt(dm->sock_fd, IPPROTO_IP, IP_MULTICAST_IF, &loop_if, sizeof(loop_if)) < 0) {
+        loop_if.s_addr = htonl(INADDR_ANY);
+        setsockopt(dm->sock_fd, IPPROTO_IP, IP_MULTICAST_IF, &loop_if, sizeof(loop_if));
+    }
+
+    /* Enable multicast loopback and set TTL */
+    uint8_t loop = 1;
+    setsockopt(dm->sock_fd, IPPROTO_IP, IP_MULTICAST_LOOP, &loop, sizeof(loop));
     uint8_t ttl = 1;
     setsockopt(dm->sock_fd, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl));
 

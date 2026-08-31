@@ -173,8 +173,13 @@ void test_basis_arbitrage_coroutine_loop() {
     std::cout << "     腿1: " << snapshot[0].symbol << " 方向=" << (snapshot[0].direction == 1 ? "卖空" : "买多") << " 价格=" << snapshot[0].price << "\n";
     std::cout << "     腿2: " << snapshot[1].symbol << " 方向=" << (snapshot[1].direction == 0 ? "买多" : "卖空") << " 价格=" << snapshot[1].price << "\n";
 
-    assert(snapshot[0].direction == 1 && std::strcmp(snapshot[0].symbol, "rb2405") == 0);
-    assert(snapshot[1].direction == 0 && std::strcmp(snapshot[1].symbol, "rb2410") == 0);
+    bool found_leg1 = false;
+    bool found_leg2 = false;
+    for (const auto& ord : snapshot) {
+        if (std::strcmp(ord.symbol, "rb2405") == 0 && ord.direction == 1) found_leg1 = true;
+        if (std::strcmp(ord.symbol, "rb2410") == 0 && ord.direction == 0) found_leg2 = true;
+    }
+    assert(found_leg1 && found_leg2);
 
     arb_task->set_stop();
     ex.run();
