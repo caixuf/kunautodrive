@@ -64,7 +64,43 @@ A **Synapse** $e_{ij} \in \mathcal{E}$ connects pre-synaptic cell $c_i$ to post-
 
 $$e_{ij} = \langle c_i, c_j, k, w_{ij}, \ell_0, \phi_{ij} \rangle$$
 
-where $w_{ij}$ is synaptic transmission efficiency, $\ell_0$ is the equilibrium spring rest length, and $\phi_{ij} \in [0, 1]$ tracks action potential photon packet propagation.
+where $w_{ij}$ is synaptic transmission efficiency (plastic; mutation samples $w \sim U(-2, 2)$, negative weights realize inhibitory connections), $\ell_0$ is the equilibrium spring rest length (default 60.0 units), and $\phi_{ij} \in [0, 1]$ tracks action potential photon packet propagation (`photon_pos`, advanced at $3.0\ \text{s}^{-1}$).
+
+Each cell exposes exactly **two input ports** (primary input and auxiliary/gating port) — a minimal abstraction of biological dendritic integration that also yields a deterministic flat memory layout: `flat_port_inputs_[cell_idx * 2 + port]`.
+
+### 2.3 The Cell Functional Taxonomy (19 Primitives)
+
+The reference implementation (`cellular_genome.hpp`) defines four functional families totaling 19 cell types, with dual-domain semantics:
+
+| Family | Type | Math Semantics | Quant Domain | ADAS Domain |
+|---|---|---|---|---|
+| **Sensory Receptors** | `SENSE_RAW_INPUT_0..3` | $u = p_1 \cdot I_k$ | Last price / Volume / Spread / Order imbalance | Lead distance / Rel. velocity / Lane offset / TTC danger |
+| **Metabolic Operators** | `OP_EMA` | $s \leftarrow \alpha I_0 + (1-\alpha) s$ | Smoothing filter (fast/slow lines) | Target distance smoothing |
+| | `OP_DIFF` | $u = I_0 - I_0^{(t-1)}$ | Momentum | Closing-rate perception |
+| | `OP_INTEGRAL` | $s \leftarrow s + \lambda I_0$ | Trend persistence | Yaw energy accumulation |
+| | `OP_SUM / OP_SUB / OP_MULTIPLY / OP_RATIO / OP_ABS` | linear algebra on ports | DIF spread, gain modulation, normalization | Desired-vs-actual error, coupling |
+| **Gating Neurons** | `GATE_THRESHOLD` | $u = \mathbb{1}[I_0 > p_1]$ | Breakout detection | Threshold alarm |
+| | `GATE_HYSTERESIS` | Schmitt trigger, dual thresholds $p_1/p_2$ | Anti-whipsaw latch | Anti-chatter latch |
+| | `GATE_AND` / `GATE_INHIBIT` | conjunctive / suppressive gating | Co-confirmation / inhibitory synapse | Dual-condition confirm / suppress |
+| **Action Effectors** | `ACT_PRIMARY_POSITIVE` / `ACT_PRIMARY_NEGATIVE` | pass-through $u = I_0$ | Buy open / Sell open | Lane-change accel / Decelerate-avoid |
+| | `ACT_DEFENSIVE_RESET` | pass-through | Flatten position | Lane-centering hold |
+| | `ACT_IMMUNE_BLOCK` | latches when $I_0 > 0.5$ | Trade circuit-breaker lock | AEB emergency braking |
+
+**Design note**: Sensory and effector types form a **protected skeleton** (immune to mutation, §4.3); only metabolic and gating types constitute the morphogenetic search space. This guarantees every organism always owns a complete *sense–decide–act–immunize* loop while its intermediate decision structure grows without bound.
+
+### 2.4 The Archean Progenitor (Seed Organism)
+
+All individuals descend from a hand-designed 9-cell seed organism `create_seed_organism()` (`Genesis-0`):
+
+```
+              [Receptors]              [Metabolic]             [Gating]        [Effectors]
+   I0(price) ──┬──────────────> EMA_slow(α=0.05) ──┐
+               │                                   ├─> SUB (fast-slow) ─> Hysteresis ─┬─w=+1─> BUY open
+   I1(volume)──┴──> EMA_fast(α=0.20) ──────────────┘              (θ=+0.01/−0.01)     └─w=−1─> SELL open
+                                                   (immune pathway emerges via mutation) ──> IMMUNE LOCK
+```
+
+This topology is the cellular re-expression of the classic MACD/dual-MA strategy — the **minimal viable ancestor** for morphogenetic search. At population initialization, individual 0 preserves the pure seed while all others undergo 3 rounds of random mutation, seeding initial diversity.
 
 ---
 
