@@ -51,6 +51,28 @@
   <div id="src">数据源: 连接守护进程...</div>
 </div>
 
+<div class="panel" id="warp-panel" style="top:220px;left:16px;width:270px;">
+  <h2>时空曲率演化加速 (Hyper-Warp)</h2>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0;">
+    <button id="w-1x" onclick="setWarp('1x')" style="padding:6px;background:rgba(30,41,59,.6);border:1px solid var(--cyan);color:var(--cyan);border-radius:6px;cursor:pointer;">1x 观察模式</button>
+    <button id="w-100x" onclick="setWarp('100x')" style="padding:6px;background:rgba(30,41,59,.6);border:1px solid var(--line);color:var(--text);border-radius:6px;cursor:pointer;">100x 快速</button>
+    <button id="w-1000x" onclick="setWarp('1000x')" style="padding:6px;background:rgba(30,41,59,.6);border:1px solid var(--line);color:var(--text);border-radius:6px;cursor:pointer;">1000x 涡轮</button>
+    <button id="w-max" onclick="setWarp('unlimited')" style="padding:6px;background:rgba(244,63,94,.2);border:1px solid var(--crimson);color:var(--crimson);border-radius:6px;cursor:pointer;font-weight:bold;">MAX 超光速</button>
+  </div>
+  <div style="display:flex;gap:6px;margin-top:6px;">
+    <button onclick="setStress('extreme')" style="flex:1;padding:5px;background:rgba(250,204,21,.15);border:1px solid #facc15;color:#facc15;border-radius:6px;cursor:pointer;font-size:11px;">[兵部] 红皇后闪崩</button>
+    <button onclick="setStress('off')" style="flex:1;padding:5px;background:rgba(30,41,59,.6);border:1px solid var(--line);color:var(--dim);border-radius:6px;cursor:pointer;font-size:11px;">恢复平稳</button>
+  </div>
+  <div class="kv" style="margin-top:8px;"><span>当前曲率档位</span><b id="st-warp" style="color:var(--cyan)">1x_Realtime</b></div>
+  <div class="kv"><span>8岛总演化代数</span><b id="st-total-gens">0</b></div>
+  <div class="kv"><span>全岛基因大迁徙</span><b id="st-total-mig">0 次</b></div>
+</div>
+
+<div class="panel" id="islands-panel" style="bottom:70px;left:16px;width:270px;max-height:220px;overflow:hidden auto;">
+  <h2 style="font-size:12px;margin-bottom:6px;">8 岛多生境演化矩阵 (Demes)</h2>
+  <div id="islands-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:10px;"></div>
+</div>
+
 <div class="panel" id="actions">
   <h2>效应器输出 (Action Outputs)</h2>
   <div class="act" id="act-buy"><span>买开 / 加速 ACT_POS</span><b id="v-buy">0.00</b></div>
@@ -137,8 +159,9 @@ const T = {
 const FAMILY = c =>
   c.startsWith('SENSE') || c.startsWith('Sense') ? 'receptor' :
   (c.startsWith('Op_') || ['EMA','DIFF','INTEGRAL','SUM','SUB','MUL','RATIO','ABS','DELAY_N','OSCILLATOR','QUADRATIC'].includes(c)) ? 'metabolic' :
-  (c.startsWith('Gate_') || ['THRESH','HYST','AND','INHIB','DEADZONE','MIN_MAX'].includes(c)) ? 'gating' : 'effector';
-const FAMILY_COLOR = { receptor:0x22d3ee, metabolic:0x34d399, gating:0xa78bfa, effector:0xf43f5e };
+  (c.startsWith('Gate_') || ['THRESH','HYST','AND','INHIB','DEADZONE','MIN_MAX'].includes(c)) ? 'gating' :
+  (c.startsWith('Pred_') || c.startsWith('Assoc_')) ? 'cognitive' : 'effector';
+const FAMILY_COLOR = { receptor:0x22d3ee, metabolic:0x34d399, gating:0xa78bfa, cognitive:0xfbbf24, effector:0xf43f5e };
 const MUT_CANDIDATES = [
   T.EMA, T.DIFF, T.INTEGRAL, T.SUM, T.SUB, T.MUL, T.RATIO, T.ABS,
   T.DELAY_N, T.OSCILLATOR, T.QUADRATIC,
@@ -553,21 +576,110 @@ document.getElementById('b-rad').onclick = e=>{
 document.getElementById('b-pause').onclick = e=>{ paused=!paused; e.target.textContent = paused?'▶ 继续':'⏸ 暂停'; };
 document.getElementById('b-reset').onclick = ()=>{ org = seedOrganism(); compile(org); rebuildViews(); log('↺ 重置为种子形态生物 Genesis-0', true); };
 
-/* 尝试从守护进程获取真实冠军有机体快照做坐标水合 (后台持续演化, 前端定时同步观察) */
+/* 尝试从守护进程获取真实冠军有机体快照做坐标水合 (后台持续演化, 前端毫秒级实时同步观察) */
 async function syncServerChampion() {
   try{
-    const r = await fetch('/api/cellular/organism', { signal: AbortSignal.timeout(3000) });
+    const r = await fetch('/api/cellular/organism', { signal: AbortSignal.timeout(2000) });
     const j = await r.json();
-    if(j.cells && j.cells.length && (!org || j.generation !== org.generation || j.cells.length !== org.cells.length)){
-      org = j;
+    if(j.cells && j.cells.length && (!org || j.generation !== org.generation || j.cells.length !== org.cells.length || Math.abs((j.thought_energy||0) - (org.thought_energy||0)) > 1e-4)){
+      const adaptedSyns = (j.synapses || j.syns || []).map(s => ({
+        from: s.from,
+        to: s.to,
+        port: s.port || 0,
+        w: s.weight !== undefined ? s.weight : (s.w || 1.0),
+        active: s.active !== undefined ? s.active : true,
+        photon: s.photon_pos || -1.0,
+        recurrent: s.recurrent || false,
+        hebb_rate: s.hebb_rate || 0.005
+      }));
+      const adaptedCells = j.cells.map(c => ({
+        id: c.id,
+        type: c.type,
+        param1: c.param1 || 0,
+        param2: c.param2 || 0,
+        x: c.x || 0,
+        y: c.y || 0,
+        z: c.z || 0,
+        vx: 0, vy: 0, vz: 0,
+        out: c.output || 0,
+        prev: 0, state: 0, aux: 0,
+        latch: false,
+        acts: c.activations || 0,
+        glow: c.glow || 0
+      }));
+
+      org = {
+        organism_id: j.organism_id || 1,
+        generation: j.generation || 0,
+        lineage: j.lineage || 'Apex',
+        fitness: j.fitness || 0,
+        thought_energy: j.thought_energy || 0,
+        cells: adaptedCells,
+        syns: adaptedSyns,
+        order: [],
+        phySteps: 0
+      };
+
       compile(org);
       rebuildViews();
-      log(`✓ 同步后台冠军生物: ${j.lineage||'Genesis'} · G${j.generation||0} (${j.cells.length} 细胞 / ${j.synapses?.length||0} 突触)`, true);
+      document.getElementById('st-gen').textContent = org.generation;
+      document.getElementById('st-cells').textContent = org.cells.length;
+      document.getElementById('st-syn').textContent = org.syns.filter(s=>s.active).length;
+      log(`✓ 同步后台冠军生物: ${org.lineage} · Gen ${org.generation} (${org.cells.length} 细胞 / ${org.syns.length} 突触)`, true);
     }
   }catch(e){ /* 离线使用客户端内嵌种子生物 */ }
 }
 syncServerChampion();
-setInterval(syncServerChampion, 4000);
+setInterval(syncServerChampion, 500);
+
+window.setWarp = async function(speed) {
+  try {
+    const r = await fetch('/api/control/warp?speed=' + speed, { method: 'POST' });
+    const j = await r.json();
+    document.getElementById('st-warp').textContent = j.warp_speed || speed;
+    log(`⚙ 演化时空曲率已调节至: ${j.warp_speed || speed}`, true);
+    ['w-1x','w-100x','w-1000x','w-max'].forEach(id => {
+      const btn = document.getElementById(id);
+      if(btn) btn.style.borderColor = 'var(--line)';
+    });
+    const activeBtn = speed === '1x' ? 'w-1x' : speed === '100x' ? 'w-100x' : speed === '1000x' ? 'w-1000x' : 'w-max';
+    if(document.getElementById(activeBtn)) document.getElementById(activeBtn).style.borderColor = 'var(--cyan)';
+  } catch(e) { console.error(e); }
+};
+
+window.setStress = async function(level) {
+  try {
+    await fetch('/api/control/stress?level=' + level, { method: 'POST' });
+    log(level === 'extreme' ? '🚨 [兵部] 触发红皇后极端流动性闪崩与对抗加压!' : '✓ 恢复平稳演化生境', true);
+  } catch(e) { console.error(e); }
+};
+
+async function pollIslands() {
+  try {
+    const r = await fetch('/api/islands/status', { signal: AbortSignal.timeout(2000) });
+    const j = await r.json();
+    if(j.warp_mode) document.getElementById('st-warp').textContent = j.warp_mode;
+    if(j.total_generations != null) document.getElementById('st-total-gens').textContent = j.total_generations.toLocaleString();
+    if(j.total_migrations != null) document.getElementById('st-total-mig').textContent = j.total_migrations + ' 次';
+    
+    if(j.islands && j.islands.length) {
+      const html = j.islands.map(isl => {
+        return `<div style="background:rgba(15,23,42,.6);border:1px solid rgba(30,41,59,.8);padding:4px 6px;border-radius:4px;">
+          <div style="display:flex;justify-content:space-between;color:var(--cyan);font-weight:bold;">
+            <span>Island-${isl.island_id}</span>
+            <span style="color:#64748b">C${isl.core_id}</span>
+          </div>
+          <div style="color:#e2e8f0;font-size:9px;">Gens: <b>${isl.generations}</b></div>
+          <div style="color:var(--emerald);font-size:9px;">Fit: <b>${isl.best_fitness.toFixed(1)}</b></div>
+          <div style="color:#94a3b8;font-size:8px;">Mig: ⇄ ${isl.migration_in}/${isl.migration_out}</div>
+        </div>`;
+      }).join('');
+      document.getElementById('islands-grid').innerHTML = html;
+    }
+  } catch(e) { /* offline fallback */ }
+}
+setInterval(pollIslands, 1000);
+pollIslands();
 
 log('形态发生细胞全息观测台已启动 — 拖拽旋转 · 滚轮缩放', true);
 

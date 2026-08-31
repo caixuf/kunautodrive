@@ -11,6 +11,7 @@
 #include <csignal>
 #include <cmath>
 #include <random>
+#include <memory>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -22,8 +23,7 @@
 #include "kun/cellular/ecosystem_biosphere.hpp"
 #include "kun/cellular/quantum_radiation_field.hpp"
 #include "kun/cellular/maze_navigator.hpp"
-#include "kun/cellular/quant_cellular_adapter.hpp"
-#include "kun/cellular/adas_cellular_adapter.hpp"
+#include "kun/cellular/island_evolution_grid.hpp"
 
 namespace kun {
 
@@ -34,6 +34,8 @@ static std::mutex g_biosphere_mutex;
 static std::mutex g_quantum_mutex;
 static std::mutex g_maze_mutex;
 
+// 核心组件实例
+static IslandEvolutionGrid g_island_grid(8, SeedInitMode::HANDCRAFTED_PROGENITOR);
 static MorphogeneticEvolutionEngine g_morph_engine(20, 42, SeedInitMode::HANDCRAFTED_PROGENITOR);
 static EcoBiosphere g_biosphere(4, 20);
 static QuantumRadiationField g_radiation_field;
@@ -49,6 +51,7 @@ static std::shared_ptr<const std::string> g_snap_pop_json;
 static std::shared_ptr<const std::string> g_snap_biosphere_json;
 static std::shared_ptr<const std::string> g_snap_quantum_json;
 static std::shared_ptr<const std::string> g_snap_maze_json;
+static std::shared_ptr<const std::string> g_snap_islands_json;
 
 static inline void publish_champ_snap(const std::string& str) {
     auto p = std::make_shared<const std::string>(str);
@@ -69,6 +72,10 @@ static inline void publish_quantum_snap(const std::string& str) {
 static inline void publish_maze_snap(const std::string& str) {
     auto p = std::make_shared<const std::string>(str);
     std::atomic_store(&g_snap_maze_json, p);
+}
+static inline void publish_islands_snap(const std::string& str) {
+    auto p = std::make_shared<const std::string>(str);
+    std::atomic_store(&g_snap_islands_json, p);
 }
 
 // MIME 类型解析
@@ -114,7 +121,7 @@ public:
             return false;
         }
 
-        if (listen(server_fd_, 64) < 0) {
+        if (listen(server_fd_, 128) < 0) {
             std::cerr << "[DAEMON_ERR] Failed to listen on socket" << std::endl;
             close(server_fd_);
             server_fd_ = -1;
@@ -173,10 +180,20 @@ private:
         std::string request(buffer);
         size_t method_end = request.find(' ');
         if (method_end == std::string::npos) { close(client_fd); return; }
+        std::string method = request.substr(0, method_end);
+
         size_t url_end = request.find(' ', method_end + 1);
         if (url_end == std::string::npos) { close(client_fd); return; }
 
-        std::string path = request.substr(method_end + 1, url_end - method_end - 1);
+        std::string full_url = request.substr(method_end + 1, url_end - method_end - 1);
+        std::string path = full_url;
+        std::string query = "";
+        size_t q_pos = full_url.find('?');
+        if (q_pos != std::string::npos) {
+            path = full_url.substr(0, q_pos);
+            query = full_url.substr(q_pos + 1);
+        }
+
         if (path == "/" || path.empty()) {
             path = "/cellular.html";
         }
@@ -194,10 +211,12 @@ private:
                << "\"status\":\"RUNNING\","
                << "\"server\":\"FlowEngine Morphogenetic Cellular Daemon\","
                << "\"version\":\"2.0-24primitives\","
+               << "\"warp_speed\":\"" << to_string(g_island_grid.get_warp_speed()) << "\","
                << "\"total_inferences\":" << g_total_inferences.load() << ","
                << "\"cosmic_hits\":" << g_total_cosmic_hits.load() << ","
                << "\"quantum_tunneling_events\":" << g_total_tunneling_events.load() << ","
                << "\"morph_population\":20,"
+               << "\"total_islands\":8,"
                << "\"primitives_count\":24"
                << "}";
             send_response(client_fd, 200, "application/json; charset=utf-8", ss.str());
@@ -236,7 +255,50 @@ private:
             return;
         }
 
-        // 4. API: /api/biosphere/status (零锁快照读取)
+        // 4. API: /api/islands/status (8 岛超加速演化态势)
+        if (path == "/api/islands/status" || path == "/api/islands") {
+            auto snap = std::atomic_load(&g_snap_islands_json);
+            if (snap) {
+                send_response(client_fd, 200, "application/json; charset=utf-8", *snap);
+            } else {
+                send_response(client_fd, 200, "application/json; charset=utf-8", g_island_grid.to_json());
+            }
+            return;
+        }
+
+        // 5. API: /api/control/warp (控制时空曲率演化档位)
+        if (path == "/api/control/warp") {
+            if (query.find("speed=100x") != std::string::npos) {
+                g_island_grid.set_warp_speed(WarpSpeed::WARP_100X);
+            } else if (query.find("speed=1000x") != std::string::npos) {
+                g_island_grid.set_warp_speed(WarpSpeed::WARP_1000X);
+            } else if (query.find("speed=unlimited") != std::string::npos || query.find("speed=max") != std::string::npos) {
+                g_island_grid.set_warp_speed(WarpSpeed::WARP_UNLIMITED);
+            } else {
+                g_island_grid.set_warp_speed(WarpSpeed::REALTIME_1X);
+            }
+            std::ostringstream ss;
+            ss << "{\"status\":\"OK\",\"warp_speed\":\"" << to_string(g_island_grid.get_warp_speed()) << "\"}";
+            send_response(client_fd, 200, "application/json; charset=utf-8", ss.str());
+            return;
+        }
+
+        // 6. API: /api/control/stress (红皇后对抗压力注入)
+        if (path == "/api/control/stress") {
+            if (query.find("level=low") != std::string::npos) {
+                g_island_grid.set_stress_level(AdversarialStressProfile::Level::LOW);
+            } else if (query.find("level=medium") != std::string::npos) {
+                g_island_grid.set_stress_level(AdversarialStressProfile::Level::MEDIUM);
+            } else if (query.find("level=extreme") != std::string::npos) {
+                g_island_grid.set_stress_level(AdversarialStressProfile::Level::EXTREME);
+            } else {
+                g_island_grid.set_stress_level(AdversarialStressProfile::Level::OFF);
+            }
+            send_response(client_fd, 200, "application/json; charset=utf-8", "{\"status\":\"OK\",\"stress\":\"UPDATED\"}");
+            return;
+        }
+
+        // 7. API: /api/biosphere/status (零锁快照读取)
         if (path == "/api/biosphere/status" || path == "/api/biosphere") {
             auto snap = std::atomic_load(&g_snap_biosphere_json);
             if (snap) {
@@ -248,7 +310,7 @@ private:
             return;
         }
 
-        // 5. API: /api/quantum/field (零锁快照读取)
+        // 8. API: /api/quantum/field (零锁快照读取)
         if (path == "/api/quantum/field") {
             auto snap = std::atomic_load(&g_snap_quantum_json);
             if (snap) {
@@ -260,7 +322,7 @@ private:
             return;
         }
 
-        // 6. API: /api/maze/status (零锁快照读取)
+        // 9. API: /api/maze/status (零锁快照读取)
         if (path == "/api/maze/status" || path == "/api/maze") {
             auto snap = std::atomic_load(&g_snap_maze_json);
             if (snap) {
@@ -272,23 +334,7 @@ private:
             return;
         }
 
-        // 7. API: /api/universe (兼容模拟行情)
-        if (path == "/api/universe") {
-            static double sim_price = 3620.0;
-            static std::mt19937_64 rng(42);
-            static std::normal_distribution<double> dist(0.0, 1.2);
-            sim_price += dist(rng);
-            if (sim_price < 3000.0) sim_price = 3000.0;
-
-            std::ostringstream ss;
-            ss << "{\"symbols\":[{\"symbol\":\"rb2405\",\"last_price\":" << sim_price 
-               << ",\"volume\":185420,\"bid1\":" << (sim_price - 1.0) 
-               << ",\"ask1\":" << (sim_price + 1.0) << ",\"change_pct\":0.45}]}";
-            send_response(client_fd, 200, "application/json; charset=utf-8", ss.str());
-            return;
-        }
-
-        // 8. 静态文件分发 (如 /cellular.html)
+        // 10. 静态文件分发 (如 /cellular.html)
         std::string file_path = static_dir_ + path;
         std::ifstream file(file_path, std::ios::binary);
         if (file.is_open()) {
@@ -349,117 +395,103 @@ int main(int argc, char* argv[]) {
 
     std::cout << "======================================================================\n";
     std::cout << "  FlowEngine Morphogenetic Cellular Cybernetics Standalone Daemon     \n";
-    std::cout << "  Version: 2.1 (Accelerated Multi-Substep & Zero-Lock Snapshot Cache) \n";
+    std::cout << "  Version: 2.0 (8-Island Hyper-Warp Grid & 24-Primitive Taxonomy)   \n";
     std::cout << "======================================================================\n";
 
-    // 线程 1: 7x24 形态发生代际进化与力场松弛 (极速高通量进化: 100 Hz + 每 30 步演化一代)
-    std::thread evo_thread([]() {
-        uint64_t tick_count = 0;
-        double synthetic_price = 3600.0;
-        std::mt19937_64 rng(1337);
-        std::normal_distribution<double> step_dist(0.0, 0.8);
+    // 线程 1: 8 岛超加速并发形态发生演化工作池 (Hyper-Warp Multi-Island Workers)
+    std::vector<std::thread> island_workers;
+    for (size_t i = 0; i < 8; ++i) {
+        island_workers.emplace_back([i]() {
+            double synthetic_price = 3600.0;
+            std::mt19937_64 rng(1337 + i * 997);
+            std::normal_distribution<double> step_dist(0.0, 0.8);
+            uint64_t local_step = 0;
 
-        while (kun::g_running) {
-            synthetic_price += step_dist(rng);
-            double dummy_inputs[4] = { synthetic_price, 1000.0, 1.0, 0.05 };
+            while (kun::g_running) {
+                synthetic_price += step_dist(rng);
+                double dummy_inputs[4] = { synthetic_price, 1000.0, 1.0, 0.05 };
 
-            {
-                std::lock_guard<std::mutex> lk(kun::g_morph_mutex);
-                for (auto& org : kun::g_morph_engine.population()) {
-                    org.step_force_field_physics(0.02f);
-                    auto actions = org.forward(dummy_inputs);
-                    kun::g_total_inferences.fetch_add(1, std::memory_order_relaxed);
+                kun::g_island_grid.step_island(i, dummy_inputs, step_dist(rng));
+                kun::g_total_inferences.fetch_add(20, std::memory_order_relaxed);
 
-                    double pnl = (actions.positive_action - actions.negative_action) * step_dist(rng) * 100.0;
-                    if (!std::isfinite(pnl)) pnl = 0.0;
-                    if (!std::isfinite(org.fitness_score)) org.fitness_score = 0.0;
-                    org.fitness_score = std::clamp(org.fitness_score * 0.95 + pnl, -500.0, 5000.0);
+                // 周期性跨岛大迁徙 (每 100 代)
+                if (i == 0 && ++local_step % 100 == 0) {
+                    kun::g_island_grid.migrate_elites();
                 }
 
-                // 每 30 步 (约 300ms) 演化一代，加速演化收敛
-                if (++tick_count % 30 == 0) {
-                    kun::g_morph_engine.evolve_generation();
-
-                    const auto& champ = kun::g_morph_engine.get_champion();
-                    if (champ.generation % 20 == 0) {
-                        std::cout << "[GEN] Generation " << champ.generation
-                                  << " | Champion ID=" << champ.organism_id
-                                  << " | Cells=" << champ.cells.size()
-                                  << " | Synapses=" << champ.synapses.size()
-                                  << " | Fitness=" << champ.fitness_score
-                                  << " | MutBoost=" << kun::g_morph_engine.get_adaptive_mutation_boost() << std::endl;
+                // 根据 WarpSpeed 动态决定休眠节拍
+                auto speed = kun::g_island_grid.get_warp_speed();
+                if (speed == kun::WarpSpeed::REALTIME_1X) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20)); // ~50Hz
+                } else if (speed == kun::WarpSpeed::WARP_100X) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(200));
+                } else if (speed == kun::WarpSpeed::WARP_1000X) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(20));
+                } else {
+                    // WARP_UNLIMITED: 硅基极限全速推进，不让渡任何时钟周期
+                    if (local_step % 1000 == 0) {
+                        std::this_thread::yield();
                     }
-                }
-
-                // 定期发布无锁快照 (每 2 步刷新一次)
-                if (tick_count % 2 == 0) {
-                    kun::publish_champ_snap(kun::g_morph_engine.get_champion().to_json());
-                }
-                if (tick_count % 10 == 0) {
-                    std::ostringstream ss;
-                    ss << "{\"population_size\":20,\"organisms\":[";
-                    const auto& pop = kun::g_morph_engine.population();
-                    for (size_t i = 0; i < pop.size(); ++i) {
-                        if (i > 0) ss << ",";
-                        ss << pop[i].to_json();
-                    }
-                    ss << "]}";
-                    kun::publish_pop_snap(ss.str());
                 }
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10)); // 100 Hz
+        });
+    }
+
+    // 线程 2: 零锁快照定时发布器 (10 Hz 定时更新原子双缓冲快照)
+    std::thread snapshot_publisher([]() {
+        while (kun::g_running) {
+            {
+                // 发布 8 岛网格全局冠军与岛屿态势
+                auto global_champ = kun::g_island_grid.get_global_champion();
+                kun::publish_champ_snap(global_champ.to_json());
+                kun::publish_islands_snap(kun::g_island_grid.to_json());
+            }
+            {
+                std::lock_guard<std::mutex> lk(kun::g_biosphere_mutex);
+                kun::publish_biosphere_snap(kun::g_biosphere.to_json());
+            }
+            {
+                std::lock_guard<std::mutex> lk(kun::g_quantum_mutex);
+                kun::publish_quantum_snap(kun::g_radiation_field.to_json());
+            }
+            {
+                std::lock_guard<std::mutex> lk(kun::g_maze_mutex);
+                kun::publish_maze_snap(kun::g_maze_engine.to_json());
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100)); // 10 Hz 快照刷新
         }
     });
 
-    // 线程 2: 宏观生态圈生境演化 (EcoBiosphere, 5Hz 提速)
+    // 线程 3: 宏观生态圈生境演化 (EcoBiosphere, 1Hz)
     std::thread biosphere_thread([]() {
-        uint64_t tick = 0;
         while (kun::g_running) {
             {
                 std::lock_guard<std::mutex> lk(kun::g_biosphere_mutex);
                 kun::g_biosphere.step_ecosystem(1.0);
-                if (++tick % 2 == 0) {
-                    kun::publish_biosphere_snap(kun::g_biosphere.to_json());
-                }
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
     });
 
-    // 线程 3: 量子辐射场波函数干涉与粒子轰击 (QuantumRadiationField, 25Hz)
+    // 线程 4: 量子辐射场波函数干涉 (QuantumRadiationField, 20Hz)
     std::thread quantum_thread([]() {
-        uint64_t tick = 0;
         while (kun::g_running) {
             {
                 std::lock_guard<std::mutex> lk_q(kun::g_quantum_mutex);
-                std::lock_guard<std::mutex> lk_m(kun::g_morph_mutex);
-
-                kun::g_radiation_field.step(0.04f);
-
-                for (auto& org : kun::g_morph_engine.population()) {
-                    kun::g_radiation_field.irradiate_organism(org, 0.0f, 0.0f, 0.0f, 0);
-                }
-
-                if (++tick % 3 == 0) {
-                    kun::publish_quantum_snap(kun::g_radiation_field.to_json());
-                }
+                kun::g_radiation_field.step(0.05f);
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(40));
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
     });
 
-    // 线程 4: 2D 连续力学迷宫空间自主寻径演化 (Maze Navigator: 批量子步 4 substeps/tick @ ~160Hz = ~640 步/秒)
+    // 线程 5: 2D 连续力学迷宫空间自主寻径演化 (Maze Navigator, ~80 步/秒)
     std::thread maze_thread([]() {
-        uint64_t tick = 0;
         while (kun::g_running) {
             {
                 std::lock_guard<std::mutex> lk(kun::g_maze_mutex);
-                kun::g_maze_engine.step_simulation(4, 0.12f);
-                if (++tick % 2 == 0) {
-                    kun::publish_maze_snap(kun::g_maze_engine.to_json());
-                }
+                kun::g_maze_engine.step_simulation();
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(6));
+            std::this_thread::sleep_for(std::chrono::milliseconds(12));
         }
     });
 
@@ -473,7 +505,10 @@ int main(int argc, char* argv[]) {
     }
 
     // 等待所有后台工作线程平稳退出
-    if (evo_thread.joinable()) evo_thread.join();
+    for (auto& w : island_workers) {
+        if (w.joinable()) w.join();
+    }
+    if (snapshot_publisher.joinable()) snapshot_publisher.join();
     if (biosphere_thread.joinable()) biosphere_thread.join();
     if (quantum_thread.joinable()) quantum_thread.join();
     if (maze_thread.joinable()) maze_thread.join();
