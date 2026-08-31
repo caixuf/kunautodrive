@@ -30,6 +30,7 @@
 #include <string>
 #include <vector>
 #include <thread>
+#include <mutex>
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -159,7 +160,9 @@ public:
             int client_fd = accept(server_fd_, (sockaddr*)&client_addr, &client_len);
             if (client_fd < 0) continue;
 
-            handle_client(client_fd);
+            // 每连接一线程: 串行处理时, 一个 15s 级 LLM 代理请求会冻结全部前端轮询
+            // (页面数据源永远停在"连接守护进程...")
+            std::thread(&NativeHttpWsServer::handle_client, this, client_fd).detach();
         }
     }
 
@@ -234,6 +237,8 @@ private:
 
         if (path == "/api/biosphere/status" || path == "/api/biosphere") {
             static kun::EcoBiosphere global_biosphere(8, 12345);
+            static std::mutex g_biosphere_mutex;  // 每连接一线程后, 并发 GET 会同时演化生态圈
+            std::lock_guard<std::mutex> lk(g_biosphere_mutex);
             global_biosphere.step_ecosystem(1.0);
             std::string json = global_biosphere.to_json();
             std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " +
