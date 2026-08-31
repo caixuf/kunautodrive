@@ -63,6 +63,16 @@ static std::atomic<uint64_t> g_replay_total{0};
 static MessageBus* g_replay_bus = nullptr;
 static std::thread g_replay_thread;
 
+// ── 形态发生细胞生命体与生态圈全局实例 (7x24 后台自主演化, 前端仅作被动全息观察窗口) ──
+static kun::MorphogeneticEvolutionEngine g_morph_engine(16, 888);
+static std::mutex g_morph_mutex;
+static kun::EcoBiosphere g_biosphere(8, 12345);
+static std::mutex g_biosphere_mutex;
+
+// ── 迷宫演化全局实例 (7x24 后台自主演化, 界面只是观察窗口) ──
+static kun::MazeEvolutionEngine g_maze_engine(24, 21);
+static std::mutex g_maze_mutex;
+
 static void replay_worker(std::string sym, double speed) {
     auto ticks = g_storage_mgr ? g_storage_mgr->load_ticks(sym, 100000) : std::vector<StorageManager::TickRow>{};
     if (ticks.size() < 2) { g_replay_running.store(false); return; }
@@ -226,9 +236,10 @@ private:
         }
 
         if (path == "/api/cellular/organism" || path == "/api/cellular/champion") {
-            auto org = kun::CellularOrganism::create_seed_organism(888);
-            org.step_force_field_physics(0.016f);
-            std::string json = org.to_json();
+            // 纯被动观察端点: 仅抓取后台 7x24 演化引擎的冠军有机体快照, 零计算阻塞
+            std::lock_guard<std::mutex> lk(g_morph_mutex);
+            const auto& champ = g_morph_engine.get_champion();
+            std::string json = champ.to_json();
             std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " +
                                    std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;
             send(client_fd, response.c_str(), response.size(), MSG_NOSIGNAL);
@@ -237,11 +248,9 @@ private:
         }
 
         if (path == "/api/biosphere/status" || path == "/api/biosphere") {
-            static kun::EcoBiosphere global_biosphere(8, 12345);
-            static std::mutex g_biosphere_mutex;  // 每连接一线程后, 并发 GET 会同时演化生态圈
+            // 纯被动观察端点: 仅读取后台演化的生态圈快照
             std::lock_guard<std::mutex> lk(g_biosphere_mutex);
-            global_biosphere.step_ecosystem(1.0);
-            std::string json = global_biosphere.to_json();
+            std::string json = g_biosphere.to_json();
             std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " +
                                    std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;
             send(client_fd, response.c_str(), response.size(), MSG_NOSIGNAL);
@@ -250,12 +259,9 @@ private:
         }
 
         if (path == "/api/maze/status" || path == "/api/maze") {
-            static kun::MazeEvolutionEngine global_maze_engine(24, 21);
-            static std::mutex g_maze_mutex;
+            // 演化由后台线程持续驱动, 端点只读快照 (不再轮询驱动, 无界面也照常学习)
             std::lock_guard<std::mutex> lk(g_maze_mutex);
-            // 每次拉取推演 8 步: 500ms 轮询下约 10s 一代, 实测 ~1800 代通关 (约 5 小时持续演化)
-            for (int i = 0; i < 8; ++i) global_maze_engine.step_simulation();
-            std::string json = global_maze_engine.to_json();
+            std::string json = g_maze_engine.to_json();
             std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " +
                                    std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;
             send(client_fd, response.c_str(), response.size(), MSG_NOSIGNAL);
@@ -264,10 +270,8 @@ private:
         }
 
         if (path == "/api/maze/reset") {
-            static kun::MazeEvolutionEngine global_maze_engine(24, 21);
-            static std::mutex g_maze_mutex;
             std::lock_guard<std::mutex> lk(g_maze_mutex);
-            global_maze_engine.generate_new_maze();
+            g_maze_engine.generate_new_maze();
             std::string json = "{\"status\":\"OK\",\"message\":\"New maze generated and population reset\"}";
             std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " +
                                    std::to_string(json.size()) + "\r\nConnection: close\r\n\r\n" + json;
@@ -1185,6 +1189,42 @@ int main(int argc, char* argv[]) {
         server.handle_connections();
     });
 
+    // 细胞形态发生与生态圈 7x24 后台自主演化线程 (前端仅作为被动全息观察窗口)
+    std::thread cellular_evo_thread([]() {
+        uint64_t step_count = 0;
+        while (kun::g_server_running.load()) {
+            {
+                std::lock_guard<std::mutex> lk(kun::g_morph_mutex);
+                for (auto& org : kun::g_morph_engine.population()) {
+                    org.step_force_field_physics(0.02f);
+                }
+                // 每 150 步 (约 3s) 推进一代形态发生演化
+                if (++step_count % 150 == 0) {
+                    kun::g_morph_engine.evolve_generation();
+                }
+            }
+
+            // 宏观生态圈生境演化 (1Hz)
+            if (step_count % 50 == 0) {
+                std::lock_guard<std::mutex> lk(kun::g_biosphere_mutex);
+                kun::g_biosphere.step_ecosystem(1.0);
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    });
+
+    // 迷宫 7x24 后台自主演化线程 (~330 步/秒, 约 0.5s 一代, 通关约 15 分钟, 无需打开任何界面)
+    std::thread maze_evo_thread([]() {
+        while (kun::g_server_running.load()) {
+            {
+                std::lock_guard<std::mutex> lk(kun::g_maze_mutex);
+                kun::g_maze_engine.step_simulation();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(3));
+        }
+    });
+
     // 主协程驱动循环 (node_pump)
     while (kun::g_server_running.load()) {
         ex.run();
@@ -1198,6 +1238,8 @@ int main(int argc, char* argv[]) {
     server.stop();
 
     if (server_thread.joinable()) server_thread.join();
+    if (cellular_evo_thread.joinable()) cellular_evo_thread.join();
+    if (maze_evo_thread.joinable()) maze_evo_thread.join();
 
     for (auto& t : spawned_tasks) {
         if (t) t->set_stop();

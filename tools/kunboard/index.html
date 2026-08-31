@@ -44,14 +44,11 @@
                 <button class="nav-item" data-page="system-logs">
                     <span class="nav-label">系统总线与日志</span>
                 </button>
-                <button class="nav-item" onclick="window.open('/cellular.html', '_blank')" style="border-left: 2px solid var(--accent, #38bdf8);">
-                    <span class="nav-label" style="color: #38bdf8; font-weight: bold;">太初生态全息观测台 ↗</span>
+                <button class="nav-item" data-page="cellular-lab" style="border-left: 2px solid var(--accent, #38bdf8);">
+                    <span class="nav-label" style="color: #38bdf8; font-weight: bold;">形态发生细胞观测台</span>
                 </button>
-                <button class="nav-item" onclick="window.open('/maze.html', '_blank')" style="border-left: 2px solid #00f0ff;">
-                    <span class="nav-label" style="color: #00f0ff; font-weight: bold;">迷宫空间学习基准 ↗</span>
-                </button>
-                <button class="nav-item" onclick="window.open('/imperial_study.html', '_blank')" style="border-left: 2px solid #f59e0b;">
-                    <span class="nav-label" style="color: #fbbf24; font-weight: bold;">太初御书房 · 典籍阁 ↗</span>
+                <button class="nav-item" data-page="maze-lab" style="border-left: 2px solid #00f0ff;">
+                    <span class="nav-label" style="color: #00f0ff; font-weight: bold;">迷宫空间学习基准</span>
                 </button>
             </nav>
 
@@ -797,6 +794,14 @@
                         </div>
 
                     </div>
+                </section>
+
+                <section class="page-view" id="page-cellular-lab">
+                    <iframe src="/cellular.html" style="width:100%; height:calc(100vh - 40px); border:0; border-radius:8px; background:#04070d;"></iframe>
+                </section>
+
+                <section class="page-view" id="page-maze-lab">
+                    <iframe src="/maze.html" style="width:100%; height:calc(100vh - 40px); border:0; border-radius:8px; background:#04070d;"></iframe>
                 </section>
 
             </main>

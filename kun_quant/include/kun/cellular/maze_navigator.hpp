@@ -311,6 +311,7 @@ public:
 
     void generate_new_maze() {
         maze_.generate_classic_maze();
+        generation_ = 1;   // 换图 = 重新开榜
         reset_simulation();
     }
 
