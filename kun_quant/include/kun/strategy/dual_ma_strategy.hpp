@@ -40,6 +40,19 @@ public:
         is_initialized_ = false;
     }
 
+    void warmup_with_price(double price) {
+        if (price <= 0) return;
+        close_history_.clear();
+        for (int i = 0; i < slow_period_; ++i) {
+            close_history_.push_back(price);
+        }
+        last_fast_ma_ = price;
+        last_slow_ma_ = price;
+        is_initialized_ = true;
+    }
+
+    bool is_ready() const { return is_initialized_ && static_cast<int>(close_history_.size()) >= slow_period_; }
+
     std::vector<StrategySignal> update_price(double price, int current_pos_state) {
         // current_pos_state: 1 = 多头, -1 = 空头, 0 = 无持仓
         std::vector<StrategySignal> signals;

@@ -363,9 +363,16 @@ public:
             auto res = co_await tick_ch.recv_for(50000);
             if (!res.ok() || res.message.data_size < sizeof(QuantTickMsg)) continue;
             const auto* tick = reinterpret_cast<const QuantTickMsg*>(res.message.data);
+            const double px = tick->last_price;
+            if (px <= 0) continue;
+
+            // 首次收到价格时快速基准预热，避免冷启动等待
+            if (!engine_.is_ready()) {
+                engine_.warmup_with_price(px);
+            }
 
             // 复用纯同构信号算子计算金叉/死叉指令
-            auto signals = engine_.update_price(tick->last_price, state);
+            auto signals = engine_.update_price(px, state);
             for (const auto& sig : signals) {
                 switch (sig.type) {
                     case SignalType::BUY_CLOSE:
@@ -428,6 +435,7 @@ public:
         bool bar_active = false;
         int state = 0;
         uint64_t seq = 0;
+        uint64_t replay_tick_count = 0;
 
         auto send_order = [&](uint8_t dir, uint8_t offset, double price, const std::string& reason) {
             QuantOrderReqMsg req{};
@@ -455,11 +463,25 @@ public:
             const double px = tick->last_price;
             if (px <= 0) continue;
 
+            // 首次收到价格时快速基准预热
+            if (!engine_.is_ready()) {
+                engine_.warmup_with_price(px);
+            }
+
             // ── 真实 tick → 5 分钟 OHLC 桶聚合 ──
-            int64_t bucket = tick->timestamp_us > 0
-                ? tick->timestamp_us / 1000000 / 300
-                : static_cast<int64_t>(std::chrono::duration_cast<std::chrono::seconds>(
-                      std::chrono::system_clock::now().time_since_epoch()).count()) / 300;
+            bool is_replay = (std::strcmp(tick->exchange, "REPLAY") == 0);
+            int64_t bucket = 0;
+            if (is_replay) {
+                // 回放模式: 每 5 个 tick 聚合为 1 根模拟加速 Bar
+                bucket = static_cast<int64_t>(++replay_tick_count / 5);
+            } else {
+                int64_t sec = static_cast<int64_t>(tick->timestamp_us / 1000000);
+                if (sec < 1577836800LL) {
+                    sec = std::chrono::duration_cast<std::chrono::seconds>(
+                              std::chrono::system_clock::now().time_since_epoch()).count();
+                }
+                bucket = sec / 300;
+            }
             if (bucket != cur_bucket) {
                 if (bar_active) {
                     true_ranges.push_back(cur.high - cur.low);

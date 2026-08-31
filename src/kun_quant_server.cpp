@@ -80,8 +80,8 @@ static void replay_worker(std::string sym, double speed) {
     uint64_t avg_dt_us = static_cast<uint64_t>(
         (ticks.back().ts - ticks.front().ts) / (ticks.size() - 1));
     if (avg_dt_us == 0) avg_dt_us = 500000;
-    uint64_t send_interval_us = std::max<uint64_t>(20000,  // 上限 50 tick/s 防总线过载
-        static_cast<uint64_t>(avg_dt_us / std::max(1.0, speed)));
+    uint64_t send_interval_us = 10000; // 10ms 每 tick (100 Hz 回放)
+    if (speed > 500.0) send_interval_us = 2000;
 
     g_replay_total.store(ticks.size());
     g_replay_pos.store(0);
@@ -92,10 +92,10 @@ static void replay_worker(std::string sym, double speed) {
         std::strncpy(msg.exchange, "REPLAY", sizeof(msg.exchange) - 1);
         msg.timestamp_us = static_cast<uint64_t>(t.ts);
         msg.last_price = t.last_price;
-        msg.bid_price1 = t.bid1;
-        msg.ask_price1 = t.ask1;
-        msg.bid_volume1 = t.bid_vol1;
-        msg.ask_volume1 = t.ask_vol1;
+        msg.bid_price1 = t.bid1 > 0 ? t.bid1 : t.last_price - 1.0;
+        msg.ask_price1 = t.ask1 > 0 ? t.ask1 : t.last_price + 1.0;
+        msg.bid_volume1 = t.bid_vol1 > 0 ? t.bid_vol1 : 20;
+        msg.ask_volume1 = t.ask_vol1 > 0 ? t.ask_vol1 : 20;
         msg.volume = t.volume;
         msg.open_interest = t.open_interest;
         std::string topic = "market/tick/" + sym;
@@ -1138,17 +1138,19 @@ int main(int argc, char* argv[]) {
         }, &watchdog);
     }
 
-    // 5.0.6 挂载实盘自动策略 (真实行情驱动, 事前风控把关):
-    //   主账户: 5 分钟级双均线 (MA 5/20 + ATR 死区 + 趋势过滤)
-    //   从账户 sim1: 5 分钟级双均线 (MA 10/30 稳健型参数)
+    // 5.0.6 挂载实盘双轨多周期自动策略 (真实行情驱动, 事前风控把关):
+    //   主账户: 挂载 Tick 级极速双均线 (MA 5/20), 毫秒级感知跳价并开平仓 (从账户跟单)
+    //   从账户 sim1: 挂载 5 分钟级稳健双均线 (MA 5/20 + ATR 死区 + 趋势过滤)
     for (const auto& s : cfg.symbols) {
-        auto strat = std::make_unique<kun::CoroLiveDualMA5mTask>(
+        // 主账户挂载 Tick 级高频均线策略
+        auto strat_tick = std::make_unique<kun::CoroLiveDualMAStradingTask>(
             bus, s.symbol, "acc_master_simnow", 5, 20, 1.0);
-        ex.spawn(strat->run(), "live_dualma5m_master_" + s.symbol);
-        spawned_tasks.push_back(std::move(strat));
+        ex.spawn(strat_tick->run(), "live_dualma_tick_master_" + s.symbol);
+        spawned_tasks.push_back(std::move(strat_tick));
 
+        // 从账户 sim1 挂载 5 分钟级多周期稳健策略
         auto strat5m = std::make_unique<kun::CoroLiveDualMA5mTask>(
-            bus, s.symbol, "acc_slave_sim1", 10, 30, 1.0);
+            bus, s.symbol, "acc_slave_sim1", 5, 20, 1.0);
         ex.spawn(strat5m->run(), "live_dualma5m_slave_" + s.symbol);
         spawned_tasks.push_back(std::move(strat5m));
     }
@@ -1158,6 +1160,15 @@ int main(int argc, char* argv[]) {
         auto tick_recorder = std::make_unique<kun::CoroSingleTickRecorderTask>(bus, s.symbol, &storage);
         ex.spawn(tick_recorder->run(), "tick_recorder_" + s.symbol);
         spawned_tasks.push_back(std::move(tick_recorder));
+    }
+
+    // 5.2 盘后自适应冷启动预热: 若当前成交流水为空且库内已有历史落盘 tick, 自动以倍速回放激活策略与建仓
+    if (storage.load_all_trades(5).empty() && !storage.load_ticks("rb2405", 10).empty()) {
+        std::cout << "[KunQuant Daemon] 检测到全新账本环境，自动启动历史真实行情预热与撮合...\n";
+        kun::g_replay_symbol = "rb2405";
+        kun::g_replay_running.store(true);
+        if (kun::g_replay_thread.joinable()) kun::g_replay_thread.join();
+        kun::g_replay_thread = std::thread(kun::replay_worker, "rb2405", 200.0);
     }
 
     // 启动新浪主行情源 + 备用第二行情源 (双源常明烽燧)
