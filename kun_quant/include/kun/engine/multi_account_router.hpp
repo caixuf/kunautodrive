@@ -21,6 +21,7 @@ struct AccountProfile {
     AccountRole role{AccountRole::INDEPENDENT};
     double capital_weight{1.0};   // 资金分配/跟单权重 (如 1.5 倍)
     double initial_balance{1000000.0};
+    bool is_live{false};          // 强类型实盘机器标记 (默认为 false 仿真安全态)
 };
 
 enum class RouteMode : uint8_t {

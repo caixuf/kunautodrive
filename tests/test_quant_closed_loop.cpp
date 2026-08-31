@@ -348,6 +348,60 @@ void test_gateway_pool_pre_trade_risk_gate() {
     std::cout << "  -> GatewayPool 事前风控前置拦截与 REJECTED 拒单回报测试通过!\n";
 }
 
+void test_live_arming_and_circuit_breaker() {
+    std::cout << "[Test 7] 运行实盘双锁门禁 (Live Arming) 与硬熔断 (Circuit Breaker) 测试...\n";
+    MessageBus* bus = message_bus_create("test_bus_live_gate");
+    GatewayPool pool(bus);
+
+    // 1. 测试未授权环境直接注册实盘账户被物理锁拦截
+    ::unsetenv("KUN_LIVE_ARMED");
+    AccountProfile live_prof{"acc_live_test", "RealBroker", AccountRole::MASTER, 1.0, 1000000.0, true};
+    bool ok_unauthorized = pool.register_account(live_prof);
+    assert(!ok_unauthorized); // 必须硬拦截
+
+    // 2. 测试授权环境变量注入后成功放行
+    ::setenv("KUN_LIVE_ARMED", "1", 1);
+    bool ok_authorized = pool.register_account(live_prof);
+    assert(ok_authorized); // 必须放行
+
+    // 3. 测试硬熔断机制
+    PositionManager pm(1000000.0);
+    RiskRuleConfig risk_cfg;
+    risk_cfg.max_daily_loss_pct = 0.02; // 2% 熔断
+    RiskManager rm(pm, risk_cfg);
+
+    assert(!rm.is_circuit_breaker_tripped());
+    rm.trip_circuit_breaker("人工强制熔断测试");
+    assert(rm.is_circuit_breaker_tripped());
+
+    OrderRequest open_req;
+    open_req.symbol = "rb2405";
+    open_req.direction = Direction::LONG;
+    open_req.offset = Offset::OPEN;
+    open_req.price = 3500.0;
+    open_req.volume = 1.0;
+
+    auto [passed, reason] = rm.check_order(open_req, {});
+    assert(!passed);
+    assert(reason.find("CIRCUIT_BREAKER_LOCKED") != std::string::npos);
+
+    // 平仓单不受开仓熔断限制，允许自救
+    OrderRequest close_req;
+    close_req.symbol = "rb2405";
+    close_req.direction = Direction::SHORT;
+    close_req.offset = Offset::CLOSE;
+    close_req.price = 3500.0;
+    close_req.volume = 1.0;
+    // (由于空仓故会被平仓超限拦下，但绝不是被熔断锁死)
+    auto [close_passed, close_reason] = rm.check_order(close_req, {});
+    assert(!close_passed);
+    assert(close_reason.find("exceeds current position") != std::string::npos);
+
+    ::unsetenv("KUN_LIVE_ARMED");
+    message_bus_destroy(bus);
+    std::cout << "  -> 实盘双锁门禁与单日硬熔断防护测试 100% 通过!\n";
+}
+
 int main() {
     std::cout.setf(std::ios::unitbuf); // 无缓冲输出, abort 时也能看到日志
     std::cout << "\n=========================================================\n";
@@ -360,9 +414,10 @@ int main() {
     test_performance_trade_pairing();
     test_gateway_pool_and_follow_trading();
     test_gateway_pool_pre_trade_risk_gate();
+    test_live_arming_and_circuit_breaker();
 
     std::cout << "\n=========================================================\n";
-    std::cout << "       全部 6 组核心闭环单测 100% 断言通过!              \n";
+    std::cout << "       全部 7 组核心闭环单测 100% 断言通过!              \n";
     std::cout << "=========================================================\n\n";
     return 0;
 }

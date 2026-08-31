@@ -12,13 +12,14 @@ QuantAppConfig ConfigLoader::default_config() {
     cfg.server.static_dir = "tools/kunboard";
     cfg.server.db_path = "data/kun_quant.db";
 
-    cfg.accounts.push_back({"acc_master_simnow", "SimNow期货仿真", AccountRole::MASTER, 1.0, 1000000.0});
-    cfg.accounts.push_back({"acc_slave_zhongxin", "中信期货实盘", AccountRole::SLAVE, 1.5, 1500000.0});
-    cfg.accounts.push_back({"acc_slave_yongan", "永安期货实盘", AccountRole::SLAVE, 0.8, 800000.0});
+    // 默认配置一律为纯仿真沙盒账户，严禁内置实盘券商名称与 live=true 标记
+    cfg.accounts.push_back({"acc_master_simnow", "SimNow期货仿真", AccountRole::MASTER, 1.0, 1000000.0, false});
+    cfg.accounts.push_back({"acc_slave_sim1", "SimNow期货跟单1", AccountRole::SLAVE, 1.5, 1500000.0, false});
+    cfg.accounts.push_back({"acc_slave_sim2", "SimNow期货跟单2", AccountRole::SLAVE, 0.8, 800000.0, false});
 
-    cfg.symbols.push_back({"rb2405", "SHFE", 10, 1.0, 0.10, 0.0001});
-    cfg.symbols.push_back({"cu2405", "SHFE", 5, 10.0, 0.12, 0.00005});
-    cfg.symbols.push_back({"ag2405", "SHFE", 15, 1.0, 0.12, 0.00005});
+    cfg.symbols.push_back({"rb2405", "SHFE", 10, 1.0, 0.10, 0.0001, "RB0"});
+    cfg.symbols.push_back({"cu2405", "SHFE", 5, 10.0, 0.12, 0.00005, "CU0"});
+    cfg.symbols.push_back({"ag2405", "SHFE", 15, 1.0, 0.12, 0.00005, "AG0"});
 
     return cfg;
 }
@@ -26,8 +27,8 @@ QuantAppConfig ConfigLoader::default_config() {
 bool ConfigLoader::load_from_file(const std::string& path, QuantAppConfig& out_cfg) {
     std::ifstream file(path);
     if (!file.is_open()) {
-        std::cerr << "[ConfigLoader] Cannot open config file: " << path << ", falling back to defaults.\n";
-        out_cfg = default_config();
+        std::cerr << "[ConfigLoader::SECURITY_ERROR] 无法打开配置文件: " << path 
+                  << "，拒绝静默回退以防越权！\n";
         return false;
     }
 
@@ -35,7 +36,6 @@ bool ConfigLoader::load_from_file(const std::string& path, QuantAppConfig& out_c
     buffer << file.rdbuf();
     std::string content = buffer.str();
 
-    // 简单高效解析 JSON 核心配置 (或直接使用默认配置并按字段覆盖)
     out_cfg = default_config();
 
     // 提取 port

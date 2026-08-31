@@ -12,23 +12,26 @@
       "role": "MASTER",
       "capital_weight": 1.0,
       "initial_balance": 1000000.0,
+      "is_live": false,
       "ctp_front_md": "tcp://180.168.146.187:10213",
       "ctp_front_trade": "tcp://180.168.146.187:10203",
       "broker_id": "9999"
     },
     {
-      "account_id": "acc_slave_zhongxin",
-      "broker_name": "中信期货实盘",
+      "account_id": "acc_slave_sim1",
+      "broker_name": "SimNow期货跟单1",
       "role": "SLAVE",
       "capital_weight": 1.5,
-      "initial_balance": 1500000.0
+      "initial_balance": 1500000.0,
+      "is_live": false
     },
     {
-      "account_id": "acc_slave_yongan",
-      "broker_name": "永安期货实盘",
+      "account_id": "acc_slave_sim2",
+      "broker_name": "SimNow期货跟单2",
       "role": "SLAVE",
       "capital_weight": 0.8,
-      "initial_balance": 800000.0
+      "initial_balance": 800000.0,
+      "is_live": false
     }
   ],
   "symbols": [

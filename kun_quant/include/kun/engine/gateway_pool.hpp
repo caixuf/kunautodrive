@@ -44,6 +44,16 @@ public:
             return false;
         }
 
+        // 核心实盘物理双锁门禁 (Live Arming Safety Gate)
+        if (profile.is_live) {
+            const char* armed = std::getenv("KUN_LIVE_ARMED");
+            if (!armed || std::string(armed) != "1") {
+                std::cerr << "[SECURITY_FATAL] 实盘账户注册被物理锁拦截! 账户: " << profile.account_id 
+                          << " (" << profile.broker_name << ") 缺少 KUN_LIVE_ARMED=1 授权环境变量!\n";
+                return false;
+            }
+        }
+
         auto ctx = std::make_shared<AccountContext>();
         ctx->profile = profile;
         ctx->gateway = std::make_shared<SimGateway>(profile.account_id);
@@ -337,6 +347,16 @@ private:
                 req.order_type = static_cast<OrderType>(pod->order_type);
                 req.price = pod->price;
                 req.volume = pod->volume;
+
+                // ── 中置实盘武装门禁 (Mid-Layer Live Arming Gate) ──
+                if (ctx->profile.is_live) {
+                    const char* armed = std::getenv("KUN_LIVE_ARMED");
+                    if (!armed || std::string(armed) != "1") {
+                        std::cerr << "[GatewayPool::SECURITY_FATAL] 账户 [" << acc_id 
+                                  << "] 报单被中置实盘门禁硬拦截! 缺少 KUN_LIVE_ARMED=1\n";
+                        return;
+                    }
+                }
 
                 // ── 事前风控门禁 (Pre-Trade Risk Gate) ──
                 auto active_orders = ctx->gateway->get_active_orders();
