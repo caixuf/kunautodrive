@@ -297,30 +297,11 @@ function forward(org, inputs){
   return actions;
 }
 
-/* 兰纳-琼斯力场物理步 (常数与 C++ 一致) */
+/* 轻量级光子动力学与发光衰减 (力场主干物理已在 C++ 原生计算，前端只做极速丝滑渲染) */
 function stepPhysics(org, dt=0.016){
-  const kRep=2500, kSpring=0.08, damping=0.85, maxDist=200;
-  for(const c of org.cells){ c.fx=0; c.fy=0; c.glow*=0.92; }
-  for(let i=0;i<org.cells.length;i++) for(let j=i+1;j<org.cells.length;j++){
-    const a=org.cells[i], b=org.cells[j];
-    const dx=b.x-a.x, dy=b.y-a.y, d2=dx*dx+dy*dy+1e-4, d=Math.sqrt(d2);
-    if(d<maxDist){ const f=kRep/d2, nx=dx/d, ny=dy/d;
-      a.fx-=nx*f; a.fy-=ny*f; b.fx+=nx*f; b.fy+=ny*f; }
-  }
-  const byId = new Map(org.cells.map(c=>[c.id,c]));
+  for(const c of org.cells){ c.glow = (c.glow || 0) * 0.95; }
   for(const s of org.syns){
-    if(!s.active) continue;
-    const c1=byId.get(s.from), c2=byId.get(s.to);
-    if(!c1||!c2) continue;
-    const dx=c2.x-c1.x, dy=c2.y-c1.y, d=Math.sqrt(dx*dx+dy*dy+1e-4);
-    const f=(d-s.rest)*kSpring, nx=dx/d, ny=dy/d;
-    c1.fx+=nx*f; c1.fy+=ny*f; c2.fx-=nx*f; c2.fy-=ny*f;
-    if(s.photon>=0){ s.photon+=dt*3; if(s.photon>1) s.photon=-1; }
-  }
-  for(const c of org.cells){
-    c.vx=(c.vx+c.fx*dt)*damping; c.vy=(c.vy+c.fy*dt)*damping;
-    c.x+=c.vx*dt; c.y+=c.vy*dt;
-    c.x=Math.max(-260,Math.min(260,c.x)); c.y=Math.max(-170,Math.min(170,c.y));
+    if(s.photon >= 0){ s.photon += dt * 3.5; if(s.photon > 1.0) s.photon = -1.0; }
   }
   org.phySteps++;
 }
@@ -408,91 +389,178 @@ addEventListener('wheel', e=>{ camR = Math.max(220, Math.min(1400, camR + e.delt
 
 /* 发光贴图 (径向渐变 sprite) */
 function glowTexture(){
-  const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+  const cv = document.createElement('canvas'); cv.width = cv.height = 64;
   const g = cv.getContext('2d');
-  const grad = g.createRadialGradient(64,64,0,64,64,64);
+  const grad = g.createRadialGradient(32,32,0,32,32,32);
   grad.addColorStop(0,'rgba(255,255,255,1)'); grad.addColorStop(.25,'rgba(255,255,255,.55)');
   grad.addColorStop(1,'rgba(255,255,255,0)');
-  g.fillStyle = grad; g.fillRect(0,0,128,128);
+  g.fillStyle = grad; g.fillRect(0,0,64,64);
   return new THREE.CanvasTexture(cv);
 }
 const GLOW = glowTexture();
-const sphereGeo = new THREE.SphereGeometry(7, 20, 20);
+const sphereGeo = new THREE.SphereGeometry(6, 14, 14);
+
+// 全局纹理与材质复用池 (零 GC 垃圾回收，消除前端卡顿)
+const LABEL_TEX_CACHE = new Map();
+function getLabelTexture(typeStr) {
+  if (LABEL_TEX_CACHE.has(typeStr)) return LABEL_TEX_CACHE.get(typeStr);
+  const cv = document.createElement('canvas'); cv.width = 256; cv.height = 64;
+  const g = cv.getContext('2d');
+  g.font = '600 24px monospace'; g.fillStyle = 'rgba(226,232,240,0.95)';
+  g.textAlign = 'center'; g.fillText(typeStr, 128, 40);
+  const tex = new THREE.CanvasTexture(cv);
+  LABEL_TEX_CACHE.set(typeStr, tex);
+  return tex;
+}
+
+const MAT_CACHE = new Map();
+function getFamilyMeshMaterial(fam) {
+  if (MAT_CACHE.has('mesh_' + fam)) return MAT_CACHE.get('mesh_' + fam);
+  const mat = new THREE.MeshBasicMaterial({ color: FAMILY_COLOR[fam] || 0x38bdf8 });
+  MAT_CACHE.set('mesh_' + fam, mat);
+  return mat;
+}
+function getFamilyHaloMaterial(fam) {
+  if (MAT_CACHE.has('halo_' + fam)) return MAT_CACHE.get('halo_' + fam);
+  const mat = new THREE.SpriteMaterial({
+    map: GLOW,
+    color: FAMILY_COLOR[fam] || 0x38bdf8,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false
+  });
+  MAT_CACHE.set('halo_' + fam, mat);
+  return mat;
+}
 
 class CellView {
   constructor(cell){
     this.cell = cell;
-    const color = FAMILY_COLOR[FAMILY(cell.type)];
-    const mat = new THREE.MeshBasicMaterial({ color });
-    this.mesh = new THREE.Mesh(sphereGeo, mat);
-    const sm = new THREE.SpriteMaterial({ map:GLOW, color, transparent:true,
-      blending:THREE.AdditiveBlending, depthWrite:false });
-    this.halo = new THREE.Sprite(sm);
-    this.halo.scale.set(40,40,1);
+    this.targetX = cell.x || 0;
+    this.targetY = cell.y || 0;
+    this.curX = this.targetX;
+    this.curY = this.targetY;
+    const fam = FAMILY(cell.type);
+    this.mesh = new THREE.Mesh(sphereGeo, getFamilyMeshMaterial(fam));
+    this.halo = new THREE.Sprite(getFamilyHaloMaterial(fam));
+    this.halo.scale.set(36, 36, 1);
     scene.add(this.mesh, this.halo);
-    // 标签
-    const cv = document.createElement('canvas'); cv.width=256; cv.height=64;
-    const g = cv.getContext('2d');
-    g.font='600 26px monospace'; g.fillStyle='rgba(203,213,225,.9)';
-    g.textAlign='center'; g.fillText(cell.type, 128, 40);
-    const lm = new THREE.SpriteMaterial({ map:new THREE.CanvasTexture(cv), transparent:true, depthWrite:false });
+
+    const lm = new THREE.SpriteMaterial({ map: getLabelTexture(cell.type), transparent: true, depthWrite: false });
+    this.labelMat = lm;
     this.label = new THREE.Sprite(lm);
-    this.label.scale.set(56,14,1);
+    this.label.scale.set(52, 13, 1);
     scene.add(this.label);
+  }
+  updateCell(cell){
+    this.cell = cell;
+    this.targetX = cell.x;
+    this.targetY = cell.y;
   }
   update(){
     const c = this.cell;
-    this.mesh.position.set(c.x, c.y, 0);
-    this.halo.position.set(c.x, c.y, 0);
-    this.label.position.set(c.x, c.y - 16, 0);
-    const s = 0.8 + c.glow*0.9;
-    this.mesh.scale.set(s,s,s);
-    this.halo.material.opacity = 0.12 + c.glow*0.85;
-    const hs = 34 + c.glow*46; this.halo.scale.set(hs,hs,1);
+    this.curX += (this.targetX - this.curX) * 0.25;
+    this.curY += (this.targetY - this.curY) * 0.25;
+    this.mesh.position.set(this.curX, this.curY, 0);
+    this.halo.position.set(this.curX, this.curY, 0);
+    this.label.position.set(this.curX, this.curY - 14, 0);
+    const s = 0.8 + (c.glow || 0) * 0.8;
+    this.mesh.scale.set(s, s, s);
+    this.halo.material.opacity = 0.12 + (c.glow || 0) * 0.85;
+    const hs = 30 + (c.glow || 0) * 40;
+    this.halo.scale.set(hs, hs, 1);
   }
-  dispose(){ scene.remove(this.mesh, this.halo, this.label); }
+  dispose(){
+    scene.remove(this.mesh, this.halo, this.label);
+    if(this.labelMat) this.labelMat.dispose();
+  }
 }
 
 class SynapseView {
   constructor(syn, org){
     this.syn = syn; this.org = org;
-    const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
-    const mat = new THREE.LineBasicMaterial({ color:0x334155, transparent:true, opacity:.55 });
-    this.line = new THREE.Line(g, mat);
-    const pm = new THREE.SpriteMaterial({ map:GLOW, color:0x7dd3fc, transparent:true,
-      blending:THREE.AdditiveBlending, depthWrite:false });
-    this.photon = new THREE.Sprite(pm);
-    this.photon.scale.set(16,16,1);
+    this.geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+    this.lineMat = new THREE.LineBasicMaterial({ color: 0x334155, transparent: true, opacity: 0.55 });
+    this.line = new THREE.Line(this.geo, this.lineMat);
+    this.photonMat = new THREE.SpriteMaterial({ map: GLOW, color: 0x7dd3fc, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+    this.photon = new THREE.Sprite(this.photonMat);
+    this.photon.scale.set(14, 14, 1);
     scene.add(this.line, this.photon);
   }
+  updateSyn(syn, org){
+    this.syn = syn;
+    this.org = org;
+  }
   update(){
-    const byId = new Map(this.org.cells.map(c=>[c.id,c]));
+    const byId = new Map(this.org.cells.map(c => [c.id, c]));
     const a = byId.get(this.syn.from), b = byId.get(this.syn.to);
-    if(!a || !b || !this.syn.active){ this.line.visible=false; this.photon.visible=false; return; }
-    this.line.visible=true;
-    const pos = this.line.geometry.attributes.position;
+    if(!a || !b || !this.syn.active){ this.line.visible = false; this.photon.visible = false; return; }
+    this.line.visible = true;
+    const pos = this.geo.attributes.position;
     pos.setXYZ(0, a.x, a.y, 0); pos.setXYZ(1, b.x, b.y, 0);
     pos.needsUpdate = true;
-    const hot = Math.abs(this.syn.w) > 0.6;
-    this.line.material.color.setHex(hot?0x38bdf8:0x334155);
-    this.line.material.opacity = hot? .8 : .4;
+    const hot = Math.abs(this.syn.w || 0) > 0.6;
+    this.lineMat.color.setHex(hot ? 0x38bdf8 : 0x334155);
+    this.lineMat.opacity = hot ? 0.8 : 0.35;
     if(this.syn.photon >= 0){
       this.photon.visible = true;
-      this.photon.position.set(a.x+(b.x-a.x)*this.syn.photon, a.y+(b.y-a.y)*this.syn.photon, 0);
+      this.photon.position.set(a.x + (b.x - a.x) * this.syn.photon, a.y + (b.y - a.y) * this.syn.photon, 0);
     } else this.photon.visible = false;
   }
-  dispose(){ scene.remove(this.line, this.photon); }
+  dispose(){
+    scene.remove(this.line, this.photon);
+    if(this.geo) this.geo.dispose();
+    if(this.lineMat) this.lineMat.dispose();
+    if(this.photonMat) this.photonMat.dispose();
+  }
 }
 
 /* ============================================================
- * 5. 生命周期管理 + 行情驱动 + UI
+ * 5. 生命周期管理 + 增量差异化渲染池 (Diffing Pool)
  * ============================================================ */
 let org = seedOrganism(); compile(org);
-let views = { cells:[], syns:[] };
+const cellViewsMap = new Map();   // cell.id -> CellView
+const synViewsMap = new Map();    // `${syn.from}->${syn.to}:${syn.port}` -> SynapseView
+let views = { cells: [], syns: [] };
+
 function rebuildViews(){
-  views.cells.forEach(v=>v.dispose()); views.syns.forEach(v=>v.dispose());
-  views.cells = org.cells.map(c=>new CellView(c));
-  views.syns = org.syns.map(s=>new SynapseView(s, org));
+  const curCellIds = new Set();
+  for (const c of org.cells) {
+    curCellIds.add(c.id);
+    if (cellViewsMap.has(c.id)) {
+      cellViewsMap.get(c.id).updateCell(c);
+    } else {
+      const v = new CellView(c);
+      cellViewsMap.set(c.id, v);
+    }
+  }
+  for (const [id, v] of cellViewsMap) {
+    if (!curCellIds.has(id)) {
+      v.dispose();
+      cellViewsMap.delete(id);
+    }
+  }
+
+  const curSynKeys = new Set();
+  for (const s of org.syns) {
+    const key = `${s.from}->${s.to}:${s.port}`;
+    curSynKeys.add(key);
+    if (synViewsMap.has(key)) {
+      synViewsMap.get(key).updateSyn(s, org);
+    } else {
+      const v = new SynapseView(s, org);
+      synViewsMap.set(key, v);
+    }
+  }
+  for (const [key, v] of synViewsMap) {
+    if (!curSynKeys.has(key)) {
+      v.dispose();
+      synViewsMap.delete(key);
+    }
+  }
+
+  views.cells = Array.from(cellViewsMap.values());
+  views.syns = Array.from(synViewsMap.values());
 }
 rebuildViews();
 
