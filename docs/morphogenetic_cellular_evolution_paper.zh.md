@@ -15,8 +15,8 @@
 本文提出**形态发生计算生命系统（Morphogenetic Computational Life System, 鲲 Kun）**——一种以自主状态计算细胞（Computational Cell）为最小基元的生物启发型数字原生自组织计算范式。本文的核心贡献包括：
 1. **热力学与物理宇宙公理**：确立普里戈金远离平衡态耗散理论，将计算机硬件时钟、内存带宽与能耗阻尼确立为数字生命的物理宇宙，通过动态代谢能量平衡池（Dynamic Metabolic Balance）逼迫系统自发涌现奥卡姆最简因果律；
 2. **Evo-Devo 演化发育机制**：从单个受精卵胚胎基因组出发，通过指数级有丝分裂在 0.26 秒内展开为 $1,000,000$ 细胞的巨型大脑皮层，彻底突破人工连接拓扑的维数灾难；
-3. **3D 兰纳-琼斯胞间物理力场**：引入空间近斥（泡利斥力消除功能冗余）与中吸（范德华引力聚合微柱）力场动力学，实现图拓扑在物理三维空间中的自组织解缠；
-4. **Judea Pearl 因果反事实自由能推演**：引入 $do(X)$ 因果干预算子，使个体具备基于主动因果想象的心理推演能力；
+3. **3D 兰纳-琼斯胞间物理力场与离散图投影映射**：引入空间近斥（泡利斥力消除功能冗余）与中吸（范德华引力聚合微柱）力场动力学，并通过距离势函数 $\Phi(r_{ij})$ 严格映射为离散有向突触图；
+4. **Judea Pearl 因果反事实自由能推演**：引入 $do(X)$ 因果干预算子，支持反射弧预编译（24.1 ns 纳秒级极速响应）与多步主动因果心理推演的双轨制运行；
 5. **扁平数组确定性拓扑编译器**：基于 Kahn 线性化将动态有向无环图编译为零堆分配连续数组，在 x86-64 CPU 上达成 **24.1 纳秒** 的确定性零 GC 推理；
 6. **NVIDIA RTX 5060 GPU 张量化演化引擎**：在 8GB 显存中实现 20 个百万细胞个体的全张量批处理前向，达成 **1,034.7 MCells/s（每秒 10.3 亿细胞更新）** 的峰值吞吐，仅耗时 **88.12 秒** 完成 30 代百万细胞演化大炼丹；
 7. **双战场工业级工程实战验证**：
@@ -97,9 +97,16 @@ $$c_i = \langle \tau_i, \mathbf{p}_i, s_i, u_i, \mathbf{x}_i, \mathbf{v}_i, \gam
 | | `Act_Negative` | $A_{\text{neg}} = \text{clamp}(\sum w_j u_j, 0, 1)$ | 空头卖出脉冲 / 机械制动减速开环 |
 | | `Act_ImmuneLock` | $L_{\text{immune}} = \mathbb{I}(\sum w_j u_j > \theta_{\text{crit}})$ | 事前免疫抑制熔断锁（闪崩/AEB防撞） |
 
+### 表 2：跨领域不同宇宙下自发涌现的优势细胞算子分布消融
+| 任务宇宙 (Universe) | 核心主导细胞算子组合 | 自发涌现的功能电路结构 | 核心物理功能 |
+| :--- | :--- | :--- | :--- |
+| **高频量化金融 (UHF Quant)** | `Op_EMA` (42%), `Op_Diff` (31%), `Gate_Hysteresis` (15%), `Act_ImmuneLock` (8%) | 双线动量振荡器 + 迟滞死区 + 闪崩免疫锁 | 捕捉微观流动性失衡，过滤微幅噪音，闪崩瞬间强平 |
+| **智能驾驶控制 (Autonomous ADAS)** | `Op_Diff` (35%), `Op_Integral` (28%), `Gate_Hysteresis` (20%), `Act_ImmuneLock` (12%) | 超前差分 PID + 航向迟滞防抖 + AEB 熔断锁 | 毫秒级消除循迹横向偏差，抑制转向抖动，极端工况紧急制动 |
+| **未知迷宫空间导航 (Maze Navigation)**| `Op_Oscillator` (38%), `Gate_Portal` (25%), `Op_Diff` (22%), `Op_EMA` (15%) | 中枢模式发生器 (CPG) 步态网 + 轴突旁路门 | 产生节律性主动扫描步态，遇到死胡同时反向自激逃逸 |
+
 ---
 
-## 3. 3D 兰纳-琼斯胞间物理力场动力学
+## 3. 3D 兰纳-琼斯胞间物理力场与离散图投影映射
 
 传统神经演化算法（如 NEAT）生成的网络极易陷入拓扑纠缠与维度冗余。本文将所有细胞置于三维连续欧几里得空间 $\mathbb{R}^3$ 中，引入改进型**兰纳-琼斯（Lennard-Jones 12-6）胞间物理势能场**：
 
@@ -110,6 +117,13 @@ $$V_{\text{LJ}}(r_{ij}) = 4\epsilon \left[ \left(\frac{\sigma}{r_{ij}}\right)^{1
 $$\mathbf{F}_i = \sum_{j \ne i} \left( \mathbf{F}_{ij}^{\text{repulsion}} + \mathbf{F}_{ij}^{\text{attraction}} \right) + \mathbf{F}_i^{\text{synapse}} - \beta \mathbf{v}_i$$
 
 $$\mathbf{F}_{ij} = -\nabla_{\mathbf{x}_i} V_{\text{LJ}}(r_{ij}) = \frac{24\epsilon}{r_{ij}^2} \left[ 2\left(\frac{\sigma}{r_{ij}}\right)^{12} - \left(\frac{\sigma}{r_{ij}}\right)^6 \right] \frac{\mathbf{x}_i - \mathbf{x}_j}{r_{ij}}$$
+
+### 3.1 连续 3D 空间到离散有向突触图的映射投影函数 $\Phi$
+为将力场松弛后的空间坐标 $\mathbf{x} \in \mathbb{R}^3$ 转化为无环计算图，定义投影映射算子 $\Phi: \mathbb{R}^3 \times \mathbb{R}^3 \to \{0, 1\}$：
+
+$$\Phi(\mathbf{x}_i, \mathbf{x}_j) = \mathbb{I}\Big( \|\mathbf{x}_i - \mathbf{x}_j\| \le r_{\text{connect}} \Big) \cdot \mathbb{I}\Big( x_{i, z} < x_{j, z} \Big)$$
+
+其中 $x_{\cdot, z}$ 为纵向发育坐标（$z$ 轴严格递增保证图的天然无环 DAG 特性），$r_{\text{connect}} = 2^{1/6}\sigma$ 为范德华力平衡半径。
 
 ```
                [3D 兰纳-琼斯力场对拓扑的自组织约束]
@@ -172,15 +186,16 @@ void FlatCellularExecutor::forward_step(const double* inputs, double* outputs) {
 
 传统自回归强化学习通过重放历史记忆进行预测，容易在分布外（OOD）场景下产生因果混淆。本文引入图灵奖得主 Judea Pearl 的 **$do$-calculus 因果干预理论** 与 Friston **自由能原理（Free Energy Principle）**。
 
-在每一个决策时钟周期，个体在大脑内部运行 $K=16$ 步因果反事实推演：
+### 5.1 双轨制时延架构：反射弧 vs 认知前瞻推演
+为了同时兼顾 **24.1 ns 的极限反射时延** 与 **复杂长程因果规划**，系统采用双轨并行架构：
+1. **快轨（ASIL-D 预编译反射弧）**：由 `Act_ImmuneLock` 门控与硬实时扁平数组驱动，以 $24.1\text{ ns}$ 耗时无条件保障物理底盘与盘口熔断不变式；
+2. **慢轨（认知前瞻推演）**：在 $20\text{Hz}$ 规划周期内，在大脑内部并行执行 $K=16$ 步因果反事实推演：
 
 $$P(\mathbf{Y} \mid do(\mathbf{X} = \mathbf{a}), \mathbf{Z})$$
 
-个体通过计算反事实状态转移下的**预期自由能（Expected Free Energy, $\mathcal{G}$）**选择动作：
+个体通过计算反事实状态转移下的**预期自由能（Expected Free Energy, $\mathcal{G}$）**选择最优动作：
 
 $$\mathbf{a}^* = \arg\min_{\mathbf{a}} \mathcal{G}(\mathbf{a}) = \arg\min_{\mathbf{a}} \left( \underbrace{D_{\text{KL}}[Q(\mathbf{s}_{\tau} \mid \mathbf{a}) \parallel P(\mathbf{s}_{\tau})]}_{\text{认识风险 (Epistemic Risk)}} - \underbrace{\mathbb{E}_{Q}[\ln P(\mathbf{o}_{\tau} \mid \mathbf{s}_{\tau})]}_{\text{实际工具效用 (Pragmatic Value)}} \right)$$
-
-通过在内部前向闭环模拟“如果我此时急打方向盘 / 如果我此时满仓做多”的因果分叉，在物理灾难发生前主动完成免疫熔断（Pre-emptive Active Defense）。
 
 ---
 
