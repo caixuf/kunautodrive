@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <cstdlib>
 #include <string>
+#include <limits>
 #include "kun/cellular/cellular_genome.hpp"
 
 using namespace kun;
@@ -47,6 +48,7 @@ void test_checkpoint_preservation_without_genetic_pollution() {
     // 1. 创建个体并赋予初始遗传基线
     CellularOrganism org = CellularOrganism::create_seed_organism();
     require(!org.synapses.empty(), "seed organism must provide at least one synapse");
+    org.organism_id = std::numeric_limits<uint64_t>::max() - 42;
     org.synapses[0].initial_weight = 1.0;
     org.synapses[0].weight = 1.0;
     org.compile();
@@ -66,6 +68,7 @@ void test_checkpoint_preservation_without_genetic_pollution() {
     require(reloaded.synapses.size() == org.synapses.size(), "reloaded synapse count must match saved organism");
     require(reloaded.cells.size() == org.cells.size(), "reloaded cell count must match saved organism");
     require(!reloaded.compiled_synapses_.empty(), "reloaded organism must be compiled");
+    require(reloaded.organism_id == org.organism_id, "large 64-bit organism_id must survive checkpoint round-trip");
     
     // 验证：加载后保持了个体后天记忆 (weight == 2.5)
     std::cout << "  ↳ 加载后突触实时记忆权重: " << reloaded.synapses[0].weight << " (期望 2.5)\n";

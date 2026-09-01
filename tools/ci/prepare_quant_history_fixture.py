@@ -73,7 +73,7 @@ def write_fixture(out_dir: Path, start: dt.date, end: dt.date) -> None:
         out_file = out_dir / f"{symbol}.csv"
         with out_file.open("w", newline="", encoding="utf-8") as fh:
             writer = csv.writer(fh)
-            writer.writerow([symbol, "date", "open", "high", "low", "close", "volume"])
+            writer.writerow(["symbol", "date", "open", "high", "low", "close", "volume"])
             writer.writerows(generate_symbol_rows(symbol, idx, dates))
 
 

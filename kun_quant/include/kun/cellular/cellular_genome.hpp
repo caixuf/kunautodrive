@@ -1568,7 +1568,7 @@ public:
         if (!std::isfinite(total_e)) total_e = 0.0;
 
         ss << "{\n";
-        ss << "  \"organism_id\": " << organism_id << ",\n";
+        ss << "  \"organism_id\": \"" << organism_id << "\",\n";
         ss << "  \"generation\": " << generation << ",\n";
         ss << "  \"lineage\": \"" << lineage_name << "\",\n";
         ss << "  \"fitness\": " << safe_fitness << ",\n";
@@ -1634,8 +1634,17 @@ public:
 
         auto get_u64 = [](cJSON* obj, const char* key, uint64_t fallback) -> uint64_t {
             cJSON* item = cJSON_GetObjectItemCaseSensitive(obj, key);
-            if (!cJSON_IsNumber(item) || item->valuedouble < 0.0) return fallback;
-            return static_cast<uint64_t>(item->valuedouble);
+            if (cJSON_IsString(item) && item->valuestring) {
+                try {
+                    return static_cast<uint64_t>(std::stoull(item->valuestring));
+                } catch (...) {
+                    return fallback;
+                }
+            }
+            if (cJSON_IsNumber(item) && item->valuedouble >= 0.0) {
+                return static_cast<uint64_t>(item->valuedouble);
+            }
+            return fallback;
         };
         auto get_u32 = [](cJSON* obj, const char* key, uint32_t fallback) -> uint32_t {
             cJSON* item = cJSON_GetObjectItemCaseSensitive(obj, key);
@@ -1733,7 +1742,7 @@ public:
     std::string export_genome_json() const {
         std::ostringstream ss;
         ss << "{\n";
-        ss << "  \"organism_id\": " << organism_id << ",\n";
+        ss << "  \"organism_id\": \"" << organism_id << "\",\n";
         ss << "  \"generation\": " << generation << ",\n";
         ss << "  \"lineage\": \"" << lineage_name << "\",\n";
         ss << "  \"cells\": [\n";
@@ -1765,7 +1774,7 @@ public:
     std::string export_epigenome_json() const {
         std::ostringstream ss;
         ss << "{\n";
-        ss << "  \"organism_id\": " << organism_id << ",\n";
+        ss << "  \"organism_id\": \"" << organism_id << "\",\n";
         ss << "  \"fitness_score\": " << fitness_score << ",\n";
         ss << "  \"plastic_drift_norms\": [\n";
         for (size_t i = 0; i < synapses.size(); ++i) {
@@ -1784,7 +1793,7 @@ public:
     std::string export_runtime_ckpt() const {
         std::ostringstream ss;
         ss << "{\n";
-        ss << "  \"organism_id\": " << organism_id << ",\n";
+        ss << "  \"organism_id\": \"" << organism_id << "\",\n";
         ss << "  \"live_cell_states\": [\n";
         for (size_t i = 0; i < cells.size(); ++i) {
             const auto& c = cells[i];
