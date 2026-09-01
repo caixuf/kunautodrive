@@ -5,6 +5,8 @@ Enables peer collaboration between:
 - Antigravity (中书省 · 首席架构与决策)
 - CodeBuddy (门下省 · 代码审议与封驳)
 - MiMoCode (尚书省 · 深度研判与全链路验证)
+- OpenCode (都察院 · 监察御史与坏味道排查)
+- GitHub Copilot (枢密院/天策府 · 顶尖战略智库: 平时 5.6 Luna / 极难 Sol & Fable 5)
 """
 
 import sys
@@ -12,6 +14,7 @@ import subprocess
 import json
 import argparse
 import os
+import shutil
 import concurrent.futures
 from typing import Dict, Optional
 
@@ -57,6 +60,52 @@ def query_opencode(prompt: str, timeout: int = 180) -> str:
     except Exception as e:
         return f"[OpenCode Execution Exception]: {str(e)}"
 
+def select_copilot_model(prompt: str, model_override: Optional[str] = None, tier: str = "auto") -> str:
+    """
+    三省六部 Copilot 战力阶梯调度:
+    - 默认/日常: gpt-5.6-luna (5.6 Luna - 极速、轻量、高响应)
+    - 顶尖复杂数理/并发/死锁: gpt-5.6-sol (5.6 Sol - 极强数理逻辑)
+    - 终极认知演化/复杂理论: claude-fable-5 (Fable 5 - 顶尖大模型思辨架构)
+    """
+    if model_override:
+        return model_override
+    if tier in ["sol", "apex"]:
+        return "gpt-5.6-sol"
+    if tier == "fable":
+        return "claude-fable-5"
+    if tier == "luna":
+        return "gpt-5.6-luna"
+
+    # 智能触发检测: 遇到顶尖高难问题自动召唤 Sol 或 Fable 5
+    p_lower = prompt.lower()
+    top_fable_keywords = ["心智涌现", "意识哲学", "大模型同构", "反事实心理推演", "形态发生终极收敛", "[fable]", "fable 5", "fable"]
+    top_sol_keywords = ["并发死锁", "lock-free", "无锁队列", "严格形式化证明", "极端对抗", "硬核量化数学", "高维相空间", "false sharing", "[apex]", "[top_tier]", "sol"]
+
+    for kw in top_fable_keywords:
+        if kw in p_lower:
+            return "claude-fable-5"
+    for kw in top_sol_keywords:
+        if kw in p_lower:
+            return "gpt-5.6-sol"
+
+    return "gpt-5.6-luna"
+
+def query_copilot(prompt: str, model: Optional[str] = None, tier: str = "auto", timeout: int = 180) -> str:
+    """Invokes GitHub Copilot CLI (枢密院/天策府 · 顶尖战略智库)."""
+    copilot_path = shutil.which("copilot") or "/home/caixuf/.npm-global/bin/copilot"
+    target_model = select_copilot_model(prompt, model_override=model, tier=tier)
+    cmd = [copilot_path, "--model", target_model, "-p", prompt, "-s", "--no-ask-user", "--no-color"]
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
+        if res.returncode == 0 and res.stdout.strip():
+            return f"【战力配置: {target_model}】\n{res.stdout.strip()}"
+        else:
+            return f"[Copilot ({target_model}) Error code {res.returncode}]: {res.stderr.strip() or res.stdout.strip()}"
+    except subprocess.TimeoutExpired:
+        return f"[Copilot ({target_model}) Timeout]: Request exceeded timeout limit."
+    except Exception as e:
+        return f"[Copilot ({target_model}) Execution Exception]: {str(e)}"
+
 def truncate_diff_cleanly(diff_text: str, max_chars: int = 5000) -> str:
     """Truncates diff cleanly at line boundaries with clear indication."""
     if len(diff_text) <= max_chars:
@@ -65,9 +114,9 @@ def truncate_diff_cleanly(diff_text: str, max_chars: int = 5000) -> str:
     truncated = "\n".join(lines[:-1])
     return f"{truncated}\n\n[... Diff truncated at line boundary for review context ...]"
 
-def review_diff(git_diff_text: str, agent: str = "all") -> Dict[str, str]:
+def review_diff(git_diff_text: str, agent: str = "all", model: Optional[str] = None, tier: str = "auto") -> Dict[str, str]:
     clean_diff = truncate_diff_cleanly(git_diff_text)
-    prompt = f"""【门下省/尚书省/都察院审议令】
+    prompt = f"""【三省六部联席审议令】
 请作为审议官，对以下中书省提交的工程代码 Diff 进行独立审查：
 1. 是否存在内存泄漏、未定义行为、死锁或并发竞态风险？
 2. 是否存在状态机死锁或边界条件处理疏漏？
@@ -79,15 +128,17 @@ def review_diff(git_diff_text: str, agent: str = "all") -> Dict[str, str]:
 """
     tasks = {}
     if agent in ["codebuddy", "all"]:
-        tasks["CodeBuddy (门下省)"] = query_codebuddy
+        tasks["CodeBuddy (门下省)"] = lambda p=prompt: query_codebuddy(p)
     if agent in ["mimo", "all"]:
-        tasks["MiMo (尚书省)"] = query_mimo
+        tasks["MiMo (尚书省)"] = lambda p=prompt: query_mimo(p)
     if agent in ["opencode", "all"]:
-        tasks["OpenCode (都察院)"] = query_opencode
+        tasks["OpenCode (都察院)"] = lambda p=prompt: query_opencode(p)
+    if agent in ["copilot", "all"]:
+        tasks["GitHub Copilot (枢密院/天策府)"] = lambda p=prompt: query_copilot(p, model=model, tier=tier)
 
     results = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks) or 1) as executor:
-        future_map = {executor.submit(func, prompt): name for name, func in tasks.items()}
+        future_map = {executor.submit(func): name for name, func in tasks.items()}
         for future in concurrent.futures.as_completed(future_map):
             name = future_map[future]
             try:
@@ -102,7 +153,9 @@ def main():
     parser.add_argument("--review-diff", action="store_true", help="Submit current git diff for Council review")
     parser.add_argument("--task", type=str, help="Dispatch custom task to agents")
     parser.add_argument("--file", type=str, help="Review specific file")
-    parser.add_argument("--agent", choices=["codebuddy", "mimo", "opencode", "all", "both"], default="all", help="Target agent")
+    parser.add_argument("--agent", choices=["codebuddy", "mimo", "opencode", "copilot", "all", "both"], default="all", help="Target agent")
+    parser.add_argument("--tier", choices=["auto", "luna", "sol", "fable", "apex"], default="auto", help="Copilot combat tier (default: auto -> luna, apex problems -> sol/fable)")
+    parser.add_argument("--model", type=str, help="Explicit model override for Copilot (e.g. gpt-5.6-luna, gpt-5.6-sol, claude-fable-5)")
     args = parser.parse_args()
 
     if args.review_diff:
@@ -114,14 +167,14 @@ def main():
         if not diff_text:
             print("No diff detected to review.")
             sys.exit(0)
-        print(f">>> 联席议事中枢正在向 [{args.agent}] 呈递代码 Diff 审议...")
-        opinions = review_diff(diff_text, agent=args.agent)
+        print(f">>> 联席议事中枢正在向 [{args.agent}] (Copilot阶梯: {args.tier}) 呈递代码 Diff 审议...")
+        opinions = review_diff(diff_text, agent=args.agent, model=args.model, tier=args.tier)
         for name, op in opinions.items():
             print(f"\n================ {name} 审议意见 ================")
             print(op)
             print("=" * 50)
     elif args.task:
-        print(f">>> 派发任务至 [{args.agent}]: {args.task}")
+        print(f">>> 派发任务至 [{args.agent}] (Copilot阶梯: {args.tier}): {args.task}")
         tasks = {}
         if args.agent in ["codebuddy", "all", "both"]:
             tasks["CodeBuddy (门下省)"] = lambda p=args.task: query_codebuddy(p)
@@ -129,6 +182,8 @@ def main():
             tasks["MiMo (尚书省)"] = lambda p=args.task: query_mimo(p)
         if args.agent in ["opencode", "all"]:
             tasks["OpenCode (都察院)"] = lambda p=args.task: query_opencode(p)
+        if args.agent in ["copilot", "all"]:
+            tasks["GitHub Copilot (枢密院/天策府)"] = lambda p=args.task: query_copilot(p, model=args.model, tier=args.tier)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks) or 1) as executor:
             future_map = {executor.submit(func): name for name, func in tasks.items()}
@@ -154,6 +209,8 @@ def main():
                 tasks["MiMo (尚书省)"] = lambda p=prompt: query_mimo(p)
             if args.agent in ["opencode", "all"]:
                 tasks["OpenCode (都察院)"] = lambda p=prompt: query_opencode(p)
+            if args.agent in ["copilot", "all"]:
+                tasks["GitHub Copilot (枢密院/天策府)"] = lambda p=prompt: query_copilot(p, model=args.model, tier=args.tier)
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks) or 1) as executor:
                 future_map = {executor.submit(func): name for name, func in tasks.items()}
@@ -169,3 +226,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
