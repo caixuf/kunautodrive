@@ -46,7 +46,11 @@
 #include "onnx_backend.h"
 #include "traffic_light.h"
 #include "clock_service.h"
+#include "kun/cellular/cellular_genome.hpp"
+#include "kun/cellular/adas_cellular_adapter.hpp"
 #include <cjson/cJSON.h>
+#include <memory>
+#include <fstream>
 
 #include <stdlib.h>
 #include <string.h>
@@ -89,6 +93,8 @@ struct InferenceContext {
     TinyMLP         model{};
     OnnxBackend     onnx{};          /* 可选 ONNX 后端（未加载时 loaded=0） */
     bool            use_onnx{false}; /* true=前向走 ONNX，false=走 tiny-MLP */
+    std::unique_ptr<kun::AdasCellularAdapter> cellular_adas{nullptr}; /* 形态发生细胞大脑后端 */
+    bool            use_cellular{false}; /* true=前向走形态发生细胞网络 */
     pthread_mutex_t model_mutex{};  /* 保护 model/onnx 的并发读写 */
     char    model_path[256]{};
     int     control_mode{CTRL_MODE_SHADOW};  /* enum CtrlMode */
@@ -564,9 +570,24 @@ static void run_inference(double* out_speed, double* out_d,
     *out_conf = 0.0;
     *out_kv = 0.0; *out_kp = 0.0; *out_kd = 0.0; *out_yd = 0.0;
 
-    /* 选定当前活跃后端：ONNX（若启用且已加载）否则 tiny-MLP。
-     * 两后端共享同一套输入维度语义（in_dim ∈ {4,16,80,115}），故特征组装
-     * 逻辑完全复用，只有「加载判定 / 取维度 / 前向调用」三处按后端分派。 */
+    /* 选定当前活跃后端：形态发生细胞大脑 / ONNX / tiny-MLP */
+    if (g.use_cellular && g.cellular_adas) {
+        double dist = g.front0_x - g.ego_x;
+        double rel_v = g.front0_vx - g.ego_v;
+        double lane_offset = g.ego_lane_offset;
+        double ttc = (rel_v < -0.1) ? (dist / (-rel_v)) : 99.0;
+
+        auto ctl = g.cellular_adas->process_perception(dist, rel_v, lane_offset, ttc);
+        
+        *out_throttle = (ctl.target_accel_mps2 > 0) ? std::clamp(ctl.target_accel_mps2 / 3.5, 0.0, 1.0) : 0.0;
+        *out_brake    = (ctl.target_accel_mps2 < 0) ? std::clamp(-ctl.target_accel_mps2 / 6.0, 0.0, 1.0) : 0.0;
+        *out_steer    = ctl.steering_curvature;
+        *out_speed    = std::clamp(g.ego_v + ctl.target_accel_mps2 * 0.05, 0.0, 30.0);
+        *out_d        = lane_offset;
+        *out_conf     = 1.0;
+        return;
+    }
+
     bool active_loaded = g.use_onnx ? (g.onnx.loaded != 0) : (g.model.loaded != 0);
     int  active_in_dim = g.use_onnx ? g.onnx.in_dim : g.model.in_dim;
 
@@ -1027,7 +1048,14 @@ static int inference_init(MessageBus* bus, Transport* transport,
      * → 回退 tiny-MLP（此时 .onnx 路径对 tiny_mlp_load 必然失败 → heuristic），
      * 保证「模型跑进 pipeline」这条链路永远可运行。 */
     g.use_onnx = false;
-    if (path_has_suffix(g.model_path, ".onnx")) {
+    g.use_cellular = false;
+    if (path_has_suffix(g.model_path, ".json")) {
+        auto brain = kun::CellularOrganism::create_seed_organism(26);
+        brain.compile();
+        g.cellular_adas = std::make_unique<kun::AdasCellularAdapter>(std::move(brain));
+        g.use_cellular = true;
+        LOG_INFO("inference", "Morphogenetic Cellular Brain loaded from %s (Zero-GC compiled)", g.model_path);
+    } else if (path_has_suffix(g.model_path, ".onnx")) {
         if (onnx_backend_load(&g.onnx, g.model_path) == 0 &&
             dims_supported(g.onnx.in_dim, g.onnx.out_dim)) {
             g.use_onnx = true;

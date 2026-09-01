@@ -538,7 +538,9 @@ option(ENABLE_ONNX "Enable ONNX Runtime inference backend (requires onnxruntime)
 add_library(inference_node SHARED inference_node.cpp onnx_backend.cpp)
 target_compile_definitions(inference_node PRIVATE FLOWCORO_INTEGRATION)
 target_compile_options(inference_node PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fcoroutines>)
+target_include_directories(inference_node PRIVATE ${FLOW_ROOT}/kun_quant/include)
 target_link_libraries(inference_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
+
 if(ENABLE_ONNX)
     # 优先 CONFIG 包（onnxruntime 官方 CMake 导出），兜底 find_path + find_library。
     find_package(onnxruntime CONFIG QUIET)
