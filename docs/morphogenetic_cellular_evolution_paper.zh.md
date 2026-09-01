@@ -1,8 +1,9 @@
 # 形态发生细胞图演化：自组织拓扑、胞间力场与亚微秒确定性图编译
 
-**作者**：Antigravity 研究实验室 & FlowEngine 工程学术委员会  
-**日期**：2026年8月  
-**领域**：人工生命、复杂自适应系统、自主信息物理系统（CPS）、进化计算、高频量化金融  
+**作者**：李龙飞 (Longfei Li)  
+**机构**：Antigravity 研究实验室 & FlowEngine 工程学术委员会  
+**日期**：2026年9月  
+**领域**：人工生命、复杂自适应系统、自主信息物理系统（CPS）、进化计算、高频量化金融、具身智能  
 **分类**：ACM CCS（Computing Methodologies $\to$ Artificial Intelligence $\to$ Evolutionary Computing; Software and its Engineering $\to$ Real-Time Systems Software; Applied Computing $\to$ Quantitative Finance & Autonomous Vehicles）
 
 ---
