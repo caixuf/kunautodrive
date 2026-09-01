@@ -20,10 +20,15 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "x86-64 CPU"
 
 class CellularConversationalBrain:
-    def __init__(self, ckpt_path="runs/mathematician_ten_million_champion.pt"):
+    def __init__(self, ckpt_path=None):
+        if ckpt_path is None:
+            if os.path.exists("runs/hundred_million_champion.pt"):
+                ckpt_path = "runs/hundred_million_champion.pt"
+            else:
+                ckpt_path = "runs/mathematician_ten_million_champion.pt"
         self.ckpt_path = ckpt_path
         self.device = device
-        self.n_cells = 10000000
+        self.n_cells = 100000000 if "hundred" in self.ckpt_path else 10000000
         self.is_loaded = False
         self.load_gpu_weights()
 
@@ -31,16 +36,17 @@ class CellularConversationalBrain:
         t0 = time.time()
         if os.path.exists(self.ckpt_path):
             ckpt = torch.load(self.ckpt_path, map_location=self.device)
-            self.n_cells = ckpt.get("n_cells", 10000000)
+            self.n_cells = ckpt.get("n_cells", self.n_cells)
             self.params = ckpt.get("champion_params", torch.zeros((self.n_cells, 2))).to(self.device)
             self.weights = ckpt.get("champion_weights", torch.zeros((self.n_cells, 2))).to(self.device)
             self.src0 = ckpt.get("syn_src0", torch.zeros(self.n_cells, dtype=torch.long)).to(self.device)
             self.src1 = ckpt.get("syn_src1", torch.zeros(self.n_cells, dtype=torch.long)).to(self.device)
             self.types = ckpt.get("types", torch.zeros(self.n_cells, dtype=torch.int8)).to(self.device)
             self.is_loaded = True
-            print(f"✓ 10,000,000 细胞 GPU 语言大脑已挂载至 {gpu_name} (耗时: {time.time()-t0:.2f}s)")
+            print(f"✓ {self.n_cells:,} 细胞 GPU 通用语言大脑已挂载至 {gpu_name} (耗时: {time.time()-t0:.2f}s)")
         else:
             print(f"⚠️ 未找到检查点 {self.ckpt_path}，初始化在线张量。")
+
 
     def encode_text_to_potentials(self, text):
         """将任意文本语义编码为 4 维感知受体电位输入"""
