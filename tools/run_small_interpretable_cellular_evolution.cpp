@@ -245,6 +245,7 @@ static EvaluationMetric evaluate_organism(
     std::map<std::string, std::deque<PositionLot>> lots;
     std::map<std::string, int> target_orders;
     std::map<std::string, double> last_known_prices;
+    bool trading_halted = false;
 
     for (const auto& as : assets) {
         lots[as.symbol] = std::deque<PositionLot>{};
@@ -257,6 +258,17 @@ static EvaluationMetric evaluate_organism(
     double total_notional_traded = 0.0;
     std::vector<double> daily_returns;
     double prev_day_equity = cash;
+
+    auto margin_in_use = [&]() {
+        double used = 0.0;
+        for (const auto& asset : assets) {
+            for (const auto& lot : lots[asset.symbol]) {
+                double mark = last_known_prices[asset.symbol];
+                used += mark * asset.multiplier * std::abs(lot.quantity) * asset.margin_rate;
+            }
+        }
+        return used;
+    };
 
     for (size_t t = start_t; t < end_t; ++t) {
         const std::string& cur_date = timeline[t];
@@ -282,9 +294,9 @@ static EvaluationMetric evaluate_organism(
                 if ((cur_qty > 0 && delta > 0) || (cur_qty < 0 && delta < 0) || cur_qty == 0) {
                     double margin_needed = notional * as.margin_rate;
                     double commission = notional * fee_rate;
-                    total_commission_paid += commission;
 
-                    if (cash >= margin_needed + commission) {
+                    if (cash - margin_in_use() >= margin_needed + commission) {
+                        total_commission_paid += commission;
                         cash -= commission;
                         lots[as.symbol].push_back({fill_price, delta, cur_date});
                     }
@@ -332,14 +344,24 @@ static EvaluationMetric evaluate_organism(
         }
 
         if (total_equity > peak_equity) peak_equity = total_equity;
-        double dd = (peak_equity - total_equity) / peak_equity;
+        double dd = (peak_equity > 0.0)
+            ? (peak_equity - total_equity) / peak_equity
+            : 1.0;
         if (dd > max_dd) max_dd = dd;
 
         double d_ret = (total_equity - prev_day_equity) / std::max(1.0, prev_day_equity);
         daily_returns.push_back(d_ret);
         prev_day_equity = total_equity;
 
+        // Treat severe equity impairment as a terminal risk event, not as
+        // permission to continue trading with negative capital.
+        if (total_equity <= initial_capital * 0.05) {
+            trading_halted = true;
+            for (auto& [symbol, target] : target_orders) target = 0;
+        }
+
         // 3. T 日特征提取 -> 六器官前向计算
+        if (trading_halted) continue;
         for (const auto& as : assets) {
             if (!as.date_index.count(cur_date)) continue;
             size_t idx = as.date_index.at(cur_date);
@@ -356,8 +378,10 @@ static EvaluationMetric evaluate_organism(
             };
 
             auto actions = brain.forward(inputs, false);
-            double atr = bar.atr > 0 ? bar.atr : bar.close * 0.02;
-            int target_contracts = std::max(1, std::min(8, static_cast<int>((total_equity * 0.005) / (atr * as.multiplier))));
+            double margin_per_contract = bar.close * as.multiplier * as.margin_rate;
+            int target_contracts = margin_per_contract > 0.0
+                ? std::min(8, static_cast<int>((total_equity * 0.02) / margin_per_contract))
+                : 0;
 
             int cur_holding = 0;
             for (const auto& lot : lots[as.symbol]) cur_holding += lot.quantity;
@@ -365,10 +389,12 @@ static EvaluationMetric evaluate_organism(
             if (actions.immune_lock) {
                 if (cur_holding != 0) m.counterfactual_immune_saves++;
                 target_orders[as.symbol] = 0;
-            } else if (actions.positive_action > 0.25) {
+            } else if (target_contracts > 0 && actions.positive_action > 0.25) {
                 target_orders[as.symbol] = target_contracts;
-            } else if (actions.negative_action > 0.25) {
+            } else if (target_contracts > 0 && actions.negative_action > 0.25) {
                 target_orders[as.symbol] = -target_contracts;
+            } else if (target_contracts == 0) {
+                target_orders[as.symbol] = 0;
             }
         }
     }
