@@ -942,6 +942,16 @@ target_include_directories(test_quant_live_combat PRIVATE kun_quant/include incl
 target_compile_definitions(test_quant_live_combat PRIVATE FLOWCORO_INTEGRATION)
 add_test(NAME test_quant_live_combat COMMAND test_quant_live_combat)
 
+add_executable(test_quant_historical_gate tests/test_quant_historical_gate.cpp)
+if(WIN32)
+    target_link_libraries(test_quant_historical_gate kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
+else()
+    target_link_libraries(test_quant_historical_gate kun_quant flowengine_core flowcoro_headers flowcoro_net scheduler_cpp pthread sqlite3)
+endif()
+target_include_directories(test_quant_historical_gate PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
+target_compile_definitions(test_quant_historical_gate PRIVATE FLOWCORO_INTEGRATION)
+add_test(NAME test_quant_historical_gate COMMAND test_quant_historical_gate)
+
 add_executable(test_flow_mechanotransduction tests/test_flow_mechanotransduction.cpp)
 if(WIN32)
     target_link_libraries(test_flow_mechanotransduction kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
