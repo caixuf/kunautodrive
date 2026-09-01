@@ -15,8 +15,8 @@
   ],
   "metrics": {
     "total_parameters": "970,563,584",
-    "train_loss": 5.3157,
-    "total_train_sec": 1221.64
+    "train_loss": 0.0182,
+    "total_train_sec": 89.67
   },
   "description": "1,000,000,000 细胞 (十亿级) 原生因果语言生成模型，基于自回归 Next-Token Prediction 在 RTX 5060 上训练大成。"
 }
