@@ -1022,6 +1022,16 @@ endif()
 target_include_directories(kun_adas_train PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
 target_compile_definitions(kun_adas_train PRIVATE FLOWCORO_INTEGRATION)
 
+add_executable(kun_adas_million_brain src/kun_adas_million_brain.cpp)
+if(WIN32)
+    target_link_libraries(kun_adas_million_brain kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
+else()
+    target_link_libraries(kun_adas_million_brain kun_quant flowengine_core flowcoro_headers flowcoro_net scheduler_cpp pthread sqlite3)
+endif()
+target_include_directories(kun_adas_million_brain PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
+target_compile_definitions(kun_adas_million_brain PRIVATE FLOWCORO_INTEGRATION)
+
+
 
 
 
