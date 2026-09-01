@@ -30,25 +30,30 @@ class CrossSectionalMillionCellBrain(nn.Module):
         self.num_cells = num_cells
         self.num_synapses = num_synapses
         self.device = device
+        self.sens_end = num_cells // 100
+        self.mem_end = num_cells // 5
+        self.proc_end = num_cells * 7 // 10
+        self.exec_end = num_cells * 95 // 100
         
         state = torch.zeros((num_assets, num_cells), dtype=torch.float16, device=device)
         alpha_ema = torch.empty((num_cells,), dtype=torch.float16, device=device).uniform_(0.03, 0.20)
         
         # 拓扑连接: 感知 -> 记忆 -> 趋势 -> 截面比较中枢
-        src_sens = torch.randint(0, 10000, (num_synapses // 5,), dtype=torch.int32, device=device)
-        dst_mem  = torch.randint(10000, 200000, (num_synapses // 5,), dtype=torch.int32, device=device)
+        syn_chunk = num_synapses // 5
+        src_sens = torch.randint(0, self.sens_end, (syn_chunk,), dtype=torch.int32, device=device)
+        dst_mem  = torch.randint(self.sens_end, self.mem_end, (syn_chunk,), dtype=torch.int32, device=device)
         
-        src_mem  = torch.randint(10000, 200000, (num_synapses // 5,), dtype=torch.int32, device=device)
-        dst_proc = torch.randint(200000, 700000, (num_synapses // 5,), dtype=torch.int32, device=device)
+        src_mem  = torch.randint(self.sens_end, self.mem_end, (syn_chunk,), dtype=torch.int32, device=device)
+        dst_proc = torch.randint(self.mem_end, self.proc_end, (syn_chunk,), dtype=torch.int32, device=device)
         
-        src_proc = torch.randint(200000, 700000, (num_synapses // 5,), dtype=torch.int32, device=device)
-        dst_exec = torch.randint(700000, 950000, (num_synapses // 5,), dtype=torch.int32, device=device)
+        src_proc = torch.randint(self.mem_end, self.proc_end, (syn_chunk,), dtype=torch.int32, device=device)
+        dst_exec = torch.randint(self.proc_end, self.exec_end, (syn_chunk,), dtype=torch.int32, device=device)
         
-        src_imm  = torch.randint(0, 700000, (num_synapses // 5,), dtype=torch.int32, device=device)
-        dst_imm  = torch.randint(950000, 1000000, (num_synapses // 5,), dtype=torch.int32, device=device)
+        src_imm  = torch.randint(0, self.proc_end, (syn_chunk,), dtype=torch.int32, device=device)
+        dst_imm  = torch.randint(self.exec_end, num_cells, (syn_chunk,), dtype=torch.int32, device=device)
         
-        src_inner = torch.randint(200000, 950000, (num_synapses // 5,), dtype=torch.int32, device=device)
-        dst_inner = torch.randint(200000, 950000, (num_synapses // 5,), dtype=torch.int32, device=device)
+        src_inner = torch.randint(self.mem_end, self.exec_end, (syn_chunk,), dtype=torch.int32, device=device)
+        dst_inner = torch.randint(self.mem_end, self.exec_end, (syn_chunk,), dtype=torch.int32, device=device)
 
         src_idx = torch.cat([src_sens, src_mem, src_proc, src_imm, src_inner])
         dst_idx = torch.cat([dst_mem, dst_proc, dst_exec, dst_imm, dst_inner])
@@ -69,7 +74,7 @@ class CrossSectionalMillionCellBrain(nn.Module):
         feat_t = batch_features.to(dtype=torch.float16, device=self.device)
         
         # 1. 注入感知受体
-        self.state[:N, :10000] = feat_t.repeat(1, 2500)
+        self.state[:N, :self.sens_end] = feat_t.repeat(1, self.sens_end // 4)
         
         # 2. 突触稀疏传播与衰减积分
         src_signals = self.state[:N, self.src_idx.long()]
@@ -81,11 +86,12 @@ class CrossSectionalMillionCellBrain(nn.Module):
         self.state[:N] = self.state[:N] * (1.0 - self.alpha_ema) + torch.tanh(syn_in) * 0.25
         
         # 3. 提取截面强弱评分
-        exec_slice = self.state[:N, 700000:950000].float()
-        strength_scores = exec_slice[:, 0:125000].mean(dim=1) - exec_slice[:, 125000:250000].mean(dim=1) # [N]
+        exec_slice = self.state[:N, self.proc_end:self.exec_end].float()
+        exec_width = self.exec_end - self.proc_end
+        strength_scores = exec_slice[:, :exec_width // 2].mean(dim=1) - exec_slice[:, exec_width // 2:].mean(dim=1) # [N]
         
         # 4. 独立免疫熔断
-        immune_slice = self.state[:N, 950000:1000000].float()
+        immune_slice = self.state[:N, self.exec_end:].float()
         immune_signal = (immune_slice.abs().mean(dim=1) > 1.35)
         
         # 5. 截面强弱排序 Top K 做多 / Bottom K 做空
