@@ -1,0 +1,20 @@
+{
+  "model_id": "adas_1m",
+  "name": "Kun 1M Morphogenetic ADAS Active Safety Brain",
+  "version": "1.0.0",
+  "author": "李龙飞 (Longfei Li)",
+  "institution": "Antigravity Research Lab & FlowEngine Academic Committee",
+  "architecture": "Morphogenetic-Cellular-Graph-1M",
+  "neuron_scale": 1000000,
+  "synapse_scale": 2000000,
+  "checkpoint_path": "runs/adas_million_champion.pt",
+  "vram_mb": 568.4,
+  "hardware_backend": "NVIDIA GeForce RTX 5060 (CUDA)",
+  "domains": ["autonomous_driving", "active_safety", "aeb", "lane_following"],
+  "metrics": {
+    "peak_throughput": "1,034.7 MCells/s",
+    "collision_rate": "0.0%",
+    "train_duration_sec": 88.12
+  },
+  "description": "百万级智能驾驶形态发生超级大脑皮层，具备 3D 动力学空间世界模型与毫秒级 AEB 紧急制动熔断能力。"
+}

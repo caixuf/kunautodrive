@@ -1,0 +1,20 @@
+{
+  "model_id": "mathematician_10m",
+  "name": "Kun 10M Morphogenetic Mathematician Super Brain",
+  "version": "1.0.0",
+  "author": "李龙飞 (Longfei Li)",
+  "institution": "Antigravity Research Lab & FlowEngine Academic Committee",
+  "architecture": "Morphogenetic-Cellular-Graph-10M",
+  "neuron_scale": 10000000,
+  "synapse_scale": 20000000,
+  "checkpoint_path": "runs/mathematician_ten_million_champion.pt",
+  "vram_mb": 1812.5,
+  "hardware_backend": "NVIDIA GeForce RTX 5060 (CUDA)",
+  "domains": ["math", "chaos_attractor", "ode_solver", "symbolic_calculus"],
+  "metrics": {
+    "peak_throughput": "1,114.6 MCells/s",
+    "ode_residual": 74.6197,
+    "train_duration_sec": 81.30
+  },
+  "description": "千万级形态发生数学家超级大脑，擅长高维非线性常微分方程刚性解耦、洛伦兹混沌吸引子流形解析与符号微积分推演。"
+}

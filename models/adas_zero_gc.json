@@ -1,0 +1,20 @@
+{
+  "model_id": "adas_zero_gc",
+  "name": "Kun C++ Flat-Array Zero-GC Real-Time Brain",
+  "version": "1.0.0",
+  "author": "李龙飞 (Longfei Li)",
+  "institution": "Antigravity Research Lab & FlowEngine Academic Committee",
+  "architecture": "Flat-Array-Topological-DAG",
+  "neuron_scale": 32,
+  "synapse_scale": 48,
+  "checkpoint_path": "runs/adas_cellular_champion.json",
+  "vram_mb": 0.0,
+  "hardware_backend": "x86-64 CPU (Zero-GC L1/L2 Cache Resident)",
+  "domains": ["hard_real_time", "asil_d", "chassis_control", "micro_reflex"],
+  "metrics": {
+    "deterministic_latency": "24.1 ns",
+    "heap_allocation": "0 Bytes (Zero-GC)",
+    "throughput_hz": "41,493,775 Hz"
+  },
+  "description": "C++ 扁平数组零 GC 确定性硬实时底盘安全大脑，达成了 24.1 纳秒级车规 ASIL-D 极限反射弧。"
+}
