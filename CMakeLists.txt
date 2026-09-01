@@ -1040,6 +1040,16 @@ endif()
 target_include_directories(verify_adas_sil_checkpoint PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
 target_compile_definitions(verify_adas_sil_checkpoint PRIVATE FLOWCORO_INTEGRATION)
 
+add_executable(kun_quant_million_combat src/kun_quant_million_combat.cpp)
+if(WIN32)
+    target_link_libraries(kun_quant_million_combat kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
+else()
+    target_link_libraries(kun_quant_million_combat kun_quant flowengine_core flowcoro_headers flowcoro_net scheduler_cpp pthread sqlite3)
+endif()
+target_include_directories(kun_quant_million_combat PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
+target_compile_definitions(kun_quant_million_combat PRIVATE FLOWCORO_INTEGRATION)
+
+
 
 
 
