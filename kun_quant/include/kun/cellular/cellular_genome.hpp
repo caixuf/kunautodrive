@@ -14,6 +14,7 @@
 #include <sstream>
 #include <fstream>
 #include <iostream>
+#include <cjson/cJSON.h>
 
 namespace kun {
 
@@ -702,7 +703,7 @@ public:
 
                 compiled_synapses_.push_back({
                     f_idx, t_idx, syn.to_port,
-                    syn.weight, syn.weight,
+                    syn.weight, syn.initial_weight,
                     syn.hebbian_rate, syn.hebbian_decay,
                     is_loop
                 });
@@ -1628,137 +1629,94 @@ public:
     // ── 全息检查点反序列化 (JSON Deserialization) ──
     static CellularOrganism from_json(const std::string& json_str) {
         CellularOrganism org;
+        cJSON* root = cJSON_Parse(json_str.c_str());
+        if (!root) return org;
 
-        auto find_val = [&](const std::string& key) -> std::string {
-            auto pos = json_str.find("\"" + key + "\"");
-            if (pos == std::string::npos) return "";
-            auto colon = json_str.find(":", pos);
-            if (colon == std::string::npos) return "";
-            size_t start = colon + 1;
-            while (start < json_str.size() && (json_str[start] == ' ' || json_str[start] == '\t' || json_str[start] == '\n' || json_str[start] == '\r')) start++;
-            if (start >= json_str.size()) return "";
-            if (json_str[start] == '\"') {
-                size_t end = json_str.find('\"', start + 1);
-                if (end == std::string::npos) return "";
-                return json_str.substr(start + 1, end - start - 1);
-            } else {
-                size_t end = start;
-                while (end < json_str.size() && json_str[end] != ',' && json_str[end] != '}' && json_str[end] != '\n' && json_str[end] != '\r') end++;
-                return json_str.substr(start, end - start);
-            }
+        auto get_u64 = [](cJSON* obj, const char* key, uint64_t fallback) -> uint64_t {
+            cJSON* item = cJSON_GetObjectItemCaseSensitive(obj, key);
+            if (!cJSON_IsNumber(item) || item->valuedouble < 0.0) return fallback;
+            return static_cast<uint64_t>(item->valuedouble);
+        };
+        auto get_u32 = [](cJSON* obj, const char* key, uint32_t fallback) -> uint32_t {
+            cJSON* item = cJSON_GetObjectItemCaseSensitive(obj, key);
+            if (!cJSON_IsNumber(item) || item->valuedouble < 0.0) return fallback;
+            return static_cast<uint32_t>(item->valuedouble);
+        };
+        auto get_u8 = [](cJSON* obj, const char* key, uint8_t fallback) -> uint8_t {
+            cJSON* item = cJSON_GetObjectItemCaseSensitive(obj, key);
+            if (!cJSON_IsNumber(item) || item->valuedouble < 0.0) return fallback;
+            return static_cast<uint8_t>(item->valuedouble);
+        };
+        auto get_double = [](cJSON* obj, const char* key, double fallback) -> double {
+            cJSON* item = cJSON_GetObjectItemCaseSensitive(obj, key);
+            return cJSON_IsNumber(item) ? item->valuedouble : fallback;
+        };
+        auto get_float = [](cJSON* obj, const char* key, float fallback) -> float {
+            cJSON* item = cJSON_GetObjectItemCaseSensitive(obj, key);
+            return cJSON_IsNumber(item) ? static_cast<float>(item->valuedouble) : fallback;
+        };
+        auto get_bool = [](cJSON* obj, const char* key, bool fallback) -> bool {
+            cJSON* item = cJSON_GetObjectItemCaseSensitive(obj, key);
+            if (cJSON_IsTrue(item)) return true;
+            if (cJSON_IsFalse(item)) return false;
+            return fallback;
         };
 
-        std::string id_str = find_val("organism_id");
-        if (!id_str.empty()) org.organism_id = static_cast<uint64_t>(std::stoull(id_str));
-        std::string gen_str = find_val("generation");
-        if (!gen_str.empty()) org.generation = static_cast<uint32_t>(std::stoul(gen_str));
-        std::string lin_str = find_val("lineage");
-        if (!lin_str.empty()) org.lineage_name = lin_str;
-        std::string fit_str = find_val("fitness");
-        if (!fit_str.empty()) org.fitness_score = std::stod(fit_str);
+        org.organism_id = get_u64(root, "organism_id", org.organism_id);
+        org.generation = get_u32(root, "generation", org.generation);
+        if (cJSON* lineage = cJSON_GetObjectItemCaseSensitive(root, "lineage");
+            cJSON_IsString(lineage) && lineage->valuestring) {
+            org.lineage_name = lineage->valuestring;
+        }
+        org.fitness_score = get_double(root, "fitness", org.fitness_score);
 
-        // 解析 cells
-        auto cells_pos = json_str.find("\"cells\"");
-        if (cells_pos != std::string::npos) {
-            auto open_bracket = json_str.find("[", cells_pos);
-            auto close_bracket = json_str.find("]", open_bracket);
-            if (open_bracket != std::string::npos && close_bracket != std::string::npos) {
-                std::string cells_block = json_str.substr(open_bracket, close_bracket - open_bracket + 1);
-                size_t pos = 0;
-                while ((pos = cells_block.find("{", pos)) != std::string::npos) {
-                    size_t end_brace = cells_block.find("}", pos);
-                    if (end_brace == std::string::npos) break;
-                    std::string cell_item = cells_block.substr(pos, end_brace - pos + 1);
-
-                    auto parse_field = [&](const std::string& k) -> std::string {
-                        auto p = cell_item.find("\"" + k + "\"");
-                        if (p == std::string::npos) return "";
-                        auto c = cell_item.find(":", p);
-                        if (c == std::string::npos) return "";
-                        size_t s = c + 1;
-                        while (s < cell_item.size() && (cell_item[s] == ' ' || cell_item[s] == '\t')) s++;
-                        if (s >= cell_item.size()) return "";
-                        if (cell_item[s] == '\"') {
-                            size_t e = cell_item.find('\"', s + 1);
-                            if (e == std::string::npos) return "";
-                            return cell_item.substr(s + 1, e - s - 1);
-                        } else {
-                            size_t e = s;
-                            while (e < cell_item.size() && cell_item[e] != ',' && cell_item[e] != '}') e++;
-                            return cell_item.substr(s, e - s);
-                        }
-                    };
-
-                    uint32_t cid = static_cast<uint32_t>(std::stoul(parse_field("id").empty() ? "0" : parse_field("id")));
-                    CellType ctype = cell_type_from_string(parse_field("type"));
-                    double p1 = parse_field("param1").empty() ? 0.0 : std::stod(parse_field("param1"));
-                    double p2 = parse_field("param2").empty() ? 0.0 : std::stod(parse_field("param2"));
-                    float x = parse_field("x").empty() ? 0.0f : std::stof(parse_field("x"));
-                    float y = parse_field("y").empty() ? 0.0f : std::stof(parse_field("y"));
-                    float z = parse_field("z").empty() ? 0.0f : std::stof(parse_field("z"));
-
-                    Cell c{cid, ctype, p1, p2, 0.0, 0.0, false, 0.0, 0, 0, x, y, z};
-                    org.cells.push_back(c);
-                    pos = end_brace + 1;
+        if (cJSON* cells_json = cJSON_GetObjectItemCaseSensitive(root, "cells"); cJSON_IsArray(cells_json)) {
+            cJSON* cell_json = nullptr;
+            cJSON_ArrayForEach(cell_json, cells_json) {
+                if (!cJSON_IsObject(cell_json)) continue;
+                Cell cell{};
+                cell.id = get_u32(cell_json, "id", cell.id);
+                if (cJSON* type = cJSON_GetObjectItemCaseSensitive(cell_json, "type");
+                    cJSON_IsString(type) && type->valuestring) {
+                    cell.type = cell_type_from_string(type->valuestring);
                 }
+                cell.param1 = get_double(cell_json, "param1", cell.param1);
+                cell.param2 = get_double(cell_json, "param2", cell.param2);
+                cell.output_val = get_double(cell_json, "output", cell.output_val);
+                cell.activation_count = get_u32(cell_json, "activations", cell.activation_count);
+                cell.x = get_float(cell_json, "x", cell.x);
+                cell.y = get_float(cell_json, "y", cell.y);
+                cell.z = get_float(cell_json, "z", cell.z);
+                cell.glow_charge = get_float(cell_json, "glow", cell.glow_charge);
+                org.cells.push_back(cell);
             }
         }
 
-        // 解析 synapses
-        auto syn_pos = json_str.find("\"synapses\"");
-        if (syn_pos != std::string::npos) {
-            auto open_bracket = json_str.find("[", syn_pos);
-            auto close_bracket = json_str.find("]", open_bracket);
-            if (open_bracket != std::string::npos && close_bracket != std::string::npos) {
-                std::string syn_block = json_str.substr(open_bracket, close_bracket - open_bracket + 1);
-                size_t pos = 0;
-                while ((pos = syn_block.find("{", pos)) != std::string::npos) {
-                    size_t end_brace = syn_block.find("}", pos);
-                    if (end_brace == std::string::npos) break;
-                    std::string syn_item = syn_block.substr(pos, end_brace - pos + 1);
-
-                    auto parse_field = [&](const std::string& k) -> std::string {
-                        auto p = syn_item.find("\"" + k + "\"");
-                        if (p == std::string::npos) return "";
-                        auto c = syn_item.find(":", p);
-                        if (c == std::string::npos) return "";
-                        size_t s = c + 1;
-                        while (s < syn_item.size() && (syn_item[s] == ' ' || syn_item[s] == '\t')) s++;
-                        if (s >= syn_item.size()) return "";
-                        if (syn_item[s] == '\"') {
-                            size_t e = syn_item.find('\"', s + 1);
-                            if (e == std::string::npos) return "";
-                            return syn_item.substr(s + 1, e - s - 1);
-                        } else {
-                            size_t e = s;
-                            while (e < syn_item.size() && syn_item[e] != ',' && syn_item[e] != '}') e++;
-                            return syn_item.substr(s, e - s);
-                        }
-                    };
-
-                    uint32_t from = static_cast<uint32_t>(std::stoul(parse_field("from").empty() ? "0" : parse_field("from")));
-                    uint32_t to = static_cast<uint32_t>(std::stoul(parse_field("to").empty() ? "0" : parse_field("to")));
-                    uint8_t port = static_cast<uint8_t>(std::stoul(parse_field("port").empty() ? "0" : parse_field("port")));
-                    double weight = parse_field("weight").empty() ? 1.0 : std::stod(parse_field("weight"));
-                    std::string init_w_str = parse_field("initial_weight");
-                    double initial_weight = init_w_str.empty() ? weight : std::stod(init_w_str);
-                    bool active = (parse_field("active") == "true" || parse_field("active").empty());
-                    bool recurrent = (parse_field("recurrent") == "true");
-                    double hebb_rate = parse_field("hebb_rate").empty() ? 0.005 : std::stod(parse_field("hebb_rate"));
-                    double hebb_decay = parse_field("hebb_decay").empty() ? 0.02 : std::stod(parse_field("hebb_decay"));
-
-                    Synapse s{from, to, port, weight, active, 60.0f, -1.0f};
-                    s.initial_weight = initial_weight;
-                    s.weight = weight;
-                    s.is_recurrent = recurrent;
-                    s.hebbian_rate = hebb_rate;
-                    s.hebbian_decay = hebb_decay;
-                    org.synapses.push_back(s);
-                    pos = end_brace + 1;
-                }
+        if (cJSON* syn_json = cJSON_GetObjectItemCaseSensitive(root, "synapses"); cJSON_IsArray(syn_json)) {
+            cJSON* syn_item = nullptr;
+            cJSON_ArrayForEach(syn_item, syn_json) {
+                if (!cJSON_IsObject(syn_item)) continue;
+                double weight = get_double(syn_item, "weight", 1.0);
+                double initial_weight = get_double(syn_item, "initial_weight", weight);
+                Synapse syn{
+                    get_u32(syn_item, "from", 0),
+                    get_u32(syn_item, "to", 0),
+                    get_u8(syn_item, "port", 0),
+                    weight,
+                    get_bool(syn_item, "active", true),
+                    60.0f,
+                    get_float(syn_item, "photon_pos", -1.0f)
+                };
+                syn.initial_weight = initial_weight;
+                syn.weight = weight;
+                syn.is_recurrent = get_bool(syn_item, "recurrent", false);
+                syn.hebbian_rate = get_double(syn_item, "hebb_rate", syn.hebbian_rate);
+                syn.hebbian_decay = get_double(syn_item, "hebb_decay", syn.hebbian_decay);
+                org.synapses.push_back(syn);
             }
         }
 
+        cJSON_Delete(root);
         org.compile();
         return org;
     }

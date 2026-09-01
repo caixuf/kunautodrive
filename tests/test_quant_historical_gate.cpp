@@ -23,6 +23,7 @@
 #include <map>
 #include <set>
 #include <deque>
+#include <cstdlib>
 
 #include "kun/cellular/cellular_genome.hpp"
 
@@ -54,6 +55,35 @@ struct AssetSeries {
     double tick_size{1.0};
     double margin_rate{0.12};
 };
+
+static std::vector<std::string> historical_dir_candidates() {
+    std::vector<std::string> candidates;
+    if (const char* env = std::getenv("KUN_QUANT_HISTORY_DIR"); env && *env) {
+        candidates.emplace_back(env);
+    }
+    candidates.emplace_back("data/history");
+    candidates.emplace_back("../data/history");
+    candidates.emplace_back("../../data/history");
+    return candidates;
+}
+
+static std::string resolve_history_dir(std::vector<std::string>* attempted = nullptr) {
+    for (const auto& candidate : historical_dir_candidates()) {
+        if (attempted) attempted->push_back(candidate);
+        if (fs::exists(candidate) && fs::is_directory(candidate)) {
+            return candidate;
+        }
+    }
+    return {};
+}
+
+static size_t count_available_symbol_fixtures(const std::string& data_dir, const std::vector<std::string>& symbols) {
+    size_t count = 0;
+    for (const auto& sym : symbols) {
+        if (fs::exists(fs::path(data_dir) / (sym + ".csv"))) count++;
+    }
+    return count;
+}
 
 static std::vector<BarData> load_and_cumulative_adjust(const std::string& path, const std::string& sym) {
     std::vector<BarData> raw;
@@ -138,11 +168,26 @@ int main() {
     std::cout << " 🏛️ KunQuant 20~30 年全品种历史数据回归防护硬门禁 (CI Regression Gate)\n";
     std::cout << "======================================================================\n";
 
-    std::string data_dir = "data/history";
-    if (!fs::exists(data_dir)) data_dir = "../data/history";
-    if (!fs::exists(data_dir)) data_dir = "../../data/history";
-
     std::vector<std::string> symbols = {"cu", "ru", "rb", "ta", "m", "a", "cf", "i", "j", "au", "ag", "zn", "al", "hc", "bu", "MA", "pp", "p"};
+    std::vector<std::string> attempted_dirs;
+    std::string data_dir = resolve_history_dir(&attempted_dirs);
+    if (data_dir.empty()) {
+        std::cerr << "❌ [Preflight FAIL] 未找到量化历史数据夹具。请设置 KUN_QUANT_HISTORY_DIR，"
+                  << "或先运行 `python3 tools/ci/prepare_quant_history_fixture.py --out data/history`。\n";
+        std::cerr << "   已检查路径:\n";
+        for (const auto& dir : attempted_dirs) {
+            std::cerr << "   - " << dir << "\n";
+        }
+        return 1;
+    }
+    size_t fixture_count = count_available_symbol_fixtures(data_dir, symbols);
+    if (fixture_count < 10) {
+        std::cerr << "❌ [Preflight FAIL] 历史数据夹具不完整: 仅找到 " << fixture_count
+                  << " 个目标品种 CSV，要求至少 10 个。检查路径: " << data_dir << "\n";
+        std::cerr << "   可用修复: `python3 tools/ci/prepare_quant_history_fixture.py --out "
+                  << data_dir << "`\n";
+        return 1;
+    }
 
     std::vector<AssetSeries> assets;
     std::set<std::string> all_dates_set;

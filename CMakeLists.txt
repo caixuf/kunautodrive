@@ -960,6 +960,9 @@ endif()
 target_include_directories(test_quant_historical_gate PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
 target_compile_definitions(test_quant_historical_gate PRIVATE FLOWCORO_INTEGRATION)
 add_test(NAME test_quant_historical_gate COMMAND test_quant_historical_gate)
+set_tests_properties(test_quant_historical_gate PROPERTIES
+    ENVIRONMENT "KUN_QUANT_HISTORY_DIR=${CMAKE_SOURCE_DIR}/data/history"
+)
 
 add_executable(test_flow_mechanotransduction tests/test_flow_mechanotransduction.cpp)
 if(WIN32)

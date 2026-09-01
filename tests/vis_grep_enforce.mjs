@@ -67,8 +67,9 @@ const RULES = [
     // DeadReckon.js = 热路径外推（避免函数调用开销）；
     // SkyEnv.js = 太阳位置（圆弧轨迹，非道路偏移）；
     // CameraRig.js = 相机相对 ego 位姿（非路上物体放置）；
-    // app.js / models.js = GPS / 动画
-    fileExempt: /\/math\/Coord\.js$|\/core\/DeadReckon\.js$|\/core\/SkyEnv\.js$|\/core\/CameraRig\.js$|\/app\.js$|\/models\.js$/,
+    // app.js / models.js = GPS / 动画；
+    // cellularMindHologram.js = 独立 Canvas 全息投影，不属于道路坐标放置链路
+    fileExempt: /\/math\/Coord\.js$|\/core\/DeadReckon\.js$|\/core\/SkyEnv\.js$|\/core\/CameraRig\.js$|\/app\.js$|\/models\.js$|\/cellularMindHologram\.js$/,
   },
   {
     name: '裸 .position.set 配魔法数',

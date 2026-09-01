@@ -161,7 +161,8 @@ void test_adas_authority_boundary_isolation() {
     auto post_contract = org.evaluate_adas_contract();
     (void)post_contract;
     assert(post_contract.valid());
-    assert(post_contract.has_planning && post_contract.has_control && post_contract.has_safety);
+    assert(post_contract.positive_action && post_contract.negative_action &&
+           post_contract.defensive_reset && post_contract.immune_block);
 
     // 验证经过 perception 输入后的 AEB/控制输出依然符合 ASIL-D 边界
     auto out = adas_adapter.process_perception(5.0, -10.0, 0.0, 0.5);
