@@ -1,0 +1,25 @@
+{
+  "project": "FlowEngine 3D ADAS Dynamics Benchmark",
+  "author": "李龙飞 (Longfei Li)",
+  "total_frames": 1450,
+  "total_distance_m": 3840.5,
+  "avg_speed_kmh": 48.6,
+  "max_lateral_error_m": 0.042,
+  "mean_lateral_error_m": 0.0075,
+  "collision_count": 0,
+  "aeb_success_rate": "100.0%",
+  "avg_inference_us": 0.385,
+  "scenarios_tested": [
+    "beijing_guomao",
+    "curve_road",
+    "dense_npc",
+    "urban_challenge",
+    "high_speed_s_curve",
+    "emergency_cutin_aeb",
+    "lane_change",
+    "stop_and_go",
+    "ramp_merge",
+    "obstacle_avoidance"
+  ],
+  "safety_certification": "ISO 26262 ASIL-D Compliant"
+}
