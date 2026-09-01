@@ -168,6 +168,10 @@ def cmd_chat(args):
         from tools.kun_chat import run_chat
         run_chat()
 
+def cmd_agent(args):
+    from tools.kun_agent import run_agent_cli
+    run_agent_cli()
+
 def main():
     parser = argparse.ArgumentParser(description="KunHub: 企业级形态发生生命体大模型管理体系 (作者: 李龙飞)")
     subparsers = parser.add_subparsers(dest="command", help="子命令")
@@ -186,6 +190,8 @@ def main():
 
     chat_p = subparsers.add_parser("chat", help="打开交互式聊天窗口 (终端 TUI 或 Web UI)")
     chat_p.add_argument("--web", action="store_true", help="打开现代 Web 聊天窗口 (http://localhost:8930)")
+
+    subparsers.add_parser("agent", help="启动全自主形态发生具身智能体 (支持自然语言执行系统工程任务)")
     
     args = parser.parse_args()
     if not args.command or args.command == "list":
@@ -198,6 +204,9 @@ def main():
         cmd_deploy(args)
     elif args.command == "chat":
         cmd_chat(args)
+    elif args.command == "agent":
+        cmd_agent(args)
+
 
 
 if __name__ == "__main__":
