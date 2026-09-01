@@ -1013,6 +1013,16 @@ target_include_directories(test_flow_unbounded_metabolic_counterfactual PRIVATE 
 target_compile_definitions(test_flow_unbounded_metabolic_counterfactual PRIVATE FLOWCORO_INTEGRATION)
 add_test(NAME test_flow_unbounded_metabolic_counterfactual COMMAND test_flow_unbounded_metabolic_counterfactual)
 
+add_executable(kun_adas_train src/kun_adas_train.cpp)
+if(WIN32)
+    target_link_libraries(kun_adas_train kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
+else()
+    target_link_libraries(kun_adas_train kun_quant flowengine_core flowcoro_headers flowcoro_net scheduler_cpp pthread sqlite3)
+endif()
+target_include_directories(kun_adas_train PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
+target_compile_definitions(kun_adas_train PRIVATE FLOWCORO_INTEGRATION)
+
+
 
 
 # ── Config-driven Launcher ──
