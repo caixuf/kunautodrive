@@ -1,4 +1,7 @@
 import json
+import os
+import shutil
+import subprocess
 import urllib.request
 import urllib.error
 from typing import Dict, Any, List, Optional
@@ -7,12 +10,25 @@ from ai_service.config import AIConfig
 class LLMProvider:
     def __init__(self, config: Optional[AIConfig] = None):
         self.config = config or AIConfig()
+        self.copilot_cli_path = shutil.which("copilot")
 
     def chat_completion(self, messages: List[Dict[str, str]], temperature: Optional[float] = None) -> str:
+        provider_mode = os.getenv("KUN_LLM_PROVIDER", "").lower()
+
+        # 1. 显式指定使用 GitHub Copilot CLI
+        if provider_mode == "copilot_cli" and self.copilot_cli_path:
+            reply = self._copilot_cli_completion(messages)
+            if reply:
+                return reply
+
         api_key = self.config.api_key.strip()
         
-        # 当未配置 API Key 时，启用本地确定性智能分析 Stub
+        # 2. 当未配置 API Key 时，若本地安装有 GitHub Copilot CLI 则优先无缝直连
         if not api_key:
+            if self.copilot_cli_path:
+                reply = self._copilot_cli_completion(messages)
+                if reply:
+                    return reply
             return self._stub_completion(messages)
 
         headers = {
@@ -51,9 +67,45 @@ class LLMProvider:
                 result = "".join(full_chunks)
                 if result:
                     return result
+                if self.copilot_cli_path:
+                    reply = self._copilot_cli_completion(messages)
+                    if reply:
+                        return reply
                 return self._stub_completion(messages)
         except Exception as e:
+            if self.copilot_cli_path:
+                reply = self._copilot_cli_completion(messages)
+                if reply:
+                    return reply
             return f"[AI Provider Fallback] 网络请求异常 ({str(e)})\n\n" + self._stub_completion(messages)
+
+    def _copilot_cli_completion(self, messages: List[Dict[str, str]]) -> Optional[str]:
+        if not self.copilot_cli_path:
+            return None
+        prompt_parts = []
+        for m in messages:
+            role = m.get("role", "user")
+            content = m.get("content", "")
+            if role == "system":
+                prompt_parts.append(f"[系统角色与约束]: {content}")
+            elif role == "user":
+                prompt_parts.append(f"[用户指令]: {content}")
+            elif role == "assistant":
+                prompt_parts.append(f"[历史助手回复]: {content}")
+        full_prompt = "\n\n".join(prompt_parts)
+
+        try:
+            res = subprocess.run(
+                [self.copilot_cli_path, "-p", full_prompt, "-s", "--no-ask-user", "--no-color"],
+                capture_output=True,
+                text=True,
+                timeout=45
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                return res.stdout.strip()
+        except Exception:
+            pass
+        return None
 
     def _stub_completion(self, messages: List[Dict[str, str]]) -> str:
         prompt_text = " ".join([m.get("content", "") for m in messages])

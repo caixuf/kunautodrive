@@ -380,6 +380,8 @@ static void handle_signal(int sig) {
 int main(int argc, char* argv[]) {
     std::signal(SIGINT, handle_signal);
     std::signal(SIGTERM, handle_signal);
+    std::signal(SIGHUP, SIG_IGN);
+    std::signal(SIGPIPE, SIG_IGN);
 
     int port = 8920;
     std::string static_dir = "/home/caixuf/code/FlowEngine/tools/kunboard";
