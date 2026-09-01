@@ -12,7 +12,7 @@
 
 * **Background**: In safety-critical cyber-physical systems such as autonomous driving and high-frequency trading, deep neural networks suffer from uninterpretable black-box behavior, non-deterministic latency jitter, and lack of formal certifiability. Conversely, traditional genetic algorithms are constrained by rigid hand-crafted topologies, unable to generate structural innovations under environmental regime shifts.
 * **Method**: We propose the **Morphogenetic Cellular Graph** architecture. Using autonomous computational cells (a 24-primitive taxonomy) with explicit dynamical semantics as atomic units, the system couples **structural mutation (mitosis, rewiring, apoptosis)** with **3D Lennard-Jones inter-cellular force-field dynamics**. A **Flat-Array Kahn Topological Compiler** compiles dynamic directed acyclic graphs (DAGs) into contiguous, zero-allocation memory execution blocks.
-* **Evaluated Evidence**: The compiled runtime achieves a deterministic **24.1 ns** Zero-GC inference latency on standard x86-64 CPUs [E1]; achieves 100% collision-free safety and 0.008 m mean lateral tracking error across six vehicle-grade deterministic simulation scenarios [E1]; delivers a +17.18% return with 0.43% maximum drawdown in a 100,000-tick synthetic market microstructure evaluation [E1]; and scales to 1M–100M cells via tensorized CUDA kernels on an NVIDIA RTX 5060 GPU, reaching 1,114.4 MCells/s peak throughput [E1].
+* **Evaluated Evidence**: The compiled runtime achieves a deterministic **24.1 ns** Zero-GC inference latency on standard x86-64 CPUs [E1]; achieves 100% collision-free safety and 0.008 m mean lateral tracking error across six vehicle-grade deterministic simulation scenarios [E1]; verifies sub-microsecond signal propagation and autonomous pre-trade immune risk locking across a 100,000-tick synthetic market microstructure evaluation [E1]; and scales to 1M–100M cells via tensorized CUDA kernels on an NVIDIA RTX 5060 GPU, reaching 1,114.4 MCells/s peak throughput [E1].
 * **Principal Result**: 3-round Weisfeiler-Lehman (WL) canonical graph hashing and bipartite vertex-label substitution Graph Edit Distance (GED) demonstrate genuine topological divergence across generations [E1]. Targeted causal ablation (Knockout Deficit) proves that newly evolved cells bear indispensable functional control loads [E1].
 * **Limitations**: Financial evaluations use synthetic multi-regime paths rather than exchange replay; autonomous driving tests are conducted in deterministic 3D simulators rather than on-road ISO 26262 ASIL-D qualified vehicles; trillion-scale macro-brain emergence remains an open hypothesis [E3].
 
@@ -186,12 +186,12 @@ Compiling dynamic DAGs into contiguous cache-aligned buffers yields the followin
 | **[5]** | **Ramp Highway Merge** | Terminal Speed $> 20.0\\ \\text{m/s}$ | **Terminal Speed $26.00\\ \\text{m/s}$ ($93.6\\ \\text{km/h}$)** | **PASS** |
 | **[6]** | **Obstacle Emergency Swerve** | Lateral Clearance $> 1.5\\ \\text{m}$ | **Lateral Clearance $2.50\\ \\text{m}$** | **PASS** |
 
-### 7.2 Multi-Regime Quantitative Trading Evaluation [E1]
-Across 100,000 continuous Level-2 ticks:
-* **Initial Capital**: $1,000,000.00$ CNY $\\to$ **Final Net Equity**: **$1,171,844.27$ CNY** (+17.18% ROI);
-* **Win Rate**: **$100.0\%$**; **Max Drawdown**: **$0.43\%$**;
-* **Flash Crash Interception**: 100% millisecond circuit-breaker liquidation under sudden limit-down crashes;
-* **Per-Tick Inference Latency**: **$332.8\\ \\text{ns}$**.
+### 7.2 Synthetic Multi-Regime Microstructure Experiment [E1]
+To validate real-time gating and circuit-breaker mechanics under extreme regime shifts, we evaluated the cellular graph across a 100,000-tick synthetic stream spanning oscillation, bull trend, flash crash, and high-volatility regimes:
+* **Execution Latency**: Single-step feature extraction and forward propagation requires only **$332.8\\ \\text{ns}$**, fulfilling sub-microsecond UHF requirements;
+* **Deadzone & Hysteresis Filtering**: Schmitt hysteresis and deadzone cells filter high-frequency uninformative noise, reducing spurious signal toggling;
+* **Autonomous Immune Lock**: Under step-wise liquidity crashes, the `Act_ImmuneLock` gate fires within a single tick, demonstrating formal risk lock-out feasibility;
+* **Scope Boundary**: This experiment constitutes a mechanistic simulation and does not claim production trading profitability or Walk-Forward exchange validation under slippage and rollover costs.
 
 ### Table 3: GPU Tensorized Morphogenesis Scale Ladder [E1]
 | Scale Tier | Neuron / Synapse Scale | VRAM Footprint | Peak Throughput | Time per Gen | Core Emergent Capability |
@@ -204,7 +204,7 @@ Across 100,000 continuous Level-2 ticks:
 
 ## 8. Threats to Validity & Limitations
 
-1. **Synthetic Market Data Limitations**: While synthetic paths span four regimes, they do not simulate full limit order book depth queues or variable market-maker spread dynamics;
+1. **Synthetic Market Data & Real-World Friction Limitations**: High-frequency evaluations use synthetic price paths; under rigorous Walk-Forward out-of-sample testing with next-bar execution, 1-tick slippage, and 1.5 bp commissions, simple low-frequency daily models without cross-sectional ranking suffer significant friction erosion. Live trading profitability is not a conclusion of this paper;
 2. **Simulation vs. On-Road ASIL-D Boundaries**: Autonomous driving tests operate in deterministic 3D simulators and do not constitute physical vehicle road clearance or ISO 26262 functional safety certification;
 3. **Macro-Emergence Hypotheses**: Discussions regarding trillion-scale cortical specialization and continuous ecological phase transitions are theoretical hypotheses [E3]. Conclusions are strictly bounded by E1 empirical data.
 
