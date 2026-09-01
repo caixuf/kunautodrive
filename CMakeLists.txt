@@ -994,6 +994,16 @@ target_include_directories(test_flow_constraint_ablation PRIVATE kun_quant/inclu
 target_compile_definitions(test_flow_constraint_ablation PRIVATE FLOWCORO_INTEGRATION)
 add_test(NAME test_flow_constraint_ablation COMMAND test_flow_constraint_ablation)
 
+add_executable(benchmark_cellular_scale tests/benchmark_cellular_scale.cpp)
+if(WIN32)
+    target_link_libraries(benchmark_cellular_scale kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
+else()
+    target_link_libraries(benchmark_cellular_scale kun_quant flowengine_core flowcoro_headers flowcoro_net scheduler_cpp pthread sqlite3)
+endif()
+target_include_directories(benchmark_cellular_scale PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
+target_compile_definitions(benchmark_cellular_scale PRIVATE FLOWCORO_INTEGRATION)
+
+
 # ── Config-driven Launcher ──
 # 读 config/pipeline.json → 按顺序 fork+exec 各节点进程
 # 是 e2e_demo --multi 的解耦升级版: 编排逻辑完全在配置文件里
