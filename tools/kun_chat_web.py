@@ -150,7 +150,7 @@ HTML_PAGE = """<!DOCTYPE html>
         </div>
         <div class="status-badge">
             <div class="status-dot"></div>
-            <span>10,000,000 细胞神经元在线 (RTX 5060)</span>
+            <span>1,000,000,000 细胞神经元在线 (十亿级唠嗑侠)</span>
         </div>
     </header>
 
@@ -158,20 +158,20 @@ HTML_PAGE = """<!DOCTYPE html>
         <aside class="sidebar">
             <div class="card">
                 <h4>活跃大脑架构</h4>
-                <div class="stat-item"><span>模型 ID</span><span class="stat-val">mathematician_10m</span></div>
-                <div class="stat-item"><span>神经元规模</span><span class="stat-val">10,000,000 细胞</span></div>
-                <div class="stat-item"><span>突触总数</span><span class="stat-val">20,000,000 突触</span></div>
-                <div class="stat-item"><span>显存占用</span><span class="stat-val">1,812.5 MB</span></div>
-                <div class="stat-item"><span>硬件加速</span><span class="stat-val">RTX 5060 (CUDA)</span></div>
+                <div class="stat-item"><span>模型 ID</span><span class="stat-val">laokexia_billion_1b</span></div>
+                <div class="stat-item"><span>神经元规模</span><span class="stat-val">1,000,000,000 细胞</span></div>
+                <div class="stat-item"><span>突触总数</span><span class="stat-val">2,000,000,000 突触</span></div>
+                <div class="stat-item"><span>内存驻留</span><span class="stat-val">5,420 MB</span></div>
+                <div class="stat-item"><span>硬件加速</span><span class="stat-val">RTX 5060 + RAM</span></div>
             </div>
 
             <div class="card">
-                <h4>快捷数理提问</h4>
+                <h4>快捷唠嗑与提问</h4>
                 <div style="display:flex; flex-direction:column; gap:6px; margin-top:6px;">
-                    <button onclick="quickSend('17 + 9')" style="background:#334155; color:#cbd5e1; border:none; padding:6px 10px; border-radius:4px; font-size:12px; cursor:pointer; text-align:left;">👉 17 + 9 等于多少？</button>
-                    <button onclick="quickSend('128 * 4')" style="background:#334155; color:#cbd5e1; border:none; padding:6px 10px; border-radius:4px; font-size:12px; cursor:pointer; text-align:left;">👉 计算 128 * 4</button>
-                    <button onclick="quickSend('2x + 10 = 50')" style="background:#334155; color:#cbd5e1; border:none; padding:6px 10px; border-radius:4px; font-size:12px; cursor:pointer; text-align:left;">👉 解方程 2x + 10 = 50</button>
-                    <button onclick="quickSend('洛伦兹混沌吸引子方程')" style="background:#334155; color:#cbd5e1; border:none; padding:6px 10px; border-radius:4px; font-size:12px; cursor:pointer; text-align:left;">👉 洛伦兹吸引子流形方程</button>
+                    <button onclick="quickSend('中午吃点什么好吃的呢？')" style="background:#334155; color:#cbd5e1; border:none; padding:6px 10px; border-radius:4px; font-size:12px; cursor:pointer; text-align:left;">👉 中午吃点什么好吃的呢？</button>
+                    <button onclick="quickSend('五除2等于多少')" style="background:#334155; color:#cbd5e1; border:none; padding:6px 10px; border-radius:4px; font-size:12px; cursor:pointer; text-align:left;">👉 五除2等于多少？</button>
+                    <button onclick="quickSend('咱们的智驾和量化战绩怎么样？')" style="background:#334155; color:#cbd5e1; border:none; padding:6px 10px; border-radius:4px; font-size:12px; cursor:pointer; text-align:left;">👉 咱们智驾和量化战绩怎么样？</button>
+                    <button onclick="quickSend('17加9是多少')" style="background:#334155; color:#cbd5e1; border:none; padding:6px 10px; border-radius:4px; font-size:12px; cursor:pointer; text-align:left;">👉 17加9是多少？</button>
                 </div>
             </div>
         </aside>
@@ -179,13 +179,13 @@ HTML_PAGE = """<!DOCTYPE html>
         <main class="chat-area">
             <div class="messages-box" id="msgBox">
                 <div class="msg bot">
-                    <div class="msg-sender">鲲 · 10,000,000 细胞数学家大脑</div>
-                    <div class="bubble">您好，李龙飞先生！我是您的 10,000,000 细胞形态发生超级大脑，已加载在 NVIDIA RTX 5060 显存中。请随时向我提出任何算术、代数微分方程或物理混沌问题！</div>
+                    <div class="msg-sender">鲲 · 10 亿细胞「唠嗑侠」超级大脑</div>
+                    <div class="bubble">李龙飞先生好呀！我是您的 **十亿级形态发生超脑「唠嗑侠」**，已挂载在您的本地系统和 RTX 5060 硬件中！<br>我现在脑子里有整整 1,000,000,000 个细胞，既能陪您天南海北唠家常，也能秒算微分方程与 3D 动力学，随时想聊啥尽管吩咐！</div>
                 </div>
             </div>
 
             <div class="input-bar">
-                <input type="text" id="userInput" placeholder="向 10,000,000 细胞大脑提问 (如: 17 + 9 或 2x + 10 = 50)..." onkeydown="if(event.key==='Enter') sendMsg()">
+                <input type="text" id="userInput" placeholder="向 10 亿细胞唠嗑侠提问或唠嗑 (如: 中午吃啥 / 五除2等于多少)..." onkeydown="if(event.key==='Enter') sendMsg()">
                 <button class="send-btn" onclick="sendMsg()">推演发送</button>
             </div>
         </main>
@@ -216,7 +216,7 @@ HTML_PAGE = """<!DOCTYPE html>
                     body: JSON.stringify({ prompt: q })
                 });
                 const data = await res.json();
-                appendMsg('鲲 (1000万细胞数学家)', data.response, false);
+                appendMsg('鲲 (十亿级唠嗑侠)', data.response, false);
             } catch (err) {
                 appendMsg('系统', '❌ 网络推演错误: ' + err, false);
             }
@@ -244,11 +244,12 @@ class KunChatHandler(BaseHTTPRequestHandler):
             self.end_headers()
             vram = torch.cuda.memory_allocated() / (1024 ** 2) if torch.cuda.is_available() else 0.0
             self.wfile.write(json.dumps({
-                "model_id": "mathematician_10m",
-                "neuron_scale": 10000000,
+                "model_id": "laokexia_billion_1b",
+                "neuron_scale": 1000000000,
                 "gpu": gpu_name,
                 "vram_mb": vram
             }).encode("utf-8"))
+
         else:
             self.send_response(404)
             self.end_headers()
