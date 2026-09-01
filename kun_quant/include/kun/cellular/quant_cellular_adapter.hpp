@@ -23,13 +23,16 @@ public:
     };
 
     TradeDecision process_tick(const QuantTickMsg& tick) {
-        // 提取 4 大基础感知信号 (标准化缩放)
+        // 提取 4 大基础微观感知信号 (标准化与无量纲化)
         double inputs[4];
-        inputs[0] = tick.last_price; // 价格
-        inputs[1] = tick.volume;     // 成交量
-        inputs[2] = tick.ask_price1 - tick.bid_price1; // 盘口价差
-        inputs[3] = (tick.bid_volume1 - tick.ask_volume1) / 
-                    (std::abs(tick.bid_volume1 + tick.ask_volume1) > 1e-4 ? (tick.bid_volume1 + tick.ask_volume1) : 1.0); // 盘口不平衡度
+        inputs[0] = (prev_price_ > 0.0) ? std::clamp((tick.last_price - prev_price_) / prev_price_ * 200.0, -1.0, 1.0) : 0.0;
+        inputs[1] = (prev_vol_ > 0.0) ? std::clamp((tick.volume - prev_vol_) / prev_vol_, -1.0, 1.0) : 0.0;
+        inputs[2] = std::clamp((tick.ask_price1 - tick.bid_price1) / (tick.last_price > 0 ? tick.last_price * 0.001 : 1.0), -1.0, 1.0);
+        double total_bid_ask_vol = std::abs(tick.bid_volume1 + tick.ask_volume1);
+        inputs[3] = (total_bid_ask_vol > 1e-4) ? std::clamp((tick.bid_volume1 - tick.ask_volume1) / total_bid_ask_vol, -1.0, 1.0) : 0.0;
+
+        prev_price_ = tick.last_price;
+        prev_vol_ = tick.volume;
 
         // 前向传导激发整个多细胞神经网络
         auto outputs = organism_.forward(inputs);
@@ -67,6 +70,8 @@ public:
 
 private:
     CellularOrganism organism_;
+    double prev_price_{0.0};
+    double prev_vol_{0.0};
 };
 
 } // namespace kun

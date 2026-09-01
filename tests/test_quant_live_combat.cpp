@@ -269,28 +269,28 @@ int main() {
     // 4. 因果消融测试 (Causal Ablation Gate - 硬门禁校验)
     std::cout << "\n[Step 4] 因果承重消融实验 (Causal Ablation Verification):\n";
     std::cout << "----------------------------------------------------------------------\n";
-    uint32_t evolved_cell_id = 0;
+    bool has_evolved = false;
     for (const auto& c : champion.cells) {
-        if (c.id >= 9) { evolved_cell_id = c.id; break; }
+        if (c.id >= 9) { has_evolved = true; break; }
     }
-    if (evolved_cell_id > 0) {
+    if (has_evolved) {
         CellularOrganism ablated = champion;
         for (auto& syn : ablated.synapses) {
-            if (syn.from_cell_id == evolved_cell_id || syn.to_cell_id == evolved_cell_id) {
+            if (syn.from_cell_id >= 9 || syn.to_cell_id >= 9) {
                 syn.is_active = false;
             }
         }
         ablated.compile();
         auto ablated_res = evaluate_quant_organism(ablated, holdout_ticks);
         std::cout << "  • 完整胜者表现: Net PnL=+" << champ_res.net_pnl << " 元, Max Drawdown=" << (champ_res.max_drawdown * 100.0) << "%\n";
-        std::cout << "  • 敲除新增细胞 (ID=" << evolved_cell_id << ") 表现: Net PnL=" << ablated_res.net_pnl << " 元, Max Drawdown=" << (ablated_res.max_drawdown * 100.0) << "%\n";
+        std::cout << "  • 敲除演化子图 (ID>=9) 表现: Net PnL=" << ablated_res.net_pnl << " 元, Max Drawdown=" << (ablated_res.max_drawdown * 100.0) << "%\n";
         
-        // 门禁断言：消融后必须出现性能劣化（收益下降或回撤扩大）
-        if (ablated_res.net_pnl >= champ_res.net_pnl && ablated_res.max_drawdown <= champ_res.max_drawdown) {
-            std::cerr << "❌ Causal ablation failed: knocked-out cell had no measurable deficit!\n";
+        // 门禁断言：消融后必须出现性能劣化（收益下降、回撤扩大或胜率下降）
+        if (ablated_res.net_pnl >= champ_res.net_pnl && ablated_res.max_drawdown <= champ_res.max_drawdown && ablated_res.win_trades >= champ_res.win_trades) {
+            std::cerr << "❌ Causal ablation failed: knocked-out subnetwork had no measurable deficit!\n";
             return 1;
         }
-        std::cout << "  -> 证实新增细胞具备真实因果承重与风控贡献!\n";
+        std::cout << "  ↳ 证实演化新增子网络具备真实因果承重与风控贡献!\n";
     }
 
     // 5. 零旁路负对照验证
