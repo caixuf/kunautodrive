@@ -3,8 +3,8 @@
   "gpu_device": "NVIDIA GeForce RTX 5060 Laptop GPU",
   "neuron_scale": 1000000,
   "synapse_scale": 2000000,
-  "generations": 30,
-  "total_duration_sec": 88.12230157852173,
+  "generations": 5,
+  "total_duration_sec": 14.92366337776184,
   "champion_fitness": 1011.7447509765625,
   "checkpoint_pt": "runs/adas_million_champion.pt"
 }

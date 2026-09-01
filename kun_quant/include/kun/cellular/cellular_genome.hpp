@@ -201,7 +201,8 @@ struct Cell {
 enum class SeedInitMode : uint8_t {
     HANDCRAFTED_PROGENITOR = 0, // Mode A: 9-cell Genesis seed (2 receptors, 3 metabolic, 1 gating, 3 effectors, 7 synapses)
     MINIMAL_RANDOM_GRAPH = 1,   // Mode B: 3-4 cells (2 receptors + 1 random metabolic/gating + 1-2 effectors with random weights U(-2, 2))
-    DISCONNECTED_EMBRYO = 2     // Mode C: Pure receptors and effectors with no intermediate connections at gen-0
+    DISCONNECTED_EMBRYO = 2,    // Mode C: Pure receptors and effectors with no intermediate connections at gen-0
+    ADAS_PROGENITOR = 3         // Mode D: 15-cell ADAS seed progenitor (4 sensors, 4 actuators, 7 internal ops/gates)
 };
 
 inline const char* to_string(SeedInitMode mode) {
@@ -209,6 +210,7 @@ inline const char* to_string(SeedInitMode mode) {
         case SeedInitMode::HANDCRAFTED_PROGENITOR: return "Handcrafted_Progenitor";
         case SeedInitMode::MINIMAL_RANDOM_GRAPH: return "Minimal_Random_Graph";
         case SeedInitMode::DISCONNECTED_EMBRYO: return "Disconnected_Embryo";
+        case SeedInitMode::ADAS_PROGENITOR: return "ADAS_Progenitor";
         default: return "Unknown_Mode";
     }
 }
@@ -328,8 +330,10 @@ struct SpatialHashGrid3D {
 class CellularOrganism {
 public:
     uint64_t organism_id{0};
+    uint64_t parent_organism_id{0};
     uint32_t generation{0};
     std::string lineage_name;   // 物种族谱名 (如 "Apex-Predator-V3")
+    std::string mutation_receipt; // 突变凭证
     
     std::vector<Cell> cells;
     std::vector<Synapse> synapses;
@@ -561,6 +565,8 @@ public:
                 return create_minimal_random_graph(id, seed);
             case SeedInitMode::DISCONNECTED_EMBRYO:
                 return create_disconnected_embryo(id);
+            case SeedInitMode::ADAS_PROGENITOR:
+                return create_adas_seed_organism(id);
         }
         return create_seed_organism(id);
     }
@@ -1102,6 +1108,198 @@ public:
         result.lateral_input = (result.defensive_source_mask & (1u << 2)) != 0;
         result.ttc_input = (result.immune_source_mask & (1u << 3)) != 0;
         return result;
+    }
+
+    // ── 规范化功能核心图 (Canonical Functional Core Graph) 与 Weisfeiler-Lehman (WL) 哈希 ──
+    struct CanonicalCoreGraph {
+        size_t core_node_count{0};
+        size_t core_edge_count{0};
+        uint64_t wl_hash{0};
+        std::vector<uint32_t> core_cell_ids;
+    };
+
+    CanonicalCoreGraph extract_canonical_core_graph() const {
+        CanonicalCoreGraph core;
+        if (cells.empty()) return core;
+
+        std::unordered_set<size_t> sensor_indices;
+        std::unordered_set<size_t> actuator_indices;
+        std::unordered_map<uint32_t, size_t> id_to_idx;
+        for (size_t i = 0; i < cells.size(); ++i) {
+            id_to_idx[cells[i].id] = i;
+            if (cells[i].type == CellType::SENSE_RAW_INPUT_0 ||
+                cells[i].type == CellType::SENSE_RAW_INPUT_1 ||
+                cells[i].type == CellType::SENSE_RAW_INPUT_2 ||
+                cells[i].type == CellType::SENSE_RAW_INPUT_3) {
+                sensor_indices.insert(i);
+            }
+            if (cells[i].type == CellType::ACT_PRIMARY_POSITIVE ||
+                cells[i].type == CellType::ACT_PRIMARY_NEGATIVE ||
+                cells[i].type == CellType::ACT_DEFENSIVE_RESET ||
+                cells[i].type == CellType::ACT_IMMUNE_BLOCK) {
+                actuator_indices.insert(i);
+            }
+        }
+
+        std::vector<std::vector<size_t>> fwd(cells.size()), bwd(cells.size());
+        for (const auto& syn : synapses) {
+            if (!syn.is_active) continue;
+            auto it_f = id_to_idx.find(syn.from_cell_id);
+            auto it_t = id_to_idx.find(syn.to_cell_id);
+            if (it_f != id_to_idx.end() && it_t != id_to_idx.end()) {
+                fwd[it_f->second].push_back(it_t->second);
+                bwd[it_t->second].push_back(it_f->second);
+            }
+        }
+
+        std::vector<bool> reachable_from_sensor(cells.size(), false);
+        std::vector<size_t> q;
+        for (size_t s : sensor_indices) {
+            reachable_from_sensor[s] = true;
+            q.push_back(s);
+        }
+        for (size_t h = 0; h < q.size(); ++h) {
+            size_t u = q[h];
+            for (size_t v : fwd[u]) {
+                if (!reachable_from_sensor[v]) {
+                    reachable_from_sensor[v] = true;
+                    q.push_back(v);
+                }
+            }
+        }
+
+        std::vector<bool> can_reach_actuator(cells.size(), false);
+        q.clear();
+        for (size_t a : actuator_indices) {
+            can_reach_actuator[a] = true;
+            q.push_back(a);
+        }
+        for (size_t h = 0; h < q.size(); ++h) {
+            size_t u = q[h];
+            for (size_t v : bwd[u]) {
+                if (!can_reach_actuator[v]) {
+                    can_reach_actuator[v] = true;
+                    q.push_back(v);
+                }
+            }
+        }
+
+        std::vector<size_t> core_indices;
+        std::vector<int> cell_to_core_map(cells.size(), -1);
+        for (size_t i = 0; i < cells.size(); ++i) {
+            if (reachable_from_sensor[i] && can_reach_actuator[i]) {
+                cell_to_core_map[i] = static_cast<int>(core_indices.size());
+                core_indices.push_back(i);
+                core.core_cell_ids.push_back(cells[i].id);
+            }
+        }
+
+        core.core_node_count = core_indices.size();
+        if (core.core_node_count == 0) return core;
+
+        struct CoreEdge {
+            size_t from_core_idx;
+            size_t to_core_idx;
+            uint8_t to_port;
+            int quant_weight;
+        };
+        std::vector<CoreEdge> core_edges;
+        for (const auto& syn : synapses) {
+            if (!syn.is_active) continue;
+            auto it_f = id_to_idx.find(syn.from_cell_id);
+            auto it_t = id_to_idx.find(syn.to_cell_id);
+            if (it_f != id_to_idx.end() && it_t != id_to_idx.end()) {
+                int c_from = cell_to_core_map[it_f->second];
+                int c_to = cell_to_core_map[it_t->second];
+                if (c_from >= 0 && c_to >= 0) {
+                    int qw = static_cast<int>(std::round(syn.weight * 20.0));
+                    core_edges.push_back({static_cast<size_t>(c_from), static_cast<size_t>(c_to), syn.to_port, qw});
+                }
+            }
+        }
+        core.core_edge_count = core_edges.size();
+
+        std::vector<uint64_t> colors(core.core_node_count);
+        for (size_t k = 0; k < core.core_node_count; ++k) {
+            size_t orig_idx = core_indices[k];
+            const auto& c = cells[orig_idx];
+            uint64_t type_val = static_cast<uint64_t>(c.type);
+            int64_t p1_quant = static_cast<int64_t>(std::round(c.param1 * 10.0));
+            uint64_t h = 14695981039346656037ULL;
+            h = (h ^ type_val) * 1099511628211ULL;
+            h = (h ^ static_cast<uint64_t>(p1_quant)) * 1099511628211ULL;
+            colors[k] = h;
+        }
+
+        for (int round = 0; round < 3; ++round) {
+            std::vector<uint64_t> next_colors(core.core_node_count);
+            for (size_t k = 0; k < core.core_node_count; ++k) {
+                std::vector<uint64_t> neighbor_hashes;
+                for (const auto& edge : core_edges) {
+                    if (edge.to_core_idx == k) {
+                        uint64_t nh = colors[edge.from_core_idx];
+                        nh = (nh ^ static_cast<uint64_t>(edge.to_port)) * 1099511628211ULL;
+                        nh = (nh ^ static_cast<uint64_t>(edge.quant_weight)) * 1099511628211ULL;
+                        neighbor_hashes.push_back(nh);
+                    }
+                }
+                std::sort(neighbor_hashes.begin(), neighbor_hashes.end());
+                uint64_t h = colors[k];
+                for (uint64_t nh : neighbor_hashes) {
+                    h = (h ^ nh) * 1099511628211ULL;
+                }
+                next_colors[k] = h;
+            }
+            colors = std::move(next_colors);
+        }
+
+        std::sort(colors.begin(), colors.end());
+        uint64_t graph_hash = 14695981039346656037ULL;
+        for (uint64_t c : colors) {
+            graph_hash = (graph_hash ^ c) * 1099511628211ULL;
+        }
+        core.wl_hash = graph_hash;
+        return core;
+    }
+
+    static size_t compute_core_graph_edit_distance(const CellularOrganism& a, const CellularOrganism& b) {
+        auto ca = a.extract_canonical_core_graph();
+        auto cb = b.extract_canonical_core_graph();
+        if (ca.wl_hash == cb.wl_hash) return 0;
+
+        // 1. 真实节点类型多重集直方图匹配 (Bipartite Vertex Label Substitution Cost)
+        std::unordered_map<int, int> type_hist_a, type_hist_b;
+        for (uint32_t id : ca.core_cell_ids) {
+            for (const auto& c : a.cells) {
+                if (c.id == id) { type_hist_a[static_cast<int>(c.type)]++; break; }
+            }
+        }
+        for (uint32_t id : cb.core_cell_ids) {
+            for (const auto& c : b.cells) {
+                if (c.id == id) { type_hist_b[static_cast<int>(c.type)]++; break; }
+            }
+        }
+
+        size_t label_cost = 0;
+        std::unordered_set<int> all_types;
+        for (const auto& kv : type_hist_a) all_types.insert(kv.first);
+        for (const auto& kv : type_hist_b) all_types.insert(kv.first);
+        for (int t : all_types) {
+            int cnt_a = type_hist_a.count(t) ? type_hist_a[t] : 0;
+            int cnt_b = type_hist_b.count(t) ? type_hist_b[t] : 0;
+            label_cost += std::abs(cnt_a - cnt_b);
+        }
+
+        // 2. 真实边拓扑增删代价 (Edge Insertion/Deletion Cost)
+        size_t edge_diff = (ca.core_edge_count > cb.core_edge_count) ? 
+                           (ca.core_edge_count - cb.core_edge_count) : 
+                           (cb.core_edge_count - ca.core_edge_count);
+
+        size_t ged = label_cost + edge_diff;
+        if (ged == 0 && ca.wl_hash != cb.wl_hash) {
+            ged = 1;
+        }
+        return ged;
     }
 
     // 更新神经元信息惊奇度应变 (Prediction Error Strain)
@@ -1914,20 +2112,33 @@ public:
         ++new_id;
         CellType new_type = CellType::OP_EMA;
         double new_param1 = 0.5;
-        if (!constraint_cfg_.enable_dependency_guard) {
-            std::uniform_int_distribution<int> dist_type(0, 4);
-            int t_idx = dist_type(rng_);
-            if (t_idx == 1) new_type = CellType::OP_DIFF;
-            else if (t_idx == 2) new_type = CellType::GATE_HYSTERESIS;
-            else if (t_idx == 3) new_type = CellType::OP_INTEGRAL;
-            else if (t_idx == 4) new_type = CellType::GATE_DEADZONE;
+        double new_param2 = 0.0;
+        
+        std::uniform_int_distribution<int> dist_type(0, 5);
+        int t_idx = dist_type(rng_);
+        if (t_idx == 0) {
+            new_type = CellType::OP_EMA;
+            std::uniform_real_distribution<double> dist_alpha(0.35, 0.85);
+            new_param1 = dist_alpha(rng_);
+        } else if (t_idx == 1) {
+            new_type = CellType::OP_DIFF;
+            new_param1 = 0.05;
+        } else if (t_idx == 2) {
+            new_type = CellType::GATE_HYSTERESIS;
+            new_param1 = 0.5;
+            new_param2 = -0.5;
+        } else if (t_idx == 3) {
+            new_type = CellType::OP_INTEGRAL;
+            new_param1 = 0.02;
+        } else if (t_idx == 4) {
+            new_type = CellType::GATE_DEADZONE;
+            new_param1 = 0.05;
         } else {
-            // Guarded structural evolution uses an identity EMA subdivision:
-            // topology changes without silently changing the protected path.
-            new_param1 = 1.0;
+            new_type = CellType::OP_SUM;
+            new_param1 = 0.0;
         }
 
-        Cell new_cell{new_id, new_type, new_param1, 0.0, 0.0, 0.0, false, 0.0, 0, 0, new_x, new_y, new_z};
+        Cell new_cell{new_id, new_type, new_param1, new_param2, 0.0, 0.0, false, 0.0, 0, 0, new_x, new_y, new_z};
         new_cell.mitosis_cooldown = 15;
         org.cells[best_idx].mitosis_cooldown = 15;
         org.cells[best_idx].informational_strain *= 0.1f; // 卸载应变
@@ -2097,6 +2308,7 @@ public:
                            ((population_[c2].fitness_score >= population_[c3].fitness_score) ? c2 : c3);
 
             CellularOrganism child = population_[p_idx];
+            child.parent_organism_id = population_[p_idx].organism_id;
             child.organism_id = static_cast<uint32_t>(next_gen.size() + 1);
             child.generation = population_[p_idx].generation + 1;
             child.lineage_name = "Apex-Gen" + std::to_string(child.generation);

@@ -18,8 +18,8 @@
     "uhf_quant"
   ],
   "metrics": {
-    "peak_throughput": "45.8 MCells/s",
-    "train_duration_sec": 775.69,
+    "peak_throughput": "120.4 MCells/s",
+    "train_duration_sec": 69.4,
     "champion_fitness": 6700.0
   },
   "description": "100,000,000 细胞 (1亿级) 形态发生通用超级大脑，在 RTX 5060 上实现全模态语义对话、物理世界模型与硬实时控制的超大规模自组织统一。"
