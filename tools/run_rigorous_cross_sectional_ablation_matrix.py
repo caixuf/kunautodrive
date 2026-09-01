@@ -113,6 +113,61 @@ class CrossSectionalMillionCellBrain(nn.Module):
         scores = exec_slice[:, 0:125000].mean(dim=1) - exec_slice[:, 125000:250000].mean(dim=1)
         return scores.cpu().numpy()
 
+def clone_brain(parent, seed, weight_noise=0.0):
+    """Clone topology and parameters so evolution changes only the declared genome."""
+    child = CrossSectionalMillionCellBrain(
+        num_assets=parent.num_assets,
+        num_cells=parent.num_cells,
+        num_synapses=parent.num_synapses,
+        device=parent.device,
+        seed=seed,
+    )
+    with torch.no_grad():
+        child.src_idx.copy_(parent.src_idx)
+        child.dst_idx.copy_(parent.dst_idx)
+        child.alpha_ema.copy_(parent.alpha_ema)
+        child.weights.copy_(parent.weights)
+        if weight_noise > 0.0:
+            child.weights.add_(torch.randn_like(child.weights) * weight_noise)
+    return child
+
+def evolve_on_is(base_brain, data, timeline, split_date, device):
+    """Select and mutate a small population using IS only, then freeze its champion."""
+    population = [clone_brain(base_brain, 1000 + i, 0.02 * i) for i in range(3)]
+    champion = population[0]
+    champion_score = float("-inf")
+
+    for generation in range(2):
+        scored = []
+        for index, candidate in enumerate(population):
+            result = run_unified_backtest(
+                "evolved_1m_cellular", candidate, data, timeline,
+                timeline[0], split_date, fee_mult=1.5,
+                slip_mult=1.5, top_k=3,
+            )
+            scored.append((result["fitness"], index, result))
+        scored.sort(key=lambda item: item[0], reverse=True)
+        if scored[0][0] > champion_score:
+            champion_score = scored[0][0]
+            champion = population[scored[0][1]]
+
+        survivors = [population[scored[0][1]], population[scored[1][1]]]
+        next_population = [survivors[0]]
+        for child_index in range(1, len(population)):
+            next_population.append(clone_brain(
+                survivors[child_index % len(survivors)],
+                2000 + generation * 10 + child_index,
+                0.03,
+            ))
+        population = next_population
+        print(
+            f"  ↳ [IS Gen {generation}] 冠军适应度={scored[0][0]:+.2f}, "
+            f"CAGR={scored[0][2]['cagr']:+.2f}%, "
+            f"MaxDD={scored[0][2]['max_dd']:.2f}%"
+        )
+
+    return clone_brain(champion, 3000, 0.0), champion_score
+
 # ── 3. 统一制度级回测撮合引擎 (支持 5 大基线模式) ──
 def run_unified_backtest(strategy_type, brain_or_model, data, timeline, d_start, d_end, fee_mult=1.0, slip_mult=1.0, top_k=3):
     sub_timeline = [d for d in timeline if d_start <= d <= d_end]
@@ -359,6 +414,7 @@ def run_unified_backtest(strategy_type, brain_or_model, data, timeline, d_start,
     downside_var = sum(r * r for r in daily_returns if r < 0)
     downside_std = math.sqrt(downside_var / max(1, len(daily_returns))) + 1e-6
     sortino = (mean_ret / downside_std) * math.sqrt(242.0)
+    fitness = (2.0 * sortino) + (1.5 * calmar) - (max_dd * 10.0)
 
     return {
         'final_cash': final_realized_cash,
@@ -368,13 +424,15 @@ def run_unified_backtest(strategy_type, brain_or_model, data, timeline, d_start,
         'win_rate': win_rate,
         'calmar': calmar,
         'sortino': sortino,
-        'trades': total_trades
+        'fitness': fitness,
+        'trades': total_trades,
+        'commission': total_commission_paid
     }
 
 def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"\n==========================================================================================================")
-    print(f" 🏛️ 严格科学消融大矩阵：5 大基线同台竞技 + 多随机种子置信区间 + 成本敏感性测试 🏛️")
+    print(f" 🏛️ 科学消融大矩阵：5 大基线同台竞技 + 样本内演化 + 成本敏感性测试 🏛️")
     print(f"==========================================================================================================")
     print(f"• 硬件加速: {torch.cuda.get_device_name(0) if device=='cuda' else 'CPU'} (CUDA Float16)")
     print(f"• 样本区间: 2005~2015 样本内 / 2016~2026 样本外 10.7 年盲测")
@@ -434,12 +492,13 @@ def main():
     # 4. 随机未演化 100万细胞截面
     brain_rand = CrossSectionalMillionCellBrain(num_assets=len(data), device=device, seed=42)
     res_rand = run_unified_backtest("random_1m_cellular", brain_rand, data, timeline, split_date, timeline[-1], top_k=3)
-    print(f"{'4. 随机未演化 100万细胞截面':<30}{res_rand['final_cash']:,.2f} 元{'':<4}{res_rand['roi']:+.2f}%{'':<6}{res_rand['cagr']:+.2f}%{'':<6}{res_rand_oos['max_dd'] if 'res_rand_oos' in locals() else res_rand['max_dd']:.2f}%{'':<6}{res_rand['win_rate']:.1f}%{'':<6}{res_rand['calmar']:.2f}")
+    print(f"{'4. 随机未演化 100万细胞截面':<30}{res_rand['final_cash']:,.2f} 元{'':<4}{res_rand['roi']:+.2f}%{'':<6}{res_rand['cagr']:+.2f}%{'':<6}{res_rand['max_dd']:.2f}%{'':<6}{res_rand['win_rate']:.1f}%{'':<6}{res_rand['calmar']:.2f}")
 
-    # 5. 演化后 100万细胞截面
-    brain_evolved = CrossSectionalMillionCellBrain(num_assets=len(data), device=device, seed=100)
-    # 模拟经过 IS 优化后的突触权重
-    brain_evolved.weights.data.mul_(1.15)
+    # 5. 真正的样本内演化；冠军在 OOS 前冻结
+    print("\n[IS] 使用固定初始拓扑进行种群选择与突触突变：")
+    brain_evolved, _ = evolve_on_is(
+        brain_rand, data, timeline, split_date, device
+    )
     res_evo = run_unified_backtest("evolved_1m_cellular", brain_evolved, data, timeline, split_date, timeline[-1], top_k=3)
     print(f"{'5. 演化百万细胞截面大脑':<30}{res_evo['final_cash']:,.2f} 元{'':<4}{res_evo['roi']:+.2f}%{'':<6}{res_evo['cagr']:+.2f}%{'':<6}{res_evo['max_dd']:.2f}%{'':<6}{res_evo['win_rate']:.1f}%{'':<6}{res_evo['calmar']:.2f}")
     print(f"{'-'*108}\n")
@@ -447,12 +506,12 @@ def main():
     # ── 对照组 2: 交易摩擦敏感性压力测试 (Cost Sensitivity) ──
     print(f"【对照组 2】演化百万细胞截面策略在不同交易摩擦下的收益敏感性分析:")
     print(f"{'-'*90}")
-    print(f"{'摩擦倍率':<20}{'实际费率与滑点':<26}{'期末清盘现金':<20}{'CAGR':<14}{'MaxDD':<10}")
+    print(f"{'摩擦倍率':<20}{'实际费率与滑点':<26}{'期末清盘现金':<20}{'CAGR':<14}{'MaxDD':<10}{'交易笔数':<10}{'手续费':<14}")
     print(f"{'-'*90}")
     for mult in [1.0, 1.5, 2.0, 3.0]:
         res_cost = run_unified_backtest("evolved_1m_cellular", brain_evolved, data, timeline, split_date, timeline[-1], fee_mult=mult, slip_mult=mult, top_k=3)
         fee_str = f"{1.5*mult:.1f}bp + {mult:.1f}Tick"
-        print(f"{str(mult)+'x 摩擦':<18}{fee_str:<26}{res_cost['final_cash']:,.2f} 元{'':<4}{res_cost['cagr']:+.2f}%{'':<6}{res_cost['max_dd']:.2f}%")
+        print(f"{str(mult)+'x 摩擦':<18}{fee_str:<26}{res_cost['final_cash']:,.2f} 元{'':<4}{res_cost['cagr']:+.2f}%{'':<6}{res_cost['max_dd']:.2f}%{'':<6}{res_cost['trades']:<10}{res_cost['commission']:,.2f}")
     print(f"{'-'*90}\n")
 
 if __name__ == '__main__':
