@@ -17,56 +17,14 @@ PORT = 8930
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "x86-64 CPU"
 
-# 加载数学家大脑检查点元数据
-CKPT_PATH = "runs/mathematician_ten_million_champion.pt"
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from tools.kun_cellular_chat_engine import get_cellular_chat_engine
+
+chat_engine = get_cellular_chat_engine()
 
 def solve_math_query(prompt):
-    prompt_clean = prompt.strip().replace("加", "+").replace("减", "-").replace("乘", "*").replace("除以", "/").replace("除", "/")
-    
-    # 算术运算
-    match = re.search(r"(-?\d+\.?\d*)\s*([\+\-\*\/])\s*(-?\d+\.?\d*)", prompt_clean)
-    if match:
-        a = float(match.group(1))
-        op = match.group(2)
-        b = float(match.group(3))
-        if op == "+": ans, name = a + b, "加法代数微柱"
-        elif op == "-": ans, name = a - b, "差动比较微柱"
-        elif op == "*": ans, name = a * b, "非线性张量乘积微柱"
-        elif op == "/": ans, name = (a / b if b != 0 else float('nan')), "有理分式微柱"
-        
-        res_str = f"{ans:.4f}".rstrip('0').rstrip('.') if '.' in f"{ans:.4f}" else f"{ans}"
-        return (
-            f"**推演结果**：`{a} {op} {b} = {res_str}`\n\n"
-            f"* **激活拓扑**：10,000,000 细胞皮层微柱 `{name}`\n"
-            f"* **李代数第一积分不变量**：`0.000000` (精确守恒)\n"
-            f"* **硬件推演时延**：`1.24 ms` (RTX 5060 Blackwell Tensor Cores)"
-        )
+    return chat_engine.generate_response(prompt)
 
-    # 方程求解
-    match_eq = re.search(r"(-?\d*)\s*x\s*([\+\-])\s*(\d+)\s*=\s*(\d+)", prompt_clean)
-    if match_eq:
-        k = float(match_eq.group(1)) if match_eq.group(1) not in ["", "+", "-"] else (1.0 if match_eq.group(1) != "-" else -1.0)
-        sign = match_eq.group(2)
-        c = float(match_eq.group(3)) * (1.0 if sign == "+" else -1.0)
-        target = float(match_eq.group(4))
-        x_val = (target - c) / k if k != 0 else float('nan')
-        return (
-            f"**一元方程解析解**：`x = {x_val:.4f}`\n\n"
-            f"* **推演步骤**：两级逆差分算子求逆 $\\implies x = \\frac{{{target} - ({c})}}{{{k}}}$\n"
-            f"* **能量极小值残差**：`0.0000` (拉格朗日乘子全局收敛)"
-        )
-
-    if "洛伦兹" in prompt or "混沌" in prompt:
-        return (
-            "**洛伦兹吸引子 (Lorenz Attractor) 动力学解析**：\n\n"
-            "$$\\begin{cases} \\frac{dx}{dt} = 10(y - x) \\\\ \\frac{dy}{dt} = x(28 - z) - y \\\\ \\frac{dz}{dt} = xy - \\frac{8}{3}z \\end{cases}$$\n\n"
-            "* **分形维数**：$D_L \\approx 2.06$\n"
-            "* **最大李雅普诺夫指数**：$\\lambda_1 \\approx 0.905 > 0$ (确定性混沌极限环)"
-        )
-    elif "作者" in prompt or "谁" in prompt:
-        return "本形态发生计算生命系统由 **李龙飞 (Longfei Li)** 创立，受 **Antigravity 研究实验室 & FlowEngine 工程学术委员会** 联合支持。"
-    else:
-        return f"10,000,000 细胞大脑已接收输入：*{prompt}*。内部张量图谱已完成 3 轮能量松弛扩散。"
 
 HTML_PAGE = """<!DOCTYPE html>
 <html lang="zh-CN">
