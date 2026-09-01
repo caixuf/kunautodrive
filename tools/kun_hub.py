@@ -159,6 +159,15 @@ def cmd_deploy(args):
 
     print("=" * 78 + "\n")
 
+def cmd_chat(args):
+    if args.web:
+        print("\n🌐 正在打开/查看 Web 聊天窗口服务: http://localhost:8930")
+        print("• 挂载模型: 10,000,000 细胞形态发生数学家超级大脑")
+        print("• 请在浏览器中直接访问: http://localhost:8930\n")
+    else:
+        from tools.kun_chat import run_chat
+        run_chat()
+
 def main():
     parser = argparse.ArgumentParser(description="KunHub: 企业级形态发生生命体大模型管理体系 (作者: 李龙飞)")
     subparsers = parser.add_subparsers(dest="command", help="子命令")
@@ -174,6 +183,9 @@ def main():
     
     deploy_p = subparsers.add_parser("deploy", help="一键热部署大脑至 FlowEngine 车载管线")
     deploy_p.add_argument("model_id", help="模型 ID")
+
+    chat_p = subparsers.add_parser("chat", help="打开交互式聊天窗口 (终端 TUI 或 Web UI)")
+    chat_p.add_argument("--web", action="store_true", help="打开现代 Web 聊天窗口 (http://localhost:8930)")
     
     args = parser.parse_args()
     if not args.command or args.command == "list":
@@ -184,6 +196,9 @@ def main():
         cmd_run(args)
     elif args.command == "deploy":
         cmd_deploy(args)
+    elif args.command == "chat":
+        cmd_chat(args)
+
 
 if __name__ == "__main__":
     main()
