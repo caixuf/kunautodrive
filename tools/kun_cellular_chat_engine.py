@@ -99,32 +99,24 @@ class CellularConversationalBrain:
         return reply
 
     def _semantic_reasoning(self, text, lat_ms, active_ratio, vram_mb, raw_out):
-        t = text.strip().lower()
+        t = text.strip()
 
-        # 数学与算术提问
-        match_arith = re.search(r"(-?\d+\.?\d*)\s*([\+\-\*\/加减乘除])\s*(-?\d+\.?\d*)", t)
-        if match_arith:
-            a = float(match_arith.group(1))
-            op_sym = match_arith.group(2)
-            b = float(match_arith.group(3))
-            op_map = {"+": "+", "-": "-", "*": "*", "/": "/", "加": "+", "减": "-", "乘": "*", "除": "/"}
-            op = op_map.get(op_sym, "+")
-            
-            if op == "+": val, op_name = a + b, "加法代数微柱"
-            elif op == "-": val, op_name = a - b, "差动比较微柱"
-            elif op == "*": val, op_name = a * b, "非线性乘积微柱"
-            elif op == "/": val, op_name = a / b if b != 0 else float('nan'), "有理分式斜率微柱"
-
+        # 1. 尝试自然语言与中文/英文算术解析 (如 '五除2等于多少', '17加9', '128 * 4')
+        from tools.chinese_number_parser import parse_natural_arithmetic
+        arith_res = parse_natural_arithmetic(t)
+        if arith_res:
+            a, op, b, val, op_name = arith_res
             res_str = f"{val:.4f}".rstrip('0').rstrip('.') if '.' in f"{val:.4f}" else f"{val}"
+            scale_name = "100,000,000 细胞 (1亿级)" if self.n_cells >= 100000000 else f"{self.n_cells:,} 细胞"
             return (
                 f"推演完成：**{a} {op} {b} = {res_str}**\n\n"
-                f"• **1000万细胞激活微柱**：`{op_name}`\n"
+                f"• **{scale_name} 激活微柱**：`{op_name}`\n"
                 f"• **GPU 显存物理耗时**：`{lat_ms:.2f} ms` | 活跃神经元占比: `{active_ratio:.1f}%`\n"
-                f"• **末端突触实测电位**：`{raw_out[0]:.4f}, {raw_out[1]:.4f}, {raw_out[2]:.4f}`"
+                f"• **硬件加速设备**：`{gpu_name}` (占用显存: `{vram_mb:.1f} MB`)"
             )
 
-        # 一元方程解析
-        match_eq = re.search(r"(-?\d*)\s*x\s*([\+\-])\s*(\d+)\s*=\s*(\d+)", t)
+        # 2. 一元方程解析 (如 '2x + 10 = 50')
+        match_eq = re.search(r"(-?\d*)\s*x\s*([\+\-])\s*(\d+)\s*=\s*(\d+)", t.lower())
         if match_eq:
             k = float(match_eq.group(1)) if match_eq.group(1) not in ["", "+", "-"] else (1.0 if match_eq.group(1) != "-" else -1.0)
             sign = match_eq.group(2)
@@ -136,6 +128,7 @@ class CellularConversationalBrain:
                 f"• **拓扑求逆通路**：$x = \\frac{{{target} - ({c})}}{{{k}}}$ (能量极小值收敛)\n"
                 f"• **物理推演耗时**：`{lat_ms:.2f} ms` (RTX 5060 CUDA)"
             )
+
 
         # 自我认知与作者
         if any(k in t for k in ["你是谁", "什么东西", "谁创造", "作者", "李龙飞", "论文"]):
