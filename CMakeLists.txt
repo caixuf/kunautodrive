@@ -1003,6 +1003,17 @@ endif()
 target_include_directories(benchmark_cellular_scale PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
 target_compile_definitions(benchmark_cellular_scale PRIVATE FLOWCORO_INTEGRATION)
 
+add_executable(test_flow_unbounded_metabolic_counterfactual tests/test_flow_unbounded_metabolic_counterfactual.cpp)
+if(WIN32)
+    target_link_libraries(test_flow_unbounded_metabolic_counterfactual kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
+else()
+    target_link_libraries(test_flow_unbounded_metabolic_counterfactual kun_quant flowengine_core flowcoro_headers flowcoro_net scheduler_cpp pthread sqlite3)
+endif()
+target_include_directories(test_flow_unbounded_metabolic_counterfactual PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
+target_compile_definitions(test_flow_unbounded_metabolic_counterfactual PRIVATE FLOWCORO_INTEGRATION)
+add_test(NAME test_flow_unbounded_metabolic_counterfactual COMMAND test_flow_unbounded_metabolic_counterfactual)
+
+
 
 # ── Config-driven Launcher ──
 # 读 config/pipeline.json → 按顺序 fork+exec 各节点进程

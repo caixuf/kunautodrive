@@ -236,6 +236,14 @@ struct EvolutionConstraintConfig {
     FitnessDriverMode fitness_driver{FitnessDriverMode::TASK_FITNESS_ONLY};
     double novelty_weight{0.3}; // 好奇心奖励权重 alpha
     bool enable_mechanotransduction{true}; // 是否启入力敏转导与皮层沟回自发折叠
+
+    // ── 真正的无上限开放式演化与动态代谢平衡 (Unbounded Open-Ended Scaling) ──
+    size_t max_cells_limit{10000000};       // 无人工硬上限 (支持万级至百万级细胞自发无上限演化)
+    size_t max_synapses_limit{50000000};    // 突触无人工天花板
+    bool enable_dynamic_metabolism{true};   // 启用真实动态代谢：大脑规模由实际盈利/认知增益动态供给，盈则生、亏则凋
+    double basal_metabolic_cost{0.002};     // 细胞单位维持能耗 (真实物理代谢阻尼)
+    double synaptic_metabolic_cost{0.0005}; // 突触单位通信能耗
+    double immigrant_rate{0.15};            // 客卿移民比例 (保持种群多样性)
 };
 
 inline const char* to_string(SkeletonLockMode m) {
@@ -1438,8 +1446,19 @@ public:
     EvolutionConstraintConfig& constraint_config() { return constraint_cfg_; }
     SeedInitMode get_init_mode() const { return constraint_cfg_.seed_mode; }
 
-    // ── 生物变异操作 1: 细胞分裂增殖 (Mitosis / Add Cell) ──
+    // ── 生物变异操作 1: 细胞分裂增殖 (Mitosis / Add Cell — 无上限开放式演化) ──
     bool mutate_add_cell(CellularOrganism& org) {
+        if (org.cells.size() >= constraint_cfg_.max_cells_limit) {
+            return mutate_add_synapse(org);
+        }
+        // 动态代谢能量约束：大脑无人工天花板。
+        // 高性能个体代谢池充盈，可自由分裂扩张至万级规模；亏损/平庸个体受代谢赤字调节，优先重塑现有突触。
+        if (constraint_cfg_.enable_dynamic_metabolism && org.total_pnl < 0.0 && org.cells.size() > 128) {
+            std::uniform_real_distribution<double> dist_met(0.0, 1.0);
+            if (dist_met(rng_) < 0.85) {
+                return mutate_add_synapse(org);
+            }
+        }
         if (org.synapses.empty()) return mutate_add_synapse(org);
         std::uniform_int_distribution<size_t> dist_syn(0, org.synapses.size() - 1);
         size_t s_idx = dist_syn(rng_);
@@ -1523,6 +1542,9 @@ public:
 
     // ── 生物变异操作 2: 突触跨界重连 (Synaptic Rewiring & Morphogenetic Spatial Wiring) ──
     bool mutate_add_synapse(CellularOrganism& org) {
+        if (org.synapses.size() >= constraint_cfg_.max_synapses_limit) {
+            return mutate_parameters(org);
+        }
         if (org.cells.size() < 2) return false;
         for (int retry = 0; retry < 12; ++retry) {
             std::uniform_int_distribution<size_t> dist_cell(0, org.cells.size() - 1);
@@ -1656,7 +1678,7 @@ public:
 
     // ── 生物变异操作 4: 力敏转导定向有丝分裂与皮层沟回拱起 (Mechanosensitive Mitosis) ──
     bool mutate_mechanosensitive_mitosis(CellularOrganism& org) {
-        if (org.cells.size() >= 10000000 || org.cells.size() < 5) return false;
+        if (org.cells.size() >= constraint_cfg_.max_cells_limit || org.cells.size() < 5) return false;
 
         // 寻找综合力敏应变最高的候选母细胞
         size_t best_idx = 0;
@@ -1762,9 +1784,21 @@ public:
         }
     }
 
-    // ── 种群世代演化 (Evolve Next Generation) ──
+    // ── 种群世代演化 (Evolve Next Generation — 无上限开放式自发演化) ──
     void evolve_generation() {
-        // 若启用了新颖性好奇心驱动，综合内在与外在动机评分
+        // 1. 动态代谢能量平衡 (Dynamic Metabolic Energy Equilibrium):
+        // 彻底破除人工硬上限。代谢维持成本随细胞与突触规模自然产生：
+        // 盈利/高适应度个体获得充足能量供给，可自发支撑成千上万细胞的宏伟大脑；
+        // 亏损/低能个体面临代谢赤字，自然抑制盲目增殖，实现真正的开放式自组织演化。
+        if (constraint_cfg_.enable_dynamic_metabolism) {
+            for (auto& org : population_) {
+                double metabolic_cost = static_cast<double>(org.cells.size()) * constraint_cfg_.basal_metabolic_cost +
+                                        static_cast<double>(org.synapses.size()) * constraint_cfg_.synaptic_metabolic_cost;
+                org.fitness_score -= metabolic_cost;
+            }
+        }
+
+        // 2. 若启用了新颖性好奇心驱动，综合内在与外在动机评分
         if (constraint_cfg_.fitness_driver == FitnessDriverMode::NOVELTY_SEARCH ||
             constraint_cfg_.fitness_driver == FitnessDriverMode::HYBRID_CURIOSITY) {
             for (auto& org : population_) {
@@ -1806,18 +1840,41 @@ public:
             }
         }
 
-        size_t elite_count = std::max<size_t>(1, population_size_ / 4);
         std::vector<CellularOrganism> next_gen;
 
-        for (size_t i = 0; i < elite_count; ++i) {
+        // 3.1 保留全局顶级精英 (Top Elites)
+        size_t elite_count = std::max<size_t>(1, population_size_ / 8); // 40 个体保留前 5 个绝对优胜者
+        for (size_t i = 0; i < elite_count && i < population_.size(); ++i) {
             next_gen.push_back(population_[i]);
         }
 
-        std::uniform_int_distribution<size_t> dist_parent(0, elite_count - 1);
+        // 3.2 注入客卿移民 (Immigrants - 彻底杜绝近亲繁殖与全盘抄袭)
+        size_t immigrant_count = static_cast<size_t>(population_size_ * constraint_cfg_.immigrant_rate);
+        immigrant_count = std::max<size_t>(1, std::min<size_t>(immigrant_count, population_size_ / 4));
+        for (size_t k = 0; k < immigrant_count && next_gen.size() < population_size_; ++k) {
+            auto immigrant = CellularOrganism::create_by_mode(
+                constraint_cfg_.seed_mode, 
+                static_cast<uint32_t>(next_gen.size() + 1), 
+                static_cast<uint32_t>(rng_())
+            );
+            for (int m = 0; m < 2 + (k % 3); ++m) mutate(immigrant);
+            immigrant.generation = population_.empty() ? 1 : population_[0].generation + 1;
+            immigrant.lineage_name = "Immigrant-Gen" + std::to_string(immigrant.generation);
+            next_gen.push_back(std::move(immigrant));
+        }
+
+        // 3.3 锦标赛选择 (Tournament Selection) 从全种群挑选父母繁殖，保持多样性
+        std::uniform_int_distribution<size_t> dist_tour(0, population_.size() - 1);
         while (next_gen.size() < population_size_) {
-            size_t p_idx = dist_parent(rng_);
+            size_t c1 = dist_tour(rng_);
+            size_t c2 = dist_tour(rng_);
+            size_t c3 = dist_tour(rng_);
+            size_t p_idx = (population_[c1].fitness_score >= population_[c2].fitness_score) ? 
+                           ((population_[c1].fitness_score >= population_[c3].fitness_score) ? c1 : c3) :
+                           ((population_[c2].fitness_score >= population_[c3].fitness_score) ? c2 : c3);
+
             CellularOrganism child = population_[p_idx];
-            child.organism_id = next_gen.size() + 1;
+            child.organism_id = static_cast<uint32_t>(next_gen.size() + 1);
             child.generation = population_[p_idx].generation + 1;
             child.lineage_name = "Apex-Gen" + std::to_string(child.generation);
             mutate(child);
