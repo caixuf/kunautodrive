@@ -3,6 +3,7 @@ import glob
 import math
 import csv
 import json
+import hashlib
 import datetime
 import torch
 import torch.nn as nn
@@ -15,24 +16,24 @@ if torch.cuda.is_available():
 
 class MultiAssetMillionCellBrain(nn.Module):
     """
-    百万级 (1,000,000 细胞) GPU 张量化量化大脑
+    百万级 (1,000,000 细胞) GPU 张量化 Reservoir 大脑
     特性：
-    1. 20 品种独立隐层状态矩阵: state[20, 1,000,000] (资产间物理隔离，零隐状态串扰)
-    2. 稀疏突触前向传导 (2,000,000 突触) + EMA 动力学衰减 + 施密特双阈值迟滞滤波
-    3. 支持样本内 (2005-2015) 演化调优与检查点冻结存盘
+    1. 18 品种独立隐层状态矩阵: state[18, 1,000,000] (资产间物理隔离，零隐状态串扰)
+    2. 所有张量均注册为 buffer，确保 state_dict() 完整存盘与确定性加载
+    3. 稀疏突触前向传导 (2,000,000 突触) + EMA 动力学衰减 + 施密特双阈值迟滞滤波
     """
-    def __init__(self, num_assets=20, num_cells=1000000, num_synapses=2000000, device='cuda'):
+    def __init__(self, num_assets=18, num_cells=1000000, num_synapses=2000000, device='cuda'):
         super().__init__()
         self.num_assets = num_assets
         self.num_cells = num_cells
         self.num_synapses = num_synapses
         self.device = device
         
-        # 每个品种独立维护一份 1,000,000 细胞的内部动力学状态
-        self.state = torch.zeros((num_assets, num_cells), dtype=torch.float16, device=device)
-        self.alpha_ema = torch.empty((num_cells,), dtype=torch.float16, device=device).uniform_(0.02, 0.25)
+        # 1. 注册内部状态与参数 buffer
+        state = torch.zeros((num_assets, num_cells), dtype=torch.float16, device=device)
+        alpha_ema = torch.empty((num_cells,), dtype=torch.float16, device=device).uniform_(0.02, 0.25)
         
-        # 拓扑连接: 感知区 (前 10k) -> 隐层 (中间 980k) -> 效应区 (后 10k)
+        # 2. 拓扑连接: 感知区 (前 10k) -> 隐层 (中间 980k) -> 效应区 (后 10k)
         src_sens = torch.randint(0, 10000, (num_synapses // 4,), dtype=torch.int32, device=device)
         dst_sens = torch.randint(10000, num_cells - 10000, (num_synapses // 4,), dtype=torch.int32, device=device)
         
@@ -42,9 +43,15 @@ class MultiAssetMillionCellBrain(nn.Module):
         src_eff = torch.randint(10000, num_cells - 10000, (num_synapses // 4,), dtype=torch.int32, device=device)
         dst_eff = torch.randint(num_cells - 10000, num_cells, (num_synapses // 4,), dtype=torch.int32, device=device)
         
-        self.src_idx = torch.cat([src_sens, src_hid, src_eff])
-        self.dst_idx = torch.cat([dst_sens, dst_hid, dst_eff])
-        self.weights = torch.empty((num_synapses,), dtype=torch.float16, device=device).normal_(0.0, 0.25)
+        src_idx = torch.cat([src_sens, src_hid, src_eff])
+        dst_idx = torch.cat([dst_sens, dst_hid, dst_eff])
+        weights = torch.empty((num_synapses,), dtype=torch.float16, device=device).normal_(0.0, 0.25)
+
+        self.register_buffer('state', state)
+        self.register_buffer('alpha_ema', alpha_ema)
+        self.register_buffer('src_idx', src_idx)
+        self.register_buffer('dst_idx', dst_idx)
+        self.register_buffer('weights', weights)
 
     def reset(self):
         self.state.zero_()
@@ -62,7 +69,7 @@ class MultiAssetMillionCellBrain(nn.Module):
         self.state[:N, :10000] = feat_t.repeat(1, 2500)
         
         # 2. 突触信号广播与稀疏聚合
-        src_signals = self.state[:N, self.src_idx.long()] # [N, num_synapses]
+        src_signals = self.state[:N, self.src_idx.long()]
         weighted = src_signals * self.weights
         
         syn_in = torch.zeros_like(self.state[:N])
@@ -73,9 +80,9 @@ class MultiAssetMillionCellBrain(nn.Module):
         
         # 4. 提取效应群决策
         effector_slice = self.state[:N, -10000:].float()
-        pos_signal = effector_slice[:, 0:3333].mean(dim=1) # [N]
-        neg_signal = effector_slice[:, 3333:6666].mean(dim=1) # [N]
-        immune_signal = (effector_slice[:, 6666:].abs().mean(dim=1) > 0.45) # [N]
+        pos_signal = effector_slice[:, 0:3333].mean(dim=1)
+        neg_signal = effector_slice[:, 3333:6666].mean(dim=1)
+        immune_signal = (effector_slice[:, 6666:].abs().mean(dim=1) > 0.45)
         
         return pos_signal, neg_signal, immune_signal
 
@@ -98,7 +105,6 @@ def load_and_cumulative_adjust(filepath):
     if len(bars) < 30:
         return []
     
-    # 累计后复权因子计算
     cum_factors = [1.0] * len(bars)
     curr_factor = 1.0
     for i in range(1, len(bars)):
@@ -126,14 +132,13 @@ def load_and_cumulative_adjust(filepath):
         cleaned.append(b)
     return cleaned
 
-# ── 3. 严格 FIFO Lot 逐笔记账回测引擎 ──
-def run_rigorous_backtest(brain, data, timeline, d_start, d_end, risk_pct=0.005):
+# ── 3. 严格 FIFO Lot 逐笔记账与组合级保证金风控 ──
+def run_rigorous_backtest(brain, data, timeline, d_start, d_end, risk_pct=0.005, force_terminal_liquidation=True):
     sub_timeline = [d for d in timeline if d_start <= d <= d_end]
     if len(sub_timeline) < 10:
         return None
 
     asset_symbols = list(data.keys())
-    sym_to_id = {sym: i for i, sym in enumerate(asset_symbols)}
     num_assets = len(asset_symbols)
 
     initial_capital = 1000000.0
@@ -141,7 +146,6 @@ def run_rigorous_backtest(brain, data, timeline, d_start, d_end, risk_pct=0.005)
     peak_equity = initial_capital
     max_dd = 0.0
 
-    # 逐笔 FIFO 持仓队列: symbol -> list of dict {'entry_price', 'qty', 'date'}
     lots = {sym: [] for sym in asset_symbols}
     target_orders = {sym: 0 for sym in asset_symbols}
     last_prices = {sym: data[sym]['bars'][0]['close'] for sym in asset_symbols}
@@ -155,6 +159,7 @@ def run_rigorous_backtest(brain, data, timeline, d_start, d_end, risk_pct=0.005)
 
     for t, cur_date in enumerate(sub_timeline):
         year = int(cur_date[:4])
+        is_last_day = (t == len(sub_timeline) - 1)
 
         # ── 步骤 1: T+1 开盘价成交 + 滑点 + FIFO 记账 ──
         for sym in asset_symbols:
@@ -172,10 +177,20 @@ def run_rigorous_backtest(brain, data, timeline, d_start, d_end, risk_pct=0.005)
                 fill_price = bar['open'] + (asset['tick_size'] if delta > 0 else -asset['tick_size'])
 
                 if (cur_qty > 0 and delta > 0) or (cur_qty < 0 and delta < 0) or cur_qty == 0:
-                    # 同向增仓: 保留旧成本，创建新 Lot
-                    margin_needed = fill_price * asset['multiplier'] * abs(delta) * 0.12
+                    # 组合级保证金总和检查: 已用保证金 + 新增保证金 <= 总权益 * 85%
+                    current_used_margin = sum(
+                        last_prices[s] * data[s]['multiplier'] * abs(sum(l['qty'] for l in lots[s])) * 0.12
+                        for s in asset_symbols
+                    )
+                    new_margin = fill_price * asset['multiplier'] * abs(delta) * 0.12
                     commission = fill_price * asset['multiplier'] * abs(delta) * fee_rate
-                    if cash >= margin_needed + commission:
+
+                    cur_eq = cash + sum(
+                        (last_prices[s] - l['entry_price'] if l['qty'] > 0 else l['entry_price'] - last_prices[s]) * data[s]['multiplier'] * abs(l['qty'])
+                        for s in asset_symbols for l in lots[s]
+                    )
+
+                    if (current_used_margin + new_margin <= cur_eq * 0.85) and (cash >= commission):
                         cash -= commission
                         lots[sym].append({'entry_price': fill_price, 'qty': delta, 'date': cur_date})
                 else:
@@ -202,9 +217,17 @@ def run_rigorous_backtest(brain, data, timeline, d_start, d_end, risk_pct=0.005)
 
                     if to_close > 0:
                         new_open = to_close if delta > 0 else -to_close
-                        margin_needed = fill_price * asset['multiplier'] * abs(new_open) * 0.12
+                        current_used_margin = sum(
+                            last_prices[s] * data[s]['multiplier'] * abs(sum(l['qty'] for l in lots[s])) * 0.12
+                            for s in asset_symbols
+                        )
+                        new_margin = fill_price * asset['multiplier'] * abs(new_open) * 0.12
                         commission = fill_price * asset['multiplier'] * abs(new_open) * fee_rate
-                        if cash >= margin_needed + commission:
+                        cur_eq = cash + sum(
+                            (last_prices[s] - l['entry_price'] if l['qty'] > 0 else l['entry_price'] - last_prices[s]) * data[s]['multiplier'] * abs(l['qty'])
+                            for s in asset_symbols for l in lots[s]
+                        )
+                        if (current_used_margin + new_margin <= cur_eq * 0.85) and (cash >= commission):
                             cash -= commission
                             lots[sym].append({'entry_price': fill_price, 'qty': new_open, 'date': cur_date})
 
@@ -227,76 +250,93 @@ def run_rigorous_backtest(brain, data, timeline, d_start, d_end, risk_pct=0.005)
             max_dd = dd
 
         # ── 步骤 3: T 日收盘特征提取 -> GPU 并行前向推理 ──
-        batch_feat = []
-        valid_syms = []
+        if not is_last_day:
+            batch_feat = []
+            valid_syms = []
+            for sym in asset_symbols:
+                asset = data[sym]
+                if cur_date not in asset['map']:
+                    batch_feat.append([0.0, 0.0, 0.0, 0.0])
+                    continue
+                bar = asset['map'][cur_date]
+                idx = asset['date_to_idx'].get(cur_date, -1)
+                if idx <= 0:
+                    batch_feat.append([0.0, 0.0, 0.0, 0.0])
+                    continue
+                pbar = asset['bars'][idx - 1]
+
+                ret = (bar['close'] - pbar['close']) / pbar['close']
+                rng = (bar['high'] - bar['low']) / bar['close']
+                body = (bar['close'] - bar['open']) / bar['open']
+                vol_chg = (bar['volume'] - pbar['volume']) / pbar['volume'] if pbar['volume'] > 0 else 0.0
+
+                batch_feat.append([
+                    max(-1.0, min(1.0, ret * 20.0)),
+                    max(-1.0, min(1.0, rng * 20.0 - 0.5)),
+                    max(-1.0, min(1.0, body * 20.0)),
+                    max(-1.0, min(1.0, vol_chg))
+                ])
+                valid_syms.append(sym)
+
+            feat_tensor = torch.tensor(batch_feat, dtype=torch.float32)
+            pos_acts, neg_acts, immunes = brain.forward_all_assets(feat_tensor)
+
+            for i, sym in enumerate(asset_symbols):
+                if sym not in valid_syms:
+                    cur_qty = sum(lot['qty'] for lot in lots[sym])
+                    target_orders[sym] = cur_qty
+                    continue
+                bar = data[sym]['map'][cur_date]
+                atr = bar.get('atr', bar['close'] * 0.02)
+                
+                risk_dollar = max(1000.0, total_equity * risk_pct)
+                target_contracts = max(1, min(8, int(risk_dollar / (atr * data[sym]['multiplier']))))
+
+                pos_val = pos_acts[i].item()
+                neg_val = neg_acts[i].item()
+                imm_val = immunes[i].item()
+
+                if imm_val:
+                    target_orders[sym] = 0
+                elif pos_val > 0.005 and pos_val > neg_val:
+                    target_orders[sym] = target_contracts
+                elif neg_val > 0.005 and neg_val > pos_val:
+                    target_orders[sym] = -target_contracts
+                else:
+                    cur_qty = sum(lot['qty'] for lot in lots[sym])
+                    target_orders[sym] = cur_qty
+
+    # 期末强平清仓结算 (Terminal Liquidation to Realized Cash)
+    if force_terminal_liquidation:
+        final_date = sub_timeline[-1]
         for sym in asset_symbols:
-            asset = data[sym]
-            if cur_date not in asset['map']:
-                batch_feat.append([0.0, 0.0, 0.0, 0.0])
-                continue
-            bar = asset['map'][cur_date]
-            idx = asset['date_to_idx'].get(cur_date, -1)
-            if idx <= 0:
-                batch_feat.append([0.0, 0.0, 0.0, 0.0])
-                continue
-            pbar = asset['bars'][idx - 1]
+            if lots[sym]:
+                close_p = last_prices[sym]
+                while lots[sym]:
+                    front_lot = lots[sym].pop(0)
+                    qty = front_lot['qty']
+                    pnl = (close_p - front_lot['entry_price']) if qty > 0 else (front_lot['entry_price'] - close_p)
+                    net_pnl = pnl * data[sym]['multiplier'] * abs(qty) - close_p * data[sym]['multiplier'] * abs(qty) * fee_rate
+                    cash += net_pnl
+                    total_trades += 1
+                    if net_pnl > 0:
+                        win_trades += 1
+        final_realized_cash = cash
+    else:
+        final_realized_cash = total_equity
 
-            ret = (bar['close'] - pbar['close']) / pbar['close']
-            rng = (bar['high'] - bar['low']) / bar['close']
-            body = (bar['close'] - bar['open']) / bar['open']
-            vol_chg = (bar['volume'] - pbar['volume']) / pbar['volume'] if pbar['volume'] > 0 else 0.0
-
-            batch_feat.append([
-                max(-1.0, min(1.0, ret * 20.0)),
-                max(-1.0, min(1.0, rng * 20.0 - 0.5)),
-                max(-1.0, min(1.0, body * 20.0)),
-                max(-1.0, min(1.0, vol_chg))
-            ])
-            valid_syms.append(sym)
-
-        feat_tensor = torch.tensor(batch_feat, dtype=torch.float32)
-        pos_acts, neg_acts, immunes = brain.forward_all_assets(feat_tensor)
-
-        for i, sym in enumerate(asset_symbols):
-            if sym not in valid_syms:
-                cur_qty = sum(lot['qty'] for lot in lots[sym])
-                target_orders[sym] = cur_qty
-                continue
-            bar = data[sym]['map'][cur_date]
-            atr = bar.get('atr', bar['close'] * 0.02)
-            
-            risk_dollar = max(1000.0, total_equity * risk_pct)
-            target_contracts = max(1, min(8, int(risk_dollar / (atr * data[sym]['multiplier']))))
-
-            pos_val = pos_acts[i].item()
-            neg_val = neg_acts[i].item()
-            imm_val = immunes[i].item()
-
-            if imm_val:
-                target_orders[sym] = 0
-            elif pos_val > 0.005 and pos_val > neg_val:
-                target_orders[sym] = target_contracts
-            elif neg_val > 0.005 and neg_val > pos_val:
-                target_orders[sym] = -target_contracts
-            else:
-                cur_qty = sum(lot['qty'] for lot in lots[sym])
-                target_orders[sym] = cur_qty
-
-    final_equity = total_equity
-    
-    # 真实日历天数精确计算年数
     d_st = datetime.datetime.strptime(sub_timeline[0], "%Y-%m-%d")
     d_ed = datetime.datetime.strptime(sub_timeline[-1], "%Y-%m-%d")
     exact_years = max(1.0, (d_ed - d_st).days / 365.25)
 
-    cagr = (math.pow(max(1.0, final_equity) / initial_capital, 1.0 / exact_years) - 1.0) * 100.0 if final_equity > 0 else -100.0
+    cagr = (math.pow(max(1.0, final_realized_cash) / initial_capital, 1.0 / exact_years) - 1.0) * 100.0 if final_realized_cash > 0 else -100.0
     calmar = (cagr / (max_dd * 100.0)) if max_dd > 0 else 0.0
     win_rate = (win_trades / total_trades * 100.0) if total_trades > 0 else 0.0
 
     return {
         'initial_capital': initial_capital,
-        'final_equity': final_equity,
-        'total_roi': (final_equity - initial_capital) / initial_capital * 100.0,
+        'final_realized_cash': final_realized_cash,
+        'total_roi': (final_realized_cash - initial_capital) / initial_capital * 100.0,
         'cagr': cagr,
         'max_drawdown': max_dd * 100.0,
         'calmar': calmar,
@@ -310,13 +350,13 @@ def run_rigorous_backtest(brain, data, timeline, d_start, d_end, risk_pct=0.005)
 def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"\n========================================================================================================")
-    print(f"   🏛️ 鲲 1,000,000 细胞 GPU 张量大脑：20~30 年全品种历史数据 100% 严谨 Walk-Forward 复测 🏛️")
+    print(f"   🏛️ 鲲 1,000,000 细胞 GPU Reservoir：20~30 年历史数据全流程无偏严谨实测 🏛️")
     print(f"========================================================================================================")
-    print(f"• 硬件加速环境: {torch.cuda.get_device_name(0) if device=='cuda' else 'CPU'} (CUDA Float16)")
+    print(f"• 计算硬件加速: {torch.cuda.get_device_name(0) if device=='cuda' else 'CPU'} (CUDA Float16)")
     print(f"• 确定性种子约束: SEED = {SEED} (100% 确定性可复现)")
     print(f"• 资产状态物理隔离: 18 个品种各自独立分配 1,000,000 细胞状态矩阵 state[18, 1M] (零跨资产泄漏)")
-    print(f"• 交易与记账协议: 累计后复权清洗 + 逐笔 FIFO Lot 队列 + 12% 保证金约束 + T+1 开盘价成交 + 1 Tick 滑点")
-    print(f"• 样本内外绝对隔离: 2005~2015 样本内训练 / 2016~2026 样本外 10.7 年绝对盲测")
+    print(f"• 交易与记账协议: 累计后复权 + 逐笔 FIFO Lot 队列 + 组合级保证金约束 + T+1 开盘价成交 + 1 Tick 滑点 + 期末强制清仓")
+    print(f"• 样本切分规范: 2005~2015 样本前半段 / 2016~2026 样本后半段 10.7 年盲测管线验证")
     print(f"========================================================================================================\n")
 
     multipliers = {
@@ -330,10 +370,12 @@ def main():
         "zn": 5.0, "al": 5.0, "hc": 1.0, "bu": 1.0, "MA": 1.0, "pp": 1.0, "p": 2.0
     }
 
+    # 动态定位 data/history 路径
+    data_dir = "data/history" if os.path.exists("data/history") else "../data/history"
     data = {}
     all_dates = set()
     for sym, mult in multipliers.items():
-        p = f"data/history/{sym}.csv"
+        p = os.path.join(data_dir, f"{sym}.csv")
         if os.path.exists(p):
             bars = load_and_cumulative_adjust(p)
             if len(bars) >= 200:
@@ -353,33 +395,35 @@ def main():
     num_assets = len(data)
     brain = MultiAssetMillionCellBrain(num_assets=num_assets, num_cells=1000000, num_synapses=2000000, device=device)
     
-    # 存盘检查点以供完整可复现性验证
+    # 完整保存包含所有 buffer 的 checkpoint (尺寸约 60 MB)
     os.makedirs("runs", exist_ok=True)
-    torch.save(brain.state_dict(), "runs/quant_million_brain_seed42.pt")
-    print(f"✓ 检查点已保存至 runs/quant_million_brain_seed42.pt (显存占用: {torch.cuda.memory_allocated() / 1024**2:.2f} MB)")
+    ckpt_path = "runs/quant_million_brain_seed42.pt"
+    torch.save(brain.state_dict(), ckpt_path)
+    ckpt_size_mb = os.path.getsize(ckpt_path) / (1024 * 1024)
+    print(f"✓ 完整权重 Checkpoint 已保存至 {ckpt_path} (文件大小: {ckpt_size_mb:.2f} MB, 显存占用: {torch.cuda.memory_allocated() / 1024**2:.2f} MB)")
 
-    # 1. 样本内回测 (In-Sample: 2005 ~ 2015)
-    res_is = run_rigorous_backtest(brain, data, timeline, timeline[0], split_date)
+    # 1. 前半段回测 (2005 ~ 2015)
+    res_is = run_rigorous_backtest(brain, data, timeline, timeline[0], split_date, force_terminal_liquidation=True)
 
-    # 2. 样本外盲测 (Out-of-Sample: 2016 ~ 2026)
-    res_oos = run_rigorous_backtest(brain, data, timeline, split_date, timeline[-1])
+    # 2. 后半段盲测 (2016 ~ 2026)
+    res_oos = run_rigorous_backtest(brain, data, timeline, split_date, timeline[-1], force_terminal_liquidation=True)
 
     print(f"\n========================================================================================================")
-    print(f"  📊 100% 严谨百万细胞 GPU 大脑：样本内 (IS) vs 样本外 (OOS) 完整对比报告 📊")
+    print(f"  📊 100% 严谨百万细胞 GPU Reservoir：前半段 (2005-2015) vs 后半段 (2016-2026) 对比报告 📊")
     print(f"========================================================================================================")
-    print(f"{'评估指标':<28}{'样本内 (2005-2015, 训练期)':<32}{'🔥 样本外前瞻盲测 (2016-2026)':<32}")
+    print(f"{'评估指标':<28}{'前半段 (2005-2015)':<32}{'🔥 后半段 (2016-2026, 盲测)':<32}")
     print(f"{'-'*92}")
     print(f"{'实际日历跨度':<28}{res_is['exact_years']:.1f} 年{'':<26}{res_oos['exact_years']:.1f} 年")
     print(f"{'初始本金':<28}{res_is['initial_capital']:,.2f} 元{'':<18}{res_oos['initial_capital']:,.2f} 元")
-    print(f"{'期末实际可提净值':<28}{res_is['final_equity']:,.2f} 元{'':<18}{res_oos['final_equity']:,.2f} 元")
+    print(f"{'期末实际清仓可提净值':<28}{res_is['final_realized_cash']:,.2f} 元{'':<18}{res_oos['final_realized_cash']:,.2f} 元")
     print(f"{'累计总回报率':<28}{res_is['total_roi']:+.2f} %{'':<24}{res_oos['total_roi']:+.2f} %")
     print(f"{'年化复合收益率 (CAGR)':<28}{res_is['cagr']:+.2f} %{'':<24}{res_oos['cagr']:+.2f} %")
     print(f"{'最大历史动态回撤 (MaxDD)':<28}{res_is['max_drawdown']:.2f} %{'':<25}{res_oos['max_drawdown']:.2f} %")
     print(f"{'卡尔玛比率 (Calmar)':<28}{res_is['calmar']:.2f}{'':<28}{res_oos['calmar']:.2f}")
-    print(f"{'平仓交易笔数与真实胜率':<28}{res_is['total_trades']} 笔 ({res_is['win_rate']:.1f}%){'':<18}{res_oos['total_trades']} 笔 ({res_oos['win_rate']:.1f}%)")
+    print(f"{'全清仓平仓交易笔数':<28}{res_is['total_trades']} 笔 (胜率: {res_is['win_rate']:.1f}%){'':<18}{res_oos['total_trades']} 笔 (胜率: {res_oos['win_rate']:.1f}%)")
     print(f"========================================================================================================\n")
 
-    print(f"📅 样本外 10.7 年（2016 ~ 2026）逐年实际年末净值与盈亏明细:")
+    print(f"📅 样本后半段 10.7 年（2016 ~ 2026）逐年实际年末净值与盈亏明细:")
     print(f"----------------------------------------------------------------------------------------")
     prev_eq = res_oos['initial_capital']
     for y, eq in res_oos['yearly_equities'].items():
@@ -388,16 +432,22 @@ def main():
         prev_eq = eq
     print(f"----------------------------------------------------------------------------------------\n")
 
-    # 导出完整 JSON 产物
+    # 导出完整 JSON 产物与 SHA-256 计算
     artifact = {
         'seed': SEED,
         'device': str(device),
+        'checkpoint_file': ckpt_path,
+        'checkpoint_size_mb': ckpt_size_mb,
         'in_sample': res_is,
         'out_of_sample': res_oos
     }
-    with open("runs/quant_million_brain_walkforward_summary.json", "w", encoding="utf-8") as f:
+    json_path = "runs/quant_million_brain_walkforward_summary.json"
+    with open(json_path, "w", encoding="utf-8") as f:
         json.dump(artifact, f, indent=2, ensure_ascii=False)
-    print("✓ 完整可复现审计工件已生成并保存至 runs/quant_million_brain_walkforward_summary.json\n")
+    
+    with open(json_path, "rb") as f:
+        sha256 = hashlib.sha256(f.read()).hexdigest()
+    print(f"✓ 完整可复现审计工件已保存至 {json_path} (SHA-256: {sha256})\n")
 
 if __name__ == '__main__':
     main()

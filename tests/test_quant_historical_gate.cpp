@@ -139,6 +139,9 @@ int main() {
     std::cout << "======================================================================\n";
 
     std::string data_dir = "data/history";
+    if (!fs::exists(data_dir)) data_dir = "../data/history";
+    if (!fs::exists(data_dir)) data_dir = "../../data/history";
+
     std::vector<std::string> symbols = {"cu", "ru", "rb", "ta", "m", "a", "cf", "i", "j", "au", "ag", "zn", "al", "hc", "bu", "MA", "pp", "p"};
 
     std::vector<AssetSeries> assets;
@@ -164,7 +167,10 @@ int main() {
         assets.push_back(as);
     }
 
-    assert(assets.size() >= 10 && "至少必须成功载入 10 个以上大宗期货品种！");
+    if (assets.size() < 10) {
+        std::cerr << "❌ [Gate 1 FAIL] 至少必须成功载入 10 个以上大宗期货品种！实际载入: " << assets.size() << " (检查路径: " << data_dir << ")\n";
+        return 1;
+    }
     std::cout << "  ↳ 成功加载 " << assets.size() << " 个核心品种，总有效交易日: " << all_dates_set.size() << " 天\n";
 
     std::vector<std::string> timeline(all_dates_set.begin(), all_dates_set.end());
@@ -174,7 +180,10 @@ int main() {
     for (size_t i = 0; i < timeline.size(); ++i) {
         if (timeline[i] >= "2016-01-01") { split_idx = i; break; }
     }
-    assert(split_idx > 500 && "样本内 (2005-2015) 必须包含足够历史数据！");
+    if (split_idx <= 500) {
+        std::cerr << "❌ [Gate 1 FAIL] 样本内 (2005-2015) 历史数据不足！实际仅: " << split_idx << " 天\n";
+        return 1;
+    }
 
     // [Gate 2] 资产独立状态与 FIFO 记账守恒门禁
     std::cout << "[Gate 2] 实例化 20 个独立神经实例并执行严格 FIFO 逐笔无偏回测...\n";
@@ -299,8 +308,14 @@ int main() {
     }
 
     std::cout << "  ↳ 样本内平仓笔数: " << total_trades << " 笔, 最大回撤: " << (max_dd * 100.0) << "%\n";
-    assert(total_trades > 500 && "样本内有效交易笔数必须 > 500！");
-    assert(max_dd < 0.40 && "样本内最大回撤必须被严格限制在 40% 以内！");
+    if (total_trades <= 500) {
+        std::cerr << "❌ [Gate 2 FAIL] 样本内有效交易笔数不足！实际仅: " << total_trades << " 笔 (要求 > 500 笔)\n";
+        return 1;
+    }
+    if (max_dd >= 0.40) {
+        std::cerr << "❌ [Gate 2 FAIL] 样本内最大回撤超标！实际: " << (max_dd * 100.0) << "% (要求 < 40%)\n";
+        return 1;
+    }
 
     std::cout << "\n✅ [Gate PASS] 20~30 年中国期货大数据防回归硬门禁 100% 校验通过！\n";
     std::cout << "======================================================================\n\n";
