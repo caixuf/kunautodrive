@@ -240,19 +240,24 @@ struct EvolutionConstraintConfig {
     double novelty_weight{0.3}; // 好奇心奖励权重 alpha
     bool enable_mechanotransduction{true}; // 是否启入力敏转导与皮层沟回自发折叠
 
-    // ── 真正的无上限开放式演化与动态代谢平衡 (Unbounded Open-Ended Scaling) ──
-    size_t max_cells_limit{10000000};       // 无人工硬上限 (支持万级至百万级细胞自发无上限演化)
-    size_t max_synapses_limit{50000000};    // 突触无人工天花板
-    bool enable_dynamic_metabolism{true};   // 启用真实动态代谢：大脑规模由实际盈利/认知增益动态供给，盈则生、亏则凋
-    double basal_metabolic_cost{0.002};     // 细胞单位维持能耗 (真实物理代谢阻尼)
-    double synaptic_metabolic_cost{0.0005}; // 突触单位通信能耗
-    double immigrant_rate{0.15};            // 客卿移民比例 (保持种群多样性)
+    // ── 资源上限守卫与动态代谢平衡 (Resource Bounds & Metabolic Equilibrium) ──
+    size_t max_cells_limit{4096};          // 细胞规模预算硬上限 (杜绝无序膨胀，支持任务级配置)
+    size_t max_synapses_limit{16384};      // 突触规模预算硬上限
+    bool enable_dynamic_metabolism{true};  // 启用动态代谢能耗调节
+    double basal_metabolic_cost{0.002};    // 细胞单位维持能耗
+    double synaptic_metabolic_cost{0.0005};// 突触单位通信能耗
+    double immigrant_rate{0.15};           // 客卿移民比例
 
-    // ── 分层突变与依赖保护 (Layered Mutation / Dependency Guard) ──
-    bool enable_dependency_guard{false};    // ADAS 模式下按功能路径原子拒绝破坏性突变
-    double fast_mutation_rate{0.80};        // 参数与局部权重漂移
-    double medium_mutation_rate{0.45};      // 局部突触重连
-    double slow_mutation_rate{0.35};        // 细胞增殖/力敏重塑
+    // ── 事务性变异与依赖保护 (Transactional Mutation & Dependency Guard) ──
+    bool enable_transaction_rollback{true};// 变异事务原子回滚：编译/预算/契约校验失败时自动回滚
+    bool enable_dependency_guard{false};   // ADAS 模式下按功能路径原子拒绝破坏性突变
+    double fast_mutation_rate{0.80};       // 参数与局部权重漂移
+    double medium_mutation_rate{0.45};     // 局部突触重连
+    double slow_mutation_rate{0.35};       // 细胞增殖/力敏重塑
+
+    // ── 鲍德温效应与可塑性跨代固化 (Baldwin Effect & Plasticity Crystallization) ──
+    bool enable_baldwin_crystallization{true}; // 启用后天突触学习向先天基因权重的跨代固化
+    double crystallization_rate{0.30};         // 突触固化速率
 };
 
 inline const char* to_string(SkeletonLockMode m) {
@@ -711,8 +716,9 @@ public:
         return true;
     }
 
-    // 胚胎分形发育生长函数 (从种子细胞快速发育扩增至 target_cells 规模，如 100,000 / 1,000,000 / 10,000,000)
-    void develop_to_scale(size_t target_cells) {
+    // 胚胎分形发育生长函数 (从种子细胞快速发育扩增至 target_cells 规模，受 max_limit 预算硬上限保护)
+    void develop_to_scale(size_t target_cells, size_t max_limit = 10000000) {
+        target_cells = std::min(target_cells, max_limit);
         if (target_cells <= cells.size()) return;
         size_t needed = target_cells - cells.size();
         uint32_t current_id = static_cast<uint32_t>(cells.size());
@@ -1587,12 +1593,16 @@ public:
         for (size_t i = 0; i < synapses.size(); ++i) {
             const auto& s = synapses[i];
             double safe_w = std::isfinite(s.weight) ? s.weight : 0.0;
+            double safe_init_w = std::isfinite(s.initial_weight) ? s.initial_weight : safe_w;
             float safe_p = std::isfinite(s.photon_pos) ? s.photon_pos : 0.0f;
             ss << "    {\"from\": " << s.from_cell_id << ", \"to\": " << s.to_cell_id << ", "
-               << "\"port\": " << (int)s.to_port << ", \"weight\": " << safe_w << ", "
+               << "\"port\": " << (int)s.to_port << ", "
+               << "\"initial_weight\": " << safe_init_w << ", "
+               << "\"weight\": " << safe_w << ", "
                << "\"active\": " << (s.is_active ? "true" : "false") << ", "
                << "\"recurrent\": " << (s.is_recurrent ? "true" : "false") << ", "
                << "\"hebb_rate\": " << s.hebbian_rate << ", "
+               << "\"hebb_decay\": " << s.hebbian_decay << ", "
                << "\"photon_pos\": " << safe_p << "}"
                << (i + 1 < synapses.size() ? "," : "") << "\n";
         }
@@ -1603,12 +1613,15 @@ public:
 
     // ── 鲍德温效应与基因固化 (Baldwin Effect & Genetic Crystallization) ──
     // 将个体后天生命期内通过 Oja 在线学习到的有效突触权重，固化并写入为遗传初始基线！
-    void crystallize_plasticity() {
+    void crystallize_plasticity(double rate = 1.0) {
+        rate = std::clamp(rate, 0.0, 1.0);
         for (auto& syn : synapses) {
-            syn.initial_weight = syn.weight;
+            syn.initial_weight = syn.initial_weight * (1.0 - rate) + syn.weight * rate;
+            syn.weight = syn.initial_weight;
         }
         for (auto& csyn : compiled_synapses_) {
-            csyn.initial_weight = csyn.weight;
+            csyn.initial_weight = csyn.initial_weight * (1.0 - rate) + csyn.weight * rate;
+            csyn.weight = csyn.initial_weight;
         }
     }
 
@@ -1727,13 +1740,19 @@ public:
                     uint32_t to = static_cast<uint32_t>(std::stoul(parse_field("to").empty() ? "0" : parse_field("to")));
                     uint8_t port = static_cast<uint8_t>(std::stoul(parse_field("port").empty() ? "0" : parse_field("port")));
                     double weight = parse_field("weight").empty() ? 1.0 : std::stod(parse_field("weight"));
-                    bool active = (parse_field("active") == "true");
+                    std::string init_w_str = parse_field("initial_weight");
+                    double initial_weight = init_w_str.empty() ? weight : std::stod(init_w_str);
+                    bool active = (parse_field("active") == "true" || parse_field("active").empty());
+                    bool recurrent = (parse_field("recurrent") == "true");
                     double hebb_rate = parse_field("hebb_rate").empty() ? 0.005 : std::stod(parse_field("hebb_rate"));
+                    double hebb_decay = parse_field("hebb_decay").empty() ? 0.02 : std::stod(parse_field("hebb_decay"));
 
                     Synapse s{from, to, port, weight, active, 60.0f, -1.0f};
-                    s.initial_weight = weight;
+                    s.initial_weight = initial_weight;
+                    s.weight = weight;
+                    s.is_recurrent = recurrent;
                     s.hebbian_rate = hebb_rate;
-                    s.hebbian_decay = 0.02;
+                    s.hebbian_decay = hebb_decay;
                     org.synapses.push_back(s);
                     pos = end_brace + 1;
                 }
@@ -1741,6 +1760,103 @@ public:
         }
 
         org.compile();
+        return org;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // ── 五层清晰分层持久化契约 (Stratified Persistence Architecture) ──
+    // 1. genome.json    : 先天纯基因（拓扑、细胞类型/空间参数、遗传初始权重 initial_weight）
+    // 2. epigenome.json : 表观遗传与可塑性调制（固化状态、学习率、适应度）
+    // 3. runtime.ckpt   : 运行时操作态（实时放电电位、当前突触权值 weight、递归状态）
+    // 4. memory.json    : 情节/世界模型记忆（经验回放池、不默认遗传）
+    // ════════════════════════════════════════════════════════════════════════
+
+    // 1. 导出纯先天基因 (genome.json)
+    std::string export_genome_json() const {
+        std::ostringstream ss;
+        ss << "{\n";
+        ss << "  \"organism_id\": " << organism_id << ",\n";
+        ss << "  \"generation\": " << generation << ",\n";
+        ss << "  \"lineage\": \"" << lineage_name << "\",\n";
+        ss << "  \"cells\": [\n";
+        for (size_t i = 0; i < cells.size(); ++i) {
+            const auto& c = cells[i];
+            ss << "    {\"id\": " << c.id << ", \"type\": \"" << to_string(c.type) << "\", "
+               << "\"param1\": " << c.param1 << ", \"param2\": " << c.param2 << ", "
+               << "\"x\": " << c.x << ", \"y\": " << c.y << ", \"z\": " << c.z << "}"
+               << (i + 1 < cells.size() ? "," : "") << "\n";
+        }
+        ss << "  ],\n";
+        ss << "  \"synapses\": [\n";
+        for (size_t i = 0; i < synapses.size(); ++i) {
+            const auto& s = synapses[i];
+            ss << "    {\"from\": " << s.from_cell_id << ", \"to\": " << s.to_cell_id << ", "
+               << "\"port\": " << (int)s.to_port << ", "
+               << "\"initial_weight\": " << s.initial_weight << ", "
+               << "\"recurrent\": " << (s.is_recurrent ? "true" : "false") << ", "
+               << "\"hebb_rate\": " << s.hebbian_rate << ", "
+               << "\"hebb_decay\": " << s.hebbian_decay << "}"
+               << (i + 1 < synapses.size() ? "," : "") << "\n";
+        }
+        ss << "  ]\n";
+        ss << "}";
+        return ss.str();
+    }
+
+    // 2. 导出表观遗传与调制态 (epigenome.json)
+    std::string export_epigenome_json() const {
+        std::ostringstream ss;
+        ss << "{\n";
+        ss << "  \"organism_id\": " << organism_id << ",\n";
+        ss << "  \"fitness_score\": " << fitness_score << ",\n";
+        ss << "  \"plastic_drift_norms\": [\n";
+        for (size_t i = 0; i < synapses.size(); ++i) {
+            const auto& s = synapses[i];
+            double drift = s.weight - s.initial_weight;
+            ss << "    {\"from\": " << s.from_cell_id << ", \"to\": " << s.to_cell_id 
+               << ", \"drift\": " << drift << "}"
+               << (i + 1 < synapses.size() ? "," : "") << "\n";
+        }
+        ss << "  ]\n";
+        ss << "}";
+        return ss.str();
+    }
+
+    // 3. 导出运行时操作态 (runtime.ckpt)
+    std::string export_runtime_ckpt() const {
+        std::ostringstream ss;
+        ss << "{\n";
+        ss << "  \"organism_id\": " << organism_id << ",\n";
+        ss << "  \"live_cell_states\": [\n";
+        for (size_t i = 0; i < cells.size(); ++i) {
+            const auto& c = cells[i];
+            ss << "    {\"id\": " << c.id << ", \"output\": " << c.output_val 
+               << ", \"activations\": " << c.activation_count << ", \"glow\": " << c.glow_charge << "}"
+               << (i + 1 < cells.size() ? "," : "") << "\n";
+        }
+        ss << "  ],\n";
+        ss << "  \"live_synapse_weights\": [\n";
+        for (size_t i = 0; i < synapses.size(); ++i) {
+            const auto& s = synapses[i];
+            ss << "    {\"from\": " << s.from_cell_id << ", \"to\": " << s.to_cell_id 
+               << ", \"weight\": " << s.weight << ", \"photon_pos\": " << s.photon_pos << "}"
+               << (i + 1 < synapses.size() ? "," : "") << "\n";
+        }
+        ss << "  ]\n";
+        ss << "}";
+        return ss.str();
+    }
+
+    // 从先天基因初始化（不带任何后天未固化权重）
+    static CellularOrganism from_genome_json(const std::string& json_str) {
+        auto org = from_json(json_str);
+        // 严格保证 live weight 重置为 initial_weight
+        for (auto& syn : org.synapses) {
+            syn.weight = syn.initial_weight;
+        }
+        for (auto& csyn : org.compiled_synapses_) {
+            csyn.weight = csyn.initial_weight;
+        }
         return org;
     }
 
@@ -1837,13 +1953,13 @@ public:
     EvolutionConstraintConfig& constraint_config() { return constraint_cfg_; }
     SeedInitMode get_init_mode() const { return constraint_cfg_.seed_mode; }
 
-    // ── 生物变异操作 1: 细胞分裂增殖 (Mitosis / Add Cell — 无上限开放式演化) ──
+    // ── 生物变异操作 1: 细胞分裂增殖 (Mitosis / Add Cell — 受资源预算与代谢平衡约束) ──
     bool mutate_add_cell(CellularOrganism& org) {
-        if (org.cells.size() >= constraint_cfg_.max_cells_limit) {
+        if (org.cells.size() >= constraint_cfg_.max_cells_limit ||
+            org.synapses.size() + 2 > constraint_cfg_.max_synapses_limit) {
             return mutate_add_synapse(org);
         }
-        // 动态代谢能量约束：大脑无人工天花板。
-        // 高性能个体代谢池充盈，可自由分裂扩张至万级规模；亏损/平庸个体受代谢赤字调节，优先重塑现有突触。
+        // 动态代谢能量约束：亏损/平庸个体受代谢赤字调节，优先重塑现有突触。
         if (constraint_cfg_.enable_dynamic_metabolism && org.total_pnl < 0.0 && org.cells.size() > 128) {
             std::uniform_real_distribution<double> dist_met(0.0, 1.0);
             if (dist_met(rng_) < 0.85) {
@@ -2069,7 +2185,9 @@ public:
 
     // ── 生物变异操作 4: 力敏转导定向有丝分裂与皮层沟回拱起 (Mechanosensitive Mitosis) ──
     bool mutate_mechanosensitive_mitosis(CellularOrganism& org) {
-        if (org.cells.size() >= constraint_cfg_.max_cells_limit || org.cells.size() < 5) return false;
+        if (org.cells.size() >= constraint_cfg_.max_cells_limit ||
+            org.synapses.size() + 2 > constraint_cfg_.max_synapses_limit ||
+            org.cells.size() < 5) return false;
 
         // 寻找综合力敏应变最高的候选母细胞
         size_t best_idx = 0;
@@ -2158,50 +2276,65 @@ public:
         return true;
     }
 
-    // 综合变异入口
-    void mutate(CellularOrganism& org) {
-        std::optional<CellularOrganism> before;
-        if (constraint_cfg_.enable_dependency_guard) {
-            before.emplace(org);
-        }
+    // 综合变异入口 (具备事务性原子回滚保障)
+    bool mutate(CellularOrganism& org) {
+        CellularOrganism snapshot = org; // 变异前事务快照
         std::uniform_real_distribution<double> dist(0.0, 1.0);
+        bool any_mutated = false;
 
         // 1. 若当前有机体突触不足 4 条 (如原始胚胎冷启动)，强制优先建立基础突触连接
         size_t active_syns = 0;
         for (const auto& s : org.synapses) if (s.is_active) active_syns++;
         if (active_syns < 4) {
-            for (int i = 0; i < 3; ++i) mutate_add_synapse(org);
+            for (int i = 0; i < 3; ++i) {
+                if (mutate_add_synapse(org)) any_mutated = true;
+            }
         }
 
         // 2. 突触权重与细胞参数微调 (细粒度梯度微扰，随停滞自适应增强)
         if (dist(rng_) < std::min(0.95, constraint_cfg_.fast_mutation_rate * adaptive_mutation_boost_)) {
-            mutate_parameters(org);
+            if (mutate_parameters(org)) any_mutated = true;
         }
 
         // 3. 突触结构重连 / 新增突触
         if (dist(rng_) < std::min(0.85, constraint_cfg_.medium_mutation_rate * adaptive_mutation_boost_)) {
-            mutate_add_synapse(org);
+            if (mutate_add_synapse(org)) any_mutated = true;
         }
 
         // 4. 力敏转导定向有丝分裂 (或传统随机有丝分裂)
         if (constraint_cfg_.enable_mechanotransduction) {
             if (dist(rng_) < std::min(0.70, constraint_cfg_.slow_mutation_rate * adaptive_mutation_boost_)) {
-                mutate_mechanosensitive_mitosis(org);
+                if (mutate_mechanosensitive_mitosis(org)) any_mutated = true;
             }
         } else {
             if (dist(rng_) < std::min(0.70, constraint_cfg_.slow_mutation_rate * adaptive_mutation_boost_)) {
-                mutate_add_cell(org);
+                if (mutate_add_cell(org)) any_mutated = true;
             }
         }
 
         // 5. 细胞自我凋亡与无用分支净化
         if (dist(rng_) < 0.05) {
             prune_apoptosis(org);
+            any_mutated = true;
         }
 
-        if (before && !org.evaluate_adas_contract().valid()) {
-            org = std::move(*before);
+        // 变异后事务校验：编译完整性、资源上限约束、功能依赖契约
+        bool compile_ok = org.compile();
+        bool budget_ok = (org.cells.size() <= constraint_cfg_.max_cells_limit &&
+                          org.synapses.size() <= constraint_cfg_.max_synapses_limit);
+        bool contract_ok = (!constraint_cfg_.enable_dependency_guard || org.evaluate_adas_contract().valid());
+
+        if (constraint_cfg_.enable_transaction_rollback) {
+            if (!compile_ok || !budget_ok || !contract_ok) {
+                org = std::move(snapshot); // 原子回滚至变异前状态
+                return false;
+            }
+        } else if (constraint_cfg_.enable_dependency_guard && !contract_ok) {
+            org = std::move(snapshot);
+            return false;
         }
+
+        return any_mutated;
     }
 
     // ── 种群世代演化 (Evolve Next Generation — 无上限开放式自发演化) ──
@@ -2258,6 +2391,13 @@ public:
             return a.fitness_score > b.fitness_score;
         });
 
+        // 3.0 鲍德温可塑性基因跨代固化 (Baldwin Effect Crystallization)
+        if (constraint_cfg_.enable_baldwin_crystallization) {
+            for (auto& org : population_) {
+                org.crystallize_plasticity(constraint_cfg_.crystallization_rate);
+            }
+        }
+
         // 自适应停滞检测 (Plateau Stagnation Detection)
         if (!population_.empty()) {
             double current_best = population_[0].fitness_score;
@@ -2291,7 +2431,7 @@ public:
                 static_cast<uint32_t>(next_gen.size() + 1), 
                 static_cast<uint32_t>(rng_())
             );
-            for (int m = 0; m < 2 + (k % 3); ++m) mutate(immigrant);
+            for (int m = 0; m < 2 + static_cast<int>(k % 3); ++m) mutate(immigrant);
             immigrant.generation = population_.empty() ? 1 : population_[0].generation + 1;
             immigrant.lineage_name = "Immigrant-Gen" + std::to_string(immigrant.generation);
             next_gen.push_back(std::move(immigrant));

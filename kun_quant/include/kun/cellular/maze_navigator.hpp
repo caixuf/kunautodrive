@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kun/cellular/cellular_genome.hpp"
+#include "kun/cellular/evolvable_task.hpp"
 #include "kun/core/types.hpp"
 #include <vector>
 #include <cmath>
@@ -9,6 +10,7 @@
 #include <algorithm>
 #include <random>
 #include <iostream>
+#include <fstream>
 
 namespace kun {
 
@@ -264,6 +266,107 @@ private:
 };
 
 /**
+ * @brief 迷宫任务 (MazeTask) — 遵循 EvolvableTask 标准 Gym 契约
+ */
+class MazeTask : public EvolvableTask {
+public:
+    explicit MazeTask(int width = 11, int height = 11, uint32_t seed = 42, int max_steps = 160)
+        : width_(width), height_(height), max_steps_(max_steps), maze_(width, height, seed) {
+        reset(seed);
+    }
+
+    const char* name() const override { return "MazeNavigation"; }
+    size_t obs_dim() const override { return 4; }
+    size_t act_dim() const override { return 4; }
+
+    void reset(uint32_t episode_seed) override {
+        maze_ = MazeEnvironment(width_, height_, episode_seed);
+        agent_ = MazeEnvironment::Agent{};
+        agent_.x = maze_.get_start_x();
+        agent_.y = maze_.get_start_y();
+        agent_.theta = 0.0f;
+        agent_.min_dist_to_goal = std::hypot(maze_.get_goal_x() - agent_.x, maze_.get_goal_y() - agent_.y);
+        maze_.update_sensors(agent_);
+        step_count_ = 0;
+        init_dist_ = agent_.min_dist_to_goal;
+    }
+
+    std::vector<float> current_observation() const override {
+        return {
+            agent_.ray_dists[0],
+            agent_.ray_dists[1],
+            agent_.ray_dists[2],
+            agent_.goal_bearing
+        };
+    }
+
+    StepResult step(int action) override {
+        CellularOrganism::ActionOutputs acts;
+        if (action == 0) {
+            acts.positive_action = 1.0;  // 直行
+            acts.negative_action = 0.0;
+        } else if (action == 1) {
+            acts.positive_action = 0.5;
+            acts.negative_action = 1.0;  // 左转
+        } else if (action == 2) {
+            acts.positive_action = 0.5;
+            acts.negative_action = -1.0; // 右转
+        } else {
+            acts.immune_lock = true;     // 倒车/脱困
+        }
+        return step_continuous(acts);
+    }
+
+    StepResult step_continuous(const CellularOrganism::ActionOutputs& acts) override {
+        step_count_++;
+        float dt = 0.12f;
+        float prev_dist = std::hypot(maze_.get_goal_x() - agent_.x, maze_.get_goal_y() - agent_.y);
+        maze_.step_agent(agent_, acts, dt);
+        float new_dist = std::hypot(maze_.get_goal_x() - agent_.x, maze_.get_goal_y() - agent_.y);
+
+        double step_reward = (prev_dist - new_dist) * 10.0; // 势能差奖励
+        if (agent_.reached_goal) {
+            step_reward += 300.0 + static_cast<double>(max_steps_ - step_count_) * 1.5;
+        }
+        step_reward -= static_cast<double>(agent_.collision_count) * 0.2;
+
+        StepResult res;
+        res.obs = current_observation();
+        res.reward = step_reward;
+        res.done = (agent_.reached_goal || step_count_ >= max_steps_);
+        res.success = agent_.reached_goal;
+        res.steps = step_count_;
+        res.min_dist_to_goal = agent_.min_dist_to_goal;
+        res.collision_count = agent_.collision_count;
+        return res;
+    }
+
+    double current_fitness() const override {
+        float progress = (init_dist_ - agent_.min_dist_to_goal) / std::max(0.1f, init_dist_);
+        double fit = progress * 100.0;
+        if (agent_.reached_goal) {
+            fit += 300.0 + static_cast<double>(max_steps_ - step_count_) * 1.5;
+        }
+        fit -= static_cast<double>(agent_.collision_count) * 0.5;
+        return fit;
+    }
+
+    int get_width() const { return width_; }
+    int get_height() const { return height_; }
+    const MazeEnvironment& get_maze() const { return maze_; }
+    const MazeEnvironment::Agent& get_agent() const { return agent_; }
+
+private:
+    int width_{11};
+    int height_{11};
+    int max_steps_{160};
+    int step_count_{0};
+    float init_dist_{10.0f};
+    MazeEnvironment maze_;
+    MazeEnvironment::Agent agent_;
+};
+
+/**
  * @brief 迷宫形态发生细胞演化导航引擎 (MazeEvolutionEngine)
  */
 class MazeEvolutionEngine {
@@ -363,6 +466,22 @@ public:
         maze_.generate_classic_maze();
         generation_ = 1;   // 换图 = 重新开榜
         reset_simulation();
+    }
+
+    OOSReport evaluate_oos(const TaskDatasetSplit& split = TaskDatasetSplit::create_default_maze_split(), double gate_threshold = 0.70) {
+        MazeTask train_task(split.train_map_size, split.train_map_size, 42, split.max_steps_per_episode);
+        MazeTask id_task(split.train_map_size, split.train_map_size, 99, split.max_steps_per_episode);
+        MazeTask ood_task(split.ood_map_size, split.ood_map_size, 199, split.max_steps_per_episode * 2);
+
+        auto& champ = morph_engine_.get_champion();
+        return TaskEvaluator::evaluate_task_split(train_task, id_task, ood_task, champ, split, gate_threshold);
+    }
+
+    bool save_champion_oos(const std::string& path, const OOSReport& report) const {
+        std::ofstream ofs(path);
+        if (!ofs.is_open()) return false;
+        ofs << report.to_json();
+        return true;
     }
 
     std::string to_json() const {
