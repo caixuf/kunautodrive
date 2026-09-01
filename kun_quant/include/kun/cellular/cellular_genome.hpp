@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <algorithm>
+#include <optional>
 #include <cmath>
 #include <random>
 #include <memory>
@@ -244,6 +245,12 @@ struct EvolutionConstraintConfig {
     double basal_metabolic_cost{0.002};     // 细胞单位维持能耗 (真实物理代谢阻尼)
     double synaptic_metabolic_cost{0.0005}; // 突触单位通信能耗
     double immigrant_rate{0.15};            // 客卿移民比例 (保持种群多样性)
+
+    // ── 分层突变与依赖保护 (Layered Mutation / Dependency Guard) ──
+    bool enable_dependency_guard{false};    // ADAS 模式下按功能路径原子拒绝破坏性突变
+    double fast_mutation_rate{0.80};        // 参数与局部权重漂移
+    double medium_mutation_rate{0.45};      // 局部突触重连
+    double slow_mutation_rate{0.35};        // 细胞增殖/力敏重塑
 };
 
 inline const char* to_string(SkeletonLockMode m) {
@@ -491,6 +498,55 @@ public:
 
         // 突触完全为空 (0 connections at gen-0)
         org.synapses.clear();
+
+        org.compile();
+        return org;
+    }
+
+    // 智驾原基：4 感受器 + 纵横向/免疫通路都在图内，适配器只做单位换算。
+    static CellularOrganism create_adas_seed_organism(uint64_t id = 1) {
+        CellularOrganism org;
+        org.organism_id = id;
+        org.generation = 0;
+        org.lineage_name = "ADAS-Progenitor";
+
+        org.cells.push_back({0, CellType::SENSE_RAW_INPUT_0, 1.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, -120.0f, -60.0f, 0.0f});
+        org.cells.push_back({1, CellType::SENSE_RAW_INPUT_1, 1.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, -120.0f, -20.0f, 0.0f});
+        org.cells.push_back({2, CellType::SENSE_RAW_INPUT_2, 1.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, -120.0f,  20.0f, 0.0f});
+        org.cells.push_back({3, CellType::SENSE_RAW_INPUT_3, 1.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, -120.0f,  60.0f, 0.0f});
+
+        org.cells.push_back({4, CellType::GATE_THRESHOLD, -1.0e9, 0.0, 0.0, 0.0, false, 0.0, 0, 0, -40.0f, 0.0f, 0.0f});
+        org.cells.push_back({5, CellType::OP_SUM, 0.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, 20.0f, -40.0f, 0.0f});
+        org.cells.push_back({6, CellType::ACT_PRIMARY_POSITIVE, 0.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, 140.0f, -60.0f, 0.0f});
+        org.cells.push_back({7, CellType::ACT_PRIMARY_NEGATIVE, 0.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, 140.0f, -20.0f, 0.0f});
+        org.cells.push_back({8, CellType::ACT_DEFENSIVE_RESET, 0.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, 140.0f,  20.0f, 0.0f});
+        org.cells.push_back({9, CellType::OP_SUB, 0.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, 20.0f, 40.0f, 0.0f});
+        org.cells.push_back({10, CellType::GATE_THRESHOLD, 0.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, 60.0f, 40.0f, 0.0f});
+        org.cells.push_back({11, CellType::OP_SUB, 0.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, 20.0f, 80.0f, 0.0f});
+        org.cells.push_back({12, CellType::GATE_THRESHOLD, 3.5, 0.0, 0.0, 0.0, false, 0.0, 0, 0, 60.0f, 80.0f, 0.0f});
+        org.cells.push_back({13, CellType::OP_SUM, 0.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, 100.0f, 60.0f, 0.0f});
+        org.cells.push_back({14, CellType::ACT_IMMUNE_BLOCK, 0.0, 0.0, 0.0, 0.0, false, 0.0, 0, 0, 140.0f, 100.0f, 0.0f});
+
+        org.synapses.push_back({0, 4, 0, 1.0, true, 60.0f, -1.0f});
+        org.synapses.push_back({0, 5, 0, 0.35, true, 60.0f, -1.0f});
+        org.synapses.push_back({1, 5, 1, 0.95, true, 60.0f, -1.0f});
+        org.synapses.push_back({4, 5, 0, -5.25, true, 60.0f, -1.0f});
+        org.synapses.push_back({5, 6, 0, 1.0, true, 60.0f, -1.0f});
+        org.synapses.push_back({2, 8, 0, 0.45, true, 60.0f, -1.0f});
+        org.synapses.push_back({4, 9, 0, 2.0, true, 60.0f, -1.0f});
+        org.synapses.push_back({3, 9, 1, 1.0, true, 60.0f, -1.0f});
+        org.synapses.push_back({9, 10, 0, 1.0, true, 60.0f, -1.0f});
+        org.synapses.push_back({1, 11, 1, 1.0, true, 60.0f, -1.0f});
+        org.synapses.push_back({11, 12, 0, 1.0, true, 60.0f, -1.0f});
+        org.synapses.push_back({10, 13, 0, 1.0, true, 60.0f, -1.0f});
+        org.synapses.push_back({12, 13, 1, 1.0, true, 60.0f, -1.0f});
+        org.synapses.push_back({13, 14, 0, 1.0, true, 60.0f, -1.0f});
+        org.synapses.push_back({13, 7, 0, -1.0, true, 60.0f, -1.0f});
+
+        for (auto& s : org.synapses) {
+            s.initial_weight = s.weight;
+            s.hebbian_rate = 0.0; // 反射弧不在线改权重，否则跟车几百步会把免疫锁焊死
+        }
 
         org.compile();
         return org;
@@ -909,6 +965,143 @@ public:
         var_z /= cells.size();
         double height = max_z - min_z;
         return 1.0 + (std::sqrt(var_z) / 12.0) + (height / 35.0);
+    }
+
+    // 力学分相：有突触对的平均距离 vs 全体细胞对。>1 表示弹簧把耦合细胞拉成微柱。
+    double compute_mechanical_demixing_ratio() const {
+        if (cells.size() < 2) return 1.0;
+        auto cell_xyz = [&](uint32_t id, float& x, float& y, float& z) -> bool {
+            for (const auto& c : cells) {
+                if (c.id == id) { x = c.x; y = c.y; z = c.z; return true; }
+            }
+            return false;
+        };
+        double syn_sum = 0.0;
+        size_t syn_n = 0;
+        for (const auto& s : synapses) {
+            if (!s.is_active) continue;
+            float x1, y1, z1, x2, y2, z2;
+            if (!cell_xyz(s.from_cell_id, x1, y1, z1) || !cell_xyz(s.to_cell_id, x2, y2, z2)) continue;
+            double dx = x1 - x2, dy = y1 - y2, dz = z1 - z2;
+            syn_sum += std::sqrt(dx * dx + dy * dy + dz * dz);
+            syn_n++;
+        }
+        double pair_sum = 0.0;
+        size_t pair_n = 0;
+        for (size_t i = 0; i < cells.size(); ++i) {
+            for (size_t j = i + 1; j < cells.size(); ++j) {
+                double dx = cells[i].x - cells[j].x;
+                double dy = cells[i].y - cells[j].y;
+                double dz = cells[i].z - cells[j].z;
+                pair_sum += std::sqrt(dx * dx + dy * dy + dz * dz);
+                pair_n++;
+            }
+        }
+        if (syn_n == 0 || pair_n == 0) return 1.0;
+        double mean_syn = syn_sum / static_cast<double>(syn_n);
+        double mean_pair = pair_sum / static_cast<double>(pair_n);
+        if (mean_syn < 1e-6) return mean_pair / 1e-6;
+        return mean_pair / mean_syn;
+    }
+
+    struct AdasGraphContract {
+        bool positive_action{false};
+        bool negative_action{false};
+        bool defensive_reset{false};
+        bool immune_block{false};
+        bool longitudinal_input{false};
+        bool relative_velocity_input{false};
+        bool lateral_input{false};
+        bool ttc_input{false};
+        uint8_t positive_source_mask{0};
+        uint8_t negative_source_mask{0};
+        uint8_t defensive_source_mask{0};
+        uint8_t immune_source_mask{0};
+        size_t reachable_cells{0};
+
+        bool valid() const {
+            return positive_action && negative_action && defensive_reset &&
+                   immune_block && longitudinal_input && relative_velocity_input &&
+                   lateral_input && ttc_input;
+        }
+    };
+
+    // Derive functional coverage from the active graph; cell IDs have no role.
+    AdasGraphContract evaluate_adas_contract() const {
+        AdasGraphContract result;
+        std::unordered_map<uint32_t, size_t> id_to_index;
+        std::vector<std::vector<size_t>> outgoing(cells.size());
+        for (size_t i = 0; i < cells.size(); ++i) {
+            id_to_index[cells[i].id] = i;
+        }
+        for (const auto& syn : synapses) {
+            if (!syn.is_active || syn.is_recurrent) continue;
+            auto from = id_to_index.find(syn.from_cell_id);
+            auto to = id_to_index.find(syn.to_cell_id);
+            if (from != id_to_index.end() && to != id_to_index.end()) {
+                outgoing[from->second].push_back(to->second);
+            }
+        }
+
+        std::vector<uint8_t> source_mask(cells.size(), 0);
+        std::vector<size_t> queue;
+        for (size_t i = 0; i < cells.size(); ++i) {
+            uint8_t mask = 0;
+            switch (cells[i].type) {
+                case CellType::SENSE_RAW_INPUT_0: mask = 1u << 0; break;
+                case CellType::SENSE_RAW_INPUT_1: mask = 1u << 1; break;
+                case CellType::SENSE_RAW_INPUT_2: mask = 1u << 2; break;
+                case CellType::SENSE_RAW_INPUT_3: mask = 1u << 3; break;
+                default: break;
+            }
+            if (mask != 0) {
+                source_mask[i] = mask;
+                queue.push_back(i);
+            }
+        }
+
+        for (size_t head = 0; head < queue.size(); ++head) {
+            const size_t current = queue[head];
+            for (size_t next : outgoing[current]) {
+                const uint8_t merged = static_cast<uint8_t>(source_mask[next] | source_mask[current]);
+                if (merged != source_mask[next]) {
+                    source_mask[next] = merged;
+                    queue.push_back(next);
+                }
+            }
+        }
+
+        for (size_t i = 0; i < cells.size(); ++i) {
+            if (source_mask[i] == 0) continue;
+            ++result.reachable_cells;
+            switch (cells[i].type) {
+                case CellType::ACT_PRIMARY_POSITIVE:
+                    result.positive_action = true;
+                    result.positive_source_mask |= source_mask[i];
+                    break;
+                case CellType::ACT_PRIMARY_NEGATIVE:
+                    result.negative_action = true;
+                    result.negative_source_mask |= source_mask[i];
+                    break;
+                case CellType::ACT_DEFENSIVE_RESET:
+                    result.defensive_reset = true;
+                    result.defensive_source_mask |= source_mask[i];
+                    break;
+                case CellType::ACT_IMMUNE_BLOCK:
+                    result.immune_block = true;
+                    result.immune_source_mask |= source_mask[i];
+                    break;
+                default:
+                    break;
+            }
+        }
+        result.longitudinal_input =
+            ((result.positive_source_mask | result.negative_source_mask) & (1u << 0)) != 0;
+        result.relative_velocity_input =
+            ((result.positive_source_mask | result.negative_source_mask) & (1u << 1)) != 0;
+        result.lateral_input = (result.defensive_source_mask & (1u << 2)) != 0;
+        result.ttc_input = (result.immune_source_mask & (1u << 3)) != 0;
+        return result;
     }
 
     // 更新神经元信息惊奇度应变 (Prediction Error Strain)
@@ -1716,17 +1909,25 @@ public:
         float new_y = parent.y + dist_noise(rng_);
         float new_z = parent.z + dist_z(rng_);
 
-        uint32_t new_id = static_cast<uint32_t>(org.cells.size());
-        std::uniform_int_distribution<int> dist_type(0, 4);
+        uint32_t new_id = 0;
+        for (const auto& cell : org.cells) new_id = std::max(new_id, cell.id);
+        ++new_id;
         CellType new_type = CellType::OP_EMA;
-        int t_idx = dist_type(rng_);
-        if (t_idx == 0) new_type = CellType::OP_EMA;
-        else if (t_idx == 1) new_type = CellType::OP_DIFF;
-        else if (t_idx == 2) new_type = CellType::GATE_HYSTERESIS;
-        else if (t_idx == 3) new_type = CellType::OP_INTEGRAL;
-        else new_type = CellType::GATE_DEADZONE;
+        double new_param1 = 0.5;
+        if (!constraint_cfg_.enable_dependency_guard) {
+            std::uniform_int_distribution<int> dist_type(0, 4);
+            int t_idx = dist_type(rng_);
+            if (t_idx == 1) new_type = CellType::OP_DIFF;
+            else if (t_idx == 2) new_type = CellType::GATE_HYSTERESIS;
+            else if (t_idx == 3) new_type = CellType::OP_INTEGRAL;
+            else if (t_idx == 4) new_type = CellType::GATE_DEADZONE;
+        } else {
+            // Guarded structural evolution uses an identity EMA subdivision:
+            // topology changes without silently changing the protected path.
+            new_param1 = 1.0;
+        }
 
-        Cell new_cell{new_id, new_type, 0.5, 0.0, 0.0, 0.0, false, 0.0, 0, 0, new_x, new_y, new_z};
+        Cell new_cell{new_id, new_type, new_param1, 0.0, 0.0, 0.0, false, 0.0, 0, 0, new_x, new_y, new_z};
         new_cell.mitosis_cooldown = 15;
         org.cells[best_idx].mitosis_cooldown = 15;
         org.cells[best_idx].informational_strain *= 0.1f; // 卸载应变
@@ -1748,6 +1949,10 @@ public:
 
     // 综合变异入口
     void mutate(CellularOrganism& org) {
+        std::optional<CellularOrganism> before;
+        if (constraint_cfg_.enable_dependency_guard) {
+            before.emplace(org);
+        }
         std::uniform_real_distribution<double> dist(0.0, 1.0);
 
         // 1. 若当前有机体突触不足 4 条 (如原始胚胎冷启动)，强制优先建立基础突触连接
@@ -1758,22 +1963,22 @@ public:
         }
 
         // 2. 突触权重与细胞参数微调 (细粒度梯度微扰，随停滞自适应增强)
-        if (dist(rng_) < std::min(0.95, 0.80 * adaptive_mutation_boost_)) {
+        if (dist(rng_) < std::min(0.95, constraint_cfg_.fast_mutation_rate * adaptive_mutation_boost_)) {
             mutate_parameters(org);
         }
 
         // 3. 突触结构重连 / 新增突触
-        if (dist(rng_) < std::min(0.85, 0.45 * adaptive_mutation_boost_)) {
+        if (dist(rng_) < std::min(0.85, constraint_cfg_.medium_mutation_rate * adaptive_mutation_boost_)) {
             mutate_add_synapse(org);
         }
 
         // 4. 力敏转导定向有丝分裂 (或传统随机有丝分裂)
         if (constraint_cfg_.enable_mechanotransduction) {
-            if (dist(rng_) < std::min(0.70, 0.35 * adaptive_mutation_boost_)) {
+            if (dist(rng_) < std::min(0.70, constraint_cfg_.slow_mutation_rate * adaptive_mutation_boost_)) {
                 mutate_mechanosensitive_mitosis(org);
             }
         } else {
-            if (dist(rng_) < std::min(0.70, 0.30 * adaptive_mutation_boost_)) {
+            if (dist(rng_) < std::min(0.70, constraint_cfg_.slow_mutation_rate * adaptive_mutation_boost_)) {
                 mutate_add_cell(org);
             }
         }
@@ -1781,6 +1986,10 @@ public:
         // 5. 细胞自我凋亡与无用分支净化
         if (dist(rng_) < 0.05) {
             prune_apoptosis(org);
+        }
+
+        if (before && !org.evaluate_adas_contract().valid()) {
+            org = std::move(*before);
         }
     }
 
@@ -1802,6 +2011,11 @@ public:
         if (constraint_cfg_.fitness_driver == FitnessDriverMode::NOVELTY_SEARCH ||
             constraint_cfg_.fitness_driver == FitnessDriverMode::HYBRID_CURIOSITY) {
             for (auto& org : population_) {
+                if (constraint_cfg_.enable_dependency_guard &&
+                    !org.evaluate_adas_contract().valid()) {
+                    org.fitness_score = -1e12;
+                    continue;
+                }
                 std::vector<double> b_vec = {
                     static_cast<double>(org.cells.size()),
                     static_cast<double>(org.synapses.size()),
@@ -1816,6 +2030,15 @@ public:
                 } else if (constraint_cfg_.fitness_driver == FitnessDriverMode::HYBRID_CURIOSITY) {
                     double alpha = constraint_cfg_.novelty_weight;
                     org.fitness_score = (1.0 - alpha) * org.fitness_score + alpha * (nov * 50.0);
+                }
+            }
+        }
+
+        // Apply the dependency guard after every score transform, including novelty.
+        if (constraint_cfg_.enable_dependency_guard) {
+            for (auto& org : population_) {
+                if (!org.evaluate_adas_contract().valid()) {
+                    org.fitness_score = -1e12;
                 }
             }
         }

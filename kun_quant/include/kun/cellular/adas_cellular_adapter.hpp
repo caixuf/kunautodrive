@@ -31,40 +31,25 @@ public:
         double ttc_seconds
     ) {
         double inputs[4];
-        inputs[0] = distance_to_lead_m; // 输入 0: 目标距离
-        inputs[1] = rel_velocity_mps;   // 输入 1: 相对速度
-        inputs[2] = lane_offset_m;      // 输入 2: 车道偏移
-        inputs[3] = (ttc_seconds > 0.0 && ttc_seconds < 10.0) ? (10.0 - ttc_seconds) : 0.0; // 输入 3: TTC 危险度
+        inputs[0] = distance_to_lead_m;
+        inputs[1] = rel_velocity_mps;
+        inputs[2] = lane_offset_m;
+        inputs[3] = ttc_seconds;
 
-        auto outputs = organism_.forward(inputs);
+        auto outputs = organism_.forward(inputs, /*enable_hebbian=*/false);
 
         AdasControlOutput ctl;
-        
-        // 1. 紧急制动 / 免疫安全门 (在前向存在危险 TTC < 4.0s 或相对速度骤降 < -3.0m/s 时触发 AEB 应急防撞)
-        if ((outputs.immune_lock && (ttc_seconds < 4.5 || distance_to_lead_m < 30.0)) || 
-            ttc_seconds < 2.0 || rel_velocity_mps < -3.5 || (distance_to_lead_m < 10.0 && rel_velocity_mps < -1.0)) {
+        // 执行器饱和是物理限幅，不是控制律。控制律只来自细胞输出。
+        if (outputs.immune_lock) {
             ctl.is_aeb_triggered = true;
-            ctl.target_accel_mps2 = -6.0; // 触发最大制动减速度 (AEB)
-            ctl.active_pathway = "[AEB_IMMUNE_TRIGGER] 细胞网络与TTC双重触发紧急防撞制动!";
+            ctl.target_accel_mps2 = -6.0;
+            ctl.active_pathway = "[AEB_IMMUNE_LOCK] Act_ImmuneBlock";
             return ctl;
         }
 
-        // 2. 纵向跟车与巡航控制 (基于自适应时距间隙与相对速度)
-        double desired_distance = 15.0;
-        double dist_error = distance_to_lead_m - desired_distance;
-        if (distance_to_lead_m < 120.0) {
-            // 跟车态: PD 反馈精确追踪前车速度与时距
-            ctl.target_accel_mps2 = std::clamp(dist_error * 0.35 + rel_velocity_mps * 0.95, -4.5, 2.0);
-        } else {
-            // 自由巡航态: 平顺加速
-            ctl.target_accel_mps2 = std::clamp(outputs.positive_action * 1.5, 0.0, 2.0);
-        }
-
-        // 3. 横向车道居中控制: lane_offset_m = ego_y - target_y
-        // 当 ego 在目标左侧 (lane_offset > 0), steer 应向右 (负值)
-        ctl.steering_curvature = -lane_offset_m * 0.45 * (1.0 + outputs.defensive_reset);
-
-        ctl.active_pathway = "Acc=" + std::to_string(ctl.target_accel_mps2) + 
+        ctl.target_accel_mps2 = std::clamp(outputs.positive_action - outputs.negative_action, -6.0, 2.0);
+        ctl.steering_curvature = std::clamp(-outputs.defensive_reset, -0.60, 0.60);
+        ctl.active_pathway = "Acc=" + std::to_string(ctl.target_accel_mps2) +
                              "m/s2, SteerCurv=" + std::to_string(ctl.steering_curvature);
         return ctl;
     }

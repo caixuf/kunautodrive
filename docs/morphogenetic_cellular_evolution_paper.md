@@ -213,6 +213,17 @@ $$T_{\text{force}} = \mathcal{O}\left( N \cdot \bar{\rho} \cdot \frac{27}{2} \ri
 
 Empirical benchmarks confirm that for $N = 100,000$, the single-step force relaxation latency collapses from minutes to **159.9 ms**, and scales linearly to **2.44 s** for $N = 1,000,000$ cells, achieving strict $\mathcal{O}(N)$ linear scalability.
 
+### 4.4 Compartment Boundaries Emerge from Mechanics, Not Quotas
+Hierarchy is not a cell cap. Writing `max_cells_fast = 256` would reinstall the mud-metaphor mold this architecture rejects. Organ boundaries are physical objects that nucleate from **differential adhesion** (Steinberg) plus Lennard-Jones demixing.
+
+Identify synaptic stiffness with work of adhesion $W_{ij}=|w_{ij}|$. Interfacial tension between candidate clusters $\mathcal{A},\mathcal{B}$ is
+
+$$\gamma_{\mathcal{AB}} = \tfrac{1}{2}(\varepsilon_{\mathcal{A}}+\varepsilon_{\mathcal{B}}) - \varepsilon_{\mathcal{AB}}, \quad \varepsilon_{\mathcal{S}}=\langle |w_{ij}| \rangle_{i,j\in\mathcal{S}}.$$
+
+When $\gamma_{\mathcal{AB}}>0$ the clusters demix: the boundary is the level set of adhesion energy and the zero-flux surface of the force field. Short-range Pauli repulsion forbids two operators occupying one point; mid-range attraction plus synaptic springs pull strongly coupled cells into microcolumns; mechanosensitive mitosis ($\sigma_i = 0.05\|\mathbf{F}_i\| + 2\,\mathrm{strain}^{\mathrm{info}}_i$) buds along $+z$ and folds gyri. The reflex column stays small because unpaid primitives are apoptosed and lethal graphs die in the environment—not because a whitelist said so.
+
+Timescale splitting is a **spectral gap** of the Jacobian $J$ of the cellular dynamics: localized high-stiffness eigenmodes compile into L1 (reflex); delocalized weak long-range modes live at planning rates. Hardware latency is the selection pressure. Metabolic drain is volume energy, not a ceiling. Turing morphogens are *not* implemented; chemical identity remains future work. Shape and walls are mechanical.
+
 ---
 
 ## 5. Morphogenetic Evolutionary Operators

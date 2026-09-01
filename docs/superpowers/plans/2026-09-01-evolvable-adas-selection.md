@@ -10,6 +10,11 @@
 
 ---
 
+**Implementation result:** Completed on 2026-09-01. The graph contract, guarded
+layered mutation, shared six-scenario fitness suite, deterministic descendant
+proof, negative controls, and held-out AEB perturbation are implemented and
+covered by the targeted CTest regression.
+
 ## File map
 
 - Modify `kun_quant/include/kun/cellular/cellular_genome.hpp`: add an ID-independent ADAS graph contract, configurable mutation layers, and atomic rollback for guarded mutation.
@@ -219,7 +224,7 @@ void test_guarded_mutation() {
     bool changed = false;
     for (auto& candidate : engine.population()) {
         candidate = seed;
-        engine.mutate_for_test(candidate);
+        engine.mutate(candidate);
         assert(candidate.evaluate_adas_contract().valid());
         changed |= candidate.cells.size() != seed_cells ||
                    active_synapse_count(candidate) != seed_synapses;
@@ -250,14 +255,8 @@ double medium_mutation_rate{0.45};
 double slow_mutation_rate{0.35};
 ```
 
-Expose a deterministic public wrapper that uses the same mutation code as
-evolution:
-
-```cpp
-void mutate_for_test(CellularOrganism& org) {
-    mutate(org);
-}
-```
+The existing public `mutate(CellularOrganism&)` entry point is used directly
+by the focused test, so the test does not require a production-only wrapper.
 
 - [ ] **Step 4: Make mutation atomic when the guard is enabled**
 
@@ -300,6 +299,20 @@ void mutate(CellularOrganism& org) {
 Include `<optional>` with the existing standard-library headers. This is a
 dependency guard, not a cell-ID lock: a replacement topology is accepted if
 the derived action/input paths remain valid.
+
+At the beginning of `evolve_generation`, before metabolic scoring and sorting,
+assign `-1e12` to any guarded candidate whose contract is invalid:
+
+```cpp
+if (constraint_cfg_.enable_dependency_guard) {
+    for (auto& org : population_) {
+        if (!org.evaluate_adas_contract().valid()) org.fitness_score = -1e12;
+    }
+}
+```
+
+This prevents an invalid immigrant or caller-supplied high score from
+becoming an elite.
 
 - [ ] **Step 5: Run mutation and regression tests**
 
