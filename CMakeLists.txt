@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(FlowEngine VERSION 1.0.0 LANGUAGES C CXX)
+project(KunAutoDrive VERSION 1.0.0 LANGUAGES C CXX)
 
 # 设置C和C++标准
 set(CMAKE_C_STANDARD 11)
@@ -1710,12 +1710,12 @@ else()
 endif()
 
 # CPack配置（用于创建安装包）
-set(CPACK_PACKAGE_NAME "FlowEngine")
+set(CPACK_PACKAGE_NAME "KunAutoDrive")
 set(CPACK_PACKAGE_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
 set(CPACK_PACKAGE_VERSION_MINOR ${PROJECT_VERSION_MINOR})
 set(CPACK_PACKAGE_VERSION_PATCH ${PROJECT_VERSION_PATCH})
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Lightweight middleware for autonomous driving & robotics — C kernel + C++20 coroutine shell")
-set(CPACK_PACKAGE_VENDOR "FlowEngine")
-set(CPACK_PACKAGE_CONTACT "https://github.com/caixuf/FlowEngine")
+set(CPACK_PACKAGE_VENDOR "KunAutoDrive")
+set(CPACK_PACKAGE_CONTACT "https://github.com/caixuf/kunautodrive")
 
 include(CPack)
