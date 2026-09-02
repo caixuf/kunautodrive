@@ -8,7 +8,7 @@
 #include "kun/cellular/cellular_genome.hpp"
 #include "kun/cellular/formal_safety_certifier.hpp"
 #include "kun/cellular/adas_cellular_adapter.hpp"
-#include "tests/adas_scenario_suite.hpp"
+#include "adas_scenario_suite.hpp"
 
 using namespace kun;
 using namespace kun::adas_test;
