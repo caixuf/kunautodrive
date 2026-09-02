@@ -60,10 +60,24 @@ foreach(_cand IN LISTS _FLOWCORO_INCLUDE_CANDIDATES)
     endif()
 endforeach()
 
+set(_KUN_CELLULAR_INCLUDE_CANDIDATES
+    "${FLOW_ROOT}/../kun-cellular/include"
+    "${FLOW_ROOT}/third_party/kun-cellular/include"
+)
+set(KUN_CELLULAR_INCLUDE_DIR "")
+foreach(_cand IN LISTS _KUN_CELLULAR_INCLUDE_CANDIDATES)
+    if(EXISTS "${_cand}/kun/cellular/cellular_genome.hpp")
+        set(KUN_CELLULAR_INCLUDE_DIR "${_cand}")
+        message(STATUS "kun-cellular include: ${_cand}")
+        break()
+    endif()
+endforeach()
+
 include_directories(
     ${FLOW_ROOT}/include
     ${FLOW_ROOT}/src/algorithms            # ekf_fusion.h, dbscan_cluster.h
     ${FLOWCORO_INCLUDE_DIR}
+    ${KUN_CELLULAR_INCLUDE_DIR}
     ${FLOWENGINE_BUILD}/gen                # 生成的 adas_msgs_gen.h
 )
 
