@@ -9,6 +9,7 @@
 #include <sstream>
 #include <iomanip>
 #include <cstdint>
+#include <stdexcept>
 #include "kun/cellular/digital_homeostasis.hpp"
 #include "kun/cellular/autonomous_replicator.hpp"
 #include "kun/cellular/multispecies_ecology.hpp"
@@ -235,6 +236,12 @@ public:
     }
 
     void init_sandbox(size_t initial_agents) {
+        if (initial_agents > kPopulationCapacity) {
+            throw std::invalid_argument("initial agent population exceeds sandbox capacity");
+        }
+        if (world_size_ <= 0.0) {
+            throw std::invalid_argument("sandbox world size must be positive");
+        }
         agents_.clear();
         patches_.clear();
         storms_.clear();
@@ -369,13 +376,18 @@ public:
 
         // 3. 自发内生繁衍与子代产生
         std::vector<std::unique_ptr<OpenEndedEmbodiedAgent>> new_offspring;
+        size_t projected_population = agents_.size();
         for (auto& agent : agents_) {
             if (!agent->get_homeostasis().is_alive || agent->get_homeostasis().state != MetabolicState::ACTIVE) continue;
 
-            if (agent->get_homeostasis().energy_reserve >= 110.0 && agents_.size() < 60) {
+            if (agent->get_homeostasis().energy_reserve >= 110.0 &&
+                projected_population < kPopulationCapacity) {
+                ++projected_population;
                 auto child = agent->spawn_embodied_offspring(rng_, next_agent_id_++, mutation_rate);
                 if (child) {
                     new_offspring.push_back(std::move(child));
+                } else {
+                    --projected_population;
                 }
             }
         }
@@ -423,6 +435,7 @@ public:
     const std::vector<EmbodiedTelemetry>& get_history() const { return history_; }
 
 private:
+    static constexpr size_t kPopulationCapacity = 60;
     double world_size_{100.0};
     uint64_t current_tick_{0};
     uint64_t next_agent_id_{1};

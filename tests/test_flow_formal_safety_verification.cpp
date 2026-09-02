@@ -2,6 +2,8 @@
 #include <vector>
 #include <cmath>
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
 #include <iomanip>
 
 #include "kun/cellular/cellular_genome.hpp"
@@ -19,14 +21,14 @@ void test_formal_safety_bounding_proof() {
 
     std::cout << "  ↳ 区间包络推演状态: " << (cert.interval_bounds_verified ? "PASSED" : "FAILED") << "\n";
     std::cout << "  ↳ 形式化符号子句数: " << cert.num_symbolic_clauses << "\n";
-    std::cout << "  ↳ 横向舵角推演上界: " << cert.max_possible_steer_rad << " rad (<= 0.60 rad ASIL-D 限幅)\n";
-    std::cout << "  ↳ 纵向减速度推演下界: " << cert.min_possible_accel_mps2 << " m/s^2 (<= -6.0 m/s^2 AEB 刹停保障)\n";
+    std::cout << "  ↳ 横向舵角推演上界: " << cert.max_possible_steer_rad << " rad (运行时边界 <= 0.60 rad)\n";
+    std::cout << "  ↳ 纵向减速度推演下界: " << cert.min_possible_accel_mps2 << " m/s^2 (运行时边界 >= -6.0 m/s^2)\n";
     std::cout << "  ↳ 证书唯一指纹: " << cert.proof_digest_sha256 << "\n";
 
     assert(cert.interval_bounds_verified);
     assert(cert.max_possible_steer_rad <= 0.60);
     assert(cert.min_possible_accel_mps2 >= -6.0);
-    std::cout << "  -> 启发式边界包络推演 100% 满分通过！\n";
+    std::cout << "  -> 启发式边界包络推演通过（不等同于形式化认证）\n";
 }
 
 void test_smtlib2_certificate_generation() {
@@ -41,23 +43,62 @@ void test_smtlib2_certificate_generation() {
     assert(cert_no_solver.smt2_code.find("(check-sat)") != std::string::npos);
     assert(cert_no_solver.smt2_code.find("steer_cmd") != std::string::npos);
     assert(cert_no_solver.smt2_code.find("accel_cmd") != std::string::npos);
+    assert(cert_no_solver.smt2_code.find("steer_raw") != std::string::npos);
+    assert(cert_no_solver.smt2_code.find("accel_raw") != std::string::npos);
+    assert(cert_no_solver.smt2_code.find("(assert (= accel_raw (- c") != std::string::npos);
+    assert(cert_no_solver.smt2_code.find("(assert (= steer_cmd (ite") != std::string::npos);
+    assert(cert_no_solver.smt2_code.find("prev_c0") != std::string::npos);
     assert(!cert_no_solver.is_verified); // 未调用求解器前严禁伪造 is_verified = true
     assert(cert_no_solver.solver_status == SolverStatus::NOT_INVOKED);
+    assert(cert_no_solver.formal_verification_skipped);
+    assert(!cert_no_solver.symbolic_model_complete);
 
-    // 2. 验证调用真实求解器接口
+    const bool formal_required =
+        std::getenv("REQUIRE_SMT") != nullptr ||
+        std::getenv("FLOWENGINE_REQUIRE_SMT") != nullptr;
+    // 2. 验证调用真实求解器接口（仅在显式请求时执行）
     auto cert_with_solver = FormalSafetyCertifier::verify_organism(org, true, "z3");
-    if (cert_with_solver.solver_status == SolverStatus::SOLVER_NOT_FOUND) {
-        std::cout << "  ↳ 本地环境未安装 Z3/CVC5 二进制文件: " << cert_with_solver.solver_message << "\n";
-        assert(!cert_with_solver.is_verified); // 真实性保证: 无求解器时不伪造证明
-    } else if (cert_with_solver.solver_status == SolverStatus::UNSAT_PROVED) {
-        std::cout << "  ↳ Z3 求解器求证通过 (UNSAT / Formally Proved)!\n";
-        assert(cert_with_solver.is_verified);
+    if (formal_required) {
+        if (cert_with_solver.solver_status == SolverStatus::SOLVER_NOT_FOUND) {
+            std::cerr << "FAIL: FLOWENGINE_REQUIRE_SMT is set but no SMT solver is available: "
+                      << cert_with_solver.solver_message << "\n";
+            std::exit(1);
+        } else if (cert_with_solver.solver_status == SolverStatus::UNSAT_PROVED) {
+            std::cout << "  ↳ Z3 求解器求证通过 (UNSAT / Formally Proved)!\n";
+            if (!cert_with_solver.is_verified) std::exit(1);
+        } else {
+            std::cerr << "FAIL: formal SMT verification returned "
+                      << to_string(cert_with_solver.solver_status) << "\n";
+            std::exit(1);
+        }
+    } else {
+        assert(!cert_with_solver.is_verified);
+        assert(cert_with_solver.formal_verification_skipped ||
+               cert_with_solver.solver_status == SolverStatus::SAT_COUNTEREXAMPLE);
+        std::cout << "  ↳ 未设置 REQUIRE_SMT，正式验证缺少完整模型/求解器时按 skipped/not certified 处理\n";
     }
 
-    std::string cert_path = "/tmp/flow_cellular_asil_d_cert.smt2";
+    CellularOrganism exact_org;
+    exact_org.organism_id = 889;
+    exact_org.lineage_name = "Exact-Static";
+    exact_org.cells.push_back({0, CellType::SENSE_RAW_INPUT_0, 1.0, 0.0, 0.0, 0.0,
+                               false, 0.0, 0, 0, 0.0f, 0.0f, 0.0f});
+    exact_org.cells.push_back({1, CellType::ACT_PRIMARY_POSITIVE, 0.0, 0.0, 0.0, 0.0,
+                               false, 0.0, 0, 0, 0.0f, 0.0f, 0.0f});
+    exact_org.synapses.push_back({0, 1, 0, 0.01, true, 60.0f, -1.0f,
+                                  0.01, 0.0, 0.0, false});
+    exact_org.compile();
+    auto missing_solver = FormalSafetyCertifier::verify_organism(
+        exact_org, true, "flowengine_solver_that_does_not_exist");
+    assert(!missing_solver.is_verified);
+    assert(missing_solver.formal_verification_skipped);
+    assert(missing_solver.solver_status == SolverStatus::SOLVER_NOT_FOUND);
+
+    std::string cert_path = "flow_cellular_asil_d_cert.smt2";
     bool saved = FormalSafetyCertifier::save_certificate_file(cert_no_solver, cert_path);
     (void)saved;
     assert(saved);
+    std::remove(cert_path.c_str());
 
     std::cout << "  ↳ 已生成标准 SMT-LIB 证书: " << cert_path << " (" << cert_no_solver.smt2_code.size() << " bytes)\n";
     std::cout << "  -> SMT-LIB 形式化验证脚本与真实状态判定 100% 规范有效！\n";
@@ -110,7 +151,7 @@ void test_transactional_mutation_and_resource_guard() {
 
 int main() {
     std::cout << "======================================================================\n";
-    std::cout << " 🛡️ FlowEngine 车规级形式化安全验证与变异事务守卫单测\n";
+    std::cout << " 🛡️ FlowEngine SMT proof-obligation 与变异事务守卫单测\n";
     std::cout << "======================================================================\n\n";
 
     test_formal_safety_bounding_proof();

@@ -16,6 +16,30 @@ struct ScenarioPerturbation {
     double curve_amp_scale{1.0};  // 弯道幅度/曲率缩放 (0.85 ~ 1.20)
 };
 
+struct ScenarioLatency {
+    double mean_us{0.0};
+    double max_us{0.0};
+    size_t samples{0};
+    double total_us{0.0};
+
+    void reset() {
+        mean_us = 0.0;
+        max_us = 0.0;
+        samples = 0;
+        total_us = 0.0;
+    }
+
+    void record(const std::chrono::high_resolution_clock::time_point& start,
+                const std::chrono::high_resolution_clock::time_point& finish) {
+        const double elapsed =
+            std::chrono::duration<double, std::micro>(finish - start).count();
+        total_us += elapsed;
+        max_us = std::max(max_us, elapsed);
+        ++samples;
+        mean_us = total_us / static_cast<double>(samples);
+    }
+};
+
 struct KinematicBicycleVehicle {
     double x{0.0};
     double y{0.0};
@@ -52,15 +76,14 @@ struct KinematicBicycleVehicle {
 inline bool run_scenario_curve_tracking(AdasCellularAdapter& adas,
                                          double& max_lat_err,
                                          double& mean_lat_err,
-                                         double& avg_lat_us,
+                                         ScenarioLatency& latency,
                                          const ScenarioPerturbation& perturb = {}) {
     KinematicBicycleVehicle ego;
     ego.reset(0.0, 0.0, 0.0, 15.0 * perturb.speed_scale);
     const int steps = 300;
     std::vector<double> lat_errs;
-    std::vector<double> latencies;
     lat_errs.reserve(steps);
-    latencies.reserve(steps);
+    latency.reset();
 
     for (int k = 0; k < steps; ++k) {
         double s = ego.x;
@@ -75,8 +98,7 @@ inline bool run_scenario_curve_tracking(AdasCellularAdapter& adas,
         auto start = std::chrono::high_resolution_clock::now();
         auto ctl = adas.process_perception(100.0, 0.0, lane_offset, 99.0);
         auto finish = std::chrono::high_resolution_clock::now();
-        latencies.push_back(
-            std::chrono::duration<double, std::micro>(finish - start).count());
+        latency.record(start, finish);
 
         double steer_cmd = ctl.steering_curvature - heading_err * 0.85 +
                            std::atan(kappa * KinematicBicycleVehicle::WHEELBASE);
@@ -88,15 +110,13 @@ inline bool run_scenario_curve_tracking(AdasCellularAdapter& adas,
     mean_lat_err = 0.0;
     for (double error : lat_errs) mean_lat_err += error;
     mean_lat_err /= static_cast<double>(lat_errs.size());
-    avg_lat_us = 0.0;
-    for (double latency : latencies) avg_lat_us += latency;
-    avg_lat_us /= static_cast<double>(latencies.size());
     return max_lat_err < (0.15 * perturb.curve_amp_scale + 0.02);
 }
 
 inline bool run_scenario_emergency_cutin_aeb(AdasCellularAdapter& adas,
                                              double& min_safety_dist,
                                              bool& aeb_triggered,
+                                             ScenarioLatency& latency,
                                              const ScenarioPerturbation& perturb = {}) {
     KinematicBicycleVehicle ego;
     ego.reset(0.0, 0.0, 0.0, 16.0 * perturb.speed_scale);
@@ -104,6 +124,7 @@ inline bool run_scenario_emergency_cutin_aeb(AdasCellularAdapter& adas,
     double lead_v = 16.0 * perturb.speed_scale;
     min_safety_dist = 999.0;
     aeb_triggered = false;
+    latency.reset();
 
     for (int k = 0; k < 200; ++k) {
         if (k == 30) {
@@ -120,7 +141,10 @@ inline bool run_scenario_emergency_cutin_aeb(AdasCellularAdapter& adas,
         double dist_to_lead = lead_x - ego.x;
         double rel_v = lead_v - ego.v;
         double ttc = (rel_v < -0.1) ? (dist_to_lead / (-rel_v)) : 99.0;
+        auto start = std::chrono::high_resolution_clock::now();
         auto ctl = adas.process_perception(dist_to_lead, rel_v, 0.0, ttc);
+        auto finish = std::chrono::high_resolution_clock::now();
+        latency.record(start, finish);
         if (ctl.is_aeb_triggered) aeb_triggered = true;
         ego.step(0.0, ctl.target_accel_mps2);
         min_safety_dist = std::min(min_safety_dist, dist_to_lead);
@@ -131,11 +155,13 @@ inline bool run_scenario_emergency_cutin_aeb(AdasCellularAdapter& adas,
 inline bool run_scenario_lane_change(AdasCellularAdapter& adas,
                                      double& settle_time_s,
                                      double& overshoot_m,
+                                     ScenarioLatency& latency,
                                      const ScenarioPerturbation& perturb = {}) {
     KinematicBicycleVehicle ego;
     ego.reset(0.0, 0.0, 0.0, 16.0 * perturb.speed_scale);
     settle_time_s = -1.0;
     double max_y = 0.0;
+    latency.reset();
 
     for (int k = 0; k < 200; ++k) {
         double t = k * KinematicBicycleVehicle::DT;
@@ -149,7 +175,10 @@ inline bool run_scenario_lane_change(AdasCellularAdapter& adas,
         double target_psi = std::atan2(target_dy, ego.v);
         double lane_offset = ego.y - target_y;
         double heading_err = ego.psi - target_psi;
+        auto start = std::chrono::high_resolution_clock::now();
         auto ctl = adas.process_perception(100.0, 0.0, lane_offset, 99.0);
+        auto finish = std::chrono::high_resolution_clock::now();
+        latency.record(start, finish);
         ego.step(ctl.steering_curvature - heading_err * 0.85, 0.0);
         max_y = std::max(max_y, ego.y);
         if (std::abs(ego.y - 3.5) < 0.06 &&
@@ -163,12 +192,14 @@ inline bool run_scenario_lane_change(AdasCellularAdapter& adas,
 
 inline bool run_scenario_stop_and_go(AdasCellularAdapter& adas,
                                      double& max_gap_err,
+                                     ScenarioLatency& latency,
                                      const ScenarioPerturbation& perturb = {}) {
     KinematicBicycleVehicle ego;
     ego.reset(0.0, 0.0, 0.0, 8.0 * perturb.speed_scale);
     double lead_x = 23.0 * perturb.lead_dist_scale;
     double lead_v = 8.0 * perturb.speed_scale;
     max_gap_err = 0.0;
+    latency.reset();
 
     for (int k = 0; k < 250; ++k) {
         lead_v = std::clamp((8.0 + 2.5 * std::sin(k * 0.05)) * perturb.speed_scale, 2.5, 14.0);
@@ -176,7 +207,10 @@ inline bool run_scenario_stop_and_go(AdasCellularAdapter& adas,
         double dist_to_lead = lead_x - ego.x;
         double rel_v = lead_v - ego.v;
         double ttc = (rel_v < -0.1) ? (dist_to_lead / (-rel_v)) : 99.0;
+        auto start = std::chrono::high_resolution_clock::now();
         auto ctl = adas.process_perception(dist_to_lead, rel_v, 0.0, ttc);
+        auto finish = std::chrono::high_resolution_clock::now();
+        latency.record(start, finish);
         ego.step(0.0, ctl.target_accel_mps2);
         if (k > 50) {
             max_gap_err = std::max(max_gap_err,
@@ -188,12 +222,17 @@ inline bool run_scenario_stop_and_go(AdasCellularAdapter& adas,
 
 inline bool run_scenario_ramp_merge(AdasCellularAdapter& adas,
                                     double& merge_speed_mps,
+                                    ScenarioLatency& latency,
                                     const ScenarioPerturbation& perturb = {}) {
     KinematicBicycleVehicle ego;
     ego.reset(0.0, -3.5, 0.0, 10.0 * perturb.speed_scale);
+    latency.reset();
     for (int k = 0; k < 160; ++k) {
         double lane_offset = ego.y;
+        auto start = std::chrono::high_resolution_clock::now();
         auto ctl = adas.process_perception(100.0, 0.0, lane_offset, 99.0);
+        auto finish = std::chrono::high_resolution_clock::now();
+        latency.record(start, finish);
         ego.step(ctl.steering_curvature - ego.psi * 1.35,
                  ctl.target_accel_mps2);
     }
@@ -203,19 +242,24 @@ inline bool run_scenario_ramp_merge(AdasCellularAdapter& adas,
 
 inline bool run_scenario_obstacle_swerve(AdasCellularAdapter& adas,
                                          double& min_obs_clearance,
+                                         ScenarioLatency& latency,
                                          const ScenarioPerturbation& perturb = {}) {
     KinematicBicycleVehicle ego;
     ego.reset(0.0, 0.0, 0.0, 12.0 * perturb.speed_scale);
     const double obs_x = 70.0 * perturb.lead_dist_scale;
     const double obs_y = 0.0;
     min_obs_clearance = 999.0;
+    latency.reset();
 
     for (int k = 0; k < 200; ++k) {
         double dist_to_obs = obs_x - ego.x;
         double target_y = 0.0;
         if (ego.x >= 30.0 && ego.x < (obs_x + 20.0)) target_y = 2.5;
         double lane_offset = ego.y - target_y;
+        auto start = std::chrono::high_resolution_clock::now();
         auto ctl = adas.process_perception(dist_to_obs, 0.0, lane_offset, 99.0);
+        auto finish = std::chrono::high_resolution_clock::now();
+        latency.record(start, finish);
         ego.step(ctl.steering_curvature - ego.psi * 1.35, 0.0);
         if (std::abs(ego.x - obs_x) < 4.0) {
             min_obs_clearance = std::min(min_obs_clearance,
@@ -228,6 +272,8 @@ inline bool run_scenario_obstacle_swerve(AdasCellularAdapter& adas,
 struct AdasScenarioFitness {
     std::array<bool, 6> passed{};
     std::array<double, 6> metric{};
+    std::array<double, 6> latency_mean_ns{};
+    std::array<double, 6> latency_max_ns{};
     double latency_ns{0.0};
     double cost{0.0};
     double score{-1000.0};
@@ -245,38 +291,63 @@ inline AdasScenarioFitness evaluate_adas_fitness(CellularOrganism& organism,
     AdasCellularAdapter adapter(organism);
 
     adapter.get_organism().reset_state(true);
-    double max_err = 0.0, mean_err = 0.0, avg_lat_us = 0.0;
+    double max_err = 0.0, mean_err = 0.0;
+    ScenarioLatency latency;
     result.passed[0] = run_scenario_curve_tracking(adapter, max_err,
-                                                    mean_err, avg_lat_us, perturb);
+                                                    mean_err, latency, perturb);
     result.metric[0] = max_err;
-    result.latency_ns = avg_lat_us * 1000.0;
+    result.latency_mean_ns[0] = latency.mean_us * 1000.0;
+    result.latency_max_ns[0] = latency.max_us * 1000.0;
 
     adapter.get_organism().reset_state(true);
     double safety_dist = 0.0;
     bool aeb_triggered = false;
+    latency.reset();
     result.passed[1] = run_scenario_emergency_cutin_aeb(
-        adapter, safety_dist, aeb_triggered, perturb);
+        adapter, safety_dist, aeb_triggered, latency, perturb);
     result.metric[1] = safety_dist;
+    result.latency_mean_ns[1] = latency.mean_us * 1000.0;
+    result.latency_max_ns[1] = latency.max_us * 1000.0;
 
     adapter.get_organism().reset_state(true);
     double settle_time = 0.0, overshoot = 0.0;
-    result.passed[2] = run_scenario_lane_change(adapter, settle_time, overshoot, perturb);
+    latency.reset();
+    result.passed[2] = run_scenario_lane_change(
+        adapter, settle_time, overshoot, latency, perturb);
     result.metric[2] = overshoot;
+    result.latency_mean_ns[2] = latency.mean_us * 1000.0;
+    result.latency_max_ns[2] = latency.max_us * 1000.0;
 
     adapter.get_organism().reset_state(true);
     double gap_error = 0.0;
-    result.passed[3] = run_scenario_stop_and_go(adapter, gap_error, perturb);
+    latency.reset();
+    result.passed[3] = run_scenario_stop_and_go(
+        adapter, gap_error, latency, perturb);
     result.metric[3] = gap_error;
+    result.latency_mean_ns[3] = latency.mean_us * 1000.0;
+    result.latency_max_ns[3] = latency.max_us * 1000.0;
 
     adapter.get_organism().reset_state(true);
     double merge_speed = 0.0;
-    result.passed[4] = run_scenario_ramp_merge(adapter, merge_speed, perturb);
+    latency.reset();
+    result.passed[4] = run_scenario_ramp_merge(
+        adapter, merge_speed, latency, perturb);
     result.metric[4] = merge_speed;
+    result.latency_mean_ns[4] = latency.mean_us * 1000.0;
+    result.latency_max_ns[4] = latency.max_us * 1000.0;
 
     adapter.get_organism().reset_state(true);
     double clearance = 0.0;
-    result.passed[5] = run_scenario_obstacle_swerve(adapter, clearance, perturb);
+    latency.reset();
+    result.passed[5] = run_scenario_obstacle_swerve(
+        adapter, clearance, latency, perturb);
     result.metric[5] = clearance;
+    result.latency_mean_ns[5] = latency.mean_us * 1000.0;
+    result.latency_max_ns[5] = latency.max_us * 1000.0;
+
+    result.latency_ns = 0.0;
+    for (double value : result.latency_mean_ns) result.latency_ns += value;
+    result.latency_ns /= static_cast<double>(result.latency_mean_ns.size());
 
     size_t active_synapses = 0;
     for (const auto& synapse : organism.synapses) {

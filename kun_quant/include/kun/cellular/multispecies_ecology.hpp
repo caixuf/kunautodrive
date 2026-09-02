@@ -9,6 +9,7 @@
 #include <sstream>
 #include <iomanip>
 #include <cstdint>
+#include <stdexcept>
 #include "kun/cellular/digital_homeostasis.hpp"
 #include "kun/cellular/autonomous_replicator.hpp"
 
@@ -185,6 +186,14 @@ public:
     }
 
     void init_ecosystem(size_t pop_per_guild, size_t num_compartments) {
+        if (num_compartments == 0) {
+            throw std::invalid_argument("MultiSpeciesEcosystemWorld requires at least one compartment");
+        }
+        const size_t max_initial_compartment_population =
+            3 * ((pop_per_guild + num_compartments - 1) / num_compartments);
+        if (max_initial_compartment_population > 50) {
+            throw std::invalid_argument("initial population exceeds per-compartment capacity");
+        }
         compartments_.clear();
         organisms_.clear();
         history_.clear();
@@ -257,8 +266,9 @@ public:
             if (org->get_guild() == SpeciesGuild::DETRITUS_SCAVENGER && comp.waste_toxicity > 0.5) {
                 double detox_amt = std::min(comp.waste_toxicity, org->get_detox_efficiency());
                 comp.waste_toxicity -= detox_amt;
-                comp.nutrient_concentration += detox_amt * 1.5; // 净化再生营养
-                h.energy_reserve += detox_amt * 0.8;            // 分解者自身获能
+                // 解毒只完成一次物质转换：毒性废物 -> 环境营养。
+                // 分解者若要获得能量，统一在后续养分摄取结算，避免重复记账。
+                comp.nutrient_concentration += detox_amt * 1.5;
                 waste_purified_in_tick += detox_amt;
             }
 
@@ -305,13 +315,29 @@ public:
         // 4. 自主跨隔室迁徙 (Autonomous Spatial Migration)
         for (auto& org : organisms_) {
             if (org->get_homeostasis().is_alive && org->get_homeostasis().state == MetabolicState::ACTIVE) {
+                const uint32_t old_compartment = org->get_compartment_id();
                 if (org->try_migrate(rng_, compartments_)) {
-                    migrations_in_tick++;
+                    const uint32_t new_compartment = org->get_compartment_id();
+                    if (comp_population[new_compartment] >=
+                        compartments_[new_compartment].carrying_capacity) {
+                        org->set_compartment_id(old_compartment);
+                        org->get_homeostasis().energy_reserve += 5.0;
+                    } else {
+                        comp_population[old_compartment]--;
+                        comp_population[new_compartment]++;
+                        migrations_in_tick++;
+                    }
                 }
             }
         }
 
         // 5. 自主繁衍与子代产生
+        std::fill(comp_population.begin(), comp_population.end(), 0);
+        for (const auto& org : organisms_) {
+            if (org->get_homeostasis().is_alive) {
+                comp_population[org->get_compartment_id()]++;
+            }
+        }
         std::vector<std::unique_ptr<EcologicalOrganism>> new_offspring;
         for (auto& org : organisms_) {
             if (!org->get_homeostasis().is_alive) continue;

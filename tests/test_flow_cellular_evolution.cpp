@@ -125,13 +125,13 @@ void test_adas_cellular_adapter() {
     // 正常高速巡航场景: 前车距离 60m, 相对速度 0m/s, 车道偏移 0m, TTC 10s
     auto normal_ctl = adas.process_perception(60.0, 0.0, 0.0, 10.0);
     assert(!normal_ctl.is_aeb_triggered);
-    std::cout << "  ↳ 正常巡航输出: " << normal_ctl.active_pathway << "\n";
+    std::cout << "  ↳ 正常巡航输出: " << AdasCellularAdapter::describe_pathway(normal_ctl) << "\n";
 
     // 极端长尾危险场景: 前车急刹，距离 8m，TTC 0.8s (< 1.2s AEB 门限)
     auto emergency_ctl = adas.process_perception(8.0, -15.0, 0.2, 0.8);
     assert(emergency_ctl.is_aeb_triggered);
     assert(emergency_ctl.target_accel_mps2 <= -5.0); // 最大防撞制动
-    std::cout << "  ↳ 紧急防撞输出: " << emergency_ctl.active_pathway << "\n";
+    std::cout << "  ↳ 紧急防撞输出: " << AdasCellularAdapter::describe_pathway(emergency_ctl) << "\n";
 
     std::cout << "  -> 智能驾驶细胞形态决策与 AEB 应急控制测试通过!\n";
 }
@@ -737,4 +737,3 @@ int main() {
     std::cout << "=========================================================\n\n";
     return 0;
 }
-

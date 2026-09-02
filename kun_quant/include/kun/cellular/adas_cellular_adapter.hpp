@@ -1,7 +1,9 @@
 #pragma once
 
 #include "kun/cellular/cellular_genome.hpp"
+#include <cstdint>
 #include <string>
+#include <sstream>
 #include <cmath>
 #include <algorithm>
 
@@ -17,11 +19,17 @@ public:
     explicit AdasCellularAdapter(CellularOrganism organism)
         : organism_(std::move(organism)) {}
 
+    enum class Pathway : uint8_t {
+        NORMAL,
+        AEB_IMMUNE_LOCK
+    };
+
     struct AdasControlOutput {
         double target_accel_mps2{0.0};  // 目标加速度 (>0 加速, <0 制动减速)
         double steering_curvature{0.0}; // 横向转向曲率指令
         bool   is_aeb_triggered{false}; // 是否触发紧急 AEB 制动
-        std::string active_pathway;     // 细胞放电通路可解释性追踪
+        Pathway pathway{Pathway::NORMAL};
+        const char* active_pathway{"NORMAL"}; // 固定标签，实时路径无分配
     };
 
     AdasControlOutput process_perception(
@@ -43,15 +51,25 @@ public:
         if (outputs.immune_lock) {
             ctl.is_aeb_triggered = true;
             ctl.target_accel_mps2 = -6.0;
+            ctl.pathway = Pathway::AEB_IMMUNE_LOCK;
             ctl.active_pathway = "[AEB_IMMUNE_LOCK] Act_ImmuneBlock";
             return ctl;
         }
 
         ctl.target_accel_mps2 = std::clamp(outputs.positive_action - outputs.negative_action, -6.0, 2.0);
         ctl.steering_curvature = std::clamp(-outputs.defensive_reset, -0.60, 0.60);
-        ctl.active_pathway = "Acc=" + std::to_string(ctl.target_accel_mps2) +
-                             "m/s2, SteerCurv=" + std::to_string(ctl.steering_curvature);
         return ctl;
+    }
+
+    // 非实时辅助路径：按需生成包含数值的可解释文本。
+    static std::string describe_pathway(const AdasControlOutput& ctl) {
+        if (ctl.pathway == Pathway::AEB_IMMUNE_LOCK) {
+            return "[AEB_IMMUNE_LOCK] Act_ImmuneBlock";
+        }
+        std::ostringstream text;
+        text << "Acc=" << ctl.target_accel_mps2
+             << "m/s2, SteerCurv=" << ctl.steering_curvature;
+        return text.str();
     }
 
     const CellularOrganism& get_organism() const { return organism_; }

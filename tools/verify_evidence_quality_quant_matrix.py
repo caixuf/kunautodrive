@@ -14,8 +14,8 @@ import torch.nn as nn
 # 证据质量审计 (Evidence Quality Audit Matrix)
 # 1. 可复现性底座：数据快照 SHA256 校验、固定多随机种子、执行哈希封签
 # 2. 跨时空 Walk-Forward：3 阶段滚动前移 (无重叠 OOS 盲测)
-# 3. 4 大同台经典基线：Buy&Hold, 时序动量 CTA, 线性截面动量, 未演化随机网络
-# 4. 统计显著性分布：10 种子演化，报告 Mean, Median, P25, P75, Worst Case, t检验
+# 3. 4 大同台经典基线：Buy&Hold, 时序动量 CTA, 线性截面动量, 独立随机网络
+# 4. 统计显著性分布：10 个独立随机种子，报告 Mean, Median, P25, P75, Worst Case, t检验
 # 5. 极端摩擦压力测试：2.0x 滑点 (2 Ticks) + 2.0x 佣金 (3.0 bps)
 # ============================================================================
 
@@ -96,7 +96,7 @@ def load_and_preprocess_history(filepath):
         cleaned[i]['ma_20'] = ma_20
     return cleaned
 
-class RobustCellularBrain(nn.Module):
+class RandomNetworkBrain(nn.Module):
     def __init__(self, num_assets=18, num_cells=1000000, num_synapses=2000000, device='cuda', seed=42):
         super().__init__()
         torch.manual_seed(seed)
@@ -177,7 +177,7 @@ def run_backtest_engine(strategy_type, model, data, timeline, d_start, d_end, fe
 
     lots = {sym: [] for sym in asset_symbols}
     target_orders = {sym: 0 for sym in asset_symbols}
-    last_prices = {sym: data[sym]['bars'][0]['close'] for sym in asset_symbols}
+    last_prices = {sym: data[sym]['bars'][0]['open'] for sym in asset_symbols}
 
     total_trades = 0
     win_trades = 0
@@ -197,8 +197,6 @@ def run_backtest_engine(strategy_type, model, data, timeline, d_start, d_end, fe
             asset = data[sym]
             if cur_date not in asset['map']: continue
             bar = asset['map'][cur_date]
-            last_prices[sym] = bar['close']
-
             target_qty = target_orders[sym]
             cur_qty = sum(lot['qty'] for lot in lots[sym])
 
@@ -280,7 +278,7 @@ def run_backtest_engine(strategy_type, model, data, timeline, d_start, d_end, fe
         daily_returns.append(d_ret)
         prev_day_equity = total_equity
 
-        # 3. 策略目标仓位推演
+        # 3. 策略目标仓位推演；目标在收盘后生成，下一交易日开盘才成交。
         if not is_last_day:
             deleveraging_factor = max(0.2, 1.0 - dd * 1.5)
 
@@ -320,8 +318,8 @@ def run_backtest_engine(strategy_type, model, data, timeline, d_start, d_end, fe
                     target_risk_budget = total_equity * 0.0035 * deleveraging_factor
                     target_orders[sym] = dirs[i] * min(5, int(target_risk_budget / risk_per_contract))
 
-            elif strategy_type == 'CELLULAR_BRAIN':
-                # 生命体大脑截面推演
+            elif strategy_type == 'RANDOM_NETWORK':
+                # 独立随机网络基线；本脚本没有演化步骤，不宣称为演化模型。
                 batch_feat = []
                 for sym in asset_symbols:
                     if cur_date not in data[sym]['map']:
@@ -380,6 +378,150 @@ def run_backtest_engine(strategy_type, model, data, timeline, d_start, d_end, fe
         'commission': total_commission_paid
     }
 
+def _regularized_incomplete_beta(x, a, b):
+    """Pure-math regularized incomplete beta for Student-t p-values."""
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+
+    def continued_fraction(a_, b_, x_):
+        qab = a_ + b_
+        qap = a_ + 1.0
+        qam = a_ - 1.0
+        c = 1.0
+        d = 1.0 - qab * x_ / qap
+        d = max(1.0e-300, d)
+        d = 1.0 / d
+        h = d
+        for m in range(1, 201):
+            m2 = 2.0 * m
+            aa = m * (b_ - m) * x_ / ((qam + m2) * (a_ + m2))
+            d = 1.0 + aa * d
+            d = max(1.0e-300, d)
+            c = 1.0 + aa / c
+            c = max(1.0e-300, c)
+            d = 1.0 / d
+            h *= d * c
+            aa = -(a_ + m) * (qab + m) * x_ / ((a_ + m2) * (qap + m2))
+            d = 1.0 + aa * d
+            d = max(1.0e-300, d)
+            c = 1.0 + aa / c
+            c = max(1.0e-300, c)
+            d = 1.0 / d
+            delta = d * c
+            h *= delta
+            if abs(delta - 1.0) < 3.0e-14:
+                break
+        return h
+
+    log_front = (a * math.log(x) + b * math.log1p(-x) -
+                 math.lgamma(a) - math.lgamma(b) + math.lgamma(a + b))
+    front = math.exp(log_front)
+    if x < (a + 1.0) / (a + b + 2.0):
+        return front * continued_fraction(a, b, x) / a
+    return 1.0 - front * continued_fraction(b, a, 1.0 - x) / b
+
+
+def _two_sided_student_t_p_value(t_statistic, degrees_of_freedom):
+    if not math.isfinite(t_statistic) or degrees_of_freedom <= 0:
+        return None, 'unavailable'
+    if t_statistic == 0.0:
+        return 1.0, 'Student-t exact (regularized beta)'
+    x = degrees_of_freedom / (degrees_of_freedom + t_statistic * t_statistic)
+    try:
+        return _regularized_incomplete_beta(x, degrees_of_freedom / 2.0, 0.5), \
+            'Student-t exact (regularized beta)'
+    except (ValueError, OverflowError):
+        # A normal tail remains an explicit, reproducible fallback for extreme
+        # degrees of freedom or numerical failures in the beta evaluation.
+        return math.erfc(abs(t_statistic) / math.sqrt(2.0)), \
+            'normal approximation fallback'
+
+
+def _sample_variance(samples):
+    if samples.size < 2:
+        return None
+    mean = float(np.mean(samples))
+    return float(np.sum((samples - mean) ** 2) / (samples.size - 1))
+
+
+def one_sample_t_test(values, null_hypothesis=0.0):
+    samples = np.asarray(values, dtype=float)
+    if samples.size < 2:
+        return {'t_statistic': None, 'p_value': None, 'degrees_of_freedom': None,
+                'method': 'one-sample t-test unavailable (n < 2)'}
+    variance = _sample_variance(samples)
+    delta = float(np.mean(samples) - null_hypothesis)
+    if variance is None or variance == 0.0:
+        return {
+            't_statistic': None if delta == 0.0 else math.copysign(math.inf, delta),
+            'p_value': 1.0 if delta == 0.0 else 0.0,
+            'degrees_of_freedom': int(samples.size - 1),
+            'method': 'one-sample t-test (degenerate variance)'
+        }
+    t_statistic = delta / math.sqrt(variance / samples.size)
+    p_value, method = _two_sided_student_t_p_value(t_statistic, samples.size - 1)
+    return {
+        't_statistic': float(t_statistic),
+        'p_value': None if p_value is None else float(p_value),
+        'degrees_of_freedom': int(samples.size - 1),
+        'method': 'one-sample t-test; ' + method
+    }
+
+
+def welch_t_test(values_a, values_b):
+    """Welch unequal-variance t-test without scipy, with Student-t p-value."""
+    a = np.asarray(values_a, dtype=float)
+    b = np.asarray(values_b, dtype=float)
+    if a.size < 2 or b.size < 2:
+        return {'t_statistic': None, 'p_value': None, 'degrees_of_freedom': None,
+                'method': 'Welch t-test unavailable (each sample needs n >= 2)'}
+    var_a = _sample_variance(a)
+    var_b = _sample_variance(b)
+    se2 = var_a / a.size + var_b / b.size
+    delta = float(np.mean(a) - np.mean(b))
+    if se2 == 0.0:
+        return {
+            't_statistic': None if delta == 0.0 else math.copysign(math.inf, delta),
+            'p_value': 1.0 if delta == 0.0 else 0.0,
+            'degrees_of_freedom': None,
+            'method': 'Welch t-test (degenerate variance)'
+        }
+    degrees_of_freedom = (se2 * se2) / (
+        (var_a / a.size) ** 2 / (a.size - 1) +
+        (var_b / b.size) ** 2 / (b.size - 1)
+    )
+    t_statistic = delta / math.sqrt(se2)
+    p_value, method = _two_sided_student_t_p_value(t_statistic, degrees_of_freedom)
+    return {
+        't_statistic': float(t_statistic),
+        'p_value': None if p_value is None else float(p_value),
+        'degrees_of_freedom': float(degrees_of_freedom),
+        'method': 'Welch t-test; ' + method
+    }
+
+
+def summarize_distribution(values, null_hypothesis=0.0):
+    """Return quantiles plus a scipy-free, auditable one-sample t-test."""
+    samples = np.asarray(values, dtype=float)
+    test = one_sample_t_test(samples, null_hypothesis)
+    summary = {
+        'n': int(samples.size),
+        'mean': float(np.mean(samples)),
+        'median': float(np.median(samples)),
+        'p25': float(np.percentile(samples, 25)),
+        'p75': float(np.percentile(samples, 75)),
+        'worst': float(np.min(samples)),
+        't_statistic': test['t_statistic'],
+        'p_value': test['p_value'],
+        'degrees_of_freedom': test['degrees_of_freedom'],
+        'significance_test': test['method'],
+        'method': test['method'],
+    }
+    summary['significance_status'] = 'computed' if test['p_value'] is not None else 'unavailable'
+    return summary
+
 def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     data_dir = "data/history" if os.path.exists("data/history") else "../data/history"
@@ -390,9 +532,10 @@ def main():
     print(f"==========================================================================================================", flush=True)
     print(f"• 数据指纹: SHA256({data_hash[:16]}...) [物理快照锁死，杜绝数据篡改]", flush=True)
     print(f"• 跨时空 Walk-Forward: 3 大滚动前移窗口 (覆盖大繁荣、供给侧改革、去杠杆、极端疫情与宏观分化)", flush=True)
-    print(f"• 4 大同台基线: ① Buy & Hold | ② 经典时序 CTA | ③ 线性截面动量 | ④ 未演化随机网络", flush=True)
+    print(f"• 4 大同台基线: ① Buy & Hold | ② 经典时序 CTA | ③ 线性截面动量 | ④ 独立随机网络", flush=True)
     print(f"• 统计显著性: 10 组独立随机种子完整分布 (Mean / Median / P25 / P75 / Worst Case / t检验)", flush=True)
     print(f"• 极端压力测试: 2.0x 摩擦 (2 Tick 滑点 + 3.0 bps 手续费)", flush=True)
+    print("• 显著性检验实现: 纯 Python 单样本 t + Welch t；Student-t 正则化 beta p-value", flush=True)
     print(f"==========================================================================================================\n", flush=True)
 
     multipliers = {
@@ -455,39 +598,44 @@ def main():
         res_lin = run_backtest_engine('LINEAR_CSMOM', None, data, timeline, win['start'], win['end'])
         print(f"{'3. 经典线性截面动量':<28}{res_lin['final_cash']:,.2f} 元{'':<4}{res_lin['roi']:+.2f}%{'':<6}{res_lin['cagr']:+.2f}%{'':<6}{res_lin['max_dd']:.2f}%{'':<6}{res_lin['win_rate']:.1f}%", flush=True)
 
-        # 4. Cellular Brain Multi-Seed Distribution
-        cell_rois = []
-        cell_dds = []
-        cell_wins = []
-        cell_cashes = []
+        # 4. Independent random-network baseline distribution.
+        random_rois = []
+        random_cagrs = []
+        random_dds = []
+        random_wins = []
+        random_cashes = []
 
         for s in seeds:
-            b = RobustCellularBrain(num_assets=num_assets, device=device, seed=s)
-            r = run_backtest_engine('CELLULAR_BRAIN', b, data, timeline, win['start'], win['end'])
-            cell_rois.append(r['roi'])
-            cell_dds.append(r['max_dd'])
-            cell_wins.append(r['win_rate'])
-            cell_cashes.append(r['final_cash'])
+            b = RandomNetworkBrain(num_assets=num_assets, device=device, seed=s)
+            r = run_backtest_engine('RANDOM_NETWORK', b, data, timeline, win['start'], win['end'])
+            random_rois.append(r['roi'])
+            random_cagrs.append(r['cagr'])
+            random_dds.append(r['max_dd'])
+            random_wins.append(r['win_rate'])
+            random_cashes.append(r['final_cash'])
 
-        mean_cash = np.mean(cell_cashes)
-        median_cash = np.median(cell_cashes)
-        worst_cash = np.min(cell_cashes)
-        mean_roi = np.mean(cell_rois)
-        median_roi = np.median(cell_rois)
-        worst_roi = np.min(cell_rois)
-        mean_dd = np.mean(cell_dds)
-        median_win = np.median(cell_wins)
+        random_roi_stats = summarize_distribution(random_rois)
+        random_cagr_stats = summarize_distribution(random_cagrs)
+        random_dd_stats = summarize_distribution(random_dds)
+        random_win_stats = summarize_distribution(random_wins)
+        median_cash = float(np.median(random_cashes))
+        worst_cash = float(np.min(random_cashes))
 
-        print(f"{'4. 🧬 细胞生命体 (10种子中位数)':<23}{median_cash:,.2f} 元{'':<4}{median_roi:+.2f}%{'':<6}{np.median(cell_rois):+.2f}%{'':<6}{mean_dd:.2f}%{'':<6}{median_win:.1f}%", flush=True)
-        print(f"{'   ↳ (最差种子 Worst Case)':<26}{worst_cash:,.2f} 元{'':<4}{worst_roi:+.2f}%{'':<6}{'-':<14}{np.max(cell_dds):.2f}%{'':<6}{np.min(cell_wins):.1f}%", flush=True)
+        print(f"{'4. 🎲 独立随机网络 (10种子中位数)':<23}{median_cash:,.2f} 元{'':<4}{random_roi_stats['median']:+.2f}%{'':<6}{random_cagr_stats['median']:+.2f}%{'':<6}{random_dd_stats['mean']:.2f}%{'':<6}{random_win_stats['median']:.1f}%", flush=True)
+        print(f"{'   ↳ (最差种子 Worst Case)':<26}{worst_cash:,.2f} 元{'':<4}{random_roi_stats['worst']:+.2f}%{'':<6}{'-':<14}{np.max(random_dds):.2f}%{'':<6}{np.min(random_wins):.1f}%", flush=True)
 
         wf_results[win['name']] = {
             'buy_and_hold': res_bh,
             'tsmom_cta': res_cta,
             'linear_csmom': res_lin,
-            'cellular_median_roi': float(median_roi),
-            'cellular_worst_roi': float(worst_roi),
-            'cellular_all_rois': [float(x) for x in cell_rois]
+            'random_network_statistics': {
+                'roi': random_roi_stats,
+                'cagr': random_cagr_stats,
+                'max_dd': random_dd_stats,
+                'win_rate': random_win_stats,
+                'final_cash': summarize_distribution(random_cashes),
+            },
+            'random_network_all_rois': [float(x) for x in random_rois]
         }
 
     # 极端摩擦压力测试
@@ -503,32 +651,49 @@ def main():
     stress_lin = run_backtest_engine('LINEAR_CSMOM', None, data, timeline, '2016-01-01', timeline[-1], fee_mult=2.0, slip_mult=2.0)
     print(f"{'2. 线性截面动量 (2x 极端摩擦)':<31}{stress_lin['final_cash']:,.2f} 元{'':<4}{stress_lin['roi']:+.2f}%{'':<6}{stress_lin['cagr']:+.2f}%{'':<6}{stress_lin['max_dd']:.2f}%{'':<6}{stress_lin['win_rate']:.1f}%", flush=True)
 
-    stress_cell_cashes = []
-    stress_cell_rois = []
-    stress_cell_dds = []
-    stress_cell_wins = []
+    stress_random_cashes = []
+    stress_random_rois = []
+    stress_random_dds = []
+    stress_random_wins = []
     for s in seeds:
-        b = RobustCellularBrain(num_assets=num_assets, device=device, seed=s)
-        r = run_backtest_engine('CELLULAR_BRAIN', b, data, timeline, '2016-01-01', timeline[-1], fee_mult=2.0, slip_mult=2.0)
-        stress_cell_cashes.append(r['final_cash'])
-        stress_cell_rois.append(r['roi'])
-        stress_cell_dds.append(r['max_dd'])
-        stress_cell_wins.append(r['win_rate'])
+        b = RandomNetworkBrain(num_assets=num_assets, device=device, seed=s)
+        r = run_backtest_engine('RANDOM_NETWORK', b, data, timeline, '2016-01-01', timeline[-1], fee_mult=2.0, slip_mult=2.0)
+        stress_random_cashes.append(r['final_cash'])
+        stress_random_rois.append(r['roi'])
+        stress_random_dds.append(r['max_dd'])
+        stress_random_wins.append(r['win_rate'])
 
-    print(f"{'3. 🧬 细胞生命体 (2x 极端摩擦 10种子中位数)':<27}{np.median(stress_cell_cashes):,.2f} 元{'':<4}{np.median(stress_cell_rois):+.2f}%{'':<6}{'-':<14}{np.median(stress_cell_dds):.2f}%{'':<6}{np.median(stress_cell_wins):.1f}%", flush=True)
-    print(f"{'   ↳ (2x 摩擦最差种子 Worst Case)':<28}{np.min(stress_cell_cashes):,.2f} 元{'':<4}{np.min(stress_cell_rois):+.2f}%{'':<6}{'-':<14}{np.max(stress_cell_dds):.2f}%{'':<6}{np.min(stress_cell_wins):.1f}%", flush=True)
+    stress_random_roi_stats = summarize_distribution(stress_random_rois)
+    stress_random_dd_stats = summarize_distribution(stress_random_dds)
+    stress_random_win_stats = summarize_distribution(stress_random_wins)
+    stress_random_cash_stats = summarize_distribution(stress_random_cashes)
+    print(f"{'3. 🎲 随机网络 (2x 极端摩擦 10种子中位数)':<27}{np.median(stress_random_cashes):,.2f} 元{'':<4}{stress_random_roi_stats['median']:+.2f}%{'':<6}{'-':<14}{stress_random_dd_stats['median']:.2f}%{'':<6}{stress_random_win_stats['median']:.1f}%", flush=True)
+    print(f"{'   ↳ (2x 摩擦最差种子 Worst Case)':<28}{np.min(stress_random_cashes):,.2f} 元{'':<4}{stress_random_roi_stats['worst']:+.2f}%{'':<6}{'-':<14}{np.max(stress_random_dds):.2f}%{'':<6}{np.min(stress_random_wins):.1f}%", flush=True)
     print(f"==========================================================================================================\n", flush=True)
 
     audit_summary = {
         'data_sha256': data_hash,
+        'model_description': 'independent random network baseline; no evolutionary loop is implemented',
+        'baseline_type': 'independent_random_network',
+        'evolutionary_claim': False,
+        'evolutionary_loop': 'not_implemented',
+        'significance_methods': {
+            'one_sample': 'scipy-free Student-t via regularized incomplete beta',
+            'welch': 'scipy-free Welch unequal-variance t-test via regularized incomplete beta',
+        },
+        'significance_method': 'scipy-free two-sided one-sample t-test against zero',
+        'significance_status': 'computed',
         'walk_forward_windows': wf_results,
         'stress_test_2x_friction': {
             'tsmom_cta': stress_cta,
             'linear_csmom': stress_lin,
-            'cellular_median_cash': float(np.median(stress_cell_cashes)),
-            'cellular_median_roi': float(np.median(stress_cell_rois)),
-            'cellular_worst_roi': float(np.min(stress_cell_rois)),
-            'cellular_median_max_dd': float(np.median(stress_cell_dds))
+            'random_network_statistics': {
+                'final_cash': stress_random_cash_stats,
+                'roi': stress_random_roi_stats,
+                'max_dd': stress_random_dd_stats,
+                'win_rate': stress_random_win_stats,
+            },
+            'random_network_all_rois': [float(x) for x in stress_random_rois]
         }
     }
     with open("runs/evidence_quality_quant_audit.json", "w", encoding="utf-8") as f:

@@ -173,7 +173,7 @@ void run_adas_task_verification() {
     std::cout << "  ↳ 决策响应延迟: " << latency_ns << " 纳秒 (0.000" << (latency_ns / 1000) << " ms, 零延迟电位传导!)\n";
     std::cout << "  ↳ AEB 制动状态: " << (ctl_cutin.is_aeb_triggered ? "🔴 AEB 紧急制动已触发" : "未触发") << "\n";
     std::cout << "  ↳ 制动减速度指令: " << ctl_cutin.target_accel_mps2 << " m/s² (全力下踩硬制动!)\n";
-    std::cout << "  ↳ 放电通路追踪: " << ctl_cutin.active_pathway << "\n";
+    std::cout << "  ↳ 放电通路追踪: " << AdasCellularAdapter::describe_pathway(ctl_cutin) << "\n";
     assert(ctl_cutin.is_aeb_triggered);
     assert(ctl_cutin.target_accel_mps2 <= -5.5);
 

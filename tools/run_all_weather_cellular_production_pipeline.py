@@ -5,6 +5,7 @@ import csv
 import json
 import time
 import datetime
+import hashlib
 import numpy as np
 import torch
 import torch.nn as nn
@@ -13,6 +14,30 @@ SEED = 42
 torch.manual_seed(SEED)
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(SEED)
+
+
+def sha256_file(filepath):
+    digest = hashlib.sha256()
+    with open(filepath, 'rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def sha256_files(filepaths):
+    digest = hashlib.sha256()
+    for filepath in sorted(filepaths):
+        digest.update(filepath.encode('utf-8'))
+        with open(filepath, 'rb') as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def adverse_fill_price(reference_price, side, tick_size, slip_mult):
+    slip = tick_size * slip_mult
+    return reference_price + (slip if side > 0 else -slip)
+
 
 class ProductionAllWeatherCellularBrain(nn.Module):
     """
@@ -116,23 +141,10 @@ def load_and_preprocess_history(filepath):
     if len(bars) < 65:
         return []
     
-    cum_factors = [1.0] * len(bars)
-    curr_factor = 1.0
-    for i in range(1, len(bars)):
-        raw_ret = (bars[i]['close'] - bars[i-1]['close']) / bars[i-1]['close']
-        if abs(raw_ret) > 0.12:
-            step_factor = bars[i-1]['close'] / bars[i]['close']
-            curr_factor *= step_factor
-        cum_factors[i] = curr_factor
-
+    # Keep supplied contract prices untouched; do not fabricate roll adjustments.
     cleaned = []
     for i in range(len(bars)):
         b = dict(bars[i])
-        f = cum_factors[i]
-        b['open'] *= f
-        b['high'] *= f
-        b['low'] *= f
-        b['close'] *= f
 
         tr = b['high'] - b['low'] if not cleaned else max(
             b['high'] - b['low'],
@@ -187,6 +199,11 @@ def run_production_simulation(brain, data, timeline, d_start, d_end, fee_mult=1.
     total_trades = 0
     win_trades = 0
     total_commission_paid = 0.0
+    total_slippage_cost = 0.0
+    margin_peak = 0.0
+    deleveraging_count = 0
+    order_rejections = 0
+    forced_liquidation_count = 0
     daily_returns = []
     equity_curve = []
     prev_day_equity = cash
@@ -194,6 +211,13 @@ def run_production_simulation(brain, data, timeline, d_start, d_end, fee_mult=1.
 
     fee_rate = 0.00015 * fee_mult
     brain.reset()
+
+    def current_used_margin():
+        return sum(
+            last_prices[s] * data[s]['multiplier'] *
+            abs(sum(l['qty'] for l in lots[s])) * 0.12
+            for s in asset_symbols
+        )
 
     for t, cur_date in enumerate(sub_timeline):
         is_last_day = (t == len(sub_timeline) - 1)
@@ -211,14 +235,12 @@ def run_production_simulation(brain, data, timeline, d_start, d_end, fee_mult=1.
 
             if target_qty != cur_qty:
                 delta = target_qty - cur_qty
-                slip = asset['tick_size'] * slip_mult
-                fill_price = bar['open'] + (slip if delta > 0 else -slip)
+                fill_price = adverse_fill_price(
+                    bar['open'], 1 if delta > 0 else -1,
+                    asset['tick_size'], slip_mult)
 
                 if (cur_qty > 0 and delta > 0) or (cur_qty < 0 and delta < 0) or cur_qty == 0:
-                    current_used_margin = sum(
-                        last_prices[s] * data[s]['multiplier'] * abs(sum(l['qty'] for l in lots[s])) * 0.12
-                        for s in asset_symbols
-                    )
+                    used_margin = current_used_margin()
                     new_margin = fill_price * asset['multiplier'] * abs(delta) * 0.12
                     commission = fill_price * asset['multiplier'] * abs(delta) * fee_rate
 
@@ -227,10 +249,16 @@ def run_production_simulation(brain, data, timeline, d_start, d_end, fee_mult=1.
                         for s in asset_symbols for l in lots[s]
                     )
 
-                    if (current_used_margin + new_margin <= cur_eq * 0.40) and (cash >= commission):
+                    if (used_margin + new_margin <= cur_eq * 0.40) and (cash >= commission):
                         cash -= commission
                         total_commission_paid += commission
+                        total_slippage_cost += (
+                            abs(fill_price - bar['open']) *
+                            asset['multiplier'] * abs(delta)
+                        )
                         lots[sym].append({'entry_price': fill_price, 'qty': delta, 'date': cur_date})
+                    else:
+                        order_rejections += 1
                 else:
                     to_close = abs(delta)
                     while to_close > 0 and len(lots[sym]) > 0:
@@ -240,6 +268,10 @@ def run_production_simulation(brain, data, timeline, d_start, d_end, fee_mult=1.
                         pnl = (fill_price - front_lot['entry_price']) if front_lot['qty'] > 0 else (front_lot['entry_price'] - fill_price)
                         commission = fill_price * asset['multiplier'] * close_this * fee_rate
                         total_commission_paid += commission
+                        total_slippage_cost += (
+                            abs(fill_price - bar['open']) *
+                            asset['multiplier'] * close_this
+                        )
                         net_pnl = pnl * asset['multiplier'] * close_this - commission
                         cash += net_pnl
 
@@ -256,20 +288,23 @@ def run_production_simulation(brain, data, timeline, d_start, d_end, fee_mult=1.
 
                     if to_close > 0:
                         new_open = to_close if delta > 0 else -to_close
-                        current_used_margin = sum(
-                            last_prices[s] * data[s]['multiplier'] * abs(sum(l['qty'] for l in lots[s])) * 0.12
-                            for s in asset_symbols
-                        )
+                        used_margin = current_used_margin()
                         new_margin = fill_price * asset['multiplier'] * abs(new_open) * 0.12
                         commission = fill_price * asset['multiplier'] * abs(new_open) * fee_rate
                         cur_eq = cash + sum(
                             (last_prices[s] - l['entry_price'] if l['qty'] > 0 else l['entry_price'] - last_prices[s]) * data[s]['multiplier'] * abs(l['qty'])
                             for s in asset_symbols for l in lots[s]
                         )
-                        if (current_used_margin + new_margin <= cur_eq * 0.40) and (cash >= commission):
+                        if (used_margin + new_margin <= cur_eq * 0.40) and (cash >= commission):
                             cash -= commission
                             total_commission_paid += commission
+                            total_slippage_cost += (
+                                abs(fill_price - bar['open']) *
+                                asset['multiplier'] * abs(new_open)
+                            )
                             lots[sym].append({'entry_price': fill_price, 'qty': new_open, 'date': cur_date})
+                        else:
+                            order_rejections += 1
 
         # 2. 盯市结算与风险度量
         total_equity = cash
@@ -319,6 +354,8 @@ def run_production_simulation(brain, data, timeline, d_start, d_end, fee_mult=1.
 
             # 动态平滑去杠杆
             deleveraging_factor = max(0.2, 1.0 - dd * 1.5)
+            if deleveraging_factor < 1.0:
+                deleveraging_count += 1
 
             for i, sym in enumerate(asset_symbols):
                 if cur_date not in data[sym]['map']: continue
@@ -334,6 +371,8 @@ def run_production_simulation(brain, data, timeline, d_start, d_end, fee_mult=1.
                 safe_contracts = min(6, min(max_contracts_by_risk, max_contracts_by_margin))
                 target_orders[sym] = dirs[i] * safe_contracts
 
+        margin_peak = max(margin_peak, current_used_margin())
+
     # 4. 期末强平清盘
     for sym in asset_symbols:
         if lots[sym]:
@@ -341,10 +380,25 @@ def run_production_simulation(brain, data, timeline, d_start, d_end, fee_mult=1.
             while lots[sym]:
                 front_lot = lots[sym].pop(0)
                 qty = front_lot['qty']
-                pnl = (close_p - front_lot['entry_price']) if qty > 0 else (front_lot['entry_price'] - close_p)
-                net_pnl = pnl * data[sym]['multiplier'] * abs(qty) - close_p * data[sym]['multiplier'] * abs(qty) * fee_rate
+                close_side = -1 if qty > 0 else 1
+                liquidation_price = adverse_fill_price(
+                    close_p, close_side, data[sym]['tick_size'], slip_mult)
+                total_slippage_cost += (
+                    abs(liquidation_price - close_p) *
+                    data[sym]['multiplier'] * abs(qty)
+                )
+                pnl = ((liquidation_price - front_lot['entry_price'])
+                       if qty > 0 else
+                       (front_lot['entry_price'] - liquidation_price))
+                commission = (
+                    liquidation_price * data[sym]['multiplier'] *
+                    abs(qty) * fee_rate
+                )
+                total_commission_paid += commission
+                net_pnl = pnl * data[sym]['multiplier'] * abs(qty) - commission
                 cash += net_pnl
                 total_trades += 1
+                forced_liquidation_count += 1
                 if net_pnl > 0:
                     win_trades += 1
 
@@ -362,6 +416,7 @@ def run_production_simulation(brain, data, timeline, d_start, d_end, fee_mult=1.
     downside_std = math.sqrt(downside_var / max(1, len(daily_returns))) + 1e-6
     sortino = (mean_ret / downside_std) * math.sqrt(242.0)
     cost_ratio = total_commission_paid / initial_capital
+    equity_values = [point['equity'] for point in equity_curve]
 
     return {
         'final_cash': final_realized_cash,
@@ -373,7 +428,23 @@ def run_production_simulation(brain, data, timeline, d_start, d_end, fee_mult=1.
         'sortino': sortino,
         'trades': total_trades,
         'total_commission': total_commission_paid,
-        'cost_ratio_pct': cost_ratio * 100.0
+        'cost_ratio_pct': cost_ratio * 100.0,
+        'total_slippage_cost': total_slippage_cost,
+        'slippage_cost_pct': total_slippage_cost / initial_capital * 100.0,
+        'peak_margin': margin_peak,
+        'deleveraging_count': deleveraging_count,
+        'order_rejections': order_rejections,
+        'forced_liquidation_count': forced_liquidation_count,
+        'equity_curve_summary': {
+            'samples': len(equity_values),
+            'start_equity': equity_values[0] if equity_values else initial_capital,
+            'end_marked_equity': equity_values[-1] if equity_values else initial_capital,
+            'final_realized_cash': final_realized_cash,
+            'min_equity': min(equity_values) if equity_values else initial_capital,
+            'max_equity': max(equity_values) if equity_values else initial_capital,
+            'peak_equity': peak_equity,
+            'max_drawdown_pct': max_dd * 100.0
+        }
     }
 
 def main():
@@ -421,26 +492,45 @@ def main():
     split_date = "2016-01-01"
     num_assets = len(data)
 
-    print(f"[Step 1] 实例化生产级全天候生命体架构...", flush=True)
+    print(f"[Step 1] 实例化可审计的全天候仿真架构...", flush=True)
     brain = ProductionAllWeatherCellularBrain(num_assets=num_assets, device=device, seed=42)
 
-    print(f"[Step 2] 运行 10.7 年 (2016 ~ 2026) 样本外生产级盲测验证...", flush=True)
+    print(f"[Step 2] 运行样本内 (IS) 与样本外 (OOS) 可复现验证...", flush=True)
     t0 = time.time()
+    is_dates = [d for d in timeline if d < split_date]
+    res_is = run_production_simulation(
+        brain, data, timeline, timeline[0], is_dates[-1],
+        fee_mult=1.0, slip_mult=1.0, top_k=3)
     res_oos = run_production_simulation(brain, data, timeline, split_date, timeline[-1], fee_mult=1.0, slip_mult=1.0, top_k=3)
     t_run = time.time() - t0
+    data_files = [
+        os.path.join(data_dir, f"{sym}.csv")
+        for sym in data
+    ]
+    code_hash = sha256_file(__file__)
+    data_hash = sha256_files(data_files)
 
     print(f"\n==========================================================================================================", flush=True)
     print(f"  🏆 生产态全天候生命体 10.7 年样本外盲测终极审计报告 🏆", flush=True)
     print(f"==========================================================================================================", flush=True)
-    print(f"  • 期末实际清盘落袋现金: {res_oos['final_cash']:,.2f} 元 (初始本金: 1,000,000.00 元)", flush=True)
+    print(f"  • IS 期末清盘现金:       {res_is['final_cash']:,.2f} 元 | ROI {res_is['roi']:+.2f}%", flush=True)
+    print(f"  • OOS 期末清盘现金:      {res_oos['final_cash']:,.2f} 元 (初始本金: 1,000,000.00 元)", flush=True)
     print(f"  • 累计净回报率 (ROI):   {res_oos['roi']:+.2f}%", flush=True)
     print(f"  • 年化复合收益率 (CAGR): {res_oos['cagr']:+.2f}%", flush=True)
-    print(f"  • 最大动态回撤 (MaxDD):  {res_oos['max_dd']:.2f}% (抗回撤风控极度坚固)", flush=True)
+    print(f"  • 最大动态回撤 (MaxDD):  {res_oos['max_dd']:.2f}% (当前仿真样本结果)", flush=True)
     print(f"  • 真实平仓胜率 (WinRate): {res_oos['win_rate']:.1f}%", flush=True)
     print(f"  • 卡尔玛比率 (Calmar):   {res_oos['calmar']:.2f}", flush=True)
     print(f"  • 索提诺比率 (Sortino):  {res_oos['sortino']:.2f}", flush=True)
     print(f"  • 累计成交平仓笔数:      {res_oos['trades']} 笔", flush=True)
     print(f"  • 累计缴纳手续费总额:    {res_oos['total_commission']:,.2f} 元 (占本金 {res_oos['cost_ratio_pct']:.2f}%)", flush=True)
+    print(f"  • 累计滑点成本:          {res_oos['total_slippage_cost']:,.2f} 元 (占本金 {res_oos['slippage_cost_pct']:.2f}%)", flush=True)
+    print(f"  • 峰值保证金占用:        {res_oos['peak_margin']:,.2f} 元", flush=True)
+    print(f"  • 去杠杆/拒单/强平计数:  {res_oos['deleveraging_count']} / {res_oos['order_rejections']} / {res_oos['forced_liquidation_count']}", flush=True)
+    print(f"  • 权益曲线摘要:          {res_oos['equity_curve_summary']['samples']}点, "
+          f"min={res_oos['equity_curve_summary']['min_equity']:,.2f}, "
+          f"max={res_oos['equity_curve_summary']['max_equity']:,.2f}", flush=True)
+    print(f"  • 代码 SHA256:           {code_hash}", flush=True)
+    print(f"  • 原始数据 SHA256:       {data_hash} (不执行合约换月伪造调整)", flush=True)
     print(f"  • GPU 穿透推演耗时:      {t_run:.2f} 秒", flush=True)
     print(f"==========================================================================================================\n", flush=True)
 
@@ -454,16 +544,26 @@ def main():
         'risk_mechanisms': ['Dynamic Deleveraging', '40% Hard Margin Cap', 'Risk-Parity Volatility Budgeting'],
         'execution_institutional_rules': {
             'fill_price': 'T+1 Open with 1 Tick Slippage',
+            'terminal_liquidation_fill': 'Last marked price with adverse 1 Tick Slippage',
             'commission': '1.5 bps',
             'accounting': 'FIFO Lot Queue',
-            'terminal_state': '100% Cash Liquidated'
+            'terminal_state': '100% Cash Liquidated',
+            'contract_roll_handling': 'Raw supplied series; no synthetic rollover'
         },
+        'data': {
+            'files': sorted(data_files),
+            'sha256': data_hash,
+            'split_date': split_date
+        },
+        'code_sha256': code_hash,
+        'in_sample_metrics': res_is,
+        'out_of_sample_metrics': res_oos,
         'oos_metrics': res_oos,
         'timestamp': datetime.datetime.now().isoformat()
     }
     with open("runs/all_weather_production_audit_report.json", "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
-    print(f"✓ 生产级审计报告已生成并归档至 runs/all_weather_production_audit_report.json\n", flush=True)
+    print(f"✓ 可审计回测报告已生成并归档至 runs/all_weather_production_audit_report.json\n", flush=True)
 
 if __name__ == '__main__':
     main()

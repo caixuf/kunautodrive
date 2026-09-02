@@ -3,8 +3,8 @@ import glob
 import math
 import csv
 import json
-import time
 import datetime
+import hashlib
 import numpy as np
 import torch
 import torch.nn as nn
@@ -13,6 +13,37 @@ SEED = 42
 torch.manual_seed(SEED)
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(SEED)
+
+
+def sha256_file(filepath):
+    digest = hashlib.sha256()
+    with open(filepath, 'rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def sha256_files(filepaths):
+    digest = hashlib.sha256()
+    for filepath in sorted(filepaths):
+        digest.update(filepath.encode('utf-8'))
+        with open(filepath, 'rb') as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def adverse_fill_price(reference_price, side, tick_size, slip_mult):
+    slip = tick_size * slip_mult
+    return reference_price + (slip if side > 0 else -slip)
+
+
+def derive_seed(base_seed, generation, slot, parent_index):
+    value = base_seed & 0x7fffffff
+    for part in (generation, slot, parent_index):
+        value = (value * 1664525 + int(part) + 1013904223) & 0x7fffffff
+    return value
+
 
 class EpigeneticAllWeatherCellularBrain(nn.Module):
     """
@@ -116,23 +147,10 @@ def load_and_preprocess_history(filepath):
     if len(bars) < 65:
         return []
     
-    cum_factors = [1.0] * len(bars)
-    curr_factor = 1.0
-    for i in range(1, len(bars)):
-        raw_ret = (bars[i]['close'] - bars[i-1]['close']) / bars[i-1]['close']
-        if abs(raw_ret) > 0.12:
-            step_factor = bars[i-1]['close'] / bars[i]['close']
-            curr_factor *= step_factor
-        cum_factors[i] = curr_factor
-
+    # Keep supplied contract prices untouched; do not fabricate roll adjustments.
     cleaned = []
     for i in range(len(bars)):
         b = dict(bars[i])
-        f = cum_factors[i]
-        b['open'] *= f
-        b['high'] *= f
-        b['low'] *= f
-        b['close'] *= f
 
         tr = b['high'] - b['low'] if not cleaned else max(
             b['high'] - b['low'],
@@ -187,12 +205,25 @@ def evaluate_all_weather_brain(brain, data, timeline, d_start, d_end, fee_mult=1
     total_trades = 0
     win_trades = 0
     total_commission_paid = 0.0
+    total_slippage_cost = 0.0
+    margin_peak = 0.0
+    deleveraging_count = 0
+    order_rejections = 0
+    forced_liquidation_count = 0
     daily_returns = []
+    equity_curve = []
     prev_day_equity = cash
     trading_halted = False
 
     fee_rate = 0.00015 * fee_mult
     brain.reset()
+
+    def current_used_margin():
+        return sum(
+            last_prices[s] * data[s]['multiplier'] *
+            abs(sum(l['qty'] for l in lots[s])) * 0.12
+            for s in asset_symbols
+        )
 
     for t, cur_date in enumerate(sub_timeline):
         is_last_day = (t == len(sub_timeline) - 1)
@@ -210,14 +241,12 @@ def evaluate_all_weather_brain(brain, data, timeline, d_start, d_end, fee_mult=1
 
             if target_qty != cur_qty:
                 delta = target_qty - cur_qty
-                slip = asset['tick_size'] * slip_mult
-                fill_price = bar['open'] + (slip if delta > 0 else -slip)
+                fill_price = adverse_fill_price(
+                    bar['open'], 1 if delta > 0 else -1,
+                    asset['tick_size'], slip_mult)
 
                 if (cur_qty > 0 and delta > 0) or (cur_qty < 0 and delta < 0) or cur_qty == 0:
-                    current_used_margin = sum(
-                        last_prices[s] * data[s]['multiplier'] * abs(sum(l['qty'] for l in lots[s])) * 0.12
-                        for s in asset_symbols
-                    )
+                    used_margin = current_used_margin()
                     new_margin = fill_price * asset['multiplier'] * abs(delta) * 0.12
                     commission = fill_price * asset['multiplier'] * abs(delta) * fee_rate
 
@@ -227,10 +256,16 @@ def evaluate_all_weather_brain(brain, data, timeline, d_start, d_end, fee_mult=1
                     )
 
                     # 严格总保证金上限 40% (安全风控硬约束)
-                    if (current_used_margin + new_margin <= cur_eq * 0.40) and (cash >= commission):
+                    if (used_margin + new_margin <= cur_eq * 0.40) and (cash >= commission):
                         cash -= commission
                         total_commission_paid += commission
+                        total_slippage_cost += (
+                            abs(fill_price - bar['open']) *
+                            asset['multiplier'] * abs(delta)
+                        )
                         lots[sym].append({'entry_price': fill_price, 'qty': delta, 'date': cur_date})
+                    else:
+                        order_rejections += 1
                 else:
                     to_close = abs(delta)
                     while to_close > 0 and len(lots[sym]) > 0:
@@ -240,6 +275,10 @@ def evaluate_all_weather_brain(brain, data, timeline, d_start, d_end, fee_mult=1
                         pnl = (fill_price - front_lot['entry_price']) if front_lot['qty'] > 0 else (front_lot['entry_price'] - fill_price)
                         commission = fill_price * asset['multiplier'] * close_this * fee_rate
                         total_commission_paid += commission
+                        total_slippage_cost += (
+                            abs(fill_price - bar['open']) *
+                            asset['multiplier'] * close_this
+                        )
                         net_pnl = pnl * asset['multiplier'] * close_this - commission
                         cash += net_pnl
 
@@ -256,20 +295,23 @@ def evaluate_all_weather_brain(brain, data, timeline, d_start, d_end, fee_mult=1
 
                     if to_close > 0:
                         new_open = to_close if delta > 0 else -to_close
-                        current_used_margin = sum(
-                            last_prices[s] * data[s]['multiplier'] * abs(sum(l['qty'] for l in lots[s])) * 0.12
-                            for s in asset_symbols
-                        )
+                        used_margin = current_used_margin()
                         new_margin = fill_price * asset['multiplier'] * abs(new_open) * 0.12
                         commission = fill_price * asset['multiplier'] * abs(new_open) * fee_rate
                         cur_eq = cash + sum(
                             (last_prices[s] - l['entry_price'] if l['qty'] > 0 else l['entry_price'] - last_prices[s]) * data[s]['multiplier'] * abs(l['qty'])
                             for s in asset_symbols for l in lots[s]
                         )
-                        if (current_used_margin + new_margin <= cur_eq * 0.40) and (cash >= commission):
+                        if (used_margin + new_margin <= cur_eq * 0.40) and (cash >= commission):
                             cash -= commission
                             total_commission_paid += commission
+                            total_slippage_cost += (
+                                abs(fill_price - bar['open']) *
+                                asset['multiplier'] * abs(new_open)
+                            )
                             lots[sym].append({'entry_price': fill_price, 'qty': new_open, 'date': cur_date})
+                        else:
+                            order_rejections += 1
 
         # 2. 盯市结算
         total_equity = cash
@@ -290,6 +332,7 @@ def evaluate_all_weather_brain(brain, data, timeline, d_start, d_end, fee_mult=1
 
         d_ret = (total_equity - prev_day_equity) / max(1.0, prev_day_equity)
         daily_returns.append(d_ret)
+        equity_curve.append({'date': cur_date, 'equity': total_equity, 'dd': dd})
         prev_day_equity = total_equity
 
         if total_equity <= initial_capital * 0.05:
@@ -318,6 +361,8 @@ def evaluate_all_weather_brain(brain, data, timeline, d_start, d_end, fee_mult=1
 
             # 动态去杠杆系数 (当发生回撤时，平滑缩减总风险敞口，杜绝爆仓)
             deleveraging_factor = max(0.2, 1.0 - dd * 1.5)
+            if deleveraging_factor < 1.0:
+                deleveraging_count += 1
 
             for i, sym in enumerate(asset_symbols):
                 if cur_date not in data[sym]['map']: continue
@@ -335,6 +380,8 @@ def evaluate_all_weather_brain(brain, data, timeline, d_start, d_end, fee_mult=1
                 safe_contracts = min(6, min(max_contracts_by_risk, max_contracts_by_margin))
                 target_orders[sym] = dirs[i] * safe_contracts
 
+        margin_peak = max(margin_peak, current_used_margin())
+
     # 4. 期末强平清盘
     for sym in asset_symbols:
         if lots[sym]:
@@ -342,10 +389,25 @@ def evaluate_all_weather_brain(brain, data, timeline, d_start, d_end, fee_mult=1
             while lots[sym]:
                 front_lot = lots[sym].pop(0)
                 qty = front_lot['qty']
-                pnl = (close_p - front_lot['entry_price']) if qty > 0 else (front_lot['entry_price'] - close_p)
-                net_pnl = pnl * data[sym]['multiplier'] * abs(qty) - close_p * data[sym]['multiplier'] * abs(qty) * fee_rate
+                close_side = -1 if qty > 0 else 1
+                liquidation_price = adverse_fill_price(
+                    close_p, close_side, data[sym]['tick_size'], slip_mult)
+                total_slippage_cost += (
+                    abs(liquidation_price - close_p) *
+                    data[sym]['multiplier'] * abs(qty)
+                )
+                pnl = ((liquidation_price - front_lot['entry_price'])
+                       if qty > 0 else
+                       (front_lot['entry_price'] - liquidation_price))
+                commission = (
+                    liquidation_price * data[sym]['multiplier'] *
+                    abs(qty) * fee_rate
+                )
+                total_commission_paid += commission
+                net_pnl = pnl * data[sym]['multiplier'] * abs(qty) - commission
                 cash += net_pnl
                 total_trades += 1
+                forced_liquidation_count += 1
                 if net_pnl > 0:
                     win_trades += 1
 
@@ -365,6 +427,7 @@ def evaluate_all_weather_brain(brain, data, timeline, d_start, d_end, fee_mult=1
     cost_ratio = total_commission_paid / initial_capital
 
     multi_objective_fitness = (2.0 * sortino) + (1.5 * calmar) - (max_dd * 10.0) - (cost_ratio * 0.5)
+    equity_values = [point['equity'] for point in equity_curve]
 
     return {
         'final_cash': final_realized_cash,
@@ -375,7 +438,25 @@ def evaluate_all_weather_brain(brain, data, timeline, d_start, d_end, fee_mult=1
         'calmar': calmar,
         'sortino': sortino,
         'trades': total_trades,
-        'fitness': multi_objective_fitness
+        'fitness': multi_objective_fitness,
+        'total_commission': total_commission_paid,
+        'cost_ratio_pct': cost_ratio * 100.0,
+        'total_slippage_cost': total_slippage_cost,
+        'slippage_cost_pct': total_slippage_cost / initial_capital * 100.0,
+        'peak_margin': margin_peak,
+        'deleveraging_count': deleveraging_count,
+        'order_rejections': order_rejections,
+        'forced_liquidation_count': forced_liquidation_count,
+        'equity_curve_summary': {
+            'samples': len(equity_values),
+            'start_equity': equity_values[0] if equity_values else initial_capital,
+            'end_marked_equity': equity_values[-1] if equity_values else initial_capital,
+            'final_realized_cash': final_realized_cash,
+            'min_equity': min(equity_values) if equity_values else initial_capital,
+            'max_equity': max(equity_values) if equity_values else initial_capital,
+            'peak_equity': peak_equity,
+            'max_drawdown_pct': max_dd * 100.0
+        }
     }
 
 def main():
@@ -422,6 +503,9 @@ def main():
     timeline = sorted(list(all_dates))
     split_date = "2016-01-01"
     num_assets = len(data)
+    data_files = [os.path.join(data_dir, f"{sym}.csv") for sym in data]
+    data_hash = sha256_files(data_files)
+    code_hash = sha256_file(__file__)
 
     print(f"[Step 1] 初始化 100 万细胞表观正规化种群...", flush=True)
     islands = [
@@ -458,9 +542,13 @@ def main():
             champion_brain = population[eval_results[0][1]]
 
         next_pop = [population[eval_results[0][1]]]
+        parent_index = eval_results[0][1]
         while len(next_pop) < len(population):
-            parent = population[eval_results[0][1]]
-            child = EpigeneticAllWeatherCellularBrain(num_assets=num_assets, device=device, seed=int(time.time()*1000)%10000)
+            parent = population[parent_index]
+            child_slot = len(next_pop)
+            child_seed = derive_seed(SEED, gen, child_slot, parent_index)
+            child = EpigeneticAllWeatherCellularBrain(
+                num_assets=num_assets, device=device, seed=child_seed)
             
             # 表观突触稀疏变异 (80% 继承，20% 稀疏微调 + 高斯微扰)
             noise = torch.empty_like(parent.weights).normal_(0.0, 0.03)
@@ -485,11 +573,36 @@ def main():
     print(f"{'1. 未演化随机网络基准':<32}{res_rand['final_cash']:,.2f} 元{'':<4}{res_rand['roi']:+.2f}%{'':<6}{res_rand['cagr']:+.2f}%{'':<6}{res_rand['max_dd']:.2f}%{'':<6}{res_rand['win_rate']:.1f}%{'':<6}{res_rand['calmar']:.2f}", flush=True)
 
     # 2. 🔥 全天候表观稀疏演化超级生命体
+    res_champ_is = evaluate_all_weather_brain(
+        champion_brain, data, timeline, timeline[0], split_date,
+        fee_mult=1.0, slip_mult=1.0, top_k=3)
     res_champ = evaluate_all_weather_brain(champion_brain, data, timeline, split_date, timeline[-1], fee_mult=1.0, slip_mult=1.0, top_k=3)
     print(f"{'2. 🔥 全天候表观演化超级生命体':<30}{res_champ['final_cash']:,.2f} 元{'':<4}{res_champ['roi']:+.2f}%{'':<6}{res_champ['cagr']:+.2f}%{'':<6}{res_champ['max_dd']:.2f}%{'':<6}{res_champ['win_rate']:.1f}%{'':<6}{res_champ['calmar']:.2f}", flush=True)
+    print(f"  OOS audit: slippage={res_champ['total_slippage_cost']:,.2f}, peak_margin={res_champ['peak_margin']:,.2f}, "
+          f"deleveraging={res_champ['deleveraging_count']}, rejects={res_champ['order_rejections']}, "
+          f"forced_liquidations={res_champ['forced_liquidation_count']}", flush=True)
+    print(f"  OOS equity curve: samples={res_champ['equity_curve_summary']['samples']}, "
+          f"min={res_champ['equity_curve_summary']['min_equity']:,.2f}, "
+          f"max={res_champ['equity_curve_summary']['max_equity']:,.2f}", flush=True)
+    print(f"  Protocol hashes: code={code_hash}, data={data_hash}", flush=True)
     print(f"==========================================================================================================\n", flush=True)
 
     summary = {
+        'protocol': {
+            'split_date': split_date,
+            'execution': 'T+1 open with adverse 1 Tick slippage; terminal liquidation also adverse 1 Tick',
+            'contract_roll_handling': 'Raw supplied series; no synthetic rollover',
+            'data_sha256': data_hash,
+            'code_sha256': code_hash,
+            'child_seed_derivation': 'deterministic(base_seed, generation, child_slot, parent_index)'
+        },
+        'in_sample': {
+            'all_weather_champion': res_champ_is
+        },
+        'out_of_sample': {
+            'random_baseline': res_rand,
+            'all_weather_champion': res_champ
+        },
         'random_baseline_oos': res_rand,
         'all_weather_champion_oos': res_champ
     }

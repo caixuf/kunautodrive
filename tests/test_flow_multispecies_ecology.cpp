@@ -2,9 +2,16 @@
 #include <vector>
 #include <cassert>
 #include <iomanip>
+#include <stdexcept>
 #include "kun/cellular/multispecies_ecology.hpp"
 
 using namespace kun;
+
+namespace {
+void require(bool condition, const char* message) {
+    if (!condition) throw std::runtime_error(message);
+}
+}
 
 void test_multispecies_differentiation_and_syntrophy() {
     std::cout << "[Test 1] 验证三类生态公会异构表型分化与共生废物净化循环 (Guilds & Syntrophy)...\n";
@@ -79,6 +86,34 @@ void test_ecological_succession_under_stress() {
     std::cout << "  -> 灾变选择、物种更替与生态位重构 100% 满分通过！\n\n";
 }
 
+void test_detox_energy_settlement_is_single_conversion() {
+    std::cout << "[Test 4] 验证解毒物质只结算一次，能量变化经统一摄取路径完成...\n";
+    MultiSpeciesEcosystemWorld world(1, 1, 123);
+    auto& compartment = world.get_compartments().front();
+    compartment.nutrient_concentration = 0.0;
+    compartment.waste_toxicity = 10.0;
+
+    const auto& organisms = world.get_organisms();
+    const EcologicalOrganism* scavenger = nullptr;
+    for (const auto& organism : organisms) {
+        if (organism->get_guild() == SpeciesGuild::DETRITUS_SCAVENGER) {
+            scavenger = organism.get();
+            break;
+        }
+    }
+    require(scavenger != nullptr, "detritus scavenger missing from test fixture");
+    const double energy_before = scavenger->get_homeostasis().energy_reserve;
+    const auto frame = world.tick(0.0, 0.0);
+    const double energy_after = scavenger->get_homeostasis().energy_reserve;
+
+    require(frame.global_waste_purified > 0.0, "detoxification did not consume waste");
+    require(energy_after < energy_before, "detoxification minted energy directly");
+    require(compartment.nutrient_concentration > 0.0, "detoxification produced no nutrient");
+    std::cout << "  ↳ 解毒量: " << frame.global_waste_purified
+              << ", 分解者能量变化: " << (energy_after - energy_before)
+              << " (无重复直接能量铸造)\n";
+}
+
 int main() {
     std::cout << "======================================================================\n";
     std::cout << " 🧬 FlowEngine 人工生命【第三阶段：多种群生态位演化】核心单测\n";
@@ -87,6 +122,7 @@ int main() {
     test_multispecies_differentiation_and_syntrophy();
     test_spatial_gradient_migration();
     test_ecological_succession_under_stress();
+    test_detox_energy_settlement_is_single_conversion();
 
     std::cout << "======================================================================\n";
     std::cout << " 🎉 多种群生态位第三阶段验收达成: 异构公会、共生净化、自发迁徙全通！\n";

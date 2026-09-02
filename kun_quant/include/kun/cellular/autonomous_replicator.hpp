@@ -23,6 +23,9 @@ struct GeneLocus {
     double firing_cost{0.08};       // 先天放电能耗
     double weight_param{1.0};       // 突触突触权重 / 传导强度
     uint32_t target_compartment{0}; // 空间隔室亲和力
+    uint32_t source_pathogen_strain_id{0}; // HGT 来源毒株，0 表示宿主自身基因
+    bool is_hgt{false};              // 是否为水平转移获得的功能位点
+    uint8_t functional_marker{0};    // 可观测功能表型标记
 };
 
 // ============================================================================

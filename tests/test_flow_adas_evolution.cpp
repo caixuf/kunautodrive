@@ -325,8 +325,14 @@ static bool test_negative_controls_and_held_out(const CellularOrganism& winner) 
     auto held_out = winner;
     AdasCellularAdapter perturbed(held_out);
     perturbed.get_organism().reset_state(true);
-    auto ctl = perturbed.process_perception(12.0, -6.0, 0.12, 0.9);
-    if (!ctl.is_aeb_triggered || ctl.target_accel_mps2 > -5.5) {
+    double held_out_distance = 0.0;
+    bool held_out_aeb = false;
+    ScenarioLatency held_out_latency{};
+    const ScenarioPerturbation held_out_perturb{1.02, 0.95, 1.05};
+    if (!run_scenario_emergency_cutin_aeb(
+            perturbed, held_out_distance, held_out_aeb, held_out_latency,
+            held_out_perturb) ||
+        !held_out_aeb) {
         std::cerr << "held-out AEB perturbation failed\n";
         return false;
     }
