@@ -1051,6 +1051,16 @@ target_include_directories(test_flow_digital_homeostasis PRIVATE kun_quant/inclu
 target_compile_definitions(test_flow_digital_homeostasis PRIVATE FLOWCORO_INTEGRATION)
 add_test(NAME test_flow_digital_homeostasis COMMAND test_flow_digital_homeostasis)
 
+add_executable(test_flow_autonomous_replication tests/test_flow_autonomous_replication.cpp)
+if(WIN32)
+    target_link_libraries(test_flow_autonomous_replication kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
+else()
+    target_link_libraries(test_flow_autonomous_replication kun_quant flowengine_core flowcoro_headers flowcoro_net scheduler_cpp pthread sqlite3)
+endif()
+target_include_directories(test_flow_autonomous_replication PRIVATE kun_quant/include include ${FLOWCORO_INCLUDE_DIR})
+target_compile_definitions(test_flow_autonomous_replication PRIVATE FLOWCORO_INTEGRATION)
+add_test(NAME test_flow_autonomous_replication COMMAND test_flow_autonomous_replication)
+
 add_executable(test_flow_adas_evidence_quality tests/test_flow_adas_evidence_quality.cpp)
 if(WIN32)
     target_link_libraries(test_flow_adas_evidence_quality kun_quant flowengine_core flowcoro_headers scheduler_cpp ws2_32 sqlite3)
