@@ -6,7 +6,7 @@
 #include <cmath>
 #include <vector>
 
-#include "kun/cellular/adas_cellular_adapter.hpp"
+#include "adas_cellular_adapter.hpp"
 
 namespace kun::adas_test {
 

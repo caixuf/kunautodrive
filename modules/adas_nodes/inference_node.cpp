@@ -46,8 +46,10 @@
 #include "onnx_backend.h"
 #include "traffic_light.h"
 #include "clock_service.h"
+#ifdef ENABLE_CELLULAR_ADAPTER
 #include "kun/cellular/cellular_genome.hpp"
-#include "kun/cellular/adas_cellular_adapter.hpp"
+#include "adas_cellular_adapter.hpp"
+#endif
 #include <cjson/cJSON.h>
 #include <memory>
 #include <fstream>
@@ -93,7 +95,9 @@ struct InferenceContext {
     TinyMLP         model{};
     OnnxBackend     onnx{};          /* 可选 ONNX 后端（未加载时 loaded=0） */
     bool            use_onnx{false}; /* true=前向走 ONNX，false=走 tiny-MLP */
-    std::unique_ptr<kun::AdasCellularAdapter> cellular_adas{nullptr}; /* 形态发生细胞大脑后端 */
+#ifdef ENABLE_CELLULAR_ADAPTER
+    std::unique_ptr<kun::AdasCellularAdapter> cellular_adas{nullptr}; /* 实验性细胞适配器 */
+#endif
     bool            use_cellular{false}; /* true=前向走形态发生细胞网络 */
     pthread_mutex_t model_mutex{};  /* 保护 model/onnx 的并发读写 */
     char    model_path[256]{};
@@ -571,6 +575,7 @@ static void run_inference(double* out_speed, double* out_d,
     *out_kv = 0.0; *out_kp = 0.0; *out_kd = 0.0; *out_yd = 0.0;
 
     /* 选定当前活跃后端：形态发生细胞大脑 / ONNX / tiny-MLP */
+#ifdef ENABLE_CELLULAR_ADAPTER
     if (g.use_cellular && g.cellular_adas) {
         double dist = g.front0_x - g.ego_x;
         double rel_v = g.front0_vx - g.ego_v;
@@ -587,6 +592,7 @@ static void run_inference(double* out_speed, double* out_d,
         *out_conf     = 1.0;
         return;
     }
+#endif
 
     bool active_loaded = g.use_onnx ? (g.onnx.loaded != 0) : (g.model.loaded != 0);
     int  active_in_dim = g.use_onnx ? g.onnx.in_dim : g.model.in_dim;
@@ -1049,13 +1055,16 @@ static int inference_init(MessageBus* bus, Transport* transport,
      * 保证「模型跑进 pipeline」这条链路永远可运行。 */
     g.use_onnx = false;
     g.use_cellular = false;
+#ifdef ENABLE_CELLULAR_ADAPTER
     if (path_has_suffix(g.model_path, ".json")) {
         auto brain = kun::CellularOrganism::create_seed_organism(26);
         brain.compile();
         g.cellular_adas = std::make_unique<kun::AdasCellularAdapter>(std::move(brain));
         g.use_cellular = true;
         LOG_INFO("inference", "Morphogenetic Cellular Brain loaded from %s (Zero-GC compiled)", g.model_path);
-    } else if (path_has_suffix(g.model_path, ".onnx")) {
+    } else
+#endif
+    if (path_has_suffix(g.model_path, ".onnx")) {
         if (onnx_backend_load(&g.onnx, g.model_path) == 0 &&
             dims_supported(g.onnx.in_dim, g.onnx.out_dim)) {
             g.use_onnx = true;
