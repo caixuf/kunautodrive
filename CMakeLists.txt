@@ -1105,6 +1105,30 @@ else()
     message(WARNING "test_entity_physics: esminiRMLib NOT found — physics unit test not registered")
 endif()
 
+# ── ADAS 细胞皮层闭环集成测试 (FlowEngine x KunCellular + C11 Cortex) ──
+set(_KUN_CELLULAR_INC_CANDIDATES
+    "${CMAKE_CURRENT_SOURCE_DIR}/../kun-cellular/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/kun-cellular/include"
+)
+set(KUN_CELLULAR_INC_DIR "")
+foreach(_cand IN LISTS _KUN_CELLULAR_INC_CANDIDATES)
+    if(EXISTS "${_cand}/kun/cellular/cellular_genome.hpp")
+        set(KUN_CELLULAR_INC_DIR "${_cand}")
+        break()
+    endif()
+endforeach()
+
+if(KUN_CELLULAR_INC_DIR AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_adas_cellular_integration.cpp")
+    add_executable(test_adas_cellular_integration tests/test_adas_cellular_integration.cpp)
+    target_include_directories(test_adas_cellular_integration PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests
+        ${KUN_CELLULAR_INC_DIR}
+    )
+    add_test(NAME adas_cellular_integration_tests COMMAND test_adas_cellular_integration)
+    set_tests_properties(adas_cellular_integration_tests PROPERTIES TIMEOUT 30)
+endif()
+
 add_test(NAME e2e_training_tools
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/ci/evaluators/test_e2e_training_tools.py
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}

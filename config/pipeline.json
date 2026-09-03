@@ -309,7 +309,7 @@
           }
         }
       ],
-      "params": "{\"max_speed\":20.0,\"frequency_hz\":20.0,\"model_path\":\"tools/train/model.txt\",\"control_mode\":\"shadow\"}"
+      "params": "{\"max_speed\":20.0,\"frequency_hz\":20.0,\"backend\":\"cortex\",\"control_mode\":\"shadow\"}"
     },
     {
       "name": "data_recorder",

@@ -44,6 +44,7 @@
 #include "logger.h"
 #include "tiny_mlp.h"
 #include "onnx_backend.h"
+#include "sdsc_cortex.h"
 #include "traffic_light.h"
 #include "clock_service.h"
 #ifdef ENABLE_CELLULAR_ADAPTER
@@ -99,6 +100,9 @@ struct InferenceContext {
     std::unique_ptr<kun::AdasCellularAdapter> cellular_adas{nullptr}; /* 实验性细胞适配器 */
 #endif
     bool            use_cellular{false}; /* true=前向走形态发生细胞网络 */
+    SdscCortex      cortex{};        /* 纯 C11 零 GC 细胞皮层推理内核 */
+    bool            use_cortex{false}; /* true=前向走纯 C11 SDSC Cortex */
+    bool            last_immune_lock{false}; /* 上一拍是否触发免疫熔断 */
     pthread_mutex_t model_mutex{};  /* 保护 model/onnx 的并发读写 */
     char    model_path[256]{};
     int     control_mode{CTRL_MODE_SHADOW};  /* enum CtrlMode */
@@ -482,10 +486,12 @@ static bool dims_supported(int in_dim, int out_dim) {
  * 限频 1Hz，tmp+rename 原子替换，避免读端撕裂。
  */
 static int active_output_dim(void) {
+    if (g.use_cortex) return g.cortex.output_count > 0 ? g.cortex.output_count : 4;
     return g.use_onnx ? g.onnx.out_dim : g.model.out_dim;
 }
 
 static bool shadow_speed_gate_supported(void) {
+    if (g.use_cortex) return true;  /* cortex 模式输出契约兼容 target_speed */
     /* out<5 的模型首个输出是 target_speed；out>=5 是 throttle/brake/...。 */
     const bool active_loaded = g.use_onnx ? (g.onnx.loaded != 0)
                                          : (g.model.loaded != 0);
@@ -568,13 +574,65 @@ static void write_shadow_sidecar(double shadow_delta, double pred_speed,
 static void run_inference(double* out_speed, double* out_d,
                           double* out_throttle, double* out_brake,
                           double* out_steer, double* out_lc, double* out_conf,
-                          double* out_kv, double* out_kp, double* out_kd, double* out_yd) {
+                          double* out_kv, double* out_kp, double* out_kd, double* out_yd,
+                          bool* out_immune_lock = nullptr) {
     float y[TINY_MLP_MAX_OUT];
     *out_lc = 0.0;
     *out_conf = 0.0;
     *out_kv = 0.0; *out_kp = 0.0; *out_kd = 0.0; *out_yd = 0.0;
+    if (out_immune_lock) *out_immune_lock = false;
 
-    /* 选定当前活跃后端：形态发生细胞大脑 / ONNX / tiny-MLP */
+    /* 选定当前活跃后端：纯 C11 SDSC Cortex / 形态发生细胞大脑 / ONNX / tiny-MLP */
+    if (g.use_cortex) {
+        double dist = g.front0_x - g.ego_x;
+        double rel_v = g.front0_vx - g.ego_v;
+        double lane_offset = g.ego_lane_offset;
+        double ttc = (rel_v < -0.1) ? (dist / (-rel_v)) : 99.0;
+
+        float c_in[4] = {
+            (float)dist,
+            (float)rel_v,
+            (float)lane_offset,
+            (float)ttc
+        };
+        float c_out[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        sdsc_cortex_forward(&g.cortex, c_in, c_out);
+
+        float accel_val = c_out[0];
+        float decel_val = c_out[1];
+        float steer_val = c_out[2];
+        bool  immune_lock = (c_out[3] > 0.5f);
+        (void)decel_val;
+
+        g.last_immune_lock = immune_lock;
+        if (out_immune_lock) {
+            *out_immune_lock = immune_lock;
+        }
+
+        if (immune_lock) {
+            /* 免疫熔断 AEB 紧急制动：硬实时防御通路，零 malloc 零 GC */
+            *out_throttle = 0.0;
+            *out_brake    = 1.0;
+            *out_steer    = std::clamp((double)steer_val * 0.15, -0.22, 0.22);
+            *out_speed    = std::clamp(g.ego_v - 6.0 * 0.05, 0.0, g.cfg_max_speed);
+            *out_d        = lane_offset;
+            *out_conf     = 1.0;
+            return;
+        }
+
+        /* 正常巡航与跟车调控 */
+        double target_accel = (double)accel_val;
+        if (g.ego_v >= g.cfg_max_speed) {
+            target_accel = 0.0;
+        }
+        *out_throttle = (target_accel > 0.0) ? std::clamp(target_accel / 3.5, 0.0, 1.0) : 0.0;
+        *out_brake    = (target_accel < 0.0) ? std::clamp(-target_accel / 6.0, 0.0, 1.0) : 0.0;
+        *out_steer    = std::clamp((double)steer_val * 0.15, -0.22, 0.22);
+        *out_speed    = std::clamp(g.ego_v + target_accel * 0.05, 0.0, g.cfg_max_speed);
+        *out_d        = lane_offset;
+        *out_conf     = 1.0;
+        return;
+    }
 #ifdef ENABLE_CELLULAR_ADAPTER
     if (g.use_cellular && g.cellular_adas) {
         double dist = g.front0_x - g.ego_x;
@@ -753,7 +811,22 @@ protected:
             if (g.reload_flag) {
                 g.reload_flag = 0;
                 pthread_mutex_lock(&g.model_mutex);
-                if (path_has_suffix(g.model_path, ".onnx")) {
+                if (path_has_suffix(g.model_path, ".cortex") ||
+                    path_has_suffix(g.model_path, ".sdsc") ||
+                    strcmp(g.model_path, "cortex") == 0 ||
+                    strcmp(g.model_path, "sdsc") == 0 ||
+                    strstr(g.model_path, "cortex") != nullptr) {
+                    sdsc_cortex_init_default_adas(&g.cortex);
+                    g.use_cortex = true;
+                    g.use_onnx = false;
+                    g.use_cellular = false;
+                    g.reload_count++;
+                    g.frame_dim = V2_DIM;
+                    g.frame_head = 0;
+                    g.frame_count = 0;
+                    LOG_INFO("inference", "OTA hot-reload #%d SDSC C11 Cortex from %s (Zero-GC pure C11)",
+                             g.reload_count, g.model_path);
+                } else if (path_has_suffix(g.model_path, ".onnx")) {
                     OnnxBackend nb{};
                     if (onnx_backend_load(&nb, g.model_path) == 0 &&
                         dims_supported(nb.in_dim, nb.out_dim)) {
@@ -804,10 +877,12 @@ protected:
             double pred_throttle = 0.0, pred_brake = 0.0, pred_steer = 0.0;
             double pred_lc = 0.0, pred_conf = 0.0;
             double pred_kv = 0.0, pred_kp = 0.0, pred_kd = 0.0, pred_yd = 0.0;
+            bool   pred_immune_lock = false;
             run_inference(&pred_speed, &pred_d,
                           &pred_throttle, &pred_brake, &pred_steer,
                           &pred_lc, &pred_conf,
-                          &pred_kv, &pred_kp, &pred_kd, &pred_yd);
+                          &pred_kv, &pred_kp, &pred_kd, &pred_yd,
+                          &pred_immune_lock);
 
             /* 影子对比: 与 planning 输出的目标速度差 */
             double shadow_delta = g.has_planning
@@ -827,8 +902,9 @@ protected:
                 }
             }
 
-            const char* model_name = g.use_onnx ? (g.onnx.loaded ? "onnx" : "heuristic")
-                                                 : (g.model.loaded ? "tiny-mlp" : "heuristic");
+            const char* model_name = g.use_cortex ? "sdsc-cortex" :
+                                     (g.use_onnx ? (g.onnx.loaded ? "onnx" : "heuristic")
+                                                 : (g.model.loaded ? "tiny-mlp" : "heuristic"));
             const bool speed_contract = shadow_speed_gate_supported();
             write_shadow_sidecar(shadow_delta, pred_speed, model_name);
 
@@ -850,6 +926,7 @@ protected:
                 cJSON_AddNumberToObject(tj_root, "steer", pred_steer);
                 cJSON_AddNumberToObject(tj_root, "lane_change", pred_lc);
                 cJSON_AddNumberToObject(tj_root, "confidence", pred_conf);
+                cJSON_AddBoolToObject(tj_root, "immune_lock", pred_immune_lock);
                 cJSON* ego_obj = cJSON_CreateObject();
                 cJSON_AddNumberToObject(ego_obj, "x", g.ego_x);
                 cJSON_AddNumberToObject(ego_obj, "y", g.ego_y);
@@ -907,10 +984,11 @@ protected:
             if (g.control_mode == CTRL_MODE_DIRECT) {
                 uint8_t raw_buf[64];
                 size_t  raw_len = sizeof(raw_buf);
+                const char* mode_tag = pred_immune_lock ? "AEB_IMMUNE" : "INFER";
                 build_control_raw(pred_speed, pred_d,
                                   pred_throttle, pred_brake, pred_steer,
                                   pred_lc, pred_conf,
-                                  raw_buf, &raw_len, "INFER");
+                                  raw_buf, &raw_len, mode_tag);
                 transport_publish(transport_, "inference/raw_cmd",
                                   raw_buf, (uint32_t)raw_len);
             }
@@ -922,8 +1000,8 @@ protected:
                 if (g.control_mode == CTRL_MODE_PLAN_ASSIST) mode_str = "plan_assist";
                 else if (g.control_mode == CTRL_MODE_DIRECT) mode_str = "direct_ctrl";
                 LOG_INFO("inference",
-                    "#%d [%s] mode=%s ego_v=%.1f → speed=%.1f d=%.2f (shadow Δ=%.2f vs planning)",
-                    g.infer_count, model_name, mode_str,
+                    "#%d [%s%s] mode=%s ego_v=%.1f → speed=%.1f d=%.2f (shadow Δ=%.2f vs planning)",
+                    g.infer_count, model_name, pred_immune_lock ? " [IMMUNE_LOCK]" : "", mode_str,
                     g.ego_v, pred_speed, pred_d, shadow_delta);
             }
         }
@@ -1016,6 +1094,7 @@ static int inference_init(MessageBus* bus, Transport* transport,
     g.cfg_frequency_hz = 20.0;  /* 和 control 对齐，时序滑窗需要更高帧率 */
     strncpy(g.model_path, "tools/train/model.txt", sizeof(g.model_path) - 1);
 
+    bool cfg_cortex_requested = false;
     if (params_json) {
         cJSON* p = cJSON_Parse(params_json);
         if (p) {
@@ -1043,6 +1122,18 @@ static int inference_init(MessageBus* bus, Transport* transport,
                 strncpy(g.sidecar_path, j->valuestring, sizeof(g.sidecar_path) - 1);
                 g.sidecar_path[sizeof(g.sidecar_path) - 1] = '\0';
             }
+            /* SDSC C11 Cortex 显式配置项支持 */
+            j = cJSON_GetObjectItemCaseSensitive(p, "cortex");
+            if (j && (cJSON_IsTrue(j) || (cJSON_IsString(j) && (strcmp(j->valuestring, "true") == 0 || strcmp(j->valuestring, "enable") == 0))))
+                cfg_cortex_requested = true;
+            j = cJSON_GetObjectItemCaseSensitive(p, "use_cortex");
+            if (cJSON_IsTrue(j))
+                cfg_cortex_requested = true;
+            j = cJSON_GetObjectItemCaseSensitive(p, "backend");
+            if (cJSON_IsString(j) && j->valuestring) {
+                if (strstr(j->valuestring, "cortex") || strstr(j->valuestring, "sdsc"))
+                    cfg_cortex_requested = true;
+            }
             cJSON_Delete(p);
         }
     }
@@ -1055,16 +1146,31 @@ static int inference_init(MessageBus* bus, Transport* transport,
      * 保证「模型跑进 pipeline」这条链路永远可运行。 */
     g.use_onnx = false;
     g.use_cellular = false;
+    g.use_cortex = false;
+    g.last_immune_lock = false;
+
+    if (cfg_cortex_requested ||
+        strcmp(g.model_path, "cortex") == 0 ||
+        strcmp(g.model_path, "sdsc") == 0 ||
+        strcmp(g.model_path, "sdsc_cortex") == 0 ||
+        path_has_suffix(g.model_path, ".cortex") ||
+        path_has_suffix(g.model_path, ".sdsc") ||
+        strstr(g.model_path, "sdsc_cortex") != nullptr) {
+        sdsc_cortex_init_default_adas(&g.cortex);
+        g.use_cortex = true;
+        LOG_INFO("inference", "SDSC C11 Cortex initialized (Zero-GC pure C11 deterministic kernel, in=%d out=%d)",
+                 g.cortex.input_count, g.cortex.output_count);
+    }
 #ifdef ENABLE_CELLULAR_ADAPTER
-    if (path_has_suffix(g.model_path, ".json")) {
+    else if (path_has_suffix(g.model_path, ".json")) {
         auto brain = kun::CellularOrganism::create_seed_organism(26);
         brain.compile();
         g.cellular_adas = std::make_unique<kun::AdasCellularAdapter>(std::move(brain));
         g.use_cellular = true;
         LOG_INFO("inference", "Morphogenetic Cellular Brain loaded from %s (Zero-GC compiled)", g.model_path);
-    } else
+    }
 #endif
-    if (path_has_suffix(g.model_path, ".onnx")) {
+    else if (path_has_suffix(g.model_path, ".onnx")) {
         if (onnx_backend_load(&g.onnx, g.model_path) == 0 &&
             dims_supported(g.onnx.in_dim, g.onnx.out_dim)) {
             g.use_onnx = true;
@@ -1091,12 +1197,12 @@ static int inference_init(MessageBus* bus, Transport* transport,
     }
 
     /* 根据活跃后端的输入维度自动选择帧维度 */
-    int active_in = g.use_onnx ? g.onnx.in_dim : g.model.in_dim;
+    int active_in = g.use_cortex ? 4 : (g.use_onnx ? g.onnx.in_dim : g.model.in_dim);
     g.frame_dim = (active_in == 23 || active_in == 115) ? V3_DIM : V2_DIM;
 
     /* sidecar 默认策略：加载了真实模型才写（heuristic 的 delta 不该进 shadow 门禁）。
      * worker 评测通过 FLOWENGINE_TEMP_DIR 隔离 sidecar，避免并发场景互读。 */
-    if (!g.sidecar_path[0] && (g.use_onnx ? g.onnx.loaded : g.model.loaded)) {
+    if (!g.sidecar_path[0] && (g.use_cortex || (g.use_onnx ? g.onnx.loaded : g.model.loaded))) {
         const char* temp_dir = getenv("FLOWENGINE_TEMP_DIR");
         if (temp_dir && temp_dir[0]) {
             snprintf(g.sidecar_path, sizeof(g.sidecar_path),
@@ -1147,8 +1253,9 @@ static int inference_init(MessageBus* bus, Transport* transport,
     else if (g.control_mode == CTRL_MODE_DIRECT) mode_str = "direct_ctrl";
     LOG_INFO("inference", "initialized (FlowCoro, mode=%s, %.0f Hz, max=%.0f m/s, %s)",
              mode_str, g.cfg_frequency_hz, g.cfg_max_speed,
-             g.use_onnx ? "onnx loaded"
-                        : (g.model.loaded ? "tiny-mlp loaded" : "heuristic fallback"));
+             g.use_cortex ? "sdsc-cortex (C11 Zero-GC)" :
+             (g.use_onnx ? "onnx loaded"
+                         : (g.model.loaded ? "tiny-mlp loaded" : "heuristic fallback")));
     return 0;
 }
 
@@ -1173,6 +1280,10 @@ static void inference_cleanup(void) {
         g.task_wrapper = nullptr;
     }
     s_plugin.taskbase = nullptr;
+    if (g.use_cortex) {
+        sdsc_cortex_reset(&g.cortex);
+        g.use_cortex = false;
+    }
     onnx_backend_free(&g.onnx);
     pthread_mutex_destroy(&g.model_mutex);
     statem_cleanup(&g.sm);
