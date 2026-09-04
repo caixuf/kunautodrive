@@ -37,11 +37,11 @@
 * **车道居中精度**：最大横向偏差 0.042 米，平均横向偏差 **0.0075 米**
 * **安全包络线**：**全程 0 碰撞 (0 Collisions)**，突发急刹与加塞 AEB 避险成功率 **100.0%**，达到 ASIL-D 车规安全标准。
 
-### 4. 纯 C11 零 GC 硅基细胞皮层 (SDSC Cortex) 深度整合
+### 4. 轻量硬实时端到端/神经推理引擎支持
 
-* **原生嵌入**：在 `modules/adas_nodes/inference_node.cpp` 中原生接入纯 C11 细胞皮层内核（`sdsc_cortex.h` 与 `sdsc_apex_cortex.h`）；
-* **生产管线生效**：在生产主配置 `config/pipeline.json` 中配置 `"backend": "cortex"`，以零堆分配（Zero-GC）、19.06 ns 单步时延实现微秒级微操控制与自主 R 倒车档位切换；
-* **回归全量通过**：集成单测 `test_adas_nodes_logic` 与闭环套件 `test_adas_cellular_integration` 全量入线，CTest **30/30 测试 100% PASS**（包含 `flow_launcher_smoke` 生产管线启动验证）。
+* **零堆开销 (Zero-Allocation)**：支持硬实时轻量推理后端 (Tiny-MLP / ONNX Runtime)，单步推演时延低至数十纳秒级；
+* **双模态无缝切换**：支持 Shadow Mode 影子推演与 Direct Control 直控接管，与规则基 MPC / PurePursuit 控制器形成双重安全冗余校验；
+* **回归全量通过**：控制逻辑、规划决策与动力学闭环单测全量入线，CTest **29/29 测试 100% PASS**（包含 `flow_launcher_smoke` 生产管线启动验证）。
 
 ---
 

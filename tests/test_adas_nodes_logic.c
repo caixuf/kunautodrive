@@ -23,7 +23,6 @@
  */
 
 #include "adas_msgs_gen.h"
-#include "sdsc_cortex.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -458,62 +457,6 @@ static void test_pwm_custom_scale(void) {
 }
 
 /* ══════════════════════════════════════════════════════════ */
-/* SDSC C11 Cortex 零 GC 推理内核测试                         */
-/* ══════════════════════════════════════════════════════════ */
-
-static void test_sdsc_cortex_init_default(void) {
-    TEST("sdsc_cortex: init_default_adas topology & counts");
-    SdscCortex ctx;
-    sdsc_cortex_init_default_adas(&ctx);
-    ASSERT_EQ(ctx.cell_count, 8, "default adas cell count should be 8");
-    ASSERT_EQ(ctx.input_count, 4, "default adas input count should be 4");
-    ASSERT_EQ(ctx.output_count, 4, "default adas output count should be 4");
-    ASSERT_EQ(ctx.synapse_count, 6, "default adas synapse count should be 6");
-    PASS();
-}
-
-static void test_sdsc_cortex_emergency_aeb(void) {
-    TEST("sdsc_cortex: extreme cut-in hazard triggers AEB immune lock");
-    SdscCortex ctx;
-    sdsc_cortex_init_default_adas(&ctx);
-    float in[4] = {8.0f, -10.0f, 0.0f, 0.35f}; /* 极危加塞: dist=8m, rel_v=-10m/s, ttc=0.35s */
-    float out[4] = {0};
-    sdsc_cortex_forward(&ctx, in, out);
-    ASSERT_EQ((int)out[3], 1, "extreme hazard must trigger immune lock");
-    PASS();
-}
-
-static void test_sdsc_cortex_normal_cruise(void) {
-    TEST("sdsc_cortex: clear road forward cruise, immune lock inactive");
-    SdscCortex ctx;
-    sdsc_cortex_init_default_adas(&ctx);
-    float in[4] = {50.0f, 0.0f, 0.0f, 99.0f}; /* 前方畅通: dist=50m, rel_v=0, ttc=99s */
-    float out[4] = {0};
-    sdsc_cortex_forward(&ctx, in, out);
-    ASSERT_EQ((int)out[3], 0, "clear road should not trigger immune lock");
-    ASSERT(out[0] > 0.0f, "clear road should have positive accel");
-    PASS();
-}
-
-static void test_sdsc_cortex_lateral_hysteresis(void) {
-    TEST("sdsc_cortex: lateral offset hysteresis centering response");
-    SdscCortex ctx;
-    sdsc_cortex_init_default_adas(&ctx);
-    /* 左偏车道 (lane_offset = +1.0m) */
-    float in_left[4] = {30.0f, 0.0f, 1.0f, 99.0f};
-    float out_left[4] = {0};
-    sdsc_cortex_forward(&ctx, in_left, out_left);
-    ASSERT_EQ((int)out_left[2], 1, "positive lane offset should trigger positive steer output");
-
-    /* 右偏车道 (lane_offset = -1.0m) */
-    float in_right[4] = {30.0f, 0.0f, -1.0f, 99.0f};
-    float out_right[4] = {0};
-    sdsc_cortex_forward(&ctx, in_right, out_right);
-    ASSERT_EQ((int)out_right[2], -1, "negative lane offset should trigger negative steer output");
-    PASS();
-}
-
-/* ══════════════════════════════════════════════════════════ */
 /* Main                                                        */
 /* ══════════════════════════════════════════════════════════ */
 
@@ -552,12 +495,6 @@ int main(void) {
     test_pwm_steering_clamp();
     test_pwm_zero_cmd_is_neutral();
     test_pwm_custom_scale();
-
-    printf("\n═══ SDSC C11 Cortex Zero-GC Inference Kernel ═══\n");
-    test_sdsc_cortex_init_default();
-    test_sdsc_cortex_emergency_aeb();
-    test_sdsc_cortex_normal_cruise();
-    test_sdsc_cortex_lateral_hysteresis();
 
     printf("\n═══════════════════════════════════\n");
     printf("  Total: %d  ✅ Passed: %d  ❌ Failed: %d\n",

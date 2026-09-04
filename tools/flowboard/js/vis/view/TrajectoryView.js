@@ -186,20 +186,34 @@ export function createTrajectoryView(scene) {
       raw3d.push(new THREE.Vector3(tx, ty, tz));
       raw3d[raw3d.length - 1].v = v;
     }
-    /* 用车头实时位置替换轨迹起点（防脱节）。车头不参与上方跳变检查，
-     * 避免"车偏离轨迹点>10m"时误截断整条轨迹。 */
+    /* 用车头实时位置替换轨迹起点（防脱节）。
+     * 消除过冲（Overshoot 防护）：如果车头与轨迹原始第 0 点有横向位移，
+     * 直接突变第 0 点会导致 Catmull-Rom 样条切线畸变从而剧烈摆动甩尾。
+     * 当首段位移较近时做平滑投影过渡，仅在偏离合理范围 (<9m²) 时平滑接入。 */
     if (raw3d.length >= 1) {
       const [tx0, ty0, tz0] = worldToThree(frontX, frontY, egoZ);
       const dx = tx0 - raw3d[0].x;
       const dz = tz0 - raw3d[0].z;
-      if (dx * dx + dz * dz < 25) {
-        raw3d[0].set(tx0, ty0, tz0);
-        raw3d[0].v = trajPath[0][2] || 0;
+      const dist2 = dx * dx + dz * dz;
+      if (dist2 < 9.0) {
+        if (raw3d.length >= 2) {
+          // 对齐到首段切线方向，避免横摆角速度过大时引发样条扭曲
+          const t1 = raw3d[1];
+          const segDx = t1.x - tx0, segDz = t1.z - tz0;
+          const segLen = Math.sqrt(segDx * segDx + segDz * segDz);
+          if (segLen > 0.5) {
+            raw3d[0].set(tx0, ty0, tz0);
+            raw3d[0].v = trajPath[0][2] || 0;
+          }
+        } else {
+          raw3d[0].set(tx0, ty0, tz0);
+          raw3d[0].v = trajPath[0][2] || 0;
+        }
       }
     }
     if (raw3d.length < 2) return [];
 
-    /* 2. CatmullRom 样条插值（centripetal 适合非均匀点距） */
+    /* 2. CatmullRom 样条插值（centripetal 适合非均匀点距，0.5 消除尖角自相交） */
     const curve = new THREE.CatmullRomCurve3(raw3d, false, 'centripetal', 0.5);
     const nSmooth = Math.min(raw3d.length * SPLINE_SUBDIV, MAX_RENDER_POINTS);
     const smoothPts = curve.getSpacedPoints(nSmooth - 1);

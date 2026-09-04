@@ -60,27 +60,10 @@ foreach(_cand IN LISTS _FLOWCORO_INCLUDE_CANDIDATES)
     endif()
 endforeach()
 
-set(_KUN_CELLULAR_INCLUDE_CANDIDATES
-    "${FLOW_ROOT}/../kun-cellular/include"
-    "${FLOW_ROOT}/third_party/kun-cellular/include"
-)
-set(KUN_CELLULAR_INCLUDE_DIR "")
-foreach(_cand IN LISTS _KUN_CELLULAR_INCLUDE_CANDIDATES)
-    if(EXISTS "${_cand}/kun/cellular/cellular_genome.hpp")
-        set(KUN_CELLULAR_INCLUDE_DIR "${_cand}")
-        message(STATUS "kun-cellular include: ${_cand}")
-        break()
-    endif()
-endforeach()
-
-option(ENABLE_CELLULAR_ADAPTER
-       "Enable the experimental KunCellular ADAS inference adapter" OFF)
-
 include_directories(
     ${FLOW_ROOT}/include
     ${FLOW_ROOT}/src/algorithms            # ekf_fusion.h, dbscan_cluster.h
     ${FLOWCORO_INCLUDE_DIR}
-    ${KUN_CELLULAR_INCLUDE_DIR}
     ${FLOWENGINE_BUILD}/gen                # 生成的 adas_msgs_gen.h
 )
 
@@ -555,10 +538,6 @@ option(ENABLE_ONNX "Enable ONNX Runtime inference backend (requires onnxruntime)
 add_library(inference_node SHARED inference_node.cpp onnx_backend.cpp)
 target_compile_definitions(inference_node PRIVATE FLOWCORO_INTEGRATION)
 target_compile_options(inference_node PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fcoroutines>)
-if(ENABLE_CELLULAR_ADAPTER AND KUN_CELLULAR_INCLUDE_DIR)
-    target_compile_definitions(inference_node PRIVATE ENABLE_CELLULAR_ADAPTER)
-    target_include_directories(inference_node PRIVATE ${KUN_CELLULAR_INCLUDE_DIR})
-endif()
 target_link_libraries(inference_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
 
 if(ENABLE_ONNX)
