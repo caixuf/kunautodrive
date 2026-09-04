@@ -44,6 +44,8 @@
 #include "logger.h"
 #include "tiny_mlp.h"
 #include "onnx_backend.h"
+#include "sdsc_cortex.h"
+#include "sdsc_adas_adapter.h"
 #include "traffic_light.h"
 #include "clock_service.h"
 #include <cjson/cJSON.h>
@@ -91,6 +93,9 @@ struct InferenceContext {
     TinyMLP         model{};
     OnnxBackend     onnx{};          /* 可选 ONNX 后端（未加载时 loaded=0） */
     bool            use_onnx{false}; /* true=前向走 ONNX，false=走 tiny-MLP */
+    SdscCortex      cortex{};        /* 纯 C11 零 GC 细胞生命体推理内核 (bin 导出的编译内拓扑) */
+    bool            use_cortex{false}; /* true=前向走细胞生命体 cortex 后端 */
+    bool            cfg_cortex_requested{false}; /* pipeline "backend" 含 cortex */
     pthread_mutex_t model_mutex{};  /* 保护 model/onnx 的并发读写 */
     char    model_path[256]{};
     int     control_mode{CTRL_MODE_SHADOW};  /* enum CtrlMode */
@@ -483,11 +488,13 @@ static bool dims_supported(int in_dim, int out_dim) {
  * 限频 1Hz，tmp+rename 原子替换，避免读端撕裂。
  */
 static int active_output_dim(void) {
+    if (g.use_cortex) return 2;  /* steer_n + accel_n */
     return g.use_onnx ? g.onnx.out_dim : g.model.out_dim;
 }
 
 static bool shadow_speed_gate_supported(void) {
     /* out<5 的模型首个输出是 target_speed；out>=5 是 throttle/brake/...。 */
+    if (g.use_cortex) return true;  /* cortex 输出 pred_speed=ego_v+accel*dt，契约兼容 */
     const bool active_loaded = g.use_onnx ? (g.onnx.loaded != 0)
                                          : (g.model.loaded != 0);
     if (!active_loaded) return true;  /* heuristic fallback emits target_speed */
@@ -551,6 +558,82 @@ static void write_shadow_sidecar(double shadow_delta, double pred_speed,
 /* ── 推理核心 ────────────────────────────────────────────────── */
 
 /*
+ * 细胞生命体 (SDSC-BIN) 特征构建。
+ *
+ * 契约与 kun-cellular tools/train_adas_cortex.py 逐字对齐：
+ * inputs[6]:
+ *   0 cte_n    横向跟踪误差 / 2.0      (正 = 目标路径在车左侧)
+ *   1 dpsi_n   航向误差 / 0.5 rad
+ *   2 kappa_n  前视曲率 * 20.0
+ *   3 v_n      车速 / 20.0
+ *   4 verr_n   (v_target - v) / 5.0
+ *   5 danger_n 危险度 = 1 - min(ttc,10)/10
+ * outputs[2]:
+ *   0 steer_n  [-1,1] → steer = steer_n * steer_limit(v)
+ *   1 accel_n  [-1,1] → accel = accel_n>0 ? accel_n*3.5 : accel_n*6.0
+ */
+static void cortex_build_features(double f[6]) {
+    /* planning 轨迹快照 */
+    Trajectory traj;
+    int have_traj = 0;
+    if (g.has_traj) {
+        pthread_mutex_lock(&g.traj_mutex);
+        traj = g.plan_traj;
+        have_traj = (traj.point_count > 0);
+        pthread_mutex_unlock(&g.traj_mutex);
+    }
+
+    double cte = 0.0, dpsi = 0.0, kappa = 0.0;
+    double v_target = (g.has_planning && g.planning_target_speed > 0.0)
+                          ? g.planning_target_speed : g.cfg_max_speed;
+
+    if (have_traj) {
+        /* 最近点 → CTE / 航向误差（语义同 control_node Stanley：
+         * cte 正 = 目标路径在车左侧） */
+        int best_i = 0;
+        double best_d2 = 1e18;
+        for (int i = 0; i < traj.point_count; ++i) {
+            double dx = (double)traj.points[i].x - g.ego_x;
+            double dy = (double)traj.points[i].y - g.ego_y;
+            double d2 = dx * dx + dy * dy;
+            if (d2 < best_d2) { best_d2 = d2; best_i = i; }
+        }
+        const TrajectoryPoint* np = &traj.points[best_i];
+        double hx = -sin(g.ego_heading), hy = cos(g.ego_heading);
+        cte = ((double)np->x - g.ego_x) * hx + ((double)np->y - g.ego_y) * hy;
+
+        /* 航向误差 wrap 到 [-pi,pi]，正 = 路径朝向偏车左侧 */
+        dpsi = (double)np->heading - g.ego_heading;
+        while (dpsi > M_PI)  dpsi -= 2.0 * M_PI;
+        while (dpsi < -M_PI) dpsi += 2.0 * M_PI;
+
+        /* 前视曲率：沿轨迹前进 max(5m, v*0.8) 取该点 kappa */
+        double lookahead = fmax(5.0, g.ego_v * 0.8);
+        kappa = (double)np->kappa;
+        for (int i = best_i; i < traj.point_count; ++i) {
+            kappa = (double)traj.points[i].kappa;
+            if ((double)traj.points[i].s - (double)np->s >= lookahead) break;
+        }
+
+        /* 纵向目标速度：轨迹最近点速度优先 */
+        if (np->v > 0.0f) v_target = (double)np->v;
+    }
+
+    /* 前向危险度：TTC（语义同 control_node 跟车） */
+    double dist = g.front0_x - g.ego_x;
+    double rel_v = g.front0_vx - g.ego_v;
+    double ttc = (rel_v < -0.1 && dist > 0.0) ? dist / (-rel_v) : 99.0;
+    double danger = 1.0 - fmin(ttc, 10.0) / 10.0;
+
+    f[0] = cte / 2.0;
+    f[1] = dpsi / 0.5;
+    f[2] = kappa * 20.0;
+    f[3] = g.ego_v / 20.0;
+    f[4] = (v_target - g.ego_v) / 5.0;
+    f[5] = danger;
+}
+
+/*
  * 计算模型输出。
  *
  * 输入特征维度 (in_dim) 由 model.txt 自动决定：
@@ -576,6 +659,31 @@ static void run_inference(double* out_speed, double* out_d,
     *out_conf = 0.0;
     *out_kv = 0.0; *out_kp = 0.0; *out_kd = 0.0; *out_yd = 0.0;
     if (out_immune_lock) *out_immune_lock = false;
+
+    /* 后端 0: 细胞生命体 cortex（6 感受器 → steer/accel 双效应器） */
+    if (g.use_cortex) {
+        double f[6];
+        cortex_build_features(f);
+        float cin[6] = {(float)f[0], (float)f[1], (float)f[2],
+                        (float)f[3], (float)f[4], (float)f[5]};
+        float cout[2] = {0.0f, 0.0f};
+        sdsc_cortex_forward(&g.cortex, cin, cout);
+        float steer_n = cout[0];
+        float accel_n = cout[1];
+
+        /* 语义同 control_node steer_limit_for_speed + physics.cpp 标定 */
+        float steer_lim = sdsc_cortex_steer_limit((float)g.ego_v, 1.4f);
+        double steer = (double)steer_n * steer_lim;
+        double accel = (accel_n > 0.0f) ? accel_n * 3.5f : accel_n * 6.0f;
+
+        *out_throttle = (accel > 0.0) ? fmin(accel / 3.5, 1.0) : 0.0;
+        *out_brake    = (accel < 0.0) ? fmin(-accel / 8.0, 1.0) : 0.0;
+        *out_steer    = steer;
+        *out_speed    = std::clamp(g.ego_v + accel * 0.05, 0.0, g.cfg_max_speed);
+        *out_d        = 0.0;
+        *out_conf     = 1.0;
+        return;
+    }
 
     /* 选定当前活跃后端：ONNX / tiny-MLP / heuristic fallback */
     bool active_loaded = g.use_onnx ? (g.onnx.loaded != 0) : (g.model.loaded != 0);
@@ -737,7 +845,10 @@ protected:
             if (g.reload_flag) {
                 g.reload_flag = 0;
                 pthread_mutex_lock(&g.model_mutex);
-                if (path_has_suffix(g.model_path, ".onnx")) {
+                if (g.use_cortex) {
+                    /* cortex 拓扑编译期内固化（bin → C11 头），无运行时文件可热载 */
+                    LOG_INFO("inference", "OTA reload ignored: cortex topology is compile-time fixed");
+                } else if (path_has_suffix(g.model_path, ".onnx")) {
                     OnnxBackend nb{};
                     if (onnx_backend_load(&nb, g.model_path) == 0 &&
                         dims_supported(nb.in_dim, nb.out_dim)) {
@@ -813,7 +924,8 @@ protected:
                 }
             }
 
-            const char* model_name = g.use_onnx ? (g.onnx.loaded ? "onnx" : "heuristic")
+            const char* model_name = g.use_cortex ? "sdsc-cortex"
+                                   : g.use_onnx ? (g.onnx.loaded ? "onnx" : "heuristic")
                                                 : (g.model.loaded ? "tiny-mlp" : "heuristic");
             const bool speed_contract = shadow_speed_gate_supported();
             write_shadow_sidecar(shadow_delta, pred_speed, model_name);
@@ -1024,6 +1136,12 @@ static int inference_init(MessageBus* bus, Transport* transport,
                 else if (strcmp(j->valuestring, "direct_ctrl") == 0)
                     g.control_mode = CTRL_MODE_DIRECT;
             }
+            /* 推理后端选择："cortex" → 细胞生命体（编译内 bin 导出拓扑）。
+             * 其余值/缺省 → 按 model_path 后缀自动选 ONNX / tiny-MLP。 */
+            j = cJSON_GetObjectItemCaseSensitive(p, "backend");
+            if (cJSON_IsString(j) && j->valuestring &&
+                strstr(j->valuestring, "cortex"))
+                g.cfg_cortex_requested = true;
             /* 影子 sidecar 输出路径（供 demo_evaluator / modelctl promote 门禁）。
              * 未配置时按后端自动决定（真实模型才写，heuristic 不写，见下）。 */
             j = cJSON_GetObjectItemCaseSensitive(p, "shadow_sidecar_path");
@@ -1043,8 +1161,18 @@ static int inference_init(MessageBus* bus, Transport* transport,
      * → 回退 tiny-MLP（此时 .onnx 路径对 tiny_mlp_load 必然失败 → heuristic），
      * 保证「模型跑进 pipeline」这条链路永远可运行。 */
     g.use_onnx = false;
+    g.use_cortex = false;
 
-    if (path_has_suffix(g.model_path, ".onnx")) {
+    if (g.cfg_cortex_requested ||
+        strstr(g.model_path, "cortex") != nullptr) {
+        /* 细胞生命体后端：拓扑由 kun-cellular 训练产物 (.bin) 经
+         * export_sdsc_cortex.py 导出为 C11 头，编译期固化，零堆分配。 */
+        sdsc_cortex_init_default_adas(&g.cortex);
+        g.use_cortex = true;
+        LOG_INFO("inference",
+                 "SDSC cellular organism initialized (Zero-GC C11 kernel, cells=%d in=%d out=2)",
+                 (int)SDSC_CELL_COUNT, (int)SDSC_RECEPTOR_COUNT);
+    } else if (path_has_suffix(g.model_path, ".onnx")) {
         if (onnx_backend_load(&g.onnx, g.model_path) == 0 &&
             dims_supported(g.onnx.in_dim, g.onnx.out_dim)) {
             g.use_onnx = true;
@@ -1154,6 +1282,7 @@ static void inference_cleanup(void) {
     }
     s_plugin.taskbase = nullptr;
     onnx_backend_free(&g.onnx);
+    g.use_cortex = false;
     pthread_mutex_destroy(&g.model_mutex);
     statem_cleanup(&g.sm);
     LOG_INFO("inference", "cleanup done (reloads=%d)", g.reload_count);
