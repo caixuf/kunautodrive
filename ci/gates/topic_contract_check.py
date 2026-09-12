@@ -54,6 +54,7 @@ NAME_TO_SRC = {
     "perception_fusion": "modules/adas_nodes/perception_fusion_node.cpp",
     "flowrec": "modules/adas_nodes/flowrec_node.c",
     "flowmond": "modules/adas_nodes/flowmond_node.cpp",
+    "bev_detection": "modules/adas_nodes/bev_detection_node.cpp",
 }
 
 ARR_RE = re.compile(

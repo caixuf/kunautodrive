@@ -562,6 +562,27 @@ if(ENABLE_ONNX)
     endif()
 endif()
 
+# bev_detection_node: BEV 多模态感知检测节点 (FlowCoro 协程版, 影子模式)
+add_library(bev_detection_node SHARED
+    bev_detection_node.cpp
+    bev_onnx_backend.cpp
+    bev_pre.c
+    bev_post.c
+)
+target_compile_definitions(bev_detection_node PRIVATE FLOWCORO_INTEGRATION)
+target_compile_options(bev_detection_node PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fcoroutines>)
+target_link_libraries(bev_detection_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
+if(ENABLE_ONNX)
+    if(onnxruntime_FOUND)
+        target_compile_definitions(bev_detection_node PRIVATE HAVE_ONNXRUNTIME)
+        target_link_libraries(bev_detection_node onnxruntime::onnxruntime)
+    elseif(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIB)
+        target_compile_definitions(bev_detection_node PRIVATE HAVE_ONNXRUNTIME)
+        target_include_directories(bev_detection_node PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
+        target_link_libraries(bev_detection_node ${ONNXRUNTIME_LIB})
+    endif()
+endif()
+
 # data_recorder_node: 训练样本采集（模仿学习 JSONL）
 add_library(data_recorder_node SHARED data_recorder_node.c)
 target_link_libraries(data_recorder_node ${NODE_LINK_LIBS})
@@ -785,6 +806,7 @@ set(FLOWENGINE_NODE_PLUGIN_TARGETS
     object_tracker_node
     prediction_node
     scene_assembler_node
+    bev_detection_node
 )
 
 install(TARGETS ${FLOWENGINE_NODE_PLUGIN_TARGETS}
