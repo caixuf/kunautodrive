@@ -53,9 +53,9 @@ def ordered_scenario_files():
             if name and os.path.exists(path) and name not in seen:
                 files.append((name, s.get("duration_s"), s.get("enabled", True)))
                 seen.add(name)
-    # 追加 suite 未列出的其它场景（suite.json 自身除外）
+    # 追加 suite 未列出的其它场景（suite.json 自身除外，忽略以 . 开头的隐藏文件）
     for name in sorted(os.listdir(SCENARIOS_DIR)):
-        if not name.endswith(".json") or name == "suite.json" or name in seen:
+        if not name.endswith(".json") or name.startswith(".") or name == "suite.json" or name in seen:
             continue
         files.append((name, None, True))
         seen.add(name)

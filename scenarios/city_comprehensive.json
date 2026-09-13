@@ -7,6 +7,9 @@
   "weather": "clear",
   "visibility_m": 1200,
   "npc_lane_change": true,
+  "enable_poisson_traffic": true,
+  "poisson_rate": 0.2,
+  "poisson_max_vehicles": 16,
   "ego": {
     "x": 20.0,
     "y": -1.75,

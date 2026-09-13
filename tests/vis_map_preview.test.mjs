@@ -32,5 +32,9 @@ ok('dragging uses pointer capture',
   appJs.includes('setPointerCapture') && appJs.includes("'pointermove'"));
 ok('modal exposes a close control',
   indexHtml.includes('flowboard.closeMapPreview()'));
+ok('preview includes extentFocus auto-framing for maps without route',
+  previewJs.includes('function extentFocus') && previewJs.includes('extentFocus(edges)'));
+ok('preview exports extentFocus',
+  previewJs.includes('extentFocus }'));
 
 done();

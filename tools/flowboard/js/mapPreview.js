@@ -108,6 +108,35 @@ function routeFocus(path) {
   };
 }
 
+function extentFocus(edges) {
+  let minX = Infinity, maxX = -Infinity;
+  let minY = Infinity, maxY = -Infinity;
+  let minZ = Infinity, maxZ = -Infinity;
+  for (const edge of edges || []) {
+    for (const point of edge.nodes || []) {
+      if (Array.isArray(point) && point.length >= 2) {
+        const x = Number(point[0] || 0);
+        const y = Number(point[1] || 0);
+        const z = Number(point[2] || 0);
+        minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+        minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
+      }
+    }
+  }
+  if (!Number.isFinite(minX)) {
+    return { centerX: 0, centerY: 0, centerZ: 0, heading: 0, height: 80 };
+  }
+  const span = Math.max(maxX - minX, maxY - minY);
+  return {
+    centerX: (minX + maxX) / 2,
+    centerY: (minY + maxY) / 2,
+    centerZ: (minZ + maxZ) / 2,
+    heading: 0,
+    height: Math.max(80, Math.min(450, span * 0.72)),
+  };
+}
+
 function toTopo(map, routes, routeId) {
   const route = routes.find((item) => item.id === routeId);
   /* 小地图保持全量；超大地图由 selectRoadsForPreview 保留路线及其 250m
@@ -132,10 +161,18 @@ function toTopo(map, routes, routeId) {
       speed_limit: road.speed_limit,
     };
   });
-  /* 取景：有真实建筑 → 聚焦城市核心（建筑密集区）；否则回退 route 全跨度。 */
-  const focus = (Array.isArray(map.buildings) && map.buildings.length)
-    ? buildingFocus(map.buildings)
-    : routeFocus(routePath);
+  /* 取景优先级：
+   * 1. 真实 OSM 建筑密集区（城市核心视觉效果最优）；
+   * 2. 选定路线 routePath（按路线跨度取景）；
+   * 3. 全道路拓扑外包盒 extentFocus（无建筑且无路线时的自适应全局居中，绝不黑屏漂移至 (0,0)）。 */
+  let focus;
+  if (Array.isArray(map.buildings) && map.buildings.length) {
+    focus = buildingFocus(map.buildings);
+  } else if (routePath && routePath.length) {
+    focus = routeFocus(routePath);
+  } else {
+    focus = extentFocus(edges);
+  }
   const first = routePath[0] || (edges[0] && edges[0].nodes[0] ? edges[0].nodes[0] : [0, 0, 0]);
   /* P1 路口渠化：map.json 的 junctions[]（fork + connecting_roads[].turn）
    * 透传给 ConnectorView 画转向导流线/按来车归属停止线；无数据时几何兜底。
@@ -205,11 +242,14 @@ async function boot() {
     });
     const result = await response.json();
     if (!response.ok || !result.ok) throw new Error(result.error || '地图加载失败');
-    const route = (result.routes.routes || []).find((item) => item.id === routeId);
+    const availableRoutes = result.routes && Array.isArray(result.routes.routes) ? result.routes.routes : [];
+    const route = availableRoutes.find((item) => item.id === routeId) ||
+                  (availableRoutes.length ? availableRoutes[0] : null);
+    const activeRouteId = route ? route.id : routeId;
     if (hint) {
       hint.textContent = (route ? route.name + ' · ' : '') + '左键旋转 · 滚轮缩放 · 按 P/Space 切换平移';
     }
-    update3D(toTopo(result.map, result.routes.routes || [], routeId));
+    update3D(toTopo(result.map, availableRoutes, activeRouteId));
     setCameraMode('orbit');
     resetMapView();
     resize3D();
@@ -221,7 +261,7 @@ async function boot() {
   }
 }
 
-export { toTopo, buildRoutePath, routeFocus, buildingFocus };
+export { toTopo, buildRoutePath, routeFocus, buildingFocus, extentFocus };
 
 if (typeof window !== 'undefined' && document.getElementById('scene3d-canvas')) {
   window.addEventListener('resize', resize3D);

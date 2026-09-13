@@ -914,22 +914,38 @@ static bool dispatch_request(int fd, MonitorServer* ms,
                 size_t map_len = 0, routes_len = 0;
                 char map_path[PATH_MAX];
                 char routes_path[PATH_MAX];
-                /* 直接返回全量 map.json。map_corridor.json（corridor_map.py 走廊
-                 * 裁剪版，吸附前生成）会把非走廊区域的路裁掉且端点断裂（郑东
-                 * 孤端率 35.5%），预览"好好的路被断开"——与用户诉求"大 OSM
-                 * 城区一次渲染完整城市"冲突。郑东全量已支持（LARGE_MAP_ROAD_LIMIT
-                 * 50000 + SUMO 拓扑端点吸附，孤端率 0.6%）。 */
+
                 snprintf(map_path, sizeof(map_path), "maps/%s/map.json", map_id);
                 char* map_json = read_file(map_path, &map_len);
                 snprintf(routes_path, sizeof(routes_path), "maps/%s/routes.json", map_id);
                 char* routes_json = read_file(routes_path, &routes_len);
-                if (!map_json || !routes_json) {
-                    free(map_json);
+
+                /* 若当前工作目录找不到，尝试从 ms->html_path 向上推导到仓库根目录查找 */
+                if (!map_json && ms->html_path[0]) {
+                    char repo_root[512];
+                    snprintf(repo_root, sizeof(repo_root), "%s", ms->html_path);
+                    char* s = path_last_sep(repo_root); /* strip index.html */
+                    if (s) *s = '\0';
+                    s = path_last_sep(repo_root);       /* strip flowboard */
+                    if (s) *s = '\0';
+                    s = path_last_sep(repo_root);       /* strip tools */
+                    if (s) *s = '\0';
+                    if (repo_root[0]) {
+                        snprintf(map_path, sizeof(map_path), "%s/maps/%s/map.json", repo_root, map_id);
+                        map_json = read_file(map_path, &map_len);
+                        snprintf(routes_path, sizeof(routes_path), "%s/maps/%s/routes.json", repo_root, map_id);
+                        routes_json = read_file(routes_path, &routes_len);
+                    }
+                }
+
+                if (!map_json) {
                     free(routes_json);
                     send_response(fd, "404 Not Found", "application/json",
                                   "{\"ok\":false,\"error\":\"map not found\"}");
                 } else {
-                    size_t total = map_len + routes_len + 32;
+                    const char* routes_payload = routes_json ? routes_json : "{\"routes\":[]}";
+                    size_t actual_routes_len = routes_json ? routes_len : strlen(routes_payload);
+                    size_t total = map_len + actual_routes_len + 32;
                     char* response = (char*)malloc(total);
                     if (!response) {
                         free(map_json);
@@ -937,14 +953,13 @@ static bool dispatch_request(int fd, MonitorServer* ms,
                         send_response(fd, "500 Internal Server Error", "application/json",
                                       "{\"ok\":false,\"error\":\"out of memory\"}");
                     } else {
-                        int n = snprintf(response, total, "{\"ok\":true,\"map\":%s,\"routes\":%s}",
-                                         map_json, routes_json);
+                        snprintf(response, total, "{\"ok\":true,\"map\":%s,\"routes\":%s}",
+                                 map_json, routes_payload);
                         send_response_full(fd, "200 OK", "application/json", response,
                                            false, "no-cache", true, accept_encoding);
                         free(response);
                         free(map_json);
                         free(routes_json);
-                        (void)n;
                     }
                 }
             }
