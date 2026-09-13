@@ -288,6 +288,10 @@ def _load_shadow_metrics() -> dict:
         delta_val = float(delta) if delta is not None else None
         full_mae_val = float(full_mae) if full_mae is not None else None
         mae_val = float(mae) if mae is not None else None
+        steer_mae = data.get("shadow_steer_mae")
+        steer_rmse = data.get("shadow_steer_rmse")
+        ade = data.get("shadow_ade") or data.get("shadow_ade_mean")
+        fde = data.get("shadow_fde") or data.get("shadow_fde_mean")
         return {
             "delta": delta_val,
             "full_mae": full_mae_val,
@@ -295,6 +299,10 @@ def _load_shadow_metrics() -> dict:
             "settled_n": settled_n or 0,
             "gate_supported": gate_supported,
             "gate_ready": gate_ready,
+            "steer_mae": float(steer_mae) if steer_mae is not None else None,
+            "steer_rmse": float(steer_rmse) if steer_rmse is not None else None,
+            "ade": float(ade) if ade is not None else None,
+            "fde": float(fde) if fde is not None else None,
         }
     except (json.JSONDecodeError, OSError, ValueError):
         return {
@@ -304,6 +312,10 @@ def _load_shadow_metrics() -> dict:
             "settled_n": 0,
             "gate_supported": True,
             "gate_ready": False,
+            "steer_mae": None,
+            "steer_rmse": None,
+            "ade": None,
+            "fde": None,
         }
 
 
@@ -2285,6 +2297,10 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         "shadow_settled_samples": shadow_metrics["settled_n"],
         "shadow_gate_supported": shadow_metrics["gate_supported"],
         "shadow_gate_ready": shadow_metrics["gate_ready"],
+        "shadow_steer_mae": shadow_metrics.get("steer_mae"),
+        "shadow_steer_rmse": shadow_metrics.get("steer_rmse"),
+        "shadow_ade": shadow_metrics.get("ade"),
+        "shadow_fde": shadow_metrics.get("fde"),
         "has_traffic_lights": bool(scenario_lights),
         "red_light_violation": red_light_violation,
         "red_light_violation_details": red_light_violation_details,

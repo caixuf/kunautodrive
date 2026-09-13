@@ -116,6 +116,9 @@ struct InferenceContext {
 
     /* v2 特征: 控制状态（来自 control/cmd） */
     double ctrl_brake{0};
+    double ctrl_throttle{0};
+    double ctrl_steer{0};
+    double ctrl_speed{0};
     int    ctrl_emergency_stop{0};
     volatile int has_control{0};
 
@@ -163,6 +166,19 @@ struct InferenceContext {
     double shadow_settled_abs_sum{0};
     double shadow_settled_sq_sum{0};
     long   shadow_settled_n{0};
+
+    /* 转向角影子统计 (Steering Shadow Metrics) */
+    double shadow_steer_abs_sum{0};
+    double shadow_steer_sq_sum{0};
+    long   shadow_steer_n{0};
+
+    /* 轨迹位移误差统计 (Trajectory ADE/FDE Shadow Metrics) */
+    double shadow_ade_sum{0};
+    double shadow_fde_sum{0};
+    long   shadow_traj_n{0};
+    double last_shadow_ade{0};
+    double last_shadow_fde{0};
+
     uint64_t sidecar_last_us{0};   /* 上次落盘时间（限频 1Hz） */
 
     /* TaskBase 包装器（由 EXPORT_COROUTINE_TASK 宏创建） */
@@ -298,6 +314,8 @@ static void on_control_cmd(const Message* msg, void* user_data) {
         ControlCmd cmd;
         if (ControlCmd_deserialize(&cmd, (const uint8_t*)msg->data, msg->data_size) == 0) {
             g.ctrl_brake = cmd.brake;
+            g.ctrl_throttle = cmd.throttle;
+            g.ctrl_steer = cmd.steering;
             g.ctrl_emergency_stop = cmd.emergency_stop ? 1 : 0;
             g.has_control = 1;
             return;
@@ -309,6 +327,10 @@ static void on_control_cmd(const Message* msg, void* user_data) {
     if (root) {
         cJSON* j = cJSON_GetObjectItemCaseSensitive(root, "brake");
         if (cJSON_IsNumber(j)) g.ctrl_brake = j->valuedouble;
+        j = cJSON_GetObjectItemCaseSensitive(root, "throttle");
+        if (cJSON_IsNumber(j)) g.ctrl_throttle = j->valuedouble;
+        j = cJSON_GetObjectItemCaseSensitive(root, "steer");
+        if (cJSON_IsNumber(j)) g.ctrl_steer = j->valuedouble;
         j = cJSON_GetObjectItemCaseSensitive(root, "mode");
         if (cJSON_IsString(j) && j->valuestring)
             g.ctrl_emergency_stop = (strstr(j->valuestring, "AEB") != NULL
@@ -538,6 +560,22 @@ static void write_shadow_sidecar(double shadow_delta, double pred_speed,
                                 g.shadow_settled_abs_sum / (double)g.shadow_settled_n);
         cJSON_AddNumberToObject(root, "shadow_speed_rmse_settled",
                                 sqrt(g.shadow_settled_sq_sum / (double)g.shadow_settled_n));
+    }
+    if (g.shadow_steer_n > 0) {
+        cJSON_AddNumberToObject(root, "shadow_steer_n", (double)g.shadow_steer_n);
+        cJSON_AddNumberToObject(root, "shadow_steer_mae",
+                                g.shadow_steer_abs_sum / (double)g.shadow_steer_n);
+        cJSON_AddNumberToObject(root, "shadow_steer_rmse",
+                                sqrt(g.shadow_steer_sq_sum / (double)g.shadow_steer_n));
+    }
+    if (g.shadow_traj_n > 0) {
+        cJSON_AddNumberToObject(root, "shadow_traj_n", (double)g.shadow_traj_n);
+        cJSON_AddNumberToObject(root, "shadow_ade", g.last_shadow_ade);
+        cJSON_AddNumberToObject(root, "shadow_fde", g.last_shadow_fde);
+        cJSON_AddNumberToObject(root, "shadow_ade_mean",
+                                g.shadow_ade_sum / (double)g.shadow_traj_n);
+        cJSON_AddNumberToObject(root, "shadow_fde_mean",
+                                g.shadow_fde_sum / (double)g.shadow_traj_n);
     }
     char* s = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -924,6 +962,69 @@ protected:
                 }
             }
 
+            /* 影子对比: 与 control 输出的转向角偏差 */
+            if (g.has_control) {
+                double steer_delta = pred_steer - g.ctrl_steer;
+                g.shadow_steer_abs_sum += fabs(steer_delta);
+                g.shadow_steer_sq_sum  += steer_delta * steer_delta;
+                g.shadow_steer_n++;
+            }
+
+            /* 基于运动学外推预测未来 3 秒轨迹 (10 步，dt=0.3s) 并计算 ADE/FDE */
+            constexpr int kRolloutSteps = 10;
+            constexpr double kDt = 0.3;
+            constexpr double kWheelbase = 2.8;
+            double sim_x = g.ego_x;
+            double sim_y = g.ego_y;
+            double sim_psi = g.ego_heading;
+            double sim_v = g.ego_v;
+            double rollout_x[kRolloutSteps];
+            double rollout_y[kRolloutSteps];
+
+            for (int step = 0; step < kRolloutSteps; ++step) {
+                sim_v += (pred_speed - sim_v) * 0.3;
+                double psi_dot = (sim_v / kWheelbase) * tan(pred_steer);
+                sim_psi += psi_dot * kDt;
+                sim_x += sim_v * cos(sim_psi) * kDt;
+                sim_y += sim_v * sin(sim_psi) * kDt;
+                rollout_x[step] = sim_x;
+                rollout_y[step] = sim_y;
+            }
+
+            if (g.has_traj) {
+                pthread_mutex_lock(&g.traj_mutex);
+                int plan_cnt = g.plan_traj.point_count;
+                if (plan_cnt > 0) {
+                    double dist_sum = 0.0;
+                    for (int step = 0; step < kRolloutSteps; ++step) {
+                        double min_d2 = 1e18;
+                        for (int pi = 0; pi < plan_cnt; ++pi) {
+                            double dx = (double)g.plan_traj.points[pi].x - rollout_x[step];
+                            double dy = (double)g.plan_traj.points[pi].y - rollout_y[step];
+                            double d2 = dx * dx + dy * dy;
+                            if (d2 < min_d2) min_d2 = d2;
+                        }
+                        dist_sum += sqrt(min_d2);
+                    }
+                    double ade = dist_sum / (double)kRolloutSteps;
+                    double fde_min_d2 = 1e18;
+                    for (int pi = 0; pi < plan_cnt; ++pi) {
+                        double dx = (double)g.plan_traj.points[pi].x - rollout_x[kRolloutSteps - 1];
+                        double dy = (double)g.plan_traj.points[pi].y - rollout_y[kRolloutSteps - 1];
+                        double d2 = dx * dx + dy * dy;
+                        if (d2 < fde_min_d2) fde_min_d2 = d2;
+                    }
+                    double fde = sqrt(fde_min_d2);
+
+                    g.last_shadow_ade = ade;
+                    g.last_shadow_fde = fde;
+                    g.shadow_ade_sum += ade;
+                    g.shadow_fde_sum += fde;
+                    g.shadow_traj_n++;
+                }
+                pthread_mutex_unlock(&g.traj_mutex);
+            }
+
             const char* model_name = g.use_cortex ? "sdsc-cortex"
                                    : g.use_onnx ? (g.onnx.loaded ? "onnx" : "heuristic")
                                                 : (g.model.loaded ? "tiny-mlp" : "heuristic");
@@ -933,6 +1034,18 @@ protected:
             /* 所有模式下都发布 inference/trajectory 供监控 */
             {
                 cJSON* tj_root = cJSON_CreateObject();
+                cJSON* pts_arr = cJSON_CreateArray();
+                for (int step = 0; step < kRolloutSteps; ++step) {
+                    cJSON* pt = cJSON_CreateObject();
+                    cJSON_AddNumberToObject(pt, "x", rollout_x[step]);
+                    cJSON_AddNumberToObject(pt, "y", rollout_y[step]);
+                    cJSON_AddItemToArray(pts_arr, pt);
+                }
+                cJSON_AddItemToObject(tj_root, "trajectory", pts_arr);
+                if (g.shadow_traj_n > 0) {
+                    cJSON_AddNumberToObject(tj_root, "shadow_ade", g.last_shadow_ade);
+                    cJSON_AddNumberToObject(tj_root, "shadow_fde", g.last_shadow_fde);
+                }
                 cJSON_AddStringToObject(tj_root, "type", "inference");
                 cJSON_AddStringToObject(tj_root, "model", model_name);
                 cJSON_AddStringToObject(tj_root, "prediction_contract",

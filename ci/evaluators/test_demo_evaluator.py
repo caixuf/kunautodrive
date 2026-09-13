@@ -476,6 +476,36 @@ class DemoEvaluatorTest(unittest.TestCase):
             "and behavior_planner subscribing to it",
         )
 
+    def test_shadow_sidecar_loads_extended_metrics(self):
+        evaluator = load_evaluator()
+        with tempfile.TemporaryDirectory() as workspace:
+            previous = os.environ.get("FLOWENGINE_TEMP_DIR")
+            os.environ["FLOWENGINE_TEMP_DIR"] = workspace
+            try:
+                Path(workspace, "flow_tiny_inference.json").write_text(
+                    '{"shadow_delta": -0.5, "shadow_speed_mae": 1.2, '
+                    '"shadow_settled_n": 25, '
+                    '"shadow_speed_mae_settled": 0.8, '
+                    '"shadow_steer_mae": 0.035, '
+                    '"shadow_steer_rmse": 0.048, '
+                    '"shadow_ade": 0.42, '
+                    '"shadow_fde": 0.85}\n',
+                    encoding="utf-8",
+                )
+                metrics = evaluator._load_shadow_metrics()
+            finally:
+                if previous is None:
+                    os.environ.pop("FLOWENGINE_TEMP_DIR", None)
+                else:
+                    os.environ["FLOWENGINE_TEMP_DIR"] = previous
+
+        self.assertTrue(metrics["gate_ready"])
+        self.assertAlmostEqual(metrics["mae"], 0.8)
+        self.assertAlmostEqual(metrics["steer_mae"], 0.035)
+        self.assertAlmostEqual(metrics["steer_rmse"], 0.048)
+        self.assertAlmostEqual(metrics["ade"], 0.42)
+        self.assertAlmostEqual(metrics["fde"], 0.85)
+
 
 if __name__ == "__main__":
     unittest.main()

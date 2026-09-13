@@ -1140,6 +1140,12 @@ add_test(NAME demo_evaluator_tools
 )
 set_tests_properties(demo_evaluator_tools PROPERTIES TIMEOUT 30)
 
+add_test(NAME shadow_mode_evaluator_tools
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_evaluate_shadow_mode.py
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+set_tests_properties(shadow_mode_evaluator_tools PROPERTIES TIMEOUT 30)
+
 add_test(NAME xodr_compatibility_tools
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_xodr_compat.py
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
