@@ -391,6 +391,67 @@ double nearest_vehicle_lateral_cross_risk(const VehicleState& state, double* out
     return best;
 }
 
+struct ArbiterState {
+    ControlCmd last_rule_cmd;
+    uint64_t   last_rule_cmd_us{0};
+    ControlCmd last_model_cmd;
+    uint64_t   last_model_cmd_us{0};
+    uint32_t   model_accept_count{0};
+    uint32_t   model_reject_count{0};
+};
+
+static ControlCmd arbitrate_control(const ControlCmd& rule_cmd,
+                                   const ControlCmd& model_cmd,
+                                   bool has_fresh_model,
+                                   bool is_degraded,
+                                   bool* out_intervened = nullptr) {
+    if (!has_fresh_model || is_degraded) {
+        if (out_intervened) *out_intervened = false;
+        return rule_cmd;
+    }
+
+    ControlCmd out = rule_cmd;
+    bool intervened = false;
+
+    /* 1. 转向角安全包络仲裁 (Steering Safe Envelope)
+     * 规则主干 Stanley/MPC 转向角作为基线，模型偏离超过 0.12 rad (~6.9°) 判定超限拒绝并回退规则。 */
+    double delta_steer = std::fabs(model_cmd.steer - rule_cmd.steer);
+    if (delta_steer > 0.12) {
+        /* 模型转向严重偏离规则基线，强制拒绝模型并采用规则主干转向 */
+        out.steer = rule_cmd.steer;
+        intervened = true;
+    } else {
+        /* 模型转向在安全包络内，采纳模型转向 */
+        out.steer = model_cmd.steer;
+    }
+
+    /* 2. 纵向安全仲裁 (Longitudinal Safe Arbiter)
+     * 若规则控制器处于制动态 (brake > 0.10)，以规则安全制动为主，禁止模型油门冲撞 */
+    if (rule_cmd.brake > 0.10) {
+        out.brake = std::max(rule_cmd.brake, model_cmd.brake);
+        out.throttle = 0.0;
+        intervened = true;
+    } else {
+        /* 规则未要求强制刹车时，允许模型调节油门，但限制其不超过规则上限 */
+        out.throttle = std::min(model_cmd.throttle, std::max(rule_cmd.throttle, 0.85));
+        out.brake = model_cmd.brake;
+    }
+
+    /* 3. 灯光与档位继承规则安全态 */
+    out.turn_signal = (rule_cmd.turn_signal != 0) ? rule_cmd.turn_signal : model_cmd.turn_signal;
+    out.hazard = rule_cmd.hazard || model_cmd.hazard;
+    out.gear = rule_cmd.gear;
+
+    if (intervened) {
+        out.mode = "ARBITER[OVERRIDE]";
+    } else {
+        out.mode = "ARBITER[MODEL]";
+    }
+
+    if (out_intervened) *out_intervened = intervened;
+    return out;
+}
+
 class SafetyControlTask : public CoroutineTask {
 public:
     SafetyControlTask(MessageBus* bus) : CoroutineTask(bus) {}
@@ -417,13 +478,27 @@ protected:
          * run 均在启动后 1-3s 永久挂起（control/cmd 断流 → 内置巡航追尾）。
          * 桥订阅生命周期=节点，5ms 轮询取槽，不再依赖事件唤醒。 */
         BusQueueBridge cmd_bridge(bus(), {"control/raw_cmd", "inference/raw_cmd"});
+        ArbiterState arbiter;
 
-        LOG_INFO("safety_control", "safety gate started (bus bridge polling)");
+        LOG_INFO("safety_control", "safety gate started (bus bridge polling + dynamic arbiter)");
         while (!should_stop()) {
             std::string topic;
             Message msg;
             if (cmd_bridge.try_take_any(&topic, &msg)) {
                 uint64_t now_us = clock_now_us();
+                bool is_rule = (topic == "control/raw_cmd");
+                if (is_rule) {
+                    arbiter.last_rule_cmd = parse_control_cmd(msg);
+                    arbiter.last_rule_cmd_us = now_us;
+                } else {
+                    arbiter.last_model_cmd = parse_control_cmd(msg);
+                    arbiter.last_model_cmd_us = now_us;
+                    /* 若规则主拍仍在活跃期 (100ms 内有 rule cmd)，则由规则主拍统一仲裁，避免双倍频率重发 */
+                    if (now_us - arbiter.last_rule_cmd_us < 100000ULL) {
+                        continue;
+                    }
+                }
+
                 if (safety_fault_injection_drop_raw_command(&fault_injection, now_us)) {
                     if (injected_at_us == 0) {
                         injected_at_us = now_us;
@@ -438,21 +513,31 @@ protected:
                     last_msg_us = now_us;
                     health_heartbeat("safety_control");
 
-                    ControlCmd cmd = parse_control_cmd(msg);
+                    bool has_fresh_model = (arbiter.last_model_cmd_us > 0 &&
+                                            (now_us - arbiter.last_model_cmd_us) < 250000ULL);
+                    bool is_degraded = (degrade_global_state()->degrade_level > DEGRADE_L0);
+                    bool arbiter_intervened = false;
+                    ControlCmd base_cmd = is_rule ? arbiter.last_rule_cmd : arbiter.last_model_cmd;
+                    ControlCmd cmd = is_rule
+                        ? arbitrate_control(arbiter.last_rule_cmd, arbiter.last_model_cmd,
+                                            has_fresh_model, is_degraded, &arbiter_intervened)
+                        : base_cmd;
+
                     VehicleState state;
                     bool has_state = false;
                     pthread_mutex_lock(&g.state_mutex);
                     state = g.latest_state;
                     has_state = g.has_state;
                     pthread_mutex_unlock(&g.state_mutex);
-                    bool intervened = apply_safety(cmd, state, has_state);
-                    publish_cmd(cmd, intervened);
+                    bool safety_intervened = apply_safety(cmd, state, has_state);
+                    bool final_intervened = arbiter_intervened || safety_intervened;
+                    publish_cmd(cmd, final_intervened);
 
                     ++cycle;
-                    if (intervened || cycle % 20 == 1) {
-                        LOG_INFO("safety_control", "#%u thr=%.2f brk=%.2f st=%.4f spd=%.1f tgt=%.1f %s",
+                    if (final_intervened || cycle % 20 == 1) {
+                        LOG_INFO("safety_control", "#%u thr=%.2f brk=%.2f st=%.4f spd=%.1f tgt=%.1f %s [mode=%s]",
                                  cycle, cmd.throttle, cmd.brake, cmd.steer, cmd.speed, cmd.target,
-                                 intervened ? "INTERVENED" : "pass");
+                                 final_intervened ? "INTERVENED" : "pass", cmd.mode.c_str());
                     }
                 }
             }

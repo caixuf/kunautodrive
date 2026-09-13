@@ -137,6 +137,11 @@ struct FlowSimContext {
     /* 物理模型选择："kinematic"（默认）| "dynamic"（线性轮胎二自由度） */
     char              physics_model[32]{"kinematic"};
 
+    /* 随机泊松动态交通流发生器 */
+    bool              enable_poisson_traffic{false};
+    double            poisson_rate{0.25};         /* 动态到达率 (veh/s) */
+    int               poisson_max_vehicles{24};   /* 动态车辆配额上限 */
+
     /* control/cmd 状态 */
     std::atomic<int>  has_control_input{0};
     std::atomic<uint64_t> last_control_cmd_us{0};
@@ -238,6 +243,9 @@ static void reset_runtime_state() {
     g.invariant_fail_count.store(0, std::memory_order_relaxed);
     g.u_turn_active = false;
     g.off_rails = false;
+    g.enable_poisson_traffic = false;
+    g.poisson_rate = 0.25;
+    g.poisson_max_vehicles = 24;
     g.ego_maneuver_grace_until = 0;
     g.prev_steer = 0.0;
     g.bridge_last_cb_check = 0;
@@ -1415,6 +1423,123 @@ static double forward_construction_front_s(const flowsim::Entity& ego) {
     return best;
 }
 
+/* ── 随机泊松动态交通流发生与超距淘汰 ────────────────────────────── */
+static void step_poisson_traffic(double dt, double ego_route_s) {
+    if (!g.enable_poisson_traffic || !g.roads_loaded || !g.route.ok()) return;
+
+    const flowsim::Entity& ego = g.pool[0];
+    if (!ego.active) return;
+
+    const double route_total = g.route.total_length();
+    if (route_total < 80.0) return;
+
+    /* 1. 超距动态车辆淘汰 (Cull out-of-range dynamic traffic) */
+    int active_dynamic_count = 0;
+    for (int i = 1; i < g.pool.size(); ++i) {
+        flowsim::Entity& e = g.pool[i];
+        if (!e.active || !e.is_dynamic_traffic) continue;
+        active_dynamic_count++;
+
+        double dx = e.x - ego.x;
+        double dy = e.y - ego.y;
+        double dist_sq = dx * dx + dy * dy;
+        /* 超过 220 米范围淘汰回收，腾出实体池配额 */
+        if (dist_sq > 220.0 * 220.0) {
+            g.pool.free(e.id);
+            active_dynamic_count--;
+        }
+    }
+
+    /* 2. 检查配额与实体池余量 */
+    if (active_dynamic_count >= g.poisson_max_vehicles) return;
+    if (g.pool.active_count() >= flowsim::MAX_ENTITIES - 10) return;
+
+    /* 3. 泊松到达抽样：时间微元 dt 内到达概率 P = lambda * dt */
+    double arrival_prob = g.poisson_rate * dt;
+    double sample = (double)(rand() % 100000) / 100000.0;
+    if (sample >= arrival_prob) return;
+
+    /* 4. 候选生成位置：75% 在 ego 前方 65-120m，25% 在 ego 后方 50-80m */
+    double s_cand = 0.0;
+    bool ahead = ((rand() % 100) < 75);
+    if (ahead) {
+        double dist = 65.0 + (double)(rand() % 55);
+        s_cand = ego_route_s + dist;
+    } else {
+        double dist = 50.0 + (double)(rand() % 30);
+        s_cand = ego_route_s - dist;
+    }
+
+    if (s_cand < 15.0 || s_cand > route_total - 15.0) return;
+
+    /* 5. 间距防重叠检查：距离任意活跃车辆 > 25m */
+    for (int i = 0; i < g.pool.size(); ++i) {
+        const flowsim::Entity& o = g.pool[i];
+        if (!o.active || !o.is_vehicle()) continue;
+        if (std::fabs(o.route_s - s_cand) < 25.0) return;
+    }
+
+    /* 6. 从路线反算 road_id 与局部坐标 */
+    int rid = 0, ridx = -1;
+    double s_local = 0.0;
+    g.route.locate(s_cand, rid, s_local, ridx);
+    flowsim::WorldPos wp;
+    if (!g.roads.frenet_to_world(rid, 0, s_local, 0.0, wp)) return;
+
+    /* 7. 分配实体并初始化 */
+    flowsim::EntityType et = flowsim::EntityType::Car;
+    int rtype = rand() % 10;
+    if (rtype == 0) et = flowsim::EntityType::Truck;
+    else if (rtype <= 2) et = flowsim::EntityType::SUV;
+
+    flowsim::EntityId id = g.pool.alloc(et);
+    if (id == flowsim::INVALID_ENTITY) return;
+
+    flowsim::Entity& e = g.pool[id];
+    e.is_dynamic_traffic = true;
+    e.scenario_id = -1000 - id;
+    e.x = wp.x;
+    e.y = wp.y;
+    e.z = wp.z;
+    e.heading = wp.h;
+    e.route_s = s_cand;
+    e.route_dir = 1;
+    e.last_teleport_cycle = g.cycle;
+
+    /* 反查精确 Frenet 车道 */
+    flowsim::FrenetPos fp;
+    if (g.roads.world_to_frenet(wp.x, wp.y, fp)) {
+        e.road_id = fp.road_id;
+        e.lane_id = fp.lane_id;
+        e.s = fp.s;
+        e.offset = flowsim::offset_from_lane_internal(
+            g.roads, fp.road_id, fp.lane_id, fp.s, fp.offset);
+        e.target_offset = e.offset;
+    } else {
+        e.road_id = rid;
+        e.lane_id = -1;
+        e.s = s_local;
+        e.offset = 0.0;
+        e.target_offset = 0.0;
+    }
+
+    /* 初始化 RoadPosition（若支持） */
+    if (e.road_id >= 0) {
+        e.road_pos.init(g.roads, e.road_id, e.lane_id, e.s, 0.0);
+    }
+
+    /* 速度与目标速度：参考场景目标速度带随机离散 */
+    double speed_var = 0.85 + 0.25 * ((double)(rand() % 100) / 100.0);
+    e.speed = g.target_speed * speed_var;
+    e.vx = e.speed * cos(e.heading);
+    e.vy = e.speed * sin(e.heading);
+    e.target_vx = e.speed;
+    e.state = flowsim::NpcState::Cruise;
+    e.turn_intent = (rand() % 10 < 6) ? 0 : ((rand() % 2) ? 1 : 2);
+
+    flowsim::apply_vehicle_defaults(e);
+}
+
 /* ── 协程主循环 ───────────────────────────────────────────────── */
 
 class FlowSimTask : public CoroutineTask {
@@ -2144,6 +2269,10 @@ protected:
              * 用 compute_ego_route_s 复用 road_pos handle，避免每帧 world_to_frenet 全网扫描 */
             double ego_route_s = compute_ego_route_s();
             if (ego_route_s < 0.0) ego_route_s = 0.0;  /* 不在 route 上时回退到起点 */
+
+            /* ── Step 2.8: 随机泊松动态交通流发生与超距淘汰 ── */
+            step_poisson_traffic(FLOWSIM_DT_SEC, ego_route_s);
+
             for (int i = 1; i < g.pool.size(); i++) {
                 flowsim::Entity& e = g.pool[i];
                 if (!e.active) continue;
@@ -2726,6 +2855,12 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
                              "见 CALIBRATION_GUIDE.md)");
                 }
             }
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "enable_poisson_traffic")) && cJSON_IsBool(j))
+                g.enable_poisson_traffic = cJSON_IsTrue(j);
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "poisson_rate")) && cJSON_IsNumber(j))
+                g.poisson_rate = j->valuedouble;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "poisson_max_vehicles")) && cJSON_IsNumber(j))
+                g.poisson_max_vehicles = (int)j->valuedouble;
             cJSON_Delete(p);
         }
     }

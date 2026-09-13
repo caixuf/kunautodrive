@@ -457,6 +457,184 @@ static void test_pwm_custom_scale(void) {
 }
 
 /* ══════════════════════════════════════════════════════════ */
+/* Sensor Model: Weather Attenuation                          */
+/* ══════════════════════════════════════════════════════════ */
+
+// adapted from modules/adas_nodes/sensor_model_node.c:on_environment_state
+static double compute_weather_attenuation(double visibility_m, const char* weather) {
+    double factor = visibility_m / 200.0;
+    if (factor < 0.1) factor = 0.1;
+    if (factor > 1.0) factor = 1.0;
+    double att = 1.0 - factor;
+    if (weather && (strstr(weather, "rain") || strstr(weather, "fog") || strstr(weather, "snow"))) {
+        if (att < 0.3) att = 0.3;
+    }
+    if (att > 1.0) att = 1.0;
+    if (att < 0.0) att = 0.0;
+    return att;
+}
+
+static void test_weather_attenuation_clear(void) {
+    TEST("sensor_model: clear weather 200m vis -> 0.0 att");
+    double att = compute_weather_attenuation(200.0, "clear");
+    ASSERT_NEAR(att, 0.0, 1e-6, "clear weather with 200m visibility should have 0 attenuation");
+    PASS();
+}
+
+static void test_weather_attenuation_fog(void) {
+    TEST("sensor_model: fog 50m vis -> 0.75 att");
+    double att = compute_weather_attenuation(50.0, "fog");
+    ASSERT_NEAR(att, 0.75, 1e-6, "50m visibility in fog should have 0.75 attenuation");
+    PASS();
+}
+
+static void test_weather_attenuation_rain_floor(void) {
+    TEST("sensor_model: rain with high vis -> min 0.30 att");
+    double att = compute_weather_attenuation(200.0, "rain");
+    ASSERT_NEAR(att, 0.30, 1e-6, "rain should enforce minimum 0.30 attenuation");
+    PASS();
+}
+
+static void test_weather_attenuation_dense_fog(void) {
+    TEST("sensor_model: dense fog clamp -> 0.90 att");
+    double att = compute_weather_attenuation(5.0, "dense_fog");
+    ASSERT_NEAR(att, 0.90, 1e-6, "extreme low vis should clamp factor to 0.1, att to 0.90");
+    PASS();
+}
+
+/* ══════════════════════════════════════════════════════════ */
+/* Safety Control: Dynamic Arbiter                             */
+/* ══════════════════════════════════════════════════════════ */
+
+typedef struct {
+    double throttle;
+    double brake;
+    double steer;
+    double speed;
+    double target;
+    double error;
+    int    turn_signal;
+    int    hazard;
+    int    gear;
+    char   mode[32];
+} TestCmd;
+
+// adapted from modules/adas_nodes/safety_control_node.cpp:arbitrate_control
+static TestCmd test_arbitrate_control(const TestCmd* rule_cmd,
+                                     const TestCmd* model_cmd,
+                                     int has_fresh_model,
+                                     int is_degraded,
+                                     int* out_intervened) {
+    if (!has_fresh_model || is_degraded) {
+        if (out_intervened) *out_intervened = 0;
+        return *rule_cmd;
+    }
+
+    TestCmd out = *rule_cmd;
+    int intervened = 0;
+
+    double delta_steer = fabs(model_cmd->steer - rule_cmd->steer);
+    if (delta_steer > 0.12) {
+        out.steer = rule_cmd->steer;
+        intervened = 1;
+    } else {
+        out.steer = model_cmd->steer;
+    }
+
+    if (rule_cmd->brake > 0.10) {
+        out.brake = (rule_cmd->brake > model_cmd->brake) ? rule_cmd->brake : model_cmd->brake;
+        out.throttle = 0.0;
+        intervened = 1;
+    } else {
+        double max_thr = (rule_cmd->throttle > 0.85) ? rule_cmd->throttle : 0.85;
+        out.throttle = (model_cmd->throttle < max_thr) ? model_cmd->throttle : max_thr;
+        out.brake = model_cmd->brake;
+    }
+
+    out.turn_signal = (rule_cmd->turn_signal != 0) ? rule_cmd->turn_signal : model_cmd->turn_signal;
+    out.hazard = (rule_cmd->hazard || model_cmd->hazard) ? 1 : 0;
+    out.gear = rule_cmd->gear;
+
+    if (intervened) {
+        snprintf(out.mode, sizeof(out.mode), "ARBITER[OVERRIDE]");
+    } else {
+        snprintf(out.mode, sizeof(out.mode), "ARBITER[MODEL]");
+    }
+
+    if (out_intervened) *out_intervened = intervened;
+    return out;
+}
+
+static TestCmd make_cmd(double thr, double brk, double steer, int gear) {
+    TestCmd cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.throttle = thr;
+    cmd.brake = brk;
+    cmd.steer = steer;
+    cmd.gear = gear;
+    return cmd;
+}
+
+static void test_arbiter_no_model(void) {
+    TEST("arbiter: no model -> return rule command");
+    TestCmd rule = make_cmd(0.4, 0.0, 0.05, 1);
+    TestCmd model = make_cmd(0.8, 0.0, 0.15, 1);
+    int intervened = 0;
+    TestCmd out = test_arbitrate_control(&rule, &model, 0, 0, &intervened);
+    ASSERT_NEAR(out.steer, 0.05, 1e-6, "should keep rule steer");
+    ASSERT_NEAR(out.throttle, 0.4, 1e-6, "should keep rule throttle");
+    ASSERT_EQ(intervened, 0, "should not be intervened");
+    PASS();
+}
+
+static void test_arbiter_degraded_fallback(void) {
+    TEST("arbiter: degraded state -> fallback to rule command");
+    TestCmd rule = make_cmd(0.3, 0.0, -0.02, 1);
+    TestCmd model = make_cmd(0.7, 0.0, 0.08, 1);
+    int intervened = 0;
+    TestCmd out = test_arbitrate_control(&rule, &model, 1, 1, &intervened);
+    ASSERT_NEAR(out.steer, -0.02, 1e-6, "should fallback to rule steer");
+    ASSERT_NEAR(out.throttle, 0.3, 1e-6, "should fallback to rule throttle");
+    ASSERT_EQ(intervened, 0, "fallback mode not intervened");
+    PASS();
+}
+
+static void test_arbiter_model_within_envelope(void) {
+    TEST("arbiter: model in envelope (|d_steer| <= 0.12) -> accept");
+    TestCmd rule = make_cmd(0.5, 0.0, 0.05, 1);
+    TestCmd model = make_cmd(0.6, 0.0, 0.10, 1);
+    int intervened = 0;
+    TestCmd out = test_arbitrate_control(&rule, &model, 1, 0, &intervened);
+    ASSERT_NEAR(out.steer, 0.10, 1e-6, "should accept model steer");
+    ASSERT_NEAR(out.throttle, 0.6, 1e-6, "should accept model throttle");
+    ASSERT_EQ(intervened, 0, "should not intervene when within envelope");
+    PASS();
+}
+
+static void test_arbiter_steer_reject(void) {
+    TEST("arbiter: model steer deviates > 0.12 rad -> reject to rule");
+    TestCmd rule = make_cmd(0.5, 0.0, 0.0, 1);
+    TestCmd model = make_cmd(0.5, 0.0, 0.18, 1);
+    int intervened = 0;
+    TestCmd out = test_arbitrate_control(&rule, &model, 1, 0, &intervened);
+    ASSERT_NEAR(out.steer, 0.0, 1e-6, "excessive steer should be rejected to rule");
+    ASSERT_EQ(intervened, 1, "should flag intervention");
+    PASS();
+}
+
+static void test_arbiter_brake_priority(void) {
+    TEST("arbiter: rule brake active -> enforce brake, throttle=0");
+    TestCmd rule = make_cmd(0.0, 0.7, 0.02, 1);
+    TestCmd model = make_cmd(0.5, 0.0, 0.03, 1);
+    int intervened = 0;
+    TestCmd out = test_arbitrate_control(&rule, &model, 1, 0, &intervened);
+    ASSERT_NEAR(out.brake, 0.7, 1e-6, "should enforce rule brake");
+    ASSERT_NEAR(out.throttle, 0.0, 1e-6, "should clamp throttle to 0");
+    ASSERT_EQ(intervened, 1, "should flag intervention");
+    PASS();
+}
+
+/* ══════════════════════════════════════════════════════════ */
 /* Main                                                        */
 /* ══════════════════════════════════════════════════════════ */
 
@@ -495,6 +673,19 @@ int main(void) {
     test_pwm_steering_clamp();
     test_pwm_zero_cmd_is_neutral();
     test_pwm_custom_scale();
+
+    printf("\n═══ Sensor Model Weather Attenuation ═══\n");
+    test_weather_attenuation_clear();
+    test_weather_attenuation_fog();
+    test_weather_attenuation_rain_floor();
+    test_weather_attenuation_dense_fog();
+
+    printf("\n═══ Safety Control Dynamic Arbiter ═══\n");
+    test_arbiter_no_model();
+    test_arbiter_degraded_fallback();
+    test_arbiter_model_within_envelope();
+    test_arbiter_steer_reject();
+    test_arbiter_brake_priority();
 
     printf("\n═══════════════════════════════════\n");
     printf("  Total: %d  ✅ Passed: %d  ❌ Failed: %d\n",

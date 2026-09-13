@@ -52,6 +52,8 @@ static struct {
     double obs_noise_std_m;
     int enable_simple_occlusion;
     double camera_visibility_factor;
+    char   weather[32];
+    double weather_attenuation;  /* 0.0=clear, 0.5=moderate rain/fog, 1.0=dense fog */
 
     /* 真实 GPS 传感器格式接入：可选 NMEA 0183 日志回放 */
     char     gps_nmea_file[256];
@@ -158,6 +160,20 @@ static void on_environment_state(const Message* msg, void* user_data) {
         if (factor > 1.0) factor = 1.0;
         g.camera_visibility_factor = factor;
     }
+    cJSON* weather_obj = cJSON_GetObjectItemCaseSensitive(root, "weather");
+    if (cJSON_IsString(weather_obj) && weather_obj->valuestring) {
+        strncpy(g.weather, weather_obj->valuestring, sizeof(g.weather) - 1);
+        g.weather[sizeof(g.weather) - 1] = '\0';
+    }
+    /* Calculate weather attenuation factor: [0.0, 1.0] */
+    double att = 1.0 - g.camera_visibility_factor;
+    if (strstr(g.weather, "rain") || strstr(g.weather, "fog") || strstr(g.weather, "snow")) {
+        if (att < 0.3) att = 0.3;
+    }
+    if (att > 1.0) att = 1.0;
+    if (att < 0.0) att = 0.0;
+    g.weather_attenuation = att;
+
     cJSON_Delete(root);
 }
 
@@ -212,15 +228,19 @@ static int sensor_model_execute(TaskBase* task) {
         usleep((unsigned long)period_us);
         if (task->should_stop) break;
 
-        double noise_x = rand_uniform_signed(g.obs_noise_std_m);
-        double noise_y = rand_uniform_signed(g.obs_noise_std_m);
+        double weather_noise_scale = 1.0 + 1.5 * g.weather_attenuation;
+        double noise_x = rand_uniform_signed(g.obs_noise_std_m * weather_noise_scale);
+        double noise_y = rand_uniform_signed(g.obs_noise_std_m * weather_noise_scale);
+
+        float lidar_intensity = (float)(0.85 * (1.0 - 0.4 * g.weather_attenuation));
+        if (lidar_intensity < 0.2f) lidar_intensity = 0.2f;
 
         LidarFrame lidar = {
             .x = (float)(g.ego_x + noise_x),
             .y = (float)(g.ego_y + noise_y),
             .z = 0.0f,
-            .intensity = 0.85f,
-            .point_count = estimate_visible_point_count(),
+            .intensity = lidar_intensity,
+            .point_count = (uint32_t)(estimate_visible_point_count() * (1.0 - 0.3 * g.weather_attenuation)),
             .frame_id = g.frame_id,
         };
         Message lmsg;
@@ -236,14 +256,15 @@ static int sensor_model_execute(TaskBase* task) {
                 gps = g.nmea_frames[g.nmea_idx];
                 g.nmea_idx = (g.nmea_idx + 1) % g.nmea_count;
             } else {
-                double noise_s = rand_uniform_signed(0.25);
-                double noise_h = rand_uniform_signed(0.25);
+                double noise_s = rand_uniform_signed(0.25 * (1.0 + 0.8 * g.weather_attenuation));
+                double noise_h = rand_uniform_signed(0.25 * (1.0 + 0.8 * g.weather_attenuation));
+                float accuracy = 0.5f + (float)(2.5 * g.weather_attenuation);
                 gps = (GpsData){
                     .latitude = 39.904 + g.ego_x * 0.00001,
                     .longitude = 116.407 + g.ego_y * 0.00001,
                     .speed_mps = (float)(g.ego_speed + noise_s),
                     .heading_deg = (float)(g.ego_heading * 180.0 / M_PI + noise_h),
-                    .accuracy_m = 0.5f,
+                    .accuracy_m = accuracy,
                 };
             }
             Message gmsg;
