@@ -162,7 +162,7 @@ function buildIndex(map, routes) {
     if (cl.length < 2) continue;
     /* edge schema 对齐 scene_pub.cpp build_road_network_json（FrameValidator
      * 必填：id/name/type/lanes/lane_width/nodes/oneway + length）；
-     * name 用字符串 road id —— lane_data 键控依赖它（RoadView laneGroupEnvelope）。 */
+     * name 用字符串 road id —— lane_data 键控依赖它（RoadAxis.computeEdgeAxis）。 */
     let length = 0;
     for (let k = 0; k < cl.length - 1; k++) {
       length += Math.hypot((cl[k + 1][0] || 0) - (cl[k][0] || 0), (cl[k + 1][1] || 0) - (cl[k][1] || 0));

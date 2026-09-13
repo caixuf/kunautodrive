@@ -40,6 +40,7 @@ ok('2点直道 halfWidth≈4.8（3×3.2/2）', Math.abs(r1.halfWidth - 4.8) < 0.
 const off = (r1.spine[0].px - sample.centerline[0][0]) * r1.spine[0].nx +
             (r1.spine[0].pz - (-sample.centerline[0][1])) * r1.spine[0].nz;
 ok('2点直道 左缘→真中心法向偏移≈4.8', Math.abs(off - 4.8) < 0.3);
+ok('2点直道 centerOffset≈4.8（RoadView 只消费这个数）', Math.abs(r1.centerOffset - 4.8) < 0.3);
 ok('2点直道 无 NaN', isFinite(r1.spine[0].px) && isFinite(r1.spine[0].pz));
 
 // ── 2. 多段中心线（CatmullRom 采样，末点差分修复路径）──
@@ -75,6 +76,7 @@ const centered = {
 const r3 = computeRoadAxis(centered);
 ok('居中路 fromLanes=true（车道组包络测得中心≈0 → 不偏移但保留半宽）', r3.fromLanes === true);
 ok('居中路 spine 保持 centerline（起点 px≈0）', Math.abs(r3.spine[0].px) < 0.5);
+ok('居中路 centerOffset=0', Math.abs(r3.centerOffset) < 1e-6);
 
 // ── computeEdgeAxis 便捷入口（家具视图用）──
 const edge = {

@@ -97,6 +97,20 @@ const RULES = [
     fileExempt: /\/theme\/tokens\.js$|\/utils\.js$|\/models\.js$|\/app\.js$|\/core\/AssetFactory\.js$|\/core\/SkyEnv\.js$|\/core\/Lighting\.js$|\/view\/(StreetlightView|RoadFacilityView|BarrierView|TrafficLightView|ETCGateView|BuildingView|PerceptionView|VehicleView|ConstructionView|ViaductView|TreeView|EffectView|StreetFurnitureView)\.js$/,
   },
   {
+    name: 'RoadView 禁止本地 laneGroupEnvelope',
+    pattern: 'laneGroupEnvelope',
+    desc: '路面中心/半宽只准走 RoadAxis.computeEdgeAxis，禁止 RoadView 再写第二份包络',
+    dir: resolve(__dirname, '../tools/flowboard/js/vis/view/RoadView.js'),
+    exempt: /\/\/\s*exempt/,
+  },
+  {
+    name: 'RoadView 禁止 P2 失败后静默启发式',
+    pattern: 'laneMarkingsMade',
+    desc: '有 lane_data 时不得用 !laneMarkingsMade 回退 lanes×width 启发式',
+    dir: resolve(__dirname, '../tools/flowboard/js/vis/view/RoadView.js'),
+    exempt: /\/\/\s*exempt/,
+  },
+  {
     name: '车身材质金属度过高 (metalness >= 0.55)',
     pattern: 'metalness:\\s*0\\.[5-9][5-9]|metalness:\\s*0\\.[6-9]\\d*|metalness:\\s*[1-9]',
     desc: '车漆 metalness 应 ≤ 0.5。轮毂/镀铬/玻璃等非车身材质豁免行加 // exempt',

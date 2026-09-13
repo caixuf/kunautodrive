@@ -117,6 +117,41 @@ function addParkingBay(layout, x, y, heading, empty) {
   }
 }
 
+function addStraightArrow(layout, x, y, heading) {
+  const stem = offsetPoint(x, y, heading, -0.2, 0);
+  addMark(layout, stem.x, stem.y, heading, 2.8, 0.28);
+  for (const side of [-1, 1]) {
+    const head = offsetPoint(x, y, heading, 0.85, side * 0.25);
+    addMark(layout, head.x, head.y,
+      heading + Math.PI - side * Math.PI * 0.20, 1.1, 0.26);
+  }
+  layout.arrows++;
+}
+
+/**
+ * 每条可行驶车道的横向偏移 + 行进朝向。
+ * offsetPoint 的 lateral 在 ENU 里：heading=0（朝东）时正值=+y（北/左）。
+ * 中国右侧通行：沿 edge heading 的车道在道路右侧（负 lateral）；对向在左侧。
+ * 双向路绝不在 lateral=0（双黄线）落箭头。
+ */
+function laneArrowSlots(edge) {
+  const lanes = Math.max(1, Number(edge.lanes) || 2);
+  const laneW = Number(edge.lane_width) || 3.5;
+  if (edge.oneway === true) {
+    return Array.from({ length: lanes }, (_, k) => ({
+      lateral: (k + 0.5 - lanes * 0.5) * laneW,
+      headingFlip: 0,
+    }));
+  }
+  const nPerSide = Math.max(1, Math.floor(lanes / 2));
+  const slots = [];
+  for (let k = 0; k < nPerSide; k++) {
+    slots.push({ lateral: -(k + 0.5) * laneW, headingFlip: 0 });
+    slots.push({ lateral: (k + 0.5) * laneW, headingFlip: Math.PI });
+  }
+  return slots;
+}
+
 function addCrosswalk(layout, center, heading, width) {
   /* GB 5768.3 5.8：斑马线条纹平行于道路中心线（与车同向），沿道路长度短
    * （交叉口 ≥2m / 路段 ≥3m）；跨道路方向铺多条条带。旧实现条纹长轴垂直
@@ -138,19 +173,21 @@ export function inferRoadFacilities(roadNetwork, entities, scenarioName = '') {
   const edges = Array.isArray(roadNetwork?.edges) ? roadNetwork.edges : [];
   const allEntities = Array.isArray(entities) ? entities : [];
 
-  const isExamOrParking = scenarioName.toLowerCase().includes('parking') ||
-    scenarioName.toLowerCase().includes('exam');
+  /* 大地图注入 lane_data 后，路口箭头由 ConnectorView 按 fork 画。
+   * 这里再沿路每 120m 铺一轮会与路口标线叠成白网。 */
+  const hasLaneData = roadNetwork && roadNetwork.lane_data
+    && typeof roadNetwork.lane_data === 'object'
+    && Object.keys(roadNetwork.lane_data).length > 0;
 
-  for (const edge of edges) {
-    for (const point of samplePolyline(roadNodes(edge), ARROW_SPACING, MAX_ARROWS_PER_EDGE)) {
-      const stem = offsetPoint(point.x, point.y, point.heading, -0.2, 0);
-      addMark(layout, stem.x, stem.y, point.heading, 2.8, 0.28);
-      for (const side of [-1, 1]) {
-        const head = offsetPoint(point.x, point.y, point.heading, 0.85, side * 0.25);
-        addMark(layout, head.x, head.y,
-          point.heading + Math.PI - side * Math.PI * 0.20, 1.1, 0.26);
+  if (!hasLaneData) {
+    for (const edge of edges) {
+      const slots = laneArrowSlots(edge);
+      for (const point of samplePolyline(roadNodes(edge), ARROW_SPACING, MAX_ARROWS_PER_EDGE)) {
+        for (const slot of slots) {
+          const p = offsetPoint(point.x, point.y, point.heading, 0, slot.lateral);
+          addStraightArrow(layout, p.x, p.y, point.heading + slot.headingFlip);
+        }
       }
-      layout.arrows++;
     }
   }
 

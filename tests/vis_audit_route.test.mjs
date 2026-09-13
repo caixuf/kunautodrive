@@ -111,6 +111,9 @@ scene.traverse(obj => {
 });
 eq('场景全量渲染顶点坐标无 NaN / Infinity', nanCoords, 0);
 ok(`全路网生成三角面数量正常 (${Math.round(totalMarkTriangles)} 面)`, totalMarkTriangles > 500);
+const roadStats = roadView.getStats();
+eq('osm_munich 有 lane_data 的路未走启发式', roadStats.heuristicEdges, 0);
+ok(`osm_munich P2 覆盖路段 (${roadStats.p2Edges})`, roadStats.p2Edges >= 10);
 
 // ── 5. 严格核查路灯：0 侵入同层车道 ──
 console.log('\n--- 4. 路灯绝对安全红线核查（0 侵入车道） ---');

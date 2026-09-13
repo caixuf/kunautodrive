@@ -21,6 +21,7 @@
  *     spine: [{px,py,pz,nx,nz}],   // TRUE 中心 spine（THREE 帧：px=east, pz=-north）
  *     cum:   [number],             // spine 累计弧长
  *     halfWidth,                   // 车道组半宽
+ *     centerOffset,                // 左缘 spine → 真中心的横向偏移（0=不挪）
  *     leftEdge: [[x,z],...],       // 路左缘（供点-多边形测试，T11）
  *     rightEdge:[[x,z],...],       // 路右缘
  *   }
@@ -163,7 +164,7 @@ function edgesFromSpine(spine, halfWidth) {
 export function computeRoadAxis(road) {
   const cl = (road && road.centerline) || [];
   if (!Array.isArray(cl) || cl.length < 2) {
-    return { ok: false, fromLanes: false, spine: [], cum: [], halfWidth: 0, leftEdge: [], rightEdge: [] };
+    return { ok: false, fromLanes: false, spine: [], cum: [], halfWidth: 0, centerOffset: 0, leftEdge: [], rightEdge: [] };
   }
 
   // 1) 基础 spine（THREE 帧）。采样密度：多段 32，直道 24。
@@ -171,7 +172,7 @@ export function computeRoadAxis(road) {
   const points = sampleEdgeNodes(cl, sampleCount);
   const spine = buildSpineFromPoints(points);
   if (spine.length < 2) {
-    return { ok: false, fromLanes: false, spine: [], cum: [], halfWidth: 0, leftEdge: [], rightEdge: [] };
+    return { ok: false, fromLanes: false, spine: [], cum: [], halfWidth: 0, centerOffset: 0, leftEdge: [], rightEdge: [] };
   }
 
   const laneWidth = Number(road.lane_width) || LANE_WIDTH_DEFAULT;
@@ -205,12 +206,12 @@ export function computeRoadAxis(road) {
       const shifted = offsetSpine(spine, env.center);
       const cum = buildCumulative(shifted);
       const { left, right } = edgesFromSpine(shifted, env.halfW);
-      return { ok: true, fromLanes: true, spine: applyElevation(shifted), cum, halfWidth: env.halfW, leftEdge: left, rightEdge: right };
+      return { ok: true, fromLanes: true, spine: applyElevation(shifted), cum, halfWidth: env.halfW, centerOffset: env.center, leftEdge: left, rightEdge: right };
     }
     // 非平行/环道/数据不足：居中（用 fallbackHw），fromLanes=false 但位置安全
     const cum = buildCumulative(spine);
     const { left, right } = edgesFromSpine(spine, fallbackHw);
-    return { ok: true, fromLanes: false, spine: applyElevation(spine), cum, halfWidth: fallbackHw, leftEdge: left, rightEdge: right };
+    return { ok: true, fromLanes: false, spine: applyElevation(spine), cum, halfWidth: fallbackHw, centerOffset: 0, leftEdge: left, rightEdge: right };
   }
 
   // 3) 无 lanes：以 centerline 为居中、警告（单次去重，避免每帧刷屏），绝不静默左偏
@@ -223,7 +224,7 @@ export function computeRoadAxis(road) {
   }
   const cum = buildCumulative(spine);
   const { left, right } = edgesFromSpine(spine, fallbackHw);
-  return { ok: true, fromLanes: false, spine: applyElevation(spine), cum, halfWidth: fallbackHw, leftEdge: left, rightEdge: right };
+  return { ok: true, fromLanes: false, spine: applyElevation(spine), cum, halfWidth: fallbackHw, centerOffset: 0, leftEdge: left, rightEdge: right };
 }
 
 /**
@@ -236,11 +237,11 @@ export function computeRoadAxis(road) {
  */
 export function computeEdgeAxis(edge, laneData) {
   if (!edge) {
-    return { ok: false, fromLanes: false, spine: [], cum: [], halfWidth: 0, leftEdge: [], rightEdge: [] };
+    return { ok: false, fromLanes: false, spine: [], cum: [], halfWidth: 0, centerOffset: 0, leftEdge: [], rightEdge: [] };
   }
   const nodes = edge.nodes;
   if (!Array.isArray(nodes) || nodes.length < 2) {
-    return { ok: false, fromLanes: false, spine: [], cum: [], halfWidth: 0, leftEdge: [], rightEdge: [] };
+    return { ok: false, fromLanes: false, spine: [], cum: [], halfWidth: 0, centerOffset: 0, leftEdge: [], rightEdge: [] };
   }
   let centerline = nodes;
   if (nodes[0] && typeof nodes[0] === 'object' && !Array.isArray(nodes[0])) {

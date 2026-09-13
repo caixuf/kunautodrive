@@ -25,7 +25,7 @@ import { walkFromJunction }
 import { SCENE }
   from '../tools/flowboard/js/vis/theme/tokens.js';
 import { detectJunctions } from '../tools/flowboard/js/vis/view/JunctionDetect.js';
-import { ok, done } from './test-utils.mjs';
+import { ok, eq, done } from './test-utils.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = pathResolve(__dirname, '..');
@@ -544,6 +544,9 @@ console.log('--- 11. 车道级标线（lane_data 数据驱动）---');
   // 兜底：无 lane_data 的 edge 仍走启发式（side_1l 有边线）
   ok('无 lane_data 的 edge 启发式兜底仍出标线',
     whiteZ.some((v) => v.y > 0.138 && Math.abs(v.x - 50) < 2.5));
+  const st11 = view.getStats();
+  eq('§11 有 lane_data 的路走 P2（main_w/main_e）', st11.p2Edges, 2);
+  eq('§11 无 lane_data 的路走启发式（side_1l）', st11.heuristicEdges, 1);
 }
 
 // ── 12. P2 修正：车道组包络对齐路面（OSM 单向车行道 centerline 贴边）──
@@ -639,6 +642,41 @@ console.log('--- 13. 防撞桶真断头判定（弯道接缝/闭合环）---');
     });
     ok(`闭合环 0 个防撞桶（${countBarrels(scene)}）`, countBarrels(scene) === 0);
   }
+}
+
+// ── 14. 有 lane_data 即使 markings 为空也禁止启发式 ──
+console.log('--- 14. 有 lane_data 禁止启发式（空 markings 也不发明）---');
+{
+  const lanes14 = [
+    { id: 'e.lane.1', index: 1, direction: 1, width: 3.5,
+      centerline: [[0, -1.75, 0], [80, -1.75, 0]], markings: [] },
+    { id: 'e.lane.2', index: 2, direction: 1, width: 3.5,
+      centerline: [[0, 1.75, 0], [80, 1.75, 0]], markings: [] },
+  ];
+  const scene = new THREE.Group();
+  const view = createRoadView(scene);
+  view.build({
+    edges: [{ id: 'empty_mk', name: 'empty_mk', type: 'highway', lanes: 4,
+      lane_width: 3.5, nodes: [[0, 0, 0], [80, 0, 0]], oneway: false }],
+    lane_data: { empty_mk: lanes14 },
+  });
+  const st14 = view.getStats();
+  eq('空 markings 仍计 P2、不走启发式', st14.p2Edges, 1);
+  eq('空 markings 启发式边数 = 0', st14.heuristicEdges, 0);
+  let markVerts = 0, heuristicHits = 0;
+  scene.traverse((ch) => {
+    if (!ch.isMesh || ch.isInstancedMesh || !ch.material || !ch.material.color) return;
+    const hex = ch.material.color.getHex();
+    if (hex !== 0xcccccc && hex !== 0xffd700) return;
+    const pos = ch.geometry.getAttribute('position');
+    for (let i = 0; i < pos.count; i++) {
+      markVerts++;
+      const z = Math.abs(pos.getZ(i));
+      if (Math.abs(z - 3.5) < 0.15 || Math.abs(z - 6.75) < 0.15) heuristicHits++;
+    }
+  });
+  eq('空 markings 不发明白/黄标线', markVerts, 0);
+  eq('空 markings 无启发式 offset 顶点', heuristicHits, 0);
 }
 
 done();

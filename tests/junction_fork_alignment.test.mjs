@@ -9,8 +9,9 @@
  *
  * 修前：A 的 main_mid 命中（exact，旧 fromIndices 无 fromEnd 校验）→ A 鬼
  *   conn，incomingIdx_A = {main_mid} → A 在 main_mid 锚点画 1 条鬼 stop。
- * 修后：A 的 main_mid fromEnd=false 被 refined 拒 → A 无 conn → fallback
- *   全画 → 6 条 stop（每个 arm 一个）。B 域两边都是 1（refined 不影响 B）。
+ * 修后：A 的 main_mid fromEnd=false 被 refined 拒 → A 无 conn。
+ * 有 fork 契约时不再 fallback 全画（那是复杂口白网根因）→ A 域 0 条 stop。
+ * B 域 1 条（real fork 来车 on main_mid）。
  *
  * 跑法：
  *   node --import ./tests/support/three-real-preload.mjs tests/junction_fork_alignment.test.mjs
@@ -86,7 +87,7 @@ scene.traverse((ch) => {
     }
   }
 });
-ok(`A 域停止线 = 5（refined+fallback；A 有 5 arm；修前 = 1 鬼 stop on main_mid）`, aStops === 5);
+ok(`A 域停止线 = 0（有 fork 无本路口 conn，不再全臂猜画）`, aStops === 0);
 ok(`B 域停止线 = 1（real fork 来车 on main_mid）`, bStops === 1);
 
 done();

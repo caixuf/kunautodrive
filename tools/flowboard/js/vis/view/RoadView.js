@@ -28,6 +28,7 @@ import { mergeGeometries } from '../math/GeometryMerge.js';
 import { LANE_WIDTH, DEFAULT_LANES, EDGE_TYPE, isTunnelEdge } from '../core/Constants.js';
 import { tangentToNormal, offsetAlongNormal, forwardENU, worldToThree } from '../math/Coord.js';
 import { getTopology } from '../model/TopologyModel.js';
+import { computeEdgeAxis } from '../model/RoadAxis.js';
 import { SCENE } from '../theme/tokens.js';
 import { MARKING } from '../theme/roadStyle.js';
 
@@ -718,17 +719,9 @@ export function createRoadView(scene) {
     const laneWidth = edge.lane_width || RAMP_LANE_W;
     const rampLanes = Math.max(1, edge.lanes || 1);
     const hw = (rampLanes * laneWidth) / 2;
-
-    // P2 车道对齐：匝道多为单车道，road.centerline 贴边时偏 ~1.75m
-    const rampLaneRec = _laneData && (_laneData[edge.name] || _laneData[String(edge.id)]);
-    let rampSpine = spine, rampHw = hw;
-    if (Array.isArray(rampLaneRec)) {
-      const env = laneGroupEnvelope(rampLaneRec, spine);
-      if (env) {
-        rampSpine = offsetSpine(spine, env.center);
-        rampHw = env.halfW;
-      }
-    }
+    const aligned = applySharedAxis(edge, spine, hw);
+    const rampSpine = aligned.roadSpine;
+    const rampHw = aligned.roadHw;
 
     // 匝道路面（略浅色）
     const road = ribbonGeo(rampSpine, rampHw, Y_ROAD);
@@ -899,59 +892,23 @@ export function createRoadView(scene) {
     return { roadGeos: road ? [road] : [], whiteGeos, vergeGeos: verge ? [verge] : [] };
   }
 
-  /** 车道组几何包络（2026-08-15 P2 修正）：OSM 单向车行道数据里
-   *  road.centerline 贴着车行道一侧（车道组中心可偏 7m），而路面 ribbon 若仍
-   *  以 road.centerline 居中，车道标线会画到沥青外（用户截图报障）。
-   *  此处按 lane centerline 实测车道组横向范围，返回 {center, halfW}
-   *  （相对道路中心线 spine 的偏移与半宽），无数据/小偏差返回 null。 */
-  function laneGroupEnvelope(lanes, spine) {
-    if (!Array.isArray(lanes) || !lanes.length || spine.length < 2) return null;
-    const stations = [0, spine.length >> 1, spine.length - 1];
-    const stationCenters = [];
-    let halfW = 0;
-    for (const si of stations) {
-      const sp = spine[si];
-      let latMin = Infinity, latMax = -Infinity;
-      for (const lane of lanes) {
-        const cl = lane && lane.centerline;
-        if (!Array.isArray(cl) || cl.length < 2) continue;
-        const w = (Number(lane.width) || LANE_WIDTH) / 2;
-        let bestAlong = Infinity, bestLat = 0;
-        for (const p of cl) {
-          /* 帧一致性：sp 是 THREE 帧（sp.px=ENU.east、sp.pz=-ENU.north）；
-           * lane.centerline 仍是 ENU(east,north,0)，必须转成 THREE 帧再比：
-           * THREE.x = p[0]，THREE.z = -(p[1])（不能用 p[2]，那是 ENU.up=0）。
-           * 横向偏移取"沿路纵向最近点"的垂距，而非欧氏最近点：对平行车道曲线，
-           * 欧氏最近点常落在曲线端点、混入纵向分量使 bestLat≈0，曲线路尤其
-           * 退化（6 条窄/曲路被误判居中→不偏移→与标线错位）。(p-sp)·n 是点到
-           * spine 切线直线的带符号垂距，与纵向位置无关；取 |纵向投影| 最小的点
-           * 即垂足，其垂距 = 真实车道组偏移（含正负方向）。切线 = (n_z,-n_x)。 */
-          const lx = p[0] || 0, lz = -(p[1] || 0);
-          const dx = lx - sp.px, dz = lz - sp.pz;
-          const along = dx * sp.nz + dz * (-sp.nx);   // 投影到切线
-          const lat = dx * sp.nx + dz * sp.nz;        // 带符号垂距
-          if (Math.abs(along) < bestAlong) { bestAlong = Math.abs(along); bestLat = lat; }
-        }
-        if (bestLat - w < latMin) latMin = bestLat - w;
-        if (bestLat + w > latMax) latMax = bestLat + w;
-      }
-      if (!isFinite(latMin) || !isFinite(latMax)) continue;
-      stationCenters.push((latMin + latMax) / 2);
-      const sh = (latMax - latMin) / 2;
-      if (sh > halfW) halfW = sh;
+  /** 路面半宽/中心只认 RoadAxis。高密度采样仍在本函数，偏移量来自共享路轴。
+   *  包络失败（fromLanes=false）则路面与标线一起降级，禁止 split-brain。 */
+  function applySharedAxis(edge, spine, fallbackHw) {
+    const axis = computeEdgeAxis(edge, _laneData);
+    const rec = _laneData && (_laneData[edge.name] || _laneData[String(edge.id)]);
+    const laneRec = Array.isArray(rec) && rec.length ? rec : null;
+    if (!axis || !axis.ok) {
+      return { roadSpine: spine, roadHw: fallbackHw, fromLanes: false, laneRec };
     }
-    if (stationCenters.length === 0) return null;
-    const cMin = Math.min(...stationCenters), cMax = Math.max(...stationCenters);
-    const center = (cMin + cMax) / 2;
-    /* 一致性守卫：平行车道组在各站位的横向偏移应稳定；急弯/环道/掉头路会让
-     * lane centerline 相对 spine 大幅摆动，cMax-cMin 很大——这种路无法用单一
-     * 偏移 ribbon 表达，放弃偏移、回退 buildStandardRoad 的默认半宽（不偏移），
-     * 否则会生成上百米宽的畸形 ribbon。 */
-    if (cMax - cMin > 4.0) return null;
-    /* center≈0 表示 road.centerline 本就是车道组中心（旧图/居中约定）→
-     * 不偏移、零回归。 */
-    if (Math.abs(center) < 0.15) return null;
-    return { center, halfW };
+    const offset = Number(axis.centerOffset) || 0;
+    const roadSpine = Math.abs(offset) > 1e-6 ? offsetSpine(spine, offset) : spine;
+    return {
+      roadSpine,
+      roadHw: axis.halfWidth > 0 ? axis.halfWidth : fallbackHw,
+      fromLanes: axis.fromLanes === true,
+      laneRec,
+    };
   }
 
   /** 车道级标线（2026-08-15 P2）：lane_data 的 lanes[]{centerline,width,markings}
@@ -1031,20 +988,10 @@ export function createRoadView(scene) {
     const lanes = edge.lanes || DEFAULT_LANES;
     const laneWidth = edge.lane_width || LANE_WIDTH;
     const hw = (lanes * laneWidth) / 2;
-
-    /* P2 车道对齐（2026-08-15，用户截图报障）：lane_data 存在且车道组中心
-     * 偏离 road.centerline 时（OSM 单向车行道 centerline 贴边，可偏 7m），
-     * 路面/路肩/人行道整体偏移到车道组包络——车道级标线本就画在车道数据上，
-     * 不偏移会悬在沥青外。启发式兜底路径（无 lane_data）不偏移，零回归。 */
-    const laneRec = _laneData && (_laneData[edge.name] || _laneData[String(edge.id)]);
-    let roadSpine = spine, roadHw = hw;
-    if (Array.isArray(laneRec)) {
-      const env = laneGroupEnvelope(laneRec, spine);
-      if (env) {
-        roadSpine = offsetSpine(spine, env.center);
-        roadHw = env.halfW;
-      }
-    }
+    const aligned = applySharedAxis(edge, spine, hw);
+    const roadSpine = aligned.roadSpine;
+    const roadHw = aligned.roadHw;
+    const laneRec = aligned.laneRec;
     const roadMarkSpine = (roadSpine === spine) ? markSpine
       : filterSpineOutsideJunctions(roadSpine, edge.id);
 
@@ -1087,42 +1034,43 @@ export function createRoadView(scene) {
     // 路缘边线（白实线）：路缘内缩。外沿=实线（真路约定 + 静态 invariant
     // 「外沿=实线」一致）；虚线只用于同向车道分隔。边线比车道线宽（0.20m vs
     // 0.15m）且略高（0.14m vs 0.13m），远距离可见，与车道分隔虚线视觉区分明显。
-    // P2 车道级：lane_data 有该 road 的 lanes[] → 标线全部来自车道边界数据
-    // （含外侧实线/双黄），下面两个启发式块整块跳过——offset 漂移/双偏移/
-    // 穿路口问题连根消失；无数据走旧启发式（旧场景零回归）。
-    const laneMarkingsMade = Array.isArray(laneRec)
-      ? buildLaneMarkingsInto(laneRec, edge.id, whiteGeos, yellowGeos)
-      : 0;
-    if (!laneMarkingsMade) {
-    for (const seg of markSpine) {
-      const edgeL = edgeLine(seg, hw - EDGE_INSET);
-      if (edgeL) whiteGeos.push(edgeL);
-      const edgeR = edgeLine(seg, -(hw - EDGE_INSET));
-      if (edgeR) whiteGeos.push(edgeR);
-    }
+    // 有 lane_data：只画 lanes[].markings（数据即几何）。P2 返回 0
+    //（空 markings / 全被路口裁掉）也禁止启发式，否则会按 lanes×width 再发明一套。
+    // 无 lane_data：straight_road 等 demo 才走启发式，画在已对齐的 roadMarkSpine 上。
+    if (laneRec) {
+      buildLaneMarkingsInto(laneRec, edge.id, whiteGeos, yellowGeos);
+      stats.p2Edges++;
+    } else {
+      stats.heuristicEdges++;
+      for (const seg of roadMarkSpine) {
+        const edgeL = edgeLine(seg, roadHw - EDGE_INSET);
+        if (edgeL) whiteGeos.push(edgeL);
+        const edgeR = edgeLine(seg, -(roadHw - EDGE_INSET));
+        if (edgeR) whiteGeos.push(edgeR);
+      }
 
-    // 标线按 GB 5768 语义生成（与 extract_city_map._markings / json_to_xodr
-    // 一致，单一真相）：对向分隔=双黄实线；同向车道分隔=白色虚线；外缘白实线
-    // 由上方 edgeLine 负责。中心线位置取 k===nPerSide（forward 车道数），对奇数
-    // 车道数（如 2+1 不对称）同样能正确落在两向分界，不再因 lanes%2!=0 丢中心线。
-    const oneway = edge.oneway === true;
-    const nPerSide = oneway ? lanes : Math.max(1, Math.floor(lanes / 2));
-    for (const seg of markSpine) {
-      for (let k = 1; k < lanes; k++) {
-        const d = -hw + k * laneWidth;
-        const isCenter = !oneway && k === nPerSide;
-        if (isCenter) {
-          const CENTER_GAP = 0.12;
-          const left = solidLine(seg, d - CENTER_GAP);
-          const right = solidLine(seg, d + CENTER_GAP);
-          if (left) yellowGeos.push(left);
-          if (right) yellowGeos.push(right);
-        } else {
-          for (const g of dashedLine(seg, d)) whiteGeos.push(g);
+      // 标线按 GB 5768 语义生成（与 extract_city_map._markings / json_to_xodr
+      // 一致，单一真相）：对向分隔=双黄实线；同向车道分隔=白色虚线；外缘白实线
+      // 由上方 edgeLine 负责。中心线位置取 k===nPerSide（forward 车道数），对奇数
+      // 车道数（如 2+1 不对称）同样能正确落在两向分界，不再因 lanes%2!=0 丢中心线。
+      const oneway = edge.oneway === true;
+      const nPerSide = oneway ? lanes : Math.max(1, Math.floor(lanes / 2));
+      for (const seg of roadMarkSpine) {
+        for (let k = 1; k < lanes; k++) {
+          const d = -roadHw + k * laneWidth;
+          const isCenter = !oneway && k === nPerSide;
+          if (isCenter) {
+            const CENTER_GAP = 0.12;
+            const left = solidLine(seg, d - CENTER_GAP);
+            const right = solidLine(seg, d + CENTER_GAP);
+            if (left) yellowGeos.push(left);
+            if (right) yellowGeos.push(right);
+          } else {
+            for (const g of dashedLine(seg, d)) whiteGeos.push(g);
+          }
         }
       }
     }
-    }   // !laneMarkingsMade（启发式兜底块结束）
 
     const curbGeos = [];
     const sidewalkGeos = [];
@@ -1211,7 +1159,7 @@ export function createRoadView(scene) {
       if (c.material) c.material.dispose();
     }
     built = false;
-    stats = { rampTransitions: 0, doubleYellowCenterlines: 0 };
+    stats = { rampTransitions: 0, doubleYellowCenterlines: 0, p2Edges: 0, heuristicEdges: 0 };
 
     if (!roadNetwork || !roadNetwork.edges || roadNetwork.edges.length === 0) return;
 

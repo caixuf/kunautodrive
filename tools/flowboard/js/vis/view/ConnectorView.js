@@ -397,58 +397,88 @@ export function createConnectorView(scene) {
       for (const conn of conns) {
         if (conn.fromIdx != null && conn.toIdx != null) incomingIdx.add(conn.fromIdx);
       }
+      /* OSM 大地图有 fork 契约：解析不出本路口转向时，禁止「全臂猜画」
+       * （斑马铺满 + 按车道序号发明左右转箭头 = 复杂口白网）。
+       * 无 fork 的合成/旧场景保持全臂兜底，零回归。 */
+      const hasForkAuthority = Array.isArray(junctionData)
+        && junctionData.some((j) => j && j.type === 'fork');
+      const paintFurniture = !hasForkAuthority || incomingIdx.size > 0;
+      /* 立交/多路汇合：只保留来车停止线，不再铺斑马/箭头/导流。 */
+      const tooComplex = arms.length >= 6;
+
+      if (paintFurniture) {
       for (let ai = 0; ai < arms.length; ai++) {
         const a = arms[ai];
         if (isTunnelEdge(a.edge)) continue;
-        const wc = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, c.radius + 2.0);
-        const rotY = directionToRotationY(wc.ux, wc.uz);
-        const step = CROSSWALK_STRIPE_W + CROSSWALK_GAP;
-        const stripeCount = Math.max(2, Math.round(a.roadW / step));
-        const nx = -wc.uz, nz = wc.ux;
-        for (let i = 0; i < stripeCount; i++) {
-          const across = (i - (stripeCount - 1) / 2) * step;
-          crossInstances.push({ x: wc.x + nx * across, z: wc.z + nz * across, y: baseY + CROSS_Y, rotY, len: CROSSWALK_LENGTH, w: CROSSWALK_STRIPE_W });
-        }
-        if (incomingIdx.size && !incomingIdx.has(ai)) continue;   // 非来车 arm：无停止线与来车标线
-        const ws = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, c.radius + 2.0 + CROSSWALK_LENGTH + 1.5);
-        const halfW = a.roadW * 0.25;
-        stopInstances.push({ x: ws.x + ws.uz * halfW, z: ws.z - ws.ux * halfW, y: baseY + STOP_Y, rotY: directionToRotationY(ws.ux, ws.uz) + Math.PI / 2, len: a.roadW * 0.5, w: STOP_LINE_W });
-
-        // ── 地面导向箭头（GB 5768.3 5.14 标准导向车道标线）──
+        if (incomingIdx.size && !incomingIdx.has(ai)) continue;
         const isOneWay = a.edge && a.edge.oneway === true;
         const totalLanes = Math.max(1, Number(a.edge && a.edge.lanes) || 2);
         const apprLanes = isOneWay ? totalLanes : Math.max(1, Math.floor(totalLanes / 2));
         const laneW = Number(a.edge && a.edge.lane_width) || (a.roadW / totalLanes);
-        const armLen = Number(a.edge && a.edge.length_m) || 50;
+        const apprW = isOneWay ? a.roadW : a.roadW * 0.5;
 
-        // 根据路段长度自适应箭头排布：短路段 1 组，长路段（>70m）2 组，避免密集重叠
+        if (!tooComplex) {
+          const wc = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, c.radius + 2.0);
+          const rotY = directionToRotationY(wc.ux, wc.uz);
+          const step = CROSSWALK_STRIPE_W + CROSSWALK_GAP;
+          const paintW = hasForkAuthority ? apprW : a.roadW;
+          const stripeCount = Math.max(2, Math.round(paintW / step));
+          /* 有 fork：斑马只铺来车半幅。无 fork：全宽居中（合成图零回归）。 */
+          const nx = wc.uz, nz = -wc.ux;
+          for (let i = 0; i < stripeCount; i++) {
+            const across = hasForkAuthority
+              ? (i + 0.5) * step
+              : (i - (stripeCount - 1) / 2) * step;
+            crossInstances.push({
+              x: wc.x + nx * across, z: wc.z + nz * across,
+              y: baseY + CROSS_Y, rotY, len: CROSSWALK_LENGTH, w: CROSSWALK_STRIPE_W,
+            });
+          }
+        }
+
+        const ws = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, c.radius + 2.0 + CROSSWALK_LENGTH + 1.5);
+        const halfW = apprW * 0.5;
+        stopInstances.push({
+          x: ws.x + ws.uz * halfW, z: ws.z - ws.ux * halfW,
+          y: baseY + STOP_Y,
+          rotY: directionToRotationY(ws.ux, ws.uz) + Math.PI / 2,
+          len: apprW, w: STOP_LINE_W,
+        });
+
+        if (tooComplex) continue;
+
+        const armTurns = new Set();
+        for (const conn of conns) {
+          if (conn.fromIdx === ai && conn.turn) armTurns.add(conn.turn);
+        }
+        const armLen = Number(a.edge && a.edge.length_m) || 50;
         const arrowDists = armLen > 70 ? [18.0, 50.0] : (armLen > 25 ? [18.0] : [10.0]);
 
         for (const dist of arrowDists) {
           const wa = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, c.radius + 2.0 + CROSSWALK_LENGTH + dist);
-          const ux = -wa.ux, uz = -wa.uz; // 车道来车前向单位向量
-          const rx = uz, rz = -ux;        // 来车方向右侧法线
+          const ux = -wa.ux, uz = -wa.uz;
+          const rx = uz, rz = -ux;
           for (let k = 0; k < apprLanes; k++) {
             const lOffset = isOneWay
               ? (k + 0.5 - apprLanes * 0.5) * laneW
               : (k + 0.5) * laneW;
-            const lx = wa.x + rx * lOffset;
-            const lz = wa.z + rz * lOffset;
-            let turnType = 'straight';
-            if (apprLanes === 1) turnType = 'straight_left';
-            else if (apprLanes === 2) turnType = (k === 0) ? 'straight_left' : 'straight_right';
-            else turnType = (k === 0) ? 'left' : (k === apprLanes - 1) ? 'right' : 'straight';
-            _drawGroundArrow(lx, baseY + STOP_Y, lz, ux, uz, turnType, arrowInstances);
+            const turnType = hasForkAuthority
+              ? _arrowTypeFromTurns(k, apprLanes, armTurns)
+              : _arrowTypeGuessed(k, apprLanes);
+            _drawGroundArrow(wa.x + rx * lOffset, baseY + STOP_Y, wa.z + rz * lOffset,
+              ux, uz, turnType, arrowInstances);
           }
         }
       }
-      // 转向引导线：本路口每个 fork junction 的 incoming→connecting 路径
-      for (const conn of conns) {
-        if (conn.fromIdx == null || conn.toIdx == null) continue;
-        const fa = arms[conn.fromIdx], ta = arms[conn.toIdx];
-        const p0 = walkFromJunction(fa.pts, fa.fromEnd, c.x, c.z, c.radius + 2.5);
-        const p1 = walkFromJunction(ta.pts, ta.fromEnd, c.x, c.z, c.radius + 2.5);
-        _drawTurnGuide(p0, p1, conn.turn, baseY + STOP_Y, guideInstances);
+      if (!tooComplex) {
+        for (const conn of conns) {
+          if (conn.fromIdx == null || conn.toIdx == null) continue;
+          const fa = arms[conn.fromIdx], ta = arms[conn.toIdx];
+          const p0 = walkFromJunction(fa.pts, fa.fromEnd, c.x, c.z, c.radius + 2.5);
+          const p1 = walkFromJunction(ta.pts, ta.fromEnd, c.x, c.z, c.radius + 2.5);
+          _drawTurnGuide(p0, p1, conn.turn, baseY + STOP_Y, guideInstances);
+        }
+      }
       }
       }
     }
@@ -684,6 +714,30 @@ export function createConnectorView(scene) {
       }
       acc = segEnd;
     }
+  }
+
+  /** 无 fork 时的旧猜测（合成图零回归）：按车道序号发明左右转。 */
+  function _arrowTypeGuessed(k, apprLanes) {
+    if (apprLanes === 1) return 'straight_left';
+    if (apprLanes === 2) return (k === 0) ? 'straight_left' : 'straight_right';
+    return (k === 0) ? 'left' : (k === apprLanes - 1) ? 'right' : 'straight';
+  }
+
+  /** 有 fork 时只画数据里存在的转向，不再发明对面没有的左右转。 */
+  function _arrowTypeFromTurns(k, apprLanes, turns) {
+    const hasL = turns.has('left') || turns.has('uturn');
+    const hasR = turns.has('right');
+    const hasS = turns.has('straight') || turns.size === 0;
+    if (apprLanes === 1) {
+      if (hasL && hasS) return 'straight_left';
+      if (hasR && hasS) return 'straight_right';
+      if (hasL && !hasR) return 'left';
+      if (hasR && !hasL) return 'right';
+      return 'straight';
+    }
+    if (k === 0 && hasL) return hasS ? 'straight_left' : 'left';
+    if (k === apprLanes - 1 && hasR) return hasS ? 'straight_right' : 'right';
+    return 'straight';
   }
 
   /** 地面导向箭头生成（GB 5768.3 5.14）：直行、左转、右转、直行+左转、直行+右转 */

@@ -34,9 +34,38 @@ ok('停止线横跨来车方向的半幅道路',
   stopLine && Math.abs(stopLine.x - 248) < 1e-6 &&
   Math.abs(stopLine.y + 3.5) < 1e-6 &&
   Math.abs(stopLine.length - 7) < 1e-6);
-eq('500m 城市路生成 4 个方向箭头', layout.arrows, 4);
+eq('500m 四车道双向：4 个站位 × 每车道 1 箭 = 16', layout.arrows, 16);
+const arrowStems = layout.marks.filter(m => m.width === 0.28 && Math.abs(m.length - 2.8) < 1e-6);
+ok('箭头箭杆不落在双黄线（|y|≥1.5）',
+  arrowStems.length === 16 && arrowStems.every(m => Math.abs(m.y) >= 1.5));
+ok('箭头落在车道中心 ±1.75 / ±5.25',
+  arrowStems.every(m => {
+    const ay = Math.abs(m.y);
+    return Math.abs(ay - 1.75) < 0.05 || Math.abs(ay - 5.25) < 0.05;
+  }));
 eq('空车位四角生成 4 根考试桩杆', layout.poles.length, 4);
 ok('全部设施合并为共享路面标记实例', layout.marks.length > 20);
+
+const demoRoad = {
+  edges: [{
+    id: 0, type: 'highway', name: 'straight_with_s_curve',
+    lanes: 4, lane_width: 3.5,
+    nodes: [[0, 0, 0], [300, 0, 0]],
+  }],
+};
+const demoLayout = inferRoadFacilities(demoRoad, [], 'straight_road');
+const demoStems = demoLayout.marks.filter(m => m.width === 0.28 && Math.abs(m.length - 2.8) < 1e-6);
+ok('demo.sh 双向四车道：箭头不画在 y=0 双黄线上',
+  demoStems.length > 0 && demoStems.every(m => Math.abs(m.y) >= 1.5));
+const westbound = demoStems.filter(m => Math.abs(Math.abs(m.heading) - Math.PI) < 1e-3);
+ok('北侧车道（+y）箭头朝西（heading≈π）',
+  westbound.length > 0 && westbound.every(m => m.y > 0));
+
+const osmLike = inferRoadFacilities({
+  edges: demoRoad.edges,
+  lane_data: { straight_with_s_curve: [{ centerline: [[0, 0], [300, 0]], width: 3.5 }] },
+}, [], 'osm_zhengdong');
+eq('大地图有 lane_data 时沿路箭头交给路口层，不再沿路铺', osmLike.arrows, 0);
 
 const numericRoad = { edges: [{ ...road.edges[0], name: '0' }] };
 const runtimeLayout = inferRoadFacilities(numericRoad, entities, 'auto_parking');
