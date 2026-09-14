@@ -72,7 +72,7 @@ def _block_fields(body: str) -> dict:
 
 
 def _derive_lane(road_id: str, center, index: int, is_opp: bool,
-                 per_side: int, oneway: bool, lw: float) -> dict:
+                 per_side: int, oneway: bool, lw: float, road_type: str = "") -> dict:
     """从 road 中心线派生一条 lane（与 extract_city_map.build_road 一致）。"""
     if not is_opp:
         offset = -(index - 0.5) * lw
@@ -86,7 +86,7 @@ def _derive_lane(road_id: str, center, index: int, is_opp: bool,
         "width": lw,
         "direction": direction,
         "centerline": offset_lane(center, offset),
-        "markings": _markings(road_id, index, is_opp, per_side, oneway),
+        "markings": _markings(road_id, index, is_opp, per_side, oneway, road_type),
         "successors": [],
     }
 
@@ -128,7 +128,8 @@ def compile_map(source: Path) -> dict:
         lane_ids = {(l.get("index"), l.get("direction", 1)): l for l in explicit}
         lanes = []
         for idx, is_opp in defs:
-            base = _derive_lane(road["id"], center, idx, is_opp, per_side, oneway, lw)
+            base = _derive_lane(road["id"], center, idx, is_opp, per_side, oneway, lw,
+                               str(road.get("type", "")))
             over = lane_ids.get((idx, base["direction"]))
             if over is not None:
                 if "width" in over:

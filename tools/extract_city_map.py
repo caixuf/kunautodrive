@@ -15,6 +15,12 @@ import json
 import math
 import os
 import sys
+from pathlib import Path
+
+_TOOLS = str(Path(__file__).resolve().parent)
+if _TOOLS not in sys.path:
+    sys.path.insert(0, _TOOLS)
+from lane_markings import markings_for_lane  # noqa: E402
 
 # ── 默认源 ──────────────────────────────────────────────────
 DEFAULT_SCENARIO = os.path.join(os.path.dirname(__file__), "..", "scenarios", "city_comprehensive.json")
@@ -48,32 +54,10 @@ def offset_lane(center, offset):
 # OpenDRIVE 约定：lane id 0=参考线，正 id=左侧(对向)，负 id=右侧(前进方向)。
 # 双向 N 车道 → 每方向 N/2 条；单向(oneway) → 全部同向（前进方向右侧）。
 
-def _markings(road_id, idx, is_opp, per_side, oneway):
-    """按车道位置推断标线（前端按类型渲染的语义数据）。
-    最左/最右外侧=实线白边；双向路对向分隔(中心线)=双黄；车道间=白虚线。"""
-    mk = []
-    if oneway:
-        if idx == 1:
-            mk.append({"type": "solid_white", "side": "left"})
-        if idx == per_side:
-            mk.append({"type": "solid_white", "side": "right"})
-        else:
-            mk.append({"type": "dashed_white", "side": "right"})
-    elif not is_opp:
-        if idx == 1:
-            mk.append({"type": "double_yellow", "side": "left"})
-        if idx == per_side:
-            mk.append({"type": "solid_white", "side": "right"})
-        else:
-            mk.append({"type": "dashed_white", "side": "right"})
-    else:
-        if idx == 1:
-            mk.append({"type": "double_yellow", "side": "right"})
-        if idx == per_side:
-            mk.append({"type": "solid_white", "side": "left"})
-        else:
-            mk.append({"type": "dashed_white", "side": "left"})
-    return mk
+def _markings(road_id, idx, is_opp, per_side, oneway, road_type=""):
+    """按车道位置推断标线。实现见 lane_markings.markings_for_lane。"""
+    return markings_for_lane(idx, per_side, oneway=oneway, is_opp=is_opp,
+                             road_type=road_type)
 
 def build_road(edge, rid):
     nodes = edge.get("nodes") or []
@@ -131,7 +115,7 @@ def build_road(edge, rid):
             "width": lw,
             "direction": direction,
             "centerline": offset_lane(center, offset),
-            "markings": _markings(road["id"], idx, is_opp, per_side, oneway),
+            "markings": _markings(road["id"], idx, is_opp, per_side, oneway, etype),
         })
     return road
 

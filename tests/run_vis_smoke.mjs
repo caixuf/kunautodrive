@@ -21,6 +21,7 @@ const REAL_THREE = new Set([
   'vis_lane_taper.test.mjs',    // 锥形 mesh 拓扑邻接断言
   'vis_viaduct_pier.test.mjs',  // 桥墩 position/scale/color 断言
   'vis_audit_route.test.mjs',   // A* 路线与路灯碰撞真实 Three 几何漫游
+  'vis_marking_types.test.mjs', // 标线 type→mesh 颜色/位置 golden
 ]);
 
 const tests = readdirSync(TESTS)

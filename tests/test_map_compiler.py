@@ -216,6 +216,24 @@ class MapCompilerTest(unittest.TestCase):
                           encoding="utf-8")
             self.assertEqual(compile_map(p2), compiled)
 
+    def test_ramp_derives_deceleration_on_outer_lane(self):
+        text = """Map {
+    id: m_ramp
+    name: "ramp"
+    Road r {
+        type: ramp_curve
+        lanes: 1
+        laneWidth: 3.2
+        speedLimit: 12.0
+        oneWay: true
+        Point { x: 0; y: 0; z: 0 }
+        Point { x: 80; y: 0; z: 0 }
+    }
+}"""
+        m = self._compile(text)
+        mk = m["roads"][0]["lanes"][0]["markings"]
+        self.assertTrue(any(x["type"] == "deceleration" for x in mk), mk)
+
 
 if __name__ == "__main__":
     unittest.main()

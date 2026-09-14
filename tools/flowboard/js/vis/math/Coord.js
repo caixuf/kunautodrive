@@ -128,6 +128,26 @@ export function radiusFromChord(chord, angle) {
   return chord / (2 * Math.sin(Math.abs(angle) / 2));
 }
 
+/** 点是否在 XZ 多边形内（射线法）。顶点支持 {x,z} / [x,z] / [x,y,z]（第三分量当 z）。
+ *  路口裁剪、用地落位共用，禁止 view 再写第二份。 */
+export function pointInPolygonXZ(x, z, poly) {
+  if (!Array.isArray(poly) || poly.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const pi = poly[i], pj = poly[j];
+    if (!pi || !pj) continue;
+    const xi = Array.isArray(pi) ? pi[0] : pi.x;
+    const zi = Array.isArray(pi) ? (pi.length > 2 ? pi[2] : pi[1]) : pi.z;
+    const xj = Array.isArray(pj) ? pj[0] : pj.x;
+    const zj = Array.isArray(pj) ? (pj.length > 2 ? pj[2] : pj[1]) : pj.z;
+    const denom = (zj - zi) || 1e-9;
+    const intersect = ((zi > z) !== (zj > z)) &&
+      (x < (xj - xi) * (z - zi) / denom + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
 /** 沿法线方向偏移（THREE 空间）
  *  用于道路中心线 spine 的横向偏移（路灯、护栏、车道线等）。
  *  @param {number} px     中心线点 X（THREE 坐标）

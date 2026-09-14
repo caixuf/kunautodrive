@@ -20,7 +20,7 @@ import { createBarrierView }
   from '../tools/flowboard/js/vis/view/BarrierView.js';
 import { createRoadView }
   from '../tools/flowboard/js/vis/view/RoadView.js';
-import { walkFromJunction }
+import { walkFromJunction, getTopology }
   from '../tools/flowboard/js/vis/model/TopologyModel.js';
 import { SCENE }
   from '../tools/flowboard/js/vis/theme/tokens.js';
@@ -677,6 +677,58 @@ console.log('--- 14. 有 lane_data 禁止启发式（空 markings 也不发明�
   });
   eq('空 markings 不发明白/黄标线', markVerts, 0);
   eq('空 markings 无启发式 offset 顶点', heuristicHits, 0);
+}
+
+// ── 15. 虚高圆 vs 路口多边形：2 车道 T，radius=20 不得吃掉 12m 处标线 ──
+console.log('--- 15. 路口多边形裁剪（虚高圆不吃引道）---');
+{
+  const rn15 = {
+    edges: [
+      { id: 'w', name: 'w', type: 'secondary', lanes: 2, lane_width: 3.5,
+        nodes: [[-40, 0, 0], [0, 0, 0]], oneway: false },
+      { id: 'e', name: 'e', type: 'secondary', lanes: 2, lane_width: 3.5,
+        nodes: [[0, 0, 0], [40, 0, 0]], oneway: false },
+      { id: 'n', name: 'n', type: 'secondary', lanes: 2, lane_width: 3.5,
+        nodes: [[0, 0, 0], [0, 40, 0]], oneway: false },
+    ],
+    junctions: [{ id: 0, x: 0, y: 0, z: 0, radius: 20 }],
+  };
+  const topo = getTopology(rn15);
+  eq('T 字检出 1 个路口', topo.centers.length, 1);
+  const c0 = topo.centers[0];
+  ok(`clipRadius < 12（${(c0.clipRadius || 0).toFixed(1)}，虚高圆=20）`,
+    c0.clipRadius < 12);
+  ok('多边形至少 3 点', c0.poly && c0.poly.length >= 3);
+  ok('12m 处在虚高圆内', Math.hypot(12 - c0.x, 0 - c0.z) < 20);
+  ok('12m 处不在路口多边形内', !topo.pointInJunction('e', 12, 0));
+  ok('3m 处仍在路口内（裁剪没有缩没）', topo.pointInJunction('e', 3, 0));
+}
+
+// ── 16. ≥6 臂 + fork：禁止斑马白网 ──
+console.log('--- 16. ≥6 臂口无斑马白网 ---');
+{
+  const edges16 = [];
+  for (let i = 0; i < 6; i++) {
+    const a = i * Math.PI / 3;
+    edges16.push({
+      id: `arm_${i}`, name: `arm_${i}`, type: 'secondary',
+      lanes: 2, lane_width: 3.5, oneway: false,
+      nodes: [[0, 0, 0], [40 * Math.cos(a), 40 * Math.sin(a), 0]],
+    });
+  }
+  const scene = new THREE.Group();
+  createConnectorView(scene).build({
+    edges: edges16,
+    map_junctions: [{
+      id: 0, type: 'fork', incoming_road: 'arm_0',
+      connecting_roads: [
+        { id: 'arm_1', turn: 'left' },
+        { id: 'arm_3', turn: 'straight' },
+      ],
+    }],
+  });
+  const stripes = extractCrosswalkStripes(scene);
+  eq('≥6 臂口斑马条数 = 0', stripes.length, 0);
 }
 
 done();

@@ -56,6 +56,12 @@ import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from pathlib import Path
+
+_TOOLS = str(Path(__file__).resolve().parent)
+if _TOOLS not in sys.path:
+    sys.path.insert(0, _TOOLS)
+from lane_markings import markings_for_lane  # noqa: E402
 
 # ── 与 osm_to_map.py 相同的 ENU 近似参数 ─────────────────────
 M_PER_DEG_LAT = 111320.0
@@ -994,14 +1000,14 @@ class NetConverter:
             lane_entries = []
             has_reverse = f"-{eid}" in self.edges or (
                 eid.startswith("-") and eid[1:] in self.edges)
+            raw_type = e.get("type", "")
+            hwy = raw_type.split(".", 1)[1] if "." in raw_type else raw_type
+            rtype = HIGHWAY_TO_TYPE.get(hwy, "urban")
             for pos, l in enumerate(lanes):
                 our_idx = n - pos
-                marks = []
-                if our_idx == 1:
-                    marks.append({"type": "double_yellow" if has_reverse
-                                  else "solid_white", "side": "left"})
-                marks.append({"type": "solid_white" if our_idx == n
-                              else "dashed_white", "side": "right"})
+                marks = markings_for_lane(
+                    our_idx, n, oneway=True, has_opposing=has_reverse,
+                    road_type=hwy or rtype)
                 lid = f"{self.road_id[eid]}.lane.{our_idx}"
                 lane_entries.append({
                     "id": lid,
@@ -1012,9 +1018,6 @@ class NetConverter:
                     "markings": marks,
                     "successors": succ.get(lid, []),
                 })
-            raw_type = e.get("type", "")
-            hwy = raw_type.split(".", 1)[1] if "." in raw_type else raw_type
-            rtype = HIGHWAY_TO_TYPE.get(hwy, "urban")
             if is_internal:
                 tgt = target_of_internal.get(eid)
                 if tgt is not None:

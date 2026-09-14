@@ -11,9 +11,9 @@
  *     centers, byId,              // detectJunctions 原始输出（路口中心 + edge 映射）
  *     armsOfJunction(ci),         // 路口 arm 列表（折线点缓存 + 半宽 + walk 锚点）
  *     junctionsOfEdge(edgeId),    // edge 两端所属路口 [{ci, end}]
- *     segmentsOutsideJunctions,   // spine 按路口圆拆段（RoadView 标线/路肩用）
- *     pointInJunction,            // 点是否落在本 edge 任一路口圆内（护栏裁剪用）
- *     nearJunction,               // 点距任一路口中心 < 半径+margin（路灯/树槽位避让）
+ *     segmentsOutsideJunctions,   // spine 按路口多边形拆段（无 poly 回退圆）
+ *     pointInJunction,            // 点是否落在本 edge 任一路口多边形内
+ *     nearJunction,               // 点在任一路口多边形内（路灯/树槽位避让）
  *   }
  *
  * 缓存：按 roadNetworkHash 单条目记忆（SceneDirector 只在 hash 变化时重建 view），
@@ -23,7 +23,7 @@
  */
 
 import { detectJunctions } from '../view/JunctionDetect.js';
-import { worldToThree } from '../math/Coord.js';
+import { worldToThree, pointInPolygonXZ } from '../math/Coord.js';
 import { roadNetworkHash } from '../store/SceneStore.js';
 import { LANE_WIDTH, DEFAULT_LANES } from '../core/Constants.js';
 
@@ -33,12 +33,15 @@ import { LANE_WIDTH, DEFAULT_LANES } from '../core/Constants.js';
  *  弯道/隧道引道（如延安东路隧道，160 节点急弯）端段方向与路口外真实路向
  *  差达 72°，斑马线斜切路面。径向出圈语义（而非固定弧长）同时覆盖聚类
  *  中心偏移导致的端点不在圆上的情形（否则锚点可能落在路口圆内部）。 */
-export function walkFromJunction(pts, fromEnd, cx, cz, exitRadius) {
+export function walkFromJunction(pts, fromEnd, cx, cz, exitRadius, insideFn) {
   const n = pts.length;
   const step = fromEnd ? -1 : 1;
   let i = fromEnd ? n - 1 : 0;
   let px = pts[i].x, pz = pts[i].z;
-  const rad = (x, z) => Math.hypot(x - cx, z - cz);
+  const outside = (x, z) => {
+    if (typeof insideFn === 'function') return !insideFn(x, z);
+    return Math.hypot(x - cx, z - cz) >= exitRadius;
+  };
   while (true) {
     const j = i + step;
     if (j < 0 || j >= n) break;
@@ -46,13 +49,13 @@ export function walkFromJunction(pts, fromEnd, cx, cz, exitRadius) {
     const l = Math.hypot(dx, dz);
     if (l < 1e-9) { i = j; continue; }
     const ux = dx / l, uz = dz / l;
-    if (rad(px, pz) >= exitRadius) return { x: px, z: pz, ux, uz };   // 已在圆外：端点即锚点
-    if (rad(pts[j].x, pts[j].z) >= exitRadius) {
-      // 本段内有一次径向上穿（起点<半径、终点≥半径，单极小值二次型 → 二分安全）
+    if (outside(px, pz)) return { x: px, z: pz, ux, uz };   // 已在域外：端点即锚点
+    if (outside(pts[j].x, pts[j].z)) {
+      // 本段内有一次出域（起点在内、终点在外，单极小值二次型 → 二分安全）
       let lo = 0, hi = 1;
       for (let k = 0; k < 24; k++) {
         const mid = (lo + hi) / 2;
-        if (rad(px + dx * mid, pz + dz * mid) >= exitRadius) hi = mid; else lo = mid;
+        if (outside(px + dx * mid, pz + dz * mid)) hi = mid; else lo = mid;
       }
       return { x: px + dx * hi, z: pz + dz * hi, ux, uz };
     }
@@ -63,6 +66,40 @@ export function walkFromJunction(pts, fromEnd, cx, cz, exitRadius) {
   const dx = b.x - a.x, dz = b.z - a.z;
   const l = Math.hypot(dx, dz) || 1;
   return { x: px, z: pz, ux: dx / l, uz: dz / l };
+}
+
+/** 路口裁剪半径：不超过检测圆，但按车道组半宽收口。
+ *  OSM fork 常把 radius 抬到 20m（connector 半长），圆会吃掉整段引道标线。 */
+export function clipRadiusFor(center, arms) {
+  const r = Number(center && center.radius);
+  let maxHw = 0;
+  for (const a of arms || []) {
+    const hw = Number(a && a.hw);
+    if (hw > maxHw) maxHw = hw;
+  }
+  const fitted = Math.max(6, 2.2 * (maxHw || 3.5));
+  if (!Number.isFinite(r) || r <= 0) return fitted;
+  return Math.min(r, fitted);
+}
+
+/** 由各臂出圈点左右缘构成的凸包多边形（THREE x,z）。无足够臂则 []。 */
+export function buildJunctionPolygon(center, arms) {
+  if (!center || !arms || arms.length < 2) return [];
+  const exitR = clipRadiusFor(center, arms);
+  const pts = [];
+  for (const a of arms) {
+    if (!a.pts || a.pts.length < 2) continue;
+    const w = walkFromJunction(a.pts, a.fromEnd, center.x, center.z, exitR);
+    const pxn = -w.uz, pzn = w.ux;
+    const hw = a.hw || 3.5;
+    const bx = w.x + pxn * hw, bz = w.z + pzn * hw;
+    const tx = w.x - pxn * hw, tz = w.z - pzn * hw;
+    pts.push({ x: bx, z: bz, ang: Math.atan2(bz - center.z, bx - center.x) }); // exempt: 排序用，非 heading
+    pts.push({ x: tx, z: tz, ang: Math.atan2(tz - center.z, tx - center.x) }); // exempt: 排序用，非 heading
+  }
+  if (pts.length < 3) return [];
+  pts.sort((a, b) => a.ang - b.ang);
+  return pts.map((p) => ({ x: p.x, z: p.z }));
 }
 
 function _build(rn) {
@@ -133,12 +170,31 @@ function _build(rn) {
     return arms;
   }
 
-  // 本 edge 路口圆列表 [{x, z, radius}]
+  for (let ci = 0; ci < centers.length; ci++) {
+    const c = centers[ci];
+    const arms = armsOfJunction(ci);
+    c.clipRadius = clipRadiusFor(c, arms);
+    c.poly = buildJunctionPolygon(c, arms);
+  }
+
+  // 本 edge 路口列表（带 poly / clipRadius）
   function junctionCirclesOfEdge(edgeId) {
     return junctionsOfEdge(edgeId).map((j) => centers[j.ci]).filter(Boolean);
   }
 
-  /** spine 按「到本 edge 路口中心 > radius」拆成若干连续段（路口内不画
+  function centerContains(j, x, z, margin = 0) {
+    if (j.poly && j.poly.length >= 3) {
+      if (pointInPolygonXZ(x, z, j.poly)) return true;
+      if (margin > 0 && Math.hypot(x - j.x, z - j.z) <= (j.clipRadius || 0) + margin) {
+        return true;
+      }
+      return false;
+    }
+    const r = j.clipRadius || j.radius || 0;
+    return Math.hypot(x - j.x, z - j.z) <= r + margin;
+  }
+
+  /** spine 按「本 edge 路口多边形外」拆成若干连续段（路口内不画
    *  标线/侧向元素），返回段数组（每段 ≥2 点）。无路口 → [spine]。 */
   function segmentsOutsideJunctions(edgeId, spine) {
     const js = junctionCirclesOfEdge(edgeId);
@@ -146,7 +202,7 @@ function _build(rn) {
     const segs = [];
     let cur = [];
     for (const c of spine) {
-      const outside = js.every((j) => Math.hypot(c.px - j.x, c.pz - j.z) > (j.radius || 0));
+      const outside = js.every((j) => !centerContains(j, c.px, c.pz, 0));
       if (outside) {
         cur.push(c);
       } else if (cur.length >= 2) {
@@ -159,10 +215,10 @@ function _build(rn) {
     return segs;
   }
 
-  /** 点是否落在本 edge 的任一路口圆内（护栏/家具裁剪用） */
+  /** 点是否落在本 edge 的任一路口多边形内（护栏/家具裁剪用） */
   function pointInJunction(edgeId, x, z, margin = 0) {
     for (const j of junctionCirclesOfEdge(edgeId)) {
-      if (Math.hypot(x - j.x, z - j.z) <= (j.radius || 0) + margin) return true;
+      if (centerContains(j, x, z, margin)) return true;
     }
     return false;
   }
@@ -192,7 +248,8 @@ function _build(rn) {
         if (!bucket) continue;
         for (const i of bucket) {
           const c = centers[i];
-          if (Math.hypot(x - c.x, z - c.z) < (c.radius || 0) + margin) return true;
+          if (Math.hypot(x - c.x, z - c.z) > (c.radius || 0) + margin) continue;
+          if (centerContains(c, x, z, margin)) return true;
         }
       }
     }

@@ -11,7 +11,7 @@
 import { worldToThree, threeToWorld, headingToRotationY, forwardENU,
          headingBetweenPoints, distanceENU,
          directionToRotationY, offsetAlongNormal, tangentToNormal,
-         placeOnRoad }
+         placeOnRoad, pointInPolygonXZ }
   from '../tools/flowboard/js/vis/math/Coord.js';
 import { ok, eq, done } from './test-utils.mjs';
 
@@ -559,6 +559,14 @@ import { detectJunctions } from '../tools/flowboard/js/vis/view/JunctionDetect.j
   };
   const { centers } = detectJunctions(rn3);
   ok('无数据层 → 几何聚类兜底检出 1 路口', centers.length === 1);
+}
+
+console.log('--- 11. pointInPolygonXZ ---');
+{
+  const sq = [{ x: 0, z: 0 }, { x: 4, z: 0 }, { x: 4, z: 4 }, { x: 0, z: 4 }];
+  ok('正方形内点', pointInPolygonXZ(2, 2, sq));
+  ok('正方形外点', !pointInPolygonXZ(5, 2, sq));
+  ok('不足 3 点 = 外', !pointInPolygonXZ(1, 1, [{ x: 0, z: 0 }, { x: 1, z: 0 }]));
 }
 
 done();

@@ -359,19 +359,22 @@ export function createConnectorView(scene) {
         if (Math.hypot(p0.x - p1.x, p0.z - p1.z) < 1.5) continue;
       }
       if (arms.length < 2) continue;
+      const exitR = c.clipRadius || c.radius;
       {
-        const pts = [];
-        for (const a of arms) {
-          const w = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, c.radius);
-          const pxn = -w.uz, pzn = w.ux;
-          const bx = w.x + pxn * a.hw;
-          const bz = w.z + pzn * a.hw;
-          const tx = w.x - pxn * a.hw;
-          const tz = w.z - pzn * a.hw;
-          pts.push({ x: bx, z: bz, ang: Math.atan2(bz - c.z, bx - c.x) }); // exempt: 排序用，非 heading 计算
-          pts.push({ x: tx, z: tz, ang: Math.atan2(tz - c.z, tx - c.x) }); // exempt: 排序用，非 heading 计算
-        }
-        pts.sort((a, b) => a.ang - b.ang);
+        const pts = (c.poly && c.poly.length >= 3)
+          ? c.poly.map((p) => ({ x: p.x, z: p.z }))
+          : (() => {
+            const raw = [];
+            for (const a of arms) {
+              const w = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, exitR);
+              const pxn = -w.uz, pzn = w.ux;
+              raw.push({ x: w.x + pxn * a.hw, z: w.z + pzn * a.hw });
+              raw.push({ x: w.x - pxn * a.hw, z: w.z - pzn * a.hw });
+            }
+            raw.forEach((p) => { p.ang = Math.atan2(p.z - c.z, p.x - c.x); }); // exempt: 排序用，非 heading
+            raw.sort((a, b) => a.ang - b.ang);
+            return raw;
+          })();
         /* 圆角化：Chaikin 2 次迭代切角，路口铺装从硬八边形变成圆角矩形
          * （向高德路口第一眼观感对齐），凸多边形保持扇形三角化成立。 */
         let smooth = pts;
@@ -418,7 +421,7 @@ export function createConnectorView(scene) {
         const apprW = isOneWay ? a.roadW : a.roadW * 0.5;
 
         if (!tooComplex) {
-          const wc = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, c.radius + 2.0);
+          const wc = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, exitR + 2.0);
           const rotY = directionToRotationY(wc.ux, wc.uz);
           const step = CROSSWALK_STRIPE_W + CROSSWALK_GAP;
           const paintW = hasForkAuthority ? apprW : a.roadW;
@@ -436,7 +439,7 @@ export function createConnectorView(scene) {
           }
         }
 
-        const ws = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, c.radius + 2.0 + CROSSWALK_LENGTH + 1.5);
+        const ws = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, exitR + 2.0 + CROSSWALK_LENGTH + 1.5);
         const halfW = apprW * 0.5;
         stopInstances.push({
           x: ws.x + ws.uz * halfW, z: ws.z - ws.ux * halfW,
@@ -455,7 +458,7 @@ export function createConnectorView(scene) {
         const arrowDists = armLen > 70 ? [18.0, 50.0] : (armLen > 25 ? [18.0] : [10.0]);
 
         for (const dist of arrowDists) {
-          const wa = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, c.radius + 2.0 + CROSSWALK_LENGTH + dist);
+          const wa = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, exitR + 2.0 + CROSSWALK_LENGTH + dist);
           const ux = -wa.ux, uz = -wa.uz;
           const rx = uz, rz = -ux;
           for (let k = 0; k < apprLanes; k++) {
@@ -474,8 +477,8 @@ export function createConnectorView(scene) {
         for (const conn of conns) {
           if (conn.fromIdx == null || conn.toIdx == null) continue;
           const fa = arms[conn.fromIdx], ta = arms[conn.toIdx];
-          const p0 = walkFromJunction(fa.pts, fa.fromEnd, c.x, c.z, c.radius + 2.5);
-          const p1 = walkFromJunction(ta.pts, ta.fromEnd, c.x, c.z, c.radius + 2.5);
+          const p0 = walkFromJunction(fa.pts, fa.fromEnd, c.x, c.z, exitR + 2.5);
+          const p1 = walkFromJunction(ta.pts, ta.fromEnd, c.x, c.z, exitR + 2.5);
           _drawTurnGuide(p0, p1, conn.turn, baseY + STOP_Y, guideInstances);
         }
       }
