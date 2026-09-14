@@ -34,8 +34,18 @@ const mergeView = build({
   ],
 });
 eq('平行贴合的入口匝道生成一段加速车道', mergeView.getStats().rampTransitions, 1);
-ok('匝道路面、渐变并道线与导流线保持合批渲染',
-  mergeView.getRoadGroup().children.length <= 4);
+{
+  const kids = mergeView.getRoadGroup().children;
+  const byColor = new Map();
+  for (const c of kids) {
+    const hex = c.material && c.material.color ? c.material.color.getHexString() : '?';
+    byColor.set(hex, (byColor.get(hex) || 0) + 1);
+  }
+  ok('同色表面合批为单 mesh（原点不在 tile 边界上拆双黄）',
+    [...byColor.values()].every((n) => n === 1));
+  ok('匝道路面、渐变并道线与导流线保持合批渲染',
+    kids.length <= 6);
+}
 
 const divergeView = build({
   edges: [

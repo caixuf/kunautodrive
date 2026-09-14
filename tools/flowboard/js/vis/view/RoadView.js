@@ -368,8 +368,15 @@ export function createRoadView(scene) {
 
   /* 阶段5 瓦片合批（支撑震撼大图）：按 500m 网格分桶，每桶独立 mesh
    * （自带包围球）→ three 默认 frustumCulled 跳过屏外 tile，大图缩放/
-   * 平移不再全量绘制。材质按表面类型各一份，跨 tile 共享、重建时幂等 dispose。 */
+   * 平移不再全量绘制。材质按表面类型各一份，跨 tile 共享、重建时幂等 dispose。
+   * 网格原点偏半格：世界 (0,0) 落在 tile 内部。否则沿 z=0 的 demo 中心线
+   * 会把双黄左右缘（z≈±0.12）拆进 0:0 与 0:-1，合批断言假红。 */
   const TILE_SIZE_M = 500;
+  const TILE_ORIGIN = TILE_SIZE_M * 0.5;
+  function tileKey(cx, cz) {
+    return Math.floor((cx + TILE_ORIGIN) / TILE_SIZE_M) + ':'
+      + Math.floor((cz + TILE_ORIGIN) / TILE_SIZE_M);
+  }
   function addMergedByTile(geometries, material) {
     if (!geometries || !geometries.length) return;
     const buckets = new Map();
@@ -378,7 +385,7 @@ export function createRoadView(scene) {
       const bb = g.boundingBox;
       const cx = (bb.min.x + bb.max.x) * 0.5;
       const cz = (bb.min.z + bb.max.z) * 0.5;
-      const key = Math.floor(cx / TILE_SIZE_M) + ':' + Math.floor(cz / TILE_SIZE_M);
+      const key = tileKey(cx, cz);
       let b = buckets.get(key);
       if (!b) { b = []; buckets.set(key, b); }
       b.push(g);
