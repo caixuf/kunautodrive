@@ -22,6 +22,20 @@ void bev_pre_config_default(BevPreConfig* cfg) {
     cfg->channels     = 4;
 }
 
+/* 连续格坐标 → 整数下标。
+ *
+ * 裸 floor() 会把「数学上恰好落在格线」的点，在 libm 残差下推进相邻格：
+ *   heading=π/2 时 cos(π/2)≈6e-17 而非 0，世界系正前方 (0, +10m)
+ *   得到 y_body≈+6e-16。y=0 是 row 边界（闭端），floor 后 iy 从 4 变成 3。
+ * 距最近整数 ≤1e-9 格（典型分辨率下约纳米级，只覆盖旋转残差）时吸附回去，
+ * 与精确 0 所在的闭边界格子一致。 */
+static int cell_index(double v) {
+    const double nearest = round(v);
+    if (fabs(v - nearest) <= 1e-9)
+        v = nearest;
+    return (int)floor(v);
+}
+
 /* 障碍物落到哪个格。返回 0 表示在图外。 */
 static int project_cell(const BevPreConfig* cfg,
                         double x_body, double y_body,
@@ -29,8 +43,8 @@ static int project_cell(const BevPreConfig* cfg,
     const double res_x = (2.0 * cfg->range_x) / cfg->w;
     const double res_y = (2.0 * cfg->range_y_half) / cfg->h;
 
-    int c = (int)floor((x_body + cfg->range_x) / res_x);
-    int r = (int)floor((cfg->range_y_half - y_body) / res_y);
+    int c = cell_index((x_body + cfg->range_x) / res_x);
+    int r = cell_index((cfg->range_y_half - y_body) / res_y);
     if (c < 0 || c >= cfg->w || r < 0 || r >= cfg->h) return 0;
     *ix = c;
     *iy = r;
