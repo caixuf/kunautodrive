@@ -160,4 +160,17 @@ KunAutoDrive 在 `coroutine_task.h` 中实现了 **CAS（Compare-And-Swap）原�
 
 ---
 
+### 20Hz RtExecutor 心跳
+
+`src/rt_heartbeat_demo.cpp` 用与生产节点相同的 `flowcoro::rt::RtExecutor` + TLS `g_node_exec`，以 `rt::sleep_until` 对齐 20Hz，打印 tick 间隔 / tardiness，然后 `request_stop` + `shutdown` 退出。对照上游 `flowcoro/examples/autonomous_driving/rt_control_loop_demo.cpp`。
+
+```bash
+cmake --build build --target rt_heartbeat_demo
+./build/bin/rt_heartbeat_demo 2
+```
+
+Sibling flowcoro：把仓库 clone 到 `../flowcoro` 后 configure，CMake 会优先用本地头，无需 FetchContent。
+
+---
+
 *下一章预告：第 11 章将探讨任务调度核心——DAG 有向无环图依赖流与多核 CPU 亲和性调度器。*

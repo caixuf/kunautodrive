@@ -699,6 +699,18 @@ else()
 endif()
 target_compile_definitions(coro_correctness_test PRIVATE FLOWCORO_INTEGRATION)
 
+# ── 20Hz RtExecutor 心跳演示（对齐 flowcoro rt_control_loop_demo）──
+# 测 tick 间隔 / tardiness，request_stop + shutdown 干净退出。
+# 构建：优先把 flowcoro clone 到与本仓库同级的 ../flowcoro（见 CMake 查找顺序）。
+# 运行：./build/bin/rt_heartbeat_demo [秒数=2]
+add_executable(rt_heartbeat_demo src/rt_heartbeat_demo.cpp)
+if(WIN32)
+    target_link_libraries(rt_heartbeat_demo flowengine_core flowcoro_headers)
+else()
+    target_link_libraries(rt_heartbeat_demo flowengine_core flowcoro_headers flowcoro_net)
+endif()
+target_compile_definitions(rt_heartbeat_demo PRIVATE FLOWCORO_INTEGRATION)
+
 # ── Config-driven Launcher ──
 # 读 config/pipeline.json → 按顺序 fork+exec 各节点进程
 # 是 e2e_demo --multi 的解耦升级版: 编排逻辑完全在配置文件里
@@ -943,6 +955,12 @@ if(ENABLE_ASAN)
     set(coro_correctness_test_timeout 120)
 endif()
 set_tests_properties(coro_correctness_test PROPERTIES TIMEOUT ${coro_correctness_test_timeout})
+
+add_test(NAME rt_heartbeat_demo
+    COMMAND ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/rt_heartbeat_demo 2
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+set_tests_properties(rt_heartbeat_demo PROPERTIES TIMEOUT 15)
 
 # ── Unit tests ────────────────────────────────────────────
 # Rename to .cpp for C++ compilation (uses lambdas in tests)
