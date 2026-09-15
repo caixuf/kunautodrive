@@ -496,7 +496,11 @@ add_test(NAME planning_coordinates COMMAND test_planning_coordinates)
 # 线程池 resume 的调度抖动会导致 20Hz 周期不一致，prev_steer 低通滤波时间间隔
 # 波动，steer 产生小幅振荡。CoroutineTask 周期精确，且 PID+Stanley 计算量小，
 # 同步 resume 阻塞可忽略。与 safety_control 一致。
+# FLOWCORO_INTEGRATION + -fcoroutines 与 fusion/planning 等 EXPORT_COROUTINE_TASK
+# 节点对齐：子项目不继承主工程 CMAKE_CXX_FLAGS 里的 -fcoroutines。
 add_library(control_node SHARED control_node.cpp)
+target_compile_definitions(control_node PRIVATE FLOWCORO_INTEGRATION)
+target_compile_options(control_node PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fcoroutines>)
 target_link_libraries(control_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
 
 # safety_control_node: safety envelope for control commands
@@ -504,6 +508,8 @@ target_link_libraries(control_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
 # FlowCoroTask — the safety check is lightweight (<10us) and synchronous resume
 # avoids thread-pool starvation that caused control/cmd staleness.
 add_library(safety_control_node SHARED safety_control_node.cpp)
+target_compile_definitions(safety_control_node PRIVATE FLOWCORO_INTEGRATION)
+target_compile_options(safety_control_node PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fcoroutines>)
 target_link_libraries(safety_control_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
 
 # PEM is an independent library. Node adapters only provide collection policy

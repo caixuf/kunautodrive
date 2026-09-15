@@ -509,10 +509,23 @@ cmake --build build -j$(nproc)
 bash build.sh release
 ```
 
+CMake 查找 flowcoro 的顺序：`../flowcoro`（与本仓库同级）→ `build/_deps/flowcoro-src` → `third_party/flowcoro` → FetchContent `https://github.com/caixuf/flowcoro.git`（`main`）。离线或钉版本时：
+
+```bash
+git clone https://github.com/caixuf/flowcoro.git ../flowcoro
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target rt_heartbeat_demo
+./build/bin/rt_heartbeat_demo 2   # ≥2s、~20Hz、request_stop/shutdown 干净退出
+# 或: ctest --test-dir build -R rt_heartbeat_demo --output-on-failure
+```
+
+节点插件（`modules/adas_nodes`）是独立 CMake 子项目，同样按上述路径找 `rt_executor.h`。所有 `EXPORT_COROUTINE_TASK` 节点（含 `control_node` / `safety_control_node`）编译时带 `FLOWCORO_INTEGRATION` + GCC `-fcoroutines`。
+
 构建产物：
 - `build/bin/flow_launcher` — 配置驱动 pipeline 启动器
 - `build/bin/flowmond` — 监控守护进程
 - `build/bin/flowctl` — CLI 工具
+- `build/bin/rt_heartbeat_demo` — 20Hz `RtExecutor` 心跳（间隔 / tardiness）
 - `build/lib/lib*.so` — 各节点插件
 
 ### 8.3 运行
