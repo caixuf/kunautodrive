@@ -60,11 +60,20 @@ def grid_res(w=W, h=H):
     return res_x, res_y
 
 
+def cell_index(v):
+    """连续格坐标 → 整数下标（镜像 bev_pre.c cell_index）。
+    距最近整数 ≤1e-9 格时吸附，避免 cos(π/2) 残差把格线上的点推进相邻格。"""
+    nearest = round(v)
+    if abs(v - nearest) <= 1e-9:
+        v = nearest
+    return int(math.floor(v))
+
+
 def project_cell(xb, yb, w=W, h=H):
     """世界车体系(x_body,y_body) → (ix, iy)。图外返回 None。（镜像 bev_pre.c project_cell）"""
     res_x, res_y = grid_res(w, h)
-    c = int(math.floor((xb + RANGE_X) / res_x))
-    r = int(math.floor((RANGE_Y_HALF - yb) / res_y))
+    c = cell_index((xb + RANGE_X) / res_x)
+    r = cell_index((RANGE_Y_HALF - yb) / res_y)
     if c < 0 or c >= w or r < 0 or r >= h:
         return None
     return c, r
@@ -253,6 +262,28 @@ def check_roundtrip(seed=7, n=14):
     return 0
 
 
+def check_pre_rotation():
+    """镜像 tests/test_bev_pre_post.c test_pre_rotation：8×8、±16m×±8m，
+    heading=π/2 时世界系 (0,+10) 必须落在与朝东前方 10m 相同的格子 (col=6,row=4)。
+    裸 floor 会被 cos(π/2)≈6e-17 残差推到 row=3。"""
+    w = h = 8
+    range_x, range_y_half = 16.0, 8.0
+    ego_h = math.pi / 2.0
+    ch, sh = math.cos(ego_h), math.sin(ego_h)
+    dx, dy = 0.0, 10.0
+    xb = dx * ch + dy * sh
+    yb = -dx * sh + dy * ch
+    res_x = 2.0 * range_x / w
+    res_y = 2.0 * range_y_half / h
+    c = cell_index((xb + range_x) / res_x)
+    r = cell_index((range_y_half - yb) / res_y)
+    if (c, r) != (6, 4):
+        print(f"  FAIL rotation: cell=({c},{r}) want (6,4) xb={xb:.16f} yb={yb:.16e}")
+        return 1
+    print("PASS check_pre_rotation: heading=π/2 前方 10m 落在 (col=6,row=4)")
+    return 0
+
+
 def _fail(msg):
     print("  FAIL", msg)
     return 1
@@ -307,5 +338,6 @@ if __name__ == "__main__":
         export_samples(args[1] if len(args) > 1 else "bev_samples.jsonl")
         sys.exit(0)
     rc = check_lane_id()
+    rc += check_pre_rotation()
     rc += check_roundtrip()
     sys.exit(0 if rc == 0 else 1)

@@ -53,8 +53,9 @@ static void test_pre_rotation(void) {
     cfg.range_y_half = 8.0;
 
     float feat[8 * 8 * 8];
-    /* ego 朝 +y（北, heading=+π/2）。世界系正前方 (+10,+?) → 车体前向 = 北向 */
-    /* 世界系 (0,+10) 在 ego(0,0,heading=π/2) 看来：dx=0,dy=10 → xb=0*cos+10*sin≈10, yb≈-0*sin+10*cos≈0 */
+    /* ego 朝 +y（北, heading=+π/2）。世界系正前方 (0,+10) → 车体前向 = 北向。
+     * 数学上 xb=10、yb=0，应与 test_pre_basic 的朝东前方 10m 落在同一格 (row=4,col=6)。
+     * 回归：libm 的 cos(π/2)≠0 曾把 yb 推到格线开侧，floor 后 iy=3，本断言失败。 */
     BevPreObs obs[] = { {0.0, 10.0, 0.0, 5.0, BEV_OBJ_VEHICLE} };
     bev_pre_rasterize(&cfg, 0, 0, M_PI / 2.0, obs, 1, feat);
     size_t i_occ = ((0 * 8 + 4) * 8 + 6);
