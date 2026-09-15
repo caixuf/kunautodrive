@@ -29,7 +29,7 @@
 #include <thread>
 #include <vector>
 
-using clock = std::chrono::steady_clock;
+using SteadyClock = std::chrono::steady_clock;
 using namespace std::chrono_literals;
 
 namespace {
@@ -38,32 +38,32 @@ flowcoro::rt::RtTask heartbeat_20hz(std::chrono::microseconds period,
                                     std::vector<int64_t>& intervals_us,
                                     std::vector<int64_t>& late_us,
                                     std::atomic<int>& ticks) {
-    const auto origin = clock::now();
-    clock::time_point prev{};
+    const auto origin = SteadyClock::now();
+    SteadyClock::time_point prev_tp{};
     bool have_prev = false;
     int i = 0;
     while (!co_await flowcoro::rt::stop_requested()) {
         ++i;
         const auto deadline = origin + period * i;
         co_await flowcoro::rt::sleep_until(deadline);
-        const auto now = clock::now();
+        const auto now = SteadyClock::now();
         ticks.fetch_add(1, std::memory_order_relaxed);
 
         auto tardiness = now - deadline;
-        if (tardiness < clock::duration::zero()) tardiness = clock::duration::zero();
+        if (tardiness < SteadyClock::duration::zero()) tardiness = SteadyClock::duration::zero();
         late_us.push_back(
             std::chrono::duration_cast<std::chrono::microseconds>(tardiness).count());
         if (have_prev) {
             intervals_us.push_back(
-                std::chrono::duration_cast<std::chrono::microseconds>(now - prev).count());
+                std::chrono::duration_cast<std::chrono::microseconds>(now - prev_tp).count());
         }
         have_prev = true;
-        prev = now;
+        prev_tp = now;
     }
 }
 
-bool drive(flowcoro::rt::RtExecutor& exec, clock::time_point until) {
-    while (clock::now() < until && !exec.is_finished()) {
+bool drive(flowcoro::rt::RtExecutor& exec, SteadyClock::time_point until) {
+    while (SteadyClock::now() < until && !exec.is_finished()) {
         exec.run();
         if (exec.has_local_work()) continue;
         if (auto next = exec.next_timer_deadline()) {
@@ -73,8 +73,8 @@ bool drive(flowcoro::rt::RtExecutor& exec, clock::time_point until) {
         }
     }
     exec.request_stop();
-    const auto drain_by = clock::now() + 2s;
-    while (!exec.is_finished() && clock::now() < drain_by) {
+    const auto drain_by = SteadyClock::now() + 2s;
+    while (!exec.is_finished() && SteadyClock::now() < drain_by) {
         exec.run();
         if (exec.has_local_work()) continue;
         if (auto next = exec.next_timer_deadline()) {
@@ -145,7 +145,7 @@ int main(int argc, char** argv) {
     g_node_exec = &exec;
     exec.spawn(heartbeat_20hz(period, intervals, late, ticks), "heartbeat");
 
-    const bool ok = drive(exec, clock::now() + std::chrono::seconds(run_seconds));
+    const bool ok = drive(exec, SteadyClock::now() + std::chrono::seconds(run_seconds));
     g_node_exec = nullptr;
 
     const auto iv = summarize(intervals);
