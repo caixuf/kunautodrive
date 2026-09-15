@@ -8,8 +8,29 @@ DURATION="${1:-4}"
 WORK="$ROOT/build/pem_smoke_$$"
 PIPELINE="$WORK/pipeline.json"
 LOG="$WORK/launcher.log"
+KEEP_LOG=0
 mkdir -p "$WORK"
-trap 'rm -rf "$WORK"' EXIT
+
+cleanup() {
+    if [ "$KEEP_LOG" != 0 ]; then
+        echo "───── launcher log tail ─────"
+        if [ -f "$LOG" ]; then
+            tail -80 "$LOG"
+        else
+            echo "(no launcher.log)"
+        fi
+        echo "───── flow logs tail ─────"
+        if [ -d "$WORK/logs" ]; then
+            for f in "$WORK"/logs/*.log; do
+                [ -f "$f" ] || continue
+                echo "--- $(basename "$f") ---"
+                tail -20 "$f"
+            done
+        fi
+    fi
+    rm -rf "$WORK"
+}
+trap cleanup EXIT
 
 if [ ! -x "$BUILD_DIR/bin/flow_launcher" ] ||
    [ ! -f "$BUILD_DIR/lib/libpem_collector_node.so" ]; then
@@ -17,6 +38,7 @@ if [ ! -x "$BUILD_DIR/bin/flow_launcher" ] ||
     exit 1
 fi
 
+echo "INFO: writing production PEM pipeline under $WORK"
 ROOT="$ROOT" PIPELINE="$PIPELINE" PEM_BASE="$WORK/pem" python3 - <<'PY'
 import json
 import os
@@ -52,18 +74,39 @@ with open(os.environ["PIPELINE"], "w", encoding="utf-8") as f:
 PY
 
 cd "$ROOT"
-timeout 90 "$BUILD_DIR/bin/flow_launcher" "$PIPELINE" --duration "$DURATION" >"$LOG" 2>&1
+export FLOW_LOG_DIR="$WORK/logs"
+mkdir -p "$FLOW_LOG_DIR"
+
+# SIGTERM at 60s, SIGKILL 5s later. Unbounded `timeout 90` waited forever when
+# flow_launcher ignored SIGTERM inside RtExecutor::shutdown(), so ctest's 150s
+# property fired with empty output. Duration is 4s plus ~5s node stagger.
+echo "INFO: running flow_launcher (duration=${DURATION}s, hard cap 60s)"
+set +e
+timeout --kill-after=5 60 "$BUILD_DIR/bin/flow_launcher" "$PIPELINE" --duration "$DURATION" >"$LOG" 2>&1
+launcher_rc=$?
+set -e
+
+if [ "$launcher_rc" -ne 0 ]; then
+    KEEP_LOG=1
+    if [ "$launcher_rc" -eq 124 ] || [ "$launcher_rc" -eq 137 ]; then
+        echo "FAIL: flow_launcher timed out (rc=$launcher_rc)"
+    else
+        echo "FAIL: flow_launcher exited with code $launcher_rc"
+    fi
+    exit 1
+fi
 
 shopt -s nullglob
 files=("$WORK"/pem_business_*.pem)
 if [ "${#files[@]}" -eq 0 ]; then
+    KEEP_LOG=1
     echo "FAIL: PEM business stream was not created"
-    tail -40 "$LOG"
     exit 1
 fi
 
 decoded="$(python3 tools/pem_dump.py --jsonl --type business "${files[@]}")"
 if ! grep -q '"name": "trip:ci_simulation"' <<<"$decoded"; then
+    KEEP_LOG=1
     echo "FAIL: PEM business stream has no trip record"
     printf '%s\n' "$decoded"
     exit 1

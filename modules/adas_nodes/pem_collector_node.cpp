@@ -395,10 +395,17 @@ public:
     explicit PemCollectorTask(MessageBus* bus) : CoroutineTask(bus) {}
 
     Task run() override {
-        const uint64_t period_us = (uint64_t)(1e6 / g.emit_hz);
+        const auto period = std::chrono::microseconds(
+            (int64_t)(1e6 / (g.emit_hz > 0.0 ? g.emit_hz : 1.0)));
         while (!should_stop()) {
-            co_await sleep_us(period_us);
+            if (co_await flowcoro::rt::stop_requested()) break;
+            /* rt::sleep_for parks on the executor timer heap so request_stop
+             * cancels the wait. DelayAwaitable/sleep_us uses a process-wide
+             * TimerService; shutdown() then busy-waits forever if that
+             * callback never post_ready's this executor (CI pem_runtime_smoke). */
+            co_await flowcoro::rt::sleep_for(period);
             if (should_stop()) break;
+            if (co_await flowcoro::rt::stop_requested()) break;
             flush();
         }
     }

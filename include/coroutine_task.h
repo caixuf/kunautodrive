@@ -84,6 +84,28 @@ inline void node_pump(flowcoro::rt::RtExecutor& ex, StopFn stopped) {
     }
 }
 
+/* Drain after node_pump() sees should_stop. RtExecutor::shutdown() busy-loops
+ * until is_finished(); that livelocks if a frame is still parked on an
+ * external post_ready producer (TimerService / DelayAwaitable) that never
+ * fires. Bound the drain so node threads always return; leftover frames are
+ * destroyed by ~RtExecutor. Prefer rt::sleep_for so request_stop cancels. */
+inline void node_executor_drain(flowcoro::rt::RtExecutor& ex,
+                                std::chrono::milliseconds budget) {
+    ex.request_stop();
+    const auto until = std::chrono::steady_clock::now() + budget;
+    while (!ex.is_finished() && std::chrono::steady_clock::now() < until) {
+        ex.run();
+        if (ex.has_local_work()) continue;
+        if (auto next = ex.next_timer_deadline()) {
+            const auto now = std::chrono::steady_clock::now();
+            if (*next <= now) continue;
+            std::this_thread::sleep_until(*next < until ? *next : until);
+        } else {
+            std::this_thread::sleep_for(std::chrono::microseconds(200));
+        }
+    }
+}
+
 /* ─────────────────────────────────────────────────────────
  * 1. Task 别名 — 所有 `Task run() override` 自动跟随
  * ───────────────────────────────────────────────────────── */
@@ -917,7 +939,7 @@ static int prefix##_execute(TaskBase* b) {                                    \
         CoroutineTask& ct = *w->impl;                                          \
         ex.spawn(ct.run(), #prefix);                                             \
         node_pump(ex, [w] { return w->impl->should_stop(); });                 \
-        ex.shutdown();                                                        \
+        node_executor_drain(ex, std::chrono::seconds(2));                      \
         g_node_exec = nullptr;                                                \
         return 0;                                                             \
     } catch (...) { return -1; }                                              \
