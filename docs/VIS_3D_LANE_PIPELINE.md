@@ -1,17 +1,24 @@
-# 车道级 3D 渲染管线设计方案
+# 车道级 3D 渲染管线
 
-> 2026-08-14。回答三个问题：① 护栏/路口等**连接处**为什么一直烂、怎么框架级解决；
-> ② 高德/开源成熟地图的画线衔接为什么永远完美（不是人调的）；
-> ③ 可视化界面怎么从"能用"到"专业软件"。
+> 2026-08-14 原设计方案。2026-09 路轴/标线权威已改，**不要把下面的「竣工」当现状**。
 >
-> **竣工状态（2026-08-15）**：P0/P1/P2/P3 全部落地，门禁全绿。
-> 关键架构变更：原 P1/P2 的「scene_pub 透传 junctions/lanes」**未走 C++ 每帧透传**，
-> 改为前端按 scenario_name 经既有 `POST /api/map/preview` 一次性拉取权威 map.json
-> （`js/vis/model/MapData.js`，SceneDirector 注入 `map_junctions`/`lane_data`，
-> 注入标志位计入 `roadNetworkHash` 恰好触发一次重建）。理由：lane 几何 ~590KB +
-> junctions ~382KB，20Hz 每帧透传是 ~20MB/s 浪费；静态数据按需拉一次即可。
-> 遗留未做（诚实清单）：跨线桥通用化（ViaductView）、出口/入口蓝色 chip 路牌
-> （LabelView ramp 角色）、lane 多边形路面（road ribbon 视觉已够，标线已车道级）。
+> **当前权威（2026-09，以代码和门禁为准）**
+>
+> | 事实 | 入口 | 门禁 |
+> |------|------|------|
+> | 路面中心 / 半宽 | `RoadAxis.computeEdgeAxis`（RoadView 不再有本地 envelope） | `vis_grep_enforce` 禁 `laneGroupEnvelope` |
+> | 沿路标线 | `map.json` `lanes[].markings`；生产规则只在 `tools/lane_markings.py` | `vis_marking_types`；有 `lane_data` 禁止启发式 |
+> | 路口裁剪 | TopologyModel 臂廊多边形 + `clipRadius`（不靠虚高圆） | `junction_markings` §15/§16 |
+> | 静态车道几何 | `POST /api/map/preview` 一次注入 `lane_data` / `map_junctions` | 禁止 scene_pub 每帧透传 |
+>
+> demo / 无 map.json 的场景仍允许启发式标线。OSM 路有 `lane_data` 时 P2 返回 0 也不发明 `lanes×width`。
+> 匝道/`*_link` 的 `deceleration` 只写在生产规则里；现成 `map.json` 要重跑 osm2kmap 才带上。
+>
+> 原方案里「scene_pub 每帧透传 lanes」**没有做、也不该做**（~20MB/s）。车道数据走 MapData 一次拉取。
+
+---
+
+> 下文是 2026-08-14 的分期设想与当时的数据盘点，作历史对照。表里的 P0–P3「竣工」是当时编号，与 2026-09 的 RoadAxis / lane_markings 收口不是同一套编号。
 
 | 期 | 状态 | commit |
 |----|------|--------|

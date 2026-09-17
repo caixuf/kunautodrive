@@ -111,6 +111,13 @@ const RULES = [
     exempt: /\/\/\s*exempt/,
   },
   {
+    name: 'view 禁止本地 pointInPolygon',
+    pattern: 'function pointInPolygon',
+    desc: 'XZ 点在多边形内只准走 Coord.pointInPolygonXZ',
+    dir: resolve(__dirname, '../tools/flowboard/js/vis/view'),
+    exempt: /\/\/\s*exempt/,
+  },
+  {
     name: '车身材质金属度过高 (metalness >= 0.55)',
     pattern: 'metalness:\\s*0\\.[5-9][5-9]|metalness:\\s*0\\.[6-9]\\d*|metalness:\\s*[1-9]',
     desc: '车漆 metalness 应 ≤ 0.5。轮毂/镀铬/玻璃等非车身材质豁免行加 // exempt',

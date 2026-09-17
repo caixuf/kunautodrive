@@ -13,6 +13,7 @@ import { getStdMaterial } from '../core/AssetFactory.js';
 import { EDGE_TYPE } from '../core/Constants.js';
 import { computeEdgeAxis } from '../model/RoadAxis.js';
 import { getTopology } from '../model/TopologyModel.js';
+import { pointInPolygonXZ } from '../math/Coord.js';
 
 const TREE_SPACING = 30;
 const TREE_PHASE   = 5;
@@ -24,28 +25,6 @@ const CANOPY_R     = 1.65;
 const COLOR_TRUNK  = 0x5c3a1e;
 const COLOR_CANOPY_LOWER = 0x245f2a;
 const COLOR_CANOPY_UPPER = 0x3d8035;
-
-/** 点是否落在某多边形内（射线法）。多边形顶点支持 [x,y,z] / [x,z] / {x,z}；
- * 约定 z 取第三分量（x,y,z）或第二分量（x,z），与多数几何数组一致。
- * 阶段6 植被按用地落位：landuse（forest/grass 多边形）由 DSL 枢纽 net2map
- * 从 OSM landuse/natural 抽取，坐标系与 spine（THREE x,z）一致（方案 §阶段6）。 */
-function pointInPolygon(x, z, poly) {
-  if (!Array.isArray(poly) || poly.length < 3) return false;
-  let inside = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const pi = poly[i], pj = poly[j];
-    if (!pi || !pj) continue;
-    const xi = Array.isArray(pi) ? pi[0] : pi.x;
-    const zi = Array.isArray(pi) ? (pi.length > 2 ? pi[2] : pi[1]) : pi.z;
-    const xj = Array.isArray(pj) ? pj[0] : pj.x;
-    const zj = Array.isArray(pj) ? (pj.length > 2 ? pj[2] : pj[1]) : pj.z;
-    const denom = (zj - zi) || 1e-9;
-    const intersect = ((zi > z) !== (zj > z)) &&
-      (x < (xj - xi) * (z - zi) / denom + xi);
-    if (intersect) inside = !inside;
-  }
-  return inside;
-}
 
 /* ── 路面避让（2026-08-16 用户报障"树长在道路上"）─────────────────
  * v2 是 SUMO 单方向车道地图：每条 edge 的路面 = centerline 向行进方向
@@ -116,7 +95,7 @@ export function inferTreeSlots(roadNetwork) {
    * landuse 缺失（当前 osm_lujiazui_v2 等地图暂未抽取）→ 保持两侧都种，行为不变。
    * DSL 枢纽抽取落地后自动点亮，无需回改本 view。 */
   const landuse = Array.isArray(roadNetwork.landuse) ? roadNetwork.landuse : null;
-  const inLanduse = (x, z) => !landuse || landuse.some((poly) => pointInPolygon(x, z, poly));
+  const inLanduse = (x, z) => !landuse || landuse.some((poly) => pointInPolygonXZ(x, z, poly));
 
   /* 路面避让（2026-08-16）：全路网路面带索引，槽位压到任何沥青即丢弃。 */
   const bandGrid = buildRoadBandGrid(roadNetwork);
