@@ -1,3 +1,7 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # KunAutoDrive — 项目概览
 
 轻量级自动驾驶中间件，核心是一个 Pub/Sub 消息总线 + 调度器 + 传输层。
@@ -5,6 +9,10 @@
 > **开发流程：** 设计 → 执行 → 测试 → 迭代 → 清理 → 文档。详见 `~/.claude/skills/workflow/SKILL.md`（入口路由）。
 > 改完代码后必跑：`/verify` → `/code-review` → `/simplify` → commit → 更新文档。
 > **算法升级必先：** `/py-sim-first` — Python 仿真验证 → 参数扫描 → 再移植到 C++。
+>
+> ⚠️ **`~/.claude/skills/*` 路径未随仓库分发**（本机 2026-09 核查不存在）。读不到时按其
+> 自述的方法论执行即可：分层探针 + 值传播验证 + 状态锁死 + 缓存层检查；下方各节的铁律与
+> 故障模式表才是仓库内的权威副本。
 >
 > **行为异常排查**（转向灯反/该停不停/该走不走/刹停到 0/改代码现象不变）→
 > 先看 `~/.claude/skills/debugging/SKILL.md`（分层探针 + 值传播验证 + 状态锁死 + 缓存层检查，
@@ -42,6 +50,12 @@ sim_world → sensor_model → perception → fusion → planning → control �
                                     ↓
                              flowmond (IPC stats bridge + HTTP/SSE) → DashBoard
 ```
+
+上图是核心控制链。`config/pipeline.json`（default profile）实际跑 **16 个进程**，
+在核心链之外还有 `object_tracker`（感知跟踪）、`navigation`（路由 + 行进方向）、
+`behavior_planner`（FSM）、`inference` / `data_recorder` / `learner` / `model_ota`
+（学习闭环 Stage 0→2→OTA）、`bev_detection`（BEV 视觉）。节点清单以
+`config/pipeline.json` 的 `processes[]` 为准，勿信任何手写拓扑文档。
 
 ## 模块职责铁律（架构设计 — 2026-08 掉头死锁 8 环连坏后确立）
 
@@ -98,7 +112,7 @@ sim_world → sensor_model → perception → fusion → planning → control �
 | `include/platform_compat.h` | 跨平台兼容层（macOS⇄Linux，CMake force-include，仅 APPLE 生效）：pthread 命名签名、robust mutex、condvar 时钟降级 |
 | `modules/adas_nodes/flowsim/physics.cpp` | 运动学自行车模型 + 可选线性轮胎二自由度动态模型（pipeline.json `physics_model`，低速<5m/s 退化运动学）；碰撞/护栏/重力见 [FLOWSIM_PHYSICS.md](docs/FLOWSIM_PHYSICS.md)、`/flowsim-physics` |
 | `modules/adas_nodes/flowsim/entity.h` | 仿真实体（含 v_x_body/v_y_body/yaw_rate/F_yf/F_yr、垂直速度 vz、crash_cooldown、route_s；EntityPool 边界检查） |
-| `scenarios/straight_road.json` | 直道导航场景（默认；另有 curve_road/dense_npc/multi_light/oncoming/泊车/驾考科目一~四等共 13 个场景 + suite.json 场景矩阵） |
+| `scenarios/straight_road.json` | 直道导航场景（默认；另有 curve_road/dense_npc/multi_light/oncoming/城市环线/OSM 城市/泊车/驾考科目一~四等共 23 个场景 + `suite.json` 场景矩阵，契约校验 `tools/scenarioctl.py validate`） |
 | `modules/adas_nodes/data_recorder_node.c` | 训练样本采集（Learning Loop Stage 0） |
 | `modules/adas_nodes/inference_node.cpp` | tiny-MLP 影子推理（Learning Loop Stage 2） |
 | `modules/adas_nodes/tiny_mlp.h` | 纯 C 单隐层 MLP 推理内核 |
@@ -106,17 +120,124 @@ sim_world → sensor_model → perception → fusion → planning → control �
 | `tools/train_e2e/{train,torch_train,temporal_train}.py` | tiny-MLP / PyTorch / 时序 训练实现 |
 | `tools/modelctl.py` | artifact 管理（list / inspect / diff / promote / ota） |
 | `docs/LEARNING_LOOP.md` | 车端学习闭环架构 |
+| `modules/adas_nodes/flowrec_node.c` | flowrec：配置化 topic 留存节点（见 `docs/FLOWREC.md`） |
+| `modules/adas_nodes/manual_drive_node.c` | 终端 WASD 接管 ego（`--manual` 游戏诊断模式） |
+| `modules/adas_nodes/bev_detection_node.cpp` | BEV 视觉检测（`bev_pre.c`/`bev_post.c` + ONNX backend） |
+| `modules/pem/pem_log.c` | PEM 记录协议（CRC / fsync / 轮转 / 配额），单测 `test_pem_log.c` |
+| `modules/pem/pem_runtime.c` | PEM 运行时双流（`monitor_node` 基础设施流 + `pem_collector_node` 业务流） |
+| `tools/pem_dump.py` | PEM 解析（`--jsonl --type business`） |
+| `tools/scenarioctl.py` | 场景/suite 契约校验（CI `scenario-file-gate`） |
+| `tools/opsctl.py` | 运维入口（与 `flowctl` 分工见文件头） |
 
-> 深入教程见 `docs/book/` 目录（16 篇，覆盖 OOP in C、插件系统、消息总线、IPC、Bag、Clock、
-> Serializer、State Machine、Discovery、Fusion、Coroutine、Demo Evaluator、E2E Learning Loop、
-> Dead Reckoning、SocketCAN Actuator、FlowSim 场景设计）；vis 模块设计见 `docs/VIS_MODULE_GUIDE.md`。
+> 深入教程见 `docs/book/` 目录（23 篇 = `00_preface` + 01~22，分 5 卷：微内核与系统编程 /
+> 执行流与高级调度 / ADAS 算法栈 / 仿真验证与学习闭环 / 真车部署，覆盖 OOP in C、插件系统、
+> 消息总线、IPC、Bag、Clock、Serializer、State Machine、Discovery、Fusion、Coroutine、
+> Demo Evaluator、E2E Learning Loop、Dead Reckoning、SocketCAN Actuator、FlowSIM 场景设计）。
+> 索引见 `docs/BOOK.md`；全量文档导航见 `docs/README.md`，代码索引 `docs/CODE_WIKI.md`；
+> vis 模块设计见 `docs/VIS_MODULE_GUIDE.md`。
 
-## 运行
+## 构建与运行
 
 ```bash
-bash scripts/demo.sh [duration]          # 启动演示
-bash scripts/demo.sh --no-browser 15     # 不打开浏览器
+# ── 构建 ────────────────────────────────────────────────────────
+bash build.sh release                # Release（默认，等价 cmake --build build）
+bash build.sh debug                  # Debug
+bash build.sh test                   # 跑 ctest（需先构建）
+bash build.sh bench                  # benchmark 二进制
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j$(nproc)
+
+# ── 运行 ────────────────────────────────────────────────────────
+bash scripts/demo.sh [duration]           # 启动演示（默认 15s）
+bash scripts/demo.sh --no-browser 15      # 不自动开浏览器
+./build/bin/flow_launcher config/pipeline.json --duration 30   # 绕过脚本直接起
+./build/bin/flowctl list                  # 运行中拓扑/参数/仪表盘
 ```
+
+`scripts/demo.sh` 常用开关（未列出的见 `scripts/demo.sh` 头部注释）：
+
+| 开关 | 作用 |
+|------|------|
+| `--scenario <json>` | 指定场景；未指定时 patch 临时 pipeline.json 指向 `DEFAULT_SCENARIO` |
+| `--manual` | 游戏诊断模式：基底换成 `pipeline_manual.json`，终端 WASD 直接驾驶 ego |
+| `--multi` | fork+exec 多进程模式（默认 dlopen 单进程） |
+| `--record` | 录 bag |
+| `--replay <bag>` | `flow_launcher --replay-bag` 回放 scene/frame + vehicle/state |
+| `--route <id>` / `--start-s <m>` / `--start-d <m>` | 从 route 指定弧长/横向偏移起跑 |
+| `--skip-services` | 跳过 flowmond 等旁路服务（配 `FLOW_SKIP_SERVICES=1`） |
+
+环境变量：`FLOWENGINE_SCENARIO`（默认场景）、`FLOW_LOG_DIR`、`FLOW_TOPOLOGY_FILE`
+（默认 `/tmp/flow_topology.json`）、`FLOW_LAUNCHER_STDOUT/STDERR`。
+
+### Pipeline profiles（`config/` 是配置驱动启动的唯一真相源）
+
+| 文件 | profile | 用途 |
+|------|---------|------|
+| `config/pipeline.json` | `default` | 仿真/算法开发/可视化主路径，**CI 与 demo 都用它**（16 节点，不写 PEM） |
+| `config/pipeline_car.json` | `hw` | RC 小车真车模板（GPS/IMU/激光雷达/执行器 + `pem_collector`） |
+| `config/pipeline_cortex.json` | `experimental` | cortex 变体，启动会打警告 |
+| `config/pipeline_manual.json` | `experimental` | `--manual` 游戏诊断模式基底 |
+| `config/pipeline_windows.json` | `default` | Windows 原生单进程管线 |
+| `config/product.json` | — | 产品身份/安装布局（`schema_version`/`plugin_dir`/`default_vehicle`），非管线 |
+
+`profile != default` 启动会打警告；`topic_contract_check.py` 强制
+`pipeline*.json` ↔ `NodePlugin` 的 `s_inputs`/`s_outputs` 对齐。
+
+### 测试
+
+```bash
+# CI 等价的快速套件（排除 benchmark/manual/stability/integration 标签）
+ctest --test-dir build --output-on-failure --timeout 60 -LE "benchmark|manual|stability|integration"
+
+# 单个测试（-R 按名字正则匹配）
+env -u LD_LIBRARY_PATH ctest --test-dir build --output-on-failure -R pem_runtime_smoke
+env -u LD_LIBRARY_PATH ctest --test-dir build/modules/adas_nodes --output-on-failure -R pem_log_protocol
+env -u LD_LIBRARY_PATH ctest --test-dir build -R vis_coord -V   # -V 看单测内部输出
+```
+
+`env -u LD_LIBRARY_PATH` 是必需的：IDE 终端注入的旧 libstdc++ 目录会让二进制启动即报
+`version not found`（`scripts/demo.sh` 的 `sanitize_ld_path` 同因）。标签含义：
+`benchmark`(性能) / `manual`(需人工) / `stability`(长稳) / `integration`(起真实管线，慢)。
+
+### Windows
+
+Windows 原生单进程插件管线受支持（CI 有 `build-windows-mingw` job）：
+`config/pipeline_windows.json` + `scripts/demo.ps1`，交叉编译用
+`cmake/mingw-w64-x86_64.cmake`，运行时验收用 `tools/win_runtime_verify.py`。
+平台差异统一收在 `include/compat_win/` 与 CMake `if(WIN32)` 分支，**Linux 行为零变化**。
+
+### 游戏诊断模式（`--manual`）
+
+```bash
+bash scripts/demo.sh --manual            # 终端 WASD 直接驾驶 ego
+```
+
+打开 FlowBoard 左上角「接管车辆」，`WASD`/方向键驾驶；`L/Q/E/H` 灯光测试，
+`S`/空格刹车灯，偏离道路按 `R` 或点「回到车道」安全归位。HUD 实时显示转向输入、
+车身航向、实际移动方向及三者偏差 —— 这是定位**车轮 kingpin / 死推 / 物理积分
+不一致**三类渲染-物理脱节的第一线工具。
+
+仿真约定 `steer > 0` 为左转（ENU heading/y 增大）。游戏模式是**诊断工具**，
+不改变规划/控制/安全模块的职责铁律；接管期间 `manual_drive_node.c` 发布 ControlCmd。
+
+### PEM 数据闭环（`profile=hw` / production）
+
+`config/pipeline_car.json` 的 production 模式起**两条 PEM 流**，都具备 CRC、
+关键事件 `fsync`、按时间/大小轮转、目录配额保留：
+
+| 流 | 节点 | 记什么 |
+|----|------|--------|
+| 基础设施流 | `monitor_node` | 系统、topic、health、降级事件 |
+| 业务流 | `pem_collector_node` | GPS/定位里程、行驶时长、地区迁移、降级事件 |
+
+```bash
+python3 tools/pem_dump.py /tmp/kunautodrive_pem_*.pem
+python3 tools/pem_dump.py --jsonl --type business /tmp/kunautodrive_pem_business_*.pem
+bash scripts/pem_smoke.sh
+```
+
+PEM 不是"配置了就相信"：`pem_runtime_smoke` 会真起 production 管线，确认实际写出
+并解析回 `trip:ci_simulation`，作为 integration 门禁跑。字段契约/扩展回调/保留策略见
+`docs/DATA_CLOSED_LOOP.md`；**默认 `pipeline.json` 不写 PEM**。
 
 > **平台：** Linux（主力/CI）与 macOS 原生均可 `bash scripts/demo.sh` 跑通。
 > 平台差异由兼容层 `include/platform_compat.h`（force-include，仅 APPLE 生效）
@@ -147,6 +268,12 @@ python3 tools/trace_incident.py                     # 事故逐层追溯（碰�
 
 评估器采样 `/tmp/flow_topology.json`，自动检查：拓扑完整性、topic 频率、碰撞、路沿偏离、停滞、变道次数、偏航抖动、NPC 瞬移。WARN 是已知问题可忽略，FAIL 必须修复。
 门禁有效性由 liveness gate（死信号 FAIL）+ require（无法判定≠通过）+ test_evaluator_gate.py（门禁自测）兜底——**门禁抓不住已知故障 = 它的 PASS 不可信**。
+
+**frontend 改动另走 `npm run vis:check:all`（6 个门禁），C 链门禁覆盖不到它。**
+CI 的 C 侧 gate 全量在 `.github/workflows/ci.yml`：`scenario-file-gate`（`tools/scenarioctl.py validate`）、
+`clock-service-gate`（禁 `modules/` 裸 `clock_gettime`）、`topic-contract-gate`、
+`zombie-ban-gate`、`map-connectivity-gate`、`build-release`/`build-asan`（ctest）、
+`build-windows-mingw`（交叉编译）、`integration-test`。本地复现任一 gate 直接抄它的 `run:` 行。
 
 ## 编码规范（统一 API — 2026-07 重构后强制执行）
 
@@ -378,10 +505,11 @@ npm run vis:check
 
 | 门禁 | 覆盖率 | 抓什么 |
 |------|--------|--------|
-| `vis_module_load.test.mjs` | 29/30 模块 (main.js 除外) | 语法错、顶层 ReferenceError、import 路径 |
-| `eslint no-undef` | 全部 30 模块 | 未定义变量引用（如 `VIADUCT_VIS_LENGTH` 未导入） |
-| `eslint no-unused-vars` | 全部 30 模块 | 定义了但未调用的函数（如 `followEgo` 漏调） |
-| `vis_render_tick.test.mjs` | director + 14 view | tickAnimation 运行时抛错、store 数据完整性 |
+| `vis_module_load.test.mjs` | 全部 `js/vis/**/*.js`（约 50 个模块） | 语法错、顶层 ReferenceError、import 路径 |
+| `eslint no-undef` | 全部 `js/vis/` | 未定义变量引用（如 `VIADUCT_VIS_LENGTH` 未导入） |
+| `eslint no-unused-vars` | 全部 `js/vis/` | 定义了但未调用的函数（如 `followEgo` 漏调） |
+| `vis_render_tick.test.mjs` | director + 全部 view | tickAnimation 运行时抛错、store 数据完整性 |
+| `vis:check:junction` / `vis:audit` / `vis:check:smoke` | 路口标线、路线审计、渲染冒烟 | 路口分叉对齐、标线类型错、渲染链路断裂 |
 
 ### 与 C 侧门禁的对称性
 
@@ -443,7 +571,10 @@ npm run vis:check:invariant
 npm run vis:check:all
 ```
 
-等价于 `vis:check` + `vis:check:invariant` + `vis:check:grep`，三者全绿才可合并。
+等价于 6 个门禁全绿：`vis:check`（模块加载 + ESLint + tick 冒烟）、
+`vis:check:invariant`（坐标 property-test）、`vis:check:grep`（裸数学检测）、
+`vis:check:junction`（路口标线/分叉对齐/标线类型）、`vis:audit`（路线审计）、
+`vis:check:smoke`（渲染冒烟）。改前端只想快跑时 `npm run vis:check` 是子集，**合并前必须全量**。
 
 - ❌ 坐标/朝向/高度/尺度只准走 `Coord.*` / `placeOnRoad` 纯函数；view 里裸 `-y`/`atan2`/`position.set`+魔法数 = 违规
 - ❌ 每个坐标纯函数必须有 property-test
@@ -599,13 +730,23 @@ frame: THREE  | up: +Y | 单位: m | ENU→THREE: [x, z, -y] | ego_centered: tru
 ```
 tools/flowboard/js/vis/
 ├── main.js           — 入口（含 _applySceneStyle 风格上下文：BEV→sr / 透视→real）
-├── core/             — 核心渲染框架（SceneDirector, CameraRig, Lighting, Constants, Layer, Renderer, SkyEnv, ViewRegistry, AssetFactory, DeadReckon）
+├── core/             — 核心渲染框架（CameraRig, Lighting, Constants, Layer, Renderer[含
+│                       isSoftwareRenderer], SkyEnv, ViewRegistry, AssetFactory, DeadReckon,
+│                       PerfMonitor, WorkerBridge）
 ├── director/         — 场景导演（SceneDirector, FrameValidator）
-├── view/             — 3D 视图（VehicleView, RoadView, GroundView, ViaductView, BarrierView, TreeView, TrafficLightView, ETCGateView, StreetlightView, ConnectorView, VehicleLights, EffectView, TrajectoryView）
-├── math/             — 坐标/几何工具（Coord.js — 唯一事实源, Curve, GeometryMerge, RoadHeight）
+├── view/             — 3D 视图（VehicleView, RoadView, GroundView, ViaductView, BarrierView,
+│                       TreeView, TrafficLightView, ETCGateView, StreetlightView, ConnectorView,
+│                       VehicleLights, EffectView, TrajectoryView, BuildingView, ConstructionView,
+│                       RoadFacilityView, StreetFurnitureView, PerceptionView, LabelView, StatsView,
+│                       JunctionDetect）
+├── math/             — 坐标/几何工具（Coord.js — 唯一事实源, Curve, GeometryMerge, RoadHeight,
+│                       MapProjection, Trajectory）
 ├── theme/            — 设计 token 单一事实源（tokens.js）+ 标线视觉样式表（roadStyle.js: MARKING/STYLE）
 ├── model/            — 数据模型（MapData.js 权威地图+走廊+按段加载, TopologyModel, RoadAxis）
-└── store/            — 场景状态（SceneStore）
+├── store/            — 场景状态（SceneStore）
+├── utils/            — CanvasTextureFactory（有界缓存，防纹理泄漏）
+├── worker/           — TopologyWorker（拓扑解析 offload）
+└── MinimapHUD.js     — 左上角小地图 HUD
 ```
 
 数据链路由 C 监控守护进程 **flowmond**（`src/flowmond.c` → `build/bin/flowmond`）提供：
