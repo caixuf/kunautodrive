@@ -45,7 +45,12 @@ flowcoro::rt::RtTask heartbeat_20hz(std::chrono::microseconds period,
     while (!co_await flowcoro::rt::stop_requested()) {
         ++i;
         const auto deadline = origin + period * i;
-        co_await flowcoro::rt::sleep_until(deadline);
+        /* upstream flowcoro 只提供 rt::sleep_for(duration)，没有 sleep_until。
+         * 用 deadline 反算剩余时长以保持固定节拍（而非 sleep_for(period) 的漂移累积）。 */
+        const auto until_deadline = deadline - SteadyClock::now();
+        if (until_deadline > SteadyClock::duration::zero()) {
+            co_await flowcoro::rt::sleep_for(until_deadline);
+        }
         const auto now = SteadyClock::now();
         ticks.fetch_add(1, std::memory_order_relaxed);
 
@@ -65,21 +70,13 @@ flowcoro::rt::RtTask heartbeat_20hz(std::chrono::microseconds period,
 bool drive(flowcoro::rt::RtExecutor& exec, SteadyClock::time_point until) {
     while (SteadyClock::now() < until && !exec.is_finished()) {
         exec.run();
-        if (exec.has_local_work()) continue;
-        if (auto next = exec.next_timer_deadline()) {
-            std::this_thread::sleep_until(*next);
-        } else {
-            std::this_thread::sleep_for(1ms);
-        }
+        std::this_thread::sleep_for(1ms);
     }
     exec.request_stop();
     const auto drain_by = SteadyClock::now() + 2s;
     while (!exec.is_finished() && SteadyClock::now() < drain_by) {
         exec.run();
-        if (exec.has_local_work()) continue;
-        if (auto next = exec.next_timer_deadline()) {
-            std::this_thread::sleep_until(*next);
-        }
+        std::this_thread::sleep_for(200us);
     }
     if (!exec.is_finished()) exec.shutdown();
     return exec.is_finished();

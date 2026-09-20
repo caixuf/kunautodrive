@@ -46,6 +46,7 @@
 #include "flowsim/route.h"
 #include "flowsim/sim_digest.h"
 #include "flowsim/lane_frenet.h"          /* C-2: 共享车道中心横向偏移公式 */
+#include "flowsim/flowsim_time.h"
 #include "scenario_router.h"              /* 车道级 A*：主循环建图 + ego 起终点路由 */
 
 #include <stdlib.h>
@@ -64,9 +65,6 @@ namespace {
 
 /* ── 仿真常量（与 sim_world_node.c 一致，保证下游节点兼容） ───── */
 
-#define FLOWSIM_FREQUENCY_HZ   60.0
-#define FLOWSIM_DT_SEC         (1.0 / FLOWSIM_FREQUENCY_HZ)   /* ~0.0167s */
-#define FLOWSIM_DT_US          ((uint64_t)(FLOWSIM_DT_SEC * 1e6))  /* 16666 */
 
 /* control/cmd 陈旧超时：2000ms 未收到则回退 FSAFE 停车。
  * 原 500ms 在高负载（15 tasks, ~34% 丢包率）下过于激进：

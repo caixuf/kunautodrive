@@ -243,9 +243,7 @@ static void on_obstacles(const Message* msg, void* user_data) {
             for (int i = 0; i < n && fi < 2; i++) {
                 /* 跳过后方障碍物 */
                 if (list.obstacles[i].x - g.ego_x < 0) continue;
-                double type_f = OBJ_TYPE_UNKNOWN;
-                if (list.obstacles[i].type == 3) type_f = OBJ_TYPE_VEHICLE;
-                else if (list.obstacles[i].type == 4) type_f = OBJ_TYPE_PEDESTRIAN;
+                double type_f = (double)(int)list.obstacles[i].type;
                 if (fi == 0) {
                     g.front0_x = list.obstacles[i].x;
                     g.front0_y = list.obstacles[i].y;

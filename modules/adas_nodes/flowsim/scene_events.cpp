@@ -25,8 +25,9 @@
 #include <cmath>
 #include <algorithm>
 
-/* 仿真步长 20Hz → 0.05s，与 flowsim_node.cpp 保持一致 */
-#define FLOWSIM_DT_SEC  0.05
+/* 仿真步长唯一事实源（60Hz ≈ 0.0167s）。本文件历史上自带一份 0.05 的定义，
+ * 导致红绿灯 phase_timer 排水速度与实际帧率差 3 倍、编排 "hold red 10s" 实际只有 3.33s。 */
+#include "flowsim_time.h"
 
 namespace flowsim {
 namespace {

@@ -94,7 +94,7 @@ static inline int tiny_mlp_forward(const TinyMLP* m, const float* x, float* y) {
     if (m->in_dim <= 0 || m->hidden_count <= 0 || m->out_dim <= 0) return 0;
 
     /* 标准化并进入隐层 0 输入 */
-    float buf[TINY_MLP_MAX_HID], *prev = buf;
+    float buf[TINY_MLP_MAX_IN], *prev = buf;
     int prev_dim = m->in_dim;
     for (int i = 0; i < m->in_dim && i < TINY_MLP_MAX_IN; i++) {
         float s = m->norm_scale[i] != 0.0f ? m->norm_scale[i] : 1.0f;

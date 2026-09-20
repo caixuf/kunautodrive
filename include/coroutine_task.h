@@ -85,24 +85,23 @@ inline void node_pump(flowcoro::rt::RtExecutor& ex, StopFn stopped) {
 }
 
 /* Drain after node_pump() sees should_stop. RtExecutor::shutdown() busy-loops
- * until is_finished(); that livelocks if a frame is still parked on an
- * external post_ready producer (TimerService / DelayAwaitable) that never
+ * `while (!is_finished()) run();` — that livelocks if a frame is still parked on
+ * an external post_ready producer (TimerService / DelayAwaitable) that never
  * fires. Bound the drain so node threads always return; leftover frames are
- * destroyed by ~RtExecutor. Prefer rt::sleep_for so request_stop cancels. */
+ * destroyed by ~RtExecutor. Prefer rt::sleep_for so request_stop cancels.
+ *
+ * NOTE: 固定 200µs 睡眠而不是"睡到下一个 timer deadline"——upstream flowcoro 的
+ * RtExecutor 既不导出 has_local_work() 也不导出 next_timer_deadline()
+ * （local_ready_/timers_ 是私有成员）。此处只依赖公开 API：run() / request_stop()
+ * / is_finished()。200µs 远小于任何节点 tick（≥10ms），不会拖慢关停；
+ * 且整个循环被 budget 硬限，不可能无限自旋。 */
 inline void node_executor_drain(flowcoro::rt::RtExecutor& ex,
                                 std::chrono::milliseconds budget) {
     ex.request_stop();
     const auto until = std::chrono::steady_clock::now() + budget;
     while (!ex.is_finished() && std::chrono::steady_clock::now() < until) {
         ex.run();
-        if (ex.has_local_work()) continue;
-        if (auto next = ex.next_timer_deadline()) {
-            const auto now = std::chrono::steady_clock::now();
-            if (*next <= now) continue;
-            std::this_thread::sleep_until(*next < until ? *next : until);
-        } else {
-            std::this_thread::sleep_for(std::chrono::microseconds(200));
-        }
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
     }
 }
 

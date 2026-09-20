@@ -404,7 +404,10 @@ static void handle_cmd(const char* json) {
         char prev_path[OTA_PATH_LEN];
         strncpy(prev_id,   g.versions[prev].id,   OTA_ID_LEN   - 1);
         strncpy(prev_path, g.versions[prev].path, OTA_PATH_LEN - 1);
-        activate_version(prev_id, prev_path);
+        if (activate_version(prev_id, prev_path) != 0) {
+            LOG_ERROR("model_ota", "rollback to version '%s' failed", prev_id);
+            return;
+        }
         g.rollback_count++;
         LOG_INFO("model_ota", "rollback to version '%s' (rollback #%d)",
                  prev_id, g.rollback_count);
