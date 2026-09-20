@@ -909,16 +909,21 @@ protected:
                 } else {
                     TinyMLP new_model;
                     if (tiny_mlp_load(&new_model, g.model_path) == 0) {
-                        g.model = new_model;
-                        g.use_onnx = false;
-                        g.reload_count++;
-                        /* 同上：重载跨维度边界时重算 frame_dim + 重置时序窗口 */
-                        g.frame_dim = (g.model.in_dim == 23 || g.model.in_dim == 115) ? V3_DIM : V2_DIM;
-                        g.frame_head = 0;
-                        g.frame_count = 0;
-                        LOG_INFO("inference", "OTA hot-reload #%d from %s (in=%d hid=%d out=%d)",
-                                 g.reload_count, g.model_path,
-                                 g.model.in_dim, g.model.hid_dim, g.model.out_dim);
+                        if (!dims_supported(new_model.in_dim, new_model.out_dim)) {
+                            LOG_WARN("inference", "OTA hot-reload 维度不支持: in=%d out=%d (%s)",
+                                     new_model.in_dim, new_model.out_dim, g.model_path);
+                        } else {
+                            g.model = new_model;
+                            g.use_onnx = false;
+                            g.reload_count++;
+                            /* 同上：重载跨维度边界时重算 frame_dim + 重置时序窗口 */
+                            g.frame_dim = (g.model.in_dim == 23 || g.model.in_dim == 115) ? V3_DIM : V2_DIM;
+                            g.frame_head = 0;
+                            g.frame_count = 0;
+                            LOG_INFO("inference", "OTA hot-reload #%d from %s (in=%d hid=%d out=%d)",
+                                     g.reload_count, g.model_path,
+                                     g.model.in_dim, g.model.hid_dim, g.model.out_dim);
+                        }
                     } else {
                         LOG_WARN("inference", "OTA hot-reload failed: %s", g.model_path);
                     }
@@ -1300,8 +1305,14 @@ static int inference_init(MessageBus* bus, Transport* transport,
             g.model.loaded = (tiny_mlp_load(&g.model, g.model_path) == 0) ? 1 : 0;
         }
     } else if (tiny_mlp_load(&g.model, g.model_path) == 0) {
-        LOG_INFO("inference", "model loaded from %s (in=%d hid=%d out=%d)",
-                 g.model_path, g.model.in_dim, g.model.hid_dim, g.model.out_dim);
+        if (!dims_supported(g.model.in_dim, g.model.out_dim)) {
+            LOG_WARN("inference", "model %s 维度不支持 (in=%d out=%d)，拒绝加载",
+                     g.model_path, g.model.in_dim, g.model.out_dim);
+            memset(&g.model, 0, sizeof(g.model));
+        } else {
+            LOG_INFO("inference", "model loaded from %s (in=%d hid=%d out=%d)",
+                     g.model_path, g.model.in_dim, g.model.hid_dim, g.model.out_dim);
+        }
     } else {
         g.model.loaded = 0;
         LOG_INFO("inference",

@@ -96,6 +96,7 @@ static struct {
     float  cfg_lr;
     int    cfg_full_finetune;
     int    cfg_save_interval;  /* 每 N 步保存一次 */
+    int    in_dim_unsupported_warned;
 
     /* 统计 */
     int   train_step;
@@ -281,7 +282,15 @@ static float do_train_step(void) {
 
     /* 确定实际输入维度 */
     int in_dim = g.model.in_dim;
-    if (in_dim < 1 || in_dim > LEARNER_FEAT_DIM) in_dim = 4;
+    if (in_dim > LEARNER_FEAT_DIM || in_dim < 1) {
+        if (g.in_dim_unsupported_warned < 1) {
+            LOG_WARN("learner", "model.in_dim=%d > LEARNER_FEAT_DIM=%d，车端微调本轮跳过（需 v2/v1 模型；shipped v3 in=115 不在本节点能力内）",
+                     in_dim, LEARNER_FEAT_DIM);
+            g.in_dim_unsupported_warned = 1;
+        }
+        pthread_mutex_unlock(&g.model_mutex);
+        return 0.0f;
+    }
 
     for (int b = 0; b < batch; b++) {
         /* 从环形缓冲随机采样一条 */

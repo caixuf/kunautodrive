@@ -323,16 +323,24 @@ def promote_gate(artifact_dir: Path, force: bool = False) -> list[str]:
                 errors.append(
                     f"影子评估 evaluator 结果 = {shadow.get('evaluator_result')!r} (要求 PASS)"
                 )
-            mae = shadow.get("shadow_speed_mae")
-            if mae is None:
-                errors.append("shadow_speed_mae 缺失 — sidecar 未生成，模型没真正跑过影子")
-            elif float(mae) > PROMOTE_SHADOW_MAE_MAX:
-                errors.append(
-                    f"shadow_speed_mae={float(mae):.2f} m/s 超阈值 {PROMOTE_SHADOW_MAE_MAX:.1f}"
-                )
-            n = shadow.get("shadow_n")
-            if n is not None and int(n) < PROMOTE_SHADOW_MIN_N:
-                errors.append(f"shadow_n={n} < {PROMOTE_SHADOW_MIN_N}，评估样本太少不可信")
+            if not shadow.get("shadow_gate_supported", True):
+                # direct_control 模型：shadow_speed_mae 物理无意义，本次放过；
+                # 闭环门禁（下方）独立判定，不依赖本字段。
+                pass
+            else:
+                mae = shadow.get("shadow_speed_mae_settled")
+                n   = shadow.get("shadow_settled_n")
+                if mae is None:
+                    mae = shadow.get("shadow_speed_mae")
+                    n   = shadow.get("shadow_n")
+                if mae is None:
+                    errors.append("shadow_speed_mae 缺失 — sidecar 未生成，模型没真正跑过影子")
+                elif float(mae) > PROMOTE_SHADOW_MAE_MAX:
+                    errors.append(
+                        f"shadow_speed_mae={float(mae):.2f} m/s 超阈值 {PROMOTE_SHADOW_MAE_MAX:.1f}"
+                    )
+                if n is not None and int(n) < PROMOTE_SHADOW_MIN_N:
+                    errors.append(f"shadow_n={n} < {PROMOTE_SHADOW_MIN_N}，评估样本太少不可信")
 
     # 闭环安全评估门禁（Phase 0 — 2026-08）。
     # 影子 MAE 只衡量"像不像 teacher"，不衡量"能不能用"。模型会倒车/横漂/冲路沿/

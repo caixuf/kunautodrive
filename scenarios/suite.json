@@ -17,7 +17,7 @@
     "stagnation_duration_s":    {"max_abs_increase": 5.0}
   },
   "scenarios": [
-    {"file": "scenarios/straight_road.json",       "duration_s": 30, "enabled": true,
+    {"file": "scenarios/straight_road.json",       "duration_s": 45, "enabled": true,
      "baseline_tolerances": {
        "stagnation_duration_s": {"max_abs_increase": 18.0},
        "steer_rate_rms_per_s": {"max_abs_increase": 0.7}
