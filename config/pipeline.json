@@ -3,6 +3,8 @@
   "log_level": 2,
   "monitor_interval": 5,
   "enable_monitor": true,
+  "_comment_allow_hung_subs": "发布者存在性 gate (ci/gates/topic_contract_check.py) 允许此列表中的订阅无发布者：sensor/pose — 默认 profile 无 slam_node；GPS-only 时 fusion 走 GPS 路径",
+  "allow_hung_subs": ["sensor/pose"],
   "scheduler": {
     "mode": "choreo",
     "worker_threads": 0,
@@ -440,7 +442,7 @@
         "road/geometry",
         "scene/frame",
         "control/cte",
-        "traffic/traffic_lights",
+        "road/traffic_lights",
         "safety/evidence"
       ],
       "params": "{\"state_file\":\"/tmp/flow_topology.json\",\"export_scene\":true}",

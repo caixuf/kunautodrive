@@ -1922,7 +1922,7 @@ static const char* s_inputs[]  = { TOPIC_PERCEPTION_OBSTACLES, TOPIC_VEHICLE_STA
                                    TOPIC_FUSION_LATENCY, TOPIC_FLOWENGINE_NODE_INFO,
                                    TOPIC_PLANNING_TRAJECTORY, TOPIC_ROAD_GEOMETRY,
                                    TOPIC_SCENE_FRAME, TOPIC_CONTROL_CTE,
-                                   "traffic/traffic_lights", "safety/evidence", NULL };
+                                   TOPIC_ROAD_TRAFFIC_LIGHTS, "safety/evidence", NULL };
 static const char* s_outputs[] = { "pem/degrade_event", NULL };
 
 static NodePlugin s_plugin;

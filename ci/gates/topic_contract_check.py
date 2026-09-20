@@ -4,6 +4,12 @@
 default profile  → set equality (JSON must declare every code topic)
 experimental/hw → JSON ⊆ code only (no phantom topics)
 
+Plus publisher-existence check (config-wide): every subscribe topic must have
+a publisher somewhere in this config (any process's s_outputs or JSON publish),
+otherwise → FAIL. Catches typo subscriptions and disconnected pipeline
+sections that the JSON-vs-code topic contract misses. Configs may add an
+`allow_hung_subs` list to opt out of specific known-conditional subscriptions.
+
 Usage:
   python3 ci/gates/topic_contract_check.py
   python3 ci/gates/topic_contract_check.py --config config/pipeline.json
@@ -18,6 +24,22 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# System topics always published by the runtime/launcher, not by any
+# NodePlugin's s_outputs. These need to be considered "published" without
+# showing up in any process's s_outputs[] or JSON publish list.
+SYSTEM_PUBLISHED_TOPICS = frozenset({
+    "flowengine/node_info",  # 每个节点 init() 末尾由 launcher 广播
+    # control_node / planning_node 用 transport_publish() 条件发布（不在 s_outputs[]），
+    # 但常见 monitor/safety_control subscribe — 不应被 gate 误报
+    "control/cte",
+    "control/ldw",
+    "control/debug",
+    "planning/debug",
+    # flowctl CLI 注入（model_ota/cmd 来自 `flowctl ota` 等命令，不在任何节点的
+    # s_outputs[]，但 model_ota_node 必须 subscribe 它才能接收指令）
+    "model_ota/cmd",
+})
 
 NAME_TO_SRC = {
     "flowsim": "modules/adas_nodes/flowsim_node.cpp",
@@ -169,6 +191,62 @@ def check_config(path: Path, macros: dict[str, str]) -> list[str]:
     return errors
 
 
+def check_publisher_existence(path: Path, macros: dict[str, str]) -> list[str]:
+    """For each subscribed topic, verify some process publishes it.
+
+    Catches:
+      - typo subscriptions (e.g. monitor subscribes `traffic/traffic_lights`
+        while flowsim publishes `road/traffic_lights` — same root bug as
+        9bb3f01-era phantom topics, but JSON-vs-code check misses it
+        because monitor's code s_inputs[] also carries the typo)
+      - disconnected pipeline sections (e.g. hw profile slam subscribes
+        `sensor/lidar` but no sensor_model process is present to publish)
+
+    Allows per-config opt-out via `allow_hung_subs: [...]` for documented
+    conditional subscriptions (e.g. perception_fusion in hw profile only
+    fires when output_topic is overridden to the obstacle_lidar/stereo
+    variants — see config/pipeline_car.json header comment).
+    """
+    cfg = json.loads(path.read_text())
+    errors: list[str] = []
+    allow = set(cfg.get("allow_hung_subs") or [])
+
+    published: set[str] = set(SYSTEM_PUBLISHED_TOPICS)
+    subs: list[tuple[str, str]] = []
+
+    for proc in cfg.get("processes") or []:
+        name = proc.get("name")
+        if not name:
+            continue
+        rel = NAME_TO_SRC.get(name)
+        code_in: set[str] = set()
+        code_out: set[str] = set()
+        if rel:
+            src = ROOT / rel
+            if src.exists():
+                try:
+                    code = parse_code_topics(src, macros)
+                except ValueError:
+                    code = None
+                if code:
+                    code_in = set(code["inputs"])
+                    code_out = set(code["outputs"])
+        json_in, json_out = json_topics(proc)
+        # JSON subscribe + code s_inputs (declarative + actual) → must have publisher
+        for t in json_in | code_in:
+            subs.append((name, t))
+        for t in json_out | code_out:
+            published.add(t)
+
+    for proc_name, topic in subs:
+        if topic in published or topic in allow:
+            continue
+        errors.append(
+            f"{path.name}:{proc_name}: subscribe '{topic}' has no publisher in this config"
+        )
+    return errors
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", action="append", default=[])
@@ -186,6 +264,7 @@ def main() -> int:
             errors.append(f"missing config: {path}")
             continue
         errors.extend(check_config(resolved, macros))
+        errors.extend(check_publisher_existence(resolved, macros))
 
     if errors:
         for e in errors:
