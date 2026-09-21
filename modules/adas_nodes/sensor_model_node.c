@@ -51,6 +51,7 @@ static struct {
     double lidar_max_range_m;
     double obs_noise_std_m;
     int enable_simple_occlusion;
+    int lidar_mode;  /* 0=旧 LidarFrame 编点云（默认）；1=射线投射真点云 + 距离噪声 + 丢失率 */
     double camera_visibility_factor;
     char   weather[32];
     double weather_attenuation;  /* 0.0=clear, 0.5=moderate rain/fog, 1.0=dense fog */
@@ -111,6 +112,121 @@ static int obstacle_in_fov(double rx, double ry, double max_range_m, double fov_
     const double half_fov_rad = (fov_deg * 0.5) * M_PI / 180.0;
     const double ang = atan2(ry, rx);
     return fabs(ang) <= half_fov_rad;
+}
+
+/* ── mode=1 真点云：射线投射 + 距离相关噪声 + 丢失率 ────────────────
+ *
+ * 背景（2026-09 handoff §4.3 仿真感知自证闭环）：
+ *   原 sensor_model 把 ego 自己的带噪位置当 sensor/lidar 发布
+ * （lidar.x = ego_x + noise），下游 perception_node 反而基于 obstacle 列表
+ * 写死 24 个地面环 + 8×N 点 → DBSCAN 重新聚回 → fusion_node 把 lidar->x
+ * 当真值。整个链路在"模拟传感器"，不是"模拟物理"。
+ *
+ * 本 patch 新增真点云路径：
+ *   - lidar_mode=1 时在 ego 系发射 N 根方位射线（FOV 等分，elevation 固定）
+ *   - 每根射线与每个 obstacle AABB 求最近 hit
+ *   - hit 点沿射线方向叠加 σ=α·range 的高斯噪声（距离越远噪声越大）
+ *   - 固定丢失率（默认 5%）随机丢弃射线，模拟空气/遮挡
+ *   - intensity 按 exp(-range/30) 衰减
+ *   - 以 JSON 数组发到 sensor/lidar_points（type_id=0 ad-hoc，不进 gen）
+ *
+ * lidar_mode=0（默认）→ 不发 sensor/lidar_points，旧 LidarFrame 行为完全
+ * 不变；lidar_mode=1 → 发真点云，LidarFrame.point_count 反映真实命中数
+ * （不再 62000+visible*450 编的）。
+ *
+ * 已知限制：仅 obstacle 射线，未对 world/buildings OBB 投射（建筑遮挡
+ * 下个 PR 接 perception_node on_world_buildings OBB 缓存复用）。
+ */
+static double rand_uniform_01(void) {
+    return (double)rand() / (double)RAND_MAX;
+}
+/* Box-Muller 标准高斯（均值 0 方差 1） */
+static double rand_gauss(void) {
+    double u1 = rand_uniform_01();
+    if (u1 < 1e-9) u1 = 1e-9;
+    double u2 = rand_uniform_01();
+    return sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
+}
+/* Ray-AABB：返回正 hit 距离 t（>=0），无 hit 返回 -1 */
+static double ray_aabb_t(double ox, double oy, double dx, double dy,
+                         double cx, double cy, double hx, double hy) {
+    const double EPS = 1e-9;
+    double t1 = (cx - hx - ox) / (fabs(dx) > EPS ? dx : EPS);
+    double t2 = (cx + hx - ox) / (fabs(dx) > EPS ? dx : EPS);
+    double t3 = (cy - hy - oy) / (fabs(dy) > EPS ? dy : EPS);
+    double t4 = (cy + hy - oy) / (fabs(dy) > EPS ? dy : EPS);
+    double tmin = fmax(fmin(t1, t2), fmin(t3, t4));
+    double tmax = fmin(fmax(t1, t2), fmax(t3, t4));
+    if (tmax < 0.0 || tmin > tmax) return -1.0;
+    return tmin > 0.0 ? tmin : tmax;
+}
+
+/* mode=1 真点云：射线 + 距离噪声 + 丢失，发布 sensor/lidar_points JSON 数组 */
+static void publish_raycast_points(void) {
+    /* 64 根方位射线（足够验证闭环 + 性能可接受）；调高需同步改 max_points */
+    const int   n_rays        = 64;
+    /* NPC 几何（标准乘用车长 4.6m、宽 2.0m）半宽 → 与 perception_node 默认 bbox 对齐 */
+    const double obs_hx       = 2.3;
+    const double obs_hy       = 1.0;
+    const double fov_rad      = g.lidar_fov_deg * M_PI / 180.0;
+    const double range_max    = g.lidar_max_range_m;
+    /* 距离相关噪声 σ=α·range；weather 衰减放大 1.5×（与旧 noise_scale 对齐） */
+    const double noise_alpha  = g.obs_noise_std_m * (1.0 + 1.5 * g.weather_attenuation);
+    const double loss_rate    = 0.05;
+    /* intensity 衰减系数：30m 半衰期 ≈ exp(-1)≈0.37（接近真实 LiDAR） */
+    const double intensity_tau = 30.0;
+
+    const double cos_h = cos(g.ego_heading);
+    const double sin_h = sin(g.ego_heading);
+
+    cJSON* arr = cJSON_CreateArray();
+    if (!arr) return;
+
+    for (int r = 0; r < n_rays; r++) {
+        /* azimuth 均匀覆盖 [-FOV/2, +FOV/2]，elevation 固定 0 */
+        double az = -fov_rad * 0.5 + (double)r / (double)(n_rays - 1) * fov_rad;
+        double wx = cos(az) * cos_h - sin(az) * sin_h;
+        double wy = cos(az) * sin_h + sin(az) * cos_h;
+
+        /* 找最近 hit */
+        double t_best = range_max;
+        int    hit_idx = -1;
+        for (int i = 0; i < g.n_obs; i++) {
+            double t = ray_aabb_t(g.ego_x, g.ego_y, wx, wy,
+                                   g.obs_x[i], g.obs_y[i], obs_hx, obs_hy);
+            if (t > 0.0 && t < t_best) {
+                t_best = t;
+                hit_idx = i;
+            }
+        }
+        if (hit_idx < 0) continue;
+        /* 丢失率 */
+        if (rand_uniform_01() < loss_rate) continue;
+        /* 距离噪声：σ=α·range，clamp 到 [0.1, range_max] */
+        double sigma = noise_alpha * t_best;
+        double t_noisy = t_best + sigma * rand_gauss();
+        if (t_noisy < 0.1)         t_noisy = 0.1;
+        if (t_noisy > range_max)   t_noisy = range_max;
+
+        cJSON* pt = cJSON_CreateObject();
+        if (!pt) continue;
+        cJSON_AddNumberToObject(pt, "x", g.ego_x + wx * t_noisy);
+        cJSON_AddNumberToObject(pt, "y", g.ego_y + wy * t_noisy);
+        cJSON_AddNumberToObject(pt, "z", 0.0);
+        cJSON_AddNumberToObject(pt, "i", exp(-t_best / intensity_tau));
+        cJSON_AddItemToArray(arr, pt);
+    }
+
+    char* json = cJSON_PrintUnformatted(arr);
+    if (json) {
+        Message msg;
+        msg_init_typed(&msg, "sensor/lidar_points", "sensor_model",
+                       /* type_id = */ 0u, /* version = */ 0u,
+                       json, strlen(json) + 1);
+        transport_publish(g.transport, "sensor/lidar_points", msg.data, msg.data_size);
+        free(json);
+    }
+    cJSON_Delete(arr);
 }
 
 static void on_vehicle_state(const Message* msg, void* user_data) {
@@ -249,6 +365,13 @@ static int sensor_model_execute(TaskBase* task) {
                        &lidar, sizeof(lidar));
         transport_publish(g.transport, "sensor/lidar", lmsg.data, lmsg.data_size);
 
+        /* mode=1 真点云：射线投射 + 距离相关噪声 + 丢失率，发 sensor/lidar_points。
+         * 与 sensor/lidar 并行发布（不替代 LidarFrame，向后兼容）。
+         * 接 perception_node 的 sensor/lidar_points 订阅后即可关掉自证闭环。 */
+        if (g.lidar_mode == 1) {
+            publish_raycast_points();
+        }
+
         if (g.frame_id % 2 == 0) {
             GpsData gps;
             if (g.nmea_count > 0) {
@@ -301,7 +424,7 @@ static const TaskInterface sensor_model_vtable = {
 };
 
 static const char* s_inputs[] = {"vehicle/state", "environment/state", NULL};
-static const char* s_outputs[] = {"sensor/lidar", "sensor/gps", "sensor/camera", NULL};
+static const char* s_outputs[] = {"sensor/lidar", "sensor/lidar_points", "sensor/gps", "sensor/camera", NULL};
 
 static NodePlugin s_plugin;
 
@@ -321,6 +444,7 @@ static int sensor_model_init(MessageBus* bus, Transport* transport,
     g.obs_noise_std_m = 0.08;
     g.camera_visibility_factor = 1.0;
     g.enable_simple_occlusion = 1;
+    g.lidar_mode = 0;  /* 默认关闭：保持旧 LidarFrame 行为不变 */
 
     if (params_json) {
         cJSON* p = cJSON_Parse(params_json);
@@ -336,6 +460,8 @@ static int sensor_model_init(MessageBus* bus, Transport* transport,
                 g.obs_noise_std_m = j->valuedouble;
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "enable_simple_occlusion")) && cJSON_IsNumber(j))
                 g.enable_simple_occlusion = (int)j->valuedouble;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "lidar_mode")) && cJSON_IsNumber(j))
+                g.lidar_mode = (int)j->valuedouble;
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "gps_nmea_file")) && cJSON_IsString(j))
                 strncpy(g.gps_nmea_file, j->valuestring, sizeof(g.gps_nmea_file) - 1);
             cJSON_Delete(p);
