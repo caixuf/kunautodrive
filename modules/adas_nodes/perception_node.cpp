@@ -246,7 +246,11 @@ static void on_sensor_lidar(const Message* msg, void* user_data) {
  * 下游要靠它发空 ObstacleList 清跟踪。 */
 static void on_lidar_points(const Message* msg, void* user_data) {
     (void)user_data;
-    if (!msg || msg->data_size < sizeof(LidarPointCloud)) return;
+    /* 不要用 sizeof(LidarPointCloud) 做长度门槛：那是**自然对齐**的 C 结构体
+     * 大小（40984），而线格式是紧密排布的 40980（msg_codegen 的 size 计算不含
+     * 填充）。长度校验交给生成的 deserialize（内部检查 < 40980），否则会把每一
+     * 帧都当成"太短"静默丢掉。 */
+    if (!msg || msg->data_size == 0) return;
     const uint8_t* data = (const uint8_t*)message_bus_message_data(msg);
     if (!data) return;
 
@@ -389,6 +393,7 @@ protected:
                     }
                     np = keep;
                 }
+
 
                 /* ── DBSCAN 时间预算保护 ── */
                 uint64_t t_dbscan_start = clock_now_us();

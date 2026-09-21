@@ -250,10 +250,21 @@ static uint32_t publish_raycast_points(uint32_t frame_id, uint64_t timestamp_us)
         cloud.count++;
     }
 
+    /* 必须走生成的序列化器，不能直接把结构体内存当 payload：msg_codegen 的
+     * 线格式假设字段紧密排布（LidarPointCloud 线格式 40980B），但 C 结构体是
+     * 自然对齐的（uint64 timestamp_us 在 uint32 frame_id 之后被填充到 offset 8
+     * → sizeof = 40984）。裸 memcpy 结构体会让对端 deserialize 读到错位的字段
+     * （count 落在 timestamp 的高 32 位 → 恒 0），点云静默变空。
+     * 这是 msg_codegen 的既有缺陷（生成器无 pack 指令但按 pack 算 size），
+     * 本节点只能按线格式发；详见 docs/HANDOFF_2026-09-21b.md。 */
+    static uint8_t wire[sizeof(LidarPointCloud)];
+    size_t wire_len = 0;
+    if (LidarPointCloud_serialize(&cloud, wire, &wire_len) != 0) return 0;
+
     Message msg;
     msg_init_typed(&msg, TOPIC_SENSOR_LIDAR_POINTS, "sensor_model",
                    LIDARPOINTCLOUD_TYPE_ID, LIDARPOINTCLOUD_SCHEMA_VERSION,
-                   &cloud, sizeof(cloud));
+                   wire, wire_len);
     transport_publish(g.transport, TOPIC_SENSOR_LIDAR_POINTS, msg.data, msg.data_size);
     return cloud.count;
 }
