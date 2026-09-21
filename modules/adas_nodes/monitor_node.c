@@ -139,6 +139,18 @@ static int find_or_add_name_slot(char* names, size_t stride, int count,
 
 /* ── 节点本地状态 ───────────────────────────────────────────── */
 
+/* ── ego 位姿历史 ────────────────────────────────────────────────
+ * perception/obstacles 的 Obstacle 是**车体系**坐标并带 timestamp_us。把它映射回
+ * 世界系（scene.perceived）必须配"同一时刻"的 ego 位姿：用最新位姿会引入一个感知
+ * 周期的滞后（10Hz/20m/s → 米级偏移），让 evaluator 的识别率被系统性压低
+ * （实测 ground_truth 直通也只得 0.85）。这里滚动保留最近若干帧位姿，按时间戳就近取。
+ */
+#define EGO_POSE_HIST 64
+typedef struct {
+    uint64_t ts_us;
+    double   x, y, hdg;
+} EgoPoseSample;
+
 static struct {
     MessageBus*       bus;
     Transport*        transport;
@@ -186,6 +198,12 @@ static struct {
     ObstacleList    latest_perceived;
     pthread_mutex_t perceived_mutex;
     volatile int    has_perceived;
+    /* ego 位姿历史（scene.perceived 车体系→世界系的时刻对齐，见 ego_pose_at()） */
+    EgoPoseSample   ego_pose_hist[EGO_POSE_HIST];
+    int             ego_pose_hist_n;
+    int             ego_pose_hist_head;
+    pthread_mutex_t ego_pose_mutex;
+    uint32_t        perceived_pose_fallback;  /* 位姿历史未命中次数（诊断用） */
     char latest_vehicle_state[8192];
     pthread_mutex_t vehicle_state_mutex; /* protects latest_vehicle_state + ego_road_id */
     double fusion_lat_avg_us;
@@ -368,6 +386,25 @@ static void monitor_try_reopen_ipc_bridges(void) {
     }
 }
 
+/* 取时间戳最接近 ts_us 的历史位姿。命中返回 1；无历史或偏差 > 500ms 返回 0。 */
+static int ego_pose_at(uint64_t ts_us, double* x, double* y, double* hdg) {
+    int best = -1;
+    uint64_t best_dt = UINT64_MAX;
+    pthread_mutex_lock(&g.ego_pose_mutex);
+    for (int i = 0; i < g.ego_pose_hist_n; i++) {
+        uint64_t t = g.ego_pose_hist[i].ts_us;
+        uint64_t dt = (t > ts_us) ? (t - ts_us) : (ts_us - t);
+        if (dt < best_dt) { best_dt = dt; best = i; }
+    }
+    if (best >= 0 && best_dt <= 500000ULL) {
+        if (x) *x = g.ego_pose_hist[best].x;
+        if (y) *y = g.ego_pose_hist[best].y;
+        if (hdg) *hdg = g.ego_pose_hist[best].hdg;
+    }
+    pthread_mutex_unlock(&g.ego_pose_mutex);
+    return best >= 0 && best_dt <= 500000ULL;
+}
+
 /* ── 订阅回调 ────────────────────────────────────────────────── */
 
 /* perception/obstacles 订阅回调 — 解析 ObstacleList（二进制，车体系）。
@@ -424,6 +461,20 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
     /* 提取 ego 所在 road_id，供 trajectory_edge_id 用 */
     g.ego_road_id = json_extract_int(g.latest_vehicle_state, "road_id");
     pthread_mutex_unlock(&g.vehicle_state_mutex);
+
+    /* 记一笔带时间戳的 ego 位姿，供 scene.perceived 的时刻对齐 */
+    {
+        double px = json_extract_double(g.latest_vehicle_state, "x");
+        double py = json_extract_double(g.latest_vehicle_state, "y");
+        double ph = json_extract_double(g.latest_vehicle_state, "hdg");
+        pthread_mutex_lock(&g.ego_pose_mutex);
+        EgoPoseSample* slot = &g.ego_pose_hist[g.ego_pose_hist_head];
+        slot->ts_us = clock_now_us();
+        slot->x = px; slot->y = py; slot->hdg = ph;
+        g.ego_pose_hist_head = (g.ego_pose_hist_head + 1) % EGO_POSE_HIST;
+        if (g.ego_pose_hist_n < EGO_POSE_HIST) g.ego_pose_hist_n++;
+        pthread_mutex_unlock(&g.ego_pose_mutex);
+    }
 }
 
 /* 收集其他节点的自描述广播 */
@@ -1504,13 +1555,19 @@ static void export_dashboard_json(void) {
         perceived_snap = g.latest_perceived;
         pthread_mutex_unlock(&g.perceived_mutex);
         if (perceived_snap.count > 128) perceived_snap.count = 128;
-        double chp = cos(hdg), shp = sin(hdg);
+        /* 时刻对齐：优先用与障碍物时间戳同时刻的 ego 位姿（消掉一个感知周期的滞后），
+         * 历史缺失/过期则退回当前位姿并把次数记进诊断计数。 */
+        double pe_x = ego_x, pe_y = ego_y, pe_h = hdg;
+        if (!ego_pose_at(perceived_snap.timestamp_us, &pe_x, &pe_y, &pe_h)) {
+            g.perceived_pose_fallback++;
+        }
+        double chp = cos(pe_h), shp = sin(pe_h);
         cJSON* pv_arr = cJSON_AddArrayToObject(scene, "perceived");
         for (uint32_t i = 0; i < perceived_snap.count; i++) {
             const Obstacle* ob = &perceived_snap.obstacles[i];
             /* 车体系 (x 前 / y 左) → 世界 ENU（与 perception_entities 同一套逆变换） */
-            double wx = ego_x + (double)ob->x * chp - (double)ob->y * shp;
-            double wy = ego_y + (double)ob->x * shp + (double)ob->y * chp;
+            double wx = pe_x + (double)ob->x * chp - (double)ob->y * shp;
+            double wy = pe_y + (double)ob->x * shp + (double)ob->y * chp;
             const char* tname = "car";
             switch (ob->type) {
                 case OBJ_TYPE_PEDESTRIAN:   tname = "pedestrian";   break;
@@ -1529,6 +1586,11 @@ static void export_dashboard_json(void) {
             cJSON_AddNumberToObject(pv, "confidence", (double)ob->confidence);
             cJSON_AddItemToArray(pv_arr, pv);
         }
+        /* 诊断：位姿历史未命中（时间戳差值 >500ms 或无历史）的次数。持续增长说明
+         * perception 的时间戳与 monitor 的 ego 位姿历史不同源，识别率会再次被
+         * 滞后压低（见 ego_pose_at 的注释）。 */
+        cJSON_AddNumberToObject(scene, "perceived_pose_fallback",
+                                (double)g.perceived_pose_fallback);
     }
 
     /* 规划轨迹 path 数组透传给 3D 前端。
@@ -2166,6 +2228,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     pthread_mutex_init(&g.vehicle_state_mutex, NULL);
     pthread_mutex_init(&g.tracked_mutex, NULL);
     pthread_mutex_init(&g.perceived_mutex, NULL);
+    pthread_mutex_init(&g.ego_pose_mutex, NULL);
     /* P3 修复：初始化 scene_frame 缓存 mutex，避免未初始化锁行为未定义。
      * on_scene_frame（消息总线线程）写 scene_entities_json，
      * export_dashboard_json（主线程）读同一 buffer。 */

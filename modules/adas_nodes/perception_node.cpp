@@ -82,6 +82,11 @@ struct PerceptionContext {
      * 下游的让行逻辑、碰撞判定、识别率分层全依赖它。 */
     uint8_t obs_type[128]{};
     double  obs_length[128]{}, obs_width[128]{};
+    /* 障碍物稳定 id（vehicle/state 的 oid%d = flowsim 实体 id）。
+     * 旧实现用 frame_id*100+i 当 id → 每帧都变，下游/评测无法跨帧跟踪同一个目标
+     * （demo_evaluator 的"预警提前量"就是按 id 跨帧算的，id 不稳 → 提前量恒 0）。
+     * 缺字段时退回 0，取用时再回退到 frame_id*100+i。 */
+    uint32_t obs_id[128]{};
 
     /* 发布帧计数 */
     uint32_t frame_id{0};
@@ -175,6 +180,11 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
         if (no > 128) no = 128;
         for (int i = 0; i < no; i++) {
             char key[16];
+            snprintf(key, sizeof(key), "oid%d", i);
+            g.obs_id[i] = 0;
+            cJSON* jid = cJSON_GetObjectItemCaseSensitive(root, key);
+            if (cJSON_IsNumber(jid) && jid->valuedouble > 0.0)
+                g.obs_id[i] = (uint32_t)jid->valuedouble;
             snprintf(key, sizeof(key), "ox%d", i);
             cJSON* jx = cJSON_GetObjectItemCaseSensitive(root, key);
             snprintf(key, sizeof(key), "oy%d", i);
@@ -306,6 +316,10 @@ protected:
             ObstacleList obs_list;
             memset(&obs_list, 0, sizeof(obs_list));
             obs_list.frame_id = g.frame_id;
+            /* 打时间戳：Obstacle 是车体系坐标，消费方（monitor/evaluator）要把它
+             * 映射回世界系时必须配**同一时刻**的 ego 位姿，否则一个感知周期的滞后
+             * 在 20m/s 下就是米级偏移（旧代码留 0 = "无时间信息"）。 */
+            obs_list.timestamp_us = clock_now_us();
 
             if (g.mode == 0) {
                 /* ── ground_truth：vehicle/state JSON 直出（默认路径） ──
@@ -316,7 +330,9 @@ protected:
                 double lw = g.has_road_geometry ? g.lane_width : 3.5;
                 for (int i = 0; i < g.n_obs && obs_list.count < 128; i++) {
                     Obstacle* ob = &obs_list.obstacles[obs_list.count++];
-                    ob->id = (uint32_t)(g.frame_id * 100 + (uint32_t)i);
+                    /* 优先用 flowsim 实体 id（跨帧稳定）；缺失时退回帧内唯一 id */
+                    ob->id = g.obs_id[i] ? g.obs_id[i]
+                                         : (uint32_t)(g.frame_id * 100 + (uint32_t)i);
                     /* 世界坐标 → 车体坐标（Obstacle 约定车体系） */
                     double dx = g.obs_x[i] - g.ego_x;
                     double dy = g.obs_y[i] - g.ego_y;

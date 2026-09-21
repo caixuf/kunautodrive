@@ -339,9 +339,15 @@ class DemoEvaluatorTest(unittest.TestCase):
                     {"id": 3, "type": "pedestrian", "x": 5.0, "y": 5.0},
                     {"id": 0, "type": "ego", "x": 0.0, "y": 0.0},
                 ],
+                # obs_world = 真值障碍（覆盖率分母）；perceived_world = 感知输出
                 "obs_world": [
-                    {"id": 100, "x": 20.5, "y": -1.75},  # 命中 car 1
-                    {"id": 101, "x": 39.5, "y": 1.75},   # 命中 car 2
+                    {"id": 1, "x": 20.0, "y": -1.75},
+                    {"id": 2, "x": 40.0, "y": 1.75},
+                    {"id": 3, "x": 5.0, "y": 5.0},
+                ],
+                "perceived_world": [
+                    {"id": 100, "x": 20.5, "y": -1.75},   # 命中 car 1
+                    {"id": 101, "x": 39.5, "y": 1.75},    # 命中 car 2
                     # 行人漏检
                 ],
             })
@@ -357,29 +363,34 @@ class DemoEvaluatorTest(unittest.TestCase):
         self.assertAlmostEqual(result["recognition_rate_by_type"]["car"], 1.0)
         self.assertAlmostEqual(result["recognition_rate_by_type"]["pedestrian"], 0.0)
 
-    def test_perceived_quality_uses_raw_perception_output(self):
-        """诊断指标必须来自 scene.perceived（感知原始输出），真值有感知空 → 0。"""
+    def test_recognition_uses_perception_output_not_truth(self):
+        """识别率必须来自感知输出：真值有障碍但感知为空 → 0，而不是 1.0。
+
+        2026-09-21 前的实现用 obs_world（monitor 从 vehicle/state 真值构造）当
+        perceived，等于真值自比：ground_truth 与 sensor 模式跑出完全相同的
+        recognition_rate_overall=1.000，感知链路坏了 CI 也不报。
+        """
         evaluator = load_evaluator()
         series = [{
             "x": 0.0, "speed": 10.0,
             "entities": [{"id": 1, "type": "car", "x": 20.0, "y": 0.0},
                          {"id": 2, "type": "pedestrian", "x": 30.0, "y": 0.0}],
             "obs_world": [{"id": 1, "x": 20.0, "y": 0.0},
-                          {"id": 2, "x": 30.0, "y": 0.0}],
-            "perceived_world": [{"x": 20.5, "y": 0.0}],   # 只看到车，漏了行人
+                          {"id": 2, "x": 30.0, "y": 0.0}],   # 真值两个都在
+            "perceived_world": [{"id": 100, "x": 20.5, "y": 0.0}],  # 感知只看到车
         }]
-        r = evaluator._compute_perceived_quality_metrics(series)
-        self.assertAlmostEqual(r["perceived_recognition_rate_vehicle"], 1.0)
-        self.assertAlmostEqual(r["perceived_recognition_rate_vru"], 0.0)
-        self.assertAlmostEqual(r["perceived_recognition_rate_overall"], 0.5)
+        r = evaluator._compute_perception_metrics(series, [0.0])
+        self.assertAlmostEqual(r["recognition_rate_vehicle"], 1.0)
+        self.assertAlmostEqual(r["recognition_rate_vru"], 0.0)
+        self.assertAlmostEqual(r["recognition_rate_overall"], 0.5)
         self.assertAlmostEqual(r["perception_coverage"], 1.0)
         self.assertAlmostEqual(r["perceived_count_avg"], 1.0)
 
-        # 真值有、感知完全没有 → 覆盖率 0、识别率 0
+        # 真值有、感知完全没有 → 覆盖率 0、识别率 0（旧实现这里会是 1.0）
         series[0]["perceived_world"] = []
-        r2 = evaluator._compute_perceived_quality_metrics(series)
+        r2 = evaluator._compute_perception_metrics(series, [0.0])
         self.assertAlmostEqual(r2["perception_coverage"], 0.0)
-        self.assertAlmostEqual(r2["perceived_recognition_rate_overall"], 0.0)
+        self.assertAlmostEqual(r2["recognition_rate_overall"], 0.0)
 
     def test_perception_metrics_warning_lead_time(self):
         """Task 5: 预警提前量 = TTC 跌破临界时刻 - 首次检测时刻。"""
@@ -393,7 +404,8 @@ class DemoEvaluatorTest(unittest.TestCase):
             series.append({
                 "x": float(i * 5), "speed": 10.0,
                 "entities": [{"id": 1, "type": "car", "x": 50.0, "y": 0.0}],
-                "obs_world": [{"id": 100, "x": 50.0, "y": 0.0}],
+                "obs_world": [{"id": 1, "x": 50.0, "y": 0.0}],
+                "perceived_world": [{"id": 100, "x": 50.0, "y": 0.0}],
             })
             timestamps.append(float(i))
         result = evaluator._compute_perception_metrics(series, timestamps)
@@ -409,7 +421,8 @@ class DemoEvaluatorTest(unittest.TestCase):
         series = [{
             "x": 0.0, "speed": 1.0,
             "entities": [{"id": 1, "type": "car", "x": 100.0, "y": 0.0}],
-            "obs_world": [{"id": 100, "x": 100.0, "y": 0.0}],
+            "obs_world": [{"id": 1, "x": 100.0, "y": 0.0}],
+            "perceived_world": [{"id": 100, "x": 100.0, "y": 0.0}],
         }]
         result = evaluator._compute_perception_metrics(series, [0.0])
         self.assertEqual(result["critical_event_count"], 0)
