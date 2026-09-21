@@ -812,6 +812,10 @@ def sample_metrics(sample: dict, road: dict | None = None,
     obstacles = scene.get("obstacles", [])
     lane = scene.get("lane", {})
     scn_entities = scene.get("entities", [])
+    # 感知原始输出（monitor 的 scene.perceived = perception/obstacles 经 ego 位姿
+    # 逆变换到世界 ENU）。注意与 scene.perception_entities（object_tracker 的已确认
+    # 航迹，还叠加 KF 确认门限/静态动态分类）不是一回事：诊断感知链路要用这一路。
+    scn_perceived = scene.get("perceived", [])
     behavior = metrics.get("behavior", {})
     behavior_state = str(behavior.get("state", "") or "").upper()
     maneuver_active = any(token in behavior_state for token in (
@@ -847,6 +851,19 @@ def sample_metrics(sample: dict, road: dict | None = None,
     min_forward_gap = math.inf
     min_abs_gap = math.inf
     obs_world = []
+    perceived_world = []
+    if isinstance(scn_perceived, list):
+        for p_ent in scn_perceived:
+            if not isinstance(p_ent, dict):
+                continue
+            try:
+                px = float(p_ent.get("x", math.inf))
+                py = float(p_ent.get("y", math.inf))
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(px) or not math.isfinite(py):
+                continue
+            perceived_world.append({"x": px, "y": py})
     ego_projection = _road_network_projection(scene, x, y)
     road_s = ego_projection[0] if ego_projection is not None else None
     for obs in obstacles:
@@ -915,7 +932,8 @@ def sample_metrics(sample: dict, road: dict | None = None,
         "y_rel": y_rel,
         "min_forward_gap": min_forward_gap,
         "min_abs_gap": min_abs_gap,
-        "obs_world": obs_world,
+        "obs_world": obs_world,        # 真值障碍（scene.obstacles）：安全校验/既有指标用
+        "perceived_world": perceived_world,  # 感知原始输出（scene.perceived）：诊断用
         "driver_mode": str(metrics.get("driver_mode", "") or ""),
         "route_lane": int(metrics.get("route_lane", 0) or 0),
         "entities": scn_entities if isinstance(scn_entities, list) else [],
@@ -1164,6 +1182,78 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
         "critical_event_count": crit_event_count,
         "min_ttc_s": min_ttc_overall if math.isfinite(min_ttc_overall) else None,
         "perceived_track_count": len(first_detect_ts),
+    }
+
+
+def _compute_perceived_quality_metrics(series: list[dict]) -> dict:
+    """真实感知输出质量（**诊断用，不参与门禁**）。
+
+    与 _compute_perception_metrics() 的区别：那一套的 perceived 用 obs_world，而
+    obs_world 是 monitor 从 vehicle/state 真值构造的 —— 等于真值自比，识别率恒
+    1.0，感知链路坏掉也测不出来（2026-09-21 实测：ground_truth 与 sensor 模式跑出
+    完全相同的 1.000）。
+
+    这里用 scene.perceived = perception/obstacles 的原始输出，按距离匹配真值实体
+    （不依赖障碍物 id，因为 perception 的 id 是每帧递增的）。能反映：
+      - perceived_recognition_rate_*：感知真的看到多少真值实体
+      - perception_coverage：真值有障碍的帧里，感知也有输出的比例（链路可用性）
+      - perceived_count_avg：每帧平均感知障碍数
+
+    为什么不直接替换掉旧指标做门禁：raw 感知输出是车体系 + 每帧 id，经 monitor
+    用"当前"ego 位姿反算世界坐标时带 ~1 个感知周期的自车位姿滞后（10Hz 下 20m/s
+    会有米级偏移），识别率会被系统性压低（实测 ground_truth 直通也只得 0.86）；
+    预警提前量还需要稳定 id 才能跨帧跟踪。要升级为门禁得先解决这两点（见
+    docs/HANDOFF_2026-09-21b.md §11）。
+    """
+    match_d2 = PERCEPTION_MATCH_DIST_M * PERCEPTION_MATCH_DIST_M
+    counts = {"vehicle": [0, 0], "vru": [0, 0], "overall": [0, 0]}
+    frames_with_truth = 0
+    frames_with_perceived = 0
+    perceived_total = 0
+
+    for m in series:
+        perceived = m.get("perceived_world", []) or []
+        if m.get("obs_world"):
+            frames_with_truth += 1
+        if perceived:
+            frames_with_perceived += 1
+        perceived_total += len(perceived)
+
+        for ent in m.get("entities", []) or []:
+            if not isinstance(ent, dict):
+                continue
+            etype = str(ent.get("type", "") or "")
+            if etype in TRUTH_TYPE_INFRA or not etype:
+                continue
+            try:
+                tx = float(ent.get("x", 0.0) or 0.0)
+                ty = float(ent.get("y", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
+            layer = TRUTH_LAYER_FOR_TYPE.get(etype, "vehicle")
+            counts[layer][1] += 1
+            counts["overall"][1] += 1
+            best_d2 = match_d2
+            for p in perceived:
+                dx = p["x"] - tx
+                dy = p["y"] - ty
+                d2 = dx * dx + dy * dy
+                if d2 <= best_d2:
+                    best_d2 = d2
+            if best_d2 < match_d2:
+                counts[layer][0] += 1
+                counts["overall"][0] += 1
+
+    def _rate(c: list[int]) -> float:
+        return c[0] / c[1] if c[1] > 0 else 0.0
+
+    return {
+        "perceived_recognition_rate_vehicle": _rate(counts["vehicle"]),
+        "perceived_recognition_rate_vru": _rate(counts["vru"]),
+        "perceived_recognition_rate_overall": _rate(counts["overall"]),
+        "perception_coverage": (frames_with_perceived / frames_with_truth
+                                if frames_with_truth else 1.0),
+        "perceived_count_avg": (perceived_total / len(series) if series else 0.0),
     }
 
 
@@ -2208,6 +2298,8 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     # truth（flowsim scene.entities）vs perceived（scene.obstacles 转世界坐标）
     # 的匹配率，按 vehicle / vru 分层；预警提前量 = TTC 跌破临界时刻 - 首次检测时刻。
     perception = _compute_perception_metrics(series, timestamps)
+    # 真实感知输出质量（诊断用；旧指标用的是 vehicle/state 真值，见函数注释）
+    perceived_quality = _compute_perceived_quality_metrics(series)
     # 分层识别率 FAIL/WARN。
     #
     # 旧实现 `if n < REC_MIN_SAMPLES: continue` 是本项目"虚假满分"的来源：
@@ -2318,6 +2410,13 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         "critical_event_count": perception["critical_event_count"],
         "min_ttc_s": perception["min_ttc_s"],
         "perceived_track_count": perception["perceived_track_count"],
+        # 诊断：来自 perception/obstacles 原始输出的真实感知质量（不参与门禁）
+        "perceived_recognition_rate_vehicle": round(perceived_quality["perceived_recognition_rate_vehicle"], 3),
+        "perceived_recognition_rate_vru": round(perceived_quality["perceived_recognition_rate_vru"], 3),
+        "perceived_recognition_rate_overall": round(perceived_quality["perceived_recognition_rate_overall"], 3),
+        "perception_coverage": round(perceived_quality["perception_coverage"], 3),
+        "perceived_count_avg": round(perceived_quality["perceived_count_avg"], 3),
+        "perception_metric_source": "scene.perceived (perception/obstacles)",
         "liveness": {k: {"unique": v["unique"], "dead": v["dead"]}
                      for k, v in liveness.items()},
         "scenario_actor_counts": scenario_layer_counts,

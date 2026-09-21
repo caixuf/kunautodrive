@@ -179,13 +179,18 @@ static struct {
     } pem_health_state[HEALTH_MAX_NODES];
 
     /* 订阅数据缓存 */
-    char latest_obstacles_json[8192];
+    /* 感知障碍缓存（perception/obstacles = ObstacleList 二进制，车体系）。
+     * 旧实现把它 memcpy 进 latest_obstacles_json 后**从未读取**（死缓存），
+     * 结果 CI evaluator 的"识别率"只能拿 vehicle/state 真值当感知——真值自比，
+     * 感知坏了也测不出来。现在解析成结构化数据并输出 scene.perceived。 */
+    ObstacleList    latest_perceived;
+    pthread_mutex_t perceived_mutex;
+    volatile int    has_perceived;
     char latest_vehicle_state[8192];
     pthread_mutex_t vehicle_state_mutex; /* protects latest_vehicle_state + ego_road_id */
     double fusion_lat_avg_us;
     double fusion_lat_p50_us;
     double fusion_lat_p99_us;
-    volatile int has_obstacles;
     volatile int has_vehicle_state;
 
     /* 感知实体缓存（perception/tracked_objects，JSON，车体坐标系）。
@@ -365,15 +370,22 @@ static void monitor_try_reopen_ipc_bridges(void) {
 
 /* ── 订阅回调 ────────────────────────────────────────────────── */
 
+/* perception/obstacles 订阅回调 — 解析 ObstacleList（二进制，车体系）。
+ * 用生成的 deserialize（线格式）而不是 memcpy 结构体：ObstacleList 的
+ * sizeof(4632) != 线格式(4368)，见 ci/gates/msg_layout_check.py。 */
 static void on_obstacles(const Message* msg, void* user_data) {
     (void)user_data;
     g.last_perception_us = clock_now_us();
-    if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
-    size_t copy = msg->data_size < sizeof(g.latest_obstacles_json) - 1
-                  ? msg->data_size : sizeof(g.latest_obstacles_json) - 1;
-    memcpy(g.latest_obstacles_json, msg->data, copy);
-    g.latest_obstacles_json[copy] = '\0';
-    g.has_obstacles = 1;
+    if (!msg || msg->data_size == 0) return;
+    const uint8_t* data = (const uint8_t*)message_bus_message_data(msg);
+    if (!data) return;
+    ObstacleList parsed;
+    if (ObstacleList_deserialize(&parsed, data, msg->data_size) != 0) return;
+    if (parsed.count > 128) parsed.count = 128;
+    pthread_mutex_lock(&g.perceived_mutex);
+    g.latest_perceived = parsed;
+    g.has_perceived = 1;
+    pthread_mutex_unlock(&g.perceived_mutex);
 }
 
 /* perception/tracked_objects 订阅回调 — 缓存感知语义障碍物（JSON，车体系）。
@@ -1478,6 +1490,47 @@ static void export_dashboard_json(void) {
         }
     }
 
+    /* 感知障碍（perception/obstacles，车体系 → 世界 ENU）。
+     * 与上面三路的区别：
+     *   scene.entities           = flowsim 真值实体（含基础设施）
+     *   scene.obstacles          = vehicle/state 真值障碍（物理安全校验/覆盖率分母）
+     *   scene.perception_entities= object_tracker 的**已确认航迹**（可视化用）
+     *   scene.perceived          = **perception_node 的原始输出**（CI 识别率用）
+     * 识别率必须看感知原始输出：tracked_objects 还叠加了 KF 确认门限与静态/动态
+     * 分类，用它会把"跟踪器行为"记到"感知"头上。 */
+    if (g.has_perceived) {
+        ObstacleList perceived_snap;
+        pthread_mutex_lock(&g.perceived_mutex);
+        perceived_snap = g.latest_perceived;
+        pthread_mutex_unlock(&g.perceived_mutex);
+        if (perceived_snap.count > 128) perceived_snap.count = 128;
+        double chp = cos(hdg), shp = sin(hdg);
+        cJSON* pv_arr = cJSON_AddArrayToObject(scene, "perceived");
+        for (uint32_t i = 0; i < perceived_snap.count; i++) {
+            const Obstacle* ob = &perceived_snap.obstacles[i];
+            /* 车体系 (x 前 / y 左) → 世界 ENU（与 perception_entities 同一套逆变换） */
+            double wx = ego_x + (double)ob->x * chp - (double)ob->y * shp;
+            double wy = ego_y + (double)ob->x * shp + (double)ob->y * chp;
+            const char* tname = "car";
+            switch (ob->type) {
+                case OBJ_TYPE_PEDESTRIAN:   tname = "pedestrian";   break;
+                case OBJ_TYPE_CYCLIST:      tname = "cyclist";      break;
+                case OBJ_TYPE_CONSTRUCTION: tname = "construction"; break;
+                case OBJ_TYPE_UNKNOWN:      tname = "unknown";      break;
+                default: break;
+            }
+            cJSON* pv = cJSON_CreateObject();
+            cJSON_AddNumberToObject(pv, "id", (double)ob->id);
+            cJSON_AddStringToObject(pv, "type", tname);
+            cJSON_AddNumberToObject(pv, "x", wx);
+            cJSON_AddNumberToObject(pv, "y", wy);
+            cJSON_AddNumberToObject(pv, "length", (double)ob->length);
+            cJSON_AddNumberToObject(pv, "width", (double)ob->width);
+            cJSON_AddNumberToObject(pv, "confidence", (double)ob->confidence);
+            cJSON_AddItemToArray(pv_arr, pv);
+        }
+    }
+
     /* 规划轨迹 path 数组透传给 3D 前端。
      * path 是 Frenet 坐标 [[s,d,spd],...]，前端可沿 road_network 曲线做
      * Frenet→World 转换（有 edge_id 时精确定位，否则搜索最近 edge）。
@@ -2112,6 +2165,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     pthread_mutex_init(&g.remote_stats_mutex, NULL);
     pthread_mutex_init(&g.vehicle_state_mutex, NULL);
     pthread_mutex_init(&g.tracked_mutex, NULL);
+    pthread_mutex_init(&g.perceived_mutex, NULL);
     /* P3 修复：初始化 scene_frame 缓存 mutex，避免未初始化锁行为未定义。
      * on_scene_frame（消息总线线程）写 scene_entities_json，
      * export_dashboard_json（主线程）读同一 buffer。 */

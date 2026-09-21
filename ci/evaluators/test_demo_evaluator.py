@@ -357,6 +357,30 @@ class DemoEvaluatorTest(unittest.TestCase):
         self.assertAlmostEqual(result["recognition_rate_by_type"]["car"], 1.0)
         self.assertAlmostEqual(result["recognition_rate_by_type"]["pedestrian"], 0.0)
 
+    def test_perceived_quality_uses_raw_perception_output(self):
+        """诊断指标必须来自 scene.perceived（感知原始输出），真值有感知空 → 0。"""
+        evaluator = load_evaluator()
+        series = [{
+            "x": 0.0, "speed": 10.0,
+            "entities": [{"id": 1, "type": "car", "x": 20.0, "y": 0.0},
+                         {"id": 2, "type": "pedestrian", "x": 30.0, "y": 0.0}],
+            "obs_world": [{"id": 1, "x": 20.0, "y": 0.0},
+                          {"id": 2, "x": 30.0, "y": 0.0}],
+            "perceived_world": [{"x": 20.5, "y": 0.0}],   # 只看到车，漏了行人
+        }]
+        r = evaluator._compute_perceived_quality_metrics(series)
+        self.assertAlmostEqual(r["perceived_recognition_rate_vehicle"], 1.0)
+        self.assertAlmostEqual(r["perceived_recognition_rate_vru"], 0.0)
+        self.assertAlmostEqual(r["perceived_recognition_rate_overall"], 0.5)
+        self.assertAlmostEqual(r["perception_coverage"], 1.0)
+        self.assertAlmostEqual(r["perceived_count_avg"], 1.0)
+
+        # 真值有、感知完全没有 → 覆盖率 0、识别率 0
+        series[0]["perceived_world"] = []
+        r2 = evaluator._compute_perceived_quality_metrics(series)
+        self.assertAlmostEqual(r2["perception_coverage"], 0.0)
+        self.assertAlmostEqual(r2["perceived_recognition_rate_overall"], 0.0)
+
     def test_perception_metrics_warning_lead_time(self):
         """Task 5: 预警提前量 = TTC 跌破临界时刻 - 首次检测时刻。"""
         evaluator = load_evaluator()
