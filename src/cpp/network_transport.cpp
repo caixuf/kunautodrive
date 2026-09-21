@@ -49,6 +49,9 @@ void net_transport_get_stats(NetworkTransport* t, NetTransportStats* stats) {
 #include <atomic>
 #include <thread>
 #include <cstring>
+#include <cstddef>
+#include <cstdio>
+#include <cerrno>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -61,24 +64,74 @@ void net_transport_get_stats(NetworkTransport* t, NetTransportStats* stats) {
 /* 网络帧协议                                                  */
 /* ══════════════════════════════════════════════════════════ */
 
+static constexpr size_t kWireHeaderSize = offsetof(Message, data);
+static constexpr size_t kRxChunk        = 65536;
+static constexpr int    kSockBufBytes   = 256 * 1024;
+
+static_assert(kWireHeaderSize == (size_t)NET_WIRE_HEADER_SIZE,
+              "header macro and compile-time offsetof drifted");
+
+static_assert(kWireHeaderSize <= 256,
+              "wire header exceeds NET_FRAME_MAX_SIZE slack");
+static_assert(kWireHeaderSize < sizeof(Message),
+              "compact frames must stay smaller than legacy sizeof(Message)");
+
+struct InboundPub {
+    char topic[MSG_BUS_MAX_TOPIC_LEN];
+    char sender[MSG_BUS_MAX_SENDER_LEN];
+    uint32_t data_size;
+    std::vector<uint8_t> data;
+};
+
 static std::string serialize_frame(const Message* msg) {
-    uint32_t payload = sizeof(Message);
-    uint32_t net_len = htonl(payload);
-    Message wire;
-    message_bus_copy_message(&wire, msg);
+    if (!msg) return {};
+    const void* payload = message_bus_message_data(msg);
+    uint32_t data_size = msg->data_size;
+    if (!payload) data_size = 0;
+    if (data_size > MSG_BUS_MAX_DATA_SIZE) return {};
+
+    uint32_t plen = (uint32_t)(kWireHeaderSize + data_size);
+    uint32_t net_len = htonl(plen);
+
     std::string frame;
-    frame.append((const char*)&net_len, 4);
-    frame.append((const char*)&wire, sizeof(Message));
+    frame.reserve(4u + plen);
+    frame.append(reinterpret_cast<const char*>(&net_len), 4);
+    frame.append(reinterpret_cast<const char*>(msg), kWireHeaderSize);
+    if (data_size > 0) {
+        frame.append(reinterpret_cast<const char*>(payload), data_size);
+    }
     return frame;
 }
 
-static bool deserialize_frame(const uint8_t* data, size_t len, Message* msg) {
-    if (len < sizeof(Message)) return false;
-    memcpy(msg, data, sizeof(Message));
-    msg->_loaned_data = nullptr;
-    msg->_loaned_release = nullptr;
-    msg->_loaned_release_ctx = nullptr;
+static bool decode_frame(const uint8_t* data, size_t len, InboundPub* out) {
+    if (!data || !out || len < kWireHeaderSize) return false;
+
+    uint32_t data_size = 0;
+    memcpy(&data_size, data + offsetof(Message, data_size), sizeof(data_size));
+    if (data_size > MSG_BUS_MAX_DATA_SIZE) return false;
+
+    const bool legacy  = (len == sizeof(Message));
+    const bool compact = (len == kWireHeaderSize + (size_t)data_size);
+    if (!legacy && !compact) return false;
+    if (legacy && kWireHeaderSize + (size_t)data_size > sizeof(Message)) return false;
+
+    memcpy(out->topic, data + offsetof(Message, topic), MSG_BUS_MAX_TOPIC_LEN);
+    memcpy(out->sender, data + offsetof(Message, sender), MSG_BUS_MAX_SENDER_LEN);
+    out->topic[MSG_BUS_MAX_TOPIC_LEN - 1] = '\0';
+    out->sender[MSG_BUS_MAX_SENDER_LEN - 1] = '\0';
+    out->data_size = data_size;
+    const uint8_t* payload = data + kWireHeaderSize;
+    out->data.assign(payload, payload + data_size);
     return true;
+}
+
+static void configure_tcp_socket(int fd) {
+    int flag = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+    int bufsz = kSockBufBytes;
+    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &bufsz, sizeof(bufsz));
+    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &bufsz, sizeof(bufsz));
+    fcntl(fd, F_SETFL, O_NONBLOCK);
 }
 
 /* ══════════════════════════════════════════════════════════ */
@@ -132,6 +185,8 @@ struct NetworkTransport {
     std::vector<BridgeSub*> subs;
 };
 
+static void close_peer(NetworkTransport* t, PeerConn* peer);
+
 /* ══════════════════════════════════════════════════════════ */
 /* 出站桥接回调                                                */
 /* ══════════════════════════════════════════════════════════ */
@@ -145,6 +200,7 @@ static void bridge_outbound_cb(const Message* msg, void* user_data) {
     }
 
     std::string frame = serialize_frame(msg);
+    if (frame.empty()) return;
 
     std::lock_guard<std::mutex> lock(t->peers_mutex);
     for (auto* peer : t->peers) {
@@ -166,9 +222,7 @@ static void bridge_outbound_cb(const Message* msg, void* user_data) {
                     continue;
             }
             t->stats.send_errors++;
-            peer->active = false;
-            close(peer->fd);
-            peer->fd = -1;
+            close_peer(t, peer);
             break;
         }
         if (sent == frame.size()) {
@@ -182,8 +236,69 @@ static void bridge_outbound_cb(const Message* msg, void* user_data) {
 /* 入站接收线程                                                */
 /* ══════════════════════════════════════════════════════════ */
 
+static void close_peer(NetworkTransport* t, PeerConn* peer) {
+    if (!peer) return;
+    if (peer->fd >= 0) {
+        close(peer->fd);
+        peer->fd = -1;
+    }
+    if (peer->active.exchange(false)) {
+        t->stats.disconnects++;
+    }
+}
+
+static void drain_peer(NetworkTransport* t, PeerConn* peer,
+                       uint8_t* buf, size_t buf_sz,
+                       std::vector<InboundPub>& inbound) {
+    for (;;) {
+        ssize_t n = recv(peer->fd, buf, buf_sz, MSG_DONTWAIT);
+        if (n == 0) {
+            printf("[net_transport] peer %s:%u disconnected\n",
+                   peer->host.c_str(), peer->port);
+            close_peer(t, peer);
+            return;
+        }
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+            close_peer(t, peer);
+            return;
+        }
+
+        peer->rx_buffer.insert(peer->rx_buffer.end(), buf, buf + n);
+
+        size_t consumed = 0;
+        while (peer->rx_buffer.size() - consumed >= 4) {
+            uint32_t net_len = 0;
+            memcpy(&net_len, peer->rx_buffer.data() + consumed, 4);
+            uint32_t payload = ntohl(net_len);
+            if (payload < kWireHeaderSize || payload > sizeof(Message)) {
+                close_peer(t, peer);
+                return;
+            }
+            size_t frame_size = 4u + (size_t)payload;
+            if (peer->rx_buffer.size() - consumed < frame_size) break;
+
+            InboundPub msg;
+            if (!decode_frame(peer->rx_buffer.data() + consumed + 4,
+                              payload, &msg)) {
+                close_peer(t, peer);
+                return;
+            }
+            t->stats.bytes_received += (uint64_t)frame_size;
+            t->stats.msgs_received++;
+            inbound.push_back(std::move(msg));
+            consumed += frame_size;
+        }
+        if (consumed > 0) {
+            peer->rx_buffer.erase(peer->rx_buffer.begin(),
+                                  peer->rx_buffer.begin() + (std::ptrdiff_t)consumed);
+        }
+    }
+}
+
 static void recv_thread_fn(NetworkTransport* t) {
-    uint8_t buf[8192];
+    uint8_t buf[kRxChunk];
 
     while (t->running) {
         /* Messages received this cycle, published AFTER releasing peers_mutex.
@@ -192,72 +307,30 @@ static void recv_thread_fn(NetworkTransport* t) {
          * would self-deadlock and permanently starve every other peers_mutex
          * user (accept, outbound bridge, and connection_count used by the
          * monitor/state-file writer). */
-        std::vector<Message> inbound;
+        std::vector<InboundPub> inbound;
 
         {
-            /* Poll all peer connections — lock held only for the poll loop,
-             * never across usleep() or bus publish. */
+            /* Drain under the lock (non-blocking recv). Never hold this lock
+             * across a waiting poll — outbound send needs it to put bytes on
+             * the wire. Idle wait happens after unlock. */
             std::lock_guard<std::mutex> lock(t->peers_mutex);
             for (auto* peer : t->peers) {
                 if (!peer->active || peer->fd < 0) continue;
-
-                ssize_t n = recv(peer->fd, buf, sizeof(buf), MSG_DONTWAIT);
-                if (n == 0) {
-                    peer->active = false;
-                    close(peer->fd);
-                    peer->fd = -1;
-                    t->stats.disconnects++;
-                    printf("[net_transport] peer %s:%u disconnected\n",
-                           peer->host.c_str(), peer->port);
-                    continue;
-                }
-                if (n < 0) {
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
-                    peer->active = false;
-                    close(peer->fd);
-                    peer->fd = -1;
-                    t->stats.disconnects++;
-                    continue;
-                }
-
-                peer->rx_buffer.insert(peer->rx_buffer.end(), buf, buf + n);
-                while (peer->rx_buffer.size() >= 4) {
-                    uint32_t net_len = 0;
-                    memcpy(&net_len, peer->rx_buffer.data(), 4);
-                    uint32_t payload = ntohl(net_len);
-                    if (payload != sizeof(Message)) {
-                        peer->active = false;
-                        close(peer->fd);
-                        peer->fd = -1;
-                        t->stats.disconnects++;
-                        break;
-                    }
-                    size_t frame_size = 4u + (size_t)payload;
-                    if (peer->rx_buffer.size() < frame_size) break;
-
-                    t->stats.bytes_received += frame_size;
-                    t->stats.msgs_received++;
-                    Message msg;
-                    if (deserialize_frame(peer->rx_buffer.data() + 4,
-                                           payload, &msg)) {
-                        inbound.push_back(msg);
-                    }
-                    peer->rx_buffer.erase(peer->rx_buffer.begin(),
-                                          peer->rx_buffer.begin() + frame_size);
-                }
+                drain_peer(t, peer, buf, sizeof(buf), inbound);
             }
         }
 
-        /* Publish outside the lock. */
         for (const auto& msg : inbound) {
             char sender[MSG_BUS_MAX_SENDER_LEN];
             snprintf(sender, sizeof(sender), "%s%s",
                      NET_FORWARD_PREFIX, msg.sender);
             message_bus_publish(t->bus, msg.topic, sender,
-                                msg.data, msg.data_size);
+                                msg.data.empty() ? nullptr : msg.data.data(),
+                                msg.data_size);
         }
 
-        usleep(10000); /* 10ms poll interval */
+        if (inbound.empty())
+            usleep(200);
     }
 }
 
@@ -267,21 +340,28 @@ static void recv_thread_fn(NetworkTransport* t) {
 
 static void accept_thread_fn(NetworkTransport* t) {
     while (t->running) {
-        struct sockaddr_in client_addr;
-        socklen_t addr_len = sizeof(client_addr);
-        int client_fd = accept(t->listen_fd, (struct sockaddr*)&client_addr, &addr_len);
-        if (client_fd < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                usleep(100000);
-                continue;
-            }
+        int listen_fd = t->listen_fd;
+        if (listen_fd < 0) break;
+
+        struct pollfd pfd = { listen_fd, POLLIN, 0 };
+        int pr = poll(&pfd, 1, 10);
+        if (pr < 0) {
+            if (errno == EINTR) continue;
             break;
         }
+        if (pr == 0) continue;
 
-        /* Set TCP_NODELAY for low-latency messaging */
-        int flag = 1;
-        setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
-        fcntl(client_fd, F_SETFL, O_NONBLOCK);
+        struct sockaddr_in client_addr;
+        socklen_t addr_len = sizeof(client_addr);
+        int client_fd = accept(listen_fd, (struct sockaddr*)&client_addr, &addr_len);
+        if (client_fd < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) continue;
+            if (errno == EBADF) break;
+            continue;
+        }
+
+        /* TCP_NODELAY + larger sockbuf + non-blocking */
+        configure_tcp_socket(client_fd);
 
         /* Create peer entry for this connection */
         auto* peer = new PeerConn();
@@ -289,6 +369,7 @@ static void accept_thread_fn(NetworkTransport* t) {
         peer->port   = ntohs(client_addr.sin_port);
         peer->fd     = client_fd;
         peer->active = true;
+        peer->rx_buffer.reserve(kRxChunk);
 
         {
             std::lock_guard<std::mutex> lock(t->peers_mutex);
@@ -455,15 +536,14 @@ int net_transport_connect(NetworkTransport* t, const char* host, uint16_t port) 
         return -1;
     }
 
-    int flag = 1;
-    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
-    fcntl(fd, F_SETFL, O_NONBLOCK);
+    configure_tcp_socket(fd);
 
     auto* peer = new PeerConn();
     peer->host   = host;
     peer->port   = port;
     peer->fd     = fd;
     peer->active = true;
+    peer->rx_buffer.reserve(kRxChunk);
 
     {
         std::lock_guard<std::mutex> lock(t->peers_mutex);

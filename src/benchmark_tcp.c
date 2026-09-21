@@ -8,11 +8,8 @@
  *   - 网卡 / 线缆 / 跨主机 RTT
  *   - 进程内 MessageBus（见 src/benchmark.c，通常 100k+ msg/s）
  *
- * 现状会进入数字（读结果时请对照，不要当“网卡性能”）：
- *   - 帧协议 = 4 字节长度前缀 + 整份 Message（含 64KB data[]），小 payload 也按大帧走线
- *   - recv 线程每 10ms 只读 8KB（network_transport.cpp），大帧吞吐被这个循环封顶
- *   - 无界突发会把非阻塞 send 的 100ms poll 打满，对端直接 disconnect
- *   - 因此吞吐段用有界 in-flight，而不是一次打几百帧
+ * 线上帧 = 4 字节长度前缀 + Message 固定头 + data_size 字节有效负载
+ * （不再把整份 64KB Message 送上线）。recv 用 poll + 64KB 排空读。
  *
  * 构建:
  *   cmake --build build --target benchmark_tcp
@@ -33,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <stdatomic.h>
 #include <time.h>
 #include <unistd.h>
@@ -111,12 +109,16 @@ static void print_latency_row(const char* label, Stats s) {
 
 #define BENCH_PAYLOAD_BYTES 64
 #define BENCH_TOPIC         "bench/tcp_loopback"
-#define DEFAULT_COUNT       200
+#define DEFAULT_COUNT       4096
 #define DEFAULT_RECV_PORT   19771
 #define SERIAL_LATENCY_N    50
-#define THRU_IN_FLIGHT      2
+#define THRU_IN_FLIGHT      32
 #define CONNECT_TIMEOUT_MS  2000
 #define DELIVER_TIMEOUT_MS  20000
+
+static size_t bench_wire_frame_bytes(void) {
+    return 4u + (size_t)NET_WIRE_HEADER_SIZE + (size_t)BENCH_PAYLOAD_BYTES;
+}
 
 typedef struct {
     uint64_t seq;
@@ -235,7 +237,7 @@ static int pair_alive(const LoopbackPair* p) {
         && net_transport_connection_count(p->receiver) >= 1;
 }
 
-/* ── 吞吐：有界 in-flight。无界突发会触发 send 侧 100ms EAGAIN 断连。── */
+/* ── 吞吐：有界 in-flight，避免瞬时撑满非阻塞 send buffer。── */
 
 static int bench_throughput(LoopbackPair* pair, int total) {
     print_bench_header("localhost loopback TCP — 持续吞吐量 (bounded in-flight)");
@@ -319,16 +321,15 @@ static int bench_throughput(LoopbackPair* pair, int total) {
 
     printf("  路径:            127.0.0.1 NetworkTransport 桥接（同进程双端）\n");
     printf("  不是:            NIC/线缆，也不是进程内 MessageBus\n");
-    printf("  载荷:            %d B 用户数据 / 线帧 ≈ %zu B（整份 Message）\n",
-           BENCH_PAYLOAD_BYTES, 4u + sizeof(Message));
+    printf("  载荷:            %d B 用户数据 / 线帧 = %zu B（头 + data_size，非整份 Message）\n",
+           BENCH_PAYLOAD_BYTES, bench_wire_frame_bytes());
     printf("  消息数:          %d（in-flight≤%d）\n", total, THRU_IN_FLIGHT);
     printf("  总耗时:          %.3f ms\n", elapsed_s * 1000.0);
     printf("  吞吐:            %.0f msg/s   (%.1f MB/s wire frames)\n",
            throughput,
-           throughput * (4.0 + (double)sizeof(Message)) / 1e6);
+           throughput * (double)bench_wire_frame_bytes() / 1e6);
     print_latency_row("in-flight 单向延迟 (嵌入时间戳)", lat);
-    printf("  注: recv 每 10ms 读 8KB + 线帧≈%zu B，吞吐被实现封顶，不是 loopback 下限。\n",
-           4u + sizeof(Message));
+    printf("  注: localhost loopback；recv 空闲 200µs tick + 总线拷贝，不是 NIC/线缆。\n");
 
     NetTransportStats tx = {0}, rx = {0};
     net_transport_get_stats(pair->sender, &tx);
@@ -412,12 +413,7 @@ static int bench_serial_latency(LoopbackPair* pair, int n) {
     print_latency_row(lat_label, lat);
     printf("  等效串行吞吐:    %.0f msg/s\n",
            lat.avg_ns ? 1e9 / (double)lat.avg_ns : 0.0);
-    {
-        size_t frame = 4u + sizeof(Message);
-        int polls = (int)((frame + 8191u) / 8192u);
-        printf("  注: recv 每 10ms 读 8KB → 一帧约 %d 次 poll（≈%d ms），不是 loopback 下限。\n",
-               polls, polls * 10);
-    }
+    printf("  注: 串行 ping 含 recv 空闲 tick（200µs）+ 总线分发；localhost loopback，不是 NIC RTT。\n");
 
     free(lat_ok);
     free(st.lat_ns);
