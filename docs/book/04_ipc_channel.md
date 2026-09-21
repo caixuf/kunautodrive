@@ -14,6 +14,8 @@
 | 通信机制 | 内存拷贝次数 | 上下文切换 | 传输延迟 | 崩溃恢复难度 |
 | :--- | :---: | :---: | :---: | :---: |
 | **TCP / UDP Loopback** | 2~4 次 (用户态⇄内核态) | 频繁 | 100 ~ 500 μs | 低 (内核自动回收套接字) |
+
+> 跨机路径不走本章 SHM，而是 `MessageBus` ↔ `NetworkTransport` ↔ TCP（紧凑线格式 + drain 收包）。细节见 [第 09 章 §6](09_discovery.md#6-跨机-tcp-networktransport-与紧凑线格式)。
 | **Unix Domain Socket (AF_UNIX)** | 2 次 | 频繁 | 30 ~ 80 μs | 中 |
 | **POSIX SHM (KunAutoDrive)** | **0 次 (直接共享物理内存页)** | **0 次 (用户态互斥锁)** | **< 2 μs** | 需 Robust Mutex 支持 |
 

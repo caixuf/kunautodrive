@@ -90,7 +90,7 @@ flowsim/physics ← step_bicycle ← flowsim_node (20Hz tick, 闭环 ego)
 | 模块 | 关键文件 | 职责 |
 |------|----------|------|
 | 消息总线 | [message_bus.c](../src/core/message_bus.c) / [message_bus.h](../include/message_bus.h) | 进程内 Pub/Sub + 请求/应答 + 零拷贝 |
-| 传输层 | [transport.c](../src/core/transport.c) / [transport.h](../include/transport.h) | 统一传输抽象（local/IPC/TCP），per-topic QoS（深度+丢弃策略+deadline+reliability） |
+| 传输层 | [transport.c](../src/core/transport.c) / [transport.h](../include/transport.h)；跨机实现 [network_transport.cpp](../src/cpp/network_transport.cpp) | 统一传输抽象（local/IPC/TCP），per-topic QoS；跨机 TCP 为 v1 紧凑帧（头+`data_size`）+ drain 收包，兼容 v0 整包（见 book 第 09 章 §6） |
 | IPC | [ipc_channel.c](../src/core/ipc_channel.c) | POSIX SHM 跨进程通信 |
 | 调度器 | [scheduler.c](../src/core/scheduler.c) / [scheduler_cpp.cpp](../src/cpp/scheduler_cpp.cpp) | classic/choreo DAG 模式，CPU 亲和+限频 |
 | 协程 | [coroutine_task.h](../include/coroutine_task.h) | C++20 协程原语（sleep/await/select/timer/req-reply，可取消） |

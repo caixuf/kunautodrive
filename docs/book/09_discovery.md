@@ -131,7 +131,44 @@ LOG_INFO("Discovery", "自动建立跨进程 IPC 管道数量: %d", channel_coun
 
 ---
 
-## 6. 工业级避坑指南
+## 6. 跨机 TCP NetworkTransport 与紧凑线格式
+
+Discovery 的 `unicast_port` / IPv4 只解决「找到谁」；真正跨机搬消息的是 `NetworkTransport`（`include/network_transport.h` / `src/cpp/network_transport.cpp`）。分层保持不变：
+
+```
+Node A local MessageBus
+        ↕ bridge（按 topic）
+   NetworkTransport  ──TCP──  NetworkTransport
+        ↕ message_bus_publish（入站，带 @net: 防环）
+Node B local MessageBus
+```
+
+统一入口仍是上层 `Transport`（`TRANSPORT_AUTO`）：同进程走 Bus，同机跨进程走 SHM IPC，跨机才落到本层 TCP。`TRANSPORT_DDS` 仅为预留，不是 FastDDS。
+
+### 6.1 线格式（#97）
+
+长度前缀帧：`[uint32 BE length][payload N bytes]`。
+
+| 版本 | 何时 | payload |
+|------|------|---------|
+| **v1 compact（当前发送）** | 默认出站 | `offsetof(Message, data)` 固定头 + `data_size` 有效载荷。典型小消息约 **232 B** 级，而不是整颗 `sizeof(Message)`（~64KB） |
+| **v0 legacy（仍可收）** | 混部旧节点 | `N == sizeof(Message)` 时按整结构体解码 |
+
+两种 `N` 不碰撞：compact 的 `N` 恒小于 `sizeof(Message)`。解码只取 topic / sender / `data_size` 与载荷，再 `message_bus_publish` 进对端本地 Bus；loaned 指针字段不在线上。
+
+### 6.2 收发包节奏
+
+- **TCP_NODELAY**：小帧不攒 Nagle。
+- **Drain 收包**：对端非阻塞 `recv` 打到 `EAGAIN`（64KB 缓冲）；空闲约 `200 µs` 再轮询，避免旧实现「小缓冲 + 长 sleep」把吞吐钉死在个位数 msg/s。
+- **解锁再发布**：在 `peers_mutex` 下只做 drain/解帧；批量入站消息在**释放锁之后**再 `message_bus_publish`，避免 Bus 回调重入 bridge 自死锁。
+
+### 6.3 基准与验证
+
+`./build/bin/benchmark_tcp`（127.0.0.1 loopback）。WSL 上 #97 后量级约为 **~29k msg/s**、串行 ping p50 **~274 µs**（修复前约 ~12 msg/s / ~90 ms）。进程内 Bus 数字见 MessageBus 基准，勿与 TCP 混比。
+
+---
+
+## 7. 工业级避坑指南
 
 ### 避坑 1：组播风暴（Multicast Storm）与抖动抑制
 - **隐患**：当集群中 50+ 个节点同时上线并发送 `DISC_QUERY` 时，所有节点如果在同一毫秒响应，会造成突发性网络拥塞。

@@ -65,6 +65,8 @@ typedef struct Message {
 } Message;
 ```
 
+> **进程内 vs 线上**：`Message` 是进程内对象。`data[]` 之后的 `_loaned_data` / `_loaned_release` / `_pool_next` 等字段只在本机有效，**绝不上 TCP**。跨机由 `NetworkTransport` 发紧凑帧（固定头到 `data[]` 之前 + `data_size` 有效载荷），见 [第 09 章](09_discovery.md#6-跨机-tcp-networktransport-与紧凑线格式)。
+
 ### 2.1 内存池优化：杜绝频繁 `malloc/free`
 在 100Hz 高频消息吞吐下，频繁调用操作系统 `malloc(64KB)` 会导致严重的内存碎片和不可控的内核系统调用延迟。
 KunAutoDrive 采用 **Free-List 内存池（Free Message Pool）**：
