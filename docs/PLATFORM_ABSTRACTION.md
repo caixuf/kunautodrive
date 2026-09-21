@@ -127,7 +127,7 @@ endif()
 | 弱化项 | 原因 | 影响 |
 |--------|------|------|
 | Robust mutex → no-op | macOS pthreads 不支持 | 多进程 IPC 崩溃自愈不可用；单进程 demo 不触发 |
-| Benchmark 不构建 | `sem_init` 在 macOS 已废弃 | 性能基准不可用 |
+| `benchmark`（进程内总线）不构建 | `sem_init` 在 macOS 已废弃 | 进程内 MessageBus 基准不可用；`benchmark_tcp`（127.0.0.1 loopback）仍构建 |
 | CAN/I2C dry-run | 无 Linux 外设 | 硬件节点走 dry_run 模式 |
 | 无线程 CPU 亲和性 | macOS 无 `pthread_setaffinity_np` | 调度器不绑核 |
 

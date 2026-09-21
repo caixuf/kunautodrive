@@ -690,6 +690,16 @@ else()
 endif()
 target_compile_definitions(benchmark_coro PRIVATE FLOWCORO_INTEGRATION)
 
+# ── localhost loopback TCP 传输基准（NetworkTransport）────
+# Windows 上 network_transport 是 stub，不构建。默认 ctest 不跑
+#（LABELS benchmark;manual），与 benchmark_coro 相同。
+# 运行: ./build/bin/benchmark_tcp    或  bash build.sh bench
+if(NOT WIN32)
+    add_executable(benchmark_tcp src/benchmark_tcp.c)
+    target_link_libraries(benchmark_tcp flowengine_core scheduler_cpp m)
+    set_target_properties(benchmark_tcp PROPERTIES LINKER_LANGUAGE CXX)
+endif()
+
 # ── 协程集成层正确性测试程序 ──────────────────────────────
 add_executable(coro_correctness_test tests/coro_correctness_test.cpp)
 if(WIN32)
@@ -777,6 +787,9 @@ install(TARGETS flowmond flowctl flow_bus flow_ipc flow_bag bag_check flow_coro 
 )
 if(NOT APPLE AND NOT WIN32)
     install(TARGETS benchmark RUNTIME DESTINATION bin)
+endif()
+if(NOT WIN32)
+    install(TARGETS benchmark_tcp RUNTIME DESTINATION bin)
 endif()
 
 install(TARGETS flowengine_core
@@ -945,6 +958,14 @@ add_test(NAME flow_coro_bench
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 set_tests_properties(flow_coro_bench PROPERTIES TIMEOUT 300 LABELS "benchmark;manual")
+
+if(NOT WIN32)
+    add_test(NAME flow_tcp_bench
+        COMMAND ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/benchmark_tcp
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    )
+    set_tests_properties(flow_tcp_bench PROPERTIES TIMEOUT 120 LABELS "benchmark;manual")
+endif()
 
 add_test(NAME coro_correctness_test
     COMMAND ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/coro_correctness_test
@@ -1241,9 +1262,9 @@ message(STATUS "flowcoro source dir: ${flowcoro_SOURCE_DIR}")
 if(WIN32)
     add_custom_target(dev DEPENDS flow_bus flow_coro benchmark_coro coro_correctness_test example_process example_task flowcoro_task config)
 elseif(APPLE)
-    add_custom_target(dev DEPENDS flow_bus flow_coro benchmark_coro coro_correctness_test example_process example_task flowcoro_task config)
+    add_custom_target(dev DEPENDS flow_bus flow_coro benchmark_coro benchmark_tcp coro_correctness_test example_process example_task flowcoro_task config)
 else()
-    add_custom_target(dev DEPENDS flow_bus flow_coro benchmark benchmark_coro coro_correctness_test example_process example_task flowcoro_task config)
+    add_custom_target(dev DEPENDS flow_bus flow_coro benchmark benchmark_coro benchmark_tcp coro_correctness_test example_process example_task flowcoro_task config)
 endif()
 
 # CPack配置（用于创建安装包）
