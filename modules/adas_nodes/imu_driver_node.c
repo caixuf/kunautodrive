@@ -67,6 +67,7 @@
 #include <cjson/cJSON.h>
 #include "clock_service.h"
 #include "serial_port.h"
+#include "imu_protocol.h"
 
 #include <math.h>
 #include <pthread.h>
@@ -99,6 +100,7 @@ static struct {
     uint64_t samples_read;      /* 成功读取并解析的 IMU 样本数 */
     uint64_t samples_failed;    /* 读取/解析失败的样本数 */
     uint64_t imu_published;     /* 发布到 sensor/imu 的帧数 */
+    int      synthetic_idx;     /* dry-run 噪声表索引（0..3 循环，imu_protocol.c 共享表） */
 
     /* 托管模式：嵌入 TaskBase，由 node_start_managed 派生线程跑 imu_execute。
      * 取代原先自管的 pthread thread / running / should_stop 三件套。 */
@@ -131,54 +133,25 @@ static struct {
  * @param line  串口读到的一行（不含末尾 '\n' 也兼容）
  * @param out   解析结果写入
  * @return 0 成功，-1 解析失败（字段不足/格式错误）
+ *
+ * 注：函数体已抽到 imu_protocol.h/.c（2026-09 handoff §4.2 副本制测试反漂移），
+ * 节点与 tests/test_adas_nodes_logic.c 共享同一份实现。
  */
-static int parse_imu_line(const char* line, ImuData* out) {
-    if (!line || !out) return -1;
-
-    const char* p = line;
-    while (*p == ' ' || *p == '\t') p++;                 /* 跳过前导空白 */
-    if (*p == '\0' || *p == '\r' || *p == '\n') return -1;
-
-    /* 顺序解析 7 个浮点：ax, ay, az, gx, gy, gz, temp */
-    float  v[7];
-    int    cnt = 0;
-    char*  end = NULL;
-    for (cnt = 0; cnt < 7; cnt++) {
-        v[cnt] = strtof(p, &end);
-        if (end == p) return -1;                         /* 当前位置无数值 */
-        p = end;
-        /* 跳过分隔符（逗号/空白/回车）到下一字段 */
-        while (*p == ',' || *p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
-    }
-
-    /* 默认假设输入已是 m/s² 与 rad/s；若模块输出 g/°/s，在此处乘换算系数 */
-    out->accel_x = v[0];
-    out->accel_y = v[1];
-    out->accel_z = v[2];
-    out->gyro_x  = v[3];
-    out->gyro_y  = v[4];
-    out->gyro_z  = v[5];
-    out->temperature = v[6];
-    return 0;
+static inline int parse_imu_line(const char* line, ImuData* out) {
+    return imu_protocol_parse_line(line, out);
 }
 
 /* ── dry-run：生成静止状态模拟 IMU 数据 ──────────────────────
  *
  * 静止时 z 轴承受重力（accel_z ≈ gravity），其余轴 ≈ 0；叠加小噪声模拟传感器抖动。
  * 走完整 publish 链路，便于在无硬件环境下联调下游 fusion/SLAM。
- */
+ *
+ * 噪声源：原版用 rand()%2001 - 1000 模拟 ±0.01 m/s² 噪声；新版改用
+ * imu_protocol.c 的固定 4-idx 表 + 节点 g.synthetic_idx 计数器，行为等价
+ * （最大幅度 ±0.01）但跨帧可重现。srand() 调用保留用于 future 随机源扩展。 */
 static void make_synthetic_imu(ImuData* out) {
-    if (!out) return;
-    /* 噪声幅度：加速度 ±0.01 m/s²，角速度 ±0.001 rad/s，温度 ±0.1 ℃ */
-    float na = (float)((rand() % 2001) - 1000) / 100000.0f;   /* ±0.01 */
-    float ng = (float)((rand() % 2001) - 1000) / 1000000.0f;  /* ±0.001 */
-    out->accel_x = na;
-    out->accel_y = na * 0.5f;
-    out->accel_z = (float)g.gravity + na;                     /* 静止 z 轴 = 重力 */
-    out->gyro_x  = ng;
-    out->gyro_y  = ng * 0.5f;
-    out->gyro_z  = ng;
-    out->temperature = 25.0f + na * 10.0f;
+    int idx = g.synthetic_idx++ & 3;
+    imu_protocol_make_static(out, g.gravity, idx);
 }
 
 /* ── 托管模式主循环：循环 serial_read_line → parse_imu_line → publish ─

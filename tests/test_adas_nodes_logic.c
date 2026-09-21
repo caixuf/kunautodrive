@@ -23,6 +23,7 @@
  */
 
 #include "adas_msgs_gen.h"
+#include "imu_protocol.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -58,57 +59,19 @@ static int g_failed = 0;
     }
 
 /* ══════════════════════════════════════════════════════════ */
-/* 副本：imu_driver_node.c 的纯逻辑（parse_imu_line + make_synthetic_imu） */
+/* IMU 纯逻辑（2026-09 handoff §4.2 反漂移：节点 + 测试共享同一份实现） */
 /* ══════════════════════════════════════════════════════════ */
 
-/* adapted from modules/adas_nodes/imu_driver_node.c:135-163
- * 原文件依赖 g.gravity，这里改为参数传入（解耦全局状态）。
- * 行为必须与源文件保持一致——任何修改都要同步两边。 */
+/* 真代码（imu_protocol.h/.c），测试通过该 wrapper 调用，源/真同步实现一致
+ * ——任何修改仅需改 imu_protocol.c，CI 自动覆盖两侧。 */
 static int parse_imu_line_for_test(const char* line, ImuData* out) {
-    if (!line || !out) return -1;
-
-    const char* p = line;
-    while (*p == ' ' || *p == '\t') p++;                 /* 跳过前导空白 */
-    if (*p == '\0' || *p == '\r' || *p == '\n') return -1;
-
-    float v[7];
-    int   cnt = 0;
-    char* end = NULL;
-    for (cnt = 0; cnt < 7; cnt++) {
-        v[cnt] = strtof(p, &end);
-        if (end == p) return -1;
-        p = end;
-        while (*p == ',' || *p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
-    }
-
-    out->accel_x = v[0];
-    out->accel_y = v[1];
-    out->accel_z = v[2];
-    out->gyro_x  = v[3];
-    out->gyro_y  = v[4];
-    out->gyro_z  = v[5];
-    out->temperature = v[6];
-    return 0;
+    return imu_protocol_parse_line(line, out);
 }
 
-/* adapted from modules/adas_nodes/imu_driver_node.c:170-182
- * 原文件读 g.gravity，这里改为参数。噪声种子用固定值以便测试可重现。 */
+/* 固定 idx 计数器保证测试可重现（imu_protocol.c 内部 4-idx 表）。 */
+static int test_synthetic_idx = 0;
 static void make_synthetic_imu_for_test(ImuData* out, double gravity) {
-    if (!out) return;
-    /* 固定噪声序列（不调 rand，保证可重现）；幅度与原实现对齐：±0.01 / ±0.001 */
-    static const float na_table[4] = { 0.005f, -0.003f, 0.008f, -0.006f };
-    static const float ng_table[4] = { 0.0003f, -0.0002f, 0.0005f, -0.0001f };
-    static int idx = 0;
-    float na = na_table[idx & 3];
-    float ng = ng_table[idx & 3];
-    idx++;
-    out->accel_x = na;
-    out->accel_y = na * 0.5f;
-    out->accel_z = (float)gravity + na;
-    out->gyro_x  = ng;
-    out->gyro_y  = ng * 0.5f;
-    out->gyro_z  = ng;
-    out->temperature = 25.0f + na * 10.0f;
+    imu_protocol_make_static(out, gravity, test_synthetic_idx++ & 3);
 }
 
 /* ══════════════════════════════════════════════════════════ */
