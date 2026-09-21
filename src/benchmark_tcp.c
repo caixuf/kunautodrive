@@ -10,7 +10,9 @@
  *
  * 现状会进入数字（读结果时请对照，不要当“网卡性能”）：
  *   - 帧协议 = 4 字节长度前缀 + 整份 Message（含 64KB data[]），小 payload 也按大帧走线
- *   - recv 线程 10ms poll（network_transport.cpp），串行 ping 会贴近该间隔
+ *   - recv 线程每 10ms 只读 8KB（network_transport.cpp），大帧吞吐被这个循环封顶
+ *   - 无界突发会把非阻塞 send 的 100ms poll 打满，对端直接 disconnect
+ *   - 因此吞吐段用有界 in-flight，而不是一次打几百帧
  *
  * 构建:
  *   cmake --build build --target benchmark_tcp
@@ -109,12 +111,12 @@ static void print_latency_row(const char* label, Stats s) {
 
 #define BENCH_PAYLOAD_BYTES 64
 #define BENCH_TOPIC         "bench/tcp_loopback"
-#define DEFAULT_COUNT       4096
+#define DEFAULT_COUNT       200
 #define DEFAULT_RECV_PORT   19771
-#define SERIAL_LATENCY_N    200
-#define THRU_BATCH          256
+#define SERIAL_LATENCY_N    50
+#define THRU_IN_FLIGHT      2
 #define CONNECT_TIMEOUT_MS  2000
-#define DELIVER_TIMEOUT_MS  15000
+#define DELIVER_TIMEOUT_MS  20000
 
 typedef struct {
     uint64_t seq;
@@ -228,19 +230,21 @@ static int pair_start(LoopbackPair* p, uint16_t base_port) {
     return -1;
 }
 
-/* ── 吞吐：分批发布，避免撑爆 MSG_BUS_QUEUE_SIZE(1024) ── */
+static int pair_alive(const LoopbackPair* p) {
+    return net_transport_connection_count(p->sender) >= 1
+        && net_transport_connection_count(p->receiver) >= 1;
+}
+
+/* ── 吞吐：有界 in-flight。无界突发会触发 send 侧 100ms EAGAIN 断连。── */
 
 static int bench_throughput(LoopbackPair* pair, int total) {
-    print_bench_header("localhost loopback TCP — 持续吞吐量 (burst)");
-
-    int rounds = (total + THRU_BATCH - 1) / THRU_BATCH;
-    int actual = rounds * THRU_BATCH;
+    print_bench_header("localhost loopback TCP — 持续吞吐量 (bounded in-flight)");
 
     RecvState st;
     memset(&st, 0, sizeof(st));
     atomic_store(&st.recv_count, 0);
-    st.lat_cap = actual;
-    st.lat_ns = calloc((size_t)actual, sizeof(uint64_t));
+    st.lat_cap = total;
+    st.lat_ns = calloc((size_t)total, sizeof(uint64_t));
     if (!st.lat_ns) {
         fprintf(stderr, "throughput: malloc failed\n");
         return -1;
@@ -253,10 +257,8 @@ static int bench_throughput(LoopbackPair* pair, int total) {
     }
 
     uint8_t payload[BENCH_PAYLOAD_BYTES];
-    /* 预热一批，不计入 */
     {
-        uint64_t t = now_ns();
-        fill_payload(payload, sizeof(payload), 0, t);
+        fill_payload(payload, sizeof(payload), 0, now_ns());
         message_bus_publish(pair->sender_bus, BENCH_TOPIC, "bench_tcp",
                             payload, sizeof(payload));
         if (wait_until_count(&st, 1, DELIVER_TIMEOUT_MS) != 0) {
@@ -265,42 +267,52 @@ static int bench_throughput(LoopbackPair* pair, int total) {
             return -1;
         }
         atomic_store(&st.recv_count, 0);
-        memset(st.lat_ns, 0, (size_t)actual * sizeof(uint64_t));
+        memset(st.lat_ns, 0, (size_t)total * sizeof(uint64_t));
     }
 
     uint64_t t0 = now_ns();
-    for (int r = 0; r < rounds; r++) {
-        uint64_t target = (uint64_t)(r + 1) * THRU_BATCH;
-        for (int i = 0; i < THRU_BATCH; i++) {
-            int seq = r * THRU_BATCH + i;
-            fill_payload(payload, sizeof(payload), (uint64_t)seq, now_ns());
-            if (message_bus_publish(pair->sender_bus, BENCH_TOPIC, "bench_tcp",
-                                    payload, sizeof(payload)) != 0) {
-                fprintf(stderr, "throughput: publish failed at seq=%d\n", seq);
-                free(st.lat_ns);
-                return -1;
-            }
+    for (int seq = 0; seq < total; seq++) {
+        fill_payload(payload, sizeof(payload), (uint64_t)seq, now_ns());
+        if (message_bus_publish(pair->sender_bus, BENCH_TOPIC, "bench_tcp",
+                                payload, sizeof(payload)) != 0) {
+            fprintf(stderr, "throughput: publish failed at seq=%d\n", seq);
+            free(st.lat_ns);
+            return -1;
         }
-        if (wait_until_count(&st, target, DELIVER_TIMEOUT_MS) != 0) {
-            fprintf(stderr, "throughput: delivery timeout at %llu / %d\n",
-                    (unsigned long long)atomic_load(&st.recv_count), actual);
+        /* 保持至多 THRU_IN_FLIGHT 条在途，避免撑死非阻塞 send。 */
+        uint64_t min_recv = (uint64_t)(seq + 1 - THRU_IN_FLIGHT);
+        if (seq + 1 >= THRU_IN_FLIGHT &&
+            wait_until_count(&st, min_recv, DELIVER_TIMEOUT_MS) != 0) {
+            fprintf(stderr, "throughput: delivery timeout at %llu / %d (peers tx=%d rx=%d)\n",
+                    (unsigned long long)atomic_load(&st.recv_count), total,
+                    net_transport_connection_count(pair->sender),
+                    net_transport_connection_count(pair->receiver));
+            if (!pair_alive(pair))
+                fprintf(stderr, "throughput: connection dropped "
+                        "(NetworkTransport closes on send-backpressure / 100ms poll)\n");
             free(st.lat_ns);
             return -1;
         }
     }
+    if (wait_until_count(&st, (uint64_t)total, DELIVER_TIMEOUT_MS) != 0) {
+        fprintf(stderr, "throughput: drain timeout at %llu / %d\n",
+                (unsigned long long)atomic_load(&st.recv_count), total);
+        free(st.lat_ns);
+        return -1;
+    }
     uint64_t t1 = now_ns();
 
     double elapsed_s = (t1 - t0) / 1e9;
-    double throughput = actual / elapsed_s;
+    double throughput = total / elapsed_s;
 
     int lat_n = 0;
-    uint64_t* lat_ok = malloc((size_t)actual * sizeof(uint64_t));
+    uint64_t* lat_ok = malloc((size_t)total * sizeof(uint64_t));
     if (!lat_ok) {
         fprintf(stderr, "throughput: malloc failed\n");
         free(st.lat_ns);
         return -1;
     }
-    for (int i = 0; i < actual; i++) {
+    for (int i = 0; i < total; i++) {
         if (st.lat_ns[i] > 0) lat_ok[lat_n++] = st.lat_ns[i];
     }
     Stats lat = calc_stats(lat_ok, lat_n);
@@ -309,13 +321,14 @@ static int bench_throughput(LoopbackPair* pair, int total) {
     printf("  不是:            NIC/线缆，也不是进程内 MessageBus\n");
     printf("  载荷:            %d B 用户数据 / 线帧 ≈ %zu B（整份 Message）\n",
            BENCH_PAYLOAD_BYTES, 4u + sizeof(Message));
-    printf("  消息数:          %d（每批 %d）\n", actual, THRU_BATCH);
+    printf("  消息数:          %d（in-flight≤%d）\n", total, THRU_IN_FLIGHT);
     printf("  总耗时:          %.3f ms\n", elapsed_s * 1000.0);
     printf("  吞吐:            %.0f msg/s   (%.1f MB/s wire frames)\n",
            throughput,
            throughput * (4.0 + (double)sizeof(Message)) / 1e6);
-    print_latency_row("burst 单向延迟 (嵌入时间戳)", lat);
-    printf("  注: burst 延迟含发送端排队 + 10ms recv poll；一批可能在同一次 poll 里到齐。\n");
+    print_latency_row("in-flight 单向延迟 (嵌入时间戳)", lat);
+    printf("  注: recv 每 10ms 读 8KB + 线帧≈%zu B，吞吐被实现封顶，不是 loopback 下限。\n",
+           4u + sizeof(Message));
 
     NetTransportStats tx = {0}, rx = {0};
     net_transport_get_stats(pair->sender, &tx);
@@ -399,8 +412,12 @@ static int bench_serial_latency(LoopbackPair* pair, int n) {
     print_latency_row(lat_label, lat);
     printf("  等效串行吞吐:    %.0f msg/s\n",
            lat.avg_ns ? 1e9 / (double)lat.avg_ns : 0.0);
-    printf("  注: 当前 recv 线程 usleep(10ms) 一次 poll；串行 ping p50 通常 ≈ 该间隔，\n");
-    printf("      这是实现特性，不是 127.0.0.1 内核回环本身的下限。\n");
+    {
+        size_t frame = 4u + sizeof(Message);
+        int polls = (int)((frame + 8191u) / 8192u);
+        printf("  注: recv 每 10ms 读 8KB → 一帧约 %d 次 poll（≈%d ms），不是 loopback 下限。\n",
+               polls, polls * 10);
+    }
 
     free(lat_ok);
     free(st.lat_ns);
@@ -448,7 +465,7 @@ int main(int argc, char** argv) {
         usage(argv[0]);
         return 1;
     }
-    if (count < THRU_BATCH) count = THRU_BATCH;
+    if (count < 1) count = DEFAULT_COUNT;
 
     printf("╔═══════════════════════════════════════════════════════════════════╗\n");
     printf("║     NetworkTransport 基准 — localhost loopback TCP                ║\n");
