@@ -1,12 +1,7 @@
 #include "ekf_slam.h"
+#include "slam_math.h"   /* slam_wrap_pi: 航向归一化，与单测共用同一份实现 */
 #include <math.h>
 #include <string.h>
-
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
-
 
 static void cov_mat_zero(EkfCovariance* P) {
     memset(P->data, 0, sizeof(P->data));
@@ -91,8 +86,7 @@ void ekf_slam_predict(EkfSlam* ekf, float accel_x, float gyro_z, uint64_t curren
     ekf->x.v += accel_x * dt;
     ekf->x.omega = gyro_z;
 
-    while (ekf->x.heading > (float)M_PI) ekf->x.heading -= 2.0f * (float)M_PI;
-    while (ekf->x.heading < -(float)M_PI) ekf->x.heading += 2.0f * (float)M_PI;
+    ekf->x.heading = slam_wrap_pi(ekf->x.heading);
 
     /* ── 雅可比 F 修复（5×5，行优先） ──
      *
@@ -197,10 +191,7 @@ void ekf_slam_update(EkfSlam* ekf, float obs_x, float obs_y, float obs_heading) 
         obs_heading - ekf->x.heading
     };
     
-    float y_norm = y[2];
-    while (y_norm > (float)M_PI) y_norm -= 2.0f * (float)M_PI;
-    while (y_norm < -(float)M_PI) y_norm += 2.0f * (float)M_PI;
-    y[2] = y_norm;
+    y[2] = slam_wrap_pi(y[2]);
     
     float Ky[5];
     Ky[0] = K[0] * y[0] + K[1] * y[1] + K[2] * y[2];
@@ -215,8 +206,7 @@ void ekf_slam_update(EkfSlam* ekf, float obs_x, float obs_y, float obs_heading) 
     ekf->x.v += Ky[3];
     ekf->x.omega += Ky[4];
     
-    while (ekf->x.heading > (float)M_PI) ekf->x.heading -= 2.0f * (float)M_PI;
-    while (ekf->x.heading < -(float)M_PI) ekf->x.heading += 2.0f * (float)M_PI;
+    ekf->x.heading = slam_wrap_pi(ekf->x.heading);
     
     float KH[EKF_COV_DIM];
     mat_mul(KH, K, H, EKF_STATE_DIM, EKF_STATE_DIM, 3);
@@ -283,8 +273,7 @@ void ekf_slam_update_pos(EkfSlam* ekf, float obs_x, float obs_y) {
     ekf->x.v       += K[6] * y[0] + K[7] * y[1];
     ekf->x.omega   += K[8] * y[0] + K[9] * y[1];
 
-    while (ekf->x.heading > (float)M_PI) ekf->x.heading -= 2.0f * (float)M_PI;
-    while (ekf->x.heading < -(float)M_PI) ekf->x.heading += 2.0f * (float)M_PI;
+    ekf->x.heading = slam_wrap_pi(ekf->x.heading);
 
     /* P = (I − K·H)·P，H 只有前两列非零 → KH 仅前两列由 K 填充 */
     float KH[EKF_COV_DIM];

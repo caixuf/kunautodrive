@@ -284,7 +284,8 @@ add_library(navigation_node SHARED navigation_node.c)
 target_link_libraries(navigation_node ${NODE_LINK_LIBS})
 
 # sensor_model_node: 噪声/FOV/遮挡传感器模型
-add_library(sensor_model SHARED sensor_model_node.c)
+# sensor_model_weather.c：可见度/天气 → 衰减纯逻辑，与 tests/test_adas_nodes_logic.c 共用
+add_library(sensor_model SHARED sensor_model_node.c sensor_model_weather.c)
 target_link_libraries(sensor_model ${NODE_LINK_LIBS})
 
 # ── 新增节点插件 ──────────────────────────────────────────────
@@ -668,7 +669,8 @@ target_link_libraries(imu_driver_node ${NODE_LINK_LIBS})
 # 拒绝并降级 dead_reckon（见 slam_node.cpp 文件头 + HAVE_FAST_LIO2 块注释）。
 # 前置里程碑（不在本轮）：先把 LidarFrame 扩成真实点云 topic，才谈得上接 FAST_LIO。
 option(ENABLE_FAST_LIO2 "Enable FAST-LIO2 SLAM backend (requires PCL/Eigen/Sophus + libfast_lio2.a)" OFF)
-add_library(slam_node SHARED slam_node.cpp ekf_slam.c)
+# slam_math.c：slam_wrap_pi（航向归一化）+ slam_dry_run_pose，与单测共用
+add_library(slam_node SHARED slam_node.cpp ekf_slam.c slam_math.c)
 target_link_libraries(slam_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
 if(ENABLE_FAST_LIO2)
     target_compile_definitions(slam_node PRIVATE HAVE_FAST_LIO2)
@@ -718,7 +720,8 @@ target_link_libraries(stereo_vision_node ${NODE_LINK_LIBS})
 # 通过 PCA9685 I2C-PWM 扩展板（¥10）或树莓派 GPIO 硬件 PWM 输出。backend 参数
 # 选 "pca9685" / "gpio" / "dry_run"。带看门狗：3s 无 cmd 强制 ESC 中位（防失控）。
 # I2C 打开失败自动降级 dry_run，不阻塞流水线。Linux 平台用 linux/i2c-dev.h。
-add_library(actuator_pwm_node SHARED actuator_pwm_node.c)
+# pwm_map.c：ControlCmd → PWM 脉宽纯映射，与 tests/test_adas_nodes_logic.c 共用
+add_library(actuator_pwm_node SHARED actuator_pwm_node.c pwm_map.c)
 target_link_libraries(actuator_pwm_node ${NODE_LINK_LIBS})
 
 # perception_fusion_node: 感知融合节点（LiDAR + Stereo 两路 ObstacleList 去重合并 + 跨帧追踪）

@@ -30,6 +30,9 @@
 #include "imu_protocol.h"
 #include "dbscan_cluster.h"
 #include "perception_points.h"
+#include "pwm_map.h"
+#include "sensor_model_weather.h"
+#include "slam_math.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -81,75 +84,17 @@ static void make_synthetic_imu_for_test(ImuData* out, double gravity) {
 }
 
 /* ══════════════════════════════════════════════════════════ */
-/* 副本：slam_node.c 的纯逻辑（dry-run 圆轨迹生成 + heading 归一化） */
+/* SLAM：改用抽出的 slam_math.{h,c}（与节点共用同一份实现）      */
 /* ══════════════════════════════════════════════════════════ */
-
-/* adapted from modules/adas_nodes/slam_node.c:385-402 (dry_run 圆轨迹块)
- * 把 g.poses_published / g.publish_hz / R=10 改成参数。
- * 注意：原代码角速度 ω=1 rad/s（t 单位是秒，t = poses_published / publish_hz）。 */
-static void slam_dry_run_circle_pose(uint64_t poses_published, int publish_hz,
-                                     float R, Pose2D* pose) {
-    double t = (double)poses_published / (double)(publish_hz > 0 ? publish_hz : 20);
-    pose->x         = R * (float)cos(t);
-    pose->y         = R * (float)sin(t);
-    pose->heading    = (float)t + (float)(M_PI / 2.0);
-    pose->cov_xx    = 0.1f;
-    pose->cov_yy    = 0.1f;
-    pose->cov_hh    = 0.05f;
-    pose->converged = true;
-    /* source 在 slam_node.c 里硬编码为 POSE_SOURCE_SLAM=2，这里也保持 */
-    pose->source    = 2u;
-}
-
-/* adapted from modules/adas_nodes/slam_node.c:198-199 (on_imu heading 归一化)
- * 把 [-pi, pi] 归一化逻辑提取为独立函数。原代码在循环里减/加 2π。 */
-static float normalize_heading_pi(float h) {
-    while (h >   (float)M_PI) h -= 2.0f * (float)M_PI;
-    while (h < -(float)M_PI) h += 2.0f * (float)M_PI;
-    return h;
-}
+/* 旧副本有两个问题：heading 归一化那份抄的是 slam_node.c 里**已被 EKF 重构删掉**
+ * 的死代码（真实实现现在在 ekf_slam.c，逐处内联了 4 遍，已收口到 slam_wrap_pi）；
+ * 圆轨迹那份抄的是 publish 循环里的内联代码。现在两边共用 slam_math.c。 */
 
 /* ══════════════════════════════════════════════════════════ */
-/* 副本：actuator_pwm_node.c 的纯逻辑（ControlCmd → PWM 映射） */
+/* Actuator PWM：改用抽出的 pwm_map.{h,c}（与节点共用同一份实现） */
 /* ══════════════════════════════════════════════════════════ */
-
-/* adapted from modules/adas_nodes/actuator_pwm_node.c:117-118 + 272-291
- * PWM_CENTER_US=1500, PWM_RANGE_US=500（±500μs 对应 ±1.0 控制）
- * MAX_STEER_RAD=0.22 是源文件硬编码的 RC 小车值。
- * 这里把所有"配置常量"参数化，便于测不同配置下的映射。 */
-#define PWM_CENTER_US   1500
-#define PWM_RANGE_US    500
-#define MAX_STEER_RAD   0.22   /* 与源文件 actuator_pwm_node.c:287 一致 */
-
-static void map_control_cmd_to_pwm(double throttle, double brake, double steering_rad,
-                                   int e_stop,
-                                   double throttle_scale, double steering_scale,
-                                   int* esc_us, int* steer_us) {
-    int estop = e_stop ? 1 : 0;
-
-    int esc;
-    if (estop) {
-        esc = PWM_CENTER_US;
-    } else if (brake > 0.01) {
-        esc = (int)(PWM_CENTER_US - brake * throttle_scale);
-    } else {
-        esc = (int)(PWM_CENTER_US + throttle * throttle_scale);
-    }
-
-    double steer_norm = steering_rad / MAX_STEER_RAD;
-    if (steer_norm > 1.0) steer_norm = 1.0;
-    if (steer_norm < -1.0) steer_norm = -1.0;
-    int steer = (int)(PWM_CENTER_US + steer_norm * steering_scale);
-
-    /* 源文件在 pwm_set_pulse 里做最终钳位 [1000, 2000]，这里同步做。 */
-    if (esc < 1000) esc = 1000;
-    if (esc > 2000) esc = 2000;
-    if (steer < 1000) steer = 1000;
-    if (steer > 2000) steer = 2000;
-
-    if (esc_us)   *esc_us   = esc;
-    if (steer_us) *steer_us = steer;
-}
+/* 以前这里是"副本 + 行号标注"（源改了副本不改，CI 不报）。现在直接调用
+ * pwm_map_control_cmd()，常量 PWM_CENTER_US / PWM_MAX_STEER_RAD 也来自头文件。 */
 
 /* ══════════════════════════════════════════════════════════ */
 /* IMU Driver Tests                                           */
@@ -250,7 +195,7 @@ static void test_imu_synthetic_custom_gravity(void) {
 static void test_slam_circle_pose_t0(void) {
     TEST("slam dry-run circle at t=0: (R, 0), heading=π/2");
     Pose2D pose;
-    slam_dry_run_circle_pose(0, 20, 10.0f, &pose);
+    slam_dry_run_pose(0, 20, 10.0f, &pose);
     ASSERT_NEAR(pose.x, 10.0, 1e-4, "x should be R at t=0");
     ASSERT_NEAR(pose.y, 0.0, 1e-4, "y should be 0 at t=0");
     ASSERT_NEAR(pose.heading, M_PI / 2.0, 1e-4, "heading should be π/2 at t=0");
@@ -266,7 +211,7 @@ static void test_slam_circle_pose_quarter(void) {
      * 此时 x=10*cos(1.55)≈0.208, y=10*sin(1.55)≈9.998 —— 量化误差是
      * 采样的固有性质，不是 bug。改用「在圆上」不变量 + 位置方向断言更稳健。 */
     Pose2D pose;
-    slam_dry_run_circle_pose(31, 20, 10.0f, &pose);
+    slam_dry_run_pose(31, 20, 10.0f, &pose);
     /* 不变量：x² + y² = R²，对任意 t 恒成立（验证圆参数化正确） */
     float r2 = pose.x * pose.x + pose.y * pose.y;
     ASSERT_NEAR(r2, 100.0f, 0.1f, "should be on circle of radius 10 (|pos|²=%.4f)", r2);
@@ -282,8 +227,8 @@ static void test_slam_circle_pose_full_loop(void) {
      * sin(6.3)=0.0168 → y=0.168（量化误差，非 bug）。用 on-circle 不变量
      * +「回到起点附近」断言。 */
     Pose2D pose_start, pose_end;
-    slam_dry_run_circle_pose(0, 20, 10.0f, &pose_start);
-    slam_dry_run_circle_pose(126, 20, 10.0f, &pose_end);
+    slam_dry_run_pose(0, 20, 10.0f, &pose_start);
+    slam_dry_run_pose(126, 20, 10.0f, &pose_end);
     /* 不变量：绕一圈后仍在圆上 */
     float r2 = pose_end.x * pose_end.x + pose_end.y * pose_end.y;
     ASSERT_NEAR(r2, 100.0f, 0.1f, "should still be on circle after full loop (|pos|²=%.4f)", r2);
@@ -297,7 +242,7 @@ static void test_slam_circle_pose_convergence_flag(void) {
     TEST("slam dry-run: cov_xx/yy/hh are constant 0.1/0.1/0.05");
     Pose2D pose;
     for (int i = 0; i < 5; i++) {
-        slam_dry_run_circle_pose((uint64_t)i * 20, 20, 10.0f, &pose);
+        slam_dry_run_pose((uint64_t)i * 20, 20, 10.0f, &pose);
         ASSERT_NEAR(pose.cov_xx, 0.1, 1e-6, "cov_xx should be constant 0.1");
         ASSERT_NEAR(pose.cov_yy, 0.1, 1e-6, "cov_yy should be constant 0.1");
         ASSERT_NEAR(pose.cov_hh, 0.05, 1e-6, "cov_hh should be constant 0.05");
@@ -308,11 +253,11 @@ static void test_slam_circle_pose_convergence_flag(void) {
 static void test_slam_heading_normalize_basic(void) {
     TEST("slam heading normalize wraps to [-π, π]");
     /* 4π → 0 */
-    ASSERT_NEAR(normalize_heading_pi(4.0f * (float)M_PI), 0.0f, 1e-5, "4π → 0");
+    ASSERT_NEAR(slam_wrap_pi(4.0f * (float)M_PI), 0.0f, 1e-5, "4π → 0");
     /* 3π/2 → -π/2 */
-    ASSERT_NEAR(normalize_heading_pi(1.5f * (float)M_PI), -0.5f * (float)M_PI, 1e-5, "3π/2 → -π/2");
+    ASSERT_NEAR(slam_wrap_pi(1.5f * (float)M_PI), -0.5f * (float)M_PI, 1e-5, "3π/2 → -π/2");
     /* -3π/2 → π/2 */
-    ASSERT_NEAR(normalize_heading_pi(-1.5f * (float)M_PI), 0.5f * (float)M_PI, 1e-5, "-3π/2 → π/2");
+    ASSERT_NEAR(slam_wrap_pi(-1.5f * (float)M_PI), 0.5f * (float)M_PI, 1e-5, "-3π/2 → π/2");
     PASS();
 }
 
@@ -322,7 +267,7 @@ static void test_slam_heading_normalize_in_range(void) {
     for (size_t i = 0; i < sizeof(test_vals)/sizeof(test_vals[0]); i++) {
         float v = test_vals[i];
         /* M_PI 本身和 -M_PI 本身按定义是合法范围（≤π / ≥-π），不变 */
-        ASSERT_NEAR(normalize_heading_pi(v), v, 1e-6, "in-range value should be unchanged");
+        ASSERT_NEAR(slam_wrap_pi(v), v, 1e-6, "in-range value should be unchanged");
     }
     PASS();
 }
@@ -334,7 +279,7 @@ static void test_slam_heading_normalize_in_range(void) {
 static void test_pwm_throttle_full_forward(void) {
     TEST("pwm: throttle=+1.0 → esc=2000μs (full forward)");
     int esc, steer;
-    map_control_cmd_to_pwm(1.0, 0.0, 0.0, 0, 500.0, 500.0, &esc, &steer);
+    pwm_map_control_cmd(1.0, 0.0, 0.0, 0, 500.0, 500.0, &esc, &steer);
     ASSERT_EQ(esc, 2000, "throttle +1 should map to 2000μs");
     ASSERT_EQ(steer, 1500, "steering 0 should map to 1500μs");
     PASS();
@@ -343,7 +288,7 @@ static void test_pwm_throttle_full_forward(void) {
 static void test_pwm_throttle_full_reverse(void) {
     TEST("pwm: throttle=-1.0 → esc=1000μs (full reverse / brake)");
     int esc, steer;
-    map_control_cmd_to_pwm(-1.0, 0.0, 0.0, 0, 500.0, 500.0, &esc, &steer);
+    pwm_map_control_cmd(-1.0, 0.0, 0.0, 0, 500.0, 500.0, &esc, &steer);
     ASSERT_EQ(esc, 1000, "throttle -1 should map to 1000μs");
     PASS();
 }
@@ -351,7 +296,7 @@ static void test_pwm_throttle_full_reverse(void) {
 static void test_pwm_brake_full(void) {
     TEST("pwm: brake=1.0 → esc=1000μs (full brake)");
     int esc, steer;
-    map_control_cmd_to_pwm(0.0, 1.0, 0.0, 0, 500.0, 500.0, &esc, &steer);
+    pwm_map_control_cmd(0.0, 1.0, 0.0, 0, 500.0, 500.0, &esc, &steer);
     ASSERT_EQ(esc, 1000, "brake=1 should map to 1000μs (reverse of throttle)");
     PASS();
 }
@@ -361,7 +306,7 @@ static void test_pwm_brake_overrides_throttle(void) {
     /* 源文件 actuator_pwm_node.c:280 用 `else if (brake > 0.01)` 走刹车路径，
      * 即 throttle 路径被忽略。这是安全设计：刹车时油门信号被丢弃。 */
     int esc, steer;
-    map_control_cmd_to_pwm(1.0, 0.5, 0.0, 0, 500.0, 500.0, &esc, &steer);
+    pwm_map_control_cmd(1.0, 0.5, 0.0, 0, 500.0, 500.0, &esc, &steer);
     /* brake=0.5 → esc = 1500 - 0.5*500 = 1250, 不是 2000 */
     ASSERT_EQ(esc, 1250, "brake should override throttle (esc=1250, not 2000)");
     PASS();
@@ -371,7 +316,7 @@ static void test_pwm_e_stop_overrides_all(void) {
     TEST("pwm: emergency_stop forces esc=1500μs (neutral)");
     int esc, steer;
     /* e_stop 即使有 throttle / brake 也应该强制中位 */
-    map_control_cmd_to_pwm(1.0, 1.0, 0.5, 1, 500.0, 500.0, &esc, &steer);
+    pwm_map_control_cmd(1.0, 1.0, 0.5, 1, 500.0, 500.0, &esc, &steer);
     ASSERT_EQ(esc, 1500, "e_stop should force esc=1500 (neutral)");
     PASS();
 }
@@ -379,12 +324,12 @@ static void test_pwm_e_stop_overrides_all(void) {
 static void test_pwm_steering_max_left(void) {
     TEST("pwm: steering=+0.22rad → steer=2000μs (full right)");
     /* 注意：源文件 actuator_pwm_node.c:286-291 的实现是
-     *   steer_norm = steering_rad / MAX_STEER_RAD
+     *   steer_norm = steering_rad / PWM_MAX_STEER_RAD
      *   steer_us = 1500 + steer_norm * steering_scale
      * steering_rad=+0.22 → steer_norm=+1.0 → steer_us=2000
      * 按舵机约定 2000μs 是"全右"。这里只验证映射不验证物理方向。 */
     int esc, steer;
-    map_control_cmd_to_pwm(0.0, 0.0, 0.22, 0, 500.0, 500.0, &esc, &steer);
+    pwm_map_control_cmd(0.0, 0.0, 0.22, 0, 500.0, 500.0, &esc, &steer);
     ASSERT_EQ(steer, 2000, "steering=+0.22rad should map to 2000μs");
     PASS();
 }
@@ -392,7 +337,7 @@ static void test_pwm_steering_max_left(void) {
 static void test_pwm_steering_max_right(void) {
     TEST("pwm: steering=-0.22rad → steer=1000μs (full left)");
     int esc, steer;
-    map_control_cmd_to_pwm(0.0, 0.0, -0.22, 0, 500.0, 500.0, &esc, &steer);
+    pwm_map_control_cmd(0.0, 0.0, -0.22, 0, 500.0, 500.0, &esc, &steer);
     ASSERT_EQ(steer, 1000, "steering=-0.22rad should map to 1000μs");
     PASS();
 }
@@ -400,8 +345,8 @@ static void test_pwm_steering_max_right(void) {
 static void test_pwm_steering_clamp(void) {
     TEST("pwm: steering beyond max is clamped to ±0.22rad equivalent");
     int esc, steer_over, steer_under;
-    map_control_cmd_to_pwm(0.0, 0.0, 0.5, 0, 500.0, 500.0, &esc, &steer_over);
-    map_control_cmd_to_pwm(0.0, 0.0, -0.5, 0, 500.0, 500.0, &esc, &steer_under);
+    pwm_map_control_cmd(0.0, 0.0, 0.5, 0, 500.0, 500.0, &esc, &steer_over);
+    pwm_map_control_cmd(0.0, 0.0, -0.5, 0, 500.0, 500.0, &esc, &steer_under);
     ASSERT_EQ(steer_over, 2000, "steering=+0.5rad should clamp to 2000μs");
     ASSERT_EQ(steer_under, 1000, "steering=-0.5rad should clamp to 1000μs");
     PASS();
@@ -410,7 +355,7 @@ static void test_pwm_steering_clamp(void) {
 static void test_pwm_zero_cmd_is_neutral(void) {
     TEST("pwm: zero throttle/brake/steer → both 1500μs (neutral)");
     int esc, steer;
-    map_control_cmd_to_pwm(0.0, 0.0, 0.0, 0, 500.0, 500.0, &esc, &steer);
+    pwm_map_control_cmd(0.0, 0.0, 0.0, 0, 500.0, 500.0, &esc, &steer);
     ASSERT_EQ(esc, 1500, "zero cmd should produce esc=1500");
     ASSERT_EQ(steer, 1500, "zero cmd should produce steer=1500");
     PASS();
@@ -420,7 +365,7 @@ static void test_pwm_custom_scale(void) {
     TEST("pwm: custom throttle_scale=300 changes range to 1500±300");
     /* 真车场景：throttle_scale 可能不是默认的 500，验证参数确实生效 */
     int esc, steer;
-    map_control_cmd_to_pwm(1.0, 0.0, 0.0, 0, 300.0, 300.0, &esc, &steer);
+    pwm_map_control_cmd(1.0, 0.0, 0.0, 0, 300.0, 300.0, &esc, &steer);
     ASSERT_EQ(esc, 1800, "throttle=1 with scale=300 should map to 1800μs");
     PASS();
 }
@@ -429,44 +374,33 @@ static void test_pwm_custom_scale(void) {
 /* Sensor Model: Weather Attenuation                          */
 /* ══════════════════════════════════════════════════════════ */
 
-// adapted from modules/adas_nodes/sensor_model_node.c:on_environment_state
-static double compute_weather_attenuation(double visibility_m, const char* weather) {
-    double factor = visibility_m / 200.0;
-    if (factor < 0.1) factor = 0.1;
-    if (factor > 1.0) factor = 1.0;
-    double att = 1.0 - factor;
-    if (weather && (strstr(weather, "rain") || strstr(weather, "fog") || strstr(weather, "snow"))) {
-        if (att < 0.3) att = 0.3;
-    }
-    if (att > 1.0) att = 1.0;
-    if (att < 0.0) att = 0.0;
-    return att;
-}
+/* 天气衰减改用抽出的 sensor_model_weather.{h,c}（与节点共用同一份实现）。
+ * 以前这里是"副本 + 行号标注"，源改了副本不改时 CI 不报。 */
 
 static void test_weather_attenuation_clear(void) {
     TEST("sensor_model: clear weather 200m vis -> 0.0 att");
-    double att = compute_weather_attenuation(200.0, "clear");
+    double att = sensor_model_weather_attenuation(200.0, "clear");
     ASSERT_NEAR(att, 0.0, 1e-6, "clear weather with 200m visibility should have 0 attenuation");
     PASS();
 }
 
 static void test_weather_attenuation_fog(void) {
     TEST("sensor_model: fog 50m vis -> 0.75 att");
-    double att = compute_weather_attenuation(50.0, "fog");
+    double att = sensor_model_weather_attenuation(50.0, "fog");
     ASSERT_NEAR(att, 0.75, 1e-6, "50m visibility in fog should have 0.75 attenuation");
     PASS();
 }
 
 static void test_weather_attenuation_rain_floor(void) {
     TEST("sensor_model: rain with high vis -> min 0.30 att");
-    double att = compute_weather_attenuation(200.0, "rain");
+    double att = sensor_model_weather_attenuation(200.0, "rain");
     ASSERT_NEAR(att, 0.30, 1e-6, "rain should enforce minimum 0.30 attenuation");
     PASS();
 }
 
 static void test_weather_attenuation_dense_fog(void) {
     TEST("sensor_model: dense fog clamp -> 0.90 att");
-    double att = compute_weather_attenuation(5.0, "dense_fog");
+    double att = sensor_model_weather_attenuation(5.0, "dense_fog");
     ASSERT_NEAR(att, 0.90, 1e-6, "extreme low vis should clamp factor to 0.1, att to 0.90");
     PASS();
 }

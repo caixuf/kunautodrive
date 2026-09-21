@@ -1078,7 +1078,10 @@ set_tests_properties(json_schema_tests PROPERTIES TIMEOUT 10)
 # 算法/驱动时回归掉已验证过的行为。副本 + 行号标注策略，详见文件头注释。
 add_executable(test_adas_nodes_logic tests/test_adas_nodes_logic.c
                                 modules/adas_nodes/imu_protocol.c
-                                modules/adas_nodes/perception_points.c)
+                                modules/adas_nodes/perception_points.c
+                                modules/adas_nodes/pwm_map.c
+                                modules/adas_nodes/sensor_model_weather.c
+                                modules/adas_nodes/slam_math.c)
 set_source_files_properties(tests/test_adas_nodes_logic.c PROPERTIES LANGUAGE CXX)
 target_link_libraries(test_adas_nodes_logic flowengine_core)
 add_dependencies(test_adas_nodes_logic msg_codegen)
@@ -1131,8 +1134,12 @@ target_link_libraries(test_ekf_fusion m)
 add_test(NAME ekf_fusion_tests COMMAND test_ekf_fusion)
 set_tests_properties(ekf_fusion_tests PROPERTIES TIMEOUT 10)
 
-add_executable(test_ekf_slam modules/adas_nodes/test_ekf_slam.c modules/adas_nodes/ekf_slam.c)
-target_include_directories(test_ekf_slam PRIVATE modules/adas_nodes)
+add_executable(test_ekf_slam modules/adas_nodes/test_ekf_slam.c
+                            modules/adas_nodes/ekf_slam.c
+                            modules/adas_nodes/slam_math.c)
+# slam_math.h 用到生成的 Pose2D（dry-run 圆轨迹位姿），故需 gen 头文件目录
+target_include_directories(test_ekf_slam PRIVATE modules/adas_nodes ${GEN_DIR})
+add_dependencies(test_ekf_slam msg_codegen)
 target_link_libraries(test_ekf_slam m)
 add_test(NAME ekf_slam_tests COMMAND test_ekf_slam)
 set_tests_properties(ekf_slam_tests PROPERTIES TIMEOUT 10)

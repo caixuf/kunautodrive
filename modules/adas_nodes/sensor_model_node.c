@@ -11,6 +11,7 @@
 #include "task_interface.h"
 #include "adas_msgs_gen.h"
 #include "nmea_parser.h"
+#include "sensor_model_weather.h"   /* 可见度/天气 → 衰减（与单测共用） */
 #include "transport.h"
 #include "discovery.h"
 #include "topic_registry.h"
@@ -325,26 +326,20 @@ static void on_environment_state(const Message* msg, void* user_data) {
     if (!msg) return;
     cJSON* root = cJSON_Parse((const char*)msg->data);
     if (!root) return;
+    double visibility_m = 200.0;
     cJSON* visibility = cJSON_GetObjectItemCaseSensitive(root, "visibility_m");
     if (cJSON_IsNumber(visibility)) {
-        double factor = visibility->valuedouble / 200.0;
-        if (factor < 0.1) factor = 0.1;
-        if (factor > 1.0) factor = 1.0;
-        g.camera_visibility_factor = factor;
+        visibility_m = visibility->valuedouble;
     }
     cJSON* weather_obj = cJSON_GetObjectItemCaseSensitive(root, "weather");
     if (cJSON_IsString(weather_obj) && weather_obj->valuestring) {
         strncpy(g.weather, weather_obj->valuestring, sizeof(g.weather) - 1);
         g.weather[sizeof(g.weather) - 1] = '\0';
     }
-    /* Calculate weather attenuation factor: [0.0, 1.0] */
-    double att = 1.0 - g.camera_visibility_factor;
-    if (strstr(g.weather, "rain") || strstr(g.weather, "fog") || strstr(g.weather, "snow")) {
-        if (att < 0.3) att = 0.3;
-    }
-    if (att > 1.0) att = 1.0;
-    if (att < 0.0) att = 0.0;
-    g.weather_attenuation = att;
+    /* 可见度/天气 → 相机可见度 + 传感器衰减：纯逻辑在 sensor_model_weather.c
+     * （与单测共用同一份实现，见 tests/test_adas_nodes_logic.c）。 */
+    g.camera_visibility_factor = sensor_model_camera_visibility(visibility_m);
+    g.weather_attenuation = sensor_model_weather_attenuation(visibility_m, g.weather);
 
     cJSON_Delete(root);
 }

@@ -81,6 +81,7 @@
 
 #include "node_plugin.h"
 #include "adas_msgs_gen.h"
+#include "pwm_map.h"     /* ControlCmd → PWM 脉宽纯映射（与单测共用同一份实现） */
 #include "transport.h"
 #include "discovery.h"
 #include "logger.h"
@@ -114,7 +115,7 @@
 #define PWM_FREQ_HZ_DEFAULT  50
 #define PCA9685_OSC_HZ       25000000ULL   /* PCA9685 内部振荡器 25MHz */
 #define PCA9685_RESOLUTION   4096          /* 12-bit */
-#define PWM_CENTER_US        1500          /* 中位脉宽 μs */
+/* PWM_CENTER_US / PWM_MIN_US / PWM_MAX_US / PWM_MAX_STEER_RAD 见 pwm_map.h */
 #define PWM_RANGE_US         500           /* ±500μs 对应 ±1.0 控制 */
 
 #define BACKEND_DRY_RUN  0
@@ -270,25 +271,14 @@ static int pwm_set_pulse(int channel, int pin_fallback, int pulse_us) {
 
 /* ── ControlCmd → PWM 转换 + 输出 ─────────────────────────── */
 static void apply_control_cmd(const ControlCmd* cmd) {
-    int e_stop = cmd->emergency_stop ? 1 : 0;
-
-    /* ESC 脉宽计算: throttle ∈ [-1, 1] → 1500 + throttle*scale
-     * brake 单独处理: brake > 0 时反向拉低 ESC（电调刹车） */
-    int esc_us;
-    if (e_stop) {
-        esc_us = PWM_CENTER_US;  /* 紧急停转：中位 */
-    } else if (cmd->brake > 0.01f) {
-        esc_us = (int)(PWM_CENTER_US - (double)cmd->brake * g.throttle_scale);
-    } else {
-        esc_us = (int)(PWM_CENTER_US + (double)cmd->throttle * g.throttle_scale);
-    }
-
-    /* 舵机脉宽计算: steering 是弧度(±0.22 rad)，先归一化到 [-1,1] 再映射 PWM */
-    const double MAX_STEER_RAD = 0.22;
-    double steer_norm = (double)cmd->steering / MAX_STEER_RAD;
-    if (steer_norm > 1.0) steer_norm = 1.0;
-    if (steer_norm < -1.0) steer_norm = -1.0;
-    int steer_us = (int)(PWM_CENTER_US + steer_norm * (double)g.steering_scale);
+    const int e_stop = cmd->emergency_stop ? 1 : 0;
+    /* 映射逻辑在 pwm_map.c（纯函数，tests/test_adas_nodes_logic.c 直接编同一份，
+     * 真车改曲线时单测跟着变）。这里只负责取缩放参数 + 落到硬件。 */
+    int esc_us = 0, steer_us = 0;
+    pwm_map_control_cmd((double)cmd->throttle, (double)cmd->brake,
+                        (double)cmd->steering, e_stop,
+                        g.throttle_scale, g.steering_scale,
+                        &esc_us, &steer_us);
 
     /* 输出 PWM */
     if (g.backend == BACKEND_PCA9685) {

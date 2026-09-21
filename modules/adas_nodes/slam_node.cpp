@@ -52,6 +52,7 @@
 #include "logger.h"
 #include "clock_service.h"
 #include "ekf_slam.h"
+#include "slam_math.h"   /* slam_dry_run_pose: dry-run 圆轨迹，与单测共用 */
 #include <cjson/cJSON.h>
 
 #include <math.h>
@@ -388,16 +389,8 @@ static int slam_execute(TaskBase* task) {
         memset(&pose, 0, sizeof(pose));
 
         if (g.dry_run) {
-            double t = (double)g.poses_published / (double)(g.publish_hz > 0 ? g.publish_hz : 20);
-            float  R = 10.0f;
-            pose.x         = R * (float)cos(t);
-            pose.y         = R * (float)sin(t);
-            pose.heading    = (float)t + (float)(M_PI / 2.0);
-            pose.cov_xx    = 0.1f;
-            pose.cov_yy    = 0.1f;
-            pose.cov_hh    = 0.05f;
-            pose.converged = true;
-            pose.source    = POSE_SOURCE_SLAM;
+            /* 纯逻辑在 slam_math.c（与单测共用同一份实现） */
+            slam_dry_run_pose(g.poses_published, g.publish_hz, 10.0f, &pose);
         } else {
             slam_update(&pose);
         }
