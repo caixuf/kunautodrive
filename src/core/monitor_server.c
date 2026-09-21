@@ -48,7 +48,7 @@ static pid_t g_route_demo_pid = 0;
 #include <zlib.h>
 #endif
 
-#define MONITOR_MAX_CLIENTS       8
+#define MONITOR_MAX_CLIENTS       64
 #define MONITOR_HTTP_BUF_SIZE     131072  /* 128 KB: 含 samples ~200 帧 (67916 bytes), 留余量给 scene.entities + obstacles */
 #define MONITOR_MAX_REMOTE_SRCS   8
 #define DASHBOARD_CACHE_STALE_SEC 15  /* tolerate short IPC jitter before marking stale */
@@ -780,6 +780,17 @@ static void exec_opsctl(int fd, const char* cmd, const char* json_body,
  * - 静态资源 + JSON API 在 client_keep_alive=true 时返回 true。
  * - 静态资源用 send_response_full（keep-alive + 路径分级缓存 + gzip）。
  * - SSE 路径绝对不走 gzip —— 压缩会缓冲实时数据，重现 "Waiting for data"。 */
+/* finish_response: 根据 client_keep_alive 决定是否保持连接。
+ * client_keep_alive 为 false 时显式 close(fd)，杜绝文件描述符泄漏与 CLOSE-WAIT 堆积；
+ * client_keep_alive 为 true 时保持连接给 handle_client 的 keep-alive 循环复用。 */
+static inline bool finish_response(int fd, bool client_keep_alive) {
+    if (!client_keep_alive) {
+        close(fd);
+        return false;
+    }
+    return true;
+}
+
 static bool dispatch_request(int fd, MonitorServer* ms,
                               char* req, ssize_t req_len,
                               const char* accept_encoding,
@@ -1350,7 +1361,7 @@ static bool dispatch_request(int fd, MonitorServer* ms,
                            "{\"status\":\"ok\"}",
                            client_keep_alive, "no-cache",
                            true, accept_encoding);
-        return client_keep_alive;
+        return finish_response(fd, client_keep_alive);
     }
 
     /* GET: /api/training/status → modelctl.py train-status (无 JSON body) */
@@ -1382,7 +1393,7 @@ static bool dispatch_request(int fd, MonitorServer* ms,
         send_response_full(fd, "200 OK", "application/json", buf,
                            client_keep_alive, "no-cache",
                            true, accept_encoding);
-        return client_keep_alive;
+        return finish_response(fd, client_keep_alive);
     }
 
     /* Route: /api/topics → per-topic stats (local + remote) */
@@ -1395,7 +1406,7 @@ static bool dispatch_request(int fd, MonitorServer* ms,
         send_response_full(fd, "200 OK", "application/json", buf,
                            client_keep_alive, "no-cache",
                            true, accept_encoding);
-        return client_keep_alive;
+        return finish_response(fd, client_keep_alive);
     }
 
     /* ── Debug API ─────────────────────────────────────── */
@@ -1431,7 +1442,7 @@ static bool dispatch_request(int fd, MonitorServer* ms,
                            true, accept_encoding);
         cJSON_free(json);
         cJSON_Delete(root);
-        return client_keep_alive;
+        return finish_response(fd, client_keep_alive);
     }
 
     /* GET /api/debug/autotune → 自动调优器状态 */
@@ -1461,7 +1472,7 @@ static bool dispatch_request(int fd, MonitorServer* ms,
                            true, accept_encoding);
         cJSON_free(json);
         cJSON_Delete(root);
-        return client_keep_alive;
+        return finish_response(fd, client_keep_alive);
     }
 
     /* GET /api/debug/params → 所有注册参数及当前值 */
@@ -1471,7 +1482,7 @@ static bool dispatch_request(int fd, MonitorServer* ms,
         send_response_full(fd, "200 OK", "application/json", buf,
                            client_keep_alive, "no-cache",
                            true, accept_encoding);
-        return client_keep_alive;
+        return finish_response(fd, client_keep_alive);
     }
 
     /* Route: / → flowboard/index.html (from --html-path) */
@@ -1501,7 +1512,7 @@ static bool dispatch_request(int fd, MonitorServer* ms,
                                fallback, client_keep_alive, "no-cache",
                                true, accept_encoding);
         }
-        return client_keep_alive;
+        return finish_response(fd, client_keep_alive);
     }
 
     /* Route: /js/<file> or /css/<file> → modular frontend from flowboard/ subdir.
@@ -1560,7 +1571,7 @@ static bool dispatch_request(int fd, MonitorServer* ms,
             close(fd);
             return false;
         }
-        return client_keep_alive;
+        return finish_response(fd, client_keep_alive);
     }
 
     /* Route: /tools/<file> → static asset served from the directory that
@@ -1653,7 +1664,7 @@ static bool dispatch_request(int fd, MonitorServer* ms,
             close(fd);
             return false;
         }
-        return client_keep_alive;
+        return finish_response(fd, client_keep_alive);
     }
 
     /* 404 */
@@ -1672,6 +1683,28 @@ static bool dispatch_request(int fd, MonitorServer* ms,
  * 返回 false），不参与复用 —— 避免 POST body 读取跨请求的字节污染问题。 */
 static void handle_client(int fd, MonitorServer* ms) {
     while (true) {
+        /* 等待客户端请求，设置 5s keep-alive 空闲超时；每 500ms 检查 ms->running 以便停服时快速退出 */
+        bool has_data = false;
+        for (int i = 0; i < 10 && ms->running; i++) {
+            fd_set rfds;
+            FD_ZERO(&rfds);
+            FD_SET(fd, &rfds);
+            struct timeval tv = { .tv_sec = 0, .tv_usec = 500000 };  /* 500ms */
+            int sret = select(fd + 1, &rfds, NULL, NULL, &tv);
+            if (sret > 0) {
+                has_data = true;
+                break;
+            }
+            if (sret < 0) {
+                if (errno == EINTR) continue;
+                break;
+            }
+        }
+        if (!has_data || !ms->running) {
+            close(fd);
+            return;
+        }
+
         char req[4096];
         ssize_t n = read(fd, req, sizeof(req) - 1);
         if (n <= 0) { close(fd); return; }
@@ -1771,6 +1804,11 @@ static void* server_thread_fn(void* arg) {
         if (select(ms->listen_fd + 1, &fds, NULL, NULL, &tv) > 0) {
             int client = accept(ms->listen_fd, NULL, NULL);
             if (client < 0) continue;
+
+            /* 为 socket 设置接收与发送超时（5s 兜底防死锁） */
+            struct timeval tv_sock = { .tv_sec = 5, .tv_usec = 0 };
+            setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &tv_sock, sizeof(tv_sock));
+            setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &tv_sock, sizeof(tv_sock));
 
             /* Hard cap concurrent client handlers (SSE connections can be long-lived).
              * listen(backlog) is not a concurrency limit, so enforce it explicitly
