@@ -5,11 +5,11 @@
   "warnings": [],
   "summary": {
     "scenario": "oncoming",
-    "samples": 191,
-    "duration_s": 44.89235496520996,
-    "x_delta_m": 831.9758382864106,
-    "avg_speed_mps": 18.79221581706617,
-    "max_speed_mps": 20.40323787984632,
+    "samples": 186,
+    "duration_s": 45.88235807418823,
+    "x_delta_m": 832.295839365977,
+    "avg_speed_mps": 18.75984932962183,
+    "max_speed_mps": 20.40299156026277,
     "max_lane_error_m": 8.750777880095484e-13,
     "max_lane_error_at_s": 0.0,
     "max_lane_error_y": -1.750000000000875,
@@ -20,8 +20,8 @@
     "yaw_rate_rms_radps": 0.0,
     "max_yaw_rate_radps": 0.0,
     "heading_flip_rate_hz": 0.0,
-    "low_speed_ratio": 0.03664921465968586,
-    "stagnation_duration_s": 1.4971609115600586,
+    "low_speed_ratio": 0.03763440860215054,
+    "stagnation_duration_s": 1.5074820518493652,
     "lane_change_count": 0,
     "has_noa_route": false,
     "driver_modes_seen": [
@@ -35,20 +35,20 @@
     "steer_rate_rms_per_s": 0.0,
     "max_steer_rate_per_s": 0.0,
     "steer_flip_rate_hz": 0.0,
-    "max_npc_speed_mps": 13.74792866104686,
+    "max_npc_speed_mps": 13.599824784659777,
     "max_npc_lateral_speed_mps": 0.0,
     "collision_topic_pub": 0,
     "topic_freq_hz": {
-      "vehicle/state": 59.15,
-      "sensor/lidar": 19.938,
-      "sensor/gps": 9.97,
-      "fusion/localization": 19.951,
-      "planning/trajectory": 14.819,
-      "control/raw_cmd": 24.533,
-      "control/cmd": 25.227
+      "vehicle/state": 59.135,
+      "sensor/lidar": 19.96,
+      "sensor/gps": 9.979,
+      "fusion/localization": 19.964,
+      "planning/trajectory": 14.805,
+      "control/raw_cmd": 20.386,
+      "control/cmd": 20.455
     },
     "inference_topic_active": true,
-    "inference_freq_hz": 19.885,
+    "inference_freq_hz": 19.876,
     "shadow_speed_mae_settled": null,
     "shadow_speed_mae_full": null,
     "shadow_settled_samples": 0,
@@ -68,21 +68,24 @@
     "recognition_rate_by_type": {
       "car": 1.0
     },
-    "truth_count_vehicle": 2483,
+    "truth_count_vehicle": 2418,
     "truth_count_vru": 0,
-    "truth_count_overall": 2483,
-    "warning_lead_avg_s": 26.882,
-    "warning_lead_min_s": 9.039,
+    "truth_count_overall": 2418,
+    "warning_lead_avg_s": 27.563,
+    "warning_lead_min_s": 9.563,
     "critical_event_count": 9,
-    "min_ttc_s": 0.0990072623400252,
+    "min_ttc_s": 0.05556118171316066,
     "perceived_track_count": 13,
+    "perception_coverage": 1.0,
+    "perceived_count_avg": 13.0,
+    "perception_metric_source": "scene.perceived (perception/obstacles)",
     "liveness": {
       "speed": {
-        "unique": 180,
+        "unique": 157,
         "dead": false
       },
       "x": {
-        "unique": 180,
+        "unique": 157,
         "dead": false
       },
       "y": {
@@ -110,7 +113,7 @@
     "behavior_obs_count": 13,
     "best_gap_m": -1.0,
     "lead_speed_mps": 20.0,
-    "desired_gap_m": 35.085113621726535,
+    "desired_gap_m": 35.085485422380245,
     "committed_lane": 2,
     "target_lane": -1,
     "blocked": false,
@@ -119,12 +122,12 @@
       "trajectory_metric_type": "closed_loop_lane_tracking",
       "trajectory_ade_m": 8.750777880095484e-13,
       "trajectory_fde_m": 8.750777880095484e-13,
-      "comfort_accel_rms_mps2": 1.0986401602826046,
-      "comfort_jerk_p95_mps3": 0.743926967116465,
-      "comfort_jerk_max_mps3": 1.4081168212301043,
-      "timing_sample_period_mean_s": 0.2507952791352512,
-      "timing_sample_period_p99_s": 0.2662510395050049,
-      "timing_sample_count": 191
+      "comfort_accel_rms_mps2": 1.1784983932781783,
+      "comfort_jerk_p95_mps3": 0.941119506766331,
+      "comfort_jerk_max_mps3": 29.138048840674504,
+      "timing_sample_period_mean_s": 0.29411767996274507,
+      "timing_sample_period_p99_s": 0.550247311592102,
+      "timing_sample_count": 186
     },
     "safety_evidence_present": false
   }

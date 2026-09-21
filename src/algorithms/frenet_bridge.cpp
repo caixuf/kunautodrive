@@ -37,8 +37,11 @@ FrenetHandle* frenet_create(double max_speed, double max_accel) {
     fh->hp.max_speed          = max_speed;
     fh->hp.max_accel          = max_accel;
     fh->hp.max_curvature      = 0.3;
-    fh->hp.max_road_width_l   = 7.0;
-    fh->hp.max_road_width_r   = 7.0;
+    /* 采样网格 [-6, 6] 步长 1.5 → d=0 落在采样点中（否则 kd>0 时车无法精确居中）。
+     * 参考线已由 planning 平移为目标车道中心线（lane_ref），FOT 的 d=0 即车道中心，
+     * ±6m 覆盖相邻车道避障；变道由 planning 的 quintic 硬覆盖，不受网格限制。 */
+    fh->hp.max_road_width_l   = 6.0;
+    fh->hp.max_road_width_r   = 6.0;
     fh->hp.d_road_w           = 1.5;
     fh->hp.dt                 = 0.25;
     fh->hp.maxt               = 10.0;  /* 6→10: 给充裕减速时间 */
@@ -46,7 +49,7 @@ FrenetHandle* frenet_create(double max_speed, double max_accel) {
     fh->hp.d_t_s              = 2.0;
     fh->hp.n_s_sample         = 3.0;
     fh->hp.obstacle_clearance = 1.0;
-    fh->hp.kd                 = 0.0;  /* 不往 d=0 拉：车道中心由 planning 的 target_lane_offset 控制 */
+    fh->hp.kd                 = 1.0;  /* 往参考线中心 (d=0=目标车道中心) 拉：代价函数权衡贴中心 vs 避障 */
     fh->hp.kv                 = 2.0;  /* 0.5→2.0: 提高速度跟踪权重，让 target_speed 更好被追踪 */
     fh->hp.ka                 = 0.3;
     fh->hp.kj                 = 0.1;

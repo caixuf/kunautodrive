@@ -2019,10 +2019,33 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
                     f"(expected for cross-road maneuver, y_min={min(ys):.2f} y_max={max(ys):.2f})"
                 )
             else:
-                failures.append(
-                    f"lateral excursion too large: y range={y_range:.2f} m > 4.5 m "
-                    f"(snaking across lanes, y_min={min(ys):.2f} y_max={max(ys):.2f})"
-                )
+                # 单向多车道合法连续变道（lane 2→1→0）的 offset 范围可达 7m+，
+                # 但方向单调（符号翻转 ≤1 次）；蛇形才会来回翻转。用方向翻转
+                # 次数区分：翻转 ≥3 次（来回 ≥2 趟）才是真蛇形，否则降级 WARN。
+                # （2026-09 W1：Frenet 参考线改目标车道中心后，FOT 避障/超车
+                #  行为更接近真实驾驶员，合法连续超车不应被横向范围门禁误杀。）
+                # 无 road_network 时 offsets 为空，回退用绝对 y 检测翻转。
+                flip_values = offsets if len(offsets) >= 10 else [float(y) for y in ys]
+                flips = 0
+                prev_sign = 0
+                for v in flip_values:
+                    s = 1 if v > 0.5 else (-1 if v < -0.5 else 0)
+                    if s != 0:
+                        if prev_sign != 0 and s != prev_sign:
+                            flips += 1
+                        prev_sign = s
+                if flips >= 3:
+                    failures.append(
+                        f"lateral excursion too large: y range={y_range:.2f} m > 4.5 m "
+                        f"with {flips} direction flips (snaking across lanes, "
+                        f"y_min={min(ys):.2f} y_max={max(ys):.2f})"
+                    )
+                else:
+                    warnings.append(
+                        f"lateral excursion {y_range:.2f} m spans multiple lanes "
+                        f"({flips} direction flip(s), monotonic lane changes, "
+                        f"y_min={min(ys):.2f} y_max={max(ys):.2f})"
+                    )
         elif y_range > 4.0:
             warnings.append(f"lateral wobble: y range={y_range:.2f} m > 4.0 m")
 

@@ -166,6 +166,16 @@ struct PlanningContext {
      * 被 ROAD_GUARD 拽停。behavior 已下发 U-turn 时跳过（掉头轨迹接管）。 */
     double        route_total_s{-1.0};   /* road_end_x（route 累计长度） */
     double        map_ref_rs0{-1.0};     /* ref_path 首点的 route_s */
+
+    /* W1 目标车道中心参考线（lane_ref）：map_ref（道路中心线）每点沿法向平移
+     * target_lane_offset 得到。Frenet 参考线用它，使 FOT 坐标系中 d=0 = 目标车道
+     * 中心，恢复 kd>0 后代价函数自行权衡"贴车道中心 vs 避障"。
+     * lane_ref_s 与 map_ref_s 相同（平行平移弧长不变）。 */
+    double        lane_ref_x[128]{};
+    double        lane_ref_y[128]{};
+    double        lane_ref_s[128]{};
+    int           lane_ref_count{0};
+
     double cfg_highway_speed_mps{13.0}; /* CP->NP 升级所需的持续速度阈值 (m/s) */
 
     /* 道路几何（可选弯道，来自场景文件 "road"；全零 = 直道，行为不变） */
@@ -175,6 +185,8 @@ struct PlanningContext {
     int    lane_count{2};       /* 从 road/geometry 订阅获取 */
     double lane_width{3.5};     /* 从 road/geometry 订阅获取 */
     double road_speed_limit{20.0}; /* FlowSim 当前道路限速，规划速度上限 */
+    int    road_oneway{0};   /* 道路单双向（road/geometry oneway 字段，W1 需要：单向路
+                              * 全部车道都是本向，nearest_lane 不得强制右半幅） */
 
     /* 变道圆弧曲率（固定方向盘 = 固定 kappa，2026-08）：
      * 变道轨迹生成时计算，回填后填给轨迹点，control kappa 前馈用 */
@@ -340,6 +352,42 @@ static bool project_to_reference_path(double x, double y,
     return true;
 }
 
+/* W1: 构建目标车道中心参考线（lane_ref）= map_ref 每点法向平移 target_lane_offset。
+ * Frenet 规划器使用 lane_ref，使 d=0 即目标车道中心；kd>0 时 FOT 自行权衡
+ * "贴车道中心 vs 避障"，planning 不再硬覆盖 d_out。
+ * 无新鲜 map_ref 时 lane_ref_count 置 0，调用方回退到 map_ref/直线参考线逻辑。 */
+static void build_lane_reference(void) {
+    g.lane_ref_count = 0;
+    if (!has_fresh_map_ref() || g.map_ref_count < 2) return;
+    const double offset = g.target_lane_offset;
+    for (int i = 0; i < g.map_ref_count; i++) {
+        const int i0 = (i > 0) ? i - 1 : 0;
+        const int i1 = (i < g.map_ref_count - 1) ? i + 1 : g.map_ref_count - 1;
+        const double theta = atan2(g.map_ref_y[i1] - g.map_ref_y[i0],
+                                   g.map_ref_x[i1] - g.map_ref_x[i0]);
+        g.lane_ref_x[i] = g.map_ref_x[i] - offset * sin(theta);
+        g.lane_ref_y[i] = g.map_ref_y[i] + offset * cos(theta);
+        g.lane_ref_s[i] = g.map_ref_s[i];
+    }
+    g.lane_ref_count = g.map_ref_count;
+#ifdef HAVE_FRENET
+    frenet_set_reference_path(g.frenet, g.lane_ref_x, g.lane_ref_y, g.lane_ref_count);
+#endif
+}
+
+/* 投影到目标车道中心参考线（lane_ref）。返回 false 表示 lane_ref 不可用。 */
+static bool project_to_lane_reference(double x, double y,
+                                      double& out_s, double& out_d) {
+    if (g.lane_ref_count < 2) return false;
+    planning_coord::Projection projection;
+    if (!planning_coord::project_to_path(
+            x, y, g.lane_ref_x, g.lane_ref_y, g.lane_ref_s,
+            g.lane_ref_count, projection)) return false;
+    out_s = projection.s;
+    out_d = projection.d;
+    return true;
+}
+
 static double traffic_light_ahead_distance(int index) {
     double ego_s = 0.0, ego_d = 0.0;
     double light_s = 0.0, light_d = 0.0;
@@ -392,23 +440,30 @@ static void update_reference_path(double start_x, bool opposite = false) {
 static bool frenet_to_cartesian(double s, double d,
                                 double& out_x, double& out_y,
                                 double& out_heading, double& out_kappa) {
-    if (has_fresh_map_ref()) {
-        double total_s = g.map_ref_s[g.map_ref_count - 1];
+    /* W1: 优先用目标车道中心参考线（lane_ref）；无则回退 map_ref（道路中心）。 */
+    const bool use_lane = (g.lane_ref_count >= 2);
+    const bool use_map  = !use_lane && has_fresh_map_ref();
+    if (use_lane || use_map) {
+        const double* rx = use_lane ? g.lane_ref_x : g.map_ref_x;
+        const double* ry = use_lane ? g.lane_ref_y : g.map_ref_y;
+        const double* rs = use_lane ? g.lane_ref_s : g.map_ref_s;
+        const int     rn = use_lane ? g.lane_ref_count : g.map_ref_count;
+        double total_s = rs[rn - 1];
         if (total_s <= 1e-6) return false;
         if (s < 0.0) s = 0.0;
         if (s > total_s) s = total_s;
         int idx = 0;
-        while (idx + 1 < g.map_ref_count && g.map_ref_s[idx + 1] < s) idx++;
-        if (idx >= g.map_ref_count - 1) idx = g.map_ref_count - 2;
-        double s0 = g.map_ref_s[idx];
-        double s1 = g.map_ref_s[idx + 1];
+        while (idx + 1 < rn && rs[idx + 1] < s) idx++;
+        if (idx >= rn - 1) idx = rn - 2;
+        double s0 = rs[idx];
+        double s1 = rs[idx + 1];
         double frac = (s1 > s0) ? ((s - s0) / (s1 - s0)) : 0.0;
         if (frac < 0.0) frac = 0.0;
         if (frac > 1.0) frac = 1.0;
-        double rx0 = g.map_ref_x[idx];
-        double ry0 = g.map_ref_y[idx];
-        double rx1 = g.map_ref_x[idx + 1];
-        double ry1 = g.map_ref_y[idx + 1];
+        double rx0 = rx[idx];
+        double ry0 = ry[idx];
+        double rx1 = rx[idx + 1];
+        double ry1 = ry[idx + 1];
         double ref_x = rx0 + frac * (rx1 - rx0);
         double ref_y = ry0 + frac * (ry1 - ry0);
         double dx = rx1 - rx0;
@@ -422,8 +477,8 @@ static bool frenet_to_cartesian(double s, double d,
          * 弯道全靠 heading 反馈追，横向误差大/抖动。 */
         out_kappa = 0.0;
         if (idx > 0) {
-            double h_prev = atan2(ry0 - g.map_ref_y[idx - 1],
-                                  rx0 - g.map_ref_x[idx - 1]);
+            double h_prev = atan2(ry0 - ry[idx - 1],
+                                  rx0 - rx[idx - 1]);
             double h_cur = atan2(ry1 - ry0, rx1 - rx0);
             double dh = h_cur - h_prev;
             while (dh >  M_PI) dh -= 2.0 * M_PI;
@@ -1124,6 +1179,9 @@ static void on_road_geometry(const Message* msg, void* user_data) {
         if ((item = cJSON_GetObjectItem(root, "speed_limit")) &&
             cJSON_IsNumber(item) && item->valuedouble > 0.0) {
             g.road_speed_limit = item->valuedouble;
+        }
+        if ((item = cJSON_GetObjectItem(root, "oneway")) && cJSON_IsNumber(item)) {
+            g.road_oneway = (item->valuedouble != 0.0) ? 1 : 0;
         }
         cJSON_Delete(root);
     } else {
@@ -1922,13 +1980,17 @@ protected:
                     g.target_lane_offset = lane_center_offset(g.current_behavior.target_lane_idx, n_lanes, lane_w);
                 } else {
                     /* 巡航/跟车：计算 ego 当前最近车道，目标其中心。
-                     * 只允许本方向合法车道（行进坐标系下右半幅，idx ≥ n_lanes/2）：
-                     * map_ref 已随行进方向对齐（返程反向采样），左侧半幅恒为对向
-                     * 车道。不 clamp 则 ego 被扰动推过道路中心时"最近车道"跟着
-                     * ego 翻到对向侧（正反馈），最终锁定逆行目标（2026-08-03
-                     * demo12 实测：返程 ego 漂到 y=-8，目标锁 y=-5.25 东行道）。 */
-                    int cur_lane = planning_coord::nearest_own_lane(
-                        ego_lane_d, n_lanes, lane_w);
+                     * 双向道路只允许本方向合法车道（行进坐标系下右半幅，
+                     * idx ≥ n_lanes/2）：map_ref 已随行进方向对齐（返程反向采样），
+                     * 左侧半幅恒为对向车道。不 clamp 则 ego 被扰动推过道路中心时
+                     * "最近车道"跟着 ego 翻到对向侧（正反馈），最终锁定逆行目标
+                     * （2026-08-03 demo12 实测：返程 ego 漂到 y=-8，目标锁 y=-5.25）。
+                     * W1：单向道路（road_oneway=1，如 lane_change_traffic）全部车道
+                     * 都是本向，必须允许左半幅 —— 否则变道完成后 target_lane_offset
+                     * 跳回右半幅，FOT 平滑回中期间 behavior 又触发超车，蛇形跨车道。 */
+                    const bool own_side_only = g.on_return || !g.road_oneway;
+                    int cur_lane = planning_coord::nearest_lane(
+                        ego_lane_d, n_lanes, lane_w, own_side_only);
                     g.target_lane_offset = lane_center_offset(cur_lane, n_lanes, lane_w);
                 }
                 if (g.plan_count % 200 == 0) {
@@ -1937,6 +1999,11 @@ protected:
                             (int)g.current_behavior.target_lane_idx, n_lanes, g.target_lane_offset, g.ego_y);
                 }
             }
+
+            /* W1: 用最新 target_lane_offset 构建目标车道中心参考线（lane_ref），
+             * Frenet 参考线即目标车道中心（d=0）。无新鲜 map_ref 时 lane_ref_count=0，
+             * 后续回退到 map_ref/直线逻辑。 */
+            build_lane_reference();
 
             /* 规划轨迹 */
             TrajectoryPoint points[64];
@@ -1947,7 +2014,12 @@ protected:
             double ego_ref_d = g.ego_y - road_center_y(g.ego_x, g.curve_start_x,
                                                        g.curve_length_m, g.curve_offset_m);
             memset(points, 0, sizeof(points));
-            (void)project_to_reference_path(g.ego_x, g.ego_y, ego_ref_s, ego_ref_d);
+            /* W1: 优先投影到目标车道中心参考线（lane_ref），使 ego_ref_d 相对
+             * 目标车道中心（变道/避障的 Frenet 初始条件同坐标系）；
+             * 无 lane_ref 时回退 map_ref（道路中心）。 */
+            if (!project_to_lane_reference(g.ego_x, g.ego_y, ego_ref_s, ego_ref_d)) {
+                (void)project_to_reference_path(g.ego_x, g.ego_y, ego_ref_s, ego_ref_d);
+            }
 
             /* ── UTurnPlanner: 掉头时跳过 Frenet，直接生成自行车模型轨迹 ── */
             if (g.overtake_state == 3) {
@@ -2125,11 +2197,13 @@ protected:
              *   - 圆弧半径 R = (L²+D²)/(2|D|)，|D| 下限保护。 */
             if (g.has_behavior && n_wp > 2 &&
                 (g.current_behavior.command == BEH_LEFT_CHANGE || g.current_behavior.command == BEH_RIGHT_CHANGE)) {
-                /* target_lane_offset 已是 map_ref Frenet 坐标系中的目标 d。
+                /* W1: 参考线已是目标车道中心线（lane_ref 按 target_lane_offset 平移），
+                 * 变道目标在 Frenet 坐标系中即 d=0，起点 ego_ref_d（相对目标车道中心）
+                 * 约 ±lane_width。quintic 从当前车道中心平滑过渡到目标车道中心。
                  * 禁止先用 legacy road_center_y(x) 拼世界 y 再投影：road_network
                  * S 弯没有 legacy curve 参数，该函数返回 0，目标点会被投影成
                  * 随道路中心漂移的 d（实测 -7m），轨迹因此驶出护栏。 */
-                const double target_ref_d = g.target_lane_offset;
+                const double target_ref_d = 0.0;
                 {
                     const double L = 50.0;  /* 变道纵向长度固定（投影鲁棒） */
                     double end_d = ego_ref_d;
@@ -2189,7 +2263,11 @@ protected:
                 bool in_lane_change = (g.has_behavior &&
                     (g.current_behavior.command == BEH_LEFT_CHANGE ||
                      g.current_behavior.command == BEH_RIGHT_CHANGE));
-                if (!in_lane_change) {
+                /* W1: 有 lane_ref 时参考线已是目标车道中心，FOT 的 kd>0 自行居中，
+                 * 此处不覆盖 → 避障时 Frenet 横向偏移真正生效。
+                 * 无 lane_ref（老场景/直线 fallback）时参考线仍是道路中心，
+                 * 必须显式把 d_out 设到目标车道中心，否则车永远不变道/不居中。 */
+                if (!in_lane_change && g.lane_ref_count < 2) {
                     for (int i = 0; i < n_wp; i++) {
                         d_out[i] = g.target_lane_offset;
                     }

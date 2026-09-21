@@ -543,6 +543,52 @@ class DemoEvaluatorTest(unittest.TestCase):
         self.assertAlmostEqual(metrics["ade"], 0.42)
         self.assertAlmostEqual(metrics["fde"], 0.85)
 
+    def test_lateral_excursion_monotonic_lane_changes_not_snaking(self):
+        """W1: 单向多车道合法连续变道（y 范围 >4.5m 但方向单调）应 WARN 而非 FAIL；
+        来回翻转的蛇形仍 FAIL。"""
+        evaluator = load_evaluator()
+
+        def make_sample(y: float):
+            return {
+                "timestamp": 1.0,
+                "metrics": {
+                    "topics": [{"topic": "vehicle/state", "freq": 20.0}],
+                    "vehicle": {"speed": 10.0, "x": 100.0},
+                    "scene": {"ego": {"x": 100.0, "y": y, "speed": 10.0}, "obstacles": []},
+                },
+                "nodes": [],
+            }
+
+        # 单调连续变道：-1.75 → 5.25（跨 3 个车道，单向 4 车道合法超车），方向不翻转。
+        mono = [make_sample(-1.75 + 0.7 * i) for i in range(11)]
+        failures, warnings, _ = evaluator.score(
+            mono,
+            ROOT / "does-not-exist.log",
+            criteria={"min_avg_speed_mps": 0.0},
+            expected_edges=[],
+        )
+        self.assertFalse(
+            any("lateral excursion too large" in f for f in failures),
+            f"monotonic multi-lane change should not fail, got {failures}",
+        )
+        self.assertTrue(
+            any("lateral excursion" in w for w in warnings),
+            f"expected lateral excursion WARN, got warnings={warnings}",
+        )
+
+        # 蛇形：-1.75 ↔ 5.25 来回翻转（≥3 次方向翻转），应 FAIL。
+        snake = [make_sample(-1.75 if i % 2 == 0 else 5.25) for i in range(11)]
+        failures, _, _ = evaluator.score(
+            snake,
+            ROOT / "does-not-exist.log",
+            criteria={"min_avg_speed_mps": 0.0},
+            expected_edges=[],
+        )
+        self.assertTrue(
+            any("lateral excursion too large" in f for f in failures),
+            f"snaking across lanes should fail, got failures={failures}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
