@@ -34,6 +34,7 @@
 #include "logger.h"
 #include "clock_service.h"
 #include "planning_coordinates.h"
+#include "traj_safety.h"   /* W3 诊断：轨迹扫掠碰撞检查（Frenet 点测漏检薄障碍） */
 #include "degrade_ladder.h"
 #include <cjson/cJSON.h>
 
@@ -197,6 +198,15 @@ struct PlanningContext {
     int tid{0};  /* scheduler task id */
 
     /* §9 轨迹拼接：上帧轨迹缓存 */
+    /* W3 诊断：发布轨迹的扫掠碰撞命中计数（handoff §4.4 W3，详见 traj_safety.h）
+     * 障碍物数组是块内局部变量，发布点看不到，故在喂 Frenet 时留一份副本。
+     * 注意：这里是**当前**位置，不含 Frenet 内部的 2s 外推 —— 静态障碍（红灯虚拟墙、
+     * 施工区）语义与 Frenet 完全一致，运动障碍差一个外推（那是 W4 的范畴）。 */
+    double   frenet_obs_x[128], frenet_obs_y[128], frenet_obs_w[128], frenet_obs_l[128];
+    int      frenet_obs_n;
+    uint32_t traj_swept_hits;
+    uint32_t traj_swept_hit_frames;
+    uint32_t traj_swept_check_frames;   /* 真正执行过检查的帧数（区分"没检查"和"检查了没命中"） */
     Trajectory prev_traj;           /* 上帧发布的轨迹 */
     uint64_t prev_traj_stamp_us;    /* 上帧轨迹发布时间戳 */
     int stitch_skip_count;          /* 连续性跳过次数统计（>5%→FAIL） */
@@ -1870,6 +1880,17 @@ protected:
 
                 /* Phase 3: 传入速度数据,Frenet bridge 做 2s 位置外推 */
                 frenet_set_obstacles_v(g.frenet, ox, oy, ow, ol, ovx, ovy, n_obs);
+                /* 留一份副本给发布点的 W3 扫掠诊断（块内数组出了作用域就没了） */
+                {
+                    int keep = (n_obs < 128) ? n_obs : 128;
+                    for (int i = 0; i < keep; i++) {
+                        g.frenet_obs_x[i] = ox[i];
+                        g.frenet_obs_y[i] = oy[i];
+                        g.frenet_obs_w[i] = ow[i];
+                        g.frenet_obs_l[i] = ol[i];
+                    }
+                    g.frenet_obs_n = keep;
+                }
             }
 #endif
 
@@ -2464,6 +2485,39 @@ publish_trajectory:
                 traj.points[i] = points[i];
             }
 
+            /* ── W3 诊断：轨迹扫掠碰撞检查（只统计 + 限频告警，不改行为） ──
+             * Frenet planner 内部的碰撞判定是"点测"（只问采样点是否落在障碍物里），
+             * 采样间距可达数米；0.5m 的薄障碍（红灯虚拟墙就是 ol=0.5）可能整根落在
+             * 两个采样点之间 → 点测放行、实际会撞。这里对**最终发布轨迹**做线段×AABB
+             * 扫掠检查，先把"到底会不会发生"量化出来（traj_safety.c + 单测）。
+             * 升级为 `traj.valid = 0` 属于行为变更，等这个计数有统计再定（handoff §17）。 */
+#ifdef HAVE_FRENET
+            if (n_pts >= 2 && g.frenet_obs_n > 0) {
+                g.traj_swept_check_frames++;
+                float sw_x[64], sw_y[64];
+                int sw_n = (n_pts < 64) ? n_pts : 64;
+                for (int i = 0; i < sw_n; i++) {
+                    sw_x[i] = points[i].x;
+                    sw_y[i] = points[i].y;
+                }
+                TrajSweptResult sw = traj_swept_check(sw_x, sw_y, sw_n,
+                                                      g.frenet_obs_x, g.frenet_obs_y,
+                                                      g.frenet_obs_w, g.frenet_obs_l,
+                                                      g.frenet_obs_n);
+                if (sw.hits > 0) {
+                    g.traj_swept_hits += (uint32_t)sw.hits;
+                    g.traj_swept_hit_frames++;
+                    if (g.traj_swept_hit_frames % 20 == 1) {
+                        LOG_WARN("planning",
+                                 "[W3] 发布轨迹扫掠命中障碍物：累计 %u 帧 / %u 次，本帧 seg=%d obs=%d（pts=%d obs=%d）"
+                                 " — Frenet 点测未拦下，详见 traj_safety.h",
+                                 g.traj_swept_hit_frames, g.traj_swept_hits,
+                                 sw.seg_idx, sw.obs_idx, sw_n, g.frenet_obs_n);
+                    }
+                }
+            }
+#endif
+
             /* §8.5 可行性检查 */
             traj.valid = 1;  /* 默认有效 */
             if (n_wp > 1) {
@@ -2564,6 +2618,10 @@ publish_trajectory:
                 cJSON_AddNumberToObject(dbg, "command_speed", command_speed);
                 cJSON_AddNumberToObject(dbg, "n_wp", n_wp);
                 cJSON_AddNumberToObject(dbg, "traj_valid", traj.valid ? 1.0 : 0.0);
+                /* W3 诊断（扫掠碰撞）：累计命中帧/次数，供长时间统计 */
+                cJSON_AddNumberToObject(dbg, "traj_swept_hit_frames", (double)g.traj_swept_hit_frames);
+                cJSON_AddNumberToObject(dbg, "traj_swept_hits", (double)g.traj_swept_hits);
+                cJSON_AddNumberToObject(dbg, "traj_swept_check_frames", (double)g.traj_swept_check_frames);
                 cJSON_AddNumberToObject(dbg, "n_lanes", g.lane_count);
                 cJSON_AddNumberToObject(dbg, "lane_width", g.lane_width);
                 if (g.has_behavior) {

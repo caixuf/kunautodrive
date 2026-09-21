@@ -473,7 +473,8 @@ find_library(FRENET_PLANNER
     NAMES frenet_planner
     HINTS ${FLOWENGINE_BUILD}/lib ${FLOWENGINE_BUILD}/lib/Release ${FLOWENGINE_BUILD}/lib/Debug
 )
-add_library(planning_node SHARED planning_node.cpp st_graph.c)
+# traj_safety.c：W3 诊断用的轨迹扫掠碰撞检查，与 tests/test_adas_nodes_logic.c 共用
+add_library(planning_node SHARED planning_node.cpp st_graph.c traj_safety.c)
 target_compile_definitions(planning_node PRIVATE FLOWCORO_INTEGRATION)
 target_compile_options(planning_node PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fcoroutines>)
 if(FRENET_BRIDGE AND FRENET_PLANNER AND _EIGEN_INC)
@@ -651,7 +652,10 @@ target_link_libraries(gps_driver_node ${NODE_LINK_LIBS})
 # 为 dry-run（生成静止模拟 IMU 走完整链路）。parse_imu_line() 是硬件适配点，社区用户
 # 按自己 IMU 协议（MPU6050/ICM-42688/Xsens MTi-300/WIT-Motion）改它即可。
 # 依赖 serial_port.h (POSIX termios)，随 libflowengine_core 提供。
-add_library(imu_driver_node SHARED imu_driver_node.c)
+# imu_protocol.c：行解析/静态合成纯逻辑（2026-09 抽离时漏加进节点目标 →
+# libimu_driver_node.so 里对 imu_protocol_parse_line 未解析，dlopen 时会
+# symbol lookup error。由 ci/gates/plugin_symbol_check.py 抓到）
+add_library(imu_driver_node SHARED imu_driver_node.c imu_protocol.c)
 target_link_libraries(imu_driver_node ${NODE_LINK_LIBS})
 
 # slam_node: SLAM 适配层节点（LiDAR + IMU → Pose2D → sensor/pose）

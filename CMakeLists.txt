@@ -1082,7 +1082,8 @@ add_executable(test_adas_nodes_logic tests/test_adas_nodes_logic.c
                                 modules/adas_nodes/pwm_map.c
                                 modules/adas_nodes/sensor_model_weather.c
                                 modules/adas_nodes/slam_math.c
-                                modules/adas_nodes/safety_arbiter.c)
+                                modules/adas_nodes/safety_arbiter.c
+                                modules/adas_nodes/traj_safety.c)
 set_source_files_properties(tests/test_adas_nodes_logic.c PROPERTIES LANGUAGE CXX)
 target_link_libraries(test_adas_nodes_logic flowengine_core)
 add_dependencies(test_adas_nodes_logic msg_codegen)

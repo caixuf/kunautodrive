@@ -34,6 +34,7 @@
 #include "sensor_model_weather.h"
 #include "slam_math.h"
 #include "safety_arbiter.h"
+#include "traj_safety.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -487,6 +488,68 @@ static void test_arbiter_brake_priority(void) {
 }
 
 /* ══════════════════════════════════════════════════════════ */
+/* 轨迹扫掠碰撞检查（traj_safety.{h,c}）—— W3 的证据         */
+/* ══════════════════════════════════════════════════════════ */
+
+static void test_swept_catches_thin_obstacle_between_samples(void) {
+    TEST("traj_swept: 0.5m 薄墙落在两个采样点之间 → 点测漏、扫掠抓到");
+    /* 轨迹沿 x 轴，采样点间隔 4m（远大于薄墙 0.5m） */
+    float xs[3] = {0.0f, 4.0f, 8.0f};
+    float ys[3] = {0.0f, 0.0f, 0.0f};
+    /* 薄墙：中心 x=2（正好在 0 与 4 之间），ol=0.5（沿 x），ow=2.0（沿 y） */
+    double ox[1] = {2.0}, oy[1] = {0.0}, ow[1] = {2.0}, ol[1] = {0.5};
+
+    ASSERT_EQ(traj_point_test_hits(xs, ys, 3, ox, oy, ow, ol, 1), 0,
+              "点测必须漏掉（这就是 W3 的定义）");
+    TrajSweptResult r = traj_swept_check(xs, ys, 3, ox, oy, ow, ol, 1);
+    ASSERT_EQ(r.hits, 1, "扫掠必须抓到");
+    ASSERT_EQ(r.seg_idx, 0, "命中的是第 0 段 (0,0)->(4,0)");
+    ASSERT_EQ(r.obs_idx, 0, "命中的是第 0 个障碍物");
+    PASS();
+}
+
+static void test_swept_ignores_side_obstacle(void) {
+    TEST("traj_swept: 横向错开的障碍物不算命中（无假阳性）");
+    float xs[3] = {0.0f, 4.0f, 8.0f};
+    float ys[3] = {0.0f, 0.0f, 0.0f};
+    /* 障碍物在 y=3（半宽 1）→ 与 y=0 的轨迹最近距离 2m，不应命中 */
+    double ox[1] = {2.0}, oy[1] = {3.0}, ow[1] = {2.0}, ol[1] = {0.5};
+    ASSERT_EQ(traj_swept_check(xs, ys, 3, ox, oy, ow, ol, 1).hits, 0, "错开的不该命中");
+    /* 挪到 y=1.5（半宽 1 → 下沿 0.5）仍然不碰 y=0 */
+    oy[0] = 1.5;
+    ASSERT_EQ(traj_swept_check(xs, ys, 3, ox, oy, ow, ol, 1).hits, 0, "擦边也不该命中");
+    /* y=1.0（下沿 0.0）刚好压线 → 命中 */
+    oy[0] = 1.0;
+    ASSERT(traj_swept_check(xs, ys, 3, ox, oy, ow, ol, 1).hits >= 1, "压线应命中");
+    PASS();
+}
+
+static void test_swept_degenerate_and_empty(void) {
+    TEST("traj_swept: 退化输入（点数<2 / 退化盒 / NULL）安全返回 0");
+    float xs[1] = {0.0f}, ys[1] = {0.0f};
+    /* 两个障碍物都是退化盒（半宽/半长 = 0）→ 全部忽略 */
+    double ox[2] = {0.0, 1.0}, oy[2] = {0.0, 0.0}, ow[2] = {0.0, 0.0}, ol[2] = {0.0, 2.0};
+    ASSERT_EQ(traj_swept_check(xs, ys, 1, ox, oy, ow, ol, 2).hits, 0, "单点无段");
+    float xs2[2] = {0.0f, 2.0f}, ys2[2] = {0.0f, 0.0f};
+    ASSERT_EQ(traj_swept_check(xs2, ys2, 2, ox, oy, ow, ol, 2).hits, 0, "退化盒忽略");
+    ASSERT_EQ(traj_swept_check(NULL, ys2, 2, ox, oy, ow, ol, 2).hits, 0, "NULL 安全");
+    PASS();
+}
+
+static void test_swept_counts_all_segments(void) {
+    TEST("traj_swept: 多段多障碍物按对计数");
+    /* 3 点 2 段；第 0 段(0→10)穿 x=2/x=8，第 1 段(10→20)穿 x=12/x=18 → 4 */
+    float xs[3] = {0.0f, 10.0f, 20.0f};
+    float ys[3] = {0.0f, 0.0f, 0.0f};
+    double ox[4] = {2.0, 8.0, 12.0, 18.0}, oy[4] = {0.0, 0.0, 0.0, 0.0};
+    double ow[4] = {2.0, 2.0, 2.0, 2.0},  ol[4] = {1.0, 1.0, 1.0, 1.0};
+    TrajSweptResult r = traj_swept_check(xs, ys, 3, ox, oy, ow, ol, 4);
+    ASSERT_EQ(r.hits, 4, "两段各穿两个障碍物");
+    ASSERT_EQ(r.seg_idx, 0, "首次命中在第 0 段");
+    PASS();
+}
+
+/* ══════════════════════════════════════════════════════════ */
 /* Perception: 点云消费纯逻辑（perception_points.{h,c}）       */
 /* ══════════════════════════════════════════════════════════ */
 /* 与 imu_protocol 相同的反漂移做法：测试直接链接节点用的同一份实现，
@@ -731,6 +794,12 @@ int main(void) {
     test_arbiter_model_within_envelope();
     test_arbiter_steer_reject();
     test_arbiter_brake_priority();
+
+    printf("\n═══ Trajectory Swept Collision Check (W3) ═══\n");
+    test_swept_catches_thin_obstacle_between_samples();
+    test_swept_ignores_side_obstacle();
+    test_swept_degenerate_and_empty();
+    test_swept_counts_all_segments();
 
     printf("\n═══ Perception Point Cloud Consumption ═══\n");
     test_perception_points_basic();
