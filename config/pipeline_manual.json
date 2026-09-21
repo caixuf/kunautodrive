@@ -92,6 +92,16 @@
           }
         },
         {
+          "topic": "sensor/lidar_points",
+          "type": "LidarPointCloud",
+          "qos": {
+            "depth": 2,
+            "policy": "drop_oldest",
+            "reliability": "best_effort",
+            "deadline_ms": 50
+          }
+        },
+        {
           "topic": "sensor/gps",
           "type": "GpsFrame",
           "qos": {
@@ -119,7 +129,8 @@
       "auto_start": true,
       "subscribe": [
         "vehicle/state",
-        "sensor/lidar"
+        "sensor/lidar",
+        "sensor/lidar_points"
       ],
       "publish": [
         {

@@ -6,13 +6,23 @@
  *   - 保留 on_vehicle_state 持久回调更新 ego 状态
  *   - DBSCAN 聚类逻辑原样搬入 run()
  *
- * 输入 topics: vehicle/state, sensor/lidar (NOA Phase 2.1: 真实传感器链路)
+ * 输入 topics: vehicle/state, sensor/lidar, sensor/lidar_points, road/geometry
  * 输出 topics: perception/obstacles
+ *
+ * 两种输入模式（params.mode）：
+ *   ground_truth（默认）—— 从 vehicle/state JSON 直读 flowsim 真值障碍物
+ *   sensor             —— 消费 sensor_model 的 sensor/lidar_points 真点云
+ *                          （LidarPointCloud 二进制，传感器系）→ DBSCAN → 障碍物
+ *
+ * 2026-09 变更（handoff §4.3 仿真感知自证闭环）：sensor 模式原先并不真的用
+ * 传感器数据 —— 它拿 vehicle/state 的真值障碍物列表，写死 24 个地面环 + 每
+ * 障碍物 8 个表面点，再 DBSCAN 把同样的东西聚回来，属于"自己证自己"。现在
+ * sensor 模式的点云必须来自 sensor/lidar_points，本文件不再生成任何点。
  *
  * 算法:
  *   - DBSCAN 点云聚类 (dbscan_cluster.c) — eps=2m, min_pts=4
- *   - RANSAC 地面移除
- *   - 基于真值的障碍物聚类仿真
+ *   - 真点云路径关闭地面去除（GROUND_REMOVE_NONE，见 perception_init）
+ *   - 纯逻辑（点云守卫 / 聚类→障碍物）在 perception_points.{h,c}，有单测
  *
  * 采用 CoroutineTask（线程池 resume）：节点做重计算（DBSCAN 点云聚类），同步 resume 会阻塞
  * 消息总线分发线程导致 drops，故改用线程池 resume。
@@ -22,6 +32,7 @@
 
 #include "node_plugin.h"
 #include "dbscan_cluster.h"
+#include "perception_points.h"
 #include "adas_msgs_gen.h"
 #include "transport.h"
 #include "discovery.h"
@@ -103,32 +114,31 @@ struct PerceptionContext {
 
     /* NOA Phase 2.1: 感知输入模式
      *   ground_truth (默认): 从 vehicle/state 读真值 ego+obstacles，向后兼容
-     *   sensor: 额外消费 sensor/lidar 的 LidarFrame，用传感器测量的 ego 位置替代
-     *           vehicle/state 真值定位（建立 sensor/lidar → perception 数据链路，
-     *           见 NOA_SCENARIO_PLAN §2.3）。障碍物仍由 vehicle/state 经 FOV/噪声/
-     *           遮挡滤波提供——sensor_model 目前发布的是定位级 LidarFrame（单点），
-     *           障碍物级点云发布为后续工作。 */
+     *   sensor: 消费 sensor/lidar_points 的真点云（LidarPointCloud 二进制，
+     *           传感器系 x 前/y 左/z 上）作为**障碍物的唯一来源**；ego 位姿取
+     *           sensor/lidar（LidarFrame，带噪定位估计），缺失时退回真值。
+     *           点云本身不含任何位姿信息，因此障碍物位置不泄漏定位真值。 */
     int mode{0};  /* 0 = ground_truth (default) — obstacles from vehicle/state JSON */
     double lid_x{0}, lid_y{0};
     volatile int has_lidar{0};
+
+    /* sensor/lidar_points 真点云缓冲。
+     * 回调跑在消息总线分发线程、run() 跑在线程池 → pthread_mutex_t 保护
+     * （同 slam_node.cpp 的 g.lock / control_node.cpp 的 ref_path_mtx 惯例）。 */
+    pthread_mutex_t cloud_mtx = PTHREAD_MUTEX_INITIALIZER;
+    LidarPointCloud cloud{};
+    uint32_t cloud_seq{0};        /* 每次收到新点云自增；run() 靠它判断本帧是否有新数据 */
+    uint32_t last_cloud_seq{0};
+    uint32_t cloud_bad{0};        /* 反序列化失败帧数（不逐帧刷日志） */
+    uint32_t no_cloud_warn{0};    /* "sensor 模式但没有点云"告警节流 */
+    /* DBSCAN 输入点缓冲（真点云，最多 PERCEPTION_MAX_CLOUD_POINTS 点） */
+    Point3D  pts[PERCEPTION_MAX_CLOUD_POINTS]{};
 
     /* TaskBase 包装器（由 EXPORT_COROUTINE_TASK 宏创建） */
     struct perception_Wrapper* task_wrapper{nullptr};
 };
 
 PerceptionContext g;
-
-static double rand_uniform_signed(double span) {
-    return (((double)rand() / (double)RAND_MAX) * 2.0 - 1.0) * span;
-}
-
-static int obstacle_in_fov(double rx, double ry, double max_range_m, double fov_deg) {
-    const double range = hypot(rx, ry);
-    if (range > max_range_m || range < 0.05) return 0;
-    const double half_fov_rad = (fov_deg * 0.5) * M_PI / 180.0;
-    const double ang = atan2(ry, rx);
-    return fabs(ang) <= half_fov_rad;
-}
 
 /* ── vehicle/state 订阅 ──────────────────────────────────────── */
 
@@ -212,8 +222,8 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
 
 /* ── sensor/lidar 订阅（NOA Phase 2.1: sensor 模式） ──────────
  * 解析 sensor_model 发布的 LidarFrame 二进制消息，取其 (x,y) 作为传感器测量
- * 的 ego 位置。sensor 模式下用它替代 vehicle/state 的真值定位，建立真实的
- * sensor/lidar → perception 数据依赖。 */
+ * 的 ego 位置。sensor 模式下用它替代 vehicle/state 的真值定位。
+ * 注意：障碍物不再来自这里 —— 点云走 sensor/lidar_points（见 on_lidar_points）。 */
 static void on_sensor_lidar(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
@@ -224,6 +234,34 @@ static void on_sensor_lidar(const Message* msg, void* user_data) {
     g.lid_x = (double)f->x;
     g.lid_y = (double)f->y;
     g.has_lidar = 1;
+}
+
+/* ── sensor/lidar_points 订阅（真点云，sensor 模式障碍物唯一来源） ────
+ * producer 是 sensor_model 的 lidar_mode=1 路径（射线投射 + 距离噪声 + 丢失率），
+ * 点已在传感器（车体）系。这里只做反序列化 + 换缓冲，不做任何位姿变换；
+ * 守卫/聚类在 perception_points.{h,c}（有单测）。
+ *
+ * 不调用 lidar_point_cloud_validate()：它要求 count>=3，而空场景（前方真的
+ * 没有东西）必须能发出 count=0 的点云 —— 那正是"本帧无障碍物"的唯一信号，
+ * 下游要靠它发空 ObstacleList 清跟踪。 */
+static void on_lidar_points(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg || msg->data_size < sizeof(LidarPointCloud)) return;
+    const uint8_t* data = (const uint8_t*)message_bus_message_data(msg);
+    if (!data) return;
+
+    LidarPointCloud tmp;
+    if (LidarPointCloud_deserialize(&tmp, data, msg->data_size) != 0) {
+        if (++g.cloud_bad % 100 == 1) {
+            LOG_WARN("perception", "LidarPointCloud deserialize failed (size=%u, count=%u)",
+                     msg->data_size, g.cloud_bad);
+        }
+        return;
+    }
+    pthread_mutex_lock(&g.cloud_mtx);
+    g.cloud = tmp;
+    g.cloud_seq++;
+    pthread_mutex_unlock(&g.cloud_mtx);
 }
 
 /* ── road/geometry 订阅 — 获取车道参数（用于 lane_id 赋值） ──── */
@@ -261,105 +299,101 @@ protected:
             co_await sleep_us(period_us_);
             if (should_stop()) break;
 
-            /* ALGORITHM_REFACTOR_PLAN §4: sensor 模式无 lidar 时跳过 */
-            if (g.mode == 1 && !g.has_lidar) {
-                g.frame_id++;
-                continue;
-            }
+            ObstacleList obs_list;
+            memset(&obs_list, 0, sizeof(obs_list));
+            obs_list.frame_id = g.frame_id;
 
-            /* ── DBSCAN ── */
-            {
-                Point3D pts[512];
-                int np = 0;
-                double ch = cos(-g.ego_heading), sh = sin(-g.ego_heading);
-
-                /* NOA Phase 2.1: sensor 模式下用 sensor/lidar 测量的 ego 位置作为
-                 * 障碍物相对坐标的参考原点（含传感器噪声），ground_truth 模式仍用
-                 * vehicle/state 真值定位。 */
-                double ego_ref_x = g.ego_x, ego_ref_y = g.ego_y;
-                if (g.mode == 1 && g.has_lidar) {
-                    ego_ref_x = g.lid_x;
-                    ego_ref_y = g.lid_y;
+            if (g.mode == 0) {
+                /* ── ground_truth：vehicle/state JSON 直出（默认路径） ──
+                 * 这里不再构造"地面环 + 障碍物表面点"的假点云跑 DBSCAN：旧实现那趟
+                 * 聚类的结果本来就被这个分支丢弃，只是白烧 CPU，还制造了"感知在算
+                 * 点云"的假象。sensor 模式才是真的吃点云（见下面的 else）。 */
+                int lc = g.has_road_geometry ? g.lane_count : 2;
+                double lw = g.has_road_geometry ? g.lane_width : 3.5;
+                for (int i = 0; i < g.n_obs && obs_list.count < 128; i++) {
+                    Obstacle* ob = &obs_list.obstacles[obs_list.count++];
+                    ob->id = (uint32_t)(g.frame_id * 100 + (uint32_t)i);
+                    /* 世界坐标 → 车体坐标（Obstacle 约定车体系） */
+                    double dx = g.obs_x[i] - g.ego_x;
+                    double dy = g.obs_y[i] - g.ego_y;
+                    double ch = cos(g.ego_heading), sh = sin(g.ego_heading);
+                    ob->x = (float)(dx * ch + dy * sh);
+                    ob->y = (float)(-dx * sh + dy * ch);
+                    ob->vx = (float)(g.obs_vx[i] * ch + g.obs_vy[i] * sh);
+                    ob->vy = (float)(-g.obs_vx[i] * sh + g.obs_vy[i] * ch);
+                    ob->type = (ObstacleType)g.obs_type[i];
+                    ob->width = (float)g.obs_width[i];
+                    ob->length = (float)g.obs_length[i];
+                    ob->confidence = 1.0f;
+                    /* lane_id：从世界系 y 计算 */
+                    double offset = (-g.obs_y[i]) / lw + (lc - 1) * 0.5;
+                    int idx = (int)(offset >= 0.0 ? offset + 0.5 : offset - 0.5);
+                    if (idx < 0) idx = 0;
+                    if (idx >= lc) idx = lc - 1;
+                    ob->lane_id = (int8_t)idx;
                 }
+            } else {
+                /* ── sensor：sensor/lidar_points 真点云 → DBSCAN ──
+                 * ego 位姿取 sensor/lidar 的定位估计（带噪），没有则退回真值。
+                 * 点云本身是传感器系的，不含位姿信息。 */
+                const double ego_ref_x = g.has_lidar ? g.lid_x : g.ego_x;
+                const double ego_ref_y = g.has_lidar ? g.lid_y : g.ego_y;
 
-                /* 地面环 */
-                for (int ring = 0; ring < 2 && np < 512; ring++) {
-                    float r = 6.0f + (float)ring * 4.0f;
-                    for (int k = 0; k < 12 && np < 512; k++) {
-                        float a = (float)k / 12.0f * 2.0f * (float)M_PI;
-                        pts[np].x = cosf(a) * r; pts[np].y = sinf(a) * r;
-                        pts[np].z = 0.05f; pts[np].intensity = 0.3f; np++;
+                /* 取本帧点云快照（回调在线程总线线程写，这里加锁只做拷贝） */
+                uint32_t seq;
+                pthread_mutex_lock(&g.cloud_mtx);
+                LidarPointCloud cloud = g.cloud;
+                seq = g.cloud_seq;
+                pthread_mutex_unlock(&g.cloud_mtx);
+
+                if (seq == g.last_cloud_seq) {
+                    /* 没有新点云：多半是 sensor_model 的 lidar_mode 没开，或该节点
+                     * 不在这份编排里。此时不能拿旧点云继续发，也不能凭空发障碍物。 */
+                    if (++g.no_cloud_warn % 50 == 1) {
+                        LOG_WARN("perception",
+                                 "sensor mode: no fresh sensor/lidar_points (frame=%u, misses=%u)"
+                                 " — check sensor_model params lidar_mode=1",
+                                 g.frame_id, g.no_cloud_warn);
                     }
+                    g.frame_id++;
+                    continue;
                 }
-                /* 传感器可见障碍物（FOV/量程/简化遮挡） */
-                double vis_rx[128], vis_ry[128], vis_r[128], vis_a[128];
-                int vis_idx[128];
-                int vis_count = 0;
-                for (int oi = 0; oi < g.n_obs && vis_count < 128; oi++) {
-                    double dx = g.obs_x[oi] - ego_ref_x;
-                    double dy = g.obs_y[oi] - ego_ref_y;
-                    double rx = dx * ch - dy * sh;
-                    double ry = dx * sh + dy * ch;
-                    if (!obstacle_in_fov(rx, ry, g.lidar_max_range_m, g.lidar_fov_deg)) {
-                        continue;
-                    }
-                    vis_rx[vis_count] = rx;
-                    vis_ry[vis_count] = ry;
-                    vis_r[vis_count] = hypot(rx, ry);
-                    vis_a[vis_count] = atan2(ry, rx);
-                    vis_idx[vis_count] = oi;
-                    vis_count++;
-                }
+                g.last_cloud_seq = seq;
 
-                int vis_keep[128];
-                for (int i = 0; i < vis_count; i++) vis_keep[i] = 1;
-                if (g.enable_simple_occlusion) {
-                    const double occ_beam = 5.0 * M_PI / 180.0;
-                    for (int i = 0; i < vis_count; i++) {
-                        if (!vis_keep[i]) continue;
-                        for (int j = 0; j < vis_count; j++) {
-                            if (i == j || !vis_keep[j]) continue;
-                            if (fabs(vis_a[i] - vis_a[j]) < occ_beam && vis_r[j] + 2.0 < vis_r[i]) {
-                                vis_keep[i] = 0;
+                /* min_range=0.5m：近场盲区（模拟 LiDAR 自车遮挡/自反射）。
+                 * 另外当障碍物 AABB 把 ego 原点包住时 ray_aabb_t 会返回
+                 * 出射距离（tmax>0）而不是入射距离，那些点也落在这段盲区里。 */
+                uint32_t np = perception_points_from_cloud(
+                        &cloud, g.pts, PERCEPTION_MAX_CLOUD_POINTS,
+                        g.lidar_max_range_m, /* min_range_m = */ 0.5);
+
+                /* 建筑遮挡：producer 的射线只对障碍物 AABB 投射，不含 world/buildings，
+                 * 这里对收到的点补一次视线检查（点已在车体系，反变换回世界系做
+                 * 线段相交，与旧实现的坐标约定一致）。 */
+                if (g.enable_simple_occlusion && !g.buildings.empty() && np > 0) {
+                    const double c = cos(g.ego_heading), s = sin(g.ego_heading);
+                    uint32_t keep = 0;
+                    for (uint32_t i = 0; i < np; i++) {
+                        const double rx = g.pts[i].x, ry = g.pts[i].y;
+                        const double ox = ego_ref_x + rx * c - ry * s;
+                        const double oy = ego_ref_y + rx * s + ry * c;
+                        int blocked = 0;
+                        for (size_t bi = 0; bi < g.buildings.size(); ++bi) {
+                            if (flowsim::segment_intersects_building(
+                                    ego_ref_x, ego_ref_y, ox, oy, g.buildings[bi])) {
+                                blocked = 1;
                                 break;
                             }
                         }
-                        /* 建筑遮挡：ego→障碍物的视线线段被任一建筑足迹阻断即遮挡。
-                         * vis_rx/vis_ry 是障碍物在 ego 车体系（前向=rx, 左=ry）坐标，
-                         * 反变换回世界系后与建筑 OBB（世界 ENU）做线段相交测试。 */
-                        if (vis_keep[i] && !g.buildings.empty()) {
-                            double dx = vis_rx[i] * ch + vis_ry[i] * sh;
-                            double dy = -vis_rx[i] * sh + vis_ry[i] * ch;
-                            double ox = ego_ref_x + dx, oy = ego_ref_y + dy;
-                            for (size_t bi = 0; bi < g.buildings.size(); ++bi) {
-                                if (flowsim::segment_intersects_building(
-                                        ego_ref_x, ego_ref_y, ox, oy, g.buildings[bi])) {
-                                    vis_keep[i] = 0;
-                                    break;
-                                }
-                            }
-                        }
+                        if (!blocked) g.pts[keep++] = g.pts[i];
                     }
-                }
-
-                /* 障碍物表面点 */
-                for (int vi = 0; vi < vis_count && np < 512; vi++) {
-                    if (!vis_keep[vi]) continue;
-                    (void)vis_idx[vi];
-                    double rx = vis_rx[vi];
-                    double ry = vis_ry[vi];
-                    for (int k = 0; k < 8 && np < 512; k++) {
-                        pts[np].x = (float)rx + ((float)(k % 3) - 1.0f) * 0.8f + (float)rand_uniform_signed(g.obs_noise_std_m);
-                        pts[np].y = (float)ry + ((float)(k / 3) - 1.0f) * 1.6f + (float)rand_uniform_signed(g.obs_noise_std_m);
-                        pts[np].z = 0.6f + (float)(k % 4) * 0.4f;
-                        pts[np].intensity = 0.7f; np++;
-                    }
+                    np = keep;
                 }
 
                 /* ── DBSCAN 时间预算保护 ── */
                 uint64_t t_dbscan_start = clock_now_us();
 
-                int n_clusters = dbscan_run(&g.dbscan, pts, np);
+                int n_clusters = dbscan_run(&g.dbscan, g.pts, (int)np);
 
                 uint64_t t_dbscan_end = clock_now_us();
                 long dbscan_us = (long)(t_dbscan_end - t_dbscan_start);
@@ -368,87 +402,38 @@ protected:
                 if (dbscan_us > period_us_) {
                     g.overrun_count++;
                     LOG_WARN("perception",
-                             "DBSCAN overrun #%u: %ldus > period %ldus (pts=%d) — reusing last frame",
+                             "DBSCAN overrun #%u: %ldus > period %ldus (pts=%u) — reusing last frame",
                              g.overrun_count, dbscan_us, period_us_, np);
                     g.frame_id++;
                     continue;
                 } else if (dbscan_us > budget_warn_us) {
                     LOG_WARN("perception",
-                             "DBSCAN budget warning: %ldus > 80%% of period %ldus (pts=%d)",
+                             "DBSCAN budget warning: %ldus > 80%% of period %ldus (pts=%u)",
                              dbscan_us, period_us_, np);
                 }
 
-                ObstacleList obs_list;
-                memset(&obs_list, 0, sizeof(obs_list));
-                obs_list.frame_id = g.frame_id;
+                /* 聚类在实例内连续存放，dbscan_get_cluster(0) 即数组首地址 */
+                const ClusterBounds* clusters = (n_clusters > 0)
+                                              ? dbscan_get_cluster(&g.dbscan, 0)
+                                              : nullptr;
+                PerceptionFramePose pose;
+                pose.frame_id    = g.frame_id;
+                pose.ego_y       = ego_ref_y;
+                pose.ego_heading = g.ego_heading;
+                pose.lane_count  = g.has_road_geometry ? g.lane_count : 2;
+                pose.lane_width  = g.has_road_geometry ? g.lane_width : 3.5;
+                /* 速度由 object_tracker 节点通过 KF 跟踪提供
+                 * （ALGORITHM_REFACTOR_PLAN §4：移除 ground truth 速度匹配）。 */
+                perception_clusters_to_obstacles(clusters, n_clusters, &pose, &obs_list);
+            }
 
-                /* ground_truth 模式：直接使用 vehicle/state 中的障碍物数据 */
-                if (g.mode == 0 && g.n_obs > 0) {
-                    int lc = g.has_road_geometry ? g.lane_count : 2;
-                    double lw = g.has_road_geometry ? g.lane_width : 3.5;
-                    for (int i = 0; i < g.n_obs && obs_list.count < 128; i++) {
-                        Obstacle* ob = &obs_list.obstacles[obs_list.count++];
-                        ob->id = (uint32_t)(g.frame_id * 100 + (uint32_t)i);
-                        /* 世界坐标 → 车体坐标（Obstacle 约定车体系） */
-                        double dx = g.obs_x[i] - g.ego_x;
-                        double dy = g.obs_y[i] - g.ego_y;
-                        double ch = cos(g.ego_heading), sh = sin(g.ego_heading);
-                        ob->x = (float)(dx * ch + dy * sh);
-                        ob->y = (float)(-dx * sh + dy * ch);
-                        ob->vx = (float)(g.obs_vx[i] * ch + g.obs_vy[i] * sh);
-                        ob->vy = (float)(-g.obs_vx[i] * sh + g.obs_vy[i] * ch);
-                        ob->type = (ObstacleType)g.obs_type[i];
-                        ob->width = (float)g.obs_width[i];
-                        ob->length = (float)g.obs_length[i];
-                        ob->confidence = 1.0f;
-                        /* lane_id：从世界系 y 计算 */
-                        double offset = (-g.obs_y[i]) / lw + (lc - 1) * 0.5;
-                        int idx = (int)(offset >= 0.0 ? offset + 0.5 : offset - 0.5);
-                        if (idx < 0) idx = 0;
-                        if (idx >= lc) idx = lc - 1;
-                        ob->lane_id = (int8_t)idx;
-                    }
-                } else {
-                    /* sensor 模式（DBSCAN） */
-                    for (int ci = 0; ci < n_clusters && obs_list.count < 128; ci++) {
-                    const ClusterBounds* cb = dbscan_get_cluster(&g.dbscan, ci);
-                    if (!cb || cb->point_count < 3) continue;
-                    Obstacle* ob = &obs_list.obstacles[obs_list.count++];
-                    ob->id = (uint32_t)(g.frame_id * 100 + (uint32_t)ci);
-                    ob->x = cb->cx; ob->y = cb->cy;
-                    ob->width = cb->width; ob->length = cb->length;
-                    ob->confidence = cb->confidence;
-                    /* lane_id：车体系 cx/cy → 世界系 y → 车道索引 */
-                    {
-                        double ch = cos(g.ego_heading), sh = sin(g.ego_heading);
-                        double wy = g.ego_y + cb->cx * sh + cb->cy * ch;
-                        int lc = g.has_road_geometry ? g.lane_count : 2;
-                        double lw = g.has_road_geometry ? g.lane_width : 3.5;
-                        /* lane_idx_from_y 公式：最左 = 0, 最右 = N-1 */
-                        double offset = (-wy) / lw + (lc - 1) * 0.5;
-                        int idx = (int)(offset >= 0.0 ? offset + 0.5 : offset - 0.5);
-                        if (idx < 0) idx = 0;
-                        if (idx >= lc) idx = lc - 1;
-                        ob->lane_id = (int8_t)idx;
-                    }
-                    switch (cb->cls) {
-                        case CLS_VEHICLE:    ob->type = OBJ_TYPE_VEHICLE;    break;
-                        case CLS_PEDESTRIAN: ob->type = OBJ_TYPE_PEDESTRIAN; break;
-                        default:             ob->type = OBJ_TYPE_UNKNOWN;    break;
-                    }
-                    /* 速度由 object_tracker 节点通过 KF 跟踪提供。
-                     * ALGORITHM_REFACTOR_PLAN §4: 移除 ground truth 速度匹配，
-                     * 速度在 object_tracker 的 KF 中跨帧关联得到。 */
-                    }
-                }  /* closes sensor mode else block */
-                g.last_obs_list = obs_list;
-                g.has_last_obs  = 1;
+            g.last_obs_list = obs_list;
+            g.has_last_obs  = 1;
 
-                uint8_t obs_buf[4368];  /* ObstacleList 序列化大小 = 16 + 128*34 */
-                size_t obs_len = 0;
-                if (ObstacleList_serialize(&obs_list, obs_buf, &obs_len) == 0 && obs_len > 0) {
-                    transport_publish(transport_, "perception/obstacles", obs_buf, (uint32_t)obs_len);
-                }
+            uint8_t obs_buf[4368];  /* ObstacleList 序列化大小 = 16 + 128*34 */
+            size_t obs_len = 0;
+            if (ObstacleList_serialize(&obs_list, obs_buf, &obs_len) == 0 && obs_len > 0) {
+                transport_publish(transport_, "perception/obstacles", obs_buf, (uint32_t)obs_len);
             }
 
             g.frame_id++;
@@ -467,7 +452,8 @@ EXPORT_COROUTINE_TASK(PerceptionTask, perception)
 
 /* ── NodePlugin 实现 ─────────────────────────────────────────── */
 
-static const char* s_inputs[]  = { "vehicle/state", "sensor/lidar", "road/geometry", nullptr };
+static const char* s_inputs[]  = { "vehicle/state", "sensor/lidar", "sensor/lidar_points",
+                                   "road/geometry", nullptr };
 static const char* s_outputs[] = { "perception/obstacles", nullptr };
 
 extern NodePlugin s_plugin;  /* 前向声明：定义在文件末尾 */
@@ -491,6 +477,10 @@ static int perception_init(MessageBus* bus, Transport* transport,
     g.mode         = 0;       /* 默认 ground_truth 模式 — 从 vehicle/state 读障碍物 */
     g.has_lidar    = 0;
     g.lid_x = g.lid_y = 0.0;
+    g.cloud_seq = 0;
+    g.last_cloud_seq = 0;
+    g.cloud_bad = 0;
+    g.no_cloud_warn = 0;
     g.transport    = transport;
     g.discovery    = discovery;
     g.scheduler    = scheduler;
@@ -524,11 +514,21 @@ static int perception_init(MessageBus* bus, Transport* transport,
     /* Fixed seed for reproducibility — flowsim_node drives deterministic time */
     srand(42u);
     dbscan_init(&g.dbscan, (float)g.dbscan_eps, g.dbscan_min_pts);
-    dbscan_set_ransac(&g.dbscan, 100, 0.2f, 0.3f);
+    if (g.mode == 1) {
+        /* 真点云只有障碍物命中点、没有地面回波（producer 侧 elevation 固定 0），
+         * RANSAC 会拟合出 z=0 平面并把整帧当内点清掉 → 0 聚类。详见
+         * src/algorithms/dbscan_cluster.h 的 dbscan_set_ground_mode 与
+         * tests/test_adas_nodes_logic.c 的回归用例。 */
+        dbscan_set_ground_mode(&g.dbscan, GROUND_REMOVE_NONE);
+    } else {
+        dbscan_set_ransac(&g.dbscan, 100, 0.2f, 0.3f);
+    }
 
     transport_subscribe(transport, "vehicle/state", on_vehicle_state, nullptr);
     /* sensor 模式额外消费 sensor/lidar（ground_truth 模式下订阅无害，仅更新 has_lidar） */
     transport_subscribe(transport, "sensor/lidar", on_sensor_lidar, nullptr);
+    /* 真点云：sensor 模式下障碍物的唯一来源 */
+    transport_subscribe(transport, TOPIC_SENSOR_LIDAR_POINTS, on_lidar_points, nullptr);
     /* 订阅 road/geometry 获取车道参数（用于 Obstacle.lane_id 赋值） */
     transport_subscribe(transport, "road/geometry", on_road_geometry, nullptr);
     /* 订阅 OSM 建筑（静态，init 时发布一次），供视线遮挡 */
@@ -536,6 +536,7 @@ static int perception_init(MessageBus* bus, Transport* transport,
 
     discovery_advertise(discovery, "vehicle/state",         0x1C0E5A7Eu, CAP_SUBSCRIBER,  0);
     discovery_advertise(discovery, "sensor/lidar",          LIDARFRAME_TYPE_ID, CAP_SUBSCRIBER, 0);
+    discovery_advertise(discovery, TOPIC_SENSOR_LIDAR_POINTS, LIDARPOINTCLOUD_TYPE_ID, CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, "road/geometry",         0x80AD5C12u, CAP_SUBSCRIBER,  0);
     discovery_advertise(discovery, "perception/obstacles",  OBSTACLELIST_TYPE_ID, CAP_PUBLISHER, 20.0);
 
@@ -553,10 +554,10 @@ static int perception_init(MessageBus* bus, Transport* transport,
     g.task_wrapper->impl->set_params(transport, g.lidar_rate_hz);
     s_plugin.taskbase = perception_get_base(g.task_wrapper);
 
-    LOG_INFO("perception", "initialized (FlowCoro, mode=%s, DBSCAN eps=%.1f, LiDAR %dHz FOV=%.0fdeg range=%.0fm noise=%.2f occ=%d)",
+    LOG_INFO("perception", "initialized (FlowCoro, mode=%s, DBSCAN eps=%.1f pts=%d, LiDAR %dHz FOV=%.0fdeg range=%.0fm occ=%d)",
              g.mode == 1 ? "sensor" : "ground_truth",
-             g.dbscan_eps, g.lidar_rate_hz, g.lidar_fov_deg, g.lidar_max_range_m,
-             g.obs_noise_std_m, g.enable_simple_occlusion);
+             g.dbscan_eps, g.dbscan_min_pts, g.lidar_rate_hz, g.lidar_fov_deg,
+             g.lidar_max_range_m, g.enable_simple_occlusion);
     return 0;
 }
 

@@ -266,7 +266,9 @@ target_link_libraries(fusion_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
 # 实现（反漂移，见 tests 文件头）。
 add_library(perception_node SHARED perception_node.cpp perception_points.c flowsim/building.cpp)
 target_compile_definitions(perception_node PRIVATE FLOWCORO_INTEGRATION)
-target_compile_options(perception_node PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fcoroutines>)
+# -fcoroutines 只对 C++ 源有效（perception_points.c 是纯 C，加了会打
+# "valid for C++/LTO but not for C" 警告）
+target_compile_options(perception_node PRIVATE $<$<COMPILE_LANGUAGE:CXX>:$<$<CXX_COMPILER_ID:GNU>:-fcoroutines>>)
 target_link_libraries(perception_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
 
 # behavior_planner_node: 行为规划节点 (FlowCoro 协程版)

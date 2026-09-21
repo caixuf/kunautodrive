@@ -137,6 +137,7 @@
       "subscribe": [
         "vehicle/state",
         "sensor/lidar",
+        "sensor/lidar_points",
         "road/geometry"
       ],
       "publish": [
