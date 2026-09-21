@@ -512,9 +512,11 @@ target_link_libraries(control_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
 # Uses CoroutineTask (synchronous resume on bus delivery thread) instead of
 # FlowCoroTask — the safety check is lightweight (<10us) and synchronous resume
 # avoids thread-pool starvation that caused control/cmd staleness.
-add_library(safety_control_node SHARED safety_control_node.cpp)
+# safety_arbiter.c：规则主干 vs 端到端模型的仲裁纯逻辑，与 tests/test_adas_nodes_logic.c 共用
+add_library(safety_control_node SHARED safety_control_node.cpp safety_arbiter.c)
 target_compile_definitions(safety_control_node PRIVATE FLOWCORO_INTEGRATION)
-target_compile_options(safety_control_node PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fcoroutines>)
+# -fcoroutines 只给 C++（safety_arbiter.c 是纯 C，加了会打警告）
+target_compile_options(safety_control_node PRIVATE $<$<COMPILE_LANGUAGE:CXX>:$<$<CXX_COMPILER_ID:GNU>:-fcoroutines>>)
 target_link_libraries(safety_control_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
 
 # PEM is an independent library. Node adapters only provide collection policy

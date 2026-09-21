@@ -17,6 +17,7 @@
 #include "topic_registry.h"
 #include "adas_msgs_gen.h"
 #include "degrade_ladder.h"
+#include "safety_arbiter.h"
 #include "health.h"
 #include "safety_evidence.h"
 #include "safety_fault_injection.h"
@@ -400,55 +401,37 @@ struct ArbiterState {
     uint32_t   model_reject_count{0};
 };
 
+/* 规则主干 vs 端到端模型的仲裁：纯逻辑在 safety_arbiter.c（与单测共用同一份实现，
+ * 详见该头文件）。节点私有 ControlCmd（含 std::string mode）只在这里做一次映射，
+ * 安全关键路径的数据结构保持不变。 */
 static ControlCmd arbitrate_control(const ControlCmd& rule_cmd,
                                    const ControlCmd& model_cmd,
                                    bool has_fresh_model,
                                    bool is_degraded,
                                    bool* out_intervened = nullptr) {
-    if (!has_fresh_model || is_degraded) {
-        if (out_intervened) *out_intervened = false;
-        return rule_cmd;
-    }
+    const SafetyArbiterCmd rule_a = {
+        rule_cmd.throttle, rule_cmd.brake, rule_cmd.steer,
+        rule_cmd.turn_signal, rule_cmd.hazard ? 1 : 0, rule_cmd.gear,
+    };
+    const SafetyArbiterCmd model_a = {
+        model_cmd.throttle, model_cmd.brake, model_cmd.steer,
+        model_cmd.turn_signal, model_cmd.hazard ? 1 : 0, model_cmd.gear,
+    };
 
-    ControlCmd out = rule_cmd;
-    bool intervened = false;
+    int intervened = 0;
+    const SafetyArbiterCmd res = safety_arbiter_apply(
+        &rule_a, &model_a, has_fresh_model ? 1 : 0, is_degraded ? 1 : 0, &intervened);
 
-    /* 1. 转向角安全包络仲裁 (Steering Safe Envelope)
-     * 规则主干 Stanley/MPC 转向角作为基线，模型偏离超过 0.12 rad (~6.9°) 判定超限拒绝并回退规则。 */
-    double delta_steer = std::fabs(model_cmd.steer - rule_cmd.steer);
-    if (delta_steer > 0.12) {
-        /* 模型转向严重偏离规则基线，强制拒绝模型并采用规则主干转向 */
-        out.steer = rule_cmd.steer;
-        intervened = true;
-    } else {
-        /* 模型转向在安全包络内，采纳模型转向 */
-        out.steer = model_cmd.steer;
-    }
+    ControlCmd out = rule_cmd;          /* speed/target/error 等透传字段 */
+    out.throttle    = res.throttle;
+    out.brake       = res.brake;
+    out.steer       = res.steer;
+    out.turn_signal = res.turn_signal;
+    out.hazard      = res.hazard != 0;
+    out.gear        = res.gear;
+    out.mode        = intervened ? "ARBITER[OVERRIDE]" : "ARBITER[MODEL]";
 
-    /* 2. 纵向安全仲裁 (Longitudinal Safe Arbiter)
-     * 若规则控制器处于制动态 (brake > 0.10)，以规则安全制动为主，禁止模型油门冲撞 */
-    if (rule_cmd.brake > 0.10) {
-        out.brake = std::max(rule_cmd.brake, model_cmd.brake);
-        out.throttle = 0.0;
-        intervened = true;
-    } else {
-        /* 规则未要求强制刹车时，允许模型调节油门，但限制其不超过规则上限 */
-        out.throttle = std::min(model_cmd.throttle, std::max(rule_cmd.throttle, 0.85));
-        out.brake = model_cmd.brake;
-    }
-
-    /* 3. 灯光与档位继承规则安全态 */
-    out.turn_signal = (rule_cmd.turn_signal != 0) ? rule_cmd.turn_signal : model_cmd.turn_signal;
-    out.hazard = rule_cmd.hazard || model_cmd.hazard;
-    out.gear = rule_cmd.gear;
-
-    if (intervened) {
-        out.mode = "ARBITER[OVERRIDE]";
-    } else {
-        out.mode = "ARBITER[MODEL]";
-    }
-
-    if (out_intervened) *out_intervened = intervened;
+    if (out_intervened) *out_intervened = intervened != 0;
     return out;
 }
 
