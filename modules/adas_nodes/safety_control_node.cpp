@@ -668,24 +668,62 @@ private:
                 }
             }
 
-            /* Near-field vehicle guard: brake by TTC to avoid side/front scrape
-             * when ego is between lanes and still closing on a lead vehicle. */
+            /* Near-field vehicle guard: 2026-09-21 升级
+             * 1. 制动距离模型：从恒速 TTC 改为基于 v²/(2·a) 的停车距离判断
+             *    ——低速时停车距离自然变小，自动松开刹车（无残留刹停）。
+             * 2. Hysteresis：safety_vehicle_brake_latched 跨帧保持，进入
+             *    制动后直到间隙 > stop_dist + 2m 才释放，避免边界振荡。
+             * 3. TTC 仍作为兜底触发条件（避免停车距离模型在低速/感知瞬丢
+             *    时漏报）。ego/control 对齐留待 #7 抽纯逻辑后做。 */
+            static bool safety_vehicle_brake_latched = false;
             double risk_dx = 0.0;
             double risk_dy = 0.0;
             double ttc = min_vehicle_ttc(state, &risk_dx, &risk_dy);
-            if (ttc < 2.2) {
-                set_changed(cmd.throttle, 0.0);
-                double brake_floor = clamp((2.2 - ttc) / 2.2, 0.45, 1.0);
-                if (risk_dx < 8.0 && risk_dy < 2.1) {
-                    brake_floor = std::max(brake_floor, 0.85);
-                }
-                set_changed(cmd.brake, std::max(cmd.brake, brake_floor));
-                if (ttc < 1.0 || (risk_dx < 6.5 && risk_dy < 1.9)) {
-                    set_changed(cmd.brake, 1.0);
-                }
-                /* §11.2 TTC 过低 → L2 MRM 降级 */
-                if (ttc < 1.5) {
-                    degrade_set_level(DEGRADE_L2, DEGRADE_REASON_COLLISION);
+            /* 停车距离 = v²/(2·a_brake) + τ·v + safety_margin
+             * 参数：5 m/s² 满刹（typical dry pavement）+ 0.3s 反应 + 1.5m 余量。
+             * engagement 上限 35m 匹配 min_vehicle_ttc 的感知范围。 */
+            constexpr double kBrakeDecel = 5.0;
+            constexpr double kBrakeTau = 0.3;
+            constexpr double kBrakeMargin = 1.5;
+            constexpr double kHysteresisGap = 2.0;  /* 释放比触发多这么多 */
+            const double stop_dist = state.speed * state.speed / (2.0 * kBrakeDecel)
+                                    + kBrakeTau * state.speed + kBrakeMargin;
+            const double engage_dist = std::min(stop_dist + 0.5, 35.0);
+            const double release_dist = stop_dist + kHysteresisGap;
+
+            /* 无障碍（ttc 巨大）或间隙足够 → 释放 */
+            const bool no_obstacle = (ttc > 1e8);
+            if (no_obstacle) {
+                safety_vehicle_brake_latched = false;
+            } else {
+                const bool in_brake_zone = safety_vehicle_brake_latched
+                    ? (risk_dx < release_dist)
+                    : (risk_dx < engage_dist);
+                /* TTC 兜底：低速（v<3m/s）时 stop_dist<3m，engage_dist 太小
+                 * → TTC 2.5s 兜底确保感知丢帧时不漏报 */
+                const bool ttc_trigger = (ttc < 2.5);
+
+                if (in_brake_zone || ttc_trigger) {
+                    safety_vehicle_brake_latched = true;
+                    set_changed(cmd.throttle, 0.0);
+                    if (risk_dx < stop_dist) {
+                        /* 已进入停车距离：必须制动，按超出比例 0.45→1.0 ramp */
+                        double deficit = clamp((stop_dist - risk_dx) / stop_dist, 0.0, 1.0);
+                        double brake_floor = 0.45 + deficit * 0.55;
+                        set_changed(cmd.brake, std::max(cmd.brake, brake_floor));
+                    } else {
+                        /* 停车距离够但间隙紧：温和减速（hysteresis 留出的余量） */
+                        set_changed(cmd.brake, std::max(cmd.brake, 0.30));
+                    }
+                    if (ttc < 1.0 || (risk_dx < 6.5 && risk_dy < 1.9)) {
+                        set_changed(cmd.brake, 1.0);
+                    }
+                    /* §11.2 TTC 过低 → L2 MRM 降级 */
+                    if (ttc < 1.5) {
+                        degrade_set_level(DEGRADE_L2, DEGRADE_REASON_COLLISION);
+                    }
+                } else {
+                    safety_vehicle_brake_latched = false;
                 }
             }
 
