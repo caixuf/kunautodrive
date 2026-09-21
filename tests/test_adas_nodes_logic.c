@@ -18,12 +18,18 @@
  *      可把节点纯逻辑抽离到独立 .c/.h（imu_protocol / slam_dead_reckon / pwm_map）
  *      让节点和测试都链接同一份实现。
  *
+ * 已抽离（测试与节点共用同一份实现，无副本漂移）：
+ *   imu_protocol.{h,c}      — IMU 行解析 / 静态合成
+ *   perception_points.{h,c} — 点云→DBSCAN 输入、聚类→ObstacleList
+ *
  * 编译: cmake --build build --target test_adas_nodes_logic
  * 运行: ./build/bin/test_adas_nodes_logic
  */
 
 #include "adas_msgs_gen.h"
 #include "imu_protocol.h"
+#include "dbscan_cluster.h"
+#include "perception_points.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -598,6 +604,199 @@ static void test_arbiter_brake_priority(void) {
 }
 
 /* ══════════════════════════════════════════════════════════ */
+/* Perception: 点云消费纯逻辑（perception_points.{h,c}）       */
+/* ══════════════════════════════════════════════════════════ */
+/* 与 imu_protocol 相同的反漂移做法：测试直接链接节点用的同一份实现，
+ * 不再维护"副本 + 行号标注"。 */
+
+static void cloud_fill(LidarPointCloud* c, uint32_t n,
+                       float x, float y, float z) {
+    memset(c, 0, sizeof(*c));
+    c->frame_id     = 1;
+    c->timestamp_us = 1000;
+    c->count        = n;
+    for (uint32_t i = 0; i < n && i < PERCEPTION_MAX_CLOUD_POINTS; i++) {
+        c->points[i].x = x;
+        c->points[i].y = y;
+        c->points[i].z = z;
+        c->points[i].intensity = 1.0f;
+    }
+}
+
+static void test_perception_points_basic(void) {
+    TEST("perception_points: 车体系点云原样拷贝，不做位姿变换");
+    LidarPointCloud c;
+    cloud_fill(&c, 3, 10.0f, -2.0f, 0.0f);
+    Point3D pts[8];
+    uint32_t n = perception_points_from_cloud(&c, pts, 8, 60.0, 1.0);
+    ASSERT_EQ(n, 3, "should copy all in-range points");
+    ASSERT_NEAR(pts[0].x, 10.0, 1e-6, "x must pass through unchanged");
+    ASSERT_NEAR(pts[0].y, -2.0, 1e-6, "y must pass through unchanged");
+    PASS();
+}
+
+static void test_perception_points_rejects_nonfinite(void) {
+    TEST("perception_points: NaN/Inf 点被丢弃");
+    LidarPointCloud c;
+    cloud_fill(&c, 4, 5.0f, 0.0f, 0.0f);
+    c.points[0].x = NAN;
+    c.points[1].y = INFINITY;
+    c.points[2].z = -INFINITY;
+    Point3D pts[8];
+    uint32_t n = perception_points_from_cloud(&c, pts, 8, 60.0, 1.0);
+    ASSERT_EQ(n, 1, "only the finite point survives");
+    ASSERT_NEAR(pts[0].x, 5.0, 1e-6, "survivor is points[3]");
+    PASS();
+}
+
+static void test_perception_points_range_filter(void) {
+    TEST("perception_points: 超量程与近场自反射被丢弃");
+    LidarPointCloud c;
+    cloud_fill(&c, 3, 5.0f, 0.0f, 0.0f);
+    c.points[0].x = 100.0f;   /* > max_range 60 */
+    c.points[1].x = 0.3f;     /* < min_range 1.0 */
+    c.points[2].x = 5.0f;     /* 保留 */
+    Point3D pts[8];
+    uint32_t n = perception_points_from_cloud(&c, pts, 8, 60.0, 1.0);
+    ASSERT_EQ(n, 1, "only the in-range point survives");
+    ASSERT_NEAR(pts[0].x, 5.0, 1e-6, "survivor is the in-range one");
+    PASS();
+}
+
+static void test_perception_points_capacity_contract(void) {
+    TEST("perception_points: count 超契约容量 → 整帧拒绝（不静默截断）");
+    LidarPointCloud c;
+    cloud_fill(&c, 2, 5.0f, 0.0f, 0.0f);
+    c.count = PERCEPTION_MAX_CLOUD_POINTS + 1u;
+    Point3D pts[8];
+    ASSERT_EQ(perception_points_from_cloud(&c, pts, 8, 60.0, 1.0), 0,
+              "over-capacity cloud must be rejected wholesale");
+    /* 空云（空场景）返回 0 而不是报错 —— 这是合法输入 */
+    cloud_fill(&c, 0, 0.0f, 0.0f, 0.0f);
+    ASSERT_EQ(perception_points_from_cloud(&c, pts, 8, 60.0, 1.0), 0,
+              "empty cloud is valid input, yields 0 points");
+    PASS();
+}
+
+static void test_perception_points_max_out(void) {
+    TEST("perception_points: 受 max_out 限制");
+    LidarPointCloud c;
+    cloud_fill(&c, 5, 5.0f, 0.0f, 0.0f);
+    Point3D pts[2];
+    ASSERT_EQ(perception_points_from_cloud(&c, pts, 2, 60.0, 1.0), 2,
+              "must not write past max_out");
+    PASS();
+}
+
+static void test_perception_clusters_null_and_noise(void) {
+    TEST("clusters_to_obstacles: NULL 入参安全 + 小簇（噪声）丢弃");
+    ObstacleList out;
+    PerceptionFramePose pose = {1, 0.0, 0.0, 4, 3.5};
+    ASSERT_EQ(perception_clusters_to_obstacles(NULL, 0, &pose, &out), 0,
+              "NULL clusters → 0");
+    ClusterBounds cb;
+    memset(&cb, 0, sizeof(cb));
+    cb.point_count = 2;   /* < 3 视为噪声 */
+    ASSERT_EQ(perception_clusters_to_obstacles(&cb, 1, &pose, &out), 0,
+              "2-point cluster is noise");
+    ASSERT_EQ(out.count, 0, "output count must be 0");
+    PASS();
+}
+
+static void test_perception_clusters_type_and_geometry(void) {
+    TEST("clusters_to_obstacles: 尺寸启发式 → 车/行人/骑行者类型");
+    ObstacleList out;
+    PerceptionFramePose pose = {7, 0.0, 0.0, 4, 3.5};
+    ClusterBounds cb[3];
+    memset(cb, 0, sizeof(cb));
+    /* 车：车头面 → 车体系纵向薄、横向 2m */
+    cb[0].cx = 20.0f; cb[0].cy = -1.75f; cb[0].width = 0.4f; cb[0].length = 2.0f;
+    cb[0].point_count = 12; cb[0].confidence = 0.8f; cb[0].cls = CLS_VEHICLE;
+    /* 行人：0.5×0.5 */
+    cb[1].cx = 6.0f;  cb[1].cy = 8.5f;  cb[1].width = 0.5f; cb[1].length = 0.5f;
+    cb[1].point_count = 6;  cb[1].confidence = 0.5f; cb[1].cls = CLS_PEDESTRIAN;
+    /* 骑行者 */
+    cb[2].cx = 9.0f;  cb[2].cy = -4.0f; cb[2].width = 1.0f; cb[2].length = 2.0f;
+    cb[2].min_z = 0.5f; cb[2].max_z = 1.8f;
+    cb[2].point_count = 8;  cb[2].confidence = 0.5f; cb[2].cls = CLS_CYCLIST;
+
+    uint32_t n = perception_clusters_to_obstacles(cb, 3, &pose, &out);
+    ASSERT_EQ(n, 3, "3 clusters → 3 obstacles");
+    ASSERT_EQ(out.frame_id, 7, "frame_id propagated");
+    ASSERT_EQ(out.obstacles[0].type, OBJ_TYPE_VEHICLE, "cluster 0 → vehicle");
+    ASSERT_EQ(out.obstacles[1].type, OBJ_TYPE_PEDESTRIAN, "cluster 1 → pedestrian");
+    ASSERT_EQ(out.obstacles[2].type, OBJ_TYPE_CYCLIST, "cluster 2 → cyclist");
+    /* 车体坐标原样透传（簇中心即障碍物位置） */
+    ASSERT_NEAR(out.obstacles[0].x, 20.0, 1e-6, "x passthrough");
+    ASSERT_NEAR(out.obstacles[0].y, -1.75, 1e-6, "y passthrough");
+    ASSERT_NEAR(out.obstacles[1].width, 0.5, 1e-6, "pedestrian width kept");
+    PASS();
+}
+
+static void test_perception_clusters_lane_id(void) {
+    TEST("clusters_to_obstacles: lane_id 反算 + 越界夹取");
+    ObstacleList out;
+    /* ego 在 y=0、朝向 0；车道宽 3.5、4 条 → 最左 lane 0（y>0 侧） */
+    PerceptionFramePose pose = {1, 0.0, 0.0, 4, 3.5};
+    ClusterBounds cb[3];
+    memset(cb, 0, sizeof(cb));
+    for (int i = 0; i < 3; i++) {
+        cb[i].point_count = 5;
+        cb[i].cls = CLS_VEHICLE;
+        cb[i].width = 0.4f; cb[i].length = 2.0f;
+    }
+    cb[0].cy = 0.0f;    /* 车道中间 → 世界 y=0 → lane 2（右二） */
+    cb[1].cy = 5.25f;   /* 车体左 5.25 → 世界 y=+5.25 → lane 0 */
+    cb[2].cy = -99.0f;  /* 远超出右侧 → 夹到 lane 3 */
+
+    ASSERT_EQ(perception_clusters_to_obstacles(cb, 3, &pose, &out), 3, "3 obstacles");
+    ASSERT_EQ(out.obstacles[0].lane_id, 2, "y=0 → middle-right lane");
+    ASSERT_EQ(out.obstacles[1].lane_id, 0, "leftmost lane");
+    ASSERT_EQ(out.obstacles[2].lane_id, 3, "clamped to last lane");
+    PASS();
+}
+
+/* 这条是 perception_node 选 GROUND_REMOVE_NONE 的依据：真点云（z 恒 0）在
+ * RANSAC 下会被整帧当"地面"清空 → 0 簇。回归保护：谁把 ground_mode 改回
+ * RANSAC，这里立刻红。
+ *
+ * 注意这个坑是**点数相关**的、因而更隐蔽：ransac_fit_ground() 的候选平面
+ * 预筛要求 quick_count >= 20，而 quick_count 只在 min(50, n) 个点上采样，
+ * 所以只有 n >= 20 的点云才真的会拟合出 z=0 平面（命中 100% 内点 → 全部移除）；
+ * n < 20 时 RANSAC 直接放弃、地面去除静默失效。同一辆车 8m 处（约 30 点）
+ * 会消失、30m 处（约 8 点）反而可见 —— 正是"看不见近处、看得见远处"的
+ * 反直觉漏检。故用 25 点覆盖 n>=20 这一档。 */
+static void test_perception_ground_remove_none_rationale(void) {
+    TEST("dbscan: z=0 点云 RANSAC 清空、GROUND_REMOVE_NONE 保留");
+    enum { N_PTS = 25 };   /* 5×5，>=20 才会触发 ransac_fit_ground 的预筛 */
+    Point3D pts[N_PTS], work[N_PTS];
+    int k = 0;
+    for (int gx = 0; gx < 5; gx++) {
+        for (int gy = 0; gy < 5; gy++) {
+            pts[k].x = (float)gx * 1.0f;
+            pts[k].y = (float)gy * 1.0f;
+            pts[k].z = 0.0f;            /* 真点云只有障碍物命中，z 恒 0 */
+            pts[k].intensity = 1.0f;
+            k++;
+        }
+    }
+    srand(42u);
+
+    DbscanCluster db;
+    dbscan_init(&db, 2.0f, 4);
+    dbscan_set_ransac(&db, 100, 0.2f, 0.3f);
+    memcpy(work, pts, sizeof(pts));
+    ASSERT_EQ(dbscan_run(&db, work, N_PTS), 0,
+              "RANSAC ground removal wipes a z=0 cloud (this is why we use NONE)");
+
+    dbscan_set_ground_mode(&db, GROUND_REMOVE_NONE);
+    memcpy(work, pts, sizeof(pts));
+    ASSERT(dbscan_run(&db, work, N_PTS) >= 1,
+           "GROUND_REMOVE_NONE must keep the cluster");
+    PASS();
+}
+
+/* ══════════════════════════════════════════════════════════ */
 /* Main                                                        */
 /* ══════════════════════════════════════════════════════════ */
 
@@ -649,6 +848,17 @@ int main(void) {
     test_arbiter_model_within_envelope();
     test_arbiter_steer_reject();
     test_arbiter_brake_priority();
+
+    printf("\n═══ Perception Point Cloud Consumption ═══\n");
+    test_perception_points_basic();
+    test_perception_points_rejects_nonfinite();
+    test_perception_points_range_filter();
+    test_perception_points_capacity_contract();
+    test_perception_points_max_out();
+    test_perception_clusters_null_and_noise();
+    test_perception_clusters_type_and_geometry();
+    test_perception_clusters_lane_id();
+    test_perception_ground_remove_none_rationale();
 
     printf("\n═══════════════════════════════════\n");
     printf("  Total: %d  ✅ Passed: %d  ❌ Failed: %d\n",

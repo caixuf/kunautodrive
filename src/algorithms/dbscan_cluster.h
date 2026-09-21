@@ -105,6 +105,18 @@ void dbscan_init(DbscanCluster* db, float eps, int min_pts);
 void dbscan_set_ground_thresh(DbscanCluster* db, float z_thresh);
 
 /**
+ * 直接指定地面去除模式。
+ *
+ * 用途：感知消费的是"只有障碍物命中点"的点云（例如 sensor_model 的真点云
+ * 路径，z 恒 0，没有地面回波）。这种点云在 GROUND_REMOVE_RANSAC 下会被
+ * 拟合出的 z=0 平面整帧清空 → 0 聚类，必须显式关掉地面去除。
+ *
+ * @param db    实例
+ * @param mode  GROUND_REMOVE_NONE / ZCUT / RANSAC
+ */
+void dbscan_set_ground_mode(DbscanCluster* db, GroundRemoveMode mode);
+
+/**
  * 配置 RANSAC 地面去除参数。
  * @param max_iter         最大迭代次数 (建议 50-200)
  * @param dist_thresh      内点距离阈值 (m) (建议 0.15-0.3)

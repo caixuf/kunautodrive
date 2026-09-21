@@ -262,7 +262,9 @@ target_link_libraries(fusion_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
 # perception_node: DBSCAN 感知 + 传感器仿真 (FlowCoro 协程版)
 # 采用 FlowCoroTask（线程池 resume）：DBSCAN 点云聚类为重计算，同步 resume 会阻塞
 # 消息总线分发线程导致 drops，故改用线程池 resume。
-add_library(perception_node SHARED perception_node.cpp flowsim/building.cpp)
+# perception_points.c：点云消费纯逻辑，与 tests/test_adas_nodes_logic.c 共用同一份
+# 实现（反漂移，见 tests 文件头）。
+add_library(perception_node SHARED perception_node.cpp perception_points.c flowsim/building.cpp)
 target_compile_definitions(perception_node PRIVATE FLOWCORO_INTEGRATION)
 target_compile_options(perception_node PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fcoroutines>)
 target_link_libraries(perception_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})

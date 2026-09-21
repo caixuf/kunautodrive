@@ -339,6 +339,11 @@ void dbscan_set_ground_thresh(DbscanCluster* db, float z_thresh) {
     db->ground_mode = GROUND_REMOVE_ZCUT;
 }
 
+void dbscan_set_ground_mode(DbscanCluster* db, GroundRemoveMode mode) {
+    if (!db) return;
+    db->ground_mode = mode;
+}
+
 void dbscan_set_ransac(DbscanCluster* db, int max_iter,
                         float dist_thresh, float min_inlier_ratio) {
     db->ground_mode            = GROUND_REMOVE_RANSAC;
