@@ -179,8 +179,23 @@ run_benchmark() {
         exit 1
     fi
 
-    print_info "运行性能基准测试..."
-    ${BUILD_DIR}/bin/benchmark
+    local ran=0
+    # 进程内 MessageBus（Linux；macOS 因 sem_init 不构建）
+    if [ -x "${BUILD_DIR}/bin/benchmark" ]; then
+        print_info "运行进程内 MessageBus 基准..."
+        "${BUILD_DIR}/bin/benchmark"
+        ran=1
+    fi
+    # localhost loopback TCP（NetworkTransport；非网卡、非进程内总线）
+    if [ -x "${BUILD_DIR}/bin/benchmark_tcp" ]; then
+        print_info "运行 localhost loopback TCP 基准..."
+        "${BUILD_DIR}/bin/benchmark_tcp"
+        ran=1
+    fi
+    if [ "$ran" -eq 0 ]; then
+        print_error "未找到 benchmark / benchmark_tcp，请先构建"
+        exit 1
+    fi
 }
 
 # 运行演示程序
@@ -208,7 +223,7 @@ show_help() {
     echo "  release    - 构建Release版本 (默认)"
     echo "  install    - 安装到系统"
     echo "  test       - 运行测试"
-    echo "  bench      - 运行性能基准测试"
+    echo "  bench      - 运行性能基准测试（进程内 benchmark + localhost TCP benchmark_tcp）"
   echo "  demo       - 运行任务演示"
     echo "  help       - 显示此帮助信息"
     echo ""

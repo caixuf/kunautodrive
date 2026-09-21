@@ -143,7 +143,8 @@ sim_world → sensor_model → perception → fusion → planning → control �
 bash build.sh release                # Release（默认，等价 cmake --build build）
 bash build.sh debug                  # Debug
 bash build.sh test                   # 跑 ctest（需先构建）
-bash build.sh bench                  # benchmark 二进制
+bash build.sh bench                  # benchmark（进程内总线）+ benchmark_tcp（127.0.0.1 loopback）
+./build/bin/benchmark_tcp            # localhost loopback TCP；数字不是 NIC/线缆，也不是进程内总线
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j$(nproc)
 
 # ── 运行 ────────────────────────────────────────────────────────
