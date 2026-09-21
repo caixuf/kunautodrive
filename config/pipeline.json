@@ -100,7 +100,7 @@
         },
         {
           "topic": "sensor/lidar_points",
-          "type": "JSON",
+          "type": "LidarPointCloud",
           "qos": {
             "depth": 2,
             "policy": "drop_oldest",

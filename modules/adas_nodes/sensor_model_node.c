@@ -3,8 +3,8 @@
  *
  * 从 vehicle/state 真值生成带噪声/视场/简化遮挡约束的传感器输出。
  *
- * 输入 topics: vehicle/state
- * 输出 topics: sensor/lidar, sensor/gps, sensor/camera
+ * 输入 topics: vehicle/state, environment/state
+ * 输出 topics: sensor/lidar, sensor/lidar_points, sensor/gps, sensor/camera
  */
 
 #include "node_plugin.h"
@@ -13,6 +13,8 @@
 #include "nmea_parser.h"
 #include "transport.h"
 #include "discovery.h"
+#include "topic_registry.h"
+#include "clock_service.h"
 #include "logger.h"
 
 #include <math.h>
@@ -43,6 +45,11 @@ static struct {
     int n_obs;
     double obs_x[128];
     double obs_y[128];
+    /* 障碍物物理尺寸（vehicle/state 的 ol%d/ow%d，米）。真点云的 AABB 半宽
+     * 直接取自这里 —— 旧实现对所有障碍物硬编码 4.6×2.0 的车盒，行人
+     * （0.5×0.5）会被当成车聚出来，下游类型判定必然错。 */
+    double obs_length[128];
+    double obs_width[128];
 
     uint32_t frame_id;
 
@@ -122,20 +129,28 @@ static int obstacle_in_fov(double rx, double ry, double max_range_m, double fov_
  * 写死 24 个地面环 + 8×N 点 → DBSCAN 重新聚回 → fusion_node 把 lidar->x
  * 当真值。整个链路在"模拟传感器"，不是"模拟物理"。
  *
- * 本 patch 新增真点云路径：
- *   - lidar_mode=1 时在 ego 系发射 N 根方位射线（FOV 等分，elevation 固定）
- *   - 每根射线与每个 obstacle AABB 求最近 hit
+ * 真点云路径（lidar_mode=1）：
+ *   - 在 ego 系发射 n_rays 根方位射线（FOV 等分，elevation 固定 0）
+ *   - 每根射线与每个 obstacle 的 AABB 求最近 hit；AABB 尺寸取该障碍物
+ *     自己的 ol/ow（行人 0.5×0.5 与车 4.6×2.0 不再混为一谈）
  *   - hit 点沿射线方向叠加 σ=α·range 的高斯噪声（距离越远噪声越大）
  *   - 固定丢失率（默认 5%）随机丢弃射线，模拟空气/遮挡
  *   - intensity 按 exp(-range/30) 衰减
- *   - 以 JSON 数组发到 sensor/lidar_points（type_id=0 ad-hoc，不进 gen）
+ *   - 以 LidarPointCloud（二进制，LIDARPOINTCLOUD_TYPE_ID）发 sensor/lidar_points
+ *
+ * 坐标约定：**传感器（车体）系** —— x 前、y 左、z 上。这是 LidarPointCloud
+ * 给 LIO/感知用的正确语义，consumer 因此不需要任何位姿变换。
+ * （旧实现发世界系坐标，只有 ego 自己知道自己在哪，等于把定位真值漏给点云。）
  *
  * lidar_mode=0（默认）→ 不发 sensor/lidar_points，旧 LidarFrame 行为完全
  * 不变；lidar_mode=1 → 发真点云，LidarFrame.point_count 反映真实命中数
  * （不再 62000+visible*450 编的）。
  *
- * 已知限制：仅 obstacle 射线，未对 world/buildings OBB 投射（建筑遮挡
- * 下个 PR 接 perception_node on_world_buildings OBB 缓存复用）。
+ * 已知限制（后续 commit）：
+ *   - 障碍物朝向：vehicle/state 不发布各障碍物 heading，AABB 近似为
+ *     "与 ego 同向"（横穿/掉头目标会失真）
+ *   - 无 elevation 维度（z 恒 0），因此 consumer 不能用 z 做地面分割
+ *   - 未对 world/buildings OBB 投射（建筑遮挡由 consumer 侧 LOS 过滤补）
  */
 static double rand_uniform_01(void) {
     return (double)rand() / (double)RAND_MAX;
@@ -161,13 +176,14 @@ static double ray_aabb_t(double ox, double oy, double dx, double dy,
     return tmin > 0.0 ? tmin : tmax;
 }
 
-/* mode=1 真点云：射线 + 距离噪声 + 丢失，发布 sensor/lidar_points JSON 数组 */
-static void publish_raycast_points(void) {
-    /* 64 根方位射线（足够验证闭环 + 性能可接受）；调高需同步改 max_points */
-    const int   n_rays        = 64;
-    /* NPC 几何（标准乘用车长 4.6m、宽 2.0m）半宽 → 与 perception_node 默认 bbox 对齐 */
-    const double obs_hx       = 2.3;
-    const double obs_hy       = 1.0;
+/* mode=1 真点云：射线 + 距离噪声 + 丢失，发布 sensor/lidar_points 二进制点云。
+ * 返回本帧命中点数（供 LidarFrame.point_count 用）。空场景（count=0）也发，
+ * 否则下游分不清"传感器没跑"和"前方真的没东西"。 */
+static uint32_t publish_raycast_points(uint32_t frame_id, uint64_t timestamp_us) {
+    /* 240 根方位射线 ≈ 0.5°/根。密度换算（DBSCAN min_pts=4、eps=2m）：
+     * 0.5m 行人 ~14m 内可成簇，2.0m 车宽 ~57m 内可成簇（受 range_max 兜底）。
+     * 上限受 LidarPointCloud.points 容量 2048 与 consumer 缓冲约束。 */
+    const int   n_rays        = 240;
     const double fov_rad      = g.lidar_fov_deg * M_PI / 180.0;
     const double range_max    = g.lidar_max_range_m;
     /* 距离相关噪声 σ=α·range；weather 衰减放大 1.5×（与旧 noise_scale 对齐） */
@@ -175,27 +191,44 @@ static void publish_raycast_points(void) {
     const double loss_rate    = 0.05;
     /* intensity 衰减系数：30m 半衰期 ≈ exp(-1)≈0.37（接近真实 LiDAR） */
     const double intensity_tau = 30.0;
+    /* 扫描周期：time_offset_us 按方位角在 FOV 上的进度分布（旋转式 LiDAR sweep） */
+    const double sweep_us     = 1e6 / (double)(g.lidar_rate_hz > 0 ? g.lidar_rate_hz : 20);
 
     const double cos_h = cos(g.ego_heading);
     const double sin_h = sin(g.ego_heading);
 
-    cJSON* arr = cJSON_CreateArray();
-    if (!arr) return;
+    /* 40KB → 静态缓冲，不能放栈上 */
+    static LidarPointCloud cloud;
+    memset(&cloud, 0, sizeof(cloud));
+    cloud.frame_id     = frame_id;
+    cloud.timestamp_us = timestamp_us;
+    cloud.sensor_id    = 0;
+
+    /* 障碍物世界→车体（AABB 取车体轴，近似"障碍物与 ego 同向"） */
+    double obs_rx[128], obs_ry[128];
+    for (int i = 0; i < g.n_obs; i++) {
+        const double dx = g.obs_x[i] - g.ego_x;
+        const double dy = g.obs_y[i] - g.ego_y;
+        obs_rx[i] =  dx * cos_h + dy * sin_h;
+        obs_ry[i] = -dx * sin_h + dy * cos_h;
+    }
 
     for (int r = 0; r < n_rays; r++) {
         /* azimuth 均匀覆盖 [-FOV/2, +FOV/2]，elevation 固定 0 */
-        double az = -fov_rad * 0.5 + (double)r / (double)(n_rays - 1) * fov_rad;
-        double wx = cos(az) * cos_h - sin(az) * sin_h;
-        double wy = cos(az) * sin_h + sin(az) * cos_h;
+        const double frac = (double)r / (double)(n_rays - 1);
+        const double az   = -fov_rad * 0.5 + frac * fov_rad;
+        const double dirx = cos(az);
+        const double diry = sin(az);
 
         /* 找最近 hit */
-        double t_best = range_max;
+        double t_best  = range_max;
         int    hit_idx = -1;
         for (int i = 0; i < g.n_obs; i++) {
-            double t = ray_aabb_t(g.ego_x, g.ego_y, wx, wy,
-                                   g.obs_x[i], g.obs_y[i], obs_hx, obs_hy);
+            double t = ray_aabb_t(0.0, 0.0, dirx, diry,
+                                   obs_rx[i], obs_ry[i],
+                                   0.5 * g.obs_length[i], 0.5 * g.obs_width[i]);
             if (t > 0.0 && t < t_best) {
-                t_best = t;
+                t_best  = t;
                 hit_idx = i;
             }
         }
@@ -203,30 +236,26 @@ static void publish_raycast_points(void) {
         /* 丢失率 */
         if (rand_uniform_01() < loss_rate) continue;
         /* 距离噪声：σ=α·range，clamp 到 [0.1, range_max] */
-        double sigma = noise_alpha * t_best;
+        double sigma   = noise_alpha * t_best;
         double t_noisy = t_best + sigma * rand_gauss();
         if (t_noisy < 0.1)         t_noisy = 0.1;
         if (t_noisy > range_max)   t_noisy = range_max;
 
-        cJSON* pt = cJSON_CreateObject();
-        if (!pt) continue;
-        cJSON_AddNumberToObject(pt, "x", g.ego_x + wx * t_noisy);
-        cJSON_AddNumberToObject(pt, "y", g.ego_y + wy * t_noisy);
-        cJSON_AddNumberToObject(pt, "z", 0.0);
-        cJSON_AddNumberToObject(pt, "i", exp(-t_best / intensity_tau));
-        cJSON_AddItemToArray(arr, pt);
+        LidarPoint* p = &cloud.points[cloud.count];
+        p->x = (float)(dirx * t_noisy);
+        p->y = (float)(diry * t_noisy);
+        p->z = 0.0f;
+        p->intensity      = (float)exp(-t_best / intensity_tau);
+        p->time_offset_us = (uint32_t)(sweep_us * frac);
+        cloud.count++;
     }
 
-    char* json = cJSON_PrintUnformatted(arr);
-    if (json) {
-        Message msg;
-        msg_init_typed(&msg, "sensor/lidar_points", "sensor_model",
-                       /* type_id = */ 0u, /* version = */ 0u,
-                       json, strlen(json) + 1);
-        transport_publish(g.transport, "sensor/lidar_points", msg.data, msg.data_size);
-        free(json);
-    }
-    cJSON_Delete(arr);
+    Message msg;
+    msg_init_typed(&msg, TOPIC_SENSOR_LIDAR_POINTS, "sensor_model",
+                   LIDARPOINTCLOUD_TYPE_ID, LIDARPOINTCLOUD_SCHEMA_VERSION,
+                   &cloud, sizeof(cloud));
+    transport_publish(g.transport, TOPIC_SENSOR_LIDAR_POINTS, msg.data, msg.data_size);
+    return cloud.count;
 }
 
 static void on_vehicle_state(const Message* msg, void* user_data) {
@@ -248,7 +277,10 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
     int n = 0;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "n_obs")) && cJSON_IsNumber(j))
         n = (int)j->valuedouble;
-    if (n < 1 || n > 128) n = 3;
+    /* 0 就是 0：旧代码把 n<1 兜底成 3，在 ego 原点伪造 3 个障碍物。旧的点数
+     * 估计靠 obstacle_in_fov 的 range<0.05 把它们滤掉所以没暴露；真点云的
+     * ray_aabb_t 在射线原点位于盒内时返回 tmax>0 → 幻影会变成真实命中。 */
+    if (n < 0 || n > 128) n = 0;
     g.n_obs = n;
 
     for (int i = 0; i < n; i++) {
@@ -259,6 +291,19 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
         snprintf(key, sizeof(key), "oy%d", i);
         if ((j = cJSON_GetObjectItemCaseSensitive(root, key)) && cJSON_IsNumber(j))
             g.obs_y[i] = j->valuedouble;
+
+        /* 尺寸：真点云 AABB 用障碍物自己的长宽，缺字段时退回标准乘用车 */
+        g.obs_length[i] = 4.6;
+        snprintf(key, sizeof(key), "ol%d", i);
+        if ((j = cJSON_GetObjectItemCaseSensitive(root, key)) && cJSON_IsNumber(j))
+            g.obs_length[i] = j->valuedouble;
+        g.obs_width[i] = 2.0;
+        snprintf(key, sizeof(key), "ow%d", i);
+        if ((j = cJSON_GetObjectItemCaseSensitive(root, key)) && cJSON_IsNumber(j))
+            g.obs_width[i] = j->valuedouble;
+        /* clamp：退化（0 或 NaN）盒子会让 ray_aabb_t 全命中/全不命中 */
+        if (!(g.obs_length[i] >= 0.2 && g.obs_length[i] <= 40.0)) g.obs_length[i] = 4.6;
+        if (!(g.obs_width[i]  >= 0.2 && g.obs_width[i]  <= 40.0)) g.obs_width[i]  = 2.0;
     }
 
     cJSON_Delete(root);
@@ -348,6 +393,15 @@ static int sensor_model_execute(TaskBase* task) {
         double noise_x = rand_uniform_signed(g.obs_noise_std_m * weather_noise_scale);
         double noise_y = rand_uniform_signed(g.obs_noise_std_m * weather_noise_scale);
 
+        /* mode=1 真点云：射线投射 + 距离相关噪声 + 丢失率，发 sensor/lidar_points。
+         * 与 sensor/lidar 并行发布（不替代 LidarFrame，向后兼容）。空场景
+         * count=0 也发：下游靠"本帧有没有新点云"区分"传感器没跑"与"前方没东西"，
+         * 后者必须发出空 ObstacleList 去清下游跟踪。 */
+        uint32_t hit_points = 0;
+        if (g.lidar_mode == 1) {
+            hit_points = publish_raycast_points(g.frame_id, clock_now_us());
+        }
+
         float lidar_intensity = (float)(0.85 * (1.0 - 0.4 * g.weather_attenuation));
         if (lidar_intensity < 0.2f) lidar_intensity = 0.2f;
 
@@ -356,7 +410,10 @@ static int sensor_model_execute(TaskBase* task) {
             .y = (float)(g.ego_y + noise_y),
             .z = 0.0f,
             .intensity = lidar_intensity,
-            .point_count = (uint32_t)(estimate_visible_point_count() * (1.0 - 0.3 * g.weather_attenuation)),
+            /* mode=1：真实命中数；mode=0：保留旧的可见点数估计（含 weather 衰减） */
+            .point_count = (g.lidar_mode == 1)
+                         ? hit_points
+                         : (uint32_t)(estimate_visible_point_count() * (1.0 - 0.3 * g.weather_attenuation)),
             .frame_id = g.frame_id,
         };
         Message lmsg;
@@ -364,13 +421,6 @@ static int sensor_model_execute(TaskBase* task) {
                        LIDARFRAME_TYPE_ID, LIDARFRAME_SCHEMA_VERSION,
                        &lidar, sizeof(lidar));
         transport_publish(g.transport, "sensor/lidar", lmsg.data, lmsg.data_size);
-
-        /* mode=1 真点云：射线投射 + 距离相关噪声 + 丢失率，发 sensor/lidar_points。
-         * 与 sensor/lidar 并行发布（不替代 LidarFrame，向后兼容）。
-         * 接 perception_node 的 sensor/lidar_points 订阅后即可关掉自证闭环。 */
-        if (g.lidar_mode == 1) {
-            publish_raycast_points();
-        }
 
         if (g.frame_id % 2 == 0) {
             GpsData gps;
@@ -486,10 +536,16 @@ static int sensor_model_init(MessageBus* bus, Transport* transport,
 
     discovery_advertise(discovery, "vehicle/state", 0x1C0E5A7Eu, CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, "sensor/lidar", LIDARFRAME_TYPE_ID, CAP_PUBLISHER, 20.0);
+    discovery_advertise(discovery, TOPIC_SENSOR_LIDAR_POINTS, LIDARPOINTCLOUD_TYPE_ID,
+                        CAP_PUBLISHER, (double)g.lidar_rate_hz);
     discovery_advertise(discovery, "sensor/gps", GPSDATA_TYPE_ID, CAP_PUBLISHER, 10.0);
     discovery_advertise(discovery, "sensor/camera", LIDARFRAME_TYPE_ID, CAP_PUBLISHER, 6.0);
 
     transport_advertise(transport, "sensor/lidar", LIDARFRAME_TYPE_ID);
+    /* 类型注册：consumer 端 deserialize 依赖 advertise 里的 type_id（transport_publish
+     * 只传裸字节），补上 lidar_points 的 0x7d34ca5c，否则 slam_node/perception 会按
+     * 未注册类型解失败。 */
+    transport_advertise(transport, TOPIC_SENSOR_LIDAR_POINTS, LIDARPOINTCLOUD_TYPE_ID);
     transport_advertise(transport, "sensor/gps", GPSDATA_TYPE_ID);
     transport_advertise(transport, "sensor/camera", LIDARFRAME_TYPE_ID);
 
