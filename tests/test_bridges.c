@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
 #include <unistd.h>
 #include <pthread.h>
 #if !defined(_WIN32)
@@ -219,12 +220,118 @@ static void test_network_transport_roundtrip(void) {
     ASSERT(count == 1, "expected one network delivery, got %d", count);
     ASSERT(last_value == value, "expected %d, got %d", value, last_value);
 
+    NetTransportStats tx = {0};
+    net_transport_get_stats(sender, &tx);
+    size_t expect = 4u + (size_t)NET_WIRE_HEADER_SIZE + sizeof(value);
+    ASSERT(tx.msgs_sent == 1, "expected 1 sent msg, got %llu",
+           (unsigned long long)tx.msgs_sent);
+    ASSERT(tx.bytes_sent == expect,
+           "compact wire expected %zu B, got bytes_sent=%llu (legacy full Message would be %zu)",
+           expect, (unsigned long long)tx.bytes_sent, 4u + sizeof(Message));
+
     net_transport_destroy(sender);
     net_transport_destroy(receiver);
     message_bus_destroy(sender_bus);
     message_bus_destroy(receiver_bus);
     PASS();
 }
+
+#if !defined(_WIN32)
+static int wait_network_sink(NetworkSink* sink, int target, int timeout_ms) {
+    int spins = timeout_ms / 2;
+    if (spins < 1) spins = 1;
+    for (int i = 0; i < spins; i++) {
+        pthread_mutex_lock(&sink->mutex);
+        int count = sink->count;
+        pthread_mutex_unlock(&sink->mutex);
+        if (count >= target) return count;
+        usleep(2000);
+    }
+    pthread_mutex_lock(&sink->mutex);
+    int count = sink->count;
+    pthread_mutex_unlock(&sink->mutex);
+    return count;
+}
+
+static void test_network_transport_compact_burst(void) {
+    TEST("NetworkTransport compact TCP burst");
+    const int burst = 256;
+    const uint16_t base_port = 18771;
+    MessageBus* sender_bus = NULL;
+    MessageBus* receiver_bus = NULL;
+    NetworkTransport* sender = NULL;
+    NetworkTransport* receiver = NULL;
+    int started = 0;
+
+    for (int attempt = 0; attempt < 8 && !started; attempt++) {
+        uint16_t recv_port = (uint16_t)(base_port + (uint16_t)attempt * 2);
+        uint16_t send_port = (uint16_t)(recv_port + 1);
+        sender_bus = message_bus_create("t_net_burst_tx");
+        receiver_bus = message_bus_create("t_net_burst_rx");
+        ASSERT(sender_bus != NULL && receiver_bus != NULL, "bus create failed");
+        receiver = net_transport_create("127.0.0.1", recv_port, receiver_bus, NULL);
+        sender = net_transport_create("127.0.0.1", send_port, sender_bus, NULL);
+        ASSERT(receiver != NULL && sender != NULL, "transport create failed");
+
+        int connected = 0;
+        if (net_transport_bridge_topic(sender, "test/burst") == 0 &&
+            net_transport_start(receiver) == 0 &&
+            net_transport_start(sender) == 0 &&
+            net_transport_connect(sender, "127.0.0.1", recv_port) == 0) {
+            for (int w = 0; w < 100; w++) {
+                if (net_transport_connection_count(sender) >= 1 &&
+                    net_transport_connection_count(receiver) >= 1) {
+                    connected = 1;
+                    break;
+                }
+                usleep(2000);
+            }
+        }
+        if (!connected) {
+            net_transport_destroy(sender);
+            net_transport_destroy(receiver);
+            message_bus_destroy(sender_bus);
+            message_bus_destroy(receiver_bus);
+            sender = receiver = NULL;
+            sender_bus = receiver_bus = NULL;
+            continue;
+        }
+        started = 1;
+    }
+    ASSERT(started, "failed to bind/connect loopback pair");
+
+    NetworkSink sink = { PTHREAD_MUTEX_INITIALIZER, 0, 0 };
+    ASSERT(message_bus_subscribe(receiver_bus, "test/burst",
+                                 network_sink_cb, &sink) == 0,
+           "receiver subscribe failed");
+
+    for (int i = 0; i < burst; i++) {
+        ASSERT(message_bus_publish(sender_bus, "test/burst", "test",
+                                   &i, sizeof(i)) == 0,
+               "publish failed at %d", i);
+    }
+
+    int count = wait_network_sink(&sink, burst, 2000);
+    ASSERT(count == burst,
+           "expected %d deliveries within 2s, got %d (old 64KB/10ms recv cannot)",
+           burst, count);
+
+    NetTransportStats tx = {0};
+    net_transport_get_stats(sender, &tx);
+    size_t expect = (4u + (size_t)NET_WIRE_HEADER_SIZE + sizeof(int)) * (size_t)burst;
+    ASSERT(tx.msgs_sent == (uint64_t)burst, "expected %d sent, got %llu",
+           burst, (unsigned long long)tx.msgs_sent);
+    ASSERT(tx.bytes_sent == expect,
+           "compact burst wire expected %zu B, got %llu",
+           expect, (unsigned long long)tx.bytes_sent);
+
+    net_transport_destroy(sender);
+    net_transport_destroy(receiver);
+    message_bus_destroy(sender_bus);
+    message_bus_destroy(receiver_bus);
+    PASS();
+}
+#endif
 
 #if !defined(_WIN32)
 static void test_transport_ipc_qos_depth(void) {
@@ -559,8 +666,10 @@ int main(void) {
     test_transport_unsubscribe();
     test_network_transport_roundtrip();
 #if !defined(_WIN32)
+    test_network_transport_compact_burst();
     test_transport_ipc_qos_depth();
 #else
+    printf("  NetworkTransport compact TCP burst (POSIX only)  SKIP\n");
     printf("  transport IPC QoS depth (POSIX only)             SKIP\n");
 #endif
 

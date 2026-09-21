@@ -6,7 +6,14 @@
  * @brief TCP 网络传输层 — 跨机器消息通信 (FlowEngine 分布式)
  *
  * 协议:
- *   [length: uint32 BE][Message serialized: N bytes]...
+ *   [length: uint32 BE][payload: N bytes]...
+ *
+ *   v1 compact（当前发送）:
+ *     payload = Message 固定头（到 data[] 之前）+ data_size 字节有效负载
+ *     N = offsetof(Message, data) + data_size
+ *   v0 legacy（仍可接收，便于混部）:
+ *     N == sizeof(Message) 时按整结构体解码（含 64KB data[]）
+ *   两种 N 不碰撞：compact 的 N 恒小于 sizeof(Message)。
  *
  * 架构:
  *   Node A (local bus) ←→ NetworkTransport ←TCP→ NetworkTransport ←→ (local bus) Node B
@@ -24,6 +31,7 @@
 #include "discovery.h"
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,6 +42,8 @@ extern "C" {
 #define NET_RECONNECT_BASE_MS  500
 #define NET_RECONNECT_MAX_MS   30000
 #define NET_FRAME_MAX_SIZE     (MSG_BUS_MAX_DATA_SIZE + 256)
+/* 线上 compact 头 = Message 到 data[] 之前的固定前缀（不含 64KB data[] / 指针尾）。 */
+#define NET_WIRE_HEADER_SIZE   (offsetof(Message, data))
 
 /* ── 不透明句柄 ──────────────────────────────────────────── */
 
