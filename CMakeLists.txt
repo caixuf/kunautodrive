@@ -1134,6 +1134,15 @@ target_link_libraries(test_ekf_slam m)
 add_test(NAME ekf_slam_tests COMMAND test_ekf_slam)
 set_tests_properties(ekf_slam_tests PROPERTIES TIMEOUT 10)
 
+# LTV-MPC Riccati + KKT 单测（2026-09 handoff §4.4 控制 W1 修复证据）
+# 暴露 p 递推的 3 个 bug（用 P_k 当 P_{k+1}、漏 p_{k+1}、多 K'R·kff），
+# kappa≠0 场景下修前 u[0] 是精确解的 0.173×。所有容差 1e-9，确保不退化。
+add_executable(test_ltv_mpc modules/adas_nodes/test_ltv_mpc.c src/algorithms/ltv_mpc.c)
+target_include_directories(test_ltv_mpc PRIVATE src/algorithms)
+target_link_libraries(test_ltv_mpc m)
+add_test(NAME ltv_mpc_kkt COMMAND test_ltv_mpc)
+set_tests_properties(ltv_mpc_kkt PROPERTIES TIMEOUT 10)
+
 # traversability_node 算法单元测试（单 TU 包含节点 .c 以访问 static 函数）
 add_executable(test_traversability tests/test_traversability.c)
 target_link_libraries(test_traversability flowengine_core scheduler_cpp m)

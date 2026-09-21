@@ -208,7 +208,12 @@ int ltv_mpc_solve(LtvMpcSolver* solver, double* steer_out) {
             solver->K[k][j] = -Quu_inv * (BtP[0]*A[0][j] + BtP[1]*A[1][j] + BtP[2]*A[2][j]);
         }
 
-        /* kff[k] = -Quu_inv * B' * (P * c + p) */
+        /* kff[k] = -Quu_inv * B' * (P * c + p)
+         *
+         * 此处 solver->P / solver->p 仍是 P_{k+1} / p_{k+1}（Riccati 后向
+         * 递归从 k=N-1 起算，P_N = Qf 已在上方 154-159 行设好）。下方
+         * 更新 P_k 之后会覆盖 solver->P，所以更新 p_k 之前必须先把
+         * P_{k+1} / p_{k+1} 保存到 P_old / p_old。 */
         double Pc_p[3];
         for (int i = 0; i < 3; i++)
             Pc_p[i] = solver->P[i][0]*c[0] + solver->P[i][1]*c[1] + solver->P[i][2]*c[2]
@@ -222,14 +227,24 @@ int ltv_mpc_solve(LtvMpcSolver* solver, double* steer_out) {
             for (int j = 0; j < 3; j++)
                 A_cl[i][j] += B[i] * solver->K[k][j];
 
-        /* 更新 P_k = Q + A_cl' * P_{k+1} * A_cl + K' * R * K */
+        /* 在更新 solver->P 之前保存 P_{k+1} / p_{k+1}，下方更新 p_k
+         * 时必须用 P_{k+1}（不是更新后的 P_k）。原始实现两处都错：
+         *   1. 用 solver->P（已被覆盖为 P_k）当作 P_{k+1}
+         *   2. 漏掉 + p_{k+1} 项
+         *   3. 多了 K'R·kff（标准 Riccati p 递推没有这一项） */
+        double P_old[3][3], p_old[3];
+        memcpy(P_old, solver->P, sizeof(P_old));
+        memcpy(p_old, solver->p, sizeof(p_old));
+
+        /* 更新 P_k = Q + A_cl' * P_{k+1} * A_cl + K' * R * K
+         * （注：A_cl 已用 P_{k+1} 算好，P_old 仅供 p 更新使用） */
         double AtPA[3][3], KtRK[3][3];
         memset(AtPA, 0, sizeof(AtPA));
         for (int i = 0; i < 3; i++)
             for (int j = 0; j < 3; j++)
                 for (int ii = 0; ii < 3; ii++)
                     for (int jj = 0; jj < 3; jj++)
-                        AtPA[i][j] += A_cl[ii][i] * solver->P[ii][jj] * A_cl[jj][j];
+                        AtPA[i][j] += A_cl[ii][i] * P_old[ii][jj] * A_cl[jj][j];
 
         memset(KtRK, 0, sizeof(KtRK));
         for (int i = 0; i < 3; i++)
@@ -242,21 +257,19 @@ int ltv_mpc_solve(LtvMpcSolver* solver, double* steer_out) {
                 P_new[i][j] = Q[i][j] + AtPA[i][j] + KtRK[i][j];
         memcpy(solver->P, P_new, sizeof(P_new));
 
-        /* 更新 p_k = ... + A_cl' * (P_{k+1} * c + p_{k+1}) + K' * R * kff */
+        /* 更新 p_k = A_cl' * (P_{k+1} * c + p_{k+1})
+         * 标准 affine-LQR 梯度递推：零参考（x_ref=0）时 p_N=0，
+         * p_k = A_cl^T (P_{k+1} c_k + p_{k+1})，无 K'R·kff 项。 */
         double Pc_p_next[3];
         for (int i = 0; i < 3; i++)
-            Pc_p_next[i] = solver->P[i][0]*c[0] + solver->P[i][1]*c[1] + solver->P[i][2]*c[2];
+            Pc_p_next[i] = P_old[i][0]*c[0] + P_old[i][1]*c[1] + P_old[i][2]*c[2]
+                          + p_old[i];
 
         double p_new[3];
         memset(p_new, 0, sizeof(p_new));
         for (int i = 0; i < 3; i++)
             for (int j = 0; j < 3; j++)
                 p_new[i] += A_cl[j][i] * Pc_p_next[j];
-
-        double KtR_kff[3];
-        for (int i = 0; i < 3; i++)
-            KtR_kff[i] = solver->K[k][i] * R * solver->kff[k];
-        vec3_add(p_new, p_new, KtR_kff);
         memcpy(solver->p, p_new, sizeof(p_new));
     }
 
