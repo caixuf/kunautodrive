@@ -79,6 +79,20 @@ jobs:
       - name: Enforce NodePlugin topic contract vs config/pipeline*.json
         run: python3 ci/gates/topic_contract_check.py
 
+  # ── msg wire-size vs struct-size gate ──────────────────────
+  # msg_codegen 的线格式尺寸是"字段尺寸直接相加"（紧密排布），但生成的结构体
+  # 没有 pack 指令 → 有对齐填充时 sizeof(T) != wire_size(T)。此时
+  # *_serialize/_deserialize（线格式）与 msg_cast/msg_init_typed(&T,sizeof(T))
+  # （内存布局）是两套互不兼容的约定，混用会静默错位（2026-09-21：sensor_model
+  # 发 LidarPointCloud 结构体内存，perception/slam 按线格式收 → 点云静默为空）。
+  # 本 gate 钉住现状（12/20 类型的已知不一致清单），新出现/数值变动/清单过期都报错。
+  msg-layout-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce msg_codegen wire size == C struct size (or documented)
+        run: python3 ci/gates/msg_layout_check.py
+
   # ── zombie dashboard path ban ──────────────────────────────
   # The legacy Python HTTP dashboard was replaced by flowmond. Reintroducing
   # that retired entrypoint (or leaving orphaned .pyc) breaks the single
