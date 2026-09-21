@@ -290,11 +290,33 @@ static void on_trajectory(const Message* msg, void* user_data) {
     uint32_t n_pts = traj.point_count;
     if (n_pts == 0 || n_pts > 64) return;
 
-    /* §5: 退化轨迹检测 — valid==0 或全零 (x,y) 时静默丢弃并触发降级 */
+    /* §5: 退化轨迹检测 — valid==0 时不再抛帧+升 L1，改为构造 park 兜底
+     * 轨迹（当前位置 + v=0）让 control 自行匀减速到 0。
+     * 旧路径触发 L1 + return 会让 control 节流（safety_control 看到长时间
+     * 无 control/cmd 会全刹，planning 失败场景就变成急刹→再启动振荡）。 */
     if (!traj.valid) {
-        LOG_WARN("control", "trajectory valid=0 — skipping, triggering L1 degrade");
-        degrade_set_level(DEGRADE_L1, DEGRADE_REASON_PLANNING_TO);
-        return;
+        static int park_warn_throttle = 0;
+        if ((park_warn_throttle++ % 50) == 0) {
+            LOG_WARN("control",
+                     "trajectory valid=0 — using park fallback (ego=%.1f,%.1f v=%.1f)",
+                     g.ego_x, g.ego_y, g.current_speed);
+        }
+        /* 构造 park trajectory：1 个点 = 当前位置 + v=0，控制层会自然减速 */
+        memset(&traj, 0, sizeof(traj));
+        traj.point_count = 1;
+        traj.valid = 1;  /* 标记为 valid 跳过下游 valid 检查 */
+        traj.planner_state = 0;
+        traj.points[0].t_rel_us = 0;
+        traj.points[0].x = (float)g.ego_x;
+        traj.points[0].y = (float)g.ego_y;
+        traj.points[0].heading = (float)g.ego_heading;
+        traj.points[0].kappa = 0.0f;
+        traj.points[0].v = 0.0f;
+        traj.points[0].a = 0.0f;
+        traj.points[0].jerk = 0.0f;
+        traj.points[0].s = 0.0f;
+        traj.points[0].l = 0.0f;
+        n_pts = 1;
     }
     /* 全零检查：n_pts >= 1 时都查。旧代码只查 n_pts > 1，导致单点
      * (0,0) 轨迹绕过检查 → Stanley 拿到 ref_path=[(0,0)] → 巨大 CTE
