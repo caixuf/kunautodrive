@@ -1035,6 +1035,15 @@ target_link_libraries(test_scenario_router m)
 add_test(NAME scenario_router_tests COMMAND test_scenario_router)
 set_tests_properties(scenario_router_tests PROPERTIES TIMEOUT 10)
 
+# M3-lite：city_grid 单路口、路口前 A* 重规划（读真实 map.json successors）
+add_executable(test_junction_reroute tests/test_junction_reroute.c)
+target_link_libraries(test_junction_reroute flowengine_core)
+target_link_libraries(test_junction_reroute m)
+target_compile_definitions(test_junction_reroute PRIVATE
+    CITY_GRID_MAP_JSON="${CMAKE_SOURCE_DIR}/maps/city_grid/map.json")
+add_test(NAME junction_reroute_tests COMMAND test_junction_reroute)
+set_tests_properties(junction_reroute_tests PROPERTIES TIMEOUT 30)
+
 # ── 安全故障注入 / 证据链：确定性心跳丢失和 raw_cmd timeout ──
 add_executable(test_safety_fault_evidence tests/test_safety_fault_evidence.c)
 target_link_libraries(test_safety_fault_evidence flowengine_core)

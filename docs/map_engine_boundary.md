@@ -27,8 +27,10 @@
 ### 自研 `MapEngine` 应负责（当前缺失或零散）
 1. **运行时统一加载**：启动时把 `map.json` 读成可查询的数据结构
    （按 id 查 road/lane、按空间范围查邻近车道），而不是仅一次性转成场景 JSON。
-2. **网格拓扑**：交叉口转向后继（左/右/直）的生成与维护——当前
-   `extract_city_map.py` 只做顺序链 + `reserved` 占位，无真实转向连接。
+2. **网格拓扑**：`extract_city_map.py` 对场景提炼仍是顺序链 + `reserved` 占位。
+   `maps/city_grid` 已由 `grid_map_generator.py` 写入真实直/右/左 `lanes[].successors`
+   （边界缺支路则省略）。`python3 tools/grid_map_generator.py --check maps/city_grid`
+   会把后继集合与该规则逐条比对。
 3. **路由接入主循环**：车道级 A* 已接入主 flowsim 循环（M1+M2，见 §3）。
 4. **验证策略**：大地图路线爆炸，"主线验证才放行"需改为按区域抽样。
 
@@ -42,14 +44,19 @@
 - 前置依赖（同批落地）：`scenario_loader.resolve_map_reference` 修 map_file/route_file
   相对路径 bug、保留 `lanes[].successors`、按 route_file/route_id 过滤 roads 到与
   xodr 同集合同编号；`ScenarioConfig.road_network_json` 暴露解析后的 road_network。
-- 待办（M3）：每辆 NPC / 路口前按需重路由；当前 ego 一次性起终点路由 + 静态链。
+- M3-lite（单路口重规划冒烟）：`tests/test_junction_reroute.c` 从 city_grid 切出
+  十字路口，`router_astar` 证明路口前改去左/右出路，路径用转向 successor，与沿同一
+  大道直行不同；去掉转向 successor 后横向目标不可达。
+  `ctest --test-dir build -R junction_reroute --output-on-failure`
+- 待办（M3 全量）：每辆 NPC 在路口前按需重路由仍未进主循环；ego 仍是一次性起终点 + 静态链。
 
 ## 4. 与 5km×5km 大地图的关系
 
 大地图可行性的真正前提不是几何生成（程序化网格即可），而是：
 - 自研 `MapEngine` 的边界立起来（§2）；
-- 网格拓扑真实连线（交由 `json_to_xodr` 的路口 `<junction>` 增强承担）；
+- 网格拓扑真实连线：city_grid 的 lane successors 已落地（§2）；xodr `<junction>` /
+  laneLink 由 `json_to_xodr` 承担（见 MAP_ENGINE_ROUTING §5 坑 9）；
 - A* 接入主循环（§3）。
 
-三者齐备后，把"网格生成器产出的 map.json"→"xodr 拓扑增强"→"A* 路由接入"
-串成一条可验证的主线。
+city_grid 上这条链已经能校验：生成器 successors → xodr junction/laneLink →
+单路口 A* 重规划冒烟（§3）。统一 `MapEngine` 类和 NPC 车队重路由仍未做。

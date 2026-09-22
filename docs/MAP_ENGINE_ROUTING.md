@@ -25,7 +25,7 @@
 - 每条 `road`：`id`、`type`(urban/ramp_curve/...)、`speed_limit`、`oneway`、`centerline[]`（节点数组，**不采样**，避免 5m 采样膨胀成数百 KB，见 `extract_city_map.py:25-28`）、`lanes[]`、可选 `elevation_profile`。
 - 每条 `lane`：`id`、`index`、`width`、`direction`(+1/-1)、`centerline[]`（由中心线沿右法线偏移生成）、`markings[]`、`successors[]`。
 - **命名约定**：`id` = `<road>.lane.<n>`；正向 lane index 1..N，对向 lane index 101..100+N（`map_compiler.py:84`、`extract_city_map.py:107`）。`map.json` **不得含 `source_scenario`**（必须脱离旧场景独立，`check` 会拦截）。
-- 好样例：`maps/city_center/map.json`（含下穿隧道 `elevation_profile` 三折线 s/z）。大地图：`maps/city_grid/map.json`（129KB，5km×5km 网格，但 lane `successors` 目前全空，见 §5 坑 1）。
+- 好样例：`maps/city_center/map.json`（含下穿隧道 `elevation_profile` 三折线 s/z）。大地图：`maps/city_grid/map.json`（5km×5km 网格，lane `successors` 为交叉口直/右/左，见 §5 坑 2）。
 
 ### routes.json（路线定义）
 - 顶层：`map_id`、`routes[]`、`reserved_turns[]`。每条 route：`id`、`name`、`kind`(main/urban/underpass/spine/on_ramp/...)、`road_chain[]`（**顺序道路链 = 当前"预设线性行驶"唯一依据**）、`lane_direction`、`validated`/`draft`（主线不带 draft）。
@@ -66,7 +66,7 @@ python3 tools/grid_map_generator.py ...
 ## 5. 经验坑速查（改地图/路由必读）
 
 1. **大地图路线爆炸**：原 `city_grid/routes.json` 的 main 把 52 条大道顺序串成一条链；`extract_city_map.py` 的 successors 只是 edge 顺序拼接（:133-136）。大地图必须靠真实转向拓扑 + A* 图搜索，而非枚举长 `road_chain`。已把 main 改为 `ns_avenue_00` 全程段链。
-2. **lane successors 为空 = 无拓扑（已修复）**：原 city_grid 所有 lane `successors:[]`。已由 `grid_map_generator.py` 拆段建模：每条大道在交叉口拆成独立 road 段（`ns_avenue_00_seg_00`），每段 lane 填直/左/右 `successors`（指向 `目标段.lane.<idx>`），顶层 `junctions[]` 用 fork 表达每个进入方向的直/左/右。`--check` 通过（1300 段 / 2600 junctions / ~1.5 万 successors 引用）。
+2. **lane successors 为空 = 无拓扑（已修复）**：原 city_grid 所有 lane `successors:[]`。已由 `grid_map_generator.py` 拆段建模：每条大道在交叉口拆成独立 road 段（`ns_avenue_00_seg_00`），每段 lane 填直/右/左 `successors`（指向 `目标段.lane.<idx>`），顶层 `junctions[]` 用 fork 表达每个进入方向的直/左/右。`--check` 除字段契约外，还会把 5200 条 lane 的 successors 与生成规则逐条比对（1300 段 / 2600 junctions / 14992 条 successors 引用）。重生成：`python3 tools/grid_map_generator.py --out maps/city_grid`。
 3. **交叉口转向是占位**：`extract_city_map.py` 对 cross_roads 只产 `reserved` junction，无真实连接；真正的左/右/直转向要依赖 json_to_xodr 的 `<junction>` 增强（属 MapEngine 应自研、当前缺失）。
 4. **A* 运行时已扩容（2026-08）**：`scenario_router.c` 现支持 2D 网格大地图——`ROUTER_MAX_LANES` **8192**、`ROUTER_MAX_EDGES` **32768**、启发式二维 (x,y) 欧氏且 `lane_index` 表 O(1) 查、`RouterGraph` 内部数组改**堆分配**（完整 city_grid 5200 lane 时结构体定长数组会 ~1.3MB 爆栈）、`router_add_lane_xy`、`router_build_from_map_json` 从 road_network JSON 的 `lanes[].successors` 建图。完整 1300 段 city_grid A* 全图路由验证通过（road 0 → road 1299，50 段含转弯，cost=9800m）。
 5. **A* 已接入主 flowsim 循环（2026-08，M1+M2 落地）**：`flowsim_node` 初始化阶段 `build_route_via_astar()` —— 从 `scenario->road_network_json` 建 RouterGraph → ego 起终点 A* → 车道链去重 road → `Route::build_from_chain`，ref_path 沿 A* 车道链发布、planning/control 跟随。失败回退旧自动链式 `Route::build()`（无 map 场景必走回退）。依赖前置：`scenario_loader.resolve_map_reference` 已修 map_file/route_file 相对路径 bug + 保留 `lanes[]`（含 successors）+ 按 route_file/route_id 过滤 roads 到与 xodr 同集合同编号。
@@ -92,4 +92,11 @@ flowsim_node.build_route_via_astar()（初始化一次）:
 失败 → 回退旧 Route::build()（端点连续性自动链）
 ```
 
-待办（M3，下一阶段）：每辆 NPC / 路口前按需重路由（当前 ego 一次性起终点路由）；`Route::build_from_chain` 目前是静态链，运行时改道需重建。
+M3-lite 冒烟已落地（单路口，不是 NPC 车队）：`tests/test_junction_reroute.c` 读真实 `maps/city_grid/map.json`，切出 `ns_avenue_01_seg_00` 北上、在路口改去右转 `ew_avenue_01_seg_01.lane.1` / 左转 `ew_avenue_01_seg_00.lane.101`。运行时 `router_astar` 的下一跳是转向 successor，与直行到 `ns_avenue_01_seg_01` 不同；只保留同大道 successor 时横向目标不可达、直行链仍可达。
+
+```
+ctest --test-dir build -R junction_reroute --output-on-failure
+python3 -m unittest tests.test_astar_route.AstarRouteTest.test_single_intersection_reroute_leaves_avenue
+```
+
+待办（M3 全量）：每辆 NPC 路口前按需重路由仍未进主循环；ego 仍是一次性起终点路由，`Route::build_from_chain` 是静态链，运行时改道需重建。
