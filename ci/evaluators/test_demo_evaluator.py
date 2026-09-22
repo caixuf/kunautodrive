@@ -505,7 +505,12 @@ class DemoEvaluatorTest(unittest.TestCase):
         self.assertEqual(evaluator.pipeline_perception_spec(), (False, 120.0, 120.0))
 
     def test_perception_metrics_warning_lead_time(self):
-        """Task 5: 预警提前量 = TTC 跌破临界时刻 - 首次检测时刻。"""
+        """预警提前量 = TTC 跌破临界时刻 - 首次检测时刻，按**真值身份**跟踪。
+
+        故意让 perception/obstacles 的 id 每帧递增（模拟 perception_points.c 的
+        `frame_id*100+ci`）—— 跟踪键是真值实体身份，所以提前量照旧算得出来；用帧内
+        局部 id 跟踪会恒 0（2026-09-22 sensor 模式 FAIL 的第一个根因）。
+        """
         evaluator = load_evaluator()
         # 固定障碍 x=50；ego 从 x=0 匀速 10m/s，10 帧每秒 1 帧。
         # TTC < 3s 时 ego_x > 20 → 第 5 帧（ego_x=25, TTC=2.5）首次跌破。
@@ -517,7 +522,7 @@ class DemoEvaluatorTest(unittest.TestCase):
                 "x": float(i * 5), "speed": 10.0,
                 "entities": [{"id": 1, "type": "car", "x": 50.0, "y": 0.0}],
                 "obs_world": [{"id": 1, "x": 50.0, "y": 0.0}],
-                "perceived_world": [{"id": 100, "x": 50.0, "y": 0.0}],
+                "perceived_world": [{"id": 100 * i, "x": 50.0, "y": 0.0}],  # 帧内局部 id
             })
             timestamps.append(float(i))
         result = evaluator._compute_perception_metrics(series, timestamps)
@@ -526,6 +531,41 @@ class DemoEvaluatorTest(unittest.TestCase):
         self.assertAlmostEqual(result["warning_lead_min_s"], 5.0, places=2)
         # 末帧 ego_x=45, TTC=5/10=0.5
         self.assertAlmostEqual(result["min_ttc_s"], 0.5, places=2)
+
+    def test_warning_lead_is_zero_when_truth_obstacle_never_detected(self):
+        """真值障碍变成临界却从未被感知命中 → 提前量 0（"完全没预警"要 FAIL）。
+
+        第一次检测必须来自"落在该真值匹配半径内"的感知输出；感知输出在别处
+        （y=40 离真值 40m）不算命中，于是这个临界事件没有任何预警。
+        """
+        evaluator = load_evaluator()
+        series = [{
+            "x": float(i * 5), "speed": 10.0,
+            "entities": [{"id": 1, "type": "car", "x": 50.0, "y": 0.0}],
+            "obs_world": [{"id": 1, "x": 50.0, "y": 0.0}],
+            "perceived_world": [{"id": 100 * i, "x": 50.0, "y": 40.0}],  # 不匹配真值
+        } for i in range(10)]
+        result = evaluator._compute_perception_metrics(
+            series, [float(i) for i in range(10)])
+        self.assertEqual(result["critical_event_count"], 1)
+        self.assertAlmostEqual(result["warning_lead_min_s"], 0.0, places=2)
+
+    def test_warning_lead_ignores_phantom_detections(self):
+        """幻影感知（不与任何真值匹配）不产生 critical event。
+
+        跟踪键是真值身份，所以"真值里不存在的那个障碍"不会凭空造出临界事件。
+        （幻影导致幽灵刹车是**假阳性**问题，需要单独的正精度门禁，不在本指标范围。）
+        """
+        evaluator = load_evaluator()
+        series = [{
+            "x": float(i * 5), "speed": 10.0,
+            "entities": [{"id": 1, "type": "car", "x": 500.0, "y": 0.0}],  # 远，永不临界
+            "obs_world": [{"id": 1, "x": 500.0, "y": 0.0}],
+            "perceived_world": [{"id": 100 * i, "x": 50.0, "y": 0.0}],     # 真值里没有
+        } for i in range(10)]
+        result = evaluator._compute_perception_metrics(
+            series, [float(i) for i in range(10)])
+        self.assertEqual(result["critical_event_count"], 0)
 
     def test_perception_metrics_no_critical_event(self):
         """无临界事件时 critical_event_count=0，不抛异常。"""

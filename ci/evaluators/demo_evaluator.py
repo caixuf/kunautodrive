@@ -1002,7 +1002,7 @@ def sample_metrics(sample: dict, road: dict | None = None,
         "min_forward_gap": min_forward_gap,
         "min_abs_gap": min_abs_gap,
         "obs_world": obs_world,        # 真值障碍（scene.obstacles）：物理安全校验/覆盖率分母
-        "perceived_world": perceived_world,  # 感知输出（scene.perceived）：识别率/预警用
+        "perceived_world": perceived_world,  # 感知原始输出：识别率 + 预警提前量用
         "driver_mode": str(metrics.get("driver_mode", "") or ""),
         "route_lane": int(metrics.get("route_lane", 0) or 0),
         "entities": scn_entities if isinstance(scn_entities, list) else [],
@@ -1140,11 +1140,21 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
         置 False，由 score() 打 WARN —— 不允许静默退回旧口径。
 
     预警提前量（warning lead time）：
-        对每个 perceived 障碍（按 id 跨帧跟踪），记录其首次被检测到的时刻
-        first_detect_ts；同时按 forward gap / ego_speed 计算 TTC，记录其
-        首次跌破 TTC_CRITICAL_S 的时刻 first_critical_ts。预警提前量 =
-        first_critical_ts - first_detect_ts（值越大说明系统越早检测到危险）。
-        对所有发生临界事件的障碍取平均与最小值。
+        跟踪的键是**真值实体的身份**（flowsim entity id，跨帧天然稳定）。对每个前方
+        真值实体：本帧只要有感知输出落在 PERCEPTION_MATCH_DIST_M 内即记 first_detect_ts；
+        TTC = 该实体的前向距离 / ego 车速，首次跌破 TTC_CRITICAL_S 记 first_critical_ts。
+        预警提前量 = first_critical_ts - first_detect_ts，对所有发生临界事件的实体取
+        平均与最小值。
+
+        ⚠️ 历史坑（2026-09-22 定位并修掉，sensor 模式唯一剩余的 FAIL）：早先按感知
+        输出自己的 id 跨帧跟踪，而 perception/obstacles 的 id 是帧内局部的
+        （perception_points.c 的 frame_id*100+ci），每帧都变 → 提前量恒 0 且凭空伪造
+        出 11~16 个 critical event。改用 object_tracker 的航迹 id 也不行：实测同一辆
+        车在 14m 处才首次出现（首次检测与临界同帧 → 提前量 0），12 个航迹 id 对应
+        9 个 actor。按障碍（而非按某个内部 id）定义"何时检测到"才稳定。
+        （代价：幻影感知不再能造出 critical event —— 本指标按真值定义障碍；感知
+        假阳性导致的幽灵刹车属于另一个指标范畴，需要单独的正精度门禁。）
+        反之，真值障碍变成临界却从未被命中 → 提前量 0，即"完全没预警"，要 FAIL。
 
     返回 dict，所有字段空数据时返回 0/空，不抛异常。
     """
@@ -1193,7 +1203,8 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
         if pose_valid:
             observability_applied = True
         # truth 实体：跳过 ego/tl/etc_gate 等基础设施
-        truth = []
+        truth = []       # 可观测子集（识别率的分母）
+        truth_all = []   # 全部真值（预警提前量用；不筛锥，见下面的注释）
         for ent in m.get("entities", []):
             if not isinstance(ent, dict):
                 continue
@@ -1209,6 +1220,7 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
                 }
             except (TypeError, ValueError):
                 continue
+            truth_all.append(t)
             if pose_valid:
                 truth_total_all += 1
                 dx = t["x"] - float(ego_x)
@@ -1245,29 +1257,33 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
                 layer_counts["overall"][0] += 1
                 type_counts[t["type"]][0] += 1
 
-        # 2) 预警提前量：对 perceived 障碍跨帧跟踪 + TTC 监测
+        # 2) 预警提前量：按**真值身份**跟踪 + TTC 监测。
+        #    "检测到" = 本帧有感知输出落在该真值的匹配半径内；TTC 用该真值的前向距离。
+        #    为什么不跟踪感知/航迹自己的 id：perception/obstacles 的 id 是帧内局部的
+        #    （perception_points.c 的 frame_id*100+ci，每帧都变 → 提前量恒 0 且伪造
+        #    critical event）；换成 object_tracker 的航迹 id 也不行 —— 实测同一辆车会在
+        #    14m 处才首次出现（首次检测与临界同帧 → 提前量 0），且 12 个航迹 id 对应
+        #    9 个 actor。仿真的真值身份天然稳定，而"系统何时检测到该障碍"本就是按
+        #    障碍（而非按某个内部 id）定义的问题。
         ego_speed = m["speed"]
-        for p in perceived:
-            pid = p.get("id")
-            if pid is None:
+        for t in truth_all:
+            tid = t["id"]
+            if tid is None:
                 continue
-            # 首次检测时间戳
-            if pid not in first_detect_ts:
-                first_detect_ts[pid] = ts_i
-            # TTC = forward gap / ego_speed；forward gap 用世界坐标 dx
-            # （perceived 在 ego 前方时 p.x > ego_x）
-            rel_x = p["x"] - ego_x
+            rel_x = t["x"] - ego_x
             if rel_x <= 0:
-                continue  # 仅前方障碍纳入 TTC
+                continue  # 仅前方障碍纳入 TTC / 预警
+            if any((p["x"] - t["x"]) ** 2 + (p["y"] - t["y"]) ** 2 <= match_d2
+                   for p in perceived):
+                if tid not in first_detect_ts:
+                    first_detect_ts[tid] = ts_i
             if ego_speed > 0.5:
                 ttc = rel_x / ego_speed
-                prev_min = obs_min_ttc.get(pid, math.inf)
-                if ttc < prev_min:
-                    obs_min_ttc[pid] = ttc
-                # 首次跌破临界阈值
-                if ttc < TTC_CRITICAL_S and pid not in critical_recorded:
-                    first_critical_ts[pid] = ts_i
-                    critical_recorded.add(pid)
+                if ttc < obs_min_ttc.get(tid, math.inf):
+                    obs_min_ttc[tid] = ttc
+                if ttc < TTC_CRITICAL_S and tid not in critical_recorded:
+                    first_critical_ts[tid] = ts_i
+                    critical_recorded.add(tid)
 
     # 汇总识别率 (无样本时为 0.0，避免虚假 100% 满分误导)
     def _rate(counts: list[int]) -> float:
