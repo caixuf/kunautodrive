@@ -504,6 +504,33 @@ class DemoEvaluatorTest(unittest.TestCase):
         self._pin_pipeline(cfg2)
         self.assertEqual(evaluator.pipeline_perception_spec(), (False, 120.0, 120.0))
 
+    def test_coverage_denominator_is_cone_aware_in_sensor_mode(self):
+        """覆盖率分母同样锥内化：锥外真值不算"该看见"，但锥内真值没输出仍要抓。"""
+        evaluator = load_evaluator()
+        self._pin_pipeline(self._write_pipeline("sensor", 120.0, 120.0))
+        far = [{
+            "x": 0.0, "y": 0.0, "heading": 0.0, "speed": 10.0,
+            "entities": [{"id": 1, "type": "car", "x": 500.0, "y": 0.0}],   # 锥外
+            "obs_world": [{"id": 1, "x": 500.0, "y": 0.0}],
+            "perceived_world": [],
+        }]
+        r = evaluator._compute_perception_metrics(far, [0.0])
+        self.assertAlmostEqual(r["perception_coverage"], 1.0)  # 分母为 0 → 约定 1.0
+
+        near = [{
+            "x": 0.0, "y": 0.0, "heading": 0.0, "speed": 10.0,
+            "entities": [{"id": 1, "type": "car", "x": 30.0, "y": 0.0}],    # 锥内
+            "obs_world": [{"id": 1, "x": 30.0, "y": 0.0}],
+            "perceived_world": [],
+        }]
+        r2 = evaluator._compute_perception_metrics(near, [0.0])
+        self.assertAlmostEqual(r2["perception_coverage"], 0.0)  # 真掉线，仍抓得住
+
+        # 非 sensor 模式不受影响（旧口径）
+        self._pin_pipeline(self._write_pipeline("ground_truth", 120.0, 120.0))
+        r3 = evaluator._compute_perception_metrics(far, [0.0])
+        self.assertAlmostEqual(r3["perception_coverage"], 0.0)
+
     def test_perception_metrics_warning_lead_time(self):
         """预警提前量 = TTC 跌破临界时刻 - 首次检测时刻，按**真值身份**跟踪。
 

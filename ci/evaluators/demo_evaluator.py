@@ -1233,7 +1233,23 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
             truth.append(t)
         # perceived 障碍：感知输出（世界坐标，见函数 docstring 的"历史坑"）
         perceived = m.get("perceived_world", []) or []
-        if m.get("obs_world"):
+        # 覆盖率的分母同样要锥内化：感知只可能"看不到物理不可见的东西"。
+        # 用与识别率同一套可观测性（只在 sensor 模式武装）。否则"真值障碍全程在
+        # 视锥外"的场景（city_comprehensive / multi_light）会把 coverage 打到 0.0%
+        # 并报 perception dropout FAIL —— 那是把物理不可见判成感知掉线。
+        obs_visible = False
+        for o in (m.get("obs_world") or []):
+            ox, oy = o.get("x"), o.get("y")
+            if not pose_valid or not isinstance(ox, (int, float)) or not isinstance(oy, (int, float)):
+                obs_visible = True   # 非 sensor 模式 / 缺位姿 / 缺坐标 → 退回旧口径
+                break
+            odx = float(ox) - float(ego_x)
+            ody = float(oy) - float(raw_ego_y)
+            if (math.hypot(odx, ody) <= obs_range_m
+                    and abs(angle_diff(math.atan2(ody, odx), float(raw_ego_h))) <= obs_half_fov):
+                obs_visible = True
+                break
+        if obs_visible:
             frames_with_truth += 1
         if perceived:
             frames_with_perceived += 1
@@ -1319,7 +1335,8 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
         "critical_event_count": crit_event_count,
         "min_ttc_s": min_ttc_overall if math.isfinite(min_ttc_overall) else None,
         "perceived_track_count": len(first_detect_ts),
-        # 真值有障碍的帧里感知也有输出的比例（感知链路可用性）
+        # 真值有障碍的帧里感知也有输出的比例（感知链路可用性）。
+        # 分母 = "有**可观测**真值障碍"的帧（sensor 模式锥内化，见上面的注释）。
         "perception_coverage": (frames_with_perceived / frames_with_truth
                                 if frames_with_truth else 1.0),
         "perceived_count_avg": perceived_total / len(series) if series else 0.0,
@@ -2346,22 +2363,6 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
                 f"{desired_gap:.1f}m (v_med={v_med:.1f} m/s)"
             )
 
-    # ── 感知降频检测 ──
-    # 场景有 entities 但 obstacles 长期为空 → 感知链路降频/掉线
-    frames_with_truth = sum(1 for m in series if m["obs_world"])
-    frames_with_perceived = sum(1 for m in series if m.get("perceived_world"))
-    perception_coverage = (frames_with_perceived / frames_with_truth
-                           if frames_with_truth else 1.0)
-    # 只有在 samples 中出现过至少一次障碍物时才做检测
-    # （空场景无 NPC 时不应触发感知告警）
-    has_seen_obs = frames_with_truth > 0
-    if has_seen_obs and perception_coverage < 0.3:
-        failures.append(f"perception dropout: truth obstacles present but perception "
-                        f"output in only {perception_coverage*100:.1f}% of those frames")
-    elif has_seen_obs and perception_coverage < 0.7:
-        warnings.append(f"perception degradation: perception output in "
-                        f"{perception_coverage*100:.1f}% of truth-obstacle frames")
-
     # ── 上游 dead 专项断言 ──
     # DATA_TIMEOUT / EKF_NOT_CONVERGED 出现频率过高 → 上游定位/感知已死
     data_timeout_frames = sum(1 for m in series if m["driver_mode"] == "DATA_TIMEOUT")
@@ -2460,6 +2461,22 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
                 f"({perception['critical_event_count']} critical events, "
                 f"WARN < {WARNING_LEAD_WARN_S:.1f}s)"
             )
+
+    # ── 感知降频检测 ──
+    # 场景有 entities 但 obstacles 长期为空 → 感知链路降频/掉线。
+    # ⚠️ 这里**不再自己重算**覆盖率（旧实现是第二份实现，且分母没锥内化）：直接复用
+    # _compute_perception_metrics 的口径 —— 它对 sensor 模式只统计"有**可观测**真值
+    # 障碍"的帧，否则"真值全程在视锥外"的场景会被判成感知掉线（物理不可见≠掉线）。
+    perception_coverage = perception["perception_coverage"]
+    # 只有在真值里真的出现过（可观测的）障碍物时才做检测
+    # （空场景无 NPC 时不应触发感知告警）
+    has_seen_obs = perception["truth_count_overall"] > 0
+    if has_seen_obs and perception_coverage < 0.3:
+        failures.append(f"perception dropout: truth obstacles present but perception "
+                        f"output in only {perception_coverage*100:.1f}% of those frames")
+    elif has_seen_obs and perception_coverage < 0.7:
+        warnings.append(f"perception degradation: perception output in "
+                        f"{perception_coverage*100:.1f}% of truth-obstacle frames")
 
     summary = {
         "scenario": scenario_name or "(unknown)",
