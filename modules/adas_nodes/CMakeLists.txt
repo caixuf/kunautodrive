@@ -285,7 +285,8 @@ target_link_libraries(navigation_node ${NODE_LINK_LIBS})
 
 # sensor_model_node: 噪声/FOV/遮挡传感器模型
 # sensor_model_weather.c：可见度/天气 → 衰减纯逻辑，与 tests/test_adas_nodes_logic.c 共用
-add_library(sensor_model SHARED sensor_model_node.c sensor_model_weather.c)
+# lidar_scan.c：mode=1 的 3D 观测模型（3D 射线/容量守卫/可达距离），同样与单测共用
+add_library(sensor_model SHARED sensor_model_node.c sensor_model_weather.c lidar_scan.c)
 target_link_libraries(sensor_model ${NODE_LINK_LIBS})
 
 # ── 新增节点插件 ──────────────────────────────────────────────

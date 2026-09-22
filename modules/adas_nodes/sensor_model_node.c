@@ -12,6 +12,7 @@
 #include "adas_msgs_gen.h"
 #include "nmea_parser.h"
 #include "sensor_model_weather.h"   /* 可见度/天气 → 衰减（与单测共用） */
+#include "lidar_scan.h"             /* mode=1 3D 观测模型（与单测共用） */
 #include "transport.h"
 #include "discovery.h"
 #include "topic_registry.h"
@@ -60,6 +61,15 @@ static struct {
     double obs_noise_std_m;
     int enable_simple_occlusion;
     int lidar_mode;  /* 0=旧 LidarFrame 编点云（默认）；1=射线投射真点云 + 距离噪声 + 丢失率 */
+    /* mode=1 的 3D 扫描规格（mode=0 时全部 inert）。量程/噪声/FOV 复用上面的
+     * lidar_max_range_m / obs_noise_std_m / lidar_fov_deg，避免第二份事实源。 */
+    int    lidar_azimuth_rays;
+    int    lidar_channels;
+    double lidar_vfov_min_deg;
+    double lidar_vfov_max_deg;
+    double lidar_height_m;
+    double lidar_noise_rel;  /* 相对测距噪声（1σ 增量/米） */
+    uint64_t scan_rng;   /* lidar_scan 自持 RNG 状态（不碰全局 rand） */
     double camera_visibility_factor;
     char   weather[32];
     double weather_attenuation;  /* 0.0=clear, 0.5=moderate rain/fog, 1.0=dense fog */
@@ -131,124 +141,94 @@ static int obstacle_in_fov(double rx, double ry, double max_range_m, double fov_
  * 当真值。整个链路在"模拟传感器"，不是"模拟物理"。
  *
  * 真点云路径（lidar_mode=1）：
- *   - 在 ego 系发射 n_rays 根方位射线（FOV 等分，elevation 固定 0）
- *   - 每根射线与每个 obstacle 的 AABB 求最近 hit；AABB 尺寸取该障碍物
- *     自己的 ol/ow（行人 0.5×0.5 与车 4.6×2.0 不再混为一谈）
- *   - hit 点沿射线方向叠加 σ=α·range 的高斯噪声（距离越远噪声越大）
+ *   - 在传感器系发射"方位射线 × 仰角层"的 3D 射线
+ *   - 每根射线与每个 obstacle 的 3D AABB 求最近 hit；AABB 尺寸取该障碍物
+ *     自己的 ol/ow（行人 0.5×0.5 与车 4.6×2.0 不再混为一谈），高度由宽度
+ *     启发式补齐（vehicle/state 不发高度）
+ *   - hit 点沿射线方向叠加高斯测距噪声 σ = obs_noise_std_m + lidar_noise_rel·range
  *   - 固定丢失率（默认 5%）随机丢弃射线，模拟空气/遮挡
  *   - intensity 按 exp(-range/30) 衰减
+ *   - 写满点云容量即停并把丢弃数上报（旧实现此处无守卫，会越界写内存）
  *   - 以 LidarPointCloud（二进制，LIDARPOINTCLOUD_TYPE_ID）发 sensor/lidar_points
  *
- * 坐标约定：**传感器（车体）系** —— x 前、y 左、z 上。这是 LidarPointCloud
- * 给 LIO/感知用的正确语义，consumer 因此不需要任何位姿变换。
+ * 扫描形态、量程、噪声、容量守卫与"可达距离"推导全部在 `lidar_scan.{h,c}`
+ * （与 tests/test_adas_nodes_logic.c 共用同一份实现，反漂移）。本节点只负责
+ * g 状态 → plan/targets 的映射 + 序列化发布。
+ *
+ * 坐标约定：**传感器（车体）系** —— 原点在传感器安装点，x 前、y 左、z 上。
+ * 这是 LidarPointCloud 给 LIO/感知用的正确语义，consumer 因此不需要位姿变换。
  * （旧实现发世界系坐标，只有 ego 自己知道自己在哪，等于把定位真值漏给点云。）
  *
  * lidar_mode=0（默认）→ 不发 sensor/lidar_points，旧 LidarFrame 行为完全
  * 不变；lidar_mode=1 → 发真点云，LidarFrame.point_count 反映真实命中数
  * （不再 62000+visible*450 编的）。
  *
- * 已知限制（后续 commit）：
- *   - 障碍物朝向：vehicle/state 不发布各障碍物 heading，AABB 近似为
- *     "与 ego 同向"（横穿/掉头目标会失真）
- *   - 无 elevation 维度（z 恒 0），因此 consumer 不能用 z 做地面分割
+ * 已知限制：
+ *   - 障碍物朝向 / 高度：vehicle/state 不发布，AABB 近似"与 ego 同向" +
+ *     高度按 ow 启发式（横穿/掉头目标会失真）
+ *   - 单帧 2048 点是 LidarPointCloud 契约上限，放大扫描密度时会触发容量守卫
  *   - 未对 world/buildings OBB 投射（建筑遮挡由 consumer 侧 LOS 过滤补）
  */
-static double rand_uniform_01(void) {
-    return (double)rand() / (double)RAND_MAX;
-}
-/* Box-Muller 标准高斯（均值 0 方差 1） */
-static double rand_gauss(void) {
-    double u1 = rand_uniform_01();
-    if (u1 < 1e-9) u1 = 1e-9;
-    double u2 = rand_uniform_01();
-    return sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
-}
-/* Ray-AABB：返回正 hit 距离 t（>=0），无 hit 返回 -1 */
-static double ray_aabb_t(double ox, double oy, double dx, double dy,
-                         double cx, double cy, double hx, double hy) {
-    const double EPS = 1e-9;
-    double t1 = (cx - hx - ox) / (fabs(dx) > EPS ? dx : EPS);
-    double t2 = (cx + hx - ox) / (fabs(dx) > EPS ? dx : EPS);
-    double t3 = (cy - hy - oy) / (fabs(dy) > EPS ? dy : EPS);
-    double t4 = (cy + hy - oy) / (fabs(dy) > EPS ? dy : EPS);
-    double tmin = fmax(fmin(t1, t2), fmin(t3, t4));
-    double tmax = fmin(fmax(t1, t2), fmax(t3, t4));
-    if (tmax < 0.0 || tmin > tmax) return -1.0;
-    return tmin > 0.0 ? tmin : tmax;
-}
-
 /* mode=1 真点云：射线 + 距离噪声 + 丢失，发布 sensor/lidar_points 二进制点云。
  * 返回本帧命中点数（供 LidarFrame.point_count 用）。空场景（count=0）也发，
  * 否则下游分不清"传感器没跑"和"前方真的没东西"。 */
 static uint32_t publish_raycast_points(uint32_t frame_id, uint64_t timestamp_us) {
-    /* 240 根方位射线 ≈ 0.5°/根。密度换算（DBSCAN min_pts=4、eps=2m）：
-     * 0.5m 行人 ~14m 内可成簇，2.0m 车宽 ~57m 内可成簇（受 range_max 兜底）。
-     * 上限受 LidarPointCloud.points 容量 2048 与 consumer 缓冲约束。 */
-    const int   n_rays        = 240;
-    const double fov_rad      = g.lidar_fov_deg * M_PI / 180.0;
-    const double range_max    = g.lidar_max_range_m;
-    /* 距离相关噪声 σ=α·range；weather 衰减放大 1.5×（与旧 noise_scale 对齐） */
-    const double noise_alpha  = g.obs_noise_std_m * (1.0 + 1.5 * g.weather_attenuation);
-    const double loss_rate    = 0.05;
+    /* 传感器规格 → LidarScanPlan。量程/噪声/FOV 复用 mode=0 也读的三个字段，
+     * 保证新增参数只有"扫描形态"（射线数/仰角层/FOV/安装高度）。 */
+    LidarScanPlan plan;
+    memset(&plan, 0, sizeof(plan));
+    plan.azimuth_rays    = g.lidar_azimuth_rays;
+    plan.channels        = g.lidar_channels;
+    plan.hfov_deg        = g.lidar_fov_deg;
+    plan.vfov_min_deg    = g.lidar_vfov_min_deg;
+    plan.vfov_max_deg    = g.lidar_vfov_max_deg;
+    plan.range_max_m     = g.lidar_max_range_m;
+    plan.mount_height_m  = g.lidar_height_m;
+    /* 测距噪声：绝对项沿用 obs_noise_std_m（weather 放大 1.5×，与 mode=0 口径一致），
+     * 相对项单独给 —— 绝不能回到 σ=0.08·range（33m 处 2.6m，会糊掉相邻目标）。 */
+    plan.noise_std_m     = g.obs_noise_std_m * (1.0 + 1.5 * g.weather_attenuation);
+    plan.noise_rel       = g.lidar_noise_rel;
+    plan.loss_rate       = 0.05;
     /* intensity 衰减系数：30m 半衰期 ≈ exp(-1)≈0.37（接近真实 LiDAR） */
-    const double intensity_tau = 30.0;
+    plan.intensity_tau_m = 30.0;
     /* 扫描周期：time_offset_us 按方位角在 FOV 上的进度分布（旋转式 LiDAR sweep） */
-    const double sweep_us     = 1e6 / (double)(g.lidar_rate_hz > 0 ? g.lidar_rate_hz : 20);
+    plan.sweep_us        = 1e6 / (double)(g.lidar_rate_hz > 0 ? g.lidar_rate_hz : 20);
+    if (lidar_scan_plan_sanitize(&plan)) {
+        static int warned = 0;   /* 只在首次越界时提示，避免每帧刷屏 */
+        if (!warned) {
+            LOG_WARN("sensor_model",
+                     "lidar scan params clamped (range<=%.0fm rays<=2048 channels<=64)",
+                     (double)LIDAR_SCAN_MAX_RANGE_M);
+            warned = 1;
+        }
+    }
 
-    const double cos_h = cos(g.ego_heading);
-    const double sin_h = sin(g.ego_heading);
+    /* 障碍物（世界系 + 尺寸）→ 观测目标。高度由宽度启发式补齐：vehicle/state
+     * 不发布各障碍物高度，3D AABB 必须自己构造。 */
+    LidarScanTarget targets[128];
+    const int n_targets = (g.n_obs > 0 && g.n_obs <= 128) ? g.n_obs : 0;
+    for (int i = 0; i < n_targets; i++) {
+        targets[i].x      = g.obs_x[i];
+        targets[i].y      = g.obs_y[i];
+        targets[i].length = g.obs_length[i];
+        targets[i].width  = g.obs_width[i];
+        targets[i].height = lidar_scan_height_from_width(g.obs_width[i]);
+    }
 
     /* 40KB → 静态缓冲，不能放栈上 */
     static LidarPointCloud cloud;
-    memset(&cloud, 0, sizeof(cloud));
-    cloud.frame_id     = frame_id;
-    cloud.timestamp_us = timestamp_us;
-    cloud.sensor_id    = 0;
-
-    /* 障碍物世界→车体（AABB 取车体轴，近似"障碍物与 ego 同向"） */
-    double obs_rx[128], obs_ry[128];
-    for (int i = 0; i < g.n_obs; i++) {
-        const double dx = g.obs_x[i] - g.ego_x;
-        const double dy = g.obs_y[i] - g.ego_y;
-        obs_rx[i] =  dx * cos_h + dy * sin_h;
-        obs_ry[i] = -dx * sin_h + dy * cos_h;
-    }
-
-    for (int r = 0; r < n_rays; r++) {
-        /* azimuth 均匀覆盖 [-FOV/2, +FOV/2]，elevation 固定 0 */
-        const double frac = (double)r / (double)(n_rays - 1);
-        const double az   = -fov_rad * 0.5 + frac * fov_rad;
-        const double dirx = cos(az);
-        const double diry = sin(az);
-
-        /* 找最近 hit */
-        double t_best  = range_max;
-        int    hit_idx = -1;
-        for (int i = 0; i < g.n_obs; i++) {
-            double t = ray_aabb_t(0.0, 0.0, dirx, diry,
-                                   obs_rx[i], obs_ry[i],
-                                   0.5 * g.obs_length[i], 0.5 * g.obs_width[i]);
-            if (t > 0.0 && t < t_best) {
-                t_best  = t;
-                hit_idx = i;
-            }
+    uint32_t dropped = 0;
+    lidar_scan_generate(&plan, targets, n_targets, g.ego_x, g.ego_y, g.ego_heading,
+                        frame_id, timestamp_us, &g.scan_rng, &cloud, &dropped);
+    if (dropped > 0) {
+        /* 容量守卫触发（写满 2048 后丢弃）：旧实现在这里会越界写内存。 */
+        static int warn_frames = 0;
+        if (warn_frames < 20) {
+            LOG_WARN("sensor_model", "lidar cloud full: dropped %u hits (cap %u)",
+                     dropped,
+                     (unsigned)(sizeof(cloud.points) / sizeof(cloud.points[0])));
+            warn_frames++;
         }
-        if (hit_idx < 0) continue;
-        /* 丢失率 */
-        if (rand_uniform_01() < loss_rate) continue;
-        /* 距离噪声：σ=α·range，clamp 到 [0.1, range_max] */
-        double sigma   = noise_alpha * t_best;
-        double t_noisy = t_best + sigma * rand_gauss();
-        if (t_noisy < 0.1)         t_noisy = 0.1;
-        if (t_noisy > range_max)   t_noisy = range_max;
-
-        LidarPoint* p = &cloud.points[cloud.count];
-        p->x = (float)(dirx * t_noisy);
-        p->y = (float)(diry * t_noisy);
-        p->z = 0.0f;
-        p->intensity      = (float)exp(-t_best / intensity_tau);
-        p->time_offset_us = (uint32_t)(sweep_us * frac);
-        cloud.count++;
     }
 
     /* 必须走生成的序列化器，不能直接把结构体内存当 payload：msg_codegen 的
@@ -501,6 +481,18 @@ static int sensor_model_init(MessageBus* bus, Transport* transport,
     g.camera_visibility_factor = 1.0;
     g.enable_simple_occlusion = 1;
     g.lidar_mode = 0;  /* 默认关闭：保持旧 LidarFrame 行为不变 */
+    /* mode=1 的 3D 扫描规格。这些默认值只在 lidar_mode=1 且参数缺省时生效，
+     * mode=0 完全不读，故默认编排行为零变化。量程仍默认 60m（mode=0 的可见点
+     * 估计也读它），要真点云看得远须在 pipeline 里显式给 lidar_max_range_m。 */
+    g.lidar_azimuth_rays = 720;
+    /* 32 层 / 22° 仰角跨度 = 0.71°/层：这是"看见 120m 外 1.5m 高的车"的最低
+     * 要求（车在 120m 处的仰角张角约 0.7°，层间距再粗就会从层缝里漏掉）。 */
+    g.lidar_channels     = 32;
+    g.lidar_vfov_min_deg = -20.0;
+    g.lidar_vfov_max_deg = 2.0;
+    g.lidar_height_m     = 1.8;
+    g.lidar_noise_rel    = 0.002;   /* 0.2%/m → 120m 处 +0.24m，保持远距定位可用 */
+    g.scan_rng           = lidar_scan_rng_seed(42u);
 
     if (params_json) {
         cJSON* p = cJSON_Parse(params_json);
@@ -518,6 +510,20 @@ static int sensor_model_init(MessageBus* bus, Transport* transport,
                 g.enable_simple_occlusion = (int)j->valuedouble;
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "lidar_mode")) && cJSON_IsNumber(j))
                 g.lidar_mode = (int)j->valuedouble;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "lidar_azimuth_rays")) && cJSON_IsNumber(j))
+                g.lidar_azimuth_rays = (int)j->valuedouble;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "lidar_channels")) && cJSON_IsNumber(j))
+                g.lidar_channels = (int)j->valuedouble;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "lidar_vfov_min_deg")) && cJSON_IsNumber(j))
+                g.lidar_vfov_min_deg = j->valuedouble;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "lidar_vfov_max_deg")) && cJSON_IsNumber(j))
+                g.lidar_vfov_max_deg = j->valuedouble;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "lidar_height_m")) && cJSON_IsNumber(j))
+                g.lidar_height_m = j->valuedouble;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "lidar_noise_rel")) && cJSON_IsNumber(j))
+                g.lidar_noise_rel = j->valuedouble;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "lidar_scan_seed")) && cJSON_IsNumber(j))
+                g.scan_rng = lidar_scan_rng_seed((uint32_t)j->valuedouble);
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "gps_nmea_file")) && cJSON_IsString(j))
                 strncpy(g.gps_nmea_file, j->valuestring, sizeof(g.gps_nmea_file) - 1);
             cJSON_Delete(p);
@@ -569,9 +575,15 @@ static int sensor_model_init(MessageBus* bus, Transport* transport,
         return -1;
     }
 
-    LOG_INFO("sensor_model", "initialized (LiDAR %dHz FOV=%.0fdeg range=%.0fm noise=%.2f occ=%d)",
+    LOG_INFO("sensor_model", "initialized (LiDAR %dHz FOV=%.0fdeg range=%.0fm noise=%.2f occ=%d mode=%d)",
              g.lidar_rate_hz, g.lidar_fov_deg, g.lidar_max_range_m,
-             g.obs_noise_std_m, g.enable_simple_occlusion);
+             g.obs_noise_std_m, g.enable_simple_occlusion, g.lidar_mode);
+    if (g.lidar_mode == 1) {
+        LOG_INFO("sensor_model",
+                 "mode=1 3D scan: %d az rays x %d channels, vfov=[%.0f,%.0f]deg, mount=%.2fm",
+                 g.lidar_azimuth_rays, g.lidar_channels,
+                 g.lidar_vfov_min_deg, g.lidar_vfov_max_deg, g.lidar_height_m);
+    }
     return 0;
 }
 

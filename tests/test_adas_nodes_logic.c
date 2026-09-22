@@ -21,6 +21,7 @@
  * 已抽离（测试与节点共用同一份实现，无副本漂移）：
  *   imu_protocol.{h,c}      — IMU 行解析 / 静态合成
  *   perception_points.{h,c} — 点云→DBSCAN 输入、聚类→ObstacleList
+ *   lidar_scan.{h,c}        — LiDAR 3D 观测模型（射线/AABB、容量守卫、可达距离）
  *
  * 编译: cmake --build build --target test_adas_nodes_logic
  * 运行: ./build/bin/test_adas_nodes_logic
@@ -35,6 +36,8 @@
 #include "slam_math.h"
 #include "safety_arbiter.h"
 #include "traj_safety.h"
+#include "lidar_scan.h"
+#include "lidar_contract.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -743,8 +746,206 @@ static void test_perception_ground_remove_none_rationale(void) {
 }
 
 /* ══════════════════════════════════════════════════════════ */
-/* Main                                                        */
+/* LiDAR 观测模型（lidar_scan.{h,c}）— 3D 扫描 / 容量守卫 / 可达性 */
 /* ══════════════════════════════════════════════════════════ */
+
+/* 几何测试用：关掉噪声/丢失，让结果只由几何决定（不 flaky）。 */
+static LidarScanPlan make_scan_plan(int az_rays, int channels,
+                                    double range_m, double hfov_deg) {
+    LidarScanPlan p;
+    memset(&p, 0, sizeof(p));
+    p.azimuth_rays    = az_rays;
+    p.channels        = channels;
+    p.hfov_deg        = hfov_deg;
+    p.vfov_min_deg    = -20.0;
+    p.vfov_max_deg    = 2.0;
+    p.range_max_m     = range_m;
+    p.mount_height_m  = 1.8;
+    p.noise_std_m     = 0.0;
+    p.noise_rel       = 0.0;
+    p.loss_rate       = 0.0;
+    p.intensity_tau_m = 30.0;
+    p.sweep_us        = 50000.0;
+    return p;
+}
+
+static LidarScanTarget make_target(double x, double y, double l, double w, double h) {
+    LidarScanTarget t;
+    memset(&t, 0, sizeof(t));
+    t.x = x; t.y = y; t.length = l; t.width = w; t.height = h;
+    return t;
+}
+
+static void test_lidar_scan_azimuth_fov_bounds(void) {
+    TEST("lidar_scan: FOV 内目标命中 / FOV 外不命中");
+    LidarScanPlan plan = make_scan_plan(241, 1, 100.0, 120.0);
+    LidarPointCloud cloud;
+    const double r = 50.0;
+
+    /* channels=1 → 射线恒在传感器水平面（安装高 1.8m）。目标取 3.0m 高
+     * （高过安装面）以便只考验方位角几何，不受"低于安装面看不见"影响。 */
+    const double b_in = 30.0 * M_PI / 180.0;   /* ±60° 之内 */
+    LidarScanTarget t = make_target(r * cos(b_in), r * sin(b_in), 4.6, 2.0, 3.0);
+    uint64_t rng = lidar_scan_rng_seed(1u);
+    uint32_t n = lidar_scan_generate(&plan, &t, 1, 0, 0, 0, 1, 1, &rng, &cloud, NULL);
+    ASSERT(n > 0, "target at +30deg should be hit, got 0 points");
+
+    const double b_out = 70.0 * M_PI / 180.0;  /* ±60° 之外 */
+    t = make_target(r * cos(b_out), r * sin(b_out), 4.6, 2.0, 3.0);
+    rng = lidar_scan_rng_seed(1u);
+    n = lidar_scan_generate(&plan, &t, 1, 0, 0, 0, 1, 1, &rng, &cloud, NULL);
+    ASSERT_EQ(n, 0, "target at +70deg (outside FOV) should miss");
+    PASS();
+}
+
+static void test_lidar_scan_range_limit(void) {
+    TEST("lidar_scan: 量程外的目标不产生点（量程放开后命中）");
+    LidarScanPlan plan = make_scan_plan(241, 1, 60.0, 120.0);
+    LidarPointCloud cloud;
+    /* 3.0m 高：高过安装面，确保考验的是量程而不是仰角 */
+    LidarScanTarget t = make_target(90.0, 0.0, 4.6, 2.0, 3.0);  /* 正前方 90m */
+
+    uint64_t rng = lidar_scan_rng_seed(7u);
+    ASSERT_EQ(lidar_scan_generate(&plan, &t, 1, 0, 0, 0, 1, 1, &rng, &cloud, NULL), 0,
+              "90m target with 60m range must yield no points");
+
+    plan.range_max_m = 120.0;   /* 同目标、只放量程 */
+    rng = lidar_scan_rng_seed(7u);
+    ASSERT(lidar_scan_generate(&plan, &t, 1, 0, 0, 0, 1, 1, &rng, &cloud, NULL) > 0,
+           "90m target with 120m range should be hit, got 0");
+    PASS();
+}
+
+static void test_lidar_scan_capacity_guard(void) {
+    TEST("lidar_scan: 命中超容量 → 写点数封顶且上报丢弃（旧实现越界）");
+    LidarScanPlan plan = make_scan_plan(2048, 32, 200.0, 120.0);
+    /* 罩住整个 FOV 的大盒子：65536 根射线全部命中 */
+    LidarScanTarget t = make_target(50.0, 0.0, 100.0, 200.0, 200.0);
+    LidarPointCloud cloud;
+    uint64_t rng = lidar_scan_rng_seed(3u);
+    uint32_t dropped = 0;
+    const uint32_t written = lidar_scan_generate(&plan, &t, 1, 0, 0, 0, 1, 1,
+                                                 &rng, &cloud, &dropped);
+    const uint32_t cap = (uint32_t)(sizeof(cloud.points) / sizeof(cloud.points[0]));
+    ASSERT_EQ(written, cap, "written points must stop exactly at capacity");
+    ASSERT_EQ(cloud.count, cap, "cloud.count must not exceed capacity");
+    ASSERT(dropped > 0, "capacity overflow must be reported as dropped, got 0");
+    PASS();
+}
+
+static void test_lidar_scan_deterministic(void) {
+    TEST("lidar_scan: 同种子+同输入 → 同点云（自持 RNG，不碰全局 rand）");
+    LidarScanPlan plan = make_scan_plan(180, 4, 120.0, 120.0);
+    plan.noise_std_m = 0.05;
+    plan.noise_rel   = 0.002;
+    plan.loss_rate   = 0.10;
+
+    LidarScanTarget ts[2];
+    ts[0] = make_target(30.0,  1.5, 4.6, 2.0, 1.5);
+    ts[1] = make_target(12.0, -2.0, 0.5, 0.5, 1.7);
+
+    LidarPointCloud a, b;
+    uint64_t ra = lidar_scan_rng_seed(2026u);
+    uint64_t rb = lidar_scan_rng_seed(2026u);
+    const uint32_t na = lidar_scan_generate(&plan, ts, 2, 0, 0, 0, 1, 1, &ra, &a, NULL);
+    const uint32_t nb = lidar_scan_generate(&plan, ts, 2, 0, 0, 0, 1, 1, &rb, &b, NULL);
+
+    ASSERT_EQ(na, nb, "same seed must give same point count");
+    ASSERT(na > 0, "expected some hits in the scene");
+    if (memcmp(&a, &b, sizeof(a)) != 0) {
+        FAIL("same seed produced different clouds");
+        return;
+    }
+    PASS();
+}
+
+static void test_lidar_scan_z_axis(void) {
+    TEST("lidar_scan: 多层扫描有非零 z；单层退化为平面（z 恒 0）");
+    LidarPointCloud cloud;
+
+    LidarScanPlan multi = make_scan_plan(360, 8, 120.0, 120.0);
+    LidarScanTarget near_car = make_target(20.0, 0.0, 4.6, 2.0, 1.5);
+    uint64_t rng = lidar_scan_rng_seed(11u);
+    ASSERT(lidar_scan_generate(&multi, &near_car, 1, 0, 0, 0, 1, 1, &rng, &cloud, NULL) > 0,
+           "expected hits on 20m target");
+    int nonzero_z = 0;
+    for (uint32_t i = 0; i < cloud.count; i++) {
+        if (fabs((double)cloud.points[i].z) > 1e-6) { nonzero_z = 1; break; }
+    }
+    ASSERT(nonzero_z, "channels>1 must produce 3D points with z != 0");
+
+    /* 单层：射线在传感器水平面，用高过安装面的目标才扫得到 */
+    LidarScanPlan single = make_scan_plan(360, 1, 120.0, 120.0);
+    LidarScanTarget tall = make_target(20.0, 0.0, 4.6, 2.0, 3.0);
+    rng = lidar_scan_rng_seed(11u);
+    ASSERT(lidar_scan_generate(&single, &tall, 1, 0, 0, 0, 1, 1, &rng, &cloud, NULL) > 0,
+           "single layer should still hit a target taller than the mount");
+    for (uint32_t i = 0; i < cloud.count; i++) {
+        if (fabs((double)cloud.points[i].z) > 1e-6) {
+            FAIL("channels==1 must stay planar (z == 0)");
+            return;
+        }
+    }
+    PASS();
+}
+
+static void test_lidar_scan_detectable_range(void) {
+    TEST("lidar_scan: 可达距离单调（量程/分辨率↑ 不减，车 >= 行人）");
+    LidarScanPlan plan = make_scan_plan(720, 8, 120.0, 120.0);
+    const double car = lidar_scan_detectable_range(&plan, 2.0, 4.6, 1.5, 2.0, 4);
+    const double ped = lidar_scan_detectable_range(&plan, 0.5, 0.5, 1.7, 2.0, 4);
+    ASSERT(car > 0.0, "car should be detectable within 120m");
+    ASSERT(ped > 0.0, "pedestrian should be detectable within 120m");
+    ASSERT(car >= ped, "bigger target must not be less detectable");
+
+    LidarScanPlan short_range = plan;
+    short_range.range_max_m = 60.0;
+    ASSERT(car >= lidar_scan_detectable_range(&short_range, 2.0, 4.6, 1.5, 2.0, 4),
+           "larger range_max must not reduce detectable range");
+
+    LidarScanPlan low_res = plan;
+    low_res.azimuth_rays = 240;   /* 旧实现的 0.5°/根 */
+    ASSERT(car >= lidar_scan_detectable_range(&low_res, 2.0, 4.6, 1.5, 2.0, 4),
+           "higher azimuth resolution must not reduce detectable range");
+    PASS();
+}
+
+static void test_lidar_scan_plan_sanitize(void) {
+    TEST("lidar_scan: plan 夹紧（量程<=200 / rays<=2048 / channels>=1）");
+    LidarScanPlan bad;
+    memset(&bad, 0, sizeof(bad));
+    bad.azimuth_rays    = 99999;
+    bad.channels        = 0;
+    bad.hfov_deg        = 120.0;
+    bad.range_max_m     = 5000.0;
+    bad.mount_height_m  = 1.8;
+    bad.intensity_tau_m = 30.0;
+    bad.loss_rate       = 5.0;
+    bad.noise_rel       = 5.0;
+
+    ASSERT(lidar_scan_plan_sanitize(&bad) == 1, "out-of-range plan must report clamping");
+    ASSERT_EQ(bad.azimuth_rays, 2048, "azimuth_rays clamp");
+    ASSERT_EQ(bad.channels, 1, "channels clamp");
+    ASSERT(bad.range_max_m <= LIDAR_SCAN_MAX_RANGE_M + 1e-9,
+           "range must clamp to the transfer contract limit");
+    ASSERT(bad.loss_rate >= 0.0 && bad.loss_rate <= 1.0, "loss_rate clamp");
+    ASSERT(bad.noise_rel <= 0.1, "noise_rel clamp");
+    ASSERT(bad.vfov_max_deg > bad.vfov_min_deg, "vfov span must stay non-degenerate");
+
+    LidarScanPlan ok = make_scan_plan(720, 8, 120.0, 120.0);
+    ASSERT(lidar_scan_plan_sanitize(&ok) == 0, "valid plan must be reported unchanged");
+    PASS();
+}
+
+static void test_lidar_scan_height_and_range_contract(void) {
+    TEST("lidar_scan: 高度启发式 + 量程上限与传输契约一致（防漂移）");
+    ASSERT_NEAR(lidar_scan_height_from_width(0.5), 1.7, 1e-9, "pedestrian 0.5m -> 1.7m");
+    ASSERT_NEAR(lidar_scan_height_from_width(2.0), 1.5, 1e-9, "car 2.0m -> 1.5m");
+    ASSERT_NEAR(lidar_scan_height_from_width(0.0), 1.5, 1e-9, "degenerate -> fallback 1.5m");
+    ASSERT(LIDAR_SCAN_MAX_RANGE_M == (double)LIDAR_POINT_CLOUD_MAX_RANGE_M,
+           "lidar_scan range cap must equal lidar_contract's LIDAR_POINT_CLOUD_MAX_RANGE_M");
+    PASS();
+}
 
 int main(void) {
     printf("\n╔══════════════════════════════════════════╗\n");
@@ -811,6 +1012,16 @@ int main(void) {
     test_perception_clusters_type_and_geometry();
     test_perception_clusters_lane_id();
     test_perception_ground_remove_none_rationale();
+
+    printf("\n═══ LiDAR Observation Model (3D scan / capacity guard) ═══\n");
+    test_lidar_scan_azimuth_fov_bounds();
+    test_lidar_scan_range_limit();
+    test_lidar_scan_capacity_guard();
+    test_lidar_scan_deterministic();
+    test_lidar_scan_z_axis();
+    test_lidar_scan_detectable_range();
+    test_lidar_scan_plan_sanitize();
+    test_lidar_scan_height_and_range_contract();
 
     printf("\n═══════════════════════════════════\n");
     printf("  Total: %d  ✅ Passed: %d  ❌ Failed: %d\n",
