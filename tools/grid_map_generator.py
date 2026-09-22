@@ -11,14 +11,18 @@
 车道几何严格复用 extract_city_map.py 的 build_road / right_normal / offset_lane /
 _markings（right-normal 偏移、lane id 方案、标线规则）。
 
-仅输出数据，不改动任何 C/C++ loader。可独立校验：
+仅输出数据，不改动任何 C/C++ loader。重生成与校验：
+  python3 tools/grid_map_generator.py --out maps/city_grid
   python3 tools/grid_map_generator.py --check maps/city_grid
+`--check` 除契约字段外，还会把每条 lane 的 successors 与本文件的直/右/左
+规则逐条比对（边界缺支路则省略，不得是空占位）。
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 import sys
 
 # ── 复用既有车道几何数学（不重新发明） ──────────────────────────
@@ -229,6 +233,90 @@ def generate(size: float, spacing: float, lanes_per_side: int,
     return map_doc, routes
 
 
+_SEG_RE = re.compile(r"^(ns|ew)_avenue_(\d+)_seg_(\d+)$")
+
+
+def _infer_grid(roads: list) -> tuple[int, int] | None:
+    """从 road id 反推 (大道数 n, 每轴段数 m)。任一 id 不合拆段命名则返回 None。"""
+    max_c = -1
+    max_k = -1
+    if not roads:
+        return None
+    for road in roads:
+        matched = _SEG_RE.match(road.get("id", ""))
+        if not matched:
+            return None
+        c = int(matched.group(2))
+        k = int(matched.group(3))
+        if c > max_c:
+            max_c = c
+        if k > max_k:
+            max_k = k
+    return max_c + 1, max_k + 1
+
+
+def check_turn_topology(map_doc: dict) -> list[str]:
+    """核对 city_grid：每条 lane 的 successors 等于直/右/左（拓扑不存在的方向省略）。
+
+    空数组、只留同大道直行、或指向错误 lane，都算失败。顺序与 generate() 一致：
+    straight, right, left。
+    """
+    roads = map_doc.get("roads", [])
+    shape = _infer_grid(roads)
+    if shape is None:
+        return ["city_grid 道路 id 不是 ns|ew_avenue_XX_seg_YY，无法核对转向 successors"]
+    n, m = shape
+    errors = []
+    for road in roads:
+        lanes = road.get("lanes", [])
+        if not isinstance(lanes, list):
+            errors.append("road %s lanes 不是数组" % road.get("id"))
+            continue
+        for lane in lanes:
+            idx = lane.get("index")
+            direction = lane.get("direction")
+            lid = lane.get("id")
+            if not isinstance(idx, int) or direction not in (1, -1):
+                errors.append("lane %s index/direction 非法" % lid)
+                continue
+            straight, right, left = _turn_targets(road["id"], idx, direction, n, m)
+            expected = []
+            for tgt_seg, tgt_dir, ok in (straight, right, left):
+                if ok:
+                    expected.append(_lane_id(tgt_seg, idx, tgt_dir))
+            got = lane.get("successors", [])
+            if got != expected:
+                errors.append("lane %s successors=%s 期望直/右/左=%s" % (lid, got, expected))
+            if len(errors) >= 8:
+                errors.append("其余 successors 不匹配已省略")
+                return errors
+    return errors
+
+
+def check_grid_dir(out_dir: str) -> int:
+    """契约校验 +（map_id=city_grid 时）转向 successors 与生成规则一致。"""
+    out_dir = os.path.abspath(out_dir)
+    rc = check(out_dir)
+    map_path = os.path.join(out_dir, "map.json")
+    try:
+        with open(map_path, encoding="utf-8") as f:
+            doc = json.load(f)
+    except Exception as e:
+        print("FAIL: 无法读取 map.json 做转向拓扑校验: %s" % e)
+        return 1
+    if doc.get("map_id") != "city_grid":
+        return rc
+    errors = check_turn_topology(doc)
+    if errors:
+        for err in errors:
+            print("FAIL:", err)
+        return 1
+    n_lanes = sum(len(r.get("lanes", [])) for r in doc.get("roads", [])
+                  if isinstance(r.get("lanes"), list))
+    print("转向拓扑通过: %d 条 lane 的 successors 与直/右/左规则一致" % n_lanes)
+    return rc
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--size", type=float, default=5000.0,
@@ -248,7 +336,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.check:
-        return check(os.path.abspath(args.check))
+        return check_grid_dir(args.check)
 
     map_doc, routes = generate(args.size, args.spacing, args.lanes_per_side,
                                args.lane_width, args.speed_limit)
@@ -258,7 +346,7 @@ def main() -> int:
         json.dump(map_doc, f, indent=2, ensure_ascii=False)
     with open(os.path.join(out_dir, "routes.json"), "w") as f:
         json.dump(routes, f, indent=2, ensure_ascii=False)
-    return check(out_dir)
+    return check_grid_dir(out_dir)
 
 
 if __name__ == "__main__":

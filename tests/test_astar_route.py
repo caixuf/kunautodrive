@@ -116,6 +116,51 @@ class AstarRouteTest(unittest.TestCase):
         rc = road_chain_from_lanes(chain, g)
         self.assertIn("ew_avenue_10_seg_00", rc)
 
+    def test_city_grid_turn_successors_match_generator(self):
+        """现网 city_grid 每条 lane 的 successors 必须是生成器的直/右/左，不能是空占位。"""
+        root = Path(__file__).resolve().parents[1]
+        out = root / "maps" / "city_grid" / "map.json"
+        if not out.exists():
+            self.skipTest("city_grid map absent")
+        from tools.grid_map_generator import check_turn_topology
+        import json
+        with out.open(encoding="utf-8") as f:
+            errors = check_turn_topology(json.load(f))
+        self.assertEqual(errors, [])
+
+    def test_turn_topology_rejects_straight_only(self):
+        """删掉转向 successor 后，校验必须失败（门禁能抓住空/只直行）。"""
+        from tools.grid_map_generator import generate, check_turn_topology
+        doc, _routes = generate(400.0, 200.0, 1, 3.5, 15.0)
+        self.assertEqual(check_turn_topology(doc), [])
+        for road in doc["roads"]:
+            for lane in road["lanes"]:
+                if len(lane["successors"]) < 2:
+                    continue
+                lane["successors"] = [lane["successors"][0]]
+                errors = check_turn_topology(doc)
+                self.assertTrue(errors)
+                self.assertIn(lane["id"], errors[0])
+                return
+        self.fail("fixture grid has no lane with a turn successor")
+
+    def test_single_intersection_reroute_leaves_avenue(self):
+        """路口前改去横向出路，路径不等于沿同一大道直行链。"""
+        root = Path(__file__).resolve().parents[1]
+        out = root / "maps" / "city_grid" / "map.json"
+        if not out.exists():
+            self.skipTest("city_grid map absent")
+        from tools.astar_route import LaneGraph, astar, compute_turns
+        import json
+        with out.open(encoding="utf-8") as f:
+            g = LaneGraph(json.load(f))
+        stay, _ = astar(g, "ns_avenue_01_seg_00.lane.1", "ns_avenue_01_seg_01.lane.1")
+        turn, _ = astar(g, "ns_avenue_01_seg_00.lane.1", "ew_avenue_01_seg_01.lane.1")
+        self.assertEqual(stay, ["ns_avenue_01_seg_00.lane.1", "ns_avenue_01_seg_01.lane.1"])
+        self.assertEqual(turn, ["ns_avenue_01_seg_00.lane.1", "ew_avenue_01_seg_01.lane.1"])
+        maneuvers = [t["maneuver"] for t in compute_turns(turn, g)]
+        self.assertEqual(maneuvers, ["RIGHT"])
+
 
 if __name__ == "__main__":
     unittest.main()
