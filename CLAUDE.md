@@ -27,6 +27,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 闸门 | 命令 | 挡住什么 |
 |------|------|----------|
 | topic-contract | `python3 ci/gates/topic_contract_check.py` | `pipeline.json` ↔ `s_inputs`/`s_outputs` 漂移 |
+| sensor-wiring | `python3 ci/gates/sensor_wiring_check.py` | sensor 模式下 `lidar_mode`/两处 `lidar_max_range_m` 不一致（静默丢点） |
 | zombie-ban | `python3 ci/gates/zombie_ban_check.py` | 退役 Python 仪表盘入口回潮 |
 | scenario/clock/map | 已有 | 空场景引用 / 禁 raw clock / 断链地图 |
 
@@ -273,7 +274,7 @@ python3 tools/trace_incident.py                     # 事故逐层追溯（碰�
 **frontend 改动另走 `npm run vis:check:all`（6 个门禁），C 链门禁覆盖不到它。**
 CI 的 C 侧 gate 全量在 `.github/workflows/ci.yml`：`scenario-file-gate`（`tools/scenarioctl.py validate`）、
 `clock-service-gate`（禁 `modules/` 裸 `clock_gettime`）、`topic-contract-gate`、
-`zombie-ban-gate`、`map-connectivity-gate`、`build-release`/`build-asan`（ctest）、
+`sensor-wiring-gate`、`zombie-ban-gate`、`map-connectivity-gate`、`build-release`/`build-asan`（ctest）、
 `build-windows-mingw`（交叉编译）、`integration-test`。本地复现任一 gate 直接抄它的 `run:` 行。
 
 ## 编码规范（统一 API — 2026-07 重构后强制执行）

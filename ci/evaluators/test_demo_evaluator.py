@@ -2,6 +2,7 @@
 """Behavior tests for demo_evaluator configuration-driven checks."""
 
 import importlib.util
+import json
 import os
 import tempfile
 import unittest
@@ -391,6 +392,117 @@ class DemoEvaluatorTest(unittest.TestCase):
         r2 = evaluator._compute_perception_metrics(series, [0.0])
         self.assertAlmostEqual(r2["perception_coverage"], 0.0)
         self.assertAlmostEqual(r2["recognition_rate_overall"], 0.0)
+
+    def _write_pipeline(self, mode: str, prod_range_m: float, cons_range_m: float,
+                        fov_deg: float = 120.0) -> Path:
+        """写一份临时 pipeline 配置并返回路径（供 FLOW_PIPELINE 注入）。"""
+        td = tempfile.mkdtemp()
+        cfg = Path(td) / "pipeline_test.json"
+        cfg.write_text(json.dumps({"processes": [
+            {"name": "sensor_model", "params": json.dumps(
+                {"lidar_mode": 1, "lidar_fov_deg": fov_deg,
+                 "lidar_max_range_m": prod_range_m})},
+            {"name": "perception", "params": json.dumps(
+                {"mode": mode, "lidar_max_range_m": cons_range_m})},
+        ]}))
+        return cfg
+
+    def _pin_pipeline(self, cfg: Path) -> None:
+        prev = os.environ.get("FLOW_PIPELINE")
+        os.environ["FLOW_PIPELINE"] = str(cfg)
+
+        def restore():
+            if prev is None:
+                os.environ.pop("FLOW_PIPELINE", None)
+            else:
+                os.environ["FLOW_PIPELINE"] = prev
+
+        self.addCleanup(restore)
+
+    def test_recognition_denominator_excludes_unobservable_truth(self):
+        """sensor 模式下锥外真值不计入分母：身后 / 超量程 / 出 FOV 都不算"漏检"。
+
+        旧的"全部真值"分母把物理不可见判成漏检 —— 实测 urban_challenge 只有
+        27.2% 的真值落在 ego 前向锥内，于是 sensor 模式无论多准都被压到 ~30% FAIL。
+        """
+        evaluator = load_evaluator()
+        self._pin_pipeline(self._write_pipeline("sensor", 120.0, 120.0))
+        series = [{
+            "x": 0.0, "y": 0.0, "heading": 0.0, "speed": 10.0,
+            "entities": [
+                {"id": 1, "type": "car", "x": 50.0, "y": 0.0},     # 锥内（命中）
+                {"id": 2, "type": "car", "x": -30.0, "y": 0.0},    # 身后
+                {"id": 3, "type": "car", "x": 500.0, "y": 0.0},    # 超 120m 量程
+                {"id": 4, "type": "car", "x": 0.0, "y": -5.0},     # 正侧方（±60° 外）
+            ],
+            "obs_world": [{"id": 1, "x": 50.0, "y": 0.0}],
+            "perceived_world": [{"id": 100, "x": 50.5, "y": 0.0}],
+        }]
+        r = evaluator._compute_perception_metrics(series, [0.0])
+        self.assertEqual(r["perception_mode"], "sensor")
+        self.assertTrue(r["perception_observability_applied"])
+        self.assertEqual(r["truth_count_overall"], 1)   # 只有正前方那辆
+        self.assertAlmostEqual(r["recognition_rate_overall"], 1.0)
+        self.assertAlmostEqual(r["perception_observable_ratio"], 0.25)
+        self.assertAlmostEqual(r["perception_range_m"], 120.0)
+        self.assertAlmostEqual(r["perception_fov_deg"], 120.0)
+
+    def test_observability_cone_only_armed_in_sensor_mode(self):
+        """ground_truth 模式**不做**锥内化：它的感知输入就是全部真值。
+
+        无条件锥内化会把"actor 全程在视锥外"的场景（city_comprehensive /
+        multi_light 各只声明 1~2 辆车）分母打成 0 → 门禁从"虚满分"翻成"无法判定"。
+        """
+        evaluator = load_evaluator()
+        self._pin_pipeline(self._write_pipeline("ground_truth", 120.0, 120.0))
+        series = [{
+            "x": 0.0, "y": 0.0, "heading": 0.0, "speed": 10.0,
+            "entities": [{"id": 1, "type": "car", "x": 500.0, "y": 0.0}],   # 锥外
+            "obs_world": [{"id": 1, "x": 500.0, "y": 0.0}],
+            "perceived_world": [{"id": 100, "x": 500.0, "y": 0.0}],
+        }]
+        r = evaluator._compute_perception_metrics(series, [0.0])
+        self.assertEqual(r["perception_mode"], "ground_truth")
+        self.assertFalse(r["perception_observability_applied"])
+        self.assertEqual(r["truth_count_overall"], 1)          # 锥外也计入
+        self.assertAlmostEqual(r["recognition_rate_overall"], 1.0)
+        self.assertIsNone(r["perception_observable_ratio"])
+
+    def test_recognition_falls_back_without_ego_pose(self):
+        """sensor 模式但缺 ego y/heading → 退回旧口径，并标记未生效。
+
+        不允许"静默退回旧口径"：`perception_observability_applied=False` 由
+        score() 转成 WARN，否则度量退化无人知晓。
+        """
+        evaluator = load_evaluator()
+        self._pin_pipeline(self._write_pipeline("sensor", 120.0, 120.0))
+        series = [{
+            "x": 0.0, "speed": 10.0,          # 故意不给 y / heading
+            "entities": [{"id": 1, "type": "car", "x": 500.0, "y": 0.0}],
+            "obs_world": [{"id": 1, "x": 500.0, "y": 0.0}],
+            "perceived_world": [{"id": 100, "x": 500.0, "y": 0.0}],
+        }]
+        r = evaluator._compute_perception_metrics(series, [0.0])
+        self.assertEqual(r["perception_mode"], "sensor")
+        self.assertFalse(r["perception_observability_applied"])
+        self.assertEqual(r["truth_count_overall"], 1)   # 500m 外也计入（旧口径）
+        self.assertAlmostEqual(r["recognition_rate_overall"], 1.0)
+        self.assertIsNone(r["perception_observable_ratio"])
+
+    def test_pipeline_spec_takes_min_range_of_producer_and_consumer(self):
+        """量程取生产者/消费者两处的 min：分歧时链路实际能看到的是较小者。
+
+        `sensor_model.lidar_max_range_m` 与 `perception.lidar_max_range_m` 各有一份
+        量程门（consumer 默认 60m 会把 producer 发的远处点静默丢光）。这里钉住
+        "min" 这个语义，防止可观测性分母比链路真实视野更乐观。
+        """
+        evaluator = load_evaluator()
+        cfg = self._write_pipeline("sensor", 120.0, 60.0, fov_deg=100.0)
+        self._pin_pipeline(cfg)
+        self.assertEqual(evaluator.pipeline_perception_spec(), (True, 100.0, 60.0))
+        cfg2 = self._write_pipeline("ground_truth", 120.0, 120.0)
+        self._pin_pipeline(cfg2)
+        self.assertEqual(evaluator.pipeline_perception_spec(), (False, 120.0, 120.0))
 
     def test_perception_metrics_warning_lead_time(self):
         """Task 5: 预警提前量 = TTC 跌破临界时刻 - 首次检测时刻。"""

@@ -93,6 +93,19 @@ jobs:
       - name: Enforce msg_codegen wire size == C struct size (or documented)
         run: python3 ci/gates/msg_layout_check.py
 
+  # ── sensor-mode wiring gate ────────────────────────────────
+  # 真点云链路的三处配置分散在两个节点里，任一处不一致都静默失效、且现象都是
+  # "改了没效果"：①perception.mode=sensor 但 sensor_model.lidar_mode!=1（生产者
+  # 不发点云，感知全盲）；②perception.lidar_max_range_m < sensor_model 的
+  # （消费者把远处点静默丢光，实测锥内识别率 86.9%→37.0%）；③两处量程不显式
+  # 声明而依赖代码默认值。属 CLAUDE.md 铁律"同一功能第二份实现=违规"。
+  sensor-wiring-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce sensor_model/perception lidar mode + range agreement
+        run: python3 ci/gates/sensor_wiring_check.py
+
   # ── zombie dashboard path ban ──────────────────────────────
   # The legacy Python HTTP dashboard was replaced by flowmond. Reintroducing
   # that retired entrypoint (or leaving orphaned .pyc) breaks the single

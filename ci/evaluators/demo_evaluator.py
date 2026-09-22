@@ -218,6 +218,21 @@ TRUTH_LAYER_FOR_TYPE = {
     "pedestrian": "vru",
 }
 
+# ── 感知可观测性：识别率分母的锥内化（2026-09-22）────────────────────
+# 识别率的分母 = "这份 pipeline 的感知输入级能知道什么"。
+#
+# 旧口径（一律全部真值）对真实前向传感器结构性不公平：实测 urban_challenge
+# （33 帧样本）真值 9.36 个/帧，落在 ego 前向 FOV + 量程锥内的只有 2.55 个/帧
+# = 27.2%，而 ground_truth 模式把背后、800m 外的 actor 也直通 → 拿 1.000，
+# sensor 模式无论多准都被压到 ~30% < PERCEPTION_RATE_FAIL，永远 FAIL。
+#
+# 但**不能无条件锥内化**：ground_truth 模式直接吃 vehicle/state 真值、没有 FOV
+# 概念，强行按 120°/120m 筛会让"actor 全程在视锥外"的场景（city_comprehensive /
+# multi_light 各只声明 1~2 辆车）分母归零 → 门禁从"虚满分"翻成"无法判定"。
+# 故锥只在 perception.mode == "sensor" 时武装（pipeline_perception_spec）。
+PERCEPTION_FOV_FALLBACK_DEG = 120.0
+PERCEPTION_RANGE_FALLBACK_M = 120.0
+
 
 def _shadow_inference_files() -> list[Path]:
     """Resolve sidecar files in the worker workspace when one is configured."""
@@ -540,6 +555,54 @@ def _pipeline_flowsim_scenario_file() -> str | None:
             return params.get("scenario_file")
         return None
     return None
+
+
+def _node_params(pipeline: dict, node_name: str) -> dict:
+    """Return a launcher node's params as a dict (params is a JSON string)."""
+    for node in _pipeline_nodes(pipeline):
+        if not isinstance(node, dict) or node.get("name") != node_name:
+            continue
+        params = node.get("params", {})
+        if isinstance(params, str):
+            try:
+                params = json.loads(params)
+            except json.JSONDecodeError:
+                return {}
+        return params if isinstance(params, dict) else {}
+    return {}
+
+
+def pipeline_perception_spec() -> tuple[bool, float, float]:
+    """Perception observability spec from the running config.
+
+    Returns ``(is_sensor_mode, hfov_deg, max_range_m)``.
+
+    识别率的分母 = **这份 pipeline 的感知输入级能知道什么**：
+
+    - `perception.mode == "sensor"`：感知吃的是 `sensor/lidar_points`，只能看到
+      ego 前向 FOV + 量程锥内的东西 → 分母必须锥内化。规格从生产者 sensor_model
+      读 `lidar_fov_deg`（也读 perception 的同名字段作兜底）；量程对两处取 **min**
+      —— 生产/消费各有一份 `lidar_max_range_m`，链路实际能看到的是较小者
+      （分歧本身由 `ci/gates/sensor_wiring_check.py` 拦下）。
+    - 其它模式（`ground_truth`）：感知直接吃 `vehicle/state` 真值、没有 FOV/量程
+      概念，能"看到"的就是全部真值 → 分母保持全部真值。此时若强行锥内化，
+      那些"actor 全程在视锥外"的场景（city_comprehensive / multi_light 各只声明
+      1~2 辆车）分母会变成 0，门禁从"虚满分"翻成"无法判定"，两者都是错的。
+    """
+    pipeline = load_json(runtime_pipeline_path()) or {}
+    sensor = _node_params(pipeline, "sensor_model")
+    perception = _node_params(pipeline, "perception")
+
+    is_sensor_mode = perception.get("mode") == "sensor"
+    fov = sensor.get("lidar_fov_deg", perception.get("lidar_fov_deg"))
+    if not (isinstance(fov, (int, float)) and fov > 0):
+        fov = PERCEPTION_FOV_FALLBACK_DEG
+    ranges = [
+        v for v in (sensor.get("lidar_max_range_m"), perception.get("lidar_max_range_m"))
+        if isinstance(v, (int, float)) and v > 0
+    ]
+    range_m = float(min(ranges) if ranges else PERCEPTION_RANGE_FALLBACK_M)
+    return is_sensor_mode, float(fov), range_m
 
 
 def load_scenario_for_duration(scenario_override: str | None = None) -> dict:
@@ -1065,6 +1128,17 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
         度量伪影压到 0.85/0.0：monitor 侧按障碍物时间戳就近取 ego 位姿（消一个感知周期
         的滞后），perception 侧带跨帧稳定 id（预警提前量要跨帧跟踪）。
 
+    可观测性锥内化（2026-09-22）：
+        分母 = **这份 pipeline 的感知输入级能知道什么**。`perception.mode=="sensor"`
+        时感知只吃 `sensor/lidar_points`，看不到 ego 背后/超量程的东西 —— 把它们计入
+        分母等于把"物理不可见"判成"漏检"（实测 urban_challenge 只有 27.2% 的真值在
+        锥内，于是 sensor 模式无论多准都被压到 ~30% < PERCEPTION_RATE_FAIL）。
+        其它模式（ground_truth 直通 `vehicle/state` 真值）不做锥内化：强行筛会让
+        "actor 全程在视锥外"的场景分母归零、门禁从虚满分翻成无法判定。
+        规格由 pipeline_perception_spec() 从在跑的 config 读；sensor 模式下若缺 ego
+        的 y/heading，则退回"全部真值"旧口径并把 `perception_observability_applied`
+        置 False，由 score() 打 WARN —— 不允许静默退回旧口径。
+
     预警提前量（warning lead time）：
         对每个 perceived 障碍（按 id 跨帧跟踪），记录其首次被检测到的时刻
         first_detect_ts；同时按 forward gap / ego_speed 计算 TTC，记录其
@@ -1078,6 +1152,13 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
     frames_with_truth = 0
     frames_with_perceived = 0
     perceived_total = 0
+
+    # 可观测性锥：仅在 sensor 模式下武装（见 pipeline_perception_spec 的 docstring）
+    obs_sensor_mode, obs_fov_deg, obs_range_m = pipeline_perception_spec()
+    obs_half_fov = math.radians(obs_fov_deg) * 0.5
+    observability_applied = False
+    truth_total_all = 0        # 全部真值（含锥外），仅用于算可观测性比例
+    truth_total_observable = 0
 
     # ── 分层识别率累积器 ──
     # key = 'vehicle' / 'vru' / 'overall'；value = [matched, total]
@@ -1102,6 +1183,15 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
     for i, m in enumerate(series):
         ts_i = timestamps[i] if i < len(timestamps) else 0.0
         ego_x = m["x"]
+        # 可观测性锥需要 ego 的 y 与 heading（缺任一或非有限值 → 本帧退回旧口径）
+        raw_ego_y = m.get("y")
+        raw_ego_h = m.get("heading")
+        pose_valid = obs_sensor_mode and all(
+            isinstance(v, (int, float)) and math.isfinite(v)
+            for v in (raw_ego_y, raw_ego_h)
+        )
+        if pose_valid:
+            observability_applied = True
         # truth 实体：跳过 ego/tl/etc_gate 等基础设施
         truth = []
         for ent in m.get("entities", []):
@@ -1111,14 +1201,24 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
             if etype in TRUTH_TYPE_INFRA or not etype:
                 continue
             try:
-                truth.append({
+                t = {
                     "id": ent.get("id"),
                     "type": etype,
                     "x": float(ent.get("x", 0.0) or 0.0),
                     "y": float(ent.get("y", 0.0) or 0.0),
-                })
+                }
             except (TypeError, ValueError):
                 continue
+            if pose_valid:
+                truth_total_all += 1
+                dx = t["x"] - float(ego_x)
+                dy = t["y"] - float(raw_ego_y)
+                if (math.hypot(dx, dy) > obs_range_m
+                        or abs(angle_diff(math.atan2(dy, dx), float(raw_ego_h)))
+                        > obs_half_fov):
+                    continue  # 锥外：传感器物理上看不到，不计入分母
+                truth_total_observable += 1
+            truth.append(t)
         # perceived 障碍：感知输出（世界坐标，见函数 docstring 的"历史坑"）
         perceived = m.get("perceived_world", []) or []
         if m.get("obs_world"):
@@ -1207,6 +1307,14 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
         "perception_coverage": (frames_with_perceived / frames_with_truth
                                 if frames_with_truth else 1.0),
         "perceived_count_avg": perceived_total / len(series) if series else 0.0,
+        # 可观测性：分母里锥内真值占全部真值的比例（解释识别率上限用），
+        # 以及"锥内化是否真的生效"（False = 缺 ego y/heading，退回旧口径）。
+        "perception_observable_ratio": (truth_total_observable / truth_total_all
+                                        if truth_total_all else None),
+        "perception_observability_applied": observability_applied,
+        "perception_mode": "sensor" if obs_sensor_mode else "ground_truth",
+        "perception_fov_deg": obs_fov_deg,
+        "perception_range_m": obs_range_m,
     }
 
 
@@ -2278,6 +2386,14 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     # truth（flowsim scene.entities）vs perceived（scene.obstacles 转世界坐标）
     # 的匹配率，按 vehicle / vru 分层；预警提前量 = TTC 跌破临界时刻 - 首次检测时刻。
     perception = _compute_perception_metrics(series, timestamps)
+    if (perception["perception_mode"] == "sensor"
+            and perception["truth_count_overall"]
+            and not perception["perception_observability_applied"]):
+        warnings.append(
+            "perception observability filter unavailable (samples carry no ego y/heading): "
+            "recognition_rate denominator falls back to ALL truth entities — a forward "
+            "sensor cannot pass this gate"
+        )
     # 分层识别率 FAIL/WARN。
     #
     # 旧实现 `if n < REC_MIN_SAMPLES: continue` 是本项目"虚假满分"的来源：
@@ -2306,12 +2422,12 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         if rate < PERCEPTION_RATE_FAIL:
             failures.append(
                 f"{layer_name} recognition rate too low: {rate*100:.1f}% "
-                f"({n} truth samples, FAIL < {PERCEPTION_RATE_FAIL*100:.0f}%)"
+                f"({n} observable truth samples, FAIL < {PERCEPTION_RATE_FAIL*100:.0f}%)"
             )
         elif rate < PERCEPTION_RATE_WARN:
             warnings.append(
                 f"{layer_name} recognition rate degraded: {rate*100:.1f}% "
-                f"({n} truth samples, WARN < {PERCEPTION_RATE_WARN*100:.0f}%)"
+                f"({n} observable truth samples, WARN < {PERCEPTION_RATE_WARN*100:.0f}%)"
             )
     # 预警提前量 FAIL/WARN（仅当发生过临界事件时才判定）
     if perception["critical_event_count"] > 0:
