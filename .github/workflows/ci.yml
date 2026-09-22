@@ -403,6 +403,23 @@ jobs:
       # ── Scenario regression vs baseline ──
       - name: Scenario regression vs baseline
         run: python3 ci/evaluators/scenario_regression.py --baseline
+      # ── Sensor-mode regression (真点云链路) ──
+      # 与上面那条互补：上面是默认的 ground_truth 直通编排，这条用
+      # config/pipeline_sensor.json 跑"真点云 → DBSCAN → planning/safety"的
+      # sensor 编排，确保"感知可用"这项能力不会悄悄烂掉 —— 2026-09-22 之前
+      # sensor 模式的识别率与预警提前量都是结构性 FAIL，却没有任何 CI 覆盖它。
+      # 取三个代表场景（时长沿用 suite.json 的条目）：
+      #   urban_challenge（车+行人+信号灯）/ dense_npc（多车）/
+      #   lane_change_traffic（42 actor、变道超车）。
+      # 注意：不传 --baseline —— sensor 编排与 ground_truth 基线的行为差异不该
+      # 被当作回归；这条只断言"每个场景自身的行为/感知门禁 PASS"。
+      - name: Sensor-mode regression (real point cloud chain)
+        run: |
+          for s in urban_challenge dense_npc lane_change_traffic; do
+            echo "─── sensor mode: $s ───"
+            FLOW_PIPELINE=config/pipeline_sensor.json \
+              python3 ci/evaluators/scenario_regression.py --workers 1 --only "$s"
+          done
       # ── Driving school exam gate (plan phase 2) ──
       # 与 scenario_regression.py 并列的另一档门禁：tools/driving_test.py 跑
       # 驾校全科，--ci 门禁不及格(任一项目<90)、--baseline 门禁单项分数较

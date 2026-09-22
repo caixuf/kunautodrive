@@ -277,6 +277,12 @@ CI 的 C 侧 gate 全量在 `.github/workflows/ci.yml`：`scenario-file-gate`（
 `sensor-wiring-gate`、`zombie-ban-gate`、`map-connectivity-gate`、`build-release`/`build-asan`（ctest）、
 `build-windows-mingw`（交叉编译）、`integration-test`。本地复现任一 gate 直接抄它的 `run:` 行。
 
+另有两条**只跑仿真**的等价门禁（在 `long-tests` job 内，需已构建）：
+- 默认编排（ground_truth 直通）：`python3 ci/evaluators/scenario_regression.py --baseline`
+- **sensor 编排（真点云链路）**：`FLOW_PIPELINE=config/pipeline_sensor.json python3 ci/evaluators/scenario_regression.py --workers 1 --only <场景>`
+  （CI 里对 urban_challenge / dense_npc / lane_change_traffic 三个场景各跑一次；不传 `--baseline`——
+  sensor 编排与 ground_truth 基线的行为差异不算回归，它只断言各场景自身门禁 PASS）
+
 ## 编码规范（统一 API — 2026-07 重构后强制执行）
 
 > 以下 API 是本项目的**唯一合法入口**。禁止绕过它们直接调用底层函数。
