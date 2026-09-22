@@ -122,5 +122,5 @@ bool CubicSpline2D::are_collinear(double x1, double y1, double x2, double y2,
     double a = x1 * (y2 - y3) +
                x2 * (y3 - y1) +
                x3 * (y1 - y2);
-    return a <= 0.01;
+    return std::fabs(a) <= 1e-4;
 }

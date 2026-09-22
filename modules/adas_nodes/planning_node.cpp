@@ -2342,6 +2342,17 @@ protected:
                         points[i].kappa = (float)ck;
                     }
                 }
+                /* TrajectoryPoint.l 坐标系契约：control_node (find_road_center / ROAD_GUARD / target_py)
+                 * 期望 points[].l 和 g.lane_d 为相对于道路中心线（map_ref）的横向偏移。
+                 * 当使用 lane_ref 时，frenet_plan 的 d_out 和 frenet_to_cartesian 的输入 l
+                 * 是相对于目标车道中心线（lane_ref，d ≈ 0）。
+                 * 回填 Cartesian 坐标后，需将 points[].l 转为相对于道路中心的绝对横向偏移，
+                 * 保持与 control_node 的接口契约一致。 */
+                if (g.lane_ref_count >= 2) {
+                    for (int i = 0; i < n_pts; i++) {
+                        points[i].l = (float)(g.target_lane_offset + (double)points[i].l);
+                    }
+                }
                 /* 变道轨迹 heading 修正（2026-08 根因修复）：
                  * frenet_to_cartesian 的 heading = 参考线切线，完全忽略 d 渐变
                  * → 变道轨迹 heading 恒 0 → control 的 psi_des 基准永远直行

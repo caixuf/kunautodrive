@@ -2565,7 +2565,8 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     # 这捕获"demo 卡住但 ego 仍在微小前进、碰撞数为 0"的退化场景——
     # 之前评估器从不检查此字段，所有场景的"超时即 FAIL"语义在 CI 中失效。
     max_duration = float(criteria.get("max_duration_s", 0.0) or 0.0)
-    if max_duration > 0.0 and summary["duration_s"] > max_duration:
+    # 允许 1.0s 采样周期与调度抖动容限（sample interval 0.25s，避免 60.001s > 60.0s 误报）
+    if max_duration > 0.0 and summary["duration_s"] > max_duration + 1.0:
         failures.append(
             f"exceeded max duration: {summary['duration_s']:.1f}s > {max_duration:.1f}s"
         )
