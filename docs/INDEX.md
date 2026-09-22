@@ -92,7 +92,7 @@
 | [FLOWSIM_PHYSICS.md](FLOWSIM_PHYSICS.md) | 车辆物理模型（运动学/动力学）+ 碰撞/护栏/重力 |
 | [HARDWARE_DEPLOYMENT.md](HARDWARE_DEPLOYMENT.md) | 真车部署 + 硬件调试 + FAST-LIO2 |
 | [LEARNING_LOOP.md](LEARNING_LOOP.md) | 车端学习闭环总纲（四阶段 + 契约 + OTA） |
-| [MAP_ENGINE_ROUTING.md](MAP_ENGINE_ROUTING.md) | 地图契约 + 工具链 + A* 路由 + 经验坑 |
+| [LTV_MPC_DESIGN.md](LTV_MPC_DESIGN.md) | LTV MPC 横向控制器设计（Riccati 递推 + 失败兜底） |
 | [MAP_GENERATION_MODULE.md](MAP_GENERATION_MODULE.md) | 地图生成 DSL 单一枢纽架构 + 五条铁律 |
 | [MONITORING_ARCHITECTURE.md](MONITORING_ARCHITECTURE.md) | flowmond 监控 + IPC/文件桥接 + HTTP/SSE |
 | [PIPELINE_ARCHITECTURE.md](PIPELINE_ARCHITECTURE.md) | 15 节点 pipeline 数据流 + 关键参数 |

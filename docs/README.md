@@ -26,6 +26,7 @@
 | 当前算法与职责边界 | [算法栈](ALGORITHM_STACK.md) | [算法验证](ALGORITHM_VERIFY_PATTERN.md)、[算法集成](ALGORITHM_INTEGRATION.md) |
 | 规划速度剖面（ST 图 + DP） | [速度规划说明](PLANNING_SPEED_UPGRADE_DESIGN.md) | [算法栈](ALGORITHM_STACK.md) |
 | 控制与真车标定 | [标定指南](CALIBRATION_GUIDE.md) | [算法验证](ALGORITHM_VERIFY_PATTERN.md) |
+| LTV MPC 横向控制器 | [LTV MPC 设计](LTV_MPC_DESIGN.md) | [算法栈](ALGORITHM_STACK.md)（Stanley/MPC/PID） |
 | FlowSim、场景与场景回归 | [仿真指南](SIMULATION_GUIDE.md) | [场景设计教程](book/18_flowsim_scenario_design.md) |
 | FlowSim 几何 / 运动 invariant | [Sim Digest](SIM_DIGEST.md) | [仿真指南](SIMULATION_GUIDE.md) |
 | Bag 通用录制与回放 | [Bag 教程](book/05_bag_recording.md) | [API 速查](API_QUICK_REFERENCE.md) |
