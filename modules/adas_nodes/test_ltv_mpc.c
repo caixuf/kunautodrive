@@ -191,15 +191,15 @@ static void test_horizon_convergence(void) {
         ltv_mpc_set_state(solver, 0.01, 0.0, 0.0, 10.0);
         CHECK(ltv_mpc_solve(solver, &steer_out) == LTV_MPC_OK);
         us[t] = steer_out;
-        if (t > 0) {
-            /* |u[N] - u[N=60]| 应随 N 缩短而增大（N=60 已是参考解） */
-            double diff_prev = fabs(us[t-1] - us[3]);
-            double diff_cur  = fabs(us[t]   - us[3]);
-            printf("  N=%2d  u=%.10f  |u-u(N=60)|=%.2e\n",
-                   Ns[t], us[t], diff_cur);
-            CHECK(diff_cur <= diff_prev + 1e-12);
-        }
         ltv_mpc_destroy(solver);
+    }
+    for (int t = 1; t < 4; t++) {
+        /* |u[N] - u[N=60]| 应随 N 缩短而增大（N=60 已是参考解） */
+        double diff_prev = fabs(us[t-1] - us[3]);
+        double diff_cur  = fabs(us[t]   - us[3]);
+        printf("  N=%2d  u=%.10f  |u-u(N=60)|=%.2e\n",
+               Ns[t], us[t], diff_cur);
+        CHECK(diff_cur <= diff_prev + 1e-12);
     }
 }
 
