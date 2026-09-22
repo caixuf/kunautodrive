@@ -156,6 +156,10 @@ struct FlowSimContext {
 
     /* 统计 */
     uint32_t          cycle{0};
+    /* 车道级定位诊断：vehicle/state 里那份"生成时刻快照"与权威解算不一致的帧数
+     * （见 topic_registry.h 的 TOPIC_LOCALIZATION_LANE_MATCH 说明）。 */
+    uint32_t          lane_match_id_mismatch{0};
+    uint32_t          lane_match_frames{0};
     uint64_t          sim_start_us{0};
     bool              roads_loaded{false};
     int               last_road_geom_road_id{-9999};
@@ -230,6 +234,8 @@ static void reset_runtime_state() {
     g.ego_gear.store(GEAR_DRIVE, std::memory_order_relaxed);
 
     g.cycle = 0;
+    g.lane_match_id_mismatch = 0;
+    g.lane_match_frames = 0;
     g.sim_start_us = 0;
     g.roads_loaded = false;
     g.last_road_geom_road_id = -9999;
@@ -1177,6 +1183,45 @@ static void publish_road_geometry(void) {
     cJSON_Delete(root);
     g.last_road_geom_road_id = road_id;
     g.last_road_geom_lane_count = lane_count;
+}
+
+/* ── 车道级定位（诊断/契约）─────────────────────────────────────
+ * 每帧用权威解算 world_to_frenet 重新求 ego 的 (road_id, lane_id, s, offset)，
+ * 并与 vehicle/state 里那份**生成时刻快照**做对比，把漂移量化进
+ * id_mismatch_frames（见 topic_registry.h 的 TOPIC_LOCALIZATION_LANE_MATCH）。
+ * 只发布、不改任何控制/规划行为。 */
+static void publish_lane_match(void) {
+    flowsim::Entity& ego = g.pool[0];
+    flowsim::FrenetPos fp;
+    const bool ok = g.roads_loaded && g.roads.world_to_frenet(ego.x, ego.y, fp);
+    if (ok) {
+        g.lane_match_frames++;
+        if (fp.lane_id != ego.lane_id || fp.road_id != ego.road_id) {
+            g.lane_match_id_mismatch++;
+        }
+    }
+
+    cJSON* j = cJSON_CreateObject();
+    cJSON_AddBoolToObject(j, "ok", ok);
+    cJSON_AddNumberToObject(j, "x", ego.x);
+    cJSON_AddNumberToObject(j, "y", ego.y);
+    if (ok) {
+        cJSON_AddNumberToObject(j, "road_id", (double)fp.road_id);
+        cJSON_AddNumberToObject(j, "lane_id", (double)fp.lane_id);
+        cJSON_AddNumberToObject(j, "s", fp.s);
+        cJSON_AddNumberToObject(j, "offset", fp.offset);
+    }
+    /* vehicle/state 里那份（生成时刻）快照，供对比与漂移统计 */
+    cJSON_AddNumberToObject(j, "pub_road_id", (double)ego.road_id);
+    cJSON_AddNumberToObject(j, "pub_lane_id", (double)ego.lane_id);
+    cJSON_AddNumberToObject(j, "id_mismatch_frames", (double)g.lane_match_id_mismatch);
+    cJSON_AddNumberToObject(j, "frames", (double)g.lane_match_frames);
+
+    char* s = cJSON_PrintUnformatted(j);
+    transport_publish(g.transport, TOPIC_LOCALIZATION_LANE_MATCH,
+                      (const uint8_t*)s, (uint32_t)strlen(s) + 1);
+    free(s);
+    cJSON_Delete(j);
 }
 
 static bool should_publish_road_geometry_now(void) {
@@ -2414,6 +2459,7 @@ protected:
             publish_ref_path();
             publish_traffic_lights();
             publish_vehicle_state(sim_time_us);
+            publish_lane_match();
             if ((g.cycle % 30u) == 0u) {
                 cJSON* env = cJSON_CreateObject();
                 const char* lighting = g.scene_pub_cfg.lighting == SCENARIO_LIGHT_NIGHT
@@ -3058,6 +3104,9 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
     /* 广告输出 topics */
     transport_advertise(transport, TOPIC_VEHICLE_STATE,       VEHICLE_STATE_TYPE_ID);
     discovery_advertise(discovery, TOPIC_VEHICLE_STATE,       VEHICLE_STATE_TYPE_ID, CAP_PUBLISHER, 20.0);
+    /* 车道级定位诊断/契约（JSON，monitor 透传；无行为消费方） */
+    transport_advertise(transport, TOPIC_LOCALIZATION_LANE_MATCH, 0u);
+    discovery_advertise(discovery, TOPIC_LOCALIZATION_LANE_MATCH, 0u, CAP_PUBLISHER, 20.0);
     transport_advertise(transport, TOPIC_ROAD_GEOMETRY,       ROAD_GEOMETRY_TYPE_ID);
     discovery_advertise(discovery, TOPIC_ROAD_GEOMETRY,       ROAD_GEOMETRY_TYPE_ID, CAP_PUBLISHER, 1.0);
     transport_advertise(transport, TOPIC_ROAD_TRAFFIC_LIGHTS, ROAD_TRAFFIC_LIGHTS_TYPE_ID);

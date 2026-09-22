@@ -248,6 +248,9 @@ static struct {
     char control_debug_json[2048];
     /* 规划层 debug（来自 planning/debug JSON topic，全链路横向调试） */
     char planning_debug_json[2048];
+    /* 车道级定位（来自 localization/lane_match，诊断透传：权威 Frenet 解算
+     * 与 vehicle/state 快照的漂移） */
+    char lane_match_json[1024];
     /* 安全故障注入/超时证据：保留最近一条完整 JSON，供 dashboard 与 CI evaluator
      * 消费。锁避免 topic 回调写入与 dashboard 序列化并发。 */
     char safety_evidence_json[2048];
@@ -888,6 +891,16 @@ static void on_planning_debug(const Message* msg, void* user_data) {
     cJSON_Delete(pd);
 }
 
+/* ── localization/lane_match 订阅 — 缓存车道级定位（诊断透传） ── */
+static void on_lane_match(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg) return;
+    size_t copy = msg->data_size;
+    if (copy >= sizeof(g.lane_match_json)) copy = sizeof(g.lane_match_json) - 1;
+    memcpy(g.lane_match_json, msg->data, copy);
+    g.lane_match_json[copy] = '\0';
+}
+
 static void on_safety_evidence(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg || msg->data_size == 0) return;
@@ -1184,6 +1197,14 @@ static void export_dashboard_json(void) {
         cJSON* pd = monitor_cJSON_Parse(g.planning_debug_json);
         if (pd) {
             cJSON_AddItemToObject(metrics, "planning_debug", pd);
+        }
+    }
+
+    /* 车道级定位（权威 Frenet 解算 vs vehicle/state 快照的漂移，诊断） */
+    if (g.lane_match_json[0]) {
+        cJSON* lm = monitor_cJSON_Parse(g.lane_match_json);
+        if (lm) {
+            cJSON_AddItemToObject(metrics, "lane_match", lm);
         }
     }
 
@@ -2064,6 +2085,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
              "{\"state\":\"NA\",\"committed_lane\":0,\"obs_count\":0}");
     g.control_debug_json[0] = '\0';
     g.planning_debug_json[0] = '\0';
+    g.lane_match_json[0] = '\0';
     g.safety_evidence_json[0] = '\0';
 
     /* samples 环形缓冲初始态 */
@@ -2175,6 +2197,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     transport_subscribe(transport, "behavior/state", on_behavior_state, NULL);
     transport_subscribe(transport, TOPIC_CONTROL_DEBUG, on_control_debug, NULL);
     transport_subscribe(transport, TOPIC_PLANNING_DEBUG, on_planning_debug, NULL);
+    transport_subscribe(transport, TOPIC_LOCALIZATION_LANE_MATCH, on_lane_match, NULL);
     transport_subscribe(transport, "safety/evidence", on_safety_evidence, NULL);
     /* 收集其他节点的自描述广播 (方案B: 数据驱动拓扑感知) */
     transport_subscribe(transport, TOPIC_FLOWENGINE_NODE_INFO, on_node_info, NULL);

@@ -78,6 +78,23 @@
 #define TOPIC_ROAD_TRAFFIC_LIGHTS "road/traffic_lights"
 #define TOPIC_WORLD_BUILDINGS     "world/buildings"   /* OSM 建筑 OBB 列表（静态，init 时发布一次）*/
 
+/* ── 诊断/契约：车道级定位 ────────────────────────────────────────
+ * flowsim 每帧用**权威解算**（esmini `FlowRoadNetwork::world_to_frenet`，任意朝向）
+ * 重新求 ego 的 (road_id, lane_id, s, offset) 并发布。
+ *
+ * 为什么需要它：`vehicle/state` 里的 `road_id`/`lane_id` 是**生成时刻的快照**
+ * （只在 populate 时写一次，变道/掉头后不刷新），而栈内其它节点全都拿不到 esmini
+ * 全局句柄（FlowRoadNetwork 非线程安全、flowsim 独占），于是"我在哪条车道"只能
+ * 退化成"道路中心线 + lane_width 的一维推算"。本 topic 把权威值对外暴露，并把
+ * "发布快照 vs 权威值"的漂移量化成 `id_mismatch_frames`。
+ *
+ * PRODUCERS: flowsim_node
+ * CONSUMERS: monitor（诊断透传，尚无行为消费方）
+ * JSON: {ok, x, y, road_id, lane_id, s, offset, pub_road_id, pub_lane_id,
+ *        id_mismatch_frames, frames}
+ *       lane_id 按 OpenDRIVE：0 = 参考线，正 = 左，负 = 右；offset 相对车道中心。 */
+#define TOPIC_LOCALIZATION_LANE_MATCH "localization/lane_match"
+
 /* ── Simulation topics ──────────────────────────────────────── */
 
 #define TOPIC_SIM_TICK            "sim/tick"
