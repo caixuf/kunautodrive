@@ -24,6 +24,11 @@ v0.2 追加（2026-08-01，Phase 1.2，对齐新场景矩阵）：
   10. 过度保守刹停     对向会车场景巡航降到 ~1m/s → min_avg_speed FAIL
   11. 转向 bang-bang   steer 每帧翻符号 → Phase 1.3 FAIL 门禁
 
+v0.3 追加（2026-09-23，sensor 编排 + 度量伪影校准，[12]~[23] 用例标题见运行输出）：
+  12~21 既有用例之外的同类扩展；本版新增的两条度量校准尤其关键：
+  22. steer 单点擦线     掉头 lock-to-lock 扫角（±0.60 rad 合法量程）不得误报
+  23. steer 佐证条款      max>6/s 且 rms>0.9/s 的尖点仍必须 FAIL（防改成永远 PASS）
+
 运行（两种方式等价）：
   python3 ci/evaluators/test_evaluator_gate.py   # 独立脚本，退出码=失败数
   python3 -m pytest ci/evaluators/test_evaluator_gate.py   # pytest 收集
@@ -291,6 +296,39 @@ def run_all_checks() -> int:
     check("low-speed approach is not a false FAIL",
           not any("min_forward_gap" in x for x in _f))
 
+    print("\n[22] steer 速率判据：掉头 lock-to-lock 扫角不得误报（max 单点需 rms 佐证）")
+    # 2026-09-23 校准：该量测 flowsim 物理前轮角，掉头时合法放开到 ±0.60 rad
+    # （physics.cpp：正常 0.25/掉头 0.60），三把方向扫角单点就能顶过 6/s。
+    # 实测默认编排 straight_road 同一份代码在 3.76~6.25/s 抖，而 rms 0.39~0.58、
+    # flips 0.06 全程健康 —— 单点擦线导致 PASS/FAIL 摇摆 = 和没门禁一样不可信。
+    # 这里一个采样间隔 Δsteer=1.2 rad（rate≈6.7/s）但整段 rms 仅 ~0.61 → 只 WARN。
+    _sweep = []
+    for i in range(120):
+        st = 0.05
+        if i == 20:
+            st = 0.60
+        elif i == 21:
+            st = -0.60          # 相邻两样本 Δsteer=1.2 rad，dt=0.18 → 6.67/s
+        _sweep.append(_mk(10 + i * 2.16, -1.75, 12.0, st, i * 0.18))
+    _f = _score("uturn-sweep", _sweep, _ZERO_CRIT)
+    check("u-turn steering sweep is not a false FAIL",
+          not any("steer bang-bang" in x for x in _f))
+
+    print("\n[23] steer max 佐证条款仍有牙：max>6/s 且 rms>0.9/s → 必须 FAIL")
+    # 只留一个尖点、样本数少到 rms≈1.07（落在 0.9~1.6 之间）→ 只能由
+    # "max 线 + rms 佐证"这条新条款判 FAIL，保证它不是把判据改成永远 PASS。
+    _corrob = []
+    for i in range(40):
+        st = 0.05
+        if i == 20:
+            st = 0.60
+        elif i == 21:
+            st = -0.60
+        _corrob.append(_mk(10 + i * 6.0, -1.75, 12.0, st, i * 0.18))
+    _f = _score("steer-max-corroborated", _corrob, _ZERO_CRIT)
+    check("max spike corroborated by rms still FAILs",
+          any("steer bang-bang" in x for x in _f))
+
     print(f"\n{'='*52}")
     print(f"gate self-test: {_passed} passed, {_failed} failed")
     print(f"{'='*52}")
@@ -300,7 +338,7 @@ def run_all_checks() -> int:
 
 
 def test_gate_self_test():
-    """pytest 入口：门禁必须抓住全部 12 类已知故障，否则本测试 FAIL。
+    """pytest 入口：门禁必须抓住全部 [1]~[23] 类已知故障，否则本测试 FAIL。
 
     这保证 CI 里的评估器门禁"先证伪自己再判别人"——评估器本身若退化到
     抓不住已知故障，评估器改动会被这里拦下，而不是等真撞车了才发现。

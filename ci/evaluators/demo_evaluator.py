@@ -187,6 +187,18 @@ ACC_TIME_HEADWAY_S = 1.5
 # 旧实现只有 WARN：bang-bang 时 steer_flip≈9-10/s 也照样 PASS，
 # 于是"修好后没复发"从没人验证过 —— 门禁抓不住已知故障 = 它的 PASS 不可信。
 # WARN 阈值命名成常量，避免与 FAIL 阈值同写一处时漂移。
+#
+# ⚠️ steer **max 速率**单点无佐证时不构成 FAIL（2026-09-23 校准）：
+# 该量测的是 flowsim 的物理前轮角 e.steer，而掉头时它被放开到 ±0.60 rad
+# （physics.cpp：正常 0.25 rad/14°，掉头 steer_override 放宽到 0.60 rad/34°），
+# 三把方向 lock-to-lock 扫角在一个采样间隔内 Δsteer≈0.9 rad 是机动本身的
+# 动力学。实测默认编排 straight_road 同一份代码在 3.76~6.25/s 之间抖
+# （sensor 编排峰值 4.53/s），而同期 rms 0.39~0.58（FAIL 线 1.6）、
+# flips 0.06（FAIL 线 2.5，真 bang-bang 时 9~10）全程健康 —— 单点擦线
+# 会让门禁在 PASS/FAIL 之间摇摆，那和"没门禁"一样不可信。
+# 故 max 线保留 WARN，但 FAIL 需 steer_rate_rms > STEER_RATE_RMS_WARN 佐证
+# （与 yaw 判据要求 yaw_rms 佐证同一先例，见 HEADING_FLIP_FAIL 注释）。
+
 YAW_RMS_WARN = 0.35         # rad/s
 YAW_MAX_WARN = 1.2          # rad/s
 HEADING_FLIP_WARN = 1.2     # /s
@@ -198,7 +210,7 @@ YAW_RMS_FAIL = 0.6          # rad/s
 YAW_MAX_FAIL = 2.0          # rad/s
 HEADING_FLIP_FAIL = 3.0     # /s，且需 yaw_rms>0.2 佐证（弯道上 heading 单调变化不算）
 STEER_RATE_RMS_FAIL = 1.6   # /s
-STEER_MAX_RATE_FAIL = 6.0   # /s
+STEER_MAX_RATE_FAIL = 6.0   # /s，需 steer_rate_rms > STEER_RATE_RMS_WARN 佐证才 FAIL（单点擦线只 WARN）
 STEER_FLIP_FAIL = 2.5       # /s
 # 实际最小间距低于期望间距的这个比例 → FAIL。取 0.5 是因为 ACC 有超调是
 # 正常的，但掉到期望值一半以下意味着间距根本没被控制。
@@ -2348,12 +2360,19 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         warnings.append(
             f"ego yaw wobble: yaw_rms={yaw_rate_rms:.2f} rad/s, max={max_yaw_rate:.2f}, flips={heading_flip_rate:.2f}/s"
         )
-    if (steer_rate_rms > STEER_RATE_RMS_FAIL or max_steer_rate > STEER_MAX_RATE_FAIL or
-            steer_flip_rate > STEER_FLIP_FAIL):
+    # max 仅一项时需 rms 佐证：掉头 lock-to-lock 扫角（物理前轮角 ±0.60 rad 是
+    # 合法量程）天然能把单点速率顶过 6/s，而真 bang-bang（每帧翻符号）的
+    # rms 与 flips 一定同时抬高。see 上方常量块的 2026-09-23 校准说明。
+    steer_max_spike = (max_steer_rate > STEER_MAX_RATE_FAIL
+                       and steer_rate_rms > STEER_RATE_RMS_WARN)
+    if (steer_rate_rms > STEER_RATE_RMS_FAIL or steer_flip_rate > STEER_FLIP_FAIL or
+            steer_max_spike):
         failures.append(
             f"steer bang-bang oscillation: steer_rate_rms={steer_rate_rms:.2f}/s, "
             f"max={max_steer_rate:.2f}/s, flips={steer_flip_rate:.2f}/s "
-            f"(control dithering every frame, FAIL > {STEER_FLIP_FAIL}/s)"
+            f"(control dithering every frame, FAIL: rms>{STEER_RATE_RMS_FAIL}/s "
+            f"or flips>{STEER_FLIP_FAIL}/s or max>{STEER_MAX_RATE_FAIL}/s 且 "
+            f"rms>{STEER_RATE_RMS_WARN}/s)"
         )
     elif (steer_rate_rms > STEER_RATE_RMS_WARN or max_steer_rate > STEER_MAX_RATE_WARN or
             steer_flip_rate > STEER_FLIP_WARN):
