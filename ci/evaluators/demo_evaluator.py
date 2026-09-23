@@ -572,6 +572,17 @@ def _node_params(pipeline: dict, node_name: str) -> dict:
     return {}
 
 
+def pipeline_has_node(node_name: str) -> bool:
+    """运行中的 pipeline 是否包含某节点（判据"适不适用"的显式声明）。
+
+    与 `pipeline_perception_spec()` 同源：读 `FLOW_PIPELINE` 指向的配置。
+    缺文件 / 坏 JSON → False（调用方据此判"该判据不适用"，而不是默认通过）。
+    """
+    pipeline = load_json(runtime_pipeline_path()) or {}
+    return any(isinstance(node, dict) and node.get("name") == node_name
+               for node in _pipeline_nodes(pipeline))
+
+
 def pipeline_perception_spec() -> tuple[bool, float, float]:
     """Perception observability spec from the running config.
 
@@ -1605,6 +1616,26 @@ def scenario_actor_layer_counts(scenario: dict | None) -> dict[str, int]:
     return counts
 
 
+def _sim_timestamps(samples: list[dict]) -> list[float]:
+    """从样本提取**仿真钟**（`metrics.scene.t_us` → 秒）；不可用则返回空列表。
+
+    仿真钟是"这一趟跑了多久"的权威量：墙钟跨度包含 demo.sh 启动/收尾与机器负载，
+    会随负载漂移（同一场景本机 59.9→63.3s），拿它当"是否跑满"的判据必然误报。
+    要求 ≥5 个样本且整体递增，否则视为不可用（调用方回退墙钟）。
+    """
+    out: list[float] = []
+    for s in samples:
+        metrics = s.get("metrics") if isinstance(s, dict) else None
+        scene = metrics.get("scene") if isinstance(metrics, dict) else None
+        t_us = scene.get("t_us") if isinstance(scene, dict) else None
+        if isinstance(t_us, bool) or not isinstance(t_us, (int, float)):
+            return []
+        out.append(float(t_us) / 1e6)
+    if len(out) < 5 or out[-1] <= out[0]:
+        return []
+    return out
+
+
 def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None, scenario_name: str | None = None, expected_edges: list[tuple[str, str, str]] | None = None, has_noa_route: bool = False, road: dict | None = None, traffic_lights: list | None = None, scenario: dict | None = None, expected_duration_s: float | None = None) -> tuple[list[str], list[str], dict]:
     failures: list[str] = []
     warnings: list[str] = []
@@ -1639,6 +1670,12 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     steer_signed = [m["steer_signed"] for m in series]
     headings = [m["heading"] for m in series]
     timestamps = [float(s.get("timestamp", 0.0) or 0.0) for s in samples]
+    # 仿真时间戳（metrics.scene.t_us，flowsim 的仿真钟）。判"这一趟跑了多久"必须
+    # 用它而不是墙钟：墙钟跨度含 demo.sh 启动/收尾 + 机器负载，2026-09-23 实测
+    # curve_road 墙钟 63.3s 而仿真只有 59.3s（场景声明 60s）→ 被 +1.0s 容差判
+    # "exceeded max duration"，属于度量伪影（run 本身完全正常）。
+    # 取不到（老 series / 单测构造的样本）→ 空列表，调用方回退墙钟并在 summary 标注。
+    sim_timestamps = _sim_timestamps(samples)
     formal_metrics = compute_formal_metrics(series, samples)
     scenario_layer_counts = scenario_actor_layer_counts(scenario)
 
@@ -1718,9 +1755,10 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     #   1) 行为指标"正常" → 误报 PASS（60s 只测了 8s）；
     #   2) x_delta 骤降 → 误报对 baseline 的数值回归。
     # 两者都让"PASS 可信"破产 —— 判定不了就该 FAIL，不是 PASS。
-    # span 复用上面算好的 timestamps（同一时间戳语义，不重复解析）。
-    if expected_duration_s is not None and expected_duration_s > 0 and len(timestamps) >= 5:
-        span = timestamps[-1] - timestamps[0]
+    # span 优先用**仿真钟**（"跑了多久"的权威量），取不到才回退墙钟。
+    span_ref = sim_timestamps if sim_timestamps else timestamps
+    if expected_duration_s is not None and expected_duration_s > 0 and len(span_ref) >= 5:
+        span = span_ref[-1] - span_ref[0]
         if span < expected_duration_s * 0.5:
             failures.append(
                 f"run truncated: sample span {span:.1f}s < 50% of requested "
@@ -1743,6 +1781,39 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
                 f"DEAD SIGNAL [{info['label']}]: {detail} across all "
                 f"{len(series)} samples — every check reading this quantity "
                 f"is vacuous"
+            )
+
+    # ── 行为决策活性：behavior/state 不能全程 "NA" ──────────────
+    # 2026-09-23 复盘（sensor 编排 straight_road）：perception 发**空**障碍物
+    # 列表时 behavior 的 on_raw_obstacles 直接 return（"空 = 没就绪"），
+    # has_obs 恒 0 → run() 前置守卫把**整个决策块**（含路端掉头触发）跳过 30s。
+    # ego 仍在动，所以上面的量活性门禁（speed/x/…）全绿，没有任何判据看见它。
+    # 判据：behavior_planner 在跑 且 behavior/state 全程 "NA"/空 → FAIL；
+    # 半数以上样本为 "NA" → WARN（启动慢/上游稀疏，不足以阻断）。
+    # 不适用：series 不带 metrics.behavior（单测构造 / 无 behavior 的 profile）
+    # ——此时判据静默跳过（该情形由节点拓扑与 topic 频率门禁覆盖）。
+    behavior_samples = [
+        s for s in samples
+        if isinstance(s, dict)
+        and isinstance((s.get("metrics") or {}).get("behavior"), dict)
+    ]
+    if behavior_samples and pipeline_has_node("behavior_planner"):
+        states = [
+            str(((s.get("metrics") or {}).get("behavior") or {}).get("state", "") or "")
+            .strip().upper()
+            for s in behavior_samples
+        ]
+        silent = sum(1 for st in states if st in ("", "NA"))
+        if silent == len(states):
+            failures.append(
+                f"behavior planner never decided: behavior/state == \"NA\" in all "
+                f"{len(states)} samples — its decision block is being skipped "
+                f"(likely an empty perception list treated as \"not ready\")"
+            )
+        elif silent * 2 > len(states):
+            warnings.append(
+                f"behavior planner silent in {silent}/{len(states)} samples — "
+                f"decisions (incl. route-end U-turn trigger) skipped for most of the run"
             )
 
     topics = topic_map(last)
@@ -2342,25 +2413,43 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     if valid_gap_records:
         min_gap_all = min(gap for gap, _speed in valid_gap_records)
         moving_gaps = [(gap, speed) for gap, speed in valid_gap_records if abs(speed) > 1.0]
-        min_moving_gap = min((gap for gap, _speed in moving_gaps), default=math.inf)
-        # 取该帧车速估期望间距；用整段的中位速度避免个别低速帧放宽判据
         _speeds_sorted = sorted(speeds)
         v_med = _speeds_sorted[len(_speeds_sorted) // 2] if _speeds_sorted else 0.0
-        desired_gap = ACC_STANDOFF_M + ACC_TIME_HEADWAY_S * v_med
-        gap_fail_thresh = desired_gap * ACC_GAP_FAIL_RATIO
+
+        def _desired_gap(v: float) -> float:
+            """该速度下的期望间距 —— 与 behavior 的跟车策略**同式同参**
+            （`desired_gap = acc_standoff + acc_time_headway * ego_v`，见
+            behavior_planner_node.cpp 的 acc_standoff/acc_time_headway）。"""
+            return ACC_STANDOFF_M + ACC_TIME_HEADWAY_S * abs(v)
+
+        # 逐帧判据：每帧与**它自己车速**下的期望间距比（"判据随车速伸缩"的本意）。
+        # 旧实现用整段中位速度 v_med 当唯一参考，于是"低速逼近 / 排队停下"的帧
+        # 被高速帧的期望间距误判：2026-09-23 lane_change_traffic 最差帧
+        # gap=4.96m @ ego 1.0 m/s（期望 6.5m，安全）被判 FAIL，三次实测里
+        # 按 v_med 判据共 28 帧误报、按逐帧判据 0 帧违规；而同一场景另一次 run
+        # v_med 16.99（全程没被压到低速）→ 判据更严却 PASS —— 结论在"这一趟
+        # 有没有低速段"之间摇摆。高速贴近照样抓得住：20 m/s 时期望 35m，
+        # 50% 阈值 17.5m，贴到 10m 依旧 FAIL。
+        violations = [
+            (gap, speed) for gap, speed in moving_gaps
+            if gap < _desired_gap(speed) * ACC_GAP_FAIL_RATIO
+        ]
+        desired_med = _desired_gap(v_med)
         if min_gap_all <= 0.0:
             failures.append(f"min_forward_gap <= 0 (min={min_gap_all:.2f}m): rear-end collision risk")
-        elif min_moving_gap < gap_fail_thresh:
+        elif violations:
+            gap, speed = min(violations, key=lambda r: r[0] / max(_desired_gap(r[1]), 1e-6))
             failures.append(
-                f"min_forward_gap {min_moving_gap:.2f}m < {gap_fail_thresh:.2f}m "
-                f"({ACC_GAP_FAIL_RATIO:.0%} of desired {desired_gap:.1f}m at "
-                f"v_med={v_med:.1f} m/s): ACC is not holding headway — "
+                f"min_forward_gap {gap:.2f}m < {_desired_gap(speed) * ACC_GAP_FAIL_RATIO:.2f}m "
+                f"({ACC_GAP_FAIL_RATIO:.0%} of desired {_desired_gap(speed):.1f}m at its own "
+                f"ego speed {speed:.1f} m/s): ACC is not holding headway — "
                 f"collision avoided by margin, not by control"
             )
-        elif min_gap_all < desired_gap:
+        elif min_gap_all < desired_med:
             warnings.append(
-                f"min_forward_gap {min_gap_all:.2f}m below desired "
-                f"{desired_gap:.1f}m (v_med={v_med:.1f} m/s)"
+                f"min_forward_gap {min_gap_all:.2f}m below {desired_med:.1f}m "
+                f"({ACC_STANDOFF_M:.0f} + {ACC_TIME_HEADWAY_S:.1f}×{v_med:.1f} m/s "
+                f"run-median speed; per-frame criterion passes)"
             )
 
     # ── 上游 dead 专项断言 ──
@@ -2482,6 +2571,8 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         "scenario": scenario_name or "(unknown)",
         "samples": len(samples),
         "duration_s": max(0.0, samples[-1].get("timestamp", 0) - samples[0].get("timestamp", 0)),
+        # 仿真钟跨度（权威）；None = 样本里没有 metrics.scene.t_us（回退墙钟）
+        "sim_duration_s": (sim_timestamps[-1] - sim_timestamps[0]) if sim_timestamps else None,
         "x_delta_m": progress,
         "avg_speed_mps": avg_speed,
         "max_speed_mps": max(speeds),
@@ -2581,11 +2672,28 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     # 场景声明了 max_duration_s (>0) 时，实际运行时长不能超过它。
     # 这捕获"demo 卡住但 ego 仍在微小前进、碰撞数为 0"的退化场景——
     # 之前评估器从不检查此字段，所有场景的"超时即 FAIL"语义在 CI 中失效。
+    #
+    # 度量改用**仿真钟**（fallback 墙钟）：墙钟跨度含 demo.sh 启动/收尾与机器负载，
+    # 同一场景本机 59.9→63.3s 随负载漂移，60s 场景被 +1.0s 容差反复误判 FAIL；
+    # 仿真相同时长只有 59.3s（2026-09-23 实测 curve_road，A/B 证明与本批改动无关）。
+    # 墙钟超了而仿真没超 → WARN（保留可见性：那是机器慢/启动开销，不是"没跑完"）。
     max_duration = float(criteria.get("max_duration_s", 0.0) or 0.0)
     # 允许 1.0s 采样周期与调度抖动容限（sample interval 0.25s，避免 60.001s > 60.0s 误报）
-    if max_duration > 0.0 and summary["duration_s"] > max_duration + 1.0:
+    wall_span = float(summary["duration_s"])
+    sim_span = summary.get("sim_duration_s")
+    span_checked = float(sim_span) if isinstance(sim_span, (int, float)) else wall_span
+    span_label = "simulation time" if isinstance(sim_span, (int, float)) else "wall-clock span"
+    if max_duration > 0.0 and span_checked > max_duration + 1.0:
         failures.append(
-            f"exceeded max duration: {summary['duration_s']:.1f}s > {max_duration:.1f}s"
+            f"exceeded max duration: {span_checked:.1f}s > {max_duration:.1f}s"
+            f" ({span_label})"
+        )
+    elif (max_duration > 0.0 and isinstance(sim_span, (int, float))
+          and wall_span > max_duration + 1.0):
+        warnings.append(
+            f"wall-clock span {wall_span:.1f}s exceeds declared {max_duration:.1f}s "
+            f"but simulation time is {sim_span:.1f}s — startup/teardown or machine "
+            f"load, not a hanging run"
         )
 
     return failures, warnings, summary

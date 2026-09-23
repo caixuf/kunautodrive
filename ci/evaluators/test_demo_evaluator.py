@@ -768,6 +768,214 @@ class DemoEvaluatorTest(unittest.TestCase):
             f"snaking across lanes should fail, got failures={failures}",
         )
 
+    def _behavior_samples(self, states: list) -> list:
+        """构造带 metrics.behavior 的样本（模拟 monitor 透传的 behavior/state）。"""
+        out = []
+        for i, state in enumerate(states):
+            out.append({
+                "timestamp": 1.0 + 0.25 * i,
+                "metrics": {
+                    "topics": [{"topic": "vehicle/state", "freq": 20.0}],
+                    "vehicle": {"speed": 10.0, "x": 100.0 + 10.0 * i},
+                    "scene": {"ego": {"x": 100.0 + 10.0 * i, "y": -1.75, "speed": 10.0},
+                              "obstacles": []},
+                    "behavior": {"state": state, "committed_lane": 2, "obs_count": 0},
+                },
+                "nodes": [],
+            })
+        return out
+
+    def test_behavior_silent_for_whole_run_fails(self):
+        """B: behavior/state 全程 NA = 决策块被跳过（空障碍物列表被当"没就绪"）。
+
+        2026-09-23 实测：sensor 编排 straight_road 掉头触发被跳过 30s，车冲出
+        路面；既有量活性门禁全绿（车仍在动）→ 必须由这条判据抓住。
+        """
+        evaluator = load_evaluator()
+        samples = self._behavior_samples(["NA"] * 8)
+        failures, _, _ = evaluator.score(
+            samples, ROOT / "does-not-exist.log",
+            criteria={"min_avg_speed_mps": 0.0}, expected_edges=[],
+        )
+        self.assertTrue(
+            any("behavior planner never decided" in f for f in failures),
+            f"all-NA behavior state must FAIL, got {failures}",
+        )
+
+    def test_behavior_silent_half_run_warns_not_fails(self):
+        """半数以上样本 NA → WARN（启动慢/上游稀疏不足以阻断），不得 FAIL。"""
+        evaluator = load_evaluator()
+        samples = self._behavior_samples(["NA"] * 6 + ["CRUISE"] * 4)
+        failures, warnings, _ = evaluator.score(
+            samples, ROOT / "does-not-exist.log",
+            criteria={"min_avg_speed_mps": 0.0}, expected_edges=[],
+        )
+        self.assertFalse(
+            any("behavior planner never decided" in f for f in failures),
+            f"partial silence must not FAIL, got {failures}",
+        )
+        self.assertTrue(
+            any("behavior planner silent" in w for w in warnings),
+            f"partial silence should WARN, got {warnings}",
+        )
+
+    def test_behavior_gate_skipped_without_behavior_segment(self):
+        """样本不带 metrics.behavior（单测构造/无 behavior 的 profile）→ 判据静默跳过。"""
+        evaluator = load_evaluator()
+        samples = [{
+            "timestamp": 1.0 + 0.25 * i,
+            "metrics": {
+                "topics": [{"topic": "vehicle/state", "freq": 20.0}],
+                "vehicle": {"speed": 10.0, "x": 100.0 + 10.0 * i},
+                "scene": {"ego": {"x": 100.0 + 10.0 * i, "y": -1.75, "speed": 10.0},
+                          "obstacles": []},
+            },
+            "nodes": [],
+        } for i in range(8)]
+        failures, warnings, _ = evaluator.score(
+            samples, ROOT / "does-not-exist.log",
+            criteria={"min_avg_speed_mps": 0.0}, expected_edges=[],
+        )
+        self.assertFalse(
+            any("behavior planner" in f for f in failures + warnings),
+            f"absent behavior segment must not trip the gate, got {failures} {warnings}",
+        )
+
+
+    def _gap_samples(self, speed: float, rel_x: float, n: int = 8) -> list:
+        """构造"前方同车道有车"的样本：min_forward_gap = rel_x − 4.6（无路网时走 rel 分支）。"""
+        return [{
+            "timestamp": 1.0 + 0.25 * i,
+            "metrics": {
+                "topics": [{"topic": "vehicle/state", "freq": 20.0}],
+                "vehicle": {"speed": speed, "x": 100.0 + speed * 0.25 * i},
+                "scene": {
+                    "ego": {"x": 100.0 + speed * 0.25 * i, "y": -1.75, "speed": speed},
+                    "obstacles": [{"id": 1, "x": rel_x, "y": 0.0, "len": 4.6, "wid": 2.0}],
+                },
+            },
+            "nodes": [],
+        } for i in range(n)]
+
+    def test_gap_criterion_uses_per_frame_speed(self):
+        """跟车判据必须与**该帧车速**的期望间距比，而不是整段中位速度。
+
+        2026-09-23 实测（lane_change_traffic）：最差帧 gap=4.96m @ ego 1.0 m/s
+        （该速度下期望 6.5m，安全），却被 v_med=9.0 的期望间距 18.5m 判 FAIL；
+        同一场景另一趟 run 全程没被压到低速（v_med 16.99）就 PASS —— 结论在
+        "这一趟有没有低速段"之间摇摆。逐帧判据下三次实测 0 帧违规、28 帧误报消失。
+        """
+        evaluator = load_evaluator()
+        crit = {"min_avg_speed_mps": 0.0}
+
+        # A. 低速逼近（排队/让行语义）：不得 FAIL
+        failures, _, _ = evaluator.score(
+            self._gap_samples(1.0, 9.56), ROOT / "does-not-exist.log",
+            criteria=crit, expected_edges=[],
+        )
+        self.assertFalse(
+            any("min_forward_gap" in f for f in failures),
+            f"creeping at 1.0 m/s behind a lead must not FAIL, got {failures}",
+        )
+
+        # B. 高速贴近：必须仍然 FAIL（判据不能因为逐帧化就失去牙）
+        failures, _, _ = evaluator.score(
+            self._gap_samples(20.0, 14.6), ROOT / "does-not-exist.log",
+            criteria=crit, expected_edges=[],
+        )
+        self.assertTrue(
+            any("min_forward_gap" in f for f in failures),
+            f"10m gap at 20 m/s (desired 35m) must FAIL, got {failures}",
+        )
+
+        # C. 静止排队：gap 3.0m @ 0 m/s（不能算追尾风险）
+        failures, _, _ = evaluator.score(
+            self._gap_samples(0.0, 7.6), ROOT / "does-not-exist.log",
+            criteria=crit, expected_edges=[],
+        )
+        self.assertFalse(
+            any("min_forward_gap" in f for f in failures),
+            f"stopped 3m behind a stopped car must not FAIL, got {failures}",
+        )
+
+        # D. 真追尾（gap <= 0）在任何速度下都必须 FAIL
+        failures, _, _ = evaluator.score(
+            self._gap_samples(0.0, 3.0), ROOT / "does-not-exist.log",
+            criteria=crit, expected_edges=[],
+        )
+        self.assertTrue(
+            any("rear-end collision risk" in f for f in failures),
+            f"gap<=0 must FAIL, got {failures}",
+        )
+
+    def _duration_samples(self, wall_span: float, sim_span: float, n: int = 12) -> list:
+        """构造带**仿真钟**的样本：墙钟跨度 wall_span、仿真跨度 sim_span。"""
+        out = []
+        for i in range(n):
+            frac = i / (n - 1)
+            wall = 1000.0 + wall_span * frac
+            sim_us = 5_000_000 + sim_span * 1e6 * frac
+            out.append({
+                "timestamp": wall,
+                "metrics": {
+                    "topics": [{"topic": "vehicle/state", "freq": 20.0}],
+                    "vehicle": {"speed": 12.0, "x": 10.0 + 10.0 * i},
+                    "scene": {
+                        "t_us": sim_us,
+                        "ego": {"x": 10.0 + 10.0 * i, "y": -1.75, "speed": 12.0},
+                        "obstacles": [],
+                    },
+                },
+                "nodes": [],
+            })
+        return out
+
+    def test_max_duration_judged_on_simulation_time(self):
+        """max_duration_s 必须按**仿真钟**判，不能按墙钟跨度。
+
+        2026-09-23 实测 curve_road：墙钟 63.3s（含 demo.sh 启动/收尾与机器负载）
+        而仿真只有 59.3s（场景声明 60s）→ 被 +1.0s 容差反复误判
+        "exceeded max duration"；A/B 证明与算法改动无关，是度量伪影。
+        """
+        evaluator = load_evaluator()
+        crit = {"min_avg_speed_mps": 0.0, "max_duration_s": 60.0}
+
+        # A. 墙钟超、仿真没超 → 不得 FAIL（应为 WARN）
+        failures, warnings, _ = evaluator.score(
+            self._duration_samples(63.3, 59.3), ROOT / "does-not-exist.log",
+            criteria=crit, expected_edges=[],
+        )
+        self.assertFalse(
+            any("exceeded max duration" in f for f in failures),
+            f"wall-clock overshoot with healthy sim time must not FAIL, got {failures}",
+        )
+        self.assertTrue(
+            any("wall-clock span" in w for w in warnings),
+            f"wall-clock overshoot should stay visible as WARN, got {warnings}",
+        )
+
+        # B. 仿真钟真超了 → 必须 FAIL（真挂死不能被放过）
+        failures, _, _ = evaluator.score(
+            self._duration_samples(95.0, 92.0), ROOT / "does-not-exist.log",
+            criteria=crit, expected_edges=[],
+        )
+        self.assertTrue(
+            any("exceeded max duration" in f for f in failures),
+            f"simulation overrun must FAIL, got {failures}",
+        )
+
+        # C. 没有仿真钟（老 series）→ 回退墙钟，语义不变
+        plain = self._duration_samples(70.0, 68.0)
+        for s in plain:
+            del s["metrics"]["scene"]["t_us"]
+        failures, _, _ = evaluator.score(
+            plain, ROOT / "does-not-exist.log", criteria=crit, expected_edges=[],
+        )
+        self.assertTrue(
+            any("exceeded max duration" in f for f in failures),
+            f"without sim clock the wall-clock check must still apply, got {failures}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

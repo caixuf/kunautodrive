@@ -464,7 +464,24 @@ static void on_raw_obstacles(const Message* msg, void* user_data) {
     ObstacleList obs_list;
     if (ObstacleList_deserialize(&obs_list, (const uint8_t*)msg->data, msg->data_size) != 0)
         return;
-    if (obs_list.count == 0) return;
+    if (obs_list.count == 0) {
+        /* 空列表是**合法的感知结果**（视野内无目标），不是"感知还没就绪"。
+         * 旧实现直接 return → has_obs 保持 0 → run() 前置守卫
+         * `if (!g.has_fusion || !g.has_obs) continue;` 把**整个决策块**（含
+         * 路端掉头触发 BEH_EV_UTURN_TRIGGER）一直跳过。
+         * 2026-09-23 straight_road 复盘（sensor 编排）：ego 背对路线起步、
+         * 视锥内空无一物 → 感知连续 30s 发空列表 → behavior 一帧决策都没做
+         * （behavior/state 采样 NA 301/475）→ 无掉头触发 → 车开过路网尽头
+         * 冲出路面（评估器 road departure 6.80m）。ground_truth 编排只在
+         * curve_road 一类"没有可观测 actor"的场景暴露（该场景 committed
+         * 基线里 behavior_state 就是 "NA"）。
+         * 修法：空列表 = `obs_count/raw_obs_count 归零 + has_obs=1`，让决策在
+         * "无目标"这个真实状态下继续跑。 */
+        g.obs_count = 0;
+        g.raw_obs_count = 0;
+        g.has_obs = 1;
+        return;
+    }
 
     int lc = g.has_road_geometry ? g.lane_count : 2;
     double lw = g.has_road_geometry ? g.lane_width : 3.5;

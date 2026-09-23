@@ -161,6 +161,8 @@ _topo.json
 
 # Local toolchains / caches
 .tools/
+# clangd 索引缓存（编辑器/LSP 工具在仓库根生成，含二进制 .idx，勿提交）
+.cache/
 configure_out.txt
 build-win/
 build-win-vs/

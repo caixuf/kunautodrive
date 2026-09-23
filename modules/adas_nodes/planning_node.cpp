@@ -138,6 +138,19 @@ struct PlanningContext {
     int8_t obs_lane_id[kMaxObs]{};  /* 感知计算的车道归属（从 perception/obstacles 提取） */
     uint8_t obs_type[kMaxObs]{};    /* 障碍物类型：OBJ_TYPE_VEHICLE / PEDESTRIAN / CYCLIST */
     float   obs_confidence[kMaxObs]{}; /* 置信度 */
+    /* 本帧感知障碍物的**权威个数**（= 最近一条 perception/obstacles 的 count）。
+     * 只有前 obs_count 个槽位是有效障碍物；其余槽位被清零，坐标 (0,0) 只在
+     * 数学上成立、**不代表"世界原点有个障碍物"**。
+     * 2026-09-23 straight_road 复盘（两模式都实测到）：
+     *   TTC follow: gap=20.0 (src=percept) -> 3.7 m/s (was 20.0)
+     *   TTC follow: gap=19.7 (src=percept) -> 3.7 m/s (was 20.0) ... gap 递减
+     * ego 起点 x=20 朝 -x，遍历全量槽位的 TTC 循环把未用槽的 (0,0) 当成"前方
+     * 20m 的静止障碍物"→ 起步被压到 3.7 m/s 直到越过原点。（同一条 (0,0) 也进
+     * 窄路会车/Frenet 注入/ST 图；forward_space 里那条 (0,0) 豁免说明作者知道
+     * 零槽无效，但只在一处打了补丁——一个文件两套有效性语义。）
+     * 所有消费 obs_* 的循环都必须用 obs_count 作上界（真值侧同 idiom：
+     * truth_obs_count）。 */
+    int obs_count{0};
 
     /* 真值障碍物缓存（vehicle/state 的 oidN/oxN/oyN/ovN，flowsim 上帝视角）。
      * 仅用于 TTC 安全兜底——感知链（perception/obstacles）漏检/停更时，
@@ -1131,6 +1144,8 @@ static void on_perception_obstacles(const Message* msg, void* user_data) {
         return;
 
     double ch = cos(g.ego_heading), sh = sin(g.ego_heading);
+    g.obs_count = (int)list.count;
+    if (g.obs_count > g.kMaxObs) g.obs_count = g.kMaxObs;  /* 契约上限 */
     for (int i = 0; i < g.kMaxObs; i++) {
         if (i < (int)list.count) {
             const Obstacle* o = &list.obstacles[i];
@@ -1753,7 +1768,7 @@ protected:
                 {
                     const double fwd_x = std::cos(g.ego_heading);
                     const double fwd_y = std::sin(g.ego_heading);
-                    for (int i = 0; i < g.kMaxObs; i++) {
+                    for (int i = 0; i < g.obs_count; i++) {
                         const double rx = g.obs_x[i] - g.ego_x;
                         const double ry = g.obs_y[i] - g.ego_y;
                         const double along = rx * fwd_x + ry * fwd_y;
@@ -1817,7 +1832,7 @@ protected:
                  * 同向车沿向速度恒为正（远离）、对向车为负（接近）。 */
                 const double fwd_x = std::cos(g.ego_heading);
                 const double fwd_y = std::sin(g.ego_heading);
-                for (int i = 0; i < g.kMaxObs; i++) {
+                for (int i = 0; i < g.obs_count; i++) {
                     const double rx = g.obs_x[i] - g.ego_x;
                     const double ry = g.obs_y[i] - g.ego_y;
                     const double along = rx * fwd_x + ry * fwd_y;       /* 沿车头前方 */
@@ -1868,7 +1883,7 @@ protected:
              * Phase 3: 添加 vx/vy 数组，传给 Frenet 做位置外推。 */
             double ox[128], oy[128], ow[128], ol[128], ovx[128], ovy[128];
             int n_obs = 0;
-            for (int i = 0; i < g.kMaxObs && n_obs < 128; i++) {
+            for (int i = 0; i < g.obs_count && n_obs < 128; i++) {
                     /* 只传入前方和侧方的有效障碍物（排除行人 y>4） */
                     double dx = g.obs_x[i] - g.ego_x;
                     if (dx < OBS_MIN_DX_M || dx > OBS_MAX_DX_M) continue;
@@ -2082,9 +2097,9 @@ protected:
                 {
                     const double hx = std::cos(g.ego_heading);
                     const double hy = std::sin(g.ego_heading);
-                    for (int i = 0; i < g.kMaxObs; i++) {
-                        /* 空槽 (0,0)：on_perception_obstacles 清零未用槽位 */
-                        if (g.obs_x[i] == 0.0 && g.obs_y[i] == 0.0) continue;
+                    for (int i = 0; i < g.obs_count; i++) {
+                        /* 有效性由 obs_count 上界保证（未用槽位清零 → 会被
+                         * 当成"世界原点有障碍物"，见 obs_count 注释）。 */
                         if (fabs(g.obs_vx[i]) < 0.5 && fabs(g.obs_vy[i]) < 0.5) {
                             const double dx = g.obs_x[i] - g.ego_x;
                             const double dy = g.obs_y[i] - g.ego_y;
@@ -2465,7 +2480,7 @@ protected:
                         const double fwd_x = std::cos(g.ego_heading);
                         const double fwd_y = std::sin(g.ego_heading);
                         const double lane_half = g.lane_width * 0.5;
-                        for (int i = 0; i < g.kMaxObs && stg.n_obstacles < STG_MAX_OBS; i++) {
+                        for (int i = 0; i < g.obs_count && stg.n_obstacles < STG_MAX_OBS; i++) {
                             const double rx = g.obs_x[i] - g.ego_x;
                             const double ry = g.obs_y[i] - g.ego_y;
                             const double along = rx * fwd_x + ry * fwd_y;       /* 沿车头前方 */
@@ -2895,6 +2910,7 @@ static int planning_init(MessageBus* bus, Transport* transport,
 
     g.ego_x = g.ego_y = g.ego_v = g.ego_heading = 0.0;
     g.cz_count = 0;
+    g.obs_count = 0;
     for (int i = 0; i < g.kMaxObs; i++) { 
         g.obs_x[i] = g.obs_y[i] = g.obs_vx[i] = g.obs_vy[i] = 0.0;
         g.obs_lane_id[i] = -1;

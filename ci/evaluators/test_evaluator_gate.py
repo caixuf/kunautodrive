@@ -253,6 +253,44 @@ def run_all_checks() -> int:
     _f2 = _score("full-run", _full, _ZERO_CRIT, expected_duration_s=30.0)
     check("full-length run not flagged", not any("run truncated" in x for x in _f2))
 
+    print("\n[20] behavior planner silent — behavior/state 'NA' for the whole run")
+    # 2026-09-23 实测（sensor 编排 straight_road）：perception 发**空**障碍物列表
+    # 时 behavior 把"空"当"还没就绪"，整个决策块（含路端掉头触发）被跳过 30s，
+    # 而车仍在动 → 既有量活性门禁（speed/x/…）全绿，没有任何判据看见它。
+    # 这条门禁必须抓住它；健康的 CRUISE run 不得误报。
+    def _mk_beh(state, **kw):
+        s = _mk(**kw)
+        s["metrics"]["behavior"] = {"state": state, "committed_lane": 2, "obs_count": 0}
+        return s
+
+    _silent = [_mk_beh("NA", x=10 + i * 10, y=-1.75, speed=12.0, steer=0.0, ts=i * 0.25)
+               for i in range(40)]
+    _f = _score("behavior-silent", _silent, _ZERO_CRIT)
+    check("behavior silent for whole run caught",
+          any("behavior planner never decided" in x for x in _f))
+    _healthy = [_mk_beh("CRUISE", x=10 + i * 10, y=-1.75, speed=12.0, steer=0.0, ts=i * 0.25)
+                for i in range(40)]
+    _f2 = _score("behavior-healthy", _healthy, _ZERO_CRIT)
+    check("healthy behavior run not flagged",
+          not any("behavior planner" in x for x in _f2))
+
+    print("\n[21] 跟车判据逐帧化后仍有牙：高速贴近 FAIL / 低速逼近不误报")
+    # 2026-09-23：判据从"整段中位速度"改成"该帧车速"（与 behavior 的跟车策略
+    # 同式同参 acc_standoff + acc_time_headway·|v|）。这条自检保证改完不会变成
+    # "什么都放过"：20 m/s 贴 10m 必须 FAIL，1 m/s 逼近 4.96m 不得 FAIL。
+    _tailgate = [_mk(100 + i * 5, -1.75, 20.0, 0.0, i * 0.25, obstacles=[
+        {"id": 1, "x": 14.6, "y": 0.0, "len": 4.6, "wid": 2.0},
+    ]) for i in range(10)]  # gap = 14.6 − 4.6 = 10m @ 20 m/s（期望 5+1.5×20 = 35m）
+    _f = _score("high-speed-tailgate", _tailgate, _ZERO_CRIT)
+    check("high-speed tailgating still caught",
+          any("min_forward_gap" in x for x in _f))
+    _creep = [_mk(100 + i, -1.75, 1.0, 0.0, i * 0.25, obstacles=[
+        {"id": 1, "x": 9.56, "y": 0.0, "len": 4.6, "wid": 2.0},
+    ]) for i in range(10)]  # gap = 4.96m @ 1 m/s（期望 5+1.5×1 = 6.5m，安全）
+    _f = _score("slow-approach", _creep, _ZERO_CRIT)
+    check("low-speed approach is not a false FAIL",
+          not any("min_forward_gap" in x for x in _f))
+
     print(f"\n{'='*52}")
     print(f"gate self-test: {_passed} passed, {_failed} failed")
     print(f"{'='*52}")
