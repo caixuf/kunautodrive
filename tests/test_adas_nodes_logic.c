@@ -682,6 +682,65 @@ static void test_perception_clusters_type_and_geometry(void) {
     PASS();
 }
 
+/* ── 碎片合并（一个目标不应报成多个障碍物；E2E 收益未证实，
+ *    也不是 straight_road 那条 FAIL 的成因 —— 见 perception_points.c 头注）── */
+
+static void test_cluster_fragments_merged_into_one(void) {
+    TEST("clusters_to_obstacles: 同一目标的碎片（正面 + 近侧面）并成一个");
+    ObstacleList out;
+    PerceptionFramePose pose = {1, 0.0, 0.0, 4, 3.5};
+    ClusterBounds cb[2];
+    memset(cb, 0, sizeof(cb));
+    /* 取自 8m/10° 的离线探针实测：正面主簇 2001 点 + 近侧面细长条（y 向仅 0.02m） */
+    cb[0].point_count = 2001; cb[0].cls = CLS_VEHICLE;
+    cb[0].cx = 5.61f; cb[0].cy = 1.30f; cb[0].width = 2.31f; cb[0].length = 2.08f;
+    cb[1].point_count = 47;   cb[1].cls = CLS_VEHICLE;
+    cb[1].cx = 8.61f; cb[1].cy = 0.39f; cb[1].width = 2.35f; cb[1].length = 0.02f;
+
+    ASSERT_EQ(perception_clusters_to_obstacles(cb, 2, &pose, &out), 1,
+              "碎片应并成 1 个障碍物");
+    /* 并集包围盒 x∈[4.46,9.79] y∈[0.26,2.34] → 中心 (7.12, 1.30) */
+    ASSERT_NEAR(out.obstacles[0].x, 7.12, 0.05, "并集中心 x");
+    ASSERT_NEAR(out.obstacles[0].y, 1.30, 0.05, "并集中心 y");
+    PASS();
+}
+
+static void test_cluster_fragments_do_not_cross_lanes(void) {
+    TEST("clusters_to_obstacles: 相邻车道两辆车不并（间隙 1.5m > 1.0m 闸）");
+    ObstacleList out;
+    PerceptionFramePose pose = {1, 0.0, 0.0, 4, 3.5};
+    ClusterBounds cb[2];
+    memset(cb, 0, sizeof(cb));
+    for (int i = 0; i < 2; i++) {
+        cb[i].point_count = 300; cb[i].cls = CLS_VEHICLE;
+        cb[i].cx = 30.0f; cb[i].width = 4.6f; cb[i].length = 2.0f;
+    }
+    cb[0].cy = -1.75f;   /* 车道中心距 3.5m、车宽 2.0 → 空隙 1.5m */
+    cb[1].cy = -5.25f;
+    ASSERT_EQ(perception_clusters_to_obstacles(cb, 2, &pose, &out), 2,
+              "相邻车道的两辆车必须保持 2 个");
+    PASS();
+}
+
+static void test_cluster_fragments_dimensional_guard(void) {
+    TEST("clusters_to_obstacles: 并起来不像一辆车 → 拒绝（第二道闸）");
+    ObstacleList out;
+    PerceptionFramePose pose = {1, 0.0, 0.0, 4, 3.5};
+    ClusterBounds cb[2];
+    memset(cb, 0, sizeof(cb));
+    for (int i = 0; i < 2; i++) {
+        cb[i].point_count = 300; cb[i].cls = CLS_VEHICLE;
+        cb[i].cx = 30.0f; cb[i].width = 4.6f; cb[i].length = 2.0f;
+    }
+    /* 间距 2.4m - 两个 y 向 2.0m 的半宽 → 间隙 0.4m ≤ 1.0m（过第一闸），
+     * 但并集 y 向跨度 = 2.4 + 2.0 = 4.4m > 3.5m（不像一辆车）→ 必须拒绝 */
+    cb[0].cy = -1.75f;
+    cb[1].cy = -4.15f;
+    ASSERT_EQ(perception_clusters_to_obstacles(cb, 2, &pose, &out), 2,
+              "并集超出一辆车占地时必须保持 2 个");
+    PASS();
+}
+
 static void test_perception_clusters_lane_id(void) {
     TEST("clusters_to_obstacles: lane_id 反算 + 越界夹取");
     ObstacleList out;
@@ -1012,6 +1071,9 @@ int main(void) {
     test_perception_clusters_type_and_geometry();
     test_perception_clusters_lane_id();
     test_perception_ground_remove_none_rationale();
+    test_cluster_fragments_merged_into_one();
+    test_cluster_fragments_do_not_cross_lanes();
+    test_cluster_fragments_dimensional_guard();
 
     printf("\n═══ LiDAR Observation Model (3D scan / capacity guard) ═══\n");
     test_lidar_scan_azimuth_fov_bounds();
