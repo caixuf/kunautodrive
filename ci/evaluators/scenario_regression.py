@@ -16,6 +16,16 @@ degrades behaviour shows up as a regression.
     # Run and compare against the saved baseline (fail on regression)
     python3 ci/evaluators/scenario_regression.py --baseline
 
+    # Run scenarios in parallel (different scenarios are isolated by key; the
+    # same scenario must never run twice concurrently — they share a worker
+    # workspace and would overwrite each other's topology snapshot)
+    python3 ci/evaluators/scenario_regression.py --workers 4 --baseline
+
+    # Record a baseline from N repeats per scenario, merged by median (use this
+    # for scenarios whose run-to-run spread is wide, so a single lucky/unlucky
+    # draw cannot set the gate; the spread lands in ``summary._spread``)
+    python3 ci/evaluators/scenario_regression.py --repeats 3 --update-baseline
+
 Exit code is 0 only when every scenario PASSes and (when --baseline is given)
 no numeric regression exceeds the suite tolerances.
 
@@ -36,6 +46,7 @@ import hashlib
 import json
 import os
 import shutil
+import statistics
 import subprocess
 import sys
 import time
@@ -183,6 +194,64 @@ def prepare_worker_workspace(results_dir: Path, key: str) -> tuple[Path, dict[st
     return workspace, paths
 
 
+def merge_repeats(payloads: list[dict], repeats: int) -> dict:
+    """把同一场景的 N 次重复合并成一份"代表结果"。
+
+    为什么需要：单样本基线在抖动大的场景上不成立 —— `lane_change_traffic` 实测
+    `avg_speed_mps` 三趟 9.506 / 13.353 / 13.409（极差 ≈29%）。若拿某一次当基线，
+    门槛会随运气漂（采到慢的那趟 = 把门禁放松）。故数值字段取**中位**。
+
+    - 数值字段：中位；同时把 `[min, max]` 记进 `summary["_spread"]`，
+      `summary["_repeats"]` 记样本数（下划线前缀，`compare_summary` 会跳过，不参与门禁）。
+    - 非数值字段（如 `behavior_state`）：取首次出现值。
+    - 判定：**全部重复都 PASS 才算 PASS** —— 用中位抹平偶发 FAIL 等于放水。
+    - failures/warnings：并集去重（保留各次重复各自的证据）。
+    """
+    if repeats <= 1 or len(payloads) <= 1:
+        return payloads[0]
+
+    merged = dict(payloads[0])
+    merged["result"] = "PASS" if all(p.get("result") == "PASS" for p in payloads) else "FAIL"
+
+    def _union(field: str) -> list:
+        out: list = []
+        for p in payloads:
+            for item in p.get(field) or []:
+                if item not in out:
+                    out.append(item)
+        return out
+
+    merged["failures"] = _union("failures")
+    merged["warnings"] = _union("warnings")
+
+    summaries: list[dict] = []
+    for p in payloads:
+        s = p.get("summary")
+        summaries.append(s if isinstance(s, dict) else {})
+    keys: set = set()
+    for s in summaries:
+        keys.update(s.keys())
+    out_summary: dict = {}
+    spread: dict = {}
+    for k in keys:
+        vals = [s[k] for s in summaries
+                if isinstance(s.get(k), (int, float)) and not isinstance(s.get(k), bool)]
+        if len(vals) == len(summaries) and vals:
+            out_summary[k] = statistics.median(vals)
+            if len(vals) > 1 and min(vals) != max(vals):
+                spread[k] = [min(vals), max(vals)]
+        else:
+            for s in summaries:
+                if k in s:
+                    out_summary[k] = s[k]
+                    break
+    out_summary["_repeats"] = len(payloads)
+    if spread:
+        out_summary["_spread"] = spread
+    merged["summary"] = out_summary
+    return merged
+
+
 def enabled_scenarios(suite: dict) -> list[dict]:
     return [s for s in suite["scenarios"]
             if isinstance(s, dict) and s.get("file") and s.get("enabled", True)]
@@ -310,6 +379,10 @@ def main() -> int:
                         help="sample interval passed to demo_evaluator")
     parser.add_argument("--workers", type=int, default=1,
                         help="number of isolated evaluator workers (default: 1)")
+    parser.add_argument("--repeats", type=int, default=1,
+                        help="每个场景重复跑 N 次（同一场景始终串行，避免共用 worker 工作区）；"
+                             "数值字段取中位、极差记进 summary._spread。配合 --update-baseline "
+                             "防『单次采样定阈值』（抖动大的场景见 HANDOFF §16.2）")
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR,
                         help="where per-scenario result JSON is written")
     parser.add_argument("--archive-dir", type=Path, default=Path("/tmp/flow_bad_cases"),
@@ -329,6 +402,9 @@ def main() -> int:
     args = parser.parse_args()
     if args.workers < 1:
         raise SystemExit("--workers must be at least 1")
+    if args.repeats < 1:
+        raise SystemExit("--repeats must be at least 1")
+    repeats = args.repeats
 
     suite = load_suite(args.suite)
     scenarios = enabled_scenarios(suite)
@@ -354,16 +430,28 @@ def main() -> int:
     baseline_slims: dict[str, dict] = {}  # key -> slim payload（仅 --update-baseline 填充）
     payloads: dict[str, dict] = {}
     active_workers = min(args.workers, len(scenarios)) if scenarios else 0
+
+    def run_scenario_repeats(entry: dict) -> dict:
+        """同一场景的 N 次重复**串行**跑：worker 工作区按场景 key 隔离，
+        同场景并发会互相覆写 topology.json（见 HANDOFF §15）。
+        两次以上时数值字段取中位、极差记进 summary._spread。"""
+        if repeats <= 1:
+            return run_scenario(entry, default_duration, args.interval, args.results_dir)
+        return merge_repeats(
+            [run_scenario(entry, default_duration, args.interval, args.results_dir)
+             for _ in range(repeats)],
+            repeats)
+
+    if repeats > 1:
+        print(f"repeats: {repeats} per scenario（数值取中位，极差记入 summary._spread）")
     if args.workers == 1 or len(scenarios) <= 1:
         for entry in scenarios:
             key = scenario_key(entry)
-            payloads[key] = run_scenario(entry, default_duration, args.interval,
-                                         args.results_dir)
+            payloads[key] = run_scenario_repeats(entry)
     else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=active_workers) as executor:
             futures = {
-                executor.submit(run_scenario, entry, default_duration,
-                                 args.interval, args.results_dir): scenario_key(entry)
+                executor.submit(run_scenario_repeats, entry): scenario_key(entry)
                 for entry in scenarios
             }
             for future in concurrent.futures.as_completed(futures):
