@@ -1377,7 +1377,14 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
 def collect_samples(duration: int, json_file: Path, interval: float,
                     scenario: str | None = None,
                     start_s: float | None = None,
-                    start_d: float | None = None) -> tuple[list[dict], int]:
+                    start_d: float | None = None,
+                    diag: dict | None = None) -> tuple[list[dict], int]:
+    """采样循环。`diag` 非空时回填诊断计数（见下方 stat 累加）供 0 样本时定位：
+    文件一直缺失 / 文件存在但 mtime 早于启动被判陈旧 / 文件在但解析不出内容。
+    """
+    if diag is not None:
+        diag.update({"polls": 0, "missing": 0, "stale": 0, "invalid": 0, "valid": 0})
+
     try:
         json_file.unlink()
     except FileNotFoundError:
@@ -1430,22 +1437,44 @@ def collect_samples(duration: int, json_file: Path, interval: float,
     deadline = started + duration + 60.0
     first_sample_seen = False
     while proc.poll() is None and time.monotonic() < deadline:
+        if diag is not None:
+            diag["polls"] += 1
         try:
             if json_file.stat().st_mtime < started_wall:
+                if diag is not None:
+                    diag["stale"] += 1
                 time.sleep(interval)
                 continue
         except FileNotFoundError:
+            if diag is not None:
+                diag["missing"] += 1
             time.sleep(interval)
             continue
         sample = load_json(json_file)
         if sample:
             samples.append(sample)
+            if diag is not None:
+                diag["valid"] += 1
             if not first_sample_seen:
                 first_sample_seen = True
                 # 收到首个有效样本后再给运行时长 + 30s 收尾缓冲，
                 # 覆盖 demo.sh 监控循环的 python3 fork 开销 + cleanup。
                 deadline = max(deadline, time.monotonic() + duration + 30.0)
+        elif diag is not None:
+            diag["invalid"] += 1
         time.sleep(interval)
+
+    if diag is not None:
+        # 收尾取文件终态：0 样本时这三条足以区分
+        # 「monitor 没写」/「写了但被判陈旧（mtime 早于启动）」/「写了但内容是空的」。
+        try:
+            st = json_file.stat()
+            diag["final_exists"] = True
+            diag["final_size"] = st.st_size
+            diag["final_mtime_delta_s"] = round(st.st_mtime - started_wall, 3)
+        except FileNotFoundError:
+            diag["final_exists"] = False
+        diag["elapsed_s"] = round(time.monotonic() - started, 1)
 
     if proc.poll() is None:
         print(f"warning: demo.sh still running after {time.monotonic() - started:.1f}s, terminating",
@@ -2831,10 +2860,20 @@ def main() -> int:
             # 避免 demo.sh 用 DEFAULT_SCENARIO（infinite_straight，无 route）覆盖。
             effective_scenario = _pipeline_flowsim_scenario_file()
         with pipeline_scenario_override(effective_scenario):
+            _collect_diag: dict = {}
             samples, returncode = collect_samples(duration, args.json_file, args.interval,
                                                   scenario=effective_scenario,
                                                   start_s=args.start_s,
-                                                  start_d=args.start_d)
+                                                  start_d=args.start_d,
+                                                  diag=_collect_diag)
+            if not samples:
+                # 0 样本时把采集层的现场打出来，否则这条 FAIL 只能说
+                # "no topology samples collected"，排查者无从分辨是
+                # monitor 没写、写了被判陈旧（mtime 早于启动），还是内容为空。
+                print("[diag] collected 0 samples — " + " ".join(
+                    f"{k}={v}" for k, v in sorted(_collect_diag.items())), flush=True)
+                print(f"[diag] json_file={args.json_file} demo.sh_returncode={returncode}",
+                      flush=True)
             # Read pass_criteria/route while the override is still active, otherwise
             # the context manager's restore-on-exit would make this reflect the
             # pre-override (default) scenario instead of the one just run.
