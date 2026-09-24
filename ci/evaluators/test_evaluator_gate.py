@@ -25,6 +25,7 @@ v0.2 追加（2026-08-01，Phase 1.2，对齐新场景矩阵）：
   11. 转向 bang-bang   steer 每帧翻符号 → Phase 1.3 FAIL 门禁
 
 v0.3 追加（2026-09-23，sensor 编排 + 度量伪影校准，[12]~[23] 用例标题见运行输出）：
+v0.4 追加（2026-09-24，[24]/[25] 预警提前量"前方"口径 —— 世界 +x vs 沿车头投影）：
   12~21 既有用例之外的同类扩展；本版新增的两条度量校准尤其关键：
   22. steer 单点擦线     掉头 lock-to-lock 扫角（±0.60 rad 合法量程）不得误报
   23. steer 佐证条款      max>6/s 且 rms>0.9/s 的尖点仍必须 FAIL（防改成永远 PASS）
@@ -329,6 +330,47 @@ def run_all_checks() -> int:
     check("max spike corroborated by rms still FAILs",
           any("steer bang-bang" in x for x in _f))
 
+    print("\n[24] 预警提前量：ego 朝 −x（掉头返程）时，车头前方的真值 actor 必须计入")
+    # 2026-09-24 实测：判"前方"用世界 +x（rel_x = t.x − ego.x > 0），只在 ego 朝 +x
+    # 时才等价于"车头前方"。ego 朝 −x（straight_road 起步段 heading=π、掉头返程）
+    # 时真正在前的 actor（x < ego.x）整段被漏掉 → critical_event_count=0、
+    # warning_lead 恒 0.000（sensor 编排报 0 的来源之一，非感知失效）。
+    # 正确口径 = 沿车头方向投影（与同函数上游视锥检查 atan2(dy,dx) vs heading 同源）。
+    def _mk_h(x, y, heading, speed, ts, ents=None, perceived=None):
+        s = _mk(x, y, speed, 0.0, ts)
+        s["metrics"]["scene"]["ego"]["heading"] = heading
+        s["metrics"]["scene"]["entities"] = ents or []
+        s["metrics"]["scene"]["perceived"] = perceived or []
+        return s
+
+    def _score_full(label, samples, criteria):
+        f, _, summ = de.score(samples, ROOT / "does-not-exist.log", criteria=criteria,
+                              scenario_name=label, expected_edges=[], road=None)
+        return f, summ
+
+    _west = []
+    for i in range(40):                      # ego 朝 −x：12 m/s 从 x=100 往 x=0 走
+        ex = 100.0 - i * 3.0                 # 0.25s × 12 m/s = 3m/帧
+        _west.append(_mk_h(ex, 0.0, math.pi, 12.0, i * 0.25,
+                           ents=[{"id": 7, "type": "car", "x": 0.0, "y": 0.0}],
+                           perceived=[{"id": 7, "x": 0.0, "y": 0.0}]))
+    _f, _s = _score_full("westbound-lead", _west, _ZERO_CRIT)
+    check("westbound (heading −x) forward actor tracked for warning lead",
+          _s["critical_event_count"] > 0 and _s["warning_lead_avg_s"] > 0.0)
+
+    print("\n[25] 反向对照：车尾后方的 actor 不得被算成\"前方\"（不得伪造提前量）")
+    # 旧口径下这辆车（ego 起点后方 30m）rel_x=30 → TTC=2.5s<3 → 伪造一个临界事件；
+    # 沿车头投影后 along=−30 → 不得计入。
+    _east = []
+    for i in range(40):
+        ex = 100.0 - i * 3.0
+        _east.append(_mk_h(ex, 0.0, math.pi, 12.0, i * 0.25,
+                           ents=[{"id": 8, "type": "car", "x": 130.0, "y": 0.0}],
+                           perceived=[{"id": 8, "x": 130.0, "y": 0.0}]))
+    _f, _s = _score_full("westbound-trailing", _east, _ZERO_CRIT)
+    check("actor behind the ego is not counted as forward (no bogus lead)",
+          _s["critical_event_count"] == 0 and _s["warning_lead_avg_s"] == 0.0)
+
     print(f"\n{'='*52}")
     print(f"gate self-test: {_passed} passed, {_failed} failed")
     print(f"{'='*52}")
@@ -338,7 +380,7 @@ def run_all_checks() -> int:
 
 
 def test_gate_self_test():
-    """pytest 入口：门禁必须抓住全部 [1]~[23] 类已知故障，否则本测试 FAIL。
+    """pytest 入口：门禁必须抓住全部 [1]~[25] 类已知故障，否则本测试 FAIL。
 
     这保证 CI 里的评估器门禁"先证伪自己再判别人"——评估器本身若退化到
     抓不住已知故障，评估器改动会被这里拦下，而不是等真撞车了才发现。

@@ -1298,6 +1298,12 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
 
         # 2) 预警提前量：按**真值身份**跟踪 + TTC 监测。
         #    "检测到" = 本帧有感知输出落在该真值的匹配半径内；TTC 用该真值的前向距离。
+        #    "前方" = 沿**车头方向**投影（与前一段视锥检查同一套朝向）。
+        #    不用世界 +x：`rel_x = t.x − ego_x > 0` 只在 ego 朝 +x 时等价于"车头前方"。
+        #    2026-09-24 实测 straight_road：ego 起步 heading=π（朝 −x）、中途掉头转 +x，
+        #    接掉头前那 286 帧里 x 口径判"前方"的车其实都在车尾；而朝 −x 段真正在
+        #    车头前方的车（x < ego.x）整段被漏掉 → TTC/提前量算在错的一侧、甚至
+        #    零临界事件（city_comprehensive 那种"空集报 0.000"由此被误读成感知失效）。
         #    为什么不跟踪感知/航迹自己的 id：perception/obstacles 的 id 是帧内局部的
         #    （perception_points.c 的 frame_id*100+ci，每帧都变 → 提前量恒 0 且伪造
         #    critical event）；换成 object_tracker 的航迹 id 也不行 —— 实测同一辆车会在
@@ -1305,19 +1311,28 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
         #    9 个 actor。仿真的真值身份天然稳定，而"系统何时检测到该障碍"本就是按
         #    障碍（而非按某个内部 id）定义的问题。
         ego_speed = m["speed"]
+        # 缺 heading/y 的最小样本（单测与旧调用）退回世界 +x 口径 —— 与修复前等价，
+        # 不改变那些路径的语义；真实采样里 heading 恒存在（见上方 sample 组装处）。
+        _hdg = m.get("heading")
+        if isinstance(_hdg, (int, float)):
+            fwd_x, fwd_y = math.cos(_hdg), math.sin(_hdg)
+        else:
+            fwd_x, fwd_y = 1.0, 0.0
+        ego_y_f = (float(raw_ego_y) if isinstance(raw_ego_y, (int, float))
+                   else float(m.get("y") or 0.0))
         for t in truth_all:
             tid = t["id"]
             if tid is None:
                 continue
-            rel_x = t["x"] - ego_x
-            if rel_x <= 0:
+            along = (t["x"] - ego_x) * fwd_x + (t["y"] - ego_y_f) * fwd_y
+            if along <= 0:
                 continue  # 仅前方障碍纳入 TTC / 预警
             if any((p["x"] - t["x"]) ** 2 + (p["y"] - t["y"]) ** 2 <= match_d2
                    for p in perceived):
                 if tid not in first_detect_ts:
                     first_detect_ts[tid] = ts_i
             if ego_speed > 0.5:
-                ttc = rel_x / ego_speed
+                ttc = along / ego_speed
                 if ttc < obs_min_ttc.get(tid, math.inf):
                     obs_min_ttc[tid] = ttc
                 if ttc < TTC_CRITICAL_S and tid not in critical_recorded:
