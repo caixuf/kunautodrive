@@ -179,6 +179,26 @@ WARNING_LEAD_FAIL_S = 0.3
 ACC_STANDOFF_M = 5.0
 ACC_TIME_HEADWAY_S = 1.5
 
+# ── 车道保持门禁（D2-06 判据落地）：盯权威车道级定位的越线 ──
+# 判据取的是 localization/lane_match 的 (lane_id, offset)——esmini
+# world_to_frenet 的权威解算，也是需求规格 D2-06 指定门禁要守的量。
+# 评测器自算的 lane_error 是按 scene 几何现推的近似量，无法判定"规划的横向
+# 参考改没改好"，故只作回退。
+#
+# 两条判据并存（实测差异见下）：
+#   ① 车心越线（D2-06 原文）：|offset| > lane_width/2 − LANE_KEEP_MARGIN_M
+#   ② 车身压线（本门禁主判据）：|offset| > lane_width/2 − LANE_KEEP_BODY_HALF_W_M
+# 为什么必须加 ②：3.5 m 车道下 ① 的门限是 1.65 m，而实测"掉头后骑线"的
+# |offset| ≈ 1.55 m —— 车心还在车道内，但 1.9 m 宽的车身已经压线。只用 ①
+# 会出现"门禁全绿而车明显骑线"的盲区，正是这次要修的故障。
+LANE_KEEP_MARGIN_M = 0.1          # 距车道线的安全余量（m，D2-06 原文）
+LANE_KEEP_BODY_HALF_W_M = 0.9     # 半车宽（m）：车身贴线判据用
+LANE_KEEP_CONSEC_WARN = 10        # 连续越线帧数（0.5s @20Hz）→ WARN
+LANE_KEEP_CONSEC_FAIL = 30        # 连续越线帧数（1.5s）→ FAIL（骑线行驶而非过渡）
+LANE_KEEP_RATIO_WARN = 0.10       # 越线帧占比 → WARN
+LANE_KEEP_RATIO_FAIL = 0.30       # 越线帧占比 → FAIL
+LANE_KEEP_MIN_COVERAGE = 0.50     # lane_match 有效帧占比低于此值则不判（只 WARN）
+
 # ── 控制层量化门禁（Phase 1.3）：病理性抖动 FAIL 阻断 ──
 # 抓 bang-bang 转向（MPC 每帧翻符号）与 1-2Hz 横向极限环。
 # 健康实测（straight_road 30s，2026-08-01）：yaw_rms≈0.02 rad/s、
@@ -904,9 +924,34 @@ def sample_metrics(sample: dict, road: dict | None = None,
     scn_perceived = scene.get("perceived", [])
     behavior = metrics.get("behavior", {})
     behavior_state = str(behavior.get("state", "") or "").upper()
-    maneuver_active = any(token in behavior_state for token in (
+    # 归一化后再匹配：behavior_planner 的真实状态名带下划线（U_TURN /
+    # LEFT_CHANGE / RIGHT_CHANGE），而 token 表用的是无下划线形式，直接子串
+    # 匹配会让 "UTURN" 永远匹配不上 "U_TURN" → 掉头帧被当成巡航帧，横向偏差
+    # 被误判（既有 bug，加车道保持门禁时暴露）。
+    behavior_state_norm = behavior_state.replace("_", "")
+    maneuver_active = any(token in behavior_state_norm for token in (
         "CHANGE", "OVERTAKE", "UTURN", "PARK",
     ))
+
+    # 权威车道级定位（monitor 把 localization/lane_match 透传到 metrics）：
+    # (road_id, lane_id, s, offset)。ok=false 或字段缺失时视为无效，不参与门禁
+    # —— 宁可不判，也不能把"无参考"当成"没越线"。
+    lane_match = metrics.get("lane_match", {})
+    lm_valid = False
+    lm_offset = None
+    lm_lane_id = None
+    if isinstance(lane_match, dict) and lane_match.get("ok", True):
+        try:
+            _lm_off = float(lane_match.get("offset"))
+        except (TypeError, ValueError):
+            _lm_off = None
+        if _lm_off is not None and math.isfinite(_lm_off):
+            lm_valid = True
+            lm_offset = _lm_off
+            try:
+                lm_lane_id = int(lane_match.get("lane_id", 0) or 0)
+            except (TypeError, ValueError):
+                lm_lane_id = 0
 
     speed = float(vehicle.get("speed", ego.get("speed", 0.0)) or 0.0)
     x = float(vehicle.get("x", ego.get("x", 0.0)) or 0.0)
@@ -1032,6 +1077,10 @@ def sample_metrics(sample: dict, road: dict | None = None,
         "tp_cycle_by_id": tp_cycle_by_id,
         "behavior_state": behavior_state,
         "maneuver_active": maneuver_active,
+        "lane_width": lane_width,
+        "lane_match_valid": lm_valid,
+        "lane_match_offset": lm_offset,
+        "lane_match_lane_id": lm_lane_id,
     }
 
 
@@ -1949,6 +1998,88 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     if max_lane_error > 2.0:
         warnings.append(f"large lane-center deviation during maneuver: {max_lane_error:.2f} m")
 
+    # ── 车道保持门禁（D2-06 判据）：权威车道级定位的越线检测 ──
+    # 与上面 max_lane_error 互补：max_lane_error 是评测器按 scene 几何现推的近似量，
+    # 这里盯的是 lane_match 的权威解算（esmini world_to_frenet）。两者不一致时，
+    # "标线/几何来源"与"定位口径"必有其一不对——掉头后骑线（规划目标
+    # target_lane_offset=-1.75 而自车停在 -3.3）那类故障正是要靠它暴露。
+    # 排除：机动帧（变道/超车/掉头/泊车）、近静止帧（起步瞬间的 offset 无意义）、
+    # lane_match 失效帧（ok=false / 字段缺失）。覆盖率不足只 WARN，不判 FAIL。
+    lm_valid_frames = [m for m in series if m.get("lane_match_valid")]
+    lm_coverage = (len(lm_valid_frames) / len(series)) if series else 0.0
+    lane_keep_frames = [
+        m for m in lm_valid_frames
+        if not m.get("maneuver_active") and float(m.get("speed", 0.0) or 0.0) > 0.5
+    ]
+    lane_straddle_frames = 0        # 车身压线帧数（主判据）
+    lane_center_cross_frames = 0    # 车心越线帧数（D2-06 原文判据）
+    lane_keep_max_excess = 0.0
+    lane_straddle_consec = 0
+    lane_straddle_consec_max = 0
+    lane_keep_worst_offset = 0.0
+    for m in lane_keep_frames:
+        half_width = float(m.get("lane_width") or 3.5) / 2.0
+        offset_abs = abs(float(m.get("lane_match_offset") or 0.0))
+        if offset_abs > lane_keep_worst_offset:
+            lane_keep_worst_offset = offset_abs
+        straddle_limit = half_width - LANE_KEEP_BODY_HALF_W_M
+        if offset_abs > straddle_limit:
+            lane_straddle_frames += 1
+            lane_keep_max_excess = max(lane_keep_max_excess, offset_abs - straddle_limit)
+            lane_straddle_consec += 1
+            lane_straddle_consec_max = max(lane_straddle_consec_max, lane_straddle_consec)
+        else:
+            lane_straddle_consec = 0
+        if offset_abs > half_width - LANE_KEEP_MARGIN_M:
+            lane_center_cross_frames += 1
+    lane_keep_frames_n = len(lane_keep_frames)
+    lane_straddle_ratio = (lane_straddle_frames / lane_keep_frames_n) if lane_keep_frames_n else 0.0
+    lane_center_cross_ratio = (lane_center_cross_frames / lane_keep_frames_n) if lane_keep_frames_n else 0.0
+    if not lm_valid_frames:
+        warnings.append(
+            "lane-keeping gate skipped: no valid localization/lane_match samples "
+            "(authoritative lane offset unavailable — cannot tell whether ego rides the line)"
+        )
+    elif lm_coverage < LANE_KEEP_MIN_COVERAGE:
+        warnings.append(
+            f"lane-keeping gate skipped: lane_match coverage {lm_coverage:.0%} "
+            f"< {LANE_KEEP_MIN_COVERAGE:.0%}"
+        )
+    elif lane_keep_frames_n:
+        _lane_keep_tail = (
+            f"(of {lane_keep_frames_n} cruise frames, worst |offset| "
+            f"{lane_keep_worst_offset:.2f} m, lane_width "
+            f"{float(lane_keep_frames[0].get('lane_width') or 3.5):.1f} m)"
+        )
+        if (lane_center_cross_frames
+                and (lane_center_cross_ratio >= LANE_KEEP_RATIO_FAIL
+                     or lane_center_cross_frames >= LANE_KEEP_CONSEC_FAIL)):
+            failures.append(
+                f"lane keeping: ego lane CENTER crossed the lane line in "
+                f"{lane_center_cross_frames} frames ({lane_center_cross_ratio:.0%}) "
+                f"{_lane_keep_tail}"
+            )
+        elif lane_center_cross_frames:
+            warnings.append(
+                f"lane keeping: ego lane center crossed the lane line briefly in "
+                f"{lane_center_cross_frames} frames {_lane_keep_tail}"
+            )
+        if (lane_straddle_consec_max >= LANE_KEEP_CONSEC_FAIL
+                or lane_straddle_ratio >= LANE_KEEP_RATIO_FAIL):
+            failures.append(
+                f"lane keeping: ego body rides the lane line in {lane_straddle_frames} "
+                f"frames ({lane_straddle_ratio:.0%}, max consecutive "
+                f"{lane_straddle_consec_max}, max excess "
+                f"{lane_keep_max_excess:.2f} m) {_lane_keep_tail}"
+            )
+        elif (lane_straddle_consec_max >= LANE_KEEP_CONSEC_WARN
+                or lane_straddle_ratio >= LANE_KEEP_RATIO_WARN):
+            warnings.append(
+                f"lane keeping: ego body touches the lane line in {lane_straddle_frames} "
+                f"frames ({lane_straddle_ratio:.0%}, max consecutive "
+                f"{lane_straddle_consec_max}) {_lane_keep_tail}"
+            )
+
     # 掉头返程合法沿 −x 行驶：净 x 位移≈0，用累计路径长代替"前进距离"。
     # 城市路网（map_file 多 edge）路线转弯，净 x 位移同样不代表行驶里程。
     _multi_edge_net = (
@@ -2643,6 +2774,14 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         "max_lane_error_at_s": max(0.0, samples[max_lane_index].get("timestamp", 0) - samples[0].get("timestamp", 0)),
         "max_lane_error_y": series[max_lane_index]["y"],
         "max_lane_error_speed_mps": series[max_lane_index]["speed"],
+        "lane_match_coverage": lm_coverage,
+        "lane_keep_worst_offset_m": lane_keep_worst_offset,
+        "lane_keep_straddle_frames": lane_straddle_frames,
+        "lane_keep_straddle_ratio": lane_straddle_ratio,
+        "lane_keep_straddle_max_consecutive": lane_straddle_consec_max,
+        "lane_keep_center_cross_frames": lane_center_cross_frames,
+        "lane_keep_center_cross_ratio": lane_center_cross_ratio,
+        "lane_keep_max_excess_m": lane_keep_max_excess,
         "min_road_margin_m": min_road_margin,
         "min_road_margin_at_s": max(0.0, samples[min_road_margin_index].get("timestamp", 0) - samples[0].get("timestamp", 0)),
         "steer_saturation_ratio": steer_saturation_ratio,
