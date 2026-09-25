@@ -183,3 +183,7 @@ tests/out/
 
 # 本地工作数据 (WorkBuddy 记忆/技能，不随仓库分发)
 .workbuddy/
+
+# M2 / D2-09 consistency gate: 大地图 lanelet.osm 由 tools/build_lanelet.sh 生成（避免 60MB+ 单文件膨胀仓库）。
+# 中小型地图的 lanelet.osm 已 commit（osm_test/city_center/city_ring/osm_munich/city_grid/beijing_guomao/osm_lujiazui_v2）。
+maps/osm_zhengdong/lanelet.osm

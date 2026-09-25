@@ -1,0 +1,691 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="json_to_lanelet.py">
+  <node id="N0" lat="3.500000" lon="-600.000000" />
+  <node id="N1" lat="3.500000" lon="-300.000000" />
+  <node id="N2" lat="3.500000" lon="0.000000" />
+  <node id="N3" lat="3.500000" lon="300.000000" />
+  <node id="N4" lat="3.500000" lon="600.000000" />
+  <node id="N5" lat="0.000000" lon="-600.000000" />
+  <node id="N6" lat="0.000000" lon="-300.000000" />
+  <node id="N7" lat="0.000000" lon="0.000000" />
+  <node id="N8" lat="0.000000" lon="300.000000" />
+  <node id="N9" lat="0.000000" lon="600.000000" />
+  <node id="N10" lat="7.000000" lon="-600.000000" />
+  <node id="N11" lat="7.000000" lon="-300.000000" />
+  <node id="N12" lat="7.000000" lon="0.000000" />
+  <node id="N13" lat="7.000000" lon="300.000000" />
+  <node id="N14" lat="7.000000" lon="600.000000" />
+  <node id="N15" lat="3.500000" lon="-600.000000" />
+  <node id="N16" lat="3.500000" lon="-300.000000" />
+  <node id="N17" lat="3.500000" lon="0.000000" />
+  <node id="N18" lat="3.500000" lon="300.000000" />
+  <node id="N19" lat="3.500000" lon="600.000000" />
+  <node id="N20" lat="10.500000" lon="-600.000000" />
+  <node id="N21" lat="10.500000" lon="-300.000000" />
+  <node id="N22" lat="10.500000" lon="0.000000" />
+  <node id="N23" lat="10.500000" lon="300.000000" />
+  <node id="N24" lat="10.500000" lon="600.000000" />
+  <node id="N25" lat="7.000000" lon="-600.000000" />
+  <node id="N26" lat="7.000000" lon="-300.000000" />
+  <node id="N27" lat="7.000000" lon="0.000000" />
+  <node id="N28" lat="7.000000" lon="300.000000" />
+  <node id="N29" lat="7.000000" lon="600.000000" />
+  <node id="N30" lat="0.000000" lon="-600.000000" />
+  <node id="N31" lat="0.000000" lon="-300.000000" />
+  <node id="N32" lat="0.000000" lon="0.000000" />
+  <node id="N33" lat="0.000000" lon="300.000000" />
+  <node id="N34" lat="0.000000" lon="600.000000" />
+  <node id="N35" lat="-3.500000" lon="-600.000000" />
+  <node id="N36" lat="-3.500000" lon="-300.000000" />
+  <node id="N37" lat="-3.500000" lon="0.000000" />
+  <node id="N38" lat="-3.500000" lon="300.000000" />
+  <node id="N39" lat="-3.500000" lon="600.000000" />
+  <node id="N40" lat="-3.500000" lon="-600.000000" />
+  <node id="N41" lat="-3.500000" lon="-300.000000" />
+  <node id="N42" lat="-3.500000" lon="0.000000" />
+  <node id="N43" lat="-3.500000" lon="300.000000" />
+  <node id="N44" lat="-3.500000" lon="600.000000" />
+  <node id="N45" lat="-7.000000" lon="-600.000000" />
+  <node id="N46" lat="-7.000000" lon="-300.000000" />
+  <node id="N47" lat="-7.000000" lon="0.000000" />
+  <node id="N48" lat="-7.000000" lon="300.000000" />
+  <node id="N49" lat="-7.000000" lon="600.000000" />
+  <node id="N50" lat="-7.000000" lon="-600.000000" />
+  <node id="N51" lat="-7.000000" lon="-300.000000" />
+  <node id="N52" lat="-7.000000" lon="0.000000" />
+  <node id="N53" lat="-7.000000" lon="300.000000" />
+  <node id="N54" lat="-7.000000" lon="600.000000" />
+  <node id="N55" lat="-10.500000" lon="-600.000000" />
+  <node id="N56" lat="-10.500000" lon="-300.000000" />
+  <node id="N57" lat="-10.500000" lon="0.000000" />
+  <node id="N58" lat="-10.500000" lon="300.000000" />
+  <node id="N59" lat="-10.500000" lon="600.000000" />
+  <node id="N60" lat="-420.000000" lon="-3.500000" />
+  <node id="N61" lat="-210.000000" lon="-3.500000" />
+  <node id="N62" lat="0.000000" lon="-3.500000" />
+  <node id="N63" lat="210.000000" lon="-3.500000" />
+  <node id="N64" lat="420.000000" lon="-3.500000" />
+  <node id="N65" lat="-420.000000" lon="0.000000" />
+  <node id="N66" lat="-210.000000" lon="0.000000" />
+  <node id="N67" lat="0.000000" lon="0.000000" />
+  <node id="N68" lat="210.000000" lon="0.000000" />
+  <node id="N69" lat="420.000000" lon="0.000000" />
+  <node id="N70" lat="-420.000000" lon="-7.000000" />
+  <node id="N71" lat="-210.000000" lon="-7.000000" />
+  <node id="N72" lat="0.000000" lon="-7.000000" />
+  <node id="N73" lat="210.000000" lon="-7.000000" />
+  <node id="N74" lat="420.000000" lon="-7.000000" />
+  <node id="N75" lat="-420.000000" lon="-3.500000" />
+  <node id="N76" lat="-210.000000" lon="-3.500000" />
+  <node id="N77" lat="0.000000" lon="-3.500000" />
+  <node id="N78" lat="210.000000" lon="-3.500000" />
+  <node id="N79" lat="420.000000" lon="-3.500000" />
+  <node id="N80" lat="-420.000000" lon="0.000000" />
+  <node id="N81" lat="-210.000000" lon="0.000000" />
+  <node id="N82" lat="0.000000" lon="0.000000" />
+  <node id="N83" lat="210.000000" lon="0.000000" />
+  <node id="N84" lat="420.000000" lon="0.000000" />
+  <node id="N85" lat="-420.000000" lon="3.500000" />
+  <node id="N86" lat="-210.000000" lon="3.500000" />
+  <node id="N87" lat="0.000000" lon="3.500000" />
+  <node id="N88" lat="210.000000" lon="3.500000" />
+  <node id="N89" lat="420.000000" lon="3.500000" />
+  <node id="N90" lat="-420.000000" lon="3.500000" />
+  <node id="N91" lat="-210.000000" lon="3.500000" />
+  <node id="N92" lat="0.000000" lon="3.500000" />
+  <node id="N93" lat="210.000000" lon="3.500000" />
+  <node id="N94" lat="420.000000" lon="3.500000" />
+  <node id="N95" lat="-420.000000" lon="7.000000" />
+  <node id="N96" lat="-210.000000" lon="7.000000" />
+  <node id="N97" lat="0.000000" lon="7.000000" />
+  <node id="N98" lat="210.000000" lon="7.000000" />
+  <node id="N99" lat="420.000000" lon="7.000000" />
+  <node id="N100" lat="423.500000" lon="-600.000000" />
+  <node id="N101" lat="423.500000" lon="-300.000000" />
+  <node id="N102" lat="423.500000" lon="0.000000" />
+  <node id="N103" lat="423.500000" lon="300.000000" />
+  <node id="N104" lat="423.500000" lon="600.000000" />
+  <node id="N105" lat="420.000000" lon="-600.000000" />
+  <node id="N106" lat="420.000000" lon="-300.000000" />
+  <node id="N107" lat="420.000000" lon="0.000000" />
+  <node id="N108" lat="420.000000" lon="300.000000" />
+  <node id="N109" lat="420.000000" lon="600.000000" />
+  <node id="N110" lat="427.000000" lon="-600.000000" />
+  <node id="N111" lat="427.000000" lon="-300.000000" />
+  <node id="N112" lat="427.000000" lon="0.000000" />
+  <node id="N113" lat="427.000000" lon="300.000000" />
+  <node id="N114" lat="427.000000" lon="600.000000" />
+  <node id="N115" lat="423.500000" lon="-600.000000" />
+  <node id="N116" lat="423.500000" lon="-300.000000" />
+  <node id="N117" lat="423.500000" lon="0.000000" />
+  <node id="N118" lat="423.500000" lon="300.000000" />
+  <node id="N119" lat="423.500000" lon="600.000000" />
+  <node id="N120" lat="420.000000" lon="-600.000000" />
+  <node id="N121" lat="420.000000" lon="-300.000000" />
+  <node id="N122" lat="420.000000" lon="0.000000" />
+  <node id="N123" lat="420.000000" lon="300.000000" />
+  <node id="N124" lat="420.000000" lon="600.000000" />
+  <node id="N125" lat="416.500000" lon="-600.000000" />
+  <node id="N126" lat="416.500000" lon="-300.000000" />
+  <node id="N127" lat="416.500000" lon="0.000000" />
+  <node id="N128" lat="416.500000" lon="300.000000" />
+  <node id="N129" lat="416.500000" lon="600.000000" />
+  <node id="N130" lat="416.500000" lon="-600.000000" />
+  <node id="N131" lat="416.500000" lon="-300.000000" />
+  <node id="N132" lat="416.500000" lon="0.000000" />
+  <node id="N133" lat="416.500000" lon="300.000000" />
+  <node id="N134" lat="416.500000" lon="600.000000" />
+  <node id="N135" lat="413.000000" lon="-600.000000" />
+  <node id="N136" lat="413.000000" lon="-300.000000" />
+  <node id="N137" lat="413.000000" lon="0.000000" />
+  <node id="N138" lat="413.000000" lon="300.000000" />
+  <node id="N139" lat="413.000000" lon="600.000000" />
+  <node id="N140" lat="-31.500000" lon="-600.000000" />
+  <node id="N141" lat="-31.500000" lon="-300.000000" />
+  <node id="N142" lat="-31.500000" lon="0.000000" />
+  <node id="N143" lat="-31.500000" lon="300.000000" />
+  <node id="N144" lat="-31.500000" lon="600.000000" />
+  <node id="N145" lat="-35.000000" lon="-600.000000" />
+  <node id="N146" lat="-35.000000" lon="-300.000000" />
+  <node id="N147" lat="-35.000000" lon="0.000000" />
+  <node id="N148" lat="-35.000000" lon="300.000000" />
+  <node id="N149" lat="-35.000000" lon="600.000000" />
+  <node id="N150" lat="-28.000000" lon="-600.000000" />
+  <node id="N151" lat="-28.000000" lon="-300.000000" />
+  <node id="N152" lat="-28.000000" lon="0.000000" />
+  <node id="N153" lat="-28.000000" lon="300.000000" />
+  <node id="N154" lat="-28.000000" lon="600.000000" />
+  <node id="N155" lat="-31.500000" lon="-600.000000" />
+  <node id="N156" lat="-31.500000" lon="-300.000000" />
+  <node id="N157" lat="-31.500000" lon="0.000000" />
+  <node id="N158" lat="-31.500000" lon="300.000000" />
+  <node id="N159" lat="-31.500000" lon="600.000000" />
+  <way id="W0">
+    <nd ref="N0" />
+    <nd ref="N1" />
+    <nd ref="N2" />
+    <nd ref="N3" />
+    <nd ref="N4" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W1">
+    <nd ref="N5" />
+    <nd ref="N6" />
+    <nd ref="N7" />
+    <nd ref="N8" />
+    <nd ref="N9" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W2">
+    <nd ref="N10" />
+    <nd ref="N11" />
+    <nd ref="N12" />
+    <nd ref="N13" />
+    <nd ref="N14" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W3">
+    <nd ref="N15" />
+    <nd ref="N16" />
+    <nd ref="N17" />
+    <nd ref="N18" />
+    <nd ref="N19" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W4">
+    <nd ref="N20" />
+    <nd ref="N21" />
+    <nd ref="N22" />
+    <nd ref="N23" />
+    <nd ref="N24" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W5">
+    <nd ref="N25" />
+    <nd ref="N26" />
+    <nd ref="N27" />
+    <nd ref="N28" />
+    <nd ref="N29" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W6">
+    <nd ref="N30" />
+    <nd ref="N31" />
+    <nd ref="N32" />
+    <nd ref="N33" />
+    <nd ref="N34" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W7">
+    <nd ref="N35" />
+    <nd ref="N36" />
+    <nd ref="N37" />
+    <nd ref="N38" />
+    <nd ref="N39" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W8">
+    <nd ref="N40" />
+    <nd ref="N41" />
+    <nd ref="N42" />
+    <nd ref="N43" />
+    <nd ref="N44" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W9">
+    <nd ref="N45" />
+    <nd ref="N46" />
+    <nd ref="N47" />
+    <nd ref="N48" />
+    <nd ref="N49" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W10">
+    <nd ref="N50" />
+    <nd ref="N51" />
+    <nd ref="N52" />
+    <nd ref="N53" />
+    <nd ref="N54" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W11">
+    <nd ref="N55" />
+    <nd ref="N56" />
+    <nd ref="N57" />
+    <nd ref="N58" />
+    <nd ref="N59" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W12">
+    <nd ref="N60" />
+    <nd ref="N61" />
+    <nd ref="N62" />
+    <nd ref="N63" />
+    <nd ref="N64" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W13">
+    <nd ref="N65" />
+    <nd ref="N66" />
+    <nd ref="N67" />
+    <nd ref="N68" />
+    <nd ref="N69" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W14">
+    <nd ref="N70" />
+    <nd ref="N71" />
+    <nd ref="N72" />
+    <nd ref="N73" />
+    <nd ref="N74" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W15">
+    <nd ref="N75" />
+    <nd ref="N76" />
+    <nd ref="N77" />
+    <nd ref="N78" />
+    <nd ref="N79" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W16">
+    <nd ref="N80" />
+    <nd ref="N81" />
+    <nd ref="N82" />
+    <nd ref="N83" />
+    <nd ref="N84" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W17">
+    <nd ref="N85" />
+    <nd ref="N86" />
+    <nd ref="N87" />
+    <nd ref="N88" />
+    <nd ref="N89" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W18">
+    <nd ref="N90" />
+    <nd ref="N91" />
+    <nd ref="N92" />
+    <nd ref="N93" />
+    <nd ref="N94" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W19">
+    <nd ref="N95" />
+    <nd ref="N96" />
+    <nd ref="N97" />
+    <nd ref="N98" />
+    <nd ref="N99" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W20">
+    <nd ref="N100" />
+    <nd ref="N101" />
+    <nd ref="N102" />
+    <nd ref="N103" />
+    <nd ref="N104" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W21">
+    <nd ref="N105" />
+    <nd ref="N106" />
+    <nd ref="N107" />
+    <nd ref="N108" />
+    <nd ref="N109" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W22">
+    <nd ref="N110" />
+    <nd ref="N111" />
+    <nd ref="N112" />
+    <nd ref="N113" />
+    <nd ref="N114" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W23">
+    <nd ref="N115" />
+    <nd ref="N116" />
+    <nd ref="N117" />
+    <nd ref="N118" />
+    <nd ref="N119" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W24">
+    <nd ref="N120" />
+    <nd ref="N121" />
+    <nd ref="N122" />
+    <nd ref="N123" />
+    <nd ref="N124" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W25">
+    <nd ref="N125" />
+    <nd ref="N126" />
+    <nd ref="N127" />
+    <nd ref="N128" />
+    <nd ref="N129" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W26">
+    <nd ref="N130" />
+    <nd ref="N131" />
+    <nd ref="N132" />
+    <nd ref="N133" />
+    <nd ref="N134" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W27">
+    <nd ref="N135" />
+    <nd ref="N136" />
+    <nd ref="N137" />
+    <nd ref="N138" />
+    <nd ref="N139" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W28">
+    <nd ref="N140" />
+    <nd ref="N141" />
+    <nd ref="N142" />
+    <nd ref="N143" />
+    <nd ref="N144" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W29">
+    <nd ref="N145" />
+    <nd ref="N146" />
+    <nd ref="N147" />
+    <nd ref="N148" />
+    <nd ref="N149" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W30">
+    <nd ref="N150" />
+    <nd ref="N151" />
+    <nd ref="N152" />
+    <nd ref="N153" />
+    <nd ref="N154" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W31">
+    <nd ref="N155" />
+    <nd ref="N156" />
+    <nd ref="N157" />
+    <nd ref="N158" />
+    <nd ref="N159" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <relation id="R0">
+    <member type="way" ref="W0" role="left" />
+    <member type="way" ref="W1" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="13.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="central_avenue.lane.1" />
+  </relation>
+  <relation id="R1">
+    <member type="way" ref="W6" role="left" />
+    <member type="way" ref="W7" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="13.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="central_avenue.lane.101" />
+  </relation>
+  <relation id="R2">
+    <member type="way" ref="W8" role="left" />
+    <member type="way" ref="W9" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="13.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="central_avenue.lane.102" />
+  </relation>
+  <relation id="R3">
+    <member type="way" ref="W10" role="left" />
+    <member type="way" ref="W11" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="13.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="central_avenue.lane.103" />
+  </relation>
+  <relation id="R4">
+    <member type="way" ref="W2" role="left" />
+    <member type="way" ref="W3" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="13.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="central_avenue.lane.2" />
+  </relation>
+  <relation id="R5">
+    <member type="way" ref="W4" role="left" />
+    <member type="way" ref="W5" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="13.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="central_avenue.lane.3" />
+  </relation>
+  <relation id="R6">
+    <member type="way" ref="W28" role="left" />
+    <member type="way" ref="W29" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="15.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="yes" />
+    <tag k="lanelet_id" v="downtown_underpass.lane.1" />
+  </relation>
+  <relation id="R7">
+    <member type="way" ref="W30" role="left" />
+    <member type="way" ref="W31" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="15.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="yes" />
+    <tag k="lanelet_id" v="downtown_underpass.lane.2" />
+  </relation>
+  <relation id="R8">
+    <member type="way" ref="W12" role="left" />
+    <member type="way" ref="W13" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="11.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="financial_street.lane.1" />
+  </relation>
+  <relation id="R9">
+    <member type="way" ref="W16" role="left" />
+    <member type="way" ref="W17" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="11.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="financial_street.lane.101" />
+  </relation>
+  <relation id="R10">
+    <member type="way" ref="W18" role="left" />
+    <member type="way" ref="W19" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="11.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="financial_street.lane.102" />
+  </relation>
+  <relation id="R11">
+    <member type="way" ref="W14" role="left" />
+    <member type="way" ref="W15" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="11.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="financial_street.lane.2" />
+  </relation>
+  <relation id="R12">
+    <member type="way" ref="W20" role="left" />
+    <member type="way" ref="W21" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="12.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="riverside_boulevard.lane.1" />
+  </relation>
+  <relation id="R13">
+    <member type="way" ref="W24" role="left" />
+    <member type="way" ref="W25" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="12.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="riverside_boulevard.lane.101" />
+  </relation>
+  <relation id="R14">
+    <member type="way" ref="W26" role="left" />
+    <member type="way" ref="W27" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="12.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="riverside_boulevard.lane.102" />
+  </relation>
+  <relation id="R15">
+    <member type="way" ref="W22" role="left" />
+    <member type="way" ref="W23" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="12.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="riverside_boulevard.lane.2" />
+  </relation>
+  <relation id="RT0">
+    <member type="way" ref="W0" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="13.00" />
+    <tag k="lanelet_id" v="central_avenue.lane.1" />
+  </relation>
+  <relation id="RT1">
+    <member type="way" ref="W6" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="13.00" />
+    <tag k="lanelet_id" v="central_avenue.lane.101" />
+  </relation>
+  <relation id="RT2">
+    <member type="way" ref="W8" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="13.00" />
+    <tag k="lanelet_id" v="central_avenue.lane.102" />
+  </relation>
+  <relation id="RT3">
+    <member type="way" ref="W10" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="13.00" />
+    <tag k="lanelet_id" v="central_avenue.lane.103" />
+  </relation>
+  <relation id="RT4">
+    <member type="way" ref="W2" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="13.00" />
+    <tag k="lanelet_id" v="central_avenue.lane.2" />
+  </relation>
+  <relation id="RT5">
+    <member type="way" ref="W4" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="13.00" />
+    <tag k="lanelet_id" v="central_avenue.lane.3" />
+  </relation>
+  <relation id="RT6">
+    <member type="way" ref="W28" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="15.00" />
+    <tag k="lanelet_id" v="downtown_underpass.lane.1" />
+  </relation>
+  <relation id="RT7">
+    <member type="way" ref="W30" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="15.00" />
+    <tag k="lanelet_id" v="downtown_underpass.lane.2" />
+  </relation>
+  <relation id="RT8">
+    <member type="way" ref="W12" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="11.00" />
+    <tag k="lanelet_id" v="financial_street.lane.1" />
+  </relation>
+  <relation id="RT9">
+    <member type="way" ref="W16" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="11.00" />
+    <tag k="lanelet_id" v="financial_street.lane.101" />
+  </relation>
+  <relation id="RT10">
+    <member type="way" ref="W18" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="11.00" />
+    <tag k="lanelet_id" v="financial_street.lane.102" />
+  </relation>
+  <relation id="RT11">
+    <member type="way" ref="W14" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="11.00" />
+    <tag k="lanelet_id" v="financial_street.lane.2" />
+  </relation>
+  <relation id="RT12">
+    <member type="way" ref="W20" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="12.00" />
+    <tag k="lanelet_id" v="riverside_boulevard.lane.1" />
+  </relation>
+  <relation id="RT13">
+    <member type="way" ref="W24" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="12.00" />
+    <tag k="lanelet_id" v="riverside_boulevard.lane.101" />
+  </relation>
+  <relation id="RT14">
+    <member type="way" ref="W26" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="12.00" />
+    <tag k="lanelet_id" v="riverside_boulevard.lane.102" />
+  </relation>
+  <relation id="RT15">
+    <member type="way" ref="W22" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="12.00" />
+    <tag k="lanelet_id" v="riverside_boulevard.lane.2" />
+  </relation>
+</osm>

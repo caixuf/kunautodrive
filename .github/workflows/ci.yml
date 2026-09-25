@@ -132,6 +132,19 @@ jobs:
       - name: Reject broken main-chain lane connectivity in referenced maps
         run: python3 tools/check_map_connectivity.py
 
+  # ── lanelet consistency gate ───────────────────────────────
+  # D2-09 + D2-08 Rule 4/5: map.json ↔ lanelet.osm 双向覆盖 + speed_limit/stop_line
+  # regulatory 数值/数量一致。PR 一旦把转换器或契约改了忘同步，立刻挂。
+  # 大地图（osm_zhengdong 63MB+）默认 gitignore：CI 跑前先调 tools/build_lanelet.sh 现生成。
+  lanelet-consistency-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate missing lanelet.osm (D2-02 + D2-08 step 2)
+        run: bash tools/build_lanelet.sh --quiet
+      - name: Reject map.json ↔ lanelet.osm drift (Rule 1-5)
+        run: python3 ci/gates/lanelet_consistency_check.py
+
   # ── Standard build + test (Release) ────────────────────────
   build-release:
     runs-on: ubuntu-24.04

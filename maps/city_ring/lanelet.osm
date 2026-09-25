@@ -1,0 +1,1391 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="json_to_lanelet.py">
+  <node id="N0" lat="3.500000" lon="0.000000" />
+  <node id="N1" lat="3.500000" lon="180.000102" />
+  <node id="N2" lat="3.473670" lon="360.408481" />
+  <node id="N3" lat="-18.505322" lon="500.136379" />
+  <node id="N4" lat="-18.500000" lon="620.000000" />
+  <node id="N5" lat="0.000000" lon="0.000000" />
+  <node id="N6" lat="0.000000" lon="179.999898" />
+  <node id="N7" lat="-0.015670" lon="360.135519" />
+  <node id="N8" lat="-21.994678" lon="499.863621" />
+  <node id="N9" lat="-22.000000" lon="620.000000" />
+  <node id="N10" lat="7.000000" lon="0.000000" />
+  <node id="N11" lat="7.000000" lon="180.000310" />
+  <node id="N12" lat="6.930633" lon="360.951947" />
+  <node id="N13" lat="-15.005342" lon="500.136639" />
+  <node id="N14" lat="-15.000000" lon="620.000000" />
+  <node id="N15" lat="3.500000" lon="0.000000" />
+  <node id="N16" lat="3.500000" lon="179.999690" />
+  <node id="N17" lat="3.441367" lon="360.678053" />
+  <node id="N18" lat="-18.494658" lon="499.863361" />
+  <node id="N19" lat="-18.500000" lon="620.000000" />
+  <node id="N20" lat="0.000000" lon="0.000000" />
+  <node id="N21" lat="-0.000000" lon="179.999898" />
+  <node id="N22" lat="0.015706" lon="359.864013" />
+  <node id="N23" lat="-22.005302" lon="500.136115" />
+  <node id="N24" lat="-22.000000" lon="620.000000" />
+  <node id="N25" lat="-3.500000" lon="0.000000" />
+  <node id="N26" lat="-3.500000" lon="180.000102" />
+  <node id="N27" lat="-3.473706" lon="359.591987" />
+  <node id="N28" lat="-25.494698" lon="499.863885" />
+  <node id="N29" lat="-25.500000" lon="620.000000" />
+  <node id="N30" lat="-3.500000" lon="0.000000" />
+  <node id="N31" lat="-3.500000" lon="179.999687" />
+  <node id="N32" lat="-3.441257" lon="359.320548" />
+  <node id="N33" lat="-25.505282" lon="500.135859" />
+  <node id="N34" lat="-25.500000" lon="620.000000" />
+  <node id="N35" lat="-7.000000" lon="0.000000" />
+  <node id="N36" lat="-7.000000" lon="180.000313" />
+  <node id="N37" lat="-6.930743" lon="359.049452" />
+  <node id="N38" lat="-28.994718" lon="499.864141" />
+  <node id="N39" lat="-29.000000" lon="620.000000" />
+  <node id="N40" lat="-18.500304" lon="620.064602" />
+  <node id="N41" lat="-18.874838" lon="640.158143" />
+  <node id="N42" lat="-19.744879" lon="660.262066" />
+  <node id="N43" lat="-20.736640" lon="680.311752" />
+  <node id="N44" lat="-21.479414" lon="700.277061" />
+  <node id="N45" lat="-21.605300" lon="720.128581" />
+  <node id="N46" lat="-20.750272" lon="739.839260" />
+  <node id="N47" lat="-18.552042" lon="759.402905" />
+  <node id="N48" lat="-14.908186" lon="778.239234" />
+  <node id="N49" lat="-9.973279" lon="796.839637" />
+  <node id="N50" lat="-4.006502" lon="815.245900" />
+  <node id="N51" lat="2.733393" lon="833.492885" />
+  <node id="N52" lat="9.982522" lon="851.620387" />
+  <node id="N53" lat="17.473050" lon="869.649729" />
+  <node id="N54" lat="25.120469" lon="887.749452" />
+  <node id="N55" lat="33.410741" lon="905.817162" />
+  <node id="N56" lat="42.193182" lon="923.691249" />
+  <node id="N57" lat="51.293912" lon="941.461038" />
+  <node id="N58" lat="60.533465" lon="959.206241" />
+  <node id="N59" lat="69.731951" lon="977.008872" />
+  <node id="N60" lat="78.708858" lon="994.954840" />
+  <node id="N61" lat="87.232697" lon="1013.003676" />
+  <node id="N62" lat="95.154791" lon="1030.934657" />
+  <node id="N63" lat="102.755771" lon="1048.976850" />
+  <node id="N64" lat="110.184001" lon="1067.062668" />
+  <node id="N65" lat="117.591200" lon="1085.131297" />
+  <node id="N66" lat="123.230165" lon="1098.652397" />
+  <node id="N67" lat="-21.999696" lon="619.999398" />
+  <node id="N68" lat="-22.373162" lon="640.049857" />
+  <node id="N69" lat="-23.241121" lon="660.099934" />
+  <node id="N70" lat="-24.233360" lon="680.160248" />
+  <node id="N71" lat="-24.978586" lon="700.200939" />
+  <node id="N72" lat="-25.104700" lon="720.193419" />
+  <node id="N73" lat="-24.239728" lon="740.110740" />
+  <node id="N74" lat="-22.011958" lon="759.931095" />
+  <node id="N75" lat="-18.319814" lon="779.020766" />
+  <node id="N76" lat="-13.330721" lon="797.828363" />
+  <node id="N77" lat="-7.313498" lon="816.392100" />
+  <node id="N78" lat="-0.533393" lon="834.749115" />
+  <node id="N79" lat="6.741478" lon="852.941613" />
+  <node id="N80" lat="14.244950" lon="871.002271" />
+  <node id="N81" lat="21.917531" lon="889.160548" />
+  <node id="N82" lat="30.249259" lon="907.318838" />
+  <node id="N83" lat="39.064818" lon="925.260751" />
+  <node id="N84" lat="48.184088" lon="943.066962" />
+  <node id="N85" lat="57.426535" lon="960.817759" />
+  <node id="N86" lat="66.612049" lon="978.595128" />
+  <node id="N87" lat="75.561142" lon="996.485160" />
+  <node id="N88" lat="84.049303" lon="1014.458324" />
+  <node id="N89" lat="91.941209" lon="1032.321343" />
+  <node id="N90" lat="99.524229" lon="1050.321150" />
+  <node id="N91" lat="106.945999" lon="1068.391332" />
+  <node id="N92" lat="114.356800" lon="1086.468703" />
+  <node id="N93" lat="119.999835" lon="1099.999603" />
+  <node id="N94" lat="-15.001304" lon="620.129636" />
+  <node id="N95" lat="-15.377838" lon="640.309162" />
+  <node id="N96" lat="-16.248881" lon="660.435117" />
+  <node id="N97" lat="-17.239644" lon="680.441846" />
+  <node id="N98" lat="-17.979419" lon="700.299288" />
+  <node id="N99" lat="-18.108290" lon="719.976148" />
+  <node id="N100" lat="-17.272204" lon="739.448146" />
+  <node id="N101" lat="-15.115913" lon="758.738756" />
+  <node id="N102" lat="-11.525047" lon="777.341839" />
+  <node id="N103" lat="-6.644173" lon="795.760996" />
+  <node id="N104" lat="-0.723448" lon="814.033054" />
+  <node id="N105" lat="5.983417" lon="832.193950" />
+  <node id="N106" lat="13.214530" lon="850.277407" />
+  <node id="N107" lat="20.697077" lon="868.287794" />
+  <node id="N108" lat="28.301526" lon="886.289582" />
+  <node id="N109" lat="36.551782" lon="904.274248" />
+  <node id="N110" lat="45.308168" lon="922.096221" />
+  <node id="N111" lat="54.398911" lon="939.844036" />
+  <node id="N112" lat="63.642490" lon="957.599289" />
+  <node id="N113" lat="72.861963" lon="975.442896" />
+  <node id="N114" lat="81.873898" lon="993.459921" />
+  <node id="N115" lat="90.433739" lon="1011.588768" />
+  <node id="N116" lat="98.379806" lon="1029.575693" />
+  <node id="N117" lat="105.992762" lon="1047.646829" />
+  <node id="N118" lat="113.423001" lon="1065.735670" />
+  <node id="N119" lat="120.821213" lon="1083.784328" />
+  <node id="N120" lat="126.460165" lon="1097.305397" />
+  <node id="N121" lat="-18.500696" lon="620.064364" />
+  <node id="N122" lat="-18.876162" lon="640.200838" />
+  <node id="N123" lat="-19.745119" lon="660.272883" />
+  <node id="N124" lat="-20.736356" lon="680.290154" />
+  <node id="N125" lat="-21.478581" lon="700.222712" />
+  <node id="N126" lat="-21.607710" lon="720.039852" />
+  <node id="N127" lat="-20.761796" lon="739.717854" />
+  <node id="N128" lat="-18.576087" lon="759.265244" />
+  <node id="N129" lat="-14.936953" lon="778.122161" />
+  <node id="N130" lat="-10.001827" lon="796.749004" />
+  <node id="N131" lat="-4.030552" lon="815.178946" />
+  <node id="N132" lat="2.716583" lon="833.450050" />
+  <node id="N133" lat="9.973470" lon="851.598593" />
+  <node id="N134" lat="17.468923" lon="869.640206" />
+  <node id="N135" lat="25.098474" lon="887.700418" />
+  <node id="N136" lat="33.390218" lon="905.775752" />
+  <node id="N137" lat="42.179832" lon="923.665779" />
+  <node id="N138" lat="51.289089" lon="941.449964" />
+  <node id="N139" lat="60.535510" lon="959.210711" />
+  <node id="N140" lat="69.742037" lon="977.029104" />
+  <node id="N141" lat="78.726102" lon="994.990079" />
+  <node id="N142" lat="87.250261" lon="1013.043232" />
+  <node id="N143" lat="95.166194" lon="1030.962307" />
+  <node id="N144" lat="102.761238" lon="1048.991171" />
+  <node id="N145" lat="110.184999" lon="1067.064330" />
+  <node id="N146" lat="117.586787" lon="1085.121672" />
+  <node id="N147" lat="123.229835" lon="1098.652603" />
+  <node id="N148" lat="-22.000300" lon="620.000395" />
+  <node id="N149" lat="-22.370836" lon="640.006077" />
+  <node id="N150" lat="-23.240880" lon="660.090100" />
+  <node id="N151" lat="-24.234636" lon="680.181661" />
+  <node id="N152" lat="-24.979407" lon="700.254751" />
+  <node id="N153" lat="-25.101311" lon="720.280029" />
+  <node id="N154" lat="-24.228336" lon="740.230447" />
+  <node id="N155" lat="-21.988176" lon="760.068029" />
+  <node id="N156" lat="-18.290311" lon="779.136686" />
+  <node id="N157" lat="-13.303363" lon="797.919351" />
+  <node id="N158" lat="-7.290567" lon="816.457712" />
+  <node id="N159" lat="-0.516648" lon="834.792780" />
+  <node id="N160" lat="6.750508" lon="852.962353" />
+  <node id="N161" lat="14.249046" lon="871.011719" />
+  <node id="N162" lat="21.938436" lon="889.209377" />
+  <node id="N163" lat="30.268709" lon="907.361094" />
+  <node id="N164" lat="39.077144" lon="925.287172" />
+  <node id="N165" lat="48.189895" lon="943.077005" />
+  <node id="N166" lat="57.423467" lon="960.812245" />
+  <node id="N167" lat="66.601903" lon="978.574778" />
+  <node id="N168" lat="75.544828" lon="996.448777" />
+  <node id="N169" lat="84.030688" lon="1014.417656" />
+  <node id="N170" lat="91.928782" lon="1032.292637" />
+  <node id="N171" lat="99.517761" lon="1050.306827" />
+  <node id="N172" lat="106.945991" lon="1068.390645" />
+  <node id="N173" lat="114.361203" lon="1086.479305" />
+  <node id="N174" lat="120.000165" lon="1100.000397" />
+  <node id="N175" lat="-25.499700" lon="619.935605" />
+  <node id="N176" lat="-25.869164" lon="639.897923" />
+  <node id="N177" lat="-26.737120" lon="659.927900" />
+  <node id="N178" lat="-27.731364" lon="680.030339" />
+  <node id="N179" lat="-28.478593" lon="700.179249" />
+  <node id="N180" lat="-28.600689" lon="720.345971" />
+  <node id="N181" lat="-27.717664" lon="740.503553" />
+  <node id="N182" lat="-25.447824" lon="760.597971" />
+  <node id="N183" lat="-21.701689" lon="779.919314" />
+  <node id="N184" lat="-16.660637" lon="798.908649" />
+  <node id="N185" lat="-10.597433" lon="817.604288" />
+  <node id="N186" lat="-3.783352" lon="836.049220" />
+  <node id="N187" lat="3.509492" lon="854.283647" />
+  <node id="N188" lat="11.020954" lon="872.364281" />
+  <node id="N189" lat="18.735564" lon="890.620623" />
+  <node id="N190" lat="27.107291" lon="908.862906" />
+  <node id="N191" lat="35.948856" lon="926.856828" />
+  <node id="N192" lat="45.080105" lon="944.682995" />
+  <node id="N193" lat="54.316533" lon="962.423755" />
+  <node id="N194" lat="63.482097" lon="980.161222" />
+  <node id="N195" lat="72.397172" lon="997.979223" />
+  <node id="N196" lat="80.847312" lon="1015.872344" />
+  <node id="N197" lat="88.715218" lon="1033.679363" />
+  <node id="N198" lat="96.286239" lon="1051.651173" />
+  <node id="N199" lat="103.708009" lon="1069.719355" />
+  <node id="N200" lat="111.126797" lon="1087.816695" />
+  <node id="N201" lat="116.769835" lon="1101.347603" />
+  <node id="N202" lat="-25.499299" lon="619.935360" />
+  <node id="N203" lat="-25.867835" lon="639.855057" />
+  <node id="N204" lat="-26.736878" lon="659.917049" />
+  <node id="N205" lat="-27.731632" lon="680.051569" />
+  <node id="N206" lat="-28.479403" lon="700.232533" />
+  <node id="N207" lat="-28.598321" lon="720.432487" />
+  <node id="N208" lat="-27.706402" lon="740.621606" />
+  <node id="N209" lat="-25.424300" lon="760.732222" />
+  <node id="N210" lat="-21.673444" lon="780.034107" />
+  <node id="N211" lat="-16.632465" lon="798.998004" />
+  <node id="N212" lat="-10.573619" lon="817.670562" />
+  <node id="N213" lat="-3.766672" lon="836.091717" />
+  <node id="N214" lat="3.518500" lon="854.305333" />
+  <node id="N215" lat="11.025019" lon="872.373655" />
+  <node id="N216" lat="18.757379" lon="890.669249" />
+  <node id="N217" lat="27.127669" lon="908.904010" />
+  <node id="N218" lat="35.962158" lon="926.882201" />
+  <node id="N219" lat="45.084896" lon="944.694007" />
+  <node id="N220" lat="54.314442" lon="962.419197" />
+  <node id="N221" lat="63.471891" lon="980.140753" />
+  <node id="N222" lat="72.379787" lon="997.943694" />
+  <node id="N223" lat="80.829646" lon="1015.832564" />
+  <node id="N224" lat="88.703766" lon="1033.651601" />
+  <node id="N225" lat="96.280770" lon="1051.636848" />
+  <node id="N226" lat="103.706990" lon="1069.717643" />
+  <node id="N227" lat="111.131191" lon="1087.826274" />
+  <node id="N228" lat="116.770165" lon="1101.347397" />
+  <node id="N229" lat="-28.998701" lon="619.870640" />
+  <node id="N230" lat="-29.366165" lon="639.746943" />
+  <node id="N231" lat="-30.233122" lon="659.754951" />
+  <node id="N232" lat="-31.228368" lon="679.900431" />
+  <node id="N233" lat="-31.978597" lon="700.157467" />
+  <node id="N234" lat="-32.097679" lon="720.499513" />
+  <node id="N235" lat="-31.195598" lon="740.896394" />
+  <node id="N236" lat="-28.883700" lon="761.263778" />
+  <node id="N237" lat="-25.084556" lon="780.817893" />
+  <node id="N238" lat="-19.989535" lon="799.987996" />
+  <node id="N239" lat="-13.880381" lon="818.817438" />
+  <node id="N240" lat="-7.033328" lon="837.348283" />
+  <node id="N241" lat="0.277500" lon="855.626667" />
+  <node id="N242" lat="7.796981" lon="873.726345" />
+  <node id="N243" lat="15.554621" lon="892.080751" />
+  <node id="N244" lat="23.966331" lon="910.405990" />
+  <node id="N245" lat="32.833842" lon="928.451799" />
+  <node id="N246" lat="41.975104" lon="946.299993" />
+  <node id="N247" lat="51.207558" lon="964.030803" />
+  <node id="N248" lat="60.352109" lon="981.727247" />
+  <node id="N249" lat="69.232213" lon="999.474306" />
+  <node id="N250" lat="77.646354" lon="1017.287436" />
+  <node id="N251" lat="85.490234" lon="1035.038399" />
+  <node id="N252" lat="93.049230" lon="1052.981152" />
+  <node id="N253" lat="100.469010" lon="1071.046357" />
+  <node id="N254" lat="107.896809" lon="1089.163726" />
+  <node id="N255" lat="113.539835" lon="1102.694603" />
+  <node id="N256" lat="123.349577" lon="1098.983776" />
+  <node id="N257" lat="129.183818" lon="1118.207813" />
+  <node id="N258" lat="134.526580" lon="1137.543933" />
+  <node id="N259" lat="140.156316" lon="1156.594003" />
+  <node id="N260" lat="146.848350" lon="1175.022320" />
+  <node id="N261" lat="155.315233" lon="1192.415224" />
+  <node id="N262" lat="165.604278" lon="1208.320633" />
+  <node id="N263" lat="177.281252" lon="1223.549725" />
+  <node id="N264" lat="189.598942" lon="1238.573847" />
+  <node id="N265" lat="201.792963" lon="1253.874285" />
+  <node id="N266" lat="213.070035" lon="1269.935370" />
+  <node id="N267" lat="222.631218" lon="1287.060320" />
+  <node id="N268" lat="230.510389" lon="1304.910518" />
+  <node id="N269" lat="237.291400" lon="1323.149397" />
+  <node id="N270" lat="243.556643" lon="1341.504212" />
+  <node id="N271" lat="249.891979" lon="1359.741650" />
+  <node id="N272" lat="253.277621" lon="1368.771653" />
+  <node id="N273" lat="120.000423" lon="1100.000224" />
+  <node id="N274" lat="125.822182" lon="1119.182187" />
+  <node id="N275" lat="131.161420" lon="1138.506067" />
+  <node id="N276" lat="136.831684" lon="1157.687997" />
+  <node id="N277" lat="143.625650" lon="1176.387680" />
+  <node id="N278" lat="152.266767" lon="1194.134776" />
+  <node id="N279" lat="162.743722" lon="1210.337367" />
+  <node id="N280" lat="174.538748" lon="1225.724275" />
+  <node id="N281" lat="186.877058" lon="1240.774153" />
+  <node id="N282" lat="198.991037" lon="1255.971715" />
+  <node id="N283" lat="210.105965" lon="1271.796630" />
+  <node id="N284" lat="219.498782" lon="1288.621680" />
+  <node id="N285" lat="227.267611" lon="1306.227482" />
+  <node id="N286" lat="233.994600" lon="1324.324603" />
+  <node id="N287" lat="240.247357" lon="1342.643788" />
+  <node id="N288" lat="246.600021" lon="1360.930350" />
+  <node id="N289" lat="250.000379" lon="1370.000347" />
+  <node id="N290" lat="126.698620" lon="1097.966918" />
+  <node id="N291" lat="132.556841" lon="1117.275891" />
+  <node id="N292" lat="137.882660" lon="1136.551213" />
+  <node id="N293" lat="143.445678" lon="1155.398104" />
+  <node id="N294" lat="149.995144" lon="1173.490198" />
+  <node id="N295" lat="158.255083" lon="1190.515733" />
+  <node id="N296" lat="168.381625" lon="1206.192126" />
+  <node id="N297" lat="179.988282" lon="1221.330762" />
+  <node id="N298" lat="192.336139" lon="1236.392090" />
+  <node id="N299" lat="204.656639" lon="1251.862189" />
+  <node id="N300" lat="216.125814" lon="1268.229612" />
+  <node id="N301" lat="225.833624" lon="1285.647136" />
+  <node id="N302" lat="233.791508" lon="1303.690811" />
+  <node id="N303" lat="240.604428" lon="1322.018474" />
+  <node id="N304" lat="246.862671" lon="1340.355296" />
+  <node id="N305" lat="253.168997" lon="1358.512699" />
+  <node id="N306" lat="256.554621" lon="1367.542653" />
+  <node id="N307" lat="123.349380" lon="1098.983082" />
+  <node id="N308" lat="129.195159" lon="1118.250109" />
+  <node id="N309" lat="134.517340" lon="1137.512787" />
+  <node id="N310" lat="140.120322" lon="1156.489896" />
+  <node id="N311" lat="146.770856" lon="1174.851802" />
+  <node id="N312" lat="155.204917" lon="1192.232267" />
+  <node id="N313" lat="165.520375" lon="1208.207874" />
+  <node id="N314" lat="177.245718" lon="1223.505238" />
+  <node id="N315" lat="189.613861" lon="1238.591910" />
+  <node id="N316" lat="201.853361" lon="1253.957811" />
+  <node id="N317" lat="213.160186" lon="1270.088388" />
+  <node id="N318" lat="222.700376" lon="1287.206864" />
+  <node id="N319" lat="230.548492" lon="1305.007189" />
+  <node id="N320" lat="237.307572" lon="1323.193526" />
+  <node id="N321" lat="243.553329" lon="1341.494704" />
+  <node id="N322" lat="249.877003" lon="1359.701301" />
+  <node id="N323" lat="253.277379" lon="1368.771347" />
+  <node id="N324" lat="253.500000" lon="1370.000015" />
+  <node id="N325" lat="253.497496" lon="1600.125984" />
+  <node id="N326" lat="241.483437" lon="1850.334426" />
+  <node id="N327" lat="213.478126" lon="2100.389782" />
+  <node id="N328" lat="250.000000" lon="1369.999985" />
+  <node id="N329" lat="249.998504" lon="1600.042016" />
+  <node id="N330" lat="237.994563" lon="1850.055574" />
+  <node id="N331" lat="209.999874" lon="2100.000218" />
+  <node id="N332" lat="257.000000" lon="1370.000046" />
+  <node id="N333" lat="256.993495" lon="1600.294025" />
+  <node id="N334" lat="244.961435" lon="1850.723452" />
+  <node id="N335" lat="216.956126" lon="2100.778782" />
+  <node id="N336" lat="253.500000" lon="1369.999954" />
+  <node id="N337" lat="253.494505" lon="1600.209975" />
+  <node id="N338" lat="241.472565" lon="1850.444548" />
+  <node id="N339" lat="213.477874" lon="2100.389218" />
+  <node id="N340" lat="250.000000" lon="1369.999985" />
+  <node id="N341" lat="250.001497" lon="1599.957943" />
+  <node id="N342" lat="238.005439" lon="1849.944400" />
+  <node id="N343" lat="210.000126" lon="2099.999782" />
+  <node id="N344" lat="246.500000" lon="1370.000015" />
+  <node id="N345" lat="246.502503" lon="1599.874057" />
+  <node id="N346" lat="234.516561" lon="1849.665600" />
+  <node id="N347" lat="206.521874" lon="2099.610218" />
+  <node id="N348" lat="246.500000" lon="1369.999954" />
+  <node id="N349" lat="246.505498" lon="1599.789902" />
+  <node id="N350" lat="234.527441" lon="1849.555375" />
+  <node id="N351" lat="206.522126" lon="2099.610782" />
+  <node id="N352" lat="243.000000" lon="1370.000046" />
+  <node id="N353" lat="243.006502" lon="1599.706098" />
+  <node id="N354" lat="231.038559" lon="1849.276625" />
+  <node id="N355" lat="203.043874" lon="2099.221218" />
+  <node id="N356" lat="213.317827" lon="2101.114487" />
+  <node id="N357" lat="207.188645" lon="2119.351997" />
+  <node id="N358" lat="201.298642" lon="2137.715783" />
+  <node id="N359" lat="195.340585" lon="2156.116228" />
+  <node id="N360" lat="189.013511" lon="2174.434142" />
+  <node id="N361" lat="182.009107" lon="2192.559517" />
+  <node id="N362" lat="173.840331" lon="2210.483381" />
+  <node id="N363" lat="164.125897" lon="2227.763502" />
+  <node id="N364" lat="153.699103" lon="2244.512510" />
+  <node id="N365" lat="143.422653" lon="2261.136706" />
+  <node id="N366" lat="134.134832" lon="2278.037214" />
+  <node id="N367" lat="126.638640" lon="2295.633517" />
+  <node id="N368" lat="121.226938" lon="2313.898617" />
+  <node id="N369" lat="117.207876" lon="2332.732770" />
+  <node id="N370" lat="113.846217" lon="2351.913996" />
+  <node id="N371" lat="110.404305" lon="2371.172556" />
+  <node id="N372" lat="108.427577" lon="2380.710179" />
+  <node id="N373" lat="210.000173" lon="2099.999513" />
+  <node id="N374" lat="203.863355" lon="2118.260003" />
+  <node id="N375" lat="197.967358" lon="2136.642217" />
+  <node id="N376" lat="192.021415" lon="2155.005772" />
+  <node id="N377" lat="185.726489" lon="2173.231858" />
+  <node id="N378" lat="178.782893" lon="2191.202483" />
+  <node id="N379" lat="170.719669" lon="2208.898619" />
+  <node id="N380" lat="161.114103" lon="2225.980498" />
+  <node id="N381" lat="150.724897" lon="2242.667490" />
+  <node id="N382" lat="140.399347" lon="2259.373294" />
+  <node id="N383" lat="130.987168" lon="2276.506786" />
+  <node id="N384" lat="123.345360" lon="2294.448483" />
+  <node id="N385" lat="117.835062" lon="2313.035383" />
+  <node id="N386" lat="113.772124" lon="2332.065230" />
+  <node id="N387" lat="110.399783" lon="2351.304004" />
+  <node id="N388" lat="106.967695" lon="2370.509444" />
+  <node id="N389" lat="105.000423" lon="2379.999821" />
+  <node id="N390" lat="216.635815" lon="2102.229525" />
+  <node id="N391" lat="210.521637" lon="2120.421020" />
+  <node id="N392" lat="204.628628" lon="2138.793827" />
+  <node id="N393" lat="198.648542" lon="2157.259357" />
+  <node id="N394" lat="192.278384" lon="2175.695490" />
+  <node id="N395" lat="185.193787" lon="2194.011277" />
+  <node id="N396" lat="176.891011" lon="2212.199010" />
+  <node id="N397" lat="167.096812" lon="2229.613644" />
+  <node id="N398" lat="156.675989" lon="2246.352694" />
+  <node id="N399" lat="146.490152" lon="2262.821564" />
+  <node id="N400" lat="137.355012" lon="2279.408899" />
+  <node id="N401" lat="129.994111" lon="2296.627985" />
+  <node id="N402" lat="124.649788" lon="2314.630208" />
+  <node id="N403" lat="120.654849" lon="2333.336909" />
+  <node id="N404" lat="117.291210" lon="2352.529036" />
+  <node id="N405" lat="113.831298" lon="2371.883592" />
+  <node id="N406" lat="111.854577" lon="2381.421179" />
+  <node id="N407" lat="213.318185" lon="2101.114475" />
+  <node id="N408" lat="207.196363" lon="2119.328980" />
+  <node id="N409" lat="201.297372" lon="2137.720173" />
+  <node id="N410" lat="195.329458" lon="2156.148643" />
+  <node id="N411" lat="188.991616" lon="2174.492510" />
+  <node id="N412" lat="181.968213" lon="2192.652723" />
+  <node id="N413" lat="173.770989" lon="2210.612990" />
+  <node id="N414" lat="164.085188" lon="2227.830356" />
+  <node id="N415" lat="153.702011" lon="2244.507306" />
+  <node id="N416" lat="143.467848" lon="2261.056436" />
+  <node id="N417" lat="134.208988" lon="2277.875101" />
+  <node id="N418" lat="126.701889" lon="2295.440015" />
+  <node id="N419" lat="121.258212" lon="2313.765792" />
+  <node id="N420" lat="117.219151" lon="2332.669091" />
+  <node id="N421" lat="113.844790" lon="2351.918964" />
+  <node id="N422" lat="110.394702" lon="2371.220408" />
+  <node id="N423" lat="108.427423" lon="2380.710821" />
+  <node id="N424" lat="108.500000" lon="2380.000586" />
+  <node id="N425" lat="108.441238" lon="2520.603553" />
+  <node id="N426" lat="75.266869" lon="2661.247376" />
+  <node id="N427" lat="23.415938" lon="2780.723291" />
+  <node id="N428" lat="3.464412" lon="2920.494487" />
+  <node id="N429" lat="105.000000" lon="2379.999414" />
+  <node id="N430" lat="104.964762" lon="2520.198447" />
+  <node id="N431" lat="71.945131" lon="2660.144624" />
+  <node id="N432" lat="20.048062" lon="2779.770709" />
+  <node id="N433" lat="-0.000412" lon="2919.999513" />
+  <node id="N434" lat="111.999999" lon="2380.001735" />
+  <node id="N435" lat="111.848133" lon="2521.407458" />
+  <node id="N436" lat="78.477499" lon="2662.639489" />
+  <node id="N437" lat="26.880710" lon="2781.219096" />
+  <node id="N438" lat="6.929412" lon="2920.989487" />
+  <node id="N439" lat="108.500001" lon="2379.998265" />
+  <node id="N440" lat="108.371867" lon="2521.000542" />
+  <node id="N441" lat="75.156501" lon="2661.534511" />
+  <node id="N442" lat="23.513290" lon="2780.264904" />
+  <node id="N443" lat="3.464588" lon="2920.494513" />
+  <node id="N444" lat="105.000000" lon="2379.999411" />
+  <node id="N445" lat="105.035344" lon="2519.800646" />
+  <node id="N446" lat="72.055236" lon="2659.854268" />
+  <node id="N447" lat="19.952167" lon="2780.228481" />
+  <node id="N448" lat="0.000412" lon="2920.000487" />
+  <node id="N449" lat="101.500000" lon="2380.000589" />
+  <node id="N450" lat="101.558656" lon="2519.397354" />
+  <node id="N451" lat="68.732764" lon="2658.753732" />
+  <node id="N452" lat="16.583833" lon="2779.277519" />
+  <node id="N453" lat="-3.464412" lon="2919.505513" />
+  <node id="N454" lat="101.499999" lon="2379.998235" />
+  <node id="N455" lat="101.628451" lon="2518.996722" />
+  <node id="N456" lat="68.844599" lon="2658.462171" />
+  <node id="N457" lat="16.487387" lon="2779.732699" />
+  <node id="N458" lat="-3.464588" lon="2919.505487" />
+  <node id="N459" lat="98.000001" lon="2380.001765" />
+  <node id="N460" lat="98.151549" lon="2518.595278" />
+  <node id="N461" lat="65.521401" lon="2657.363829" />
+  <node id="N462" lat="13.118613" lon="2778.783301" />
+  <node id="N463" lat="-6.929412" lon="2919.010513" />
+  <way id="W0">
+    <nd ref="N0" />
+    <nd ref="N1" />
+    <nd ref="N2" />
+    <nd ref="N3" />
+    <nd ref="N4" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W1">
+    <nd ref="N5" />
+    <nd ref="N6" />
+    <nd ref="N7" />
+    <nd ref="N8" />
+    <nd ref="N9" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W2">
+    <nd ref="N10" />
+    <nd ref="N11" />
+    <nd ref="N12" />
+    <nd ref="N13" />
+    <nd ref="N14" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W3">
+    <nd ref="N15" />
+    <nd ref="N16" />
+    <nd ref="N17" />
+    <nd ref="N18" />
+    <nd ref="N19" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W4">
+    <nd ref="N20" />
+    <nd ref="N21" />
+    <nd ref="N22" />
+    <nd ref="N23" />
+    <nd ref="N24" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W5">
+    <nd ref="N25" />
+    <nd ref="N26" />
+    <nd ref="N27" />
+    <nd ref="N28" />
+    <nd ref="N29" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W6">
+    <nd ref="N30" />
+    <nd ref="N31" />
+    <nd ref="N32" />
+    <nd ref="N33" />
+    <nd ref="N34" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W7">
+    <nd ref="N35" />
+    <nd ref="N36" />
+    <nd ref="N37" />
+    <nd ref="N38" />
+    <nd ref="N39" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W8">
+    <nd ref="N40" />
+    <nd ref="N41" />
+    <nd ref="N42" />
+    <nd ref="N43" />
+    <nd ref="N44" />
+    <nd ref="N45" />
+    <nd ref="N46" />
+    <nd ref="N47" />
+    <nd ref="N48" />
+    <nd ref="N49" />
+    <nd ref="N50" />
+    <nd ref="N51" />
+    <nd ref="N52" />
+    <nd ref="N53" />
+    <nd ref="N54" />
+    <nd ref="N55" />
+    <nd ref="N56" />
+    <nd ref="N57" />
+    <nd ref="N58" />
+    <nd ref="N59" />
+    <nd ref="N60" />
+    <nd ref="N61" />
+    <nd ref="N62" />
+    <nd ref="N63" />
+    <nd ref="N64" />
+    <nd ref="N65" />
+    <nd ref="N66" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W9">
+    <nd ref="N67" />
+    <nd ref="N68" />
+    <nd ref="N69" />
+    <nd ref="N70" />
+    <nd ref="N71" />
+    <nd ref="N72" />
+    <nd ref="N73" />
+    <nd ref="N74" />
+    <nd ref="N75" />
+    <nd ref="N76" />
+    <nd ref="N77" />
+    <nd ref="N78" />
+    <nd ref="N79" />
+    <nd ref="N80" />
+    <nd ref="N81" />
+    <nd ref="N82" />
+    <nd ref="N83" />
+    <nd ref="N84" />
+    <nd ref="N85" />
+    <nd ref="N86" />
+    <nd ref="N87" />
+    <nd ref="N88" />
+    <nd ref="N89" />
+    <nd ref="N90" />
+    <nd ref="N91" />
+    <nd ref="N92" />
+    <nd ref="N93" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W10">
+    <nd ref="N94" />
+    <nd ref="N95" />
+    <nd ref="N96" />
+    <nd ref="N97" />
+    <nd ref="N98" />
+    <nd ref="N99" />
+    <nd ref="N100" />
+    <nd ref="N101" />
+    <nd ref="N102" />
+    <nd ref="N103" />
+    <nd ref="N104" />
+    <nd ref="N105" />
+    <nd ref="N106" />
+    <nd ref="N107" />
+    <nd ref="N108" />
+    <nd ref="N109" />
+    <nd ref="N110" />
+    <nd ref="N111" />
+    <nd ref="N112" />
+    <nd ref="N113" />
+    <nd ref="N114" />
+    <nd ref="N115" />
+    <nd ref="N116" />
+    <nd ref="N117" />
+    <nd ref="N118" />
+    <nd ref="N119" />
+    <nd ref="N120" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W11">
+    <nd ref="N121" />
+    <nd ref="N122" />
+    <nd ref="N123" />
+    <nd ref="N124" />
+    <nd ref="N125" />
+    <nd ref="N126" />
+    <nd ref="N127" />
+    <nd ref="N128" />
+    <nd ref="N129" />
+    <nd ref="N130" />
+    <nd ref="N131" />
+    <nd ref="N132" />
+    <nd ref="N133" />
+    <nd ref="N134" />
+    <nd ref="N135" />
+    <nd ref="N136" />
+    <nd ref="N137" />
+    <nd ref="N138" />
+    <nd ref="N139" />
+    <nd ref="N140" />
+    <nd ref="N141" />
+    <nd ref="N142" />
+    <nd ref="N143" />
+    <nd ref="N144" />
+    <nd ref="N145" />
+    <nd ref="N146" />
+    <nd ref="N147" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W12">
+    <nd ref="N148" />
+    <nd ref="N149" />
+    <nd ref="N150" />
+    <nd ref="N151" />
+    <nd ref="N152" />
+    <nd ref="N153" />
+    <nd ref="N154" />
+    <nd ref="N155" />
+    <nd ref="N156" />
+    <nd ref="N157" />
+    <nd ref="N158" />
+    <nd ref="N159" />
+    <nd ref="N160" />
+    <nd ref="N161" />
+    <nd ref="N162" />
+    <nd ref="N163" />
+    <nd ref="N164" />
+    <nd ref="N165" />
+    <nd ref="N166" />
+    <nd ref="N167" />
+    <nd ref="N168" />
+    <nd ref="N169" />
+    <nd ref="N170" />
+    <nd ref="N171" />
+    <nd ref="N172" />
+    <nd ref="N173" />
+    <nd ref="N174" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W13">
+    <nd ref="N175" />
+    <nd ref="N176" />
+    <nd ref="N177" />
+    <nd ref="N178" />
+    <nd ref="N179" />
+    <nd ref="N180" />
+    <nd ref="N181" />
+    <nd ref="N182" />
+    <nd ref="N183" />
+    <nd ref="N184" />
+    <nd ref="N185" />
+    <nd ref="N186" />
+    <nd ref="N187" />
+    <nd ref="N188" />
+    <nd ref="N189" />
+    <nd ref="N190" />
+    <nd ref="N191" />
+    <nd ref="N192" />
+    <nd ref="N193" />
+    <nd ref="N194" />
+    <nd ref="N195" />
+    <nd ref="N196" />
+    <nd ref="N197" />
+    <nd ref="N198" />
+    <nd ref="N199" />
+    <nd ref="N200" />
+    <nd ref="N201" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W14">
+    <nd ref="N202" />
+    <nd ref="N203" />
+    <nd ref="N204" />
+    <nd ref="N205" />
+    <nd ref="N206" />
+    <nd ref="N207" />
+    <nd ref="N208" />
+    <nd ref="N209" />
+    <nd ref="N210" />
+    <nd ref="N211" />
+    <nd ref="N212" />
+    <nd ref="N213" />
+    <nd ref="N214" />
+    <nd ref="N215" />
+    <nd ref="N216" />
+    <nd ref="N217" />
+    <nd ref="N218" />
+    <nd ref="N219" />
+    <nd ref="N220" />
+    <nd ref="N221" />
+    <nd ref="N222" />
+    <nd ref="N223" />
+    <nd ref="N224" />
+    <nd ref="N225" />
+    <nd ref="N226" />
+    <nd ref="N227" />
+    <nd ref="N228" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W15">
+    <nd ref="N229" />
+    <nd ref="N230" />
+    <nd ref="N231" />
+    <nd ref="N232" />
+    <nd ref="N233" />
+    <nd ref="N234" />
+    <nd ref="N235" />
+    <nd ref="N236" />
+    <nd ref="N237" />
+    <nd ref="N238" />
+    <nd ref="N239" />
+    <nd ref="N240" />
+    <nd ref="N241" />
+    <nd ref="N242" />
+    <nd ref="N243" />
+    <nd ref="N244" />
+    <nd ref="N245" />
+    <nd ref="N246" />
+    <nd ref="N247" />
+    <nd ref="N248" />
+    <nd ref="N249" />
+    <nd ref="N250" />
+    <nd ref="N251" />
+    <nd ref="N252" />
+    <nd ref="N253" />
+    <nd ref="N254" />
+    <nd ref="N255" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W16">
+    <nd ref="N256" />
+    <nd ref="N257" />
+    <nd ref="N258" />
+    <nd ref="N259" />
+    <nd ref="N260" />
+    <nd ref="N261" />
+    <nd ref="N262" />
+    <nd ref="N263" />
+    <nd ref="N264" />
+    <nd ref="N265" />
+    <nd ref="N266" />
+    <nd ref="N267" />
+    <nd ref="N268" />
+    <nd ref="N269" />
+    <nd ref="N270" />
+    <nd ref="N271" />
+    <nd ref="N272" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W17">
+    <nd ref="N273" />
+    <nd ref="N274" />
+    <nd ref="N275" />
+    <nd ref="N276" />
+    <nd ref="N277" />
+    <nd ref="N278" />
+    <nd ref="N279" />
+    <nd ref="N280" />
+    <nd ref="N281" />
+    <nd ref="N282" />
+    <nd ref="N283" />
+    <nd ref="N284" />
+    <nd ref="N285" />
+    <nd ref="N286" />
+    <nd ref="N287" />
+    <nd ref="N288" />
+    <nd ref="N289" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W18">
+    <nd ref="N290" />
+    <nd ref="N291" />
+    <nd ref="N292" />
+    <nd ref="N293" />
+    <nd ref="N294" />
+    <nd ref="N295" />
+    <nd ref="N296" />
+    <nd ref="N297" />
+    <nd ref="N298" />
+    <nd ref="N299" />
+    <nd ref="N300" />
+    <nd ref="N301" />
+    <nd ref="N302" />
+    <nd ref="N303" />
+    <nd ref="N304" />
+    <nd ref="N305" />
+    <nd ref="N306" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W19">
+    <nd ref="N307" />
+    <nd ref="N308" />
+    <nd ref="N309" />
+    <nd ref="N310" />
+    <nd ref="N311" />
+    <nd ref="N312" />
+    <nd ref="N313" />
+    <nd ref="N314" />
+    <nd ref="N315" />
+    <nd ref="N316" />
+    <nd ref="N317" />
+    <nd ref="N318" />
+    <nd ref="N319" />
+    <nd ref="N320" />
+    <nd ref="N321" />
+    <nd ref="N322" />
+    <nd ref="N323" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W20">
+    <nd ref="N324" />
+    <nd ref="N325" />
+    <nd ref="N326" />
+    <nd ref="N327" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W21">
+    <nd ref="N328" />
+    <nd ref="N329" />
+    <nd ref="N330" />
+    <nd ref="N331" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W22">
+    <nd ref="N332" />
+    <nd ref="N333" />
+    <nd ref="N334" />
+    <nd ref="N335" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W23">
+    <nd ref="N336" />
+    <nd ref="N337" />
+    <nd ref="N338" />
+    <nd ref="N339" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W24">
+    <nd ref="N340" />
+    <nd ref="N341" />
+    <nd ref="N342" />
+    <nd ref="N343" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W25">
+    <nd ref="N344" />
+    <nd ref="N345" />
+    <nd ref="N346" />
+    <nd ref="N347" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W26">
+    <nd ref="N348" />
+    <nd ref="N349" />
+    <nd ref="N350" />
+    <nd ref="N351" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W27">
+    <nd ref="N352" />
+    <nd ref="N353" />
+    <nd ref="N354" />
+    <nd ref="N355" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W28">
+    <nd ref="N356" />
+    <nd ref="N357" />
+    <nd ref="N358" />
+    <nd ref="N359" />
+    <nd ref="N360" />
+    <nd ref="N361" />
+    <nd ref="N362" />
+    <nd ref="N363" />
+    <nd ref="N364" />
+    <nd ref="N365" />
+    <nd ref="N366" />
+    <nd ref="N367" />
+    <nd ref="N368" />
+    <nd ref="N369" />
+    <nd ref="N370" />
+    <nd ref="N371" />
+    <nd ref="N372" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W29">
+    <nd ref="N373" />
+    <nd ref="N374" />
+    <nd ref="N375" />
+    <nd ref="N376" />
+    <nd ref="N377" />
+    <nd ref="N378" />
+    <nd ref="N379" />
+    <nd ref="N380" />
+    <nd ref="N381" />
+    <nd ref="N382" />
+    <nd ref="N383" />
+    <nd ref="N384" />
+    <nd ref="N385" />
+    <nd ref="N386" />
+    <nd ref="N387" />
+    <nd ref="N388" />
+    <nd ref="N389" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W30">
+    <nd ref="N390" />
+    <nd ref="N391" />
+    <nd ref="N392" />
+    <nd ref="N393" />
+    <nd ref="N394" />
+    <nd ref="N395" />
+    <nd ref="N396" />
+    <nd ref="N397" />
+    <nd ref="N398" />
+    <nd ref="N399" />
+    <nd ref="N400" />
+    <nd ref="N401" />
+    <nd ref="N402" />
+    <nd ref="N403" />
+    <nd ref="N404" />
+    <nd ref="N405" />
+    <nd ref="N406" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W31">
+    <nd ref="N407" />
+    <nd ref="N408" />
+    <nd ref="N409" />
+    <nd ref="N410" />
+    <nd ref="N411" />
+    <nd ref="N412" />
+    <nd ref="N413" />
+    <nd ref="N414" />
+    <nd ref="N415" />
+    <nd ref="N416" />
+    <nd ref="N417" />
+    <nd ref="N418" />
+    <nd ref="N419" />
+    <nd ref="N420" />
+    <nd ref="N421" />
+    <nd ref="N422" />
+    <nd ref="N423" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W32">
+    <nd ref="N424" />
+    <nd ref="N425" />
+    <nd ref="N426" />
+    <nd ref="N427" />
+    <nd ref="N428" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W33">
+    <nd ref="N429" />
+    <nd ref="N430" />
+    <nd ref="N431" />
+    <nd ref="N432" />
+    <nd ref="N433" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W34">
+    <nd ref="N434" />
+    <nd ref="N435" />
+    <nd ref="N436" />
+    <nd ref="N437" />
+    <nd ref="N438" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W35">
+    <nd ref="N439" />
+    <nd ref="N440" />
+    <nd ref="N441" />
+    <nd ref="N442" />
+    <nd ref="N443" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W36">
+    <nd ref="N444" />
+    <nd ref="N445" />
+    <nd ref="N446" />
+    <nd ref="N447" />
+    <nd ref="N448" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W37">
+    <nd ref="N449" />
+    <nd ref="N450" />
+    <nd ref="N451" />
+    <nd ref="N452" />
+    <nd ref="N453" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W38">
+    <nd ref="N454" />
+    <nd ref="N455" />
+    <nd ref="N456" />
+    <nd ref="N457" />
+    <nd ref="N458" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <way id="W39">
+    <nd ref="N459" />
+    <nd ref="N460" />
+    <nd ref="N461" />
+    <nd ref="N462" />
+    <nd ref="N463" />
+    <tag k="type" v="line_thin" />
+  </way>
+  <relation id="R0">
+    <member type="way" ref="W8" role="left" />
+    <member type="way" ref="W9" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="15.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="curved_commercial_boulevard.lane.1" />
+  </relation>
+  <relation id="R1">
+    <member type="way" ref="W12" role="left" />
+    <member type="way" ref="W13" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="15.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="curved_commercial_boulevard.lane.101" />
+  </relation>
+  <relation id="R2">
+    <member type="way" ref="W14" role="left" />
+    <member type="way" ref="W15" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="15.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="curved_commercial_boulevard.lane.102" />
+  </relation>
+  <relation id="R3">
+    <member type="way" ref="W10" role="left" />
+    <member type="way" ref="W11" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="15.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="curved_commercial_boulevard.lane.2" />
+  </relation>
+  <relation id="R4">
+    <member type="way" ref="W16" role="left" />
+    <member type="way" ref="W17" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="14.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="yes" />
+    <tag k="lanelet_id" v="eastbound_viaduct_entry.lane.1" />
+  </relation>
+  <relation id="R5">
+    <member type="way" ref="W18" role="left" />
+    <member type="way" ref="W19" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="14.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="yes" />
+    <tag k="lanelet_id" v="eastbound_viaduct_entry.lane.2" />
+  </relation>
+  <relation id="R6">
+    <member type="way" ref="W20" role="left" />
+    <member type="way" ref="W21" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="20.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="elevated_ring_east.lane.1" />
+  </relation>
+  <relation id="R7">
+    <member type="way" ref="W24" role="left" />
+    <member type="way" ref="W25" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="20.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="elevated_ring_east.lane.101" />
+  </relation>
+  <relation id="R8">
+    <member type="way" ref="W26" role="left" />
+    <member type="way" ref="W27" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="20.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="elevated_ring_east.lane.102" />
+  </relation>
+  <relation id="R9">
+    <member type="way" ref="W22" role="left" />
+    <member type="way" ref="W23" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="20.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="elevated_ring_east.lane.2" />
+  </relation>
+  <relation id="R10">
+    <member type="way" ref="W0" role="left" />
+    <member type="way" ref="W1" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="15.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="ground_signal_avenue.lane.1" />
+  </relation>
+  <relation id="R11">
+    <member type="way" ref="W4" role="left" />
+    <member type="way" ref="W5" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="15.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="ground_signal_avenue.lane.101" />
+  </relation>
+  <relation id="R12">
+    <member type="way" ref="W6" role="left" />
+    <member type="way" ref="W7" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="15.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="ground_signal_avenue.lane.102" />
+  </relation>
+  <relation id="R13">
+    <member type="way" ref="W2" role="left" />
+    <member type="way" ref="W3" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="15.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="ground_signal_avenue.lane.2" />
+  </relation>
+  <relation id="R14">
+    <member type="way" ref="W32" role="left" />
+    <member type="way" ref="W33" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="13.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="riverfront_return_road.lane.1" />
+  </relation>
+  <relation id="R15">
+    <member type="way" ref="W36" role="left" />
+    <member type="way" ref="W37" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="13.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="riverfront_return_road.lane.101" />
+  </relation>
+  <relation id="R16">
+    <member type="way" ref="W38" role="left" />
+    <member type="way" ref="W39" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="13.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="riverfront_return_road.lane.102" />
+  </relation>
+  <relation id="R17">
+    <member type="way" ref="W34" role="left" />
+    <member type="way" ref="W35" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="13.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="no" />
+    <tag k="lanelet_id" v="riverfront_return_road.lane.2" />
+  </relation>
+  <relation id="R18">
+    <member type="way" ref="W28" role="left" />
+    <member type="way" ref="W29" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="12.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="yes" />
+    <tag k="lanelet_id" v="westbound_viaduct_exit.lane.1" />
+  </relation>
+  <relation id="R19">
+    <member type="way" ref="W30" role="left" />
+    <member type="way" ref="W31" role="right" />
+    <tag k="type" v="lanelet" />
+    <tag k="subtype" v="road" />
+    <tag k="speed_limit" v="12.00" />
+    <tag k="location" v="urban" />
+    <tag k="one_way" v="yes" />
+    <tag k="lanelet_id" v="westbound_viaduct_exit.lane.2" />
+  </relation>
+  <relation id="RT0">
+    <member type="way" ref="W8" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="15.00" />
+    <tag k="lanelet_id" v="curved_commercial_boulevard.lane.1" />
+  </relation>
+  <relation id="RT1">
+    <member type="way" ref="W12" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="15.00" />
+    <tag k="lanelet_id" v="curved_commercial_boulevard.lane.101" />
+  </relation>
+  <relation id="RT2">
+    <member type="way" ref="W14" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="15.00" />
+    <tag k="lanelet_id" v="curved_commercial_boulevard.lane.102" />
+  </relation>
+  <relation id="RT3">
+    <member type="way" ref="W10" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="15.00" />
+    <tag k="lanelet_id" v="curved_commercial_boulevard.lane.2" />
+  </relation>
+  <relation id="RT4">
+    <member type="way" ref="W16" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="14.00" />
+    <tag k="lanelet_id" v="eastbound_viaduct_entry.lane.1" />
+  </relation>
+  <relation id="RT5">
+    <member type="way" ref="W18" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="14.00" />
+    <tag k="lanelet_id" v="eastbound_viaduct_entry.lane.2" />
+  </relation>
+  <relation id="RT6">
+    <member type="way" ref="W20" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="20.00" />
+    <tag k="lanelet_id" v="elevated_ring_east.lane.1" />
+  </relation>
+  <relation id="RT7">
+    <member type="way" ref="W24" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="20.00" />
+    <tag k="lanelet_id" v="elevated_ring_east.lane.101" />
+  </relation>
+  <relation id="RT8">
+    <member type="way" ref="W26" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="20.00" />
+    <tag k="lanelet_id" v="elevated_ring_east.lane.102" />
+  </relation>
+  <relation id="RT9">
+    <member type="way" ref="W22" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="20.00" />
+    <tag k="lanelet_id" v="elevated_ring_east.lane.2" />
+  </relation>
+  <relation id="RT10">
+    <member type="way" ref="W0" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="15.00" />
+    <tag k="lanelet_id" v="ground_signal_avenue.lane.1" />
+  </relation>
+  <relation id="RT11">
+    <member type="way" ref="W4" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="15.00" />
+    <tag k="lanelet_id" v="ground_signal_avenue.lane.101" />
+  </relation>
+  <relation id="RT12">
+    <member type="way" ref="W6" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="15.00" />
+    <tag k="lanelet_id" v="ground_signal_avenue.lane.102" />
+  </relation>
+  <relation id="RT13">
+    <member type="way" ref="W2" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="15.00" />
+    <tag k="lanelet_id" v="ground_signal_avenue.lane.2" />
+  </relation>
+  <relation id="RT14">
+    <member type="way" ref="W32" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="13.00" />
+    <tag k="lanelet_id" v="riverfront_return_road.lane.1" />
+  </relation>
+  <relation id="RT15">
+    <member type="way" ref="W36" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="13.00" />
+    <tag k="lanelet_id" v="riverfront_return_road.lane.101" />
+  </relation>
+  <relation id="RT16">
+    <member type="way" ref="W38" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="13.00" />
+    <tag k="lanelet_id" v="riverfront_return_road.lane.102" />
+  </relation>
+  <relation id="RT17">
+    <member type="way" ref="W34" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="13.00" />
+    <tag k="lanelet_id" v="riverfront_return_road.lane.2" />
+  </relation>
+  <relation id="RT18">
+    <member type="way" ref="W28" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="12.00" />
+    <tag k="lanelet_id" v="westbound_viaduct_exit.lane.1" />
+  </relation>
+  <relation id="RT19">
+    <member type="way" ref="W30" role="ref_line" />
+    <tag k="type" v="regulatory_element" />
+    <tag k="subtype" v="speed_limit" />
+    <tag k="speed_limit" v="12.00" />
+    <tag k="lanelet_id" v="westbound_viaduct_exit.lane.2" />
+  </relation>
+</osm>
