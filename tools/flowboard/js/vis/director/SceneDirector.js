@@ -29,6 +29,7 @@ import { createEffectView } from '../view/EffectView.js';
 import { createTrajectoryView } from '../view/TrajectoryView.js';
 import { createRoadFacilityView } from '../view/RoadFacilityView.js';
 import { createStreetFurnitureView } from '../view/StreetFurnitureView.js';
+import { createLaneDiagView } from '../view/LaneDiagView.js';
 import {
   tickDeadReckon, _dr,
   updateEntityDeadReckon, tickEntityDeadReckon, getEntitySmooth,
@@ -75,6 +76,9 @@ ViewRegistry.register('effect',       createEffectView);
 ViewRegistry.register('trajectory',   createTrajectoryView);
 ViewRegistry.register('roadFacility', createRoadFacilityView);
 ViewRegistry.register('streetFurniture', createStreetFurnitureView);
+/* 车道诊断叠加层（观测用）：默认关闭，由 app.js 的 K 键 / 场景视图开关 /
+ * ?lanediag=1 打开，避免影响常规观感。 */
+ViewRegistry.register('laneDiag',    createLaneDiagView);
 
 export function createSceneDirector(scene) {
   const store = createSceneStore();
@@ -111,7 +115,7 @@ export function createSceneDirector(scene) {
     ['env',   ['ground', 'viaduct']],
     ['road',  ['road', 'streetlight', 'barrier', 'connector', 'tree', 'construction', 'roadFacility', 'streetFurniture']],
     ['agent', ['vehicle', 'label', 'perception', 'effect', 'trajectory']],
-    ['infra', ['trafficLight', 'etcGate']],
+    ['infra', ['trafficLight', 'etcGate', 'laneDiag']],
   ]) {
     const layer = rootLayer.findDescendant(layerName);
     for (const vn of viewNames) {
@@ -150,6 +154,14 @@ export function createSceneDirector(scene) {
   }
 
   function update(topoData) {
+    /* 车道诊断数据先写 store，再走 scene 契约校验 —— LaneDiagView 读的是
+     * metrics 里的 planning_debug / lane_match / perceived_lanes，即使某一帧
+     * 的 metrics.scene 不完整，诊断叠加层也应显示最新值（观测优先于渲染）。 */
+    const diagMetrics = (topoData && topoData.metrics) || {};
+    store.planningDebug  = diagMetrics.planning_debug || null;
+    store.laneMatch      = diagMetrics.lane_match || null;
+    store.perceivedLanes = diagMetrics.perceived_lanes || null;
+
     /* Step 5 重构：校验逻辑下沉到 validateFrame 纯函数，
      * update() 只负责把校验结果 emit 到 _warnOnce + 实际构建。 */
     const v = validateFrame(topoData);
@@ -506,6 +518,7 @@ export function createSceneDirector(scene) {
   const getGroundView  = () => ViewRegistry.get('ground');
   const getViaductView = () => ViewRegistry.get('viaduct');
   const getVehicleView = () => ViewRegistry.get('vehicle');
+  const getLaneDiagView = () => ViewRegistry.get('laneDiag');
 
   /* ── Layer 树访问（调试 + dispose 用）── */
   function getRootLayer() { return rootLayer; }
@@ -521,5 +534,5 @@ export function createSceneDirector(scene) {
 
   return { init, update, tickAnimation, dispose,
            getStore, getRoadView, getGroundView, getViaductView, getVehicleView,
-           getRootLayer, getLayer, resetWarnings };
+           getLaneDiagView, getRootLayer, getLayer, resetWarnings };
 }

@@ -7,7 +7,14 @@
  *
  * Input topics:  road/geometry      — JSON road curve + lane params (from flowsim_node)
  *                vehicle/state      — ego x-position for curve evaluation
- * Output topics: perception/lanes   — JSON array of LaneBoundary objects
+ * Output topics: perception/lanes   — JSON object:
+ *                {frame_id, timestamp_us, ego:{x,y,heading}, model_frame,
+ *                 boundaries:[{lane_id, type, coeffs, pts, range, confidence,
+ *                              is_synthetic}]}
+ *
+ * 每个 boundary 除 coeffs（"沿世界 +x 的 y(x)"三次多项式模型）外，另带 pts：
+ * 世界 ENU 折线（沿自车 heading 前向采样），供 3D 前端直接绘制而不必反解
+ * 多项式。coeffs 保留以兼容既有消费者。
  *
  * Sandbox algorithm:
  *   From road_geometry JSON (curve_start_x, curve_length_m, curve_offset_m,
@@ -62,10 +69,12 @@ static struct {
     uint32_t frame_id;
     double   frequency_hz;
 
-    /* Current ego x-position — used for evaluating the road curve.
-     * Updated from vehicle/state so the lane boundaries track correctly
-     * as the vehicle moves. */
+    /* Current ego pose — used for evaluating the road curve and for placing
+     * the world-frame `pts` polyline. Updated from vehicle/state so the lane
+     * boundaries track correctly as the vehicle moves. */
     double ego_x;
+    double ego_y;
+    double ego_heading;
     volatile int has_ego_x;
 } g;
 
@@ -90,6 +99,10 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
         g.ego_x = j->valuedouble;
         g.has_ego_x = 1;
     }
+    if ((j = cJSON_GetObjectItemCaseSensitive(root, "y")) && cJSON_IsNumber(j))
+        g.ego_y = j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(root, "heading")) && cJSON_IsNumber(j))
+        g.ego_heading = j->valuedouble;
     cJSON_Delete(root);
 }
 
@@ -195,6 +208,15 @@ static int lane_detection_execute(TaskBase* task) {
         cJSON_AddNumberToObject(root, "frame_id", (double)g.frame_id);
         cJSON_AddNumberToObject(root, "timestamp_us", (double)clock_now_us());
 
+        /* 自车位姿：pts 与 coeffs 的共同参照。诊断面板据此把边界描回世界系，
+         * 并判断沙箱模型是否在有效域内（该模型假设道路沿世界 x 展开）。 */
+        cJSON* ego_obj = cJSON_CreateObject();
+        cJSON_AddNumberToObject(ego_obj, "x", g.ego_x);
+        cJSON_AddNumberToObject(ego_obj, "y", g.ego_y);
+        cJSON_AddNumberToObject(ego_obj, "heading", g.ego_heading);
+        cJSON_AddItemToObject(root, "ego", ego_obj);
+        cJSON_AddStringToObject(root, "model_frame", "ego_forward_world_x");
+
         cJSON* boundaries = cJSON_CreateArray();
 
         for (int i = 0; i < num; i++) {
@@ -224,6 +246,27 @@ static int lane_detection_execute(TaskBase* task) {
             cJSON_AddNumberToObject(b, "range", range_m);
             cJSON_AddNumberToObject(b, "confidence", dynamic_conf);
             cJSON_AddBoolToObject(b, "is_synthetic", 1);
+
+            /* 世界 ENU 折线（供 3D 前端直接绘制）：
+             *   px(k) = ego_x + s_k·cos(h)      —— 沿自车 heading 前向采样
+             *   py(k) = road_center_y_at(px(k)) + offset
+             * 直线路段（h=0）与 coeffs 模型完全一致；返程（|h|≈π）沿 -x 采样，
+             * 仍落在同一条道路中心曲线上，因此不会像 coeffs 那样反向失真。 */
+            {
+                const int PT_N = 17;
+                const double s_step = range_m / (double)(PT_N - 1);
+                const double ch = cos(g.ego_heading);
+                cJSON* pts = cJSON_CreateArray();
+                for (int k = 0; k < PT_N; k++) {
+                    const double px = g.ego_x + s_step * (double)k * ch;
+                    const double py = road_center_y_at(px) + offset;
+                    cJSON* pt = cJSON_CreateArray();
+                    cJSON_AddItemToArray(pt, cJSON_CreateNumber(px));
+                    cJSON_AddItemToArray(pt, cJSON_CreateNumber(py));
+                    cJSON_AddItemToArray(pts, pt);
+                }
+                cJSON_AddItemToObject(b, "pts", pts);
+            }
             cJSON_AddItemToArray(boundaries, b);
         }
 

@@ -34,6 +34,18 @@ export const SCENE = {
   srGroundTint: 0x39424d,
 };
 
+/* ── 车道诊断叠加层配色（诊断语义色，不参与 junction_markings 换肤锁定）──
+ * 四组数据必须一眼可分，任何一组与其它组撞色都会让"谁跟谁不一致"读不出来：
+ *   ① 规划参考线（规划在追的车道中心）  ② 车道格网（系统认为的车道在哪）
+ *   ③ 权威车道定位（esmini Frenet 解算） ④ 感知车道线（沙箱合成边界）
+ * 刻意避开 SCENE.lineWhite/lineYellow —— 那是路面标线本身，不是诊断量。 */
+export const LANE_DIAG = {
+  plannerRef: 0x00e5ff,   // 青：规划参考线
+  lattice:    0x8b949e,   // 灰：车道格网
+  laneMatch:  0x3fb950,   // 绿：权威车道定位
+  detected:   0xff9f1c,   // 橙：感知车道线（synthetic）
+};
+
 /* ── 仪表盘 UI 调色板（CSS 字符串，与 css/style.css :root 变量一一对应）── */
 export const UI = {
   bg: '#0d1117',          // 页面底

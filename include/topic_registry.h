@@ -149,8 +149,8 @@
  *   CONSUMERS: scene_assembler_node [alt]
  *
  * TOPIC_PERCEPTION_LANES:
- *   PRODUCERS: lane_detection_node [alt]
- *   CONSUMERS: scene_assembler_node [alt]
+ *   PRODUCERS: lane_detection_node [alt]; lane_detection_node [dev pipeline — 沙箱合成边界，非真实相机检测]
+ *   CONSUMERS: scene_assembler_node [alt]; monitor_node [dev pipeline — 透传到 metrics.perceived_lanes 供 3D 对账]
  *
  * TOPIC_PERCEPTION_TRAFFIC_LIGHTS:
  *   PRODUCERS: traffic_light_recognition_node [alt]

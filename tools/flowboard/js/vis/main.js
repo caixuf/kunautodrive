@@ -604,6 +604,15 @@ export function setRenderPaused(paused) {
   if (_perfMonitor) _perfMonitor.setActive(!_renderPaused);
 }
 
+/** 车道诊断叠加层开关（app.js 的 K 键 / 场景视图 checkbox / ?lanediag=1）。
+ *  返回是否成功切到目标状态（scene 未就绪时返回 false，不抛错）。 */
+export function setLaneDiagVisible(on) {
+  const view = _director ? _director.getLaneDiagView() : null;
+  if (!view || typeof view.setVisible !== 'function') return false;
+  view.setVisible(on);
+  return true;
+}
+
 // scene3d 已在模块顶部 export let 声明，init3DScene 里赋值
 
 /** 切换视角 */

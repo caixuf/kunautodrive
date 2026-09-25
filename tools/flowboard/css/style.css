@@ -139,6 +139,22 @@ body[data-workspace="perf"] .ws-operate,
 #game-toggle.active + #game-rescue{display:block}
 #game-hud{display:none;position:absolute;left:14px;bottom:14px;z-index:29;width:270px;padding:13px 15px;border-radius:12px;background:#08111de8;border:1px solid #58a6ff88;box-shadow:0 8px 28px #000b;backdrop-filter:blur(8px);pointer-events:none}
 #game-hud.active{display:block}
+/* 车道诊断叠加层（LaneDiagView 的开关 + 判读面板）。
+   按钮放左侧第二行（避开 top:14px 的「接管车辆」），面板放右下（避开左下
+   game-hud 与右上 FPS 面板）。面板配色与 3D 叠加层的四组线一一对应。 */
+#lane-diag-toggle{position:absolute;left:14px;top:52px;z-index:30;background:#161b22dd;border-color:#00e5ff;color:#8be9fd;font-weight:700}
+#lane-diag-toggle.active{background:linear-gradient(135deg,#05505e,#0b7285);border-color:#00e5ff;color:#fff}
+#lane-diag-hud{display:none;position:absolute;right:14px;bottom:14px;z-index:29;width:306px;padding:11px 13px;border-radius:12px;background:#08111de8;border:1px solid #00e5ff66;box-shadow:0 8px 28px #000b;backdrop-filter:blur(8px);pointer-events:none;font:11px/1.6 'JetBrains Mono',monospace;color:#8b949e}
+#lane-diag-hud.active{display:block}
+#lane-diag-hud .ld-row{display:grid;grid-template-columns:1fr auto;gap:2px 10px}
+#lane-diag-hud .ld-row b{color:#fff;text-align:right}
+#lane-diag-hud .ld-verdict{margin-top:8px;padding:5px 8px;border-radius:6px;background:#0d3320;color:#3fb950;text-align:center;font-weight:800}
+#lane-diag-hud .ld-verdict.warn{background:#4d2a0a;color:#ffa94d}
+#lane-diag-hud .ld-verdict.bad{background:#4d1a1a;color:#ff7b72}
+#lane-diag-hud .ld-c-ref{color:#00e5ff}
+#lane-diag-hud .ld-c-lat{color:#8b949e}
+#lane-diag-hud .ld-c-match{color:#3fb950}
+#lane-diag-hud .ld-c-det{color:#ff9f1c}
 .game-hud-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px;text-transform:uppercase;letter-spacing:.08em;color:#58a6ff;font-weight:800}
 .game-hud-title b{font-size:9px;color:#3fb950;text-align:right}
 .game-hud-grid{display:grid;grid-template-columns:1fr auto;gap:4px 12px;font:11px/1.5 'JetBrains Mono',monospace;color:#8b949e}

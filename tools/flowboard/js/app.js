@@ -2,7 +2,7 @@
 // FlowBoard — Entry Point ES Module
 // ═══════════════════════════════════════════════════════════════
 // Imports from sub-modules
-import { init3DScene, resize3D, update3D, sceneReady, scene3d, setTopoData as setTopoData3D, setDebugCam, setCameraMode, resetCamera, resetMapView, closeNPCDetail, setPerfTier, togglePerfOverlay, toggleMinimap, setRenderPaused, setUserEnvironment } from './vis/main.js';
+import { init3DScene, resize3D, update3D, sceneReady, scene3d, setTopoData as setTopoData3D, setDebugCam, setCameraMode, resetCamera, resetMapView, closeNPCDetail, setPerfTier, togglePerfOverlay, toggleMinimap, setRenderPaused, setLaneDiagVisible, setUserEnvironment } from './vis/main.js';
 import { initCharts, updateCharts, onChartTopicChange, onChartRangeChange, setTopoData as setTopoDataChart } from './charts.js';
 import { safeCall, reportDiag, clearDiag, _auditSceneMaterials } from './utils.js';
 import { updateDeadReckon, _dr, initDeadReckon, tickDeadReckon } from './vis/core/DeadReckon.js';
@@ -1479,6 +1479,103 @@ function doPause() {
   document.getElementById('pause-btn').textContent = paused ? '▶ 继续' : '⏯ 暂停';
 }
 
+/* ═══════════════════════════════════════════════════════════════
+ * 车道诊断叠加层（LaneDiagView 的 3D 图层 + 这里的判读 HUD）
+ *
+ * 目的：把「地图/启发式标线 · 规划参考线 · 权威车道定位 · 感知车道线」四者
+ * 摆在同一屏，让"是不是感知出问题"可以直接读出来，而不是靠猜。
+ * 数据来自 monitor 透传的 metrics.planning_debug / lane_match / perceived_lanes；
+ * 感知支路（lane_detection）是沙箱合成边界，HUD 会明确标 synthetic。
+ * ═══════════════════════════════════════════════════════════════ */
+var laneDiagOn = false;
+var _lastLaneDiagHudMs = 0;
+var _LANE_DIAG_HUD_MS = 250;     // HUD 4Hz：诊断数据本身只有 ~2Hz
+var _CAR_HALF_W = 0.9;           // 半车宽（m）：判断"车轮压线"用
+
+function setLaneDiag(on, opts) {
+  laneDiagOn = !!on;
+  setLaneDiagVisible(laneDiagOn);
+  var btn = document.getElementById('lane-diag-toggle');
+  if (btn) btn.classList.toggle('active', laneDiagOn);
+  var hud = document.getElementById('lane-diag-hud');
+  if (hud) hud.classList.toggle('active', laneDiagOn);
+  if (laneDiagOn) updateLaneDiagHud(true);
+  if (!opts || !opts.silent) toast(laneDiagOn ? '车道诊断叠加层：开' : '车道诊断叠加层：关');
+}
+
+function toggleLaneDiag() { setLaneDiag(!laneDiagOn, null); }
+
+function _ldNum(v, digits) {
+  var n = Number(v);
+  if (!Number.isFinite(n)) return '--';
+  return n.toFixed(digits === undefined ? 2 : digits);
+}
+
+function _ldSet(id, text) {
+  var el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+
+function updateLaneDiagHud(force) {
+  if (!laneDiagOn) return;
+  var now = performance.now();
+  if (!force && now - _lastLaneDiagHudMs < _LANE_DIAG_HUD_MS) return;
+  _lastLaneDiagHudMs = now;
+
+  var m = (topoData && topoData.metrics) || {};
+  var pd = m.planning_debug || null;
+  var lm = m.lane_match || null;
+  var pl = m.perceived_lanes || null;
+
+  /* ① 规划参考线：target_lane_offset 是目标车道中心；ego_d 是自车在规划
+   * 参考系里的横向位置，两者之差就是"规划还差多少没把车拉回中心"。 */
+  var tgt = pd ? Number(pd.target_lane_offset) : NaN;
+  var egoD = pd ? Number(pd.ego_d) : NaN;
+  var laneW = (pd && Number(pd.lane_width)) || 3.5;
+  _ldSet('ld-ref', Number.isFinite(tgt) ? (tgt >= 0 ? '+' : '') + tgt.toFixed(2) + ' m' : '--');
+  _ldSet('ld-lat', (Number.isFinite(tgt) && Number.isFinite(egoD))
+    ? _ldNum(egoD - tgt) + ' m' : '--');
+
+  /* ② 车道格网来源：map.json 车道级数据，还是按 lane_width 的启发式兜底。
+   * 这一行决定了"画出来的标线能不能当基准"。 */
+  var rn = (m.scene && m.scene.road_network) || {};
+  var hasLaneData = !!(rn.lane_data && Object.keys(rn.lane_data).length);
+  var nLanes = (pd && Number(pd.n_lanes)) || (rn.edges && rn.edges[0] && Number(rn.edges[0].lanes)) || 0;
+  _ldSet('ld-lattice', (hasLaneData ? 'map.json' : '启发式') + ' · ' + (nLanes || '?') + ' 车道');
+
+  /* ③ 权威车道定位：esmini world_to_frenet 解算的 road/lane/offset（不是感知） */
+  var lmOk = !!(lm && lm.ok !== false && Number.isFinite(Number(lm.x)));
+  _ldSet('ld-match', lmOk ? ('road ' + _ldNum(lm.road_id, 0)) : '无解');
+  _ldSet('ld-match2', lmOk ? ('lane ' + _ldNum(lm.lane_id, 0) + ' / ' + _ldNum(lm.offset) + ' m') : '--');
+
+  /* ④ 感知车道线：沙箱合成边界（synthetic），不是真实相机检测 */
+  var nB = (pl && Array.isArray(pl.boundaries)) ? pl.boundaries.length : 0;
+  _ldSet('ld-det', nB > 0 ? (nB + ' 条 · synthetic') : '无数据');
+
+  /* 结论行：只陈述可观测的不一致，不做因果猜测 */
+  var vEl = document.getElementById('ld-verdict');
+  if (!vEl) return;
+  var text = '等待数据…';
+  var cls = '';
+  var offAbs = lmOk ? Math.abs(Number(lm.offset)) : NaN;
+  var residual = (Number.isFinite(tgt) && Number.isFinite(egoD)) ? Math.abs(egoD - tgt) : NaN;
+  if (!pd && !lm && nB === 0) {
+    text = '等待数据…';
+  } else if (Number.isFinite(offAbs) && offAbs > (laneW / 2) - _CAR_HALF_W) {
+    text = '自车压车道线（定位 offset ' + _ldNum(lm.offset) + ' m）';
+    cls = 'bad';
+  } else if (Number.isFinite(residual) && residual > 0.5) {
+    text = '规划横向未收敛（差 ' + _ldNum(egoD - tgt) + ' m）';
+    cls = 'warn';
+  } else if (nB === 0) {
+    text = '车道居中正常 · 感知支路无数据';
+  } else {
+    text = '居中正常';
+  }
+  vEl.textContent = text;
+  vEl.className = 'ld-verdict' + (cls ? ' ' + cls : '');
+}
+
 function clearFrames() {
   frames = [];
   frameCount = 0;
@@ -1499,6 +1596,9 @@ function updateAll() {
   // Phase 4.9: push topoData into the per-module stores first so each renderer
   // (scene3d, charts) reads from its own module-scoped var.
   setTopoData(topoData);
+
+  /* 车道诊断 HUD：内部按 4Hz 限流，未开启时直接 return（零开销） */
+  updateLaneDiagHud(false);
 
   const now = performance.now();
   // ── 工作区可见性门控 ──
@@ -2586,6 +2686,9 @@ function initAll() {
         if (okFlag) toast('独立地图已启用：' + mapId + '（路网来自 map.json，实体来自感知）');
       });
     }
+    /* ?lanediag=1 —— 直接进车道诊断视角（讨论"车压线/感知有没有看到车道线"
+     * 时免去每次手点开关）。 */
+    if (params.get('lanediag') === '1') setLaneDiag(true, {silent: true});
   } catch (_) {}
   switchWorkspace(workspaceMode || 'observe');
   // 1. Initialize D3 topology graph
@@ -2773,6 +2876,13 @@ document.addEventListener('keydown', function(ev) {
     return;
   }
 
+  // k — 车道诊断叠加层（规划参考线 / 车道格网 / 权威定位 / 感知车道线）
+  if (key === 'k') {
+    ev.preventDefault();
+    toggleLaneDiag();
+    return;
+  }
+
   // p — 切换性能悬浮窗
   if (key === 'p') {
     ev.preventDefault();
@@ -2819,6 +2929,7 @@ window.flowboard = {
   exitMapPreview: exitMapPreview,
   closeMapPreview: closeMapPreview,
   doPause: doPause,
+  toggleLaneDiag: toggleLaneDiag,
   clearFrames: clearFrames,
   resetView: resetView,
   // filter

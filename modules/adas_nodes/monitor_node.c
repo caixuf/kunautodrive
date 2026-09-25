@@ -251,6 +251,9 @@ static struct {
     /* 车道级定位（来自 localization/lane_match，诊断透传：权威 Frenet 解算
      * 与 vehicle/state 快照的漂移） */
     char lane_match_json[1024];
+    /* 感知车道线（来自 perception/lanes，诊断透传：沙箱合成边界 + 世界坐标
+     * 折线 pts）。boundaries ≤ 8 条 × 17 点 × 2 坐标，故留 8KB。 */
+    char perceived_lanes_json[8192];
     /* 安全故障注入/超时证据：保留最近一条完整 JSON，供 dashboard 与 CI evaluator
      * 消费。锁避免 topic 回调写入与 dashboard 序列化并发。 */
     char safety_evidence_json[2048];
@@ -901,6 +904,16 @@ static void on_lane_match(const Message* msg, void* user_data) {
     g.lane_match_json[copy] = '\0';
 }
 
+/* ── perception/lanes 订阅 — 缓存感知车道线（诊断透传） ── */
+static void on_perceived_lanes(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg) return;
+    size_t copy = msg->data_size;
+    if (copy >= sizeof(g.perceived_lanes_json)) copy = sizeof(g.perceived_lanes_json) - 1;
+    memcpy(g.perceived_lanes_json, msg->data, copy);
+    g.perceived_lanes_json[copy] = '\0';
+}
+
 static void on_safety_evidence(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg || msg->data_size == 0) return;
@@ -1205,6 +1218,15 @@ static void export_dashboard_json(void) {
         cJSON* lm = monitor_cJSON_Parse(g.lane_match_json);
         if (lm) {
             cJSON_AddItemToObject(metrics, "lane_match", lm);
+        }
+    }
+
+    /* 感知车道线（沙箱 lane_detection 的合成边界，诊断透传）。
+     * 前端用它画"感知实际输出了什么"，与地图/启发式标线对账。 */
+    if (g.perceived_lanes_json[0]) {
+        cJSON* pl = monitor_cJSON_Parse(g.perceived_lanes_json);
+        if (pl) {
+            cJSON_AddItemToObject(metrics, "perceived_lanes", pl);
         }
     }
 
@@ -2198,6 +2220,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     transport_subscribe(transport, TOPIC_CONTROL_DEBUG, on_control_debug, NULL);
     transport_subscribe(transport, TOPIC_PLANNING_DEBUG, on_planning_debug, NULL);
     transport_subscribe(transport, TOPIC_LOCALIZATION_LANE_MATCH, on_lane_match, NULL);
+    transport_subscribe(transport, TOPIC_PERCEPTION_LANES, on_perceived_lanes, NULL);
     transport_subscribe(transport, "safety/evidence", on_safety_evidence, NULL);
     /* 收集其他节点的自描述广播 (方案B: 数据驱动拓扑感知) */
     transport_subscribe(transport, TOPIC_FLOWENGINE_NODE_INFO, on_node_info, NULL);
