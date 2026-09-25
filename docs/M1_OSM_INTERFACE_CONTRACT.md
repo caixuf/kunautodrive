@@ -1,4 +1,4 @@
-# M1 接口契约：D2-02 输出 OSM XML Schema（v1.0-clarify-2）
+# M1 接口契约：D2-02 输出 OSM XML Schema（v1.0-clarify-3）
 
 > **目的**：让 D2-02（转换器）和 D2-09（consistency gate）并行开发不打架。本文档是
 > `tools/json_to_lanelet.py` **必须**产出的 OSM XML 格式唯一权威定义。
@@ -95,12 +95,35 @@
 - `<member>` 角色：
   - `stop_line`：停止线 way
   - `ref_line`：受控 lanelet（本期复用普通 lane 的 left boundary way）
-- `<tag>`：
+- `<tag>` 顺序固定：
   1. `type` = `"regulatory_element"`
-  2. `subtype` = `"traffic_light"`（本期唯一）
-  3. `lanelet_id` = map.json 红绿灯对应的 lane id
+  2. `subtype` 见下表
+  3. `lanelet_id` = map.json 该设施对应的 lane id
+  4. 按 subtype 加额外 tag（见 §2.5.1~2.5.3）
 
----
+#### 2.5.1 `subtype="traffic_light"`（D2-02 既有）
+
+- members：`stop_line` + `ref_line`
+- tag 顺序：`type` / `subtype` / `lanelet_id`
+- 数据源：`map.json.landmarks.traffic_lights[]` 或顶层 `traffic_lights[]`，每条 lane 必须有 1 个
+
+#### 2.5.2 `subtype="speed_limit"`（D2-08 新增）
+
+- members：仅 `ref_line`（限速不需要停止线）
+- tag 顺序：`type` / `subtype` / `speed_limit` / `lanelet_id`
+- 数据源：`map.json.roads[].speed_limit`，每个有 speed_limit 的 lane 必须有 1 个
+- `speed_limit` 单位 m/s，**2 位小数**，与 lanelet relation 的 `speed_limit` 字段保持一致
+
+#### 2.5.3 `subtype="stop_line"`（D2-08 新增）
+
+- members：`stop_line` way + `ref_line`
+- tag 顺序：`type` / `subtype` / `lanelet_id`
+- 数据源：`map.json.landmarks.stop_lines[]`，每个 item 必须有 1 个
+- 与 `subtype=traffic_light` 的差异：本 subtype 没有 `refers` 虚拟元素，仅静态停止线本身
+
+#### 2.5.4 subtype 输出顺序固定（D2-02 字节级确定性要求）
+
+同一个 .osm 文件里，regulatory relation 的输出顺序严格按：`traffic_light` → `speed_limit` → `stop_line`。同 subtype 内按 lane id 字典序。
 
 ## 3. map.json → lanelet 字段映射
 
@@ -183,7 +206,7 @@ python3 ci/gates/lanelet_consistency_check.py [--map maps/<name>/map.json --osm 
 
 ---
 
-*文档版本：v1.0-clarify-2（D2-02 实现反馈后 §7.1 修正，gate Rule 3 改用几何中点）*
+*文档版本：v1.0-clarify-3（D2-08 新增 §2.5.2/2.5.3/2.5.4 + gate Rule 4/5）*
 *下一步：agent B / C 据此实现，agent A 据此文档化 submodule*
 
 ---

@@ -8,6 +8,8 @@
   - 停止线 way：<way id="W{i}">，<tag k="type" v="stop_line"/>
   - 车道关系：<relation id="R{i}">，member 先 left 后 right，tag 按固定顺序排布
   - 信号灯关系：<relation id="RT{i}">，subtype=traffic_light，排在所有车道 relation 之后
+  - 限速 sign (D2-08): <relation id="RT{i}">, subtype=speed_limit
+  - 独立停止线 (D2-08): <relation id="RT{i}">, subtype=stop_line
   - 字节级确定性：属性顺序固定、浮点 6 位小数、字典序稳定、空字段跳过不写
 
 用法:
@@ -60,9 +62,11 @@ class OSMLaneletRelation:
 @dataclass(frozen=True)
 class OSMRegulatoryRelation:
     id: str
-    stop_line_way_id: str
+    subtype: str  # "traffic_light" | "speed_limit" | "stop_line"
+    stop_line_way_id: str  # "" if no stop_line way (speed_limit subtype)
     ref_line_way_id: str
     lanelet_id: str
+    speed_limit: str | None = None  # only for speed_limit subtype
 
 
 def offset_left(pts: list[tuple[float, float]], d: float) -> list[tuple[float, float]]:
@@ -292,10 +296,55 @@ def convert_map_dict(data: dict) -> str:
     for rt_idx, reg in enumerate(reg_relations_raw):
         regulatory_relations.append(OSMRegulatoryRelation(
             id=f"RT{rt_idx}",
+            subtype="traffic_light",
             stop_line_way_id=reg["stop_way_id"],
             ref_line_way_id=reg["ref_way_id"],
             lanelet_id=reg["lane_id"],
         ))
+
+    # 5b. speed_limit regulatory relations (D2-08 / contract 2.5.2)
+    speed_limit_rels: list[OSMRegulatoryRelation] = []
+    for info in sorted_lanes:
+        sl_str = info.get("speed_limit")
+        if sl_str is None:
+            continue
+        speed_limit_rels.append(OSMRegulatoryRelation(
+            id=f"RT{len(regulatory_relations) + len(speed_limit_rels)}",
+            subtype="speed_limit",
+            stop_line_way_id="",
+            ref_line_way_id=info["left_way_id"],
+            lanelet_id=info["lane_id"],
+            speed_limit=sl_str,
+        ))
+
+    # 5c. 独立 stop_line regulatory relations (D2-08 / contract 2.5.3)
+    stop_line_rels: list[OSMRegulatoryRelation] = []
+    raw_stop_lines = []
+    if isinstance(data.get("landmarks"), dict):
+        raw_stop_lines = data["landmarks"].get("stop_lines", [])
+    if not isinstance(raw_stop_lines, list):
+        raw_stop_lines = []
+    for sl in raw_stop_lines:
+        if not isinstance(sl, dict):
+            continue
+        sl_lane = sl.get("lane") or sl.get("lane_id")
+        if not sl_lane or str(sl_lane) not in lane_by_id:
+            continue
+        target = lane_by_id[str(sl_lane)]
+        stop_wid = f"W{way_id_counter}"
+        way_id_counter += 1
+        stop_refs = (target["left_node_ids"][-1], target["right_node_ids"][-1])
+        ways.append(OSMWay(id=stop_wid, nd_refs=stop_refs, way_type="stop_line"))
+        stop_line_rels.append(OSMRegulatoryRelation(
+            id=f"RT{len(regulatory_relations) + len(speed_limit_rels) + len(stop_line_rels) - 1}",
+            subtype="stop_line",
+            stop_line_way_id=stop_wid,
+            ref_line_way_id=target["left_way_id"],
+            lanelet_id=str(sl_lane),
+        ))
+
+    # 5d. 合并 regulatory 顺序: traffic_light -> speed_limit -> stop_line (contract 2.5.4)
+    all_regulatory = regulatory_relations + speed_limit_rels + stop_line_rels
 
     # 6. 按照字节级确定性格式组装 XML 字符串
     lines: list[str] = [
@@ -326,12 +375,15 @@ def convert_map_dict(data: dict) -> str:
         lines.append(f'    <tag k="lanelet_id" v="{rel.lanelet_id}" />')
         lines.append('  </relation>')
 
-    for rt in regulatory_relations:
+    for rt in all_regulatory:
         lines.append(f'  <relation id="{rt.id}">')
-        lines.append(f'    <member type="way" ref="{rt.stop_line_way_id}" role="stop_line" />')
+        if rt.stop_line_way_id:
+            lines.append(f'    <member type="way" ref="{rt.stop_line_way_id}" role="stop_line" />')
         lines.append(f'    <member type="way" ref="{rt.ref_line_way_id}" role="ref_line" />')
         lines.append('    <tag k="type" v="regulatory_element" />')
-        lines.append('    <tag k="subtype" v="traffic_light" />')
+        lines.append(f'    <tag k="subtype" v="{rt.subtype}" />')
+        if rt.subtype == "speed_limit" and rt.speed_limit is not None:
+            lines.append(f'    <tag k="speed_limit" v="{rt.speed_limit}" />')
         lines.append(f'    <tag k="lanelet_id" v="{rt.lanelet_id}" />')
         lines.append('  </relation>')
 

@@ -84,9 +84,23 @@ class TestJsonToLanelet(unittest.TestCase):
         self.assertEqual(root.get("version"), "0.6")
         self.assertEqual(root.get("generator"), "json_to_lanelet.py")
 
-        # 2 条车道 → 2 个 lanelet relation
+        # 2 条车道 → 2 lanelet relations + 2 speed_limit regulatory (D2-08)
         relations = root.findall("relation")
-        self.assertEqual(len(relations), 2)
+        self.assertEqual(len(relations), 4)
+
+        # lanelet vs regulatory 分桶
+        lanelet_rels = [r for r in relations
+                        if {t.get("k"): t.get("v") for t in r.findall("tag")}.get("type") == "lanelet"]
+        regulatory_rels = [r for r in relations
+                           if {t.get("k"): t.get("v") for t in r.findall("tag")}.get("type") == "regulatory_element"]
+        self.assertEqual(len(lanelet_rels), 2)
+        self.assertEqual(len(regulatory_rels), 2)
+
+        # speed_limit regulatory 必须包含 speed_limit tag (D2-08)
+        for rr in regulatory_rels:
+            tags = {t.get("k"): t.get("v") for t in rr.findall("tag")}
+            self.assertEqual(tags.get("subtype"), "speed_limit")
+            self.assertEqual(tags.get("speed_limit"), "13.89")
 
         # 每条车道有 left/right 2 个 way → 共 4 个 way
         ways = root.findall("way")
@@ -94,8 +108,9 @@ class TestJsonToLanelet(unittest.TestCase):
 
         way_by_id = {w.get("id"): w for w in ways}
 
-        # 验证每个 relation 的 left/right way 节点数等于 centerline 节点数 (3)
-        for rel in relations:
+        # 验证每个 lanelet relation 的 left/right way 节点数等于 centerline 节点数 (3)
+        # (regulatory 的 member 数不同，单独验证)
+        for rel in lanelet_rels:
             members = rel.findall("member")
             self.assertEqual(len(members), 2)
             left_ref = next(m.get("ref") for m in members if m.get("role") == "left")
@@ -105,6 +120,12 @@ class TestJsonToLanelet(unittest.TestCase):
             right_nds = way_by_id[right_ref].findall("nd")
             self.assertEqual(len(left_nds), 3)
             self.assertEqual(len(right_nds), 3)
+
+        # speed_limit regulatory 只有 ref_line member (无 stop_line), 验证
+        for rel in regulatory_rels:
+            members = rel.findall("member")
+            self.assertEqual(len(members), 1)
+            self.assertEqual(members[0].get("role"), "ref_line")
 
         # 验证节点总数: 2 lanes * 2 ways * 3 points = 12 nodes
         nodes = root.findall("node")
@@ -207,6 +228,7 @@ class TestJsonToLanelet(unittest.TestCase):
             "roads": [
                 {
                     "id": "road_tl",
+                    "speed_limit": 13.89,
                     "lanes": [
                         {
                             "id": "road_tl.lane.1",
@@ -226,21 +248,32 @@ class TestJsonToLanelet(unittest.TestCase):
         root = ET.fromstring(xml_str)
 
         relations = root.findall("relation")
-        # 1 个 lanelet relation + 1 个 regulatory_element relation
-        self.assertEqual(len(relations), 2)
+        # 1 lanelet + 1 traffic_light + 1 speed_limit (D2-08) = 3 relations
+        self.assertEqual(len(relations), 3)
 
-        lanelet_rel = relations[0]
-        reg_rel = relations[1]
+        # 分桶
+        lanelet_rel = next(r for r in relations
+                           if {t.get("k"): t.get("v") for t in r.findall("tag")}.get("type") == "lanelet")
+        reg_rels = [r for r in relations
+                    if {t.get("k"): t.get("v") for t in r.findall("tag")}.get("type") == "regulatory_element"]
+        self.assertEqual(len(reg_rels), 2)
+
+        # traffic_light 和 speed_limit 各一个
+        subtypes = sorted({t.get("v") for r in reg_rels for t in r.findall("tag") if t.get("k") == "subtype"})
+        self.assertEqual(subtypes, ["speed_limit", "traffic_light"])
+
+        # 找 traffic_light regulatory (有 stop_line member)
+        tl_rel = next(r for r in reg_rels
+                      if {t.get("k"): t.get("v") for t in r.findall("tag")}.get("subtype") == "traffic_light")
 
         # 断言 RT 出现在车道 relation 之后
-        self.assertTrue(reg_rel.get("id").startswith("RT"))
-        reg_tags = {t.get("k"): t.get("v") for t in reg_rel.findall("tag")}
+        self.assertTrue(tl_rel.get("id").startswith("RT"))
+        reg_tags = {t.get("k"): t.get("v") for t in tl_rel.findall("tag")}
         self.assertEqual(reg_tags.get("type"), "regulatory_element")
         self.assertEqual(reg_tags.get("subtype"), "traffic_light")
         self.assertEqual(reg_tags.get("lanelet_id"), "road_tl.lane.1")
-
         # 检查 member roles: stop_line 和 ref_line
-        reg_members = {m.get("role"): m for m in reg_rel.findall("member")}
+        reg_members = {m.get("role"): m for m in tl_rel.findall("member")}
         self.assertIn("stop_line", reg_members)
         self.assertIn("ref_line", reg_members)
 
@@ -249,6 +282,15 @@ class TestJsonToLanelet(unittest.TestCase):
         stop_way = next(w for w in root.findall("way") if w.get("id") == stop_way_id)
         stop_tags = {t.get("k"): t.get("v") for t in stop_way.findall("tag")}
         self.assertEqual(stop_tags.get("type"), "stop_line")
+
+        # speed_limit regulatory: 仅 ref_line, 无 stop_line
+        sl_rel = next(r for r in reg_rels
+                      if {t.get("k"): t.get("v") for t in r.findall("tag")}.get("subtype") == "speed_limit")
+        sl_members = sl_rel.findall("member")
+        self.assertEqual(len(sl_members), 1)
+        self.assertEqual(sl_members[0].get("role"), "ref_line")
+        sl_tags = {t.get("k"): t.get("v") for t in sl_rel.findall("tag")}
+        self.assertEqual(sl_tags.get("speed_limit"), "13.89")
 
     def test_05_byte_level_determinism(self) -> None:
         """用例 5: 字节稳定性（同 map.json 跑两次输出 bytes 相等）"""
@@ -353,6 +395,140 @@ class TestJsonToLanelet(unittest.TestCase):
         bad_res = subprocess.run(bad_cmd, capture_output=True, text=True)
         self.assertNotEqual(bad_res.returncode, 0)
         self.assertIn("Error", bad_res.stderr)
+
+
+    def test_09_speed_limit_regulatory_element_D2_08(self) -> None:
+        """D2-08 用例 9: 限速 sign 独立为 subtype=speed_limit regulatory_element (无 stop_line member)"""
+        map_data = {
+            "schema_version": 1,
+            "map_id": "sl_test",
+            "roads": [
+                {
+                    "id": "road_sl",
+                    "type": "urban",
+                    "speed_limit": 13.89,  # m/s = 50 km/h
+                    "oneway": True,
+                    "lanes": [
+                        {
+                            "id": "road_sl.lane.1",
+                            "index": 1,
+                            "width": 3.5,
+                            "direction": 1,
+                            "centerline": [[0.0, 0.0], [50.0, 0.0]],
+                        }
+                    ],
+                }
+            ],
+            "traffic_lights": [],  # 明确不含 traffic_light
+            "landmarks": {"traffic_lights": [], "stop_lines": []},
+        }
+        xml_str = convert_map_dict(map_data)
+        root = ET.fromstring(xml_str)
+
+        relations = root.findall("relation")
+        # 1 lanelet + 1 speed_limit (no traffic_light, no stop_line) = 2 relations
+        self.assertEqual(len(relations), 2)
+
+        sl_rel = next(
+            r for r in relations
+            if {t.get("k"): t.get("v") for t in r.findall("tag")}.get("subtype") == "speed_limit"
+        )
+
+        # member: 仅 ref_line, 无 stop_line (限速不需要停止线)
+        members = sl_rel.findall("member")
+        self.assertEqual(len(members), 1)
+        self.assertEqual(members[0].get("role"), "ref_line")
+
+        # tag 顺序: type / subtype / speed_limit / lanelet_id
+        tags = [(t.get("k"), t.get("v")) for t in sl_rel.findall("tag")]
+        self.assertEqual(tags, [
+            ("type", "regulatory_element"),
+            ("subtype", "speed_limit"),
+            ("speed_limit", "13.89"),
+            ("lanelet_id", "road_sl.lane.1"),
+        ])
+
+    def test_10_independent_stop_line_regulatory_element_D2_08(self) -> None:
+        """D2-08 用例 10: 独立停止线 (landmarks.stop_lines[]) 转 subtype=stop_line"""
+        map_data = {
+            "schema_version": 1,
+            "map_id": "sl2_test",
+            "roads": [
+                {
+                    "id": "road_s2",
+                    "type": "urban",
+                    "oneway": True,
+                    "lanes": [
+                        {
+                            "id": "road_s2.lane.1",
+                            "index": 1,
+                            "width": 3.5,
+                            "direction": 1,
+                            "centerline": [[0.0, 0.0], [50.0, 0.0]],
+                        }
+                    ],
+                }
+            ],
+            "traffic_lights": [],  # 明确不含 traffic_light
+            "landmarks": {
+                "traffic_lights": [],
+                "stop_lines": [{"id": 0, "lane": "road_s2.lane.1"}],
+            },
+        }
+        xml_str = convert_map_dict(map_data)
+        root = ET.fromstring(xml_str)
+
+        relations = root.findall("relation")
+        # 1 lanelet + 1 stop_line (no traffic_light, no speed_limit because road has none) = 2
+        reg_rels = [r for r in relations
+                    if {t.get("k"): t.get("v") for t in r.findall("tag")}.get("type") == "regulatory_element"]
+        self.assertEqual(len(reg_rels), 1)
+        stop_rel = reg_rels[0]
+
+        # subtype = stop_line (不是 traffic_light)
+        tags = {t.get("k"): t.get("v") for t in stop_rel.findall("tag")}
+        self.assertEqual(tags.get("subtype"), "stop_line")
+        self.assertEqual(tags.get("lanelet_id"), "road_s2.lane.1")
+
+        # member: stop_line + ref_line
+        members = {m.get("role"): m for m in stop_rel.findall("member")}
+        self.assertIn("stop_line", members)
+        self.assertIn("ref_line", members)
+
+        # 输出顺序: traffic_light -> speed_limit -> stop_line (本例只有 stop_line)
+        # RT id 起始于 0
+        self.assertTrue(stop_rel.get("id").startswith("RT"))
+
+    def test_11_byte_stability_with_regulatory_D2_08(self) -> None:
+        """D2-08 用例 11: 字节稳定性在加上 speed_limit regulatory 后仍然保持"""
+        map_data = {
+            "schema_version": 1,
+            "map_id": "bs_test",
+            "roads": [
+                {
+                    "id": "r1",
+                    "type": "urban",
+                    "speed_limit": 13.89,
+                    "oneway": True,
+                    "lanes": [
+                        {
+                            "id": "r1.lane.1",
+                            "index": 1,
+                            "width": 3.5,
+                            "direction": 1,
+                            "centerline": [[0.0, 0.0], [30.0, 0.0]],
+                        }
+                    ],
+                }
+            ],
+            "landmarks": {"traffic_lights": [], "stop_lines": []},
+        }
+        out1 = convert_map_dict(map_data)
+        out2 = convert_map_dict(map_data)
+        self.assertEqual(out1, out2)
+        # RT id 仍然从 0 起, 且字节等于预期大小
+        self.assertIn('<relation id="RT0">', out1)
+        self.assertIn('<tag k="subtype" v="speed_limit"', out1)
 
 
 if __name__ == "__main__":

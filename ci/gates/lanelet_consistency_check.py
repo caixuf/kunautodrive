@@ -10,6 +10,8 @@
 3. centerline 起点坐标偏差 ≤ 1.0m（取 .osm 中 left/right way 第 1 个 nd ref 几何中点，map.json x/y 直比当
    同一坐标——M1 期内不投影；详见 M1_OSM_INTERFACE_CONTRACT.md §2.2）
 
+4. speed_limit regulatory_element 双向覆盖（D2-08 新增）：每个 map.json 有 `speed_limit` 的 lane 在 .osm 里能找到对应 subtype=speed_limit regulatory；反向亦然
+5. 独立 stop_line 双向覆盖（D2-08 新增）：每个 map.json.landmarks.stop_lines[] item 在 .osm 里能找到对应 subtype=stop_line regulatory；反向亦然
 退码语义（按契约 §5）：
   0 = 全绿
   1 = 有 mismatch（双向覆盖或坐标偏差超 1.0m）
