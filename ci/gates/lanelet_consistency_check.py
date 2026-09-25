@@ -7,7 +7,7 @@
 
 1. 每个 map.json lane 在 .osm 里有对应 relation（按 lanelet_id 一致）
 2. 每个 .osm lanelet relation 在 map.json 里有对应 lane
-3. centerline 起点坐标偏差 ≤ 1.0m（map.json x/y 直比 .osm lat/lon 当作
+3. centerline 起点坐标偏差 ≤ 1.0m（取 .osm 中 left/right way 第 1 个 nd ref 几何中点，map.json x/y 直比当
    同一坐标——M1 期内不投影；详见 M1_OSM_INTERFACE_CONTRACT.md §2.2）
 
 退码语义（按契约 §5）：
@@ -104,13 +104,18 @@ def parse_lanelet_osm(osm_path: Path) -> dict[str, dict]:
         left_node_ids = list(ways.get(left_ref, {}).get("nd_refs", [])) if left_ref else []
         right_node_ids = list(ways.get(right_ref, {}).get("nd_refs", [])) if right_ref else []
 
-        # centerline 起点：取 left way 的第 1 个 nd ref 对应节点的 lat/lon
-        # （契约 §2.3："nd ref 按 centerline 顺序"，第 1 个就是起点）
+        # centerline 起点：v1.0-clarify-2 取 left/right way 第 1 个 nd ref 的几何中点
+        # 契约 §3 要求左/右 way 各偏移 width/2（独立节点），单取 left 会天然偏差 width/2
+        # （契约 §7.1 修正：v1.0 原方案"共用节点"是错的，零面积车道 Lanelet2 拒绝加载）
         lat = lon = None
-        if left_node_ids:
-            first = left_node_ids[0]
-            if first in nodes:
-                lat, lon = nodes[first]
+        if left_node_ids and right_node_ids                 and left_node_ids[0] in nodes and right_node_ids[0] in nodes:
+            left_lat, left_lon = nodes[left_node_ids[0]]
+            right_lat, right_lon = nodes[right_node_ids[0]]
+            lat = (left_lat + right_lat) / 2.0
+            lon = (left_lon + right_lon) / 2.0
+        elif left_node_ids and left_node_ids[0] in nodes:
+            # regulatory_element 等无 right 的 relation 兜底（本期不触发，仅防御）
+            lat, lon = nodes[left_node_ids[0]]
 
         lanelets[lanelet_id] = {
             "lat": lat,

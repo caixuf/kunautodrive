@@ -1,4 +1,4 @@
-# M1 接口契约：D2-02 输出 OSM XML Schema（v1.0）
+# M1 接口契约：D2-02 输出 OSM XML Schema（v1.0-clarify-2）
 
 > **目的**：让 D2-02（转换器）和 D2-09（consistency gate）并行开发不打架。本文档是
 > `tools/json_to_lanelet.py` **必须**产出的 OSM XML 格式唯一权威定义。
@@ -183,7 +183,7 @@ python3 ci/gates/lanelet_consistency_check.py [--map maps/<name>/map.json --osm 
 
 ---
 
-*文档版本：v1.0（与 REQ_L3_DIR2_HDMAP.md v1.0 对齐，agy 四轮 10/10 通过）*
+*文档版本：v1.0-clarify-2（D2-02 实现反馈后 §7.1 修正，gate Rule 3 改用几何中点）*
 *下一步：agent B / C 据此实现，agent A 据此文档化 submodule*
 
 ---
@@ -193,18 +193,32 @@ python3 ci/gates/lanelet_consistency_check.py [--map maps/<name>/map.json --osm 
 > 本节由 v1.0 → v1.0-clarify 时补，记录 D2-09 consistency gate 实现时反馈的契约疑义。
 > D2-02 实现时**必须**按本节执行，否则 D2-09 会误报。
 
-### 7.1 way 的 nd ref 与 centerline 节点的关系（**关键**）
+### 7.1 way 的 nd ref 与 centerline 节点的关系（v1.0-clarify-2 修正）
 
-**规则**：D2-02 输出时，**每个 lane 的 left/right way 引用的 `<node>` 必须与该 lane 的 `centerline` 点一一对应**（共用同一组 `<node>`）。
+**v1.0-clarify §7.1 原方案错误**，经 D2-02 实现反馈后修正：
 
-具体实现要点：
-- 假设 `lanes[0].centerline = [[x0,y0], [x1,y1], [x2,y2]]`，则：
-  - left way 的 nd ref 序列 = `[node_x0, node_x1, node_x2]`
-  - right way 的 nd ref 序列 = `[node_x0, node_x1, node_x2]`（**共用节点**，仅靠 way 不同 + 后续 geometry 处理）
-- **不**能为 left/right 各自独立偏移出 6 个不同节点
-- left/right 的物理偏移由 `<way>` 的几何属性（Lanelet2 通过 left/right way 重建 centerline + width）或后续 M2 接入的 `<tag k="width">` 处理，**不**通过节点偏移实现
+**正确规则**（与 §3 工业标准一致）：
+- D2-02 输出时，**left/right way 各持独立 `<node>`**（分别按 centerline 法向量偏移 ±width/2）
+- 假设 `lanes[0].centerline = [[x0,y0], [x1,y1], [x2,y2]]`，`width = 3.0`：
+  - left way 的 nd ref = `[node_(x0,y0)_left, node_(x1,y1)_left, node_(x2,y2)_left]`
+  - right way 的 nd ref = `[node_(x0,y0)_right, node_(x1,y1)_right, node_(x2,y2)_right]`
+  - left 与 right **不共用节点**（共用会构成零面积车道，Lanelet2 拒绝加载）
 
-**为什么这么定**：D2-09 的 Rule 3（centerline 起点坐标偏差 ≤ 1.0m）取 left way 第 1 个 nd ref 对应节点的 lat/lon，必须保证 left way 的第 1 个节点 = centerline 第 1 个点。如果 left/right 各偏移独立节点，gate 会把"左边界起点"误判成"centerline 起点"。
+**D2-09 gate Rule 3 必须改用几何中点**（v1.0-clarify-2 同步修正）：
+```python
+# 旧（错）：取 left_way 第 1 个 nd ref 对应节点 → 对 width=3.0 的车道天然偏差 1.5m
+# 新（对）：取 left/right 第 1 个 nd ref 节点的几何中点
+center_start = (
+    (left_first_node.lon + right_first_node.lon) / 2,
+    (left_first_node.lat + right_first_node.lat) / 2,
+)
+dx = center_start[0] - map.x
+dy = center_start[1] - map.y
+if math.hypot(dx, dy) > 1.0:
+    flag_mismatch(...)
+```
+
+**§3 字段映射表的 width 描述不变**（仍要求左/右 way 各偏移 width/2）。
 
 ### 7.2 坐标语义（M1 期内）
 
