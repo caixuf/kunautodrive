@@ -1,13 +1,12 @@
-# 第 10 章：C++20 协程通信框架 FlowCoro
+# 第 10 章：用 C++20 协程拆掉回调地狱
 
-> **本章导读**：
-> 在自动驾驶系统中，节点往往需要同时等待多个异构传感器数据（如等待点云、等待 GPS、等待控制应答、设置超时看门狗）。在传统的异步 C 语言编程中，这通常会导致严重的**回调地狱（Callback Hell）**——业务状态被强行打散到数十个全局变量与回调函数中，状态同步和停机清理极易引发死锁与内存泄漏。
->
-> KunAutoDrive 构建了基于 **C++20 原生协程（Coroutines TS）** 的高性能通信运行时 **FlowCoro**。通过将 `MessageBus` 的 Pub/Sub、Req/Reply、Timer 与多路 Select 封装为标准 Awaitable 原语，开发者可以用**同步直序（Sequential）的代码逻辑编写高性能非阻塞异步系统**。
+写自动驾驶节点，最难忍的不是算法，是等待。一个融合节点要同时等点云、等 GPS、等定位服务的应答，每一路等待还得各自配一个超时看门狗。在传统的异步 C 写法里，这一整段业务会被拆成几十个回调函数，状态散落在全局变量之间，同步和停机的清理顺序稍微写错，就是死锁或者内存泄漏。
 
----
+KunAutoDrive 的 FlowCoro 换了个做法：把 `MessageBus` 的 Pub/Sub、Req/Reply、Timer 和多路 Select 都包成标准 awaitable 原语，于是等待可以写成从上往下读的直序代码——看上去是同步的，跑起来不占任何线程。
 
-## 1. 编程范式转移：从回调地狱到协程直序
+## 同一段等待，两种写法
+
+先看左边那种写法的后果，再看右边这种写法为什么能读得下去。
 
 ```
 传统回调驱动 (切碎的逻辑与散落的状态):
@@ -20,29 +19,27 @@
 │      ctx->got_gps = true;                                │
 │      if (ctx->got_lidar) trigger_fusion(ctx);            │
 │  }                                                       │
-│  缺陷：超时看门狗、异常重试、优雅停机代码极度晦涩冗长。 │
+│  缺陷：超时看门狗、异常重试、优雅停机代码极度晦涩冗长。  │
 └──────────────────────────────────────────────────────────┘
 
 FlowCoro C++20 协程驱动 (直序、清晰、确定性):
-┌──────────────────────────────────────────────────────────┐
-│  Task run() override {                                   │
-│      while (!should_stop()) {                            │
-│          // 50ms 超时等待点云，超时自动触发看门狗        │
-│          auto r = co_await next_for("sensor/lidar", 50000);│
-│          if (r.timed_out()) { watchdog_alert(); continue; }│
-│          auto pose = co_await ask("service/locate", req);│
-│          publish("fusion/result", compute(*r, pose));    │
-│      }                                                   │
-│  }                                                       │
+┌──────────────────────────────────────────────────────────────┐
+│  Task run() override {                                       │
+│      while (!should_stop()) {                                │
+│          // 50ms 超时等待点云，超时自动触发看门狗            │
+│        auto r = co_await next_for("sensor/lidar", 50000);    │
+│        if (r.timed_out()) { watchdog_alert(); continue; }    │
+│          auto pose = co_await ask("service/locate", req);    │
+│          publish("fusion/result", compute(*r, pose));        │
+│      }                                                       │
+│  }                                                           │
 │  优势：代码自上而下直叙；挂起时不占 CPU 线程；无锁优雅停机。 │
-└──────────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────────┘
 ```
 
----
+## 无栈协程在编译器眼里是什么
 
-## 2. C++20 协程底层机理与 FlowCoro 执行器
-
-C++20 协程是**无栈协程（Stackless Coroutines）**。编译器在编译期将包含 `co_await` 的函数转换为一个由堆分配的协程状态帧（Coroutine Frame）和一个内部有限状态机。
+C++20 协程是无栈协程。编译器在编译期把含 `co_await` 的函数改造成两样东西：一个堆上分配的协程状态帧（coroutine frame），和一个内部有限状态机。所谓挂起，并不是把函数卡在那里，而是把现场写进状态帧，然后返回。
 
 ```
 FlowCoro 执行模型:
@@ -54,7 +51,7 @@ FlowCoro 执行模型:
 │  │ (Ready Queue) │                 │ (执行至 co_await)    │ │
 │  └───────▲───────┘                 └──────────┬───────────┘ │
 │          │                                    │             │
-│          │ post_ready() 唤醒                  │ await_suspend│
+│         │ post_ready() 唤醒                  │ await_suspend│
 │          │                                    ▼             │
 │  ┌───────┴────────────────────────────────────────────────┐ │
 │  │             MessageBus / Timer 挂起等待监听器          │ │
@@ -62,16 +59,13 @@ FlowCoro 执行模型:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 2.1 线程局部执行器绑定（TLS 机制）
-为了确保多线程环境下的调度确定性，每个 Worker 线程维护一个唯一的 `g_node_exec` 线程局部变量（Thread Local Storage）：
-- 协程在 `await_suspend(handle)` 执行瞬间，从当前线程 TLS 读取 `RtExecutor*` 并记录在 Awaitable 内部；
-- 当外部总线分发线程收到消息触发回调时，直接调用记录的 `exec_->post_ready(handle)` 将协程投递回原执行器线程，**杜绝跨线程直接 resume 导致的竞态条件**。
+### 执行器怎么跟着协程走
 
----
+为了让多线程下的调度结果是确定的，每个 Worker 线程都维护一个自己的 `g_node_exec` 线程局部变量：协程执行到 `await_suspend(handle)` 的那一刻，从当前线程的 TLS 里读出 `RtExecutor*`，记在 awaitable 内部。之后外部总线分发线程收到消息、要唤醒这个协程时，走的不是 resume，而是调用当初记下的 `exec_->post_ready(handle)`，把协程投递回它自己的执行器线程。跨线程直接 resume 引发的那类竞态，就这样被挡在了门外。
 
-## 3. 核心 Awaitable 原语家族
+## 可以 co_await 的五样东西
 
-FlowCoro 提供了一套针对自动驾驶通信量身定制的 Awaitable 原语：
+这张表是 FlowCoro 针对通信场景定的原语，日常代码里出现的基本就这几个：
 
 | 原语 | 功能语义 | 典型应用场景 |
 | :--- | :--- | :--- |
@@ -81,9 +75,9 @@ FlowCoro 提供了一套针对自动驾驶通信量身定制的 Awaitable 原语
 | `co_await ask(service, req)` | 异步 RPC 请求挂起直到收到响应 | 路径规划向高精地图查询车道 |
 | `co_await sleep_us(duration_us)` | 协程定时休眠（不阻塞系统底层线程） | 控制循环高频降采样定频 |
 
----
+## 写一个带超时和多路选择的融合节点
 
-## 4. 实战：编写一个带超时与多路选择的融合协程节点
+把原语拼起来，一个节点的主循环就这么长。这段代码里同时用到了 `select`（点云和毫米波雷达谁先到先处理谁）、`ask_for`（20ms 超时的 RPC 查询）和 `sleep_us`（定频 100Hz）：
 
 ```cpp
 /* modules/adas_nodes/coro_fusion_node.cpp */
@@ -130,39 +124,15 @@ protected:
 EXPORT_COROUTINE_TASK(CoroFusionNode, coro_fusion_node)
 ```
 
----
+## 挂起的协程，怎么保证只被唤醒一次
 
-## 5. 优雅停机与无锁并发恢复保护（CAS Resume Guard）
+协程挂在那里等消息的时候，宿主进程可能恰好下发了 `stop()`。消息到达、超时定时器触发、停机信号，这三件事是可能同时发生的，而它们之中只能有一个真正生效。
 
-在协程被挂起等待消息的同时，若宿主进程发起了 `stop()` 停机指令，如何保证协程干净退出而不发生资源泄漏？
+`coroutine_task.h` 里的 `AwaitCtl` 就是管这件事的：一个基于 CAS（Compare-And-Swap）的原子恢复守卫。三路唤醒源要竞争同一个恢复权，CAS 保证同一个挂起句柄 `std::coroutine_handle<>` 在它的生命周期里有且仅被 resume 一次。少了这道守卫，两次恢复撞在一起就是段错误。
 
-KunAutoDrive 在 `coroutine_task.h` 中实现了 **CAS（Compare-And-Swap）原子恢复守卫 `AwaitCtl`**：
+## 顺手跑一遍 20Hz 心跳
 
-- **互斥唤醒**：消息到达、超时定时器触发、外部停机信号三者并发竞争恢复权；
-- **唯一恢复保证**：原子 CAS 确保同一个挂起句柄 `std::coroutine_handle<>` 在其生命周期内**有且仅被 resume 一次**，彻底消除了“双重恢复（Double Resume）引发的段错误”。
-
----
-
-## 6. 工业级避坑指南
-
-### 避坑 1：严禁跨 `co_await` 捕获局部变量的裸引用（Dangling Reference）
-- **致命陷阱**：
-  ```cpp
-  // 错误代码:
-  auto& ref = get_local_struct();
-  co_await next("sensor/lidar");
-  process(ref); // 灾难！挂起后局部栈帧可能已失效或被重新分配
-  ```
-- **黄金准则**：跨越 `co_await` 挂起点的所有持久变量，必须作为类的成员变量存储，或使用值传递（By-Value Copy）。
-
-### 避坑 2：禁止在异步回调线程直接调用 `handle.resume()`
-- `resume()` 会在当前调用者线程立即同步执行协程后续代码。如果在总线工作线程直接 resume，会导致总线工作线程被重型算法占用而阻塞整条总线。必须通过 `exec_->post_ready(handle)` 将任务交还给专属 Worker 线程。
-
----
-
-### 20Hz RtExecutor 心跳
-
-`src/rt_heartbeat_demo.cpp` 用与生产节点相同的 `flowcoro::rt::RtExecutor` + TLS `g_node_exec`，以 `rt::sleep_until` 对齐 20Hz，打印 tick 间隔 / tardiness，然后 `request_stop` + `shutdown` 退出。对照上游 `flowcoro/examples/autonomous_driving/rt_control_loop_demo.cpp`。
+`src/rt_heartbeat_demo.cpp` 用的是和生产节点相同的 `flowcoro::rt::RtExecutor` + TLS `g_node_exec`，以 `rt::sleep_until` 对齐 20Hz，打印 tick 间隔 / tardiness，然后 `request_stop` + `shutdown` 退出。可以拿它和上游 `flowcoro/examples/autonomous_driving/rt_control_loop_demo.cpp` 对照着看。
 
 ```bash
 cmake --build build --target rt_heartbeat_demo
@@ -171,6 +141,28 @@ cmake --build build --target rt_heartbeat_demo
 
 Sibling flowcoro：把仓库 clone 到 `../flowcoro` 后 configure，CMake 会优先用本地头，无需 FetchContent。
 
----
+## 协程里翻过的三次车
 
-*下一章预告：第 11 章将探讨任务调度核心——DAG 有向无环图依赖流与多核 CPU 亲和性调度器。*
+### 挂起点前面留了个裸引用
+
+现象很干脆：节点跑上几分钟，进程毫无征兆地 SIGSEGV，可一旦放慢复现节奏又什么都看不出来。最后是在代码里找到了这一段：
+
+- 当时的写法：
+  ```cpp
+  // 错误代码:
+  auto& ref = get_local_struct();
+  co_await next("sensor/lidar");
+  process(ref); // 灾难！挂起后局部栈帧可能已失效或被重新分配
+  ```
+
+问题出在 `ref`：它指向一个局部结构体，`co_await` 挂起之后那个栈帧可能已经失效或者被重新分配，再拿 `ref` 用，读到的就是垃圾内存。改法很简单也很死板：所有要跨越挂起点的持久变量，要么存成类的成员变量，要么按值拷贝一份。
+
+### 在总线回调线程里直接 resume
+
+`resume()` 会在当前调用者线程上立即同步执行协程后续代码。如果这条路径是总线工作线程走的，一个重型算法就能把整条总线堵在那里——现象是所有节点的消息延迟一起抬高，而不是某一个节点变慢。
+
+改法是把任务交还给协程自己的 Worker 线程：调 `exec_->post_ready(handle)`，而不是 `handle.resume()`。这也是上面那句「记下自己所属的执行器」真正的用处。
+
+### 同一个句柄被 resume 两次
+
+前面说过 `AwaitCtl` 的 CAS 守卫，这里说它还没写出来之前的样子：进程偶尔崩在 resume 的调用点上，core dump 里两个线程的栈都停在同一个 `coroutine_handle` 上——消息到了、超时也到了，两边都认为自己该唤醒这个协程。修法就是给恢复权加一把原子锁，让三路唤醒源去竞争，输的那两路直接放弃。

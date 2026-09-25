@@ -1,17 +1,12 @@
-# 附录 A：真车部署与硬件落地指南（SocketCAN & PWM）
+# 附录 A：把软件接到真车的最后一公里
 
-> **本章导读**：
-> 软件仿真的终点是物理世界的真车落地。无论是在 1:10 比例的 RC 智能小车（树莓派 / Jetson Orin Nano 底盘），还是在真实的乘用车/商用车线控底盘上，控制指令最终都必须通过物理电气接口（如 CAN 总线或 PWM 脉宽调制信号）发送给电子调速器（ESC）与转向舵机/线控转向机（EPS）。
->
-> 本附录详细梳理从 **KunAutoDrive 软件流水线到硬件电气接口的最后一公里**：涵盖 **Linux SocketCAN 内核网络驱动、MCP2515 SPI-CAN 模块配置、PCA9685 PWM 舵机驱动以及真车安全互锁规范**。
+仿真的终点是物理世界的那辆车。不管是 1:10 的 RC 小车（树莓派或 Jetson Orin Nano 底盘），还是乘用车、商用车的线控底盘，控制指令最终都得从软件变成电气信号，经 CAN 总线或 PWM 脉宽调制发给电调（ESC）和转向舵机或线控转向机（EPS）。这份附录讲的就是从 KunAutoDrive 软件流水线到硬件接口这最后一公里：Linux SocketCAN 驱动、MCP2515 这类 SPI-CAN 模块怎么配、PCA9685 怎么驱动舵机，以及真车上那几条不能破的安全约定。
 
----
-
-## 1. 硬件连接拓扑全景
+## 先看整体接线
 
 ```
   ┌─────────────────────────────────────────────────────────────┐
-  │         KunAutoDrive 软件流水线 (IPC / MessageBus)            │
+  │         KunAutoDrive 软件流水线 (IPC / MessageBus)          │
   │  control_node ──► safety_control_node (TTC 限幅) ──►        │
   └──────────────────────────────┬──────────────────────────────┘
                                  │ control/cmd (ControlCmd 消息)
@@ -24,7 +19,7 @@
                  │ (CAN 报文 / can0)             │ (I2C 脉冲 / dev/i2c-1)
                  ▼                              ▼
   ┌──────────────────────────────┐┌─────────────────────────────┐
-  │ 线控底盘 / 乘用车 CAN 网络    ││ PCA9685 16路 PWM 驱动板     │
+  │ 线控底盘 / 乘用车 CAN 网络    ││ PCA9685 16路 PWM 驱动板    │
   │ (500kbps 差分信号 CAN_H/L)   ││ (50Hz 周期, 1.0~2.0ms 脉宽) │
   └──────────────┬───────────────┘└─────────────┬───────────────┘
                  │                              │
@@ -32,21 +27,23 @@
      [真实线控转向 EPS / 刹车]           [ESC 电调油门 / 转向舵机]
 ```
 
----
+## 在 Linux 上和 CAN 总线说话
 
-## 2. Linux SocketCAN 驱动与报文编码
+### SocketCAN 是什么
 
-### 2.1 什么是 SocketCAN？
-SocketCAN 是 Linux 内核原生的 CAN 总线抽象层。它将 CAN 控制器虚拟化为标准的网络设备（如 `can0`, `vcan0`）。应用程序通过熟悉的 POSIX Socket API (`socket(PF_CAN, SOCK_RAW, CAN_RAW)`) 进行收发，就像收发 UDP/IP 数据包一样简单。
+SocketCAN 是 Linux 内核原生的 CAN 总线抽象层。它把 CAN 控制器虚拟化成标准的网络设备（比如 `can0`、`vcan0`），应用层用熟悉的 POSIX Socket API（`socket(PF_CAN, SOCK_RAW, CAN_RAW)`）收发，手感和收 UDP/IP 包差不多。
 
-### 2.2 树莓派 / Jetson 硬件使能（MCP2515 示例）
-在树莓派 `/boot/firmware/config.txt` 中开启 SPI 与 CAN 覆盖层：
+### 在树莓派 / Jetson 上把它打开（以 MCP2515 为例）
+
+先在树莓派的 `/boot/firmware/config.txt` 里打开 SPI 和 CAN 覆盖层：
+
 ```ini
 dtparam=spi=on
 dtoverlay=mcp2515-can0,oscillator=16000000,interrupt=25
 ```
 
-启动并配置波特率（通常汽车底盘为 500kbps）：
+再按车盘的波特率把接口拉起来，汽车底盘一般是 500kbps：
+
 ```bash
 # 配置 500kbps 速率并拉起接口
 sudo ip link set can0 type can bitrate 500000
@@ -57,7 +54,8 @@ candump can0
 cansend can0 100#0102030405060708
 ```
 
-### 2.3 C 语言 SocketCAN 报文打包（`actuator_node.c`）
+### 在 C 里把控制量打成 CAN 报文（`actuator_node.c`）
+
 ```c
 #include <linux/can.h>
 #include <linux/can/raw.h>
@@ -82,14 +80,9 @@ int send_can_frame(int socket_fd, uint32_t can_id, float throttle, float steer) 
 }
 ```
 
----
+## 用 PCA9685 驱动 RC 小车的舵机
 
-## 3. PCA9685 I2C-PWM 舵机驱动（RC 智能小车）
-
-在 1:10 遥控模型小车中，电调（ESC）和舵机通常接收 $50\text{ Hz}$（周期 $20\text{ ms}$）的标准 RC PWM 脉冲：
-- **$1.5\text{ ms}$ 脉宽（高电平）**：中立位置（停止 / 方向居中）；
-- **$1.0\text{ ms}$ 脉宽**：最大反向制动 / 左转打满；
-- **$2.0\text{ ms}$ 脉宽**：最大正向前进 / 右转打满。
+在 1:10 的遥控模型小车上，电调和舵机收的是标准 RC PWM 脉冲，频率 $50\text{ Hz}$、周期 $20\text{ ms}$，脉宽落在下面几个点上：$1.5\text{ ms}$ 是中立，也就是停车、方向居中；$1.0\text{ ms}$ 对应最大反向制动或左转打满；$2.0\text{ ms}$ 对应最大正向前进或右转打满。
 
 ```c
 /* modules/adas_nodes/actuator_pwm_node.c */
@@ -103,11 +96,9 @@ void set_servo_pulse(int i2c_fd, uint8_t channel, float normalized_val) {
 }
 ```
 
----
+## 真车上的宿主配置
 
-## 4. 真实上车配置：`pipeline_car.json`
-
-在真车上部署时，将宿主配置指定为真车专用的 `config/pipeline_car.json`：
+真车部署时，把宿主配置换成真车专用的 `config/pipeline_car.json`：
 
 ```json
 {
@@ -132,16 +123,8 @@ void set_servo_pulse(int i2c_fd, uint8_t channel, float normalized_val) {
 }
 ```
 
----
+## 上车前必须守住的两条
 
-## 5. 工业级安全上车守则
+第一条是关于急停的。任何纯软件的急停逻辑，都可能随着操作系统一起崩掉，所以真车底盘上要串一个常闭的物理断电急停开关，紧急时能直接切掉动力电池给电机的供电回路。
 
-### 守则 1：硬件物理急停开关（E-Stop）直连断电
-- 任何基于软件的急停逻辑都可能因操作系统崩溃而失效。真车底盘必须串联一个**常闭物理断电急停蘑菇头按键**，在紧急情况下直接切断动力电池给电机的供电回路。
-
-### 守则 2：CAN 总线超时自动锁死保护（Heartbeat Timeout）
-- ESC 与底层转向控制器必须内置独立的硬件定时器。若连续超过 $100\text{ ms}$ 未收到来自工控机的有效 CAN 控制帧，底层硬件必须**自动执行刹车并回正方向盘**，防止工控机死机时车辆保持油门飞车。
-
----
-
-*全书完结。祝您在 KunAutoDrive 的高性能自动驾驶与仿真开发之旅中取得丰硕成果！*
+第二条是通信超时怎么办。ESC 和底层转向控制器里要各自带一个独立的硬件定时器，一旦连续超过 $100\text{ ms}$ 没收到工控机发来的有效 CAN 帧，硬件就得自己刹车并回正方向盘，免得工控机死机时车还闷着头往前冲。

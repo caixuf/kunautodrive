@@ -1,15 +1,10 @@
-# 第 18 章：FlowSim 场景设计与路网仿真（FlowSim & OpenDRIVE）
+# 第 18 章：给算法造一个能反复练车的世界
 
-> **本章导读**：
-> 自动驾驶算法在实车上路之前，必须在仿真环境中经历数百万公里的虚拟测试。高保真度的仿真器不仅要模拟车辆动力学，还要能生成包含多车道、交叉路口、匝道汇入以及具备智能交互行为的交通流（NPC Actors）。
->
-> KunAutoDrive 内置了自主研发的离散动力学轻量级仿真器 **FlowSim**。本章深入讲解 **多 Edge 路网拓扑建模、Junction 连接道、NPC 交互状态机以及与 OpenDRIVE 标准高精地图格式的转换桥接**。
+算法在上真车之前，得先在仿真里跑够里程。可要造出这样一个世界并不轻松：它既要能摆出多车道、交叉路口和匝道汇入，还得让路上那些 NPC 车和人看起来像真的在开车。这一章讲 FlowSim 怎么用一份 JSON 把场景描述清楚，路网怎么从一条直线拼成完整主路线，以及它怎么和工业界的 OpenDRIVE 地图对接。
 
----
+## 一个场景文件里写了什么
 
-## 1. FlowSim 场景 DSL 数据模型
-
-KunAutoDrive 的场景由声明式 JSON 文件（如 `scenarios/city_to_highway_full.json`）定义，包含四大核心要素：
+一份场景就是一份声明式 JSON，比如 `scenarios/city_to_highway_full.json`。自车从哪起步、路网长什么样、路上有哪些 NPC，都在这一个文件里写清楚：
 
 ```json
 {
@@ -32,11 +27,9 @@ KunAutoDrive 的场景由声明式 JSON 文件（如 `scenarios/city_to_highway_
 }
 ```
 
----
+## 路网不是一条直线：多条 Edge 拼成主 Route
 
-## 2. 多 Edge 路网拓扑与主 Route 链构建
-
-在现实道路中，道路由多条线段、圆弧与缓和曲线（Spiral）顺次连接。
+现实里的路不会一直笔直，它由好几段线段、圆弧和缓和曲线顺次接起来。
 
 ```
 主 Route 拓扑链 (Route Chain):
@@ -46,11 +39,13 @@ KunAutoDrive 的场景由声明式 JSON 文件（如 `scenarios/city_to_highway_
 └──────────────┘     └──────────────┘     └──────────────┘     └──────────────┘
 ```
 
-### 2.1 端点平滑与航向连续性校验
-`Route::build()` 在加载场景时，自动校验相邻 Edge 的端点几何距离 $\Delta d < 0.01\text{ m}$ 与切线航向角跳变 $\Delta \psi < 0.05\text{ rad}$。若发现曲率不连续（G1/C2 不连续），自动插入过渡三次样条曲线。
+### 相邻路段的接缝怎么接平
 
-### 2.2 edge.type 语义与 3D 渲染分支绑定
-在场景配置文件中，`edge.type` 决定了仿真物理引擎的摩擦力系数与前端 Three.js 的 3D 模型渲染分支：
+加载场景时，`Route::build()` 会主动检查相邻 Edge 的端点几何距离 $\Delta d < 0.01\text{ m}$ 和切线航向角跳变 $\Delta \psi < 0.05\text{ rad}$。一旦发现曲率不连续（G1/C2 不连续），它会自动插一段过渡三次样条曲线把缝补上。
+
+### edge.type 一变，物理和渲染都跟着变
+
+场景配置里的 `edge.type` 不只是一个标签，它同时决定仿真物理引擎取多大的摩擦系数、以及前端 Three.js 走哪条渲染分支：
 
 | edge.type | 物理属性 | 渲染视图模型 (View) | 注意事项 |
 | :--- | :--- | :--- | :--- |
@@ -60,11 +55,9 @@ KunAutoDrive 的场景由声明式 JSON 文件（如 `scenarios/city_to_highway_
 | `ramp_curve` | 缓和曲线弯道 | RoadView 弯道曲面 Ribbon | 限制最高车速 $\le 40\text{ km/h}$ |
 | `cross_road` | 十字路口区域 | RoadView 交叉口多边形 | 支持配置信号灯相位 |
 
----
+## NPC 不是匀速滑动的点
 
-## 3. NPC 交通流交互智能（NPC AI & Behavior）
-
-FlowSim 中的交通参与者（NPC Vehicles / Pedestrians）不仅是简单的匀速点，而是运行着轻量级行为状态机的智能体：
+FlowSim 里的交通参与者，不管是车还是行人，都不是匀速滑动的点，它们各自跑着一个轻量的行为状态机：
 
 ```mermaid
 stateDiagram-v2
@@ -76,27 +69,12 @@ stateDiagram-v2
     NPC_YIELD_INTERSECTION --> NPC_FREE_CRUISE : 主干道车辆通过完毕
 ```
 
----
+## 接住现成的 OpenDRIVE 地图
 
-## 4. OpenDRIVE 标准高精地图双向转换桥接
+现实项目里，高精地图往往已经是 OpenDRIVE（`.xodr`）格式，为了不重造一遍，KunAutoDrive 在 `modules/adas_nodes/flowsim/esmini_stub.cpp` 里做了一层转换桥接：解析 `<planView>` 里的 Line、Spiral、Arc 几何原语，把 `<laneSection>` 的车道宽度多项式采样成自己的 `RoadNetwork::Edge`，再把 `<junction>` 拓扑翻译成内部的交叉路口拓扑矩阵。
 
-为了复用工业界标准的 OpenDRIVE（`.xodr`）高精地图，KunAutoDrive 在 `modules/adas_nodes/flowsim/esmini_stub.cpp` 中实现了转换桥接层：
-- 解析 OpenDRIVE 的 `<planView>` 中的 Line、Spiral、Arc 几何原语；
-- 将 `<laneSection>` 的车道宽度多项式采样为 KunAutoDrive 的 `RoadNetwork::Edge`；
-- 将 `<junction>` 拓扑解析为内部交叉路口拓扑矩阵。
+## 两个真的踩过的坑
 
----
+第一次是有人把一段平路场景标成了 `viaduct_highway`。现象是 3D 仪表盘里的红绿灯和行人要么悬在半空，要么掉到路面下方 7 米。查了一阵才反应过来，这个类型会强制走高架桥的抬高渲染逻辑，平路场景得老老实实写 `highway` 或 `urban`。
 
-## 5. 工业级避坑指南
-
-### 避坑 1：平路场景误标 `viaduct_highway` 导致 NPC 视觉沉降
-- **现象**：在前端 3D 仪表盘中，红绿灯或行人悬浮在空中或掉落到路面下方 7 米。
-- **原因**：`viaduct_highway` 会强制启用高架桥抬高渲染逻辑。平路场景**严禁**标记此类型，必须使用 `highway` 或 `urban`。
-
-### 避坑 2：Junction Connecting Road 上的 NPC 投影漂移
-- 放置在非主路线（如匝道汇入支路）上的 NPC，若跨越两个 Edge 的重叠连接区，最近邻投影算法可能会将其误投影到主线上，导致 NPC 瞬移。
-- **解决方案**：为支路 NPC 显式指定 `segment_id` 与局部 `s_offset`，禁止全局暴力最近邻搜索。
-
----
-
-*下一章预告：第 19 章将深入探讨端到端自动驾驶学习闭环（E2E Learning Loop 与 DAgger 训练）。*
+第二次出在匝道汇入的支路上。放在非主路线上的 NPC，一旦跨过两个 Edge 重叠的连接区，最近邻投影有时会把它误投到主线上，画面里就看着它瞬移。后来不再用全局暴力最近邻搜索，改成给支路 NPC 显式指定 `segment_id` 和局部 `s_offset`。

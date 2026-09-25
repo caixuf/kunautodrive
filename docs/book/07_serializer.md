@@ -1,14 +1,12 @@
+# 第 07 章：把类型错误挡在编译期
 
-# 第 07 章：零反射类型安全序列化层（Serializer & IDL）
+消息层里最危险的一行代码，是那个谁都不想写的强制转换。发布者发的是 `ImuData`，订阅者要是照着 `GpsData` 去解引用，内存会越界，而编译器一句话都不会说。
 
-> **本章导读**：
-> 在底层的 C/C++ 消息传输中，最危险的隐患莫过于“裸指针强制转换（`void*` Cast）”。如果发布者发送了 `ImuData`，而订阅者误按 `GpsData` 解引用，将直接引发内存越界与灾难性控制失误。然而，传统的序列化方案（如 Google Protobuf / ROS2 CDR）在嵌入式与微内核环境中又显得过于厚重且伴随多次内存拷贝。
->
-> KunAutoDrive 设计了一套**零反射、亚纳秒级开销的类型安全序列化层**：通过 **FNV-1a 编译期哈希 Type ID**、**IDL 代码生成器（`msg_codegen.py`）** 与 **`msg_cast<T>` 访问器**，在保证极致零拷贝性能的同时，实现了绝对的编译期与运行时类型安全。
+传统方案不是没有：Google Protobuf 和 ROS2 CDR 都能把类型管住。但在嵌入式与微内核环境里，它们显得厚重，还伴着多次内存拷贝。KunAutoDrive 想同时要到另外两样东西——零反射、亚纳秒级的开销，以及编译期与运行时都成立的类型安全。
 
----
+## 别人是怎么做的
 
-## 1. 自动驾驶序列化方案的技术选型与权衡
+三种方案放在一起，差别主要在拷贝次数和对运行时的依赖：
 
 | 序列化方案 | 内存拷贝开销 | 反射与运行时依赖 | 跨语言能力 | 动态类型安全 |
 | :--- | :---: | :---: | :---: | :---: |
@@ -16,11 +14,11 @@
 | **ROS2 CDR (FastDDS)** | 1~2 次 | 中 (依赖 Dynamic Types) | 强 | 强 |
 | **KunAutoDrive 零反射 IDL** | **0 次 (直接内联内存映射)** | **0 (纯宏 + FNV-1a Hash)** | 强 (C/C++/Python/JS) | **绝对安全 (ID 校验)** |
 
----
+表里那个 0 次拷贝不是省掉一次 `memcpy`，而是根本没打算把消息搬进另一块缓冲区：消息体就在总线上那块内存里，谁要用谁直接映射过去。
 
-## 2. 核心原理：FNV-1a 32 位类型哈希
+## 类型 ID 是算出来的，不是分配出去的
 
-KunAutoDrive 将消息类型名称（如 `"sensor/LidarFrame"`）通过 **FNV-1a 哈希算法** 在编译期映射为一个确定性的 `uint32_t type_id`：
+KunAutoDrive 把消息类型名称（如 `"sensor/LidarFrame"`）过一遍 FNV-1a 哈希算法，在编译期得到一个确定性的 `uint32_t type_id`：
 
 ```c
 /* 算法定义：初始基准值 2166136261，乘数 16777619 */
@@ -36,19 +34,18 @@ static inline uint32_t fnv1a_hash(const uint8_t* data, size_t len) {
 }
 ```
 
-每个通过 IDL 生成的消息头文件中，均硬编码该类型的唯一 ID：
+每个由 IDL 生成的消息头文件里，这个 ID 是硬编码进去的：
 ```c
 #define LIDAR_FRAME_TYPE_NAME "sensor/LidarFrame"
 #define LIDAR_FRAME_TYPE_ID   0x9A4F2C18u
 ```
 
----
+## 从一份 IDL 生成头文件和 JSON 序列化器
 
-## 3. IDL 消息定义与自动化代码生成
+结构体布局、类型 ID、序列化函数都不手写。KunAutoDrive 用声明式 IDL（`msg/adas_msgs.msg`）描述消息，再由 Python 生成器 `tools/msg_codegen.py` 自动产出 C 头文件与 JSON 序列化器。
 
-KunAutoDrive 采用声明式 IDL 格式（`msg/adas_msgs.msg`），通过 Python 代码生成器 `tools/msg_codegen.py` 自动产出 C 头文件与 JSON 序列化器。
+### IDL 长什么样
 
-### 3.1 IDL 语法示例
 ```
 # msg/adas_msgs.msg
 struct VehiclePose {
@@ -61,22 +58,21 @@ struct VehiclePose {
 }
 ```
 
-### 3.2 自动化流水线
+### 生成流水线
+
 ```bash
 python3 tools/msg_codegen.py msg/adas_msgs.msg build/gen/adas_msgs_gen.h
 ```
 
-生成的代码包含：
-1. **C 内存对齐结构体**：带确切的字节 padding；
-2. **C++ 模板特化**：绑定 `type_id`；
-3. **JSON 序列化/反序列化函数**：供 Web 仪表盘与日志导出使用；
-4. **二进制打包与校验函数**。
+生成物里有四样东西：
+1. C 内存对齐结构体：带确切的字节 padding；
+2. C++ 模板特化：绑定 `type_id`；
+3. JSON 序列化/反序列化函数：供 Web 仪表盘与日志导出使用；
+4. 二进制打包与校验函数。
 
----
+## msg_cast：只接收校验过的指针
 
-## 4. 类型安全转换器：`msg_cast` 机制
-
-当订阅者收到 `const Message* msg` 时，严禁直接强转，必须通过 `msg_cast` 访问器：
+订阅者收到 `const Message* msg` 之后直接强转，是最省事也最容易出事的一步。项目里只留一个入口——`msg_cast` 访问器：
 
 ```mermaid
 sequenceDiagram
@@ -93,7 +89,8 @@ sequenceDiagram
     end
 ```
 
-### 4.1 C++ 优雅模板实现
+### C++ 版本
+
 ```cpp
 /* include/serializer.h */
 template<typename T>
@@ -112,7 +109,8 @@ inline const T* msg_cast(const Message* msg) {
 }
 ```
 
-### 4.2 C 语言版本实现
+### C 版本
+
 ```c
 /* include/serializer.h */
 const void* msg_cast_c(const Message* msg, uint32_t expected_type_id, size_t expected_size) {
@@ -126,32 +124,23 @@ const void* msg_cast_c(const Message* msg, uint32_t expected_type_id, size_t exp
     ((const Type*)msg_cast_c((msg), Type##_TYPE_ID, sizeof(Type)))
 ```
 
----
+## 跨机传输时谁来做字节序翻转
 
-## 5. 跨平台大小端检测（Endian Marker）
+x86 主机和 ARM/DSP 边缘计算盒之间要传二进制数据，字节序得由数据自己说清楚。`Message` 结构里内嵌了 `endian_marker`：
 
-为了支持在 x86 主机与 ARM/DSP 边缘计算盒之间跨平台传输二进制数据，`Message` 结构内嵌 `endian_marker`：
-- **`0x12`**：小端模式（Little-Endian，主流 x86/ARM）；
-- **`0x21`**：大端模式（Big-Endian）；
-- 当读取端发现 `msg->endian_marker` 与本地架构相反时，自动触发针对浮点数与整型的 `bswap` 字节序翻转。
+- `0x12`：小端模式（Little-Endian，主流 x86/ARM）；
+- `0x21`：大端模式（Big-Endian）；
+- 读取端发现 `msg->endian_marker` 与本地架构相反时，自动对浮点数与整型做 `bswap` 字节序翻转。
 
----
+## 这两处我们都返工过
 
-## 6. 工业级避坑指南
+### 同一份数据算出两个 CRC
 
-### 避坑 1：结构体 Padding 未初始化引发传输脏数据
-在 C 语言中，结构体字段间的填充对齐字节（Padding）可能包含栈上的残留随机值。直接 `memcpy` 发送会导致：
-- 相同的有效数据，计算出不同的 MD5 / CRC；
-- 泄露栈内存中的敏感信息。
-- **最佳实践**：构造结构体前必须显式 `memset(&obj, 0, sizeof(obj))` 清零。
+现象是回放校验突然对不上：同一批有效数据，CRC 每次都不一样。原因在 C 结构体字段之间的填充对齐字节（Padding）——它们可能躺着栈上的残留随机值，直接 `memcpy` 发出去，这些字节也跟着上了线。除了校验对不上，它们还可能带出栈内存里的敏感内容。改法是在构造结构体之前显式清零：`memset(&obj, 0, sizeof(obj))`。
 
-### 避坑 2：Schema 升级时的“向后兼容（Backward Compatibility）”规范
-当向已有消息追加新字段时：
-- 必须递增 `schema_version`（如从 `v1` 升级至 `v2`）；
-- 新字段**只能追加在结构体末尾**，严禁在中间插入字段破坏旧字段的 `offsetof`；
-- 接收端应根据 `msg->schema_version` 决定是否解引用尾部新增字段。
+### 追加字段之后，老节点读到了垃圾
 
----
+往已有消息里加字段，最省事的做法是直接插在中间，代价是旧字段的 `offsetof` 全变了。这一层的规矩是：必须递增 `schema_version`（如从 `v1` 升级至 `v2`）；新字段只能追加在结构体末尾，严禁在中间插入；接收端根据 `msg->schema_version` 决定是否解引用尾部新增字段。新老节点混跑时的向后兼容（Backward Compatibility）就靠这三条撑着。
 
-*第一卷完结。下一章将进入【第二卷：执行流与高级调度】，深入探讨反射式有限状态机（Reflective State Machine）的设计与实现。*
+到这里，消息在总线上的样子就定下来了：类型 ID 对得上，字节序说得清，字段怎么排布也写在 IDL 里。
 

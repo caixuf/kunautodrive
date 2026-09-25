@@ -1,15 +1,10 @@
-# 第 16 章：跟踪控制与特殊机动（Control, MPC & Maneuver）
+# 第 16 章：让车真的贴着那条线走
 
-> **本章导读**：
-> 控制模块（Control Module）是自动驾驶系统的“四肢”。无论上层的感知、定位与规划多么完美，如果底层的横向转向角（Steering Angle）与纵向油门/刹车（Throttle/Brake）无法精确、平稳、无超调地跟踪期望轨迹，车辆就会发生画龙振荡（Snaking）甚至冲出车道。
->
-> KunAutoDrive 控制器 `control_node.cpp` 实现了 **Stanley 几何前馈反馈横向控制器**、**线性时变模型预测控制（LTV MPC）** 以及专为狭窄掉头和倒车泊车设计的 **特殊机动跟踪器（ManeuverTracker）**。
+规划层把轨迹交出来，只是说清楚了「该走哪儿」；车能不能真贴着这条线走，全看控制层。转向角打多深、油门给多少、什么时候踩刹车，这几笔账算不准，再好的规划也是白搭——车会画龙，严重时直接冲出车道。这一章讲 KunAutoDrive 的控制器 `control_node.cpp`：它用几何的 Stanley 算横向，用 LTV MPC 在大侧向加速度下兜底，还专门为掉头、倒车备了一个特殊机动跟踪器。
 
----
+## 靠几何就能跟线：Stanley
 
-## 1. 车辆横向动力学与 Stanley 几何控制算法
-
-Stanley 算法是由斯坦福大学无人车队提出的经典横向跟踪算法，它结合了**航向误差（Heading Error $\psi_e$）**与**前轴横向横偏误差（Cross-Track Error $e_y$）**：
+Stanley 是斯坦福大学无人车队提出的经典横向跟踪算法，它把两样东西合到一起：车头朝向跟目标切线差多少（航向误差 Heading Error $\psi_e$），以及前轴离目标轨迹偏了多远（前轴横向横偏误差 Cross-Track Error $e_y$）：
 
 ```
 Stanley 几何误差模型:
@@ -21,23 +16,17 @@ Stanley 几何误差模型:
 期望轨迹 (Target Path) ───────x────────────────► 切线航向 psi_target
 ```
 
-### 1.1 Stanley 转向角控制律公式
+### 一个公式，两项误差
 
 $$\delta(t) = \psi_e(t) + \arctan\left( \frac{k \cdot e_y(t)}{v(t) + k_{\text{soft}}} \right)$$
 
-其中：
-- $\psi_e = \psi_{\text{ego}} - \psi_{\text{target}}$：当前车头朝向与目标轨迹切线朝向的夹角；
-- $e_y$：前轴中心到目标轨迹最近点的垂直欧氏距离（偏左为正，偏右为负）；
-- $k$：横向增益系数（通常取 $0.8 \sim 1.5$）；
-- $k_{\text{soft}}$：低速软化常数（防止车速接近 0 时分母为 0 导致转向角饱和）。
+其中：$\psi_e = \psi_{\text{ego}} - \psi_{\text{target}}$ 是当前车头朝向与目标轨迹切线朝向的夹角；$e_y$ 是前轴中心到目标轨迹最近点的垂直欧氏距离（偏左为正，偏右为负）；$k$ 是横向增益系数，通常取 $0.8 \sim 1.5$；$k_{\text{soft}}$ 是低速软化常数，防止车速接近 0 时分母为 0 把转向角顶到饱和。
 
----
+## 车速一高，几何法就不够了
 
-## 2. 线性时变模型预测控制（LTV MPC）
+车速上去（$> 60\text{ km/h}$）或侧向加速度一大，轮胎的侧偏角（Tire Slip Angle）就冒出来了，纯几何的 Stanley 会留下一份稳态横偏。KunAutoDrive 于是用自行车动力学模型补上，在 `src/core/ltv_mpc.c` 里实现了 LTV MPC：
 
-在高车速（$> 60\text{ km/h}$）或大侧向加速度工况下，由于轮胎存在侧偏角（Tire Slip Angle），纯几何 Stanley 算法会出现稳态横偏。KunAutoDrive 在 `src/core/ltv_mpc.c` 中实现了基于自行车动力学模型的 LTV MPC：
-
-### 2.1 状态空间方程
+### 把它写成一个 QP 问题
 $$X = \begin{bmatrix} e_y \\ \dot{e}_y \\ e_\psi \\ \dot{e}_\psi \end{bmatrix}, \quad \dot{X} = A X + B u + C \rho$$
 
 在预测时域 $N_p = 10 \sim 20$ 步内，构造 QP 二次规划问题：
@@ -45,13 +34,9 @@ $$\min_U \sum_{k=0}^{N_p} \left( X_k^T Q X_k + u_k^T R u_k + \Delta u_k^T R_{\De
 
 通过 OSQP 或内点法在 $10\text{ ms}$ 内求解出首步最优前轮转角 $u_0^*$。
 
----
+## 掉头和倒车不属于「连续轨迹」
 
-## 3. 特殊机动跟踪器（ManeuverTracker）
-
-在自动驾驶中，**掉头（U-Turn）、平行泊车（Parking）、倒车（Reverse）** 属于非连续参考线的特殊工况。传统轨迹规划器无法直接在此类工况下生成连续单向多项式。
-
-KunAutoDrive 采用基于航路点状态机的 `ManeuverTracker`（`include/maneuver_tracker.h`）：
+掉头（U-Turn）、平行泊车（Parking）、倒车（Reverse）这几件事有个共同点：参考线是断的，甚至得掉头往回走，普通轨迹规划器没法在这种工况下生成一条连续单向的多项式。KunAutoDrive 的办法是用基于航路点的状态机 `ManeuverTracker`（`include/maneuver_tracker.h`）来管：
 
 ```c
 typedef enum {
@@ -69,13 +54,9 @@ typedef struct {
 } ManeuverTracker;
 ```
 
----
+## 方向盘为什么一直在抖
 
-## 4. 转向角低通滤波与极限环抗振荡
-
-在实车调试中，控制周期微小的调度抖动会导致转向角产生 $\sim 1.6\text{ Hz}$ 的极限环（Limit Cycle）左摇右晃。
-
-KunAutoDrive 在 `control_node.cpp` 中引入了一阶滞后低通滤波与横摆阻尼：
+实车调试时碰过一个现象：控制周期里一点点调度抖动，就能让转向角生出 $\sim 1.6\text{ Hz}$ 的极限环（Limit Cycle），方向盘一直在小幅左摇右晃。KunAutoDrive 在 `control_node.cpp` 里加了一阶滞后低通滤波和横摆阻尼来压住它：
 ```c
 #define STEER_FILTER_NEW   0.5f  /* 新值权重 50% (-3dB @ 1.2Hz) */
 #define STEER_FILTER_PREV  0.5f  /* 历史值权重 50% */
@@ -89,17 +70,8 @@ float yaw_damping = -0.05f * ego_pose.omega_z;
 g_final_steer = clamp(g_filtered_steer + yaw_damping, -MAX_STEER, MAX_STEER);
 ```
 
----
+## 控制层最难缠的两件事
 
-## 5. 工业级避坑指南
+第一件是倒车。挂上倒挡之后，前轮转向带来的横向运动学效果和前进时正好相反；要是还照搬前进时的 Stanley 公式，正反馈会让转向角迅速发散，最后死死卡在极限位置。改法很直接：倒车时把参考点换成后轴中心，再把误差项乘上 $-1.0$。
 
-### 避坑 1：倒车工况下的 Stanley 符号翻转
-- **陷阱**：当车辆挂倒挡（Reverse）倒车时，前轮转向产生的横向运动学效果与前进时恰好相反。若直接运行前进时的 Stanley 公式，控制器会迅速正反馈发散导致转向角死锁在极端位置。
-- **解决方案**：在倒车时，将参考点切换为后轴中心，并将误差项乘以 $-1.0$。
-
-### 避坑 2：执行器死区（Deadband）与饱和限幅
-- 真车转向电机和底盘由于机械间隙存在 $0.5^\circ \sim 1.0^\circ$ 的控制死区。控制输出必须在微小误差区间施加死区非线性补偿，并硬限制最大转角速度（Slew Rate Limit，如 $\le 300^\circ/\text{s}$），防止转向电机过热过流保护跳闸。
-
----
-
-*下一章预告：第 17 章将讲解安全底线——FlowCoro 协程安全包络与碰撞闸门机制。*
+第二件藏在执行器里。真车的转向电机和底盘有机械间隙，$0.5^\circ \sim 1.0^\circ$ 的控制死区就出在这里。控制输出得在这个微小误差区间里做死区非线性补偿，还要把最大转角速度硬限住（Slew Rate Limit，比如 $\le 300^\circ/\text{s}$），不然转向电机会因为过热过流保护跳闸。

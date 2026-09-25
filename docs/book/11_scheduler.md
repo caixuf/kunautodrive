@@ -1,13 +1,12 @@
-# 第 11 章：DAG 任务流与混合调度器（Choreo Scheduler）
+# 第 11 章：谁先跑，跑在哪颗核上
 
-> **本章导读**：
-> 在自动驾驶系统中，各个算法任务存在严格的**先后拓扑依赖关系（DAG, Directed Acyclic Graph）**。例如：必须在“相机采集”和“激光雷达预处理”完成后，才能启动“多模态前融合”；而在“融合定位”输出后，才能并发触发“局部路径规划”与“速度规划”。
->
-> 传统的独立线程轮询会导致严重的线程上下文切换开销与无序竞争。KunAutoDrive 设计了 **Choreo 混合调度器（Hybrid Scheduler）**：它结合了经典 FIFO 优先级队列与有向无环图依赖调度，支持 **CPU 核心亲和性绑定（CPU Affinity）、频率限制（RateControl）、资源配额（ResourceQuota）与微秒级延迟追踪（LatencyTracker）**。
+自动驾驶的算法任务不是一堆平级的函数，它们之间有硬性先后：相机采集和激光雷达预处理都做完了，多模态前融合才有输入；融合定位出了结果，局部路径规划和速度规划才能并发启动。
 
----
+如果每个节点各起一个线程轮询，你付出的是线程上下文切换的开销，换来的却是一个没有顺序保证的执行环境。Choreo 混合调度器把两件事拼在一起：经典的 FIFO 优先级队列，加上有向无环图依赖调度。在此之上还能配 CPU 核心亲和性、频率限制（RateControl）、资源配额（ResourceQuota）和微秒级延迟追踪（LatencyTracker）。
 
-## 1. 自动驾驶 DAG 拓扑依赖模型
+## 先把依赖关系画成一张图
+
+调度器眼里的 pipeline 长这样，每个框是一个注册进来的任务，箭头是声明出来的依赖：
 
 ```
 自动驾驶 Pipeline DAG 调度拓扑图:
@@ -36,9 +35,9 @@
 └────────────────────────────────────────┘
 ```
 
----
+## 控频、延迟统计和资源配额
 
-## 2. 调度器核心数据结构与 QoS 指标
+调度器要管的不只是顺序，还有「一个任务每秒最多跑几次」「最近这段延迟抖成什么样」「这次执行花了多少 CPU、跑过多少次、占了多少内存」。这三件事在头文件里是三个结构体：
 
 ```c
 /* include/scheduler.h */
@@ -71,11 +70,9 @@ typedef struct {
 } ResourceQuota;
 ```
 
----
+## 把关键任务钉在某些核上
 
-## 3. 多核 CPU 亲和性绑定（CPU Affinity）
-
-在 Linux RT 实时内核中，为了避免跨 CPU 核心缓存失效（L1/L2 Cache Miss）与线程抢占抖动，KunAutoDrive 支持将关键任务硬绑定到指定的 CPU 隔离核心（通过 `isolcpus` 内核启动参数保留的核心）：
+在 Linux RT 实时内核上，跨核迁移意味着 L1/L2 缓存全部作废，还随时可能被别的线程抢占。所以关键任务可以硬绑到指定的核心上，通常是拿 `isolcpus` 内核启动参数隔离出来的那几颗：
 
 ```c
 /* 绑定规划节点到 CPU Core 2 与 Core 3 */
@@ -83,7 +80,10 @@ uint32_t cpu_mask = (1 << 2) | (1 << 3);
 scheduler_set_affinity(sched, planning_task_id, cpu_mask);
 ```
 
-### 内部实现原理：
+### 掩码是怎么翻译成 cpu_set_t 的
+
+绑定最终落到 `pthread_setaffinity_np`，中间的翻译工作就是把掩码一位一位搬进 `cpu_set_t`：
+
 ```c
 cpu_set_t cpuset;
 CPU_ZERO(&cpuset);
@@ -95,22 +95,20 @@ for (int i = 0; i < 32; i++) {
 pthread_setaffinity_np(worker_thread, sizeof(cpu_set_t), &cpuset);
 ```
 
----
+## 协程和线程的多路复用
 
-## 4. M:N 协程与线程池调度模型
-
-KunAutoDrive 的调度器在底层维护一个高效的 Worker 线程池，多个异步 Task/Coroutine 被多路复用调度到预分配的线程池中执行：
+底层是一个预分配的 Worker 线程池，多个异步任务和协程被多路复用到这些线程上执行：
 
 ```mermaid
 flowchart TD
-    A[就绪队列 Ready Queue (按 PRIORITY 排序)] --> B{M:N 调度分发器}
-    B --> C[Worker Thread 0 (CPU 0)]
-    B --> D[Worker Thread 1 (CPU 1)]
-    B --> E[Worker Thread 2 (RT Core 2)]
+    A["就绪队列 Ready Queue (按 PRIORITY 排序)"] --> B{M:N 调度分发器}
+    B --> C["Worker Thread 0 (CPU 0)"]
+    B --> D["Worker Thread 1 (CPU 1)"]
+    B --> E["Worker Thread 2 (RT Core 2)"]
     
     C --> F[执行 Task 01]
     D --> G[执行 Task 02]
-    E --> H[执行 Task 03 (高优先级)]
+    E --> H["执行 Task 03 (高优先级)"]
     
     F --> I[记录耗时到 LatencyTracker]
     G --> I
@@ -119,9 +117,9 @@ flowchart TD
     J -- 达到周期 --> A
 ```
 
----
+## 注册两个任务，配好 QoS
 
-## 5. 实战演练：注册任务并配置 QoS 策略
+一段可以照着抄的最小例子：建调度器，注册 `sensor_fusion` 和 `planning_node`，给它们配优先级、CPU 亲和性与 50Hz 控频，声明 planning 依赖 fusion，跑 10 秒后把延迟统计打出来。
 
 ```c
 #include "scheduler.h"
@@ -164,18 +162,18 @@ int main(void) {
 }
 ```
 
----
+## 两个真的卡死过的地方
 
-## 6. 工业级避坑指南
+### DAG 里出现了环
 
-### 避坑 1：DAG 循环依赖检测（Cycle Detection）
-- **隐患**：若业务配置不当出现 `A -> B -> C -> A` 的闭环依赖，调度器就绪队列将永远无法满足入度为 0 的触发条件，导致整个 Pipeline 永久锁死。
-- **防护**：`scheduler_add_dependency` 在每次插入依赖边时，自动执行基于 **Tarjan 算法或拓扑排序（Kahn 算法）** 的环路检测，若发现有向环立即报错并拒绝配置。
+改动一处配置，把依赖写成 `A -> B -> C -> A`，然后整条 pipeline 就再也不动了：就绪队列永远等不到一个入度为 0 的任务，所有节点安静地待在那儿。
 
-### 避坑 2：优先级反转（Priority Inversion）与线程池饥饿
-- **隐患**：低优先级任务（如日志落盘）占满了 Worker 线程池中的所有工作线程，导致高优先级的急停和控制任务无法被及时调度。
-- **最佳实践**：为 `TASK_PRIORITY_REALTIME` 预留独占 Worker 线程，或使用实时内核调度策略 `SCHED_FIFO / SCHED_RR`。
+现在这种错误在配置阶段就会被拦下来——`scheduler_add_dependency` 每插一条依赖边，都会先跑一遍环路检测（Tarjan 算法或者 Kahn 拓扑排序那套），发现有向环立即报错、拒绝这次配置。
 
----
+### 日志任务把线程池吃光了
 
-*第二卷完结。下一章将进入【第三卷：ADAS 算法栈从理论到实现】，深入探讨多传感器前融合与扩展卡尔曼滤波（EKF）定位框架。*
+这一类故障的现象往往不是 CPU 忙，而是控制链路的延迟莫名其妙地变差：低优先级的日志落盘任务占满了 Worker 线程池里所有的工作线程，高优先级的急停和控制任务排在后面，拿不到线程。
+
+改法有两条路：给 `TASK_PRIORITY_REALTIME` 预留独占的 Worker 线程，或者干脆用实时内核的调度策略 `SCHED_FIFO / SCHED_RR`。
+
+到这里第二卷就结束了：节点之间能通信，也有了统一的时钟和可控的调度顺序。

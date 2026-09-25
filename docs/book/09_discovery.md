@@ -1,18 +1,15 @@
-# 第 09 章：去中心化服务发现与拓扑管理（Discovery & Topology）
+# 第 09 章：没有中心节点之后
 
-> **本章导读**：
-> 在第一代机器人系统（如 ROS 1）中，中心化的 Master 节点（`roscore`）是整个系统的单点故障源（SPOF）。一旦 Master 异常退出，所有节点之间的通信将彻底陷入瘫痪。
->
-> KunAutoDrive 借鉴了 DDS RTPS 的去中心化思想，在微内核层实现了基于 **UDP 组播信标（Multicast Beacon）**的轻量级服务发现协议 `DiscoveryManager`。每个 ADAS 节点在启动时自动宣告自身的 Pub/Sub 能力，动态构建**全网拓扑图（Topology Graph）**，并在节点异常离线时触发毫秒级拓扑自愈。
+第一代机器人系统（如 ROS 1）里有一个中心化的 Master 节点（`roscore`），它既是注册中心，也是整个系统的单点故障源（SPOF）：它一退出，所有节点之间的通信就彻底瘫痪了。
 
----
+KunAutoDrive 借鉴了 DDS RTPS 的去中心化思路，在微内核层实现了一个基于 UDP 组播信标（Multicast Beacon）的轻量级服务发现协议 `DiscoveryManager`。每个 ADAS 节点启动时自己宣告 Pub/Sub 能力，各自拼出同一张拓扑图（Topology Graph），节点异常离线时再毫秒级地把它摘掉。
 
-## 1. 中心化 vs 去中心化发现机制
+两种架构摆在一起看最清楚：
 
 ```
 中心化架构 (如 ROS 1 roscore):
 ┌──────────────┐         ┌──────────────┐
-│ perception   │ ──注册─►│ roscore (单点)│ ◄──注册── [control]
+│perception   │ ──注册─►│ roscore (单点)│ ◄──注册── [control]
 └──────────────┘         └──────┬───────┘
                                 │ (一旦宕机，全网瘫痪)
                                 ▼
@@ -22,15 +19,15 @@
 │  UDP Multicast Group (239.255.0.100:5500)                   │
 │                                                             │
 │  [perception] ──HELLO/BEACON广播──► [fusion] ──► [control]  │
-│  (任何单个节点崩溃，其他节点通过 10s 心跳超时自动剔除并重组)   │
+│  (任何单个节点崩溃，其他节点通过 10s 心跳超时自动剔除并重组)│
 └─────────────────────────────────────────────────────────────┘
 ```
 
----
+单点没了之后，发现这件事就落到每个进程自己身上。
 
-## 2. 组播信标协议与报文帧结构
+## 一条信标报文里装了什么
 
-所有节点监听并广播至标准组播地址 `239.255.0.100:5500`。信标报文采用定长与变长结合的高紧凑二进制格式：
+所有节点都监听并广播到同一个标准组播地址 `239.255.0.100:5500`。信标报文采用定长与变长结合的高紧凑二进制格式：
 
 ```
 组播信标二进制报文格式:
@@ -42,7 +39,7 @@
 │   ├── name: char[64] (节点名称，如 "planning_node")                          │
 │   ├── pid: uint32_t (进程 ID)                                                │
 │   ├── capabilities: uint8_t (CAP_PUBLISHER | CAP_SUBSCRIBER | CAP_SERVICE)   │
-│   └── topic_count: uint16_t (宣告的 Topic 数量)                               │
+│   └── topic_count: uint16_t (宣告的 Topic 数量)                              │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │ [Topic Adverts 列表: topic_count × 76 字节]                                  │
 │   ├── topic: char[64] (如 "sensor/lidar")                                    │
@@ -56,9 +53,9 @@
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
----
+## HELLO、QUERY、HEARTBEAT、GOODBYE
 
-## 3. 四大信标消息交互时序
+四条消息覆盖了一个节点从上线到退出的完整过程：
 
 ```mermaid
 sequenceDiagram
@@ -84,11 +81,9 @@ sequenceDiagram
     F->>F: 立即从 TopologyGraph 移除 perception
 ```
 
----
+## 拓扑图：谁和谁能对上
 
-## 4. 全网拓扑图与关联矩阵（Topology Matrix）
-
-`DiscoveryManager` 维护着全局拓扑图 `TopologyGraph`，其内部利用二维关联矩阵计算 Pub/Sub 与依赖匹配关系：
+`DiscoveryManager` 维护着全局拓扑图 `TopologyGraph`，内部用一张二维关联矩阵算出 Pub/Sub 与依赖的匹配关系：
 
 ```c
 /* include/discovery.h */
@@ -105,8 +100,9 @@ typedef struct {
 } TopologyGraph;
 ```
 
-### 4.1 自动依赖同步与等待（Dependency Sync）
-在启动复杂的 Pipeline 时，规划节点通常必须等待感知和融合节点完全上线后才能启动计算。KunAutoDrive 提供了确定性等待 API：
+### 等依赖节点全部上线
+
+启动复杂 Pipeline 时，规划节点通常必须等感知和融合节点完全上线才能开始计算。KunAutoDrive 为此提供了一个确定性等待 API：
 
 ```c
 const char* required_nodes[] = { "perception_node", "fusion_node" };
@@ -117,11 +113,9 @@ if (ret != 0) {
 }
 ```
 
----
+## 顺手把跨进程通道也建起来
 
-## 5. 自动构建跨进程 IPC 通道
-
-当服务发现检测到本地有两个进程分别声明了同一 Topic 的 `CAP_PUBLISHER` 与 `CAP_SUBSCRIBER` 时，`DiscoveryManager` 可以自动建立 POSIX 共享内存通道：
+当服务发现看到本地有两个进程分别声明了同一 Topic 的 `CAP_PUBLISHER` 与 `CAP_SUBSCRIBER`，`DiscoveryManager` 会直接替它们把 POSIX 共享内存通道建好：
 
 ```c
 // 自动为所有匹配的跨进程 Pub/Sub 建立深度为 32 的共享内存环形通道
@@ -129,11 +123,9 @@ int channel_count = discovery_create_ipc_channels(dm, 32);
 LOG_INFO("Discovery", "自动建立跨进程 IPC 管道数量: %d", channel_count);
 ```
 
----
+## 跨机之后交给 TCP
 
-## 6. 跨机 TCP NetworkTransport 与紧凑线格式
-
-Discovery 的 `unicast_port` / IPv4 只解决「找到谁」；真正跨机搬消息的是 `NetworkTransport`（`include/network_transport.h` / `src/cpp/network_transport.cpp`）。分层保持不变：
+Discovery 的 `unicast_port` / IPv4 只解决「找到谁」。真正跨机搬消息的是 `NetworkTransport`（`include/network_transport.h` / `src/cpp/network_transport.cpp`），分层和前面保持一致：
 
 ```
 Node A local MessageBus
@@ -145,7 +137,7 @@ Node B local MessageBus
 
 统一入口仍是上层 `Transport`（`TRANSPORT_AUTO`）：同进程走 Bus，同机跨进程走 SHM IPC，跨机才落到本层 TCP。`TRANSPORT_DDS` 仅为预留，不是 FastDDS。
 
-### 6.1 线格式（#97）
+### 线格式
 
 长度前缀帧：`[uint32 BE length][payload N bytes]`。
 
@@ -156,28 +148,22 @@ Node B local MessageBus
 
 两种 `N` 不碰撞：compact 的 `N` 恒小于 `sizeof(Message)`。解码只取 topic / sender / `data_size` 与载荷，再 `message_bus_publish` 进对端本地 Bus；loaned 指针字段不在线上。
 
-### 6.2 收发包节奏
+### 收发的节奏
 
-- **TCP_NODELAY**：小帧不攒 Nagle。
-- **Drain 收包**：对端非阻塞 `recv` 打到 `EAGAIN`（64KB 缓冲）；空闲约 `200 µs` 再轮询，避免旧实现「小缓冲 + 长 sleep」把吞吐钉死在个位数 msg/s。
-- **解锁再发布**：在 `peers_mutex` 下只做 drain/解帧；批量入站消息在**释放锁之后**再 `message_bus_publish`，避免 Bus 回调重入 bridge 自死锁。
+三处细节决定了这条链路实际的吞吐：
 
-### 6.3 基准与验证
+- TCP_NODELAY：小帧不攒 Nagle。
+- Drain 收包：对端非阻塞 `recv` 打到 `EAGAIN`（64KB 缓冲）；空闲约 `200 µs` 再轮询，避免旧实现「小缓冲 + 长 sleep」把吞吐钉死在个位数 msg/s。
+- 解锁再发布：在 `peers_mutex` 下只做 drain/解帧；批量入站消息在释放锁之后再 `message_bus_publish`，避免 Bus 回调重入 bridge 自死锁。
 
-`./build/bin/benchmark_tcp`（127.0.0.1 loopback）。WSL 上 #97 后量级约为 **~29k msg/s**、串行 ping p50 **~274 µs**（修复前约 ~12 msg/s / ~90 ms）。进程内 Bus 数字见 MessageBus 基准，勿与 TCP 混比。
+### 基准数据
 
----
+量级用 `./build/bin/benchmark_tcp`（127.0.0.1 loopback）实测。WSL 上 #97 之后约为 ~29k msg/s、串行 ping p50 ~274 µs（修复前约 ~12 msg/s / ~90 ms）。进程内 Bus 的数字见 MessageBus 基准，不要和 TCP 混比。
 
-## 7. 工业级避坑指南
+## 集群一扩容，心跳就先堵上了
 
-### 避坑 1：组播风暴（Multicast Storm）与抖动抑制
-- **隐患**：当集群中 50+ 个节点同时上线并发送 `DISC_QUERY` 时，所有节点如果在同一毫秒响应，会造成突发性网络拥塞。
-- **解决方案**：响应 `QUERY` 时，各节点引入 `0 ~ 200ms` 的随机退避抖动时间（Jitter），平滑网络流量。
+节点数量小的时候一切正常，扩到 50+ 之后开始出现莫名的丢心跳。原因是大家同时上线并发送 `DISC_QUERY`，所有节点又在同一毫秒响应，组播流量瞬间堆出一个尖峰。现在的做法是响应的 `QUERY` 各自带上 `0 ~ 200ms` 的随机退避抖动时间（Jitter），把这一波流量摊开。
 
-### 避坑 2：多网卡与虚拟网卡（Loopback / Docker）绑定错误
-- **隐患**：主机若存在多个网络接口（如 `eth0`、`wlan0`、`docker0`），系统默认可能将组播报文发送至 Docker 虚拟桥接网卡，导致实体局域网中的其他设备无法收到心跳。
-- **解决方案**：在 `pipeline.json` 中显式指定 `multicast_interface`，并在 `setsockopt(IP_MULTICAST_IF)` 中绑定正确的 IP 地址。
+## 心跳发进了 docker0
 
----
-
-*下一章预告：第 10 章将进入 KunAutoDrive 的异步性能巅峰——基于 C++20 原生协程的 FlowCoro 调度框架。*
+另一个现场问题是节点全在跑，实体局域网里的设备却收不到心跳。主机上有多个网络接口（`eth0`、`wlan0`、`docker0`）时，系统默认可能把组播报文从 Docker 虚拟桥接网卡送出去。办法是在 `pipeline.json` 里显式指定 `multicast_interface`，再在 `setsockopt(IP_MULTICAST_IF)` 中绑定正确的 IP 地址。
