@@ -1185,6 +1185,51 @@ static void publish_road_geometry(void) {
     g.last_road_geom_lane_count = lane_count;
 }
 
+/* D2-05 lane_match 计算（M2 baseline） ────────────────────────
+ * 从 (x, y, ego_heading) 推出 5 个 M2 契约字段：
+ *   llt_id / llt_s / llt_offset / llt_heading_err_rad / valid
+ *
+ * 算法：投影 + 全图最近（FR-RT-03 简化版，未上 Temporal ROI Cache）。
+ *   1. esmini world_to_frenet 拿 road_id / lane_id / s / offset
+ *   2. frenet_to_world 拿车道切线 heading（用几何差分，避开 RM pd.h 污染）
+ *   3. ego_heading - lane_heading，wrap 到 [-π, π]
+ *
+ * llt_id 占位（M2）：road_id*1000 + (lane_id+500)。M3 切 Lanelet2 后换真 Lanelet 全局 ID。
+ * 失败路径：world_to_frenet/frenet_to_world 任一失败 -> 全部 0 + valid=0。
+ */
+static void compute_lane_match(double x, double y, double ego_heading,
+                               uint64_t* out_llt_id, double* out_llt_s,
+                               double* out_llt_offset, double* out_heading_err,
+                               int* out_valid) {
+    flowsim::FrenetPos fp;
+    const bool ok = g.roads_loaded && g.roads.world_to_frenet(x, y, fp);
+    if (!ok || fp.road_id < 0) {
+        *out_llt_id = 0;
+        *out_llt_s = 0.0;
+        *out_llt_offset = 0.0;
+        *out_heading_err = 0.0;
+        *out_valid = 0;
+        return;
+    }
+    flowsim::WorldPos wp;
+    if (!g.roads.frenet_to_world(fp.road_id, fp.lane_id, fp.s, fp.offset, wp)) {
+        *out_llt_id = 0;
+        *out_llt_s = 0.0;
+        *out_llt_offset = 0.0;
+        *out_heading_err = 0.0;
+        *out_valid = 0;
+        return;
+    }
+    double err = ego_heading - wp.h;
+    while (err > M_PI)  err -= 2.0 * M_PI;
+    while (err < -M_PI) err += 2.0 * M_PI;
+    *out_llt_id = (uint64_t)(fp.road_id * 1000 + (fp.lane_id + 500));
+    *out_llt_s = fp.s;
+    *out_llt_offset = fp.offset;
+    *out_heading_err = err;
+    *out_valid = 1;
+}
+
 /* ── 车道级定位（诊断/契约）─────────────────────────────────────
  * 每帧用权威解算 world_to_frenet 重新求 ego 的 (road_id, lane_id, s, offset)，
  * 并与 vehicle/state 里那份**生成时刻快照**做对比，把漂移量化进
@@ -1216,6 +1261,21 @@ static void publish_lane_match(void) {
     cJSON_AddNumberToObject(j, "pub_lane_id", (double)ego.lane_id);
     cJSON_AddNumberToObject(j, "id_mismatch_frames", (double)g.lane_match_id_mismatch);
     cJSON_AddNumberToObject(j, "frames", (double)g.lane_match_frames);
+    cJSON_AddNumberToObject(j, "frames", (double)g.lane_match_frames);
+
+    /* M2 起追加 D2-04/D2-05 契约字段（按 spec §6.1 顺序） */
+    uint64_t llt_id = 0;
+    double llt_s = 0.0, llt_offset = 0.0, llt_heading_err_rad = 0.0;
+    int valid = 0;
+    compute_lane_match(ego.x, ego.y, ego.heading,
+                       &llt_id, &llt_s, &llt_offset,
+                       &llt_heading_err_rad, &valid);
+    cJSON_AddNumberToObject(j, "llt_id", (double)llt_id);
+    cJSON_AddNumberToObject(j, "llt_s", llt_s);
+    cJSON_AddNumberToObject(j, "llt_offset", llt_offset);
+    cJSON_AddNumberToObject(j, "llt_heading_err_rad", llt_heading_err_rad);
+    cJSON_AddNumberToObject(j, "valid", (double)valid);
+
 
     char* s = cJSON_PrintUnformatted(j);
     transport_publish(g.transport, TOPIC_LOCALIZATION_LANE_MATCH,
