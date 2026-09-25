@@ -185,3 +185,50 @@ python3 ci/gates/lanelet_consistency_check.py [--map maps/<name>/map.json --osm 
 
 *文档版本：v1.0（与 REQ_L3_DIR2_HDMAP.md v1.0 对齐，agy 四轮 10/10 通过）*
 *下一步：agent B / C 据此实现，agent A 据此文档化 submodule*
+
+---
+
+## 7. v1.0 澄清（D2-09 实现反馈后追加，避免 D2-02 与 D2-09 语义错位）
+
+> 本节由 v1.0 → v1.0-clarify 时补，记录 D2-09 consistency gate 实现时反馈的契约疑义。
+> D2-02 实现时**必须**按本节执行，否则 D2-09 会误报。
+
+### 7.1 way 的 nd ref 与 centerline 节点的关系（**关键**）
+
+**规则**：D2-02 输出时，**每个 lane 的 left/right way 引用的 `<node>` 必须与该 lane 的 `centerline` 点一一对应**（共用同一组 `<node>`）。
+
+具体实现要点：
+- 假设 `lanes[0].centerline = [[x0,y0], [x1,y1], [x2,y2]]`，则：
+  - left way 的 nd ref 序列 = `[node_x0, node_x1, node_x2]`
+  - right way 的 nd ref 序列 = `[node_x0, node_x1, node_x2]`（**共用节点**，仅靠 way 不同 + 后续 geometry 处理）
+- **不**能为 left/right 各自独立偏移出 6 个不同节点
+- left/right 的物理偏移由 `<way>` 的几何属性（Lanelet2 通过 left/right way 重建 centerline + width）或后续 M2 接入的 `<tag k="width">` 处理，**不**通过节点偏移实现
+
+**为什么这么定**：D2-09 的 Rule 3（centerline 起点坐标偏差 ≤ 1.0m）取 left way 第 1 个 nd ref 对应节点的 lat/lon，必须保证 left way 的第 1 个节点 = centerline 第 1 个点。如果 left/right 各偏移独立节点，gate 会把"左边界起点"误判成"centerline 起点"。
+
+### 7.2 坐标语义（M1 期内）
+
+`map.json` 的 `x` ↔ `.osm` 的 `lon`，`map.json` 的 `y` ↔ `.osm` 的 `lat`（**数值直比，不投影**）。
+
+gate 的 Rule 3 实现：
+```python
+dx = osm.lon - map.x
+dy = osm.lat - map.y
+dist = math.hypot(dx, dy)  # 单位与 map.json 一致（米/度，混用但本期就这个语义）
+if dist > 1.0:
+    flag_mismatch(...)
+```
+
+M2 接入 pyproj 后，本节需重写：阈值改为按经纬度算大圆距离（单位米）。
+
+### 7.3 regulatory_element 处理
+
+D2-02 输出红绿灯 regulatory_element 时，**禁止**给它的 `lanelet_id` 字段赋与车道 `relation.lanelet_id` 重复的值。
+
+D2-09 gate 只收 `type=lanelet` 的 relation，regulatory_element 完全跳过不参与双向覆盖检查。若 D2-02 让两者 `lanelet_id` 重叠且 gate 误报，说明 D2-02 错把 regulatory_element 注册成了 lane relation —— D2-02 侧 bug。
+
+### 7.4 speed_limit 等可缺省 tag
+
+gate **不强制** `speed_limit` 等 tag 必现（§6 用例 6 测的是 D2-02 跳过缺字段，**不是** gate）。D2-02 必须在用例 6 自测里覆盖"speed_limit 缺则该 tag 整个不写"。
+
+D2-09 只比双向覆盖 + 起点坐标；不验证 tag 完整性（那是 M2 起 `lane_match_schema_check.py` 的事）。
