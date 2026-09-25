@@ -632,6 +632,8 @@ var frames = [];
 var paused = false;
 var frameCount = 0;
 var serverUrl = defaultServerUrl();
+// 首连失败时是否已经回退到本页 origin（避免历史遗留地址把页面永久钉在演示模式）
+var _originFallbackTried = false;
 var eventSource = null;
 var selectedNode = null;
 var reconnectTimer = null;
@@ -1441,9 +1443,25 @@ async function doConnect() {
     applyLiveStatus(topoData);
     connectRetries = 0;
     _reconnectDelay = 2000;
+    _originFallbackTried = false;
     // SSE 与 topology fetch 并行启动（减少一跳延迟）
     startSSE();
   } catch(err) {
+    // 保存的地址可能是历史遗留（例如旧版 Python dashboard 的 8801 端口，flowmond
+    // 接手后已改为 8800）。它若连不上且不是本页 origin，先回退到 origin 试一次；
+    // 否则会静默掉进 doSimulate() 的演示模式，那里没有自车遥测，车会一直冻在原点。
+    var pageOrigin = defaultServerUrl();
+    if (!_originFallbackTried && serverUrl !== pageOrigin) {
+      _originFallbackTried = true;
+      var staleUrl = serverUrl;
+      serverUrl = pageOrigin;
+      document.getElementById('url').value = pageOrigin;
+      saveState();
+      setConnStatus('warn', '● 改用 ' + pageOrigin);
+      toast('后端 ' + staleUrl + ' 连不上，已改用 ' + pageOrigin);
+      reconnectTimer = setTimeout(doConnect, 200);
+      return;
+    }
     connectRetries++;
     if (connectRetries <= 3) {
       var delay = 250 * Math.pow(2, connectRetries - 1);
