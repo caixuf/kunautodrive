@@ -22,7 +22,7 @@
 | 01 | [第 01 章：用 C 造一个对象](book/01_oop_in_c.md) | C11 标准首成员内存对齐保证、vtable 虚函数分发、生命周期链与内存安全 |
 | 02 | [第 02 章：把节点拆成一块块可插拔的 .so](book/02_plugin_system.md) | ABI 门禁校验、RTLD_LOCAL 符号隔离、依赖注入与生命周期状态机 |
 | 03 | [第 03 章：15 个节点怎么互相说话](book/03_message_bus.md) | Pub/Sub 拓扑、64KB 动态消息帧、Free-List 零拷贝内存池、QoS 丢弃策略 |
-| 04 | [第 04 章：两个进程，一块内存](book/04_ipc_channel.md) | POSIX SHM 环形队列、Robust Mutex 崩溃自愈、大 JSON 分块传输协议 |
+| 04 | [第 04 章：两个进程，一块内存](book/04_ipc_channel.md) | POSIX SHM 广播环、process-shared 锁与条件变量、仪表盘 JSON 分块 |
 | 05 | [第 05 章：录下来，再原样放一遍](book/05_bag_recording.md) | Bag v2 格式、标准 MCAP 规范与时序索引无损回放 |
 | 06 | [第 06 章：仿真时钟和物理时钟，到底该听谁的？](book/06_clock_service.md) | 物理真实时钟 vs 仿真步进时钟、统一时间戳 uint64 μs 语义 |
 | 07 | [第 07 章：把类型错误挡在编译期](book/07_serializer.md) | FNV-1a 编译期哈希 Type ID、IDL 代码生成器与跨语言序列化 |

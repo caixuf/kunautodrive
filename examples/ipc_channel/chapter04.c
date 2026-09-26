@@ -927,6 +927,8 @@ int main(int argc, char** argv) {
         print_usage(argv[0]);
         return 2;
     }
+    /* 管道里 stdout 是全缓冲，fork 出去的子进程若直接 _exit 会把 printf 丢掉。 */
+    setvbuf(stdout, NULL, _IOLBF, 0);
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
 

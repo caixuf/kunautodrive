@@ -96,7 +96,7 @@
 | 01 | [第 01 章：C 语言面向对象与微内核架构](book/01_oop_in_c.md) | C11 标准首成员内存保证、vtable 虚表分发、生命周期链与内存安全 |
 | 02 | [第 02 章：dlopen 插件化系统与微内核解耦](book/02_plugin_system.md) | ABI 门禁校验、RTLD_LOCAL 符号隔离、依赖注入与生命周期状态机 |
 | 03 | [第 03 章：高性能进程内消息总线](book/03_message_bus.md) | Pub/Sub 拓扑、64KB 动态消息帧、Free-List 零拷贝内存池、QoS 丢弃策略 |
-| 04 | [第 04 章：跨进程共享内存通信](book/04_ipc_channel.md) | POSIX SHM 环形队列、Robust Mutex 崩溃自愈、大 JSON 分块传输协议 |
+| 04 | [第 04 章：跨进程共享内存通信](book/04_ipc_channel.md) | POSIX SHM 广播环、process-shared 锁与条件变量、仪表盘 JSON 分块 |
 | 05 | [第 05 章：数据录制与回放](book/05_bag_recording.md) | Bag v2 格式、标准 MCAP 规范与时序索引无损回放 |
 | 06 | [第 06 章：统一时钟服务](book/06_clock_service.md) | 真实时钟 vs 仿真步进时钟、统一时间戳 uint64 μs 语义 |
 | 07 | [第 07 章：类型安全序列化层](book/07_serializer.md) | IDL 代码生成器、FNV-1a 哈希校验与二进制内存对齐 |
