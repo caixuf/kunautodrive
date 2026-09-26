@@ -69,7 +69,7 @@
 | 16 | Frenet 轨迹规划 | `modules/adas_nodes/planning_coordinates.h::project_to_path` 与 `src/algorithms/frenet_bridge.h::frenet_plan` 把问题投到参考线上。速度用 S-T 图（Station-Time graph），由 `modules/adas_nodes/st_graph.h::st_graph_plan` 做动态规划。`include/piecewise_jerk_qp.h::pjqp_path_solve` 与 `include/piecewise_jerk_qp.h::pjqp_speed_solve` 有声明和实现，规划节点没有调用；实际调用的是 `include/piecewise_jerk_qp.h::pjqp_smooth_2d` | [`book/15_trajectory_planning.md`](book/15_trajectory_planning.md) |
 | 17 | 跟踪控制：横向级联、LTV-MPC 与机动跟踪器 | `modules/adas_nodes/control_node.cpp` 里是纵向 PID + 横向三级级联 PD（横向速度 → ψ_des → 转向角，含曲率前馈；不是教科书 Stanley 公式）。`include/ltv_mpc.h::ltv_mpc_solve` 解的是 3 状态 1 控制的仿射 LQR（后向 Riccati，非 QP，约束为事后截断），且默认关闭。`modules/adas_nodes/maneuver_tracker.h` 的 `ManeuverTracker` 管掉头和泊车这类断开的参考线，倒挡时反馈项反号 | [`book/16_tracking_control.md`](book/16_tracking_control.md) |
 | 18 | 安全包络与降级 | 让控制指令先过一遍安全包络，再发布 `control/cmd`。`modules/adas_nodes/safety_arbiter.h::safety_arbiter_apply` 仲裁规则控制与学习模型（降级 > 转向包络 0.12 rad > 规则制动 > 模型油门上限 0.85，制动取 max）。`include/degrade_ladder.h::degrade_layer_action` 是 L0~L3 粘滞阶梯，`include/health.h::health_heartbeat` 的 5 s `HEALTH_STALE` 仅上报不动作 | [`book/17_safety_envelope.md`](book/17_safety_envelope.md) |
-| 19 | 执行器：PWM 与 SocketCAN | `config/pipeline_car.json` 的 actuator 加载 PWM 节点，`modules/adas_nodes/pwm_map.h::pwm_map_control_cmd` 把 `control/cmd` 映成 ESC 与舵机脉宽。PWM 与 SocketCAN 两路执行器的默认看门狗都是 3 秒。`modules/adas_nodes/actuator_node.c` 是备选后端：socket 打不开就降为 dry-run。当前 pipeline 没有引用它 | [`book/22_socketcan_actuator.md`](book/22_socketcan_actuator.md) |
+| 19 | 执行器：PWM 与 SocketCAN | `config/pipeline_car.json` 的 actuator 加载 PWM 节点（`libactuator_pwm_node.so`），`modules/adas_nodes/pwm_map.c::pwm_map_control_cmd` 把 `control/cmd` 映成 ESC 与舵机脉宽。看门狗 3 秒。`modules/adas_nodes/actuator_node.c` 是 SocketCAN 备选后端：**零 config 引用、零测试**。注意 `pipeline_car.json:269` 的 `max_steer: 0.35` 超过执行器的 0.22 量程 | [`book/22_socketcan_actuator.md`](book/22_socketcan_actuator.md) |
 
 第 13、14 章的写作约束见附录对应小节。
 
@@ -315,9 +315,12 @@
 ### 19　执行器：PWM 与 SocketCAN
 
 - 现文件：[`book/22_socketcan_actuator.md`](book/22_socketcan_actuator.md)
-- `modules/adas_nodes/pwm_map.h`，`modules/adas_nodes/pwm_map.c`：`pwm_map_control_cmd` 把 `throttle` / `brake` / `steering_rad` 映成 ESC 与舵机脉宽（μs），钳在 `PWM_MIN_US` 与 `PWM_MAX_US` 之间
-- `modules/adas_nodes/actuator_pwm_node.c`：订阅 `control/cmd`，按 `backend` 走 PCA9685、GPIO 或 dry-run。`config/pipeline_car.json` 与 `config/vehicles/rc_car.json` 里名为 actuator 的条目都指向这份 PWM 节点，`backend` 为 `pca9685`。I2C 或 GPIO 打不开时降为 dry-run。`watchdog_timeout_s` 默认 3：超时未收到 `control/cmd` 则强制 ESC 中位
-- `modules/adas_nodes/actuator_node.c`：SocketCAN 备选后端。文件头写明当前 pipeline 配置用的是 PWM 节点；仓库里的 pipeline json 没有把本节点写进 library_path。socket 打不开时把 `dry_run` 置 1，降为 dry-run。`watchdog_timeout_s` 默认同样是 3 秒，超时则强制 ESC 中位
+- `modules/adas_nodes/pwm_map.h`，`modules/adas_nodes/pwm_map.c`：`pwm_map_control_cmd` 把 `throttle` / `brake` / `steering_rad` 映成 ESC 与舵机脉宽（μs），钳在 `PWM_MIN_US`（1000）与 `PWM_MAX_US`（2000）之间。**全文件 33 行**，三级优先：`e_stop` → `brake > 0.01`（`esc = 1500 − brake·scale`，反打）→ `throttle`（`esc = 1500 + throttle·scale`）。**`e_stop` 只覆盖 ESC，舵机保持原角度**。转向走 `steer_norm = steering_rad / PWM_MAX_STEER_RAD(0.22)`，独立于 e_stop
+- **映射层测试**：`tests/test_adas_nodes_logic.c` 的 10 个 `test_pwm_*`（`:295-389`），`CMakeLists.txt:1110` 把**生产同一份** `pwm_map.c` 编进测试目标（`ctest adas_nodes_logic_tests`）。**CAN 后端零测试**；e_stop 用例只断言 `esc`，**不断言 `steer`**
+- `modules/adas_nodes/actuator_pwm_node.c`（571 行，`modules/adas_nodes/CMakeLists.txt:733`）：订阅 `control/cmd`，不发布。`pca9685_set_freq` 用 `prescale = 25e6/(4096·f) − 1`（50 Hz → 121），`pca9685_set_pulse_us` 用 `tick = pulse_us/period_us × 4096`（1500 μs → 307）。上电与清理都强制回中。`watchdog_timeout_s` 默认 3（`time(NULL)` 1 s 粒度）：超时则 **ESC + 舵机双双回中**。`gpio_set_pulse_us` 硬编码 `pwmchip0` 且把 GPIO 号当 pwmchip 子索引，实际不可用
+- `modules/adas_nodes/actuator_node.c`（523 行，SocketCAN，**零 config 引用**）：`can_open` / `can_send` / `encode_throttle_frame` / `encode_steering_frame` / `actuator_execute`。三报文 0x100（油门刹车 gear e_stop，DLC 8）、0x101（转向 + seq，DLC 4）、0x102（10 Hz 状态心跳，DLC 8）。`throttle_scale`/`steering_scale` 默认 1000。**单向降级到 dry-run 永不重试**；`watchdog_timeout_s` 写死 3 不可配；启动前 `last_cmd_time == 0` 使看门狗完全惰性。**零测试**
+- **跨层不匹配**：`config/pipeline_car.json:269` 的 `max_steer: 0.35` 超过执行器 `PWM_MAX_STEER_RAD = 0.22`，0.22~0.35 rad 这段授权被 `pwm_map.c:27` 静默截断。同一物理量在四处独立出现（msg 注释、`pwm_map.h:21`、`actuator_node.c:235` 的局部 `0.22f`、`safety_control_node.cpp:77`）
+- `src/algorithms/serial_port.c`：`serial_write`（`:163`）**全仓库零调用者**。`serial_open` 只被 gps/imu/激光雷达三个**只读**驱动使用——执行器不碰串口
 - `config/pipeline_car.json`
 
 ### 20　FlowSim 场景与世界
@@ -390,6 +393,11 @@
 | 同上（已重写） | 旧稿 TTC 分级阶梯 3.0/2.0/1.0 s、预充液压、0.3g / −1.0g | 全部不存在。真实阈值是 2.5 s 触发 / 1.5 s 降级 / 1.0 s 硬 AEB，`brake` 是 [0,1] 归一化量而非 g；无预充液逻辑 |
 | 同上（已重写） | 旧稿 `safety/cmd` 话题、`actuator/cmd` 话题、`safety_override_active`、`apply_emergency_brake()`、规划 200 ms 心跳看门狗 | 均为虚构。真实输出是 `control/cmd`（20 B 的 `ControlCmd`）；看门狗是 `safety_raw_command_timeout_expired`（`moving && Δt > 2s`），监控 `control/raw_cmd` 而非规划指令 |
 | 同上（已重写） | 旧稿完全缺失 `safety_arbiter_apply` 与 `degrade_ladder` | 新稿补全了规则/模型仲裁的完整优先级链、P1 不计入 `intervened` 的语义设计，以及 L0~L3 粘滞阶梯与 500/150/2000/3000 ms 四个时间常数 |
+| [`book/22_socketcan_actuator.md`](book/22_socketcan_actuator.md)（新 19，已重写） | 旧稿的 `send_can_frame()`、`set_servo_pulse()`、`pca9685_set_pwm()` | 三个函数全部不存在。真实实现是 `actuator_node.c` 的 `can_open`/`can_send`/`encode_throttle_frame`/`encode_steering_frame`，以及 `actuator_pwm_node.c` 的 `pca9685_set_pulse_us()`（参数是 `int pulse_us` 微秒，不是 `float normalized_val`） |
+| 同上（已重写） | 旧稿称油门与转向打包在同一个 8 字节帧的 `[0-3]`；`int16_t` 编码油门 | 与系统里任何 ID 都不匹配。真实是 0x100（DLC 8，throttle/brake/gear/e_stop）与 0x101（DLC 4，steering/seq）两个独立报文；油门是 `uint16_t` 且先钳位到 [0,1] |
+| 同上（已重写） | 旧稿的 `config/pipeline_car.json` 片段：`car_real_hardware_pipeline` + `libactuator_node.so` + `can_throttle_id: 256` | 错三处：没有名为 `car_real_hardware_pipeline` 的配置；没有 config 引用 `libactuator_node.so`（CAN 后端零引用）；配置 schema 用 `library_path` 不是 `library`。真实配置是 `pipeline_car.json:272-278` 的 `libactuator_pwm_node.so` |
+| 同上（已重写） | 旧稿暗示执行器经串口下发指令 | **执行器不碰串口**。`serial_port.c:163` 的 `serial_write()` 全仓库零调用者；`serial_open` 只被 gps/imu/激光雷达三个**只读**驱动使用 |
+| 同上（已重写） | 旧稿完全缺失软件看门狗 | 新稿补全了两个后端各一份的 3 s 看门狗（`actuator_pwm_node.c:330-352` 与 `actuator_node.c:302-322`），以及三处不一致：CAN 后端启动前 `last_cmd_time == 0` 使看门狗惰性、CAN 端 `watchdog_timeout_s` 不可配、PWM 端健康检查另用硬编码 5 s |
 | [`book/21_demo_evaluator.md`](book/21_demo_evaluator.md)（新 22） | `tools/demo_evaluator.py` | 没有这个路径。评估器在 `ci/evaluators/demo_evaluator.py` |
 | 同上 | `tools/param_sweep.py` | 没有这个文件，仓库里也没有替代脚本 |
 | 同上 | `scenarios/zhongkai_road_full.json` | 没有这个文件 |
