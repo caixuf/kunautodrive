@@ -25,7 +25,7 @@
 |---|---|---|---|
 | 01 | 用 C 造一个对象 | 用结构体首成员和函数指针表做出 `TaskBase` / `TaskInterface`，管住 initialize、execute、cleanup | [`book/01_oop_in_c.md`](book/01_oop_in_c.md) |
 | 02 | 可插拔 .so 与启动器 | `include/node_plugin.h::NodePlugin` 与 `include/node_plugin.h::NODE_PLUGIN_SYMBOL`（导出名字是 node_get_plugin），`src/flow_launcher.c` 按 pipeline 做 dlopen，`src/flow_node_host.c` 把同一份 .so 放进独立进程运行 | [`book/02_plugin_system.md`](book/02_plugin_system.md) |
-| 03 | 注册中心与参数系统 | int/float 注册时带上下界，`include/param_registry.h::param_set_int` 与 `include/param_registry.h::param_set_float` 越界拒绝。`include/param_registry.h::param_set_callback` 只登记改值回调；`include/param_registry.h::param_enable_hot_reload` 把 `hot_reload` 打开之后，上面两个 `param_set_*` 才会调用它。任务、话题、类型和插件统一登记到 `include/flow_registry.h::flow_registry_register_task` 这一组函数 | **待写** |
+| 03 | 注册中心与参数系统 | int/float 注册时带上下界，`include/param_registry.h::param_set_int` 与 `include/param_registry.h::param_set_float` 越界拒绝，范围内则写入当前值。`include/param_registry.h::param_set_callback` 与 `include/param_registry.h::param_enable_hot_reload` 没有别的 C/C++ 调用点，改值回调不会因此跑起来。跑起来的调参是 `src/flowctl.c` 的 `flowctl param` 经 `include/param_bridge.h::param_bridge_client_request` 写入，节点下一拍用 `include/param_registry.h::param_get_int` 与 `include/param_registry.h::param_get_float` 读出。任务、话题、类型和插件登记到 `include/flow_registry.h::flow_registry_register_task` 这一组函数 | **待写** |
 | 04 | 状态机 | 反射式状态机：转移表、guard、entry/exit，非法事件有明确策略 | [`book/08_state_machine.md`](book/08_state_machine.md) |
 
 ## 第二部　通信与时间
@@ -139,18 +139,19 @@
 - `include/node_plugin.h`，`src/core/node_plugin.c`：`NodePlugin`，`NODE_PLUGIN_API_VERSION`，`NODE_PLUGIN_SYMBOL`（`node_get_plugin`），`node_start_managed`，`node_announce_self`
 - `src/flow_launcher.c`
 - `src/flow_node_host.c`
-- `src/plugins/example_process.c`
+- `modules/adas_nodes/manual_drive_node.c`：`node_get_plugin` 返回填好的 `NodePlugin`（`manual_drive`）
+- `modules/adas_nodes/flowrec_node.c`：`NODE_PLUGIN_EXPORT` 的 `node_get_plugin` 返回填好的 `NodePlugin`（`flowrec`）。`src/plugins/example_process.c` 不是这份契约的示例，它导出的是 `get_process_interface`
 - 同 00b 的六份 `config/pipeline.json`、`config/pipeline_car.json`、`config/pipeline_manual.json`、`config/pipeline_sensor.json`、`config/pipeline_cortex.json`、`config/pipeline_windows.json`
 
 ### 03　注册中心与参数系统
 
 - 现文件：待写
-- `include/param_registry.h`，`src/core/param_registry.c`：`param_register_int` / `param_register_float` / `param_register_bool` / `param_register_string`。int 与 float 注册时带 min/max；`param_set_int` 与 `param_set_float` 越界则拒绝。`param_set_callback` 在运行时改值时调用。`param_enable_hot_reload` 打开热更新。`param_export_json` 导出。
+- `include/param_registry.h`，`src/core/param_registry.c`：`param_register_int` / `param_register_float` / `param_register_bool` / `param_register_string`。int 与 float 注册时带 min/max；`param_set_int` 与 `param_set_float` 越界则拒绝，范围内则写入 `current_value`，不看 `hot_reload`。`param_set_callback` 只把回调记到 `on_change`。`param_enable_hot_reload` 只把 `hot_reload` 设为 true。`validate_and_set` 要 `on_change` 和 `hot_reload` 都有才调用回调。这两个函数除本头文件和本 .c 外没有 C/C++ 调用点，新建参数时 `hot_reload` 为 false、`on_change` 为空，所以这条回调不会跑起来。`param_export_json` 导出，其中包含 `hot_reload` 字段。
 - `include/flow_registry.h`，`src/core/flow_registry.c`：`flow_registry_register_task`，`flow_registry_register_topic`，`flow_registry_register_type`，`flow_registry_register_plugin`，`flow_registry_export_json`。宏 `FLOW_REGISTRY_DECLARE_PLUGIN` 展开后只调用 `flow_registry_register_plugin(名字, NULL, NULL, NULL)`，宏参数里的版本和描述没有写入注册表。
 - `include/topic_registry.h`：编译期话题名常量，例如 `TOPIC_SENSOR_LIDAR`（`sensor/lidar`）、`TOPIC_PERCEPTION_OBSTACLES`、`TOPIC_CONTROL_CMD`
 - `include/config_manager.h`，`src/core/config_manager.c`：`config_load`，`config_save`，`config_free`
 - `include/param_bridge.h`，`src/core/param_bridge.c`：`param_bridge_server_start`，`param_bridge_server_stop`，`param_bridge_client_request`。默认套接字 `PARAM_BRIDGE_DEFAULT_SOCK`（`/tmp/flow_param.sock`），可用 `FLOW_PARAM_SOCK` 覆盖。线协议是 `LIST` / `GET` / `SET`
-- `src/flowctl.c`：`flowctl param list`、`flowctl param get <name>`、`flowctl param set <name> <value>`
+- `src/flowctl.c`：`flowctl param list`、`flowctl param get <name>`、`flowctl param set <name> <value>`。三条都经 `param_bridge_client_request` 发 `LIST` / `GET` / `SET`，不调用 `param_set_callback` 或 `param_enable_hot_reload`。`SET` 由 `param_bridge` 按类型转成 `param_set_int` / `param_set_float` / `param_set_bool` / `param_set_string`。节点下一拍用 `param_get_int` / `param_get_float` 读到新值。
 
 ### 04　状态机
 
@@ -373,7 +374,7 @@
 |---|---|---|
 | [`book/02_plugin_system.md`](book/02_plugin_system.md)（新 02） | `src/core/process_manager.c` | 没有这个文件。加载与启动看 `src/flow_launcher.c`、`src/flow_node_host.c`、`src/core/node_plugin.c` |
 | 同上 | `src/launcher.c` | 没有这个文件。启动器是 `src/flow_launcher.c` |
-| 同上 | `modules/adas_nodes/example_filter_node.c` | 没有这个文件。示例插件是 `src/plugins/example_process.c` |
+| 同上 | `modules/adas_nodes/example_filter_node.c` | 没有这个文件。`src/plugins/example_process.c` 包含 `include/process_interface.h`，导出 `get_process_interface`，没有 `node_get_plugin`。现成的 `NodePlugin` 入口是 `modules/adas_nodes/manual_drive_node.c` 与 `modules/adas_nodes/flowrec_node.c` 的 `node_get_plugin` |
 | [`book/10_coroutine.md`](book/10_coroutine.md)（新 10） | `modules/adas_nodes/coro_fusion_node.cpp` | 没有这个文件。协程融合节点是 `modules/adas_nodes/fusion_node.cpp` |
 | [`book/16_tracking_control.md`](book/16_tracking_control.md)（新 17） | `include/maneuver_tracker.h` | 没有这个路径。头文件在 `modules/adas_nodes/maneuver_tracker.h` |
 | 同上 | `src/core/ltv_mpc.c` | 没有这个路径。实现在 `src/algorithms/ltv_mpc.c`，声明在 `include/ltv_mpc.h` |
