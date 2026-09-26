@@ -229,6 +229,10 @@ static int run_layout(void) {
     printf("  offsetof data_size         %zu\n", offsetof(Message, data_size));
     printf("  offsetof type_id           %zu\n", offsetof(Message, type_id));
     printf("  offsetof data              %zu\n", offsetof(Message, data));
+    printf("  offsetof _loaned_data      %zu\n", offsetof(Message, _loaned_data));
+    printf("  offsetof _loaned_release   %zu\n", offsetof(Message, _loaned_release));
+    printf("  offsetof _loaned_release_ctx %zu\n", offsetof(Message, _loaned_release_ctx));
+    printf("  offsetof _pool_next        %zu\n", offsetof(Message, _pool_next));
     printf("  MSG_BUS_MAX_DATA_SIZE      %d\n", MSG_BUS_MAX_DATA_SIZE);
     printf("sizeof(pthread_mutex_t)      %zu\n", sizeof(pthread_mutex_t));
     printf("sizeof(pthread_cond_t)       %zu\n", sizeof(pthread_cond_t));

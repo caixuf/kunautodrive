@@ -581,9 +581,12 @@ add_executable(flow_ipc src/ipc_demo.c)
 # librt 仅 Linux 存在;macOS 的 shm_open/clock 等在 libSystem 中,无需 -lrt。
 target_link_libraries(flow_ipc flowengine_core $<$<AND:$<NOT:$<PLATFORM_ID:Darwin>>,$<NOT:$<PLATFORM_ID:Windows>>>:rt>)
 
-# 第 04 章配套：布局核对、双进程示例、延迟/吞吐测量、故障实验。
-add_executable(ipc_chapter examples/ipc_channel/chapter04.c)
-target_link_libraries(ipc_chapter flowengine_core $<$<AND:$<NOT:$<PLATFORM_ID:Darwin>>,$<NOT:$<PLATFORM_ID:Windows>>>:rt>)
+# 书中可运行示例。默认关闭，避免进日常构建；以后各章的示例目标放进同一个 if。
+option(FLOW_BUILD_BOOK_EXAMPLES "Build KunAutoDrive book examples" OFF)
+if(FLOW_BUILD_BOOK_EXAMPLES AND NOT WIN32)
+    add_executable(ipc_chapter examples/ipc_channel/chapter04.c)
+    target_link_libraries(ipc_chapter flowengine_core $<$<AND:$<NOT:$<PLATFORM_ID:Darwin>>,$<NOT:$<PLATFORM_ID:Windows>>>:rt>)
+endif()
 
 # ── Step 3: Bag 录制回放（含 Step 5 统一时钟）────────────
 add_executable(flow_bag src/bag_demo.c)
