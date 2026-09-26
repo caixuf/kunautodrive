@@ -51,20 +51,22 @@
 
 | 编号 | 章节 | 这一章讲什么 | 现文件 |
 |---|---|---|---|
-| 13 | 激光点云到目标 | `lidar_scan_generate` 产生点，`dbscan_run` 聚类，`ktracker_associate_and_update` 用匈牙利算法做关联。视觉和其他感知源并进本章一节，见下面的说明 | [`book/12_lidar_tracking.md`](book/12_lidar_tracking.md) |
-| 14 | 定位融合 EKF | `ekf_slam_predict` / `ekf_slam_update`，以及 `ekf_fusion_predict` 与 GPS / LiDAR 更新；NMEA 由 `nmea_parse_line` 解析 | [`book/13_sensor_fusion.md`](book/13_sensor_fusion.md) |
+| 13 | 激光点云到目标 | `lidar_scan_generate` 产生点，`dbscan_run` 聚类。跟踪是 `src/algorithms/kalman_tracker.c` 的线性常速卡尔曼：状态 `[x, y, vx, vy]`，`F` 为常速转移，`H` 只观测位置，关联用匈牙利算法。`modules/adas_nodes/perception_fusion_node.cpp` 合并激光与双目两路 `ObstacleList`。BEV 与车道线沙箱见下面的说明 | [`book/12_lidar_tracking.md`](book/12_lidar_tracking.md) |
+| 14 | 定位融合 EKF | `config/pipeline_car.json` 里 slam 的 `algo` 为 `ekf_slam` 时，`ekf_slam_*` 经 `sensor/pose` 把位姿交给 `fusion_node.cpp` 的 `ekf_fusion_*`：位姿的 x/y 进 `ekf_fusion_update_lidar`，GPS 的速度和航向进 `ekf_fusion_update_gps`。默认 `config/pipeline.json` 没有 slam 进程 | [`book/13_sensor_fusion.md`](book/13_sensor_fusion.md) |
 | 15 | 行为决策（含预测输入） | 行为状态机发布 `planning/behavior`；导航、轨迹规划节点和 `prediction/tracks` 是它的上下游 | [`book/14_behavior_decision.md`](book/14_behavior_decision.md) |
 | 16 | Frenet 轨迹规划 | `project_to_path` 与 `frenet_plan` 把问题投到参考线上；`st_graph_plan` 做 S-T 速度，`pjqp_path_solve` / `pjqp_speed_solve` 做分段 jerk QP | [`book/15_trajectory_planning.md`](book/15_trajectory_planning.md) |
 | 17 | 跟踪控制：Stanley / MPC | `modules/adas_nodes/control_node.cpp` 里是 PID + Stanley 跟轨迹；`ltv_mpc_solve` 解时变线性 MPC；`ManeuverTracker` 管掉头和泊车这类断开的参考线 | [`book/16_tracking_control.md`](book/16_tracking_control.md) |
 | 18 | 安全包络与降级 | `modules/adas_nodes/safety_control_node.cpp` 对控制指令做安全包络再发布 `control/cmd`；`safety_arbiter_apply`、`degrade_layer_action`、`health_heartbeat` 负责仲裁、降级和心跳 | [`book/17_safety_envelope.md`](book/17_safety_envelope.md) |
-| 19 | 执行器：SocketCAN / PWM | `modules/adas_nodes/actuator_node.c` 把控制指令打成 SocketCAN 帧；`pwm_map_control_cmd` 映射到 PWM。真车进程表在 `config/pipeline_car.json` | [`book/22_socketcan_actuator.md`](book/22_socketcan_actuator.md) |
+| 19 | 执行器：PWM / SocketCAN | `config/pipeline_car.json` 的 actuator 加载 `libactuator_pwm_node.so`，`pwm_map_control_cmd` 把 `control/cmd` 映成 ESC 与舵机脉宽。`modules/adas_nodes/actuator_node.c` 的 SocketCAN 是备选后端，当前 pipeline 没有引用它 | [`book/22_socketcan_actuator.md`](book/22_socketcan_actuator.md) |
 
 第 13 章不单开视觉章。激光跟踪那一章里用一节「其他感知源」把它们收进来，并写明下面两件事：
 
 - `modules/adas_nodes/lane_detection_node.c` 是沙箱。它订阅 `road/geometry`，用场景里的道路几何合成车道线。Canny 边缘检测和 Hough 变换只写在文件头的注释里（注释称之为尚未实现的 HAVE_CV 版本），这个 .c 文件里没有这条图像处理路径。
 - `modules/adas_nodes/bev_post.h` 和 `modules/adas_nodes/bev_post.c` 只做协议映射。`bev_post_to_obstacle_list` 把已经解码好的 `BevPostDet` 填进 `ObstacleList`。网络输出怎么解码不在这两个文件里。
 
-同一节里的相邻源码按各自文件的实际行为来写。`modules/adas_nodes/traffic_light_recognition_node.c` 也是沙箱，把 `road/traffic_lights` 转成 `perception/traffic_lights`，注释里的相机检测没有实现。`modules/adas_nodes/bev_detection_node.cpp` 是影子节点，发布 `bev/obstacles`；栅格用 `bev_pre_rasterize`，可选的 ONNX 前向用 `bev_onnx_backend_forward`，没有模型时走真值直通，填 `ObstacleList` 时调用 `bev_post_to_obstacle_list`。`modules/adas_nodes/stereo_vision_node.c` 把 `sensor/stereo` 的深度反投影后做 DBSCAN。`modules/adas_nodes/perception_node.cpp` 在 ground_truth 与 `sensor/lidar_points` 两种模式下产出 `perception/obstacles`。`modules/adas_nodes/perception_fusion_node.cpp` 里的 `fuse_obstacles` 与 `associate_and_track` 合并两路 `ObstacleList`。
+同一节里的相邻源码按各自文件的实际行为来写。`modules/adas_nodes/traffic_light_recognition_node.c` 也是沙箱，把 `road/traffic_lights` 转成 `perception/traffic_lights`，注释里的相机检测没有实现。`modules/adas_nodes/bev_detection_node.cpp` 是影子节点，发布 `bev/obstacles`；栅格用 `bev_pre_rasterize`，可选的 ONNX 前向用 `bev_onnx_backend_forward`，没有模型时走真值直通，填 `ObstacleList` 时调用 `bev_post_to_obstacle_list`。`modules/adas_nodes/stereo_vision_node.c` 把 `sensor/stereo` 的深度反投影后做 DBSCAN。`modules/adas_nodes/perception_node.cpp` 在 ground_truth 与 `sensor/lidar_points` 两种模式下产出 `perception/obstacles`。
+
+第 14 章的两条 EKF 不在同一个文件里互相调用。`modules/adas_nodes/slam_node.cpp` 仅当 `algo` 为 `ekf_slam` 时跑 `ekf_slam_predict`（IMU 的 `accel_x`、`gyro_z`）和 `ekf_slam_update` / `ekf_slam_update_pos`（激光位置；位移够大时用航迹方向当航向观测），再把 `Pose2D` 发到 `sensor/pose`。`modules/adas_nodes/fusion_node.cpp` 订阅这条话题：位姿 `converged` 且 `cov_xx + cov_yy < 100` 时，用位姿的 x/y 调用 `ekf_fusion_update_lidar`；否则用 `sensor/lidar` 的 `LidarFrame` x/y 调用同一个函数。GPS 另走 `ekf_fusion_update_gps`（速度和航向）。`config/pipeline_car.json` 把 slam 的 `algo` 设成 `ekf_slam`。默认 `config/pipeline.json` 没有 slam，`sensor/pose` 列在 `allow_hung_subs` 里，融合节点这时走激光位置加 GPS。`slam_node` 自己的默认 `algo` 是 `dead_reckon`，那条路径不调用 `ekf_slam.c`。
 
 ## Part VI　仿真、可观测与闭环
 
@@ -221,8 +223,9 @@
 - `modules/adas_nodes/lidar_contract.h`：`lidar_point_cloud_validate`，`lidar_point_cloud_capacity`
 - `modules/adas_nodes/lidar_driver_node.c`
 - `src/algorithms/dbscan_cluster.h`，`src/algorithms/dbscan_cluster.c`：`dbscan_init`，`dbscan_run`，`dbscan_cluster_count`
-- `src/algorithms/kalman_tracker.h`，`src/algorithms/kalman_tracker.c`：`KalmanTracker`，`ktracker_init`，`ktracker_predict`，`ktracker_associate_and_update`（实现里的 `hungarian_solve`）
-- `modules/adas_nodes/object_tracker_node.c`：订阅 `perception/obstacles`，发布 `perception/tracked_objects`
+- `src/algorithms/kalman_tracker.h`，`src/algorithms/kalman_tracker.c`：线性常速卡尔曼，不是扩展卡尔曼。`KTRACKER_STATE_DIM` 为 4，状态 `[x, y, vx, vy]`。`kf_predict` 的转移矩阵 `F` 是 `x'=x+vx·dt`、`y'=y+vy·dt`、速度保持；`kf_update` 的 `H` 只取位置 `[zx, zy]`。`ktracker_predict`，`ktracker_associate_and_update`，关联实现是 `hungarian_solve`
+- `modules/adas_nodes/object_tracker_node.c`：订阅 `perception/obstacles`，发布 `perception/tracked_objects`，调用上面的 `ktracker_*`
+- `modules/adas_nodes/perception_fusion_node.cpp`：目标级融合，不是定位 EKF。默认订阅 `perception/obstacles_lidar` 与 `perception/obstacles_stereo`（两路 `ObstacleList`）。`fuse_obstacles` 按距离去重合并，`associate_and_track` 做最近邻跨帧关联，写出持久 id 和差分速度，发布 `perception/obstacles`。`config/pipeline_car.json` 文件头写明该节点默认关闭；同时使用激光和双目时，才把两路输出改到上述话题并打开融合
 
 其他感知源（并入本章，不另开编号）：
 
@@ -234,14 +237,14 @@
 - `modules/adas_nodes/traffic_light_recognition_node.c`：沙箱，转发 `road/traffic_lights`
 - `modules/adas_nodes/stereo_vision_node.c`：`sensor/stereo` 深度反投影后聚类
 - `modules/adas_nodes/perception_node.cpp`：`perception/obstacles`
-- `modules/adas_nodes/perception_fusion_node.cpp`：`fuse_obstacles`，`associate_and_track`
 
 ### 14　定位融合 EKF
 
 - 现文件：[`book/13_sensor_fusion.md`](book/13_sensor_fusion.md)
-- `modules/adas_nodes/ekf_slam.h`，`modules/adas_nodes/ekf_slam.c`：`ekf_slam_init`，`ekf_slam_predict`，`ekf_slam_update`，`ekf_slam_get_pose`
-- `src/algorithms/ekf_fusion.h`，`src/algorithms/ekf_fusion.c`：`ekf_fusion_init`，`ekf_fusion_predict`，`ekf_fusion_update_gps`，`ekf_fusion_update_lidar`，`ekf_fusion_get_state`
-- `modules/adas_nodes/slam_node.cpp`
+- `modules/adas_nodes/ekf_slam.h`，`modules/adas_nodes/ekf_slam.c`：5 维状态 `[x, y, heading, v, omega]`。`ekf_slam_predict` 用 IMU 的 `accel_x`、`gyro_z` 做运动学预测，并传播雅可比 `F`。`ekf_slam_update` 观测位置和航向，`ekf_slam_update_pos` 只观测位置。`ekf_slam_get_pose` 读出 x/y/heading 和 `cov_xx` / `cov_yy` / `cov_hh`
+- `modules/adas_nodes/slam_node.cpp`：订阅 `sensor/lidar`、`sensor/imu`，发布 `sensor/pose`（`Pose2D`）。默认 `algo` 是 `dead_reckon`，不调用 `ekf_slam.c`。`algo` 为 `ekf_slam` 时走 `slam_update_ekf_slam`：预测用最近一帧 IMU，激光新鲜时做位置更新，位移大于 `heading_obs_min_disp` 时用 `atan2(Δy, Δx)` 作为航向观测。`config/pipeline_car.json` 的 slam 进程把 `algo` 设为 `ekf_slam`。默认 `config/pipeline.json` 没有这个进程，`allow_hung_subs` 含 `sensor/pose`
+- `src/algorithms/ekf_fusion.h`，`src/algorithms/ekf_fusion.c`：`EkfFusion` 状态 `[x, y, v, heading, yaw_rate]`。`ekf_fusion_predict` 用自行车运动学。`ekf_fusion_update_lidar` 只更新位置 x/y。`ekf_fusion_update_gps` 的实参是速度和航向（`z_v`，`z_heading`），不是经纬度
+- `modules/adas_nodes/fusion_node.cpp`：订阅 `sensor/lidar`、`sensor/gps`、`sensor/pose`，发布 `fusion/localization`。先 `ekf_fusion_predict`。若 `Pose2D` 已 `converged` 且 `cov_xx + cov_yy < 100`，把位姿的 x/y 送进 `ekf_fusion_update_lidar`；否则把 `LidarFrame` 的 x/y 送进同一个函数。有 GPS 时再 `ekf_fusion_update_gps(speed_mps, heading_deg 转弧度)`。`ekf_slam.c` 没有调用 `ekf_fusion.c`；车端这条链路是 `sensor/pose` 上的 `Pose2D`
 - `modules/adas_nodes/slam_math.h`，`modules/adas_nodes/slam_math.c`：`slam_wrap_pi`
 - `modules/adas_nodes/gps_driver_node.c`
 - `modules/adas_nodes/imu_driver_node.c`
@@ -283,12 +286,12 @@
 - `include/safety_evidence.h`，`src/core/safety_evidence.c`：`safety_evidence_to_json`
 - `include/safety_fault_injection.h`，`src/core/safety_fault_injection.c`：`safety_fault_injection_init`，`safety_fault_injection_start`
 
-### 19　执行器：SocketCAN / PWM
+### 19　执行器：PWM / SocketCAN
 
 - 现文件：[`book/22_socketcan_actuator.md`](book/22_socketcan_actuator.md)
-- `modules/adas_nodes/actuator_node.c`：SocketCAN 输出；非 Linux 环境降级为 dry-run
-- `modules/adas_nodes/actuator_pwm_node.c`
-- `modules/adas_nodes/pwm_map.h`，`modules/adas_nodes/pwm_map.c`：`pwm_map_control_cmd`
+- `modules/adas_nodes/pwm_map.h`，`modules/adas_nodes/pwm_map.c`：`pwm_map_control_cmd` 把 `throttle` / `brake` / `steering_rad` 映成 ESC 与舵机脉宽（μs），钳在 `PWM_MIN_US` 与 `PWM_MAX_US` 之间
+- `modules/adas_nodes/actuator_pwm_node.c`：订阅 `control/cmd`，按 `backend` 走 PCA9685、GPIO 或 `dry_run`。`config/pipeline_car.json` 与 `config/vehicles/rc_car.json` 里名为 actuator 的条目都指向这份 PWM 节点，`backend` 为 `pca9685`
+- `modules/adas_nodes/actuator_node.c`：SocketCAN 备选后端。文件头写明当前 pipeline 配置用的是 PWM 节点；仓库里的 pipeline json 没有把本节点写进 `library_path`。无 CAN 设备时 socket 失败则只打日志
 - `config/pipeline_car.json`
 
 ### 20　FlowSim 场景与世界
