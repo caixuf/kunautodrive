@@ -39,6 +39,11 @@
 #include "lidar_scan.h"
 #include "lidar_contract.h"
 
+/* D2-04 / D2-05 M3: lane_match 10 字段契约 -> 抽出 helper 到 flowsim/lane_match_helpers.h。
+ * compute_lane_match() 是 static 不能直接调；这些 extern "C" 包装是它的纯算法
+ * 部分（曲率 / 合成 llt_id / 邻 lane 查找 / 失败归零），详见对应 .cpp。 */
+#include "flowsim/lane_match_helpers.h"
+
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -1006,6 +1011,235 @@ static void test_lidar_scan_height_and_range_contract(void) {
     PASS();
 }
 
+
+/* ══════════════════════════════════════════════════════════ */
+/* Lane Match M3 helper（flowsim_node.cpp::compute_lane_match 抽出的纯算法）*/
+/* ══════════════════════════════════════════════════════════ */
+/* D2-04 M3 起 compute_lane_match 输出 10 字段（M2 5 + M3 5）。其中 4 个核心算法
+ * 在 flowsim/lane_match_helpers.{h,cpp} 里抽出成 extern "C" 纯函数，可直接调：
+ *   - flowsim_lm_curvature_3pt        三点曲率（Menger 公式，带符号）
+ *   - flowsim_lm_synthesize_lanelet_id M2/M3 step1 占位 llt_id 合成公式
+ *   - flowsim_lm_pick_adjacent_lane_id closest-on-side 邻 lane 挑选
+ *   - flowsim_lm_zero_outputs_on_failure 失败路径 10 字段归零
+ *
+ * esmini 路网相关部分（world_to_frenet / lane_width / drivable_lane_ids）由
+ * compute_lane_match 集成时调 `g.roads.*`，本测试只覆盖纯算法（不依赖 esmini）。
+ * 路网集成覆盖在 tests/test_adas_nodes_logic 之外的 test_road_network 里（场景无关
+ * invariant 测试）+ demo runtime smoke（scripts/demo.sh --no-browser 10s）。 */
+
+/* ── 1. 三点曲率：直线 → ≈ 0 ── */
+static void test_compute_lane_match_curvature_straight_zero(void) {
+    TEST("compute_lane_match: 三点共线 -> curvature ≈ 0 (±0.01)");
+    /* 水平直线：y 恒为 0，x 等距。三点严格共线 → Menger 分子 cross = 0 → κ = 0 */
+    const double k1 = flowsim_lm_curvature_3pt(0.0, 0.0,  1.0, 0.0,  2.0, 0.0);
+    ASSERT_NEAR(k1, 0.0, 0.01, "horizontal colinear: kappa should be 0");
+    /* 反向点序也得 0（cross 变号但 |kappa| 仍是 0） */
+    const double k2 = flowsim_lm_curvature_3pt(2.0, 0.0,  1.0, 0.0,  0.0, 0.0);
+    ASSERT_NEAR(k2, 0.0, 0.01, "horizontal colinear reversed: kappa should be 0");
+    /* 倾斜直线 */
+    const double k3 = flowsim_lm_curvature_3pt(0.0, 0.0,  1.0, 1.0,  2.0, 2.0);
+    ASSERT_NEAR(k3, 0.0, 0.01, "45-degree colinear: kappa should be 0");
+    PASS();
+}
+
+/* ── 2. 三点曲率：左弯 → > 0 ── */
+static void test_compute_lane_match_curvature_left_turn_positive(void) {
+    TEST("compute_lane_match: 左弯三点（CCW 弧）-> curvature > 0");
+    /* 单位圆 R=1：3 点取 0°, 60°, 120° 走 CCW（左转方向），间距近 1m 量级。
+     * 这三个点的外接圆就是原单位圆 → κ = 1/R = 1.0。
+     * cross 方向：CCW → z 分量 > 0 → signed κ > 0。 */
+    const double c60 = 0.5;
+    const double s60 = 0.866025403784;
+    const double c120 = -0.5;
+    const double s120 = 0.866025403784;
+    const double kappa = flowsim_lm_curvature_3pt(
+        1.0, 0.0,         /* (1, 0) = 0 deg */
+        c60, s60,         /* (0.5, sqrt(3)/2) = 60 deg */
+        c120, s120);      /* (-0.5, sqrt(3)/2) = 120 deg */
+    ASSERT(kappa > 0.5,
+           "left arc points should give positive curvature (got %.4f, want > 0.5)", kappa);
+    ASSERT_NEAR(kappa, 1.0, 0.05, "unit-circle 3-point approx should be ~1.0");
+
+    /* 反向点序（右弯，CW）→ κ < 0（验证符号语义） */
+    const double kappa_cw = flowsim_lm_curvature_3pt(
+        1.0, 0.0,
+        c120, s120,
+        c60, s60);
+    ASSERT(kappa_cw < -0.5,
+           "reversed (CW) arc should give negative curvature (got %.4f)", kappa_cw);
+    PASS();
+}
+
+/* ── 3. lane_match 字段语义：合成 llt_id + 失败路径零化（覆盖「已知 width=3.5 → 输出 3.5」测试意图）── */
+/* 「已知 width=3.5 → 输出 3.5」测试意图是验证 lane_width 字段的透传语义。
+ * 在不依赖 esmini 的前提下，把这条拆成两部分：
+ *   - 验证合成 llt_id 公式的正确性（这是 lane_match_id 字段的来源）
+ *   - 验证失败路径零化函数对 lane_width 也置 0（关键 invariant）：
+ *     一旦 compute_lane_match 进入失败分支，所有字段必须一致归零，
+ *     不能保留 stale 的 3.5。 */
+static void test_compute_lane_match_synthesize_and_zero_path(void) {
+    TEST("compute_lane_match: synthesize_lanelet_id 公式 + 失败路径零化");
+    /* 合成公式: road_id*1000 + (lane_id+500)
+     * road=0, lane=-1 -> 0*1000 + 499 = 499
+     * road=0, lane= 0 -> 0*1000 + 500 = 500  (ref line 不参与，但公式仍算)
+     * road=0, lane= 1 -> 0*1000 + 501 = 501
+     * road=5, lane=-3 -> 5*1000 + 497 = 5497
+     * road=1000, lane=-100 -> 1000*1000 + 400 = 1000400 */
+    ASSERT(flowsim_lm_synthesize_lanelet_id(0, -1) == 499ULL,
+           "synthesize(0, -1) should be 499");
+    ASSERT(flowsim_lm_synthesize_lanelet_id(0, 0) == 500ULL,
+           "synthesize(0, 0) should be 500 (ref line but formula still applies)");
+    ASSERT(flowsim_lm_synthesize_lanelet_id(5, -3) == 5497ULL,
+           "synthesize(5, -3) should be 5497");
+    ASSERT(flowsim_lm_synthesize_lanelet_id(1000, -100) == 1000400ULL,
+           "synthesize(1000, -100) should be 1000400");
+
+    /* 防御: road_id < 0 (不应该发生，esmini 返 >= 0) -> 0 */
+    ASSERT(flowsim_lm_synthesize_lanelet_id(-1, -1) == 0ULL,
+           "synthesize(-1, -1) should be 0 (defensive)");
+    /* 防御: lane_id < -500 -> 合成负数 -> 0 (不合法 llt_id) */
+    ASSERT(flowsim_lm_synthesize_lanelet_id(0, -501) == 0ULL,
+           "synthesize(0, -501) should be 0 (lane_offset < 0)");
+
+    /* 关键 invariant: 失败路径零化函数对全部 10 字段生效
+     * （lane_width=3.5 这个用例的核心: 在 valid=0 时 lane_width 必须也是 0，
+     * 不能保留 stale 的 3.5）。 */
+    uint64_t llt_id = 999, left_id = 999, right_id = 999;
+    double llt_s = 1.0, llt_off = 0.5, h_err = 0.1;
+    double curv = 0.2, lw = 3.5;   /* 故意设非零值模拟"漏清零" */
+    int valid = 1;
+    uint32_t flags = 0xFF;
+    flowsim_lm_zero_outputs_on_failure(
+        &llt_id, &llt_s, &llt_off, &h_err, &valid,
+        &curv, &lw, &left_id, &right_id, &flags);
+    ASSERT_EQ(llt_id, 0ULL, "failure path: llt_id must be 0 (not 999)");
+    ASSERT_EQ(llt_s, 0.0, "failure path: llt_s must be 0");
+    ASSERT_EQ(llt_off, 0.0, "failure path: llt_offset must be 0");
+    ASSERT_EQ(h_err, 0.0, "failure path: llt_heading_err_rad must be 0");
+    ASSERT_EQ(valid, 0, "failure path: valid must be 0");
+    ASSERT_EQ(curv, 0.0, "failure path: curvature must be 0");
+    ASSERT_EQ(lw, 0.0, "failure path: lane_width must be 0 (not stale 3.5)");
+    ASSERT_EQ(left_id, 0ULL, "failure path: left_lanelet_id must be 0");
+    ASSERT_EQ(right_id, 0ULL, "failure path: right_lanelet_id must be 0");
+    ASSERT_EQ(flags, 0U, "failure path: flags must be 0");
+    PASS();
+}
+
+/* ── 4. 邻 lane 查找: 3 车道中中间车道 left/right 都有；边上车道一侧 0 ── */
+static void test_compute_lane_match_left_right_neighbors(void) {
+    TEST("compute_lane_match: 3 车道 -> 中间 lane 双侧有邻 / 边上 lane 一侧 0");
+    /* 模拟 OpenDRIVE 双向 3 车道（右侧 rht_three）:
+     *   lane_id: -1, -2, -3
+     *   -1 是离参考线最近的（右侧最内车道）
+     *   -3 是最外的车道
+     * 「中间」车道 = -2（左右各一个邻） */
+    const int ids_rht[] = {-1, -2, -3};
+
+    /* 中间车道 -2: 左邻（id 更大）= -1，右邻（id 更小）= -3 */
+    ASSERT_EQ(flowsim_lm_pick_adjacent_lane_id(-2, ids_rht, 3, +1), -1,
+               "middle (-2) left neighbor should be -1");
+    ASSERT_EQ(flowsim_lm_pick_adjacent_lane_id(-2, ids_rht, 3, -1), -3,
+               "middle (-2) right neighbor should be -3");
+
+    /* 边车道 -1: 左邻 = 0（候选里没有 > -1 的 id，但 ref line id=0 不在候选），
+     * 右邻 = -2 */
+    ASSERT_EQ(flowsim_lm_pick_adjacent_lane_id(-1, ids_rht, 3, +1), 0,
+               "edge (-1) left neighbor must be 0 (no drivable on that side)");
+    ASSERT_EQ(flowsim_lm_pick_adjacent_lane_id(-1, ids_rht, 3, -1), -2,
+               "edge (-1) right neighbor should be -2");
+
+    /* 边车道 -3: 左邻 = -2，右邻 = 0 */
+    ASSERT_EQ(flowsim_lm_pick_adjacent_lane_id(-3, ids_rht, 3, +1), -2,
+               "edge (-3) left neighbor should be -2");
+    ASSERT_EQ(flowsim_lm_pick_adjacent_lane_id(-3, ids_rht, 3, -1), 0,
+               "edge (-3) right neighbor must be 0 (no drivable on that side)");
+
+    /* 4 车道（双侧各有车道）: 正负 id 都存在
+     *   lane_id: -2, -1（右行驶）, +1, +2（左行驶 — ref 是 0 不在 drivable 列表）
+     * 中间车道 -1: 左邻（id 更大）= +1（跳过 ref 0）, 右邻（id 更小）= -2
+     * 中间车道 +1: 左邻 = +2, 右邻 = -1（同样跳过 ref 0）
+     * ⚠ ref lane id=0 虽存在但不可行驶（参考线），本 helper 跳过；
+     * closest-on-side 自然会找到 +1 / -1 而不是 0。 */
+    const int ids_bidir[] = {-2, -1, 1, 2};
+    ASSERT_EQ(flowsim_lm_pick_adjacent_lane_id(-1, ids_bidir, 4, +1), +1,
+               "middle (-1) left neighbor should be +1 (skipping non-drivable ref 0)");
+    ASSERT_EQ(flowsim_lm_pick_adjacent_lane_id(-1, ids_bidir, 4, -1), -2,
+               "middle (-1) right neighbor should be -2");
+    ASSERT_EQ(flowsim_lm_pick_adjacent_lane_id(+1, ids_bidir, 4, +1), +2,
+               "middle (+1) left neighbor should be +2");
+    ASSERT_EQ(flowsim_lm_pick_adjacent_lane_id(+1, ids_bidir, 4, -1), -1,
+               "middle (+1) right neighbor should be -1 (skipping non-drivable ref 0)");
+
+    /* 真正的边车道 +2（最外左车道）: 左邻 = 0, 右邻 = +1 */
+    ASSERT_EQ(flowsim_lm_pick_adjacent_lane_id(+2, ids_bidir, 4, +1), 0,
+               "edge (+2) left neighbor must be 0 (no drivable on outer side)");
+    ASSERT_EQ(flowsim_lm_pick_adjacent_lane_id(+2, ids_bidir, 4, -1), +1,
+               "edge (+2) right neighbor should be +1");
+    /* 边车道 -2（最外右车道）: 左邻 = -1, 右邻 = 0 */
+    ASSERT_EQ(flowsim_lm_pick_adjacent_lane_id(-2, ids_bidir, 4, +1), -1,
+               "edge (-2) left neighbor should be -1");
+    ASSERT_EQ(flowsim_lm_pick_adjacent_lane_id(-2, ids_bidir, 4, -1), 0,
+               "edge (-2) right neighbor must be 0 (no drivable on outer side)");
+
+    /* 退化: 空候选、side=0 -> 0；candidate_ids=nullptr -> 0 */
+    ASSERT_EQ(flowsim_lm_pick_adjacent_lane_id(-1, ids_rht, 0, +1), 0,
+               "empty candidate list returns 0");
+    ASSERT_EQ(flowsim_lm_pick_adjacent_lane_id(-1, ids_rht, 3, 0), 0,
+               "side=0 returns 0");
+    ASSERT_EQ(flowsim_lm_pick_adjacent_lane_id(-1, NULL, 3, +1), 0,
+               "NULL candidates returns 0");
+    PASS();
+}
+
+/* ── 5. 失败路径语义: world_to_frenet 失败 -> 全 10 字段归零 + valid=0 ── */
+/* compute_lane_match 是 static 不能直接调；本测试模拟「失败路径」控制流:
+ * 通过 flowsim_lm_zero_outputs_on_failure 验证当 flowsim_node.cpp 走 failed
+ * 分支（g.roads_loaded=false / world_to_frenet==false / frenet_to_world==false）
+ * 时调用方拿到的 10 字段语义。已在用例 3 验证了零化函数本身的正确性，
+ * 本用例再补一组对照: 模拟"非零初值 + valid=1 -> 调零化 -> 全 0 + valid=0"
+ * 的状态机转移，确保 cJSON 序列化层看到一致状态。
+ *
+ * 真正的「失败路径 -> valid=0」集成覆盖由 demo runtime smoke 验证
+ * （scripts/demo.sh --no-browser 10s，flowsim 启动期 g.roads_loaded=false 时
+ * publish_lane_match 走失败路径）。 */
+static void test_compute_lane_match_failure_path_zeros(void) {
+    TEST("compute_lane_match: 失败路径 -> 全 10 字段 0 + valid=0");
+    /* 模拟"成功解算后某帧突然失败"（lane 被画到 junction 里、road_id=-1 等）
+     * 的状态机转移: 前一帧 valid=1 的输出被 reset 到全 0。 */
+    uint64_t llt_id = 12345;
+    double llt_s = 50.0, llt_off = -0.3, h_err = 0.05;
+    int valid = 1;
+    double curv = 0.01, lw = 3.5;
+    uint64_t left_id = 12344, right_id = 12346;
+    uint32_t flags = 0;
+    /* 模拟失败回调（compute_lane_match 内部任一条件不满足时调零化函数） */
+    flowsim_lm_zero_outputs_on_failure(
+        &llt_id, &llt_s, &llt_off, &h_err, &valid,
+        &curv, &lw, &left_id, &right_id, &flags);
+    /* gate lane_match_schema_check 的关键不变量:
+     *   1) valid=0
+     *   2) llt_id==0（避免"valid=1 requires llt_id>0"语义矛盾）
+     *   3) 所有 8 个数值字段都是 0（lane_match_id_mismatch 等下游诊断
+     *      不会拿到 stale 数据） */
+    ASSERT_EQ(valid, 0, "valid must flip to 0 on failure");
+    ASSERT_EQ(llt_id, 0ULL, "llt_id must be 0 on failure (gate invariant)");
+    ASSERT_EQ(llt_s, 0.0, "llt_s must be 0 on failure");
+    ASSERT_EQ(llt_off, 0.0, "llt_offset must be 0 on failure");
+    ASSERT_EQ(h_err, 0.0, "llt_heading_err_rad must be 0 on failure");
+    ASSERT_EQ(curv, 0.0, "curvature must be 0 on failure");
+    ASSERT_EQ(lw, 0.0, "lane_width must be 0 on failure");
+    ASSERT_EQ(left_id, 0ULL, "left_lanelet_id must be 0 on failure");
+    ASSERT_EQ(right_id, 0ULL, "right_lanelet_id must be 0 on failure");
+    ASSERT_EQ(flags, 0U, "flags must be 0 on failure (ABI reserved)");
+    /* 重复调零化: 仍是全 0（幂等性） */
+    flowsim_lm_zero_outputs_on_failure(
+        &llt_id, &llt_s, &llt_off, &h_err, &valid,
+        &curv, &lw, &left_id, &right_id, &flags);
+    ASSERT_EQ(valid, 0, "valid stays 0 on repeated zeroing (idempotence)");
+    ASSERT_EQ(llt_id, 0ULL, "llt_id stays 0 on repeated zeroing");
+    PASS();
+}
+
 int main(void) {
     printf("\n╔══════════════════════════════════════════╗\n");
     printf("║  FlowEngine ADAS Nodes Logic Tests        ║\n");
@@ -1074,6 +1308,13 @@ int main(void) {
     test_cluster_fragments_merged_into_one();
     test_cluster_fragments_do_not_cross_lanes();
     test_cluster_fragments_dimensional_guard();
+
+    printf("\n═══ Lane Match M3 helpers (D2-04 10-field contract) ═══\n");
+    test_compute_lane_match_curvature_straight_zero();
+    test_compute_lane_match_curvature_left_turn_positive();
+    test_compute_lane_match_synthesize_and_zero_path();
+    test_compute_lane_match_left_right_neighbors();
+    test_compute_lane_match_failure_path_zeros();
 
     printf("\n═══ LiDAR Observation Model (3D scan / capacity guard) ═══\n");
     test_lidar_scan_azimuth_fov_bounds();

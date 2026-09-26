@@ -148,6 +148,20 @@ public:
     int drivable_lane_count(int road_id, double s);
 
     /**
+     * 枚举指定道路在 s 处的所有可行驶车道 id（M3 lane_match helper）。
+     *
+     * 返回值按 esmini 内部顺序排列（不保证 sorted）；调用方用
+     * `flowsim_lm_pick_adjacent_lane_id` 在返回列表上挑 closest-on-side。
+     * 路网未加载 / road_id 越界 → 返回空 vector。
+     *
+     * 设计动机：把 `RM_GetDrivableLaneIdByIndex` 的 esmini C API 调用
+     * 局限在 FlowRoadNetwork 内部，避免 flowsim_node.cpp 直接耦合 esminiRMLib。
+     * D2-03 加载真 Lanelet2 后，可在这里换成 `LaneletMap::laneletLayer.find`
+     * 拿邻 lanelet，flowsim_node.cpp 的 caller 不受影响。
+     */
+    std::vector<int> drivable_lane_ids(int road_id, double s);
+
+    /**
      * 检测路网中的所有交叉口中心（端点几何聚类）。
      *
      * esmini C API 不暴露 junction 拓扑（仅 RM_GetJunctionIdString 字符串），

@@ -46,6 +46,7 @@
 #include "flowsim/route.h"
 #include "flowsim/sim_digest.h"
 #include "flowsim/lane_frenet.h"          /* C-2: 共享车道中心横向偏移公式 */
+#include "flowsim/lane_match_helpers.h"   /* D2-04 M3: lane_match 纯算法 helper（曲率/synthesize/邻车道查找/失败归零） */
 #include "flowsim/flowsim_time.h"
 #include "scenario_router.h"              /* 车道级 A*：主循环建图 + ego 起终点路由 */
 
@@ -1194,40 +1195,96 @@ static void publish_road_geometry(void) {
  *   2. frenet_to_world 拿车道切线 heading（用几何差分，避开 RM pd.h 污染）
  *   3. ego_heading - lane_heading，wrap 到 [-π, π]
  *
- * llt_id 占位（M2）：road_id*1000 + (lane_id+500)。M3 切 Lanelet2 后换真 Lanelet 全局 ID。
- * 失败路径：world_to_frenet/frenet_to_world 任一失败 -> 全部 0 + valid=0。
+ * llt_id 占位（M2 → M3 step 1）：road_id*1000 + (lane_id+500)，M3 step 2 起
+ * flowsim 加载 lanelet::LaneletMap 后换真 Lanelet 全局 ID（D2-03 / D2-05 design §4）。
+ *
+ * M3 追加 5 字段（spec §6.1 v1.0）：
+ *   curvature        — 当前 lane centerline 在 ego_s 处的三点曲率（1/m，带符号：
+ *                      + 左转弯 / - 右转弯 / ≈0 直线）；用 ±0.5m 前后两点取样，
+ *                      Menger 公式 2·cross / (|a|·|b|·|c|)，共线/重合返回 0
+ *   lane_width       — g.roads.lane_width(road, lane, s)（m，0 = 未知）
+ *   left_lanelet_id  — 邻 lane（左 = id 更大，OpenDRIVE 约定）合成的 llt_id；
+ *                      无左邻返回 0
+ *   right_lanelet_id — 邻 lane（右 = id 更小）合成的 llt_id；无右邻返回 0
+ *   flags            — ABI 保留位，本期必须置 0（M3 后续 D2-06/D2-07 会定义语义）
+ *
+ * 失败路径：world_to_frenet/frenet_to_world 任一失败 -> 全部 10 字段归零 + valid=0
+ * （通过 lane_match_helpers.h 的 `flowsim_lm_zero_outputs_on_failure` 保证字段
+ * 一致性，避免漏写新字段导致 valid=0 时仍有 stale 值）。
  */
 static void compute_lane_match(double x, double y, double ego_heading,
                                uint64_t* out_llt_id, double* out_llt_s,
                                double* out_llt_offset, double* out_heading_err,
-                               int* out_valid) {
+                               int* out_valid,
+                               /* M3 新增 5 字段（spec §6.1 v1.0 顺序） */
+                               double* out_curvature,
+                               double* out_lane_width,
+                               uint64_t* out_left_lanelet_id,
+                               uint64_t* out_right_lanelet_id,
+                               uint32_t* out_flags) {
     flowsim::FrenetPos fp;
     const bool ok = g.roads_loaded && g.roads.world_to_frenet(x, y, fp);
     if (!ok || fp.road_id < 0) {
-        *out_llt_id = 0;
-        *out_llt_s = 0.0;
-        *out_llt_offset = 0.0;
-        *out_heading_err = 0.0;
-        *out_valid = 0;
+        flowsim_lm_zero_outputs_on_failure(
+            out_llt_id, out_llt_s, out_llt_offset, out_heading_err, out_valid,
+            out_curvature, out_lane_width,
+            out_left_lanelet_id, out_right_lanelet_id, out_flags);
         return;
     }
     flowsim::WorldPos wp;
     if (!g.roads.frenet_to_world(fp.road_id, fp.lane_id, fp.s, fp.offset, wp)) {
-        *out_llt_id = 0;
-        *out_llt_s = 0.0;
-        *out_llt_offset = 0.0;
-        *out_heading_err = 0.0;
-        *out_valid = 0;
+        flowsim_lm_zero_outputs_on_failure(
+            out_llt_id, out_llt_s, out_llt_offset, out_heading_err, out_valid,
+            out_curvature, out_lane_width,
+            out_left_lanelet_id, out_right_lanelet_id, out_flags);
         return;
     }
     double err = ego_heading - wp.h;
     while (err > M_PI)  err -= 2.0 * M_PI;
     while (err < -M_PI) err += 2.0 * M_PI;
-    *out_llt_id = (uint64_t)(fp.road_id * 1000 + (fp.lane_id + 500));
+
+    /* M2 字段 */
+    *out_llt_id = flowsim_lm_synthesize_lanelet_id(fp.road_id, fp.lane_id);
     *out_llt_s = fp.s;
     *out_llt_offset = fp.offset;
     *out_heading_err = err;
     *out_valid = 1;
+
+    /* M3 字段 */
+    /* curvature：±0.5m centerline 三点采样 → Menger 公式（退化返 0） */
+    constexpr double kCurvatureDs = 0.5;
+    flowsim::WorldPos p_prev, p_cur, p_next;
+    bool have_prev = g.roads.frenet_to_world(fp.road_id, fp.lane_id,
+                                             fp.s - kCurvatureDs, 0.0, p_prev);
+    bool have_cur  = g.roads.frenet_to_world(fp.road_id, fp.lane_id,
+                                             fp.s, 0.0, p_cur);
+    bool have_next = g.roads.frenet_to_world(fp.road_id, fp.lane_id,
+                                             fp.s + kCurvatureDs, 0.0, p_next);
+    if (have_prev && have_cur && have_next) {
+        *out_curvature = flowsim_lm_curvature_3pt(
+            p_prev.x, p_prev.y, p_cur.x, p_cur.y, p_next.x, p_next.y);
+    } else {
+        *out_curvature = 0.0;   /* s 越界或 road 退化（<0.5m 长）→ 0 */
+    }
+
+    /* lane_width：直接透传 road_network API（0 = 未知；spec §6.1 允许） */
+    *out_lane_width = g.roads.lane_width(fp.road_id, fp.lane_id, fp.s);
+
+    /* left/right_lanelet_id：枚举 drivable lane ids，挑 closest-on-side 邻 lane，
+     * 合成 llt_id。无邻 → 0。`drivable_lane_ids` 把 esmini RM_GetDrivableLaneIdByIndex
+     * 封装在 FlowRoadNetwork 内，flowsim_node.cpp 不直接耦合 esminiRMLib。 */
+    const std::vector<int> drivable_ids = g.roads.drivable_lane_ids(fp.road_id, fp.s);
+    const int left_lid  = flowsim_lm_pick_adjacent_lane_id(
+        fp.lane_id, drivable_ids.data(), (int)drivable_ids.size(), +1);
+    const int right_lid = flowsim_lm_pick_adjacent_lane_id(
+        fp.lane_id, drivable_ids.data(), (int)drivable_ids.size(), -1);
+    *out_left_lanelet_id  = (left_lid  != 0)
+        ? flowsim_lm_synthesize_lanelet_id(fp.road_id, left_lid)  : 0ULL;
+    *out_right_lanelet_id = (right_lid != 0)
+        ? flowsim_lm_synthesize_lanelet_id(fp.road_id, right_lid) : 0ULL;
+
+    /* flags：ABI 保留位，本期必须置 0 */
+    *out_flags = 0U;
 }
 
 /* ── 车道级定位（诊断/契约）─────────────────────────────────────
@@ -1263,18 +1320,38 @@ static void publish_lane_match(void) {
     cJSON_AddNumberToObject(j, "frames", (double)g.lane_match_frames);
     cJSON_AddNumberToObject(j, "frames", (double)g.lane_match_frames);
 
-    /* M2 起追加 D2-04/D2-05 契约字段（按 spec §6.1 顺序） */
+    /* M2 起追加 D2-04/D2-05 契约字段（spec §6.1 v1.0 顺序）。
+     * 字段顺序锁定：M2 5 字段在前 → M3 5 字段在后。cJSON_AddNumberToObject 内部
+     * 用链表保插入顺序，所以序列化后 print(j) 看到的就是这个顺序。
+     *
+     *   llt_id, llt_s, llt_offset, llt_heading_err_rad, valid,             ← M2
+     *   curvature, lane_width, left_lanelet_id, right_lanelet_id, flags    ← M3
+     *
+     * ⚠ 不要调整顺序：gate lane_match_schema_check.py 与下游 fusion / planning
+     * 都按这个顺序读字段。 */
     uint64_t llt_id = 0;
     double llt_s = 0.0, llt_offset = 0.0, llt_heading_err_rad = 0.0;
     int valid = 0;
+    /* M3 新增字段 */
+    double curvature = 0.0, lane_width = 0.0;
+    uint64_t left_lanelet_id = 0, right_lanelet_id = 0;
+    uint32_t flags = 0U;
     compute_lane_match(ego.x, ego.y, ego.heading,
                        &llt_id, &llt_s, &llt_offset,
-                       &llt_heading_err_rad, &valid);
+                       &llt_heading_err_rad, &valid,
+                       &curvature, &lane_width,
+                       &left_lanelet_id, &right_lanelet_id, &flags);
     cJSON_AddNumberToObject(j, "llt_id", (double)llt_id);
     cJSON_AddNumberToObject(j, "llt_s", llt_s);
     cJSON_AddNumberToObject(j, "llt_offset", llt_offset);
     cJSON_AddNumberToObject(j, "llt_heading_err_rad", llt_heading_err_rad);
     cJSON_AddNumberToObject(j, "valid", (double)valid);
+    /* M3 5 字段（顺序见上） */
+    cJSON_AddNumberToObject(j, "curvature", curvature);
+    cJSON_AddNumberToObject(j, "lane_width", lane_width);
+    cJSON_AddNumberToObject(j, "left_lanelet_id", (double)left_lanelet_id);
+    cJSON_AddNumberToObject(j, "right_lanelet_id", (double)right_lanelet_id);
+    cJSON_AddNumberToObject(j, "flags", (double)flags);
 
 
     char* s = cJSON_PrintUnformatted(j);

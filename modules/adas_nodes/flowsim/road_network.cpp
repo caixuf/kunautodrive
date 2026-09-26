@@ -179,6 +179,25 @@ int FlowRoadNetwork::drivable_lane_count(int road_id, double s) {
     return (n > 0) ? n : 0;
 }
 
+std::vector<int> FlowRoadNetwork::drivable_lane_ids(int road_id, double s) {
+    /* M3 lane_match helper：枚举指定 road 在 s 处的所有 drivable lane id。
+     * 内部包 `RM_GetDrivableLaneIdByIndex`，把 esmini 耦合封在本类里。
+     * 与 drivable_lane_count 的语义差异：后者只数 N，前者返回每个 lane 的 id。
+     * 路网未加载 / road_id 越界 → 返回空 vector（不是 -1 / nullptr）。 */
+    std::vector<int> ids;
+    if (!loaded_) return ids;
+    const int n = RM_GetRoadNumberOfDrivableLanes((id_t)road_id, s);
+    if (n <= 0) return ids;
+    ids.reserve((size_t)n);
+    for (int i = 0; i < n; ++i) {
+        int lid = 0;
+        if (RM_GetDrivableLaneIdByIndex((id_t)road_id, i, s, &lid) >= 0) {
+            ids.push_back(lid);
+        }
+    }
+    return ids;
+}
+
 std::vector<RoadEndpoint> FlowRoadNetwork::road_endpoints() const {
     std::vector<RoadEndpoint> eps;
     if (!loaded_) return eps;
