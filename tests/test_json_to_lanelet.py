@@ -531,5 +531,187 @@ class TestJsonToLanelet(unittest.TestCase):
         self.assertIn('<tag k="subtype" v="speed_limit"', out1)
 
 
+
+
+class TestTrafficLightFallback(unittest.TestCase):
+    """D2-08 step 2 §5.1: 坐标式 traffic_light → 所属 lane 几何 fallback 测试.
+
+    覆盖 osm_lujiazui_v2 / beijing_guomao / osm_zhengdong 三张 map (共 880+185+34 个
+    坐标式 tl) 的 fallback 路径. 显式 {id, lane} 字段走 test_04/test_10 已覆盖的旧路径,
+    本类只覆盖无 lane 字段 + 含 (x, y_lane) 坐标的情况.
+    """
+
+    def setUp(self) -> None:
+        self.tmp_dir = tempfile.mkdtemp()
+        self.tmp_path = Path(self.tmp_dir)
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_tl_with_lane_field_still_works(self) -> None:
+        """D2-08 step 2 §5.1 用例 1: 显式 {id, lane} 格式仍走旧路径 (向后兼容 test_04)."""
+        map_data = {
+            "schema_version": 1,
+            "map_id": "tl_explicit_test",
+            "roads": [
+                {
+                    "id": "road_explicit",
+                    "type": "urban",
+                    "lanes": [
+                        {
+                            "id": "road_explicit.lane.1",
+                            "centerline": [[0.0, 0.0], [100.0, 0.0]],
+                            "width": 3.5,
+                        },
+                    ],
+                }
+            ],
+            "traffic_lights": [
+                {"id": 100, "lane": "road_explicit.lane.1"},  # 显式 lane 字段
+            ],
+        }
+        xml_str = convert_map_dict(map_data)
+        root = ET.fromstring(xml_str)
+        relations = root.findall("relation")
+        # 1 lanelet + 1 traffic_light = 2 relations (无 speed_limit 因为 road 没 speed_limit)
+        reg_rels = [r for r in relations
+                    if {t.get("k"): t.get("v") for t in r.findall("tag")}.get("type") == "regulatory_element"]
+        tl_rel = next(r for r in reg_rels
+                      if {t.get("k"): t.get("v") for t in r.findall("tag")}.get("subtype") == "traffic_light")
+        # 显式 lane 字段必须被识别
+        tags = {t.get("k"): t.get("v") for t in tl_rel.findall("tag")}
+        self.assertEqual(tags.get("lanelet_id"), "road_explicit.lane.1")
+
+    def test_tl_with_x_y_lane_finds_nearest_lane(self) -> None:
+        """D2-08 step 2 §5.1 用例 2: 坐标式 tl (x, y_lane) → 最近 lane.
+
+        Setup: 1 road 2 lane, lane 1 centerline at world y=0, lane 2 at world y=+3.5 (above).
+        - tl(x=10, y_lane=0): P_world from lane 1's frame = (10, 0), claimed by lane 1 → lane 1
+        - tl(x=10, y_lane=+3.5): P_world from lane 2's frame = (10, +3.5), claimed by lane 2 → lane 2
+        """
+        map_data = {
+            "schema_version": 1,
+            "map_id": "tl_coord_test",
+            "roads": [
+                {
+                    "id": "road_coord",
+                    "type": "urban",
+                    "lanes": [
+                        {
+                            "id": "road_coord.lane.1",
+                            "centerline": [[0.0, 0.0], [100.0, 0.0]],
+                            "width": 3.5,
+                        },
+                        {
+                            "id": "road_coord.lane.2",
+                            "centerline": [[0.0, 3.5], [100.0, 3.5]],
+                            "width": 3.5,
+                        },
+                    ],
+                }
+            ],
+            "traffic_lights": [
+                {"id": 1, "x": 10.0, "y_lane": 0.0},
+                {"id": 2, "x": 10.0, "y_lane": 3.5},
+            ],
+        }
+        xml_str = convert_map_dict(map_data)
+        root = ET.fromstring(xml_str)
+
+        relations = root.findall("relation")
+        reg_rels = [r for r in relations
+                    if {t.get("k"): t.get("v") for t in r.findall("tag")}.get("type") == "regulatory_element"
+                    and {t.get("k"): t.get("v") for t in r.findall("tag")}.get("subtype") == "traffic_light"]
+
+        # Should be 2 traffic_light relations (one per tl)
+        self.assertEqual(len(reg_rels), 2)
+
+        # Each tl should map to a lane; collect their lanelet_id
+        tl_lane_ids = sorted({t.get("v") for r in reg_rels for t in r.findall("tag") if t.get("k") == "lanelet_id"})
+        # The 2 lanes must be present
+        self.assertEqual(set(tl_lane_ids), {"road_coord.lane.1", "road_coord.lane.2"})
+
+    def test_tl_far_from_any_lane_returns_none(self) -> None:
+        """D2-08 step 2 §5.1 用例 3: tl 远离所有 lane → 无匹配 + stderr 警告.
+
+        Setup: 1 road 1 lane (arc-length=10), tl.x=200 (past lane end) → arc-length 过滤直接拒绝.
+        """
+        map_data = {
+            "schema_version": 1,
+            "map_id": "tl_far_test",
+            "roads": [
+                {
+                    "id": "road_far",
+                    "type": "urban",
+                    "lanes": [
+                        {
+                            "id": "road_far.lane.1",
+                            "centerline": [[0.0, 0.0], [10.0, 0.0]],
+                            "width": 3.5,
+                        },
+                    ],
+                }
+            ],
+            "traffic_lights": [
+                # x=200 远超 lane arc-length=10 → 不会被任何 lane 认领
+                {"id": 999, "x": 200.0, "y_lane": 0.0},
+            ],
+        }
+        # Capture stderr to verify warning
+        import io as _io
+        captured = _io.StringIO()
+        old_stderr = sys.stderr
+        sys.stderr = captured
+        try:
+            xml_str = convert_map_dict(map_data)
+        finally:
+            sys.stderr = old_stderr
+        stderr_output = captured.getvalue()
+
+        # valid_tls 列表应为空 → 0 个 traffic_light regulatory
+        root = ET.fromstring(xml_str)
+        relations = root.findall("relation")
+        reg_rels = [r for r in relations
+                    if {t.get("k"): t.get("v") for t in r.findall("tag")}.get("type") == "regulatory_element"
+                    and {t.get("k"): t.get("v") for t in r.findall("tag")}.get("subtype") == "traffic_light"]
+        self.assertEqual(len(reg_rels), 0)
+
+        # stderr 必须包含 fallback 失败的警告
+        self.assertIn("1/1 traffic_lights", stderr_output)
+        self.assertIn("coordinate->lane fallback 失败", stderr_output)
+
+    def test_lujiazui_v2_extracts_880_traffic_lights(self) -> None:
+        """D2-08 step 2 §5.1 用例 4: osm_lujiazui_v2 的 880 坐标式 tl 全部提取.
+
+        880 个 tl 全部无 {lane, lane_id} 字段, 走 _find_nearest_lane fallback. 任务
+        容许 30 个 OSM 边界附近的 tl 不可匹配, 故断言 >= 850.
+        """
+        lujiazui_map = ROOT / "maps" / "osm_lujiazui_v2" / "map.json"
+        self.assertTrue(lujiazui_map.exists(), f"Missing {lujiazui_map}")
+
+        out_osm = self.tmp_path / "lujiazui_fallback.osm"
+        # Run the converter via CLI (to capture stderr warnings)
+        cmd = [sys.executable, str(ROOT / "tools" / "json_to_lanelet.py"),
+               str(lujiazui_map), "-o", str(out_osm)]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        self.assertEqual(res.returncode, 0, f"converter failed: {res.stderr}")
+        self.assertTrue(out_osm.exists())
+        self.assertGreater(out_osm.stat().st_size, 1_000_000)
+
+        # Parse OSM and count traffic_light subtype relations
+        with open(out_osm, "r", encoding="utf-8") as f:
+            osm_content = f.read()
+        # Fast count via grep on serialized output. 注意 subtype 是 k 的值, v 才是 traffic_light.
+        # OSM 序列化用单/双引号都可, 这里匹配 v 的值.
+        import re as _re
+        count = len(_re.findall(r"""v=['"]traffic_light['"]""", osm_content))
+        self.assertGreaterEqual(
+            count, 850,
+            f"Expected >= 850 traffic_light regulatory elements, got {count}. "
+            f"Task allows up to 30 unmatched (OSM boundary).",
+        )
+
+
+
 if __name__ == "__main__":
     unittest.main()

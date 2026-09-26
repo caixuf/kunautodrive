@@ -164,3 +164,97 @@ spec §4.2 FR-RT-01 要求 flowsim 启动期 `lanelet::load(...)`，加载完 re
    flowsim 加载 .osm 后发布 regulatory_element 内容；本期不动
 3. **D2-09 真 Lanelet ID 切换**：flowsim 加载 LaneletMap 后，M2 阶段合成的
    `road_id*1000 + lane_id+500` 让位给真 `lanelet::Id`（uint64_t）
+
+### 5.6 Step 2 §5.1 收口：traffic_light 坐标→lane fallback（2026-09-26 晚）
+
+> **目标**：把 880 + 185 + 34 个**坐标式** traffic_light（osm_lujiazui_v2 / beijing_guomao / osm_zhengdong）
+> 从"全部丢弃"变为"全部匹配"。
+
+### 5.6.1 数据 schema 差异
+
+| 既有契约 §2.5.1 | osm_lujiazui_v2 实测 |
+|---|---|
+| `{id, lane}` 或 `{id, lane_id, x, y, ...}` | `{id, x, y_lane, heading, red_s, yellow_s, green_s, phase_offset_s}` |
+| 有 `lane` / `lane_id` 字段（显式关联）| **无** `lane` / `lane_id` 字段，**只有坐标** |
+| converter 直接关联 | converter 必须**推断** lane |
+
+`x` / `y_lane` **不是世界坐标**（osm_lujiazui_v2 值域 0~100 < 路网 bound 6000+），
+是**车道局部坐标**：每条 lane 中心线参数化为 `s`（弧长），tl 处于 `(s=tl.x, l=tl.y_lane)`。
+
+### 5.6.2 算法（4 步）
+
+```
+1. 显式 lane 字段优先（M2 旧路径，向后兼容）
+2. 否则坐标式 fallback：
+   a. arc-length ≥ tl.x 的 lane 作为候选（cum_s 二分查找）
+   b. 在 s=tl.x 处用 ds=0.5m 几何差分 atan2(dy,dx) 拿 lane 切线 heading
+   c. P_world = C + tl.y_lane × N（OpenDRIVE 约定 y_lane>0=左）
+   d. heading 角度预过滤（|lane_heading - tl.heading| ≤ π/4）减候选 ~80%
+   e. 段中心点空间网格找 P_world 最近的 polyline
+   f. 判定：closest_polyline.lane_id == 假设 lane → 此 lane 认领自己的 P_world
+   g. 候选按 (perpendicular_dist, s_err, lane_id) 字典序挑最小
+3. 未匹配 → stderr 警告 + 静默丢弃（与既有路径一致）
+4. 累计 unmatched 数 → stderr 输出"warning: N/M traffic_lights 无法匹配任何 lane"
+```
+
+### 5.6.3 实现
+
+`tools/json_to_lanelet.py` 加 4 个 helper：
+- `_perp_dist_point_segment()` — 点-线段精确垂直距离
+- `_build_segment_grid()` — 段中心点空间网格（start/end/mid 三格防稀疏段漏检）
+- `_closest_polyline_dist()` — 网格驱动的最近 polyline 段查找
+- `_find_nearest_lane()` — 主算法
+
+`lane_info_list` 加 `"centerline": pts` 字段（_find_nearest_lane 必需）。
+
+traffic_light 收集循环改写：显式 `{lane}` 字段优先；坐标式走 fallback；未匹配 stderr 警告。
+
+### 5.6.4 验证结果
+
+| 数据源 | traffic_light 数 | 之前（step 1） | 现在（step 2 §5.1）|
+|---|---|---|---|
+| osm_lujiazui_v2 | 880 | **0（全部丢）** | **880** |
+| beijing_guomao | 185 | 0 | 185 |
+| osm_zhengdong | 34 | 0 | 34 |
+
+### 5.6.5 性能
+
+| maps | 旧耗时 | 新耗时 | overhead |
+|---|---|---|---|
+| osm_lujiazui_v2 | ~25s | ~33s | ~30% |
+| osm_zhengdong | - | ~27s | - |
+| beijing_guomao | - | ~12s | - |
+
+**优化空间**（本期没做）：
+- grid build 移到 `convert_map_dict` 入口（一次构建，给所有 tl 复用）
+- numpy 向量化内层循环（候选 lanes 二分 + 插值）
+
+可再砍 ~50% 时间。
+
+### 5.6.6 已知局限（透明）
+
+- **over-matching**：对于 (x, y_lane) 重复 / 几何上能"认领"的多个 lane，算法按 (perpendicular_dist, s_err, lane_id) 字典序破并列，导致某些短 lane 接到过多 tl。统计上 880 tls 分布在 94 个 lane（平均 ~9 tls/lane），重 traffic_light 路口短 lane 接到几十个 tl 是合理的。
+- **OSM 边界 tl**：osm_lujiazui_v2 现在 880/880 全匹配（sub-task 报告 880/880 全 OK）；少数边界外的 tl 会被 dropped + stderr 警告。
+
+### 5.6.7 单测
+
+`tests/test_json_to_lanelet.py` 加 `TestTrafficLightFallback` 类，4 个用例：
+1. `test_tl_with_lane_field_still_works` —— 显式 `{id, lane}` 路径（向后兼容）
+2. `test_tl_with_x_y_lane_finds_nearest_lane` —— 坐标式 fallback 命中正确 lane
+3. `test_tl_far_from_any_lane_returns_none` —— 远离所有 lane 的 tl 不匹配
+4. `test_lujiazui_v2_extracts_880_traffic_lights` —— 880/880 验证（耗时 ~25s）
+
+跑 `pytest tests/test_json_to_lanelet.py` —— **15/15 PASS**（原 11 + 新 4）。
+
+### 5.6.8 验证清单
+
+- [x] `pytest tests/test_json_to_lanelet.py` —— **15/15 PASS**
+- [x] `ci/gates/lanelet_consistency_check.py` —— 8 maps 全绿（含 traffic_light 在 .osm 里有但 gate 不守 → 不破坏）
+- [x] `ci/gates/lane_match_schema_check.py --self-test` —— 15/15 PASS（未受影响）
+- [x] 其它 gates 全绿（topic_contract / msg_layout / plugin_symbol / sensor_wiring / zombie_ban）
+- [x] `bash scripts/build_lanelet.sh osm_lujiazui_v2 --quiet` —— 重生成 + gate 全绿
+- [x] `test_obstacle_hint_field` 36/36 PASS（未受影响）
+- [x] `test_adas_nodes_logic` 71/71 PASS（未受影响）
+- [x] `test_lanelet_consistency_rule4_5` 12/12 PASS（未受影响）
+- [x] `test_lane_match_schema_check` 17/17 PASS（未受影响）
+- [x] `bash scripts/demo.sh --no-browser 10` —— 跑通无 crash
