@@ -1,4 +1,4 @@
-# 第 04 章：两个进程，一块内存
+# 第 07 章：共享内存 IPC
 
 把一个节点放进单独的进程，是为了让它崩溃时不要把整条链路一起带走。拆开之后，激光雷达帧、
 仪表盘 JSON、话题（Topic）统计就得从进程 A 交到进程 B。套接字、管道、Unix domain socket
@@ -12,14 +12,14 @@ Windows 在同一个文件里另有一套实现，只在末尾对照（`src/core
 
 ## 它接在哪两条链之间
 
-同进程的节点不走这里。它们用第 03 章的 `MessageBus`：回调拿到的是进程内指针，借用出去的负载可以不进 `Message.data[]`（`include/message_bus.h::message_bus_publish_loaned:L153-L156`）。同机的另一个进程看不到那块堆内存，指针传过去没有意义。跨机再往后是第 09 章的 TCP，不走这块共享内存。
+同进程的节点不走这里。它们用第 05 章的 `MessageBus`：回调拿到的是进程内指针，借用出去的负载可以不进 `Message.data[]`（`include/message_bus.h::message_bus_publish_loaned:L153-L156`）。同机的另一个进程看不到那块堆内存，指针传过去没有意义。跨机再往后是第 08 章统一传输与服务发现，不走这块共享内存。
 
 三条路在 `transport_publish` 里汇合（`src/core/transport.c::transport_publish:L270-L294`）。
 
 ```
 同一进程   message_bus_publish
 同一台机器 ipc_channel_publish     名字由 topic 换成 flow_<topic>，'/' 变成 '_'
-另一台机器 NetworkTransport        4 字节长度前缀帧，见第 09 章
+另一台机器 NetworkTransport        4 字节长度前缀帧，见第 08 章
 ```
 
 `transport_publish` 总是先调用 `message_bus_publish`。只有策略是 `TRANSPORT_IPC`、并且这条 Topic 已经调用过 `transport_advertise`，才再调用一次 `ipc_channel_publish`（`src/core/transport.c::transport_publish:L274-L284`）。`transport_publish_loaned` 只在路由仍是 `ROUTE_LOCAL` 时走 `message_bus_publish_loaned`；路由一旦离开本进程，它就把字节交给 `transport_publish`，然后调用释放函数（`src/core/transport.c::transport_publish_loaned:L296-L311`）。借用在进程间通信（IPC）边界上结束。
@@ -459,7 +459,7 @@ macOS 上这段代码仍会 `shm_open`，但不会把互斥锁设成健壮。Win
 
 比 64 KB 更大的仪表盘 JSON 靠 `DashboardChunk` 的 `seq` / `idx` / `count` 重组，环深 8，接收端最多认 64 块，并用第一个 NUL 判断块的长度。
 
-同一台机器上的两个进程，到这里已经能交换消息。换一台机器，共享内存就够不着了，那是第 09 章要解决的事：先发现对端，再由统一传输把字节交给 TCP。
+同一台机器上的两个进程，到这里已经能交换消息。换一台机器，共享内存就够不着了，那是第 08 章统一传输与服务发现要解决的事。
 
 ## 练习
 
