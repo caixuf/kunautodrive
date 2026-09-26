@@ -111,3 +111,79 @@ valid=0 时允许 `llt_id == 0`（gate `_check_payload` 已专门放过这种情
 - [x] `lanelet_consistency_check.py` 回归 EXIT=0（M1 未受 D2-04/05 影响）
 - [ ] **M2 阶段待补**：scenario_regression 4 场景 × `--repeats 3` 跑 flowsim，采集实际 cJSON payload 给 gate（D2-10 收口时一起做）
 - [ ] **M3 待补**：end-to-end benchmark（compute_lane_match 延迟 + 漂统计）
+
+---
+
+## 11. M3 落地（compute_lane_match 5 → 10 字段扩展，2026-09-26）
+
+> v1.0 spec §6.1 写明："M2 → M3 演进是纯增量。" 本节记录 M3 阶段 producer 端扩展。
+
+### 11.1 `compute_lane_match` 新签名（11 个出参）
+
+```cpp
+static void compute_lane_match(double x, double y, double ego_heading,
+                               uint64_t* out_llt_id, double* out_llt_s,
+                               double* out_llt_offset, double* out_heading_err,
+                               int* out_valid,
+                               /* M3 fields: */
+                               double* out_curvature,
+                               double* out_lane_width,
+                               uint64_t* out_left_lanelet_id,
+                               uint64_t* out_right_lanelet_id,
+                               uint32_t* out_flags);
+```
+
+### 11.2 M3 三段新增逻辑（在已有 frenet_to_world 成功之后）
+
+1. **curvature**：调 `flowsim_lm_curvature_3pt()` — Menger 三点曲率（带符号，共线/重合返 0，无 NaN/Inf）
+2. **lane_width**：调 `g.roads.lane_width(road_id, lane_id, s)` — road_network 新 helper
+3. **left/right_lanelet_id**：
+   - 调 `g.roads.drivable_lane_ids(road_id, s)` 拿所有可行驶 lane id
+   - `flowsim_lm_pick_adjacent_lane_id()` 在 drivable 列表里 closest-on-side 挑选（OpenDRIVE 约定：id 大=左）
+   - `flowsim_lm_synthesize_lanelet_id()` 用 M2 公式 `road_id*1000 + (lane_id+500)` 转 llt_id
+   - 无邻 → 0
+
+### 11.3 失败路径：`valid=0` 时所有 10 字段归零
+
+通过 `flowsim_lm_zero_outputs_on_failure()` 统一处理（含 NULL 防御）。
+**关键 invariant**：`lane_width` 失败路径必须置 0（不保留 stale 3.5），单测 `compute_lane_match_synthesize_and_zero_path` 锁此行为。
+
+### 11.4 序列化顺序：`publish_lane_match` cJSON
+
+按 spec §6.1 v1.0 锁定，M2 5 → M3 5 追加：
+
+```
+ok, x, y, road_id, lane_id, s, offset,         ← 既有诊断
+pub_road_id, pub_lane_id,                       ← 漂移统计
+id_mismatch_frames, frames, frames,             ← pre-existing, frames 重复是上游 bug 不动
+llt_id, llt_s, llt_offset,                      ← M2 5
+llt_heading_err_rad, valid,
+curvature, lane_width,                          ← M3 5 (NEW)
+left_lanelet_id, right_lanelet_id, flags
+```
+
+### 11.5 验证
+
+- 编译 EXIT=0，零新增 warning
+- `test_adas_nodes_logic` —— **62/62 PASS**（原 57 + M3 新增 5）
+- `bash scripts/demo.sh --no-browser 10` —— 11s 跑完，无 crash
+- Runtime smoke (`/tmp/test_lane_match_runtime2`) —— 5 个场景 10 字段输出正确
+- `lane_match_schema_check.py /tmp/lane_match_10field.json` —— default + strict-m3 都 PASS
+
+### 11.6 M3 → D2-03 真 Lanelet2 ID 切换
+
+本期 `flowsim_lm_synthesize_lanelet_id()` 是占位（road_id*1000 + lane_id+500），
+D2-03 step 2（flowsim 加载 LaneletMap）接手时：
+
+1. 替换合成公式为 `lanelet::LaneletMap::laneletLayer.findNearest(x, y)` 真 ID
+2. 替换 `drivable_lane_ids()` 为 `LaneletMap::laneletLayer.exists(llt_id)` + `lanelet::routing` 查询邻 lane
+3. `lane_width()` / `curvature()` helper 不变（语义已经在 LaneletMap 里有对应）
+
+helper 接口稳定 → flowsim_node.cpp 调用方**零改动**。
+
+### 11.7 留给 M3 step 2 / M4 的工作
+
+1. **真 Lanelet2 ID 替换**（见 §11.6）
+2. **Temporal ROI Cache**（M2 §9.1 推后项）：compute_lane_match 加历史 `prev_llt_id` 参数
+3. **`obs_lane_match_hint` 接线**（D2-07）：fusion_node 订阅 `localization/lane_match`
+4. **planning 真消费**（D2-06）：planning_node 删 `target_lane_offset` 启发式

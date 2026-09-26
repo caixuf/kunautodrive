@@ -70,3 +70,101 @@ M3 把这 5 个 key 加进 `REQUIRED_FIELDS` 即可，**没有破坏性改动**�
 
 **M3 待办**：把 REQUIRED_FIELDS 扩到 10 项 + 加 M3-only 单测 + 跑 scenario_regression 4 场景 ×
 `--repeats 3`（D2-10 一起收尾）。
+
+---
+
+## 8. M3 落地（lane_match 5 → 10 字段扩展，2026-09-26）
+
+> v1.0 spec §6.1 写明："M2 → M3 演进是纯增量：每次只追加 key，不删不改老 key，旧消费方天然兼容。"
+> 本节记录 M3 阶段已实现的 schema 升级。
+
+### 8.1 升级后的 `REQUIRED_FIELDS`
+
+```python
+REQUIRED_FIELDS = (
+    # M2 — 顺序与原 M2 严格保持
+    ("llt_id",              "int"),       # uint64
+    ("llt_s",               "number"),    # double, m
+    ("llt_offset",          "number"),    # double, m
+    ("llt_heading_err_rad", "number"),    # double, rad
+    ("valid",               "int"),       # 0/1
+    # M3 — spec §6.2 追加
+    ("curvature",           "number"),    # double, 1/m
+    ("lane_width",          "number"),    # double, m
+    ("left_lanelet_id",     "int"),       # uint64 strict
+    ("right_lanelet_id",    "int"),       # uint64 strict
+    ("flags",               "int"),       # uint32, ABI reserved (must be 0)
+)
+```
+
+### 8.2 新增 `--strict-m3` 选项
+
+- **默认关闭**：M2 5 字段必填，M3 5 字段 optional 但**存在时强制类型校验**（避免 silent 漂移）
+- **开启后**：全 10 字段必填（M3 producer 必须出齐）
+- 用法：`python3 ci/gates/lane_match_schema_check.py [--strict-m3] <fixture.json>`
+- 启用时机：D2-10 端到端收口时（`scenario_regression --repeats 3` 全 PASS 后切强制）
+- 当前 PR 阻塞检查仍走默认模式（M2 producer 不发 M3 字段也 PASS，向后兼容）
+
+### 8.3 类型判定严格化
+
+- `kind="int"` 严格区分 Python `int` vs `float`（`bool` 是 int 子类，先排除）
+  - 拒绝 `left_lanelet_id=43.0` 这种 producer 写成 float 的 bug（cJSON 区分 int-valued vs float-valued）
+- `kind="number"` 接受 `int | float`（拒绝 bool / str）
+- 错误信息：`field 'X' is <type> (<value>), expected <kind>`
+
+### 8.4 self-test 矩阵
+
+15 个 case（原 7 + 新 8）覆盖 default + strict 双模式：
+
+| Case | default | strict |
+|---|---|---|
+| valid_payload | PASS | PASS |
+| valid_payload_degraded | PASS | PASS |
+| missing_field (M2) | FAIL | FAIL |
+| valid_one_with_zero_llt_id | FAIL | FAIL |
+| llt_offset_as_string | FAIL | FAIL |
+| valid_as_bool_true | FAIL | FAIL |
+| forward_compat_extra_fields | PASS | FAIL (缺 M3) |
+| m3_valid_payload_10_fields | PASS | PASS |
+| m3_curvature_as_string | FAIL | FAIL |
+| m3_curvature_as_bool | FAIL | FAIL |
+| m3_left_lanelet_id_as_bool | FAIL | FAIL |
+| m3_right_lanelet_id_as_float | FAIL | FAIL |
+| m3_flags_as_float | FAIL | FAIL |
+| m3_missing_left_lanelet_id_strict | PASS | **FAIL** |
+| m4_forward_compat_unknown_field | PASS | FAIL (缺 M3) |
+
+### 8.5 与 C++ producer 端契约对齐
+
+flowsim_node.cpp `publish_lane_match()` 严格按 M2 5 → M3 5 顺序追加 5 字段：
+
+```cpp
+/* M2 字段 */
+cJSON_AddNumberToObject(j, "llt_id", (double)llt_id);
+cJSON_AddNumberToObject(j, "llt_s", llt_s);
+cJSON_AddNumberToObject(j, "llt_offset", llt_offset);
+cJSON_AddNumberToObject(j, "llt_heading_err_rad", llt_heading_err_rad);
+cJSON_AddNumberToObject(j, "valid", (double)valid);
+/* M3 字段（顺序见上） */
+cJSON_AddNumberToObject(j, "curvature", curvature);
+cJSON_AddNumberToObject(j, "lane_width", lane_width);
+cJSON_AddNumberToObject(j, "left_lanelet_id", (double)left_lanelet_id);
+cJSON_AddNumberToObject(j, "right_lanelet_id", (double)right_lanelet_id);
+cJSON_AddNumberToObject(j, "flags", (double)flags);
+```
+
+**关键避坑**：uint64 / uint32 字段**必须**用 `(double)` cast（已是 int 类型），
+不能传字面量 `0` 或 `0.0`（cJSON 会自动判 float 表象，触发 strict-int 校验）。
+
+### 8.6 验证
+
+- `python3 ci/gates/lane_match_schema_check.py --self-test` —— **15/15 PASS**
+- `python3 ci/gates/lane_match_schema_check.py --self-test --strict-m3` —— **15/15 PASS**
+- `python3 tests/test_lane_match_schema_check.py` —— **17/17 PASS**（TestSchemaGate 8 + TestM3Fields 9）
+- 端到端 fixture `/tmp/lane_match_10field.json` —— default + strict-m3 都 PASS
+
+### 8.7 留给 M3 step 2 / M4 的工作
+
+1. **CI 阻塞启用 `--strict-m3`**：D2-10 scenario_regression 4 场景 × 3 repeats 全 PASS 后切强制
+2. **PR 校验**：D2-10 收口后给 ci/gates/lane_match_schema_check.py 加 mcap 自动 fixture 生成
+3. **真 Lanelet2 ID 切换**（D2-03 step 2）：合成公式退役，flowsim 加载 LaneletMap 后 llt_id 改用真 ID

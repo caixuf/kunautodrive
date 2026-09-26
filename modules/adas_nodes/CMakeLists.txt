@@ -375,6 +375,8 @@ add_library(flowsim_node SHARED
     flowsim/sim_digest.cpp
     flowsim/actor/VehicleActor.cpp
     flowsim/route.cpp
+    # D2-04 M3 lane_match 10 字段契约 helper（纯算法，flowsim_node.cpp 调用）
+    flowsim/lane_match_helpers.cpp
 )
 if(NOT ESMINI_RMLIB)
     target_sources(flowsim_node PRIVATE flowsim/esmini_stub.cpp)
