@@ -451,7 +451,7 @@ protected:
             g.last_obs_list = obs_list;
             g.has_last_obs  = 1;
 
-            uint8_t obs_buf[4368];  /* ObstacleList 序列化大小 = 16 + 128*34 */
+            uint8_t obs_buf[sizeof(ObstacleList)];  /* ObstacleList 序列化大小 = 16 + 128*35 wire (D2-07 M3 加 obs_lane_match_hint); sizeof 包含 alignment padding 5144B 一定够用 */
             size_t obs_len = 0;
             if (ObstacleList_serialize(&obs_list, obs_buf, &obs_len) == 0 && obs_len > 0) {
                 transport_publish(transport_, "perception/obstacles", obs_buf, (uint32_t)obs_len);

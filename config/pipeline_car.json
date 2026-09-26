@@ -11,7 +11,8 @@
     "road/traffic_lights",
     "vehicle/state",
     "scene/frame",
-    "navigation/region"
+    "navigation/region",
+    "localization/lane_match"
   ],
   "log_file": "launcher_car.log",
   "log_level": 2,

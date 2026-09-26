@@ -310,7 +310,7 @@ static int lidar_execute(TaskBase* task) {
         g.obstacles_published += (uint64_t)cnt;
 
         /* d. 序列化 + 发布到 output_topic（默认 perception/obstacles） */
-        uint8_t buf[4368];  /* ObstacleList 序列化大小 = 16 + 128*34 */
+        uint8_t buf[sizeof(ObstacleList)];  /* D2-07 M3: ObstacleList 序列化 16+128*35 wire (加 obs_lane_match_hint); sizeof 5144B 含 alignment padding 一定够用 */
         size_t len = 0;
         if (ObstacleList_serialize(&obs_list, buf, &len) == 0 && len > 0) {
             transport_publish(g.transport, g.output_topic,

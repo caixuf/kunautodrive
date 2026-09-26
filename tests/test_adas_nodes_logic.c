@@ -44,6 +44,12 @@
  * 部分（曲率 / 合成 llt_id / 邻 lane 查找 / 失败归零），详见对应 .cpp。 */
 #include "flowsim/lane_match_helpers.h"
 
+/* D2-07 phase 2: perception_fusion 订阅 lane_match → 给 obs 打 obs_lane_match_hint。
+ * 抽出 compute_hint / LaneMatchCache / apply_hint 纯算法到 fusion_lane_hint.h，
+ * 节点 + 测试共用同一份实现（与 imu_protocol.h / perception_points.h / lidar_scan.h
+ * 一致的 header-only 抽取模式，无副本漂移）。 */
+#include "fusion_lane_hint.h"
+
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -1240,6 +1246,291 @@ static void test_compute_lane_match_failure_path_zeros(void) {
     PASS();
 }
 
+/* ══════════════════════════════════════════════════════════ */
+/* D2-07 phase 2: obs_lane_match_hint 计算 (fusion_lane_hint.h) */
+/* ══════════════════════════════════════════════════════════ */
+/*
+ * 覆盖 spec §4.2 FR-RT-05 的 v1 简化版算法:
+ *   hint = true iff obs 相对 ego 当前车道中心线 lateral 距离 < 3×lane_width
+ *
+ * 测试要点:
+ *   - 同车道（|y - llt_offset| < 0.5·lane_width）→ true
+ *   - 邻车道（< 3·lane_width 内）→ true
+ *   - 远车道 / 对向车道 → false
+ *   - cache.valid=false（lane_match 失效）→ false（向后兼容 + defensive）
+ *   - cache fresh=false（陈旧）→ false
+ *   - obs.lane_id == -1（感知未分配）→ false
+ *   - llt_offset 非零（ego 偏右）时仍按相对偏移计算
+ *
+ * 全部 6 例对应子任务说明文档的 5+1 例：
+ *   same_lane / adjacent_lane / far_lane / invalid_lane_match /
+ *   no_lane_assignment / with_llt_offset
+ */
+
+/* ── Test 1: 同车道 ── */
+static void test_compute_hint_same_lane(void) {
+    TEST("compute_hint: 同车道 obs.y=0.5 + lane_width=3.5 → true");
+    LaneMatchCache lm;
+    fusion_lane_hint_cache_init(&lm);
+    lm.valid      = true;
+    lm.fresh      = true;
+    lm.lane_width = 3.5;
+    lm.llt_offset = 0.0;          /* ego 在车道中央 */
+    lm.stamp_us   = 1000ULL;
+
+    Obstacle obs;
+    memset(&obs, 0, sizeof(obs));
+    obs.id      = 1;
+    obs.x       = 30.0f;          /* 纵向 30m */
+    obs.y       = 0.5f;           /* 横向 0.5m（与 ego 同车道） */
+    obs.lane_id = 0;              /* 已分配车道 */
+
+    ASSERT(fusion_compute_hint(&obs, &lm) == true,
+           "same lane obs (y=0.5 < 0.5×lane_width=1.75) must hint=true");
+    PASS();
+}
+
+/* ── Test 2: 邻车道 ── */
+static void test_compute_hint_adjacent_lane(void) {
+    TEST("compute_hint: 邻车道 obs.y=4.0 + lane_width=3.5 → true");
+    LaneMatchCache lm;
+    fusion_lane_hint_cache_init(&lm);
+    lm.valid      = true;
+    lm.fresh      = true;
+    lm.lane_width = 3.5;
+    lm.llt_offset = 0.0;
+
+    Obstacle obs;
+    memset(&obs, 0, sizeof(obs));
+    obs.x       = 25.0f;
+    obs.y       = 4.0f;           /* 横向 4m（跨过 0.5×3.5=1.75 边界，进入邻车道） */
+    obs.lane_id = 1;              /* 邻车道 */
+
+    /* 4.0 < 3.0 × 3.5 = 10.5 → true（覆盖到 ±1 lane） */
+    ASSERT(fusion_compute_hint(&obs, &lm) == true,
+           "adjacent lane obs (y=4.0 < 3×lane_width=10.5) must hint=true");
+    PASS();
+}
+
+/* ── Test 3: 远车道（>3×lane_width）── */
+static void test_compute_hint_far_lane(void) {
+    TEST("compute_hint: 远车道 obs.y=15.0 + lane_width=3.5 → false");
+    LaneMatchCache lm;
+    fusion_lane_hint_cache_init(&lm);
+    lm.valid      = true;
+    lm.fresh      = true;
+    lm.lane_width = 3.5;
+    lm.llt_offset = 0.0;
+
+    Obstacle obs;
+    memset(&obs, 0, sizeof(obs));
+    obs.x       = 20.0f;
+    obs.y       = 15.0f;          /* 横向 15m（远在 ±1 lane 之外） */
+    obs.lane_id = 5;              /* 远处多车道外的 lane */
+
+    /* 15.0 >= 3 × 3.5 = 10.5 → false */
+    ASSERT(fusion_compute_hint(&obs, &lm) == false,
+           "far lane obs (y=15.0 >= 3×lane_width=10.5) must hint=false");
+    PASS();
+}
+
+/* ── Test 4: lane_match 失效（cache.valid=false）── */
+static void test_compute_hint_invalid_lane_match(void) {
+    TEST("compute_hint: cache.valid=false → 任意 obs 一律 false");
+    LaneMatchCache lm;
+    fusion_lane_hint_cache_init(&lm);
+    /* valid = false（lane_match.valid=0 / payload 缺字段 / lane_width<=0） */
+    lm.valid      = false;
+    lm.fresh      = false;
+    lm.lane_width = 3.5;          /* 即便有宽度，valid=false 时 hint 必须 false */
+    lm.llt_offset = 0.0;
+    lm.stamp_us   = 1000ULL;
+
+    Obstacle obs;
+    memset(&obs, 0, sizeof(obs));
+    obs.id      = 42;
+    obs.x       = 10.0f;
+    obs.y       = 0.0f;           /* 完美同车道，但 cache 失效 */
+    obs.lane_id = 0;
+
+    ASSERT(fusion_compute_hint(&obs, &lm) == false,
+           "cache.valid=false must short-circuit hint=false regardless of obs");
+    PASS();
+}
+
+/* ── Test 4b: 陈旧数据（fresh=false）── */
+static void test_compute_hint_stale_cache(void) {
+    TEST("compute_hint: cache.fresh=false（陈旧）→ false");
+    LaneMatchCache lm;
+    fusion_lane_hint_cache_init(&lm);
+    lm.valid      = true;
+    lm.fresh      = false;         /* 陈旧（60Hz fusion + 10Hz lane_match 时常落 6 周期） */
+    lm.lane_width = 3.5;
+    lm.llt_offset = 0.0;
+    lm.stamp_us   = 1000ULL;
+
+    Obstacle obs;
+    memset(&obs, 0, sizeof(obs));
+    obs.x       = 10.0f;
+    obs.y       = 0.5f;
+    obs.lane_id = 0;
+
+    ASSERT(fusion_compute_hint(&obs, &lm) == false,
+           "stale cache (fresh=false) must return false to avoid stale hint");
+    PASS();
+}
+
+/* ── Test 5: obs 未分配车道（lane_id == -1）── */
+static void test_compute_hint_no_lane_assignment(void) {
+    TEST("compute_hint: obs.lane_id=-1（感知未分配）→ false");
+    LaneMatchCache lm;
+    fusion_lane_hint_cache_init(&lm);
+    lm.valid      = true;
+    lm.fresh      = true;
+    lm.lane_width = 3.5;
+    lm.llt_offset = 0.0;
+    lm.stamp_us   = 1000ULL;
+
+    Obstacle obs;
+    memset(&obs, 0, sizeof(obs));
+    obs.x       = 10.0f;
+    obs.y       = 0.0f;
+    obs.lane_id = -1;              /* 感知无法判断 obs 车道归属 */
+
+    /* lane_id=-1 一律 false，让 planning 自己决定（CLAUDE.md 职责铁律） */
+    ASSERT(fusion_compute_hint(&obs, &lm) == false,
+           "obs.lane_id=-1 must short-circuit hint=false");
+    PASS();
+}
+
+/* ── Test 6: ego 偏右（llt_offset 非零）── */
+static void test_compute_hint_with_llt_offset(void) {
+    TEST("compute_hint: llt_offset=1.0 + obs.y=2.5 + lane_width=3.5 → true");
+    LaneMatchCache lm;
+    fusion_lane_hint_cache_init(&lm);
+    lm.valid      = true;
+    lm.fresh      = true;
+    lm.lane_width = 3.5;
+    lm.llt_offset = 1.0;           /* ego 相对车道中心线偏右 1m */
+    lm.stamp_us   = 1000ULL;
+
+    Obstacle obs;
+    memset(&obs, 0, sizeof(obs));
+    obs.x       = 15.0f;
+    obs.y       = 2.5f;
+    obs.lane_id = 0;
+    /* 相对车道中心线 lateral = 2.5 - 1.0 = 1.5 < 0.5×3.5=1.75（同车道）
+     * 或 < 3×3.5=10.5（覆盖 ±1 lane）；算法上同车道 + 邻车道都覆盖 → true */
+
+    ASSERT(fusion_compute_hint(&obs, &lm) == true,
+           "ego offset=1.0 + obs.y=2.5 -> lateral=1.5 (still in ego lane or adj) must hint=true");
+    PASS();
+}
+
+/* ── Test 7 (额外): cache 陈旧度检查（check_freshness） ── */
+static void test_lane_hint_cache_freshness(void) {
+    TEST("lane_hint cache: check_freshness 边界（陈旧/新鲜/future ts）");
+    LaneMatchCache lm;
+    fusion_lane_hint_cache_init(&lm);
+    lm.valid      = true;
+    lm.lane_width = 3.5;
+    lm.llt_offset = 0.5;
+    lm.stamp_us   = 1000ULL;
+
+    /* 1) now == stamp: future ts 处理 (defensive) → fresh=true */
+    fusion_lane_hint_cache_check_freshness(&lm, 1000ULL, 1000000ULL);
+    ASSERT_EQ(lm.fresh, true, "now==stamp must be fresh");
+
+    /* 2) now < stamp（理论上 wrap） → fresh=true (defensive) */
+    fusion_lane_hint_cache_check_freshness(&lm, 500ULL, 1000000ULL);
+    ASSERT_EQ(lm.fresh, true, "now<stamp must be fresh (defensive wrap)");
+
+    /* 3) now > stamp + max_age → fresh=false */
+    fusion_lane_hint_cache_check_freshness(&lm, 2000000ULL, 1000000ULL);
+    ASSERT_EQ(lm.fresh, false, "now-stamp > max_age must be stale");
+
+    /* 4) now > stamp but within max_age → fresh=true (差 499999us < 1s) */
+    fusion_lane_hint_cache_check_freshness(&lm, 500999ULL, 1000000ULL);
+    ASSERT_EQ(lm.fresh, true, "now-stamp <= max_age must be fresh");
+
+    /* 5) valid=false → fresh=false（无论时间） */
+    lm.valid = false;
+    fusion_lane_hint_cache_check_freshness(&lm, 1000ULL, 1000000ULL);
+    ASSERT_EQ(lm.fresh, false, "cache.valid=false overrides freshness");
+    PASS();
+}
+
+/* ── Test 8 (额外): fusion_apply_hint 批量（多 obs） ── */
+static void test_lane_hint_apply_hint_batch(void) {
+    TEST("apply_hint: ObstacleList 批量设 obs_lane_match_hint（不改 count）");
+    LaneMatchCache lm;
+    fusion_lane_hint_cache_init(&lm);
+    lm.valid      = true;
+    lm.fresh      = true;
+    lm.lane_width = 3.5;
+    lm.llt_offset = 0.0;
+    lm.stamp_us   = 1000ULL;
+
+    ObstacleList list;
+    memset(&list, 0, sizeof(list));
+    list.count = 3;
+    /* 显式逐字段赋值，避免 -Wmissing-field-initializers warning
+     * （Obstacle 现在有 11 字段 + obs_lane_match_hint，designated initializer
+     * 漏字段 GCC 会抱怨） */
+    /* obs[0]: 同车道 → hint=true */
+    list.obstacles[0].id         = 1;
+    list.obstacles[0].x          = 10.0f;
+    list.obstacles[0].y          = 0.5f;
+    list.obstacles[0].vx         = 0.0f;
+    list.obstacles[0].vy         = 0.0f;
+    list.obstacles[0].width      = 2.0f;
+    list.obstacles[0].length     = 5.0f;
+    list.obstacles[0].lane_id    = 0;
+    list.obstacles[0].type       = OBJ_TYPE_VEHICLE;
+    list.obstacles[0].confidence = 0.9f;
+    /* obs[1]: 邻车道 → hint=true */
+    list.obstacles[1].id         = 2;
+    list.obstacles[1].x          = 20.0f;
+    list.obstacles[1].y          = 4.0f;
+    list.obstacles[1].vx         = 0.0f;
+    list.obstacles[1].vy         = 0.0f;
+    list.obstacles[1].width      = 2.0f;
+    list.obstacles[1].length     = 5.0f;
+    list.obstacles[1].lane_id    = 1;
+    list.obstacles[1].type       = OBJ_TYPE_VEHICLE;
+    list.obstacles[1].confidence = 0.8f;
+    /* obs[2]: 远车道 → hint=false */
+    list.obstacles[2].id         = 3;
+    list.obstacles[2].x          = 30.0f;
+    list.obstacles[2].y          = 15.0f;
+    list.obstacles[2].vx         = 0.0f;
+    list.obstacles[2].vy         = 0.0f;
+    list.obstacles[2].width      = 2.0f;
+    list.obstacles[2].length     = 5.0f;
+    list.obstacles[2].lane_id    = 5;
+    list.obstacles[2].type       = OBJ_TYPE_VEHICLE;
+    list.obstacles[2].confidence = 0.5f;
+
+    /* 应用前：所有 hint=false（init by memset） */
+    ASSERT_EQ(list.obstacles[0].obs_lane_match_hint, 0, "pre: obs[0] hint=false");
+    ASSERT_EQ(list.obstacles[1].obs_lane_match_hint, 0, "pre: obs[1] hint=false");
+    ASSERT_EQ(list.obstacles[2].obs_lane_match_hint, 0, "pre: obs[2] hint=false");
+    /* 关键不变量：count 不变 */
+    ASSERT_EQ(list.count, 3, "count must not change (only hint set, no filter)");
+
+    /* 调用 apply_hint */
+    fusion_apply_hint(&list, &lm);
+
+    /* 应用后 */
+    ASSERT_EQ(list.obstacles[0].obs_lane_match_hint, 1, "obs[0] same-lane must hint=true");
+    ASSERT_EQ(list.obstacles[1].obs_lane_match_hint, 1, "obs[1] adj-lane must hint=true");
+    ASSERT_EQ(list.obstacles[2].obs_lane_match_hint, 0, "obs[2] far-lane must hint=false");
+    /* count 仍不变 */
+    ASSERT_EQ(list.count, 3, "post: count must remain 3 (spec §4.2 invariant)");
+
+    PASS();
+}
+
 int main(void) {
     printf("\n╔══════════════════════════════════════════╗\n");
     printf("║  FlowEngine ADAS Nodes Logic Tests        ║\n");
@@ -1315,6 +1606,17 @@ int main(void) {
     test_compute_lane_match_synthesize_and_zero_path();
     test_compute_lane_match_left_right_neighbors();
     test_compute_lane_match_failure_path_zeros();
+
+    printf("\n═══ obs_lane_match_hint (D2-07 phase 2 — fusion lane hint) ═══\n");
+    test_compute_hint_same_lane();
+    test_compute_hint_adjacent_lane();
+    test_compute_hint_far_lane();
+    test_compute_hint_invalid_lane_match();
+    test_compute_hint_stale_cache();
+    test_compute_hint_no_lane_assignment();
+    test_compute_hint_with_llt_offset();
+    test_lane_hint_cache_freshness();
+    test_lane_hint_apply_hint_batch();
 
     printf("\n═══ LiDAR Observation Model (3D scan / capacity guard) ═══\n");
     test_lidar_scan_azimuth_fov_bounds();

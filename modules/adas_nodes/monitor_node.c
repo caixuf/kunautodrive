@@ -415,7 +415,7 @@ static int ego_pose_at(uint64_t ts_us, double* x, double* y, double* hdg) {
 
 /* perception/obstacles 订阅回调 — 解析 ObstacleList（二进制，车体系）。
  * 用生成的 deserialize（线格式）而不是 memcpy 结构体：ObstacleList 的
- * sizeof(4632) != 线格式(4368)，见 ci/gates/msg_layout_check.py。 */
+ * sizeof(5144) != 线格式(4496)，见 ci/gates/msg_layout_check.py。 */
 static void on_obstacles(const Message* msg, void* user_data) {
     (void)user_data;
     g.last_perception_us = clock_now_us();

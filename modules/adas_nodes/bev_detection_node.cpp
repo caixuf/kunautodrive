@@ -107,7 +107,7 @@ struct BevDetectionContext {
     BevPostDet dets[BEV_POST_MAX_DET]{};
     int     n_dets{0};
 
-    /* shadow 输出 ObstacleList（固定 4368B） */
+    /* shadow 输出 ObstacleList（固定 4496B (wire) / 5144B (struct)） */
     ObstacleList out_list{};
 
     uint32_t frame_id{0};

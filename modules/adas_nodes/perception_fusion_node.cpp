@@ -28,6 +28,7 @@
 
 #include "node_plugin.h"
 #include "adas_msgs_gen.h"
+#include "topic_registry.h"   /* TOPIC_LOCALIZATION_LANE_MATCH（lane_match topic 契约名）*/
 #include "transport.h"
 #include "discovery.h"
 #include "coroutine_task.h"
@@ -40,10 +41,12 @@
 #undef LOG_ERROR
 #undef LOG_FATAL
 #include "logger.h"
+#include "fusion_lane_hint.h"   /* D2-07: lane_match hint 纯算法（cache + compute_hint + apply_hint）*/
 #include <cjson/cJSON.h>
 
 #include <errno.h>
 #include <math.h>
+#include <pthread.h>           /* D2-07: LaneMatchCache pthread_mutex 保护 */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -122,6 +125,25 @@ struct PerceptionFusionContext {
     uint64_t tracks_matched{0};
     uint64_t tracks_killed{0};
 
+    /* ── D2-07: lane_match hint ───────────────────────────────
+     *
+     * 订阅 `localization/lane_match` 后，把最新 ego 车道信息 cache 到
+     * lm_cache；融合主循环在 publish 前调 check_freshness + apply_hint，
+     * 给每个 obs.obs_lane_match_hint 字段打 metadata。
+     *
+     * 线程模型：
+     *   - on_lane_match 回调（transport 线程）：lm_mutex 保护下写
+     *     {valid, lane_width, llt_offset, stamp_us}
+     *   - 主协程：lm_mutex 保护下读 + 独占写 fresh 标志（已锁住，
+     *     不与回调并发）。apply_hint 用本地 snapshot，避免长持锁。
+     *
+     * 默认 cache.valid = false（向后兼容：M2 时期没 lane_match 输入
+     * 时 fusion 必须仍工作，所有 hint=false → 不影响既有消费方）。 */
+    LaneMatchCache  lm_cache{};          /* 默认 valid=false → compute_hint → false */
+    pthread_mutex_t lm_mutex{};          /* PTHREAD_MUTEX_INITIALIZER for static init */
+    uint64_t        lm_max_age_us{1000000ULL};  /* 默认 1s 过期：flowsim 10Hz × 6 个 60Hz fusion 周期 */
+    uint64_t        lm_frames_in{0};     /* 统计：收到 lane_match 消息数 */
+
     };
 
 PerceptionFusionContext g;
@@ -139,6 +161,61 @@ static void on_input_b(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg || msg->data_size == 0 || !g.enabled) return;
     if (message_buffer_push(g.b_buf, msg) == 0) g.frames_in_b++;
+}
+
+/* ── D2-07: lane_match 回调（cJSON → LaneMatchCache） ──────────
+ *
+ * cJSON payload 格式（flowsim_node.cpp publish_lane_match，M2 5 字段
+ * + M3 5 字段；旧 payload 缺 M3 字段时 cache 自动 invalid → hint 全 false）：
+ *   { ll..., valid, curvature, lane_width, left_lanelet_id, right_lanelet_id, flags, ... }
+ *
+ * 仅取 hint 计算需要的 3 个字段：valid / lane_width / llt_offset。
+ * 字段缺失 → 防御性 cache.valid = false（**不**报错，spec §6.1 兼容旧 payload）。
+ *
+ * 线程：transport 回调线程 → pthread_mutex 保护 cache 写入。 */
+static void on_lane_match(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg || msg->data_size == 0 || !g.enabled) return;
+
+    cJSON* root = cJSON_Parse((const char*)msg->data);
+    if (!root) {
+        /* payload 不是合法 JSON → 静默忽略（spec §6.1 兼容旧/异常 payload） */
+        return;
+    }
+
+    bool     valid      = false;
+    double   lane_width = 0.0;
+    double   llt_offset = 0.0;
+    uint64_t stamp_us   = msg->timestamp_us;  /* 用 transport 头时间戳作 cache 时戳 */
+
+    cJSON* j;
+    if ((j = cJSON_GetObjectItem(root, "valid")) && cJSON_IsNumber(j)) {
+        valid = (j->valueint != 0);
+    }
+    if ((j = cJSON_GetObjectItem(root, "lane_width")) && cJSON_IsNumber(j)) {
+        lane_width = j->valuedouble;
+    }
+    if ((j = cJSON_GetObjectItem(root, "llt_offset")) && cJSON_IsNumber(j)) {
+        llt_offset = j->valuedouble;
+    }
+    cJSON_Delete(root);
+
+    /* 防御：lane_width 非法（≤0 或 NaN） → cache 失效。spec 不强制，但
+     * 否则 compute_hint 会算 abs_lat < 3.0*0 = false（无害），但保留
+     * valid=true 会误导 planning（以为"有 lane_match 但 lane 不可信"
+     * 与 "没收到 lane_match" 应一致）。 */
+    if (!valid || !(lane_width > 0.0) || !isfinite(lane_width)) {
+        valid = false;
+    }
+
+    pthread_mutex_lock(&g.lm_mutex);
+    g.lm_cache.valid      = valid;
+    g.lm_cache.lane_width = valid ? lane_width : 0.0;
+    g.lm_cache.llt_offset = llt_offset;
+    g.lm_cache.stamp_us   = stamp_us;
+    g.lm_cache.fresh      = false;  /* fresh 由主协程 check_freshness 设；此处重置 */
+    g.lm_frames_in++;
+    pthread_mutex_unlock(&g.lm_mutex);
 }
 
 /* ── 融合核心：两路 ObstacleList → 去重合并（原样保留，操作 g.merges_done） ──
@@ -472,11 +549,31 @@ protected:
                 tracked = fused;  /* 不追踪，直接透传（向后兼容） */
             }
 
+            /* D2-07: lane_match hint 注入（track 完成后才打，仅 metadata，
+             * 不下结论、不删 obs）。lm_mutex 锁住 → 拷贝 cache 到本地 snapshot
+             * → 释放锁 → check_freshness（单线程独占写 fresh 标志）→ apply_hint。
+             *
+             * 关键不变量：
+             *   - obs 总数不变（fusion_apply_hint 仅设 obs_lane_match_hint）
+             *   - hint=false 不代表"对向/远处"，只代表 cache 失效/陈旧/obs 未分配
+             *   - planning 自己消费 hint + lane_match 决策（CLAUDE.md 职责铁律） */
+            {
+                pthread_mutex_lock(&g.lm_mutex);
+                /* 本地 snapshot：避免持锁 O(N) 遍历 obs */
+                LaneMatchCache snap = g.lm_cache;
+                pthread_mutex_unlock(&g.lm_mutex);
+                /* check_freshness 改 snap.fresh（局部变量，无并发） */
+                fusion_lane_hint_cache_check_freshness(&snap, now, g.lm_max_age_us);
+                fusion_apply_hint(&tracked, &snap);
+            }
+
             /* 序列化 + 发布 */
             tracked.frame_id     = (uint32_t)(g.frames_out & 0xFFFFFFFFu);
             tracked.timestamp_us = now;
 
-            uint8_t buf[4368];  /* ObstacleList 序列化大小 = 16 + 128*34 */
+            uint8_t buf[4496];  /* ObstacleList 序列化大小 = 16 + 128*35（D2-07 phase 1
+              * Obstacle.wire: 34 → 35（+bool obs_lane_match_hint））；
+              * 仍 < sizeof(ObstacleList) (5144)，栈 buffer 够用 */
             size_t len = 0;
             if (ObstacleList_serialize(&tracked, buf, &len) == 0 && len > 0) {
                 transport_publish(transport_, g.output_topic, buf, (uint32_t)len);
@@ -515,7 +612,9 @@ EXPORT_COROUTINE_TASK(PerceptionFusionTask, perception_fusion)
 /* ── NodePlugin 实现 ─────────────────────────────────────── */
 
 static const char* s_inputs[]  = { "perception/obstacles_lidar",
-                                    "perception/obstacles_stereo", nullptr };
+                                    "perception/obstacles_stereo",
+                                    "localization/lane_match",      /* D2-07: ego lane 上下文 → obs_lane_match_hint */
+                                    nullptr };
 static const char* s_outputs[] = { "perception/obstacles", nullptr };
 
 extern NodePlugin s_plugin;  /* 前向声明：定义在文件末尾，供 init/start 引用 */
@@ -541,6 +640,11 @@ static int fusion_init(MessageBus* bus, Transport* transport,
     g.far_persist_frames= 5;
     g.far_max_range     = 30.0;
     g.far_conf_decay    = 0.85;
+    /* D2-07: lane_match cache 默认 invalid（向后兼容 M2 时期无 lane_match 输入）*/
+    fusion_lane_hint_cache_init(&g.lm_cache);
+    g.lm_max_age_us     = 1000000ULL;  /* 1s: 60Hz fusion 时 60 个周期内 cache 仍 fresh */
+    g.lm_frames_in      = 0;
+    pthread_mutex_init(&g.lm_mutex, nullptr);
     memset(g.tracks, 0, sizeof(g.tracks));
     g.track_count   = 0;
     g.next_track_id = 1;
@@ -582,6 +686,9 @@ static int fusion_init(MessageBus* bus, Transport* transport,
                 g.far_max_range = j->valuedouble;
             if ((j = cJSON_GetObjectItem(root, "far_conf_decay")) && cJSON_IsNumber(j))
                 g.far_conf_decay = j->valuedouble;
+            /* D2-07: lane_match 陈旧度阈值（默认 1s；60Hz fusion × 6 周期仍 fresh） */
+            if ((j = cJSON_GetObjectItem(root, "lm_max_age_ms")) && cJSON_IsNumber(j))
+                g.lm_max_age_us = (uint64_t)(j->valueint) * 1000ULL;
             cJSON_Delete(root);
         }
     }
@@ -607,6 +714,10 @@ static int fusion_init(MessageBus* bus, Transport* transport,
     discovery_advertise(discovery, g.input_a_topic, OBSTACLELIST_TYPE_ID, CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, g.input_b_topic, OBSTACLELIST_TYPE_ID, CAP_SUBSCRIBER, 0);
 
+    /* D2-07: 订阅 ego lane 上下文（cJSON payload；不需 type_id，discovery 跳过 schema 检查）*/
+    transport_subscribe(transport, TOPIC_LOCALIZATION_LANE_MATCH, on_lane_match, nullptr);
+    discovery_advertise(discovery, TOPIC_LOCALIZATION_LANE_MATCH, 0u, CAP_SUBSCRIBER, 0);
+
     /* 发布融合结果 */
     discovery_advertise(discovery, g.output_topic, OBSTACLELIST_TYPE_ID, CAP_PUBLISHER,
                         (double)g.publish_hz);
@@ -623,13 +734,15 @@ static int fusion_init(MessageBus* bus, Transport* transport,
     LOG_INFO("perception_fusion", "initialized (FlowCoro): a=%s b=%s → out=%s "
              "merge=%.2fm hz=%d max_age=%dms tracking=%s(assoc=%.1fm "
              "max_missed=%d ema=%.2f) far=%s(persist=%d max_range=%.0fm "
-             "conf_decay=%.2f)",
+             "conf_decay=%.2f) lane_match_hint=%s(lm_max_age=%lums)",
              g.input_a_topic, g.input_b_topic, g.output_topic,
              g.merge_dist, g.publish_hz, g.max_age_ms,
              g.tracking_enabled ? "on" : "off",
              g.track_assoc_dist, g.track_max_missed, g.track_ema_alpha,
              g.far_enabled ? "on" : "off",
-             g.far_persist_frames, g.far_max_range, g.far_conf_decay);
+             g.far_persist_frames, g.far_max_range, g.far_conf_decay,
+             "on",   /* D2-07: lane_match hint 始终启用；cache 失效时退化为 all-false */
+             (unsigned long)(g.lm_max_age_us / 1000ULL));
     return 0;
 }
 
@@ -661,12 +774,15 @@ static void fusion_cleanup(void) {
     s_plugin.taskbase = nullptr;
     if (g.a_buf) { message_buffer_destroy(g.a_buf); g.a_buf = nullptr; }
     if (g.b_buf) { message_buffer_destroy(g.b_buf); g.b_buf = nullptr; }
+    /* D2-07: lm_mutex 销毁（transport 回调已不再被调，cleanup 在 stop 之后） */
+    pthread_mutex_destroy(&g.lm_mutex);
     LOG_INFO("perception_fusion", "cleanup: in_a=%lu in_b=%lu out=%lu merges=%lu "
-             "trk_created=%lu trk_matched=%lu trk_killed=%lu",
+             "trk_created=%lu trk_matched=%lu trk_killed=%lu lm_in=%lu",
              (unsigned long)g.frames_in_a, (unsigned long)g.frames_in_b,
              (unsigned long)g.frames_out, (unsigned long)g.merges_done,
              (unsigned long)g.tracks_created, (unsigned long)g.tracks_matched,
-             (unsigned long)g.tracks_killed);
+             (unsigned long)g.tracks_killed,
+             (unsigned long)g.lm_frames_in);
 }
 
 /* ── 导出入口（同 fusion_node.cpp 风格，手工构造 s_plugin） ──

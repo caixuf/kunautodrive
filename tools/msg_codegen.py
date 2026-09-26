@@ -27,6 +27,7 @@ import re
 import os
 from dataclasses import dataclass, field
 from typing import Optional
+import json
 
 # =============================================================================
 # FNV-1a Hash (32-bit, same as runtime in serializer.c)
@@ -223,10 +224,34 @@ class IDLParser:
 # =============================================================================
 
 class CodeGenerator:
-    def __init__(self, parser: IDLParser):
+    def __init__(self, parser: IDLParser, schema_state: Optional[dict] = None):
         self.enums = parser.enums
         self.structs = parser.structs
         self._sort_structs()
+        # schema_state: dict[name] = {"hash": int, "version": int}
+        # Used to drive SCHEMA_VERSION auto-bump: when a struct's layout_hash
+        # changes from the value recorded in state, bump version + 1.
+        # Stored back to disk by main() after generation.
+        self.schema_state = schema_state if schema_state is not None else {}
+
+    def _compute_schema_version(self, s: 'StructDef') -> int:
+        """Return current schema_version for struct s, updating self.schema_state.
+
+        Deterministic auto-bump:
+          - If state[struct].hash doesn't match current layout_hash, bump version + 1.
+          - If struct missing from state, version = 1 (initial).
+        """
+        cur_hash = self._schema_hash(s)
+        entry = self.schema_state.get(s.name)
+        if entry is None:
+            self.schema_state[s.name] = {"hash": cur_hash, "version": 1}
+            return 1
+        if entry["hash"] != cur_hash:
+            entry["version"] = int(entry.get("version", 1)) + 1
+            entry["hash"] = cur_hash
+            self.schema_state[s.name] = entry
+            return entry["version"]
+        return int(entry.get("version", 1))
 
     def _sort_structs(self):
         """Topological sort structs by dependency."""
@@ -565,7 +590,7 @@ class CodeGenerator:
 
         # Type ID and schema version
         lines.append(f"#define {s.name.upper()}_TYPE_ID         0x{type_id:08x}u")
-        lines.append(f"#define {s.name.upper()}_SCHEMA_VERSION  1")
+        lines.append(f"#define {s.name.upper()}_SCHEMA_VERSION  {self._compute_schema_version(s)}")
         lines.append(f"#define {s.name.upper()}_SCHEMA_HASH     0x{self._schema_hash(s):08x}u")
         lines.append(f"#define {s.name.upper()}_TYPE_NAME        \"{s.name}\"")
         lines.append("")
@@ -814,6 +839,11 @@ def main():
                     help="Generate per-struct split headers under <output_dir>/gen/")
     ap.add_argument("--output-dir", default=None,
                     help="Root output directory for --split mode (default: dirname of output)")
+    ap.add_argument("--schema-state", default=None,
+                    help="Path to a JSON sidecar that records each struct's last "
+                         "layout_hash + schema_version. On regeneration, layouts whose "
+                         "hash changed automatically bump version + 1 (deterministic "
+                         "auto-bump). The file is created on first run if missing.")
     args = ap.parse_args()
 
     with open(args.input, 'r', encoding='utf-8') as f:
@@ -822,7 +852,18 @@ def main():
     parser = IDLParser(text)
     parser.parse()
 
-    gen = CodeGenerator(parser)
+    # Load or initialize schema_version state
+    schema_state = {}
+    if args.schema_state and os.path.exists(args.schema_state):
+        try:
+            with open(args.schema_state, 'r', encoding='utf-8') as f:
+                schema_state = json.load(f)
+        except Exception as e:
+            print(f"warning: failed to load schema state {args.schema_state}: {e}",
+                  file=sys.stderr)
+            schema_state = {}
+
+    gen = CodeGenerator(parser, schema_state=schema_state)
 
     if args.split:
         # Determine output directory: --output-dir > dirname(output) > .
@@ -837,6 +878,20 @@ def main():
 
         for rel in generated:
             print(f"  Generated: {rel}")
+
+        # Persist auto-bumped schema state
+        if args.schema_state:
+            os.makedirs(os.path.dirname(args.schema_state) or ".", exist_ok=True)
+            with open(args.schema_state, 'w', encoding='utf-8') as f:
+                json.dump(gen.schema_state, f, indent=2, sort_keys=True)
+            print(f"  Schema state: {args.schema_state}")
+
+        # Surface any version bumps loudly so CI / devs notice schema evolution.
+        bumped = [(n, e.get("version")) for n, e in sorted(gen.schema_state.items())
+                  if e.get("version", 1) > 1]
+        if bumped:
+            print(f"  Auto-bumped versions: {bumped}")
+
         print(f"Split generation: {len(parser.structs)} structs, {len(parser.enums)} enums "
               f"→ {len(generated)} files")
     else:

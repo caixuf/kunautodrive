@@ -65,8 +65,8 @@ KNOWN_MISMATCHES: dict[str, tuple[int, int]] = {
     "ImuData":              (36, 40),
     "LidarPointCloud":      (40980, 40984),
     "Localization":         (57, 60),
-    "Obstacle":             (34, 36),
-    "ObstacleList":         (4368, 4632),
+    "Obstacle":             (35, 40),  # D2-07 phase 1: +bool obs_lane_match_hint (wire 34→35, struct 36→40; +4B trailing pad)
+    "ObstacleList":         (4496, 5144),
     "Pose2D":               (29, 32),
     "PredictionHypothesis": (1017, 1020),
     "PredictionSet":        (3068, 3088),
