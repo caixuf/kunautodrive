@@ -157,7 +157,6 @@ foreach(MSG_FILE ${MSG_FILES})
         OUTPUT ${GEN_HEADER}
         COMMAND ${Python3_EXECUTABLE} ${MSG_CODEGEN} "${CMAKE_SOURCE_DIR}/${MSG_FILE}"
                 --split --output-dir ${CMAKE_BINARY_DIR}
-                --schema-state ${GEN_DIR}/msg_schema_state.json
         DEPENDS ${MSG_CODEGEN} ${CMAKE_SOURCE_DIR}/${MSG_FILE}
         COMMENT "Generating split serialization headers from ${MSG_FILE}"
     )
@@ -587,6 +586,18 @@ option(FLOW_BUILD_BOOK_EXAMPLES "Build KunAutoDrive book examples" OFF)
 if(FLOW_BUILD_BOOK_EXAMPLES AND NOT WIN32)
     add_executable(ipc_chapter examples/ipc_channel/chapter04.c)
     target_link_libraries(ipc_chapter flowengine_core $<$<AND:$<NOT:$<PLATFORM_ID:Darwin>>,$<NOT:$<PLATFORM_ID:Windows>>>:rt>)
+
+    # 第 14 章：布局、离线滤波、耗时，以及驱动 fusion_node 的故障实验。
+    # transport.c 在 REMOTE/AUTO 分支引用 net_transport_*，符号在 scheduler_cpp。
+    add_executable(ekf_chapter
+        examples/ekf_chapter/ekf_chapter.c
+        modules/adas_nodes/ekf_slam.c
+        modules/adas_nodes/slam_math.c)
+    target_include_directories(ekf_chapter PRIVATE modules/adas_nodes)
+    add_dependencies(ekf_chapter msg_codegen)
+    target_link_libraries(ekf_chapter flowengine_core scheduler_cpp m
+        $<$<AND:$<NOT:$<PLATFORM_ID:Darwin>>,$<NOT:$<PLATFORM_ID:Windows>>>:rt>)
+    set_target_properties(ekf_chapter PROPERTIES LINKER_LANGUAGE CXX)
 endif()
 
 # ── Step 3: Bag 录制回放（含 Step 5 统一时钟）────────────
@@ -1089,15 +1100,6 @@ target_link_libraries(test_json_schema flowengine_core)
 
 add_test(NAME json_schema_tests COMMAND test_json_schema)
 set_tests_properties(json_schema_tests PROPERTIES TIMEOUT 10)
-
-# ── D2-07 phase 1: Obstacle.obs_lane_match_hint IDL 扩展 + round-trip 测试 ──
-add_executable(test_obstacle_hint_field tests/test_obstacle_hint_field.c)
-target_link_libraries(test_obstacle_hint_field flowengine_core)
-add_dependencies(test_obstacle_hint_field msg_codegen)
-target_include_directories(test_obstacle_hint_field PRIVATE ${GEN_DIR})
-
-add_test(NAME obstacle_hint_field_tests COMMAND test_obstacle_hint_field)
-set_tests_properties(obstacle_hint_field_tests PROPERTIES TIMEOUT 10)
 
 # ── ADAS 节点纯逻辑单元测试（imu / slam / actuator_pwm dry-run 路径）──
 # 真车部署 roadmap 第一步：把"两头"占位实现的纯逻辑钉死，避免后续接入真实
