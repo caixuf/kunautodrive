@@ -79,10 +79,11 @@
 
 | 编号 | 章节 | 这一章讲什么 | 现文件 |
 |---|---|---|---|
-| 20 | FlowSim 场景与世界 | 仿真只做被控对象：`modules/adas_nodes/flowsim/physics.cpp` 用前向欧拉积分自行车模型的位置、航向和速度（`modules/adas_nodes/flowsim/physics.h::step_bicycle` 与 `modules/adas_nodes/flowsim/physics.h::step_bicycle_dynamic`），再发布真值。场景由 `include/scenario_loader.h::scenario_load` 读入，路网和 NPC 在 `modules/adas_nodes/flowsim/` | [`book/18_flowsim_scenario_design.md`](book/18_flowsim_scenario_design.md) |
-| 21 | 可视化与内省 | `src/flowmond.c` 与 `include/monitor_server.h::monitor_server_start` 把拓扑送给浏览器；仪表盘 JSON 经 `include/dashboard_bridge.h::dashboard_bridge_publish`（通道机制见第 07 章）；前端入口是 `tools/flowboard/js/app.js` | [`book/20_flowmond_3d_vis.md`](book/20_flowmond_3d_vis.md) |
-| 22 | 验证关卡与回归评估 | `ci/evaluators/demo_evaluator.py` 与 `ci/evaluators/scenario_regression.py` 做行为回归。`ci/gates/` 有 7 个脚本做静态契约检查，其中 6 个写进 `.github/workflows/ci.yml`，`ci/gates/lane_match_schema_check.py` 没有。`tools/pipeline_check.py` 做离线管道检查 | [`book/21_demo_evaluator.md`](book/21_demo_evaluator.md) |
-| 23 | 端到端学习闭环 | `modules/adas_nodes/learner_node.c` 采集，`modules/adas_nodes/inference_node.cpp` 用 `modules/adas_nodes/tiny_mlp.h::tiny_mlp_load` 与 `modules/adas_nodes/tiny_mlp.h::tiny_mlp_forward` 做影子推理，`modules/adas_nodes/model_ota_node.c` 负责换模型；训练脚本在 `tools/train_e2e/` | [`book/19_e2e_learning_loop.md`](book/19_e2e_learning_loop.md) |
+| 20 | FlowSim 场景与世界 | `modules/adas_nodes/flowsim_node.cpp` 是仿真世界：60 Hz 逻辑时钟（`flowsim_time.h`，**不能快进**），订阅 `control/cmd` 发真值。三套车辆模型中**默认是运动学** `physics.cpp::step_bicycle`，动态/Pacejka 需显式开且**仅自车可用**。路网由 `tools/json_to_xodr.py` 子进程转 OpenDRIVE 后交给 esmini。`modules/adas_nodes/flowsim/npc_ai.cpp` 不是 pure-pursuit，MOBIL 默认关闭；`modules/adas_nodes/sensor_model_weather.c` 全部天气只有 25 行 | [`book/18_flowsim_scenario_design.md`](book/18_flowsim_scenario_design.md) |
+| 21 | VLA、世界模型与无人车前沿 | **本章是全书唯一大量引用仓库外材料的一章**，提供坐标系而非改代码指引。2026 年的行业共识（Waymo / NVIDIA / XPeng 三方一致）是「端到端用于策略，结构化表示 + 独立验证用于安全」。含 VLA 三种动作头、延迟分解、VLA vs 纯 VA 对照、生成式 vs 潜空间世界模型分类、Waymo/百度/小马/WeRide/Tesla 落地数据、UNECE ADS GTR（2026-06-24 通过）、加州废除脱离率指标，以及 10 条「未能核实」清单 | [`book/23_vla_world_model_frontier.md`](book/23_vla_world_model_frontier.md) |
+| 22 | 可视化与内省 | `src/flowmond.c` 与 `include/monitor_server.h::monitor_server_start` 把拓扑送给浏览器；仪表盘 JSON 经 `include/dashboard_bridge.h::dashboard_bridge_publish`（通道机制见第 07 章）；前端入口是 `tools/flowboard/js/app.js` | [`book/20_flowmond_3d_vis.md`](book/20_flowmond_3d_vis.md) |
+| 23 | 验证关卡与回归评估 | `ci/evaluators/demo_evaluator.py` 与 `ci/evaluators/scenario_regression.py` 做行为回归。`ci/gates/` 有 7 个脚本做静态契约检查，其中 6 个写进 `.github/workflows/ci.yml`，`ci/gates/lane_match_schema_check.py` 没有。`tools/pipeline_check.py` 做离线管道检查 | [`book/21_demo_evaluator.md`](book/21_demo_evaluator.md) |
+| 24 | 端到端学习闭环 | `modules/adas_nodes/learner_node.c` 采集，`modules/adas_nodes/inference_node.cpp` 用 `modules/adas_nodes/tiny_mlp.h::tiny_mlp_load` 与 `modules/adas_nodes/tiny_mlp.h::tiny_mlp_forward` 做影子推理，`modules/adas_nodes/model_ota_node.c` 负责换模型；训练脚本在 `tools/train_e2e/` | [`book/19_e2e_learning_loop.md`](book/19_e2e_learning_loop.md) |
 
 ---
 
@@ -327,9 +328,9 @@
 
 - 现文件：[`book/18_flowsim_scenario_design.md`](book/18_flowsim_scenario_design.md)
 - `modules/adas_nodes/flowsim_node.cpp`
-- `modules/adas_nodes/flowsim/physics.h`，`modules/adas_nodes/flowsim/physics.cpp`：前向欧拉，积分自行车模型的位置、航向和速度。`step_bicycle`，`step_bicycle_dynamic`，`step_pedestrian`。`flowsim_node.cpp` 传入的步长是 `FLOWSIM_DT_SEC`。`physics.cpp` 文件头写 dt=0.05s（20Hz），和 `flowsim_time.h` 的 60 Hz 不一致，改写时以调用点为准
-- `modules/adas_nodes/flowsim/flowsim_time.h`：`FLOWSIM_FREQUENCY_HZ`，`FLOWSIM_DT_SEC`
-- `modules/adas_nodes/flowsim/npc_ai.h`，`modules/adas_nodes/flowsim/npc_ai.cpp`：`step_npc_vehicle`，`step_npc_pedestrian`
+- `modules/adas_nodes/flowsim/physics.h`，`modules/adas_nodes/flowsim/physics.cpp`：前向欧拉。**三套模型**：`step_bicycle`（运动学，**默认**）、`step_bicycle_dynamic`（线性轮胎 2 自由度）、`step_bicycle_dynamic_pacejka`（Pacejka 96）。后两者**仅自车可用**且需 `physics_model` 参数显式开启。运动学参考点在**车身中心**（`half_wb·yaw_rate` 旋转项），位置积分与动态模型**不同**。`step_pedestrian` 纯匀速直线
+- `modules/adas_nodes/flowsim/flowsim_time.h`：`FLOWSIM_FREQUENCY_HZ`（60），`FLOWSIM_DT_SEC`，`FLOWSIM_DT_US`（16666）。**时间步唯一事实源**。`physics.cpp:3` 与全部 16 个物理测试仍用过时的 `dt=0.05`，与生产不一致
+- `modules/adas_nodes/flowsim/npc_ai.h`，`modules/adas_nodes/flowsim/npc_ai.cpp`：`step_npc_vehicle`，`step_npc_pedestrian`，`idm_desired_speed`，`mobil_gain`，`recycle_npc`。**不是 pure-pursuit**——横向位置由 `RoadPosition::advance` 强加，AI 只出 `throttle/brake/offset`。`enable_mobil` **默认 false**，导致 `NpcState::LaneChange` 分支事实死码
 - `modules/adas_nodes/flowsim/route.h`，`modules/adas_nodes/flowsim/route.cpp`：`Route`，`build`，`sample_pose`
 - `modules/adas_nodes/flowsim/road_network.h`，`modules/adas_nodes/flowsim/road_network.cpp`：`FlowRoadNetwork`，`load`，`frenet_to_world`
 - `modules/adas_nodes/flowsim/collision.h`，`modules/adas_nodes/flowsim/collision.cpp`：`detect_collisions`，`apply_guardrail`
@@ -340,12 +341,22 @@
 - `modules/adas_nodes/flowsim/building.h`：`load_buildings`，`obb_hits_building`
 - `modules/adas_nodes/flowsim/lane_frenet.h`：`lane_center_t`
 - `modules/adas_nodes/flowsim/lane_match_helpers.h`：`flowsim_lm_curvature_3pt`
-- `modules/adas_nodes/flowsim/road_position.h`：`RoadPosition`
 - `modules/adas_nodes/flowsim/vehicle_lights.h`：`VehicleLights`
-- `include/scenario_loader.h`，`src/core/scenario_loader.c`：`scenario_load`，`scenario_free`
-- `scenarios/`
+- `include/scenario_loader.h`，`src/core/scenario_loader.c`：`scenario_load`，`scenario_free`.纯 JSON（cJSON）。`stop_lines` 被解析但**从不生成实体**
+- `modules/adas_nodes/sensor_model_weather.c`，`modules/adas_nodes/sensor_model_weather.h`：`sensor_model_camera_visibility`，`sensor_model_weather_attenuation`。**全文件 25 行**，天气只是 `strstr` 子串测试 + 0.3 地板。**无太阳角度模型，无天气-μ 耦合**；且 `flowsim_node.cpp:2572` 比较的 `storm`/`sandstorm` 不在加载器白名单（`rain/snow/overcast/fog/clear`）里
+- `modules/adas_nodes/flowsim/road_position.h`：`RoadPosition`。**每车一个 esmini 句柄**。运行时必须用 `relocate()` 不能用 `init()`（后者会让所有 NPC 一起偏移约 200 m）
+- `modules/adas_nodes/flowsim/test_entity_physics.cpp`，`modules/adas_nodes/flowsim/test_road_network.cpp`：ctest `entity_physics_tests`（17 用例，**依赖 `ESMINI_RMLIB_TEST`**）、`flowsim_road_network` / `_cross`
+- `scenarios/`（23 个场景 + `suite.json` 清单）
 
-### 21　可视化与内省
+### 21　VLA、世界模型与无人车前沿
+
+- 现文件：[`book/23_vla_world_model_frontier.md`](book/23_vla_world_model_frontier.md)
+- **本章性质**：全书唯一大量引用仓库外材料的一章。它**不对应本仓库任何源码**，目的是给前 20 章的模块化架构提供坐标系。改写时不要试图在里面加本地源码引用
+- 主题：VLA 三种动作头（离散 token AR / 离散+下游解码器 / VLM+独立动作专家）、延迟分解（94% 慢路径耗在语言自回归解码）、VLA vs 纯 VA 的诚实对照、生成式 vs 潜空间世界模型分类、Waymo/百度 Apollo Go/小马/WeRide/Tesla 的 2026 落地数据、UNECE ADS GTR（2026-06-24 通过，全球首个 L4/L5 框架）、加州废除脱离率指标
+- **本仓库的落点**（第 8 节）：`safety_arbiter_apply` = 规则/模型仲裁；`safety_control_node` = 独立机载验证；FlowSim = 闭环仿真；`inference_node` = 影子模式。**这三者正是 2026 年行业共识的最小实现**
+- **写作约束**：所有数字必须标注来源；公司营销口径与可测量结果必须分开写；**第 9 节列了 10 条「未能核实」事项，不要删掉**
+
+### 22　可视化与内省
 
 - 现文件：[`book/20_flowmond_3d_vis.md`](book/20_flowmond_3d_vis.md)
 - `modules/adas_nodes/flowmond_node.cpp`
@@ -354,7 +365,7 @@
 - `include/dashboard_bridge.h`，`src/core/dashboard_bridge.c`：`dashboard_bridge_publish`
 - `tools/flowboard/js/app.js`
 
-### 22　验证关卡与回归评估
+### 23　验证关卡与回归评估
 
 - 现文件：[`book/21_demo_evaluator.md`](book/21_demo_evaluator.md)
 - `ci/evaluators/demo_evaluator.py`
@@ -364,7 +375,7 @@
 - `include/auto_tuner.h`，`src/core/auto_tuner.c`：`auto_tuner_init`，`auto_tuner_register`，`auto_tuner_tick`
 - `tools/auto_tune_mpc.py`
 
-### 23　端到端学习闭环
+### 24　端到端学习闭环
 
 - 现文件：[`book/19_e2e_learning_loop.md`](book/19_e2e_learning_loop.md)
 - `tools/train_e2e/`：入口包括 `tools/train_e2e/train.py`、`tools/train_e2e/torch_train.py`、`tools/train_e2e/temporal_train.py`
@@ -398,10 +409,16 @@
 | 同上（已重写） | 旧稿的 `config/pipeline_car.json` 片段：`car_real_hardware_pipeline` + `libactuator_node.so` + `can_throttle_id: 256` | 错三处：没有名为 `car_real_hardware_pipeline` 的配置；没有 config 引用 `libactuator_node.so`（CAN 后端零引用）；配置 schema 用 `library_path` 不是 `library`。真实配置是 `pipeline_car.json:272-278` 的 `libactuator_pwm_node.so` |
 | 同上（已重写） | 旧稿暗示执行器经串口下发指令 | **执行器不碰串口**。`serial_port.c:163` 的 `serial_write()` 全仓库零调用者；`serial_open` 只被 gps/imu/激光雷达三个**只读**驱动使用 |
 | 同上（已重写） | 旧稿完全缺失软件看门狗 | 新稿补全了两个后端各一份的 3 s 看门狗（`actuator_pwm_node.c:330-352` 与 `actuator_node.c:302-322`），以及三处不一致：CAN 后端启动前 `last_cmd_time == 0` 使看门狗惰性、CAN 端 `watchdog_timeout_s` 不可配、PWM 端健康检查另用硬编码 5 s |
-| [`book/21_demo_evaluator.md`](book/21_demo_evaluator.md)（新 22） | `tools/demo_evaluator.py` | 没有这个路径。评估器在 `ci/evaluators/demo_evaluator.py` |
+| [`book/18_flowsim_scenario_design.md`](book/18_flowsim_scenario_design.md)（新 20，已重写） | 旧稿说 `esmini_stub.cpp` 解析 OpenDRIVE 几何原语、采样车道宽度多项式、翻译 junction 拓扑 | **完全说反。** `esmini_stub.cpp` 是全空桩（每个 `RM_*` 返回 `-1`/`0`），仅用于无 esmini 构建时降级。真实的 OpenDRIVE 读取由 esmini 承担，而 `.xodr` 由 `flowsim_node.cpp:324` 的 `convert_scenario_to_xodr` 用 `system()` 调 `tools/json_to_xodr.py` 生成 |
+| 同上（已重写） | 旧稿的 `edge.type` 表声称 `highway`→μ=0.9、`urban`→μ=0.8、`viaduct_highway`→z=7.0 m | **μ 那一列在代码里不存在。** 动力学里的摩擦只有 `pacejka_mu`（恒 0.7，`physics.cpp:271`）和稳定性护栏硬编码的 0.8（`physics.cpp:204`）。`edge.type` 与摩擦无关 |
+| 同上（已重写） | 旧稿的 NPC 状态机图（`NPC_FREE_CRUISE`/`NPC_ACC_FOLLOW`/`NPC_CHANGE_LANE`/`NPC_YIELD_INTERSECTION`） | 符号名不对。真实是 `entity.h:60-67` 的 7 个状态：`Cruise / Follow / StopForTL / LaneChange / CutIn / Stopped / Yield`。且 LaneChange 在 MOBIL 默认关闭时**从不进入** |
+| 同上（已重写） | 旧稿称 `Route::build()` 检查 $\Delta d < 0.01$ m、$\Delta\psi < 0.05$ rad 并插三次样条 | 真实是 `tol = 4.0` m（`route.h:69`）的端点邻近 + 航向连续贪心串接，**不做曲率连续性检查**；接缝靠 Hermite 桥接段补（`route.h:41-50`） |
+| 同上（已重写） | 旧稿称「FlowSim 生成停止线实体」 | `stop_lines` 在 `scenario_loader.c:595-613` 被解析，但 `populate_entities_from_scenario` **从不分配 `EntityType::StopLine`**，全仓库无消费者 |
+| [`book/23_vla_world_model_frontier.md`](book/23_vla_world_model_frontier.md)（新 21，新增） | — | **本章不引用本仓库源码**，是全书唯一的前沿综述章。第 8 节把前沿映射回 `safety_arbiter_apply` / `safety_control_node` / FlowSim / `inference_node`；第 9 节列了 10 条「未能核实」事项，改写时**不要删** |
+| [`book/21_demo_evaluator.md`](book/21_demo_evaluator.md)（新 23） | `tools/demo_evaluator.py` | 没有这个路径。评估器在 `ci/evaluators/demo_evaluator.py` |
 | 同上 | `tools/param_sweep.py` | 没有这个文件，仓库里也没有替代脚本 |
 | 同上 | `scenarios/zhongkai_road_full.json` | 没有这个文件 |
-| [`book/18_flowsim_scenario_design.md`](book/18_flowsim_scenario_design.md)（新 20） | `scenarios/city_to_highway_full.json` | 没有这个文件 |
-| [`book/19_e2e_learning_loop.md`](book/19_e2e_learning_loop.md)（新 23） | `scenarios/city_to_highway_full.json`，`scenarios/zhongkai_road_full.json` | 没有这两个文件 |
+| [`book/18_flowsim_scenario_design.md`](book/18_flowsim_scenario_design.md)（新 20） | `scenarios/city_to_highway_full.json` | 没有这个文件（`scenarios/` 下 23 个场景，无此名） |
+| [`book/19_e2e_learning_loop.md`](book/19_e2e_learning_loop.md)（新 24） | `scenarios/city_to_highway_full.json`，`scenarios/zhongkai_road_full.json` | 没有这两个文件 |
 | [`book/15_trajectory_planning.md`](book/15_trajectory_planning.md)（新 16） | （正文没有点名任何源码文件） | 对照表见本页第 16 章：`modules/adas_nodes/planning_coordinates.h`、`src/algorithms/frenet_bridge.cpp`、`modules/adas_nodes/st_graph.c`、`include/piecewise_jerk_qp.h`、`src/algorithms/piecewise_jerk_qp.c`、`modules/adas_nodes/traj_safety.h` |
 | [`book/03_message_bus.md`](book/03_message_bus.md)（新 05） | 标题「15 个节点」 | 这是标题里的断言，不是从 `config/pipeline.json` 的 `processes` 数出来的。改写时按该数组计数，不要照抄 15 |
