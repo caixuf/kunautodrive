@@ -581,6 +581,18 @@ add_executable(flow_ipc src/ipc_demo.c)
 # librt 仅 Linux 存在;macOS 的 shm_open/clock 等在 libSystem 中,无需 -lrt。
 target_link_libraries(flow_ipc flowengine_core $<$<AND:$<NOT:$<PLATFORM_ID:Darwin>>,$<NOT:$<PLATFORM_ID:Windows>>>:rt>)
 
+# 第 14 章配套：EKF 布局、离线滤波、耗时、以及驱动 fusion_node 的故障实验。
+add_executable(ekf_chapter
+    examples/ekf_chapter/ekf_chapter.c
+    modules/adas_nodes/ekf_slam.c
+    modules/adas_nodes/slam_math.c)
+target_include_directories(ekf_chapter PRIVATE modules/adas_nodes)
+add_dependencies(ekf_chapter msg_codegen)
+# transport.c 在 REMOTE/AUTO 分支引用 net_transport_*，符号在 scheduler_cpp。
+target_link_libraries(ekf_chapter flowengine_core scheduler_cpp m
+    $<$<AND:$<NOT:$<PLATFORM_ID:Darwin>>,$<NOT:$<PLATFORM_ID:Windows>>>:rt>)
+set_target_properties(ekf_chapter PROPERTIES LINKER_LANGUAGE CXX)
+
 # ── Step 3: Bag 录制回放（含 Step 5 统一时钟）────────────
 add_executable(flow_bag src/bag_demo.c)
 target_link_libraries(flow_bag flowengine_core m)
