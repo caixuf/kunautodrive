@@ -332,6 +332,28 @@ typedef struct {
 
 /* ── 场景配置主体 ─────────────────────────────────────────── */
 
+/* ── 自动交通密度（D3-1，L3 方向三 NPC 自动填充）─────────────────────
+ * 场景文件顶层加 "traffic_density" 块时，flowsim 在 populate 阶段自动沿
+ * ego 的 route 步骤按 Poisson 分布批量 spawn NPC 车辆，无需在 "actors"
+ * 数组里逐条手列。hand-list 仍有效；auto-spawn 与 hand-list 共用同一个
+ * entity pool（index 续编）。
+ *
+ * 字段语义：
+ *   cars_per_km            沿 route 每公里期望车辆数（含对向，本档取正向）
+ *   spawn_jitter_m         spawn s 位置的均匀抖动半宽（m）；0=严格等距
+ *   lane_spread            true=spawn 跨多车道（提升密度感）；
+ *                          false=全部 spawn 在 ego 同车道（压力测试）
+ *   max_npcs               上限（防 entity pool 128 满）
+ *   random_seed_offset     spawn RNG seed 偏置（同一场景可复现）
+ */
+typedef struct {
+    int    cars_per_km;          /* 沿 route 每公里车辆数（默认 0 = 不 spawn） */
+    double spawn_jitter_m;       /* s 抖动半宽（m），默认 2.0 */
+    int    lane_spread;          /* 是否跨多车道 spawn（0/1，默认 1） */
+    int    max_npcs;             /* 上限（默认 50） */
+    int    random_seed_offset;   /* RNG 偏置（默认 0） */
+} ScenarioTrafficDensity;
+
 typedef struct {
     char             name[SCENARIO_NAME_LEN];
     char             description[SCENARIO_DESC_LEN];
@@ -350,7 +372,7 @@ typedef struct {
     int               etc_gate_count;
     ScenarioStopLine  stop_lines[SCENARIO_MAX_STOP_LINES]; /**< 停止线（FlowSim v2 新增） */
     int               stop_line_count;
-    ScenarioConstructionZone construction_zones[SCENARIO_MAX_CONSTRUCTION_ZONES]; /**< 施工区域（前方封路，可选） */
+    ScenarioConstructionZone construction_zones[SCENARIO_MAX_CONSTRUCTION_ZONES];
     int               construction_zone_count;
     /* ── 中凯路场景新增（Task 3 + Task 4）── */
     ScenarioLighting  lighting;        /**< 全局光照模式（day/night/dusk，默认 day） */
@@ -362,6 +384,7 @@ typedef struct {
     Choreography      choreography;   /**< 编舞循环配置（可选，缺省 enabled=false） */
     /* ── NPC 行为开关 ── */
     bool              npc_lane_change;/**< NPC 启用 MOBIL 自主变道（默认 false，各守其道） */
+    ScenarioTrafficDensity traffic_density;/**< 自动 NPC 密度（D3-1，可选） */
     /* ── 解析后的 road_network JSON（A* 主循环建图用）──
      * resolve_map_reference 注入后保留一份 cJSON_PrintUnformatted 字符串：
      * edges[].lanes[] 含 id/direction/successors，供 flowsim 初始化阶段

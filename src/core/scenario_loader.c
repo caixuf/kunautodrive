@@ -409,6 +409,30 @@ ScenarioConfig* scenario_load(const char* path) {
     cJSON* jnpc_lc = cJSON_GetObjectItemCaseSensitive(root, "npc_lane_change");
     sc->npc_lane_change = cJSON_IsTrue(jnpc_lc);
 
+    /* traffic_density (D3-1, L3 方向三)：可选自动 NPC 密度块
+     * 缺省 / 缺字段 → 全零值，flowsim_auto_populate_traffic 视为 disabled
+     * （与既有 hand-list 场景完全向后兼容）。
+     * 解析独立出错 → 静默 fallback 到 0，不让单个坏字段阻塞场景加载。 */
+    sc->traffic_density.cars_per_km          = 0;
+    sc->traffic_density.spawn_jitter_m       = 2.0;
+    sc->traffic_density.lane_spread          = 1;
+    sc->traffic_density.max_npcs             = 50;
+    sc->traffic_density.random_seed_offset   = 0;
+    cJSON* jtd = cJSON_GetObjectItemCaseSensitive(root, "traffic_density");
+    if (cJSON_IsObject(jtd)) {
+        cJSON* jv;
+        jv = cJSON_GetObjectItemCaseSensitive(jtd, "cars_per_km");
+        if (cJSON_IsNumber(jv) && jv->valueint >= 0) sc->traffic_density.cars_per_km = jv->valueint;
+        jv = cJSON_GetObjectItemCaseSensitive(jtd, "spawn_jitter_m");
+        if (cJSON_IsNumber(jv) && jv->valuedouble >= 0.0) sc->traffic_density.spawn_jitter_m = jv->valuedouble;
+        jv = cJSON_GetObjectItemCaseSensitive(jtd, "lane_spread");
+        if (cJSON_IsBool(jv)) sc->traffic_density.lane_spread = cJSON_IsTrue(jv) ? 1 : 0;
+        jv = cJSON_GetObjectItemCaseSensitive(jtd, "max_npcs");
+        if (cJSON_IsNumber(jv) && jv->valueint > 0) sc->traffic_density.max_npcs = jv->valueint;
+        jv = cJSON_GetObjectItemCaseSensitive(jtd, "random_seed_offset");
+        if (cJSON_IsNumber(jv)) sc->traffic_density.random_seed_offset = jv->valueint;
+    }
+
     /* route（可选）：导航路线主动变道指令，按 trigger_x 触发，与障碍物无关。
      * NOA Phase 3.1: 新增 type 字段（lane_change/branch_select/merge）+
      * branch_id（branch_select 选路）。无 type 字段 = ROUTE_LANE_CHANGE，
