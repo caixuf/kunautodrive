@@ -1,5 +1,18 @@
 # 第 08 章：没有中心节点之后
 
+> **v2 范式示范章**。本章是 docs/book/ v2 重写后保留的少数章节之一，
+> 用作"真技术书应该长什么样"的参考：
+>
+> - 开头是问题驱动（「中心化的 Master 是 SPOF → 我们想要什么」），不是代码目录
+> - 章节标题是设问句（「没有中心节点之后」），不是「DiscoveryManager 详解」
+> - 用图示（ASCII / mermaid）说明结构，不堆 ASCII 表
+> - 跨机一段不绑行号；TCP_NODELAY / Drain 收包 / 解锁再发布这种"工程取舍"用人话讲
+> - 失败故事独立成段（集群扩容心跳堵车、docker0 心跳外发），有原因有对策
+>
+> 参照 `docs/book/README.md` 的写作风格约束。
+> 旧稿（按源码逐条重建版本）见 `docs/_archive/book_v1/04_ipc_channel.md` 与
+> `_archive/book_v1/` 内的兄弟归档章（v1 是 800+ 行的行号说明书）。
+
 第一代机器人系统（如 ROS 1）里有一个中心化的 Master 节点（`roscore`），它既是注册中心，也是整个系统的单点故障源（SPOF）：它一退出，所有节点之间的通信就彻底瘫痪了。
 
 KunAutoDrive 借鉴了 DDS RTPS 的去中心化思路，在微内核层实现了一个基于 UDP 组播信标（Multicast Beacon）的轻量级服务发现协议 `DiscoveryManager`。每个 ADAS 节点启动时自己宣告 Pub/Sub 能力，各自拼出同一张拓扑图（Topology Graph），节点异常离线时再毫秒级地把它摘掉。

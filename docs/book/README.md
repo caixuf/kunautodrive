@@ -82,8 +82,16 @@
 ## 参考书目（真技术书范式）
 
 - **《Designing Data-Intensive Applications》**（Martin Kleppmann）—— 用真实生产事故讲取舍
-- **《Operating Systems: Three Easy Pieces》**（Arpaci-Dusseau）—— 用"为什么"代替"是什么"
+- **《Operating Systems: Three Easy Pieces》**（Arpaci-Dusseau） —— 用"为什么"代替"是什么"
 - **《The Pragmatic Programmer》** —— 经验格言 + 反模式 + 类比
 - **《C++ Concurrency in Action》**（Anthony Williams）—— 思想 + 图示 + 关键代码片段（非全本）
 
 我们要接近的目标是 DDIA 的"思想密度"而不是 OS-3EP 的"教学耐心"。
+
+## 范式参考章
+
+写新章节或修改现存章节前，先读一遍：
+
+- **`docs/book/09_discovery.md`** —— 第 08 章《没有中心节点之后》。问题驱动标题、ASCII + mermaid 图示、跨机一段不绑行号、失败故事独立成段（集群扩容心跳堵车 / docker0 心跳外发）。是 v2 范式标杆。
+
+v1 反面教材：`docs/_archive/book_v1/04_ipc_channel.md`（800+ 行行号清单，与本书原则对立）。
