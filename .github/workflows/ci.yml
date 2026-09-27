@@ -117,6 +117,23 @@ jobs:
       - name: Reject retired Python dashboard entrypoint / orphan pyc
         run: python3 ci/gates/zombie_ban_check.py
 
+  # ── book_guard gate (CLAUDE.md docs/book 整治后新增) ──────────
+  # docs/book/ 真技术书风格守门：单章节 800 行上限、行号密度 ≤5 处/100 行、
+  # 超长对比表检测、commit-level >20% 行数突变。当前以 --warn-only 启动，
+  # v1 存量章节在迁移期 WARN 不阻断；v2 新写章节必须 PASS（默认 FAIL 模式）。
+  # docs/_archive/book_v1/ 不受约束（已归档历史内容）。
+  # 详见 ci/gates/book_guard.py 头部注释 + docs/book/README.md。
+  book-guard-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 50  # 给 --diff-against HEAD~5 留 commit 历史
+      - name: Enforce docs/book/ 真技术书风格（行数/行号密度/突变检测）
+        run: |
+          python3 ci/gates/book_guard.py --warn-only
+          python3 ci/gates/book_guard.py --warn-only --diff-against HEAD~5
+
   # ── map connectivity gate ──────────────────────────────────
   # 每个被 scenarios/*.json 引用的地图，main 链车道连通性回归检查
   # （tools/check_map_connectivity.py → astar_route.py --check）。
