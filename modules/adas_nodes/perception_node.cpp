@@ -204,7 +204,6 @@ static void on_lane_match(const Message* msg, void* user_data) {
     g.lm_cache.stamp_us   = stamp_us;
     pthread_mutex_unlock(&g.lm_mtx);
 }
-}
 
 static void on_vehicle_state(const Message* msg, void* user_data) {
     (void)user_data;
@@ -504,7 +503,7 @@ protected:
             pthread_mutex_lock(&g.lm_mtx);
             lm_snapshot = g.lm_cache;
             pthread_mutex_unlock(&g.lm_mtx);
-            fusion_lane_hint_cache_check_freshness(&lm_snapshot, g.lm_max_age_us);
+            fusion_lane_hint_cache_check_freshness(&lm_snapshot, clock_now_us(), g.lm_max_age_us);
             fusion_apply_hint(&obs_list, &lm_snapshot);
 
             uint8_t obs_buf[sizeof(ObstacleList)];  /* ObstacleList 序列化大小 = 16 + 128*35 wire (D2-07 M3 加 obs_lane_match_hint); sizeof 包含 alignment padding 5144B 一定够用 */
