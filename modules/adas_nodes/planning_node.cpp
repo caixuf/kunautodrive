@@ -39,6 +39,7 @@
 #include <cjson/cJSON.h>
 
 #include "construction_zones.h"
+#include "planning_ttc_candidate.h"   /* D2-06: TTC follow lead 候选选择 helper */
 #ifdef HAVE_FRENET
 #include "frenet_bridge.h"
 #include "st_graph.h"   /* ST 图 + DP 速度规划（planning 重生 M1，替代线性斜坡+override 堆） */
@@ -138,6 +139,7 @@ struct PlanningContext {
     int8_t obs_lane_id[kMaxObs]{};  /* 感知计算的车道归属（从 perception/obstacles 提取） */
     uint8_t obs_type[kMaxObs]{};    /* 障碍物类型：OBJ_TYPE_VEHICLE / PEDESTRIAN / CYCLIST */
     float   obs_confidence[kMaxObs]{}; /* 置信度 */
+    bool    obs_lane_match_hint[kMaxObs]{}; /* fusion 给的 obs_lane_match_hint (D2-06 消费；D2-07 fusion 写入) */
     /* 本帧感知障碍物的**权威个数**（= 最近一条 perception/obstacles 的 count）。
      * 只有前 obs_count 个槽位是有效障碍物；其余槽位被清零，坐标 (0,0) 只在
      * 数学上成立、**不代表"世界原点有个障碍物"**。
@@ -1157,11 +1159,13 @@ static void on_perception_obstacles(const Message* msg, void* user_data) {
             g.obs_lane_id[i] = o->lane_id;  /* 感知已算好的车道归属 */
             g.obs_type[i] = (uint8_t)o->type;
             g.obs_confidence[i] = o->confidence;
+            g.obs_lane_match_hint[i] = o->obs_lane_match_hint;  /* D2-06: fusion 给的同/邻车道提示 */
         } else {
             g.obs_x[i] = g.obs_y[i] = g.obs_vx[i] = g.obs_vy[i] = 0.0;
             g.obs_lane_id[i] = -1;
             g.obs_type[i] = 0;
             g.obs_confidence[i] = 0.0f;
+            g.obs_lane_match_hint[i] = false;  /* 无效槽清零，避免误入选 */
         }
     }
     g.has_vstate = 1;
@@ -1765,18 +1769,59 @@ protected:
                  * 旧实现硬编码 dx>0（+x 前进方向）—— 返程（heading≈π 朝 -x）
                  * 时前方车在 -x 被跳过 → 不减速 → 撞车。沿车头方向投影对
                  * 前进/返程/任意 heading 正确。 */
+                /* D2-06: 两段式 TTC follow 候选选择
+                 *   pass 1 (hint-first): 仅 obs.obs_lane_match_hint=true 的 obs
+                 *                          横向门限 lane_w * 0.75（与原版 lateral gate 一致）。
+                 *                          fusion 已验证 obs 在 ego 同车道或相邻 ±1。
+                 *                          gap_src = 1 (percept + hint verified)
+                 *   pass 2 (legacy fallback): 所有 obs 都考虑
+                 *                          横向门限更严 lane_w * 0.5（未验证同车道，保守方向）
+                 *                          仅当 pass 1 无候选时执行。
+                 *                          gap_src = 3 (percept + hint unavailable)
+                 * gap_src=2 留给真值兜底分支不变。 */
                 {
-                    const double fwd_x = std::cos(g.ego_heading);
-                    const double fwd_y = std::sin(g.ego_heading);
+                    TtcObsView view[g.kMaxObs];
                     for (int i = 0; i < g.obs_count; i++) {
-                        const double rx = g.obs_x[i] - g.ego_x;
-                        const double ry = g.obs_y[i] - g.ego_y;
-                        const double along = rx * fwd_x + ry * fwd_y;
-                        if (along <= 0.0 || along > 80.0) continue;
-                        if (g.obs_vx[i] < -2.0) continue;  /* 对向车不走此限速 */
-                        const double lat = std::fabs(-rx * fwd_y + ry * fwd_x);
-                        if (lat > lane_w * 0.75) continue;
-                        if (along < min_gap) { min_gap = along; gap_src = 1; }
+                        view[i].x = g.obs_x[i];
+                        view[i].y = g.obs_y[i];
+                        view[i].vx = g.obs_vx[i];
+                        view[i].vy = g.obs_vy[i];
+                        view[i].lane_match_hint = g.obs_lane_match_hint[i];
+                    }
+                    /* pass 1: hint-first */
+                    int idx = ttc_select_follow_lead(
+                        view, g.obs_count,
+                        g.ego_x, g.ego_y, g.ego_heading,
+                        lane_w,
+                        /*along_min*/ 0.0, /*along_max*/ 80.0,
+                        /*rel_v_min*/ -2.0,
+                        /*lat_max*/   lane_w * 0.75,
+                        /*require_hint*/ true);
+                    if (idx >= 0) {
+                        const double rx = g.obs_x[idx] - g.ego_x;
+                        const double ry = g.obs_y[idx] - g.ego_y;
+                        const double fwd_x = std::cos(g.ego_heading);
+                        const double fwd_y = std::sin(g.ego_heading);
+                        min_gap = rx * fwd_x + ry * fwd_y;
+                        gap_src = 1;  /* percept + hint verified */
+                    } else {
+                        /* pass 2: legacy lateral-only fallback */
+                        idx = ttc_select_follow_lead(
+                            view, g.obs_count,
+                            g.ego_x, g.ego_y, g.ego_heading,
+                            lane_w,
+                            /*along_min*/ 0.0, /*along_max*/ 80.0,
+                            /*rel_v_min*/ -2.0,
+                            /*lat_max*/   lane_w * 0.5,
+                            /*require_hint*/ false);
+                        if (idx >= 0) {
+                            const double rx = g.obs_x[idx] - g.ego_x;
+                            const double ry = g.obs_y[idx] - g.ego_y;
+                            const double fwd_x = std::cos(g.ego_heading);
+                            const double fwd_y = std::sin(g.ego_heading);
+                            min_gap = rx * fwd_x + ry * fwd_y;
+                            gap_src = 3;  /* percept + hint unavailable (legacy) */
+                        }
                     }
                 }
                 /* 真值兜底：感知链未提供本车道前车（漏检/停更）时，
@@ -1805,7 +1850,7 @@ protected:
                     if (ttc_follow < command_speed) {
                         if (g.plan_count % 10 == 0) {
                             LOG_WARN("planning", "TTC follow: gap=%.1f (src=%s) -> %.1f m/s (was %.1f)",
-                                     min_gap, gap_src == 2 ? "truth" : "percept", ttc_follow,
+                                     min_gap, gap_src == 2 ? "truth" : (gap_src == 3 ? "legacy" : "hint"), ttc_follow,
                                      command_speed);
                         }
                         command_speed = ttc_follow;

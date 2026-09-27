@@ -49,6 +49,7 @@
  * 节点 + 测试共用同一份实现（与 imu_protocol.h / perception_points.h / lidar_scan.h
  * 一致的 header-only 抽取模式，无副本漂移）。 */
 #include "fusion_lane_hint.h"
+#include "planning_ttc_candidate.h"   /* D2-06: TTC follow lead 候选选择 helper */
 
 #include <math.h>
 #include <stdint.h>
@@ -1531,6 +1532,114 @@ static void test_lane_hint_apply_hint_batch(void) {
     PASS();
 }
 
+
+/* ═══════════════════════════════════════════════════════════
+ * D2-06: planning TTC follow lead 候选选择 (planning_ttc_candidate.h)
+ * ═══════════════════════════════════════════════════════════
+ *
+ * 覆盖需求（spec REQ_L3_DIR2_HDMAP.md §4.2 FR-RT-05 + D2-06）：
+ *   1. require_hint=true → 只挑 obs.lane_match_hint=true 的 obs（融合验证过同/邻车道）
+ *   2. require_hint=false → 所有 obs 都考虑（向后兼容 / fallback）
+ *   3. 沿车头距离最近者优先（closest in s）
+ *   4. 横向 / 速度 / 距离门限由参数控制；超出 → 不入选
+ *
+ * 共 4 例（每例 1 个断言），对应 D2-06 handoff §9.1 "planning 真消费 hint" 的
+ * 验收用例。
+ */
+
+/* ── Test 1: hint=true 必填，hint=false 不入选 ── */
+static void test_ttc_select_hint_strict(void) {
+    TEST("ttc_select_follow_lead: require_hint=true 跳过最近的未验证 obs");
+    TtcObsView obs[3];
+    /* obs[0]: 远前车 25m，hint=true */
+    obs[0].x = 25.0; obs[0].y = 1.0; obs[0].vx = 0.0; obs[0].vy = 0.0; obs[0].lane_match_hint = true;
+    /* obs[1]: 中前车 20m，hint=true → 应选（hint=true 中最近）*/
+    obs[1].x = 20.0; obs[1].y = 1.0; obs[1].vx = 0.0; obs[1].vy = 0.0; obs[1].lane_match_hint = true;
+    /* obs[2]: 最近前车 10m，hint=false → require_hint=true 必须过滤掉 */
+    obs[2].x = 10.0; obs[2].y = 1.0; obs[2].vx = 0.0; obs[2].vy = 0.0; obs[2].lane_match_hint = false;
+
+    int idx = ttc_select_follow_lead(
+        obs, 3,
+        /*ego*/ 0.0, 0.0, 0.0,
+        /*lane_w*/ 3.5,
+        /*along_min*/ 0.0, /*along_max*/ 80.0,
+        /*rel_v_min*/ -2.0,
+        /*lat_max*/   3.5 * 0.75,
+        /*require_hint*/ true);
+
+    /* obs[2] 10m 最近但 hint=false 被 require_hint 过滤；obs[1] 20m 是 hint=true 中最近 */
+    ASSERT(idx == 1,
+           "require_hint=true must skip hint=false obs[2] (10m closest but unverified) and pick obs[1] (20m, hint=true)");
+    PASS();
+}
+
+/* ── Test 2: hint=false fallback，hint=true 不挡路 ── */
+static void test_ttc_select_no_hint_fallback(void) {
+    TEST("ttc_select_follow_lead: require_hint=false 时所有 obs 都参与，按距离选最近");
+    TtcObsView obs[2];
+    /* obs[0]: 前车 30m，hint=true（远，但已验证）*/
+    obs[0].x = 30.0; obs[0].y = 0.5; obs[0].vx = 0.0; obs[0].vy = 0.0; obs[0].lane_match_hint = true;
+    /* obs[1]: 前车 12m，hint=false（近，未验证）*/
+    obs[1].x = 12.0; obs[1].y = 0.5; obs[1].vx = 0.0; obs[1].vy = 0.0; obs[1].lane_match_hint = false;
+
+    int idx = ttc_select_follow_lead(
+        obs, 2,
+        0.0, 0.0, 0.0,
+        3.5, 0.0, 80.0, -2.0,
+        /*lat_max*/ 3.5 * 0.5,
+        /*require_hint*/ false);
+
+    /* require_hint=false，obs[1] 12m 最近，应选 */
+    ASSERT(idx == 1,
+           "require_hint=false must pick obs[1] (12m closest) regardless of hint");
+    PASS();
+}
+
+/* ── Test 3: 横向门限（lat_max）严格生效 ── */
+static void test_ttc_select_lat_gate(void) {
+    TEST("ttc_select_follow_lead: lat_max 严格生效，超门限 obs 不入选");
+    TtcObsView obs[2];
+    /* obs[0]: 前车 10m，但横向 2.0m（lane_w=3.5，lat_max=3.5*0.5=1.75 → 超门限）*/
+    obs[0].x = 10.0; obs[0].y = 2.0; obs[0].vx = 0.0; obs[0].vy = 0.0; obs[0].lane_match_hint = true;
+    /* obs[1]: 前车 25m，横向 0.5m（在门限内）*/
+    obs[1].x = 25.0; obs[1].y = 0.5; obs[1].vx = 0.0; obs[1].vy = 0.0; obs[1].lane_match_hint = true;
+
+    int idx = ttc_select_follow_lead(
+        obs, 2,
+        0.0, 0.0, 0.0,
+        3.5, 0.0, 80.0, -2.0,
+        /*lat_max*/ 3.5 * 0.5,   /* = 1.75m */
+        /*require_hint*/ true);
+
+    /* obs[0] |lat|=2.0 > 1.75 落选；obs[1] 25m 入选 */
+    ASSERT(idx == 1,
+           "obs[0] lat=2.0 > lat_max=1.75 must be rejected; obs[1] lat=0.5 selected");
+    PASS();
+}
+
+/* ── Test 4: 沿车头相对速度 rel_v_min 过滤对向车 ── */
+static void test_ttc_select_relv_gate(void) {
+    TEST("ttc_select_follow_lead: rel_v_min=-2 过滤沿车头相对速度 < -2 的对向来车");
+    TtcObsView obs[2];
+    /* obs[0]: 前车 15m，沿车头方向相对速度 -10 m/s（对向高速驶来）*/
+    obs[0].x = 15.0; obs[0].y = 0.5; obs[0].vx = -10.0; obs[0].vy = 0.0; obs[0].lane_match_hint = true;
+    /* obs[1]: 前车 25m，沿车头方向相对速度 0 m/s（同向静止）*/
+    obs[1].x = 25.0; obs[1].y = 0.5; obs[1].vx = 0.0;   obs[1].vy = 0.0; obs[1].lane_match_hint = true;
+
+    int idx = ttc_select_follow_lead(
+        obs, 2,
+        0.0, 0.0, 0.0,
+        3.5, 0.0, 80.0,
+        /*rel_v_min*/ -2.0,
+        /*lat_max*/ 3.5 * 0.75,
+        /*require_hint*/ true);
+
+    /* obs[0] rel_v=-10 < -2.0 落选（对向来车）；obs[1] 25m 入选 */
+    ASSERT(idx == 1,
+           "obs[0] rel_v=-10 (oncoming) must be rejected by rel_v_min=-2; obs[1] selected");
+    PASS();
+}
+
 int main(void) {
     printf("\n╔══════════════════════════════════════════╗\n");
     printf("║  FlowEngine ADAS Nodes Logic Tests        ║\n");
@@ -1617,6 +1726,12 @@ int main(void) {
     test_compute_hint_with_llt_offset();
     test_lane_hint_cache_freshness();
     test_lane_hint_apply_hint_batch();
+
+    printf("\n═══ planning TTC follow lead 候选 (D2-06) ═══\n");
+    test_ttc_select_hint_strict();
+    test_ttc_select_no_hint_fallback();
+    test_ttc_select_lat_gate();
+    test_ttc_select_relv_gate();
 
     printf("\n═══ LiDAR Observation Model (3D scan / capacity guard) ═══\n");
     test_lidar_scan_azimuth_fov_bounds();
