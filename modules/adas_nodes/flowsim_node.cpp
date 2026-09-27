@@ -1318,7 +1318,6 @@ static void publish_lane_match(void) {
     cJSON_AddNumberToObject(j, "pub_lane_id", (double)ego.lane_id);
     cJSON_AddNumberToObject(j, "id_mismatch_frames", (double)g.lane_match_id_mismatch);
     cJSON_AddNumberToObject(j, "frames", (double)g.lane_match_frames);
-    cJSON_AddNumberToObject(j, "frames", (double)g.lane_match_frames);
 
     /* M2 起追加 D2-04/D2-05 契约字段（spec §6.1 v1.0 顺序）。
      * 字段顺序锁定：M2 5 字段在前 → M3 5 字段在后。cJSON_AddNumberToObject 内部

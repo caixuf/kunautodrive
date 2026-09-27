@@ -165,7 +165,8 @@
       "auto_start": true,
       "subscribe": [
         "perception/obstacles_lidar",
-        "perception/obstacles_stereo"
+        "perception/obstacles_stereo",
+        "localization/lane_match"
       ],
       "publish": [
         {
