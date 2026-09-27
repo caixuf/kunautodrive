@@ -595,7 +595,7 @@ else                            → Red
 **闪烁绿**在绿灯末尾，模拟国内路口的「绿灯闪烁提示即将变黄」。
 
 > [!WARNING]
-> `entity.h:186` 的注释写 `phase_state // 0=绿 1=黄 2=红`——**这是错的**。实际枚举有 4 个值，`TLPhase` 在 `scene_events.h:28-33` 定义为 `Green / FlashingGreen / Yellow / Red`。
+> `entity.h:178` 的注释写 `phase_state // 0=绿 1=黄 2=红`——**这是错的**。实际枚举有 4 个值，`TLPhase` 在 `scene_events.h:28-33` 定义为 `Green / FlashingGreen / Yellow / Red`。
 >
 > 写代码时按注释理解相位会直接出错。
 
@@ -898,7 +898,7 @@ Step 7   发布全部                             :2590-2618
 | `g.has_control_input` | `:298, 316, 227` | 写入、复位，从不读 |
 | `e.width = open_range_m` | `:977` | 闸门 tick 用硬编码 50.0/10.0，不读它 |
 | `NpcState::LaneChange` 分支 | `npc_ai.cpp:557-587` | MOBIL 关闭时是死代码（代码自己承认） |
-| `entity.h:186` 相位注释 | — | 说 3 相位，实际 4 相位 |
+| `entity.h:178` 相位注释 | — | 说 3 相位，实际 4 相位 |
 | `sim_digest.h:45-46, 86-89` | — | 字段自述「从未被填充」/「无读取者」 |
 | `road_network.h:149-160` | — | Lanelet2 迁移的 TODO 注释，未实现 |
 
