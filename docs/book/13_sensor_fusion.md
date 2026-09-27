@@ -1,5 +1,9 @@
 # 第 14 章：定位融合：EKF
 
+> **v2 范式章节**（2026-09 整治后保留）。本章保留低行号密度、真技术书
+> 风格，参照 `docs/book/README.md` 写作风格约束与 `docs/book/09_discovery.md`
+> 范式示范。v1 行号清单版本归档于 `docs/_archive/book_v1/`。
+
 这一章在第五部　自动驾驶算法栈。
 上一章是感知：从激光点云到目标（含其他感知源）。
 [第 13 章](12_lidar_tracking.md#卡尔曼追踪器在追什么) 把一帧激光雷达点云收成前车的边界框（Bounding Box）。
@@ -779,21 +783,4 @@ raw_json_first={"x":9.97570093533642,"y":0,"v":5.1215074728502348,"heading":0,"y
 
 ## 勘误：本章上一版的错误说法
 
-| 上一版说法 | 实际行为 | 源码 |
-| --- | --- | --- |
-| GPS、IMU 和轮速计（Wheel Odometry）进同一个滤波器 | 两个 EKF，互不调用。没有轮速计输入 | `ekf_fusion_predict` 与 `ekf_slam_predict` |
-| 经纬度先投影到 ENU 再当位置测量 | 经纬度只抄进 `world_lat`、`world_lon` | `FusionTask::run` |
-| 预测和输出 100 Hz | `dt` 固定 0.05 秒，一唤醒预测一次。本次两路 20 Hz 时输出 39.716 Hz | `fusion_init` |
-| 厘米级位姿 | `demo` 第 40 步贴住真值，是因为测量就是刚生成的真值 | `ekf_chapter` 的 `demo` |
-| 状态顺序 `[px, py, θ, v, ω]` | 只符合 `EkfState`。融合状态是 `[x, y, v, heading, yaw_rate]` | `EKF_STATE_DIM` |
-| 阿克曼或角速度积分，`v` 加 `a·dt`，`ω` 等于陀螺 | 融合预测是 CTRV，`v` 和 `yaw_rate` 保持不变。SLAM 才是 `v += accel_x·dt` 且 `omega = gyro_z` | `ekf_fusion_predict` |
-| 雅可比最后一行全 0 | 只符合 `ekf_slam_predict` 里的 `F[24] = 0`。融合的 `F[4][4] = 1` | `compute_jacobian_F` |
-| 里程计用 `H_odom` 做速度更新 | 速度更新来自 `ekf_fusion_update_gps`，观测是 GPS 速度 | `ekf_fusion_update_gps` |
-| `ekf_update_gps(EkfSlam*, x, y, heading)` | 没有这个函数。融合 GPS 更新的参数是速度和航向 | `ekf_fusion_update_gps` |
-| GPS 丢失时把 `localization_status` 标成 `DEGRADED` | 只有 `diverged`。没有这个状态字段 | `FusionTask::run` |
-| 每次更新后把 `P` 对称化，对角低于 `1e-6` 就抬上去 | `ekf_update_generic` 写的是 `(I-KH)P`，没有这两步 | `ekf_update_generic` |
-| 航向差用 `atan2(sin, cos)` 折回 | 融合用 `while` 加减 `2π`。SLAM 用 `slam_wrap_pi` | `ekf_fusion_update_gps` |
-| 环岛里航向从 +179 度跳到 -179 度，规划画出左右猛打的轨迹 | 短弧残差在 `fault-wrap` 里测到了。环岛那次路测没有对应记录可以核对 | `ekf_fusion_update_gps` |
-| 没有 χ²，前 100 次更新也不设门 | `ekf_update_generic` 有门限，`update_count < 100` 时跳过 | `ekf_update_generic` |
-| 协方差不小于 100 时仍用激光雷达位置 | 内层 `if` 没有 `else`，这一拍不做位置更新 | `FusionTask::run` |
-| 真车配置会发布 `sensor/lidar` 上的 `LidarFrame` | `lidar_execute` 发布 `ObstacleList` | `lidar_execute` |
+16 条纠错（GPS/IMU/Wheel 三路同滤波器、经纬度先投影 ENU、100 Hz 输出、厘米级位姿、状态顺序、阿克曼积分、雅可比末行、轮速 `H_odom`、`ekf_update_gps` 函数签名、`localization_status`、P 对称化、航向 `atan2` wrap、环岛航向跳变、χ² 门限、协方差激光雷达位置、真车发布 `LidarFrame`）已在本章正文里被逐条破除。本节列出仅作交叉索引：**v0 错误说法已死、v2 没有保留痕迹**。详细反驳见正文对应小节。
