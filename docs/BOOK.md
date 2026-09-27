@@ -65,7 +65,7 @@
 |---|---|---|---|
 | 13 | 感知：从激光点云到目标（含其他感知源） | `modules/adas_nodes/lidar_scan.h::lidar_scan_generate` 产生点，`src/algorithms/dbscan_cluster.h::dbscan_run` 聚类。跟踪是 `src/algorithms/kalman_tracker.c` 的线性常速卡尔曼滤波（KF）：状态 `[x, y, vx, vy]`，`F` 为常速转移，`H` 只观测位置，关联用匈牙利算法。这不是扩展卡尔曼滤波（EKF）。`modules/adas_nodes/perception_fusion_node.cpp` 合并激光与双目两路 `ObstacleList` | [`book/12_lidar_tracking.md`](book/12_lidar_tracking.md) |
 | 14 | 定位融合：EKF | `src/algorithms/ekf_fusion.c::ekf_fusion_predict` 按常速、常横摆角速度（CTRV）传播，不用转角和轴距。`config/pipeline_car.json` 里 slam 的 `algo` 为 `ekf_slam` 时，位姿经 `sensor/pose` 进入 `modules/adas_nodes/fusion_node.cpp`。位置更新有三种：位姿已收敛且 `cov_xx + cov_yy < 100` 时，用位姿的 x/y 调用 `src/algorithms/ekf_fusion.h::ekf_fusion_update_lidar`；已收敛但协方差不小于 100 时，这一拍不做位置更新；没有位姿或未收敛时，用 `LidarFrame` 的 x/y。GPS 的速度和航向进 `src/algorithms/ekf_fusion.h::ekf_fusion_update_gps`。`modules/adas_nodes/slam_node.cpp` 写出的位姿把 `converged` 设为 true。默认 `config/pipeline.json` 没有 slam 进程 | [`book/13_sensor_fusion.md`](book/13_sensor_fusion.md) |
-| 15 | 行为决策 | 上游读 `fusion/localization`、`perception/obstacles`、`perception/tracked_objects`、`vehicle/state` 和道路话题，发布 `planning/behavior`。下游 `modules/adas_nodes/planning_node.cpp` 订阅这条行为，并订阅 `navigation/path`，发布 `planning/trajectory`。`prediction/tracks` 由 `modules/adas_nodes/prediction_node.c` 发布，订阅者是 `modules/adas_nodes/scene_assembler_node.c`；行为节点和规划节点都不订阅 | [`book/14_behavior_decision.md`](book/14_behavior_decision.md) |
+| 15 | 行为决策 | `modules/adas_nodes/behavior_planner_node.cpp`（1940 行，20 Hz **编译进去**，`pipeline.json` 的 behavior_planner 块没有 `params` 键）订阅 8 路、发布 `planning/behavior`（22 B 的 `Behavior`）与 `behavior/state`。**8 个状态里只有 5 个可达**——`STOP`/`YIELD`/`EMERGENCY` 从不是任何转移规则的 `to`，连带 `BehaviorCommand` 里那 3 个值永不发布。跟车律是 CTG：`d = acc_standoff(5.0) + acc_time_headway(1.5)·v`，`v_follow = v_lead + acc_k_gap(0.4)·clamp(Δ−d, ±8.0)`。变道是三条件与门（同向 + 后向安全 + 空隙 > 1.5×min_gap）。**零单测** | [`book/14_behavior_decision.md`](book/14_behavior_decision.md) |
 | 16 | Frenet 轨迹规划 | `modules/adas_nodes/planning_coordinates.h::project_to_path` 与 `src/algorithms/frenet_bridge.h::frenet_plan` 把问题投到参考线上。速度用 S-T 图（Station-Time graph），由 `modules/adas_nodes/st_graph.h::st_graph_plan` 做动态规划。`include/piecewise_jerk_qp.h::pjqp_path_solve` 与 `include/piecewise_jerk_qp.h::pjqp_speed_solve` 有声明和实现，规划节点没有调用；实际调用的是 `include/piecewise_jerk_qp.h::pjqp_smooth_2d` | [`book/15_trajectory_planning.md`](book/15_trajectory_planning.md) |
 | 17 | 跟踪控制：横向级联、LTV-MPC 与机动跟踪器 | `modules/adas_nodes/control_node.cpp` 里是纵向 PID + 横向三级级联 PD（横向速度 → ψ_des → 转向角，含曲率前馈；不是教科书 Stanley 公式）。`include/ltv_mpc.h::ltv_mpc_solve` 解的是 3 状态 1 控制的仿射 LQR（后向 Riccati，非 QP，约束为事后截断），且默认关闭。`modules/adas_nodes/maneuver_tracker.h` 的 `ManeuverTracker` 管掉头和泊车这类断开的参考线，倒挡时反馈项反号 | [`book/16_tracking_control.md`](book/16_tracking_control.md) |
 | 18 | 安全包络与降级 | 让控制指令先过一遍安全包络，再发布 `control/cmd`。`modules/adas_nodes/safety_arbiter.h::safety_arbiter_apply` 仲裁规则控制与学习模型（降级 > 转向包络 0.12 rad > 规则制动 > 模型油门上限 0.85，制动取 max）。`include/degrade_ladder.h::degrade_layer_action` 是 L0~L3 粘滞阶梯，`include/health.h::health_heartbeat` 的 5 s `HEALTH_STALE` 仅上报不动作 | [`book/17_safety_envelope.md`](book/17_safety_envelope.md) |
@@ -282,8 +282,20 @@
 
 ### 15　行为决策
 
-- 现文件：[`book/14_behavior_decision.md`](book/14_behavior_decision.md)
-- `modules/adas_nodes/behavior_planner_node.cpp`：订阅 `fusion/localization`、`perception/tracked_objects`、`perception/obstacles`、`vehicle/state`、`road/geometry`、`road/traffic_lights`、`road/ref_path`、场景帧，发布 `planning/behavior`。不订阅 `prediction/tracks`
+- 现文件：[`book/14_behavior_decision.md`](book/14_behavior_decision.md)（**2026-09-26 按源码重写，83 → 730 行**）
+- `modules/adas_nodes/behavior_planner_node.cpp`（1940 行）：订阅 `fusion/localization`、`perception/tracked_objects`、`perception/obstacles`、`vehicle/state`、`road/geometry`、`road/traffic_lights`、`road/ref_path`、`scene/frame`，发布 `planning/behavior`（22 B）与 `behavior/state`（未类型化 JSON，0.4 Hz）。**不订阅 `prediction/tracks`**。20 Hz 是**硬编码的**（`:722-724` 三个定时器都累加字面量 `0.05`），`config/pipeline.json` 的 behavior_planner 块**没有 `params` 键**
+- `BehState`（`:49-58`，8 个）和 `BehEvent`（`:60-68`，7 个）**共用同一组数字 200-207**。`BEH_TRANSITIONS`（`:71-105`）**19 条规则**。`:46-47` 注释称用 `SM_EVENT_USER_BASE+` 区域，但值是硬编码 `200..207`，而 `SM_EVENT_USER_BASE == 16`（`state_machine.h:59`）——**注释是错的**
+- **8 个状态里 3 个不可达**：`BEH_ST_STOP(204)`、`BEH_ST_YIELD(205)`、`BEH_ST_EMERGENCY(206)` 从不是任何规则的 `to`；`EMERGENCY` 连一条规则都没有。**实际可达只有 5 个**。连带 `BehaviorCommand` 的 `BEH_STOP`/`BEH_YIELD`/`BEH_EMERGENCY` 三个值永不发布
+- **CTG 跟车律**（`:832-851`）：`d_desired = acc_standoff(5.0 m) + acc_time_headway(1.5 s)·v_ego`；`v_follow = clamp(0, v_cruise, v_lead + acc_k_gap(0.4 s⁻¹)·clamp(Δ−d_desired, ±8.0 m/s))`。硬上限 `kFollowMaxRange = 200.0`（`:840`）
+- `blocked`（`:862`）用 `max(30.0, 3.5·d_desired)`，**FOLLOW 状态下乘 `follow_hysteresis = 1.3`** 退出（标准迟滞）。`min_gap = min(90, 25 + 2.0·rel_speed)`（`:865`）。`worthwhile = blocked && (best_gap > min_gap)`（`:873`）
+- **变道三条件与门**（`:1029-1030`）：`same_side && rear_safe && gap > min_gap × lc_gap_mult(1.5)`。**左右后向安全不对称**——左侧 `max(15.0, v_rear × 3.0)`（`:965`），右侧 `max(min_gap, 15.0)`（`:1019-1022`），右侧判据不随后车速度增长
+- **双向道路守卫**：`planning_coord::first_legal_lane`（`planning_coordinates.h:22-24`）= `oneway ? 0 : lane_count/2`
+- `carriageway_ahead_stop_light`（`:643-671`）：`stop_range = max(60, v²/8 + 23)` m，**只门控变道不停车**。绿灯**和闪烁绿**都算通行。实际制动在 `st_graph_plan` 的虚拟墙
+- **施工区只影响掉头触发点**（`:1154-1161`），对跟车/变道零影响
+- **掉头**（`:1086-1268`）：需东西向路线 + 内侧车道（`inner_lane = lc/2`）+ 低速。触发区 `uturn_approach_dist_m = 120.0`，返程速度门限**硬编码 7.0** 而去程用参数 5.0。冷却 `lane_change_cooldown_timeout_s(5.0) × 6.0 = 30 s`（`:1503, 1515`），注释记录了两次实测故障（2026-08-03 连环掉头、失败后每帧重触发卡死 3 分钟）
+- **已发现的真实不一致**：CRUISE→超车（`:1316`）**漏掉 `g.cooldown <= 0.0` 检查**，而 FOLLOW→超车（`:1375`）和并线归位（`:1334`）都有
+- **17 个热重载参数**（`:1823-1856` 注册 / `:698-714` 逐帧重读），是第 03 章「三处都通」的正面例子。但 `min_overtake_gap_base`/`_cap` **不在 registry**，只能改配置文件
+- **零单测**（`docs/HANDOFF_2026-09-21.md:202` 明确记录）。只有回归基线 JSON 里的 `behavior_state` 字符串字段
 - `modules/adas_nodes/planning_node.cpp`：订阅 `planning/behavior` 与 `navigation/path`，发布 `planning/trajectory`。不订阅 `prediction/tracks`
 - `modules/adas_nodes/navigation_node.c`：发布 `navigation/path`
 - `modules/adas_nodes/prediction_node.c`：输出 `prediction/tracks`
@@ -411,6 +423,11 @@
 | 同上（已重写） | 旧稿 TTC 分级阶梯 3.0/2.0/1.0 s、预充液压、0.3g / −1.0g | 全部不存在。真实阈值是 2.5 s 触发 / 1.5 s 降级 / 1.0 s 硬 AEB，`brake` 是 [0,1] 归一化量而非 g；无预充液逻辑 |
 | 同上（已重写） | 旧稿 `safety/cmd` 话题、`actuator/cmd` 话题、`safety_override_active`、`apply_emergency_brake()`、规划 200 ms 心跳看门狗 | 均为虚构。真实输出是 `control/cmd`（20 B 的 `ControlCmd`）；看门狗是 `safety_raw_command_timeout_expired`（`moving && Δt > 2s`），监控 `control/raw_cmd` 而非规划指令 |
 | 同上（已重写） | 旧稿完全缺失 `safety_arbiter_apply` 与 `degrade_ladder` | 新稿补全了规则/模型仲裁的完整优先级链、P1 不计入 `intervened` 的语义设计，以及 L0~L3 粘滞阶梯与 500/150/2000/3000 ms 四个时间常数 |
+| [`book/14_behavior_decision.md`](book/14_behavior_decision.md)（新 15，已重写） | 旧稿的 RSS 责任敏感安全模型四分式 `$d_{safe}=v_{rear}\rho+\frac12 a_{max}\rho^2+\frac{(v_{rear}+\rho a_{max})^2}{2b_{min}}-\frac{v_{ego}^2}{2b_{max}}$` | **代码里没有 RSS。** 后向安全是纯运动学判据：左侧 `max(rear_safe_min_m(15), v_rear × rear_safe_time_s(3.0))`（`:965`），右侧 `max(min_gap, rear_safe_min_m)`（`:1019-1022`）。无加速度模型、无最小制动减速度参数 |
+| 同上（已重写） | 旧稿的 `evaluate_noa_navigation(PlanningContext*)` 函数 | **这个函数不存在。** 导航触发变道不在决策节点；决策节点的变道只有「被堵 + 值得超」这一条路径（`:1316-1317`） |
+| 同上（已重写） | 旧稿的 8 状态 mermaid 图，含 `YIELD`/`EMERGENCY_STOP` 的进入边 | `STOP`/`YIELD`/`EMERGENCY` **从不是任何转移规则的 `to`**，实际可达只有 5 个状态。旧图画出的 `FOLLOW → YIELD`、`CRUISE → EMERGENCY_STOP` 两条边不存在 |
+| 同上（已重写） | 旧稿的「驾驶模式能级阶梯」和「Mode Transition Guard」 | 这部分**属于规划节点**（`planning_node.cpp` 的 `g.mode_sm` + `SM_TABLE_MODE_SWITCHING`，模式 `NA/ACC/CP/NP/LP/NOA`），不在行为决策节点。旧稿把它和 8 态行为状态机混为一谈 |
+| 同上（已重写） | 旧稿称「变道完成后强制待够 5.0 s」 | `lane_change_cooldown_s` 默认 **3.0 s**（`:1841`）。30 s 那个是掉头专用（`:1503`），且 CRUISE→超车路径**绕过冷却检查** |
 | [`book/22_socketcan_actuator.md`](book/22_socketcan_actuator.md)（新 19，已重写） | 旧稿的 `send_can_frame()`、`set_servo_pulse()`、`pca9685_set_pwm()` | 三个函数全部不存在。真实实现是 `actuator_node.c` 的 `can_open`/`can_send`/`encode_throttle_frame`/`encode_steering_frame`，以及 `actuator_pwm_node.c` 的 `pca9685_set_pulse_us()`（参数是 `int pulse_us` 微秒，不是 `float normalized_val`） |
 | 同上（已重写） | 旧稿称油门与转向打包在同一个 8 字节帧的 `[0-3]`；`int16_t` 编码油门 | 与系统里任何 ID 都不匹配。真实是 0x100（DLC 8，throttle/brake/gear/e_stop）与 0x101（DLC 4，steering/seq）两个独立报文；油门是 `uint16_t` 且先钳位到 [0,1] |
 | 同上（已重写） | 旧稿的 `config/pipeline_car.json` 片段：`car_real_hardware_pipeline` + `libactuator_node.so` + `can_throttle_id: 256` | 错三处：没有名为 `car_real_hardware_pipeline` 的配置；没有 config 引用 `libactuator_node.so`（CAN 后端零引用）；配置 schema 用 `library_path` 不是 `library`。真实配置是 `pipeline_car.json:272-278` 的 `libactuator_pwm_node.so` |
