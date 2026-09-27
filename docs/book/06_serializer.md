@@ -72,12 +72,12 @@ FNV-1a 是 32 位字面量，不是加密哈希——它**有意不做**加密�
 只求"32 位均匀分布 + 跨平台一致"。
 hash 算法没有"分支安全"——理论上可能有冲突，我们跑了 23 个类型没撞过。
 **风险**：`adas_msgs::Obstacle` 这个字符串若被改名，hash 全变，所有
-存量 bag（详见 `docs/book/05_bag_recording.md`）记录下来的类型 ID 跟现
+存量 bag（详见 `docs/book/12_bag_recording.md`）记录下来的类型 ID 跟现
 场对不上——这是改 schema 名要付出的代价，不是 bug。
 
 ```
-hash("adas_msgs::Obstacle") = 0xA1B2C3D4     // 编译期常量
-hash("adas_msgs::ObstacleV2") = 0xDECAFBAD   // 完全不同的另一个 ID
+hash("adas_msgs::Obstacle")    = 0x322bd084u   // codegen 编译期常量
+hash("adas_msgs::ObstacleV2")  = 0x<新 ID>u    // 完全不同的另一个 ID（与字段布局哈希共同判别）
 ```
 
 增量改名请**新增**字段而不是改 IDL 字段名；旧字段 deprecate 但保留
