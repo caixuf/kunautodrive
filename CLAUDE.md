@@ -19,6 +19,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > 2026-07 修 8 个连环 bug 的方法论），别凭直觉猜层。
 >
 > **重构类改动** commit body 必含 `Removed:` 段（详见 `~/.claude/skills/workflow/SKILL.md` 第七节），纯新增/fix/docs 可省略。
+>
+> **commit subject 章节号以 BOOK.md 当前编号为准**（不是 `docs/book/<NN>_<topic>.md` 的 NN 后缀）。BOOK.md 是真源，文件名跟随。重排期 commit subject 写旧编号读者按 BOOK 找会扑空。
+>
+> **commit body 自述 vs `git diff --stat` 实际必须一致**（文件数 + 行数 + 隐式次要改动全部列）。这是 322e66c D2-07 commit 的教训：自述 "5 文件 buffer overflow 修复" 实际是 6 个 c/cpp（4 buffer + 2 仅注释更新）；隐式改了 `config/pipeline_car.json` 但 body 完全未提。Sub-agent 派工时 brief 必须显式要求"列全部改动文件，含次要改动"。
 
 ## 低维护治理（2026-09）
 
