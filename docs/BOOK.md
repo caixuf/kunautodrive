@@ -146,13 +146,20 @@
 
 ### 03　注册中心与参数系统
 
-- 现文件：[`book/03_registry_and_params.md`](book/03_registry_and_params.md)
-- `include/param_registry.h`，`src/core/param_registry.c`：`param_register_int` / `param_register_float` / `param_register_bool` / `param_register_string`。int 与 float 注册时带 min/max；`param_set_int` 与 `param_set_float` 越界则拒绝，范围内则写入 `current_value`，不看 `hot_reload`。`param_set_callback` 只把回调记到 `on_change`。`param_enable_hot_reload` 只把 `hot_reload` 设为 true。`validate_and_set` 要 `on_change` 和 `hot_reload` 都有才调用回调。这两个函数除本头文件和本 .c 外没有 C/C++ 调用点，新建参数时 `hot_reload` 为 false、`on_change` 为空，所以这条回调不会跑起来。`param_export_json` 导出，其中包含 `hot_reload` 字段。
-- `include/flow_registry.h`，`src/core/flow_registry.c`：`flow_registry_register_task`，`flow_registry_register_topic`，`flow_registry_register_type`，`flow_registry_register_plugin`，`flow_registry_export_json`。宏 `FLOW_REGISTRY_DECLARE_PLUGIN` 展开后只调用 `flow_registry_register_plugin(名字, NULL, NULL, NULL)`，宏参数里的版本和描述没有写入注册表。
-- `include/topic_registry.h`：编译期话题名常量，例如 `TOPIC_SENSOR_LIDAR`（`sensor/lidar`）、`TOPIC_PERCEPTION_OBSTACLES`、`TOPIC_CONTROL_CMD`
-- `include/config_manager.h`，`src/core/config_manager.c`：`config_load`，`config_save`，`config_free`
-- `include/param_bridge.h`，`src/core/param_bridge.c`：`param_bridge_server_start`，`param_bridge_server_stop`，`param_bridge_client_request`。默认套接字 `PARAM_BRIDGE_DEFAULT_SOCK`（`/tmp/flow_param.sock`），可用 `FLOW_PARAM_SOCK` 覆盖。线协议是 `LIST` / `GET` / `SET`
-- `src/flowctl.c`：`flowctl param list`、`flowctl param get <name>`、`flowctl param set <name> <value>`。三条都经 `param_bridge_client_request` 发 `LIST` / `GET` / `SET`，不调用 `param_set_callback` 或 `param_enable_hot_reload`。`SET` 由 `param_bridge` 按类型转成 `param_set_int` / `param_set_float` / `param_set_bool` / `param_set_string`。节点下一拍用 `param_get_int` / `param_get_float` 读到新值。
+- 现文件：[`book/03_registry_and_params.md`](book/03_registry_and_params.md)（**2026-09-26 按源码重建，原文件在工作区丢失且从未进入任何 git ref**）
+- `include/param_registry.h`，`src/core/param_registry.c`：`param_register_int` / `param_register_float` / `param_register_bool` / `param_register_string`（`:42/:67/:92/:113`），`param_get_*`（`:147-196`），`param_set_*`（`:210-277`）。128 槽进程级固定表 + 1 把 `pthread_mutex`。int/float 的 `param_set_*` 越界会返回 `ERR_INVALID_PARAM`，bool/string 跳过检查
+- **回调机制完全死代码**：`param_set_callback`（`:134`）与 `param_enable_hot_reload`（`:297`）**各为零生产调用者**；`create_param` 的 `memset`（`:29`）把 `hot_reload` 清成 false、`on_change` 清成 NULL，所以 `validate_and_set`（`:200`）里 `if (e->on_change && e->hot_reload)` **恒为假**。连带后果：JSON 导出里的 `hot_reload` 字段**永远输出 false**，`flowctl list params` 的 🔥 标记**永不出现**。另注：回调若真被调用，是在**持有 `g_mutex` 时**执行，回调内再进 `param_get_*` 会自死锁
+- **真正生效的热重载是逐帧轮询**：`control_node.cpp:527-548`（22 次 `param_get_float`）+ `:937-956`（8 次），`behavior_planner_node.cpp:698-714`（17 次）。**16 个节点里只有这 2 个实现了**；另 14 个（含 `safety_control_node`）参数改不动。`CLAUDE.md:353-360` 规定的「三处都通」纪律指的就是这个
+- `param_export_json`（`:319`）：手写 `snprintf` 拼 JSON，**无转义**，**零调用者**
+- `include/flow_registry.h`，`src/core/flow_registry.c`：`flow_registry_register_task`（`:37`）、`_topic`（`:105`）、`_type`（`:168`，**纯转发给 serializer，自身零调用者**）、`_plugin`（`:276`），`flow_registry_export_json`（`:432`，输出 7 键 JSON）。`FLOW_REGISTRY_MAX_IO = 8` 静默截断；`src/flow_launcher.c:839` 把 `desc` 传成节点名、`:845` 把 `type_id` 传成 0
+- `FLOW_REGISTRY_DECLARE_PLUGIN`（`include/flow_registry.h:180`）：`__attribute__((constructor))` 宏，**`pver`/`pdesc` 被静默丢弃**（`PluginMeta` 里根本没有这两个字段），且宏本身零使用
+- `include/topic_registry.h`：38 个 `TOPIC_*` 编译期话题名常量。约定 `TOPIC_<类别>_<名字>` → `"类别/名字"`，`TOPIC_INFERENCE_CONTROL_DELTA`（`:68`）**违反该约定**。`:111-222` 是 110 行的生产者/消费者图，标注「CI 可自动解析验证」
+- `include/config_manager.h`，`src/core/config_manager.c`：`config_load` / `config_save` / `config_free`。cJSON 解析。**`params` 字段同时支持内嵌 JSON 对象和转义字符串**（`:195-211`，当前配置全用后者；只处理前者会让所有参数静默退回硬编码默认值）。`ProcessConfig.params[1024]` 是 256 截断事故后的热修复（`config_manager.h:73-77`）；`:38-42` 的 `scheduler.mode = 1` 同样是防止 calloc 零值静默降级
+- `include/param_bridge.h`，`src/core/param_bridge.c`：`param_bridge_server_start/stop`、`param_bridge_client_request`、`apply_set`（`:55`）。AF_UNIX `/tmp/flow_param.sock`（`$FLOW_PARAM_SOCK` 可覆盖），**Windows 走 TCP 18776 但头文件无文档**。线协议 `LIST`/`GET`/`SET`（`:159` 用 `sscanf`，**值含空格会被截断**，bool 大小写敏感）。**零测试**
+- `src/flowctl.c`：`param list/get/set`（`:768-816`）**全部走套接字**；`:769-771` 注释记录了旧 bug——「此前读写 flowctl 自己那份 registry，set 完打印 ✓ 但跑着的车什么都没变」。另有 `list params`（`:212-228`）读的是 flowctl 自己**永远为空**的本地 registry
+- **平台承重假设**：`CMakeLists.txt:497-510`——Windows 因 PE/COFF 无符号抢占，必须把 `param_registry.c` 编成共享库 `flowengine_param_runtime`；Linux 依赖 ELF 全局符号抢占，**但无端到端测试验证插件注册的参数 launcher 侧能读到**
+- 已发现的真实 bug：`control_node.cpp:937` 用 `param_get_float` 读 `control.mpc_horizon`（注册范围下限 5.0），而 `tools/auto_tune_mpc.py:598,630` 用 `param set control.mpc_horizon 0` 关 MPC——**会被范围检查拒绝**；且 `:65-70` 列的 `mpc_q_y`/`mpc_q_theta`/`mpc_r_a` 与 registry 里的 `control.ltv_q_y`/`ltv_r_ddelta` 名字分叉，`mpc_q_theta` 和 `mpc_r_a` 根本不存在
+- 头文件文档腐化：`include/param_registry.h:9-10` 的示例写的是不存在的 `param_registry_register_int`；`config_manager.h:75` 引用的行号已过时
 
 ### 04　状态机
 
