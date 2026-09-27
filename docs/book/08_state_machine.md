@@ -1,5 +1,9 @@
 # 第 04 章：状态机把自己的转移表摊开给你看
 
+> **v2 范式章节**（2026-09 整治后保留）。本章保留低行号密度、真技术书
+> 风格，参照 `docs/book/README.md` 写作风格约束与 `docs/book/09_discovery.md`
+> 范式示范。v1 行号清单版本归档于 `docs/_archive/book_v1/`。
+
 任务节点的生命周期（`INITIALIZED` → `RUNNING` → `STOPPING`）是一个状态机，上层 ADAS 的跟车、变道、让行、掉头、紧急停车也是。用硬编码的 `switch-case` 写当然能跑，但出事之后有两个问题答不上来：当前状态下允许收哪些事件？上一次是怎么跳到这里的？
 
 KunAutoDrive 的反射式状态机（Reflective State Machine）把转移矩阵（Transition Matrix）、Guard 守卫条件、Entry/Exit 钩子和一段环形历史都放在内存里，随时可以查。
