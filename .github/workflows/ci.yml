@@ -162,6 +162,22 @@ jobs:
       - name: Reject map.json ↔ lanelet.osm drift (Rule 1-5)
         run: python3 ci/gates/lanelet_consistency_check.py
 
+  # ── lane_match schema gate (D2-04 M3 阶段核心契约) ─────────
+  # D2-04 引入的 lane_match 5→10 字段扩展 + D2-07 hint 上线都靠
+  # ci/gates/lane_match_schema_check.py 守门，但 5d32e44 之前这个
+  # gate 没有 CI job 触发（review/2026-09-27 A-F6）。
+  # 自检 (--self-test) 15/15 是 Python 验证，关掉 self-test 模式后
+  # gate 默认必须有 fixture。本 job 默认跑 --self-test（CI 阶段
+  # 不到 PR-introduced fixture 但要守住 codegen 自身的契约）；
+  # PR 作者若改了 msg/adas_msgs.msg + tools/msg_codegen.py +
+  # 字段契约，需在 PR 中附 fixture 并改本 job 用 fixture 跑。
+  lane-match-schema-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Self-test lane_match schema check gate (codegen contract)
+        run: python3 ci/gates/lane_match_schema_check.py --self-test
+
   # ── Standard build + test (Release) ────────────────────────
   build-release:
     runs-on: ubuntu-24.04
