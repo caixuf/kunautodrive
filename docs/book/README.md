@@ -93,5 +93,16 @@
 写新章节或修改现存章节前，先读一遍：
 
 - **`docs/book/09_discovery.md`** —— 第 08 章《没有中心节点之后》。问题驱动标题、ASCII + mermaid 图示、跨机一段不绑行号、失败故事独立成段（集群扩容心跳堵车 / docker0 心跳外发）。是 v2 范式标杆。
+- **`docs/book/CROSS_CUTTING.md`** —— 14 个共用抽象的串联表（ClockService / KF 族 / 反射状态机 / Pub-Sub / 共享内存 IPC / 插件契约 / Bag / 评估与门禁 / 航位推算 / CTRV / JSON / 依赖注入）。读完任意一章遇到不熟的抽象，按此表跳到对应章节。
+
+## 首次进入本书：推荐阅读路径
+
+按 14 章自身的"成熟度"梯度，建议首次读者三档：
+
+- **必读（5 章）**：`00_preface` → `01_oop_in_c` → `02_plugin_system` → `08_state_machine` → `09_discovery`
+- **强烈推荐（4 章）**：`06_clock_service` → `10_coroutine` → `11_scheduler` → `21_demo_evaluator`
+- **按需（5 章）**：`05_bag_recording` / `12_lidar_tracking` / `13_sensor_fusion` / `19_e2e_learning_loop` / `20_flowmond_3d_vis`
+
+详情见 `CROSS_CUTTING.md` 的"作者建议"段。
 
 v1 反面教材：`docs/_archive/book_v1/04_ipc_channel.md`（800+ 行行号清单，与本书原则对立）。
