@@ -13,6 +13,7 @@
 #include "transport.h"
 #include "error_codes.h"
 #include "logger.h"
+#include "serializer.h"  /* A-F4: serializer_lookup_type + serializer_check_compat */
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -55,6 +56,7 @@ struct Transport {
     bool               running;
     atomic_uint_fast64_t ipc_published;
     atomic_uint_fast64_t ipc_delivered;
+    atomic_uint_fast64_t ipc_dropped_incompat;  /* A-F4: schema_hash 双判拒收计数 */
 
     /* Topic 路由表 */
     TopicRoute         routes[TRANSPORT_MAX_TOPICS];
@@ -153,6 +155,7 @@ Transport* transport_create(MessageBus* bus, DiscoveryManager* discovery,
     t->policy    = policy;
     atomic_init(&t->ipc_published, 0);
     atomic_init(&t->ipc_delivered, 0);
+    atomic_init(&t->ipc_dropped_incompat, 0);
     pthread_mutex_init(&t->mutex, NULL);
 
     if (!discovery && policy != TRANSPORT_LOCAL) {
@@ -322,6 +325,33 @@ typedef struct {
 
 static void ipc_to_bus_relay(const Message* msg, void* user_data) {
     IpcRelayCtx* ctx = (IpcRelayCtx*)user_data;
+
+    /* ── A-F4: schema_hash 双判（incompat 隔离）─────────────────────────
+     * IPC 远端推送的 msg 若带 type_id 且本端注册表里能找到同 type_id，
+     * 用 serializer_check_compat 按 schema_hash + schema_version 判别。
+     * SCHEMA_INCOMPATIBLE → log warn + 跳过投递（不 abort 整条链路）。
+     * SCHEMA_COMPATIBLE / IDENTICAL → 放行（旧 wire 仅 version 缺 hash，退化 IDENTICAL）。
+     * type_id == 0 → 旧 wire 不做判别，直接放行。 */
+    if (msg && msg->type_id != 0) {
+        const TypeRegistryEntry* entry = serializer_lookup_type(msg->type_id);
+        if (entry) {
+            SchemaCompat compat = serializer_check_compat(entry->type_name,
+                                                            msg->schema_version,
+                                                            msg->schema_hash);
+            if (compat == SCHEMA_INCOMPATIBLE) {
+                atomic_fetch_add(&ctx->transport->ipc_dropped_incompat, 1);
+                LOG_WARN("transport",
+                         "ipc_to_bus_relay: drop '%s' (type=%s id=0x%08x): "
+                         "their_hash=0x%08x ver=%u vs local hash=0x%08x ver=%u (INCOMPATIBLE)",
+                         msg->topic, entry->type_name, msg->type_id,
+                         msg->schema_hash, msg->schema_version,
+                         entry->schema_hash, entry->schema_version);
+                return;
+            }
+        }
+        /* entry == NULL：type_id 在本端未注册（罕见），放行保持兼容 */
+    }
+
     atomic_fetch_add(&ctx->transport->ipc_delivered, 1);
     message_bus_publish(ctx->bus, msg->topic, msg->sender, msg->data, msg->data_size);
 }
@@ -448,6 +478,7 @@ void transport_get_stats(Transport* t, TransportStats* stats) {
     stats->local_delivered = del;
     stats->ipc_published = atomic_load(&t->ipc_published);
     stats->ipc_delivered = atomic_load(&t->ipc_delivered);
+    stats->ipc_dropped_incompat = atomic_load(&t->ipc_dropped_incompat);
 
     if (t->net_transport) {
         NetTransportStats ns;

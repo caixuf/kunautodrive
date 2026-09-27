@@ -164,6 +164,49 @@ static void test_schema_compat(void) {
     PASS();
 }
 
+/* A-F4: message_bus_publish_typed 必须按 type_name 从 TypeRegistry 自动填
+ * type_id + schema_hash + schema_version 三字段。订阅端按这三字段做 compat 判别
+ * 的依据。type_name=NULL 时退化（字段全 0），与旧 publish 行为一致。 */
+static Message g_typed_captured_msg;
+static volatile int g_typed_captured = 0;
+static void on_typed_capture(const Message* msg, void* user_data) {
+    (void)user_data;
+    g_typed_captured_msg = *msg;
+    g_typed_captured = 1;
+}
+
+static void test_publish_typed_schema_metadata(void) {
+    TEST("publish_typed fills type_id+schema_hash+version from registry");
+    MessageBus* bus = message_bus_create(NULL);
+    ASSERT(bus != NULL, "bus create");
+
+    g_typed_captured = 0;
+    memset(&g_typed_captured_msg, 0, sizeof(g_typed_captured_msg));
+    message_bus_subscribe(bus, "test/typed", on_typed_capture, NULL);
+
+    const char payload[] = "hello typed";
+    int rc = message_bus_publish_typed(bus, "test/typed", "tester", "CompatType",
+                                        payload, sizeof(payload));
+    ASSERT_EQ(rc, 0, "publish_typed rc");
+
+    /* 触发分发：阻塞等待 callback。 */
+    for (int i = 0; i < 1000 && !g_typed_captured; ++i) {
+        usleep(1000);  /* 1ms */
+    }
+    ASSERT(g_typed_captured, "callback not fired");
+
+    /* type_id/schema_hash/schema_version 必须按 CompatType 注册表填上 */
+    ASSERT(g_typed_captured_msg.type_id == 0x11112222u,
+           "type_id should match CompatType registry (got 0x%08x)", g_typed_captured_msg.type_id);
+    ASSERT(g_typed_captured_msg.schema_hash == 0xAABBCCDDu,
+           "schema_hash should match registry (got 0x%08x)", g_typed_captured_msg.schema_hash);
+    ASSERT(g_typed_captured_msg.schema_version == 2,
+           "schema_version should match registry (got %u)", g_typed_captured_msg.schema_version);
+
+    message_bus_destroy(bus);
+    PASS();
+}
+
 static void test_serialize_roundtrip(void) {
     TEST("serialize/deserialize roundtrip");
     /* Simple struct for testing */
@@ -1304,6 +1347,7 @@ int main(void) {
     test_type_registry();
     test_schema_metadata();
     test_schema_compat();
+    test_publish_typed_schema_metadata();  /* A-F4 */
     test_serialize_roundtrip();
     test_gen_serialize_roundtrip();
     test_msg_cast();

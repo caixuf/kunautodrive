@@ -40,6 +40,7 @@ typedef struct FlowrecBufferedRecord {
     uint64_t inserted_us;
     uint64_t timestamp_us;
     uint32_t type_id;
+    uint32_t schema_hash;   /* D2-07 phase 2 (A-F4): 字段级布局哈希 */
     uint8_t schema_version;
     uint8_t endian_marker;
     uint32_t data_size;
@@ -660,6 +661,7 @@ static void prebuffer_add(FlowrecCollector* collector, const Message* message,
     record->inserted_us = now_us;
     record->timestamp_us = message->timestamp_us;
     record->type_id = message->type_id;
+    record->schema_hash = message->schema_hash;
     record->schema_version = message->schema_version;
     record->endian_marker = message->endian_marker;
     record->data_size = message->data_size;
@@ -680,6 +682,7 @@ static int write_buffered_record(FlowrecCollector* collector,
     copy_string(message.topic, sizeof(message.topic), record->topic);
     message.timestamp_us = record->timestamp_us;
     message.type_id = record->type_id;
+    message.schema_hash = record->schema_hash;
     message.schema_version = record->schema_version;
     message.endian_marker = record->endian_marker;
     message.data_size = record->data_size;

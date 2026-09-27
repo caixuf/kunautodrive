@@ -13,6 +13,7 @@
 #include "clock_service.h"
 #include "platform_pal.h"
 #include "logger.h"
+#include "serializer.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -785,8 +786,32 @@ void message_bus_destroy(MessageBus* bus) {
 
 int message_bus_publish(MessageBus* bus, const char* topic, const char* sender,
                         const void* data, uint32_t size) {
+    return message_bus_publish_typed(bus, topic, sender, NULL, data, size);
+}
+
+int message_bus_publish_typed(MessageBus* bus, const char* topic, const char* sender,
+                            const char* type_name,
+                            const void* data, uint32_t size) {
     if (!bus || !topic) return ERR_INVALID_PARAM;
     if (size > MSG_BUS_MAX_DATA_SIZE) return ERR_OVERFLOW;
+
+    /* ── 查 type registry：type_id + schema_hash + schema_version ── */
+    uint32_t msg_type_id      = 0;
+    uint32_t msg_schema_hash  = 0;
+    uint8_t  msg_schema_ver   = 0;
+    if (type_name) {
+        const TypeRegistryEntry* type_entry = serializer_lookup_by_name(type_name);
+        if (type_entry) {
+            msg_type_id     = type_entry->type_id;
+            msg_schema_hash = type_entry->schema_hash;
+            msg_schema_ver  = type_entry->schema_version;
+        } else {
+            /* 未知名 → log warn 一次 + 退化为普通 publish */
+            LOG_WARN("message_bus",
+                     "publish_typed: unknown type_name '%s', falling back to untyped publish",
+                     type_name);
+        }
+    }
 
     /* ── Remap: resolve topic to its routing target ──
      * 无 remap 规则（remap_active==false，常见）时热路径零加锁直接路由。 */
@@ -928,9 +953,10 @@ int message_bus_publish(MessageBus* bus, const char* topic, const char* sender,
     msg->timestamp_us = msg_ts;
     msg->topic_idx    = ti;
     msg->data_size    = size;
-    msg->type_id      = 0;
-    msg->schema_version = 0;
-    msg->endian_marker  = 0;
+    msg->type_id      = msg_type_id;
+    msg->schema_hash  = msg_schema_hash;
+    msg->schema_version = msg_schema_ver;
+    msg->endian_marker  = serializer_endian_marker();
     msg->_loaned_data = NULL;
     msg->_loaned_release = NULL;
     msg->_loaned_release_ctx = NULL;

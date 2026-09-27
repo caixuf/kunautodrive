@@ -64,9 +64,10 @@ typedef struct Message {
 
     /* ── 类型安全序列化字段 (Phase 1) ─────────────────────── */
     uint32_t    type_id;          /**< FNV-1a hash 类型标识 (0=raw/unknown) */
+    uint32_t    schema_hash;      /**< 字段级布局哈希（0 = 未提供/旧消费者），用于 type_id+version+hash 三判别 */
     uint8_t     schema_version;   /**< schema 版本号 (0=unknown, 1=initial) */
     uint8_t     endian_marker;    /**< 字节序标记: 0x12=LE, 0x21=BE, 0=unknown */
-    uint8_t     _reserved[6];     /**< 对齐保留，便于后续扩展 */
+    uint8_t     _reserved[2];     /**< 对齐保留，便于后续扩展 */
 
     uint8_t     data[MSG_BUS_MAX_DATA_SIZE];      /**< 负载数据 */
 
@@ -144,6 +145,16 @@ void message_bus_destroy(MessageBus* bus);
  */
 int message_bus_publish(MessageBus* bus, const char* topic, const char* sender,
                         const void* data, uint32_t size);
+
+/**
+ * 类型化发布：声明 type_name 后总线自动从 TypeRegistry 查 type_id + schema_hash + schema_version
+ * 写入 Message 头。订阅端可据此做 type_id+schema_hash 双判（见 serializer_check_compat）。
+ *
+ * type_name 必须是已注册的 codegen 类型名（如 "ObstacleList"）；未知名 → 退化为普通 publish。
+ */
+int message_bus_publish_typed(MessageBus* bus, const char* topic, const char* sender,
+                            const char* type_name,
+                            const void* data, uint32_t size);
 
 /**
  * 异步借用发布。总线不复制 payload，分发完成后调用 release_fn。

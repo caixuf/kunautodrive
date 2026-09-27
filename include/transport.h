@@ -135,6 +135,7 @@ typedef struct {
     uint64_t ipc_delivered;
     uint64_t remote_delivered;
     uint64_t ipc_dropped;        /**< 本端作为订阅者时, IPC 广播环形缓冲因落后被丢弃的消息累计数 */
+    uint64_t ipc_dropped_incompat;  /**< A-F4: schema_hash 双判为 SCHEMA_INCOMPATIBLE 而丢弃 */
 } TransportStats;
 
 void transport_get_stats(Transport* t, TransportStats* stats);

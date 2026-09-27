@@ -1,15 +1,16 @@
 /**
- * bag.c — 消息录制与回放实现 (v2 格式)
+ * bag.c — 消息录制与回放实现 (v3 格式)
  *
- * 文件格式 v2：
+ * 文件格式 v3 (A-F4)：在 v2 的 record 头部插入 schema_hash(4B)。
  *   [Header: magic(4B)|version(4B)|msg_count(8B)|duration_us(8B)|
  *            index_offset(8B)|reserved(32B)] — 64 bytes total
- *   [Records: type_id(4B)|schema_ver(1B)|endian(1B)|ts(8B)|topic_len(1B)|
+ *   [Records: type_id(4B)|schema_hash(4B)|schema_ver(1B)|endian(1B)|ts(8B)|topic_len(1B)|
  *             topic(N)|data_size(4B)|data(N)] × msg_count
- *   [Index: entry_count(8B)|entries[topic(64B)|count(8B)|first_off(8B)|last_off(8B)]|
+ *   [Index: entry_count(8B)|entries[topic(64B)|count(8B)|first_off(8B)|last_off(8B)|
+ *            type_id(4B)|schema_hash(4B)|schema_ver(1B)]|
  *            crc32(4B)]
  *
- * 向后兼容：reader 检测前 4 字节是否为 "FLB_"，否则回退到 legacy 格式。
+ * 向后兼容：reader 检测 version 字段——v3 按新格式解析，v2 按旧格式（缺 schema_hash，按 0 处理）。
  */
 
 #include "bag.h"
@@ -29,7 +30,7 @@
 
 #define BAG_MAGIC        0x5F424C46u  /* "FLB_" in LE */
 
-#define BAG_VERSION      2
+#define BAG_VERSION      3  /* v3: +schema_hash in record header (A-F4) */
 #define BAG_HEADER_SIZE  64
 #define BAG_RESERVED_SIZE 32
 #define BAG_INDEX_ENTRY_TOPIC_LEN 64
@@ -42,6 +43,7 @@ typedef struct {
     uint64_t first_offset;
     uint64_t last_offset;
     uint32_t type_id;
+    uint32_t schema_hash;   /* D2-07 phase 2 (A-F4): 字段级布局哈希；旧 bag 文件 0 兼容 */
     uint8_t  schema_version;
 } BagIndexEntry;
 
@@ -240,7 +242,7 @@ int bag_writer_write(BagWriter* w, const Message* msg) {
     /* Build serialized record: [type_id:4B][schema_ver:1B][endian:1B]
      * [ts:8B][tlen:1B][topic:N][dsize:4B][data:N]
      * Same on-disk format as before — no extra framing in ring buffer. */
-    uint32_t rec_size = 4 + 1 + 1 + 8 + 1 + (uint32_t)tlen + 4 + dsize;
+    uint32_t rec_size = 4 + 4 + 1 + 1 + 8 + 1 + (uint32_t)tlen + 4 + dsize;  /* +4 for schema_hash (A-F4) */
     if (rec_size > BAG_MAX_RECORD) return -1;
 
     pthread_mutex_lock(&w->mutex);
@@ -261,6 +263,7 @@ int bag_writer_write(BagWriter* w, const Message* msg) {
     /* Pack record into the ring in chunks so a record crossing its physical
      * end is still serialized contiguously on disk by the flush thread. */
     ring_write_bytes(w, &msg->type_id, 4);
+    ring_write_bytes(w, &msg->schema_hash, 4);  /* D2-07 phase 2 (A-F4) */
     ring_write_bytes(w, &msg->schema_version, 1);
     ring_write_bytes(w, &msg->endian_marker, 1);
     ring_write_bytes(w, &ts, 8);
@@ -276,6 +279,7 @@ int bag_writer_write(BagWriter* w, const Message* msg) {
         if (ie->count == 0) {
             ie->first_offset   = w->enqueued_offset;
             ie->type_id        = msg->type_id;
+            ie->schema_hash    = msg->schema_hash;
             ie->schema_version = msg->schema_version;
         }
         ie->last_offset = w->enqueued_offset;
@@ -372,6 +376,7 @@ struct BagReader {
     FILE*   fp;
     char    path[512];
     bool    is_v2;               /* true = new format, false = legacy */
+    uint32_t bag_version;        /* A-F4: 2=v2, 3=v3 (with schema_hash)；legacy=0 */
     uint64_t msg_count;          /* from header (v2) or computed (legacy) */
     uint64_t duration_us;        /* from header (v2) or computed (legacy) */
     uint64_t first_ts_us;        /* cached: first record timestamp */
@@ -412,6 +417,7 @@ BagReader* bag_reader_open(const char* path) {
         header_ok &= (fread(&r->msg_count, sizeof(r->msg_count), 1, fp) == 1);
         header_ok &= (fread(&r->duration_us, sizeof(r->duration_us), 1, fp) == 1);
         header_ok &= (fread(&index_offset, sizeof(index_offset),  1, fp) == 1);
+        r->bag_version = version;       /* A-F4: 持久化以供 read_record 分发 */
         r->index_offset = index_offset;
 
         if (!header_ok) {
@@ -438,6 +444,12 @@ BagReader* bag_reader_open(const char* path) {
                     entry_ok &= (fread(&e->first_offset,      sizeof(e->first_offset),  1, fp) == 1);
                     entry_ok &= (fread(&e->last_offset,       sizeof(e->last_offset),   1, fp) == 1);
                     entry_ok &= (fread(&e->type_id,           sizeof(e->type_id),       1, fp) == 1);
+                    if (version >= 3) {
+                        /* v3+: schema_hash(4B) 紧跟 type_id 之后 */
+                        entry_ok &= (fread(&e->schema_hash, sizeof(e->schema_hash), 1, fp) == 1);
+                    } else {
+                        e->schema_hash = 0;  /* v2 file 缺该字段，按 0 处理（serializer.c 双判退化路径） */
+                    }
                     entry_ok &= (fread(&e->schema_version,    sizeof(e->schema_version), 1, fp) == 1);
                     if (!entry_ok) {
                         r->index_count--;
@@ -472,6 +484,55 @@ void bag_reader_close(BagReader* r) {
  * Read one v2 record.
  * Returns 1 on success, 0 on EOF, -1 on error.
  */
+static int read_record_v3(FILE* fp, uint64_t* ts_out, Message* msg_out) {
+    uint32_t type_id, schema_hash;
+    uint8_t  schema_ver, endian;
+    if (fread(&type_id, sizeof(type_id), 1, fp) != 1) return 0;
+    if (fread(&schema_hash, sizeof(schema_hash), 1, fp) != 1) return ERR_IO;  /* v3 +4B */
+    if (fread(&schema_ver, sizeof(schema_ver), 1, fp) != 1) return ERR_IO;
+    if (fread(&endian, sizeof(endian), 1, fp) != 1) return ERR_IO;
+
+    uint64_t ts;
+    if (fread(&ts, sizeof(ts), 1, fp) != 1) return ERR_IO;
+
+    uint8_t tlen;
+    if (fread(&tlen, sizeof(tlen), 1, fp) != 1) return ERR_IO;
+
+    /* Clamp tlen to fit buffer — defensive against corrupted files.
+     * Also avoids FORTIFY_SOURCE false-positive stack overflow when
+     * the compiler cannot prove tlen < sizeof(topic). */
+    if (tlen >= MSG_BUS_MAX_TOPIC_LEN) return ERR_IO;
+
+    char topic[MSG_BUS_MAX_TOPIC_LEN];
+    memset(topic, 0, sizeof(topic));
+    if (tlen > 0 && fread(topic, 1, tlen, fp) != tlen) return ERR_IO;
+
+    uint32_t dsize;
+    if (fread(&dsize, sizeof(dsize), 1, fp) != 1) return ERR_IO;
+    if (dsize > MSG_BUS_MAX_DATA_SIZE) return ERR_IO;
+
+    uint8_t data[MSG_BUS_MAX_DATA_SIZE];
+    if (dsize > 0 && fread(data, 1, dsize, fp) != dsize) return ERR_IO;
+
+    if (ts_out)  *ts_out = ts;
+    if (msg_out) {
+        memset(msg_out, 0, sizeof(*msg_out));
+        snprintf(msg_out->topic,  MSG_BUS_MAX_TOPIC_LEN,  "%s", topic);
+        snprintf(msg_out->sender, MSG_BUS_MAX_SENDER_LEN, "bag_replay");
+        msg_out->timestamp_us   = ts;
+        msg_out->type           = MSG_TYPE_PUBLISH;
+        msg_out->data_size      = dsize;
+        msg_out->type_id        = type_id;
+        msg_out->schema_hash    = schema_hash;
+        msg_out->schema_version = schema_ver;
+        msg_out->endian_marker  = endian;
+        if (dsize > 0) memcpy(msg_out->data, data, dsize);
+    }
+    return 1;
+}
+
+/* v2 reader: schema_hash 默认 0（serializer_check_compat 退化路径），
+ * 保留以兼容 v2 录制的 bag 文件回放。 */
 static int read_record_v2(FILE* fp, uint64_t* ts_out, Message* msg_out) {
     uint32_t type_id;
     uint8_t  schema_ver, endian;
@@ -510,6 +571,7 @@ static int read_record_v2(FILE* fp, uint64_t* ts_out, Message* msg_out) {
         msg_out->type           = MSG_TYPE_PUBLISH;
         msg_out->data_size      = dsize;
         msg_out->type_id        = type_id;
+        msg_out->schema_hash    = 0;  /* v2 file 缺，按 0 处理 */
         msg_out->schema_version = schema_ver;
         msg_out->endian_marker  = endian;
         if (dsize > 0) memcpy(msg_out->data, data, dsize);
@@ -565,8 +627,12 @@ static int read_record(BagReader* r, uint64_t* ts_out, Message* msg_out) {
         if (pos >= 0 && (uint64_t)pos >= r->index_offset)
             return 0;
     }
-    if (r->is_v2) return read_record_v2(r->fp, ts_out, msg_out);
-    else          return read_record_legacy(r->fp, ts_out, msg_out);
+    if (r->is_v2) {
+        /* A-F4: v3 record 头部多 4B schema_hash；v2 仍按旧格式解析（缺字段按 0 处理） */
+        if (r->bag_version >= 3) return read_record_v3(r->fp, ts_out, msg_out);
+        return read_record_v2(r->fp, ts_out, msg_out);
+    }
+    return read_record_legacy(r->fp, ts_out, msg_out);
 }
 
 /* ── Sleep ────────────────────────────────────────────────── */
