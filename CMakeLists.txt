@@ -1123,6 +1123,15 @@ target_include_directories(test_adas_nodes_logic PRIVATE ${GEN_DIR}
 
 add_test(NAME adas_nodes_logic_tests COMMAND test_adas_nodes_logic)
 
+# D2-07 phase 1: Obstacle.obs_lane_match_hint 序列化 round-trip + IDL 契约铁律
+# （原 commit 322e66c 引入但未注册到 ctest；A-F2 修复）。
+add_executable(test_obstacle_hint_field tests/test_obstacle_hint_field.c)
+add_dependencies(test_obstacle_hint_field msg_codegen)
+target_include_directories(test_obstacle_hint_field PRIVATE ${GEN_DIR}
+                                                       modules/adas_nodes)
+target_link_libraries(test_obstacle_hint_field flowengine_core)
+add_test(NAME obstacle_hint_field_tests COMMAND test_obstacle_hint_field)
+
 add_executable(test_lidar_contract tests/test_lidar_contract.c)
 add_dependencies(test_lidar_contract msg_codegen)
 target_include_directories(test_lidar_contract PRIVATE
