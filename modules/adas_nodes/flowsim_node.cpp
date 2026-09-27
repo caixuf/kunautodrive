@@ -2972,7 +2972,9 @@ static const char* s_outputs[] = {
     TOPIC_VEHICLE_STATE, TOPIC_ROAD_GEOMETRY, TOPIC_ROAD_TRAFFIC_LIGHTS,
     TOPIC_ROAD_REF_PATH,
     TOPIC_SIM_TICK, TOPIC_SIM_COLLISION, TOPIC_SCENE_FRAME,
-    TOPIC_ENVIRONMENT_STATE, nullptr
+    TOPIC_ENVIRONMENT_STATE,
+    TOPIC_LOCALIZATION_LANE_MATCH,  /* A-F5: D2-04 漏写，补齐 s_outputs 契约 */
+    nullptr
 };
 
 extern NodePlugin s_plugin;

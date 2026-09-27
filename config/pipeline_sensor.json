@@ -78,6 +78,10 @@
         },
         {
           "topic": "environment/state"
+        },
+        {
+          "topic": "localization/lane_match",
+          "type": "raw"
         }
       ],
       "params": "{\"init_speed\": 5.0, \"target_speed\": 20.0, \"random_seed\": 42, \"scenario_file\": \"scenarios/straight_road.json\", \"physics_model\": \"kinematic\"}"
@@ -141,7 +145,8 @@
         "vehicle/state",
         "sensor/lidar",
         "sensor/lidar_points",
-        "road/geometry"
+        "road/geometry",
+        "localization/lane_match"
       ],
       "publish": [
         {

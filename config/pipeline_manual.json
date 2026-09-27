@@ -69,6 +69,15 @@
             "policy": "drop_oldest",
             "reliability": "best_effort"
           }
+        },
+        {
+          "topic": "localization/lane_match",
+          "type": "raw",
+          "qos": {
+            "depth": 1,
+            "policy": "drop_oldest",
+            "reliability": "best_effort"
+          }
         }
       ],
       "params": "{\"init_speed\": 5.0, \"target_speed\": 12.0, \"frequency_hz\": 50.0, \"random_seed\": 42, \"scenario_file\": \"scenarios/straight_road.json\", \"physics_model\": \"kinematic\"}"
@@ -130,7 +139,8 @@
       "subscribe": [
         "vehicle/state",
         "sensor/lidar",
-        "sensor/lidar_points"
+        "sensor/lidar_points",
+        "localization/lane_match"
       ],
       "publish": [
         {
