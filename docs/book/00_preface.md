@@ -91,7 +91,7 @@ KunAutoDrive 选择了「小而全」——把自动驾驶的每一层都实现�
 你会对自动驾驶全栈有扎实的理解。
 
 **工程师**（转行/入职）：先读第一~第三部分搭环境和理解架构，然后按需跳到感兴趣的部分。
-术语速查见 [docs/book/README.md](README.md) 末尾的"范式参考章"段与 [CROSS_CUTTING.md](CROSS_CUTTING.md) 的"跨章节共用抽象串联表"。
+术语速查见 [BOOK.md](../BOOK.md) 末尾的附录 B [`docs/GLOSSARY.md`](../GLOSSARY.md)、[`docs/book/README.md`](README.md) 末尾的"范式参考章"段与 [CROSS_CUTTING.md](CROSS_CUTTING.md) 的"跨章节共用抽象串联表"。
 
 **研究者**（算法验证）：直接跳到第五部分（算法）和第六部分（学习闭环），用 Python 仿真
 工具快速验证你的想法，再决定是否移植到 C++。
