@@ -2,7 +2,7 @@
 
 > **这是什么**：一本从微内核底座、通信与调度讲起，经过感知、定位、决策、规划、控制、安全与执行器，最后落到仿真、评估和学习闭环的自动驾驶全栈实践书。正文在 `docs/book/`，本页是阅读顺序和源码对照。
 >
-> **怎么读**：按第零部到第六部往下读：第零部从这里开始，第一部框架骨架，第二部通信与时间，第三部执行与调度，第四部录制与回放，第五部自动驾驶算法栈，第六部仿真、可视化与学习闭环。表里的编号是新的阅读顺序；链接指向章节正文：v2 主目录在 `docs/book/`，v1 历史归档在 `docs/_archive/book_v1/`（详见本目录头部的"关于文档结构"一节）。编号和文件名不一致时，以链接为准，例如第 05 章链到 [`_archive/book_v1/03_message_bus.md`](_archive/book_v1/03_message_bus.md)。
+> **怎么读**：按第零部到第六部往下读：第零部从这里开始，第一部框架骨架，第二部通信与时间，第三部执行与调度，第四部录制与回放，第五部自动驾驶算法栈，第六部仿真、可视化与学习闭环。表里的编号是新的阅读顺序；链接指向章节正文：v2 主目录在 `docs/book/`，v1 历史归档在 `docs/_archive/book_v1/`（详见本目录头部的"关于文档结构"一节）。编号和文件名不一致时，以链接为准，例如第 05 章链到 [`book/05_message_bus.md`](book/05_message_bus.md)。
 >
 > 正文里点到函数时写成 `路径::符号`。附录里的路径保持原样。
 
@@ -12,8 +12,8 @@
 
 最近几周 docs/book/ 有章节被"按源码逐条重建"成 900+ 行说明书，绑定行号、文件名、函数符号——与代码强耦合、维护成本高、易腐化。本目录整治后：
 
-- **`docs/book/`** 是 v2 主目录，按 `docs/book/README.md` 的写作风格约束（真技术书范式：讲设计动机 + 取舍 + 领域常识；不绑行号）。当前多数章节仍是 v1 风格未迁移（book_guard gate 在 `--warn-only` 模式下提醒存量问题）。
-- **`docs/_archive/book_v1/`** 是 v1 归档，11 个最近按源码重建的章节已 git mv 至此，每个文件头部加了归档 banner 与现章节交叉链接。历史参考用。归档清单（文件名 → BOOK.md 现章节）：
+- **`docs/book/`** 是 v2 主目录，按 `docs/book/README.md` 的写作风格约束（真技术书范式：讲设计动机 + 取舍 + 领域常识；不绑行号）。BOOK.md 25 个编号章节均有对应 v2 文件，book_guard gate 25 chapter(s) OK 默认无 WARN。
+- **`docs/_archive/book_v1/`** 是 v1 归档，10 个"按源码逐条重建"产物的历史快照，git mv 至此保留。每个文件头部加了归档 banner 与现章节交叉链接。**v2 现章节全部独立写在 `docs/book/`，v1 不再作为主章节来源**。归档清单（文件名 → BOOK.md 现章节）：
   - `03_message_bus.md` → 第 05 章「消息总线」
   - `03_registry_and_params.md` → 第 03 章「注册中心与参数系统」
   - `04_ipc_channel.md` → 第 07 章「共享内存 IPC」
@@ -24,10 +24,11 @@
   - `17_safety_envelope.md` → 第 18 章「安全包络与降级」
   - `18_flowsim_scenario_design.md` → 第 20 章「FlowSim 场景与世界」
   - `22_socketcan_actuator.md` → 第 19 章「执行器：PWM 与 SocketCAN」
-  - `23_vla_world_model_frontier.md` → 第 21 章「VLA、世界模型与无人车前沿」
+
+  注：第 21 章「VLA、世界模型与无人车前沿」**没有独立归档** —— v1 已经是真技术书风格（514 行、零行号引用、问题驱动开头），git mv 直接落到 `docs/book/21_vla_world_model_frontier.md`。如有历史对照需求可 git log -- docs/book/21_vla_world_model_frontier.md。
 - **`tools/gates/book_guard.py`**（`ci/gates/book_guard.py`）守门 v2 风格：单章节 800 行上限、行号密度 ≤5 处/100 行、超长对比表检测、commit-level >20% 行数突变。
 
-新写章节请先读 `docs/book/README.md`。BOOK.md 索引对 v2 章节指向 `docs/book/`、对 v1 归档章节指向 `docs/_archive/book_v1/`。
+新写章节请先读 `docs/book/README.md`。BOOK.md 索引全部指向 `docs/book/`（v2 现章节）；`docs/_archive/book_v1/` 仅作历史参考，不再被 BOOK.md 表引用。
 
 ---
 
@@ -48,7 +49,7 @@
 |---|---|---|---|
 | 01 | 用 C 造一个对象 | 用结构体首成员和函数指针表做出 `TaskBase` / `TaskInterface`，管住 initialize、execute、cleanup | [`book/01_oop_in_c.md`](book/01_oop_in_c.md) |
 | 02 | 可插拔 .so 与启动器 | `include/node_plugin.h::NodePlugin` 与 `include/node_plugin.h::NODE_PLUGIN_SYMBOL`（导出名字是 node_get_plugin），`src/flow_launcher.c` 按 pipeline 做 dlopen，`src/flow_node_host.c` 把同一份 .so 放进独立进程运行 | [`book/02_plugin_system.md`](book/02_plugin_system.md) |
-| 03 | 注册中心与参数系统 | int/float 注册时带上下界，`include/param_registry.h::param_set_int` 与 `include/param_registry.h::param_set_float` 越界拒绝，范围内则写入当前值。`include/param_registry.h::param_set_callback` 与 `include/param_registry.h::param_enable_hot_reload` 没有别的 C/C++ 调用点，改值回调不会因此跑起来。跑起来的调参是 `src/flowctl.c` 的 `flowctl param` 经 `include/param_bridge.h::param_bridge_client_request` 写入，节点下一拍用 `include/param_registry.h::param_get_int` 与 `include/param_registry.h::param_get_float` 读出。任务、话题、类型和插件登记到 `include/flow_registry.h::flow_registry_register_task` 这一组函数 | [`_archive/book_v1/03_registry_and_params.md`](_archive/book_v1/03_registry_and_params.md) |
+| 03 | 注册中心与参数系统 | int/float 注册时带上下界，`include/param_registry.h::param_set_int` 与 `include/param_registry.h::param_set_float` 越界拒绝，范围内则写入当前值。`include/param_registry.h::param_set_callback` 与 `include/param_registry.h::param_enable_hot_reload` 没有别的 C/C++ 调用点，改值回调不会因此跑起来。跑起来的调参是 `src/flowctl.c` 的 `flowctl param` 经 `include/param_bridge.h::param_bridge_client_request` 写入，节点下一拍用 `include/param_registry.h::param_get_int` 与 `include/param_registry.h::param_get_float` 读出。任务、话题、类型和插件登记到 `include/flow_registry.h::flow_registry_register_task` 这一组函数 | [`book/03_registry_and_params.md`](book/03_registry_and_params.md) |
 | 04 | 状态机 | 反射式状态机：转移表、guard、entry/exit，非法事件有明确策略 | [`book/08_state_machine.md`](book/08_state_machine.md) |
 
 ## 第二部　通信与时间
@@ -57,11 +58,11 @@
 
 | 编号 | 章节 | 这一章讲什么 | 现文件 |
 |---|---|---|---|
-| 05 | 消息总线 | 进程内 Pub/Sub：`include/message_bus.h::message_bus_publish` / `include/message_bus.h::message_bus_subscribe`，以及 `include/message_bus.h::message_bus_set_topic_qos` | [`_archive/book_v1/03_message_bus.md`](_archive/book_v1/03_message_bus.md) |
-| 06 | 类型 ID、IDL 与序列化 | `include/serializer.h::fnv1a_hash` 做类型 ID，`include/serializer.h::serializer_register_type` 登记类型。IDL 写在 `msg/adas_msgs.msg`，`tools/msg_codegen.py` 据此生成 C 头：结构体、FNV-1a 类型 ID、序列化函数。这份 .msg 是输入，不是生成物 | [`_archive/book_v1/07_serializer.md`](_archive/book_v1/07_serializer.md) |
-| 07 | 共享内存 IPC | `include/ipc_channel.h::ipc_channel_open` / `include/ipc_channel.h::ipc_channel_publish` 的共享内存通道，仪表盘 JSON 走 `include/dashboard_bridge.h::dashboard_bridge_publish` | [`_archive/book_v1/04_ipc_channel.md`](_archive/book_v1/04_ipc_channel.md) |
+| 05 | 消息总线 | 进程内 Pub/Sub：`include/message_bus.h::message_bus_publish` / `include/message_bus.h::message_bus_subscribe`，以及 `include/message_bus.h::message_bus_set_topic_qos` | [`book/05_message_bus.md`](book/05_message_bus.md) |
+| 06 | 类型 ID、IDL 与序列化 | `include/serializer.h::fnv1a_hash` 做类型 ID，`include/serializer.h::serializer_register_type` 登记类型。IDL 写在 `msg/adas_msgs.msg`，`tools/msg_codegen.py` 据此生成 C 头：结构体、FNV-1a 类型 ID、序列化函数。这份 .msg 是输入，不是生成物 | [`book/06_serializer.md`](book/06_serializer.md) |
+| 07 | 共享内存 IPC | `include/ipc_channel.h::ipc_channel_open` / `include/ipc_channel.h::ipc_channel_publish` 的共享内存通道，仪表盘 JSON 走 `include/dashboard_bridge.h::dashboard_bridge_publish` | [`book/07_ipc_channel.md`](book/07_ipc_channel.md) |
 | 08 | 统一传输与服务发现 | `include/transport.h::transport_publish` 统一收发；发现用组播 `include/discovery.h::DISC_MULTICAST_GROUP`（`239.255.0.100`）和 `include/discovery.h::DISC_MULTICAST_PORT`（5500）；跨机走 `include/network_transport.h::net_transport_connect` | [`book/09_discovery.md`](book/09_discovery.md) |
-| 09 | 时钟服务 | `include/clock_service.h::clock_now_us` 逻辑调度可注入；`include/clock_service.h::clock_now_monotonic_wall_us` 专供物理延迟测量；`include/clock_service.h::clock_now_realtime_us` 为 Unix 绝对时钟 | [`book/06_clock_service.md`](book/06_clock_service.md) |
+| 09 | 时钟服务 | `include/clock_service.h::clock_now_us` 逻辑调度可注入；`include/clock_service.h::clock_now_monotonic_wall_us` 专供物理延迟测量；`include/clock_service.h::clock_now_realtime_us` 为 Unix 绝对时钟 | [`book/09_clock_service.md`](book/09_clock_service.md) |
 
 ## 第三部　执行与调度
 
@@ -78,7 +79,7 @@
 
 | 编号 | 章节 | 这一章讲什么 | 现文件 |
 |---|---|---|---|
-| 12 | Bag、MCAP 与 flowrec | `include/bag.h::bag_writer_write` 与 `include/bag.h::bag_reader_play`，`include/mcap_writer.h::mcap_writer_write_msg` 与 `include/mcap_reader.h::mcap_reader_next`，以及 `include/flowrec.h::flowrec_engine_process` 按配置留存话题 | [`book/05_bag_recording.md`](book/05_bag_recording.md) |
+| 12 | Bag、MCAP 与 flowrec | `include/bag.h::bag_writer_write` 与 `include/bag.h::bag_reader_play`，`include/mcap_writer.h::mcap_writer_write_msg` 与 `include/mcap_reader.h::mcap_reader_next`，以及 `include/flowrec.h::flowrec_engine_process` 按配置留存话题 | [`book/12_bag_recording.md`](book/12_bag_recording.md) |
 
 ## 第五部　自动驾驶算法栈
 
@@ -88,11 +89,11 @@
 |---|---|---|---|
 | 13 | 感知：从激光点云到目标（含其他感知源） | `modules/adas_nodes/lidar_scan.h::lidar_scan_generate` 产生点，`src/algorithms/dbscan_cluster.h::dbscan_run` 聚类。跟踪是 `src/algorithms/kalman_tracker.c` 的线性常速卡尔曼滤波（KF）：状态 `[x, y, vx, vy]`，`F` 为常速转移，`H` 只观测位置，关联用匈牙利算法。这不是扩展卡尔曼滤波（EKF）。`modules/adas_nodes/perception_fusion_node.cpp` 合并激光与双目两路 `ObstacleList` | [`book/12_lidar_tracking.md`](book/12_lidar_tracking.md) |
 | 14 | 定位融合：EKF | `src/algorithms/ekf_fusion.c::ekf_fusion_predict` 按常速、常横摆角速度（CTRV）传播，不用转角和轴距。`config/pipeline_car.json` 里 slam 的 `algo` 为 `ekf_slam` 时，位姿经 `sensor/pose` 进入 `modules/adas_nodes/fusion_node.cpp`。位置更新有三种：位姿已收敛且 `cov_xx + cov_yy < 100` 时，用位姿的 x/y 调用 `src/algorithms/ekf_fusion.h::ekf_fusion_update_lidar`；已收敛但协方差不小于 100 时，这一拍不做位置更新；没有位姿或未收敛时，用 `LidarFrame` 的 x/y。GPS 的速度和航向进 `src/algorithms/ekf_fusion.h::ekf_fusion_update_gps`。`modules/adas_nodes/slam_node.cpp` 写出的位姿把 `converged` 设为 true。默认 `config/pipeline.json` 没有 slam 进程 | [`book/13_sensor_fusion.md`](book/13_sensor_fusion.md) |
-| 15 | 行为决策 | `modules/adas_nodes/behavior_planner_node.cpp`（1940 行，20 Hz **编译进去**，`pipeline.json` 的 behavior_planner 块没有 `params` 键）订阅 8 路、发布 `planning/behavior`（22 B 的 `Behavior`）与 `behavior/state`。**8 个状态里只有 5 个可达**——`STOP`/`YIELD`/`EMERGENCY` 从不是任何转移规则的 `to`，连带 `BehaviorCommand` 里那 3 个值永不发布。跟车律是 CTG：`d = acc_standoff(5.0) + acc_time_headway(1.5)·v`，`v_follow = v_lead + acc_k_gap(0.4)·clamp(Δ−d, ±8.0)`。变道是三条件与门（同向 + 后向安全 + 空隙 > 1.5×min_gap）。**零单测** | [`_archive/book_v1/14_behavior_decision.md`](_archive/book_v1/14_behavior_decision.md) |
-| 16 | Frenet 轨迹规划 | `modules/adas_nodes/planning_coordinates.h::project_to_path` 是**最近点投影**（$t$ 钳位在 $[0,1]$，不外推），不是真 Frenet 变换。`src/algorithms/frenet_bridge.cpp::frenet_plan` **本身不做优化**，只是调 `third_party/frenet_planner` 的 `run_fot()`——那是**三级网格枚举约 2079 条候选**（横向五次 + 纵向四次多项式，系数用 Eigen LU）。纵向速度另由 `modules/adas_nodes/st_graph.c::st_graph_plan` 用 S-T 图动态规划求（90×101 网格，$O(N)$ 闭式前驱预筛，**零单测**）。`include/piecewise_jerk_qp.h::pjqp_path_solve` 与 `pjqp_speed_solve` 零调用点，前者连 QP 都不是；实际调用的只有 `pjqp_smooth_2d`（参考线几何平滑） | [`_archive/book_v1/15_trajectory_planning.md`](_archive/book_v1/15_trajectory_planning.md) |
-| 17 | 跟踪控制：横向级联、LTV-MPC 与机动跟踪器 | `modules/adas_nodes/control_node.cpp` 里是纵向 PID + 横向三级级联 PD（横向速度 → ψ_des → 转向角，含曲率前馈；不是教科书 Stanley 公式）。`include/ltv_mpc.h::ltv_mpc_solve` 解的是 3 状态 1 控制的仿射 LQR（后向 Riccati，非 QP，约束为事后截断），且默认关闭。`modules/adas_nodes/maneuver_tracker.h` 的 `ManeuverTracker` 管掉头和泊车这类断开的参考线，倒挡时反馈项反号 | [`_archive/book_v1/16_tracking_control.md`](_archive/book_v1/16_tracking_control.md) |
-| 18 | 安全包络与降级 | 让控制指令先过一遍安全包络，再发布 `control/cmd`。`modules/adas_nodes/safety_arbiter.h::safety_arbiter_apply` 仲裁规则控制与学习模型（降级 > 转向包络 0.12 rad > 规则制动 > 模型油门上限 0.85，制动取 max）。`include/degrade_ladder.h::degrade_layer_action` 是 L0~L3 粘滞阶梯，`include/health.h::health_heartbeat` 的 5 s `HEALTH_STALE` 仅上报不动作 | [`_archive/book_v1/17_safety_envelope.md`](_archive/book_v1/17_safety_envelope.md) |
-| 19 | 执行器：PWM 与 SocketCAN | `config/pipeline_car.json` 的 actuator 加载 PWM 节点（`libactuator_pwm_node.so`），`modules/adas_nodes/pwm_map.c::pwm_map_control_cmd` 把 `control/cmd` 映成 ESC 与舵机脉宽。看门狗 3 秒。`modules/adas_nodes/actuator_node.c` 是 SocketCAN 备选后端：**零 config 引用、零测试**。注意 `pipeline_car.json:269` 的 `max_steer: 0.35` 超过执行器的 0.22 量程 | [`_archive/book_v1/22_socketcan_actuator.md`](_archive/book_v1/22_socketcan_actuator.md) |
+| 15 | 行为决策 | `modules/adas_nodes/behavior_planner_node.cpp`（1940 行，20 Hz **编译进去**，`pipeline.json` 的 behavior_planner 块没有 `params` 键）订阅 8 路、发布 `planning/behavior`（22 B 的 `Behavior`）与 `behavior/state`。**8 个状态里只有 5 个可达**——`STOP`/`YIELD`/`EMERGENCY` 从不是任何转移规则的 `to`，连带 `BehaviorCommand` 里那 3 个值永不发布。跟车律是 CTG：`d = acc_standoff(5.0) + acc_time_headway(1.5)·v`，`v_follow = v_lead + acc_k_gap(0.4)·clamp(Δ−d, ±8.0)`。变道是三条件与门（同向 + 后向安全 + 空隙 > 1.5×min_gap）。**零单测** | [`book/15_behavior_decision.md`](book/15_behavior_decision.md) |
+| 16 | Frenet 轨迹规划 | `modules/adas_nodes/planning_coordinates.h::project_to_path` 是**最近点投影**（$t$ 钳位在 $[0,1]$，不外推），不是真 Frenet 变换。`src/algorithms/frenet_bridge.cpp::frenet_plan` **本身不做优化**，只是调 `third_party/frenet_planner` 的 `run_fot()`——那是**三级网格枚举约 2079 条候选**（横向五次 + 纵向四次多项式，系数用 Eigen LU）。纵向速度另由 `modules/adas_nodes/st_graph.c::st_graph_plan` 用 S-T 图动态规划求（90×101 网格，$O(N)$ 闭式前驱预筛，**零单测**）。`include/piecewise_jerk_qp.h::pjqp_path_solve` 与 `pjqp_speed_solve` 零调用点，前者连 QP 都不是；实际调用的只有 `pjqp_smooth_2d`（参考线几何平滑） | [`book/16_trajectory_planning.md`](book/16_trajectory_planning.md) |
+| 17 | 跟踪控制：横向级联、LTV-MPC 与机动跟踪器 | `modules/adas_nodes/control_node.cpp` 里是纵向 PID + 横向三级级联 PD（横向速度 → ψ_des → 转向角，含曲率前馈；不是教科书 Stanley 公式）。`include/ltv_mpc.h::ltv_mpc_solve` 解的是 3 状态 1 控制的仿射 LQR（后向 Riccati，非 QP，约束为事后截断），且默认关闭。`modules/adas_nodes/maneuver_tracker.h` 的 `ManeuverTracker` 管掉头和泊车这类断开的参考线，倒挡时反馈项反号 | [`book/17_tracking_control.md`](book/17_tracking_control.md) |
+| 18 | 安全包络与降级 | 让控制指令先过一遍安全包络，再发布 `control/cmd`。`modules/adas_nodes/safety_arbiter.h::safety_arbiter_apply` 仲裁规则控制与学习模型（降级 > 转向包络 0.12 rad > 规则制动 > 模型油门上限 0.85，制动取 max）。`include/degrade_ladder.h::degrade_layer_action` 是 L0~L3 粘滞阶梯，`include/health.h::health_heartbeat` 的 5 s `HEALTH_STALE` 仅上报不动作 | [`book/18_safety_envelope.md`](book/18_safety_envelope.md) |
+| 19 | 执行器：PWM 与 SocketCAN | `config/pipeline_car.json` 的 actuator 加载 PWM 节点（`libactuator_pwm_node.so`），`modules/adas_nodes/pwm_map.c::pwm_map_control_cmd` 把 `control/cmd` 映成 ESC 与舵机脉宽。看门狗 3 秒。`modules/adas_nodes/actuator_node.c` 是 SocketCAN 备选后端：**零 config 引用、零测试**。注意 `pipeline_car.json:269` 的 `max_steer: 0.35` 超过执行器的 0.22 量程 | [`book/19_socketcan_actuator.md`](book/19_socketcan_actuator.md) |
 
 第 13、14 章的写作约束见附录对应小节。
 
@@ -102,11 +103,11 @@
 
 | 编号 | 章节 | 这一章讲什么 | 现文件 |
 |---|---|---|---|
-| 20 | FlowSim 场景与世界 | `modules/adas_nodes/flowsim_node.cpp` 是仿真世界：60 Hz 逻辑时钟（`flowsim_time.h`，**不能快进**），订阅 `control/cmd` 发真值。三套车辆模型中**默认是运动学** `physics.cpp::step_bicycle`，动态/Pacejka 需显式开且**仅自车可用**。路网由 `tools/json_to_xodr.py` 子进程转 OpenDRIVE 后交给 esmini。`modules/adas_nodes/flowsim/npc_ai.cpp` 不是 pure-pursuit，MOBIL 默认关闭；`modules/adas_nodes/sensor_model_weather.c` 全部天气只有 25 行 | [`_archive/book_v1/18_flowsim_scenario_design.md`](_archive/book_v1/18_flowsim_scenario_design.md) |
-| 21 | VLA、世界模型与无人车前沿 | **本章是全书唯一大量引用仓库外材料的一章**，提供坐标系而非改代码指引。2026 年的行业共识（Waymo / NVIDIA / XPeng 三方一致）是「端到端用于策略，结构化表示 + 独立验证用于安全」。含 VLA 三种动作头、延迟分解、VLA vs 纯 VA 对照、生成式 vs 潜空间世界模型分类、Waymo/百度/小马/WeRide/Tesla 落地数据、UNECE ADS GTR（2026-06-24 通过）、加州废除脱离率指标，以及 10 条「未能核实」清单 | [`_archive/book_v1/23_vla_world_model_frontier.md`](_archive/book_v1/23_vla_world_model_frontier.md) |
-| 22 | 可视化与内省 | `src/flowmond.c` 与 `include/monitor_server.h::monitor_server_start` 把拓扑送给浏览器；仪表盘 JSON 经 `include/dashboard_bridge.h::dashboard_bridge_publish`（通道机制见第 07 章）；前端入口是 `tools/flowboard/js/app.js` | [`book/20_flowmond_3d_vis.md`](book/20_flowmond_3d_vis.md) |
-| 23 | 验证关卡与回归评估 | `ci/evaluators/demo_evaluator.py` 与 `ci/evaluators/scenario_regression.py` 做行为回归。`ci/gates/` 有 7 个脚本做静态契约检查，其中 6 个写进 `.github/workflows/ci.yml`，`ci/gates/lane_match_schema_check.py` 没有。`tools/pipeline_check.py` 做离线管道检查 | [`book/21_demo_evaluator.md`](book/21_demo_evaluator.md) |
-| 24 | 端到端学习闭环 | `modules/adas_nodes/learner_node.c` 采集，`modules/adas_nodes/inference_node.cpp` 用 `modules/adas_nodes/tiny_mlp.h::tiny_mlp_load` 与 `modules/adas_nodes/tiny_mlp.h::tiny_mlp_forward` 做影子推理，`modules/adas_nodes/model_ota_node.c` 负责换模型；训练脚本在 `tools/train_e2e/` | [`book/19_e2e_learning_loop.md`](book/19_e2e_learning_loop.md) |
+| 20 | FlowSim 场景与世界 | `modules/adas_nodes/flowsim_node.cpp` 是仿真世界：60 Hz 逻辑时钟（`flowsim_time.h`，**不能快进**），订阅 `control/cmd` 发真值。三套车辆模型中**默认是运动学** `physics.cpp::step_bicycle`，动态/Pacejka 需显式开且**仅自车可用**。路网由 `tools/json_to_xodr.py` 子进程转 OpenDRIVE 后交给 esmini。`modules/adas_nodes/flowsim/npc_ai.cpp` 不是 pure-pursuit，MOBIL 默认关闭；`modules/adas_nodes/sensor_model_weather.c` 全部天气只有 25 行 | [`book/20_flowsim_scenario_design.md`](book/20_flowsim_scenario_design.md) |
+| 21 | VLA、世界模型与无人车前沿 | **本章是全书唯一大量引用仓库外材料的一章**，提供坐标系而非改代码指引。2026 年的行业共识（Waymo / NVIDIA / XPeng 三方一致）是「端到端用于策略，结构化表示 + 独立验证用于安全」。含 VLA 三种动作头、延迟分解、VLA vs 纯 VA 对照、生成式 vs 潜空间世界模型分类、Waymo/百度/小马/WeRide/Tesla 落地数据、UNECE ADS GTR（2026-06-24 通过）、加州废除脱离率指标，以及 10 条「未能核实」清单 | [`book/21_vla_world_model_frontier.md`](book/21_vla_world_model_frontier.md) |
+| 22 | 可视化与内省 | `src/flowmond.c` 与 `include/monitor_server.h::monitor_server_start` 把拓扑送给浏览器；仪表盘 JSON 经 `include/dashboard_bridge.h::dashboard_bridge_publish`（通道机制见第 07 章）；前端入口是 `tools/flowboard/js/app.js` | [`book/22_flowmond_3d_vis.md`](book/22_flowmond_3d_vis.md) |
+| 23 | 验证关卡与回归评估 | `ci/evaluators/demo_evaluator.py` 与 `ci/evaluators/scenario_regression.py` 做行为回归。`ci/gates/` 有 7 个脚本做静态契约检查，其中 6 个写进 `.github/workflows/ci.yml`，`ci/gates/lane_match_schema_check.py` 没有。`tools/pipeline_check.py` 做离线管道检查 | [`book/23_demo_evaluator.md`](book/23_demo_evaluator.md) |
+| 24 | 端到端学习闭环 | `modules/adas_nodes/learner_node.c` 采集，`modules/adas_nodes/inference_node.cpp` 用 `modules/adas_nodes/tiny_mlp.h::tiny_mlp_load` 与 `modules/adas_nodes/tiny_mlp.h::tiny_mlp_forward` 做影子推理，`modules/adas_nodes/model_ota_node.c` 负责换模型；训练脚本在 `tools/train_e2e/` | [`book/24_e2e_learning_loop.md`](book/24_e2e_learning_loop.md) |
 
 ---
 
@@ -169,7 +170,7 @@
 
 ### 03　注册中心与参数系统
 
-- 现文件：[`_archive/book_v1/03_registry_and_params.md`](_archive/book_v1/03_registry_and_params.md)（**2026-09-26 按源码重建，原文件在工作区丢失且从未进入任何 git ref**）
+- 现文件：[`book/03_registry_and_params.md`](book/03_registry_and_params.md)（**2026-09-26 按源码重建，原文件在工作区丢失且从未进入任何 git ref**）
 - `include/param_registry.h`，`src/core/param_registry.c`：`param_register_int` / `param_register_float` / `param_register_bool` / `param_register_string`（`:42/:67/:92/:113`），`param_get_*`（`:147-196`），`param_set_*`（`:210-277`）。128 槽进程级固定表 + 1 把 `pthread_mutex`。int/float 的 `param_set_*` 越界会返回 `ERR_INVALID_PARAM`，bool/string 跳过检查
 - **回调机制完全死代码**：`param_set_callback`（`:134`）与 `param_enable_hot_reload`（`:297`）**各为零生产调用者**；`create_param` 的 `memset`（`:29`）把 `hot_reload` 清成 false、`on_change` 清成 NULL，所以 `validate_and_set`（`:200`）里 `if (e->on_change && e->hot_reload)` **恒为假**。连带后果：JSON 导出里的 `hot_reload` 字段**永远输出 false**，`flowctl list params` 的 🔥 标记**永不出现**。另注：回调若真被调用，是在**持有 `g_mutex` 时**执行，回调内再进 `param_get_*` 会自死锁
 - **真正生效的热重载是逐帧轮询**：`control_node.cpp:527-548`（22 次 `param_get_float`）+ `:937-956`（8 次），`behavior_planner_node.cpp:698-714`（17 次）。**16 个节点里只有这 2 个实现了**；另 14 个（含 `safety_control_node`）参数改不动。`CLAUDE.md:353-360` 规定的「三处都通」纪律指的就是这个
@@ -191,7 +192,7 @@
 
 ### 05　消息总线
 
-- 现文件：[`_archive/book_v1/03_message_bus.md`](_archive/book_v1/03_message_bus.md)
+- 现文件：[`book/05_message_bus.md`](book/05_message_bus.md)
 - `include/message_bus.h`，`src/core/message_bus.c`：`Message`，`MessageBus`，`message_bus_create`，`message_bus_publish`，`message_bus_subscribe`，`message_bus_set_topic_qos`
 - `src/bus_demo.c`
 
@@ -199,7 +200,7 @@
 
 ### 06　类型 ID、IDL 与序列化
 
-- 现文件：[`_archive/book_v1/07_serializer.md`](_archive/book_v1/07_serializer.md)
+- 现文件：[`book/06_serializer.md`](book/06_serializer.md)
 - `include/serializer.h`，`src/core/serializer.c`：`fnv1a_hash`，`serializer_register_type`，`SerializeFunc`，`DeserializeFunc`，`_msg_cast_impl`，`msg_cast`
 - `include/msg_schema.h`，`src/core/msg_schema.c`：`msg_schema_register`，`msg_schema_check`，`MSG_REGISTER_TYPE`，`MSG_CHECK_SIZE`
 - `include/fp_env.h`：`fp_env_init`（置位 x86 MXCSR FTZ/DAZ 与 ARM FPCR.FZ 硬件防御）
@@ -209,7 +210,7 @@
 
 ### 07　共享内存 IPC
 
-- 现文件：[`_archive/book_v1/04_ipc_channel.md`](_archive/book_v1/04_ipc_channel.md)
+- 现文件：[`book/07_ipc_channel.md`](book/07_ipc_channel.md)
 - `include/ipc_channel.h`，`src/core/ipc_channel.c`：`IpcChannel`，`ipc_channel_open`，`ipc_channel_publish`，`ipc_channel_subscribe`，`ipc_channel_start`
 - `include/dashboard_bridge.h`，`src/core/dashboard_bridge.c`：`dashboard_bridge_publisher_open`，`dashboard_bridge_publish`，`dashboard_bridge_subscriber_open`
 - `src/ipc_demo.c`
@@ -224,7 +225,7 @@
 
 ### 09　时钟服务
 
-- 现文件：[`book/06_clock_service.md`](book/06_clock_service.md)
+- 现文件：[`book/09_clock_service.md`](book/09_clock_service.md)
 - `include/clock_service.h`，`src/core/clock_service.c`：`clock_now_us`，`clock_now_monotonic_wall_us`，`clock_now_realtime_us`，`clock_set_sim_mode`，`clock_set_sim_time`，`clock_advance_us`，`clock_set_step_us`
 - `include/platform_pal.h`，`src/core/platform_pal.c`：`flow_pal_clock_gettime_monotonic`，`flow_pal_clock_gettime_realtime`
 - `src/core/message_bus.c`，`src/core/ipc_channel.c`：绑定 `clock_now_monotonic_wall_us` 杜绝仿真延迟为 0
@@ -250,7 +251,7 @@
 
 ### 12　Bag、MCAP 与 flowrec
 
-- 现文件：[`book/05_bag_recording.md`](book/05_bag_recording.md)
+- 现文件：[`book/12_bag_recording.md`](book/12_bag_recording.md)
 - `include/bag.h`，`src/core/bag.c`：`bag_writer_open`，`bag_writer_write`，`bag_reader_open`，`bag_reader_play`
 - `include/mcap_writer.h`，`src/core/mcap_writer.c`：`mcap_writer_open`，`mcap_writer_write_msg`，`mcap_writer_close`
 - `include/mcap_reader.h`，`src/core/mcap_reader.c`：`mcap_reader_open`，`mcap_reader_next`，`mcap_reader_close`
@@ -305,7 +306,7 @@
 
 ### 15　行为决策
 
-- 现文件：[`_archive/book_v1/14_behavior_decision.md`](_archive/book_v1/14_behavior_decision.md)（**2026-09-26 按源码重写，83 → 730 行**）
+- 现文件：[`book/15_behavior_decision.md`](book/15_behavior_decision.md)（**2026-09-26 按源码重写，83 → 730 行**）
 - `modules/adas_nodes/behavior_planner_node.cpp`（1940 行）：订阅 `fusion/localization`、`perception/tracked_objects`、`perception/obstacles`、`vehicle/state`、`road/geometry`、`road/traffic_lights`、`road/ref_path`、`scene/frame`，发布 `planning/behavior`（22 B）与 `behavior/state`（未类型化 JSON，0.4 Hz）。**不订阅 `prediction/tracks`**。20 Hz 是**硬编码的**（`:722-724` 三个定时器都累加字面量 `0.05`），`config/pipeline.json` 的 behavior_planner 块**没有 `params` 键**
 - `BehState`（`:49-58`，8 个）和 `BehEvent`（`:60-68`，7 个）**共用同一组数字 200-207**。`BEH_TRANSITIONS`（`:71-105`）**19 条规则**。`:46-47` 注释称用 `SM_EVENT_USER_BASE+` 区域，但值是硬编码 `200..207`，而 `SM_EVENT_USER_BASE == 16`（`state_machine.h:59`）——**注释是错的**
 - **8 个状态里 3 个不可达**：`BEH_ST_STOP(204)`、`BEH_ST_YIELD(205)`、`BEH_ST_EMERGENCY(206)` 从不是任何规则的 `to`；`EMERGENCY` 连一条规则都没有。**实际可达只有 5 个**。连带 `BehaviorCommand` 的 `BEH_STOP`/`BEH_YIELD`/`BEH_EMERGENCY` 三个值永不发布
@@ -326,7 +327,7 @@
 
 ### 16　Frenet 轨迹规划
 
-- 现文件：[`_archive/book_v1/15_trajectory_planning.md`](_archive/book_v1/15_trajectory_planning.md)（**2026-09-26 按源码重写，73 → 950 行**）
+- 现文件：[`book/16_trajectory_planning.md`](book/16_trajectory_planning.md)（**2026-09-26 按源码重写，73 → 950 行**）
 - `modules/adas_nodes/planning_coordinates.h`（87 行 header-only）：`Projection`（`:10-16`）、`lane_center_d`（`:18-20`，`d = -(idx-(N-1)/2)·w`，**索引 0 是最左**）、`first_legal_lane`（`:22-24`，`oneway ? 0 : lc/2`）、`nearest_lane`（`:26-37`，`raw` 是 `lane_center_d` 的精确代数反解）、`project_to_path`（`:39-72`）、`quintic_lane_change`（`:74-83`）
 - **`project_to_path` 是最近点投影而非真 Frenet 变换**：$t$ clamp 到 $[0,1]$ **不外推**；`s = ref_s[i] + t·|v_i|` 用**弦长**累加（`ref_s` 仅作锚点，这个隐含不变量无任何文档）；并列取靠前段；自相交路径上会给不出唯一解。旧稿称「$|d|>R_{min}$ 退回笛卡尔规划」——**代码里没有这条路径**，实际是投影失败后走车头坐标系兜底
 - `src/algorithms/frenet_bridge.cpp`（6 个 C 接口）：`frenet_plan`（`:100-174`）**本身零优化**，只填 `FrenetInitialConditions` → 算障碍 AABB → 调 `run_fot()` → 提取。障碍物中心按自身速度**外推 2 秒**（`:134, 139-141`）才生成 AABB。**`frenet_set_obstacles`（不带速度）是死代码**（`.h:43`，头文件自称 backward-compatible）
@@ -343,7 +344,7 @@
 
 ### 17　跟踪控制：横向级联、LTV-MPC 与机动跟踪器
 
-- 现文件：[`_archive/book_v1/16_tracking_control.md`](_archive/book_v1/16_tracking_control.md)
+- 现文件：[`book/17_tracking_control.md`](book/17_tracking_control.md)
 - `modules/adas_nodes/control_node.cpp`：纵向 PID（`:854-920`）+ 横向级联 PD（`:999-1061`）。横向不是教科书 Stanley 公式，而是「横向速度 PD → ψ_des → 转向角」三级级联，另有曲率前馈与运动学前馈；`steer_limit_for_speed`（`:191`）按 $a_{lat} = L a_{max}/v^2$ 给出自适应转向包络
 - `modules/adas_nodes/maneuver_tracker.h`：`ManeuverTracker`，`ManeuverTrackerParams`，`TrackPoint`，`ManeuverResult`。header-only 弧长跟踪器，`tick`（`:228`）按弧长推进轨迹，倒挡时反馈项反号（`:283`）；无 `ManeuverType` 枚举，机动类型由轨迹数据（$v<0$ 或 $|\kappa|>0.12$）判定
 - `include/ltv_mpc.h`，`src/algorithms/ltv_mpc.c`：`ltv_mpc_set_reference`，`ltv_mpc_set_state`，`ltv_mpc_solve`。3 状态 1 控制的离散仿射 LQR（后向 Riccati 递推，$O(N)$），**不是 QP**；`max_steer`/`max_dsteer` 是事后截断而非优化约束。`use_ltv_mpc` 默认 0，无 `config/*.json` 启用
@@ -353,7 +354,7 @@
 
 ### 18　安全包络与降级
 
-- 现文件：[`_archive/book_v1/17_safety_envelope.md`](_archive/book_v1/17_safety_envelope.md)
+- 现文件：[`book/18_safety_envelope.md`](book/18_safety_envelope.md)
 - `modules/adas_nodes/safety_control_node.cpp`：订阅原始控制、定位与障碍物，发布最终 `control/cmd`。声明的输入是 `control/raw_cmd`、`fusion/localization`、`perception/obstacles`。运行时的队列桥还收 `inference/raw_cmd`。没有 `vehicle/state`。5 ms（200 Hz）轮询节拍，看门狗独立于消息流
 - `modules/adas_nodes/safety_arbiter.h`，`modules/adas_nodes/safety_arbiter.c`：`safety_arbiter_apply`，60 行。优先级：降级/模型不新鲜（P1，不计入 `intervened`）> 转向包络 `0.12` rad > 规则制动 `0.10` > 模型油门上限 `0.85`。制动取 `fmax` 而非规则独赢；规则不制动时模型 `brake` 原样透传
 - `include/degrade_ladder.h`，`src/core/degrade_ladder.c`：`degrade_set_level`，`degrade_set_level_at`（粘滞，单调不减），`degrade_layer_action`（**不接收参数**），`degrade_supervisor_tick`（500 ms 触发 + 150 ms 去抖 / 2000 ms 严重 / 3000 ms 恢复），`degrade_clear`。`l1_speed_limit` 只在 L2 写 3.0、L3 写 0.0，**L1 不限速**
@@ -365,7 +366,7 @@
 
 ### 19　执行器：PWM 与 SocketCAN
 
-- 现文件：[`_archive/book_v1/22_socketcan_actuator.md`](_archive/book_v1/22_socketcan_actuator.md)
+- 现文件：[`book/19_socketcan_actuator.md`](book/19_socketcan_actuator.md)
 - `modules/adas_nodes/pwm_map.h`，`modules/adas_nodes/pwm_map.c`：`pwm_map_control_cmd` 把 `throttle` / `brake` / `steering_rad` 映成 ESC 与舵机脉宽（μs），钳在 `PWM_MIN_US`（1000）与 `PWM_MAX_US`（2000）之间。**全文件 33 行**，三级优先：`e_stop` → `brake > 0.01`（`esc = 1500 − brake·scale`，反打）→ `throttle`（`esc = 1500 + throttle·scale`）。**`e_stop` 只覆盖 ESC，舵机保持原角度**。转向走 `steer_norm = steering_rad / PWM_MAX_STEER_RAD(0.22)`，独立于 e_stop
 - **映射层测试**：`tests/test_adas_nodes_logic.c` 的 10 个 `test_pwm_*`（`:295-389`），`CMakeLists.txt:1110` 把**生产同一份** `pwm_map.c` 编进测试目标（`ctest adas_nodes_logic_tests`）。**CAN 后端零测试**；e_stop 用例只断言 `esc`，**不断言 `steer`**
 - `modules/adas_nodes/actuator_pwm_node.c`（571 行，`modules/adas_nodes/CMakeLists.txt:733`）：订阅 `control/cmd`，不发布。`pca9685_set_freq` 用 `prescale = 25e6/(4096·f) − 1`（50 Hz → 121），`pca9685_set_pulse_us` 用 `tick = pulse_us/period_us × 4096`（1500 μs → 307）。上电与清理都强制回中。`watchdog_timeout_s` 默认 3（`time(NULL)` 1 s 粒度）：超时则 **ESC + 舵机双双回中**。`gpio_set_pulse_us` 硬编码 `pwmchip0` 且把 GPIO 号当 pwmchip 子索引，实际不可用
@@ -376,7 +377,7 @@
 
 ### 20　FlowSim 场景与世界
 
-- 现文件：[`_archive/book_v1/18_flowsim_scenario_design.md`](_archive/book_v1/18_flowsim_scenario_design.md)
+- 现文件：[`book/20_flowsim_scenario_design.md`](book/20_flowsim_scenario_design.md)
 - `modules/adas_nodes/flowsim_node.cpp`
 - `modules/adas_nodes/flowsim/physics.h`，`modules/adas_nodes/flowsim/physics.cpp`：前向欧拉。**三套模型**：`step_bicycle`（运动学，**默认**）、`step_bicycle_dynamic`（线性轮胎 2 自由度）、`step_bicycle_dynamic_pacejka`（Pacejka 96）。后两者**仅自车可用**且需 `physics_model` 参数显式开启。运动学参考点在**车身中心**（`half_wb·yaw_rate` 旋转项），位置积分与动态模型**不同**。`step_pedestrian` 纯匀速直线
 - `modules/adas_nodes/flowsim/flowsim_time.h`：`FLOWSIM_FREQUENCY_HZ`（60），`FLOWSIM_DT_SEC`，`FLOWSIM_DT_US`（16666）。**时间步唯一事实源**。`physics.cpp:3` 与全部 16 个物理测试仍用过时的 `dt=0.05`，与生产不一致
@@ -400,7 +401,7 @@
 
 ### 21　VLA、世界模型与无人车前沿
 
-- 现文件：[`_archive/book_v1/23_vla_world_model_frontier.md`](_archive/book_v1/23_vla_world_model_frontier.md)
+- 现文件：[`book/21_vla_world_model_frontier.md`](book/21_vla_world_model_frontier.md)
 - **本章性质**：全书唯一大量引用仓库外材料的一章。它**不对应本仓库任何源码**，目的是给前 20 章的模块化架构提供坐标系。改写时不要试图在里面加本地源码引用
 - 主题：VLA 三种动作头（离散 token AR / 离散+下游解码器 / VLM+独立动作专家）、延迟分解（94% 慢路径耗在语言自回归解码）、VLA vs 纯 VA 的诚实对照、生成式 vs 潜空间世界模型分类、Waymo/百度 Apollo Go/小马/WeRide/Tesla 的 2026 落地数据、UNECE ADS GTR（2026-06-24 通过，全球首个 L4/L5 框架）、加州废除脱离率指标
 - **本仓库的落点**（第 8 节）：`safety_arbiter_apply` = 规则/模型仲裁；`safety_control_node` = 独立机载验证；FlowSim = 闭环仿真；`inference_node` = 影子模式。**这三者正是 2026 年行业共识的最小实现**
@@ -408,7 +409,7 @@
 
 ### 22　可视化与内省
 
-- 现文件：[`book/20_flowmond_3d_vis.md`](book/20_flowmond_3d_vis.md)
+- 现文件：[`book/22_flowmond_3d_vis.md`](book/22_flowmond_3d_vis.md)
 - `modules/adas_nodes/flowmond_node.cpp`
 - `src/flowmond.c`
 - `include/monitor_server.h`，`src/core/monitor_server.c`：`monitor_server_create`，`monitor_server_start`，`monitor_server_stop`
@@ -417,7 +418,7 @@
 
 ### 23　验证关卡与回归评估
 
-- 现文件：[`book/21_demo_evaluator.md`](book/21_demo_evaluator.md)
+- 现文件：[`book/23_demo_evaluator.md`](book/23_demo_evaluator.md)
 - `ci/evaluators/demo_evaluator.py`
 - `ci/evaluators/scenario_regression.py`
 - `ci/gates/` 共 7 个脚本：`ci/gates/topic_contract_check.py`、`ci/gates/sensor_wiring_check.py`、`ci/gates/zombie_ban_check.py`、`ci/gates/plugin_symbol_check.py`、`ci/gates/msg_layout_check.py`、`ci/gates/lanelet_consistency_check.py`、`ci/gates/lane_match_schema_check.py`。前 6 个写在 `.github/workflows/ci.yml` 里。`ci/gates/lane_match_schema_check.py` 没有接进 `ci.yml`
@@ -427,7 +428,7 @@
 
 ### 24　端到端学习闭环
 
-- 现文件：[`book/19_e2e_learning_loop.md`](book/19_e2e_learning_loop.md)
+- 现文件：[`book/24_e2e_learning_loop.md`](book/24_e2e_learning_loop.md)
 - `tools/train_e2e/`：入口包括 `tools/train_e2e/train.py`、`tools/train_e2e/torch_train.py`、`tools/train_e2e/temporal_train.py`
 - `modules/adas_nodes/learner_node.c`
 - `modules/adas_nodes/inference_node.cpp`
@@ -447,38 +448,38 @@
 | 同上 | `src/launcher.c` | 没有这个文件。启动器是 `src/flow_launcher.c` |
 | 同上 | `modules/adas_nodes/example_filter_node.c` | 没有这个文件。`src/plugins/example_process.c` 包含 `include/process_interface.h`，导出 `get_process_interface`，没有 `node_get_plugin`。现成的 `NodePlugin` 入口是 `modules/adas_nodes/manual_drive_node.c` 与 `modules/adas_nodes/flowrec_node.c` 的 `node_get_plugin` |
 | [`book/10_coroutine.md`](book/10_coroutine.md)（新 10） | `modules/adas_nodes/coro_fusion_node.cpp` | 没有这个文件。协程融合节点是 `modules/adas_nodes/fusion_node.cpp` |
-| [`_archive/book_v1/16_tracking_control.md`](_archive/book_v1/16_tracking_control.md)（新 17，已修正） | `include/maneuver_tracker.h` | 旧稿路径有误，头文件在 `modules/adas_nodes/maneuver_tracker.h`；新稿已改正 |
+| [`book/17_tracking_control.md`](book/17_tracking_control.md)（新 17，已修正） | `include/maneuver_tracker.h` | 旧稿路径有误，头文件在 `modules/adas_nodes/maneuver_tracker.h`；新稿已改正 |
 | 同上（已修正） | `src/core/ltv_mpc.c` | 旧稿路径有误，实现是 `src/algorithms/ltv_mpc.c`，声明在 `include/ltv_mpc.h`；新稿已改正 |
 | 同上（已修正） | 旧稿称 MPC 状态为 4 维、时域 `N_p=10~20`、用「OSQP 或内点法」求解 | 旧稿与源码不符：实为 3 状态 `[e_y, e_psi, delta]`、控制 `[ddelta]`，时域 60 步 × 0.025 s = 1.5 s，且**无任何 QP 求解器**，是后向 Riccati 递推的无约束仿射 LQR，约束为事后截断；新稿已逐条澄清 |
-| [`_archive/book_v1/17_safety_envelope.md`](_archive/book_v1/17_safety_envelope.md)（新 18，已重写） | `is_obstacle_in_collision_corridor()`、`compute_radial_distance_to_arc()` | 旧稿凭空捏造的函数，全仓库不存在。真实的横向穿越守卫是 `safety_control_node.cpp:366` 的 `nearest_vehicle_lateral_cross_risk`，是车体系矩形门限，无弧线几何 |
+| [`book/18_safety_envelope.md`](book/18_safety_envelope.md)（新 18，已重写） | `is_obstacle_in_collision_corridor()`、`compute_radial_distance_to_arc()` | 旧稿凭空捏造的函数，全仓库不存在。真实的横向穿越守卫是 `safety_control_node.cpp:366` 的 `nearest_vehicle_lateral_cross_risk`，是车体系矩形门限，无弧线几何 |
 | 同上（已重写） | 旧稿 TTC 分级阶梯 3.0/2.0/1.0 s、预充液压、0.3g / −1.0g | 全部不存在。真实阈值是 2.5 s 触发 / 1.5 s 降级 / 1.0 s 硬 AEB，`brake` 是 [0,1] 归一化量而非 g；无预充液逻辑 |
 | 同上（已重写） | 旧稿 `safety/cmd` 话题、`actuator/cmd` 话题、`safety_override_active`、`apply_emergency_brake()`、规划 200 ms 心跳看门狗 | 均为虚构。真实输出是 `control/cmd`（20 B 的 `ControlCmd`）；看门狗是 `safety_raw_command_timeout_expired`（`moving && Δt > 2s`），监控 `control/raw_cmd` 而非规划指令 |
 | 同上（已重写） | 旧稿完全缺失 `safety_arbiter_apply` 与 `degrade_ladder` | 新稿补全了规则/模型仲裁的完整优先级链、P1 不计入 `intervened` 的语义设计，以及 L0~L3 粘滞阶梯与 500/150/2000/3000 ms 四个时间常数 |
-| [`_archive/book_v1/14_behavior_decision.md`](_archive/book_v1/14_behavior_decision.md)（新 15，已重写） | 旧稿的 RSS 责任敏感安全模型四分式 `$d_{safe}=v_{rear}\rho+\frac12 a_{max}\rho^2+\frac{(v_{rear}+\rho a_{max})^2}{2b_{min}}-\frac{v_{ego}^2}{2b_{max}}$` | **代码里没有 RSS。** 后向安全是纯运动学判据：左侧 `max(rear_safe_min_m(15), v_rear × rear_safe_time_s(3.0))`（`:965`），右侧 `max(min_gap, rear_safe_min_m)`（`:1019-1022`）。无加速度模型、无最小制动减速度参数 |
+| [`book/15_behavior_decision.md`](book/15_behavior_decision.md)（新 15，已重写） | 旧稿的 RSS 责任敏感安全模型四分式 `$d_{safe}=v_{rear}\rho+\frac12 a_{max}\rho^2+\frac{(v_{rear}+\rho a_{max})^2}{2b_{min}}-\frac{v_{ego}^2}{2b_{max}}$` | **代码里没有 RSS。** 后向安全是纯运动学判据：左侧 `max(rear_safe_min_m(15), v_rear × rear_safe_time_s(3.0))`（`:965`），右侧 `max(min_gap, rear_safe_min_m)`（`:1019-1022`）。无加速度模型、无最小制动减速度参数 |
 | 同上（已重写） | 旧稿的 `evaluate_noa_navigation(PlanningContext*)` 函数 | **这个函数不存在。** 导航触发变道不在决策节点；决策节点的变道只有「被堵 + 值得超」这一条路径（`:1316-1317`） |
 | 同上（已重写） | 旧稿的 8 状态 mermaid 图，含 `YIELD`/`EMERGENCY_STOP` 的进入边 | `STOP`/`YIELD`/`EMERGENCY` **从不是任何转移规则的 `to`**，实际可达只有 5 个状态。旧图画出的 `FOLLOW → YIELD`、`CRUISE → EMERGENCY_STOP` 两条边不存在 |
 | 同上（已重写） | 旧稿的「驾驶模式能级阶梯」和「Mode Transition Guard」 | 这部分**属于规划节点**（`planning_node.cpp` 的 `g.mode_sm` + `SM_TABLE_MODE_SWITCHING`，模式 `NA/ACC/CP/NP/LP/NOA`），不在行为决策节点。旧稿把它和 8 态行为状态机混为一谈 |
 | 同上（已重写） | 旧稿称「变道完成后强制待够 5.0 s」 | `lane_change_cooldown_s` 默认 **3.0 s**（`:1841`）。30 s 那个是掉头专用（`:1503`），且 CRUISE→超车路径**绕过冷却检查** |
-| [`_archive/book_v1/15_trajectory_planning.md`](_archive/book_v1/15_trajectory_planning.md)（新 16，已重写） | 旧稿的「先粗搜一遍 + QP 精修」两段 | **两段都不存在。** 全仓库无 QP 求解器：横向是暴力网格枚举 2079 条候选（`third_party/frenet_planner`），纵向是 S-T 图动态规划（`st_graph.c`）。唯一被调用的 `pjqp_smooth_2d` 只做参考线几何平滑 |
+| [`book/16_trajectory_planning.md`](book/16_trajectory_planning.md)（新 16，已重写） | 旧稿的「先粗搜一遍 + QP 精修」两段 | **两段都不存在。** 全仓库无 QP 求解器：横向是暴力网格枚举 2079 条候选（`third_party/frenet_planner`），纵向是 S-T 图动态规划（`st_graph.c`）。唯一被调用的 `pjqp_smooth_2d` 只做参考线几何平滑 |
 | 同上（已重写） | 旧稿称「$|a|\le 3.0\text{ m/s}^2$ 的 QP 约束」 | DP 里的加速度上限是 `STG_A_MAX = 4.0`（`st_graph.h:42`），不是 3.0 |
 | 同上（已重写） | 旧稿称「往前推 100~150 ms 的轨迹点当下一周期起点」 | 代码里没有这个机制。真实是**事后校验**（`planning_node.cpp:2337-2354`）：`dt<500ms` / 位置差 `<2.0` m / 速度差 `<3.0` m/s |
 | 同上（已重写） | 旧稿称「曲率平滑」+「$|d|>R_{min}$ 退回笛卡尔坐标系直接规划」 | **两条都不存在。** `project_to_path` 的 $t$ 钳在 $[0,1]$ 所以不会崩也不会外推；投影失败时走的是**车头坐标系兜底投影**，仍不是笛卡尔规划 |
 | 同上（已重写） | 旧稿称「解一个 $6\times6$ 线性方程组」 | 数学方向对（横向五次 6 个边界条件、纵向四次 5 个），但实现是**网格枚举**而非直接解方程组；且系数用 **Eigen LU**，依赖 Eigen3（`CMakeLists.txt:621`），缺失时规划节点退化为恒速车道保持 |
-| [`_archive/book_v1/22_socketcan_actuator.md`](_archive/book_v1/22_socketcan_actuator.md)（新 19，已重写） | 旧稿的 `send_can_frame()`、`set_servo_pulse()`、`pca9685_set_pwm()` | 三个函数全部不存在。真实实现是 `actuator_node.c` 的 `can_open`/`can_send`/`encode_throttle_frame`/`encode_steering_frame`，以及 `actuator_pwm_node.c` 的 `pca9685_set_pulse_us()`（参数是 `int pulse_us` 微秒，不是 `float normalized_val`） |
+| [`book/19_socketcan_actuator.md`](book/19_socketcan_actuator.md)（新 19，已重写） | 旧稿的 `send_can_frame()`、`set_servo_pulse()`、`pca9685_set_pwm()` | 三个函数全部不存在。真实实现是 `actuator_node.c` 的 `can_open`/`can_send`/`encode_throttle_frame`/`encode_steering_frame`，以及 `actuator_pwm_node.c` 的 `pca9685_set_pulse_us()`（参数是 `int pulse_us` 微秒，不是 `float normalized_val`） |
 | 同上（已重写） | 旧稿称油门与转向打包在同一个 8 字节帧的 `[0-3]`；`int16_t` 编码油门 | 与系统里任何 ID 都不匹配。真实是 0x100（DLC 8，throttle/brake/gear/e_stop）与 0x101（DLC 4，steering/seq）两个独立报文；油门是 `uint16_t` 且先钳位到 [0,1] |
 | 同上（已重写） | 旧稿的 `config/pipeline_car.json` 片段：`car_real_hardware_pipeline` + `libactuator_node.so` + `can_throttle_id: 256` | 错三处：没有名为 `car_real_hardware_pipeline` 的配置；没有 config 引用 `libactuator_node.so`（CAN 后端零引用）；配置 schema 用 `library_path` 不是 `library`。真实配置是 `pipeline_car.json:272-278` 的 `libactuator_pwm_node.so` |
 | 同上（已重写） | 旧稿暗示执行器经串口下发指令 | **执行器不碰串口**。`serial_port.c:163` 的 `serial_write()` 全仓库零调用者；`serial_open` 只被 gps/imu/激光雷达三个**只读**驱动使用 |
 | 同上（已重写） | 旧稿完全缺失软件看门狗 | 新稿补全了两个后端各一份的 3 s 看门狗（`actuator_pwm_node.c:330-352` 与 `actuator_node.c:302-322`），以及三处不一致：CAN 后端启动前 `last_cmd_time == 0` 使看门狗惰性、CAN 端 `watchdog_timeout_s` 不可配、PWM 端健康检查另用硬编码 5 s |
-| [`_archive/book_v1/18_flowsim_scenario_design.md`](_archive/book_v1/18_flowsim_scenario_design.md)（新 20，已重写） | 旧稿说 `esmini_stub.cpp` 解析 OpenDRIVE 几何原语、采样车道宽度多项式、翻译 junction 拓扑 | **完全说反。** `esmini_stub.cpp` 是全空桩（每个 `RM_*` 返回 `-1`/`0`），仅用于无 esmini 构建时降级。真实的 OpenDRIVE 读取由 esmini 承担，而 `.xodr` 由 `flowsim_node.cpp:324` 的 `convert_scenario_to_xodr` 用 `system()` 调 `tools/json_to_xodr.py` 生成 |
+| [`book/20_flowsim_scenario_design.md`](book/20_flowsim_scenario_design.md)（新 20，已重写） | 旧稿说 `esmini_stub.cpp` 解析 OpenDRIVE 几何原语、采样车道宽度多项式、翻译 junction 拓扑 | **完全说反。** `esmini_stub.cpp` 是全空桩（每个 `RM_*` 返回 `-1`/`0`），仅用于无 esmini 构建时降级。真实的 OpenDRIVE 读取由 esmini 承担，而 `.xodr` 由 `flowsim_node.cpp:324` 的 `convert_scenario_to_xodr` 用 `system()` 调 `tools/json_to_xodr.py` 生成 |
 | 同上（已重写） | 旧稿的 `edge.type` 表声称 `highway`→μ=0.9、`urban`→μ=0.8、`viaduct_highway`→z=7.0 m | **μ 那一列在代码里不存在。** 动力学里的摩擦只有 `pacejka_mu`（恒 0.7，`physics.cpp:271`）和稳定性护栏硬编码的 0.8（`physics.cpp:204`）。`edge.type` 与摩擦无关 |
 | 同上（已重写） | 旧稿的 NPC 状态机图（`NPC_FREE_CRUISE`/`NPC_ACC_FOLLOW`/`NPC_CHANGE_LANE`/`NPC_YIELD_INTERSECTION`） | 符号名不对。真实是 `entity.h:60-67` 的 7 个状态：`Cruise / Follow / StopForTL / LaneChange / CutIn / Stopped / Yield`。且 LaneChange 在 MOBIL 默认关闭时**从不进入** |
 | 同上（已重写） | 旧稿称 `Route::build()` 检查 $\Delta d < 0.01$ m、$\Delta\psi < 0.05$ rad 并插三次样条 | 真实是 `tol = 4.0` m（`route.h:69`）的端点邻近 + 航向连续贪心串接，**不做曲率连续性检查**；接缝靠 Hermite 桥接段补（`route.h:41-50`） |
 | 同上（已重写） | 旧稿称「FlowSim 生成停止线实体」 | `stop_lines` 在 `scenario_loader.c:595-613` 被解析，但 `populate_entities_from_scenario` **从不分配 `EntityType::StopLine`**，全仓库无消费者 |
-| [`_archive/book_v1/23_vla_world_model_frontier.md`](_archive/book_v1/23_vla_world_model_frontier.md)（新 21，新增） | — | **本章不引用本仓库源码**，是全书唯一的前沿综述章。第 8 节把前沿映射回 `safety_arbiter_apply` / `safety_control_node` / FlowSim / `inference_node`；第 9 节列了 10 条「未能核实」事项，改写时**不要删** |
-| [`book/21_demo_evaluator.md`](book/21_demo_evaluator.md)（新 23） | `tools/demo_evaluator.py` | 没有这个路径。评估器在 `ci/evaluators/demo_evaluator.py` |
+| [`book/21_vla_world_model_frontier.md`](book/21_vla_world_model_frontier.md)（新 21，新增） | — | **本章不引用本仓库源码**，是全书唯一的前沿综述章。第 8 节把前沿映射回 `safety_arbiter_apply` / `safety_control_node` / FlowSim / `inference_node`；第 9 节列了 10 条「未能核实」事项，改写时**不要删** |
+| [`book/23_demo_evaluator.md`](book/23_demo_evaluator.md)（新 23） | `tools/demo_evaluator.py` | 没有这个路径。评估器在 `ci/evaluators/demo_evaluator.py` |
 | 同上 | `tools/param_sweep.py` | 没有这个文件，仓库里也没有替代脚本 |
 | 同上 | `scenarios/zhongkai_road_full.json` | 没有这个文件 |
-| [`_archive/book_v1/18_flowsim_scenario_design.md`](_archive/book_v1/18_flowsim_scenario_design.md)（新 20） | `scenarios/city_to_highway_full.json` | 没有这个文件（`scenarios/` 下 23 个场景，无此名） |
-| [`book/19_e2e_learning_loop.md`](book/19_e2e_learning_loop.md)（新 24） | `scenarios/city_to_highway_full.json`，`scenarios/zhongkai_road_full.json` | 没有这两个文件 |
-| [`_archive/book_v1/15_trajectory_planning.md`](_archive/book_v1/15_trajectory_planning.md)（新 16） | （正文没有点名任何源码文件） | 对照表见本页第 16 章：`modules/adas_nodes/planning_coordinates.h`、`src/algorithms/frenet_bridge.cpp`、`modules/adas_nodes/st_graph.c`、`include/piecewise_jerk_qp.h`、`src/algorithms/piecewise_jerk_qp.c`、`modules/adas_nodes/traj_safety.h` |
-| [`_archive/book_v1/03_message_bus.md`](_archive/book_v1/03_message_bus.md)（新 05） | 标题「15 个节点」 | 这是标题里的断言，不是从 `config/pipeline.json` 的 `processes` 数出来的。改写时按该数组计数，不要照抄 15 |
+| [`book/20_flowsim_scenario_design.md`](book/20_flowsim_scenario_design.md)（新 20） | `scenarios/city_to_highway_full.json` | 没有这个文件（`scenarios/` 下 23 个场景，无此名） |
+| [`book/24_e2e_learning_loop.md`](book/24_e2e_learning_loop.md)（新 24） | `scenarios/city_to_highway_full.json`，`scenarios/zhongkai_road_full.json` | 没有这两个文件 |
+| [`book/16_trajectory_planning.md`](book/16_trajectory_planning.md)（新 16） | （正文没有点名任何源码文件） | 对照表见本页第 16 章：`modules/adas_nodes/planning_coordinates.h`、`src/algorithms/frenet_bridge.cpp`、`modules/adas_nodes/st_graph.c`、`include/piecewise_jerk_qp.h`、`src/algorithms/piecewise_jerk_qp.c`、`modules/adas_nodes/traj_safety.h` |
+| [`book/05_message_bus.md`](book/05_message_bus.md)（新 05） | 标题「15 个节点」 | 这是标题里的断言，不是从 `config/pipeline.json` 的 `processes` 数出来的。改写时按该数组计数，不要照抄 15 |
