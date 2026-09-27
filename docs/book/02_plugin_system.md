@@ -245,15 +245,19 @@ static NodePlugin g_plugin = {
     .taskbase      = NULL
 };
 
-      "plugin_path": "lib/flowengine/plugins/my_plugin.so",
-      "priority": "NORMAL",
-      "auto_restart": true,
-      "max_restart_count": 3,
-      "depends_on": []
-    }
-  ]
-}
-```
+// 上面这份 C 结构体对应 pipeline.json 中的一个 process 条目：
+//
+// {
+//   "name": "example_filter",
+//   "library_path": "lib/flowengine/plugins/my_plugin.so",
+//   "auto_start": true,
+//   "subscribe": ["raw/sensor"],
+//   "publish":   [{"topic": "filtered/sensor", "type": "raw"}],
+//   "params": "{\"cutoff_freq\": 50}"
+// }
+//
+// 启动器按 pipeline.json 把 example_filter 这个 process 用 dlopen 加载；
+// 然后用 dlsym 找到 node_get_plugin 函数指针，拿到 NodePlugin*。
 
 写这类节点时有两条经验值得记住：插件内部的辅助函数一律加 `static`，别让它们污染主进程
 的命名空间；`dlopen` 和 `dlsym` 之后都要检查 `dlerror()`，不要假设一定成功。
@@ -271,7 +275,7 @@ A → B → C      启动顺序：A, B, C
 
 ## 参考文件
 
-- `src/core/process_manager.c` — dlopen 加载与管理逻辑
-- `src/launcher.c` — 主启动器，读取配置并依次加载插件
-- `src/plugins/example_process.c` — 最简进程插件示例
-- `cmake/config.json.in` — 配置文件模板
+- `src/flow_launcher.c` — 主启动器，读取配置并依次加载插件
+- `src/flow_node_host.c` — 把同一份 .so 放进独立进程运行
+- `modules/adas_nodes/perception_node.cpp` — 一个真实的 ADAS 插件（结构与本示例一致）
+- `config/pipeline.json` — 实际插件配置示例
