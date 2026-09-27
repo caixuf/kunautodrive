@@ -706,9 +706,11 @@ class TestTrafficLightFallback(unittest.TestCase):
         import re as _re
         count = len(_re.findall(r"""v=['"]traffic_light['"]""", osm_content))
         self.assertGreaterEqual(
-            count, 850,
-            f"Expected >= 850 traffic_light regulatory elements, got {count}. "
-            f"Task allows up to 30 unmatched (OSM boundary).",
+            count, 880,
+            f"Expected >= 880 traffic_light regulatory elements, got {count}. "
+            f"osm_lujiazui_v2 has exactly 880 coordinate-format traffic_lights; "
+            f"any regression must surface (was previously asserting >= 850 which "
+            f"tolerated a 30-element regression silently).",
         )
 
 
