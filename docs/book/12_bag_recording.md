@@ -54,7 +54,7 @@ Bag v2 文件二进制布局：
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ [Header 区: 64 字节固定]                                                     │
 │   ├── magic: char[4] = "FLB_" (0x46, 0x4C, 0x42, 0x5F)                       │
-│   ├── version: uint32_t = 2                                                  │
+│   ├── version: uint32_t = 3                                                  │
 │   ├── msg_count: uint64_t (记录总数)                                         │
 │   ├── duration_us: uint64_t (持续总微秒数)                                   │
 │   ├── index_offset: uint64_t (尾部索引区的文件起始偏移量)                    │
@@ -62,7 +62,7 @@ Bag v2 文件二进制布局：
 ├──────────────────────────────────────────────────────────────────────────────┤
 │ [Records 流: 紧密排列的消息帧]                                               │
 │   ┌── Record 0:                                                              │
-│   │     type_id(4B) | schema_ver(1B) | endian(1B) | timestamp_us(8B) |       │
+│   │     type_id(4B) | schema_hash(4B) | schema_ver(1B) | endian(1B) |       │
 │   │     topic_len(1B) | topic(N B) | data_size(4B) | data(N B)               │
 │   ├── Record 1: ...                                                          │
 │   └── Record N-1: ...                                                        │

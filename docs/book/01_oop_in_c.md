@@ -312,7 +312,8 @@ void task_destroy(TaskBase* task) {
 `task_base_init` 到 `TASK_CALL` 走完的整条生命周期。
 
 ```bash
-./build/bin/unit_tests --filter=task_interface
+cmake --build build --target test_modules
+ctest --test-dir build -R '^test_modules$' -V
 ```
 
 ---
