@@ -13,7 +13,18 @@
 最近几周 docs/book/ 有章节被"按源码逐条重建"成 900+ 行说明书，绑定行号、文件名、函数符号——与代码强耦合、维护成本高、易腐化。本目录整治后：
 
 - **`docs/book/`** 是 v2 主目录，按 `docs/book/README.md` 的写作风格约束（真技术书范式：讲设计动机 + 取舍 + 领域常识；不绑行号）。当前多数章节仍是 v1 风格未迁移（book_guard gate 在 `--warn-only` 模式下提醒存量问题）。
-- **`docs/_archive/book_v1/`** 是 v1 归档，6 个最近重写的章节（04/16/17/18/22/23）已 git mv 至此，每个文件头部加了归档 banner 说明。历史参考用。
+- **`docs/_archive/book_v1/`** 是 v1 归档，11 个最近按源码重建的章节已 git mv 至此，每个文件头部加了归档 banner 与现章节交叉链接。历史参考用。归档清单（文件名 → BOOK.md 现章节）：
+  - `03_message_bus.md` → 第 05 章「消息总线」
+  - `03_registry_and_params.md` → 第 03 章「注册中心与参数系统」
+  - `04_ipc_channel.md` → 第 07 章「共享内存 IPC」
+  - `07_serializer.md` → 第 06 章「类型 ID、IDL 与序列化」
+  - `14_behavior_decision.md` → 第 15 章「行为决策」
+  - `15_trajectory_planning.md` → 第 16 章「Frenet 轨迹规划」
+  - `16_tracking_control.md` → 第 17 章「跟踪控制：横向级联、LTV-MPC 与机动跟踪器」
+  - `17_safety_envelope.md` → 第 18 章「安全包络与降级」
+  - `18_flowsim_scenario_design.md` → 第 20 章「FlowSim 场景与世界」
+  - `22_socketcan_actuator.md` → 第 19 章「执行器：PWM 与 SocketCAN」
+  - `23_vla_world_model_frontier.md` → 第 21 章「VLA、世界模型与无人车前沿」
 - **`tools/gates/book_guard.py`**（`ci/gates/book_guard.py`）守门 v2 风格：单章节 800 行上限、行号密度 ≤5 处/100 行、超长对比表检测、commit-level >20% 行数突变。
 
 新写章节请先读 `docs/book/README.md`。BOOK.md 索引对 v2 章节指向 `docs/book/`、对 v1 归档章节指向 `docs/_archive/book_v1/`。

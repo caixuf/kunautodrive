@@ -4,6 +4,7 @@
 > 内容大量绑定代码行号、文件名、函数符号，与代码强耦合 —— 维护成本高且易过时。
 > v2 重写计划：见 `docs/book/README.md` 的写作风格约束 + 真技术书范式。
 > 本归档文件保留供历史参考；引用时用 `docs/_archive/book_v1/04_ipc_channel.md` 而非 `docs/book/`。
+> **现章节**：BOOK.md 第 20 章「FlowSim 场景与世界」。
 
 # 第 20 章：FlowSim —— 给算法造一个能反复练车的世界
 

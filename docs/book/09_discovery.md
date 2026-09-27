@@ -12,6 +12,8 @@
 > 参照 `docs/book/README.md` 的写作风格约束。
 > 旧稿（按源码逐条重建版本）见 `docs/_archive/book_v1/04_ipc_channel.md` 与
 > `_archive/book_v1/` 内的兄弟归档章（v1 是 800+ 行的行号说明书）。
+> 04_ipc_channel.md 在 BOOK.md 当前为第 07 章「共享内存 IPC」，
+> 本章（Discovery / 传输层）是相邻主题的 v2 重写版，主题不重叠。
 
 第一代机器人系统（如 ROS 1）里有一个中心化的 Master 节点（`roscore`），它既是注册中心，也是整个系统的单点故障源（SPOF）：它一退出，所有节点之间的通信就彻底瘫痪了。
 
