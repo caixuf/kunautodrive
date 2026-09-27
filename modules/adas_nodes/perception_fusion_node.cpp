@@ -571,9 +571,7 @@ protected:
             tracked.frame_id     = (uint32_t)(g.frames_out & 0xFFFFFFFFu);
             tracked.timestamp_us = now;
 
-            uint8_t buf[4496];  /* ObstacleList 序列化大小 = 16 + 128*35（D2-07 phase 1
-              * Obstacle.wire: 34 → 35（+bool obs_lane_match_hint））；
-              * 仍 < sizeof(ObstacleList) (5144)，栈 buffer 够用 */
+            uint8_t buf[sizeof(ObstacleList)];  /* D2-07 M3: ObstacleList 序列化 16+128*35 wire (加 obs_lane_match_hint); sizeof 5144B 含 alignment padding 一定够用 */
             size_t len = 0;
             if (ObstacleList_serialize(&tracked, buf, &len) == 0 && len > 0) {
                 transport_publish(transport_, g.output_topic, buf, (uint32_t)len);
