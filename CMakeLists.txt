@@ -1053,6 +1053,12 @@ target_link_libraries(test_scenario_router flowengine_core)
 target_link_libraries(test_scenario_router m)
 add_test(NAME scenario_router_tests COMMAND test_scenario_router)
 set_tests_properties(scenario_router_tests PROPERTIES TIMEOUT 10)
+# D3-2: traffic_density scenario 契约单测
+add_executable(test_traffic_density_scenario tests/test_traffic_density_scenario.c)
+target_link_libraries(test_traffic_density_scenario flowengine_core)
+target_link_libraries(test_traffic_density_scenario m)
+add_test(NAME traffic_density_scenario_tests COMMAND test_traffic_density_scenario)
+set_tests_properties(traffic_density_scenario_tests PROPERTIES TIMEOUT 10)
 
 # M3-lite：city_grid 单路口、路口前 A* 重规划（读真实 map.json successors）
 add_executable(test_junction_reroute tests/test_junction_reroute.c)
@@ -1100,6 +1106,15 @@ target_link_libraries(test_json_schema flowengine_core)
 
 add_test(NAME json_schema_tests COMMAND test_json_schema)
 set_tests_properties(json_schema_tests PROPERTIES TIMEOUT 10)
+
+# ── fusion 降级契约回归（2026-09 真车定位沉默失败修复）──
+# 钉死「sensor/lidar 上没有 LidarFrame 时仍应发布降级定位」这一契约。
+# 旧实现在空 lidar 缓冲处 continue，导致 fusion/localization 永不发布。
+add_executable(test_fusion_degraded tests/test_fusion_degraded.c)
+target_link_libraries(test_fusion_degraded flowengine_core m)
+add_dependencies(test_fusion_degraded msg_codegen)
+add_test(NAME fusion_degraded_tests COMMAND test_fusion_degraded)
+set_tests_properties(fusion_degraded_tests PROPERTIES TIMEOUT 20)
 
 # ── ADAS 节点纯逻辑单元测试（imu / slam / actuator_pwm dry-run 路径）──
 # 真车部署 roadmap 第一步：把"两头"占位实现的纯逻辑钉死，避免后续接入真实

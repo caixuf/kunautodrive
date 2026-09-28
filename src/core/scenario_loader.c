@@ -981,6 +981,18 @@ char* scenario_to_json(const ScenarioConfig* scenario) {
     }
     cJSON_AddItemToObject(root, "scenarios", jscripts);
 
+    /* traffic_density (D3-2): 仅在 cars_per_km > 0 时输出块（与场景文件
+     * 写盘风格一致：disabled 状态不写噪声字段）。 */
+    if (scenario->traffic_density.cars_per_km > 0) {
+        cJSON* jtd = cJSON_CreateObject();
+        cJSON_AddNumberToObject(jtd, "cars_per_km",        scenario->traffic_density.cars_per_km);
+        cJSON_AddNumberToObject(jtd, "spawn_jitter_m",     scenario->traffic_density.spawn_jitter_m);
+        cJSON_AddBoolToObject(jtd,   "lane_spread",        scenario->traffic_density.lane_spread != 0);
+        cJSON_AddNumberToObject(jtd, "max_npcs",           scenario->traffic_density.max_npcs);
+        cJSON_AddNumberToObject(jtd, "random_seed_offset", scenario->traffic_density.random_seed_offset);
+        cJSON_AddItemToObject(root, "traffic_density", jtd);
+    }
+
     char* out = cJSON_Print(root);
     cJSON_Delete(root);
     return out;
