@@ -13,7 +13,7 @@
  */
 
 import { worldToThree, forwardENU } from '../math/Coord.js';
-import { selectCurrentMotionSegment } from '../math/Trajectory.js';
+import { selectCurrentMotionSegment, _anchorTrajectoryStart } from '../math/Trajectory.js';
 import { roadHeightAt } from '../math/RoadHeight.js';
 import { VEHICLE_GROUND_Y } from './VehicleView.js';
 
@@ -187,29 +187,12 @@ export function createTrajectoryView(scene) {
       raw3d[raw3d.length - 1].v = v;
     }
     /* 用车头实时位置替换轨迹起点（防脱节）。
-     * 消除过冲（Overshoot 防护）：如果车头与轨迹原始第 0 点有横向位移，
-     * 直接突变第 0 点会导致 Catmull-Rom 样条切线畸变从而剧烈摆动甩尾。
-     * 当首段位移较近时做平滑投影过渡，仅在偏离合理范围 (<9m²) 时平滑接入。 */
+     * 交由 Trajectory._anchorTrajectoryStart 做"连续锚定"：阈值内无条件吸附，
+     * 不做"距离太近/太远就跳过一次"的开关 —— 那会让起点在阈值附近逐帧弹跳
+     * （观感"一抽一抽"）。详见该函数注释。 */
     if (raw3d.length >= 1) {
       const [tx0, ty0, tz0] = worldToThree(frontX, frontY, egoZ);
-      const dx = tx0 - raw3d[0].x;
-      const dz = tz0 - raw3d[0].z;
-      const dist2 = dx * dx + dz * dz;
-      if (dist2 < 9.0) {
-        if (raw3d.length >= 2) {
-          // 对齐到首段切线方向，避免横摆角速度过大时引发样条扭曲
-          const t1 = raw3d[1];
-          const segDx = t1.x - tx0, segDz = t1.z - tz0;
-          const segLen = Math.sqrt(segDx * segDx + segDz * segDz);
-          if (segLen > 0.5) {
-            raw3d[0].set(tx0, ty0, tz0);
-            raw3d[0].v = trajPath[0][2] || 0;
-          }
-        } else {
-          raw3d[0].set(tx0, ty0, tz0);
-          raw3d[0].v = trajPath[0][2] || 0;
-        }
-      }
+      _anchorTrajectoryStart(raw3d, tx0, ty0, tz0, trajPath[0][2] || 0);
     }
     if (raw3d.length < 2) return [];
 

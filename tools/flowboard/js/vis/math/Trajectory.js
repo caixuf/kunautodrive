@@ -4,6 +4,42 @@ function motionSign(v) {
   return v < -0.05 ? -1 : v > 0.05 ? 1 : 0;
 }
 
+/* 车头锚定的合理上限：车头与轨迹首点距离超过 ~5m 视为拿到不相关/陈旧路径，
+ * 放弃锚定（不把错的路径硬拖到车头）。阈值以内一律连续吸附。 */
+export const ANCHOR_MAX_DIST2 = 25.0;
+/* 吸附后首段塌缩成一点的下限（0.1m）：丢点，避免 CatmullRom 在重合点上
+ * 切线退化（NaN / 剧烈抖动）。 */
+export const ANCHOR_MIN_SEG2 = 0.01;
+
+/**
+ * 把轨迹首点**连续**锚定到车头实时位置（防脱节）。
+ *
+ * 关键在"连续"：规划快照 10Hz，而车以 60fps 持续运动，若用小距离阈值决定
+ * 吸附/不吸附（或"首段太短就跳过吸附"），车头与首点的距离会在阈值附近
+ * 逐帧来回穿越 → 吸附状态以 10Hz 频率翻转 → 起点在"车头"与"旧规划点"
+ * 之间弹跳，观感就是"一抽一抽"。因此这里只保留一个很宽的兜底上限，
+ * 阈值内无条件吸附，不做任何细分开关。
+ *
+ * @param {Array<{x:number,y:number,z:number,v:number}>} raw3d 已转 THREE 坐标的原始轨迹点（原地修改）
+ * @param {number} ax 车头 THREE x
+ * @param {number} ay 车头 THREE y
+ * @param {number} az 车头 THREE z
+ * @param {number} v0 起点速度（沿用原规划首点速度）
+ */
+export function _anchorTrajectoryStart(raw3d, ax, ay, az, v0) {
+  if (!raw3d || raw3d.length < 1) return;
+  const dx = ax - raw3d[0].x;
+  const dz = az - raw3d[0].z;
+  if (dx * dx + dz * dz >= ANCHOR_MAX_DIST2) return;
+  raw3d[0].set(ax, ay, az);
+  raw3d[0].v = v0;
+  if (raw3d.length >= 2) {
+    const sx = raw3d[1].x - raw3d[0].x;
+    const sz = raw3d[1].z - raw3d[0].z;
+    if (sx * sx + sz * sz < ANCHOR_MIN_SEG2) raw3d.splice(1, 1);
+  }
+}
+
 /**
  * Select the active forward/reverse stroke from a cached maneuver trajectory.
  * A gear change is a hard path boundary and must never be spline-smoothed.
