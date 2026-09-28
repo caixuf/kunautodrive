@@ -1,10 +1,10 @@
 # 第 06 章：写在总线上的字节——为什么 wire 协议必须固定
 
 > **v2 范式章节**（2026-09 整治后保留）。本章保留低行号密度、真技术书
-> 风格，参照 `docs/book/README.md` 写作风格约束与 `docs/book/09_discovery.md`
+> 风格，参照 `docs/book/README.md` 写作风格约束与 `docs/book/08_discovery.md`
 > 范式示范。v1 行号清单版本归档于 `docs/_archive/book_v1/07_serializer.md`。
 
-这一章在第一卷　微内核与系统编程。
+这一章在第二部分　通信与时间。
 上一篇是节点之间的总线（见第 05 章）——它告诉你"数据从 A 到 B"。
 本篇解决"放到线上的时候是哪些字节、按什么规则读出来"。
 
@@ -154,7 +154,7 @@ IDL 重新编译。
 **铁律**：跨语言特征提取器请让 `msg_codegen.py` 生成**两份**——一份
 C 头，再加一份 Python skeleton（暂未实现，作者立场：未来应该做）。
 今天 Python 端是手写的 `serialize_obstacle()`，单测要断言与 C 端在容差
-$10^{-6}$ 内一致（这是上一章提到的"差点翻车"的补救，详见 `docs/book/19_e2e_learning_loop.md`）。
+$10^{-6}$ 内一致（这是上一章提到的"差点翻车"的补救，详见 `docs/book/24_e2e_learning_loop.md`）。
 
 ## 测试：怎么验证序列化层是对的
 

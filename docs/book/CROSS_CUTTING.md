@@ -1,7 +1,7 @@
 # 跨章节共用抽象：把同一颗钉子读三遍也只该读一次
 
 > **v2 范式章节**（2026-09 整治后保留）。本章保留低行号密度、真技术书
-> 风格，参照 `docs/book/README.md` 写作风格约束与 `docs/book/09_discovery.md`
+> 风格，参照 `docs/book/README.md` 写作风格约束与 `docs/book/08_discovery.md`
 > 范式示范。v1 行号清单版本归档于 `docs/_archive/book_v1/`。
 
 ## 为什么需要这一张表
@@ -197,19 +197,19 @@ Bag 是 05 章的录制文件，看起来只是一个"事后回放"的工具；�
 
 **工程师**（转行 / 入职，先搭环境再按需跳读）——按以下优先顺序：
 
-1. **必读**：`02_plugin_system.md`（插件契约是所有节点的统一入口）、`08_state_machine.md`（通用 FSM 原语，被多个章节复用）、`09_discovery.md`（跨进程通道的自动建立，是规模化部署的关键）。
-2. **强烈推荐**：`01_oop_in_c.md`（理解底座）、`05_bag_recording.md`（理解事实容器）、`06_clock_service.md`（理解三层时间）、`10_coroutine.md`（理解现代节点写法）、`11_scheduler.md`（理解 DAG 与绑核）、`21_demo_evaluator.py` 对应的 21 章（理解验证阶梯）。
-3. **按需阅读**：`12_lidar_tracking.md`（感知算法入门）、`13_sensor_fusion.md`（EKF 细节）、`19_e2e_learning_loop.md`（学习闭环）、`20_flowmond_3d_vis.md`（可视化）。
+1. **必读**：`02_plugin_system.md`（插件契约是所有节点的统一入口）、`04_state_machine.md`（通用 FSM 原语，被多个章节复用）、`08_discovery.md`（跨进程通道的自动建立，是规模化部署的关键）。
+2. **强烈推荐**：`01_oop_in_c.md`（理解底座）、`12_bag_recording.md`（理解事实容器）、`09_clock_service.md`（理解三层时间）、`10_coroutine.md`（理解现代节点写法）、`11_scheduler.md`（理解 DAG 与绑核）、`23_demo_evaluator.py` 对应的 21 章（理解验证阶梯）。
+3. **按需阅读**：`13_lidar_tracking.md`（感知算法入门）、`14_sensor_fusion.md`（EKF 细节）、`24_e2e_learning_loop.md`（学习闭环）、`22_flowmond_3d_vis.md`（可视化）。
 
 **研究者**（专注算法验证）——优先 12、13、19、21 章；02、10、11 章作为"运行环境"速读。
 
 ### 通读两遍都嫌少的章节
 
-只有 `08_state_machine.md`（通用反射 FSM）和 `09_discovery.md`（去中心化发现协议）值得通读两遍——前者是横向复用最广的抽象，后者是规模化的关键转折点。其他章节读完一遍后，按需跳读即可。
+只有 `04_state_machine.md`（通用反射 FSM）和 `08_discovery.md`（去中心化发现协议）值得通读两遍——前者是横向复用最广的抽象，后者是规模化的关键转折点。其他章节读完一遍后，按需跳读即可。
 
 ### 可以跳过的章节
 
-`00_preface.md` 之外的元文件（`README.md` 等）只在写新章节前需要参照；`12_lidar_tracking.md` 与 `13_sensor_fusion.md` 在不碰感知与定位算法时可以只读引子和最后一节，跳过中间的具体公式推导。
+`00_preface.md` 之外的元文件（`README.md` 等）只在写新章节前需要参照；`13_lidar_tracking.md` 与 `14_sensor_fusion.md` 在不碰感知与定位算法时可以只读引子和最后一节，跳过中间的具体公式推导。
 
 ---
 

@@ -50,7 +50,7 @@
 | 01 | 用 C 造一个对象 | 用结构体首成员和函数指针表做出 `TaskBase` / `TaskInterface`，管住 initialize、execute、cleanup | [`book/01_oop_in_c.md`](book/01_oop_in_c.md) |
 | 02 | 可插拔 .so 与启动器 | `include/node_plugin.h::NodePlugin` 与 `include/node_plugin.h::NODE_PLUGIN_SYMBOL`（导出名字是 node_get_plugin），`src/flow_launcher.c` 按 pipeline 做 dlopen，`src/flow_node_host.c` 把同一份 .so 放进独立进程运行 | [`book/02_plugin_system.md`](book/02_plugin_system.md) |
 | 03 | 注册中心与参数系统 | int/float 注册时带上下界，`include/param_registry.h::param_set_int` 与 `include/param_registry.h::param_set_float` 越界拒绝，范围内则写入当前值。`include/param_registry.h::param_set_callback` 与 `include/param_registry.h::param_enable_hot_reload` 没有别的 C/C++ 调用点，改值回调不会因此跑起来。跑起来的调参是 `src/flowctl.c` 的 `flowctl param` 经 `include/param_bridge.h::param_bridge_client_request` 写入，节点下一拍用 `include/param_registry.h::param_get_int` 与 `include/param_registry.h::param_get_float` 读出。任务、话题、类型和插件登记到 `include/flow_registry.h::flow_registry_register_task` 这一组函数 | [`book/03_registry_and_params.md`](book/03_registry_and_params.md) |
-| 04 | 状态机 | 反射式状态机：转移表、guard、entry/exit，非法事件有明确策略 | [`book/08_state_machine.md`](book/08_state_machine.md) |
+| 04 | 状态机 | 反射式状态机：转移表、guard、entry/exit，非法事件有明确策略 | [`book/04_state_machine.md`](book/04_state_machine.md) |
 
 ## 第二部　通信与时间
 
@@ -61,7 +61,7 @@
 | 05 | 消息总线 | 进程内 Pub/Sub：`include/message_bus.h::message_bus_publish` / `include/message_bus.h::message_bus_subscribe`，以及 `include/message_bus.h::message_bus_set_topic_qos` | [`book/05_message_bus.md`](book/05_message_bus.md) |
 | 06 | 类型 ID、IDL 与序列化 | `include/serializer.h::fnv1a_hash` 做类型 ID，`include/serializer.h::serializer_register_type` 登记类型。IDL 写在 `msg/adas_msgs.msg`，`tools/msg_codegen.py` 据此生成 C 头：结构体、FNV-1a 类型 ID、序列化函数。这份 .msg 是输入，不是生成物 | [`book/06_serializer.md`](book/06_serializer.md) |
 | 07 | 共享内存 IPC | `include/ipc_channel.h::ipc_channel_open` / `include/ipc_channel.h::ipc_channel_publish` 的共享内存通道，仪表盘 JSON 走 `include/dashboard_bridge.h::dashboard_bridge_publish` | [`book/07_ipc_channel.md`](book/07_ipc_channel.md) |
-| 08 | 统一传输与服务发现 | `include/transport.h::transport_publish` 统一收发；发现用组播 `include/discovery.h::DISC_MULTICAST_GROUP`（`239.255.0.100`）和 `include/discovery.h::DISC_MULTICAST_PORT`（5500）；跨机走 `include/network_transport.h::net_transport_connect` | [`book/09_discovery.md`](book/09_discovery.md) |
+| 08 | 统一传输与服务发现 | `include/transport.h::transport_publish` 统一收发；发现用组播 `include/discovery.h::DISC_MULTICAST_GROUP`（`239.255.0.100`）和 `include/discovery.h::DISC_MULTICAST_PORT`（5500）；跨机走 `include/network_transport.h::net_transport_connect` | [`book/08_discovery.md`](book/08_discovery.md) |
 | 09 | 时钟服务 | `include/clock_service.h::clock_now_us` 逻辑调度可注入；`include/clock_service.h::clock_now_monotonic_wall_us` 专供物理延迟测量；`include/clock_service.h::clock_now_realtime_us` 为 Unix 绝对时钟 | [`book/09_clock_service.md`](book/09_clock_service.md) |
 
 ## 第三部　执行与调度
@@ -87,8 +87,8 @@
 
 | 编号 | 章节 | 这一章讲什么 | 现文件 |
 |---|---|---|---|
-| 13 | 感知：从激光点云到目标（含其他感知源） | `modules/adas_nodes/lidar_scan.h::lidar_scan_generate` 产生点，`src/algorithms/dbscan_cluster.h::dbscan_run` 聚类。跟踪是 `src/algorithms/kalman_tracker.c` 的线性常速卡尔曼滤波（KF）：状态 `[x, y, vx, vy]`，`F` 为常速转移，`H` 只观测位置，关联用匈牙利算法。这不是扩展卡尔曼滤波（EKF）。`modules/adas_nodes/perception_fusion_node.cpp` 合并激光与双目两路 `ObstacleList` | [`book/12_lidar_tracking.md`](book/12_lidar_tracking.md) |
-| 14 | 定位融合：EKF | `src/algorithms/ekf_fusion.c::ekf_fusion_predict` 按常速、常横摆角速度（CTRV）传播，不用转角和轴距。`config/pipeline_car.json` 里 slam 的 `algo` 为 `ekf_slam` 时，位姿经 `sensor/pose` 进入 `modules/adas_nodes/fusion_node.cpp`。位置更新有三种：位姿已收敛且 `cov_xx + cov_yy < 100` 时，用位姿的 x/y 调用 `src/algorithms/ekf_fusion.h::ekf_fusion_update_lidar`；已收敛但协方差不小于 100 时，这一拍不做位置更新；没有位姿或未收敛时，用 `LidarFrame` 的 x/y。GPS 的速度和航向进 `src/algorithms/ekf_fusion.h::ekf_fusion_update_gps`。`modules/adas_nodes/slam_node.cpp` 写出的位姿把 `converged` 设为 true。默认 `config/pipeline.json` 没有 slam 进程 | [`book/13_sensor_fusion.md`](book/13_sensor_fusion.md) |
+| 13 | 感知：从激光点云到目标（含其他感知源） | `modules/adas_nodes/lidar_scan.h::lidar_scan_generate` 产生点，`src/algorithms/dbscan_cluster.h::dbscan_run` 聚类。跟踪是 `src/algorithms/kalman_tracker.c` 的线性常速卡尔曼滤波（KF）：状态 `[x, y, vx, vy]`，`F` 为常速转移，`H` 只观测位置，关联用匈牙利算法。这不是扩展卡尔曼滤波（EKF）。`modules/adas_nodes/perception_fusion_node.cpp` 合并激光与双目两路 `ObstacleList` | [`book/13_lidar_tracking.md`](book/13_lidar_tracking.md) |
+| 14 | 定位融合：EKF | `src/algorithms/ekf_fusion.c::ekf_fusion_predict` 按常速、常横摆角速度（CTRV）传播，不用转角和轴距。`config/pipeline_car.json` 里 slam 的 `algo` 为 `ekf_slam` 时，位姿经 `sensor/pose` 进入 `modules/adas_nodes/fusion_node.cpp`。位置更新有三种：位姿已收敛且 `cov_xx + cov_yy < 100` 时，用位姿的 x/y 调用 `src/algorithms/ekf_fusion.h::ekf_fusion_update_lidar`；已收敛但协方差不小于 100 时，这一拍不做位置更新；没有位姿或未收敛时，用 `LidarFrame` 的 x/y。GPS 的速度和航向进 `src/algorithms/ekf_fusion.h::ekf_fusion_update_gps`。`modules/adas_nodes/slam_node.cpp` 写出的位姿把 `converged` 设为 true。默认 `config/pipeline.json` 没有 slam 进程 | [`book/14_sensor_fusion.md`](book/14_sensor_fusion.md) |
 | 15 | 行为决策 | `modules/adas_nodes/behavior_planner_node.cpp`（1940 行，20 Hz **编译进去**，`pipeline.json` 的 behavior_planner 块没有 `params` 键）订阅 8 路、发布 `planning/behavior`（22 B 的 `Behavior`）与 `behavior/state`。**8 个状态里只有 5 个可达**——`STOP`/`YIELD`/`EMERGENCY` 从不是任何转移规则的 `to`，连带 `BehaviorCommand` 里那 3 个值永不发布。跟车律是 CTG：`d = acc_standoff(5.0) + acc_time_headway(1.5)·v`，`v_follow = v_lead + acc_k_gap(0.4)·clamp(Δ−d, ±8.0)`。变道是三条件与门（同向 + 后向安全 + 空隙 > 1.5×min_gap）。**零单测** | [`book/15_behavior_decision.md`](book/15_behavior_decision.md) |
 | 16 | Frenet 轨迹规划 | `modules/adas_nodes/planning_coordinates.h::project_to_path` 是**最近点投影**（$t$ 钳位在 $[0,1]$，不外推），不是真 Frenet 变换。`src/algorithms/frenet_bridge.cpp::frenet_plan` **本身不做优化**，只是调 `third_party/frenet_planner` 的 `run_fot()`——那是**三级网格枚举约 2079 条候选**（横向五次 + 纵向四次多项式，系数用 Eigen LU）。纵向速度另由 `modules/adas_nodes/st_graph.c::st_graph_plan` 用 S-T 图动态规划求（90×101 网格，$O(N)$ 闭式前驱预筛，**零单测**）。`include/piecewise_jerk_qp.h::pjqp_path_solve` 与 `pjqp_speed_solve` 零调用点，前者连 QP 都不是；实际调用的只有 `pjqp_smooth_2d`（参考线几何平滑） | [`book/16_trajectory_planning.md`](book/16_trajectory_planning.md) |
 | 17 | 跟踪控制：横向级联、LTV-MPC 与机动跟踪器 | `modules/adas_nodes/control_node.cpp` 里是纵向 PID + 横向三级级联 PD（横向速度 → ψ_des → 转向角，含曲率前馈；不是教科书 Stanley 公式）。`include/ltv_mpc.h::ltv_mpc_solve` 解的是 3 状态 1 控制的仿射 LQR（后向 Riccati，非 QP，约束为事后截断），且默认关闭。`modules/adas_nodes/maneuver_tracker.h` 的 `ManeuverTracker` 管掉头和泊车这类断开的参考线，倒挡时反馈项反号 | [`book/17_tracking_control.md`](book/17_tracking_control.md) |
@@ -187,7 +187,7 @@
 
 ### 04　状态机
 
-- 现文件：[`book/08_state_machine.md`](book/08_state_machine.md)
+- 现文件：[`book/04_state_machine.md`](book/04_state_machine.md)
 - `include/state_machine.h`，`src/core/state_machine.c`：`ReflectiveStateMachine`，`statem_init`，`statem_send_event_ex`，`statem_set_guard`，`statem_add_transition`，`statem_dump_table`
 
 ### 05　消息总线
@@ -217,7 +217,7 @@
 
 ### 08　统一传输与服务发现
 
-- 现文件：[`book/09_discovery.md`](book/09_discovery.md)
+- 现文件：[`book/08_discovery.md`](book/08_discovery.md)
 - `include/transport.h`，`src/core/transport.c`：`Transport`，`transport_create`，`transport_publish`，`transport_subscribe`，`transport_publish_loaned`，`topic_to_ipc_name`
 - `include/discovery.h`，`src/core/discovery.c`：`DiscoveryManager`，`discovery_create`，`discovery_advertise`，`discovery_wait_for_deps`，`discovery_create_ipc_channels`；`DISC_MULTICAST_GROUP`，`DISC_MULTICAST_PORT`，`DISC_MSG_HELLO`，`DISC_MSG_HEARTBEAT`，`DISC_MSG_GOODBYE`，`DISC_MSG_QUERY`
 - `include/network_transport.h`，`src/cpp/network_transport.cpp`：`net_transport_start`，`net_transport_connect`，`net_transport_bridge_topic`，`serialize_frame`，`decode_frame`
@@ -263,7 +263,7 @@
 
 ### 13　感知：从激光点云到目标（含其他感知源）
 
-- 现文件：[`book/12_lidar_tracking.md`](book/12_lidar_tracking.md)
+- 现文件：[`book/13_lidar_tracking.md`](book/13_lidar_tracking.md)
 - `modules/adas_nodes/lidar_scan.h`，`modules/adas_nodes/lidar_scan.c`：`LidarScanPlan`，`lidar_scan_generate`，`lidar_scan_plan_sanitize`
 - `modules/adas_nodes/lidar_contract.h`：`lidar_point_cloud_validate`，`lidar_point_cloud_capacity`
 - `modules/adas_nodes/lidar_driver_node.c`
@@ -292,7 +292,7 @@
 
 ### 14　定位融合：EKF
 
-- 现文件：[`book/13_sensor_fusion.md`](book/13_sensor_fusion.md)
+- 现文件：[`book/14_sensor_fusion.md`](book/14_sensor_fusion.md)
 - `modules/adas_nodes/ekf_slam.h`，`modules/adas_nodes/ekf_slam.c`：5 维状态 `[x, y, heading, v, omega]`。`ekf_slam_predict` 用 IMU 的 `accel_x`、`gyro_z` 做运动学预测，并传播雅可比 `F`。`ekf_slam_update` 观测位置和航向，`ekf_slam_update_pos` 只观测位置。`ekf_slam_get_pose` 读出 x/y/heading 和 `cov_xx` / `cov_yy` / `cov_hh`
 - `modules/adas_nodes/slam_node.cpp`：订阅 `sensor/lidar`、`sensor/imu`，发布 `sensor/pose`（`Pose2D`）。两处写出位姿都把 `converged` 设为 true，所以 `pipeline_car` 上只要位姿还在到，融合节点进不了上面的（c）。默认 `algo` 是 `dead_reckon`，不调用 `ekf_slam.c`。`algo` 为 `ekf_slam` 时走 `slam_update_ekf_slam`：预测用最近一帧 IMU，激光新鲜时做位置更新，位移大于 `heading_obs_min_disp` 时用 `atan2(Δy, Δx)` 作为航向观测。`config/pipeline_car.json` 的 slam 进程把 `algo` 设为 `ekf_slam`。默认 `config/pipeline.json` 没有这个进程，`allow_hung_subs` 含 `sensor/pose`
 - `src/algorithms/ekf_fusion.h`，`src/algorithms/ekf_fusion.c`：`EkfFusion` 状态 `[x, y, v, heading, yaw_rate]`。`ekf_fusion_predict` 是 CTRV：速度保持，横摆角速度保持，`x` 加上 `v·cos(heading)·dt`，没有转角，也没有轴距。头文件 Prediction 注释写着 “bicycle kinematic model”，和这段实现不一致，改写时按实现写。`ekf_fusion_update_lidar` 只更新位置 x/y。`ekf_fusion_update_gps` 的实参是速度和航向（`z_v`，`z_heading`），不是经纬度。头文件用法注释里的四参数形式（位置、速度、航向）和声明对不上

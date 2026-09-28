@@ -27,15 +27,15 @@
 | 规划速度剖面（ST 图 + DP） | [速度规划说明](PLANNING_SPEED_UPGRADE_DESIGN.md) | [算法栈](ALGORITHM_STACK.md) |
 | 控制与真车标定 | [标定指南](CALIBRATION_GUIDE.md) | [算法验证](ALGORITHM_VERIFY_PATTERN.md) |
 | LTV MPC 横向控制器 | [LTV MPC 设计](LTV_MPC_DESIGN.md) | [算法栈](ALGORITHM_STACK.md)（Stanley/MPC/PID） |
-| FlowSim、场景与场景回归 | [仿真指南](SIMULATION_GUIDE.md) | [场景设计教程](book/18_flowsim_scenario_design.md) |
+| FlowSim、场景与场景回归 | [仿真指南](SIMULATION_GUIDE.md) | [场景设计教程](book/20_flowsim_scenario_design.md) |
 | FlowSim 几何 / 运动 invariant | [Sim Digest](SIM_DIGEST.md) | [仿真指南](SIMULATION_GUIDE.md) |
-| Bag 通用录制与回放 | [Bag 教程](book/05_bag_recording.md) | [API 速查](API_QUICK_REFERENCE.md) |
+| Bag 通用录制与回放 | [Bag 教程](book/12_bag_recording.md) | [API 速查](API_QUICK_REFERENCE.md) |
 | flowrec 配置化留存节点 | [flowrec](FLOWREC.md) | [监控架构](MONITORING_ARCHITECTURE.md) |
 | 监控、flowmond 与 HTTP/SSE | [监控架构](MONITORING_ARCHITECTURE.md) | [FlowBoard API 契约](FLOWBOARD_CONTRACT.md) |
 | FlowBoard 场景帧与 `road_network` schema | [FlowBoard Scene 契约](FLOWBOARD_SCENE_CONTRACT.md) | [可视化架构](VISUALIZATION_ARCHITECTURE.md) |
 | FlowBoard 运行时架构 | [可视化架构](VISUALIZATION_ARCHITECTURE.md) | [vis View 接入规范](VIS_MODULE_GUIDE.md) |
 | PEM 与车端数据采集 | [数据闭环](DATA_CLOSED_LOOP.md) | [硬件部署](HARDWARE_DEPLOYMENT.md) |
-| 训练、影子推理与 OTA | [学习闭环](LEARNING_LOOP.md) | [学习教程](book/19_e2e_learning_loop.md) |
+| 训练、影子推理与 OTA | [学习闭环](LEARNING_LOOP.md) | [学习教程](book/24_e2e_learning_loop.md) |
 | 真车 profile、打包与升级 | [硬件部署](HARDWARE_DEPLOYMENT.md) | [RC 小车清单](RC_CAR_HARDWARE_CHECKLIST.md) |
 | 3D 仪表盘故障 | [3D 仪表盘排查](TROUBLESHOOTING_3D_DASHBOARD.md) | [监控架构](MONITORING_ARCHITECTURE.md) |
 
@@ -90,44 +90,66 @@
 
 《KunAutoDrive：从零构建高性能自动驾驶系统与仿真引擎》（中间件内核 KunAutoDrive 实战专著），按系统分卷组织（总目录见 [BOOK.md](BOOK.md)）：
 
-### 第一卷：微内核与系统编程底座 (Core & OS Primitives)
+### 第零部：先跑起来
 | 章节 | 专章教程 | 核心主题与深度解析 |
 |---|---|---|
-| 01 | [第 01 章：C 语言面向对象与微内核架构](book/01_oop_in_c.md) | C11 标准首成员内存保证、vtable 虚表分发、生命周期链与内存安全 |
-| 02 | [第 02 章：dlopen 插件化系统与微内核解耦](book/02_plugin_system.md) | ABI 门禁校验、RTLD_LOCAL 符号隔离、依赖注入与生命周期状态机 |
-| 03 | [第 03 章：高性能进程内消息总线](book/03_message_bus.md) | Pub/Sub 拓扑、64KB 动态消息帧、Free-List 零拷贝内存池、QoS 丢弃策略 |
-| 04 | [第 04 章：跨进程共享内存通信](book/04_ipc_channel.md) | POSIX SHM 环形队列、Robust Mutex 崩溃自愈、大 JSON 分块传输协议 |
-| 05 | [第 05 章：数据录制与回放](book/05_bag_recording.md) | Bag v2 格式、标准 MCAP 规范与时序索引无损回放 |
-| 06 | [第 06 章：统一时钟服务](book/06_clock_service.md) | 真实时钟 vs 仿真步进时钟、统一时间戳 uint64 μs 语义 |
-| 07 | [第 07 章：类型安全序列化层](book/07_serializer.md) | IDL 代码生成器、FNV-1a 哈希校验与二进制内存对齐 |
+| 00 | [前言](book/00_preface.md) | 这本书要造一个什么样的系统 |
+| 00b | [构建、演示与 pipeline.json](book/00b_run_pipeline.md) | 编出来、跑起来、看懂进程表 |
 
-### 第二卷：执行流与高级调度 (Scheduler & Coroutines)
+### 第一部：框架骨架
+| 章节 | 专章教程 | 核心主题与深度解析 |
+|---|---|---|
+| 01 | [第 01 章：用 C 造一个对象](book/01_oop_in_c.md) | C11 标准首成员内存保证、vtable 虚表分发、生命周期链与内存安全 |
+| 02 | [第 02 章：可插拔 .so 与启动器](book/02_plugin_system.md) | ABI 门禁校验、RTLD_LOCAL 符号隔离、依赖注入与生命周期状态机 |
+| 03 | [第 03 章：注册中心与参数系统](book/03_registry_and_params.md) | 参数注册与越界拒绝、热重载改值为何不能改行为 |
+| 04 | [第 04 章：反射式状态机](book/04_state_machine.md) | 事件驱动状态转移矩阵与拓扑反射 |
+
+### 第二部：通信与时间
 | 章节 | 专章教程 | 核心主题 |
 |---|---|---|
-| 08 | [第 08 章：反射式状态机](book/08_state_machine.md) | 事件驱动状态转移矩阵与拓扑反射 |
-| 09 | [第 09 章：去中心化服务发现](book/09_discovery.md) | UDP 广播、心跳自愈与 SysMonitor 节点内省 |
+| 05 | [第 05 章：消息总线](book/05_message_bus.md) | Pub/Sub 拓扑、动态消息帧、零拷贝内存池、QoS 丢弃策略 |
+| 06 | [第 06 章：类型 ID、IDL 与序列化](book/06_serializer.md) | IDL 代码生成器、FNV-1a 哈希校验与二进制内存对齐 |
+| 07 | [第 07 章：共享内存 IPC](book/07_ipc_channel.md) | POSIX SHM 环形队列、Robust Mutex 崩溃自愈、大 JSON 分块传输协议 |
+| 08 | [第 08 章：统一传输与服务发现](book/08_discovery.md) | UDP 组播、心跳自愈与拓扑内省 |
+| 09 | [第 09 章：时钟服务](book/09_clock_service.md) | 真实时钟 vs 仿真步进时钟、统一时间戳 uint64 μs 语义 |
+
+### 第三部：执行与调度
+| 章节 | 专章教程 | 核心主题 |
+|---|---|---|
 | 10 | [第 10 章：C++20 协程框架 FlowCoro](book/10_coroutine.md) | Task、Awaitable、Select、超时与优雅取消 |
-| 11 | [第 11 章：DAG 任务流与混合调度器](book/11_scheduler.md) | Classic FIFO + Choreo DAG + CPU 亲和性 |
+| 11 | [第 11 章：调度器与绑核](book/11_scheduler.md) | Classic FIFO + Choreo DAG + CPU 亲和性 |
 
-### 第三卷：ADAS 算法栈从理论到实现 (Algorithms & Pipeline)
+### 第四部：录制与回放
 | 章节 | 专章教程 | 核心主题 |
 |---|---|---|
-| 12 | [第 12 章：点云聚类与卡尔曼追踪](book/12_lidar_tracking.md) | DBSCAN 点云聚类与 Kalman 目标跟踪 |
-| 13 | [第 13 章：多传感器融合与定位](book/13_sensor_fusion.md) | EKF 状态估计、GPS/IMU 解算与 EKF-SLAM |
-| 14 | [第 14 章：离散决策状态机](book/14_behavior_decision.md) | 8 状态 Behavior FSM（跟车、变道、让行、掉头）与 NOA 导航主动变道 |
-| 15 | [第 15 章：轨迹与速度规划](book/15_trajectory_planning.md) | Frenet 最优轨迹、ST 图 + DP 动态规划速度剖面 |
-| 16 | [第 16 章：跟踪控制与特殊机动](book/16_tracking_control.md) | Stanley 横向 + LTV MPC + ManeuverTracker 掉头泊车 |
-| 17 | [第 17 章：FlowCoro 协程安全包络](book/17_safety_envelope.md) | TTC 碰撞闸门、横向干涉豁免与行人防护 |
+| 12 | [第 12 章：Bag、MCAP 与 flowrec](book/12_bag_recording.md) | Bag 格式、标准 MCAP 规范与时序索引无损回放 |
 
-### 第四卷：仿真验证、学习闭环与运维 (Sim, Learning & Ops)
+### 第五部：ADAS 算法栈
 | 章节 | 专章教程 | 核心主题 |
 |---|---|---|
-| 18 | [第 18 章：FlowSim 场景设计](book/18_flowsim_scenario_design.md) | 多 edge 路网拓扑、NPC 交互与 OpenDRIVE 桥接 |
-| 19 | [第 19 章：端到端学习闭环](book/19_e2e_learning_loop.md) | 数据采集、v3 59 维特征、tiny-MLP/PyTorch 训练、DAgger 与 Promote 门禁 |
-| 20 | [第 20 章：flowmond 监控与 3D 可视化](book/20_flowmond_3d_vis.md) | Three.js 前端、航位推算 Dead Reckoning 与 View 模块规范 |
-| 21 | [第 21 章：黑盒回归评估体系](book/21_demo_evaluator.md) | Demo Evaluator、分层校验阶梯 L0/L1/L2、参数敏感度扫描 |
+| 13 | [第 13 章：感知：从点云到目标](book/13_lidar_tracking.md) | DBSCAN 点云聚类与 Kalman 目标跟踪、动静分类 |
+| 14 | [第 14 章：定位融合与它的三种沉默](book/14_sensor_fusion.md) | EKF 状态估计、三个位置分支与真车配置下的沉默失败 |
+| 15 | [第 15 章：行为决策](book/15_behavior_decision.md) | 8 状态 Behavior FSM（跟车、变道、让行、掉头）与 NOA 导航主动变道 |
+| 16 | [第 16 章：Frenet 轨迹规划](book/16_trajectory_planning.md) | 网格枚举候选轨迹、ST 图 + DP 动态规划速度剖面 |
+| 17 | [第 17 章：跟踪控制与特殊机动](book/17_tracking_control.md) | 横向三级级联 + LTV MPC + ManeuverTracker 掉头泊车 |
+| 18 | [第 18 章：安全包络与降级](book/18_safety_envelope.md) | 仲裁规则、降级阶梯与健康心跳 |
+| 19 | [第 19 章：执行器 PWM 与 SocketCAN](book/19_socketcan_actuator.md) | 脉宽映射、看门狗与 CAN 后端 |
 
-### 第五卷：真车部署与硬件落地 (Hardware Deployment)
+### 第六部：仿真、可视化与学习闭环
 | 章节 | 专章教程 | 核心主题 |
 |---|---|---|
-| 附录 A | [SocketCAN 与 PWM 执行器落地指南](book/22_socketcan_actuator.md) | RC 智能小车与真车底盘软硬件连接、SocketCAN 与 PCA9685 PWM 驱动 |
+| 20 | [第 20 章：FlowSim 场景与世界](book/20_flowsim_scenario_design.md) | 多 edge 路网拓扑、NPC 交互与 OpenDRIVE 桥接 |
+| 21 | [第 21 章：VLA、世界模型与无人车前沿](book/21_vla_world_model_frontier.md) | 行业坐标与 2026 年共识，唯一大量引用仓库外材料的一章 |
+| 22 | [第 22 章：可视化与内省](book/22_flowmond_3d_vis.md) | Three.js 前端、航位推算 Dead Reckoning 与 View 模块规范 |
+| 23 | [第 23 章：验证关卡与回归评估](book/23_demo_evaluator.md) | Demo Evaluator、分层校验阶梯 L0/L1/L2、参数敏感度扫描 |
+| 24 | [第 24 章：端到端学习闭环](book/24_e2e_learning_loop.md) | 数据采集、v3 59 维特征、tiny-MLP/PyTorch 训练、DAgger 与 Promote 门禁 |
+
+完整阅读顺序与每章的源码对照见 [BOOK.md](BOOK.md)。
+
+### 附录
+
+| 文档 | 内容 |
+|---|---|
+| [A. SocketCAN 与 PWM 执行器落地指南](book/19_socketcan_actuator.md) | RC 智能小车与真车底盘软硬件连接、SocketCAN 与 PCA9685 PWM 驱动 |
+| [B. 术语表](GLOSSARY.md) | 全书反复出现的名词一句话定义 |
+| [C. 全书索引](INDEX.md) | 按任务 / 主题 / 文件三种方式检索 |

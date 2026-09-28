@@ -17,22 +17,22 @@
 | 我想… | 去 |
 |------|-----|
 | 加一个新节点 | [book/02_plugin_system.md](book/02_plugin_system.md) |
-| 加一个新 topic / 消息类型 | [book/03_message_bus.md](book/03_message_bus.md) + [book/07_serializer.md](book/07_serializer.md) |
+| 加一个新 topic / 消息类型 | [book/05_message_bus.md](book/05_message_bus.md) + [book/06_serializer.md](book/06_serializer.md) |
 | 加一个可调参数 | [API_QUICK_REFERENCE.md](API_QUICK_REFERENCE.md)（ParamRegistry） |
 | 接第三方算法库（YOLO/Eigen…） | [ALGORITHM_INTEGRATION.md](ALGORITHM_INTEGRATION.md) |
-| 让节点跨进程通信 | [book/04_ipc_channel.md](book/04_ipc_channel.md) |
-| 写一个状态机 | [book/08_state_machine.md](book/08_state_machine.md) |
-| 新增一个仿真场景 | [book/18_flowsim_scenario_design.md](book/18_flowsim_scenario_design.md) |
+| 让节点跨进程通信 | [book/07_ipc_channel.md](book/07_ipc_channel.md) |
+| 写一个状态机 | [book/04_state_machine.md](book/04_state_machine.md) |
+| 新增一个仿真场景 | [book/20_flowsim_scenario_design.md](book/20_flowsim_scenario_design.md) |
 | 新增一个地图 | [MAP_GENERATION_MODULE.md](MAP_GENERATION_MODULE.md) + [MAP_ENGINE_ROUTING.md](MAP_ENGINE_ROUTING.md) |
 | 新增一个 3D View | [VIS_MODULE_GUIDE.md](VIS_MODULE_GUIDE.md) |
 | 调控制器参数（仿真/真车） | [CALIBRATION_GUIDE.md](CALIBRATION_GUIDE.md) |
-| 训练并部署一个驾驶模型 | [LEARNING_LOOP.md](LEARNING_LOOP.md) + [book/19_e2e_learning_loop.md](book/19_e2e_learning_loop.md) |
+| 训练并部署一个驾驶模型 | [LEARNING_LOOP.md](LEARNING_LOOP.md) + [book/24_e2e_learning_loop.md](book/24_e2e_learning_loop.md) |
 
 ### 调试 / 验证
 | 我想… | 去 |
 |------|-----|
 | 改完代码快速检查管道 | [ALGORITHM_VERIFY_PATTERN.md](ALGORITHM_VERIFY_PATTERN.md)（`pipeline_check.py`） |
-| 整条链 45s 行为回归 | [book/21_demo_evaluator.md](book/21_demo_evaluator.md) |
+| 整条链 45s 行为回归 | [book/23_demo_evaluator.md](book/23_demo_evaluator.md) |
 | 场景矩阵批量回归 | [SIMULATION_GUIDE.md](SIMULATION_GUIDE.md)（scenario_regression） |
 | 检查地图连通性 | [MAP_ENGINE_ROUTING.md](MAP_ENGINE_ROUTING.md)（check_map_connectivity） |
 | 前端 3D 门禁 | [VIS_MODULE_GUIDE.md](VIS_MODULE_GUIDE.md)（`npm run vis:check:all`） |
@@ -45,7 +45,7 @@
 |------|-----|
 | 部署到真车 | [HARDWARE_DEPLOYMENT.md](HARDWARE_DEPLOYMENT.md) |
 | 组装 RC 小车 | [RC_CAR_HARDWARE_CHECKLIST.md](RC_CAR_HARDWARE_CHECKLIST.md) |
-| 接 CAN 执行器 | [book/22_socketcan_actuator.md](book/22_socketcan_actuator.md) |
+| 接 CAN 执行器 | [book/19_socketcan_actuator.md](book/19_socketcan_actuator.md) |
 | 接真实 SLAM | [HARDWARE_DEPLOYMENT.md](HARDWARE_DEPLOYMENT.md)（FAST-LIO2） |
 | 看硬件调试命令 | [HARDWARE_DEPLOYMENT.md](HARDWARE_DEPLOYMENT.md) §调试 |
 
@@ -54,13 +54,13 @@
 | 主题 | 教程（原理/入门） | 参考（契约/细节） |
 |------|------------------|-------------------|
 | C 面向对象 | [book/01_oop_in_c.md](book/01_oop_in_c.md) | [CODE_WIKI.md](CODE_WIKI.md) |
-| 消息总线 | [book/03_message_bus.md](book/03_message_bus.md) | [API_QUICK_REFERENCE.md](API_QUICK_REFERENCE.md) §Message Bus |
-| 传输/IPC | [book/04_ipc_channel.md](book/04_ipc_channel.md) | [MONITORING_ARCHITECTURE.md](MONITORING_ARCHITECTURE.md) |
-| 时钟/时间 | [book/06_clock_service.md](book/06_clock_service.md) | [API_QUICK_REFERENCE.md](API_QUICK_REFERENCE.md) |
-| 序列化 | [book/07_serializer.md](book/07_serializer.md) | [FLOWBOARD_SCENE_CONTRACT.md](FLOWBOARD_SCENE_CONTRACT.md) |
-| 状态机 | [book/08_state_machine.md](book/08_state_machine.md) | [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（8 状态 FSM） |
+| 消息总线 | [book/05_message_bus.md](book/05_message_bus.md) | [API_QUICK_REFERENCE.md](API_QUICK_REFERENCE.md) §Message Bus |
+| 传输/IPC | [book/07_ipc_channel.md](book/07_ipc_channel.md) | [MONITORING_ARCHITECTURE.md](MONITORING_ARCHITECTURE.md) |
+| 时钟/时间 | [book/09_clock_service.md](book/09_clock_service.md) | [API_QUICK_REFERENCE.md](API_QUICK_REFERENCE.md) |
+| 序列化 | [book/06_serializer.md](book/06_serializer.md) | [FLOWBOARD_SCENE_CONTRACT.md](FLOWBOARD_SCENE_CONTRACT.md) |
+| 状态机 | [book/04_state_machine.md](book/04_state_machine.md) | [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（8 状态 FSM） |
 | 协程 | [book/10_coroutine.md](book/10_coroutine.md) | [ALGORITHM_STACK.md](ALGORITHM_STACK.md) |
-| 融合/定位 | [book/13_sensor_fusion.md](book/13_sensor_fusion.md) | [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（EKF） |
+| 融合/定位 | [book/14_sensor_fusion.md](book/14_sensor_fusion.md) | [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（EKF） |
 | 感知/跟踪 | — | [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（DBSCAN/卡尔曼） |
 | 行为决策 | — | [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（FSM） |
 | 规划（轨迹+速度） | [PLANNING_SPEED_UPGRADE_DESIGN.md](PLANNING_SPEED_UPGRADE_DESIGN.md) | [ALGORITHM_STACK.md](ALGORITHM_STACK.md) |
@@ -69,9 +69,9 @@
 | 仿真物理 | [FLOWSIM_PHYSICS.md](FLOWSIM_PHYSICS.md) | [SIM_DIGEST.md](SIM_DIGEST.md) |
 | 地图生成 | [MAP_GENERATION_MODULE.md](MAP_GENERATION_MODULE.md) | [MAP_ENGINE_ROUTING.md](MAP_ENGINE_ROUTING.md) |
 | 可视化/3D | [VISUALIZATION_ARCHITECTURE.md](VISUALIZATION_ARCHITECTURE.md) | [VIS_3D_RENDERING.md](VIS_3D_RENDERING.md) |
-| 学习闭环 | [book/19_e2e_learning_loop.md](book/19_e2e_learning_loop.md) | [LEARNING_LOOP.md](LEARNING_LOOP.md) |
+| 学习闭环 | [book/24_e2e_learning_loop.md](book/24_e2e_learning_loop.md) | [LEARNING_LOOP.md](LEARNING_LOOP.md) |
 | 数据采集 | [FLOWREC.md](FLOWREC.md) | [DATA_CLOSED_LOOP.md](DATA_CLOSED_LOOP.md) |
-| 验证/门禁 | [book/21_demo_evaluator.md](book/21_demo_evaluator.md) | [ALGORITHM_VERIFY_PATTERN.md](ALGORITHM_VERIFY_PATTERN.md) |
+| 验证/门禁 | [book/23_demo_evaluator.md](book/23_demo_evaluator.md) | [ALGORITHM_VERIFY_PATTERN.md](ALGORITHM_VERIFY_PATTERN.md) |
 
 ## 三、按文件：每个文档一句话定位
 

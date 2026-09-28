@@ -1,7 +1,7 @@
 # 第 19 章：浮点数变成电压的最后那一段
 
 > **v2 范式章节**（2026-09 整治后保留）。本章保留低行号密度、真技术书
-> 风格，参照 `docs/book/README.md` 写作风格约束与 `docs/book/09_discovery.md`
+> 风格，参照 `docs/book/README.md` 写作风格约束与 `docs/book/08_discovery.md`
 > 范式示范。v1 行号清单版本归档于 `docs/_archive/book_v1/22_socketcan_actuator.md`。
 
 前面 18 章的所有输出，到本章为止都还只是一串浮点数。这一章是它们变成

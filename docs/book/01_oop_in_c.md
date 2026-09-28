@@ -1,7 +1,7 @@
 # 第 01 章：用 C 造一个对象
 
 > **v2 范式章节**（2026-09 整治后保留）。本章保留低行号密度、真技术书
-> 风格，参照 `docs/book/README.md` 写作风格约束与 `docs/book/09_discovery.md`
+> 风格，参照 `docs/book/README.md` 写作风格约束与 `docs/book/08_discovery.md`
 > 范式示范。v1 行号清单版本归档于 `docs/_archive/book_v1/`。
 
 调度器手里只有一串 `TaskBase*`，它得挨个喊一声「该你了」。可每个任务被喊到时

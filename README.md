@@ -203,13 +203,17 @@ bash build.sh release
 
 《KunAutoDrive：从零构建高性能自动驾驶系统与仿真引擎》（中间件内核 FlowEngine 实战专著），完整 5 大卷索引见 [docs/BOOK.md](docs/BOOK.md)：
 
-| 卷号 | 专卷主题 | 包含章节 |
+| 部分 | 主题 | 包含章节 |
 |------|---------|---------|
-| **第一卷** | **微内核与系统编程底座** | [01 语言面向对象](docs/book/01_oop_in_c.md) · [02 dlopen 插件化](docs/book/02_plugin_system.md) · [03 进程内消息总线](docs/book/03_message_bus.md) · [04 共享内存 IPC](docs/book/04_ipc_channel.md) · [05 数据持久化 Bag](docs/book/05_bag_recording.md) · [06 统一时钟服务](docs/book/06_clock_service.md) · [07 类型安全序列化](docs/book/07_serializer.md) |
-| **第二卷** | **执行流与高级调度** | [08 反射式状态机](docs/book/08_state_machine.md) · [09 服务发现与拓扑](docs/book/09_discovery.md) · [10 FlowCoro 协程框架](docs/book/10_coroutine.md) · [11 DAG 混合调度器](docs/book/11_scheduler.md) |
-| **第三卷** | **ADAS 算法栈从理论到实现** | [12 点云聚类与跟踪](docs/book/12_lidar_tracking.md) · [13 多传感器融合 EKF](docs/book/13_sensor_fusion.md) · [14 行为决策与 NOA](docs/book/14_behavior_decision.md) · [15 轨迹与速度规划](docs/book/15_trajectory_planning.md) · [16 跟踪控制与 MPC](docs/book/16_tracking_control.md) · [17 协程安全包络](docs/book/17_safety_envelope.md) |
-| **第四卷** | **仿真验证、学习闭环与运维** | [18 FlowSim 场景设计](docs/book/18_flowsim_scenario_design.md) · [19 端到端学习闭环](docs/book/19_e2e_learning_loop.md) · [20 flowmond 3D 监控](docs/book/20_flowmond_3d_vis.md) · [21 黑盒回归评估体系](docs/book/21_demo_evaluator.md) |
-| **第五卷** | **真车部署与硬件落地** | [附录 A SocketCAN 与 PWM 执行器落地指南](docs/book/22_socketcan_actuator.md) |
+| **第零部** | 先跑起来 | [00 前言](docs/book/00_preface.md) · [00b 构建、演示与 pipeline.json](docs/book/00b_run_pipeline.md) |
+| **第一部** | 框架骨架 | [01 用 C 造对象](docs/book/01_oop_in_c.md) · [02 可插拔 .so](docs/book/02_plugin_system.md) · [03 注册中心与参数](docs/book/03_registry_and_params.md) · [04 状态机](docs/book/04_state_machine.md) |
+| **第二部** | 通信与时间 | [05 消息总线](docs/book/05_message_bus.md) · [06 序列化与 IDL](docs/book/06_serializer.md) · [07 共享内存 IPC](docs/book/07_ipc_channel.md) · [08 服务发现](docs/book/08_discovery.md) · [09 时钟服务](docs/book/09_clock_service.md) |
+| **第三部** | 执行与调度 | [10 C++20 协程](docs/book/10_coroutine.md) · [11 调度器与绑核](docs/book/11_scheduler.md) |
+| **第四部** | 录制与回放 | [12 Bag、MCAP 与 flowrec](docs/book/12_bag_recording.md) |
+| **第五部** | ADAS 算法栈 | [13 点云聚类与跟踪](docs/book/13_lidar_tracking.md) · [14 定位融合 EKF](docs/book/14_sensor_fusion.md) · [15 行为决策](docs/book/15_behavior_decision.md) · [16 Frenet 轨迹规划](docs/book/16_trajectory_planning.md) · [17 跟踪控制与 MPC](docs/book/17_tracking_control.md) · [18 安全包络与降级](docs/book/18_safety_envelope.md) · [19 执行器 PWM / SocketCAN](docs/book/19_socketcan_actuator.md) |
+| **第六部** | 仿真、可视化与学习闭环 | [20 FlowSim 场景设计](docs/book/20_flowsim_scenario_design.md) · [21 VLA 与世界模型前沿](docs/book/21_vla_world_model_frontier.md) · [22 flowmond 3D 监控](docs/book/22_flowmond_3d_vis.md) · [23 黑盒回归评估](docs/book/23_demo_evaluator.md) · [24 端到端学习闭环](docs/book/24_e2e_learning_loop.md) |
+
+阅读顺序、每章讲什么和源码对照见 [docs/BOOK.md](docs/BOOK.md)。
 
 ---
 

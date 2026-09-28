@@ -1,6 +1,7 @@
 # M1 Submodule 接入指南：Lanelet2（D2-01 文档化）
 
-> 配套：[REQ_L3_DIR2_HDMAP.md v1.0](../REQ_L3_DIR2_HDMAP.md) §2.1 D2-01
+> 配套：`REQ_L3_DIR2_HDMAP.md` v1.0 §2.1 D2-01 —— **该文档不在本仓库内**
+> （仓库根目录无此文件，git 全历史亦无），属于外部需求文档，需要时向需求方索取。
 > 配套：[M1_OSM_INTERFACE_CONTRACT.md](M1_OSM_INTERFACE_CONTRACT.md) §5（D2-09 消费本 submodule 产出的 .osm）
 
 ## 1. 拉取
@@ -62,7 +63,7 @@ endforeach()
 1. **Lanelet2 无 tag 体系**：master 即稳定，但 API 偶有 breaking change（v1.1 → v1.2 时 `LaneletMap::load` 签名变过一次）。M2 实施时记录实际 commit hash 到 `third_party/lanelet2/README.md`。
 2. **Boost 引入会拖慢 CI 编译**：从 0 到 vendored Boost 约 +2 分钟构建时间。评估是否值得。
 3. **macOS / Windows 兼容性**：Lanelet2 在 macOS 上 Boost 路径可能踩坑；本项目主 target 是 Linux，暂不考虑。
-4. **与 esmini OpenDRIVE 共存**：M1 阶段 esmini 仍读 .xodr 渲染地图，Lanelet2 走 .osm 做规划输入，两套链路并存（详见 [REQ_L3_DIR2_HDMAP.md v1.0](../REQ_L3_DIR2_HDMAP.md) §1.3 选型）。
+4. **与 esmini OpenDRIVE 共存**：M1 阶段 esmini 仍读 .xodr 渲染地图，Lanelet2 走 .osm 做规划输入，两套链路并存（详见 `REQ_L3_DIR2_HDMAP.md` v1.0 §1.3 选型）。
 
 ## 6. M1 阶段不强制 init 的原因
 

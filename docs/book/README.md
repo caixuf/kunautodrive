@@ -51,10 +51,17 @@
 | 文件名 | 真实章节号（BOOK.md 维护） |
 |---|---|
 | `00_preface.md` | 序 |
-| `07_serializer.md` | 类型安全的零拷贝序列化 |
-| `13_sensor_fusion.md` | 传感器融合：从卡尔曼到 EKF |
+| `06_serializer.md` | 06 类型安全的零拷贝序列化 |
+| `14_sensor_fusion.md` | 14 定位融合：EKF |
+
+**文件名前缀必须等于章节号**。`docs/book/` 下不允许出现两个同前缀的文件
+（比如曾经同时存在 `12_bag_recording.md` 和 `12_lidar_tracking.md`），
+因为读者靠 `ls` 和文件名定位章节，前缀乱了索引就废了。
 
 如果重排后文件名与 BOOK.md 章节号对不上——**BOOK.md 是真源，文件名跟随**（不要反过来）。
+重排是一次性动作：改完 BOOK.md 就把所有 `git mv` 做完，并全仓库替换旧文件名
+（`docs/README.md`、`docs/INDEX.md`、`docs/GLOSSARY.md`、根 `README.md`、
+各章 banner 里的交叉引用，以及 `.py` 注释里的引用）。
 
 ## v1 → v2 迁移
 
@@ -62,15 +69,20 @@
 **v2（本目录）**：按本 README 风格重写。轻装上阵，每章只讲一个核心思想。
 
 迁移期策略：
-- 已重写的 v2 章进入 `docs/`，删除 `docs/_archive/book_v1/` 对应文件
-- 未重写的章节暂时保留 `docs/book/old_<n>_<topic>.md`，标注"待 v2 重写"
-- BOOK.md 索引指向**当前真源**（v2 章节优先，archive 章节标注历史）
+- v1 原文整体 `git mv` 到 `docs/_archive/book_v1/` 保留（不删），文件头部加归档
+  banner，指向它在 BOOK.md 里的现章节号。删掉就没法回答"这一章为什么改"
+- 重写后的 v2 章落在 `docs/book/`，文件名与章号对齐
+- BOOK.md 索引**只指向 `docs/book/` 的 v2 现章节**；archive 仅作历史参考，
+  不被任何章节表引用
+- `BOOK.md` 头部"关于文档结构"段记录 v1→现章节号的完整映射表
 
 ## 编辑纪律
 
 - **不在 PR 中间改 docs/book/**：每次重写一整章；不要小步编辑（会留下半新半旧）
 - **作者自报**：commit body 写明"为什么这一章要存在" / "v1 的哪一条内容搬到这里"
-- **CI 守门**：`tools/gates/book_guard.py` 监控每章行数突变（>20%）、行号密度（>5 个 `:NNN` 引用）、函数符号密度（>10 个）
+- **CI 守门**：`ci/gates/book_guard.py` 监控每章行数突变（>20%）、行号密度（>5 个 `:NNN` 引用）、函数符号密度（>10 个）
+- **守门管不到什么**（所以下面几条靠人）：链接有效性、文件名前缀与章号是否一致、
+  正文里残留的校对批注、篇幅是否远低于下限。gate 绿 ≠ 书能读
 
 ## 何时不写 docs/book/
 
@@ -92,16 +104,17 @@
 
 写新章节或修改现存章节前，先读一遍：
 
-- **`docs/book/09_discovery.md`** —— 第 08 章《没有中心节点之后》。问题驱动标题、ASCII + mermaid 图示、跨机一段不绑行号、失败故事独立成段（集群扩容心跳堵车 / docker0 心跳外发）。是 v2 范式标杆。
+- **`docs/book/08_discovery.md`** —— 第 08 章《没有中心节点之后》。问题驱动标题、ASCII + mermaid 图示、跨机一段不绑行号、失败故事独立成段（集群扩容心跳堵车 / docker0 心跳外发）。是 v2 范式标杆。
 - **`docs/book/CROSS_CUTTING.md`** —— 14 个共用抽象的串联表（ClockService / KF 族 / 反射状态机 / Pub-Sub / 共享内存 IPC / 插件契约 / Bag / 评估与门禁 / 航位推算 / CTRV / JSON / 依赖注入）。读完任意一章遇到不熟的抽象，按此表跳到对应章节。
 
 ## 首次进入本书：推荐阅读路径
 
-按 14 章自身的"成熟度"梯度，建议首次读者三档：
+按 25 章自身的"成熟度"梯度，建议首次读者三档（另有第 00b 章"跑起来"
+是所有章节的共同起点，不计入三档）：
 
-- **必读（5 章）**：`00_preface` → `01_oop_in_c` → `02_plugin_system` → `08_state_machine` → `09_discovery`
-- **强烈推荐（4 章）**：`06_clock_service` → `10_coroutine` → `11_scheduler` → `21_demo_evaluator`
-- **按需（5 章）**：`05_bag_recording` / `12_lidar_tracking` / `13_sensor_fusion` / `19_e2e_learning_loop` / `20_flowmond_3d_vis`
+- **必读（6 章）**：`00_preface` → `00b_run_pipeline` → `01_oop_in_c` → `02_plugin_system` → `04_state_machine` → `08_discovery`
+- **强烈推荐（4 章）**：`09_clock_service` → `10_coroutine` → `11_scheduler` → `23_demo_evaluator`
+- **按需（5 章）**：`12_bag_recording` / `13_lidar_tracking` / `14_sensor_fusion` / `24_e2e_learning_loop` / `22_flowmond_3d_vis`
 
 详情见 `CROSS_CUTTING.md` 的"作者建议"段。
 

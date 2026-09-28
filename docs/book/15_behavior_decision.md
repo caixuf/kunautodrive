@@ -1,7 +1,7 @@
 # 第 15 章：决策层为什么只回答「做哪件」，不回答「怎么做」
 
 > **v2 范式章节**（2026-09 整治后保留）。本章保留低行号密度、真技术书
-> 风格，参照 `docs/book/README.md` 写作风格约束与 `docs/book/09_discovery.md`
+> 风格，参照 `docs/book/README.md` 写作风格约束与 `docs/book/08_discovery.md`
 > 范式示范。v1 行号清单版本归档于 `docs/_archive/book_v1/14_behavior_decision.md`。
 
 前面有辆车挡住了你。你脑子里其实同时转着两个问题——**走不走**，和**往哪走**。
