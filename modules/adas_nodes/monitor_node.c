@@ -320,9 +320,16 @@ static struct {
     pthread_mutex_t scene_frame_mutex;
 
     /* 节点拓扑: 从 flowengine/node_info topic 收集 (B 方案) */
-#define MAX_TOPO_NODES 16
+    /* 容量必须 ≥ 单条 pipeline 编排的最大节点数，否则超出的广播被静默丢弃。
+     * 2026-09-28 实测：config/pipeline.json 有 17 个节点（含 monitor 自身），
+     * 上限 16 时 monitor 自己的自描述广播正好排在第 17 条被丢掉 ——
+     * state_file 里就没有 monitor 节点，demo_evaluator 随即报 8 条
+     * "missing topology edge ... --> monitor"，而 launcher 日志一片干净。
+     * pipeline_car.json 更有 19 个节点，早已溢出。取 32 留出余量。 */
+#define MAX_TOPO_NODES 32
     char node_info_json[MAX_TOPO_NODES][2048];  /* 每个节点的原始 JSON（需能容纳最长节点的 self-description JSON） */
     int  node_info_count;
+    int  node_info_dropped;   /* 因容量满被丢弃的广播数（>0 说明 MAX_TOPO_NODES 又不够了） */
 
     /* 导出路径 */
     char state_file[512];
@@ -486,7 +493,19 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
 /* 收集其他节点的自描述广播 */
 static void on_node_info(const Message* msg, void* user_data) {
     (void)user_data;
-    if (!msg || g.node_info_count >= MAX_TOPO_NODES) return;
+    if (!msg) return;
+    if (g.node_info_count >= MAX_TOPO_NODES) {
+        /* 容量溢出必须可见：静默丢弃会让拓扑缺节点，下游 evaluator 只能
+         * 报 "missing topology edge"，指不到真正的根因。 */
+        g.node_info_dropped++;
+        if (g.node_info_dropped == 1 || g.node_info_dropped % 50 == 0) {
+            LOG_WARN("monitor",
+                     "node topology truncated: %d node_info broadcasts dropped "
+                     "(MAX_TOPO_NODES=%d) — topology is incomplete, raise the cap "
+                     "in monitor_node.c", g.node_info_dropped, MAX_TOPO_NODES);
+        }
+        return;
+    }
     size_t copy = msg->data_size < sizeof(g.node_info_json[0]) - 3
                   ? msg->data_size : sizeof(g.node_info_json[0]) - 3;
     memcpy(g.node_info_json[g.node_info_count], msg->data, copy);
@@ -1059,6 +1078,11 @@ static void export_dashboard_json(void) {
     }
 
     cJSON* nodes = cJSON_AddArrayToObject(root, "nodes");
+    /* 显式暴露截断计数：nodes 数组不完整时下游能区分「拓扑就这么多节点」
+     * 和「还有节点被容量上限吃掉了」，不必再去猜。 */
+    if (g.node_info_dropped > 0) {
+        cJSON_AddNumberToObject(root, "nodes_dropped", g.node_info_dropped);
+    }
     if (topo && disc_alive > g.node_info_count) {
         emit_nodes_from_discovery(nodes, topo);
         /* discovery 拓扑不含本节点自身 (self 只广播 my_topics, 不进自己的
