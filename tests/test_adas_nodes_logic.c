@@ -50,6 +50,7 @@
  * 一致的 header-only 抽取模式，无副本漂移）。 */
 #include "fusion_lane_hint.h"
 #include "planning_ttc_candidate.h"   /* D2-06: TTC follow lead 候选选择 helper */
+#include "traffic_density_spawn.h"   /* D3-2: traffic_density spawn 算式 helper */
 
 #include <math.h>
 #include <stdint.h>
@@ -1640,6 +1641,83 @@ static void test_ttc_select_relv_gate(void) {
     PASS();
 }
 
+
+/* ═══════════════════════════════════════════════════════════
+ * D3-2: traffic_density auto-spawn 纯算法 (traffic_density_spawn.h)
+ * ═══════════════════════════════════════════════════════════
+ *
+ * 覆盖需求（spec REQ_L3_DIR2_HDMAP.md D3-2）：
+ *   - cars_per_km → spacing_m 反算（1000/density）
+ *   - 段长 + spacing → spawn 数（floor，避免同段重叠）
+ *   - jitter 抖动边界（cap 到段内 [0, L]）
+ *   - lane_spread 模式下 lane_id 交替（压力测试模式全 0）
+ *
+ * 共 4 例（每例 1 个断言），对应 D3-2 handoff §3 的算法验收。
+ */
+
+/* ── deterministic test RNG（不依赖系统 rand）── */
+static double _test_uniform_returns_zero(double lo, double hi) {
+    /* 返回区间中点 = (lo+hi)/2 = 0（当 lo=-jitter, hi=+jitter 时） */
+    (void)lo; (void)hi;
+    return 0.0;
+}
+
+/* ── Test 1: cars_per_km → spacing_m 反算 ── */
+static void test_traffic_density_spacing_from_density(void) {
+    TEST("traffic_density_spacing_from_density: 1000 veh/km → 1m; 0 → 1e9");
+    double sp1000 = traffic_density_spacing_from_density(1000);
+    ASSERT(sp1000 == 1.0, "1000 cars_per_km must yield 1.0m spacing");
+    double sp0 = traffic_density_spacing_from_density(0);
+    ASSERT(sp0 > 1e8, "0 cars_per_km must yield > 1e8 spacing (effectively disabled)");
+    double sp50 = traffic_density_spacing_from_density(50);
+    ASSERT(sp50 == 20.0, "50 cars_per_km must yield 20.0m spacing (typical mid-density)");
+    PASS();
+}
+
+/* ── Test 2: 段长 + spacing → spawn 数（floor） ── */
+static void test_traffic_density_seg_spawn_count(void) {
+    TEST("traffic_density_seg_spawn_count: floor(L/spacing)，段短<spacing→0");
+    int n100_20 = traffic_density_seg_spawn_count(100.0, 20.0);
+    ASSERT(n100_20 == 5, "100m segment with 20m spacing must yield 5 spawns");
+    int n95_20 = traffic_density_seg_spawn_count(95.0, 20.0);
+    ASSERT(n95_20 == 4, "95m segment with 20m spacing must yield 4 spawns (floor, no overlap)");
+    int n5_20 = traffic_density_seg_spawn_count(5.0, 20.0);
+    ASSERT(n5_20 == 0, "5m segment with 20m spacing must yield 0 (avoid overlap)");
+    int n100_0 = traffic_density_seg_spawn_count(100.0, 0.0);
+    ASSERT(n100_0 == 0, "spacing<=0 must yield 0 spawns (disabled)");
+    PASS();
+}
+
+/* ── Test 3: s_local 计算 + jitter cap ── */
+static void test_traffic_density_compute_s_local(void) {
+    TEST("traffic_density_compute_s_local: i*spacing + jitter，cap 到 [0, L]");
+    /* jitter=0，rand_uniform=NULL：直接 i*spacing */
+    double s00 = traffic_density_compute_s_local(100.0, 20.0, 0.0, 0, NULL);
+    ASSERT(s00 == 0.0, "i=0, jitter=0 → s=0");
+    double s12 = traffic_density_compute_s_local(100.0, 20.0, 0.0, 1, NULL);
+    ASSERT(s12 == 20.0, "i=1, jitter=0 → s=20");
+    /* jitter>0，rand_uniform 返回 lo（=0）→ s = i*spacing + 0 */
+    double s23 = traffic_density_compute_s_local(100.0, 20.0, 5.0, 2, _test_uniform_returns_zero);
+    ASSERT(s23 == 40.0, "i=2, jitter=5 (RNG returns 0) → s=40");
+    /* i 极大时 cap 到 L=100 */
+    double s_clip = traffic_density_compute_s_local(100.0, 20.0, 0.0, 10, NULL);
+    ASSERT(s_clip == 100.0, "i=10, jitter=0 → s=200 unclamped; cap to L=100");
+    PASS();
+}
+
+/* ── Test 4: lane_spread 模式 ── */
+static void test_traffic_density_lane_id(void) {
+    TEST("traffic_density_lane_id: spread=true 0/-1 交替；spread=false 全 0");
+    ASSERT(traffic_density_lane_id(true, 0) == 0,  "spread=true, i=0 → 0");
+    ASSERT(traffic_density_lane_id(true, 1) == -1, "spread=true, i=1 → -1");
+    ASSERT(traffic_density_lane_id(true, 2) == 0,  "spread=true, i=2 → 0");
+    ASSERT(traffic_density_lane_id(true, 3) == -1, "spread=true, i=3 → -1");
+    ASSERT(traffic_density_lane_id(false, 0) == 0, "spread=false, i=0 → 0");
+    ASSERT(traffic_density_lane_id(false, 1) == 0, "spread=false, i=1 → 0");
+    ASSERT(traffic_density_lane_id(false, 2) == 0, "spread=false, i=2 → 0");
+    PASS();
+}
+
 int main(void) {
     printf("\n╔══════════════════════════════════════════╗\n");
     printf("║  FlowEngine ADAS Nodes Logic Tests        ║\n");
@@ -1732,6 +1810,12 @@ int main(void) {
     test_ttc_select_no_hint_fallback();
     test_ttc_select_lat_gate();
     test_ttc_select_relv_gate();
+
+    printf("\n═══ traffic_density auto-spawn (D3-2) ═══\n");
+    test_traffic_density_spacing_from_density();
+    test_traffic_density_seg_spawn_count();
+    test_traffic_density_compute_s_local();
+    test_traffic_density_lane_id();
 
     printf("\n═══ LiDAR Observation Model (3D scan / capacity guard) ═══\n");
     test_lidar_scan_azimuth_fov_bounds();
