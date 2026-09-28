@@ -141,7 +141,86 @@ protected:
             degrade_supervisor_record_heartbeat("fusion_node", clock_now_us() / 1000);
 
             const Message* lidar_msg = message_buffer_latest(lidar_buf_);
-            if (!lidar_msg) continue;
+
+            /* 无 LidarFrame 时不能静默跳过。
+             * 真车配置（pipeline_car.json）里 lidar_driver 发的是
+             * perception/obstacles 上的 ObstacleList，enable 默认 0，
+             * 没有任何进程往 sensor/lidar 发 LidarFrame。旧实现在此
+             * `continue`，导致 fusion/localization 永不发布 —— 节点不报错、
+             * 下游一直等，是最贵的失败形态。
+             * 现在降级为纯预测：无位置量测，只靠 GPS 速度/航向维持状态，
+             * 并周期性告警，让沉默的失败变成可见的失败。
+             * 代价见 docs/book/14_sensor_fusion.md「三个分支」一节。 */
+            if (!lidar_msg) {
+                const Message* pose_only = pose_buf_ ? message_buffer_latest(pose_buf_) : nullptr;
+                const Message* gps_only  = message_buffer_latest(gps_buf_);
+                if (!pose_only && !gps_only) continue;  /* 真的什么都没有 */
+
+                if (g.fused_count % 50 == 0) {
+                    LOG_WARN("fusion",
+                             "no LidarFrame on sensor/lidar — degraded to "
+                             "predict-only (pose=%d gps=%d); check the pipeline "
+                             "publishes LidarFrame, or localization will be "
+                             "drift-only", pose_only ? 1 : 0, gps_only ? 1 : 0);
+                }
+
+                ekf_fusion_predict(ekf_);
+
+                if (gps_only) {
+                    const GpsData* gps = (const GpsData*)
+                        _msg_cast_impl(gps_only, GPSDATA_TYPE_ID, sizeof(GpsData), "GpsData");
+                    if (gps) {
+                        ekf_fusion_update_gps(ekf_, (double)gps->speed_mps,
+                                              (double)gps->heading_deg * M_PI / 180.0,
+                                              nullptr);
+                    }
+                }
+
+                double x, y, v, h, yr, diag[5];
+                ekf_fusion_get_state(ekf_, &x, &y, &v, &h, &yr);
+                ekf_fusion_get_covariance_diag(ekf_, diag);
+                g.fused_x = x; g.fused_y = y; g.fused_v = v;
+                g.fused_heading = h; g.fused_yaw_rate = yr;
+                g.fused_count++;
+
+                if (v < 0.0 || v > 50.0) {
+                    v = (v < 0.0) ? 0.0 : 50.0;
+                    ekf_->x[2] = v;
+                }
+
+                cJSON* proot = cJSON_CreateObject();
+                cJSON_AddNumberToObject(proot, "x", x);
+                cJSON_AddNumberToObject(proot, "y", y);
+                cJSON_AddNumberToObject(proot, "v", v);
+                cJSON_AddNumberToObject(proot, "heading", h);
+                cJSON_AddNumberToObject(proot, "yaw_rate", yr);
+                cJSON_AddNumberToObject(proot, "cov_xx", diag[0]);
+                cJSON_AddNumberToObject(proot, "cov_yy", diag[1]);
+                cJSON_AddNumberToObject(proot, "cov_vv", diag[2]);
+                cJSON_AddNumberToObject(proot, "cov_hh", diag[3]);
+                cJSON_AddNumberToObject(proot, "cov_yyaw", diag[4]);
+                cJSON_AddNumberToObject(proot, "innovation", ekf_->last_innovation);
+                cJSON_AddBoolToObject(proot, "diverged", ekf_->diverged != 0);
+                /* 显式标记降级，下游能区分「有位姿的定位」和「漂着的定位」 */
+                cJSON_AddBoolToObject(proot, "degraded_no_lidar", 1);
+                if (gps_only) {
+                    const GpsData* g2 = (const GpsData*)
+                        _msg_cast_impl(gps_only, GPSDATA_TYPE_ID, sizeof(GpsData), "GpsData");
+                    if (g2) {
+                        cJSON_AddNumberToObject(proot, "raw_speed", (double)g2->speed_mps);
+                        cJSON_AddNumberToObject(proot, "world_lat", g2->latitude);
+                        cJSON_AddNumberToObject(proot, "world_lon", g2->longitude);
+                    }
+                }
+                cJSON_AddNumberToObject(proot, "timestamp_us", (double)clock_now_us());
+
+                char* pjson = cJSON_PrintUnformatted(proot);
+                transport_publish(transport_, "fusion/localization",
+                                  (const uint8_t*)pjson, (uint32_t)strlen(pjson) + 1);
+                free(pjson);
+                cJSON_Delete(proot);
+                continue;
+            }
 
             uint64_t ref_ts = lidar_msg->timestamp_us;
 
