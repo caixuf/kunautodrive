@@ -37,6 +37,7 @@
 | 检查地图连通性 | [MAP_ENGINE_ROUTING.md](MAP_ENGINE_ROUTING.md)（check_map_connectivity） |
 | 前端 3D 门禁 | [VIS_MODULE_GUIDE.md](VIS_MODULE_GUIDE.md)（`npm run vis:check:all`） |
 | 排查 3D 仪表盘黑屏/挂死 | [TROUBLESHOOTING_3D_DASHBOARD.md](TROUBLESHOOTING_3D_DASHBOARD.md) |
+| 行为异常对号入座（转向灯反/该停不停/刹停到 0…） | [FAILURE_MODES.md](FAILURE_MODES.md) |
 | 事故逐层追溯 | [ALGORITHM_VERIFY_PATTERN.md](ALGORITHM_VERIFY_PATTERN.md)（trace_incident） |
 | 复现一次采样 | [SIMULATION_GUIDE.md](SIMULATION_GUIDE.md)（scenarioctl replay） |
 
@@ -86,6 +87,7 @@
 | [CALIBRATION_GUIDE.md](CALIBRATION_GUIDE.md) | 控制参数标定（仿真/真车双路径） |
 | [CODE_WIKI.md](CODE_WIKI.md) | 代码地图：15 节点、控制子系统详解、构建运行 |
 | [DATA_CLOSED_LOOP.md](DATA_CLOSED_LOOP.md) | PEM 与车端数据采集链路 |
+| [FAILURE_MODES.md](FAILURE_MODES.md) | 运行期故障模式表（43 行「现象 → 根因 → 位置」，按 6 类分节；仓库权威副本） |
 | [FLOWBOARD_CONTRACT.md](FLOWBOARD_CONTRACT.md) | FlowBoard /api/topology 归一化数据契约 |
 | [FLOWBOARD_SCENE_CONTRACT.md](FLOWBOARD_SCENE_CONTRACT.md) | road_network schema + 场景帧字段（唯一权威） |
 | [FLOWREC.md](FLOWREC.md) | flowrec 配置化留存节点 |

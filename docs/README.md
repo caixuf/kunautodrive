@@ -38,6 +38,7 @@
 | 训练、影子推理与 OTA | [学习闭环](LEARNING_LOOP.md) | [学习教程](book/24_e2e_learning_loop.md) |
 | 真车 profile、打包与升级 | [硬件部署](HARDWARE_DEPLOYMENT.md) | [RC 小车清单](RC_CAR_HARDWARE_CHECKLIST.md) |
 | 3D 仪表盘故障 | [3D 仪表盘排查](TROUBLESHOOTING_3D_DASHBOARD.md) | [监控架构](MONITORING_ARCHITECTURE.md) |
+| 运行期行为异常（控制/规划/感知/仿真） | [故障模式表](FAILURE_MODES.md) | [算法排查范式](ALGORITHM_VERIFY_PATTERN.md) |
 
 ## 教程
 
@@ -82,9 +83,12 @@
 
 | 文档 | 说明 |
 |------|------|
+| [FAILURE_MODES.md](FAILURE_MODES.md) | 运行期故障模式表（43 行「现象 → 根因 → 位置」，按 6 类分节，仓库权威副本） |
 | [TROUBLESHOOTING_3D_DASHBOARD.md](TROUBLESHOOTING_3D_DASHBOARD.md) | 3D 仪表盘"加载失败"排查与修复 |
 
-> 更多运行期故障速查见 [CLAUDE.md](../CLAUDE.md) 的「常见故障模式」表。
+> 行为异常（转向灯反 / 该停不停 / 该走不走 / 刹停到 0 / 改代码现象不变）先按
+> [FAILURE_MODES.md](FAILURE_MODES.md) 的现象列对号入座，再按 [ALGORITHM_VERIFY_PATTERN.md](ALGORITHM_VERIFY_PATTERN.md)
+> 的分层验证阶梯定位。
 
 ## KunAutoDrive 技术专著与实战教程（book/）
 
