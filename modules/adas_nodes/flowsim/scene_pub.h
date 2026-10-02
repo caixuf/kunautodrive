@@ -65,6 +65,26 @@ struct ScenePubConstructionZone {
 };
 
 /**
+ * traffic_density 自动补给结果（D3-2 可观测性）。
+ *
+ * flowsim 启动时按 scenario 的 traffic_density 块沿 ego route 自动 spawn NPC。
+ * 此前这个结果只有一条 `if (spawned > 0) LOG_INFO` —— spawn 数为 0（route 没加载、
+ * pool 满、spacing 算错）时**完全静默**，任何门禁都抓不住"场景声明了密度却一辆没发"。
+ * 这里把结果编码进 scene/frame 静态段，经 monitor 透传进 /tmp/flow_topology.json
+ * 的 metrics.scene.traffic_density，让 demo_evaluator 能对"声明 vs 实际"下断言。
+ *
+ * 注意：本结构记录的是 **spawn 时刻** 的结果，仿真过程中不更新（NPC 会被
+ * recycle，但"是否成功补给过"是启动期的既成事实）。
+ */
+struct ScenePubTrafficDensity {
+    bool enabled{false};      /* scenario 是否声明了 traffic_density.cars_per_km > 0 */
+    int  cars_per_km{0};      /* 声明的密度 */
+    int  route_segs{0};       /* route 段数（spawn 骨架；0 = route 未加载） */
+    int  spawned{0};          /* 实际落入 entity pool 的 NPC 数 */
+    bool pool_full{false};    /* 是否为 pool 容量耗尽而提前停止 */
+};
+
+/**
  * scene/frame 发布配置。
  * 由 flowsim_node 在 init 阶段填充，每帧传入 publish_scene_frame()。
  */
@@ -115,6 +135,11 @@ struct ScenePubConfig {
      * init 阶段由 flowsim_node 从 road_network_json 提取 raw 缓存；每帧 emit 给前端
      * BuildingView 渲染真实建筑轮廓。建筑在仿真中不变，故缓存为字符串。 */
     std::string buildings_json;
+
+    /* ── traffic_density 自动补给结果（D3-2）──
+     * flowsim_node init 阶段填充一次（spawn 是启动期行为）。enabled=false 时不
+     * emit，保持"没声明就一个字段都不多"的兼容性。 */
+    ScenePubTrafficDensity traffic_density;
 };
 
 /**

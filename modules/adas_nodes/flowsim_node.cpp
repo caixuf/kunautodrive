@@ -60,6 +60,7 @@
 
 #include <string>
 #include <vector>
+#include <algorithm>
 #include <atomic>
 
 namespace {
@@ -223,6 +224,7 @@ static void reset_runtime_state() {
     g.scene_pub_cfg.cached_road_network_json.clear();
     g.scene_pub_cfg.roads = nullptr;
     g.scene_pub_cfg.construction_zones.clear();
+    g.scene_pub_cfg.traffic_density = flowsim::ScenePubTrafficDensity();
 
     g.has_control_input.store(0, std::memory_order_relaxed);
     g.last_control_cmd_us.store(0, std::memory_order_relaxed);
@@ -595,15 +597,24 @@ static void apply_scenario_scripts(double sim_time_s) {
  *   3. 对每条 RouteSeg：n = floor(length / spacing) 个 spawn 点
  *   4. 对每个 spawn 点：
  *        s     = i * spacing + uniform(-jitter, +jitter)
- *        lane  = lane_spread ? (i % 2 == 0 ? 0 : -1) : 0   （交错在 2 个车道）
+ *        lane  = dir_lanes[slot % N]，slot = lane_spread ? i%2 : 0
+ *                （dir_lanes = 本段同向可行驶车道，负 lane id，**永不含 0**；
+ *                  0 是参考线 type="none"，落上去的同向 NPC 车头会翻 180°）
  *        vx    = uniform(8, 14) m/s（中等巡航速度，IDM 跟车自己调整）
  *        world = roads.frenet_to_world(road_id, lane, s, 0, wp)
  *      失败（esmini 查询 miss）→ 跳过，不污染 pool
  *   5. pool 满或达到 max_npcs → 提前停止
  *
  * 返回实际 spawn 数量（含上层 spawn counter），0 = 没 spawn（disabled / 没路网）。
+ *
+ * @param pool_full_out 可选出参：因 entity pool 容量耗尽而提前停止时置 true。
+ *                      调用方把它记进 scene_pub_cfg.traffic_density 暴露给门禁 ——
+ *                      "够了所以停"（max_npcs）与"装不下了所以停"（pool 满）是
+ *                      两种完全不同的结论，混成一个 spawned 数字排查时分不清。
  */
-static int flowsim_auto_populate_traffic_density(const ScenarioConfig* sc) {
+static int flowsim_auto_populate_traffic_density(const ScenarioConfig* sc,
+                                                 bool* pool_full_out) {
+    if (pool_full_out) *pool_full_out = false;
     const ScenarioTrafficDensity* td = &sc->traffic_density;
     if (td->cars_per_km <= 0) return 0;
     if (!g.roads_loaded || !g.route.ok()) return 0;
@@ -641,6 +652,25 @@ static int flowsim_auto_populate_traffic_density(const ScenarioConfig* sc) {
         const flowsim::RouteSeg& seg = g.route.seg(si);
         int n_in_seg = traffic_density_seg_spawn_count(seg.length, spacing_m);
         if (n_in_seg < 1) continue;
+
+        /* 本段的同向可行驶车道表（lane_spread 的落点池）。
+         *   - 负 lane id = 本仓右行地图的行进方向（正 id 在对向），故只留负 id；
+         *   - **永不使用 0**：0 是 OpenDRIVE 参考线（type="none"，不可行驶），
+         *     esmini 对它的 pd.h 恒为 π，落上去的同向 NPC（route_dir=+1）车头
+         *     会翻 180° → 逆向行驶 + Δs<0 → motion_direction invariant 爆炸，
+         *     并与相邻真实车道（间距 1.75m < 车宽 2.0m）侧刮成堆（npc_ai.cpp
+         *     P3 是同一族 bug）；
+         *   - 按 |id| 升序 = 由内到外，使交替铺开落在相邻两条真实车道上；
+         *   - 枚举失败（esmini miss / 地图只有对向车道）→ 回退 {-1}：frenet_to_world
+         *     若真不存在该车道会 miss 并 WARN，结论仍然可观测，不会静默乱放。 */
+        std::vector<int> dir_lanes = g.roads.drivable_lane_ids(seg.road_id, seg.s0);
+        dir_lanes.erase(std::remove_if(dir_lanes.begin(), dir_lanes.end(),
+                                       [](int lid) { return lid >= 0; }),
+                        dir_lanes.end());
+        std::sort(dir_lanes.begin(), dir_lanes.end(),
+                  [](int a, int b) { return std::abs(a) < std::abs(b); });
+        if (dir_lanes.empty()) dir_lanes.push_back(-1);
+
         for (int i = 0; i < n_in_seg && spawned < kScenarioMaxNpc; i++) {
             /* s 在本段内均匀分布 + 抖动（cap 到段边界）。
              * 内联 rand_uniform 而不用 lambda 转函数指针（C++ capture lambda
@@ -652,22 +682,58 @@ static int flowsim_auto_populate_traffic_density(const ScenarioConfig* sc) {
             }
             if (s_local < 0.0)        s_local = 0.0;
             if (s_local > seg.length) s_local = seg.length;
-            /* lane：spread=true 时 i%2 交替；spread=false 全部 lane 0（压力测试） */
-            int lane_id = traffic_density_lane_id(do_spread, i);
+            /* lane：槽位 → 本段同向真实车道（spread=false 恒定落 dir_lanes[0]） */
+            const int slot = traffic_density_lane_slot(do_spread, i);
+            const int lane_id = dir_lanes[(size_t)slot % dir_lanes.size()];
+            /* s 语义统一到两个域（此前直接用 i*spacing 当 esmini s）：
+             *   s_esmini    = 段内 s + s0（fillet 段首修剪偏移）—— frenet_to_world 要 esmini s
+             *   route_s_cand= 段累计起点 + 段内 s —— 与手列 actors 的 route_s 同域（清距检查用）
+             * 忽略 s0 会在被路口 fillet 修剪过的段上把车放到段外。 */
+            const double s_esmini     = seg.s0 + s_local;
+            const double route_s_cand = seg.s_start + s_local;
             /* esmini 投影 → 世界坐标 + 航向 */
             flowsim::WorldPos wp;
-            if (!g.roads.frenet_to_world(seg.road_id, lane_id, s_local, 0.0, wp)) {
+            if (!g.roads.frenet_to_world(seg.road_id, lane_id, s_esmini, 0.0, wp)) {
                 /* esmini miss（road_id 在 esmini 但 lane/s 不存在）→ skip */
                 if (spawned < 2) {
                     LOG_WARN("flowsim",
                              "traffic_density: road=%d lane=%d s=%.1f miss in esmini — skip",
-                             seg.road_id, lane_id, s_local);
+                             seg.road_id, lane_id, s_esmini);
                 }
                 continue;
+            }
+            /* 6. 间距防重叠检查（与 step_poisson_traffic 同一口径）：候选点与任意
+             *    活跃车辆的 route_s 差 < 25m 就放弃。
+             *    没有这条时第一个候选点落在 route_s≈0，正好压在 ego 出生点上：
+             *    碰撞分离把两车挤开 → 双方车头与所在车道方向相反 + bbox 重叠 +
+             *    瞬移，一连串 invariant 违规（dense_route_traffic 实测 total=121）。
+             *    ego 不走 npc_init_route（route_s 无记账），故对 ego 单用世界坐标距离。 */
+            {
+                const flowsim::Entity& ego = g.pool[0];
+                if (ego.active &&
+                    std::hypot(ego.x - wp.x, ego.y - wp.y) < 25.0) {
+                    continue;
+                }
+                bool too_close = false;
+                for (int k = 1; k < g.pool.size(); ++k) {
+                    const flowsim::Entity& o = g.pool[k];
+                    if (!o.active || !o.is_vehicle()) continue;
+                    if (std::fabs(o.route_s - route_s_cand) < 25.0) { too_close = true; break; }
+                }
+                if (too_close) {
+                    if (spawned < 2) {
+                        LOG_WARN("flowsim",
+                                 "traffic_density: route_s=%.1f too close to an active vehicle "
+                                 "(<25m) — skip this candidate",
+                                 route_s_cand);
+                    }
+                    continue;
+                }
             }
             /* pool 满 → 提前停止 */
             flowsim::EntityId id = g.pool.alloc(flowsim::EntityType::Car);
             if (id == flowsim::INVALID_ENTITY || id >= kPoolSoftLimit) {
+                if (pool_full_out) *pool_full_out = true;
                 if (spawned < 2) {
                     LOG_WARN("flowsim",
                              "traffic_density: pool full at %d NPCs — stop spawn",
@@ -715,7 +781,7 @@ static int flowsim_auto_populate_traffic_density(const ScenarioConfig* sc) {
                     e.target_offset = e.offset;
                 }
                 if (e.road_id >= 0) {
-                    flowsim::npc_init_route(e, g.route, 1);  /* 同向（lane 0） */
+                    flowsim::npc_init_route(e, g.route, 1);  /* 同向（dir_lanes 选出的行进方向车道） */
                     if (!e.road_pos.init(g.roads, e.road_id, e.lane_id, e.s, 0.0)) {
                         if (spawned < 2) {
                             LOG_WARN("flowsim",
@@ -996,8 +1062,9 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
      * 关键设计：
      *   - 速度初值 vx = uniform(8, 14) m/s（中速巡航；IDM 跟车自己会调整）
      *   - 横向 offset = 0（lane center），不强行贴车道边
-     *   - lane_spread=true 时 lane_id 在 [-N+1, 0] 区间交替（负 lane = 对向，
-     *     但 esmini 用正负号表达方向，这里只用 0 和 -1 简化）
+     *   - lane_spread=true 时在**本段的同向可行驶车道**间交替（负 lane id =
+     *     行进方向，正 id 在对向；0 = 参考线不可用），由 spawn 函数查
+     *     drivable_lane_ids 决定，绝不落在 lane 0
      *   - spawn 顺序按 (seg_idx, s_in_seg) 升序，便于复现
      *   - 复用现有 road_pos.init + npc_init_route，与手列 NPC 走完全相同的
      *     lane-follow / same_lane / find_lead 主路径，不引入平行代码
@@ -1005,12 +1072,33 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
     {
         const ScenarioTrafficDensity* td = &sc->traffic_density;
         if (td->cars_per_km > 0) {
-            int spawned = flowsim_auto_populate_traffic_density(sc);
+            bool pool_full = false;
+            int spawned = flowsim_auto_populate_traffic_density(sc, &pool_full);
+            const int route_segs = g.route.ok() ? g.route.count() : 0;
+            /* 结果落进 scene/frame 静态段（D3-2 可观测性）：
+             * 经 monitor 透传进 /tmp/flow_topology.json 的
+             * metrics.scene.traffic_density，demo_evaluator 据此断言
+             * "场景声明了密度 → 世界里必须真有 NPC"。这是唯一公共数据源
+             * 路径，不要另开 topic 或只依赖日志。 */
+            g.scene_pub_cfg.traffic_density.enabled     = true;
+            g.scene_pub_cfg.traffic_density.cars_per_km = td->cars_per_km;
+            g.scene_pub_cfg.traffic_density.route_segs  = route_segs;
+            g.scene_pub_cfg.traffic_density.spawned     = spawned;
+            g.scene_pub_cfg.traffic_density.pool_full   = pool_full;
+            /* 无论 spawn 成功与否都打一行：旧代码把日志套在 `if (spawned > 0)` 里，
+             * 于是"场景写了 traffic_density 却一辆没发"（route 没建、pool 满、
+             * spacing 算错）在日志里完全静默 —— 排查时只能看到 scene/frame 里
+             * 没有 traffic_density 字段，无从分辨是没声明还是没跑。 */
             if (spawned > 0) {
                 LOG_INFO("flowsim",
-                         "traffic_density auto-spawned %d NPCs (cars_per_km=%d, route_segs=%d, roads_loaded=%d)",
-                         spawned, td->cars_per_km, g.route.ok() ? g.route.count() : 0,
-                         g.roads_loaded ? 1 : 0);
+                         "traffic_density auto-spawned %d NPCs (cars_per_km=%d, route_segs=%d, roads_loaded=%d%s)",
+                         spawned, td->cars_per_km, route_segs, g.roads_loaded ? 1 : 0,
+                         pool_full ? ", stopped: pool full" : "");
+            } else {
+                LOG_WARN("flowsim",
+                         "traffic_density declared cars_per_km=%d but spawned 0 NPCs "
+                         "(route_segs=%d, roads_loaded=%d) — no NPC will be populated",
+                         td->cars_per_km, route_segs, g.roads_loaded ? 1 : 0);
             }
         }
     }

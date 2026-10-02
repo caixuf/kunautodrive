@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 >
 > ⚠️ **`~/.claude/skills/*` 路径未随仓库分发**（本机 2026-09 核查不存在）。读不到时按其
 > 自述的方法论执行即可：分层探针 + 值传播验证 + 状态锁死 + 缓存层检查；下方各节的铁律与
-> [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)（运行期故障模式表，43 行）才是仓库内的权威副本。
+> [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)（运行期故障模式表，50 行 / 6 类）才是仓库内的权威副本。
 >
 > **行为异常排查**（转向灯反/该停不停/该走不走/刹停到 0/改代码现象不变）→
 > 先按 [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md) 的**现象列**对号入座，再看
@@ -29,12 +29,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 一次对齐后靠 CI 守门，避免拓扑声明再次漂移：
 
-| 闸门 | 命令 | 挡住什么 |
+下表 = `ci/gates/` 里全部静态守门脚本（每条一个 CI job）。改拓扑声明/消息布局后跑对应一条即可复现 CI：
+
+| 闸门（CI job） | 本地命令 | 挡住什么 |
 |------|------|----------|
-| topic-contract | `python3 ci/gates/topic_contract_check.py` | `pipeline.json` ↔ `s_inputs`/`s_outputs` 漂移 |
-| sensor-wiring | `python3 ci/gates/sensor_wiring_check.py` | sensor 模式下 `lidar_mode`/两处 `lidar_max_range_m` 不一致（静默丢点） |
-| zombie-ban | `python3 ci/gates/zombie_ban_check.py` | 退役 Python 仪表盘入口回潮 |
-| scenario/clock/map | 已有 | 空场景引用 / 禁 raw clock / 断链地图 |
+| topic-contract-gate | `python3 ci/gates/topic_contract_check.py` | `pipeline*.json` ↔ `s_inputs`/`s_outputs` 漂移 |
+| msg-layout-gate | `python3 ci/gates/msg_layout_check.py` | `msg_codegen` 线格式尺寸 ≠ C 结构体尺寸（padding 陷阱） |
+| plugin-symbol-gate | `python3 ci/gates/plugin_symbol_check.py` | 插件 .so 未解析的项目符号（launcher `dlopen` 即失败） |
+| sensor-wiring-gate | `python3 ci/gates/sensor_wiring_check.py` | sensor 模式下 `lidar_mode`/两处 `lidar_max_range_m` 不一致（静默丢点） |
+| zombie-ban-gate | `python3 ci/gates/zombie_ban_check.py` | 退役 Python 仪表盘入口回潮 |
+| book-guard-gate | `python3 ci/gates/book_guard.py` | `docs/book/` 掉回"按源码逐条重建"（行数上限 / 行号密度 / 突变） |
+| lanelet-consistency-gate | `python3 ci/gates/lanelet_consistency_check.py` | `map.json` ↔ `lanelet.osm` Rule 1–5 漂移 |
+| lane-match-schema-gate | `python3 ci/gates/lane_match_schema_check.py` | 车道匹配 schema ↔ codegen 契约不一致（`--self-test`） |
+| scenario / clock / map | `tools/scenarioctl.py validate` / 禁 `modules/` 裸 `clock_gettime` / `tools/check_map_connectivity.py` | 空场景引用 / raw clock / 断链地图 |
+
+**新增/改名的闸门必须同步这张表** —— 只加 job 不登记，下一个人会以为没有它。
 
 **纪律：**
 - 仪表盘唯一后端：`flowmond`（勿再引入第二套 HTTP server）
@@ -57,10 +66,10 @@ sim_world → sensor_model → perception → fusion → planning → control �
                              flowmond (IPC stats bridge + HTTP/SSE) → DashBoard
 ```
 
-上图是核心控制链。`config/pipeline.json`（default profile）实际跑 **16 个进程**，
-在核心链之外还有 `object_tracker`（感知跟踪）、`navigation`（路由 + 行进方向）、
-`behavior_planner`（FSM）、`inference` / `data_recorder` / `learner` / `model_ota`
-（学习闭环 Stage 0→2→OTA）、`bev_detection`（BEV 视觉）。节点清单以
+上图是核心控制链。`config/pipeline.json`（default profile）实际跑 **17 个进程**，
+在核心链之外还有 `lane_detection`（车道线，发 `perception/lanes`）、`object_tracker`（感知跟踪）、
+`navigation`（路由 + 行进方向）、`behavior_planner`（FSM）、`inference` / `data_recorder` /
+`learner` / `model_ota`（学习闭环 Stage 0→2→OTA）、`bev_detection`（BEV 视觉）。节点清单以
 `config/pipeline.json` 的 `processes[]` 为准，勿信任何手写拓扑文档。
 
 ## 模块职责铁律（架构设计 — 2026-08 掉头死锁 8 环连坏后确立）
@@ -129,16 +138,20 @@ sim_world → sensor_model → perception → fusion → planning → control �
 | `modules/adas_nodes/flowrec_node.c` | flowrec：配置化 topic 留存节点（见 `docs/FLOWREC.md`） |
 | `modules/adas_nodes/manual_drive_node.c` | 终端 WASD 接管 ego（`--manual` 游戏诊断模式） |
 | `modules/adas_nodes/bev_detection_node.cpp` | BEV 视觉检测（`bev_pre.c`/`bev_post.c` + ONNX backend） |
+| `modules/adas_nodes/lane_detection_node.c` | 车道线检测（sandbox 由 `road/geometry` 生成 `perception/lanes`；`HAVE_CV` 走 Canny+Hough） |
 | `modules/pem/pem_log.c` | PEM 记录协议（CRC / fsync / 轮转 / 配额），单测 `test_pem_log.c` |
 | `modules/pem/pem_runtime.c` | PEM 运行时双流（`monitor_node` 基础设施流 + `pem_collector_node` 业务流） |
 | `tools/pem_dump.py` | PEM 解析（`--jsonl --type business`） |
 | `tools/scenarioctl.py` | 场景/suite 契约校验（CI `scenario-file-gate`） |
 | `tools/opsctl.py` | 运维入口（与 `flowctl` 分工见文件头） |
 
-> 深入教程见 `docs/book/` 目录（23 篇 = `00_preface` + 01~22，分 5 卷：微内核与系统编程 /
-> 执行流与高级调度 / ADAS 算法栈 / 仿真验证与学习闭环 / 真车部署，覆盖 OOP in C、插件系统、
-> 消息总线、IPC、Bag、Clock、Serializer、State Machine、Discovery、Fusion、Coroutine、
-> Demo Evaluator、E2E Learning Loop、Dead Reckoning、SocketCAN Actuator、FlowSIM 场景设计）。
+> 深入教程见 `docs/book/`（v2 主目录，26 个编号章节 = `00_preface` + `00b_run_pipeline` + 01~24，
+> 分 7 部：从这里开始 / 框架骨架 / 通信与时间 / 执行与调度 / 录制与回放 / ADAS 算法栈 /
+> 仿真·可视化·学习闭环。覆盖 OOP in C、插件系统、注册与参数、状态机、消息总线、Serializer、
+> IPC、Discovery、Clock、Coroutine、Scheduler、Bag/MCAP、感知与跟踪、EKF 融合、行为决策、
+> Frenet 规划、跟踪控制、安全包络、SocketCAN、FlowSIM、可视化、Demo Evaluator、E2E 学习闭环）。
+> 写作约束见 `docs/book/README.md`（真技术书范式，不绑行号）；v1 旧稿归档在 `docs/_archive/book_v1/`，
+> 风格由 `ci/gates/book_guard.py` 守门。
 > 索引见 `docs/BOOK.md`；全量文档导航见 `docs/README.md`，代码索引 `docs/CODE_WIKI.md`；
 > vis 模块设计见 `docs/VIS_MODULE_GUIDE.md`。
 
@@ -179,8 +192,9 @@ bash scripts/demo.sh --no-browser 15      # 不自动开浏览器
 
 | 文件 | profile | 用途 |
 |------|---------|------|
-| `config/pipeline.json` | `default` | 仿真/算法开发/可视化主路径，**CI 与 demo 都用它**（16 节点，不写 PEM） |
-| `config/pipeline_car.json` | `hw` | RC 小车真车模板（GPS/IMU/激光雷达/执行器 + `pem_collector`） |
+| `config/pipeline.json` | `default` | 仿真/算法开发/可视化主路径，**CI 与 demo 都用它**（17 节点，不写 PEM） |
+| `config/pipeline_sensor.json` | `default` | 同上但走**真点云链路**（sensor 编排，16 节点）；nightly 的三场景门禁跑它，见"验证"节 |
+| `config/pipeline_car.json` | `hw` | RC 小车真车模板（GPS/IMU/激光雷达/执行器 + `pem_collector`，19 节点） |
 | `config/pipeline_cortex.json` | `experimental` | cortex 变体，启动会打警告 |
 | `config/pipeline_manual.json` | `experimental` | `--manual` 游戏诊断模式基底 |
 | `config/pipeline_windows.json` | `default` | Windows 原生单进程管线 |
@@ -277,16 +291,17 @@ python3 tools/trace_incident.py                     # 事故逐层追溯（碰�
 门禁有效性由 liveness gate（死信号 FAIL）+ require（无法判定≠通过）+ test_evaluator_gate.py（门禁自测）兜底——**门禁抓不住已知故障 = 它的 PASS 不可信**。
 
 **frontend 改动另走 `npm run vis:check:all`（6 个门禁），C 链门禁覆盖不到它。**
-CI 的 C 侧 gate 全量在 `.github/workflows/ci.yml`：`scenario-file-gate`（`tools/scenarioctl.py validate`）、
-`clock-service-gate`（禁 `modules/` 裸 `clock_gettime`）、`topic-contract-gate`、
-`sensor-wiring-gate`、`zombie-ban-gate`、`map-connectivity-gate`、`build-release`/`build-asan`（ctest）、
-`build-windows-mingw`（交叉编译）、`integration-test`。本地复现任一 gate 直接抄它的 `run:` 行。
+CI 的 job 全量在 `.github/workflows/ci.yml`：9 条静态 gate（见上文"低维护治理"表）+
+`build-release` / `build-asan`（ctest）+ `build-windows-mingw`（交叉编译）+ `integration-test`
+（起真实管线，内含 plugin symbol gate）+ `evaluator`（45s demo 回归）+ `viz` / `vis-js-tests`
+（前端 6 门禁）+ `nightly`（Debug/UBSAN/Coverage + 长稳 + 场景回归，仅 schedule/dispatch 触发）。本地复现任一 gate 直接抄它的 `run:` 行。
 
-另有两条**只跑仿真**的等价门禁（在 `long-tests` job 内，需已构建）：
+另有几条**只跑仿真**的门禁（在 `nightly` job 内，需已构建）：
 - 默认编排（ground_truth 直通）：`python3 ci/evaluators/scenario_regression.py --baseline`
 - **sensor 编排（真点云链路）**：`FLOW_PIPELINE=config/pipeline_sensor.json python3 ci/evaluators/scenario_regression.py --workers 1 --only <场景>`
   （CI 里对 urban_challenge / dense_npc / lane_change_traffic 三个场景各跑一次；不传 `--baseline`——
   sensor 编排与 ground_truth 基线的行为差异不算回归，它只断言各场景自身门禁 PASS）
+- 驾校全科：`python3 tools/driving_test.py --all --ci --baseline`（当前仅科目二实跑，带 `continue-on-error`）
 
 ## 编码规范（统一 API — 2026-07 重构后强制执行）
 
@@ -518,7 +533,7 @@ npm run vis:check
 
 | 门禁 | 覆盖率 | 抓什么 |
 |------|--------|--------|
-| `vis_module_load.test.mjs` | 全部 `js/vis/**/*.js`（约 50 个模块） | 语法错、顶层 ReferenceError、import 路径 |
+| `vis_module_load.test.mjs` | 全部 `js/vis/**/*.js`（`readdirSync` 自动发现，当前 51 个） | 语法错、顶层 ReferenceError、import 路径 |
 | `eslint no-undef` | 全部 `js/vis/` | 未定义变量引用（如 `VIADUCT_VIS_LENGTH` 未导入） |
 | `eslint no-unused-vars` | 全部 `js/vis/` | 定义了但未调用的函数（如 `followEgo` 漏调） |
 | `vis_render_tick.test.mjs` | director + 全部 view | tickAnimation 运行时抛错、store 数据完整性 |
@@ -688,7 +703,7 @@ frame: THREE  | up: +Y | 单位: m | ENU→THREE: [x, z, -y] | ego_centered: tru
 
 ## 常见故障模式
 
-> **完整 43 行表（现象 → 根因 → 位置）见 [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)**
+> **完整 50 行表（现象 → 根因 → 位置）见 [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)**
 > —— 仓库内权威副本，按 6 类分节：控制/规划/安全层 · 感知/点云 · 仿真/几何/NPC ·
 > 仪表盘/监控/前端 · 评估器/门禁 · 框架/工具链。
 >
@@ -698,7 +713,8 @@ frame: THREE  | up: +Y | 单位: m | ENU→THREE: [x, z, -y] | ego_centered: tru
 
 ## 最新 tag
 
-`v0.1.0` — 创始版本，8 节点全链路稳定运行
+`v0.4.0` — Native Windows runtime support（`v0.1.0` 创始版本 8 节点全链路 → `v0.2.0` 交通灯/视觉调优 →
+`v0.3.0` 学习闭环一键化 → `v0.4.0` Windows 原生运行时）
 
 ---
 

@@ -4,7 +4,7 @@
  * 把 flowsim_auto_populate_traffic_density() 里的纯算法抽出来：
  *   - 计算某 RouteSeg 上 spawn 数量
  *   - 计算第 i 个 spawn 在该段内的 s_local（带 Poisson 抖动）
- *   - 计算 lane_id（lane_spread 模式下交替 -1 / 0）
+ *   - 计算车道槽位（lane_spread 模式下 0/1 交替；真实 lane_id 由调用方查路网决定）
  *
  * 这些是 header-only + 标量算术，可直接单测。
  * 实际 esmini frenet_to_world 投影留给 flowsim_node.cpp（依赖 esminiRMLib）。
@@ -60,11 +60,21 @@ static inline int traffic_density_seg_spawn_count(double L, double spacing_m) {
     return (int)(L / spacing_m);
 }
 
-/** lane_spread 模式下第 i 个 spawn 的 lane_id。
- *  spread=true → 0 与 -1 交替；spread=false → 全部 0。 */
-static inline int traffic_density_lane_id(bool spread, int i) {
+/** lane_spread 模式下第 i 个 spawn 的**车道槽位**（0-based，恒 >= 0）。
+ *
+ * 返回槽位而非 lane_id：真实 lane_id 取决于路网（哪几条是同向可行驶车道），
+ * 只能由 flowsim_node 查 drivable_lane_ids 决定；本函数只管"第 i 辆落在第几槽"。
+ *   spread=true  → 0,1,0,1,…（交替两条同向车道）
+ *   spread=false → 恒 0（单车道压力测试）
+ *
+ * ⚠️ 本函数历史上直接返回 lane_id（0 与 -1 交替），是 D3-2 首个 invariant 爆炸的
+ *    根因：lane 0 是 OpenDRIVE 参考线（type="none"，不可行驶），esmini 对它的
+ *    pd.h 恒为 π —— 落上去的同向 NPC 车头朝后逆向行驶（motion_direction / Δs
+ *    invariant 失败；与 npc_ai.cpp P3 是同一族 bug）。故本函数不再触碰 lane_id
+ *    语义，映射到真实车道是调用方的事，且永远不要落回 0。 */
+static inline int traffic_density_lane_slot(bool spread, int i) {
     if (!spread) return 0;
-    return (i % 2 == 0) ? 0 : -1;
+    return i % 2;
 }
 
 #ifdef __cplusplus

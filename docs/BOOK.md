@@ -12,7 +12,7 @@
 
 最近几周 docs/book/ 有章节被"按源码逐条重建"成 900+ 行说明书，绑定行号、文件名、函数符号——与代码强耦合、维护成本高、易腐化。本目录整治后：
 
-- **`docs/book/`** 是 v2 主目录，按 `docs/book/README.md` 的写作风格约束（真技术书范式：讲设计动机 + 取舍 + 领域常识；不绑行号）。BOOK.md 25 个编号章节均有对应 v2 文件，book_guard gate 25 chapter(s) OK 默认无 WARN。
+- **`docs/book/`** 是 v2 主目录，按 `docs/book/README.md` 的写作风格约束（真技术书范式：讲设计动机 + 取舍 + 领域常识；不绑行号）。BOOK.md 26 个编号章节（00、00b、01~24）均有对应 v2 文件，`book_guard` gate 实报 26 chapter(s) OK、默认无 WARN。
 - **`docs/_archive/book_v1/`** 是 v1 归档，10 个"按源码逐条重建"产物的历史快照，git mv 至此保留。每个文件头部加了归档 banner 与现章节交叉链接。**v2 现章节全部独立写在 `docs/book/`，v1 不再作为主章节来源**。归档清单（文件名 → BOOK.md 现章节）：
   - `03_message_bus.md` → 第 05 章「消息总线」
   - `03_registry_and_params.md` → 第 03 章「注册中心与参数系统」

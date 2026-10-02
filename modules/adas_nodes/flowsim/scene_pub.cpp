@@ -535,6 +535,21 @@ char* build_scene_frame_json(const EntityPool& pool,
         }
     }
 
+    /* traffic_density 自动补给结果（D3-2 可观测性）：spawn 结论此前只有一条
+     * `if (spawned > 0) LOG_INFO`，spawn 数为 0 时静默，门禁无从断言。
+     * 这里随静态段发出去，经 monitor 进 /tmp/flow_topology.json，由
+     * demo_evaluator 对"场景声明了密度 → 世界里必须真有 NPC"下断言。
+     * 体积为 5 个标量，**不随 embed_static 省略**（该门禁只管 road_network/
+     * buildings 这类可能撑爆 64KB 总线的大块；大地图 OSM 场景若连带省略，
+     * 评估器会把"静态段太大"误判成"spawn 没跑"）。 */
+    if (cfg.traffic_density.enabled) {
+        cJSON* td = cJSON_AddObjectToObject(root, "traffic_density");
+        cJSON_AddNumberToObject(td, "cars_per_km", (double)cfg.traffic_density.cars_per_km);
+        cJSON_AddNumberToObject(td, "route_segs", (double)cfg.traffic_density.route_segs);
+        cJSON_AddNumberToObject(td, "spawned", (double)cfg.traffic_density.spawned);
+        cJSON_AddBoolToObject(td, "pool_full", cfg.traffic_density.pool_full);
+    }
+
     char* s = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     return s;

@@ -2729,6 +2729,70 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
                 f"{layer_name} recognition rate degraded: {rate*100:.1f}% "
                 f"({n} observable truth samples, WARN < {PERCEPTION_RATE_WARN*100:.0f}%)"
             )
+    # ── D3-2: traffic_density 自动补给必须真的落到世界里 ──
+    # 场景声明 traffic_density.cars_per_km > 0 ⇒ flowsim 启动时应沿 ego route
+    # 自动 spawn NPC。此前这个结论只存在于一条 `if (spawned > 0) LOG_INFO`
+    # 里：spawn 数为 0（route 没建好 / pool 满 / spacing 算错）时**完全静默**，
+    # 场景写了密度而世界空空如也，没有任何门禁抓得住。现在 flowsim 把结论
+    # 经 scene/frame 静态段 → monitor → /tmp/flow_topology.json 的
+    # metrics.scene.traffic_density 送出来，这里做两级断言：
+    #   1) 声明了就必须有块可读（没有块 = spawn 路径压根没跑 → INCONCLUSIVE）
+    #   2) spawned >= 1，且世界里的车辆数必须超过 actors[] 能解释的数量
+    #      （交叉校验：只有 spawned 数字自说自话不算"真进了世界"）
+    declared_td = scenario.get("traffic_density") if isinstance(scenario, dict) else None
+    declared_cars_per_km = 0
+    if isinstance(declared_td, dict):
+        try:
+            declared_cars_per_km = int(declared_td.get("cars_per_km", 0) or 0)
+        except (TypeError, ValueError):
+            declared_cars_per_km = 0
+    reported_td = None
+    for s in reversed(samples):
+        scene_m = (s.get("metrics") or {}).get("scene") if isinstance(s, dict) else None
+        cand = scene_m.get("traffic_density") if isinstance(scene_m, dict) else None
+        if isinstance(cand, dict):
+            reported_td = cand
+            break
+    traffic_density_spawned = 0
+    if reported_td is not None:
+        try:
+            traffic_density_spawned = int(reported_td.get("spawned", 0) or 0)
+        except (TypeError, ValueError):
+            traffic_density_spawned = 0
+    # 世界侧交叉校验：整个 run 里出现过的最大车辆实体数（scene/frame 真值快照，
+    # 不含 ego —— ego 的 type 是 "ego"）。取 max 而非末帧：NPC 会被 recycle，
+    # 末帧数量可能因回收而偏低，用峰值问"到底有没有多出来的车"。
+    observed_vehicle_max = 0
+    for m in series:
+        ents = m.get("entities") or []
+        n_veh = sum(1 for e in ents
+                    if isinstance(e, dict) and e.get("type") in TRUTH_TYPE_VEHICLE)
+        observed_vehicle_max = max(observed_vehicle_max, n_veh)
+    declared_actor_vehicles = scenario_layer_counts.get("vehicle", 0)
+    if declared_cars_per_km > 0:
+        if require(failures, "traffic_density_spawn", {
+            f"scenario declares traffic_density.cars_per_km={declared_cars_per_km} "
+            f"but no traffic_density block ever reached the evaluator "
+            f"(scene/frame→monitor passthrough broken, or flowsim never ran "
+            f"the auto-spawn path)":
+                reported_td is not None,
+        }):
+            if traffic_density_spawned < 1:
+                failures.append(
+                    f"traffic_density declared cars_per_km={declared_cars_per_km} "
+                    f"but flowsim spawned 0 NPCs "
+                    f"(route_segs={reported_td.get('route_segs')}, "
+                    f"pool_full={reported_td.get('pool_full')}) — "
+                    f"the scenario asks for density and the world has none"
+                )
+            elif observed_vehicle_max <= declared_actor_vehicles:
+                failures.append(
+                    f"traffic_density reports spawned={traffic_density_spawned} "
+                    f"but the world never held more vehicles than actors[] explains "
+                    f"(max observed {observed_vehicle_max} vehicle entities vs "
+                    f"{declared_actor_vehicles} declared actors) — the spawn count "
+                    f"is not corroborated by scene/frame truth"
+                )
     # 预警提前量 FAIL/WARN（仅当发生过临界事件时才判定）
     if perception["critical_event_count"] > 0:
         min_lead = perception["warning_lead_min_s"]
@@ -2836,6 +2900,10 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         "liveness": {k: {"unique": v["unique"], "dead": v["dead"]}
                      for k, v in liveness.items()},
         "scenario_actor_counts": scenario_layer_counts,
+        # D3-2: traffic_density 自动补给结果（0 = 场景未声明，或声明了但没落进世界）。
+        # 记进 summary 使 baseline/回归能覆盖"密度场景真的补给了 NPC"这件事。
+        "traffic_density_cars_per_km": declared_cars_per_km,
+        "traffic_density_spawned": traffic_density_spawned,
         # behavior 指标（从最后一个 sample 的 metrics.behavior 提取，
         # 仅在 behavior/state 已发布时可用）
         "behavior_state": last.get("metrics", {}).get("behavior", {}).get("state", ""),

@@ -290,6 +290,15 @@ static struct {
     char   scene_lighting[16];
     char   scene_weather[16];
     double scene_visibility_m;
+    /* D3-2 traffic_density 自动补给结果（flowsim 启动期既成事实，每帧随静态段重发）。
+     * 定长 5 标量，故直接缓存字段而非缓存 JSON 字符串再 reparse（construction_zones
+     * 那种做法是为变长数组）。enabled=0 → 本帧没有 traffic_density 块 → 不 emit，
+     * 评估器据此区分"场景没声明"与"声明了但 spawn 0 辆"。 */
+    int    scene_td_enabled;
+    int    scene_td_cars_per_km;
+    int    scene_td_route_segs;
+    int    scene_td_spawned;
+    int    scene_td_pool_full;
 
 #define MAX_SAMPLES 200  /* samples 环形缓冲长度：50ms 采样 × 200 = 10s 窗口 */
     /* ── samples 环形缓冲：最近 ~10s 的 ego 快照 ── */
@@ -688,6 +697,27 @@ static void on_scene_frame(const Message* msg, void* user_data) {
         snprintf(g.scene_weather, sizeof(g.scene_weather), "%s", weather->valuestring);
     }
     if (cJSON_IsNumber(visibility)) g.scene_visibility_m = visibility->valuedouble;
+
+    /* traffic_density：每帧全量覆盖（含"本帧没有"→ enabled=0），使缓存始终等于
+     * 最新一帧的声明，避免换场景后残留上一场景的 spawn 结论。 */
+    cJSON* td = cJSON_GetObjectItemCaseSensitive(root, "traffic_density");
+    if (td && cJSON_IsObject(td)) {
+        cJSON* j_cpk  = cJSON_GetObjectItemCaseSensitive(td, "cars_per_km");
+        cJSON* j_seg  = cJSON_GetObjectItemCaseSensitive(td, "route_segs");
+        cJSON* j_sp   = cJSON_GetObjectItemCaseSensitive(td, "spawned");
+        cJSON* j_pf   = cJSON_GetObjectItemCaseSensitive(td, "pool_full");
+        g.scene_td_enabled     = 1;
+        g.scene_td_cars_per_km = cJSON_IsNumber(j_cpk) ? (int)j_cpk->valuedouble : 0;
+        g.scene_td_route_segs  = cJSON_IsNumber(j_seg) ? (int)j_seg->valuedouble : 0;
+        g.scene_td_spawned     = cJSON_IsNumber(j_sp)  ? (int)j_sp->valuedouble  : 0;
+        g.scene_td_pool_full   = cJSON_IsBool(j_pf)    ? (cJSON_IsTrue(j_pf) ? 1 : 0) : 0;
+    } else {
+        g.scene_td_enabled     = 0;
+        g.scene_td_cars_per_km = 0;
+        g.scene_td_route_segs  = 0;
+        g.scene_td_spawned     = 0;
+        g.scene_td_pool_full   = 0;
+    }
     pthread_mutex_unlock(&g.scene_frame_mutex);
 
     /* 缓存 road_network */
@@ -1486,6 +1516,26 @@ static void export_dashboard_json(void) {
         cJSON_AddNumberToObject(scene, "visibility_m",
                                g.scene_visibility_m > 0.0 ? g.scene_visibility_m : 1000.0);
         pthread_mutex_unlock(&g.scene_frame_mutex);
+    }
+
+    /* traffic_density 自动补给结果（D3-2 可观测性）：flowsim 启动期沿 ego route
+     * 自动 spawn NPC 的结论。这是"场景声明了 cars_per_km → 世界里必须真有 NPC"
+     * 这条门禁的唯一数据来源（旧实现只有一条 `if (spawned > 0) LOG_INFO`，
+     * spawn 数 0 时完全静默）。锁内读 5 个标量、锁外建对象，与上面的
+     * lighting/weather 同 pattern。 */
+    if (g.has_scene_frame && g.scene_td_enabled) {
+        int td_cpk, td_seg, td_sp, td_pf;
+        pthread_mutex_lock(&g.scene_frame_mutex);
+        td_cpk = g.scene_td_cars_per_km;
+        td_seg = g.scene_td_route_segs;
+        td_sp  = g.scene_td_spawned;
+        td_pf  = g.scene_td_pool_full;
+        pthread_mutex_unlock(&g.scene_frame_mutex);
+        cJSON* td = cJSON_AddObjectToObject(scene, "traffic_density");
+        cJSON_AddNumberToObject(td, "cars_per_km", (double)td_cpk);
+        cJSON_AddNumberToObject(td, "route_segs", (double)td_seg);
+        cJSON_AddNumberToObject(td, "spawned", (double)td_sp);
+        cJSON_AddBoolToObject(td, "pool_full", td_pf ? 1 : 0);
     }
 
     /* 施工区（后端单一事实源）：从 scene/frame 缓存透传给前端。

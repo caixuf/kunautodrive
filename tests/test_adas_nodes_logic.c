@@ -1650,9 +1650,10 @@ static void test_ttc_select_relv_gate(void) {
  *   - cars_per_km → spacing_m 反算（1000/density）
  *   - 段长 + spacing → spawn 数（floor，避免同段重叠）
  *   - jitter 抖动边界（cap 到段内 [0, L]）
- *   - lane_spread 模式下 lane_id 交替（压力测试模式全 0）
+ *   - lane_spread 模式下返回**车道槽位** 0/1 交替（压力测试模式恒 0，恒 >= 0）
+ *     —— 真实 lane_id 由 flowsim_node 查 drivable_lane_ids 映射，本层不碰
  *
- * 共 4 例（每例 1 个断言），对应 D3-2 handoff §3 的算法验收。
+ * 共 4 例，对应 D3-2 handoff §3 的算法验收。
  */
 
 /* ── deterministic test RNG（不依赖系统 rand）── */
@@ -1705,16 +1706,22 @@ static void test_traffic_density_compute_s_local(void) {
     PASS();
 }
 
-/* ── Test 4: lane_spread 模式 ── */
-static void test_traffic_density_lane_id(void) {
-    TEST("traffic_density_lane_id: spread=true 0/-1 交替；spread=false 全 0");
-    ASSERT(traffic_density_lane_id(true, 0) == 0,  "spread=true, i=0 → 0");
-    ASSERT(traffic_density_lane_id(true, 1) == -1, "spread=true, i=1 → -1");
-    ASSERT(traffic_density_lane_id(true, 2) == 0,  "spread=true, i=2 → 0");
-    ASSERT(traffic_density_lane_id(true, 3) == -1, "spread=true, i=3 → -1");
-    ASSERT(traffic_density_lane_id(false, 0) == 0, "spread=false, i=0 → 0");
-    ASSERT(traffic_density_lane_id(false, 1) == 0, "spread=false, i=1 → 0");
-    ASSERT(traffic_density_lane_id(false, 2) == 0, "spread=false, i=2 → 0");
+/* ── Test 4: lane_spread → 车道槽位 ── */
+static void test_traffic_density_lane_slot(void) {
+    TEST("traffic_density_lane_slot: spread=true 0/1 交替；spread=false 恒 0；恒 >= 0");
+    ASSERT(traffic_density_lane_slot(true, 0) == 0,  "spread=true, i=0 → slot 0");
+    ASSERT(traffic_density_lane_slot(true, 1) == 1,  "spread=true, i=1 → slot 1");
+    ASSERT(traffic_density_lane_slot(true, 2) == 0,  "spread=true, i=2 → slot 0");
+    ASSERT(traffic_density_lane_slot(true, 3) == 1,  "spread=true, i=3 → slot 1");
+    ASSERT(traffic_density_lane_slot(false, 0) == 0, "spread=false, i=0 → slot 0");
+    ASSERT(traffic_density_lane_slot(false, 1) == 0, "spread=false, i=1 → slot 0");
+    ASSERT(traffic_density_lane_slot(false, 2) == 0, "spread=false, i=2 → slot 0");
+    /* 槽位语义：调用方用它索引 dir_lanes（恒非负）。若本函数再返回 lane_id，
+     * 就可能把 spawn 放回 lane 0（参考线，pd.h=π）→ 车头朝后逆行。 */
+    for (int i = 0; i < 8; i++) {
+        ASSERT(traffic_density_lane_slot(true, i) >= 0, "slot must never be negative");
+        ASSERT(traffic_density_lane_slot(false, i) >= 0, "slot must never be negative");
+    }
     PASS();
 }
 
@@ -1815,7 +1822,7 @@ int main(void) {
     test_traffic_density_spacing_from_density();
     test_traffic_density_seg_spawn_count();
     test_traffic_density_compute_s_local();
-    test_traffic_density_lane_id();
+    test_traffic_density_lane_slot();
 
     printf("\n═══ LiDAR Observation Model (3D scan / capacity guard) ═══\n");
     test_lidar_scan_azimuth_fov_bounds();

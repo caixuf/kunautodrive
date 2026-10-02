@@ -34,11 +34,11 @@
 |---|------|------|
 | 1 | 控制 / 规划 / 安全层 | 18 |
 | 2 | 感知 / 点云 | 6 |
-| 3 | 仿真 / 几何 / NPC | 5 |
+| 3 | 仿真 / 几何 / NPC | 7 |
 | 4 | 仪表盘 / 监控 / 前端 | 9 |
-| 5 | 评估器 / 门禁 | 3 |
+| 5 | 评估器 / 门禁 | 4 |
 | 6 | 框架 / 工具链 | 2 |
-| | **合计** | **43** |
+| | **合计** | **46** |
 
 ## 1. 控制 / 规划 / 安全层
 
@@ -88,6 +88,8 @@
 | NPC/车飞出路面、不在车道上、坐标飞到几千米外 | flowsim NPC 用 `step_bicycle(steer=0)` 世界系直线积分、不跟道路几何，路一拐弯就直线冲出路网。已改为中央 `Route`（把各 road 连成有序主路）+ Frenet 沿车道推进 + 到头回收 | `npc_ai.cpp` step_npc_vehicle / `flowsim/route.cpp` |
 | 车身左右晃动（1-2Hz 极限环） | 历史根因：`road_pos.world()` 每帧把 ego.heading 重置为道路切线，control 的 `v_lat_damp` 失效（heading_err≈0），退化为纯 P。**96447a9 起已改为两模式都自由积分 heading**：运动学模式由 step_bicycle 积分，靠 `sin(dh)` 负反馈闭环 + cte/heading 项 + 低通 + 死区稳住（曾尝试自由积分导致斜行后回滚，后加 sin(dh) 反馈再启用）；动力学模式由轮胎侧偏力积分。故 `is_dynamic` 分支对两模式一视同仁，只做 heading 归一化 | `flowsim_node.cpp` 主循环 ego 段 |
 | 内部巡航 fallback 输出大 steer | `internal_cruise_control` 用 `road_h - heading` 全量前馈，运动学模型下 heading 漂移可达 0.8 rad，公式输出 0.8 被 clamp 到 0.25。修复：改用 `heading_err*0.3 + yaw_damp + lat_err*0.03`，cap 降到 0.15 | `flowsim_node.cpp:1007-1027` |
+| **同向 NPC 车头朝后（逆向行驶）**，与相邻真实车道侧刮成堆；invariant `motion_direction` / Δs 符号失败 | 自动补给（D3-2）落点用 **esmini lane 0** —— OpenDRIVE 参考线（`type="none"`，不可行驶），esmini 对它的 `pd.h` 恒为 **π**，而 `RoadPosition::world()` 直接返回该 `data.h`，同向车（`route_dir=+1`）车头翻 180° → 逆向行驶 + Δs<0。且 lane 0 与 lane −1 中心仅差 1.75m < 车宽 2.0m，两车道车并列即侧刮。修复：`drivable_lane_ids()` 取本段可行驶车道 → 只留**负 id**（本仓右行地图的行进方向，正 id 在对向）→ 按 `abs(id)` 升序（由内到外，交替铺开落在相邻真实车道）→ 枚举为空回退 `{-1}`；`lane_spread` 只决定"第几槽"（`traffic_density_lane_slot`，恒 ≥0），lane_id 映射归 flowsim —— **与 `npc_ai.cpp` P3（硬编码 lane_id=0）/ P1 同一族 bug**。⚠️ 同一模式仍在 `step_poisson_traffic`：它也 `frenet_to_world(rid, 0, …)`，随后 `world_to_frenet` 反查回真实 lane_id（危害被部分掩盖），但 `e.heading = wp.h`（=π）已用于 `e.vx/e.vy` 初值 —— 本次未覆盖 | `flowsim_node.cpp:656`（dir_lanes 表）/ `traffic_density_spawn.h:75` / `npc_ai.cpp:406` |
+| NPC 集体压在 ego 出生点、bbox 重叠、瞬移；invariant 一次爆 **121 条**（spatial+motion+temporal 三类混合） | 自动补给候选点**无清距检查**：第 0 个候选 `s≈0` 正是 ego 出生点，落进去后碰撞分离把两车挤开 → 双方车头与所在车道方向相反 + bbox 重叠 + `Δpos ≫ v·dt`，一条根因引出三类 invariant。另：s 直接拿 `i*spacing` 当 esmini s，漏掉 `seg.s0`（路口 fillet 的段首修剪偏移）→ 在被修剪过的段上把车放到段外。修复：候选点与 ego 用**世界坐标**距离、与其他车用 `route_s` 差，均 < 25m 即跳过（与 `step_poisson_traffic` 第 5 步同口径；ego 不走 `npc_init_route`，`route_s` 无记账，故不能同域比较）；同时把 s 统一到两个域 —— `s_esmini = seg.s0 + s_local`（`frenet_to_world` 要），`route_s_cand = seg.s_start + s_local`（与手列 actors 同域，清距检查用） | `flowsim_node.cpp:705`（清距块）/ `flowsim_node.cpp:692`（s 双域） |
 | S 弯不跟弯（curve_road 场景车沿 y=-1.75 直开，heading 恒 0） | **四层连环**（2026-08-04 排查）：① `json_to_xodr.py` roads_from_road_network 只认 curvature_profile/length_m，完全忽略 `road_network.edges[].nodes` → 生成直道 XODR → ref_path 全 y=0；② 即便 XODR 弯了，control 横向目标 `target_path_y` 是轨迹 0.5s 前视点绝对 y，弯道上该点比 ego 当前位置高 → lat_error 虚高 → 车往弯内侧漂 ~3m；③ `scene_pub.cpp` `ROAD_NODES_PER_EDGE=8` 固定采样 → 前端 CR 过 8 点严重过冲、评估器弦长偏离真值 ~14m → 车在车道里被判 road departure；④ demo_evaluator 逆行/横向摆动检查假设直路（y<0 朝东 / 绝对 y 范围<4.5m），S 弯 ego y 合法扫过 ±103 却 heading 恒朝东 → 误报 WRONG-WAY/lateral excursion。修复：nodes 折线 → 三次 Hermite（端点切线 = 相邻 chord 平均，**不用 CR**——coarse 节点 CR 过冲生成 R≈19m 发卡弯，a_lat≈21m/s² 拐不过来；Hermite min R≈546m 可跟）密采样 5m → 逐段 line；planning map_ref 分支 kappa 从恒 0 改为切线中心差分恢复前馈；control 横向目标改用 query_ref_at **本地**参考（离 ego 最近轨迹点），cruise_lane_y = 本地 road_c + lane_d·cos(h)，只有本地查询失败才回退前视点；scene_pub 节点数按长度自适应（~25m 一点，8..128）；curve_road.json nodes 由 13 粗点重采样为 194 平滑点（前端 CR 与物理 Hermite 偏差 5.7m→<0.8m）；评估器弯道用局部 road_heading / road_signed_offset 替代绝对 y 启发 | `tools/json_to_xodr.py` build_polyline_road / `planning_node.cpp` frenet_to_cartesian / `control_node.cpp` query_ref_at 覆盖块+cruise_lane_y / `flowsim/scene_pub.cpp` road_nodes_per_edge / `scenarios/curve_road.json` / `ci/evaluators/demo_evaluator.py` |
 
 ## 4. 仪表盘 / 监控 / 前端
@@ -115,6 +117,7 @@
 | 算法评估挂死（demo_evaluator/scenario_regression 无输出不结束） | 三层因果：① demo.sh 行为监控管道 `{ tail -F \| grep } &` 的 EXIT trap 只 kill 子 shell，tail/grep 孙子泄漏（tail -F 永不退出）；② f412132 日志改到 `$LOG_DIR/launcher.log` 后泄漏 tail 命令行不再匹配启动清扫 `pkill -9 -f flow_launcher`（旧路径含该串会被顺带清理 → 旧版自愈）；③ 泄漏 grep 继承 fd2=评估器捕获管道写端 → `proc.stdout.read()` 等 EOF 永不返回。修复：tail 加 `--pid=$$`（GNU，BSD 降级）+ 启动清扫补 pkill、评估器 read() 改 select 限时读取、SIGTERM/INT killpg 防孤儿、scenario_regression 加超时 | `scripts/demo.sh` tail 块 / `ci/evaluators/demo_evaluator.py` / `ci/evaluators/scenario_regression.py` |
 | demo_evaluator 报 road departure 但车明明在车道里 | 评估器 `_road_network_cross_track` 用 topology `scene.road_network.edges[].nodes` 的弦长算路沿，而该 nodes 是 `scene_pub.cpp` 固定 8 点粗采样 → 长弯道上弦长偏离 Hermite 真路 ~14m → 车被误判出路沿（实测 curve_road 3000m S 弯 -7.44m）。修复：节点数按长度自适应 ~25m 一点（8..128） | `flowsim/scene_pub.cpp` road_nodes_per_edge / `ci/evaluators/demo_evaluator.py` |
 | 同一份代码重跑一遍，场景判定在 PASS/FAIL 之间摇摆（门槛附近抖） | 两条判据的"参考量"与它要守的策略不是同一套尺度：① 跟车 `min_forward_gap` 用**整段中位速度**算期望间距（注释却写"判据随车速伸缩"）→ 低速逼近/排队停下的帧被高速帧的尺度误判 FAIL（实测最差帧 `gap=4.96m @ ego 1.0 m/s`，该速度下期望 6.5m 安全；三次实测 28 帧误报、逐帧判据 0 帧违规）；② `max_duration_s` 用**墙钟跨度**（含 demo.sh 启动/收尾与机器负载，同场景 59.9→63.3s 漂移），而仿真钟只有 59.3s。修复：①逐帧用该帧车速（与 behavior 的 `acc_standoff + acc_time_headway·|v|` 同式同参）；②改按 `metrics.scene.t_us` 的仿真跨度判，墙钟超而仿真没超记 WARN | `demo_evaluator.py` `min_forward_gap` 判据 / `_sim_timestamps` + `max_duration_s` 判据 |
+| 场景声明了 `traffic_density.cars_per_km` 但世界里一辆 NPC 都没有，**全部门禁仍绿** | 自动补给结论（D3-2）只存在于一条 `if (spawned > 0) LOG_INFO`：spawn 数为 0（route 没建好 / pool 满 / spacing 算错）时**完全静默**，`scene/frame` 里连 `traffic_density` 字段都没有 —— 排查时分不清"场景没声明"与"声明了没跑"，门禁也无从断言。修复：结论编码进 `scene/frame` 静态段（5 个标量，**不随 `embed_static` 省略** —— 那种"静态段太大就省"的裁剪针对 road_network/buildings 这类可能撑爆 64KB 总线的大块，大地图 OSM 场景若连带省略，评估器会把"静态段太大"误判成"spawn 没跑"）→ monitor 透传 → `metrics.scene.traffic_density`；`demo_evaluator` 两级断言：① 声明了就必须有块可读（无块 = 透传断了或 spawn 路径压根没跑，走 `require` 记为**无法判定**而非通过）② `spawned >= 1` **且** 世界车辆实体峰值 > `actors[]` 能解释的数量（防止 spawn 数字自说自话，不经 scene/frame 真值交叉校验）；flowsim 侧日志改为无条件（0 辆时打 WARN，并把"够了所以停 max_npcs"与"装不下所以停 pool 满"分开记） | `flowsim/scene_pub.h` `ScenePubTrafficDensity` / `flowsim/scene_pub.cpp:538` / `monitor_node.c:297,709,1526` / `ci/evaluators/demo_evaluator.py:2732`（`traffic_density_spawn`） |
 
 ## 6. 框架 / 工具链
 
@@ -123,4 +126,4 @@
 | 现象 | 根因 | 位置 |
 |------|------|------|
 | 8 个节点线程各占满一个核 | 裸 `while(!stop) ex.run();` 忙等；`idle_sleep_us` 只被零调用者的 `run_blocking()` 读取。改用 `node_pump()` | `coroutine_task.h` node_pump |
-| 管道检查 topics 列表缺 perception/obstacles | `monitor_node.c` 的 `TopicStats tstats[16]` 只能装 16 个 topic，第 17 个静默丢弃。扩到 64 | `monitor_node.c:647` |
+| 管道检查 topics 列表缺 perception/obstacles | `monitor_node.c` 的 `TopicStats tstats[16]` 只能装 16 个 topic，第 17 个静默丢弃。扩到 64 | `monitor_node.c:1304` |
