@@ -9,6 +9,7 @@ import { updateDeadReckon, _dr, initDeadReckon, tickDeadReckon } from './vis/cor
 import { selectCurrentMotionSegment } from './vis/math/Trajectory.js';
 import { mapToRoadNetwork } from './showcase/sceneAdapter.js';
 import { toTopo } from './mapPreview.js';
+import { computeDrivingStatus } from './vis/hud/DrivingStatus.js';
 
 var userEnv = { lighting: null, weather: null, visibility_m: null };
 try {
@@ -1576,6 +1577,113 @@ function updateLaneDiagHud(force) {
   vEl.className = 'ld-verdict' + (cls ? ' ' + cls : '');
 }
 
+/* ═══════════════════════════════════════════════════════════════
+ * 驾驶态势 HUD（3D 视图底部常驻仪表条）
+ *
+ * 一眼读出"车在干什么、危不危险"：速度/巡航目标、behavior 状态、控制模式
+ * （MRM/SAFE/机动）、本车道前车 gap/TTC 风险、ODD 环境提示。
+ * 视图模型由 vis/hud/DrivingStatus.js 纯函数计算（有单测），这里只写 DOM。
+ * 快捷键 I 开关；URL ?hud=0 默认关闭；手动驾驶模式下由 CSS 自动让位给 game-hud。
+ * ═══════════════════════════════════════════════════════════════ */
+var driveHudOn = true;
+var _lastDriveHudMs = 0;
+var _DRIVE_HUD_MS = 250;         // 4Hz：与车道诊断 HUD 同频，DOM 写入可忽略
+var _DH_TTC_FULL_S = 6;          // TTC 风险条满格对应的秒数
+
+function setDriveHud(on, opts) {
+  driveHudOn = !!on;
+  var hud = document.getElementById('drive-hud');
+  if (hud) hud.classList.toggle('hidden', !driveHudOn);
+  if (driveHudOn) updateDriveHud(true);
+  if (!opts || !opts.silent) toast(driveHudOn ? '驾驶态势 HUD：开' : '驾驶态势 HUD：关');
+}
+
+function toggleDriveHud() { setDriveHud(!driveHudOn, null); }
+
+function _dhChip(id, text, tone) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'dh-chip tone-' + (tone || 'idle');
+}
+
+function _dhWidth(id, frac) {
+  var el = document.getElementById(id);
+  if (el) el.style.width = (Math.max(0, Math.min(1, frac)) * 100).toFixed(1) + '%';
+}
+
+function updateDriveHud(force) {
+  if (!driveHudOn) return;
+  var now = performance.now();
+  if (!force && now - _lastDriveHudMs < _DRIVE_HUD_MS) return;
+  _lastDriveHudMs = now;
+  var hud = document.getElementById('drive-hud');
+  if (!hud) return;
+
+  var st = computeDrivingStatus(topoData && topoData.metrics);
+  if (!st.hasData) {
+    hud.className = 'tone-idle';
+    return;
+  }
+
+  /* 速度区：km/h 大字 + m/s 小字（仿真/日志都用 m/s，方便对照） */
+  _ldSet('dh-kmh', st.speedKmh === null ? '--' : Math.max(0, st.speedKmh).toFixed(0));
+  _ldSet('dh-ms', st.speed === null ? '-- m/s' : st.speed.toFixed(1) + ' m/s');
+  var cruise = st.cruiseSpeed;
+  var scale = Math.max(cruise || 0, st.speed || 0, 1) * 1.15;
+  _dhWidth('dh-speed-fill', (st.speed || 0) / scale);
+  var tick = document.getElementById('dh-target-tick');
+  if (tick) {
+    tick.style.display = cruise === null ? 'none' : '';
+    if (cruise !== null) tick.style.left = ((cruise / scale) * 100).toFixed(1) + '%';
+  }
+  _ldSet('dh-target', cruise === null ? '目标 --'
+    : '目标 ' + (cruise * 3.6).toFixed(0) + ' km/h' +
+      (st.commandSpeed !== null ? ' · 指令 ' + (st.commandSpeed * 3.6).toFixed(0) : ''));
+
+  /* 决策 / 控制 / 驾驶模式 chip */
+  _dhChip('dh-beh', st.behavior.label, st.behavior.tone);
+  _dhChip('dh-ctl', st.control.label, st.control.tone);
+  var drv = document.getElementById('dh-drv');
+  if (drv) drv.textContent = st.driverMode || '—';
+
+  /* 踏板 + 方向盘 */
+  _dhWidth('dh-thr', st.throttle);
+  _dhWidth('dh-brk', st.brake);
+  _ldSet('dh-steer', (st.steerDeg >= 0 ? '+' : '') + st.steerDeg.toFixed(1) + '°');
+
+  /* 前车 / TTC */
+  _dhChip('dh-risk', st.risk.label, st.risk.tone);
+  _ldSet('dh-src', '源: ' + st.perceptionSource);
+  var lead = st.lead;
+  _ldSet('dh-gap', lead ? lead.gap.toFixed(1) + ' m' : '—');
+  _ldSet('dh-ttc', (lead && Number.isFinite(lead.ttc)) ? lead.ttc.toFixed(1) + ' s' : '∞');
+  _ldSet('dh-lane', st.lane ? (st.lane.index + '/' + st.lane.count) : '--');
+  _dhWidth('dh-ttc-fill', (lead && Number.isFinite(lead.ttc)) ? lead.ttc / _DH_TTC_FULL_S : 1);
+
+  /* ODD 环境提示 */
+  _dhChip('dh-odd', st.odd.label, st.odd.tone);
+  var oddEl = document.getElementById('dh-odd-items');
+  if (oddEl) {
+    var sig = st.odd.items.map(function(it) { return it.tone + ':' + it.label; }).join('|');
+    if (oddEl.dataset.sig !== sig) {
+      oddEl.dataset.sig = sig;
+      oddEl.textContent = '';
+      st.odd.items.forEach(function(it) {
+        var span = document.createElement('span');
+        span.className = 'tone-' + it.tone;
+        span.textContent = it.label;
+        oddEl.appendChild(span);
+      });
+    }
+  }
+
+  /* 整条 HUD 边框按最高严重度发光：碰撞风险 / MRM > 注意 / 安全介入 */
+  var tones = [st.risk.tone, st.control.tone, st.behavior.tone];
+  var frame = tones.indexOf('bad') >= 0 ? 'tone-bad' : (tones.indexOf('warn') >= 0 ? 'tone-warn' : 'tone-ok');
+  hud.className = frame;
+}
+
 function clearFrames() {
   frames = [];
   frameCount = 0;
@@ -1599,6 +1707,8 @@ function updateAll() {
 
   /* 车道诊断 HUD：内部按 4Hz 限流，未开启时直接 return（零开销） */
   updateLaneDiagHud(false);
+  /* 驾驶态势 HUD：同样 4Hz 限流 */
+  updateDriveHud(false);
 
   const now = performance.now();
   // ── 工作区可见性门控 ──
@@ -2689,6 +2799,8 @@ function initAll() {
     /* ?lanediag=1 —— 直接进车道诊断视角（讨论"车压线/感知有没有看到车道线"
      * 时免去每次手点开关）。 */
     if (params.get('lanediag') === '1') setLaneDiag(true, {silent: true});
+    /* ?hud=0 —— 录屏/截图时关掉底部驾驶态势 HUD */
+    if (params.get('hud') === '0') setDriveHud(false, {silent: true});
   } catch (_) {}
   switchWorkspace(workspaceMode || 'observe');
   // 1. Initialize D3 topology graph
@@ -2883,6 +2995,13 @@ document.addEventListener('keydown', function(ev) {
     return;
   }
 
+  // i — 驾驶态势 HUD（速度 / 决策 / 控制模式 / 前车 TTC / ODD）
+  if (key === 'i') {
+    ev.preventDefault();
+    toggleDriveHud();
+    return;
+  }
+
   // p — 切换性能悬浮窗
   if (key === 'p') {
     ev.preventDefault();
@@ -2930,6 +3049,7 @@ window.flowboard = {
   closeMapPreview: closeMapPreview,
   doPause: doPause,
   toggleLaneDiag: toggleLaneDiag,
+  toggleDriveHud: toggleDriveHud,
   clearFrames: clearFrames,
   resetView: resetView,
   // filter
