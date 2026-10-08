@@ -246,10 +246,14 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 ninja-build python3
       - name: Configure (mingw-w64 cross)
+        # Core-only PE gate (flow_launcher/flowmond/flowctl). This job does not
+        # build planning_node, so Eigen is not required. Linux / planning builds
+        # keep the top-level FATAL_ERROR.
         run: |
           cmake -S . -B build-mingw -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64-x86_64.cmake \
-            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_BUILD_TYPE=Release \
+            -DFLOWENGINE_ALLOW_NO_EIGEN=ON
       - name: Build (mingw-gate targets only)
         # 只构建门禁校验的三个 Windows 二进制。全量构建会连带编译 kun_quant,
         # 其 sqlite3 依赖在 mingw 交叉环境不可用 (ubuntu 无 mingw 版 sqlite3 dev)。
