@@ -1603,9 +1603,14 @@ def collect_samples(duration: int, json_file: Path, interval: float,
     if start_d is not None:
         cmd += ["--start-d", str(start_d)]
     cmd += [str(duration)]
+    # 非交互调用方：topology 等不到就让 demo.sh 退出非零，评估器随即判"没采到样本"
+    # 并打印采集层现场（而非静默空跑）。见 scripts/demo.sh 的 FLOW_REQUIRE_TOPOLOGY。
+    run_env = os.environ.copy()
+    run_env.setdefault("FLOW_REQUIRE_TOPOLOGY", "1")
     proc = subprocess.Popen(
         cmd,
         cwd=ROOT,
+        env=run_env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,

@@ -514,22 +514,30 @@ echo "  ✓ Pipeline running (PID $LAUNCHER_PID)"
 # 看不到 flow_launcher 进程内的数据, launch 演示必须用文件桥接。
 echo "───[3/4] Starting dashboard..."
 # Wait for monitor node to write first snapshot.
-# 预算（2026-10-08 放宽 15s→40s）：CI nightly 的 scenario_regression 并行起 N 个
-# worker，每个都是完整 pipeline + monitor；调度器高负载下 monitor 首帧常 >15s，
-# 于是全体 worker 齐刷刷 "no topology samples collected" 把整矩阵判 FAIL（实测
-# nightly 2026-10-04~10-08 连续失败）。这是启动竞态，不是行为回归。
-# 同时把"超时"从只 echo 升级为**退出非零**：之前静默继续，调用方（评估器/
-# CI）看不到根因，只看到下游"没采到样本"，排查方向被带偏。
-WAIT_STEPS="${FLOW_TOPO_WAIT_STEPS:-80}"   # 80 × 0.5s = 40s
+# 预算（2026-10-08 放宽 15s→40s）：CI nightly 跑 scenario_regression（workers=1
+# 顺序）时，每个场景都是完整 pipeline + monitor；CI runner 冷启动/高负载下
+# monitor 首帧常 >15s，于是整矩阵齐刷刷 "no topology samples collected" 被判
+# FAIL（实测 nightly 2026-10-04~10-08 连续失败）。这是启动竞态，不是行为回归。
+#
+# 预算上限自适应：等待步数不得让"等待 + 运行"超过 demo 时长 —— 短 demo（如
+# 评估器默认 20s）若等 40s 会先耗尽时长再退出，反而制造"没采到样本"。取
+# min(默认上限, 时长相关)，并保留 FLOW_TOPO_WAIT_STEPS 显式覆盖。
+WAIT_STEPS="${FLOW_TOPO_WAIT_STEPS:-80}"   # 默认上限 80 × 0.5s = 40s
+if [ "${FLOW_TOPO_WAIT_STEPS:-}" = "" ] && [ "${DURATION:-0}" -gt 0 ] 2>/dev/null; then
+  # 至少给 10s，至多不超过 "时长 - 5s"（留出实际运行时间）
+  _cap=$(( (DURATION - 5) * 2 ))
+  [ "$_cap" -lt 20 ] && _cap=20
+  [ "$_cap" -lt "$WAIT_STEPS" ] && WAIT_STEPS="$_cap"
+fi
 for _ in $(seq 1 "$WAIT_STEPS"); do
   if [ -s "$JSON_FILE" ]; then break; fi
   sleep 0.5
 done
 if [ ! -s "$JSON_FILE" ]; then
   echo "  ✗ Timeout waiting for $JSON_FILE after $((WAIT_STEPS/2))s — monitor node may have failed"
-  echo "    检查 $LAUNCHER_STDERR；并行 worker 下可调大 FLOW_TOPO_WAIT_STEPS"
-  if [ "$SKIP_SERVICES" = "1" ]; then
-    # 隔离评估 worker：无 topology 即无法评估，直接失败而非让下游误报空样本
+  echo "    检查 $LAUNCHER_STDERR；CI/并行可调大 FLOW_TOPO_WAIT_STEPS"
+  if [ "$SKIP_SERVICES" = "1" ] || [ "${FLOW_REQUIRE_TOPOLOGY:-0}" = "1" ]; then
+    # 非交互调用方：无 topology 即无法评估，直接失败而非让下游误报空样本
     exit 4
   fi
 fi
