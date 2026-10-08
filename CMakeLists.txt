@@ -354,6 +354,7 @@ endif()
 
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 # Use system-installed Eigen if available (fastest path, no network/download needed)
+option(FLOWENGINE_ALLOW_NO_EIGEN "Permit building without Eigen (planning_node skipped; NOT a supported runtime path)" OFF)
 find_package(Eigen3 3.3 QUIET NO_MODULE)
 if(Eigen3_FOUND)
     set(FLOWENGINE_HAVE_EIGEN TRUE)
@@ -383,12 +384,29 @@ elseif(EXISTS "/usr/include/eigen3/Eigen/Core" OR EXISTS "/usr/local/include/eig
     endif()
     set(FLOWENGINE_HAVE_EIGEN TRUE)
     message(STATUS "Eigen found (system headers /usr/include/eigen3) — frenet planner will be built")
+elseif(FLOWENGINE_ALLOW_NO_EIGEN)
+    set(FLOWENGINE_HAVE_EIGEN FALSE)
+    message(WARNING
+        "Eigen3 not found but FLOWENGINE_ALLOW_NO_EIGEN=ON — building WITHOUT the "
+        "Frenet planner. planning_node degrades to lane-keep-only: the ego will "
+        "NEVER change lanes or overtake. This is a diagnostics-only path.")
 else()
     set(FLOWENGINE_HAVE_EIGEN FALSE)
-    message(STATUS "Eigen not available — building without frenet planner. "
-        "IMPACT: planning_node falls back to lane-keep-only mode — the ego "
-        "vehicle will NEVER change lanes or overtake. Install libeigen3-dev "
-        "and reconfigure to enable lane changes (core + unit tests unaffected).")
+    # 缺 Eigen 时**直接构建失败**，不再静默退化（L3-P0③）。
+    # 旧行为：planning_node 退化为 lane-keep-only，ego 永不变道/超车，但构建成功、
+    # CI 绿 —— 于是"换台机器忘了装 libeigen3-dev"表现为"算法变差"而非"环境坏了"，
+    # 排查方向被彻底带偏。CI 三个 job 都已 apt install libeigen3-dev（ci.yml:278/
+    # 312/412），故这里 FATAL_ERROR 不会误伤正常 CI。
+    message(FATAL_ERROR
+        "Eigen3 not found — refusing to build. The Frenet planner (planning_node) "
+        "requires Eigen; without it the ego silently degrades to lane-keep-only and "
+        "NEVER changes lanes or overtakes.\n"
+        "  Fix:  install libeigen3-dev (Debian/Ubuntu: "
+        "`sudo apt-get install -y libeigen3-dev`), or vendored headers at "
+        "third_party/eigen/, then reconfigure.\n"
+        "  Escape hatch (unit tests / core-only builds that don't need planning): "
+        "`cmake -DFLOWENGINE_ALLOW_NO_EIGEN=ON ...` — planning_node is still skipped, "
+        "but this is an explicit, greppable choice rather than a silent fallback.")
 endif()
 set(BUILD_TESTING ON CACHE BOOL "" FORCE)
 

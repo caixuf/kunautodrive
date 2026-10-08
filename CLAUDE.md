@@ -39,6 +39,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | sensor-wiring-gate | `python3 ci/gates/sensor_wiring_check.py` | sensor 模式下 `lidar_mode`/两处 `lidar_max_range_m` 不一致（静默丢点） |
 | zombie-ban-gate | `python3 ci/gates/zombie_ban_check.py` | 退役 Python 仪表盘入口回潮 |
 | book-guard-gate | `python3 ci/gates/book_guard.py` | `docs/book/` 掉回"按源码逐条重建"（行数上限 / 行号密度 / 突变） |
+| behavior-fsm-gate | `python3 ci/gates/behavior_fsm_check.py` | `behavior_planner` 转移表死状态 / 死事件 / 变道缺超时回退 |
+| long-run-lane-keep | `python3 ci/gates/long_run_lane_keep.py --duration 600` | 10min demo.sh soak：巡航压线 / 车心越线（长跑才显形的漂移退化；nightly，过渡期 continue-on-error） |
 | lanelet-consistency-gate | `python3 ci/gates/lanelet_consistency_check.py` | `map.json` ↔ `lanelet.osm` Rule 1–5 漂移 |
 | lane-match-schema-gate | `python3 ci/gates/lane_match_schema_check.py` | 车道匹配 schema ↔ codegen 契约不一致（`--self-test`） |
 | scenario / clock / map | `tools/scenarioctl.py validate` / 禁 `modules/` 裸 `clock_gettime` / `tools/check_map_connectivity.py` | 空场景引用 / raw clock / 断链地图 |

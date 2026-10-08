@@ -187,3 +187,6 @@ tests/out/
 # M2 / D2-09 consistency gate: 大地图 lanelet.osm 由 tools/build_lanelet.sh 生成（避免 60MB+ 单文件膨胀仓库）。
 # 中小型地图的 lanelet.osm 已 commit（osm_test/city_center/city_ring/osm_munich/city_grid/beijing_guomao/osm_lujiazui_v2）。
 maps/osm_zhengdong/lanelet.osm
+
+# L3 P0 门禁本地运行产物（长跑 soak / 场景回归 worker 工作区，勿入库）
+.long_run_gate/

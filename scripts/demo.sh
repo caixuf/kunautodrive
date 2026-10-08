@@ -513,13 +513,25 @@ echo "  ✓ Pipeline running (PID $LAUNCHER_PID)"
 # 依据 VISUALIZATION_ARCHITECTURE.md: flowmond 拥有独立 MessageBus,
 # 看不到 flow_launcher 进程内的数据, launch 演示必须用文件桥接。
 echo "───[3/4] Starting dashboard..."
-# Wait for monitor node to write first snapshot
-for _ in $(seq 1 30); do
+# Wait for monitor node to write first snapshot.
+# 预算（2026-10-08 放宽 15s→40s）：CI nightly 的 scenario_regression 并行起 N 个
+# worker，每个都是完整 pipeline + monitor；调度器高负载下 monitor 首帧常 >15s，
+# 于是全体 worker 齐刷刷 "no topology samples collected" 把整矩阵判 FAIL（实测
+# nightly 2026-10-04~10-08 连续失败）。这是启动竞态，不是行为回归。
+# 同时把"超时"从只 echo 升级为**退出非零**：之前静默继续，调用方（评估器/
+# CI）看不到根因，只看到下游"没采到样本"，排查方向被带偏。
+WAIT_STEPS="${FLOW_TOPO_WAIT_STEPS:-80}"   # 80 × 0.5s = 40s
+for _ in $(seq 1 "$WAIT_STEPS"); do
   if [ -s "$JSON_FILE" ]; then break; fi
   sleep 0.5
 done
 if [ ! -s "$JSON_FILE" ]; then
-  echo "  ✗ Timeout waiting for $JSON_FILE — monitor node may have failed"
+  echo "  ✗ Timeout waiting for $JSON_FILE after $((WAIT_STEPS/2))s — monitor node may have failed"
+  echo "    检查 $LAUNCHER_STDERR；并行 worker 下可调大 FLOW_TOPO_WAIT_STEPS"
+  if [ "$SKIP_SERVICES" = "1" ]; then
+    # 隔离评估 worker：无 topology 即无法评估，直接失败而非让下游误报空样本
+    exit 4
+  fi
 fi
 if [ "$SKIP_SERVICES" = "1" ]; then
   echo "  ↷ Dashboard and Foxglove bridge disabled for isolated evaluation worker"

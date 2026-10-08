@@ -515,6 +515,11 @@ protected:
                     bool safety_intervened = apply_safety(cmd, state, has_state);
                     bool final_intervened = arbiter_intervened || safety_intervened;
                     publish_cmd(cmd, final_intervened);
+                    /* L3-P0④：控频发周期状态证据（每 20 拍 ≈ 0.5s@40Hz 轮询），
+                     * 使正常场景也带安全证据。频率远低于 cmd，不冲击 IPC 带宽。 */
+                    if (cycle % 20 == 0) {
+                        publish_state_evidence(cmd, final_intervened);
+                    }
 
                     ++cycle;
                     if (final_intervened || cycle % 20 == 1) {
@@ -860,6 +865,7 @@ private:
             .fault_type = "data_timeout",
             .component = "safety_control",
             .injected = injected,
+            .periodic = false,
             .injected_at_us = injected_at_us,
             .detected_at_us = detected_at_us,
             .last_input_age_us = last_input_age_us,
@@ -868,6 +874,37 @@ private:
             .command_brake = action.immediate_stop ? 1.0 : 0.0,
             .command_steer = 0.0,
         };
+        char* json = safety_evidence_to_json(&evidence);
+        if (!json) return;
+        transport_publish(transport_, "safety/evidence",
+                          reinterpret_cast<const uint8_t*>(json),
+                          static_cast<uint32_t>(std::strlen(json) + 1));
+        cJSON_free(json);
+    }
+
+    /* L3-P0④：周期状态快照证据。每个评估 run 都应携带安全证据 —— 此前
+     * safety/evidence 只在故障注入/超时时刻发布，正常场景全程无证据，
+     * demo_evaluator 的 safety_evidence_present 恒为 False，"系统负责的那一半"
+     * 在报告里是空白。本方法按固定节拍发一条 evidence_type="safety_state" 的
+     * 快照（fault.id="none"、injected=false），反映当前 degrade/action 状态，
+     * 使任何 run 都有可审计的安全证据；真正的故障证据（periodic=false）语义不变。 */
+    void publish_state_evidence(const ControlCmd& cmd, bool intervened) const {
+        const DegradeAction action = degrade_layer_action();
+        SafetyEvidence evidence = {
+            .fault_id = "none",
+            .fault_type = "none",
+            .component = "safety_control",
+            .injected = false,
+            .periodic = true,
+            .injected_at_us = 0,
+            .detected_at_us = 0,
+            .last_input_age_us = 0,
+            .action = action,
+            .command_throttle = cmd.throttle,
+            .command_brake = cmd.brake,
+            .command_steer = cmd.steer,
+        };
+        (void)intervened;
         char* json = safety_evidence_to_json(&evidence);
         if (!json) return;
         transport_publish(transport_, "safety/evidence",

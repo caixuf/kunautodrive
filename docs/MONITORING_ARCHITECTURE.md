@@ -255,6 +255,12 @@ topic 契约与扩展规则见[数据闭环](DATA_CLOSED_LOOP.md#业务回调流
 - 每次注入与检测均发布 `safety/evidence` JSON；`monitor_node` 将最后一条导出为
   `metrics.safety_evidence`。终态证据包含注入/检测单调时间、L3 原因和制动命令，
   可由 `flowrec` 或 dashboard JSON 保存。
+- **周期状态快照（L3-P0④）**：`safety_control` 另按节拍（每 20 拍）发布
+  `evidence_type="safety_state"` 的快照（`fault.id="none"`、`injected=false`），
+  携带当前 `degrade` / `action` / `command`，使**无故障的正常场景**也带安全证据
+  （此前 `safety_evidence_present` 恒为 False）。两类记录共用同一 topic 与
+  `schema_version=1`，由 `evidence_type` 区分；`monitor_node` 只留最后一条，
+  故消费方（`demo_evaluator`）必须按类型挑证据（故障优先）。
 
 确定性单测会同时覆盖缺失心跳（L1 安全包络）和 raw_cmd 超时（L3 紧急制动）：
 

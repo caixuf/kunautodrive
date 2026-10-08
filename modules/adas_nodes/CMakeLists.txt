@@ -464,8 +464,20 @@ elseif(EXISTS "/usr/include/eigen3/Eigen/Core")
 elseif(EXISTS "/usr/local/include/eigen3/Eigen/Core")
     set(_EIGEN_INC "/usr/local/include/eigen3")
     message(STATUS "Eigen found (system /usr/local/include/eigen3): ${_EIGEN_INC}")
+elseif(FLOWENGINE_ALLOW_NO_EIGEN)
+    message(WARNING
+        "Eigen NOT found but FLOWENGINE_ALLOW_NO_EIGEN=ON — planning_node builds "
+        "in fallback mode (lane-keep-only; ego will never change lanes). "
+        "Diagnostics-only, not a supported runtime path.")
 else()
-    message(STATUS "Eigen NOT found — Frenet planner will fall back")
+    # L3-P0③：缺 Eigen 直接构建失败，不再静默退化（见顶层 CMakeLists.txt 同名分支）。
+    message(FATAL_ERROR
+        "Eigen3 not found — refusing to build planning_node's Frenet planner. "
+        "Without Eigen the planner silently degrades to lane-keep-only and the ego "
+        "NEVER changes lanes or overtakes, yet the build stays green.\n"
+        "  Fix: install libeigen3-dev (`sudo apt-get install -y libeigen3-dev`) or "
+        "vendor headers at third_party/eigen/, then reconfigure.\n"
+        "  Escape hatch: `cmake -DFLOWENGINE_ALLOW_NO_EIGEN=ON ...`")
 endif()
 
 find_library(FRENET_BRIDGE

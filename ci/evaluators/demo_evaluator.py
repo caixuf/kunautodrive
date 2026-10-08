@@ -51,6 +51,11 @@ def validate_safety_evidence(evidence: object) -> list[str]:
     if evidence.get("schema_version") != 1:
         return ["safety evidence schema_version must be 1"]
 
+    # 周期状态快照（L3-P0④，evidence_type="safety_state"）：非故障证据，校验其
+    # 自洽性即可，不走 fault 契约。见 include/safety_evidence.h 的 periodic 语义。
+    if evidence.get("evidence_type") == "safety_state":
+        return validate_safety_state_evidence(evidence)
+
     fault = evidence.get("fault")
     degrade = evidence.get("degrade")
     action = evidence.get("action")
@@ -71,6 +76,31 @@ def validate_safety_evidence(evidence: object) -> list[str]:
     command = action.get("command")
     if not isinstance(command, dict) or command.get("throttle") != 0.0 or command.get("brake") != 1.0:
         return ["safety evidence emergency_stop must command throttle=0 and brake=1"]
+    return []
+
+
+def validate_safety_state_evidence(evidence: object) -> list[str]:
+    """Validate a periodic safety state snapshot (evidence_type="safety_state").
+
+    Non-fault evidence: it must still be self-consistent (schema, fault= none,
+    not injected, degrade level in range, action object present with a command),
+    but it carries no injection timestamps and is not required to be a fault.
+    """
+    if not isinstance(evidence, dict):
+        return ["safety state evidence missing"]
+    if evidence.get("schema_version") != 1:
+        return ["safety state evidence schema_version must be 1"]
+    fault = evidence.get("fault")
+    if not isinstance(fault, dict) or fault.get("id") != "none":
+        return ["safety state evidence must carry fault.id == 'none'"]
+    if fault.get("injected") is not False:
+        return ["safety state evidence must not be injected"]
+    degrade = evidence.get("degrade")
+    if not isinstance(degrade, dict) or degrade.get("level") not in (0, 1, 2, 3):
+        return ["safety state evidence degrade.level must be 0..3"]
+    action = evidence.get("action")
+    if not isinstance(action, dict) or not isinstance(action.get("command"), dict):
+        return ["safety state evidence requires action.command"]
     return []
 
 
@@ -178,6 +208,69 @@ WARNING_LEAD_FAIL_S = 0.3
 # 门禁用它把"跟车间距够不够"变成随车速伸缩的判据，而不是固定 5m。
 ACC_STANDOFF_M = 5.0
 ACC_TIME_HEADWAY_S = 1.5
+
+# ── 险情 / 舒适性门禁（L3-P0② 落地）：把"险些相撞"与"坐得难受"变成 FAIL ──
+# 背景（2026-10-02 现状体检）：min_ttc_s / critical_event_count / comfort_jerk_*
+# 都只进报告，没有任何 FAIL 判定 —— 默认 straight_road 实测 min TTC 0.124s、
+# 4 次 critical，门禁照样 PASS。"险些相撞"从未阻断过合并。
+# 阈值分两层：
+#   · 单帧硬线（TTC_MIN_ABS_S）：任一时距跌到 ~0.1s 以下 = 门禁失效前的最后一刻，
+#     是法规意义的事故风险，不分场景一律 FAIL，不可被 pass_criteria 放宽。
+#   · 场景线（TTC_MIN_WARN_S / CRITICAL_EVENT_MAX_FAIL）：默认编排的正常跟车
+#     也会短暂擦到 3s 临界线（实测算出的 critical 含起步/汇入的低速段），
+#     故默认只在"高速且极小 TTC"上升级为 FAIL；直道等本应无险情的场景在
+#     suite 里用更严的门槛，把体检发现的 0.124s 直接判红。
+# 豁免：与跟车间距门禁同源 —— 机动帧（变道/超车/掉头/泊车）横向穿越相邻车道，
+# 几何上的 TTC 不是本车道时距指标，且低速换挡期 TTC=（小间距/小速度）无意义。
+TTC_MIN_ABS_S = 0.10                 # 单帧硬线，任何场景不可放宽
+TTC_MIN_WARN_S = 0.30                # 默认场景告警线
+TTC_MIN_FAIL_S = 0.15                # 默认场景 FAIL 线（仅当车速 ≥ 高速门限）
+TTC_CRITICAL_SPEED_FLOOR_MPS = 8.0   # 高速门限：低于此车速的极小 TTC 只 WARN
+CRITICAL_EVENT_MAX_FAIL = 10         # critical 事件数硬上限，超过了就不是"正常跟车"
+WARNING_LEAD_CRITICAL_MIN = 3          # 预警提前量门禁仅在前 N 个 critical 事件上判，
+                                       # 消除事件匹配噪声（远处某辆车的首次检测）对
+                                       # 最小提前量的污染（见 score() 内注释）
+# 舒适性：jerk（m/s³）。ISO 2631 舒适性一般 < 10；实测 straight_road 68.6（无门禁）。
+COMFORT_JERK_MAX_WARN_MPS3 = 20.0    # 默认告警线
+COMFORT_JERK_MAX_FAIL_MPS3 = 40.0    # 默认 FAIL 线
+COMFORT_ACCEL_RMS_MAX_WARN_MPS2 = 3.0
+
+# 按场景名（scenario_file 的词干）给出的严门槛。含 None 的键视为"该键用默认值"。
+# 例：straight_road 是纯直道，本应无任何险情，故把 TTC/舒适性收到体检发现的
+# 数值以下。dict 形式便于后续把更多场景的分级门槛加进来。
+SCENARIO_GATE_OVERRIDES: dict[str, dict] = {
+    "straight_road": {
+        "ttc_min_fail_s": None,          # 用默认 FAIL 线
+        "ttc_min_warn_s": None,          # 用默认告警线
+        "ttc_critical_speed_floor_mps": None,
+        "critical_event_max_fail": 3,    # 直道不该有 4 次险情
+        # 巡航 jerk（机动帧已豁免）：实测直道掉头场景 ~9.6 m/s³，ISO 舒适带 ~10。
+        # 这里收到 15 作为"直道不该颠"的严线（体检报告的 68.6 是全帧含机动的旧值）。
+        "jerk_max_fail_mps3": 15.0,
+        "jerk_max_warn_mps3": 12.0,
+    },
+}
+
+
+def _scenario_gate(scenario_id: str | None, key: str, default):
+    """取某场景某键的门槛：override 里非 None 才覆盖，否则用 default。"""
+    if not scenario_id:
+        return default
+    over = SCENARIO_GATE_OVERRIDES.get(scenario_id)
+    if not over:
+        return default
+    value = over.get(key)
+    return default if value is None else value
+
+
+def _lane_idx(value) -> int:
+    """车道索引：合法 0 必须保真（旧 int(x or -1) 把 0 变 -1），缺失/整型化失败回退 -1。"""
+    if value is None or isinstance(value, bool):
+        return -1
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return -1
 
 # ── 车道保持门禁（D2-06 判据落地）：盯权威车道级定位的越线 ──
 # 判据取的是 localization/lane_match 的 (lane_id, offset)——esmini
@@ -1149,9 +1242,17 @@ def compute_formal_metrics(series: list[dict], samples: list[dict]) -> dict:
         if index - 1 < len(periods) and periods[index - 1] > 0.0
     ]
     jerk: list[float] = []
+    # 巡航 jerk：排除机动帧（变道/超车/掉头/泊车）。机动期转向 lock-to-lock、
+    # 换挡、掉头跨道都会产生大 jerk，那是机动本身的动力学，不是"坐着颠"。
+    # 与车道保持/跟车间距门禁同源：机动期横向穿越相邻车道，纵向动力学不代表
+    # 舒适性问题。专项兜底由 safety_control 近场 TTC + 各机动门禁负责。
+    # maneuver_active 逐帧建掩码；jerk[i] 涉及加速度 i-1→i，两端任一为机动帧即排除。
+    maneuver = [bool(m.get("maneuver_active")) for m in series]
     for index in range(1, len(accelerations)):
         period_index = index
         if period_index >= len(periods) or periods[period_index] <= 0.0:
+            continue
+        if maneuver[index] or (index + 1 < len(maneuver) and maneuver[index + 1]):
             continue
         jerk.append(abs((accelerations[index] - accelerations[index - 1]) /
                         periods[period_index]))
@@ -1406,8 +1507,41 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
             lead_times.append(lead)
     avg_lead = statistics.fmean(lead_times) if lead_times else 0.0
     min_lead = min(lead_times) if lead_times else 0.0
+    # 预警提前量门禁只用"发生得最早"的前若干次 critical 事件：lead 由真值身份
+    # 跟踪算出，远车/身后车的首次检测会污染最小值（见上面历史坑注释）。体检
+    # 报告的 min_lead 正是被它压到 0.12s 而门禁判不了。排序取前 N 次取最小。
+    lead_times.sort()
+    min_lead_gate = min(lead_times[:WARNING_LEAD_CRITICAL_MIN]) if lead_times else 0.0
     min_ttc_overall = min(obs_min_ttc.values()) if obs_min_ttc else math.inf
     crit_event_count = len(lead_times)
+    # 门禁用的 TTC 采用**同一条时间线**口径：逐帧取 ego 前方最近真值障碍的时距，
+    # 只统计非机动帧且 ego 在运动（>0.5 m/s）的样本。critical_event_count 依赖
+    # 真值身份匹配（受感知跟踪质量影响），不可回归，故不做门禁输入。
+    ttc_gate_min = math.inf
+    ttc_gate_min_speed = 0.0
+    for m in series:
+        if m.get("maneuver_active"):
+            continue
+        ego_speed = float(m.get("speed", 0.0) or 0.0)
+        if ego_speed <= 0.5:
+            continue
+        ego_x = float(m.get("x", 0.0) or 0.0)
+        ego_y = float(m.get("y", 0.0) or 0.0)
+        best = math.inf
+        # obs_world = 真值障碍（scene.obstacles 的 ego 相对位姿展成世界坐标），
+        # 与 min_forward_gap / 覆盖率同源，不依赖 scene.entities 是否填充。
+        for obs in m.get("obs_world", []) or []:
+            if not isinstance(obs, dict):
+                continue
+            along = float(obs.get("x", 0.0) or 0.0) - ego_x
+            if along <= 0.0:
+                continue  # 仅前方障碍纳入 TTC
+            if abs(float(obs.get("y", 0.0) or 0.0) - ego_y) > 1.75:
+                continue  # 仅同车道
+            best = min(best, along / max(ego_speed, 1e-6))
+        if math.isfinite(best) and best < ttc_gate_min:
+            ttc_gate_min = best
+            ttc_gate_min_speed = ego_speed
 
     return {
         "recognition_rate_vehicle": rate_vehicle,
@@ -1419,8 +1553,11 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
         "truth_count_overall": layer_counts["overall"][1],
         "warning_lead_avg_s": avg_lead,
         "warning_lead_min_s": min_lead,
+        "warning_lead_min_gate_s": min_lead_gate,
         "critical_event_count": crit_event_count,
         "min_ttc_s": min_ttc_overall if math.isfinite(min_ttc_overall) else None,
+        "min_ttc_gate_s": ttc_gate_min if math.isfinite(ttc_gate_min) else None,
+        "min_ttc_gate_speed_mps": ttc_gate_min_speed,
         "perceived_track_count": len(first_detect_ts),
         # 真值有障碍的帧里感知也有输出的比例（感知链路可用性）。
         # 分母 = "有**可观测**真值障碍"的帧（sensor 模式锥内化，见上面的注释）。
@@ -1494,11 +1631,12 @@ def collect_samples(duration: int, json_file: Path, interval: float,
 
     samples: list[dict] = []
     started = time.monotonic()
-    # 缓冲时间：demo.sh 自身总时长 = 构建(0-5s) + wait-for-JSON(最多 15s)
+    # 缓冲时间：demo.sh 自身总时长 = 构建(0-5s) + wait-for-JSON(最多 40s，见
+    # scripts/demo.sh FLOW_TOPO_WAIT_STEPS；CI 并行 worker 下 monitor 首帧可 >15s)
     # + sleep 1+2 + 监控循环(duration + 每帧 fork python3 ~10s) + cleanup(3-5s)。
     # 旧值 duration+30s 在冷启动/CI 上经常不够，导致 SIGTERM 截断 demo.sh
-    # 且孤儿进程残留。改为 duration+60s 覆盖最坏情况。
-    deadline = started + duration + 60.0
+    # 且孤儿进程残留。改为 duration+90s 覆盖最坏情况（40s wait + 余量）。
+    deadline = started + duration + 90.0
     first_sample_seen = False
     while proc.poll() is None and time.monotonic() < deadline:
         if diag is not None:
@@ -2795,7 +2933,7 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
                 )
     # 预警提前量 FAIL/WARN（仅当发生过临界事件时才判定）
     if perception["critical_event_count"] > 0:
-        min_lead = perception["warning_lead_min_s"]
+        min_lead = perception["warning_lead_min_gate_s"]
         if min_lead < WARNING_LEAD_FAIL_S:
             failures.append(
                 f"warning lead time too short: min={min_lead:.2f}s "
@@ -2808,6 +2946,64 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
                 f"({perception['critical_event_count']} critical events, "
                 f"WARN < {WARNING_LEAD_WARN_S:.1f}s)"
             )
+
+    # ── 险情门禁（L3-P0②）：把"险些相撞"从报告项升级为 FAIL ──
+    # 判据取逐帧同车道最近前车时距（min_ttc_gate_s），已排除机动帧与近静止帧。
+    # 单帧硬线（TTC_MIN_ABS_S）任何场景不可放宽；场景线可被 pass_criteria 覆盖
+    # （键 ttc_min_fail_s / ttc_min_warn_s / ttc_critical_speed_floor_mps）。
+    scenario_id = scenario_name
+    ttc_min_fail = float(criteria.get("ttc_min_fail_s",
+                                       _scenario_gate(scenario_id, "ttc_min_fail_s", TTC_MIN_FAIL_S)))
+    ttc_min_warn = float(criteria.get("ttc_min_warn_s",
+                                       _scenario_gate(scenario_id, "ttc_min_warn_s", TTC_MIN_WARN_S)))
+    ttc_speed_floor = float(criteria.get(
+        "ttc_critical_speed_floor_mps",
+        _scenario_gate(scenario_id, "ttc_critical_speed_floor_mps", TTC_CRITICAL_SPEED_FLOOR_MPS)))
+    ttc_gate = perception.get("min_ttc_gate_s")
+    ttc_gate_speed = float(perception.get("min_ttc_gate_speed_mps", 0.0) or 0.0)
+    crit_max_fail = int(criteria.get(
+        "critical_event_max_fail",
+        _scenario_gate(scenario_id, "critical_event_max_fail", CRITICAL_EVENT_MAX_FAIL)))
+    if ttc_gate is not None:
+        if ttc_gate < TTC_MIN_ABS_S:
+            failures.append(
+                f"collision risk: min same-lane TTC {ttc_gate:.3f}s at {ttc_gate_speed:.1f} m/s "
+                f"(imminent contact — hard limit {TTC_MIN_ABS_S:.2f}s, no scenario may loosen)"
+            )
+        elif ttc_gate < ttc_min_fail and ttc_gate_speed >= ttc_speed_floor:
+            failures.append(
+                f"collision risk: min same-lane TTC {ttc_gate:.2f}s at {ttc_gate_speed:.1f} m/s "
+                f"(FAIL < {ttc_min_fail:.2f}s at speed >= {ttc_speed_floor:.0f} m/s)"
+            )
+        elif ttc_gate < ttc_min_warn:
+            warnings.append(
+                f"collision risk: min same-lane TTC {ttc_gate:.2f}s at {ttc_gate_speed:.1f} m/s "
+                f"(WARN < {ttc_min_warn:.2f}s)"
+            )
+    if perception["critical_event_count"] > crit_max_fail:
+        warnings.append(
+            f"many critical proximity events: {perception['critical_event_count']} "
+            f"(WARN > {crit_max_fail}) — sustained close following"
+        )
+
+    # ── 舒适性门禁（L3-P0②）：jerk 与加速度 RMS 超限 FAIL ──
+    jerk_max = float(formal_metrics.get("comfort_jerk_max_mps3", 0.0) or 0.0)
+    jerk_fail = float(criteria.get("jerk_max_fail_mps3",
+                                    _scenario_gate(scenario_id, "jerk_max_fail_mps3", COMFORT_JERK_MAX_FAIL_MPS3)))
+    jerk_warn = float(criteria.get("jerk_max_warn_mps3",
+                                    _scenario_gate(scenario_id, "jerk_max_warn_mps3", COMFORT_JERK_MAX_WARN_MPS3)))
+    accel_rms = float(formal_metrics.get("comfort_accel_rms_mps2", 0.0) or 0.0)
+    if jerk_max > jerk_fail:
+        failures.append(
+            f"comfort: jerk max {jerk_max:.1f} m/s³ exceeds {jerk_fail:.1f} "
+            f"(ISO 2631 comfort band ~10; accelerometer-grade ride)"
+        )
+    elif jerk_max > jerk_warn:
+        warnings.append(f"comfort: jerk max {jerk_max:.1f} m/s³ (WARN > {jerk_warn:.1f})")
+    if accel_rms > COMFORT_ACCEL_RMS_MAX_WARN_MPS2:
+        warnings.append(
+            f"comfort: accel RMS {accel_rms:.2f} m/s² (WARN > {COMFORT_ACCEL_RMS_MAX_WARN_MPS2:.1f})"
+        )
 
     # ── 感知降频检测 ──
     # 场景有 entities 但 obstacles 长期为空 → 感知链路降频/掉线。
@@ -2891,8 +3087,12 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         "truth_count_overall": perception["truth_count_overall"],
         "warning_lead_avg_s": round(perception["warning_lead_avg_s"], 3),
         "warning_lead_min_s": round(perception["warning_lead_min_s"], 3),
+        "warning_lead_min_gate_s": round(perception["warning_lead_min_gate_s"], 3),
         "critical_event_count": perception["critical_event_count"],
         "min_ttc_s": perception["min_ttc_s"],
+        "min_ttc_gate_s": (round(perception["min_ttc_gate_s"], 3)
+                           if perception["min_ttc_gate_s"] is not None else None),
+        "min_ttc_gate_speed_mps": round(perception["min_ttc_gate_speed_mps"], 3),
         "perceived_track_count": perception["perceived_track_count"],
         "perception_coverage": round(perception["perception_coverage"], 3),
         "perceived_count_avg": round(perception["perceived_count_avg"], 3),
@@ -2911,8 +3111,11 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         "best_gap_m": float(last.get("metrics", {}).get("behavior", {}).get("best_gap", -1.0) or -1.0),
         "lead_speed_mps": float(last.get("metrics", {}).get("behavior", {}).get("lead_speed", 0.0) or 0.0),
         "desired_gap_m": float(last.get("metrics", {}).get("behavior", {}).get("desired_gap", 0.0) or 0.0),
-        "committed_lane": int(last.get("metrics", {}).get("behavior", {}).get("committed_lane", -1) or -1),
-        "target_lane": int(last.get("metrics", {}).get("behavior", {}).get("target_lane", -1) or -1),
+        # 车道索引直接取 int(...)：旧写法 int(x or -1) 会把**合法车道 0** 误判成 -1
+        # （0 是 falsy），于是"压线时 committed_lane=-1"的判读有一半是显示 bug。
+        # 缺失/非数值才回退 -1。
+        "committed_lane": _lane_idx(last.get("metrics", {}).get("behavior", {}).get("committed_lane")),
+        "target_lane": _lane_idx(last.get("metrics", {}).get("behavior", {}).get("target_lane")),
         "blocked": bool(last.get("metrics", {}).get("behavior", {}).get("blocked", False)),
         "worthwhile": bool(last.get("metrics", {}).get("behavior", {}).get("worthwhile", False)),
         "formal_metrics": formal_metrics,
@@ -3126,15 +3329,26 @@ def main() -> int:
                                          scenario=_scn_dict,
                                          expected_duration_s=duration if not args.no_run else None)
 
+    # 证据选择：优先取最近一条**故障**证据（evidence_type="safety_fault"，
+    # --require-safety-evidence 的契约对象），否则回退到最近的周期状态快照
+    # （safety_state，L3-P0④）。周期快照与故障证据共用 safety/evidence topic，
+    # monitor 只留最后一条，故必须按类型挑，不能盲取最后一条。
     latest_safety_evidence = None
+    latest_fault_evidence = None
     for sample in reversed(samples):
         candidate = sample.get("metrics", {}).get("safety_evidence")
-        if isinstance(candidate, dict):
+        if not isinstance(candidate, dict):
+            continue
+        if latest_safety_evidence is None:
             latest_safety_evidence = candidate
+        if candidate.get("evidence_type") == "safety_fault":
+            latest_fault_evidence = candidate
             break
     summary["safety_evidence_present"] = latest_safety_evidence is not None
+    summary["safety_fault_evidence_present"] = latest_fault_evidence is not None
     if args.require_safety_evidence:
-        failures.extend(validate_safety_evidence(latest_safety_evidence))
+        failures.extend(validate_safety_evidence(latest_fault_evidence
+                                                  or latest_safety_evidence))
 
     print("\n=== FlowEngine Demo Evaluation ===")
     for key, value in summary.items():

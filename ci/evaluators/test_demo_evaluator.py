@@ -275,6 +275,38 @@ class DemoEvaluatorTest(unittest.TestCase):
         self.assertTrue(failures)
         self.assertIn("brake=1", failures[0])
 
+    def test_safety_state_evidence_contract_accepts_periodic_snapshot(self):
+        # L3-P0④：正常场景也带安全证据（周期状态快照）。契约为非故障证据。
+        evaluator = load_evaluator()
+        evidence = {
+            "schema_version": 1,
+            "evidence_type": "safety_state",
+            "fault": {"id": "none", "type": "none", "component": "safety_control",
+                      "injected": False},
+            "degrade": {"level": 0, "reason": 0},
+            "action": {
+                "name": "none",
+                "immediate_stop": False,
+                "mrm_stop": False,
+                "disable_lane_change": False,
+                "command": {"throttle": 0.3, "brake": 0.0, "steer": 0.01},
+            },
+        }
+        self.assertEqual(evaluator.validate_safety_evidence(evidence), [])
+
+    def test_safety_state_evidence_rejects_injected_flag(self):
+        evaluator = load_evaluator()
+        evidence = {
+            "schema_version": 1,
+            "evidence_type": "safety_state",
+            "fault": {"id": "none", "injected": True},
+            "degrade": {"level": 0},
+            "action": {"command": {"throttle": 0.0, "brake": 0.0}},
+        }
+        failures = evaluator.validate_safety_evidence(evidence)
+        self.assertTrue(failures)
+        self.assertIn("must not be injected", failures[0])
+
     def test_expected_edges_are_generated_from_pipeline(self):
         evaluator = load_evaluator()
         pipeline = {

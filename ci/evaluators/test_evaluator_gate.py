@@ -371,6 +371,42 @@ def run_all_checks() -> int:
     check("actor behind the ego is not counted as forward (no bogus lead)",
           _s["critical_event_count"] == 0 and _s["warning_lead_avg_s"] == 0.0)
 
+    print("\n[26] 险情门禁：同车道极小 TTC 必须 FAIL；正常跟车不得误报")
+    # L3-P0② 新门禁。判据 = 逐帧同车道最近前车时距（min_ttc_gate_s）。
+    # 注意 scene.obstacles 是 **ego 相对** 位姿（y=0 = 本车道）。
+    # 注入：12 m/s，前车纵向 1.0m（车心到车心）→ TTC≈0.08s < 硬线 0.10s → FAIL。
+    _close = [_mk(10 + i * 3, -1.75, 12.0, 0.0, i * 0.25, obstacles=[
+        {"id": 1, "x": 1.0, "y": 0.0, "len": 4.6, "wid": 2.0},
+    ]) for i in range(20)]
+    _f, _s = _score_full("ttc-close", _close, _ZERO_CRIT)
+    check("imminent low-TTC caught",
+          any("collision risk" in x for x in _f) and _s["min_ttc_gate_s"] is not None
+          and _s["min_ttc_gate_s"] < de.TTC_MIN_ABS_S)
+    # 健康对照：前车 30m（TTC=2.5s）→ 不得 FAIL。
+    _safe = [_mk(10 + i * 3, -1.75, 12.0, 0.0, i * 0.25, obstacles=[
+        {"id": 1, "x": 30.0, "y": 0.0, "len": 4.6, "wid": 2.0},
+    ]) for i in range(20)]
+    _f2 = _score_full("ttc-safe", _safe, _ZERO_CRIT)[0]
+    check("healthy headway not flagged for TTC",
+          not any("collision risk" in x for x in _f2))
+    # 场景严门槛：同样 2.5s，若场景把 warn 线设为 3.0 则应告警（WARN 非 FAIL）。
+    _f3, _w3, _ = de.score(_safe, ROOT / "does-not-exist.log",
+                           criteria={**_ZERO_CRIT, "ttc_min_warn_s": 3.0},
+                           scenario_name="ttc-strict", expected_edges=[], road=None)
+    check("scenario-tightened TTC warn honored",
+          any("collision risk" in x for x in _w3))
+
+    print("\n[27] 舒适性门禁：高 jerk 必须 FAIL；平稳 run 不得误报")
+    # 注入：速度每帧交替 ±3 m/s（0.25s 周期）→ 加速度 ±24/s → jerk 巨大，远超默认 FAIL 线。
+    _jerky = [_mk(10 + i * 3, -1.75, 12.0 + (3.0 if i % 2 else -3.0), 0.0, i * 0.25)
+              for i in range(40)]
+    _f = _score_full("jerk-bad", _jerky, _ZERO_CRIT)[0]
+    check("high jerk caught", any("comfort: jerk" in x for x in _f))
+    _smooth = [_mk(10 + i * 3, -1.75, 12.0 + i * 0.002, 0.0, i * 0.25) for i in range(40)]
+    _f2 = _score_full("jerk-ok", _smooth, _ZERO_CRIT)[0]
+    check("smooth run not flagged for comfort",
+          not any("comfort: jerk" in x for x in _f2))
+
     print(f"\n{'='*52}")
     print(f"gate self-test: {_passed} passed, {_failed} failed")
     print(f"{'='*52}")

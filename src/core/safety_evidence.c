@@ -11,7 +11,8 @@ char* safety_evidence_to_json(const SafetyEvidence* evidence) {
     cJSON* root = cJSON_CreateObject();
     if (!root) return NULL;
     cJSON_AddNumberToObject(root, "schema_version", 1);
-    cJSON_AddStringToObject(root, "evidence_type", "safety_fault");
+    cJSON_AddStringToObject(root, "evidence_type",
+                            evidence->periodic ? "safety_state" : "safety_fault");
 
     cJSON* fault = cJSON_AddObjectToObject(root, "fault");
     cJSON_AddStringToObject(fault, "id", evidence->fault_id);
