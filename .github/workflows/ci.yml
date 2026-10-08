@@ -117,6 +117,18 @@ jobs:
       - name: Reject retired Python dashboard entrypoint / orphan pyc
         run: python3 ci/gates/zombie_ban_check.py
 
+  # ── behavior FSM gate (L3-P0) ──────────────────────────────
+  # 模块职责铁律：「状态转移表缺行」此前只写在文档里、无门禁。本 gate 解析
+  # behavior_planner_node.cpp 的 BEH_TRANSITIONS[]，断言无死状态 / 无死事件 /
+  # 变道均有 TIMEOUT 回退。已声明但暂未接线的目标态（STOP/YIELD/EMERGENCY）
+  # 必须在 ALLOWED_SINK_STATES 里显式登记（显式拒绝，非静默放过）。
+  behavior-fsm-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce behavior FSM transition-table completeness
+        run: python3 ci/gates/behavior_fsm_check.py
+
   # ── book_guard gate (CLAUDE.md docs/book 整治后新增) ──────────
   # docs/book/ 真技术书风格守门：单章节 800 行上限、行号密度 ≤5 处/100 行、
   # 超长对比表检测、commit-level >20% 行数突变。当前以 --warn-only 启动，
@@ -477,3 +489,14 @@ jobs:
       - name: Driving school exam vs baseline
         continue-on-error: true
         run: python3 tools/driving_test.py --all --ci --baseline
+      # ── 10 分钟长跑车道保持门禁（L3 需求：正常车道保持下不压线）──
+      # 短跑评估只看得到起步 + 一次机动；1Hz 极限环 / 横向积分漂移 / 曲率累积
+      # 要几分钟才显形。本门禁起一次 ~10min demo.sh（16km 直道 soak），断言
+      # 全程巡航不压线 / 车心不越线（判据与 demo_evaluator 同源常量）。
+      # ⚠ 过渡保护：continue-on-error —— 当前 16km 直道 soak 触发已知的
+      # "车道横向坐标系反"根因（见 docs/ROADMAP_L3.md P0①，纯直道巡航 ego 漂到
+      # y=+5.14 出车道），该根因修复并全矩阵转绿后删除 continue-on-error。
+      # 在此之前本门禁的作用=每日自动复现该故障，防止"改好了没复发"无人验证。
+      - name: Long-run lane-keeping soak (10min)
+        continue-on-error: true
+        run: python3 ci/gates/long_run_lane_keep.py --duration 600
