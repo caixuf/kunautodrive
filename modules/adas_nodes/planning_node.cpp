@@ -36,6 +36,7 @@
 #include "planning_coordinates.h"
 #include "traj_safety.h"   /* W3 诊断：轨迹扫掠碰撞检查（Frenet 点测漏检薄障碍） */
 #include "degrade_ladder.h"
+#include "param_registry.h"
 #include <cjson/cJSON.h>
 
 #include "construction_zones.h"
@@ -168,6 +169,11 @@ struct PlanningContext {
     double cfg_max_speed{20.0};
     double cfg_max_accel{4.0};
     double cfg_ref_path_length{5000.0};
+    /* 车道边约束（2026-10-08 压线自锁修复）：发布轨迹的横向偏移必须让车身
+     * 留在本车道内。safe_band = lane_width/2 - ego_half_width - guard，
+     * guard 是车身与车道线之间保留的余量（0.20m）。 */
+    double cfg_lane_edge_guard_m{0.20};
+    double cfg_ego_half_width_m{1.00};
     double        ref_path_start_x{0.0};
     double        map_ref_x[128]{};
     double        map_ref_y[128]{};
@@ -1600,6 +1606,10 @@ protected:
 
             if (!g.has_fusion) continue;
 
+            /* 参数热重载（三处之三）：漏了这步，注册了也改不动，只能重启。 */
+            g.cfg_lane_edge_guard_m = param_get_float("planning.lane_edge_guard_m");
+            g.cfg_ego_half_width_m  = param_get_float("planning.ego_half_width_m");
+
             /* ── 驾驶模式仲裁：周期性检查条件，尝试升级；定位丢失时立即降级 ── */
             uint64_t now_us = clock_now_us();
             g.highway_ready = (g.ego_v >= g.cfg_highway_speed_mps) &&
@@ -2349,6 +2359,44 @@ protected:
                     for (int i = 0; i < n_wp; i++) {
                         d_out[i] = g.target_lane_offset;
                     }
+                } else if (!in_lane_change) {
+                    /* lane_ref 有效：d=0 即目标车道中心。
+                     *
+                     * 2026-10-08 压线自锁修复（dense_route_traffic 280s 实测）：
+                     * 上面的强制居中在有 lane_ref 时被整块跳过，居中全交给
+                     * Frenet。但 Frenet 横向走廊是 max_road_width_l/r = 6.0m
+                     * （≈1.7 个车道宽），**没有任何车道边界约束**。实测 ego 偏到
+                     * d≈-1.49m（2/3 号车道线上，车身宽 2.0m 直接压线）时，Frenet
+                     * 输出的是 d_start≈d_lookahead≈d_end≈-1.5 的"平行于车道
+                     * 中心、恒定偏移"的直线，全程不收敛 → control 忠实跟随、
+                     * steer 恒 0 → 每帧从当前位置重规划又得到 -1.5 → 自锁，
+                     * 车永远骑线（实测 125 连续帧）。
+                     *
+                     * 这里加车道边约束：d 超出安全带（车身将压线）就强制拉回车道
+                     * 中心。安全带 = lane_width/2 - ego_half_width - guard；
+                     * 带内完全不动 Frenet 输出 → 车道内避障（W1）能力保留；
+                     * 带外只拦"车身会压线"的非法偏移。
+                     * 注意不能只夹紧不纠正：夹紧是恒等映射，ego 会永久停在带沿
+                     * 同样压线（Python 验证见 /tmp/lane_dbg/validate_lane_clamp.py
+                     * 的 C 反例）。 */
+                    const double lane_w = g.lane_width > 1.0 ? g.lane_width : 3.5;
+                    double safe_band = lane_w * 0.5 - g.cfg_ego_half_width_m
+                                       - g.cfg_lane_edge_guard_m;
+                    if (safe_band < 0.0) safe_band = 0.0;
+                    int forced = 0;
+                    for (int i = 0; i < n_wp; i++) {
+                        if (fabs(d_out[i]) > safe_band) {
+                            d_out[i] = 0.0;
+                            forced++;
+                        }
+                    }
+                    if (forced > 0 && g.plan_count % 100 == 0) {
+                        LOG_WARN("planning",
+                                 "[LANE_EDGE] forced %d/%d traj pts to lane center: "
+                                 "band=%.2fm (lane_w=%.2f ego_hw=%.2f guard=%.2f)",
+                                 forced, n_wp, safe_band, lane_w,
+                                 g.cfg_ego_half_width_m, g.cfg_lane_edge_guard_m);
+                    }
                 }
             }
 
@@ -3011,9 +3059,23 @@ static int planning_init(MessageBus* bus, Transport* transport,
                 g.cfg_ref_path_length = item->valuedouble;
             if ((item = cJSON_GetObjectItem(root, "highway_speed_mps")))
                 g.cfg_highway_speed_mps = item->valuedouble;
+            if ((item = cJSON_GetObjectItem(root, "lane_edge_guard_m")))
+                g.cfg_lane_edge_guard_m = item->valuedouble;
+            if ((item = cJSON_GetObjectItem(root, "ego_half_width_m")))
+                g.cfg_ego_half_width_m = item->valuedouble;
             cJSON_Delete(root);
         }
     }
+
+    /* 参数注册（三处之二）：默认值取上面解析后的值，不用硬编码字面量，
+     * 否则会把 params_json 里的值盖掉。逐帧 param_get_float 重读见主循环。 */
+    param_register_float("planning.lane_edge_guard_m", g.cfg_lane_edge_guard_m,
+                         0.0, 1.0,
+                         "发布轨迹横向偏移安全带外沿到车道线的余量 (m)："
+                         "safe_band = lane_width/2 - ego_half_width - guard");
+    param_register_float("planning.ego_half_width_m", g.cfg_ego_half_width_m,
+                         0.5, 3.0,
+                         "ego 车身半宽 (m)，用于计算轨迹横向偏移的安全带");
 
     g.target_speed = g.cfg_target_speed;
     g.route_target_speed = -1.0;  /* -1=未设置 */
