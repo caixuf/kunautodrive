@@ -199,11 +199,14 @@ jerk 100+；(3) `periods` 过滤非正 dt 后变短却仍按 `periods[index-1]` 
 单测 `[28]`/`[29]` + 3 例 `test_demo_evaluator` 锁定契约。
 
 **遗留（仍阻断 8/8 稳定全绿，均**既有**、与本项无因果）**：
-- `straight_road` 间歇 `lane keeping: ego body rides the lane line`（~2/12）：探针（8 run）显示压线帧
-  绝大多数是**掉头**帧（`maneuver=True`，已豁免），仅 3-6 帧非机动；FAIL run 里掉头跨道 ~30 帧被
-  计入巡航压线（`max consecutive 30` = 跨道时长）→ 疑为**掉头期 behavior_state 遥测偶发非 U_TURN**
-  致豁免失效，阈值（30 帧 / 30%）又恰好卡在观测值（27-30 帧 / 30-32%）上，属门禁边界 + 机动豁免
-  的健壮性问题，非真实车道保持回归（16km soak 0 压线）。
+- `straight_road` 间歇 `lane keeping: ego body rides the lane line`（~2/12）：**真实掉头后横向落位 bug**，
+  非门禁伪影。探针实证（FAIL run）——掉头后巡航全程 `ego.y≈−3.13`（漂到 −3.24）恒定，`laneid=−1`、
+  `lane_match_offset≈−1.38`，而车道 −1 中心 = −1.75 → **自车真实停在偏 −1.38m 处、车身骑 −1/−2 线**
+  （正是门禁注释里"规划目标 −1.75 而自车停在 −3.3"那类故障，门禁**判对了**）。PASS run 则收敛到
+  −1.75（offset≈−0.22）。即**掉头返程落位间歇性偏 ~1.4m**，属 planning/behavior 的掉头返程落位问题。
+  **已证既有**：pre-P0① worktree（4737b5f，重建）跑 straight_road 同样复现 lane-keeping FAIL
+  （+ 两条 jerk FAIL），与本项/P0① 均无因果。阈值（30 帧/30%）卡在观测方差边缘 → 偶发 FAIL。
+  注：16km 直道 soak 无掉头故 0 压线；本项**不改门禁阈值**（会掩盖真实落位缺陷）。
 - `no topology samples collected` 间歇（~1/6）：启动竞态（monitor 首帧 vs 采样开始），原评估器同样复现。
 
 
