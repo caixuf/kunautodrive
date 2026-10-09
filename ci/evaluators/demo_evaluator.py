@@ -1225,39 +1225,64 @@ def compute_formal_metrics(series: list[dict], samples: list[dict]) -> dict:
             "timing_sample_period_mean_s": None,
             "timing_sample_period_p99_s": None,
             "timing_sample_count": 0,
+            "timing_clock": "wall",
         }
-    times = [_sample_time_seconds(sample) for sample in samples]
+    times, used_sim_clock = _sample_clock_seconds(samples)
     lane_errors = [
         abs(float(metric.get("lane_error", 0.0) or 0.0)) for metric in series
     ]
-    periods = [
-        times[index] - times[index - 1]
-        for index in range(1, len(times))
-        if times[index] > times[index - 1]
-    ]
     speeds = [float(metric.get("speed", 0.0) or 0.0) for metric in series]
-    accelerations = [
-        (speeds[index] - speeds[index - 1]) / periods[index - 1]
-        for index in range(1, len(speeds))
-        if index - 1 < len(periods) and periods[index - 1] > 0.0
-    ]
-    jerk: list[float] = []
     # 巡航 jerk：排除机动帧（变道/超车/掉头/泊车）。机动期转向 lock-to-lock、
     # 换挡、掉头跨道都会产生大 jerk，那是机动本身的动力学，不是"坐着颠"。
     # 与车道保持/跟车间距门禁同源：机动期横向穿越相邻车道，纵向动力学不代表
     # 舒适性问题。专项兜底由 safety_control 近场 TTC + 各机动门禁负责。
-    # maneuver_active 逐帧建掩码；jerk[i] 涉及加速度 i-1→i，两端任一为机动帧即排除。
-    maneuver = [bool(m.get("maneuver_active")) for m in series]
-    for index in range(1, len(accelerations)):
-        period_index = index
-        if period_index >= len(periods) or periods[period_index] <= 0.0:
+    maneuver = [bool(metric.get("maneuver_active")) for metric in series]
+
+    # ── accel/jerk 的时间基：必须"逐对对齐 + 剔伪影"，否则会炸出假尖峰 ──
+    # 两个真实故障（2026-10-09 实测 live probe 定位）：
+    #   (1) 仿真结束后 collect_samples 每 interval 重复 append **冻结**的拓扑
+    #       JSON → 一长串 dt=0 重复帧；dt 作分母 → 除法爆炸。
+    #   (2) 墙钟（t_demo）在 CI 负载下非单调（实测 dt=−0.64s / 0.0192s），
+    #       微小 dt 作分母同样爆炸。
+    #   (3) 旧实现 `periods` 先过滤非正 dt（列表变短），却仍按 periods[index-1] /
+    #       period_index=index 取 → 丢一个 period 就错位后面**所有** accel/jerk。
+    # 修法：把 (dt, a, i0, i1) 打成**一个对齐的 pair 列表**，索引永不漂移；
+    # dt 用**自相对下限**（本 run 正 dt 中位数的一半）剔掉重复帧与抖动微样本。
+    # 下限自相对 → 自适应任意采样率，不写死 0.25s。
+    raw_dts = [times[i] - times[i - 1] for i in range(1, len(times))]
+    positive_dts = [dt for dt in raw_dts if dt > 0.0]
+    dt_floor = 0.5 * statistics.median(positive_dts) if positive_dts else 0.0
+
+    accel_pairs: list[dict] = []  # {"dt","a","i0","i1"}；i0/i1 为样本索引
+    for i in range(1, len(times)):
+        dt = times[i] - times[i - 1]
+        if dt <= 0.0 or (dt_floor > 0.0 and dt < dt_floor):
+            continue  # 重复帧 / 非单调 / 抖动微样本 → 不进分母
+        accel_pairs.append(
+            {
+                "dt": dt,
+                "a": (speeds[i] - speeds[i - 1]) / dt if i < len(speeds) else 0.0,
+                "i0": i - 1,
+                "i1": i,
+            }
+        )
+    periods = [pair["dt"] for pair in accel_pairs]  # timing_* 用清洗后的正 dt 集
+
+    jerk: list[float] = []
+    # jerk 由相邻两个 accel 估计作差得到。要求两对在**样本上邻接**（丢帧/被守卫
+    # 剔除的间隔会制造假尖峰，跳过）；maneuver 掩码作用于本对两端样本（原语义：
+    # 机动期纵向动力学不代表舒适性问题）。
+    for prev, cur in zip(accel_pairs, accel_pairs[1:]):
+        if cur["i0"] != prev["i1"]:
+            continue  # 样本不邻接 → 中间有被剔除的帧，不据此作差
+        if maneuver[cur["i0"]] or maneuver[cur["i1"]]:
             continue
-        if maneuver[index] or (index + 1 < len(maneuver) and maneuver[index + 1]):
-            continue
-        jerk.append(abs((accelerations[index] - accelerations[index - 1]) /
-                        periods[period_index]))
-    accel_rms = math.sqrt(statistics.fmean(value * value for value in accelerations)) \
-        if accelerations else 0.0
+        jerk.append(abs((cur["a"] - prev["a"]) / cur["dt"]))
+    accel_rms = (
+        math.sqrt(statistics.fmean(value * value for value in
+                                   (pair["a"] for pair in accel_pairs)))
+        if accel_pairs else 0.0
+    )
     return {
         "trajectory_metric_type": "closed_loop_lane_tracking",
         "trajectory_ade_m": statistics.fmean(lane_errors),
@@ -1268,6 +1293,7 @@ def compute_formal_metrics(series: list[dict], samples: list[dict]) -> dict:
         "timing_sample_period_mean_s": statistics.fmean(periods) if periods else 0.0,
         "timing_sample_period_p99_s": _p95(periods),
         "timing_sample_count": len(series),
+        "timing_clock": "sim" if used_sim_clock else "wall",
     }
 
 
@@ -1584,7 +1610,8 @@ def collect_samples(duration: int, json_file: Path, interval: float,
     文件一直缺失 / 文件存在但 mtime 早于启动被判陈旧 / 文件在但解析不出内容。
     """
     if diag is not None:
-        diag.update({"polls": 0, "missing": 0, "stale": 0, "invalid": 0, "valid": 0})
+        diag.update({"polls": 0, "missing": 0, "stale": 0, "invalid": 0, "valid": 0,
+                     "duplicate": 0})
 
     try:
         json_file.unlink()
@@ -1659,6 +1686,16 @@ def collect_samples(duration: int, json_file: Path, interval: float,
             continue
         sample = load_json(json_file)
         if sample:
+            # 仿真结束到 demo.sh 退出之间，monitor 已停写但本循环仍在轮询 →
+            # 反复读到**同一份冻结 JSON**。若原样 append，会在尾部堆出一长串
+            # dt=0 的重复帧，污染 jerk/accel/timing（2026-10-09 实测连续 18 帧
+            # dt=0，把一次正常减速炸成 jerk 100+）。与上一帧完全相同即视为冻结
+            # 重复，跳过 append（诊断计数 duplicate 便于回溯采集质量）。
+            if samples and sample == samples[-1]:
+                if diag is not None:
+                    diag["duplicate"] += 1
+                time.sleep(interval)
+                continue
             samples.append(sample)
             if diag is not None:
                 diag["valid"] += 1
@@ -1882,6 +1919,25 @@ def _sim_timestamps(samples: list[dict]) -> list[float]:
     if len(out) < 5 or out[-1] <= out[0]:
         return []
     return out
+
+
+def _sample_clock_seconds(samples: list[dict]) -> tuple[list[float], bool]:
+    """每样本的秒级时间 + 是否用仿真钟，专供微分（accel/jerk）用。
+
+    优先 `metrics.scene.t_us`（仿真钟，单调、与机器负载无关）；缺失/不可用
+    才回退墙钟（`_sample_time_seconds`，t_demo/timestamp）。
+
+    ⚠ 仿真钟**不保证**逐点单调：`_sim_timestamps` 只在"端到端递增"上判可用
+    （`out[-1] > out[0]`），仿真结束后轮询追加的**重复冻结帧**会让中段出现
+    dt=0（实测 50 样本里连续 18 个 dt=0）。故调用方必须**逐对守卫 dt<=0**——
+    不能靠本函数的返回值本身是干净序列。
+
+    Returns: (times_seconds, used_sim_clock)
+    """
+    sim = _sim_timestamps(samples)
+    if sim and len(sim) == len(samples):
+        return sim, True
+    return [_sample_time_seconds(s) for s in samples], False
 
 
 def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None, scenario_name: str | None = None, expected_edges: list[tuple[str, str, str]] | None = None, has_noa_route: bool = False, road: dict | None = None, traffic_lights: list | None = None, scenario: dict | None = None, expected_duration_s: float | None = None) -> tuple[list[str], list[str], dict]:

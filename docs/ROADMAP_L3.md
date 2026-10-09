@@ -187,12 +187,24 @@ lane id −1..−4 于 y=−1.75…−12.25）。于是 planning 的 idx0/idx1 �
   sensor 编排三场景（urban_challenge/dense_npc/lane_change_traffic）全 PASS。
   **车道保持维度**：全场景 0 压线 / 0 越线（本项修复目标，已达成）。
 
-**遗留（非本项）**：`straight_road` / `dense_npc` 的 `comfort jerk max` 门禁**抖动**（非本项引入）。
-`jerk_max` 取单帧最大值，对罕见瞬态极敏感，实测两棵树同分布：`straight_road` 在 HEAD 与
-改动树各约 3/6 次超 15.0 线；`dense_npc` HEAD 达 ~928 m/s³（3/6 超 40 线），**改动树降到 ~79
-（1/6）**——坐标系修复让 ego 变道不再被拽过参考线，反而**收敛**了极端 jerk，非致因。
-故矩阵 FAIL 与坐标系修复无因果；属**独立**的「jerk 门禁用 max 单点、无去抖/分位」指标缺陷，
-另立跟踪（建议改 p95 或对采样边界去抖）。
+**遗留（非本项）→ 2026-10-09 已修复**：`straight_road`/`dense_npc` 的 `comfort jerk max`
+门禁**抖动**根因是**度量伪影**（非本项引入），现已修复：`compute_formal_metrics` 三缺陷叠加——
+(1) 仿真结束后 `collect_samples` 每 interval 重复 append **冻结**拓扑 JSON → 尾部 dt=0 重复帧；
+(2) 时间基取自**墙钟** `t_demo`，CI 负载下非单调（实测 dt=−0.64s/0.0192s）→ 微 dt 作分母炸出
+jerk 100+；(3) `periods` 过滤非正 dt 后变短却仍按 `periods[index-1]` 取 → 丢一帧错位后面全部 accel。
+修法：(a) 新增 `_sample_clock_seconds` 优先仿真钟 `metrics.scene.t_us`；(b) accel/jerk 改用
+**对齐的 `(dt,a,i0,i1)` pair 列表** + 自相对 dt 下限（正 dt 中位数一半）剔伪影；(c) `collect_samples`
+冻结帧去重。**实测收敛**：`dense_npc` 12/12 PASS（原 3/6 FAIL，jerk 由 ~928 降到 ≤21.7）；
+`straight_road` jerk 恒 <12（原偶见 2564）。门禁判据保留 `max`（不改 p95，保对单次真实颠簸的检出）。
+单测 `[28]`/`[29]` + 3 例 `test_demo_evaluator` 锁定契约。
+
+**遗留（仍阻断 8/8 稳定全绿，均**既有**、与本项无因果）**：
+- `straight_road` 间歇 `lane keeping: ego body rides the lane line`（~2/12）：探针（8 run）显示压线帧
+  绝大多数是**掉头**帧（`maneuver=True`，已豁免），仅 3-6 帧非机动；FAIL run 里掉头跨道 ~30 帧被
+  计入巡航压线（`max consecutive 30` = 跨道时长）→ 疑为**掉头期 behavior_state 遥测偶发非 U_TURN**
+  致豁免失效，阈值（30 帧 / 30%）又恰好卡在观测值（27-30 帧 / 30-32%）上，属门禁边界 + 机动豁免
+  的健壮性问题，非真实车道保持回归（16km soak 0 压线）。
+- `no topology samples collected` 间歇（~1/6）：启动竞态（monitor 首帧 vs 采样开始），原评估器同样复现。
 
 
 ## 与近期工作的关系

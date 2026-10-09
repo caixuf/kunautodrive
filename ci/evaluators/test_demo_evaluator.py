@@ -80,6 +80,39 @@ class DemoEvaluatorTest(unittest.TestCase):
         )
         self.assertAlmostEqual(metrics["timing_sample_period_mean_s"], 0.1)
 
+    def test_formal_metrics_ignores_duplicate_timestamp_tail(self):
+        """仿真结束后 collect_samples 重复 append 冻结帧 → 尾部 dt=0 不得灌爆 jerk。"""
+        evaluator = load_evaluator()
+        samples = [{"t_demo": i * 0.1} for i in range(20)]
+        samples += [{"t_demo": 19 * 0.1} for _ in range(30)]  # 冻结尾巴
+        series = [{"lane_error": 0.0, "speed": 12.0 + 0.02 * i} for i in range(20)]
+        series += [{"lane_error": 0.0, "speed": 12.0 + 0.02 * 19} for _ in range(30)]
+        metrics = evaluator.compute_formal_metrics(series, samples)
+        # dt=0 被守卫剔除，无除法爆炸
+        self.assertLess(metrics["comfort_jerk_max_mps3"], 5.0)
+        self.assertAlmostEqual(metrics["timing_sample_period_mean_s"], 0.1, places=6)
+
+    def test_formal_metrics_prefers_sim_clock_when_present(self):
+        """t_us 存在时必须用仿真钟：墙钟抖动（微样本）不得污染 period/jerk。"""
+        evaluator = load_evaluator()
+        samples = []
+        for i in range(20):
+            wall = [i * 0.1, i * 0.1 + 0.0192, i * 0.1 - 0.64][i % 3]  # 抖动的墙钟
+            samples.append({"t_demo": wall, "metrics": {"scene": {"t_us": i * 100_000}}})
+        series = [{"lane_error": 0.0, "speed": 12.0 - 0.05 * i} for i in range(20)]
+        metrics = evaluator.compute_formal_metrics(series, samples)
+        self.assertEqual(metrics["timing_clock"], "sim")
+        self.assertAlmostEqual(metrics["timing_sample_period_mean_s"], 0.1, places=6)
+
+    def test_formal_metrics_falls_back_to_wall_clock_without_sim_clock(self):
+        """无 t_us 时必须回退墙钟（t_demo），且标注为 wall。"""
+        evaluator = load_evaluator()
+        samples = [{"t_demo": i * 0.1} for i in range(20)]
+        series = [{"lane_error": 0.0, "speed": 12.0} for _ in range(20)]
+        metrics = evaluator.compute_formal_metrics(series, samples)
+        self.assertEqual(metrics["timing_clock"], "wall")
+        self.assertAlmostEqual(metrics["timing_sample_period_mean_s"], 0.1, places=6)
+
     def test_timestamp_delta_handles_microseconds_without_scaling_seconds(self):
         evaluator = load_evaluator()
         self.assertAlmostEqual(

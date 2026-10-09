@@ -186,19 +186,24 @@ def run_all_checks() -> int:
     # topic 名复用 demo_evaluator.TOPIC_MIN_FREQ（唯一事实源），避免 set 漂移。
     _TOPICS = [{"topic": t, "freq": 20.0} for t in de.TOPIC_MIN_FREQ]
 
-    def _mk(x, y, speed, steer, ts, tl_state=None, obstacles=None):
+    def _mk(x, y, speed, steer, ts, tl_state=None, obstacles=None, t_us=None):
         ents = [{"id": 0, "type": "tl", "x": 300.0, "state": tl_state}] if tl_state else []
+        scene = {
+            "ego": {"x": x, "y": y, "speed": speed, "steer": steer, "heading": 0.0},
+            "lane": {"width": 3.5, "count": 4},
+            "obstacles": obstacles or [],
+            "entities": ents,
+        }
+        # t_us：仿真钟（microseconds）。给了才注入 → 未给时 _sim_timestamps 回退墙钟
+        # （保持既有用例走 t_demo/timestamp 路径）。
+        if t_us is not None:
+            scene["t_us"] = t_us
         return {
             "timestamp": ts,
             "metrics": {
                 "topics": _TOPICS,
                 "vehicle": {"speed": speed, "x": x},
-                "scene": {
-                    "ego": {"x": x, "y": y, "speed": speed, "steer": steer, "heading": 0.0},
-                    "lane": {"width": 3.5, "count": 4},
-                    "obstacles": obstacles or [],
-                    "entities": ents,
-                },
+                "scene": scene,
                 "driver_mode": "NOA:CRUISE",
             },
             "nodes": [],
@@ -406,6 +411,46 @@ def run_all_checks() -> int:
     _f2 = _score_full("jerk-ok", _smooth, _ZERO_CRIT)[0]
     check("smooth run not flagged for comfort",
           not any("comfort: jerk" in x for x in _f2))
+
+    print("\n[28] 舒适性门禁抗抖动：重复时间戳尾巴不得灌爆 jerk；真颠簸仍须 FAIL")
+    # 2026-10-09 根因：仿真结束后 collect_samples 每 interval 重复 append 冻结的
+    # 拓扑 JSON → 尾部一长串 dt=0 重复帧；dt 进分母 → 正常减速被炸成 jerk 100+。
+    # 旧实现还会因 periods 过滤后索引错位放大。修后：(i) 尾巴被剔，平稳 run 不误报；
+    # (ii) 真颠簸混尾巴仍 FAIL（证明守卫没把判据改哑）；(iii) 直道严门槛（15.0）不误报。
+    _body = [_mk(10 + i * 3, -1.75, 12.0 + i * 0.05, 0.0, i * 0.25) for i in range(20)]
+    _tail = [_mk(10 + 19 * 3, -1.75, 12.0 + 19 * 0.05, 0.0, 19 * 0.25)
+             for _ in range(30)]                        # 同一 timestamp 重复 30 帧
+    _f = _score_full("dup-tail", _body + _tail, _ZERO_CRIT)[0]
+    check("duplicate-timestamp tail does not inflate jerk",
+          not any("comfort: jerk" in x for x in _f))
+    # 真颠簸（±3 m/s 交替）+ 重复尾巴 → 仍须 FAIL
+    _jerky_dup = [_mk(10 + i * 3, -1.75, 12.0 + (3.0 if i % 2 else -3.0), 0.0, i * 0.25)
+                  for i in range(40)]
+    _jerky_dup += [_mk(10 + 39 * 3, -1.75, 12.0, 0.0, 39 * 0.25) for _ in range(20)]
+    _f2 = _score_full("jerk-bad-dup", _jerky_dup, _ZERO_CRIT)[0]
+    check("genuinely jerky run still FAILs despite duplicate tail",
+          any("comfort: jerk" in x for x in _f2))
+    # 直道严门槛（straight_road：FAIL 15.0）：平稳 + 尾巴 不得误报
+    _f3 = _score_full("straight_road", _body + _tail, _ZERO_CRIT)[0]
+    check("straight_road tight jerk gate not tripped by stale tail",
+          not any("comfort: jerk" in x for x in _f3))
+
+    print("\n[29] 仿真钟优先：t_us 存在时 dt 用仿真钟，墙钟抖动不影响 jerk")
+    # 物理上**恒减速**（−0.5 m/s²）→ 真 jerk = 0。仿真钟 0.1s 均匀；墙钟
+    # 被注入一个 0.0192s 微样本（CI 调度抖动的实测形态，见 2026-10-09 probe）。
+    # 旧实现用墙钟：dt≈0.0192 作分母 → 把一个恒减速 run 炸成 jerk ~110 → 直道
+    # 严门槛（15.0）误 FAIL。修后用仿真钟 → jerk 0，且 summary 记为 sim。
+    _jit = []
+    for i in range(30):
+        wall = i * 0.1
+        if i == 15:
+            wall = 15 * 0.1 - 0.1 + 0.0192   # 一处微样本
+        _jit.append(_mk(10 + i, -1.75, 12.0 - 0.05 * i, 0.0, wall, t_us=int(i * 100_000)))
+    _fj, _sj = _score_full("straight_road", _jit, _ZERO_CRIT)
+    check("sim clock used over jittery wall clock (no false jerk FAIL)",
+          not any("comfort: jerk" in x for x in _fj))
+    check("summary records sim clock",
+          _sj.get("formal_metrics", {}).get("timing_clock") == "sim")
 
     print(f"\n{'='*52}")
     print(f"gate self-test: {_passed} passed, {_failed} failed")
