@@ -15,18 +15,63 @@ struct Projection {
     double heading{0.0};
 };
 
-inline double lane_center_d(int lane_idx, int lane_count, double lane_width) {
-    return -(lane_idx - (lane_count - 1) * 0.5) * lane_width;
+/**
+ * 车道组整体横向偏移（相对道路参考线 y=road_c）。
+ *
+ * 双向路：车道对称铺在参考线两侧，偏移 0（既有行为）。
+ * 单向路：OpenDRIVE/靠右行驶下所有车道都在参考线的 -y 侧（lane_id=-1..-N），
+ *   参考线是道路**最内侧车道的内边界**而非几何中心。此时车道组整体向 -y
+ *   偏移 -N·w/2，使 idx0 落在最内侧真实车道中心（y=-w/2），
+ *   idx N-1 落在最外侧（y=-(N-1)·w-w/2）。
+ *
+ * 与 include/road_geometry.h::lane_center_y(..., side_offset) 同一语义（单一事实源）：
+ *   road_geometry.h docstring 例：N=4, lane_width=3.5, side_offset=-7.0
+ *   → 车道中心 -1.75/-5.25/-8.75/-12.25，正是单向 4 车道物理布局。
+ *
+ * @param lane_count 车道数 N（≥1）
+ * @param lane_width 单车道宽度 (m)
+ * @param road_oneway 1=单向（全部车道同向），0=双向（跨参考线=对向）
+ */
+inline double lane_group_side_offset(int lane_count, double lane_width,
+                                     bool road_oneway) {
+    if (!road_oneway || lane_count <= 1) return 0.0;
+    return -lane_count * lane_width * 0.5;
+}
+
+/**
+ * 车道中心相对道路参考线的横向偏移。
+ *
+ *   lane_center_d = side_offset - (idx - (N-1)/2)·w
+ *
+ * side_offset 见 lane_group_side_offset：双向路取 0（对称，历史行为不变）；
+ * 单向路取 -N·w/2（车道组整体偏到 -y 侧，与 flowsim 物理车道对齐）。
+ *
+ * 约定：idx 增大 → y 减小（向右/外侧）。单向路 idx0 = 最内侧（y 最接近 0），
+ * idx N-1 = 最外侧（y 最负）。
+ */
+inline double lane_center_d(int lane_idx, int lane_count, double lane_width,
+                            double side_offset = 0.0) {
+    if (lane_count <= 1) return side_offset;
+    return side_offset - (lane_idx - (lane_count - 1) * 0.5) * lane_width;
 }
 
 inline int first_legal_lane(int lane_count, bool road_oneway) {
     return road_oneway ? 0 : lane_count / 2;
 }
 
+/**
+ * 由横向偏移 d 反推最近车道索引 [0, lane_count-1]。
+ *
+ * 为 lane_center_d 的严格逆（round-trip 必须成立），同样接受 side_offset：
+ *   raw = (side_offset - d) / w + (N-1)/2
+ *
+ * own_side_only=true 时 clamp 下限到 N/2（双向路本向半幅）；单向路调用方传
+ * false，使全部车道可选（此时 clamp 到 [0, N-1]）。
+ */
 inline int nearest_lane(double d, int lane_count, double lane_width,
-                        bool own_side_only = true) {
+                        bool own_side_only = true, double side_offset = 0.0) {
     if (lane_count <= 0 || lane_width <= 0.0) return 0;
-    double raw = (-d) / lane_width + (lane_count - 1) * 0.5;
+    double raw = (side_offset - d) / lane_width + (lane_count - 1) * 0.5;
     int lane = static_cast<int>(raw >= 0.0 ? raw + 0.5 : raw - 0.5);
     lane = std::max(own_side_only ? lane_count / 2 : 0, lane);
     return std::min(lane_count - 1, lane);

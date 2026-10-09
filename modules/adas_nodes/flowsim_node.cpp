@@ -1828,8 +1828,16 @@ static void internal_cruise_control(flowsim::Entity& ego) {
      * road_h - heading 在变道结束 heading 未收敛时产生不必要的大 steer。
      * 改用 heading_err*0.3 + lat_err*0.03 降低对 heading 残留的敏感度。 */
     double rc_y = road_center_y(ego.x, g.curve_start_x, g.curve_length_m, g.curve_offset_m);
-    int ego_lane_idx = lane_idx_from_y(ego.y, g.scene_pub_cfg.lane_count, g.lane_width, rc_y, 0.0);
-    double target_y = lane_center_y(ego_lane_idx, g.scene_pub_cfg.lane_count, g.lane_width, rc_y, 0.0);
+    /* 单向路车道组整体偏在 -y 侧（与 planning/behavior 同源）。
+     * 用 road_geometry.h::lane_center_y 的 side_offset 项表达，保证 fallback
+     * 车道保持目标与 flowsim 物理车道、planning 目标一致（否则单向路 fallback
+     * 会把 ego 保到对称（错误）的车道中心）。 */
+    const int  fb_lane_count = g.scene_pub_cfg.lane_count;
+    const bool fb_oneway = (g.scenario && g.scenario->road.oneway) ? true : false;
+    const double fb_side_offset =
+        fb_oneway ? -(double)fb_lane_count * g.lane_width * 0.5 : 0.0;
+    int ego_lane_idx = lane_idx_from_y(ego.y, fb_lane_count, g.lane_width, rc_y, fb_side_offset);
+    double target_y = lane_center_y(ego_lane_idx, fb_lane_count, g.lane_width, rc_y, fb_side_offset);
     double y_err = target_y - ego.y;
     double road_h = road_center_heading(ego.x, g.curve_start_x, g.curve_length_m, g.curve_offset_m);
     double heading_err = road_h - ego.heading;

@@ -161,28 +161,39 @@
 | ②附 committed_lane 显示 bug | ✅ 完成 | `int(x or -1)` 把合法车道 0 误判 −1 → `_lane_idx()` |
 | ③ 缺 Eigen 硬失败 | ✅ 完成 | 顶层 + 节点 CMakeLists `FATAL_ERROR`（留 `-DFLOWENGINE_ALLOW_NO_EIGEN=ON` 逃生口） |
 | 行为 FSM 表门禁（新增） | ✅ 完成 | `ci/gates/behavior_fsm_check.py` + CI `behavior-fsm-gate`。抓出 STOP/YIELD/EMERGENCY 三个死状态，显式登记为待接线目标态（P1 MRM 用） |
-| 长跑车道保持门禁（新增） | ✅ 完成 | `ci/gates/long_run_lane_keep.py`（16km 直道 soak，断言全程巡航不压线）。**复现了 ① 的根因**，故 CI 侧过渡期 `continue-on-error`，根因修复后转硬门禁 |
+| 长跑车道保持门禁（新增） | ✅ 完成（已转硬门禁） | `ci/gates/long_run_lane_keep.py`（16km 直道 soak，断言全程巡航不压线）。曾复现 ① 根因，CI 侧过渡期 `continue-on-error`；① 修复后 **2026-10-09 删除 continue-on-error 转硬门禁** |
 | CI nightly 启动竞态修复 | ✅ 完成 | nightly 连续 5 天 "no topology samples collected"：`demo.sh` wait 预算 15s→40s 并按 demo 时长自适应封顶 + 非交互路径 exit 非零（`FLOW_REQUIRE_TOPOLOGY`） |
-| ① `lane_change_traffic` FAIL | ⏳ **根因已确认，修复待做（跨模块，P0 唯一未闭项）** | 见下 |
+| ① `lane_change_traffic` FAIL | ✅ 完成（2026-10-09） | 见下 |
 | ④ `safety_evidence` 全场景输出 | ✅ 完成 | `safety_control` 周期发 `evidence_type="safety_state"` 快照（`include/safety_evidence.h` 加 `periodic` 字段），正常场景也带证据；`demo_evaluator` 按类型挑证据（故障优先），新增 `validate_safety_state_evidence` + 2 单测。实测 `safety_evidence_present: True` |
 
-**① 根因（2026-10-08，已探针 + 长跑复现确认，影响面比预想大）**：两套车道坐标系横向
-符号相反。`planning_coordinates.h:18` 的 `lane_center_d` 把 `idx=0` 放在 **+y 侧**
-（4 车道下 `lane_center_d(0..3)=+5.25,+1.75,-1.75,-5.25`；`road_geometry.h:96-97` 明说
-"side_offset=0 时 idx=0 为最左 +y"），而 flowsim/OpenDRIVE 的前进车道是**负 lane id、
-全在 −y 侧**（`lane_center_t(-1..-4)=-1.75..-12.25`）。behavior 规划 `committed_lane`
-2→1→0（idx 递减 = 物理往 +y），ego 跟规划目标走 → y 从 −1.75 涨到 **+5.25，冲出前进
-车道越过参考线 5.25m**。评测器 FAIL **合法**（ego 真出界）。
+**① 根因（2026-10-08 探针 + 长跑复现；2026-10-09 修复）**：单向路两套车道坐标系横向
+布局相反。`planning_coordinates.h::lane_center_d` 把车道**对称铺在参考线两侧**
+（4 车道 `lane_center_d(0..3)=+5.25,+1.75,-1.75,-5.25`），而 flowsim/OpenDRIVE 沿靠右
+行驶把**单向路全部车道放在 −y 侧**（`json_to_xodr.py` 单向只生成 `<right>`、
+lane id −1..−4 于 y=−1.75…−12.25）。于是 planning 的 idx0/idx1 映射到路面外（+5.25/+1.75），
+且 behavior 的"超车后归位"分支（缺 `!road_oneway` 守卫）每帧触发 LEFT_CHANGE 往 idx−1
+（+y 方向）走，ego 被拽出前进车道越参考线（`committed_lane` 2→1→0、y→+5.33）。
 
-**影响面（新发现）**：不止 `lane_change_traffic`。新建的长跑门禁（16km 纯直道、无 route）
-复现同样签名——纯直道巡航 behavior `committed_lane=0`、ego 漂到 y=±5.1 出车道。
-**任何单向直路场景都中招**。
+**修复（2026-10-09）**：
+- `planning_coordinates.h`：新增 `lane_group_side_offset(N,w,oneway)=−N·w/2`（单向；双向 0），
+  `lane_center_d`/`nearest_lane` 增 `side_offset` 形参（默认 0→双向零变化）。单向 4 车道
+  恢复为 idx0=−1.75 … idx3=−12.25（与 flowsim 物理车道逐条对齐），ego@y=−1.75→idx0。
+- 接线：`planning_node.cpp`（`lane_center_offset`/`lane_center_y`/巡航 `nearest_lane`/uturn
+  目标道）、`behavior_planner_node.cpp`（`recalc_idx`/`target_lane_d`/`tl_y`/发布 y + 归位加
+  `!road_oneway` 守卫 + `inner_lane` 单向取 0）、`flowsim_node.cpp`（内置巡航 fallback）。
+- 测试：`test_planning_coordinates.cpp` 增单向断言 + round-trip（N∈1..8）。
+- 验证：`lane_change_traffic` PASS；16km soak PASS（0 压线/0 越线）；33 ctest 全绿；
+  `behavior_fsm_check`/`pipeline_check` 绿；9 场景矩阵除 `straight_road`/`dense_npc` 外全 PASS；
+  sensor 编排三场景（urban_challenge/dense_npc/lane_change_traffic）全 PASS。
+  **车道保持维度**：全场景 0 压线 / 0 越线（本项修复目标，已达成）。
 
-**修复方向**：`planning_node.cpp:553 lane_center_y` 的 `side_offset` 硬编码 0.0，
-应反映"前进车道在 −y 侧"（单向路 `side_offset≈−(N−1)·w/2`）；或统一
-`planning_coordinates.h::lane_center_d` 与 flowsim Frenet 的符号。**跨模块**：behavior/
-planning 用 `lane_center_d`、flowsim 用 `lane_center_t`；`test_planning_coordinates.cpp`
-硬编码 `lane_center_d(0)=5.25` 需同步。改前跑全矩阵，属重构类改动。
+**遗留（非本项）**：`straight_road` / `dense_npc` 的 `comfort jerk max` 门禁**抖动**（非本项引入）。
+`jerk_max` 取单帧最大值，对罕见瞬态极敏感，实测两棵树同分布：`straight_road` 在 HEAD 与
+改动树各约 3/6 次超 15.0 线；`dense_npc` HEAD 达 ~928 m/s³（3/6 超 40 线），**改动树降到 ~79
+（1/6）**——坐标系修复让 ego 变道不再被拽过参考线，反而**收敛**了极端 jerk，非致因。
+故矩阵 FAIL 与坐标系修复无因果；属**独立**的「jerk 门禁用 max 单点、无去抖/分位」指标缺陷，
+另立跟踪（建议改 p95 或对采样边界去抖）。
+
 
 ## 与近期工作的关系
 

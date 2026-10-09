@@ -717,6 +717,11 @@ protected:
             double lw = g.has_road_geometry ? g.lane_width : 3.5;
             if (lc < 1) lc = 2;
             if (lw < 1.0) lw = 3.5;
+            /* 单向路车道组整体偏在 -y 侧（见 planning_coordinates.h）；
+             * 双向路偏移 0。所有 lane_center_d / nearest_lane 调用共用此偏移，
+             * 保证索引↔物理横向位置与 flowsim 车道对齐。 */
+            const double side_offset = planning_coord::lane_group_side_offset(
+                lc, lw, g.road_oneway != 0);
 
             /* ── 状态计时 ── */
             g.state_timer += 0.05;
@@ -738,7 +743,7 @@ protected:
                 g.ego_x, g.ego_y, ego_projection);
             const double ego_lane_d = has_ego_projection ? ego_projection.d : g.ego_y;
             const int recalc_idx = planning_coord::nearest_lane(
-                ego_lane_d, lc, lw, !g.road_oneway);
+                ego_lane_d, lc, lw, !g.road_oneway, side_offset);
 
             StateId cur_sm = statem_current(&g.sm);
             bool in_lane_change = (cur_sm == BEH_ST_LEFT_CHANGE || cur_sm == BEH_ST_RIGHT_CHANGE);
@@ -748,7 +753,7 @@ protected:
                  * 掉头期间 ego 会跨过全部车道，重算会导致 committed_lane 剧烈抖动。 */
             } else if (in_lane_change && g.target_lane_idx >= 0) {
                 double target_lane_d = planning_coord::lane_center_d(
-                    g.target_lane_idx, lc, lw);
+                    g.target_lane_idx, lc, lw, side_offset);
                 double dist_to_target = fabs(ego_lane_d - target_lane_d);
                 /* 进入目标车道中心半个车道宽度内(1.75/2≈0.875m)即判定变道完成 */
                 if (dist_to_target < lw * 0.3) {
@@ -767,7 +772,7 @@ protected:
             if (g.target_lane_idx >= 0 && g.target_lane_idx < lc) {
                 dist_to_target_lane = fabs(
                     ego_lane_d - planning_coord::lane_center_d(
-                        g.target_lane_idx, lc, lw));
+                        g.target_lane_idx, lc, lw, side_offset));
             }
 
             /* ── 找本车道前车 ──
@@ -788,7 +793,7 @@ protected:
                 const double fwd_x = std::cos(g.ego_heading);
                 const double fwd_y = std::sin(g.ego_heading);
                 const double current_lane_d =
-                    planning_coord::lane_center_d(current_idx, lc, lw);
+                    planning_coord::lane_center_d(current_idx, lc, lw, side_offset);
                 for (int i = 0; i < g.obs_count; i++) {
                     planning_coord::Projection obs_projection;
                     double along;
@@ -928,7 +933,7 @@ protected:
             bool left_same_side = false;  /* 是否与 ego 在道路中心同侧 */
             if (current_idx > 0) {
                 int tl = current_idx - 1;
-                double tl_y = planning_coord::lane_center_d(tl, lc, lw);
+                double tl_y = planning_coord::lane_center_d(tl, lc, lw, side_offset);
                 left_same_side = g.road_oneway ||
                     (tl >= legal_first && tl <= legal_last);
 
@@ -976,7 +981,7 @@ protected:
             bool right_same_side = false;
             if (current_idx < lc - 1) {
                 int tl = current_idx + 1;
-                double tl_y = planning_coord::lane_center_d(tl, lc, lw);
+                double tl_y = planning_coord::lane_center_d(tl, lc, lw, side_offset);
                 right_same_side = g.road_oneway ||
                     (tl >= legal_first && tl <= legal_last);
 
@@ -1074,7 +1079,9 @@ protected:
                  * CRUISE/FOLLOW/变道分支都要用，故声明在外层决策块（覆盖全部
                  * 分支），不能在 if(cur!=U_TURN) 内声明（作用域覆盖不到下方
                  * CRUISE/FOLLOW/LEFT_CHANGE/RIGHT_CHANGE 分支）。 */
-                const int inner_lane = lc / 2;
+                /* 内侧道：掉头必须从内侧道发起。双向路内侧=本向前进半幅的最内道
+                 * （lc/2）；单向路无对向半幅，最内侧真实车道为 idx0。 */
+                const int inner_lane = g.road_oneway ? 0 : (lc / 2);
                 const bool at_inner_lane = (current_idx == inner_lane);
                 /* ── 掉头触发（优先级最高：路端是硬约束，任何状态生效）──
                  * 前进 trip：ego_x 接近 ref_path 终点 → 掉头到对向车道
@@ -1331,7 +1338,8 @@ protected:
                                  "blocked gap=%.1f/%.1f lead=%.1fm/s → FOLLOW id=%u v=%.1f (no adj lane: left_ok=%d right_ok=%d cooldown=%.1f)",
                                  best_gap, desired_gap, lead_speed, lead_id, follow_speed,
                                  left_ok, right_ok, g.cooldown);
-                    } else if (!g.on_return && left_ok && current_idx > 0 && g.cooldown <= 0.0 &&
+                    } else if (!g.road_oneway && !g.on_return && left_ok &&
+                               current_idx > planning_coord::first_legal_lane(lc, false) && g.cooldown <= 0.0 &&
                                !carriageway_ahead_stop_light() &&
                                (left_gap >= 1e8 ||
                                 left_lead_v >= g.cfg_cruise_speed * 0.7)) {
@@ -1348,7 +1356,12 @@ protected:
                          * 2026-07-31：加 carriageway_ahead_stop_light 条件——
                          * 归位前确认本方向前方 60m 内没有红灯/黄灯。否则切回 lane2
                          * 立刻停在灯前（实跑：距 x=350 红灯 ~15m 切回即刹停），
-                         * 归位变成无效变道。目标车道有灯时留在外侧道继续巡航。 */
+                         * 归位变成无效变道。目标车道有灯时留在外侧道继续巡航。
+                         *
+                         * 2026-08：仅限双向路（!road_oneway）。本分支的动机是"回到
+                         * 红绿灯管辖的内侧道"，是双向路的语义；单向路无对向半幅、
+                         * 无此区分，且曾因缺此守卫在 lane_change_traffic 每帧触发
+                         * 归位变道、ego 被拽出前进车道（P0 ① 根因之一）。 */
                         ev = BEH_EV_OVERTAKE_LEFT;
                         new_target_lane = current_idx - 1;
                         new_target_speed = g.cfg_cruise_speed;
@@ -1655,11 +1668,11 @@ protected:
                     cJSON_AddNumberToObject(root, "lane_width", lw);
                     /* 横向变道调试：目标车道中心y + 到目标的距离 */
                     if (g.target_lane_idx >= 0) {
-                        double tgt_y = lane_center_y(g.target_lane_idx, lc, lw, 0.0, 0.0);
+                        double tgt_y = lane_center_y(g.target_lane_idx, lc, lw, 0.0, side_offset);
                         cJSON_AddNumberToObject(root, "target_lane_y", tgt_y);
                         cJSON_AddNumberToObject(root, "dist_to_target_lane", fabs(g.ego_y - tgt_y));
                     }
-                    double cur_lane_y = lane_center_y(g.committed_lane_idx, lc, lw, 0.0, 0.0);
+                    double cur_lane_y = lane_center_y(g.committed_lane_idx, lc, lw, 0.0, side_offset);
                     cJSON_AddNumberToObject(root, "current_lane_y", cur_lane_y);
                     cJSON_AddNumberToObject(root, "cte", g.ego_y - cur_lane_y);
                     /* 跟车关键变量 */

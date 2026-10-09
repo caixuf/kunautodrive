@@ -493,10 +493,8 @@ jobs:
       # 短跑评估只看得到起步 + 一次机动；1Hz 极限环 / 横向积分漂移 / 曲率累积
       # 要几分钟才显形。本门禁起一次 ~10min demo.sh（16km 直道 soak），断言
       # 全程巡航不压线 / 车心不越线（判据与 demo_evaluator 同源常量）。
-      # ⚠ 过渡保护：continue-on-error —— 当前 16km 直道 soak 触发已知的
-      # "车道横向坐标系反"根因（见 docs/ROADMAP_L3.md P0①，纯直道巡航 ego 漂到
-      # y=+5.14 出车道），该根因修复并全矩阵转绿后删除 continue-on-error。
-      # 在此之前本门禁的作用=每日自动复现该故障，防止"改好了没复发"无人验证。
+      # 硬门禁（2026-10-09）：P0① 单向路车道坐标系反根因已修复（planning 车道组
+      # 单向时整体偏到 -y 侧，与 flowsim 物理车道对齐），lane_change_traffic 与
+      # 本 soak 均转绿，故删除 continue-on-error 转为阻断合并的硬门禁。
       - name: Long-run lane-keeping soak (10min)
-        continue-on-error: true
         run: python3 ci/gates/long_run_lane_keep.py --duration 600

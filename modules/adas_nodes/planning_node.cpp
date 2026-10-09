@@ -344,8 +344,13 @@ static bool has_fresh_map_ref(void) {
            clock_now_us() - g.last_map_ref_us < 500000ULL;
 }
 
-static double lane_center_offset(int lane_idx, int n_lanes, double lane_w) {
-    return planning_coord::lane_center_d(lane_idx, n_lanes, lane_w);
+static double lane_center_offset(int lane_idx, int n_lanes, double lane_w,
+                                 int road_oneway) {
+    /* 单向路车道组整体偏到 -y 侧（见 planning_coordinates.h::lane_group_side_offset）；
+     * 双向路偏移 0，历史行为不变。 */
+    const double side_offset = planning_coord::lane_group_side_offset(
+        n_lanes, lane_w, road_oneway != 0);
+    return planning_coord::lane_center_d(lane_idx, n_lanes, lane_w, side_offset);
 }
 
 static bool project_to_reference_path(double x, double y,
@@ -549,10 +554,12 @@ static bool frenet_to_cartesian(double s, double d,
     return true;
 }
 
-/* 计算车道中心的 y 坐标 */
-static double lane_center_y(int lane_idx, int n_lanes, double lane_w) {
+/* 计算车道中心的 y 坐标（相对道路参考线 y=road_c=0）。 */
+static double lane_center_y(int lane_idx, int n_lanes, double lane_w,
+                            int road_oneway) {
     double road_c = 0.0;  /* 道路中心 y=0 */
-    double side_offset = 0.0;
+    const double side_offset = planning_coord::lane_group_side_offset(
+        n_lanes, lane_w, road_oneway != 0);
     return road_c + side_offset - (lane_idx - (n_lanes - 1) / 2.0) * lane_w;
 }
 
@@ -826,12 +833,18 @@ static int generate_uturn_trajectory(TrajectoryPoint* points, int max_points,
     /* 目标车道中心：去程 → 对向内侧车道 / 返程 → 前进内侧车道。
      * 2026-08-05 泛化：旧实现 ±lane_width*0.5 硬编码（只对 4 车道对称路成立）。
      * 用 lane_center_y 从真实车道布局推导——4 车道时去程 lane1(y=+1.75)/
-     * 返程 lane2(y=-1.75)，2 车道时 ±1.75，任意车道数自洽。 */
+     * 返程 lane2(y=-1.75)，2 车道时 ±1.75，任意车道数自洽。
+     * 单向路（无对向半幅）：掉头后回到同一行车方向内侧道（idx0），不再区分去/返程。 */
     const int lc = (g.lane_count >= 2) ? g.lane_count : 2;
-    const double target_lane_center_y =
-        (uturn_target_h < 0.5)
-            ? lane_center_y(lc / 2, lc, g.lane_width)         /* 返程 → 前进车道（内道） */
-            : lane_center_y(lc / 2 - 1, lc, g.lane_width);    /* 去程 → 对向车道（内道） */
+    double target_lane_center_y;
+    if (g.road_oneway) {
+        target_lane_center_y = lane_center_y(0, lc, g.lane_width, 1);
+    } else {
+        target_lane_center_y =
+            (uturn_target_h < 0.5)
+                ? lane_center_y(lc / 2, lc, g.lane_width, 0)         /* 返程 → 前进车道（内道） */
+                : lane_center_y(lc / 2 - 1, lc, g.lane_width, 0);    /* 去程 → 对向车道（内道） */
+    }
     const double stroke_dir = (uturn_target_h < 0.5) ? -1.0 : 1.0;  /* 去程 +1 / 返程 -1 */
 
     bool uturn_done = false;
@@ -2037,7 +2050,7 @@ protected:
                 if (g.has_behavior && g.current_behavior.target_lane_idx >= 0 &&
                     g.current_behavior.target_lane_idx < n_lanes &&
                     (g.current_behavior.command == BEH_LEFT_CHANGE || g.current_behavior.command == BEH_RIGHT_CHANGE)) {
-                    g.target_lane_offset = lane_center_offset(g.current_behavior.target_lane_idx, n_lanes, lane_w);
+                    g.target_lane_offset = lane_center_offset(g.current_behavior.target_lane_idx, n_lanes, lane_w, g.road_oneway);
                 } else {
                     /* 巡航/跟车：计算 ego 当前最近车道，目标其中心。
                      * 双向道路只允许本方向合法车道（行进坐标系下右半幅，
@@ -2046,12 +2059,17 @@ protected:
                      * "最近车道"跟着 ego 翻到对向侧（正反馈），最终锁定逆行目标
                      * （2026-08-03 demo12 实测：返程 ego 漂到 y=-8，目标锁 y=-5.25）。
                      * W1：单向道路（road_oneway=1，如 lane_change_traffic）全部车道
-                     * 都是本向，必须允许左半幅 —— 否则变道完成后 target_lane_offset
-                     * 跳回右半幅，FOT 平滑回中期间 behavior 又触发超车，蛇形跨车道。 */
-                    const bool own_side_only = g.on_return || !g.road_oneway;
+                     * 都是本向且整体偏在 -y 侧，side_offset 已把车道组对齐物理布局，
+                     * clamp 到 [0, n_lanes-1] 即可。own_side_only 仅对双向路生效
+                     * （限制在本向半幅）；单向路无对向半幅，on_return 时也必须是
+                     * false，否则 clamp 下限 N/2 会把正确的最内侧 idx0 抬到 idx2
+                     * （返程半程重新引入横向漂移）。 */
+                    const bool own_side_only = !g.road_oneway;
+                    const double side_offset = planning_coord::lane_group_side_offset(
+                        n_lanes, lane_w, g.road_oneway != 0);
                     int cur_lane = planning_coord::nearest_lane(
-                        ego_lane_d, n_lanes, lane_w, own_side_only);
-                    g.target_lane_offset = lane_center_offset(cur_lane, n_lanes, lane_w);
+                        ego_lane_d, n_lanes, lane_w, own_side_only, side_offset);
+                    g.target_lane_offset = lane_center_offset(cur_lane, n_lanes, lane_w, g.road_oneway);
                 }
                 if (g.plan_count % 200 == 0) {
                     LOG_WARN("planning", "[DBG_LC] pc=%d has_beh=%d cmd=%d tgt_lane=%d n_lanes=%d offset=%.2f ego_y=%.2f",

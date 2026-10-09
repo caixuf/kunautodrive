@@ -53,6 +53,7 @@ static struct {
     int active_step_index;
     int lane_count;
     double lane_width;
+    int road_oneway;        /* 1=单向（全部车道同向且整体偏在 -y 侧），0=双向 */
     double road_length_m;
     RouterGraph lane_graph;
     int graph_ready;
@@ -124,8 +125,13 @@ static void publish_route_step_fields(RouteStepType type,
     cJSON_Delete(root);
 }
 
+/* 车道中心 y（相对道路参考线 y=0）。单向路车道组整体偏在 -y 侧
+ * （见 planning_coordinates.h::lane_group_side_offset），idx0=最内侧。 */
 static double lane_center_y(int lane_idx) {
-    return ((double)(g.lane_count - 1) * 0.5 - (double)lane_idx) * g.lane_width;
+    const double side_offset =
+        (g.road_oneway && g.lane_count > 1)
+            ? -(double)g.lane_count * g.lane_width * 0.5 : 0.0;
+    return side_offset + ((double)(g.lane_count - 1) * 0.5 - (double)lane_idx) * g.lane_width;
 }
 
 static int lane_idx_from_y(double y) {
@@ -388,6 +394,7 @@ static int navigation_init(MessageBus* bus, Transport* transport,
             }
             g.lane_count = sc->road.lanes > 0 ? sc->road.lanes : 2;
             g.lane_width = sc->road.lane_width > 0.0 ? sc->road.lane_width : 3.5;
+            g.road_oneway = sc->road.oneway ? 1 : 0;
             g.ego_y = sc->ego.y;
             g.road_length_m = 3000.0;
             if (sc->duration_s > 0.0) (void)0;
