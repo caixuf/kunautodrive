@@ -200,13 +200,22 @@ jerk 100+；(3) `periods` 过滤非正 dt 后变短却仍按 `periods[index-1]` 
 
 **遗留（仍阻断 8/8 稳定全绿，均**既有**、与本项无因果）**：
 - `straight_road` 间歇 `lane keeping: ego body rides the lane line`（~2/12）：**真实掉头后横向落位 bug**，
-  非门禁伪影。探针实证（FAIL run）——掉头后巡航全程 `ego.y≈−3.13`（漂到 −3.24）恒定，`laneid=−1`、
+  非门禁伪影。探针实证（FAIL run）——掉头后巡航 `ego.y≈−3.13`（漂到 −3.24），`laneid=−1`、
   `lane_match_offset≈−1.38`，而车道 −1 中心 = −1.75 → **自车真实停在偏 −1.38m 处、车身骑 −1/−2 线**
-  （正是门禁注释里"规划目标 −1.75 而自车停在 −3.3"那类故障，门禁**判对了**）。PASS run 则收敛到
-  −1.75（offset≈−0.22）。即**掉头返程落位间歇性偏 ~1.4m**，属 planning/behavior 的掉头返程落位问题。
-  **已证既有**：pre-P0① worktree（4737b5f，重建）跑 straight_road 同样复现 lane-keeping FAIL
-  （+ 两条 jerk FAIL），与本项/P0① 均无因果。阈值（30 帧/30%）卡在观测方差边缘 → 偶发 FAIL。
-  注：16km 直道 soak 无掉头故 0 压线；本项**不改门禁阈值**（会掩盖真实落位缺陷）。
+  （正是门禁注释里"规划目标 −1.75 而自车停在 −3.3"那类故障，门禁**判对了**）。PASS run 收敛到
+  −1.75（offset≈−0.22）。**已证既有**：pre-P0① worktree（4737b5f 重建）跑 straight_road 同样复现
+  lane-keeping FAIL，与本项/P0① 均无因果。
+
+  **根因（2026-10-10 定位，已坐实）**：`behavior_planner_node.cpp:1506-1509` 掉头完成判据
+  **只看 heading、不看横向落位**——`if (fabs(fabs(hn) - uturn_target_h) < 0.15) ev = BEH_EV_COMPLETED`。
+  实测日志 `uturn COMPLETED (h=-0.15) → CRUISE`：车头一进入 ±0.15 rad 窗口即宣告掉头完成，**当时车在
+  哪个横向位置就是哪个**。掉头是**多把方向**（前弧→倒车→前弧，实测耗时 14.8s），heading 对齐发生在
+  横向摆位过程中/末段，落位残差随执行方差而变化；横摆残差交由随后的巡航收敛，收敛慢/被下一次变道
+  打断时 → 车身骑线 >30 帧 → 偶发 FAIL。planning 侧另有一个**半车道宽**的完成容差
+  （`planning_node.cpp:898` `|y - target_lane_center_y| < 1.75`）同样偏松。
+  **修复方向**（未实施）：给掉头完成加横向落位条件（|ego_y − 目标道中心| < ~0.5–0.8m），
+  即"heading 对齐 **且** 车已回到目标车道中心附近"才 COMPLETED；需注意别把落位慢的 run 推成 TIMEOUT。
+  注：16km 直道 soak 无掉头故 0 压线；**不改门禁阈值**（会掩盖真实落位缺陷）。
 - `no topology samples collected` 间歇（~1/6）：启动竞态（monitor 首帧 vs 采样开始），原评估器同样复现。
 
 
