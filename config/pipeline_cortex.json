@@ -4,7 +4,10 @@
   "monitor_interval": 5,
   "enable_monitor": true,
   "_comment_allow_hung_subs": "发布者存在性 gate (ci/gates/topic_contract_check.py) 允许此列表中的订阅无发布者：sensor/pose — cortex 变体无 slam_node；control/raw_cmd — cortex 变体无 control_node (TODO：planning 直连 safety_control)",
-  "allow_hung_subs": ["sensor/pose", "control/raw_cmd"],
+  "allow_hung_subs": ["sensor/pose", "control/raw_cmd",
+    "odd/state",
+    "tor/state",
+    "safety/mrm_request"],
   "scheduler": {
     "mode": "choreo",
     "worker_threads": 0,

@@ -67,6 +67,13 @@
 #define TOPIC_CONTROL_DEBUG       "control/debug"
 #define TOPIC_INFERENCE_CONTROL_DELTA "inference/control_delta"
 
+/* ── L3 safety topics（方向六 P1：ODD → TOR → MRM）───────────────
+ * 注意 `DEGRADE_L3`（degrade_ladder 的"立即停"档）不是 SAE L3。 */
+
+#define TOPIC_ODD_STATE      "odd/state"            /* odd_monitor 发；tor_manager/monitor 收 */
+#define TOPIC_TOR_STATE      "tor/state"            /* tor_manager 发；monitor 收（metrics.tor）*/
+#define TOPIC_SAFETY_MRM     "safety/mrm_request"   /* tor_manager 发；control/safety_control 收 */
+
 /* ── Vehicle topics ─────────────────────────────────────────── */
 
 #define TOPIC_VEHICLE_STATE       "vehicle/state"
@@ -219,6 +226,18 @@
  * TOPIC_FLOWENGINE_NODE_INFO:
  *   PRODUCERS: all nodes (via node_announce_self)
  *   CONSUMERS: monitor_node
+ *
+ * TOPIC_ODD_STATE:
+ *   PRODUCERS: odd_monitor_node
+ *   CONSUMERS: tor_manager_node, monitor_node
+ *
+ * TOPIC_TOR_STATE:
+ *   PRODUCERS: tor_manager_node
+ *   CONSUMERS: monitor_node
+ *
+ * TOPIC_SAFETY_MRM:
+ *   PRODUCERS: tor_manager_node
+ *   CONSUMERS: control_node, safety_control_node
  */
 
 #endif /* TOPIC_REGISTRY_H */

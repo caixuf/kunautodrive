@@ -59,6 +59,8 @@ NAME_TO_SRC = {
     "monitor": "modules/adas_nodes/monitor_node.c",
     "prediction": "modules/adas_nodes/prediction_node.c",
     "lane_detection": "modules/adas_nodes/lane_detection_node.c",
+    "odd_monitor": "modules/adas_nodes/odd_monitor_node.c",
+    "tor_manager": "modules/adas_nodes/tor_manager_node.c",
     "traffic_light_recognition": "modules/adas_nodes/traffic_light_recognition_node.c",
     "slam": "modules/adas_nodes/slam_node.cpp",
     "gps_driver": "modules/adas_nodes/gps_driver_node.c",

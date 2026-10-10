@@ -13,7 +13,10 @@
     "scene/frame",
     "navigation/region",
     "localization/lane_match"
-  ],
+  ,
+    "odd/state",
+    "tor/state",
+    "safety/mrm_request"],
   "log_file": "launcher_car.log",
   "log_level": 2,
   "monitor_interval": 5,

@@ -282,7 +282,8 @@
         "fusion/localization",
         "planning/trajectory",
         "planning/behavior"
-      ],
+      ,
+        "safety/mrm_request"],
       "publish": [
         {
           "topic": "control/raw_cmd",
@@ -305,7 +306,8 @@
         "control/raw_cmd",
         "fusion/localization",
         "perception/obstacles"
-      ],
+      ,
+        "safety/mrm_request"],
       "publish": [
         {
           "topic": "control/cmd",
@@ -463,13 +465,52 @@
         "control/cte",
         "road/traffic_lights",
         "safety/evidence"
-      ],
+      ,
+        "odd/state",
+        "tor/state"],
       "params": "{\"state_file\":\"/tmp/flow_topology.json\",\"export_scene\":true}",
       "publish": [
         {
           "topic": "pem/degrade_event"
         }
       ]
+    },
+    {
+      "name": "odd_monitor",
+      "library_path": "build/lib/libodd_monitor_node.so",
+      "auto_start": true,
+      "subscribe": [
+        "environment/state",
+        "vehicle/state",
+        "fusion/localization",
+        "navigation/path",
+        "safety/evidence"
+      ],
+      "publish": [
+        {
+          "topic": "odd/state"
+        }
+      ],
+      "params": "{\"frequency_hz\":10.0,\"odd_min_visibility_m\":150.0,\"loc_max_age_ms\":500.0,\"route_max_age_ms\":1000.0,\"allowed_weather\":\"clear,overcast,cloudy\",\"scenario_file\":\"scenarios/straight_road.json\"}"
+    },
+    {
+      "name": "tor_manager",
+      "library_path": "build/lib/libtor_manager_node.so",
+      "auto_start": true,
+      "subscribe": [
+        "odd/state",
+        "vehicle/state",
+        "safety/evidence"
+      ],
+      "publish": [
+        {
+          "topic": "tor/state"
+        },
+        {
+          "topic": "safety/mrm_request"
+        }
+      ],
+      "params": "{\"frequency_hz\":20.0,\"tor_countdown_s\":10.0,\"tor_odd_exit_dwell_s\":0.5,\"tor_odd_reenter_dwell_s\":1.0,\"mrm_settle_s\":1.0,\"startup_grace_s\":2.0,\"mrm_decel_mps2\":1.5,\"scenario_file\":\"scenarios/straight_road.json\"}"
     }
   ],
   "profile": "default",

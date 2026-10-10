@@ -113,6 +113,7 @@ struct ControlContext {
     double current_speed{0};
     double target_speed{0};
     int    has_target_speed{0};  /* trajectory 回调是否已设置 target_speed */
+    volatile int mrm_active{0};  /* L3-P1：safety/mrm_request.active → 纵向目标 0（车道内停）*/
     double ego_x{0}, ego_y{0};
     double lane_d{0};          /* 从 trajectory 解析的横向偏移（Frenet d） */
     double target_path_y{0};   /* 同一前视点的全局 y，避免最近点 rc_y + 前视点 lane_d 混拼 */
@@ -751,6 +752,13 @@ protected:
             } else {
                 acc_target = 0.0;  /* 无轨迹 → 停车 */
             }
+            /* L3-P1 MRM（safety/mrm_request）：tor_manager 请求最小风险停车 →
+             * 纵向目标强制 0，**保留横向跟随**（沿轨迹车道内减速停车）。
+             * 与 degrade_ladder 正交（不碰其单调升级/自动清除语义）。 */
+            if (g.mrm_active) {
+                acc_target = 0.0;
+                g.integral = 0;
+            }
             /* 停车指令时清 PID 积分，抗 windup */
             if (acc_target < 0.01 && g.integral > 0) {
                 g.integral = 0;
@@ -1305,7 +1313,18 @@ EXPORT_COROUTINE_TASK(ControlTask, control)
 
 /* ── NodePlugin 实现 ─────────────────────────────────────────── */
 
-static const char* s_inputs[]  = { TOPIC_FUSION_LOCALIZATION, TOPIC_PLANNING_TRAJECTORY, TOPIC_PLANNING_BEHAVIOR, nullptr };
+/* L3-P1：tor_manager 的 MRM 请求（最小风险停车）。active=true → 纵向目标 0。 */
+static void on_mrm_request(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg) return;
+    cJSON* root = cJSON_Parse((const char*)msg->data);
+    if (!root) return;
+    cJSON* a = cJSON_GetObjectItemCaseSensitive(root, "active");
+    if (cJSON_IsBool(a)) g.mrm_active = cJSON_IsTrue(a) ? 1 : 0;
+    cJSON_Delete(root);
+}
+
+static const char* s_inputs[]  = { TOPIC_FUSION_LOCALIZATION, TOPIC_PLANNING_TRAJECTORY, TOPIC_PLANNING_BEHAVIOR, TOPIC_SAFETY_MRM, nullptr };
 static const char* s_outputs[] = { TOPIC_CONTROL_RAW_CMD, nullptr };
 
 extern NodePlugin s_plugin;  /* 前向声明：定义在文件末尾 */
@@ -1491,6 +1510,7 @@ static int control_init(MessageBus* bus, Transport* transport,
     transport_subscribe(transport, TOPIC_VEHICLE_STATE, on_vehicle_state, nullptr);
     transport_subscribe(transport, TOPIC_PLANNING_TRAJECTORY, on_trajectory, nullptr);
     transport_subscribe(transport, TOPIC_PLANNING_BEHAVIOR, on_planning_behavior, nullptr);  /* 转向灯意图 */
+    transport_subscribe(transport, TOPIC_SAFETY_MRM, on_mrm_request, nullptr);  /* L3-P1 MRM 请求 */
     transport_advertise(transport, TOPIC_CONTROL_RAW_CMD, CONTROLRAW_TYPE_ID);
     transport_advertise(transport, TOPIC_CONTROL_DEBUG, 0u);  /* JSON text */
     transport_advertise(transport, TOPIC_CONTROL_CTE, 0u);    /* JSON text */

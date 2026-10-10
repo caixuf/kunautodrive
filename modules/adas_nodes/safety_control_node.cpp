@@ -25,6 +25,7 @@
 #include <cjson/cJSON.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -95,6 +96,7 @@ struct SafetyContext {
     pthread_mutex_t state_mutex = PTHREAD_MUTEX_INITIALIZER;
     VehicleState latest_state;
     bool has_state{false};
+    std::atomic<bool> mrm_active{false};  /* L3-P1：safety/mrm_request.active → 制动下限+双闪 */
 };
 
 SafetyContext g;
@@ -180,6 +182,16 @@ void on_fusion(const Message* msg, void*) {
         g.latest_state.heading = j->valuedouble;
     g.has_state = true;
     pthread_mutex_unlock(&g.state_mutex);
+    cJSON_Delete(root);
+}
+
+/* L3-P1：tor_manager 的最小风险停车请求（active=true → 制动下限 + 双闪）。 */
+void on_mrm_request(const Message* msg, void*) {
+    if (!msg) return;
+    cJSON* root = cJSON_Parse((const char*)msg->data);
+    if (!root) return;
+    cJSON* a = cJSON_GetObjectItemCaseSensitive(root, "active");
+    if (cJSON_IsBool(a)) g.mrm_active.store(cJSON_IsTrue(a));
     cJSON_Delete(root);
 }
 
@@ -794,6 +806,14 @@ private:
         /* degrade_ladder 是全局安全策略的唯一权威。先由本层完成碰撞/TTC
          * 限幅，再在出口处执行 L2/L3，保证上游恢复出新 raw_cmd 时不会绕过
          * 已锁存的最小风险动作。 */
+        /* L3-P1 MRM（safety/mrm_request）：tor_manager 请求最小风险停车。
+         * 纯安全闸门职责——只做出口制动下限 + 双闪，不改任务意图；纵向减速由
+         * control 执行（与本层正交，不碰 degrade_ladder 的单调升级语义）。 */
+        if (g.mrm_active.load()) {
+            set_changed(cmd.throttle, 0.0);
+            set_changed(cmd.brake, std::max(cmd.brake, 0.60));
+            cmd.hazard = true;
+        }
         const DegradeAction degrade_action = degrade_layer_action();
         if (degrade_action.immediate_stop) {
             set_changed(cmd.throttle, 0.0);
@@ -920,7 +940,7 @@ private:
 /* ── TaskBase 包装器（宏生成） — 必须在 safety_init 前展开 ─────── */
 EXPORT_COROUTINE_TASK(SafetyControlTask, safety_control)
 
-const char* s_inputs[] = {"control/raw_cmd", TOPIC_FUSION_LOCALIZATION, TOPIC_PERCEPTION_OBSTACLES, nullptr};
+const char* s_inputs[] = {"control/raw_cmd", TOPIC_FUSION_LOCALIZATION, TOPIC_PERCEPTION_OBSTACLES, TOPIC_SAFETY_MRM, nullptr};
 const char* s_outputs[] = {"control/cmd", "safety/evidence", nullptr};
 extern NodePlugin s_plugin;
 
@@ -971,6 +991,7 @@ int safety_init(MessageBus* bus, Transport* transport, DiscoveryManager* discove
 
     transport_subscribe(transport, TOPIC_FUSION_LOCALIZATION, on_fusion, nullptr);
     transport_subscribe(transport, TOPIC_PERCEPTION_OBSTACLES, on_perception_obstacles, nullptr);
+    transport_subscribe(transport, TOPIC_SAFETY_MRM, on_mrm_request, nullptr);  /* L3-P1 MRM 请求 */
     transport_advertise(transport, "control/cmd", CONTROL_CMD_TYPE_ID);
     transport_advertise(transport, "safety/evidence", 0u);
 

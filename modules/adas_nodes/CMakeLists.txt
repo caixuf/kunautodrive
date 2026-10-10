@@ -770,6 +770,14 @@ target_link_libraries(traversability_node ${NODE_LINK_LIBS})
 add_library(lane_detection_node SHARED lane_detection_node.c)
 target_link_libraries(lane_detection_node ${NODE_LINK_LIBS})
 
+# odd_monitor_node: ODD (Operational Design Domain) monitor (L3-P1 方向六)
+add_library(odd_monitor_node SHARED odd_monitor_node.c)
+target_link_libraries(odd_monitor_node ${NODE_LINK_LIBS})
+
+# tor_manager_node: TOR state machine + DMS model + MRM authority (L3-P1 方向六)
+add_library(tor_manager_node SHARED tor_manager_node.c)
+target_link_libraries(tor_manager_node ${NODE_LINK_LIBS})
+
 # traffic_light_recognition_node: Traffic light perception (sandbox: from sim_world)
 add_library(traffic_light_recognition_node SHARED traffic_light_recognition_node.c)
 target_link_libraries(traffic_light_recognition_node ${NODE_LINK_LIBS})
@@ -836,6 +844,8 @@ set(FLOWENGINE_NODE_PLUGIN_TARGETS
     perception_fusion_node
     traversability_node
     lane_detection_node
+    odd_monitor_node
+    tor_manager_node
     traffic_light_recognition_node
     object_tracker_node
     prediction_node

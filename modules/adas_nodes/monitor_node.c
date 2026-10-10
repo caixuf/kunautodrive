@@ -244,6 +244,9 @@ static struct {
 
     /* 行为规划状态（来自 behavior/state JSON topic）*/
     char behavior_state_json[2048];
+    /* L3-P1：ODD/TOR 状态（来自 odd/state、tor/state JSON topic） */
+    char odd_state_json[2048];
+    char tor_state_json[2048];
     /* 控制层 debug（来自 control/debug JSON topic，全链路横向调试） */
     char control_debug_json[2048];
     /* 规划层 debug（来自 planning/debug JSON topic，全链路横向调试） */
@@ -911,6 +914,25 @@ static void on_behavior_state(const Message* msg, void* user_data) {
     g.behavior_state_json[copy] = '\0';
 }
 
+/* L3-P1：ODD 状态（odd/state）与 TOR 状态（tor/state）——透传到 metrics.odd/tor。 */
+static void on_odd_state(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg) return;
+    size_t copy = msg->data_size;
+    if (copy >= sizeof(g.odd_state_json)) copy = sizeof(g.odd_state_json) - 1;
+    memcpy(g.odd_state_json, msg->data, copy);
+    g.odd_state_json[copy] = '\0';
+}
+
+static void on_tor_state(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg) return;
+    size_t copy = msg->data_size;
+    if (copy >= sizeof(g.tor_state_json)) copy = sizeof(g.tor_state_json) - 1;
+    memcpy(g.tor_state_json, msg->data, copy);
+    g.tor_state_json[copy] = '\0';
+}
+
 /* ── control/debug 订阅 — 缓存控制层横向调试数据 ── */
 static void on_control_debug(const Message* msg, void* user_data) {
     (void)user_data;
@@ -1227,6 +1249,16 @@ static void export_dashboard_json(void) {
     if (has_safety_evidence && safety_evidence_snap[0]) {
         cJSON* evidence = monitor_cJSON_Parse(safety_evidence_snap);
         if (evidence) cJSON_AddItemToObject(metrics, "safety_evidence", evidence);
+    }
+
+    /* L3-P1：ODD / TOR 状态（供评估器断言 + FlowBoard L3 面板）*/
+    if (g.odd_state_json[0]) {
+        cJSON* od = monitor_cJSON_Parse(g.odd_state_json);
+        if (od) cJSON_AddItemToObject(metrics, "odd", od);
+    }
+    if (g.tor_state_json[0]) {
+        cJSON* tr = monitor_cJSON_Parse(g.tor_state_json);
+        if (tr) cJSON_AddItemToObject(metrics, "tor", tr);
     }
 
     /* 行为规划状态 */
@@ -2154,7 +2186,8 @@ static const char* s_inputs[]  = { TOPIC_PERCEPTION_OBSTACLES, TOPIC_VEHICLE_STA
                                    TOPIC_FUSION_LATENCY, TOPIC_FLOWENGINE_NODE_INFO,
                                    TOPIC_PLANNING_TRAJECTORY, TOPIC_ROAD_GEOMETRY,
                                    TOPIC_SCENE_FRAME, TOPIC_CONTROL_CTE,
-                                   TOPIC_ROAD_TRAFFIC_LIGHTS, "safety/evidence", NULL };
+                                   TOPIC_ROAD_TRAFFIC_LIGHTS, "safety/evidence",
+                                   TOPIC_ODD_STATE, TOPIC_TOR_STATE, NULL };
 static const char* s_outputs[] = { "pem/degrade_event", NULL };
 
 static NodePlugin s_plugin;
@@ -2296,6 +2329,8 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     transport_subscribe(transport, TOPIC_LOCALIZATION_LANE_MATCH, on_lane_match, NULL);
     transport_subscribe(transport, TOPIC_PERCEPTION_LANES, on_perceived_lanes, NULL);
     transport_subscribe(transport, "safety/evidence", on_safety_evidence, NULL);
+    transport_subscribe(transport, TOPIC_ODD_STATE, on_odd_state, NULL);
+    transport_subscribe(transport, TOPIC_TOR_STATE, on_tor_state, NULL);
     /* 收集其他节点的自描述广播 (方案B: 数据驱动拓扑感知) */
     transport_subscribe(transport, TOPIC_FLOWENGINE_NODE_INFO, on_node_info, NULL);
     g.node_info_count = 0;
