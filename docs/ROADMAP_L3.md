@@ -210,12 +210,18 @@ jerk 100+；(3) `periods` 过滤非正 dt 后变短却仍按 `periods[index-1]` 
   **只看 heading、不看横向落位**——`if (fabs(fabs(hn) - uturn_target_h) < 0.15) ev = BEH_EV_COMPLETED`。
   实测日志 `uturn COMPLETED (h=-0.15) → CRUISE`：车头一进入 ±0.15 rad 窗口即宣告掉头完成，**当时车在
   哪个横向位置就是哪个**。掉头是**多把方向**（前弧→倒车→前弧，实测耗时 14.8s），heading 对齐发生在
-  横向摆位过程中/末段，落位残差随执行方差而变化；横摆残差交由随后的巡航收敛，收敛慢/被下一次变道
-  打断时 → 车身骑线 >30 帧 → 偶发 FAIL。planning 侧另有一个**半车道宽**的完成容差
+  横向摆位过程中/末段，落位残差随执行方差而变化。planning 侧另有一个**半车道宽**的完成容差
   （`planning_node.cpp:898` `|y - target_lane_center_y| < 1.75`）同样偏松。
-  **修复方向**（未实施）：给掉头完成加横向落位条件（|ego_y − 目标道中心| < ~0.5–0.8m），
-  即"heading 对齐 **且** 车已回到目标车道中心附近"才 COMPLETED；需注意别把落位慢的 run 推成 TIMEOUT。
-  注：16km 直道 soak 无掉头故 0 压线；**不改门禁阈值**（会掩盖真实落位缺陷）。
+
+  **✅ 已修复（2026-10-10，由 251d8ed 收口）**：落位残差**本是摆位问题，但被 Frenet 横向走廊的自锁
+  放大成压线**——planning 的 Frenet 横向走廊无车道边约束（`max_road_width ≈ 6.0m` ≈1.7 车道宽），
+  ego 一旦偏到带沿就输出**恒定偏移直线**且全程不收敛 → control 忠实跟随 steer=0 → 每帧重规划又得同
+  一偏移 → **骑线自锁**。`251d8ed` 加"安全带"（`safe_band = lane_width/2 − ego_half_width − guard`，
+  带内放行保车道内避障、带外强制 `d→0`）切断自锁。本项探针（掉头完成只看 heading → 落位残差）是
+  该自锁的**触发源**，两者合起来解释完整因果链。
+  **复验（本次）**：`straight_road` 直跑 **12/12 PASS**（原 ~2/12 FAIL）；全矩阵（9 场景）连跑
+  **2 次全 PASS**；`dense_npc` 12/12 PASS（jerk 修复）。**P0 放行条件「8/8 稳定全绿」达成**。
+  注：16km 直道 soak 无掉头故 0 压线；**未改门禁阈值**（未掩盖真实落位缺陷）。
 - `no topology samples collected` 间歇（~1/6）：启动竞态（monitor 首帧 vs 采样开始），原评估器同样复现。
 
 
