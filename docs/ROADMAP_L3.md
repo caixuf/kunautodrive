@@ -390,6 +390,49 @@ A/B 实测：干净跑 43 个 topic（含 `perception/obstacles`），注入后 
 **P2 放行条件「每类注入故障都有可观测的降级路径」→ 对已登记的 6 类达成。**
 
 
+### P2 进展（2026-10-11，第三刀：EDR — L3 法规事件记录）
+
+P2 要求「**EDR**：在现有 PEM 流上增加 L3 法规事件：激活/退出、TOR、MRM、
+碰撞前后窗口，复用 CRC / fsync / 轮转」。盘点发现 PEM 里此前只有
+`degrade_transition` **一类**事件，L3 特有的四类**一个都没有**。
+
+| 项 | 状态 | 落地 |
+|----|------|------|
+| 事件分类（Python 先行） | ✅ 完成 | `tools/l3_edr_sim.py`：五类事件（`l3_activation` / `l3_tor` / `l3_mrm` / `l3_odd_exit` / `l3_collision`）的**单一事实源** —— 每类声明来源 topic、触发条件、8 个字段名、是否 critical。`--check-taxonomy` 强制「每类都有触发条件 + 字段 + 关键标记 + 说明」，且 `derive_events()` 自检**边沿检测语义**（稳态不记、跃迁各记一次） |
+| C 侧实现 | ✅ 完成 | `include/l3_edr.h` + `src/core/l3_edr.c`：状态码映射 + 8 槽字段清零辅助。单测 `test_l3_edr.c`（状态码未知必须 -1、不得伪造 OFF；事件名统一 `l3_` 前缀且唯一） |
+| monitor 边沿检测 | ✅ 完成 | monitor 的 PEM 循环里对 `tor/state`、`odd/state` 做**跃迁检测**（稳态不写，否则 20Hz 重复事件会淹掉取证信息），五类事件全部 `critical=true` 走 fsync |
+| 端到端门禁（有牙） | ✅ 完成 | `ci/gates/l3_edr_gate.py`：真起管线、真写 PEM、**读懂事件**，断言 L3 场景集齐四类 + 全部 fsync + 无未声明事件名。CI `integration-test` job 跑 |
+
+**本轮抓出并修掉的真实缺陷**：
+
+- 🔴 **EDR 的事件源订阅被关在 `if (!g.embedded_mode)` 里，而写 PEM 恰恰只在
+  embedded（production）模式** —— 两个条件**永不同时成立**，于是 `l3_*` 事件
+  一条都记不下来。实测证据：production 管线跑 L3 场景 30s，PEM 里只有
+  `degrade_transition`。这也解释了为什么此前"PEM 有事件框架"却没有任何 L3 事件。
+  修法：`odd/state` 与 `tor/state` 两条订阅移出该分支（体量极小，两种模式都订）。
+
+- 🔴 **`l3_edr.c` 漏加进 CMake 的 `CORE_SOURCES`**，但 `plugin_symbol_check.py`
+  仍报"OK (36 plugins)"。`nm` 显示 `libmonitor_node.so` 里
+  `l3_edr_tor_state_code` / `l3_edr_values_init` 是 **undefined** ——
+  `dlopen` 时会直接 'symbol lookup error' 弄死 launcher。
+  **这是该闸门已知的覆盖盲区**（它只查"插件里定义但未解析的项目符号"，
+  漏了"插件引用而核心库未编译进去"这一向）。已补进 CMake 并复验 `nm` 无 undefined。
+
+**顺带说明一个设计约束（已写进门禁注释）**：EDR 要求"碰撞前后各 N 秒可回溯"，
+本项只记碰撞**本身**这一条 —— 前后窗口由 PEM **持续记录**的周期性 topic
+（`vehicle/state` 等）提供。故 PEM 必须持续记录这些量，不能只在事件时刻记。
+碰撞事件的 `pre_window`/`post_window` 字段用于标记该窗口在 PEM 时间轴上的范围。
+
+**验证**：40 ctest 全绿（新增 `l3_edr_tests` + `l3_edr_sim_tools`）；
+`ci/gates/l3_edr_gate.py` 实测 PEM 内
+`{l3_odd_exit:3, l3_activation:3, l3_tor:2, l3_mrm:4}` 且全部 critical/fsync；
+`ci/gates/fault_inject_gate.py` 6/6 类仍全绿；9 条静态 gate 全绿。
+
+**P2 遗留**：雷达传感器模型仍缺失（`sensor_model` 只有 lidar/gps/camera，
+全仓无 radar）——这是 P2 冗余维度最后一块；另有"感知降级后系统行为是否仍安全"
+的专项判据（需构造"盲开仍不撞"场景）。
+
+
 ## 与近期工作的关系
 
 - 近期回归修复见 `UPGRADE_DIRECTION.md`：`main` 先稳定在 `a065f26`，

@@ -24,7 +24,8 @@
 #include "json_extract.h"
 #include "clock_service.h"
 #include "degrade_ladder.h"
-#include "fault_inject.h"   /* L3-P2: 把注入状态导出到拓扑，供门禁确认注入确已生效 */
+#include "fault_inject.h"   /* L3-P2: 把注入状态导出到拓扑，供门禁确认注入已生效 */
+#include "l3_edr.h"         /* L3-P2: EDR — L3 法规事件记录（激活/TOR/MRM/ODD/碰撞）*/
 #include "health.h"
 #include <pem_log.h>
 #include <pem_runtime.h>
@@ -186,6 +187,13 @@ static struct {
     } pem_topic_state[64];
     int pem_last_degrade_level;
     int pem_last_degrade_reason;
+
+    /* ── L3-P2 EDR 边沿检测快照 ──
+     * tor/state 与 odd/state 是 10~20Hz **持续**发布的，只有在跃迁时才写 PEM
+     * 记录，否则稳态重复事件会把真正的取证信息淹掉。用上一次的码值做边沿检测。 */
+    int pem_last_tor_code;       /* L3_EDR_TOR_*，-1 = 尚未收到 */
+    int pem_last_odd_in;         /* 0/1，-1 = 尚未收到 */
+    int pem_last_mrm_active;     /* 0/1，-1 = 尚未收到 */
     struct {
         char name[32];
         HealthStatus status;
@@ -2210,6 +2218,169 @@ static int monitor_execute(TaskBase* task) {
                 g.pem_last_degrade_level = degrade->degrade_level;
                 g.pem_last_degrade_reason = degrade->degrade_reason;
             }
+
+            /* ── L3-P2 EDR：L3 法规事件（只在**跃迁**时记一条）─────────────
+             * 来源：monitor 已缓存的 tor/state 与 odd/state JSON。
+             * 关键事件（critical=true）走 fsync —— L3 取证要求掉电不可丢。
+             * 碰撞前后窗口由 PEM 持续记录的周期量提供，此处只记碰撞本身。 */
+            {
+                cJSON* tor = g.tor_state_json[0]
+                    ? monitor_cJSON_Parse(g.tor_state_json) : NULL;
+                cJSON* odd = g.odd_state_json[0]
+                    ? monitor_cJSON_Parse(g.odd_state_json) : NULL;
+
+                const char* tor_state = NULL;
+                int tor_code = -1, mrm_active = -1;
+                double tor_countdown = 0.0, tor_speed = 0.0;
+                int dms_attention = 0, dms_will = 0;
+                double dms_latency = 0.0, mrm_target = 0.0;
+                if (tor) {
+                    cJSON* j = cJSON_GetObjectItemCaseSensitive(tor, "state");
+                    if (cJSON_IsString(j)) {
+                        tor_state = j->valuestring;
+                        tor_code = l3_edr_tor_state_code(tor_state);
+                    }
+                    if ((j = cJSON_GetObjectItemCaseSensitive(tor, "countdown_s")) &&
+                        cJSON_IsNumber(j)) tor_countdown = j->valuedouble;
+                    if ((j = cJSON_GetObjectItemCaseSensitive(tor, "speed")) &&
+                        cJSON_IsNumber(j)) tor_speed = j->valuedouble;
+                    cJSON* dms = cJSON_GetObjectItemCaseSensitive(tor, "dms");
+                    if (cJSON_IsObject(dms)) {
+                        cJSON* a = cJSON_GetObjectItemCaseSensitive(dms, "attention");
+                        if (cJSON_IsBool(a)) dms_attention = cJSON_IsTrue(a) ? 1 : 0;
+                        cJSON* w = cJSON_GetObjectItemCaseSensitive(dms, "will_takeover");
+                        if (cJSON_IsBool(w)) dms_will = cJSON_IsTrue(w) ? 1 : 0;
+                        cJSON* l = cJSON_GetObjectItemCaseSensitive(dms, "takeover_latency_s");
+                        if (cJSON_IsNumber(l)) dms_latency = l->valuedouble;
+                    }
+                    cJSON* mrm = cJSON_GetObjectItemCaseSensitive(tor, "mrm");
+                    if (cJSON_IsObject(mrm)) {
+                        cJSON* a = cJSON_GetObjectItemCaseSensitive(mrm, "active");
+                        if (cJSON_IsBool(a)) mrm_active = cJSON_IsTrue(a) ? 1 : 0;
+                        cJSON* t = cJSON_GetObjectItemCaseSensitive(mrm, "target_speed");
+                        if (cJSON_IsNumber(t)) mrm_target = t->valuedouble;
+                    }
+                }
+
+                int odd_in = -1;
+                int odd_violations = 0;
+                double odd_visibility = 0.0, odd_loc_age = 0.0, odd_route_age = 0.0;
+                double odd_t_s = 0.0;
+                if (odd) {
+                    cJSON* j = cJSON_GetObjectItemCaseSensitive(odd, "in_odd");
+                    if (cJSON_IsBool(j)) odd_in = cJSON_IsTrue(j) ? 1 : 0;
+                    cJSON* v = cJSON_GetObjectItemCaseSensitive(odd, "violations");
+                    if (cJSON_IsArray(v)) odd_violations = cJSON_GetArraySize(v);
+                    if ((j = cJSON_GetObjectItemCaseSensitive(odd, "visibility_m")) &&
+                        cJSON_IsNumber(j)) odd_visibility = j->valuedouble;
+                    if ((j = cJSON_GetObjectItemCaseSensitive(odd, "loc_age_ms")) &&
+                        cJSON_IsNumber(j)) odd_loc_age = j->valuedouble;
+                    if ((j = cJSON_GetObjectItemCaseSensitive(odd, "route_age_ms")) &&
+                        cJSON_IsNumber(j)) odd_route_age = j->valuedouble;
+                    if ((j = cJSON_GetObjectItemCaseSensitive(odd, "t_s")) &&
+                        cJSON_IsNumber(j)) odd_t_s = j->valuedouble;
+                }
+
+                const double sim_t = odd_t_s;
+
+                /* ① ODD 退出/重入（TOR 的**前提**，必须与 TOR 成对可读）*/
+                if (odd_in >= 0 && g.pem_last_odd_in >= 0 &&
+                    odd_in != g.pem_last_odd_in) {
+                    double vals[8];
+                    l3_edr_values_init(vals);
+                    vals[0] = odd_in;
+                    vals[1] = odd_violations;
+                    vals[2] = odd_visibility;
+                    vals[3] = odd_loc_age;
+                    vals[4] = odd_route_age;
+                    vals[5] = (double)degrade->degrade_level;
+                    vals[6] = sim_t;
+                    pem_runtime_emit_event(&g.pem_runtime, PEM_RECORD_EVENT, 1u,
+                                           now_us, realtime_us, L3_EDR_EV_ODD_EXIT,
+                                           vals, true /* critical → fsync */);
+                }
+
+                /* ② 系统激活/退出 + ③ TOR 请求/接管 + ④ MRM 进入/完成 */
+                if (tor_code >= 0 && g.pem_last_tor_code >= 0 &&
+                    tor_code != g.pem_last_tor_code) {
+                    const int prev = g.pem_last_tor_code;
+
+                    /* 激活/退出：涉及 {OFF, ACTIVE} 的跃迁 */
+                    const bool act_edge =
+                        (tor_code == L3_EDR_TOR_OFF || tor_code == L3_EDR_TOR_ACTIVE ||
+                         prev == L3_EDR_TOR_OFF || prev == L3_EDR_TOR_ACTIVE);
+                    if (act_edge) {
+                        double vals[8];
+                        l3_edr_values_init(vals);
+                        vals[0] = (tor_code == L3_EDR_TOR_ACTIVE) ? 1.0 : 0.0;
+                        vals[1] = (double)prev;
+                        vals[2] = (double)tor_code;
+                        vals[3] = sim_t;
+                        vals[4] = tor_countdown;
+                        pem_runtime_emit_event(&g.pem_runtime, PEM_RECORD_EVENT, 1u,
+                                               now_us, realtime_us, L3_EDR_EV_ACTIVATION,
+                                               vals, true);
+                    }
+
+                    /* TOR：进入/离开 {TOR_REQUESTED, DRIVER_TAKEOVER} */
+                    const bool tor_edge =
+                        (tor_code == L3_EDR_TOR_REQUESTED ||
+                         tor_code == L3_EDR_TOR_DRIVER_TAKEOVER ||
+                         prev == L3_EDR_TOR_REQUESTED ||
+                         prev == L3_EDR_TOR_DRIVER_TAKEOVER);
+                    if (tor_edge) {
+                        double vals[8];
+                        l3_edr_values_init(vals);
+                        vals[0] = (double)tor_code;
+                        vals[1] = tor_countdown;
+                        vals[2] = (odd_in == 1) ? 1.0 : 0.0;
+                        vals[3] = (double)dms_attention;
+                        vals[4] = (double)dms_will;
+                        vals[5] = dms_latency;
+                        vals[6] = sim_t;
+                        pem_runtime_emit_event(&g.pem_runtime, PEM_RECORD_EVENT, 1u,
+                                               now_us, realtime_us, L3_EDR_EV_TOR,
+                                               vals, true);
+                    }
+
+                    /* MRM：进入/离开 MRM 状态 */
+                    if (tor_code == L3_EDR_TOR_MRM || prev == L3_EDR_TOR_MRM) {
+                        double vals[8];
+                        l3_edr_values_init(vals);
+                        vals[0] = (tor_code == L3_EDR_TOR_MRM) ? 1.0 : 0.0;
+                        vals[1] = mrm_target;
+                        vals[2] = tor_speed;
+                        vals[3] = (double)degrade->degrade_reason;
+                        vals[4] = sim_t;
+                        pem_runtime_emit_event(&g.pem_runtime, PEM_RECORD_EVENT, 1u,
+                                               now_us, realtime_us, L3_EDR_EV_MRM,
+                                               vals, true);
+                    }
+                }
+
+                /* ④ MRM 执行边沿：tor.state 未必跟着变（例如 ACTIVE 下直接 MRM），
+                 * 故 mrm.active 单独做一次边沿检测，避免漏记。 */
+                if (mrm_active >= 0 && g.pem_last_mrm_active >= 0 &&
+                    mrm_active != g.pem_last_mrm_active) {
+                    double vals[8];
+                    l3_edr_values_init(vals);
+                    vals[0] = (double)mrm_active;
+                    vals[1] = mrm_target;
+                    vals[2] = tor_speed;
+                    vals[3] = (double)degrade->degrade_reason;
+                    vals[4] = sim_t;
+                    pem_runtime_emit_event(&g.pem_runtime, PEM_RECORD_EVENT, 1u,
+                                           now_us, realtime_us, L3_EDR_EV_MRM,
+                                           vals, true);
+                }
+
+                if (odd_in >= 0) g.pem_last_odd_in = odd_in;
+                if (tor_code >= 0) g.pem_last_tor_code = tor_code;
+                if (mrm_active >= 0) g.pem_last_mrm_active = mrm_active;
+
+                if (tor) cJSON_Delete(tor);
+                if (odd) cJSON_Delete(odd);
+            }
             if (pem_runtime_drain(&g.pem_runtime, monitor_write_pem_runtime_record,
                                   NULL, PEM_RUNTIME_EVENT_CAPACITY +
                                   PEM_RUNTIME_METRIC_CAPACITY) < 0) {
@@ -2333,6 +2504,9 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     g.lane_count   = 2;
     flow_temp_path(g.pem_log_path, sizeof(g.pem_log_path), "kunautodrive_pem");
     g.pem_last_degrade_level = -1;
+    g.pem_last_tor_code = -1;
+    g.pem_last_odd_in = -1;
+    g.pem_last_mrm_active = -1;
     g.pem_last_degrade_reason = -1;
     g.pem_rotate_sec = 300;
     g.pem_rotate_bytes = 100ULL * 1024 * 1024;
@@ -2435,12 +2609,20 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     transport_subscribe(transport, "fusion/localization", on_fusion_localization, NULL);
     transport_subscribe(transport, TOPIC_PERCEPTION_LANES, on_perceived_lanes, NULL);
     transport_subscribe(transport, "safety/evidence", on_safety_evidence, NULL);
-    transport_subscribe(transport, TOPIC_ODD_STATE, on_odd_state, NULL);
-    transport_subscribe(transport, TOPIC_TOR_STATE, on_tor_state, NULL);
     /* 收集其他节点的自描述广播 (方案B: 数据驱动拓扑感知) */
     transport_subscribe(transport, TOPIC_FLOWENGINE_NODE_INFO, on_node_info, NULL);
     g.node_info_count = 0;
     }
+
+    /* ── L3-P2 EDR：odd/state 与 tor/state 必须**两种模式都订阅** ──
+     * 它们原本在 `if (!g.embedded_mode)` 块内，而 EDR 事件只在 embedded
+     * （production/PEM）模式下写出 —— 于是"写 PEM 的模式恰恰收不到要记的事件"
+     * 这个组合永远不成立，l3_* 事件一条都记不下来（实测：PEM 里只有
+     * degrade_transition）。这两条订阅体量极小（10~20Hz 小 JSON），
+     * 放在两种模式下都订阅，代价可忽略。 */
+    transport_subscribe(transport, TOPIC_ODD_STATE, on_odd_state, NULL);
+    transport_subscribe(transport, TOPIC_TOR_STATE, on_tor_state, NULL);
+
     /* Production PEM also caches the latest end-to-end fusion latency. */
     transport_subscribe(transport, TOPIC_FUSION_LATENCY, on_fusion_latency, NULL);
 

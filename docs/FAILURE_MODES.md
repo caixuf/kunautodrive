@@ -32,13 +32,13 @@
 
 | # | 分类 | 条数 |
 |---|------|------|
-| 1 | 控制 / 规划 / 安全层 | 26 |
+| 1 | 控制 / 规划 / 安全层 | 28 |
 | 2 | 感知 / 点云 | 6 |
 | 3 | 仿真 / 几何 / NPC | 7 |
 | 4 | 仪表盘 / 监控 / 前端 | 9 |
 | 5 | 评估器 / 门禁 | 5 |
 | 6 | 框架 / 工具链 | 3 |
-| | **合计** | **56** |
+| | **合计** | **58** |
 
 ## 1. 控制 / 规划 / 安全层
 
@@ -73,6 +73,9 @@
 | `fusion/localization` 有**两个**发布点，只给一个加诊断字段 → 另一条路径的场景里字段整体缺席（真车 `lidar_driver` 未使能时定位完整性在遥测里查无此项） | 正常路径与"无-lidar 降级路径"各自 `cJSON_CreateObject` + `transport_publish` 一次。给正常路径加了 `loc_*` 后忘了降级路径。**与上一轮 control 的 DATA_TIMEOUT fallback 漏发 debug 是同一类缺陷**：在多发布点上加遥测字段，必须逐点排查。修复：两条路径都补 `loc_trustworthy`/`loc_critical`/`loc_reasons[]`/`gated_count`/`gated_ratio` | `fusion_node.cpp`（两处 `transport_publish(..., "fusion/localization", ...)`） |
 | 节点在 C 代码里 `transport_subscribe()` 了某 topic，但三份 `pipeline*.json` 的 subscribe 列表没同步 → 订阅在跑、拓扑里恒无该数据块 | 只改 C 侧不改配置。`topic_contract_check.py` 就是为此存在：它比对 `pipeline*.json` 的 subscribe/publish ↔ 插件 `s_inputs`/`s_outputs`，本轮当场抓出 `monitor` 漏登记 `fusion/localization`（4 issue）。修复：三份 pipeline 的 monitor subscribe + `s_inputs` 同步补上 | `config/pipeline{,_sensor,_windows}.json` / `modules/adas_nodes/monitor_node.c` `s_inputs` |
 | ODD 判"定位健康"只看消息龄期 + `diverged`，而融合已判 `loc_trustworthy=false` 时 ODD 仍认为在域内 | `odd_monitor` 的定位项只消费 `diverged`（该标志要 χ² 连续失败 >10 或协方差 trace>1e9 才置位）→ 中间地带（双源互相矛盾、观测被大量拒绝）对 ODD 完全不可见。修复：消费 fusion 的交叉校验裁决，新增 `loc_untrustworthy` violation（ODD 是"在不在域内"的权威，定位不可信属域外） | `odd_monitor_node.c` `on_localization` / 分类器定位项 |
+
+| **PEM 有事件框架却一条 L3 事件都记不下来**（production 管线跑完 L3 场景，PEM 里只有 `degrade_transition`） | EDR 的事件源订阅（`odd/state`、`tor/state`）被关在 `if (!g.embedded_mode)` 块内，而 **PEM 写出恰恰只在 embedded（production）模式** —— 两个条件**永不同时成立**。修法：两条订阅移出该分支（体量极小，两种模式都订）。**通用教训**：`embedded_mode` 这类"模式开关"两侧的依赖要成对审查 —— 只在 A 模式采数据、只在 B 模式消费，是静默失效的经典组合 | `monitor_node.c` `if (!g.embedded_mode)` 订阅块 / EDR 写出块（embedded 分支内） |
+| 新 `src/core/*.c` 漏加进 CMake `CORE_SOURCES`，`plugin_symbol_check.py` 仍报 OK，直到 `dlopen` 才 'symbol lookup error' | 该闸门只查"插件**定义**但未解析的项目符号"，漏了"插件**引用**而核心库未编译进去"这一向（反向依赖）。实测：`nm -D --undefined-only build/lib/libmonitor_node.so` 里 `l3_edr_tor_state_code` 为 `U`，而闸门报 "OK (36 plugins)"。**排查手法**：加新 core 源文件后，除了跑闸门，还要 `nm -D --undefined-only` 检查受影响 .so 有无项目符号未解析 | `CMakeLists.txt` `CORE_SOURCES` / `ci/gates/plugin_symbol_check.py` 覆盖盲区 |
 
 ## 2. 感知 / 点云
 

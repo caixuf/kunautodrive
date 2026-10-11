@@ -473,6 +473,7 @@ set(CORE_SOURCES
     src/core/safety_fault_injection.c
     src/core/fault_inject.c
     src/core/localization_integrity.c
+    src/core/l3_edr.c
     src/core/safety_evidence.c
     # src/core/mpc_controller.c — removed 2026-07-28, per ALGORITHM_REFACTOR_PLAN §12
     # src/core/intent_predictor.c — removed 2026-07-28, per ALGORITHM_REFACTOR_PLAN §12
@@ -1111,6 +1112,14 @@ target_link_libraries(test_localization_integrity flowengine_core m)
 add_test(NAME localization_integrity_tests COMMAND test_localization_integrity)
 set_tests_properties(localization_integrity_tests PROPERTIES TIMEOUT 10)
 
+# ── L3-P2 EDR：L3 法规事件分类（方向六）──
+# 覆盖 include/l3_edr.h 的契约：状态码映射（未知必须 -1，不得伪造 OFF）、
+# 8 槽字段清零、事件名统一 l3_ 前缀且唯一、碰撞前后窗口为正。
+add_executable(test_l3_edr tests/test_l3_edr.c)
+target_link_libraries(test_l3_edr flowengine_core)
+add_test(NAME l3_edr_tests COMMAND test_l3_edr)
+set_tests_properties(l3_edr_tests PROPERTIES TIMEOUT 10)
+
 # ── flowrec 配置驱动 Bag v2 采集单元测试 ───────────────────
 add_executable(test_flowrec tests/test_flowrec.c)
 target_link_libraries(test_flowrec flowengine_core)
@@ -1348,6 +1357,14 @@ add_test(NAME localization_integrity_sim_tools
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 set_tests_properties(localization_integrity_sim_tools PROPERTIES TIMEOUT 30)
+
+# L3-P2 EDR 分类自检（Python 先行）。**真跑**写 PEM 的端到端门禁是
+# ci/gates/l3_edr_gate.py（需构建产物），故挂 CI integration-test。
+add_test(NAME l3_edr_sim_tools
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/l3_edr_sim.py --run-all
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(l3_edr_sim_tools PROPERTIES TIMEOUT 30)
 
 # ── Smoke test: flow_launcher short integration run ──
 find_program(BASH_EXECUTABLE bash)

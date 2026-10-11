@@ -318,6 +318,14 @@ jobs:
       # control/debug **之前** continue → 该降级路径在拓扑里完全不可见。
       - name: Fault-injection → degrade-path gate (L3-P2)
         run: python3 ci/gates/fault_inject_gate.py --duration 22
+      # ── L3-P2（方向六）：EDR — L3 法规事件真写 PEM 门禁 ──
+      # P2 要求"在现有 PEM 流上增加 L3 法规事件（激活/退出、TOR、MRM、碰撞窗口）"。
+      # 本门禁真起管线、真写 PEM、再读懂事件，断言 L3 场景集齐四类且都走 fsync。
+      # 2026-10-11 首次上线即抓出：EDR 的事件源订阅被关在 `if (!g.embedded_mode)`
+      # 里，而写 PEM 恰恰只在 embedded 模式 —— 两个条件永不同时成立，l3_* 事件
+      # 一条都记不下来。
+      - name: L3 EDR event-record gate (P2)
+        run: python3 ci/gates/l3_edr_gate.py --duration 28
 
   # ── Algorithm evaluator (regression gate) ─────────────────────
   # Runs the full plugin pipeline (demo.sh) and scores it against
