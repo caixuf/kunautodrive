@@ -255,6 +255,11 @@ static struct {
     /* 车道级定位（来自 localization/lane_match，诊断透传：权威 Frenet 解算
      * 与 vehicle/state 快照的漂移） */
     char lane_match_json[1024];
+
+    /* L3-P2 定位完整性（来自 fusion/localization 的 loc_* 字段）。
+     * 单独缓存：fusion/localization 是 20Hz 全量状态 JSON，只取完整性相关
+     * 字段，避免把整个定位状态塞进拓扑。 */
+    char localization_json[768];
     /* 感知车道线（来自 perception/lanes，诊断透传：沙箱合成边界 + 世界坐标
      * 折线 pts）。boundaries ≤ 8 条 × 17 点 × 2 坐标，故留 8KB。 */
     char perceived_lanes_json[8192];
@@ -966,6 +971,34 @@ static void on_planning_debug(const Message* msg, void* user_data) {
     cJSON_Delete(pd);
 }
 
+/* ── fusion/localization 订阅 — 缓存定位完整性字段（L3-P2） ──
+ * 只保留 loc_* / gated_* / diverged / innovation 这几个诊断量：拓扑 JSON 已有
+ * lane_match（车道级）与 scene.ego（真值），此处补的是"定位**可信度**"，
+ * 这正是 P2 冗余要断言的对象。 */
+static void on_fusion_localization(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg) return;
+    cJSON* src = monitor_cJSON_Parse((const char*)msg->data);
+    if (!src) return;
+    cJSON* out = cJSON_CreateObject();
+    static const char* keys[] = {
+        "loc_trustworthy", "loc_critical", "loc_reasons",
+        "gated_count", "gated_ratio", "diverged", "innovation",
+        "cov_xx", "cov_yy", "cov_vv", "cov_hh", "cov_yyaw",
+    };
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+        cJSON* it = cJSON_GetObjectItemCaseSensitive(src, keys[i]);
+        if (it) cJSON_AddItemToObject(out, keys[i], cJSON_Duplicate(it, 1));
+    }
+    char* txt = cJSON_PrintUnformatted(out);
+    if (txt) {
+        snprintf(g.localization_json, sizeof(g.localization_json), "%s", txt);
+        free(txt);
+    }
+    cJSON_Delete(out);
+    cJSON_Delete(src);
+}
+
 /* ── localization/lane_match 订阅 — 缓存车道级定位（诊断透传） ── */
 static void on_lane_match(const Message* msg, void* user_data) {
     (void)user_data;
@@ -1365,6 +1398,14 @@ static void export_dashboard_json(void) {
         cJSON* lm = monitor_cJSON_Parse(g.lane_match_json);
         if (lm) {
             cJSON_AddItemToObject(metrics, "lane_match", lm);
+        }
+    }
+
+    /* L3-P2：定位完整性（fusion/localization 的 loc_* 诊断量） */
+    if (g.localization_json[0]) {
+        cJSON* lz = monitor_cJSON_Parse(g.localization_json);
+        if (lz) {
+            cJSON_AddItemToObject(metrics, "localization", lz);
         }
     }
 
@@ -2244,7 +2285,9 @@ static const TaskInterface monitor_vtable = {
 /* ── NodePlugin 实现 ─────────────────────────────────────────── */
 
 static const char* s_inputs[]  = { TOPIC_PERCEPTION_OBSTACLES, TOPIC_VEHICLE_STATE,
-                                   TOPIC_FUSION_LATENCY, TOPIC_FLOWENGINE_NODE_INFO,
+                                   TOPIC_FUSION_LATENCY,
+                                   "fusion/localization",   /* L3-P2 定位完整性 */
+                                   TOPIC_FLOWENGINE_NODE_INFO,
                                    TOPIC_PLANNING_TRAJECTORY, TOPIC_ROAD_GEOMETRY,
                                    TOPIC_SCENE_FRAME, TOPIC_CONTROL_CTE,
                                    TOPIC_ROAD_TRAFFIC_LIGHTS, "safety/evidence",
@@ -2276,6 +2319,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     g.control_debug_json[0] = '\0';
     g.planning_debug_json[0] = '\0';
     g.lane_match_json[0] = '\0';
+    g.localization_json[0] = '\0';
     g.safety_evidence_json[0] = '\0';
 
     /* samples 环形缓冲初始态 */
@@ -2388,6 +2432,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     transport_subscribe(transport, TOPIC_CONTROL_DEBUG, on_control_debug, NULL);
     transport_subscribe(transport, TOPIC_PLANNING_DEBUG, on_planning_debug, NULL);
     transport_subscribe(transport, TOPIC_LOCALIZATION_LANE_MATCH, on_lane_match, NULL);
+    transport_subscribe(transport, "fusion/localization", on_fusion_localization, NULL);
     transport_subscribe(transport, TOPIC_PERCEPTION_LANES, on_perceived_lanes, NULL);
     transport_subscribe(transport, "safety/evidence", on_safety_evidence, NULL);
     transport_subscribe(transport, TOPIC_ODD_STATE, on_odd_state, NULL);

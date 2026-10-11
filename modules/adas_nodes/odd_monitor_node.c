@@ -56,6 +56,11 @@ static struct {
     double visibility_m;
     volatile int    has_loc;
     int    loc_diverged;
+    /* L3-P2：fusion 的定位完整性裁决（交叉校验结论）。
+     * ODD 的"定位健康"项此前只看 **消息龄期 + diverged**，而 diverged 只在
+     * χ² 连续失败 >10 或协方差 trace>1e9 时才置位 —— 中间地带（两源互相矛盾、
+     * 观测被大量拒绝）对 ODD 完全不可见。这里消费 fusion 的交叉校验结论。 */
+    int    loc_untrustworthy;
     double loc_ts_us;
     volatile int    has_route;
     double route_ts_us;
@@ -129,6 +134,13 @@ static void on_localization(const Message* msg, void* ud) {
     if (!root) return;
     cJSON* d = cJSON_GetObjectItemCaseSensitive(root, "diverged");
     if (cJSON_IsBool(d)) g.loc_diverged = cJSON_IsTrue(d) ? 1 : 0;
+    /* L3-P2：loc_trustworthy=false 表示交叉校验判定定位不可用于驾驶 */
+    cJSON* lt = cJSON_GetObjectItemCaseSensitive(root, "loc_trustworthy");
+    if (cJSON_IsBool(lt)) g.loc_untrustworthy = cJSON_IsTrue(lt) ? 0 : 1;
+    else {
+        cJSON* lc = cJSON_GetObjectItemCaseSensitive(root, "loc_critical");
+        if (cJSON_IsBool(lc)) g.loc_untrustworthy = cJSON_IsTrue(lc) ? 1 : 0;
+    }
     cJSON* t = cJSON_GetObjectItemCaseSensitive(root, "timestamp_us");
     if (cJSON_IsNumber(t)) { g.loc_ts_us = t->valuedouble; g.has_loc = 1; }
     cJSON_Delete(root);
@@ -184,6 +196,7 @@ static void odd_publish(void) {
     if (!weather_allowed(g.weather))                 viols[nv++] = "weather";
     if (eff_visibility < g.odd_min_visibility_m)     viols[nv++] = "visibility";
     if (g.loc_diverged)                              viols[nv++] = "loc_diverged";
+    if (g.loc_untrustworthy)                         viols[nv++] = "loc_untrustworthy";
     double loc_age_ms = g.has_loc ? (now_us - g.loc_ts_us) / 1000.0 : 1e9;
     if (loc_age_ms > g.loc_max_age_ms)               viols[nv++] = "loc_stale";
     double route_age_ms = g.has_route ? (now_us - g.route_ts_us) / 1000.0 : 1e9;

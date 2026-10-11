@@ -145,6 +145,8 @@ def observe(samples: list[dict]) -> dict:
     odd_violations: set[str] = set()
     driver_modes: set[str] = set()
     control_modes: set[str] = set()
+    loc_reasons: set[str] = set()
+    loc_trustworthy_seen: set[bool] = set()
     topic_freq_min: dict[str, float] = {}
     inject_enabled = False
     inject_dropped = 0
@@ -171,6 +173,13 @@ def observe(samples: list[dict]) -> dict:
             cm = cd.get("mode")
             if isinstance(cm, str) and cm:
                 control_modes.add(cm)
+        lz = m.get("localization")
+        if isinstance(lz, dict):
+            for r in lz.get("loc_reasons") or []:
+                loc_reasons.add(str(r))
+            lt = lz.get("loc_trustworthy")
+            if isinstance(lt, bool):
+                loc_trustworthy_seen.add(lt)
         fi = m.get("fault_inject")
         if isinstance(fi, dict):
             if fi.get("enabled"):
@@ -194,6 +203,8 @@ def observe(samples: list[dict]) -> dict:
         "odd_violations": odd_violations,
         "driver_modes": driver_modes,
         "control_modes": control_modes,
+        "loc_reasons": loc_reasons,
+        "loc_trustworthy_seen": loc_trustworthy_seen,
         "topic_freq_min": topic_freq_min,
         "inject_enabled": inject_enabled,
         "inject_dropped": inject_dropped,
@@ -252,6 +263,24 @@ def check_class(entry: dict, obs: dict, matrix_mod) -> list[str]:
     if want_mode and want_mode not in obs["control_modes"]:
         fails.append(f"control_mode '{want_mode}' not observed "
                      f"(seen: {sorted(obs['control_modes']) or ['none']})")
+
+    # ── Rule 3b：定位完整性落点（如声明）──
+    # 语义要点：单源丢失时 loc_trustworthy 必须**保持 true**（冗余生效），
+    # 全源丢失才 false —— 断言两侧都要，否则"永远 trustworthy=false"也能过。
+    if "loc_integrity" in via and not obs["loc_trustworthy_seen"]:
+        fails.append("loc_integrity evidence missing: metrics.localization absent "
+                     "(monitor not caching fusion/localization?)")
+    want_loc = entry.get("loc_reasons")
+    if want_loc:
+        missing = [r for r in want_loc if r not in obs["loc_reasons"]]
+        if missing:
+            fails.append(f"loc_reasons missing {missing} "
+                         f"(seen: {sorted(obs['loc_reasons']) or ['none']})")
+    want_trust = entry.get("loc_trustworthy")
+    if want_trust is not None and obs["loc_trustworthy_seen"]:
+        if want_trust not in obs["loc_trustworthy_seen"]:
+            fails.append(f"loc_trustworthy={want_trust} never observed "
+                         f"(seen: {sorted(obs['loc_trustworthy_seen'])})")
 
     # ── Rule 4：ODD 联动（如声明）──
     want_v = entry.get("odd_violation")
@@ -314,6 +343,8 @@ def main() -> int:
             print(f"  observed: level={obs['max_level']} "
                   f"reasons={sorted(obs['reasons']) or ['none']} "
                   f"control_modes={sorted(obs['control_modes']) or ['none']} "
+                  f"loc_reasons={sorted(obs['loc_reasons']) or ['none']} "
+                  f"loc_trustworthy={sorted(obs['loc_trustworthy_seen']) or ['none']} "
                   f"injected_drops={obs['inject_dropped']}")
         total_fails += len(fails)
         for f in fails:

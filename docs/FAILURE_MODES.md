@@ -32,13 +32,13 @@
 
 | # | 分类 | 条数 |
 |---|------|------|
-| 1 | 控制 / 规划 / 安全层 | 22 |
+| 1 | 控制 / 规划 / 安全层 | 26 |
 | 2 | 感知 / 点云 | 6 |
 | 3 | 仿真 / 几何 / NPC | 7 |
 | 4 | 仪表盘 / 监控 / 前端 | 9 |
 | 5 | 评估器 / 门禁 | 5 |
 | 6 | 框架 / 工具链 | 3 |
-| | **合计** | **52** |
+| | **合计** | **56** |
 
 ## 1. 控制 / 规划 / 安全层
 
@@ -68,6 +68,11 @@
 | **压车道线：CRUISE 状态骑在 2/3 号车道线上不动，`steer` 恒 0，control 看起来"很听话"** | **缺陷在 planning，不在 control。** 有 `lane_ref` 时"强制锁车道中心"整块被跳过，居中全交给 Frenet；但 Frenet 横向走廊 `max_road_width_l/r = 6.0m`（≈1.7 个车道宽）**无任何车道边界约束**，`d_road_w=1.5` 的格点又恰好让落点等于车道线。实测 `dense_route_traffic` 280s：ego 停在 `ego_d=-3.24`（车道线 -3.5，车身宽 2.0m 直接压线），planning 发布 `d_start≈d_lookahead≈d_end≈-1.5` 的**恒定偏移直线**、全程不收敛 → control 忠实跟随 → steer=0 → 每帧从当前位置重规划又得到 -1.5 → **自锁**（压线 125 连续帧）。**排查陷阱**：control 层一切正常（steer/限幅/Stanley 均无异常），只看 control 会误判成"车自己不开转向"；必须看 `planning/debug` 的 `d_start/d_lookahead/d_end` 是否收敛。**修复不能只夹紧**：夹紧是恒等映射，ego 会永久停在带沿同样压线（Python 反例验证），必须"安全带内放行 Frenet（保 W1 车道内避障）、带外强制回 d=0" | `planning_node.cpp` d_out 后处理块（`lane_ref_count < 2` 分支的 `else`）+ `frenet_bridge.cpp` `max_road_width_l/r` |
 | **MRM 发出后车不停，1~2s 就宣告"停稳完成"并退回 OFF，随后重新加速**（L3：车还在 20 m/s 时 `tor.state=MRM→OFF`，`mrm.active` 只闪 2 帧） | **`tor_manager` 读错车速字段名**。`flowsim` 的 `vehicle/state` 车速字段是 **`spd`**；全仓其余消费者（control/planning/perception/behavior/sensor_model/object_tracker/monitor）都读 `spd`，唯独 `tor_manager_node.c` 读 `"speed"` → `g.speed` 恒 0 → MRM 停稳判据 `fabs(speed) < 0.1` **在进入 MRM 的那一刻就为真** → 立即 `MRM_COMPLETE` → `OFF` → planning 重新给速度。**排查陷阱**：只看 `tor.state` 序列（`ACTIVE→TOR_REQUESTED→MRM→OFF`）会以为链路全通，必须同时看 `mrm.active` 持续帧数 + 车速曲线。修复：以 `"spd"` 为准、保留 `"speed"` 作兼容回退。**门禁教训**：只断言"MRM 状态出现过"会全绿放过本缺陷，必须断言"MRM 生效后车速收敛到 ~0" | `modules/adas_nodes/tor_manager_node.c` `on_vehicle_state` |
 | **降级逻辑存在但遥测里看不见**：注入 `planning/trajectory` 后评估器只能看到 `driver_mode` 停在最后一个正常值，`control_debug` 整块缺席，误判"降级路径没走到" | `control_node.cpp` 的 planning 掉线分支（`DATA_TIMEOUT` 车道保持 fallback）在**发布 `control/debug` 之前** `continue` → 该分支永不发布 debug，而 `control/debug` 是 monitor 拿 `control_debug`/`driver_mode` 的**唯一来源**。**排查陷阱**：日志里能看到 `#N DATA_TIMEOUT — lane-following fallback`（LOG_WARN 在 continue 之前），于是以为"路径在跑、只是评估器没读"，实则遥测里根本没有这条路径。修复：在 fallback 分支内补一条最小 debug（只带本分支实际持有的量，不复用常规块——那块的局部变量在 fallback 路径上不存在），频率与常规块一致（2Hz）。**通用教训**：在 `continue`/`return` 提前退出的降级分支里必须显式补遥测——**"有降级逻辑" ≠ "降级可被验证"** | `control_node.cpp` DATA_TIMEOUT fallback 分支（`continue` 前） |
+
+| **全体源静默时 fusion 一帧都不发**：注入 `sensor/gps` + `sensor/lidar` 后 `fusion/localization` 频率归零，融合日志 `0 fused frames` —— 本节点自己的输入丢失在遥测里**完全不可见**，下游只看到"定位没了"却拿不到"为什么没的" | `fusion_node.cpp` 的 `if (!lidar_msg)` 分支里，`if (!pose_only && !gps_only) continue;` 把"所有源都停发"当成"没什么可做"直接跳过 → 永不发布。**讽刺的是紧邻的注释正是在警告这个"最贵的失败形态"**，但只在"无 lidar 但有 gps/pose"那条路上兑现了。修复：全丢也照发一帧（仍做 `ekf_fusion_predict` 纯惯性递推保持状态连续），用定位完整性字段如实报 `all_sources_lost` 并驱动 `DEGRADE_REASON_LOCALIZATION` | `fusion_node.cpp` `if (!lidar_msg)` 分支的"全丢"路径 |
+| `fusion/localization` 有**两个**发布点，只给一个加诊断字段 → 另一条路径的场景里字段整体缺席（真车 `lidar_driver` 未使能时定位完整性在遥测里查无此项） | 正常路径与"无-lidar 降级路径"各自 `cJSON_CreateObject` + `transport_publish` 一次。给正常路径加了 `loc_*` 后忘了降级路径。**与上一轮 control 的 DATA_TIMEOUT fallback 漏发 debug 是同一类缺陷**：在多发布点上加遥测字段，必须逐点排查。修复：两条路径都补 `loc_trustworthy`/`loc_critical`/`loc_reasons[]`/`gated_count`/`gated_ratio` | `fusion_node.cpp`（两处 `transport_publish(..., "fusion/localization", ...)`） |
+| 节点在 C 代码里 `transport_subscribe()` 了某 topic，但三份 `pipeline*.json` 的 subscribe 列表没同步 → 订阅在跑、拓扑里恒无该数据块 | 只改 C 侧不改配置。`topic_contract_check.py` 就是为此存在：它比对 `pipeline*.json` 的 subscribe/publish ↔ 插件 `s_inputs`/`s_outputs`，本轮当场抓出 `monitor` 漏登记 `fusion/localization`（4 issue）。修复：三份 pipeline 的 monitor subscribe + `s_inputs` 同步补上 | `config/pipeline{,_sensor,_windows}.json` / `modules/adas_nodes/monitor_node.c` `s_inputs` |
+| ODD 判"定位健康"只看消息龄期 + `diverged`，而融合已判 `loc_trustworthy=false` 时 ODD 仍认为在域内 | `odd_monitor` 的定位项只消费 `diverged`（该标志要 χ² 连续失败 >10 或协方差 trace>1e9 才置位）→ 中间地带（双源互相矛盾、观测被大量拒绝）对 ODD 完全不可见。修复：消费 fusion 的交叉校验裁决，新增 `loc_untrustworthy` violation（ODD 是"在不在域内"的权威，定位不可信属域外） | `odd_monitor_node.c` `on_localization` / 分类器定位项 |
 
 ## 2. 感知 / 点云
 

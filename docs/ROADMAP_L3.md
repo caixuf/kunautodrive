@@ -150,7 +150,7 @@
 |------|------|----------|
 | **P0 地基补牢** | ① 定位并修复 `lane_change_traffic` 车道保持 FAIL；② `demo_evaluator` 增加 min TTC / critical 次数 / jerk·加速度 FAIL 门槛（配 `test_evaluator_gate.py` 自测）；③ 缺 Eigen 时构建/CI 直接失败而非静默退化；④ 每次评估输出 `safety_evidence` | 场景矩阵 8/8 稳定全绿 |
 | **P1 L3 核心闭环** | ODD 监控 → TOR 状态机 → MRM 升级（先 Python 仿真），DMS 驾驶员模型 | ODD 退出 / TOR 超时场景进 suite 且 PASS → ✅ **2026-10-11 达成**（见下 P1 进展） |
-| **P2 验证体系** | 法规场景库 + 故障注入 + 批量并行仿真；冗余（雷达模型、定位交叉校验、看门狗）；EDR | 每类注入故障都有可观测的降级路径 → ⏳ **2026-10-11 第一刀：已登记 4 类达成**（见下 P2 进展；冗余/EDR 待做） |
+| **P2 验证体系** | 法规场景库 + 故障注入 + 批量并行仿真；冗余（雷达模型、定位交叉校验、看门狗）；EDR | 每类注入故障都有可观测的降级路径 → ⏳ **2026-10-11：已登记 6 类达成**（两刀，见下 P2 进展；雷达模型/EDR 待做） |
 | **P3 安全论证与前端** | ISO 26262 / SOTIF / R155·R156 文档链；统计里程目标；FlowBoard L3 面板与事故回放；补 `/api/map/preview` | 需求→测试→证据可追溯 |
 
 ### P0 进展（2026-10-08）
@@ -333,13 +333,61 @@ A/B 实测：干净跑 43 个 topic（含 `perception/obstacles`），注入后 
 `dense_npc` 一次既有启动竞态（重跑即 PASS，见 P0 遗留）外全 PASS。
 
 **P2 放行条件（第一刀）「每类注入故障都有可观测的降级路径」→ 对已登记的 4 类达成。**
+**（第二刀起扩到 6 类，见下。）**
 
 **P2 遗留（下一刀）**：注入类别仍需扩展到**冗余**维度——雷达传感器模型缺失
-（`sensor_model` 只有 lidar/gps/camera，全仓无 radar）、定位冗余的 GNSS/航位推算/
-地图匹配**交叉校验**尚未实现（现仅有 EKF `diverged` 单标志）、EDR 的 L3 法规事件
+（`sensor_model` 只有 lidar/gps/camera，全仓无 radar）、EDR 的 L3 法规事件
 （激活/退出、TOR、MRM、碰撞前后窗口）尚未进 PEM 业务流。另外 `perception_loss`
 的可观测落点目前只到"注入生效 + topic 归零"，**"感知降级后系统行为是否仍安全"
 尚无专门判据**（需配合 TTC/碰撞门禁构造一个"盲开仍不撞"的场景）。
+
+
+### P2 进展（2026-10-11，第二刀：定位冗余交叉校验）
+
+第一刀把「每类注入故障都有可观测的降级路径」落了地，但**"冗余"这一项还是空的**。
+盘点定位链路发现三处真实缺口：
+
+1. **双源无互校**：`fusion_node` 有 GPS + LiDAR/SLAM 双源，但两者之间**没有任何
+   一致性检查**；只有一个 `diverged` 单标志（χ² 连续失败 >10 或协方差 trace>1e9
+   才置位）→ 中间地带（两源互相矛盾、观测被大量拒绝）完全不可见。
+2. **诊断量算了不发**：`EkfFusion.gated_count` 被算出来却**从未发布**——源码注释
+   自己写了"fusion_node 应把它发布出去"，是个自认的 TODO。
+3. **死原因码**：`DEGRADE_REASON_LOCALIZATION` 在 `degrade_ladder.h` 里定义、
+   在 `degrade_reason_name()` 里有名字，但**全仓没有任何地方 set 它**。
+
+| 项 | 状态 | 落地 |
+|----|------|------|
+| 交叉校验规则（Python 先行） | ✅ 完成 | `tools/localization_integrity_sim.py`：位置差分速度 vs 另一源速度、位移方向 vs 另一源航向、观测拒绝率、协方差 trace 四项判定 + 去抖。`--check-rules` 强制「单源陈旧**不得**算 critical」——冗余生效不等于定位丢失 |
+| 交叉校验实现 | ✅ 完成 | `include/localization_integrity.h` + `src/core/localization_integrity.c`（纯函数、无时钟依赖，可完全单测）。11 条单测 `test_localization_integrity.c` |
+| 死码激活 | ✅ 完成 | `all_sources_lost`（两源全丢）去抖 1s 后置 `L2/localization_lost` —— `DEGRADE_REASON_LOCALIZATION` **从死码变活码** |
+| 诊断量发布 | ✅ 完成 | `fusion/localization` 增 `loc_trustworthy` / `loc_critical` / `loc_reasons[]` / `gated_count` / `gated_ratio`；monitor 透传为 `metrics.localization` |
+| ODD 消费完整性 | ✅ 完成 | `odd_monitor` 此前只看**消息龄期 + diverged**；现消费 fusion 的交叉校验裁决，新增 `loc_untrustworthy` violation（ODD 是"在不在域内"的权威，定位不可信属于域外） |
+| 新故障类：GPS 单源丢失 | ✅ 完成 | `gps_loss_redundancy`：断言 `loc_reasons=['gps_stale']` 且 **`loc_trustworthy=true`、不降级**。这与"定位丢失"是两回事，门禁把两侧都钉住 |
+| 新故障类：全源丢失 | ✅ 完成 | 注入 `sensor/gps` + `sensor/lidar` → L2/`localization_lost` + `loc_trustworthy=false` + ODD `loc_untrustworthy` |
+
+**本轮抓出并修掉的真实缺陷（由新门禁暴露，且**都是我这一刀自己引入/漏掉的**）**：
+
+- 🔴 **`fusion/localization` 有两个发布点，只给一个加了完整性字段**。
+  正常路径与"无-lidar 降级路径"各发一次；我只加了前者 →
+  真车配置（`lidar_driver` 未使能）这类场景的完整性在遥测里缺席。
+  与上一轮 control 的 DATA_TIMEOUT fallback 漏发 debug **是同一类缺陷**。
+- 🔴 **全体源静默时 fusion 直接 `continue`，一帧都不发**。实测注入两源后
+  fusion 日志 `0 fused frames`、`fusion/localization` 频率归零 —— 本节点
+  **自己的输入丢失在遥测里完全不可见**。讽刺的是紧邻的代码注释正是在警告
+  这个"最贵的失败形态"，但旧实现只在"无 lidar 但有 gps/pose"这条路上兑现了。
+  修法：全丢也照发一帧，如实报 `all_sources_lost`（仍是纯惯性递推，状态连续）。
+- 🔴 **monitor 的 `s_inputs` 与 `pipeline*.json` 漏同步**。我只在 C 代码里
+  `transport_subscribe` 了 `fusion/localization`，三份 pipeline 的 monitor
+  subscribe 列表都没加 → 订阅在跑但拓扑里恒无该块。**`topic_contract_check.py`
+  当场抓住**（它比对 JSON subscribe ↔ `s_inputs`）——这正是该闸门存在的意义。
+- 🔴 **`odd_monitor` 的定位健康项与 fusion 的结论脱节**。ODD 只看消息龄期 +
+  `diverged`，即使 fusion 已判 `loc_trustworthy=false`，ODD 仍认为"定位健康"。
+
+**验证**：39 ctest 全绿（新增 3 项：`localization_integrity_tests` /
+`localization_integrity_sim_tools` / 既有项）；`ci/gates/fault_inject_gate.py`
+**6/6 类可观测**；9 条静态 gate 全绿；`scenario_regression --baseline` 见下。
+
+**P2 放行条件「每类注入故障都有可观测的降级路径」→ 对已登记的 6 类达成。**
 
 
 ## 与近期工作的关系

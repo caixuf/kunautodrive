@@ -117,10 +117,39 @@ FAULT_MATRIX = [
                 "无限拉锯（见 safety_control_node.cpp 注释）。守卫生效本身就是被验证的行为；"
                 "行驶中失联的 L3 路径由 safety_fault_evidence 单测覆盖",
     },
+    {
+        "id": "gps_loss_redundancy",
+        "inject": "sensor/gps:4000",
+        "level": DEGRADE_L0,
+        "reason_names": (),
+        "odd_violation": None,
+        "control_mode": None,
+        "loc_reasons": ("gps_stale",),
+        "loc_trustworthy": True,
+        "observable_via": ("loc_integrity", "inject_ack", "topic_freq"),
+        "note": "GPS 单源丢失（实测丢弃 ~400 条）：**冗余生效** —— LiDAR 仍在，"
+                "fusion 的交叉校验如实上报 gps_stale，但 loc_trustworthy 保持 true、"
+                "**不得降级**。这正是 P2「冗余」要断言的行为：单路失效不等于定位丢失",
+    },
+    {
+        "id": "all_sources_lost",
+        "inject": "sensor/gps:4000;sensor/lidar:4000",
+        "level": DEGRADE_L2,
+        "reason_names": (REASON_LOCALIZATION,),
+        "odd_violation": "loc_untrustworthy",
+        "control_mode": None,
+        "loc_reasons": ("all_sources_lost",),
+        "loc_trustworthy": False,
+        "observable_via": ("degrade", "loc_integrity", "inject_ack"),
+        "note": "两个独立源全丢 → fusion 判 all_sources_lost（critical）→ 去抖 1s 后"
+                "置 L2/localization_lost。**这条把 DEGRADE_REASON_LOCALIZATION 从死码"
+                "变成活码**：此前它定义在 degrade_ladder.h、在 degrade_reason_name() 里"
+                "有名字，但全仓没有任何地方 set 它",
+    },
 ]
 
 # 合法的可观测落点（新增落点必须同时补上对应的门禁实现）
-OBSERVABLE_VIA = ("degrade", "control_mode", "topic_freq", "inject_ack")
+OBSERVABLE_VIA = ("degrade", "control_mode", "topic_freq", "inject_ack", "loc_integrity")
 
 
 def supervisor_progression(node_ages_ms, now_ms, current_level=DEGRADE_L0):
@@ -196,6 +225,18 @@ def check_matrix():
         if e.get("odd_violation") and "degrade" not in (e.get("observable_via") or ()):
             failures.append(f"{e['id']}: expects ODD violation '{e['odd_violation']}' "
                             f"but does not declare 'degrade' in observable_via")
+        # 声明了 loc_reasons 的类必须以 loc_integrity 为落点（否则断言无依据）
+        if e.get("loc_reasons") and "loc_integrity" not in (e.get("observable_via") or ()):
+            failures.append(f"{e['id']}: expects loc_reasons {e['loc_reasons']} "
+                            f"but does not declare 'loc_integrity' in observable_via")
+        # 声明 loc_trustworthy 的类同样需要 loc_integrity 落点
+        if e.get("loc_trustworthy") is not None and "loc_integrity" not in (e.get("observable_via") or ()):
+            failures.append(f"{e['id']}: declares loc_trustworthy but no 'loc_integrity' "
+                            f"in observable_via")
+        if (e.get("loc_reasons") or e.get("loc_trustworthy") is not None) and \
+                "inject_ack" not in (e.get("observable_via") or ()):
+            failures.append(f"{e['id']}: localization assertions require 'inject_ack' "
+                            f"to prove the fault actually took effect")
     return failures
 
 

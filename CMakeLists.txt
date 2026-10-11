@@ -472,6 +472,7 @@ set(CORE_SOURCES
     src/core/degrade_ladder.c
     src/core/safety_fault_injection.c
     src/core/fault_inject.c
+    src/core/localization_integrity.c
     src/core/safety_evidence.c
     # src/core/mpc_controller.c — removed 2026-07-28, per ALGORITHM_REFACTOR_PLAN §12
     # src/core/intent_predictor.c — removed 2026-07-28, per ALGORITHM_REFACTOR_PLAN §12
@@ -1102,6 +1103,14 @@ target_link_libraries(test_fault_inject flowengine_core)
 add_test(NAME fault_inject_tests COMMAND test_fault_inject)
 set_tests_properties(fault_inject_tests PROPERTIES TIMEOUT 10)
 
+# ── L3-P2 定位完整性交叉校验（方向六 冗余）──
+# 覆盖 include/localization_integrity.h 的判定语义：单源陈旧=冗余生效（可信但
+# 上报原因）、两源全丢/不一致/滤波器被拒=critical、无法判定≠通过。
+add_executable(test_localization_integrity tests/test_localization_integrity.c)
+target_link_libraries(test_localization_integrity flowengine_core m)
+add_test(NAME localization_integrity_tests COMMAND test_localization_integrity)
+set_tests_properties(localization_integrity_tests PROPERTIES TIMEOUT 10)
+
 # ── flowrec 配置驱动 Bag v2 采集单元测试 ───────────────────
 add_executable(test_flowrec tests/test_flowrec.c)
 target_link_libraries(test_flowrec flowengine_core)
@@ -1330,6 +1339,15 @@ add_test(NAME fault_degrade_sim_tools
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 set_tests_properties(fault_degrade_sim_tools PROPERTIES TIMEOUT 30)
+
+# L3-P2（方向六 冗余）：定位完整性交叉校验矩阵自检（Python 先行）。
+# 校验判定语义：单源陈旧=冗余生效（可信但上报原因）、两源全丢/不一致/滤波器
+# 被拒=critical、无法判定≠通过。C 侧实现为 src/core/localization_integrity.c。
+add_test(NAME localization_integrity_sim_tools
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/localization_integrity_sim.py --run-all
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(localization_integrity_sim_tools PROPERTIES TIMEOUT 30)
 
 # ── Smoke test: flow_launcher short integration run ──
 find_program(BASH_EXECUTABLE bash)

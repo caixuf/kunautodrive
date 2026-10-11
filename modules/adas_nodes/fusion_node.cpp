@@ -37,6 +37,8 @@
 #include "coroutine_task.h"
 #include "clock_service.h"
 #include "degrade_ladder.h"
+#include "localization_integrity.h"   /* L3-P2 定位交叉校验 */
+#include "clock_service.h"
 #include <cjson/cJSON.h>
 #undef LOG_TRACE
 #undef LOG_DEBUG
@@ -80,6 +82,21 @@ struct FusionContext {
     uint32_t fused_count{0};
     double   fused_x{0}, fused_y{0}, fused_v{0}, fused_heading{0}, fused_yaw_rate{0};
 
+    /* ── L3-P2 定位完整性交叉校验 ──
+     * prev_lidar_{x,y} 保留上一帧 LiDAR 位置，用于位置差分算"LiDAR 速度/航向"
+     * 与 GPS 的速度/航向互校（两个独立源测同一物理量）。
+     * disagree_s 是"连续不一致"的累计时长，用于去抖（单帧不一致不升级）。 */
+    bool     has_prev_lidar{false};
+    double   prev_lidar_x{0}, prev_lidar_y{0}, prev_lidar_t{0};
+    double   disagree_s{0};
+    uint32_t loc_assess_count{0};
+    /* 各源**到达**时刻（不是消息内时间戳）：用于判"该源是否还在送数据"，
+     * 即陈旧检测。源停了就是停了，与它最后一次报的时间无关。 */
+    bool     has_gps_ts{false};
+    bool     has_lidar_ts{false};
+    uint64_t gps_ts_us{0};
+    uint64_t lidar_ts_us{0};
+
     /* 延迟统计 — 环形缓冲，128 个样本 */
     LatencyTracker  lat_tracker{};
 
@@ -94,11 +111,15 @@ FusionContext g;
 
 static void on_lidar(const Message* msg, void* user_data) {
     (void)user_data;
+    g.lidar_ts_us = clock_now_us();
+    g.has_lidar_ts = true;
     message_buffer_push(g.lidar_buf, msg);
 }
 
 static void on_gps(const Message* msg, void* user_data) {
     (void)user_data;
+    g.gps_ts_us = clock_now_us();
+    g.has_gps_ts = true;
     message_buffer_push(g.gps_buf, msg);
 }
 
@@ -154,7 +175,85 @@ protected:
             if (!lidar_msg) {
                 const Message* pose_only = pose_buf_ ? message_buffer_latest(pose_buf_) : nullptr;
                 const Message* gps_only  = message_buffer_latest(gps_buf_);
-                if (!pose_only && !gps_only) continue;  /* 真的什么都没有 */
+                /* L3-P2：**所有源都停发**时不能静默 continue —— 那会让
+                 * fusion/localization 彻底停发，下游只看到"定位没了"却拿不到
+                 * "为什么没的"，本节点自己的输入丢失在遥测里完全不可见。
+                 * 这正是上面那段注释警告的"最贵的失败形态"，但旧代码只在
+                 * "无 lidar 但有 gps/pose"这条路上兑现了，全丢这条路漏了。
+                 * 现在：全丢也照常发一帧，用定位完整性字段如实报
+                 * all_sources_lost，并驱动 DEGRADE_REASON_LOCALIZATION。
+                 * 仍做 predict 推进（纯惯性递推），保持状态连续。 */
+                if (!pose_only && !gps_only) {
+                    ekf_fusion_predict(ekf_);
+                    LocalizationIntegrity loc;
+                    memset(&loc, 0, sizeof(loc));
+                    const uint64_t now_us = clock_now_us();
+                    /* 用"到达时刻"判陈旧：源停了就是停了 */
+                    loc.gps_age_ms   = g.has_gps_ts
+                        ? (double)(now_us - g.gps_ts_us) / 1000.0 : -1.0;
+                    loc.lidar_age_ms = g.has_lidar_ts
+                        ? (double)(now_us - g.lidar_ts_us) / 1000.0 : -1.0;
+                    if (ekf_->update_count + ekf_->gated_count > 0) {
+                        loc.has_gated_ratio = true;
+                        loc.gated_ratio = (double)ekf_->gated_count /
+                                          (double)(ekf_->update_count + ekf_->gated_count);
+                    }
+                    double tr0 = 0.0;
+                    for (int i = 0; i < 5; i++) tr0 += ekf_->P[i * 5 + i];
+                    loc.has_cov_trace = true;
+                    loc.cov_trace = tr0;
+                    localization_assess(&loc);
+
+                    /* 去抖后升级：连续 critical 累计 >= 1s（20Hz 融合节拍）*/
+                    if (loc.critical) {
+                        g.disagree_s += 1.0 / 20.0;
+                        if (localization_should_escalate(g.disagree_s)) {
+                            degrade_set_level(DEGRADE_L2, DEGRADE_REASON_LOCALIZATION);
+                        }
+                    } else {
+                        g.disagree_s = 0.0;
+                    }
+
+                    double x0, y0, v0, h0, yr0, d0[5];
+                    ekf_fusion_get_state(ekf_, &x0, &y0, &v0, &h0, &yr0);
+                    ekf_fusion_get_covariance_diag(ekf_, d0);
+                    cJSON* nroot = cJSON_CreateObject();
+                    cJSON_AddNumberToObject(nroot, "x", x0);
+                    cJSON_AddNumberToObject(nroot, "y", y0);
+                    cJSON_AddNumberToObject(nroot, "v", v0);
+                    cJSON_AddNumberToObject(nroot, "heading", h0);
+                    cJSON_AddNumberToObject(nroot, "yaw_rate", yr0);
+                    cJSON_AddNumberToObject(nroot, "cov_xx", d0[0]);
+                    cJSON_AddNumberToObject(nroot, "cov_yy", d0[1]);
+                    cJSON_AddNumberToObject(nroot, "cov_vv", d0[2]);
+                    cJSON_AddNumberToObject(nroot, "cov_hh", d0[3]);
+                    cJSON_AddNumberToObject(nroot, "cov_yyaw", d0[4]);
+                    cJSON_AddNumberToObject(nroot, "innovation", ekf_->last_innovation);
+                    cJSON_AddBoolToObject(nroot, "diverged", ekf_->diverged != 0);
+                    cJSON_AddBoolToObject(nroot, "degraded_no_lidar", 1);
+                    cJSON_AddBoolToObject(nroot, "loc_trustworthy", loc.trustworthy);
+                    cJSON_AddBoolToObject(nroot, "loc_critical", loc.critical);
+                    cJSON_AddNumberToObject(nroot, "gated_count", (double)ekf_->gated_count);
+                    if (loc.has_gated_ratio)
+                        cJSON_AddNumberToObject(nroot, "gated_ratio", loc.gated_ratio);
+                    cJSON* narr = cJSON_AddArrayToObject(nroot, "loc_reasons");
+                    for (int i = 0; i < loc.reason_count; i++)
+                        cJSON_AddItemToArray(narr, cJSON_CreateString(loc.reasons[i]));
+                    cJSON_AddNumberToObject(nroot, "timestamp_us", (double)clock_now_us());
+                    char* njson = cJSON_PrintUnformatted(nroot);
+                    transport_publish(transport_, "fusion/localization",
+                                      (const uint8_t*)njson, (uint32_t)strlen(njson) + 1);
+                    free(njson);
+                    cJSON_Delete(nroot);
+
+                    if (g.fused_count % 50 == 0) {
+                        LOG_WARN("fusion",
+                                 "ALL localization sources silent (gps=%d lidar=%d) — "
+                                 "publishing all_sources_lost at L2", g.has_gps_ts ? 1 : 0,
+                                 g.has_lidar_ts ? 1 : 0);
+                    }
+                    continue;
+                }
 
                 if (g.fused_count % 50 == 0) {
                     LOG_WARN("fusion",
@@ -203,6 +302,38 @@ protected:
                 cJSON_AddBoolToObject(proot, "diverged", ekf_->diverged != 0);
                 /* 显式标记降级，下游能区分「有位姿的定位」和「漂着的定位」 */
                 cJSON_AddBoolToObject(proot, "degraded_no_lidar", 1);
+                /* L3-P2：本降级分支也必须带定位完整性字段。
+                 * fusion/localization 有**两个**发布点（正常路径 + 本无-lidar
+                 * 降级路径）；只给正常路径加 loc_* 会让"真车配 lidar_driver 未
+                 * 使能"这类场景的完整性在遥测里缺席 —— 与上一轮 control 的
+                 * DATA_TIMEOUT fallback 漏发 debug 是同一类缺陷。 */
+                {
+                    const uint64_t _now = clock_now_us();
+                    LocalizationIntegrity _loc;
+                    memset(&_loc, 0, sizeof(_loc));
+                    _loc.gps_age_ms   = g.has_gps_ts
+                        ? (double)(_now - g.gps_ts_us) / 1000.0 : -1.0;
+                    _loc.lidar_age_ms = g.has_lidar_ts
+                        ? (double)(_now - g.lidar_ts_us) / 1000.0 : -1.0;
+                    if (ekf_->update_count + ekf_->gated_count > 0) {
+                        _loc.has_gated_ratio = true;
+                        _loc.gated_ratio = (double)ekf_->gated_count /
+                                           (double)(ekf_->update_count + ekf_->gated_count);
+                    }
+                    double _tr = 0.0;
+                    for (int i = 0; i < 5; i++) _tr += ekf_->P[i * 5 + i];
+                    _loc.has_cov_trace = true;
+                    _loc.cov_trace = _tr;
+                    localization_assess(&_loc);
+                    cJSON_AddBoolToObject(proot, "loc_trustworthy", _loc.trustworthy);
+                    cJSON_AddBoolToObject(proot, "loc_critical", _loc.critical);
+                    cJSON_AddNumberToObject(proot, "gated_count", (double)ekf_->gated_count);
+                    if (_loc.has_gated_ratio)
+                        cJSON_AddNumberToObject(proot, "gated_ratio", _loc.gated_ratio);
+                    cJSON* _arr = cJSON_AddArrayToObject(proot, "loc_reasons");
+                    for (int i = 0; i < _loc.reason_count; i++)
+                        cJSON_AddItemToArray(_arr, cJSON_CreateString(_loc.reasons[i]));
+                }
                 if (gps_only) {
                     const GpsData* g2 = (const GpsData*)
                         _msg_cast_impl(gps_only, GPSDATA_TYPE_ID, sizeof(GpsData), "GpsData");
@@ -298,6 +429,73 @@ protected:
                 ekf_fusion_reset(ekf_, pos_used_x, pos_used_y);
             }
 
+            /* ── L3-P2 定位完整性交叉校验 ──────────────────────────
+             * 两个独立源互校：LiDAR 位置差分 → 速度/航向，与 GPS 的速度/航向比。
+             * 任一源缺失时对应 check 返回 false（无法判定 ≠ 通过）。
+             * 结果发布到 fusion/localization，并驱动此前**死代码**的
+             * DEGRADE_REASON_LOCALIZATION（定义在 degrade_ladder.h 里但全仓
+             * 无人 set）。去抖：连续不一致累计过阈值才升级，抗单帧噪声。 */
+            LocalizationIntegrity loc;
+            memset(&loc, 0, sizeof(loc));
+            {
+                const uint64_t now_us = clock_now_us();
+                /* 龄期：monitor 需要绝对时基，这里用最近一次到达时间推算 */
+                loc.gps_age_ms   = g.has_gps_ts   ? (double)(now_us - g.gps_ts_us) / 1000.0 : -1.0;
+                loc.lidar_age_ms = g.has_lidar_ts ? (double)(now_us - g.lidar_ts_us) / 1000.0 : -1.0;
+
+                if (lidar) {
+                    const double this_t = (double)now_us / 1e6;
+                    if (g.has_prev_lidar) {
+                        const double dt = this_t - g.prev_lidar_t;
+                        bool sok = false, hok = false;
+                        if (localization_check_speed((double)lidar->x, (double)lidar->y,
+                                                     g.prev_lidar_x, g.prev_lidar_y, dt,
+                                                     gps ? (double)gps->speed_mps : NAN,
+                                                     &sok, nullptr)) {
+                            loc.has_speed_check = true;
+                            loc.speed_ok = sok;
+                        }
+                        if (localization_check_heading((double)lidar->x, (double)lidar->y,
+                                                       g.prev_lidar_x, g.prev_lidar_y,
+                                                       gps ? (double)gps->heading_deg * M_PI / 180.0 : NAN,
+                                                       &hok, nullptr)) {
+                            loc.has_heading_check = true;
+                            loc.heading_ok = hok;
+                        }
+                    }
+                    g.prev_lidar_x = (double)lidar->x;
+                    g.prev_lidar_y = (double)lidar->y;
+                    g.prev_lidar_t = this_t;
+                    g.has_prev_lidar = true;
+                }
+
+                /* 滤波器健康度：gated_count 是 EKF 早已算好却从未发布的诊断量
+                 * （源码注释自己写了"fusion_node 应把它发布出去"）。 */
+                if (ekf_->update_count + ekf_->gated_count > 0) {
+                    loc.has_gated_ratio = true;
+                    loc.gated_ratio = (double)ekf_->gated_count /
+                                      (double)(ekf_->update_count + ekf_->gated_count);
+                }
+                {
+                    double tr = 0.0;
+                    for (int i = 0; i < 5; i++) tr += ekf_->P[i * 5 + i];
+                    loc.has_cov_trace = true;
+                    loc.cov_trace = tr;
+                }
+
+                localization_assess(&loc);
+            }
+
+            /* 去抖后升级：连续 critical 累计 >= 1s 才置降级，避免单帧噪声打降级 */
+            if (loc.critical) {
+                g.disagree_s += (lidar ? 1.0 : 0.0) / 20.0;   /* 融合节拍 20Hz */
+                if (localization_should_escalate(g.disagree_s)) {
+                    degrade_set_level(DEGRADE_L2, DEGRADE_REASON_LOCALIZATION);
+                }
+            } else {
+                g.disagree_s = 0.0;
+            }
+
             /* ── 发布融合结果 (cJSON + 世界坐标) ── */
             cJSON* root = cJSON_CreateObject();
             cJSON_AddNumberToObject(root, "x", x);
@@ -312,6 +510,18 @@ protected:
             cJSON_AddNumberToObject(root, "cov_yyaw", diag[4]);
             cJSON_AddNumberToObject(root, "innovation", ekf_->last_innovation);
             cJSON_AddBoolToObject(root, "diverged", ekf_->diverged);
+            /* L3-P2 定位完整性：供 monitor 透传 + 评估器/门禁断言。
+             * trustworthy=false 表示定位结果不可用于驾驶（已去抖）。 */
+            cJSON_AddBoolToObject(root, "loc_trustworthy", loc.trustworthy);
+            cJSON_AddBoolToObject(root, "loc_critical", loc.critical);
+            cJSON_AddNumberToObject(root, "gated_count", (double)ekf_->gated_count);
+            if (loc.has_gated_ratio)
+                cJSON_AddNumberToObject(root, "gated_ratio", loc.gated_ratio);
+            {
+                cJSON* arr = cJSON_AddArrayToObject(root, "loc_reasons");
+                for (int i = 0; i < loc.reason_count; i++)
+                    cJSON_AddItemToArray(arr, cJSON_CreateString(loc.reasons[i]));
+            }
             /* raw sensor for debugging */
             if (lidar) {
                 cJSON_AddNumberToObject(root, "raw_pos_x", lidar->x);

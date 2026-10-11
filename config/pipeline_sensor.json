@@ -458,6 +458,7 @@
         "perception/obstacles",
         "vehicle/state",
         "fusion/latency",
+        "fusion/localization",
         "flowengine/node_info",
         "planning/trajectory",
         "road/geometry",
