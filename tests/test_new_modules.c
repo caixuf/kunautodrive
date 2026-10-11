@@ -8,6 +8,8 @@
 #include "serializer.h"
 #include "state_machine.h"
 #include "message_bus.h"
+#include "adas_msgs_gen.h"
+#include "radar_model.h"
 #include "error_codes.h"
 #include "task_manager.h"
 #include "ipc_channel.h"
@@ -867,6 +869,68 @@ static void test_param_registry_bridge(void) {
     PASS();
 }
 
+
+/* ══════════════════════════════════════════════════════════ */
+/* L3-P2 冗余：雷达帧经真实总线往返（组帧→序列化→反序列化）      */
+/* ══════════════════════════════════════════════════════════ */
+static RadarFrame g_radar_rx;
+static int        g_radar_rx_count;
+
+static void on_radar_frame(const Message* msg, void* ud) {
+    (void)ud;
+    const RadarFrame* f = (const RadarFrame*)_msg_cast_impl(
+        msg, RADARFRAME_TYPE_ID, sizeof(RadarFrame), "RadarFrame");
+    if (!f) return;
+    g_radar_rx = *f;
+    g_radar_rx_count++;
+}
+
+static void test_radar_frame_roundtrip(void) {
+    TEST("radar: 组帧→总线往返（目标内容保持不变）");
+    MessageBus* bus = message_bus_create("test_radar");
+    ASSERT(bus != NULL, "bus create");
+
+    g_radar_rx_count = 0;
+    memset(&g_radar_rx, 0, sizeof(g_radar_rx));
+    message_bus_subscribe(bus, "sensor/radar", on_radar_frame, NULL);
+
+    RadarConfig cfg = { .range_max_m = 200.0, .hfov_deg = 90.0,
+                        .range_noise_std_m = 0.0, .azimuth_noise_std_deg = 0.0 };
+    RadarEgo ego = { .x = 0.0, .y = 0.0, .heading = 0.0, .speed = 12.0 };
+    RadarObsTarget t[2] = {
+        { .x = 40.0, .y = 2.0, .length = 4.0, .width = 2.0 },
+        { .x = 90.0, .y = -3.0, .length = 4.0, .width = 2.0 },
+    };
+    RadarFrame frame;
+    uint64_t rng = 42;
+    const uint32_t n = radar_build_frame(&cfg, &ego, t, 2, 0.0, &rng, &frame);
+    frame.frame_id = 7;
+    frame.timestamp_us = 123456789ULL;
+    frame.sensor_id = 0;
+    frame.reserved = 0;
+    ASSERT(n == 2, "two targets within range/FOV must be built");
+
+    Message m;
+    msg_init_typed(&m, "sensor/radar", "test", RADARFRAME_TYPE_ID,
+                   RADARFRAME_SCHEMA_VERSION, &frame, sizeof(frame));
+    ASSERT(message_bus_publish(bus, "sensor/radar", "test", m.data, m.data_size) == 0,
+          "publish radar frame");
+
+    for (int i = 0; i < 50 && g_radar_rx_count == 0; i++) usleep(2000);
+    ASSERT(g_radar_rx_count == 1, "subscriber must receive exactly one frame");
+    ASSERT(g_radar_rx.count == 2, "received frame must carry 2 targets");
+    ASSERT(g_radar_rx.frame_id == 7, "frame_id must survive the round trip");
+    ASSERT(g_radar_rx.timestamp_us == 123456789ULL, "timestamp must survive");
+    ASSERT(fabs((double)g_radar_rx.targets[0].range_m - 40.0) < 0.05,
+          "first target range must survive the round trip");
+    ASSERT(fabs((double)g_radar_rx.targets[0].azimuth_deg -
+               (float)(atan2(2.0, 40.0) * 180.0 / M_PI)) < 0.05,
+          "first target azimuth must survive the round trip");
+
+    message_bus_destroy(bus);
+    PASS();
+}
+
 /* ══════════════════════════════════════════════════════════ */
 /* Main                                                        */
 /* ══════════════════════════════════════════════════════════ */
@@ -877,6 +941,9 @@ int main(void) {
     printf("\xE2\x95\x9A\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x9D\n");
 
     /* ── Message Bus ────────────────────────── */
+    printf("\n═══ L3-P2 Radar (L3 冗余：帧往返) ═══\n");
+    test_radar_frame_roundtrip();
+
     printf("\n═══ Message Bus / Basic ═══\n");
     test_bus_pub_sub_basic();
     test_bus_pub_sub_multi();

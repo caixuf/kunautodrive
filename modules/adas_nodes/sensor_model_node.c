@@ -12,7 +12,8 @@
 #include "adas_msgs_gen.h"
 #include "nmea_parser.h"
 #include "sensor_model_weather.h"   /* 可见度/天气 → 衰减（与单测共用） */
-#include "lidar_scan.h"             /* mode=1 3D 观测模型（与单测共用） */
+#include "lidar_scan.h"
+#include "radar_model.h"             /* L3-P2 冗余：雷达观测模型（header-only） */             /* mode=1 3D 观测模型（与单测共用） */
 #include "transport.h"
 #include "discovery.h"
 #include "topic_registry.h"
@@ -72,6 +73,18 @@ static struct {
     double lidar_noise_rel;  /* 相对测距噪声（1σ 增量/米） */
     uint64_t scan_rng;   /* lidar_scan 自持 RNG 状态（不碰全局 rand） */
     double camera_visibility_factor;
+
+    /* ── L3-P2 冗余：毫米波雷达 ──
+     * 与 LiDAR/相机互补：测距远、不受光照/恶劣天气影响，但角分辨率低。
+     * enable_radar 默认 0（默认管线**零行为变化**），由 pipeline params 打开。 */
+    int    enable_radar;
+    double radar_max_range_m;
+    double radar_fov_deg;
+    double radar_rate_hz;
+    double radar_range_noise_m;
+    double radar_azimuth_noise_deg;
+    uint64_t radar_rng;
+    uint64_t last_radar_us;
     char   weather[32];
     double weather_attenuation;  /* 0.0=clear, 0.5=moderate rain/fog, 1.0=dense fog */
 
@@ -325,6 +338,47 @@ static void on_environment_state(const Message* msg, void* user_data) {
     cJSON_Delete(root);
 }
 
+/* ── L3-P2 冗余：毫米波雷达 ────────────────────────────────────────
+ * 观测模型已抽离到 modules/adas_nodes/radar_model.h（header-only），
+ * 使本节点与单测链接**同一份实现**，无副本漂移（与 lidar_scan /
+ * sensor_model_weather 同一策略）。这里只负责组帧 + 发布。 */
+static uint32_t publish_radar_targets(uint64_t timestamp_us) {
+    RadarConfig cfg = {
+        .range_max_m           = g.radar_max_range_m,
+        .hfov_deg              = g.radar_fov_deg,
+        .range_noise_std_m     = g.radar_range_noise_m,
+        .azimuth_noise_std_deg = g.radar_azimuth_noise_deg,
+    };
+    RadarEgo ego = {
+        .x = g.ego_x, .y = g.ego_y,
+        .heading = g.ego_heading, .speed = g.ego_speed,
+    };
+    RadarObsTarget targets[128];
+    const int n_obs = (g.n_obs > 0 && g.n_obs <= 128) ? g.n_obs : 0;
+    for (int i = 0; i < n_obs; i++) {
+        targets[i].x = g.obs_x[i];
+        targets[i].y = g.obs_y[i];
+        targets[i].length = g.obs_length[i];
+        targets[i].width = g.obs_width[i];
+    }
+
+    static RadarFrame frame;   /* ~1KB，静态避免栈压力 */
+    const uint32_t n = radar_build_frame(&cfg, &ego, targets, n_obs,
+                                         g.weather_attenuation, &g.radar_rng,
+                                         &frame);
+    frame.frame_id     = g.frame_id;
+    frame.timestamp_us = timestamp_us;
+    frame.sensor_id    = 0;
+    frame.reserved     = 0;
+
+    Message msg;
+    msg_init_typed(&msg, "sensor/radar", "sensor_model",
+                   RADARFRAME_TYPE_ID, RADARFRAME_SCHEMA_VERSION,
+                   &frame, sizeof(frame));
+    transport_publish(g.transport, "sensor/radar", msg.data, msg.data_size);
+    return n;
+}
+
 static uint32_t estimate_visible_point_count(void) {
     double vis_r[128], vis_a[128];
     int vis_count = 0;
@@ -450,6 +504,16 @@ static int sensor_model_execute(TaskBase* task) {
             transport_publish(g.transport, "sensor/camera", cmsg.data, cmsg.data_size);
         }
 
+        /* L3-P2：毫米波雷达（默认关闭；开启后按 radar_rate_hz 限频发布） */
+        if (g.enable_radar) {
+            const double period = 1e6 / (g.radar_rate_hz > 0.0 ? g.radar_rate_hz : 20.0);
+            if (g.last_radar_us == 0 ||
+                (double)(clock_now_us() - g.last_radar_us) >= period) {
+                g.last_radar_us = clock_now_us();
+                (void)publish_radar_targets(g.last_radar_us);
+            }
+        }
+
         g.frame_id++;
     }
 
@@ -465,7 +529,8 @@ static const TaskInterface sensor_model_vtable = {
 };
 
 static const char* s_inputs[] = {"vehicle/state", "environment/state", NULL};
-static const char* s_outputs[] = {"sensor/lidar", "sensor/lidar_points", "sensor/gps", "sensor/camera", NULL};
+static const char* s_outputs[] = {"sensor/lidar", "sensor/lidar_points", "sensor/gps", "sensor/camera",
+                                  "sensor/radar", NULL};   /* L3-P2 冗余 */
 
 static NodePlugin s_plugin;
 
@@ -484,6 +549,13 @@ static int sensor_model_init(MessageBus* bus, Transport* transport,
     g.lidar_max_range_m = 60.0;
     g.obs_noise_std_m = 0.08;
     g.camera_visibility_factor = 1.0;
+    g.enable_radar            = 0;      /* 默认关闭：不加雷达的管线行为零变化 */
+    g.radar_max_range_m       = 200.0;
+    g.radar_fov_deg           = 90.0;
+    g.radar_rate_hz           = 20.0;
+    g.radar_range_noise_m     = 0.5;
+    g.radar_azimuth_noise_deg = 1.0;
+    g.radar_rng               = 0x9E3779B97F4A7C15ULL;
     g.enable_simple_occlusion = 1;
     g.lidar_mode = 0;  /* 默认关闭：保持旧 LidarFrame 行为不变 */
     /* mode=1 的 3D 扫描规格。这些默认值只在 lidar_mode=1 且参数缺省时生效，
@@ -531,6 +603,19 @@ static int sensor_model_init(MessageBus* bus, Transport* transport,
                 g.scan_rng = lidar_scan_rng_seed((uint32_t)j->valuedouble);
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "gps_nmea_file")) && cJSON_IsString(j))
                 strncpy(g.gps_nmea_file, j->valuestring, sizeof(g.gps_nmea_file) - 1);
+            /* L3-P2 冗余：毫米波雷达（默认关，见 g.enable_radar 注释） */
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "enable_radar")) && cJSON_IsNumber(j))
+                g.enable_radar = j->valueint ? 1 : 0;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "radar_max_range_m")) && cJSON_IsNumber(j))
+                g.radar_max_range_m = j->valuedouble;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "radar_fov_deg")) && cJSON_IsNumber(j))
+                g.radar_fov_deg = j->valuedouble;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "radar_rate_hz")) && cJSON_IsNumber(j))
+                g.radar_rate_hz = j->valuedouble;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "radar_range_noise_m")) && cJSON_IsNumber(j))
+                g.radar_range_noise_m = j->valuedouble;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "radar_azimuth_noise_deg")) && cJSON_IsNumber(j))
+                g.radar_azimuth_noise_deg = j->valuedouble;
             cJSON_Delete(p);
         }
     }
@@ -557,6 +642,11 @@ static int sensor_model_init(MessageBus* bus, Transport* transport,
                         CAP_PUBLISHER, (double)g.lidar_rate_hz);
     discovery_advertise(discovery, "sensor/gps", GPSDATA_TYPE_ID, CAP_PUBLISHER, 10.0);
     discovery_advertise(discovery, "sensor/camera", LIDARFRAME_TYPE_ID, CAP_PUBLISHER, 6.0);
+    /* L3-P2 冗余：雷达只在 enable_radar 时真正发布，但**始终 advertise**，
+     * 让拓扑/契约检查能看到这条链路存在（否则 topic-contract gate 会因
+     * pipeline 里的 publish 声明与 s_outputs 不一致而报错）。 */
+    discovery_advertise(discovery, "sensor/radar", RADARFRAME_TYPE_ID, CAP_PUBLISHER,
+                        g.radar_rate_hz > 0.0 ? g.radar_rate_hz : 20.0);
 
     transport_advertise(transport, "sensor/lidar", LIDARFRAME_TYPE_ID);
     /* 类型注册：consumer 端 deserialize 依赖 advertise 里的 type_id（transport_publish
@@ -565,6 +655,7 @@ static int sensor_model_init(MessageBus* bus, Transport* transport,
     transport_advertise(transport, TOPIC_SENSOR_LIDAR_POINTS, LIDARPOINTCLOUD_TYPE_ID);
     transport_advertise(transport, "sensor/gps", GPSDATA_TYPE_ID);
     transport_advertise(transport, "sensor/camera", LIDARFRAME_TYPE_ID);
+    transport_advertise(transport, "sensor/radar", RADARFRAME_TYPE_ID);
 
     /* 托管模式：初始化嵌入的 TaskBase 并挂上 vtable。s_plugin.taskbase 在
      * 静态初始化里已指向 &g.taskbase，故此处只需填好其内容。max_frequency_hz

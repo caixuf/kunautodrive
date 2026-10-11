@@ -1061,9 +1061,10 @@ endif()
 
 # ── 新增模块单元测试（Task Manager / IPC / Discovery / Bag / FlowRegistry）──
 add_executable(test_new_modules tests/test_new_modules.c)
-target_link_libraries(test_new_modules flowengine_core)
+target_link_libraries(test_new_modules flowengine_core m)
 add_dependencies(test_new_modules msg_codegen)
-target_include_directories(test_new_modules PRIVATE ${GEN_DIR})
+target_include_directories(test_new_modules PRIVATE ${GEN_DIR}
+                                                    modules/adas_nodes)
 
 add_test(NAME new_module_tests COMMAND test_new_modules)
 set_tests_properties(new_module_tests PROPERTIES TIMEOUT 10)

@@ -454,8 +454,31 @@ supervisor 有完整的递进策略（L1/L2/L3 + 去抖 + 自动恢复），但*
 **门禁有效性自检（本项特别做了 A/B）**：把 `DEGRADE_MAX_NODES` 改回 16 重编译，
 新增的 4 条断言**全部 FAIL**；还原为 32 后 PASS —— 证明这些断言不是恒真摆设。
 
-**P2 遗留**：雷达传感器模型仍缺失（`sensor_model` 只有 lidar/gps/camera，
-全仓无 radar）。
+### P2 进展（2026-10-11，第五刀：雷达传感器模型）
+
+P2 的「冗余（**雷达模型**、…）」是最后一块空白：`sensor_model` 只有 lidar/gps/camera，
+全仓**无 radar**。相机在夜间/逆光/恶劣天气显著退化、LiDAR 量程有限（默认 60m），
+两者退化模式**相同方向**（都是"看不见"）；雷达补的正是这块短板。
+
+| 项 | 状态 | 落地 |
+|----|------|------|
+| IDL 类型 | ✅ 完成 | `msg/adas_msgs.msg` 新增 `RadarTarget`（距离/方位/径向速度/RCS）+ `RadarFrame`（64 目标/帧）。**刻意设计字段顺序 + 显式 `reserved`**，使 wire size == struct size == 1048 —— 新增类型**不必**再往 `KNOWN_MISMATCHES` 里加一条（这是 `msg_layout_check.py` 当场抓出来的：原顺序下 wire=1044/struct=1048） |
+| 观测模型 | ✅ 完成 | `modules/adas_nodes/radar_model.h`（header-only）。抽离成独立模块而非留在 `sensor_model_node.c` 里做 static —— 与 `lidar_scan` / `sensor_model_weather` 同一策略：**节点与单测链接同一份实现，无副本漂移** |
+| 节点接线 | ✅ 完成 | `sensor_model` 新增 `sensor/radar` 发布（含 advertise）。`enable_radar` **默认 0** → 不加雷达的管线**行为零变化**（三份 pipeline 均只加声明与参数，不开开关） |
+| 与 LiDAR 的差异（为何是冗余而非重复） | ✅ 完成 | 量程 200m vs 60m；只报方位角（无高度）→ 目标数远少于点云；报**径向速度**（LiDAR 单帧点云没有的直接量测）；**天气只衰减 RCS 幅度、不影响可达性** |
+| 单测 | ✅ 完成 | 8 条雷达几何单测（量程/FOV 门限、方位角以车头为基准、径向速度符号、目标数截断容量守卫、同种子可复现）+ 1 条**经真实总线往返**测试（组帧→序列化→反序列化后目标内容不变） |
+
+**最关键的断言**（写在单测里，是本项的**设计意图**而非附带检查）：
+`test_radar_survives_bad_weather` —— 恶劣天气下雷达**仍报同一目标**（只降 RCS 幅度），
+而相机可见度会被**乘性衰减**。这正是 P2 要的"任一模态退化时剩余模态仍能支撑安全"。
+
+**验证**：40 ctest 全绿（`test_adas_nodes_logic` 87→95 项、`test_new_modules` 新增
+总线往返）；9 条静态 gate 全绿（含 `msg_layout` — 新类型**零** padding 失配）；
+实跑 `enable_radar=1` 时 `sensor/radar` 稳定 ~10Hz（182 帧/18s）；
+`scenario_regression --baseline` 11/11 PASS 0 回归。
+
+**P2 遗留**：法规场景库仍不完整（缺 UN R157 要求的 cut-in / cut-out / 静止障碍 /
+传感器失效注入四类）；另有"感知降级后系统行为是否仍安全"的专项判据。
 
 
 ## 与近期工作的关系

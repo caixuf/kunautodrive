@@ -37,6 +37,7 @@
 #include "safety_arbiter.h"
 #include "traj_safety.h"
 #include "lidar_scan.h"
+#include "radar_model.h"
 #include "lidar_contract.h"
 
 /* D2-04 / D2-05 M3: lane_match 10 字段契约 -> 抽出 helper 到 flowsim/lane_match_helpers.h。
@@ -1725,6 +1726,166 @@ static void test_traffic_density_lane_slot(void) {
     PASS();
 }
 
+
+/* ══════════════════════════════════════════════════════════════
+ * L3-P2 冗余：毫米波雷达观测模型（radar_model.h）
+ *
+ * 与 lidar_scan 同一策略：节点与单测链接同一份实现，无副本漂移。
+ * ══════════════════════════════════════════════════════════════ */
+
+static RadarConfig radar_cfg_default(void) {
+    RadarConfig c;
+    c.range_max_m = 200.0;
+    c.hfov_deg = 90.0;
+    c.range_noise_std_m = 0.0;        /* 默认去噪：先验纯几何 */
+    c.azimuth_noise_std_deg = 0.0;
+    return c;
+}
+
+static RadarEgo radar_ego_at_origin(void) {
+    RadarEgo e;
+    e.x = 0.0; e.y = 0.0; e.heading = 0.0; e.speed = 0.0;
+    return e;
+}
+
+/* 正前方目标：距离/方位必须正确 */
+static void test_radar_target_ahead(void) {
+    TEST("radar: 正前方 50m 目标 → range=50 az=0");
+    RadarConfig cfg = radar_cfg_default();
+    RadarEgo ego = radar_ego_at_origin();
+    RadarObsTarget t = { .x = 50.0, .y = 0.0, .length = 4.0, .width = 2.0 };
+    RadarFrame f;
+    uint64_t rng = 1;
+    const uint32_t n = radar_build_frame(&cfg, &ego, &t, 1, 0.0, &rng, &f);
+    ASSERT(n == 1, "ahead target within range must be detected");
+    ASSERT_EQ(f.count, 1, "frame count must match returned count");
+    ASSERT_NEAR((double)f.targets[0].range_m, 50.0, 0.01,
+                "range must equal 50m with zero noise");
+    ASSERT_NEAR((double)f.targets[0].azimuth_deg, 0.0, 0.01,
+                "ahead target azimuth must be 0 deg");
+    PASS();
+}
+
+/* 量程外必须不报（雷达量程是硬边界） */
+static void test_radar_range_gate(void) {
+    TEST("radar: 量程外目标不报（range_max 硬边界）");
+    RadarConfig cfg = radar_cfg_default();
+    RadarEgo ego = radar_ego_at_origin();
+    RadarObsTarget t = { .x = 250.0, .y = 0.0, .length = 4.0, .width = 2.0 };
+    RadarFrame f;
+    uint64_t rng = 1;
+    const uint32_t n = radar_build_frame(&cfg, &ego, &t, 1, 0.0, &rng, &f);
+    ASSERT_EQ(n, 0, "target beyond range_max must NOT be reported");
+    PASS();
+}
+
+/* FOV 外必须不报 */
+static void test_radar_fov_gate(void) {
+    TEST("radar: FOV 边界（60° 不报 / 30° 报，半角 45°）");
+    RadarConfig cfg = radar_cfg_default();
+    RadarEgo ego = radar_ego_at_origin();
+    RadarFrame f;
+    uint64_t rng = 1;
+    RadarObsTarget out = { .x = 10.0, .y = 10.0 * tan(60.0 * M_PI / 180.0),
+                           .length = 4.0, .width = 2.0 };
+    ASSERT_EQ(radar_build_frame(&cfg, &ego, &out, 1, 0.0, &rng, &f), 0,
+              "target outside half-FOV must NOT be reported");
+    RadarObsTarget in = { .x = 10.0, .y = 10.0 * tan(30.0 * M_PI / 180.0),
+                          .length = 4.0, .width = 2.0 };
+    ASSERT_EQ(radar_build_frame(&cfg, &ego, &in, 1, 0.0, &rng, &f), 1,
+              "target inside half-FOV must be reported");
+    PASS();
+}
+
+/* 方位角以**车头**为基准：ego 转 90 度后，正前方目标方位仍为 0 */
+static void test_radar_azimuth_relative_to_heading(void) {
+    TEST("radar: 方位角以车头为基准（非世界轴）");
+    RadarConfig cfg = radar_cfg_default();
+    RadarEgo ego = radar_ego_at_origin();
+    ego.heading = M_PI / 2.0;            /* 车头朝 +y */
+    RadarObsTarget t = { .x = 0.0, .y = 40.0, .length = 4.0, .width = 2.0 };
+    RadarFrame f;
+    uint64_t rng = 1;
+    ASSERT_EQ(radar_build_frame(&cfg, &ego, &t, 1, 0.0, &rng, &f), 1,
+              "target ahead of a +y-heading ego must be detected");
+    ASSERT_NEAR((double)f.targets[0].azimuth_deg, 0.0, 0.01,
+                "azimuth must be relative to heading, not world axis");
+    PASS();
+}
+
+/* 径向速度符号：本车朝静止目标前进 → 目标在逼近 → range_rate 为负 */
+static void test_radar_range_rate_sign(void) {
+    TEST("radar: 逼近目标 range_rate 为负（≈ -ego speed）");
+    RadarConfig cfg = radar_cfg_default();
+    RadarEgo ego = radar_ego_at_origin();
+    ego.speed = 10.0;                    /* 朝 +x 前进 */
+    RadarObsTarget t = { .x = 50.0, .y = 0.0, .length = 4.0, .width = 2.0 };
+    RadarFrame f;
+    uint64_t rng = 1;
+    (void)radar_build_frame(&cfg, &ego, &t, 1, 0.0, &rng, &f);
+    ASSERT(f.targets[0].range_rate_mps < -9.0,
+           "approaching target must have negative range_rate (~-ego speed)");
+    PASS();
+}
+
+/* 冗余核心断言：恶劣天气下雷达仍报同一目标（相机可见度会被乘性衰减，
+ * 雷达只降 RCS 幅度）—— 这正是"任一模态退化时剩余模态仍能支撑安全"。 */
+static void test_radar_survives_bad_weather(void) {
+    TEST("radar: 恶劣天气下仍报目标（冗余核心）");
+    RadarConfig cfg = radar_cfg_default();
+    RadarEgo ego = radar_ego_at_origin();
+    RadarObsTarget t = { .x = 80.0, .y = 0.0, .length = 4.0, .width = 2.0 };
+    RadarFrame f_clear, f_storm;
+    uint64_t rng1 = 1, rng2 = 1;
+    const uint32_t n_clear = radar_build_frame(&cfg, &ego, &t, 1, 0.0, &rng1, &f_clear);
+    const uint32_t n_storm = radar_build_frame(&cfg, &ego, &t, 1, 1.0, &rng2, &f_storm);
+    ASSERT(n_clear == 1 && n_storm == 1,
+           "radar must detect the SAME target in clear weather and in a storm");
+    ASSERT(f_storm.targets[0].rcs_dbsm < f_clear.targets[0].rcs_dbsm,
+           "weather must attenuate RCS magnitude (but not reachability)");
+    PASS();
+}
+
+/* 目标数上限：超出 RADAR_MAX_TARGETS 必须截断而非越界写 */
+static void test_radar_target_capacity(void) {
+    TEST("radar: 目标数截断到 RADAR_MAX_TARGETS（容量守卫）");
+    RadarConfig cfg = radar_cfg_default();
+    cfg.range_max_m = 1000.0;
+    cfg.hfov_deg = 360.0;
+    RadarEgo ego = radar_ego_at_origin();
+    RadarObsTarget targets[128];
+    for (int i = 0; i < 128; i++) {
+        targets[i].x = 10.0 + (double)i;
+        targets[i].y = 0.0;
+        targets[i].length = 4.0;
+        targets[i].width = 2.0;
+    }
+    RadarFrame f;
+    uint64_t rng = 1;
+    const uint32_t n = radar_build_frame(&cfg, &ego, targets, 128, 0.0, &rng, &f);
+    ASSERT_EQ(n, RADAR_MAX_TARGETS, "must clamp to RADAR_MAX_TARGETS");
+    ASSERT_EQ(f.count, RADAR_MAX_TARGETS, "frame count must be clamped too");
+    PASS();
+}
+
+/* 确定性：同一 RNG 种子两次生成必须一致（可复现才能做门禁） */
+static void test_radar_deterministic(void) {
+    TEST("radar: 同种子可复现（确定性）");
+    RadarConfig cfg = radar_cfg_default();
+    cfg.range_noise_std_m = 0.5;         /* 打开噪声 */
+    cfg.azimuth_noise_std_deg = 1.0;
+    RadarEgo ego = radar_ego_at_origin();
+    RadarObsTarget t = { .x = 60.0, .y = 5.0, .length = 4.0, .width = 2.0 };
+    RadarFrame a, b;
+    uint64_t r1 = 12345, r2 = 12345;
+    (void)radar_build_frame(&cfg, &ego, &t, 1, 0.0, &r1, &a);
+    (void)radar_build_frame(&cfg, &ego, &t, 1, 0.0, &r2, &b);
+    ASSERT(a.targets[0].range_m == b.targets[0].range_m &&
+           a.targets[0].azimuth_deg == b.targets[0].azimuth_deg,
+           "same RNG seed must produce identical measurements");
+    PASS();
+}
+
 int main(void) {
     printf("\n╔══════════════════════════════════════════╗\n");
     printf("║  FlowEngine ADAS Nodes Logic Tests        ║\n");
@@ -1748,6 +1909,16 @@ int main(void) {
     test_slam_circle_pose_convergence_flag();
     test_slam_heading_normalize_basic();
     test_slam_heading_normalize_in_range();
+
+    printf("\n═══ Radar model (L3-P2 冗余：量程/FOV/方位/天气/容量) ═══\n");
+    test_radar_target_ahead();
+    test_radar_range_gate();
+    test_radar_fov_gate();
+    test_radar_azimuth_relative_to_heading();
+    test_radar_range_rate_sign();
+    test_radar_survives_bad_weather();
+    test_radar_target_capacity();
+    test_radar_deterministic();
 
     printf("\n═══ Actuator PWM (ControlCmd → PWM mapping) ═══\n");
     test_pwm_throttle_full_forward();

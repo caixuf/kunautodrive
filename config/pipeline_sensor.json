@@ -133,9 +133,19 @@
             "policy": "drop_oldest",
             "reliability": "best_effort"
           }
+        },
+        {
+          "topic": "sensor/radar",
+          "type": "RadarFrame",
+          "qos": {
+            "depth": 2,
+            "policy": "drop_oldest",
+            "reliability": "best_effort",
+            "deadline_ms": 50
+          }
         }
       ],
-      "params": "{\"lidar_rate_hz\": 20, \"lidar_fov_deg\": 120.0, \"lidar_max_range_m\": 120.0, \"obs_noise_std_m\": 0.08, \"enable_simple_occlusion\": 1, \"lidar_mode\": 1, \"lidar_azimuth_rays\": 720, \"lidar_channels\": 32, \"lidar_vfov_min_deg\": -20.0, \"lidar_vfov_max_deg\": 2.0, \"lidar_height_m\": 1.8, \"lidar_noise_rel\": 0.002}"
+      "params": "{\"lidar_rate_hz\": 20, \"lidar_fov_deg\": 120.0, \"lidar_max_range_m\": 120.0, \"obs_noise_std_m\": 0.08, \"enable_simple_occlusion\": 1, \"lidar_mode\": 1, \"lidar_azimuth_rays\": 720, \"lidar_channels\": 32, \"lidar_vfov_min_deg\": -20.0, \"lidar_vfov_max_deg\": 2.0, \"lidar_height_m\": 1.8, \"lidar_noise_rel\": 0.002, \"enable_radar\": 0, \"radar_max_range_m\": 200.0, \"radar_fov_deg\": 90.0, \"radar_rate_hz\": 20.0}"
     },
     {
       "name": "perception",

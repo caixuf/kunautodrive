@@ -37,8 +37,8 @@
 | 3 | 仿真 / 几何 / NPC | 7 |
 | 4 | 仪表盘 / 监控 / 前端 | 9 |
 | 5 | 评估器 / 门禁 | 5 |
-| 6 | 框架 / 工具链 | 3 |
-| | **合计** | **60** |
+| 6 | 框架 / 工具链 | 4 |
+| | **合计** | **61** |
 
 ## 1. 控制 / 规划 / 安全层
 
@@ -79,6 +79,7 @@
 
 | **安全闸门/感知链掉线无人发现**：`safety_control`、`sensor_model`、`perception`、`object_tracker`、`behavior_planner` 全部静默，而 `metrics.degrade` 显示"心跳都健康" | supervisor 的递进策略（L1/L2/L3+去抖+自动恢复）本身完整，但**只有 3 个节点上报心跳**（control/fusion/planning）—— 覆盖面而非机制的问题。`safety_control` 是最后一层保护，它掉线最不该无人发现。修复：新增 5 个上报点，覆盖面 3→8；并给 `reason_for_node` 补感知链映射（`sensor_model`/`perception`/`object_tracker` → `sensor_timeout`），否则感知掉线会报 `control_timeout` 把人指向明明在跑的 control | `degrade_ladder.c` `reason_for_node` + 各节点的 `degrade_supervisor_record_heartbeat` |
 | **第 17 个节点起的心跳被静默丢弃**，而默认 `pipeline.json` 恰好有 19 个节点 → 运维侧看到"心跳都健康"的假绿 | `DEGRADE_MAX_NODES` 为 16，`degrade_supervisor_record_heartbeat` 在表满时直接 `return`（**不报错**）。这是本仓库反复出现的"最贵的失败形态"：静默截断被当成正常。修复：上限 16→32（与 `HEALTH_MAX_NODES` 对齐），表满改 `LOG_ERROR` 点名（带防刷屏） | `include/degrade_ladder.h` `DEGRADE_MAX_NODES` / `degrade_ladder.c` 心跳注册分支 |
+
 
 ## 2. 感知 / 点云
 
@@ -145,3 +146,4 @@
 | 场景 JSON 里写了 `odd` / `driver` 注入块，但 ODD 判据从未触发（`l3_odd_exit_*` 场景必 FAIL，`odd.violations` 里只有 `route_stale` 没有 `visibility`） | **`demo.sh` 的 `scenario_file` sed 漏 patch 新节点**：`odd_monitor` / `tor_manager` 的 `params` 被写成 compact 形式 `"scenario_file":"..."`（冒号后**无空格**），而 sed 模式 `\"scenario_file\": \"` 强制要求一个空格 → 这两节点永远拿不到 `--scenario` 指定的场景，注入块静默失效。同一类漏洞也在 `demo_evaluator.pipeline_scenario_override` 的白名单里（只含 flowsim/planning/navigation/control）。修复：sed 改 `\\\": *\\\"`（零或多个空白）+ 白名单补两节点。**通用教训**：给 pipeline 节点加 `scenario_file` 参数时，params 的序列化风格（有无空格）必须与 `demo.sh`/评估器的 patcher 兼容，否则新节点会静默读旧场景 | `scripts/demo.sh` scenario patch sed / `ci/evaluators/demo_evaluator.py` `pipeline_scenario_override` |
 | 8 个节点线程各占满一个核 | 裸 `while(!stop) ex.run();` 忙等；`idle_sleep_us` 只被零调用者的 `run_blocking()` 读取。改用 `node_pump()` | `coroutine_task.h` node_pump |
 | 管道检查 topics 列表缺 perception/obstacles | `monitor_node.c` 的 `TopicStats tstats[16]` 只能装 16 个 topic，第 17 个静默丢弃。扩到 64 | `monitor_node.c:1304` |
+| 新增 IDL 类型后 `msg_layout_check` 报 `wire=N struct=N+4`，构建通过但序列化/直读两套约定不一致 | `msg_codegen` 的 wire size 是字段尺寸朴素累加（无 padding），C 结构体按自然对齐插 padding。把 `uint64` 放结构体中间就会失配（实测 RadarFrame 原顺序 wire=1044/struct=1048）。**两种修法**：① 加进 `KNOWN_MISMATCHES` 记录既有失配；② **更好的修法**是从设计上消除它 —— 调整字段顺序（大对齐成员前置）+ 显式 `reserved` 填平尾部，使 wire == struct。新增类型优先 ②，别让已知失配表继续变长 | `msg/adas_msgs.msg` 新类型字段布局 / `ci/gates/msg_layout_check.py` |

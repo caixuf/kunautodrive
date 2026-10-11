@@ -64,6 +64,34 @@ struct LidarPointCloud {
     LidarPoint points[2048]
 }
 
+# 毫米波雷达（L3-P2 冗余：夜间/逆光/恶劣天气下补视觉短板）
+# 与 LiDAR 互补：雷达测距远（~200m）、不受光照影响，但角分辨率低、无高度信息。
+# 一个 RadarTarget = 一个检测点（距离/方位/径向速度/幅度）。
+struct RadarTarget {
+    float    range_m        # 径向距离（米）
+    float    azimuth_deg    # 方位角（度，正=左）
+    float    range_rate_mps # 径向速度（m/s，正=远离）
+    float    rcs_dbsm       # 雷达截面积（dBsm，幅度代理）
+}
+
+# 雷达帧：固定 64 目标/帧。
+#
+# ⚠️ 字段顺序 + 显式 `reserved` 是刻意设计，**勿随手重排**：
+#   msg_codegen 的 wire size 是各字段尺寸的朴素累加（无 padding），而 C 结构体
+#   按自然对齐插入 padding。若把 uint64 放中间，wire=1044 而 struct=1048 →
+#   size 不一致（见 ci/gates/msg_layout_check.py 的既有 13 类）。
+#   这里把 uint64 放**首位**、并显式补一个 uint32 reserved 填平尾部对齐，
+#   使 wire == struct == 1048 —— 新增类型不必再往 KNOWN_MISMATCHES 里加一条。
+#   reserved 同时留作后续扩展（如 radar 模式/健康位）。
+struct RadarFrame {
+    uint64   timestamp_us   # 采样时间戳（微秒，CLOCK_MONOTONIC）
+    uint32   frame_id
+    uint32   count          # 有效目标数
+    uint32   sensor_id      # 传感器编号（多雷达时区分）
+    uint32   reserved       # 对齐填充 + 扩展位（见上方注释）
+    RadarTarget targets[64]
+}
+
 struct GpsData {
     float64  latitude       # 纬度（度）
     float64  longitude      # 经度（度）
