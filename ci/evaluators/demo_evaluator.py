@@ -601,6 +601,12 @@ def load_scenario_criteria_from_pipeline() -> tuple[dict, str | None, bool, dict
     criteria = scenario.get("pass_criteria", {})
     if not isinstance(criteria, dict):
         criteria = {}
+    else:
+        criteria = dict(criteria)   # 不改调用方持有的原 dict
+    # 把场景声明的失效注入规格透给判据：频率门禁据此豁免"该场景自己切断的 topic"
+    # （见 score() 的 injected_topics）。否则注入传感器失效的场景必然 FAIL。
+    if isinstance(scenario.get("fault_injection"), str):
+        criteria["_inject_topics"] = scenario["fault_injection"]
     name = scenario.get("name") if isinstance(scenario.get("name"), str) else None
     has_route = bool(scenario.get("route"))
     road = scenario.get("road")
@@ -2277,8 +2283,37 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         if (pub_node, topic) not in pubs or (sub_node, topic) not in subs:
             failures.append(f"missing topology edge {pub_node} --{topic}--> {sub_node}")
 
+    # 场景**声明**的注入豁免：`fault_injection` 里被显式切断的 topic，频率门禁
+    # 必须让位 —— 否则"注入传感器失效"的法规场景永远不可能 PASS（门禁与场景
+    # 意图互相矛盾）。只豁免**该场景自己声明要断**的 topic，其余仍照常判。
+    injected_topics = {
+        r.split(":")[0].strip()
+        for r in str(criteria.get("_inject_topics", "") or "").split(";") if r.strip()
+    }
+    # 注入的**级联**下游：切断某模态后，其直接消费者频率下降是**正确**后果
+    # （例：切断 sensor/lidar → fusion 只能靠 GPS 慢速更新 → localization 掉频）。
+    # 若不给级联豁免，"注入传感器失效"的场景永远无法 PASS —— 门禁会拦下它本应
+    # 记录的那个行为。级联映射只覆盖**直接**消费者，不做传递闭包（避免一次注入
+    # 把整条链的判据全豁免掉）。
+    INJECT_CASCADE = {
+        "sensor/lidar": {"fusion/localization"},
+        "sensor/gps": {"fusion/localization"},
+    }
+    cascade_topics: set[str] = set()
+    for t in list(injected_topics):
+        cascade_topics |= INJECT_CASCADE.get(t, set())
+    injected_topics |= cascade_topics
     for topic, min_freq in TOPIC_MIN_FREQ.items():
         actual = float(topics.get(topic, {}).get("freq", 0.0) or 0.0)
+        if topic in injected_topics:
+            # 只对**直接**注入的 topic 断言"应当停发"；级联下游本就该继续发，
+            # 只是频率降低，对它只安静放行（不发误导性 WARN）。
+            if actual > 0.0 and topic not in cascade_topics:
+                warnings.append(
+                    f"topic {topic} still publishing at {actual:.1f} Hz although the "
+                    f"scenario declares fault_injection on it — injection may not "
+                    f"have taken effect")
+            continue
         if actual < min_freq:
             failures.append(f"topic {topic} freq too low: {actual:.1f} Hz < {min_freq:.1f} Hz")
 

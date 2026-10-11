@@ -522,8 +522,56 @@ stagnation 44.6s → 消失，场景 PASS。
 **验证**：`r157_cut_in` / `r157_cut_out` 均 PASS；`behavior_fsm_check` 全绿
 （转移表完整性未被破坏）；9 条静态 gate 全绿；`scenario_regression` 见下。
 
-**P2 遗留**：法规场景库仍缺"前车急刹 / 施工区 / 传感器失效注入"三类；
-另有"感知降级后系统行为是否仍安全"的专项判据（需构造"盲开仍不撞"场景）。
+### P2 进展（2026-10-11，第七刀：法规场景库补齐）
+
+第六刀补了切入/切出 + 静止障碍，本刀把 UN R157 清单里剩下的**前车急刹 /
+施工区 / 传感器失效注入**三类补完，法规场景库基本齐全。
+
+| 场景 | 机制 | 结果 |
+|------|------|------|
+| `r157_hard_brake` | choreography `act=brake` 把前车目标速度 14→0（**原地自然减速，不传送**，故无瞬移风险） | ✅ PASS |
+| `r157_construction_zone` | 顶层 `construction_zones` 块 → flowsim 把施工区前缘按车道宽铺成静态障碍物；**width 取一个车道宽（3.5）** 才是"本车道施工、需变道绕行"的语义 | ✅ PASS（ego 前进 833m / 变道 2 次） |
+| `r157_sensor_failure` | 顶层 `fault_injection` 字符串（**场景声明**，非环境变量） | ✅ PASS，且降级链完整可观测 |
+
+**新增机制：场景可声明失效注入（`fault_injection`）**
+
+此前注入只能靠外部环境变量 `FLOW_FAULT_INJECT` —— 环境变量**进不了 suite、
+无法随场景回归矩阵一起跑、也不随场景版本化**。"传感器失效注入"作为法规场景
+必须能声明在场景里。已实现：`ScenarioConfig.fault_injection[256]` +
+`scenario_loader` 解析 + `flowsim` 在**场景加载之后**应用
+（`fault_inject_init`）。
+
+优先级设计：**只在未被环境变量启用时**应用场景声明 —— 环境变量是显式人工覆盖
+（门禁 `fault_inject_gate` 正是靠它注入），不能被场景悄悄改掉。
+
+实测 `r157_sensor_failure`：`dropped=603`（注入真生效），
+`loc_reasons=[lidar_stale, covariance_grown]`、`loc_trustworthy=False` ——
+**主测距模态失效后系统确实进入了可观测的降级路径**，而非静默以陈旧定位继续行驶。
+
+**一个实测踩到的坑（已记入故障模式表）**：hook 最初放在 `flowsim` 的
+**reset 函数**里，那是**场景加载之前**执行的 → `g.scenario` 还是 nullptr，
+注入静默不生效（`dropped=0`、lidar 照常）。移到 `g.scenario = scenario_load(...)`
+之后即生效。
+
+**门禁协同（本轮同时修的两处判据矛盾）**：
+
+引入"场景可声明失效注入"后，评估器的 **topic 频率门禁**与场景意图直接冲突 ——
+`r157_sensor_failure` 声明切断 `sensor/lidar`，而门禁要求它 ≥15Hz → 该场景
+**永远不可能 PASS**（门禁与它要验证的行为互相矛盾）。修法两条：
+
+1. **直接注入豁免**：场景 `fault_injection` 里被切断的 topic 跳过频率门禁；
+   但仍断言"它**确实**停了"（还在发 → WARN 提示注入可能没生效）。
+2. **级联豁免**：切断某模态后其**直接消费者**掉频是**正确**后果（切断 lidar →
+   fusion 只能靠 GPS 慢速更新 → `fusion/localization` 由 20Hz 掉到 10Hz）。
+   若不豁免级联，注入场景同样永远 FAIL。级联映射**只覆盖直接消费者、不做
+   传递闭包** —— 避免一次注入把整条链的判据全部豁免掉。
+
+**验证**：`scenario_regression` 16 个 enabled 场景全跑（见下）；
+9 条静态 gate 全绿；`scenarioctl validate` 全场景 PASS。
+
+**P2 遗留**：法规场景库已覆盖 R157 主要条目；剩余为"感知降级后系统行为是否
+仍安全"的专项判据（需构造"盲开仍不撞"场景），以及 P2 之外的 P3（ISO 26262 /
+SOTIF / R155·R156 文档链、FlowBoard L3 面板、统计里程目标）。
 
 
 ## 与近期工作的关系

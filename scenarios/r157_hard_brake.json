@@ -1,0 +1,48 @@
+{
+  "name": "r157_hard_brake",
+  "description": "UN R157 (ALKS) 法规场景：前车急刹（hard brake）。双向 4 车道 3000m 直道，ego 定速巡航、本车道前方有前车同速行驶；t=8s 由 choreography beat 以 act=brake 把前车目标速度从 14 降到 0 —— 前车**原地开始急减速**（不传送，走 NpcEvent::ScriptSet 自然减速，故无瞬移风险），模拟前车发现障碍急刹。覆盖：前车急减速时 ego 的 TTC 预警与跟停能力。判据：无碰撞 + 不超时。",
+  "random_seed": 159,
+  "duration_s": 0,
+  "ego": {
+    "x": 20.0,
+    "y": -1.75,
+    "heading": 0.0,
+    "init_speed": 14.0,
+    "target_speed": 14.0
+  },
+  "road_network": {
+    "edges": [
+      {
+        "id": 0,
+        "type": "highway",
+        "name": "r157_straight",
+        "length_m": 3000,
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 22.0,
+        "nodes": [[0, 0, 0], [3000, 0, 0]]
+      }
+    ]
+  },
+  "actors": [
+    {"id": 1, "type": "car", "x": 70.0, "y": -1.75, "vx": 14.0, "vy": 0.0, "len": 4.6, "wid": 2.0,
+     "_comment": "本车道前车，t=8s 起急刹到停"},
+    {"id": 2, "type": "car", "x": 400.0, "y": -5.25, "vx": 12.0, "vy": 0.0, "len": 4.6, "wid": 2.0}
+  ],
+  "traffic_lights": [],
+  "choreography": {
+    "loop_period_s": 45,
+    "beats": [
+      {"t": 8.0, "actor": 1, "vx": 0.0, "act": "brake"},
+      {"t": 30.0, "actor": 1, "vx": 14.0, "act": "brake"}
+    ]
+  },
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 60.0,
+    "min_avg_speed_mps": 3.0,
+    "min_distance_m": 40.0
+  },
+  "route": [],
+  "scenarios": []
+}

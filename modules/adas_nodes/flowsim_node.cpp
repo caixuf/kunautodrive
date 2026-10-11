@@ -24,6 +24,7 @@
 #include "node_plugin.h"
 #include "topic_registry.h"
 #include "scenario_loader.h"
+#include "fault_inject.h"   /* L3-P2：场景声明的传感器失效注入 */
 #include "road_geometry.h"
 #include "clock_service.h"
 #include "platform_paths.h"
@@ -272,6 +273,7 @@ static void reset_runtime_state() {
     g.curve_offset_m = 0.0;
 
     flowsim::reset_choreography_state();
+
 }
 
 /* ── control/cmd 订阅回调 ─────────────────────────────────────── */
@@ -3322,6 +3324,22 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
      * 此时 scenario_file 由 params_json 解析注入完毕） */
     if (g.scenario_file[0] != '\0') {
         g.scenario = scenario_load(g.scenario_file);
+
+        /* ── L3-P2：应用**场景声明**的失效注入 ──
+         * 场景 JSON 顶层 fault_injection 字符串（语法同 FLOW_FAULT_INJECT）。
+         * 在这里应用而非 launcher：场景加载正发生在此处，且这样"传感器失效"
+         * 能作为场景的一部分被版本化、进 suite、随场景回归矩阵一起跑 ——
+         * 环境变量做不到这些。
+         * ⚠️ 只在**未由环境变量启用**时应用：环境变量是显式的人工覆盖，
+         * 优先级更高（门禁 fault_inject_gate 就是靠 env 注入的）。 */
+        if (g.scenario && g.scenario->fault_injection[0] &&
+            !fault_inject_enabled()) {
+            const int nfi = fault_inject_init(g.scenario->fault_injection,
+                                              clock_now_us());
+            if (nfi > 0)
+                LOG_WARN("flowsim", "scenario-declared fault injection ACTIVE: "
+                         "%d rule(s) from '%s'", nfi, g.scenario->name);
+        }
     }
     if (!g.scenario) {
         LOG_WARN("flowsim", "scenario_load failed for '%s' — using defaults",

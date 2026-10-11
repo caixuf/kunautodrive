@@ -1,0 +1,68 @@
+{
+  "name": "r157_construction_zone",
+  "description": "UN R157 (ALKS) 法规场景：施工区绕行。双向 4 车道 3000m 直道，x=250m 处**本车道**（y=-1.75）有 30m 长施工区（width=3.5 = 恰好一个车道宽）—— flowsim 把施工区前缘按车道宽铺成一排静态障碍物，覆盖**仅 ego 本车道**。ego 巡航接近后必须识别本车道被占用并变道绕行，而不是停在施工区前死等。覆盖：静态障碍占用本车道时的绕行决策（与 r157_cut_out 的静止障碍是同类问题的另一触发路径）。判据：无碰撞 + 不超时 + 必须有前进距离（停在施工区前 = FAIL）。",
+  "random_seed": 160,
+  "duration_s": 0,
+  "ego": {
+    "x": 20.0,
+    "y": -1.75,
+    "heading": 0.0,
+    "init_speed": 14.0,
+    "target_speed": 16.0
+  },
+  "road_network": {
+    "edges": [
+      {
+        "id": 0,
+        "type": "highway",
+        "name": "r157_straight",
+        "length_m": 3000,
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 22.0,
+        "nodes": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            3000,
+            0,
+            0
+          ]
+        ]
+      }
+    ]
+  },
+  "actors": [
+    {
+      "id": 1,
+      "type": "car",
+      "x": 800.0,
+      "y": -5.25,
+      "vx": 12.0,
+      "vy": 0.0,
+      "len": 4.6,
+      "wid": 2.0
+    }
+  ],
+  "construction_zones": [
+    {
+      "id": 0,
+      "x": 250.0,
+      "y": -1.75,
+      "length": 30.0,
+      "width": 3.5
+    }
+  ],
+  "traffic_lights": [],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 60.0,
+    "min_avg_speed_mps": 6.0,
+    "min_distance_m": 400.0
+  },
+  "route": [],
+  "scenarios": []
+}

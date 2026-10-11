@@ -393,6 +393,13 @@ typedef struct {
     /* ── NPC 行为开关 ── */
     bool              npc_lane_change;/**< NPC 启用 MOBIL 自主变道（默认 false，各守其道） */
     ScenarioTrafficDensity traffic_density;/**< 自动 NPC 密度（D3-1，可选） */
+    /* ── L3-P2 传感器/链路失效注入（法规场景用）──
+     * 语法与 FLOW_FAULT_INJECT 一致：`<topic>:<after_ms>[:<duration_ms>];...`
+     * （见 include/fault_inject.h）。场景里声明后由 flowsim 在初始化时调用
+     * fault_inject_init 生效 —— 这样"传感器失效注入"能作为**场景**的一部分
+     * 被版本化/复现，而不是只能靠外部环境变量传（环境变量无法进 suite、
+     * 无法随场景回归矩阵一起跑）。空串 = 不注入。 */
+    char              fault_injection[256];
     /* ── 解析后的 road_network JSON（A* 主循环建图用）──
      * resolve_map_reference 注入后保留一份 cJSON_PrintUnformatted 字符串：
      * edges[].lanes[] 含 id/direction/successors，供 flowsim 初始化阶段

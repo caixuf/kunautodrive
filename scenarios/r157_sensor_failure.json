@@ -1,0 +1,40 @@
+{
+  "name": "r157_sensor_failure",
+  "description": "UN R157 (ALKS) 法规场景：传感器失效注入。双向 4 车道 3000m 直道，ego 巡航；t=8s 起由场景声明的 fault_injection 把 LiDAR 链路（sensor/lidar）切断，持续到场景结束 —— 模拟行驶中激光雷达失效。**注入规格写在场景里**（顶层 fault_injection 字符串，语法同 FLOW_FAULT_INJECT），故该失效可被版本化、进 suite、随场景回归矩阵一起跑，而不是只能靠外部环境变量传。覆盖：主测距模态失效后系统是否进入可观测的降级路径（fusion 判定位不可信 → L2 降级 → ODD 退出），而不是静默继续以陈旧定位行驶。判据：无碰撞 + 不超时。降级路径的可观测性由 fault_inject_gate / l3_edr_gate 的同类断言覆盖。",
+  "random_seed": 161,
+  "duration_s": 0,
+  "fault_injection": "sensor/lidar:8000",
+  "ego": {
+    "x": 20.0,
+    "y": -1.75,
+    "heading": 0.0,
+    "init_speed": 14.0,
+    "target_speed": 16.0
+  },
+  "road_network": {
+    "edges": [
+      {
+        "id": 0,
+        "type": "highway",
+        "name": "r157_straight",
+        "length_m": 3000,
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 22.0,
+        "nodes": [[0, 0, 0], [3000, 0, 0]]
+      }
+    ]
+  },
+  "actors": [
+    {"id": 1, "type": "car", "x": 300.0, "y": -5.25, "vx": 12.0, "vy": 0.0, "len": 4.6, "wid": 2.0}
+  ],
+  "traffic_lights": [],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 60.0,
+    "min_avg_speed_mps": 2.0,
+    "min_distance_m": 30.0
+  },
+  "route": [],
+  "scenarios": []
+}

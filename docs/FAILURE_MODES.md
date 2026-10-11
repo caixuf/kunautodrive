@@ -34,11 +34,11 @@
 |---|------|------|
 | 1 | 控制 / 规划 / 安全层 | 32 |
 | 2 | 感知 / 点云 | 6 |
-| 3 | 仿真 / 几何 / NPC | 7 |
+| 3 | 仿真 / 几何 / NPC | 8 |
 | 4 | 仪表盘 / 监控 / 前端 | 9 |
-| 5 | 评估器 / 门禁 | 5 |
+| 5 | 评估器 / 门禁 | 6 |
 | 6 | 框架 / 工具链 | 4 |
-| | **合计** | **63** |
+| | **合计** | **65** |
 
 ## 1. 控制 / 规划 / 安全层
 
@@ -97,6 +97,7 @@
 | sensor 模式"预警提前量"恒为 0（且伪造 critical event） | `perception_clusters_to_obstacles` 用 `frame_id*100+ci` 当障碍物 id → 每帧都变，跨帧跟踪失效。ground_truth 模式用 `vehicle/state` 的 `oid%d` 已修，sensor 模式无 oid 可用，需给簇做跨帧关联或用 tracker 的已确认航迹 id | `perception_points.c` / `ci/evaluators/demo_evaluator.py` 预警提前量 |
 | 真点云写点越界（潜在崩溃） | 旧射线循环 `cloud.points[cloud.count++]` **无容量守卫**；`n_rays=240 < 2048` 时侥幸没炸，提高射线数/密集场景（42 actor）即越界写。修复：写满即停 + `dropped` 上报 | `lidar_scan.c` `lidar_scan_generate` |
 
+
 ## 3. 仿真 / 几何 / NPC
 
 `flowsim` / `physics` / `npc_ai` / `route` / XODR 生成 / 地图几何。
@@ -110,6 +111,8 @@
 | **同向 NPC 车头朝后（逆向行驶）**，与相邻真实车道侧刮成堆；invariant `motion_direction` / Δs 符号失败 | 自动补给（D3-2）落点用 **esmini lane 0** —— OpenDRIVE 参考线（`type="none"`，不可行驶），esmini 对它的 `pd.h` 恒为 **π**，而 `RoadPosition::world()` 直接返回该 `data.h`，同向车（`route_dir=+1`）车头翻 180° → 逆向行驶 + Δs<0。且 lane 0 与 lane −1 中心仅差 1.75m < 车宽 2.0m，两车道车并列即侧刮。修复：`drivable_lane_ids()` 取本段可行驶车道 → 只留**负 id**（本仓右行地图的行进方向，正 id 在对向）→ 按 `abs(id)` 升序（由内到外，交替铺开落在相邻真实车道）→ 枚举为空回退 `{-1}`；`lane_spread` 只决定"第几槽"（`traffic_density_lane_slot`，恒 ≥0），lane_id 映射归 flowsim —— **与 `npc_ai.cpp` P3（硬编码 lane_id=0）/ P1 同一族 bug**。⚠️ 同一模式仍在 `step_poisson_traffic`：它也 `frenet_to_world(rid, 0, …)`，随后 `world_to_frenet` 反查回真实 lane_id（危害被部分掩盖），但 `e.heading = wp.h`（=π）已用于 `e.vx/e.vy` 初值 —— 本次未覆盖 | `flowsim_node.cpp:656`（dir_lanes 表）/ `traffic_density_spawn.h:75` / `npc_ai.cpp:406` |
 | NPC 集体压在 ego 出生点、bbox 重叠、瞬移；invariant 一次爆 **121 条**（spatial+motion+temporal 三类混合） | 自动补给候选点**无清距检查**：第 0 个候选 `s≈0` 正是 ego 出生点，落进去后碰撞分离把两车挤开 → 双方车头与所在车道方向相反 + bbox 重叠 + `Δpos ≫ v·dt`，一条根因引出三类 invariant。另：s 直接拿 `i*spacing` 当 esmini s，漏掉 `seg.s0`（路口 fillet 的段首修剪偏移）→ 在被修剪过的段上把车放到段外。修复：候选点与 ego 用**世界坐标**距离、与其他车用 `route_s` 差，均 < 25m 即跳过（与 `step_poisson_traffic` 第 5 步同口径；ego 不走 `npc_init_route`，`route_s` 无记账，故不能同域比较）；同时把 s 统一到两个域 —— `s_esmini = seg.s0 + s_local`（`frenet_to_world` 要），`route_s_cand = seg.s_start + s_local`（与手列 actors 同域，清距检查用） | `flowsim_node.cpp:705`（清距块）/ `flowsim_node.cpp:692`（s 双域） |
 | S 弯不跟弯（curve_road 场景车沿 y=-1.75 直开，heading 恒 0） | **四层连环**（2026-08-04 排查）：① `json_to_xodr.py` roads_from_road_network 只认 curvature_profile/length_m，完全忽略 `road_network.edges[].nodes` → 生成直道 XODR → ref_path 全 y=0；② 即便 XODR 弯了，control 横向目标 `target_path_y` 是轨迹 0.5s 前视点绝对 y，弯道上该点比 ego 当前位置高 → lat_error 虚高 → 车往弯内侧漂 ~3m；③ `scene_pub.cpp` `ROAD_NODES_PER_EDGE=8` 固定采样 → 前端 CR 过 8 点严重过冲、评估器弦长偏离真值 ~14m → 车在车道里被判 road departure；④ demo_evaluator 逆行/横向摆动检查假设直路（y<0 朝东 / 绝对 y 范围<4.5m），S 弯 ego y 合法扫过 ±103 却 heading 恒朝东 → 误报 WRONG-WAY/lateral excursion。修复：nodes 折线 → 三次 Hermite（端点切线 = 相邻 chord 平均，**不用 CR**——coarse 节点 CR 过冲生成 R≈19m 发卡弯，a_lat≈21m/s² 拐不过来；Hermite min R≈546m 可跟）密采样 5m → 逐段 line；planning map_ref 分支 kappa 从恒 0 改为切线中心差分恢复前馈；control 横向目标改用 query_ref_at **本地**参考（离 ego 最近轨迹点），cruise_lane_y = 本地 road_c + lane_d·cos(h)，只有本地查询失败才回退前视点；scene_pub 节点数按长度自适应（~25m 一点，8..128）；curve_road.json nodes 由 13 粗点重采样为 194 平滑点（前端 CR 与物理 Hermite 偏差 5.7m→<0.8m）；评估器弯道用局部 road_heading / road_signed_offset 替代绝对 y 启发 | `tools/json_to_xodr.py` build_polyline_road / `planning_node.cpp` frenet_to_cartesian / `control_node.cpp` query_ref_at 覆盖块+cruise_lane_y / `flowsim/scene_pub.cpp` road_nodes_per_edge / `scenarios/curve_road.json` / `ci/evaluators/demo_evaluator.py` |
+
+| 场景里声明了 `fault_injection` 但注入**完全没生效**（`dropped=0`、目标 topic 照常发布） | hook 放在了 `flowsim` 的 **reset 函数**里，而那是**场景加载之前**执行的 —— 此时 `g.scenario` 仍是 nullptr，条件判断直接短路。**通用教训**：依赖"场景已加载"的逻辑必须放在 `g.scenario = scenario_load(...)` **之后**；reset/init 早于加载是容易踩的时序陷阱。修复：移到场景加载语句之后（实测 `dropped` 由 0 → 603） | `modules/adas_nodes/flowsim_node.cpp` 场景加载之后的注入应用点 |
 
 ## 4. 仪表盘 / 监控 / 前端
 
@@ -139,6 +142,8 @@
 | 场景声明了 `traffic_density.cars_per_km` 但世界里一辆 NPC 都没有，**全部门禁仍绿** | 自动补给结论（D3-2）只存在于一条 `if (spawned > 0) LOG_INFO`：spawn 数为 0（route 没建好 / pool 满 / spacing 算错）时**完全静默**，`scene/frame` 里连 `traffic_density` 字段都没有 —— 排查时分不清"场景没声明"与"声明了没跑"，门禁也无从断言。修复：结论编码进 `scene/frame` 静态段（5 个标量，**不随 `embed_static` 省略** —— 那种"静态段太大就省"的裁剪针对 road_network/buildings 这类可能撑爆 64KB 总线的大块，大地图 OSM 场景若连带省略，评估器会把"静态段太大"误判成"spawn 没跑"）→ monitor 透传 → `metrics.scene.traffic_density`；`demo_evaluator` 两级断言：① 声明了就必须有块可读（无块 = 透传断了或 spawn 路径压根没跑，走 `require` 记为**无法判定**而非通过）② `spawned >= 1` **且** 世界车辆实体峰值 > `actors[]` 能解释的数量（防止 spawn 数字自说自话，不经 scene/frame 真值交叉校验）；flowsim 侧日志改为无条件（0 辆时打 WARN，并把"够了所以停 max_npcs"与"装不下所以停 pool 满"分开记） | `flowsim/scene_pub.h` `ScenePubTrafficDensity` / `flowsim/scene_pub.cpp:538` / `monitor_node.c:297,709,1526` / `ci/evaluators/demo_evaluator.py:2732`（`traffic_density_spawn`） |
 
 | 故障注入后目标 topic 从 `metrics.topics` **整个消失**（不是显示 0 Hz），门禁误判"注入没生效" | 注入点在 `message_bus_publish` **之前**（`transport_publish` 入口），消息从未进过 bus → 该 topic 的 `pub_count` 恒 0 → stats 表里根本没有这个条目。A/B 实测：干净跑 43 个 topic（含 `perception/obstacles`），永久注入后 41 个（不含）。修复：门禁的"topic 缺席"判定改为**有丢弃计数时缺席即为注入生效的强证据**（`inject_dropped > 0`），而非一律判"无法确认" | `ci/gates/fault_inject_gate.py` `check_class` / `src/core/transport.c` `transport_publish` 注入点 |
+
+| 场景声明"切断某传感器"，而评估器的 topic 频率门禁要求该 topic 达最低频率 → **该场景永远不可能 PASS**（门禁与它要验证的行为互相矛盾） | 门禁把"topic 必须在发"当无条件要求。但对**故意注入失效**的场景，"该 topic 停发"正是它的预期行为。修复：① 场景 `fault_injection` 里直接切断的 topic 跳过频率门禁，但仍断言它**确实停了**（还在发 → WARN 提示注入可能没生效）；② **级联豁免** —— 切断某模态后其**直接消费者**掉频是正确后果（切 lidar → fusion 只能靠 GPS 慢速更新 → `fusion/localization` 20Hz→10Hz）。级联映射**只覆盖直接消费者、不做传递闭包**，避免一次注入把整条链的判据全豁免 | `ci/evaluators/demo_evaluator.py` `injected_topics` / `INJECT_CASCADE` + `load_scenario_criteria_from_pipeline` 透传 `_inject_topics` |
 
 ## 6. 框架 / 工具链
 

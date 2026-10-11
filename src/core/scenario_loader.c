@@ -405,6 +405,15 @@ ScenarioConfig* scenario_load(const char* path) {
         sc->criteria.no_collision = true;
     }
 
+    /* L3-P2：传感器/链路失效注入规格（可选，缺省空 = 不注入） */
+    sc->fault_injection[0] = '\0';
+    {
+        cJSON* jfi = cJSON_GetObjectItemCaseSensitive(root, "fault_injection");
+        if (cJSON_IsString(jfi) && jfi->valuestring)
+            strncpy(sc->fault_injection, jfi->valuestring,
+                    sizeof(sc->fault_injection) - 1);
+    }
+
     /* npc_lane_change: NPC 启用 MOBIL 自主变道（默认 false，各守其道） */
     cJSON* jnpc_lc = cJSON_GetObjectItemCaseSensitive(root, "npc_lane_change");
     sc->npc_lane_change = cJSON_IsTrue(jnpc_lc);
