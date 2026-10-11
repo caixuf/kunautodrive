@@ -1,0 +1,163 @@
+{
+  "scenario": "r157_sensor_failure",
+  "result": "PASS",
+  "failures": [],
+  "warnings": [],
+  "summary": {
+    "scenario": "r157_sensor_failure",
+    "samples": 160,
+    "duration_s": 39.90393900871277,
+    "sim_duration_s": 39.381758,
+    "x_delta_m": 734.3434310604872,
+    "avg_speed_mps": 18.58380160068664,
+    "max_speed_mps": 20.40527350188884,
+    "max_lane_error_m": 8.750777880095484e-13,
+    "max_lane_error_at_s": 0.0,
+    "max_lane_error_y": -1.750000000000875,
+    "max_lane_error_speed_mps": 0.7222133060157008,
+    "lane_match_coverage": 1.0,
+    "lane_keep_worst_offset_m": 1.7501555760190968e-12,
+    "lane_keep_straddle_frames": 0,
+    "lane_keep_straddle_ratio": 0.0,
+    "lane_keep_straddle_max_consecutive": 0,
+    "lane_keep_center_cross_frames": 0,
+    "lane_keep_center_cross_ratio": 0.0,
+    "lane_keep_max_excess_m": 0.0,
+    "min_road_margin_m": 4.249999999999125,
+    "min_road_margin_at_s": 0.0,
+    "steer_saturation_ratio": 0.0,
+    "yaw_rate_rms_radps": 0.0,
+    "max_yaw_rate_radps": 0.0,
+    "heading_flip_rate_hz": 0.0,
+    "low_speed_ratio": 0.04375,
+    "stagnation_duration_s": 1.5047330856323242,
+    "lane_change_count": 0,
+    "has_noa_route": false,
+    "driver_modes_seen": [
+      "ACC",
+      "CP",
+      "NA",
+      "NP"
+    ],
+    "reached_noa": false,
+    "route_lane_active": true,
+    "steer_rate_rms_per_s": 0.0,
+    "max_steer_rate_per_s": 0.0,
+    "steer_flip_rate_hz": 0.0,
+    "max_npc_speed_mps": 12.539954359569533,
+    "max_npc_lateral_speed_mps": 0.0,
+    "collision_topic_pub": 0,
+    "topic_freq_hz": {
+      "vehicle/state": 59.553,
+      "sensor/lidar": 0.0,
+      "sensor/gps": 9.977,
+      "fusion/localization": 9.979,
+      "planning/trajectory": 14.911,
+      "control/raw_cmd": 22.024,
+      "control/cmd": 21.862
+    },
+    "inference_topic_active": true,
+    "inference_freq_hz": 19.868,
+    "shadow_speed_mae_settled": null,
+    "shadow_speed_mae_full": null,
+    "shadow_settled_samples": 0,
+    "shadow_gate_supported": true,
+    "shadow_gate_ready": false,
+    "shadow_steer_mae": null,
+    "shadow_steer_rmse": null,
+    "shadow_ade": null,
+    "shadow_fde": null,
+    "has_traffic_lights": false,
+    "red_light_violation": false,
+    "red_light_violation_details": [],
+    "green_phase_max_stop_s": 0.0,
+    "recognition_rate_vehicle": 1.0,
+    "recognition_rate_vru": 0.0,
+    "recognition_rate_overall": 1.0,
+    "recognition_rate_by_type": {
+      "car": 1.0
+    },
+    "truth_count_vehicle": 160,
+    "truth_count_vru": 0,
+    "truth_count_overall": 160,
+    "warning_lead_avg_s": 35.163,
+    "warning_lead_min_s": 35.163,
+    "warning_lead_min_gate_s": 35.163,
+    "critical_event_count": 1,
+    "min_ttc_s": 1.0992350590287998,
+    "min_ttc_gate_s": null,
+    "min_ttc_gate_speed_mps": 0.0,
+    "perceived_track_count": 1,
+    "perception_coverage": 1.0,
+    "perceived_count_avg": 1.0,
+    "perception_metric_source": "scene.perceived (perception/obstacles)",
+    "liveness": {
+      "speed": {
+        "unique": 160,
+        "dead": false
+      },
+      "x": {
+        "unique": 160,
+        "dead": false
+      },
+      "y": {
+        "unique": 1,
+        "dead": false
+      },
+      "heading": {
+        "unique": 1,
+        "dead": false
+      },
+      "steer_signed": {
+        "unique": 1,
+        "dead": false
+      },
+      "lane_count": {
+        "unique": 1,
+        "dead": false
+      }
+    },
+    "scenario_actor_counts": {
+      "vehicle": 1,
+      "vru": 0
+    },
+    "traffic_density_cars_per_km": 0,
+    "traffic_density_spawned": 0,
+    "behavior_state": "CRUISE",
+    "behavior_obs_count": 1,
+    "best_gap_m": -1.0,
+    "lead_speed_mps": 20.0,
+    "desired_gap_m": 35.1245877660034,
+    "committed_lane": 2,
+    "target_lane": -1,
+    "blocked": false,
+    "worthwhile": false,
+    "formal_metrics": {
+      "trajectory_metric_type": "closed_loop_lane_tracking",
+      "trajectory_ade_m": 8.750777880095484e-13,
+      "trajectory_fde_m": 8.750777880095484e-13,
+      "comfort_accel_rms_mps2": 1.1723507729294569,
+      "comfort_jerk_p95_mps3": 0.5968385240195849,
+      "comfort_jerk_max_mps3": 1.2421576723218477,
+      "timing_sample_period_mean_s": 0.24768401257861633,
+      "timing_sample_period_p99_s": 0.2666560000000011,
+      "timing_sample_count": 160,
+      "timing_clock": "sim"
+    },
+    "l3_odd_exit_observed": true,
+    "l3_odd_violations_seen": [
+      "loc_untrustworthy",
+      "route_stale"
+    ],
+    "l3_tor_states_seen": [
+      "DRIVER_TAKEOVER",
+      "OFF",
+      "TOR_REQUESTED"
+    ],
+    "l3_tor_requested_frames": 6,
+    "l3_mrm_active_frames": 0,
+    "l3_expect": [],
+    "safety_evidence_present": true,
+    "safety_fault_evidence_present": false
+  }
+}

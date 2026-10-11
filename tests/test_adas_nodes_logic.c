@@ -1554,11 +1554,11 @@ static void test_ttc_select_hint_strict(void) {
     TEST("ttc_select_follow_lead: require_hint=true 跳过最近的未验证 obs");
     TtcObsView obs[3];
     /* obs[0]: 远前车 25m，hint=true */
-    obs[0].x = 25.0; obs[0].y = 1.0; obs[0].vx = 0.0; obs[0].vy = 0.0; obs[0].lane_match_hint = true;
+    obs[0].x = 25.0; obs[0].y = 1.0; obs[0].vx = 0.0; obs[0].vy = 0.0; obs[0].lane_match_hint = true;  obs[0].lat_m = 1.0;
     /* obs[1]: 中前车 20m，hint=true → 应选（hint=true 中最近）*/
-    obs[1].x = 20.0; obs[1].y = 1.0; obs[1].vx = 0.0; obs[1].vy = 0.0; obs[1].lane_match_hint = true;
+    obs[1].x = 20.0; obs[1].y = 1.0; obs[1].vx = 0.0; obs[1].vy = 0.0; obs[1].lane_match_hint = true;  obs[1].lat_m = 1.0;
     /* obs[2]: 最近前车 10m，hint=false → require_hint=true 必须过滤掉 */
-    obs[2].x = 10.0; obs[2].y = 1.0; obs[2].vx = 0.0; obs[2].vy = 0.0; obs[2].lane_match_hint = false;
+    obs[2].x = 10.0; obs[2].y = 1.0; obs[2].vx = 0.0; obs[2].vy = 0.0; obs[2].lane_match_hint = false; obs[2].lat_m = 1.0;
 
     int idx = ttc_select_follow_lead(
         obs, 3,
@@ -1580,9 +1580,9 @@ static void test_ttc_select_no_hint_fallback(void) {
     TEST("ttc_select_follow_lead: require_hint=false 时所有 obs 都参与，按距离选最近");
     TtcObsView obs[2];
     /* obs[0]: 前车 30m，hint=true（远，但已验证）*/
-    obs[0].x = 30.0; obs[0].y = 0.5; obs[0].vx = 0.0; obs[0].vy = 0.0; obs[0].lane_match_hint = true;
+    obs[0].x = 30.0; obs[0].y = 0.5; obs[0].vx = 0.0; obs[0].vy = 0.0; obs[0].lane_match_hint = true;  obs[0].lat_m = 0.5;
     /* obs[1]: 前车 12m，hint=false（近，未验证）*/
-    obs[1].x = 12.0; obs[1].y = 0.5; obs[1].vx = 0.0; obs[1].vy = 0.0; obs[1].lane_match_hint = false;
+    obs[1].x = 12.0; obs[1].y = 0.5; obs[1].vx = 0.0; obs[1].vy = 0.0; obs[1].lane_match_hint = false; obs[1].lat_m = 0.5;
 
     int idx = ttc_select_follow_lead(
         obs, 2,
@@ -1602,9 +1602,9 @@ static void test_ttc_select_lat_gate(void) {
     TEST("ttc_select_follow_lead: lat_max 严格生效，超门限 obs 不入选");
     TtcObsView obs[2];
     /* obs[0]: 前车 10m，但横向 2.0m（lane_w=3.5，lat_max=3.5*0.5=1.75 → 超门限）*/
-    obs[0].x = 10.0; obs[0].y = 2.0; obs[0].vx = 0.0; obs[0].vy = 0.0; obs[0].lane_match_hint = true;
+    obs[0].x = 10.0; obs[0].y = 2.0; obs[0].vx = 0.0; obs[0].vy = 0.0; obs[0].lane_match_hint = true; obs[0].lat_m = 2.0;
     /* obs[1]: 前车 25m，横向 0.5m（在门限内）*/
-    obs[1].x = 25.0; obs[1].y = 0.5; obs[1].vx = 0.0; obs[1].vy = 0.0; obs[1].lane_match_hint = true;
+    obs[1].x = 25.0; obs[1].y = 0.5; obs[1].vx = 0.0; obs[1].vy = 0.0; obs[1].lane_match_hint = true; obs[1].lat_m = 0.5;
 
     int idx = ttc_select_follow_lead(
         obs, 2,
@@ -1624,9 +1624,9 @@ static void test_ttc_select_relv_gate(void) {
     TEST("ttc_select_follow_lead: rel_v_min=-2 过滤沿车头相对速度 < -2 的对向来车");
     TtcObsView obs[2];
     /* obs[0]: 前车 15m，沿车头方向相对速度 -10 m/s（对向高速驶来）*/
-    obs[0].x = 15.0; obs[0].y = 0.5; obs[0].vx = -10.0; obs[0].vy = 0.0; obs[0].lane_match_hint = true;
+    obs[0].x = 15.0; obs[0].y = 0.5; obs[0].vx = -10.0; obs[0].vy = 0.0; obs[0].lane_match_hint = true; obs[0].lat_m = 0.5;
     /* obs[1]: 前车 25m，沿车头方向相对速度 0 m/s（同向静止）*/
-    obs[1].x = 25.0; obs[1].y = 0.5; obs[1].vx = 0.0;   obs[1].vy = 0.0; obs[1].lane_match_hint = true;
+    obs[1].x = 25.0; obs[1].y = 0.5; obs[1].vx = 0.0;   obs[1].vy = 0.0; obs[1].lane_match_hint = true; obs[1].lat_m = 0.5;
 
     int idx = ttc_select_follow_lead(
         obs, 2,
@@ -1639,6 +1639,70 @@ static void test_ttc_select_relv_gate(void) {
     /* obs[0] rel_v=-10 < -2.0 落选（对向来车）；obs[1] 25m 入选 */
     ASSERT(idx == 1,
            "obs[0] rel_v=-10 (oncoming) must be rejected by rel_v_min=-2; obs[1] selected");
+    PASS();
+}
+
+/* ── Test 5 (D2-07 回归): 变道途中邻道车（感知质心偏 1m）必须被拒 ──
+ *
+ * 实测帧（scenarios/r157_cut_out.json + config/pipeline_sensor.json，
+ * 探针取自 planning_node）：
+ *   ego=(41.68, -4.58, h=-0.109)，正从源车道 y=-1.75 切向目标车道 y=-5.25
+ *   邻道静止障碍真值 y=-1.75（源车道，ego 正在**离开**它）
+ *   DBSCAN 只聚到可见近面 → 感知质心 y=-2.75（偏向 ego 侧 1.0m）
+ * 旧判据（以 ego 为零点）：
+ *   真值 lat = |−1.75 − (−4.58)|·cos(h) ≈ 2.80 → > 2.625 拒绝
+ *   感知 lat = |−2.75 − (−4.58)|·cos(h) ≈ 1.82 → < 2.625 **收下** → 刹停死锁
+ * 新判据（对目标车道中心线 y=-5.25 求距）：
+ *   真值 |−1.75+5.25| = 3.50 > 2.35 拒绝 ✓
+ *   感知 |−2.75+5.25| = 2.50 > 2.35 拒绝 ✓
+ * 本用例断言：即便感知质心偏了 1.0m，邻道车也不会被收成跟车目标。 */
+static void test_ttc_select_lane_relative_rejects_adjacent(void) {
+    TEST("ttc_select_follow_lead(D2-07): 变道途中邻道车感知质心偏 1m 仍被拒（不刹停死锁）");
+    TtcObsView obs[2];
+    /* obs[0]: 邻道静止障碍，感知质心 y=-2.75，到目标车道中心线横向 2.50m */
+    obs[0].x = 44.98; obs[0].y = -2.75; obs[0].vx = 0.0; obs[0].vy = 0.0;
+    obs[0].lane_match_hint = true; obs[0].lat_m = 2.50;
+    /* obs[1]: 目标车道前车 3m，横向 0.32m（正前方，应被收）*/
+    obs[1].x = 44.60; obs[1].y = -5.25; obs[1].vx = 0.0; obs[1].vy = 0.0;
+    obs[1].lane_match_hint = true; obs[1].lat_m = 0.32;
+
+    /* lane_w=3.5 → 门限 = 0.5*3.5+0.6 = 2.35（与 behavior 的 lead_lat_tol 同值）*/
+    int idx = ttc_select_follow_lead(
+        obs, 2,
+        41.68, -4.58, -0.109,
+        3.5, 0.0, 80.0, -2.0,
+        /*lat_max*/ 3.5 * 0.5 + 0.6,
+        /*require_hint*/ true);
+
+    /* 关键：obs[0] 横向 2.50 > 2.35 被拒，不能因为它"最近"就被收；
+     * obs[1] 才是真前车（横向 0.32 在门内）。旧实现会返回 0 → 刹停死锁。 */
+    ASSERT(idx == 1,
+           "adjacent-lane obs (lat_m=2.50 > 2.35) must be rejected; target-lane lead (lat_m=0.32) selected");
+    PASS();
+}
+
+/* ── Test 6 (D2-07 回归): 远处目标车道真前车必须被收 ──
+ *
+ * 变道途中 ego heading≠0，若参考系误用"ego 站位处的车道点 + 车体系标量"，
+ * 远处同车道目标会因 along·sin(h) 伪影被误拒（h=0.109、along=40m 时约 4.3m）。
+ * 用逐障碍的车道线横向距离（lat_m 由 Frenet 给出）后，该项相消：远处真前车
+ * 横向仍≈0，必须被收 —— 漏掉真前车比误收邻道车更危险（追尾）。 */
+static void test_ttc_select_lane_relative_keeps_far_lead(void) {
+    TEST("ttc_select_follow_lead(D2-07): 远处(40m)目标车道真前车不被 heading 伪影误拒");
+    TtcObsView obs[1];
+    /* 目标车道前车 40m，同车道 → 到车道中心线横向≈0 */
+    obs[0].x = 81.0; obs[0].y = -5.25; obs[0].vx = 0.0; obs[0].vy = 0.0;
+    obs[0].lane_match_hint = true; obs[0].lat_m = 0.05;
+
+    int idx = ttc_select_follow_lead(
+        obs, 1,
+        41.68, -4.58, -0.109,
+        3.5, 0.0, 80.0, -2.0,
+        /*lat_max*/ 3.5 * 0.5 + 0.6,
+        /*require_hint*/ true);
+
+    ASSERT(idx == 0,
+           "far (40m) same-lane lead must be selected despite non-zero ego heading");
     PASS();
 }
 
@@ -1988,6 +2052,8 @@ int main(void) {
     test_ttc_select_no_hint_fallback();
     test_ttc_select_lat_gate();
     test_ttc_select_relv_gate();
+    test_ttc_select_lane_relative_rejects_adjacent();
+    test_ttc_select_lane_relative_keeps_far_lead();
 
     printf("\n═══ traffic_density auto-spawn (D3-2) ═══\n");
     test_traffic_density_spacing_from_density();

@@ -587,6 +587,54 @@ sensor 门禁，必须先解决该问题（属"感知链路能力"而非"场景�
 以及 P2 之外的 P3（ISO 26262 / SOTIF / R155·R156 文档链、FlowBoard L3 面板、
 统计里程目标）。
 
+### P2 进展（2026-10-11，第八刀：TTC 横向门限参考系统一 + 补齐 R157 基线）
+
+**D2-07：planning 的 TTC 跟车横向门限改用「应跟随车道中心线」参考系**
+
+上面那条 sensor 编排发现继续排查后，定位到**一个独立的真 bug**（不只是"感知
+能力不足"）：
+
+- **现象**：`r157_cut_out` 变道途中 `TTC follow: gap=3.06 (src=hint) -> 0.0 m/s
+  (was 20.0)`，同时 behavior 报 `best_gap=-1`（无前车）要 20 m/s —— **两模块对
+  同一目标结论相反**，planning 把 ego 永久按死。
+- **根因**：planning 的横向门限用 `|obs_lat|`（**ego 瞬时位置**为零点），而
+  behavior 用 `|obs_projection.d − current_lane_d|`（**车道相对**）。变道途中
+  ego_y 悬在两车道之间（实测 −4.58，源道 −1.75 / 目标道 −5.25），零点随之漂移：
+  "离开车道"的邻道车被误判为跟车目标 —— 真值障碍车体系 lat=3.17 恰在门外，而
+  DBSCAN 只聚到可见近面、感知质心偏向 ego 侧 1.0m 后 lat=2.18 落进门内
+  → `gap≈3m` → 刹到 0 且永不恢复。门限**恰好**卡在真值/感知两种表示之间。
+- **同类伪影（ground_truth 编排也中）**：远处同车道真前车在 heading=0.109 时
+  车体系 lat=3.61 > 2.625 被**误拒**（`along·sin h` 项，弯道上更甚）→ **漏掉
+  真前车**（比误收邻道车更危险）。
+- **修法**：横向距离改对**应跟随车道中心线**求（Frenet `obs_d −
+  follow_lane_center_d`，变道中取 behavior 下发的目标车道，与 W1
+  `target_lane_offset` 同源），门限 `0.5·lane_w + 0.6` 与 behavior 的
+  `lead_lat_tol` **同式同值**；真值兜底分支同样改。`cur_lane` 量化顺带改用
+  `nearest_lane` + 单向路 `side_offset`（旧式 `(-ego_y)/lane_w` 忽略单向路车道组
+  整体偏移，单向 4 车道会算错车道）。
+- **Python 先行**：`tools/ttc_lat_gate_sim.py`（邻道车真值/感知两种表示均拒绝 +
+  目标道真值/±1m 偏差/40m 远处均收下，全 PASS）。
+- **单测**：`test_adas_nodes_logic.c` 新增 2 例（邻道车感知质心偏 1m 仍被拒；
+  40m 远处同车道真前车不被 heading 伪影误拒），共 6 例。
+
+**补齐 R157 场景基线（门禁覆盖缺口）**：5 个 R157 场景早已进 `suite.json`
+（16 enabled），但 `tests/baseline/` 里**没有它们的基线** → 回归门禁对它们恒报
+"no baseline recorded"，即**跑得出 PASS/FAIL 但抓不住相对退化**。已用
+`--update-baseline --only <场景>` 逐个补上（`avg_speed_mps` min_ratio 0.6 等
+判据随即生效 —— 若再出现本轮那种 0.5 m/s 级停滞，门禁会当场抓住）。
+
+**验证**：`scenario_regression` 16/16 行为 PASS、**0 回归**；ctest 40/40；
+9 条静态 gate 全绿；`fault_inject_gate` 6/6；`l3_edr_gate` PASS；
+`ttc_lat_gate_sim` PASS。
+
+**如实记录的边界**：sensor 编排下 `r157_cut_out` 仍跑不动（avg 0.6 m/s），
+但已用**改前基线 A/B 确认这不是本刀引入的回归**（改前同样 0.6 m/s / x_delta
+21.7m）。现场探针显示末段 ego 偏航 31° 时车头已贴到静止障碍侧后方
+（`along=1.7m`），`safety_control` 的 `nearest_same_lane_gap`（`same_lane_tol=2.0`）
+据此全刹 —— 该制动力在 0.17m 净距下是**合理的保守行为，不应放宽**。真正待解的是
+sensor 编排下 DBSCAN 目标数远少于 ground_truth（`obs_count=1`），属"感知链路
+能力"专项，见上一条 sensor 编排发现。
+
 
 ## 与近期工作的关系
 

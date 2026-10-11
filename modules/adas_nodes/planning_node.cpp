@@ -1778,47 +1778,103 @@ protected:
              * 本车道前车物理 gap 逼近时按 3s TTC 强制限速，杜绝巡航速度追尾。
              * 用 planning 自己的感知障碍物（perception/obstacles），与
              * behavior 的 tracked_objects 独立，形成第二道防线。
-             * 横向归属：按 ego 当前实际位置量化车道（变道中跨线时取本车道
-             * 前车，保守方向——变道完成前仍视原车道前车为危险源）。 */
+             * 横向归属：对**应跟随车道中心线**求横向距离（D2-07）——变道中取
+             * behavior 下发的目标车道，巡航取 ego 最近车道。不再以 ego 瞬时
+             * 位置为零点：变道途中 ego 悬在两车道之间时，零点漂移会把"离开
+             * 车道"的邻道车误判为跟车目标（实测永久刹停，见下方详注）。 */
             if (g.has_vstate && g.lane_count >= 1) {
                 double lane_w = g.lane_width;
-                double lc_f = (-g.ego_y) / lane_w + (g.lane_count - 1) * 0.5;
-                int cur_lane = (int)(lc_f >= 0.0 ? lc_f + 0.5 : lc_f - 0.5);
+                /* ego 当前车道：用 nearest_lane + 单向路 side_offset 反推（与 W1
+                 * target_lane_offset 同源）。旧式 (-ego_y)/lane_w 忽略单向路
+                 * 车道组整体偏到 -y 侧的 side_offset，单向 4 车道会算错车道。 */
+                const double cur_side_offset = planning_coord::lane_group_side_offset(
+                    g.lane_count, lane_w, g.road_oneway != 0);
+                int cur_lane = planning_coord::nearest_lane(
+                    g.ego_y, g.lane_count, lane_w, !g.road_oneway, cur_side_offset);
                 if (cur_lane < 0) cur_lane = 0;
                 if (cur_lane >= g.lane_count) cur_lane = g.lane_count - 1;
                 double min_gap = 1e9;
                 int gap_src = 0;  /* 0=none 1=perception 2=truth */
+                /* ── D2-07: TTC 横向门限参考系 = 应跟随车道中心线 ────────────
+                 * 旧实现以 |obs_lat|（**ego 瞬时位置**为零点）做横向门限。变道
+                 * 途中 ego_y 悬在两车道之间（实测 ego_y=-4.58，源道 -1.75 /
+                 * 目标道 -5.25），零点随之漂移，"离开车道"的邻道车会被误判为
+                 * 跟车目标：真值障碍 lat=3.17 恰在门外，而 DBSCAN 只聚到近面、
+                 * 感知质心偏向可见侧 1.0m 后 lat=2.18 落进门内 → 把邻道静止障碍
+                 * 当本车道前车 → gap≈3m → command_speed 刹到 0 且永不恢复
+                 * （r157_cut_out 永久卡死）。
+                 * 修法：横向距离改为对"应跟随车道中心线"求（Frenet 投影，
+                 * `obs_d − follow_lane_center_d`），与 ego 位置解耦。参考系与
+                 * behavior_planner_node.cpp 的 lead 判据
+                 * `lat = |obs_projection.d − current_lane_d|` 完全一致，两模块对
+                 * 同一目标结论不再翻转。Python 先行验证 tools/ttc_lat_gate_sim.py。
+                 * 应跟随车道：变道中 = behavior 下发的目标车道（与 W1
+                 * target_lane_offset 同源），否则 = ego 当前最近车道。 */
+                double follow_lane_center_d = 0.0;
+                {
+                    const double side_offset = planning_coord::lane_group_side_offset(
+                        g.lane_count, lane_w, g.road_oneway != 0);
+                    int follow_lane = cur_lane;
+                    if (g.has_behavior && g.current_behavior.target_lane_idx >= 0 &&
+                        g.current_behavior.target_lane_idx < g.lane_count &&
+                        (g.current_behavior.command == BEH_LEFT_CHANGE ||
+                         g.current_behavior.command == BEH_RIGHT_CHANGE)) {
+                        follow_lane = g.current_behavior.target_lane_idx;
+                    }
+                    follow_lane_center_d = planning_coord::lane_center_d(
+                        follow_lane, g.lane_count, lane_w, side_offset);
+                }
                 /* 前方 = 沿车头方向（2026-08-04 掉头返程撞车修复）：
                  * 旧实现硬编码 dx>0（+x 前进方向）—— 返程（heading≈π 朝 -x）
                  * 时前方车在 -x 被跳过 → 不减速 → 撞车。沿车头方向投影对
                  * 前进/返程/任意 heading 正确。 */
                 /* D2-06: 两段式 TTC follow 候选选择
                  *   pass 1 (hint-first): 仅 obs.obs_lane_match_hint=true 的 obs
-                 *                          横向门限 lane_w * 0.75（与原版 lateral gate 一致）。
+                 *                          横向门限 lane_w*0.5 + 0.6（D2-07 起与
+                 *                          behavior 的 lead_lat_tol 同式同值）。
                  *                          fusion 已验证 obs 在 ego 同车道或相邻 ±1。
                  *                          gap_src = 1 (percept + hint verified)
                  *   pass 2 (legacy fallback): 所有 obs 都考虑
                  *                          横向门限更严 lane_w * 0.5（未验证同车道，保守方向）
                  *                          仅当 pass 1 无候选时执行。
                  *                          gap_src = 3 (percept + hint unavailable)
-                 * gap_src=2 留给真值兜底分支不变。 */
+                 * gap_src=2 留给真值兜底分支不变。
+                 * 注：两段的横向门限都是对**应跟随车道中心线**的距离（D2-07），
+                 * 不再以 ego 瞬时位置为零点。 */
                 {
                     TtcObsView view[g.kMaxObs];
+                    const double obs_fwd_x = std::cos(g.ego_heading);
+                    const double obs_fwd_y = std::sin(g.ego_heading);
                     for (int i = 0; i < g.obs_count; i++) {
                         view[i].x = g.obs_x[i];
                         view[i].y = g.obs_y[i];
                         view[i].vx = g.obs_vx[i];
                         view[i].vy = g.obs_vy[i];
                         view[i].lane_match_hint = g.obs_lane_match_hint[i];
+                        /* 横向距离 = obs 到**应跟随车道中心线**的距离。
+                         * 优先用 Frenet 投影（与 behavior_planner 同参考系，
+                         * 弯道正确）；map_ref 不可用时退化为车体系横向距离。 */
+                        double obs_s = 0.0, obs_d = 0.0;
+                        if (project_to_reference_path(g.obs_x[i], g.obs_y[i], obs_s, obs_d)) {
+                            view[i].lat_m = obs_d - follow_lane_center_d;
+                        } else {
+                            const double rx = g.obs_x[i] - g.ego_x;
+                            const double ry = g.obs_y[i] - g.ego_y;
+                            view[i].lat_m = -rx * obs_fwd_y + ry * obs_fwd_x;
+                        }
                     }
-                    /* pass 1: hint-first */
+                    /* pass 1: hint-first。门限 0.5*lane_w + 0.6 与
+                     * behavior_planner 的 lead_lat_tol 同式同值——两模块对同一
+                     * 目标结论一致（旧版此处 0.75*lane_w 与 behavior 不等，加上
+                     * 参考系不同，才会出现"behavior 说无前车、planning 说 gap=3m
+                     * 刹停"的自相矛盾）。 */
                     int idx = ttc_select_follow_lead(
                         view, g.obs_count,
                         g.ego_x, g.ego_y, g.ego_heading,
                         lane_w,
                         /*along_min*/ 0.0, /*along_max*/ 80.0,
                         /*rel_v_min*/ -2.0,
-                        /*lat_max*/   lane_w * 0.75,
+                        /*lat_max*/   lane_w * 0.5 + 0.6,
                         /*require_hint*/ true);
                     if (idx >= 0) {
                         const double rx = g.obs_x[idx] - g.ego_x;
@@ -1848,7 +1904,9 @@ protected:
                     }
                 }
                 /* 真值兜底：感知链未提供本车道前车（漏检/停更）时，
-                 * 用 flowsim 真值障碍物计算 gap——安全兜底不依赖感知链。 */
+                 * 用 flowsim 真值障碍物计算 gap——安全兜底不依赖感知链。
+                 * 横向同样对**应跟随车道中心线**求距（D2-07），否则变道途中
+                 * 真值兜底会重蹈"以 ego 为零点"的覆辙。 */
                 if (min_gap >= 1e8) {
                     const double fwd_x = std::cos(g.ego_heading);
                     const double fwd_y = std::sin(g.ego_heading);
@@ -1858,8 +1916,15 @@ protected:
                         const double along = rx * fwd_x + ry * fwd_y;
                         if (along <= 0.0 || along > 80.0) continue;
                         if (g.truth_obs_vx[i] < -2.0) continue;
-                        const double lat = std::fabs(-rx * fwd_y + ry * fwd_x);
-                        if (lat > lane_w * 0.75) continue;
+                        double truth_s = 0.0, truth_d = 0.0;
+                        double lat;
+                        if (project_to_reference_path(g.truth_obs_x[i], g.truth_obs_y[i],
+                                                      truth_s, truth_d)) {
+                            lat = std::fabs(truth_d - follow_lane_center_d);
+                        } else {
+                            lat = std::fabs(-rx * fwd_y + ry * fwd_x);
+                        }
+                        if (lat > lane_w * 0.5 + 0.6) continue;
                         if (along < min_gap) { min_gap = along; gap_src = 2; }
                     }
                 }

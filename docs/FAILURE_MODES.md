@@ -32,13 +32,13 @@
 
 | # | 分类 | 条数 |
 |---|------|------|
-| 1 | 控制 / 规划 / 安全层 | 33 |
+| 1 | 控制 / 规划 / 安全层 | 34 |
 | 2 | 感知 / 点云 | 6 |
 | 3 | 仿真 / 几何 / NPC | 8 |
 | 4 | 仪表盘 / 监控 / 前端 | 9 |
 | 5 | 评估器 / 门禁 | 6 |
 | 6 | 框架 / 工具链 | 4 |
-| | **合计** | **66** |
+| | **合计** | **67** |
 
 ## 1. 控制 / 规划 / 安全层
 
@@ -85,6 +85,8 @@
 | 场景写了 `allow_npc_lane_change: true` 想让 NPC 切入 ego 车道，NPC 却始终在原车道直行 | 该开关在 `scene_events.cpp` 的注释里被写为"未来需要时再加"，但**从未实现** —— NPC 横控被无条件归零（配合 MOBIL `#if 0`）。于是任何"NPC 切入"的法规场景（UN R157 cut-in/cut-out）在结构上写不出来，写了也只测到"没被加塞"（假绿）。修复：`Choreography.allow_npc_lane_change` 字段 + 解析 + 消费点条件判断，默认 false 保既有场景零变化。**另**：cut-in 应用 actor 的 `vy`（连续横向速度），**不要**用 choreography 的 `dl` 传送 —— 传送是位置跳变，实测会直接撞上 ego | `include/scenario_loader.h` `Choreography` / `src/core/scenario_loader.c` / `flowsim/scene_events.cpp` `effective_dl` |
 
 | 同一场景 **ground_truth 编排能跑、sensor 编排（真点云链路）跑不动**（`r157_cut_out`：GT avg 13.63 m/s / x_delta 532m / 变道 4 次 vs sensor avg 0.54 m/s / x_delta 21m / 变道 1 次，behavior 停在 `CRUISE`、`obs_count=1`） | sensor 编排下 ego 背对视锥起步、DBSCAN 聚类出的目标数远少于 ground_truth 直通；`obs_count=1` 时 behavior 的加塞/绕行逻辑缺少可评估的**邻道**目标，可能根本进不了变道评估分支。**排查手法**：对比两种编排的 `metrics.behavior.obs_count` 与 `behavior_state` 序列，而不是只看最终 x_delta。**注意**：既有 sensor 门禁场景（urban_challenge / dense_npc / lane_change_traffic）全 PASS，故这是**新场景超出 sensor 编排现有能力**，不是回归 | `config/pipeline_sensor.json`（sensor 编排）/ `behavior_planner_node.cpp` 左右车道评估分支（依赖邻道目标） |
+
+| **变道途中 TTC 跟车误锁邻道车 → 永久刹停到 0**（`TTC follow: gap=3.06 (src=hint) -> 0.0 m/s (was 20.0)`，同时 behavior 报 `best_gap=-1`（无前车）要 20 m/s —— **两模块对同一目标结论相反**） | planning 的 TTC 横向门限用 `\|obs_lat\|`（**ego 瞬时位置**为零点，`lat=−rx·sin h+ry·cos h`），而 behavior 用 `\|obs_projection.d − current_lane_d\|`（**车道相对**）。变道途中 ego_y 悬在两车道之间（实测 −4.58，源道 −1.75 / 目标道 −5.25），零点随之漂移："离开车道"的邻道车被误判为跟车目标 —— 真值障碍（源车道 y=−1.75）车体系 lat=3.17 恰在门外，而 DBSCAN 只聚到可见近面、感知质心偏向 ego 侧 1.0m 后 lat=2.18 落进门内 → gap≈3m → 刹到 0 且永不恢复（`r157_cut_out` sensor 编排永久卡死）。**同类伪影（GT 编排也中）**：远处同车道真前车在 heading=0.109 时车体系 lat=3.61 > 2.625 被**误拒**（`along·sin h` 项，弯道上更甚）→ **漏掉真前车**（比误收邻道车更危险）。**排查手法**：不要只看 planning 的 `TTC follow` 日志下结论 —— 必须同时看 behavior 的 `best_gap`，两者矛盾即参考系不一致。修复：横向距离改对**应跟随车道中心线**求（Frenet `obs_d − follow_lane_center_d`，变道中取 behavior 下发的目标车道，与 W1 `target_lane_offset` 同源），门限 `0.5·lane_w+0.6` 与 behavior 的 `lead_lat_tol` **同式同值**；真值兜底分支同样改。Python 先行 `tools/ttc_lat_gate_sim.py`（邻道车真值/感知均拒 + 目标道真值/±1m 偏差/40m 远处均收，全 PASS）| `planning_ttc_candidate.h`（`TtcObsView.lat_m`）/ `planning_node.cpp` TTC follow 候选块 + 真值兜底 |
 
 ## 2. 感知 / 点云
 
