@@ -17,6 +17,7 @@
 #include "topic_registry.h"
 #include "adas_msgs_gen.h"
 #include "degrade_ladder.h"
+#include "clock_service.h"
 #include "safety_arbiter.h"
 #include "health.h"
 #include "safety_evidence.h"
@@ -477,6 +478,12 @@ protected:
 
         LOG_INFO("safety_control", "safety gate started (bus bridge polling + dynamic arbiter)");
         while (!should_stop()) {
+            /* L3-P2 看门狗：安全闸门**自身**必须被监控。
+             * 此前 supervisor 只覆盖 control/fusion/planning 三个节点 ——
+             * safety_control 掉线时没有任何机制发现，而它正是最后一层保护。
+             * 名字用 "safety_control_node" 与 reason_for_node 的映射对齐。 */
+            degrade_supervisor_record_heartbeat("safety_control_node",
+                                                (int64_t)(clock_now_us() / 1000));
             std::string topic;
             Message msg;
             if (cmd_bridge.try_take_any(&topic, &msg)) {

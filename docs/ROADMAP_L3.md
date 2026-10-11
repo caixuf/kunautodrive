@@ -433,6 +433,31 @@ P2 要求「**EDR**：在现有 PEM 流上增加 L3 法规事件：激活/退出
 的专项判据（需构造"盲开仍不撞"场景）。
 
 
+### P2 进展（2026-10-11，第四刀：看门狗覆盖面）
+
+P2 的「冗余（…、**看门狗**）」这一项此前只是**名义上存在**：`degrade_ladder` 的
+supervisor 有完整的递进策略（L1/L2/L3 + 去抖 + 自动恢复），但**只有 3 个节点上报
+心跳**（`control` / `fusion` / `planning`）——安全闸门 `safety_control` 自身、
+整条感知链（`sensor_model` / `perception` / `object_tracker`）、决策层
+`behavior_planner` 掉线时**没有任何机制发现**。
+
+| 项 | 状态 | 落地 |
+|----|------|------|
+| 心跳覆盖 3 → 8 节点 | ✅ 完成 | 新增 `safety_control_node` / `perception_node` / `sensor_model_node` / `object_tracker_node` / `behavior_planner_node` 五个上报点。**`safety_control` 是最后一层保护，它掉线最不该无人发现** |
+| 原因码不再指错层 | ✅ 完成 | `reason_for_node` 增感知链映射：`sensor_model`/`perception`/`object_tracker` 超时报 `sensor_timeout`，而不是此前的 `control_timeout`（后者会把人指向明明在跑的 control） |
+| 表容量静默丢弃 | ✅ 完成 | `DEGRADE_MAX_NODES` 16 → 32。默认 `pipeline.json` 有 **19 个节点**，旧上限下第 17 个起的心跳被 `return` **静默丢弃** —— 运维侧看到的是"心跳都健康"的假绿。现在表满会 `LOG_ERROR` 点名（带防刷屏），并加注释说明为何是 32（与 `HEALTH_MAX_NODES` 对齐） |
+
+**验证**：40 ctest 全绿（`safety_fault_evidence_tests` 新增看门狗覆盖面/容量/原因码
+三类断言）；实测 `metrics.degrade.node_count` 由 3 → **8**，逐节点 age 均新鲜；
+9 条静态 gate 全绿。
+
+**门禁有效性自检（本项特别做了 A/B）**：把 `DEGRADE_MAX_NODES` 改回 16 重编译，
+新增的 4 条断言**全部 FAIL**；还原为 32 后 PASS —— 证明这些断言不是恒真摆设。
+
+**P2 遗留**：雷达传感器模型仍缺失（`sensor_model` 只有 lidar/gps/camera，
+全仓无 radar）。
+
+
 ## 与近期工作的关系
 
 - 近期回归修复见 `UPGRADE_DIRECTION.md`：`main` 先稳定在 `a065f26`，

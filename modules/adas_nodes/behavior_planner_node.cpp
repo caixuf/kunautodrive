@@ -31,6 +31,7 @@
 #undef LOG_FATAL
 #include "logger.h"
 #include "clock_service.h"
+#include "degrade_ladder.h"   /* L3-P2 看门狗 */
 #include "planning_coordinates.h"
 #include "construction_zones.h"
 #include <cjson/cJSON.h>
@@ -685,6 +686,10 @@ protected:
         LOG_INFO("behavior", "FlowCoro behavior planner started (20Hz)");
 
         while (!should_stop()) {
+            /* L3-P2 看门狗：行为决策层掉线表现为"该变道不变道"这种静默退化，
+             * 没有降级信号就无从发现。 */
+            degrade_supervisor_record_heartbeat("behavior_planner_node",
+                                                (int64_t)(clock_now_us() / 1000));
             uint64_t t_start = clock_now_us();
 
             /* 等待感知数据就绪 */

@@ -11,6 +11,7 @@
 
 #include "degrade_ladder.h"
 #include "clock_service.h"
+#include "logger.h"
 #include <string.h>
 #include <stdio.h>
 #if defined(_WIN32)
@@ -193,7 +194,18 @@ void degrade_supervisor_record_heartbeat(const char* node_name, int64_t now_ms) 
 
     /* 新节点注册 */
     if (idx < 0) {
-        if (g_supervisor.node_count >= DEGRADE_MAX_NODES) return;
+        if (g_supervisor.node_count >= DEGRADE_MAX_NODES) {
+            /* 表满必须**出声**：静默 return 会让该节点永远不被监控，而运维
+             * 侧看到的是"心跳都健康"这种假绿。只在前若干次打日志防刷屏。 */
+            static int warned = 0;
+            if (warned < 5) {
+                LOG_ERROR("degrade", "supervisor node table full (%d); heartbeat "
+                          "from '%s' DROPPED — this node is NOT being watched",
+                          DEGRADE_MAX_NODES, node_name);
+                warned++;
+            }
+            return;
+        }
         idx = g_supervisor.node_count++;
         snprintf(g_supervisor.nodes[idx].name, sizeof(g_supervisor.nodes[idx].name),
                  "%s", node_name);
@@ -203,8 +215,15 @@ void degrade_supervisor_record_heartbeat(const char* node_name, int64_t now_ms) 
 }
 
 static int reason_for_node(const char* name) {
+    if (!name) return DEGRADE_REASON_CONTROL_TO;
+    /* 感知链路的超时归到 SENSOR_TO，规划/控制归各自原因码，其余归 CONTROL_TO。
+     * 为什么要把感知链路单列：sensor_model / perception / object_tracker 掉线时
+     * 报 "control_timeout" 会把人指向错误的层（control 明明在跑）。 */
     if (strcmp(name, "planning_node") == 0) return DEGRADE_REASON_PLANNING_TO;
-    if (strcmp(name, "fusion_node") == 0) return DEGRADE_REASON_FUSION_TO;
+    if (strcmp(name, "fusion_node") == 0)   return DEGRADE_REASON_FUSION_TO;
+    if (strcmp(name, "sensor_model_node") == 0 ||
+        strcmp(name, "perception_node") == 0 ||
+        strcmp(name, "object_tracker_node") == 0) return DEGRADE_REASON_SENSOR_TO;
     return DEGRADE_REASON_CONTROL_TO;
 }
 

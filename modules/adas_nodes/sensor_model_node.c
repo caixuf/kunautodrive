@@ -17,6 +17,7 @@
 #include "discovery.h"
 #include "topic_registry.h"
 #include "clock_service.h"
+#include "degrade_ladder.h"   /* L3-P2 看门狗 */
 #include "logger.h"
 
 #include <math.h>
@@ -372,6 +373,10 @@ static int sensor_model_execute(TaskBase* task) {
     long period_us = 1000000L / (g.lidar_rate_hz > 0 ? g.lidar_rate_hz : 20);
 
     while (!task->should_stop) {
+        /* L3-P2 看门狗：感知链源头。掉线时报 sensor_timeout 而不是
+         * control_timeout（后者会把人指向错误的层）。 */
+        degrade_supervisor_record_heartbeat("sensor_model_node",
+                                            (int64_t)(clock_now_us() / 1000));
         usleep((unsigned long)period_us);
         if (task->should_stop) break;
 

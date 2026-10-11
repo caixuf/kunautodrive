@@ -32,13 +32,13 @@
 
 | # | 分类 | 条数 |
 |---|------|------|
-| 1 | 控制 / 规划 / 安全层 | 28 |
+| 1 | 控制 / 规划 / 安全层 | 30 |
 | 2 | 感知 / 点云 | 6 |
 | 3 | 仿真 / 几何 / NPC | 7 |
 | 4 | 仪表盘 / 监控 / 前端 | 9 |
 | 5 | 评估器 / 门禁 | 5 |
 | 6 | 框架 / 工具链 | 3 |
-| | **合计** | **58** |
+| | **合计** | **60** |
 
 ## 1. 控制 / 规划 / 安全层
 
@@ -76,6 +76,9 @@
 
 | **PEM 有事件框架却一条 L3 事件都记不下来**（production 管线跑完 L3 场景，PEM 里只有 `degrade_transition`） | EDR 的事件源订阅（`odd/state`、`tor/state`）被关在 `if (!g.embedded_mode)` 块内，而 **PEM 写出恰恰只在 embedded（production）模式** —— 两个条件**永不同时成立**。修法：两条订阅移出该分支（体量极小，两种模式都订）。**通用教训**：`embedded_mode` 这类"模式开关"两侧的依赖要成对审查 —— 只在 A 模式采数据、只在 B 模式消费，是静默失效的经典组合 | `monitor_node.c` `if (!g.embedded_mode)` 订阅块 / EDR 写出块（embedded 分支内） |
 | 新 `src/core/*.c` 漏加进 CMake `CORE_SOURCES`，`plugin_symbol_check.py` 仍报 OK，直到 `dlopen` 才 'symbol lookup error' | 该闸门只查"插件**定义**但未解析的项目符号"，漏了"插件**引用**而核心库未编译进去"这一向（反向依赖）。实测：`nm -D --undefined-only build/lib/libmonitor_node.so` 里 `l3_edr_tor_state_code` 为 `U`，而闸门报 "OK (36 plugins)"。**排查手法**：加新 core 源文件后，除了跑闸门，还要 `nm -D --undefined-only` 检查受影响 .so 有无项目符号未解析 | `CMakeLists.txt` `CORE_SOURCES` / `ci/gates/plugin_symbol_check.py` 覆盖盲区 |
+
+| **安全闸门/感知链掉线无人发现**：`safety_control`、`sensor_model`、`perception`、`object_tracker`、`behavior_planner` 全部静默，而 `metrics.degrade` 显示"心跳都健康" | supervisor 的递进策略（L1/L2/L3+去抖+自动恢复）本身完整，但**只有 3 个节点上报心跳**（control/fusion/planning）—— 覆盖面而非机制的问题。`safety_control` 是最后一层保护，它掉线最不该无人发现。修复：新增 5 个上报点，覆盖面 3→8；并给 `reason_for_node` 补感知链映射（`sensor_model`/`perception`/`object_tracker` → `sensor_timeout`），否则感知掉线会报 `control_timeout` 把人指向明明在跑的 control | `degrade_ladder.c` `reason_for_node` + 各节点的 `degrade_supervisor_record_heartbeat` |
+| **第 17 个节点起的心跳被静默丢弃**，而默认 `pipeline.json` 恰好有 19 个节点 → 运维侧看到"心跳都健康"的假绿 | `DEGRADE_MAX_NODES` 为 16，`degrade_supervisor_record_heartbeat` 在表满时直接 `return`（**不报错**）。这是本仓库反复出现的"最贵的失败形态"：静默截断被当成正常。修复：上限 16→32（与 `HEALTH_MAX_NODES` 对齐），表满改 `LOG_ERROR` 点名（带防刷屏） | `include/degrade_ladder.h` `DEGRADE_MAX_NODES` / `degrade_ladder.c` 心跳注册分支 |
 
 ## 2. 感知 / 点云
 

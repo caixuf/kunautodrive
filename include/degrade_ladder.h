@@ -117,7 +117,12 @@ DegradeAction degrade_layer_action(void);
 /*  Supervisor API — 健康监控 + 自动递进                          */
 /* ══════════════════════════════════════════════════════════ */
 
-#define DEGRADE_MAX_NODES 16   /**< supervisor 最大监控节点数 */
+/* supervisor 最大监控节点数。
+ * 为什么从 16 提到 32：默认 pipeline.json 是 **19 个节点**，而 watchdog 覆盖
+ * 范围正在从 3 个（control/fusion/planning）扩到全部安全相关节点。16 会让
+ * 第 17 个起的心跳**静默丢弃**（旧实现是 `return` 不报错），恰好又是本仓库
+ * 反复出现的"最贵的失败形态"。取 32 与 HEALTH_MAX_NODES 对齐。 */
+#define DEGRADE_MAX_NODES 32   /**< supervisor 最大监控节点数 */
 #define DEGRADE_NODE_NAME_LEN 32
 
 /**

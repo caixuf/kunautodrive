@@ -58,6 +58,7 @@
 #include <unistd.h>
 
 #include "clock_service.h"
+#include "degrade_ladder.h"   /* L3-P2 看门狗 */
 
 #include <cjson/cJSON.h>
 
@@ -355,6 +356,9 @@ protected:
         LOG_INFO("perception", "FlowCoro perception started (%ld us period)", period_us_);
 
         while (!should_stop()) {
+            /* L3-P2 看门狗：感知链（点云聚类/障碍物输出）掉线必须可见。 */
+            degrade_supervisor_record_heartbeat("perception_node",
+                                                (int64_t)(clock_now_us() / 1000));
             /* 替代 usleep：sleep_us 自动注入 cancel_token_，stop() 可立即唤醒 */
             co_await sleep_us(period_us_);
             if (should_stop()) break;

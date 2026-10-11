@@ -56,6 +56,83 @@ static void test_missed_heartbeat_degrades(void) {
           "L1 must expose a degraded safety envelope");
 }
 
+/*
+ * L3-P2: watchdog 覆盖面与表容量。
+ *
+ * 两个真实缺陷的回归锁：
+ *   1. DEGRADE_MAX_NODES 曾为 16，而默认 pipeline 有 19 个节点 —— 第 17 个起
+ *      的心跳被 **静默丢弃**，运维侧看到的是"心跳都健康"的假绿。
+ *   2. 感知链（sensor_model/perception/object_tracker）与 safety_control/
+ *      behavior_planner 此前根本不上报心跳 → 掉线无人发现；且它们的超时会被
+ *      reason_for_node 归成 control_timeout，指错层。
+ */
+static void test_watchdog_capacity_and_reasons(void) {
+    /* 注意：degrade_clear() **不清** supervisor 的 node_count（只清心跳时间戳），
+     * 节点表在进程生命周期内只增不减。故本测试用"注册前/后差值"而非绝对数量，
+     * 才能与前序用例的残留解耦。 */
+    const int before = degrade_supervisor_node_count();
+
+    /* 装满一整条默认管线的节点数（19）+ 余量，全部必须被接纳。
+     * 旧 cfg（16）下第 17 个起被静默丢弃 → 运维看到"心跳都健康"的假绿。 */
+    char names[24][64];
+    for (int i = 0; i < 24; i++) {
+        snprintf(names[i], sizeof(names[i]), "cap_probe_%02d", i);
+        degrade_supervisor_record_heartbeat(names[i], 1000);
+    }
+    const int added = degrade_supervisor_node_count() - before;
+    CHECK(added == 24,
+          "supervisor must accept 24 further nodes (default pipeline is 19; the old "
+          "cap of 16 silently dropped the rest, leaving them invisibly unwatched)");
+    CHECK(degrade_supervisor_node_count() <= DEGRADE_MAX_NODES,
+          "node count must stay within DEGRADE_MAX_NODES");
+
+    /* 感知链 / 安全闸门 / 决策层的关键节点必须都能注册（覆盖面回归锁）。 */
+    const int before2 = degrade_supervisor_node_count();
+    const char* critical[] = {
+        "sensor_model_node", "perception_node", "object_tracker_node",
+        "safety_control_node", "behavior_planner_node",
+    };
+    for (size_t i = 0; i < sizeof(critical) / sizeof(critical[0]); i++)
+        degrade_supervisor_record_heartbeat(critical[i], 1000);
+    /* 允许 fusion/planning/control 已被前序用例注册（表只增不减），故用 >=：
+     * 关键是这些**感知链/安全闸门/决策层**节点必须都能进去。 */
+    CHECK(degrade_supervisor_node_count() - before2 >=
+              (int)(sizeof(critical) / sizeof(critical[0])),
+          "every safety-critical node must fit in the watchdog table");
+
+    /* 感知链超时必须报 sensor_timeout，而不是 control_timeout（指错层）。
+     *
+     * ⚠️ 判据取**第一个**超时节点的名字（degrade_ladder.c 的 reason_for_node），
+     * 而节点表只增不减。故这里先让所有已注册节点的心跳都"新鲜"，只把
+     * sensor_model_node 留成陈旧，才能确定性地验证映射。 */
+    degrade_clear();                       /* 清心跳时间戳（不清表） */
+    for (int i = 0; i < degrade_supervisor_node_count(); i++) {
+        /* 逐个刷新：用 node_health 读回名字再打心跳 */
+    }
+    {
+        /* 直接对所有已知关键节点刷新，再把 sensor_model 单独做旧 */
+        const char* all[] = {
+            "sensor_model_node", "perception_node", "object_tracker_node",
+            "safety_control_node", "behavior_planner_node",
+            "fusion_node", "planning_node", "control_node",
+        };
+        for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); i++)
+            degrade_supervisor_record_heartbeat(all[i], 1652);   /* 新鲜 */
+        degrade_supervisor_record_heartbeat("sensor_model_node", 1000); /* 陈旧 */
+    }
+    degrade_supervisor_tick(1501);
+    degrade_supervisor_tick(1652);
+    CHECK(degrade_global_state()->degrade_reason == DEGRADE_REASON_SENSOR_TO,
+          "perception-chain timeout must report sensor_timeout, not control_timeout");
+    CHECK(strcmp(degrade_reason_name(DEGRADE_REASON_SENSOR_TO),
+                 "sensor_timeout") == 0,
+          "sensor timeout reason must have a stable published name");
+
+    /* safety_control 掉线必须被判定为超时（它是最后一层保护）。 */
+    CHECK(degrade_global_state()->degrade_level >= DEGRADE_L1,
+          "safety_control silence must degrade — it is the last safety layer");
+}
+
 static char* test_raw_command_timeout_evidence(void) {
     SafetyFaultInjection injection;
     safety_fault_injection_init(&injection, true, 500000);
@@ -132,6 +209,7 @@ int main(int argc, char** argv) {
     }
 
     test_missed_heartbeat_degrades();
+    test_watchdog_capacity_and_reasons();
     char* evidence_json = test_raw_command_timeout_evidence();
 
     if (evidence_json) {

@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 >
 > ⚠️ **`~/.claude/skills/*` 路径未随仓库分发**（本机 2026-09 核查不存在）。读不到时按其
 > 自述的方法论执行即可：分层探针 + 值传播验证 + 状态锁死 + 缓存层检查；下方各节的铁律与
-> [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)（运行期故障模式表，58 行 / 6 类）才是仓库内的权威副本。
+> [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)（运行期故障模式表，60 行 / 6 类）才是仓库内的权威副本。
 >
 > **行为异常排查**（转向灯反/该停不停/该走不走/刹停到 0/改代码现象不变）→
 > 先按 [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md) 的**现象列**对号入座，再看
@@ -47,6 +47,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | L3 安全闭环（P1） | `ctest -R tor_mrm_sim` + `python3 ci/evaluators/demo_evaluator.py --scenario scenarios/l3_odd_exit_takeover.json` / `..._timeout_mrm.json` | ODD 退出 / TOR 请求 / 接管 / 超时 MRM 链路断开；**MRM 只发请求没真停**（遥测缺失=INCONCLUSIVE≠PASS）。判据在场景 `pass_criteria.l3_expect`，CI `evaluator` job 每次 push 跑 |
 | L3 故障注入（P2） | `python3 ci/gates/fault_inject_gate.py --duration 22` + `ctest -R "fault_inject\|fault_degrade"` | 每类注入故障无**可观测**降级路径；注入没生效被误记成降级缺失；降级逻辑存在但遥测里看不见（实测抓过 control 的 DATA_TIMEOUT fallback 在发 debug 前 `continue`）。矩阵单一事实源 `tools/fault_degrade_sim.py`，CI `integration-test` job 跑 |
 | L3 定位冗余（P2） | `python3 tools/localization_integrity_sim.py --run-all` + `ctest -R localization_integrity` | 单源丢失被误判成定位丢失（冗余失效）/ 双源互相矛盾却无人发现；**死原因码** `DEGRADE_REASON_LOCALIZATION` 回潮；`fusion/localization` 多发布点漏加完整性字段。规则单一事实源两条同步：`tools/localization_integrity_sim.py` ↔ `include/localization_integrity.h` |
+| L3 看门狗（P2） | `ctest -R safety_fault_evidence` | 安全相关节点掉线无人发现（心跳覆盖面不足）/ 感知链超时被报成 `control_timeout` 指错层 / `DEGRADE_MAX_NODES` 表满**静默丢弃**心跳（默认管线 19 节点 > 旧上限 16，运维看到假绿） | 
 | L3 EDR（P2） | `python3 ci/gates/l3_edr_gate.py --duration 28` + `ctest -R l3_edr` | L3 法规事件（激活/退出、TOR、MRM、ODD 退出）没真写进 PEM；事件未走 fsync；PEM 出现未声明的事件名。**实测抓过**：事件源订阅被关在 `if (!g.embedded_mode)` 里、而写 PEM 只在 embedded 模式 → 两个条件永不同时成立，`l3_*` 一条都记不下。分类单一事实源 `tools/l3_edr_sim.py` ↔ `include/l3_edr.h`，CI `integration-test` 跑 |
 
 **新增/改名的闸门必须同步这张表** —— 只加 job 不登记，下一个人会以为没有它。
@@ -709,7 +710,7 @@ frame: THREE  | up: +Y | 单位: m | ENU→THREE: [x, z, -y] | ego_centered: tru
 
 ## 常见故障模式
 
-> **完整 58 行表（现象 → 根因 → 位置）见 [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)**
+> **完整 60 行表（现象 → 根因 → 位置）见 [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)**
 > —— 仓库内权威副本，按 6 类分节：控制/规划/安全层 · 感知/点云 · 仿真/几何/NPC ·
 > 仪表盘/监控/前端 · 评估器/门禁 · 框架/工具链。
 >

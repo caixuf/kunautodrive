@@ -20,6 +20,7 @@
 #include "adas_msgs_gen.h"
 #include "logger.h"
 #include "clock_service.h"
+#include "degrade_ladder.h"   /* L3-P2 看门狗 */
 #include <cjson/cJSON.h>
 
 #include <math.h>
@@ -191,6 +192,9 @@ static int tracker_execute(TaskBase* task) {
     const long period_us = (long)(1000000.0 / g.rate_hz);
 
     while (!task->should_stop) {
+        /* L3-P2 看门狗：跟踪层掉线 → 障碍物列表陈旧，属感知链。 */
+        degrade_supervisor_record_heartbeat("object_tracker_node",
+                                            (int64_t)(clock_now_us() / 1000));
         usleep((unsigned long)period_us);
         if (task->should_stop) break;
 
