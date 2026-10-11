@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 >
 > ⚠️ **`~/.claude/skills/*` 路径未随仓库分发**（本机 2026-09 核查不存在）。读不到时按其
 > 自述的方法论执行即可：分层探针 + 值传播验证 + 状态锁死 + 缓存层检查；下方各节的铁律与
-> [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)（运行期故障模式表，65 行 / 6 类）才是仓库内的权威副本。
+> [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)（运行期故障模式表，66 行 / 6 类）才是仓库内的权威副本。
 >
 > **行为异常排查**（转向灯反/该停不停/该走不走/刹停到 0/改代码现象不变）→
 > 先按 [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md) 的**现象列**对号入座，再看
@@ -712,7 +712,7 @@ frame: THREE  | up: +Y | 单位: m | ENU→THREE: [x, z, -y] | ego_centered: tru
 
 ## 常见故障模式
 
-> **完整 65 行表（现象 → 根因 → 位置）见 [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)**
+> **完整 66 行表（现象 → 根因 → 位置）见 [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)**
 > —— 仓库内权威副本，按 6 类分节：控制/规划/安全层 · 感知/点云 · 仿真/几何/NPC ·
 > 仪表盘/监控/前端 · 评估器/门禁 · 框架/工具链。
 >

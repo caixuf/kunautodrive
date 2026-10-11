@@ -569,9 +569,23 @@ stagnation 44.6s → 消失，场景 PASS。
 **验证**：`scenario_regression` 16 个 enabled 场景全跑（见下）；
 9 条静态 gate 全绿；`scenarioctl validate` 全场景 PASS。
 
+**本轮新增的一个重要发现（未修，如实记录）**：新 R157 场景在 **sensor 编排
+（真点云链路，`config/pipeline_sensor.json`）下普遍跑不动** —— 例
+`r157_cut_out`：ground_truth 编排 avg 13.63 m/s / x_delta 532m / 变道 4 次；
+sensor 编排 avg **0.54 m/s** / x_delta **21m** / 变道 1 次（behavior 停在
+`CRUISE`、`obs_count=1`）。
+
+排查方向（未结论）：sensor 编排下 ego 背对视锥起步、DBSCAN 聚类出的目标数远少于
+ground_truth 直通，`obs_count=1` 时 behavior 的加塞/绕行逻辑缺少可评估的邻道目标，
+可能根本进不了变道评估分支。**这不是本刀引入的回归** —— CI 的 sensor 门禁只跑
+`urban_challenge` / `dense_npc` / `lane_change_traffic` 三个既有场景且全 PASS；
+新 R157 场景**未**加入 sensor 门禁清单，故 CI 不受影响。若后续要把 R157 纳入
+sensor 门禁，必须先解决该问题（属"感知链路能力"而非"场景定义"）。
+
 **P2 遗留**：法规场景库已覆盖 R157 主要条目；剩余为"感知降级后系统行为是否
-仍安全"的专项判据（需构造"盲开仍不撞"场景），以及 P2 之外的 P3（ISO 26262 /
-SOTIF / R155·R156 文档链、FlowBoard L3 面板、统计里程目标）。
+仍安全"的专项判据（需构造"盲开仍不撞"场景，与上面的 sensor 编排发现同源），
+以及 P2 之外的 P3（ISO 26262 / SOTIF / R155·R156 文档链、FlowBoard L3 面板、
+统计里程目标）。
 
 
 ## 与近期工作的关系

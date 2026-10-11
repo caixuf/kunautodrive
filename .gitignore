@@ -192,4 +192,7 @@ maps/osm_zhengdong/lanelet.osm
 .long_run_gate/
 .fault_gate_*/
 .flow_regression/
+# scenario_regression / demo_evaluator 的 worker 工作区：内含 pipeline.json 副本、
+# xodr、launcher stdout/stderr（可达数千行）。无论 results_dir 叫什么都别提交。
+.workers/
 

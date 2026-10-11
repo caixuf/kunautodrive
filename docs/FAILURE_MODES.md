@@ -32,13 +32,13 @@
 
 | # | 分类 | 条数 |
 |---|------|------|
-| 1 | 控制 / 规划 / 安全层 | 32 |
+| 1 | 控制 / 规划 / 安全层 | 33 |
 | 2 | 感知 / 点云 | 6 |
 | 3 | 仿真 / 几何 / NPC | 8 |
 | 4 | 仪表盘 / 监控 / 前端 | 9 |
 | 5 | 评估器 / 门禁 | 6 |
 | 6 | 框架 / 工具链 | 4 |
-| | **合计** | **65** |
+| | **合计** | **66** |
 
 ## 1. 控制 / 规划 / 安全层
 
@@ -83,6 +83,8 @@
 
 | **前方静止障碍把 ego 永久堵死**（`stagnation 44.6s` / `lane_change_count=0` / avg_speed 0.40 m/s / behavior 恒 `FOLLOW`） | `behavior_planner` 超车价值判据 `worthwhile = blocked && (best_gap > min_gap)` 而 `min_gap = min_overtake_gap_base(25.0) + rel_speed×2.0`。ego 正常跟停在 desired_gap≈5m（实测 7.2m），`min_gap` 却是 25m 起跳 → `best_gap > min_gap` **恒不成立** → 永不评估变道 → 永久堵死。**关键洞察**：该判据的语义（"前方留够空间才**值得**超车"）对**运动**前车成立（逼近过程 best_gap 从大到小穿过阈值），但对**已停在正前方**的障碍物无解 —— **车越守规矩停得越近，越永远不绕行**。修复：前车速度 < `min_overtake_lead_moving_mps`（新参数，默认 0.5 m/s）即视为已停住 → 绕行价值恒真，可不可行交给下游变道安全评估（目标车道 rear/front gap）。修后实测 avg_speed 0.40→14.26 m/s、变道 0→4 次 | `behavior_planner_node.cpp` `worthwhile` 判据（`min_overtake_lead_moving_mps`） |
 | 场景写了 `allow_npc_lane_change: true` 想让 NPC 切入 ego 车道，NPC 却始终在原车道直行 | 该开关在 `scene_events.cpp` 的注释里被写为"未来需要时再加"，但**从未实现** —— NPC 横控被无条件归零（配合 MOBIL `#if 0`）。于是任何"NPC 切入"的法规场景（UN R157 cut-in/cut-out）在结构上写不出来，写了也只测到"没被加塞"（假绿）。修复：`Choreography.allow_npc_lane_change` 字段 + 解析 + 消费点条件判断，默认 false 保既有场景零变化。**另**：cut-in 应用 actor 的 `vy`（连续横向速度），**不要**用 choreography 的 `dl` 传送 —— 传送是位置跳变，实测会直接撞上 ego | `include/scenario_loader.h` `Choreography` / `src/core/scenario_loader.c` / `flowsim/scene_events.cpp` `effective_dl` |
+
+| 同一场景 **ground_truth 编排能跑、sensor 编排（真点云链路）跑不动**（`r157_cut_out`：GT avg 13.63 m/s / x_delta 532m / 变道 4 次 vs sensor avg 0.54 m/s / x_delta 21m / 变道 1 次，behavior 停在 `CRUISE`、`obs_count=1`） | sensor 编排下 ego 背对视锥起步、DBSCAN 聚类出的目标数远少于 ground_truth 直通；`obs_count=1` 时 behavior 的加塞/绕行逻辑缺少可评估的**邻道**目标，可能根本进不了变道评估分支。**排查手法**：对比两种编排的 `metrics.behavior.obs_count` 与 `behavior_state` 序列，而不是只看最终 x_delta。**注意**：既有 sensor 门禁场景（urban_challenge / dense_npc / lane_change_traffic）全 PASS，故这是**新场景超出 sensor 编排现有能力**，不是回归 | `config/pipeline_sensor.json`（sensor 编排）/ `behavior_planner_node.cpp` 左右车道评估分支（依赖邻道目标） |
 
 ## 2. 感知 / 点云
 
