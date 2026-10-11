@@ -310,6 +310,14 @@ jobs:
         run: timeout 35 ./build/bin/flow_launcher config/pipeline.json --duration 15
       - name: Integration smoke (ctest -L integration)
         run: ctest --test-dir build --output-on-failure -L integration
+      # ── L3-P2（方向六）：故障注入 → 降级路径 门禁 ──
+      # P2 放行条件「每类注入故障都有可观测的降级路径」的有牙实现：
+      # 对 tools/fault_degrade_sim.py 登记的每一类故障真起一条管线、真注入、
+      # 再从 metrics.degrade / control_debug / fault_inject 读回实测值与期望比对。
+      # 2026-10-11 首次上线即抓出 control 的 DATA_TIMEOUT fallback 在发布
+      # control/debug **之前** continue → 该降级路径在拓扑里完全不可见。
+      - name: Fault-injection → degrade-path gate (L3-P2)
+        run: python3 ci/gates/fault_inject_gate.py --duration 22
 
   # ── Algorithm evaluator (regression gate) ─────────────────────
   # Runs the full plugin pipeline (demo.sh) and scores it against

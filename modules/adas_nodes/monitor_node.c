@@ -24,6 +24,7 @@
 #include "json_extract.h"
 #include "clock_service.h"
 #include "degrade_ladder.h"
+#include "fault_inject.h"   /* L3-P2: 把注入状态导出到拓扑，供门禁确认注入确已生效 */
 #include "health.h"
 #include <pem_log.h>
 #include <pem_runtime.h>
@@ -1259,6 +1260,66 @@ static void export_dashboard_json(void) {
     if (g.tor_state_json[0]) {
         cJSON* tr = monitor_cJSON_Parse(g.tor_state_json);
         if (tr) cJSON_AddItemToObject(metrics, "tor", tr);
+    }
+
+    /* L3-P2：降级路径可观测性。
+     *
+     * 此前 degrade 状态**只写 PEM**（见下方 pem/degrade_event 发布点），拓扑
+     * JSON 里没有任何字段 → 评估器/CI 无法断言"某类故障是否走了预期降级路径"，
+     * P2 的放行条件「每类注入故障都有可观测的降级路径」在验收层面是空的。
+     * 这里把 degrade 等级/原因码（稳定字符串）+ 逐节点心跳健康导出到
+     * metrics.degrade，让 Black-box 门禁能按名字断言。 */
+    {
+        const int64_t now_ms = (int64_t)(clock_now_us() / 1000ULL);
+        const DegradeState* ds = degrade_global_state();
+        const int lvl = (int)ds->degrade_level;
+        cJSON* dg = cJSON_AddObjectToObject(metrics, "degrade");
+        cJSON_AddNumberToObject(dg, "level", lvl);
+        cJSON_AddNumberToObject(dg, "reason", (int)ds->degrade_reason);
+        cJSON_AddStringToObject(dg, "reason_name",
+                                degrade_reason_name((int)ds->degrade_reason));
+        cJSON_AddBoolToObject(dg, "active", lvl > DEGRADE_L0);
+        cJSON_AddNumberToObject(dg, "timestamp_ms", (double)ds->degrade_timestamp_ms);
+
+        /* 逐节点心跳健康：按 name 断言"哪个节点掉线导致了这次降级"。 */
+        DegradeNodeHealth nodes[DEGRADE_MAX_NODES];
+        const int n = degrade_supervisor_node_health(nodes, DEGRADE_MAX_NODES, now_ms);
+        cJSON* jnodes = cJSON_AddArrayToObject(dg, "nodes");
+        int timed_out_count = 0;
+        for (int i = 0; i < n; i++) {
+            if (nodes[i].timed_out) timed_out_count++;
+            cJSON* jo = cJSON_CreateObject();
+            cJSON_AddStringToObject(jo, "name", nodes[i].name);
+            cJSON_AddNumberToObject(jo, "age_ms", (double)nodes[i].age_ms);
+            cJSON_AddBoolToObject(jo, "timed_out", nodes[i].timed_out);
+            cJSON_AddBoolToObject(jo, "lost", nodes[i].lost);
+            cJSON_AddItemToArray(jnodes, jo);
+        }
+        cJSON_AddNumberToObject(dg, "timed_out_count", timed_out_count);
+        cJSON_AddNumberToObject(dg, "node_count", n);
+    }
+
+    /* L3-P2：故障注入回读。
+     *
+     * 为什么必须导出：门禁要能区分「注入生效但降级路径没走到」与「注入压根
+     * 没生效（配置写错/规则没匹配上）」。前者是 L3 缺陷，后者是测试基础设施
+     * 缺陷，混在一起会把"没测到"误报成"通过"或反之。
+     * 用**实测丢弃计数**而不是只看配置：计数为 0 说明规则没命中任何发布。 */
+    if (fault_inject_enabled()) {
+        cJSON* fi = cJSON_AddObjectToObject(metrics, "fault_inject");
+        cJSON_AddBoolToObject(fi, "enabled", true);
+        cJSON_AddNumberToObject(fi, "rule_count", fault_inject_rule_count());
+        cJSON_AddNumberToObject(fi, "dropped", (double)fault_inject_dropped_count());
+        cJSON* jrules = cJSON_AddArrayToObject(fi, "rules");
+        for (int i = 0; i < fault_inject_rule_count(); i++) {
+            FaultInjectRule r;
+            if (!fault_inject_get_rule(i, &r)) continue;
+            cJSON* jr = cJSON_CreateObject();
+            cJSON_AddStringToObject(jr, "topic", r.topic);
+            cJSON_AddNumberToObject(jr, "after_ms", (double)r.start_after_us / 1000.0);
+            cJSON_AddNumberToObject(jr, "duration_ms", (double)r.duration_us / 1000.0);
+            cJSON_AddItemToArray(jrules, jr);
+        }
     }
 
     /* 行为规划状态 */

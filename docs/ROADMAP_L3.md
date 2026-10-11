@@ -150,7 +150,7 @@
 |------|------|----------|
 | **P0 地基补牢** | ① 定位并修复 `lane_change_traffic` 车道保持 FAIL；② `demo_evaluator` 增加 min TTC / critical 次数 / jerk·加速度 FAIL 门槛（配 `test_evaluator_gate.py` 自测）；③ 缺 Eigen 时构建/CI 直接失败而非静默退化；④ 每次评估输出 `safety_evidence` | 场景矩阵 8/8 稳定全绿 |
 | **P1 L3 核心闭环** | ODD 监控 → TOR 状态机 → MRM 升级（先 Python 仿真），DMS 驾驶员模型 | ODD 退出 / TOR 超时场景进 suite 且 PASS → ✅ **2026-10-11 达成**（见下 P1 进展） |
-| **P2 验证体系** | 法规场景库 + 故障注入 + 批量并行仿真；冗余（雷达模型、定位交叉校验、看门狗）；EDR | 每类注入故障都有可观测的降级路径 |
+| **P2 验证体系** | 法规场景库 + 故障注入 + 批量并行仿真；冗余（雷达模型、定位交叉校验、看门狗）；EDR | 每类注入故障都有可观测的降级路径 → ⏳ **2026-10-11 第一刀：已登记 4 类达成**（见下 P2 进展；冗余/EDR 待做） |
 | **P3 安全论证与前端** | ISO 26262 / SOTIF / R155·R156 文档链；统计里程目标；FlowBoard L3 面板与事故回放；补 `/api/map/preview` | 需求→测试→证据可追溯 |
 
 ### P0 进展（2026-10-08）
@@ -279,6 +279,67 @@ Python 先行仿真在 `tools/tor_mrm_sim.py`。**本轮补的是放行条件本
 "驾驶员注视/分心随仿真时间变化"的动力学；TOR 倒计时期间 `safety_control` 的双闪只在
 `mrm_request` active 时点亮，TOR 阶段（尚未确认接管）的 HMI 提示尚未分级；
 MRM 只有"车道内减速停车"一种，靠边停车 / ODD 边界前提前降速属 P2。
+
+
+### P2 进展（2026-10-11，第一刀：故障注入框架 + 降级路径可观测性）
+
+P2 的放行条件是「**每类注入故障都有可观测的降级路径**」。开工时盘点发现它的
+三个前提**都不成立**：
+
+1. **没有通用注入手段**：唯一注入是 `safety_control` 节点内的 `raw_cmd_timeout`
+   （`include/safety_fault_injection.h`），只能造"控制指令超时"一类；节点掉线 /
+   topic 丢包 / 传感器失效**无法注入**。
+2. **降级状态不可观测**：`degrade` 只写 PEM（`monitor_node.c` 的 `pem/degrade_event`），
+   拓扑 JSON 里**没有任何 degrade 字段** → 门禁无从断言"是否走到了预期降级路径"。
+3. **注入从未在 CI 里跑过**：`fault_injection` 参数在 `config/` 与 CI 里**零出现**，
+   即"能力存在但从未被验证"。
+
+| 项 | 状态 | 落地 |
+|----|------|------|
+| 通用故障注入 | ✅ 完成 | 新增 `include/fault_inject.h` + `src/core/fault_inject.c`。**单点收口**在 `transport_publish()`（全仓每个节点发布都经此，`publish_loaned` 的 ROUTE_LOCAL 快路径也单独补了判定，否则会绕过）。env 驱动（`FLOW_FAULT_INJECT="<topic>:<after_ms>[:<duration_ms>];..."`），默认关闭，热路径未启用时只多一次 bool 读（同 message_bus 的 `remap_active` 手法）。`--multi` 模式的 `flow_node_host` 也初始化（否则该模式静默无注入）。9 条单测 `test_fault_inject.c` |
+| 降级路径可观测 | ✅ 完成 | `metrics.degrade` 导出 level / **reason_name 稳定字符串** / active / 逐节点心跳健康（name/age_ms/timed_out/lost）。新增 `degrade_reason_name()` 作为原因码→名字的**单一事实源**（原先只在 `degrade_supervisor_summary()` 里转成人类文本，评估器无法按名断言）。另导出 `metrics.fault_inject.dropped` 实测丢弃计数，让门禁能区分**「注入没生效」与「降级路径没走到」**——这两者混在一起会把基础设施问题记成 L3 缺陷 |
+| Python 先行矩阵 | ✅ 完成 | `tools/fault_degrade_sim.py`：故障类 → 期望降级路径的表（单一事实源）+ supervisor 递进语义 + raw_cmd **moving 守卫**（车停稳时不得升 L3，否则"停→L3→起步→L3"无限拉锯）自检；`--check-matrix` 强制每类都声明可观测落点（`degrade`/`control_mode`/`topic_freq`/`inject_ack`），空落点判 FAIL |
+| 端到端门禁（有牙） | ✅ 完成 | `ci/gates/fault_inject_gate.py`：对每类故障**真起管线、真注入**，从 `metrics.degrade`/`control_debug`/`fault_inject` 读回实测值与矩阵比对。CI `integration-test` job 每次 push 跑 |
+| 4 类故障全部可观测 | ✅ 达成 | `localization_loss`→L1/fusion_timeout + ODD `loc_stale`；`planning_loss`→control `DATA_TIMEOUT` fallback；`perception_loss` / `raw_cmd_timeout`→注入确认 + topic 频率归零（这两类的**正确**行为就是不升降级，见下） |
+
+**本轮抓出并修掉的真实缺陷（由新门禁暴露）**：
+
+- 🔴 **`control` 的 DATA_TIMEOUT fallback 在拓扑里完全不可见**。
+  `control_node.cpp` 的 planning 掉线分支在发布 `control/debug` **之前** `continue`
+  （line 635），而 `control/debug` 是 monitor 拿 `control_debug` / `driver_mode` 的
+  唯一来源 → 注入 `planning/trajectory` 后 `control_debug.mode` 观测为空集，
+  **降级路径存在但不可观测**。修法：在该分支补一条最小 debug（只带本分支实际持有的
+  量，不复用常规块——那块的局部变量在 fallback 路径上不存在），频率与常规块一致（2Hz）。
+  修后实测 `control_debug.mode=['DATA_TIMEOUT']`。
+  这正是 P2 放行条件要拦的东西：**"有降级逻辑" ≠ "降级可被验证"**。
+
+**一个需要说清的判据设计**：`perception_loss` 与 `raw_cmd_timeout` 的期望等级是
+**L0**（不升降级），这是**正确的**降级语义而非门禁放过：
+- 感知障碍丢失 → 安全层按"无目标"巡航（不该因为"没看见障碍"就降级），靠下游 TTC 兜底；
+- `raw_cmd` 丢失 → 车随即停稳，`safety_control` 的 **moving 守卫**抑制 L3（刻意设计，
+  见 `safety_control_node.cpp` 注释），行驶中失联的 L3 路径由 `safety_fault_evidence`
+  单测覆盖。
+  故这两类的落点是 `inject_ack` + `topic_freq`，而非 `degrade` 等级。
+
+**一个实测澄清（反直觉，已写进门禁注释）**：永久注入一个 topic 时，该 topic 会
+**整个从 `metrics.topics` 消失**（不是显示 0 Hz）——因为注入点在 `message_bus_publish`
+之前，消息从未进过 bus，`pub_count` 恒 0，于是 stats 表里没有这个条目。
+A/B 实测：干净跑 43 个 topic（含 `perception/obstacles`），注入后 41 个（不含）。
+故门禁对"topic 缺席"的判定改为：**有丢弃计数时，缺席即为注入生效的强证据**。
+
+**验证**：35 ctest 全绿（新增 `fault_inject_tests` + `fault_degrade_sim_tools`）；
+`ci/gates/fault_inject_gate.py` **4/4 类可观测**；9 条静态 gate 全绿；
+`demo_evaluator` 默认场景 PASS（无回归）；`scenario_regression --baseline` 除
+`dense_npc` 一次既有启动竞态（重跑即 PASS，见 P0 遗留）外全 PASS。
+
+**P2 放行条件（第一刀）「每类注入故障都有可观测的降级路径」→ 对已登记的 4 类达成。**
+
+**P2 遗留（下一刀）**：注入类别仍需扩展到**冗余**维度——雷达传感器模型缺失
+（`sensor_model` 只有 lidar/gps/camera，全仓无 radar）、定位冗余的 GNSS/航位推算/
+地图匹配**交叉校验**尚未实现（现仅有 EKF `diverged` 单标志）、EDR 的 L3 法规事件
+（激活/退出、TOR、MRM、碰撞前后窗口）尚未进 PEM 业务流。另外 `perception_loss`
+的可观测落点目前只到"注入生效 + topic 归零"，**"感知降级后系统行为是否仍安全"
+尚无专门判据**（需配合 TTC/碰撞门禁构造一个"盲开仍不撞"的场景）。
 
 
 ## 与近期工作的关系

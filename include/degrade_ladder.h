@@ -146,6 +146,40 @@ void degrade_supervisor_tick(int64_t now_ms);
  */
 int degrade_supervisor_summary(char* buf, int buf_size);
 
+/**
+ * 降级原因码 → 稳定字符串（"planning_timeout" / "heartbeat_lost" / "none" …）。
+ *
+ * 为什么需要：原因码此前只在 degrade_supervisor_summary() 里被转成**人类可读**
+ * 文本，评估器/CI 无从按名字断言"哪一类故障走了哪条降级路径"。这里是唯一
+ * 事实源，PEM 与拓扑 JSON 都复用它（勿在别处再写第二份 switch）。
+ */
+const char* degrade_reason_name(int reason);
+
+/**
+ * 单个受监控节点的健康快照（供 monitor 导出到拓扑 JSON）。
+ */
+typedef struct {
+    char    name[DEGRADE_NODE_NAME_LEN];
+    int64_t last_heartbeat_ms;   /**< 上次心跳 (ms)，0 = 未注册 */
+    int64_t age_ms;              /**< now - last_heartbeat_ms，未注册为 -1 */
+    bool    timed_out;           /**< 已确认超时（>500ms 且再持续 150ms）*/
+    bool    lost;                /**< 失联（age > 2000ms）*/
+} DegradeNodeHealth;
+
+/**
+ * 拷贝受监控节点健康表。
+ * @param out      输出数组（可为 NULL，仅取数量）
+ * @param max      数组容量
+ * @param now_ms   当前时间 (ms)，用于计算 age_ms
+ * @return 写入的条目数（<= max）
+ */
+int degrade_supervisor_node_health(DegradeNodeHealth* out, int max, int64_t now_ms);
+
+/**
+ * 受监控节点总数（与 degrade_supervisor_node_health 的返回语义一致）。
+ */
+int degrade_supervisor_node_count(void);
+
 #ifdef __cplusplus
 }
 #endif

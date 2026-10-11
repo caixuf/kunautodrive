@@ -632,6 +632,37 @@ protected:
                              "(spd=%.1f, steer=%.4f, target_y=%.2f, err=%.2f)",
                              g.cycle, g.current_speed, fb_steer, fb_target_y, fb_lat_error);
                 }
+
+                /* L3-P2 可观测性：本分支上方 `continue`，会**跳过**函数后半段那条
+                 * 常规 control/debug 发布 → 降级路径（planning 掉线后的车道保持
+                 * fallback）在拓扑 JSON 里完全不可见，评估器只能看到 driver_mode
+                 * 停在最后一个正常值。P2 的放行条件是「每类注入故障都有**可观测的**
+                 * 降级路径」，故此处补一条最小 debug（只带上本分支实际持有的量，
+                 * 不复用常规块——那块的局部量在 fallback 路径上不存在）。
+                 * 频率与常规块一致（每 10 帧≈2Hz），避免刷爆总线。 */
+                if (g.cycle % 10 == 0) {
+                    cJSON* fdbg = cJSON_CreateObject();
+                    cJSON_AddNumberToObject(fdbg, "seq", g.cycle);
+                    cJSON_AddNumberToObject(fdbg, "ego_x", g.ego_x);
+                    cJSON_AddNumberToObject(fdbg, "ego_y", g.ego_y);
+                    cJSON_AddNumberToObject(fdbg, "ego_heading", g.ego_heading);
+                    cJSON_AddNumberToObject(fdbg, "speed", g.current_speed);
+                    cJSON_AddNumberToObject(fdbg, "target_y", fb_target_y);
+                    cJSON_AddNumberToObject(fdbg, "lat_error", fb_lat_error);
+                    cJSON_AddNumberToObject(fdbg, "steer", fb_steer);
+                    cJSON_AddNumberToObject(fdbg, "throttle", 0.0);
+                    cJSON_AddNumberToObject(fdbg, "brake", 0.25);
+                    cJSON_AddStringToObject(fdbg, "mode", "DATA_TIMEOUT");
+                    cJSON_AddBoolToObject(fdbg, "hazard", false);
+                    cJSON_AddBoolToObject(fdbg, "mpc_used", false);
+                    cJSON_AddNumberToObject(fdbg, "has_planning", 0.0);
+                    char* fdbg_s = cJSON_PrintUnformatted(fdbg);
+                    transport_publish(transport_, TOPIC_CONTROL_DEBUG,
+                                      (const uint8_t*)fdbg_s,
+                                      (uint32_t)strlen(fdbg_s) + 1);
+                    free(fdbg_s);
+                    cJSON_Delete(fdbg);
+                }
                 continue;
             }
 

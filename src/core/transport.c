@@ -14,6 +14,8 @@
 #include "error_codes.h"
 #include "logger.h"
 #include "serializer.h"  /* A-F4: serializer_lookup_type + serializer_check_compat */
+#include "fault_inject.h" /* L3-P2: 故障注入单点收口（见 include/fault_inject.h） */
+#include "clock_service.h"
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -274,6 +276,14 @@ int transport_publish(Transport* t, const char* topic,
                       const void* data, uint32_t size) {
     if (!t || !topic) return ERR_INVALID_PARAM;
 
+    /* ── L3-P2 故障注入（单点收口）─────────────────────────────
+     * 全仓每个节点的发布都经由本函数（含 publish_loaned 的转发路径），
+     * 故此处一处判定即覆盖全部 topic，无需逐节点埋点。
+     * 未启用注入时 fault_inject_should_drop 只做一次 bool 读即返回。 */
+    if (fault_inject_should_drop(topic, clock_now_us())) {
+        return ERR_OK;   /* 静默丢弃：对发布方而言"发布成功"，故障由下游超时暴露 */
+    }
+
     /* Always publish to local bus first */
     int ret = message_bus_publish(t->bus, topic, "transport", data, size);
 
@@ -302,6 +312,14 @@ int transport_publish_loaned(Transport* t, const char* topic,
                              void* release_user_data) {
     if (!t || !topic || !data || size == 0 || !release_fn)
         return ERR_INVALID_PARAM;
+
+    /* L3-P2：注入判定必须**早于**此处的 ROUTE_LOCAL 快路径 —— 后者直接走
+     * message_bus_publish_loaned，不经过 transport_publish，会绕过注入点。
+     * 丢弃时仍要调用 release_fn 归还借用缓冲，否则调用方的缓冲池泄漏。 */
+    if (fault_inject_should_drop(topic, clock_now_us())) {
+        release_fn(data, release_user_data);
+        return ERR_OK;
+    }
 
     if (transport_route_type(t, topic) == ROUTE_LOCAL) {
         return message_bus_publish_loaned(t->bus, topic, "transport", data, size,

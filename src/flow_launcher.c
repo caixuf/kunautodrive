@@ -23,6 +23,7 @@
  */
 
 #include "fp_env.h"
+#include "fault_inject.h"   /* L3-P2: env 驱动的故障注入 */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -678,6 +679,12 @@ static int run_multi_process_mode(int duration, int stagger_ms,
 
 int main(int argc, char** argv) {
     fp_env_init();  /* FTZ/DAZ：防 denormal 进 JSON 触发 glibc strtod 断言 */
+
+    /* ── L3-P2 故障注入（env 驱动，默认关闭）────────────────────────
+     * 在节点注册/发布之前初始化，使规则表随后只读。
+     * 规格见 include/fault_inject.h：<topic>:<after_ms>[:<duration_ms>]，分号分隔。 */
+    fault_inject_init(getenv("FLOW_FAULT_INJECT"), clock_now_us());
+
     const char* config_path = "config/pipeline.json";
     const char* bag_path    = NULL;
     ReplayConfig replay = {

@@ -28,6 +28,8 @@
  */
 
 #include "fp_env.h"
+#include "fault_inject.h"   /* L3-P2: env 驱动的故障注入（--multi 模式） */
+#include "clock_service.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -94,6 +96,15 @@ static void* load_plugin_lib(const char* library) {
 
 int main(int argc, char** argv) {
     fp_env_init();  /* FTZ/DAZ：防 denormal 进 JSON 触发 glibc strtod 断言 */
+
+    /* ── L3-P2 故障注入（env 驱动，默认关闭）────────────────────────
+     * 多进程模式（flow_launcher --multi fork+exec 本 host）下每个节点是独立
+     * 进程，各自继承 FLOW_FAULT_INJECT，故必须**在 host 侧也初始化**——
+     * 只在 launcher 初始化会让 --multi 模式静默无注入。
+     * 时间基用各自进程的 clock_now_us()：多进程下各进程起点略有差异，但注入
+     * 规则按"起始后 N 毫秒"表达，量级（秒）远大于进程启动抖动，不影响判定。 */
+    fault_inject_init(getenv("FLOW_FAULT_INJECT"), clock_now_us());
+
     if (argc < 3) {
         fprintf(stderr,
                 "usage: %s <config_path> <node_name> [duration_sec]\n", argv[0]);

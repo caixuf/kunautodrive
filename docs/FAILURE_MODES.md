@@ -32,13 +32,13 @@
 
 | # | 分类 | 条数 |
 |---|------|------|
-| 1 | 控制 / 规划 / 安全层 | 21 |
+| 1 | 控制 / 规划 / 安全层 | 22 |
 | 2 | 感知 / 点云 | 6 |
 | 3 | 仿真 / 几何 / NPC | 7 |
 | 4 | 仪表盘 / 监控 / 前端 | 9 |
-| 5 | 评估器 / 门禁 | 4 |
+| 5 | 评估器 / 门禁 | 5 |
 | 6 | 框架 / 工具链 | 3 |
-| | **合计** | **50** |
+| | **合计** | **52** |
 
 ## 1. 控制 / 规划 / 安全层
 
@@ -67,6 +67,7 @@
 | 单向直路巡航 ego 漂出前进车道（`committed_lane` 2→1→0、y 从 −1.75 涨到 +5.3 越参考线；长跑 soak 全程压线） | **单向路两套车道横向布局相反**：`lane_center_d` 把车道对称铺在参考线两侧（idx0=+5.25），而 flowsim/OpenDRIVE 单向路全部车道在 −y 侧（`json_to_xodr.py` 只生成 `<right>`，lane −1..−4 于 −1.75…−12.25）→ idx0/1 映射到路面外；叠加 behavior"超车后归位"分支缺 `!road_oneway` 守卫，每帧触发往 idx−1(+y) 的 LEFT_CHANGE。修复：新增 `lane_group_side_offset(N,w,oneway)=−N·w/2`（单向；双向 0），`lane_center_d`/`nearest_lane` 增 `side_offset` 形参；归位分支加 `!road_oneway`；单向 idx0=−1.75…idx3=−12.25 与物理车道对齐 | `planning_coordinates.h` `lane_center_d`/`lane_group_side_offset`；`planning_node.cpp`/`behavior_planner_node.cpp`/`flowsim_node.cpp` 调用点；`behavior_planner_node.cpp` 归位分支（~line 1339） |
 | **压车道线：CRUISE 状态骑在 2/3 号车道线上不动，`steer` 恒 0，control 看起来"很听话"** | **缺陷在 planning，不在 control。** 有 `lane_ref` 时"强制锁车道中心"整块被跳过，居中全交给 Frenet；但 Frenet 横向走廊 `max_road_width_l/r = 6.0m`（≈1.7 个车道宽）**无任何车道边界约束**，`d_road_w=1.5` 的格点又恰好让落点等于车道线。实测 `dense_route_traffic` 280s：ego 停在 `ego_d=-3.24`（车道线 -3.5，车身宽 2.0m 直接压线），planning 发布 `d_start≈d_lookahead≈d_end≈-1.5` 的**恒定偏移直线**、全程不收敛 → control 忠实跟随 → steer=0 → 每帧从当前位置重规划又得到 -1.5 → **自锁**（压线 125 连续帧）。**排查陷阱**：control 层一切正常（steer/限幅/Stanley 均无异常），只看 control 会误判成"车自己不开转向"；必须看 `planning/debug` 的 `d_start/d_lookahead/d_end` 是否收敛。**修复不能只夹紧**：夹紧是恒等映射，ego 会永久停在带沿同样压线（Python 反例验证），必须"安全带内放行 Frenet（保 W1 车道内避障）、带外强制回 d=0" | `planning_node.cpp` d_out 后处理块（`lane_ref_count < 2` 分支的 `else`）+ `frenet_bridge.cpp` `max_road_width_l/r` |
 | **MRM 发出后车不停，1~2s 就宣告"停稳完成"并退回 OFF，随后重新加速**（L3：车还在 20 m/s 时 `tor.state=MRM→OFF`，`mrm.active` 只闪 2 帧） | **`tor_manager` 读错车速字段名**。`flowsim` 的 `vehicle/state` 车速字段是 **`spd`**；全仓其余消费者（control/planning/perception/behavior/sensor_model/object_tracker/monitor）都读 `spd`，唯独 `tor_manager_node.c` 读 `"speed"` → `g.speed` 恒 0 → MRM 停稳判据 `fabs(speed) < 0.1` **在进入 MRM 的那一刻就为真** → 立即 `MRM_COMPLETE` → `OFF` → planning 重新给速度。**排查陷阱**：只看 `tor.state` 序列（`ACTIVE→TOR_REQUESTED→MRM→OFF`）会以为链路全通，必须同时看 `mrm.active` 持续帧数 + 车速曲线。修复：以 `"spd"` 为准、保留 `"speed"` 作兼容回退。**门禁教训**：只断言"MRM 状态出现过"会全绿放过本缺陷，必须断言"MRM 生效后车速收敛到 ~0" | `modules/adas_nodes/tor_manager_node.c` `on_vehicle_state` |
+| **降级逻辑存在但遥测里看不见**：注入 `planning/trajectory` 后评估器只能看到 `driver_mode` 停在最后一个正常值，`control_debug` 整块缺席，误判"降级路径没走到" | `control_node.cpp` 的 planning 掉线分支（`DATA_TIMEOUT` 车道保持 fallback）在**发布 `control/debug` 之前** `continue` → 该分支永不发布 debug，而 `control/debug` 是 monitor 拿 `control_debug`/`driver_mode` 的**唯一来源**。**排查陷阱**：日志里能看到 `#N DATA_TIMEOUT — lane-following fallback`（LOG_WARN 在 continue 之前），于是以为"路径在跑、只是评估器没读"，实则遥测里根本没有这条路径。修复：在 fallback 分支内补一条最小 debug（只带本分支实际持有的量，不复用常规块——那块的局部变量在 fallback 路径上不存在），频率与常规块一致（2Hz）。**通用教训**：在 `continue`/`return` 提前退出的降级分支里必须显式补遥测——**"有降级逻辑" ≠ "降级可被验证"** | `control_node.cpp` DATA_TIMEOUT fallback 分支（`continue` 前） |
 
 ## 2. 感知 / 点云
 
@@ -121,6 +122,8 @@
 | demo_evaluator 报 road departure 但车明明在车道里 | 评估器 `_road_network_cross_track` 用 topology `scene.road_network.edges[].nodes` 的弦长算路沿，而该 nodes 是 `scene_pub.cpp` 固定 8 点粗采样 → 长弯道上弦长偏离 Hermite 真路 ~14m → 车被误判出路沿（实测 curve_road 3000m S 弯 -7.44m）。修复：节点数按长度自适应 ~25m 一点（8..128） | `flowsim/scene_pub.cpp` road_nodes_per_edge / `ci/evaluators/demo_evaluator.py` |
 | 同一份代码重跑一遍，场景判定在 PASS/FAIL 之间摇摆（门槛附近抖） | 两条判据的"参考量"与它要守的策略不是同一套尺度：① 跟车 `min_forward_gap` 用**整段中位速度**算期望间距（注释却写"判据随车速伸缩"）→ 低速逼近/排队停下的帧被高速帧的尺度误判 FAIL（实测最差帧 `gap=4.96m @ ego 1.0 m/s`，该速度下期望 6.5m 安全；三次实测 28 帧误报、逐帧判据 0 帧违规）；② `max_duration_s` 用**墙钟跨度**（含 demo.sh 启动/收尾与机器负载，同场景 59.9→63.3s 漂移），而仿真钟只有 59.3s。修复：①逐帧用该帧车速（与 behavior 的 `acc_standoff + acc_time_headway·|v|` 同式同参）；②改按 `metrics.scene.t_us` 的仿真跨度判，墙钟超而仿真没超记 WARN | `demo_evaluator.py` `min_forward_gap` 判据 / `_sim_timestamps` + `max_duration_s` 判据 |
 | 场景声明了 `traffic_density.cars_per_km` 但世界里一辆 NPC 都没有，**全部门禁仍绿** | 自动补给结论（D3-2）只存在于一条 `if (spawned > 0) LOG_INFO`：spawn 数为 0（route 没建好 / pool 满 / spacing 算错）时**完全静默**，`scene/frame` 里连 `traffic_density` 字段都没有 —— 排查时分不清"场景没声明"与"声明了没跑"，门禁也无从断言。修复：结论编码进 `scene/frame` 静态段（5 个标量，**不随 `embed_static` 省略** —— 那种"静态段太大就省"的裁剪针对 road_network/buildings 这类可能撑爆 64KB 总线的大块，大地图 OSM 场景若连带省略，评估器会把"静态段太大"误判成"spawn 没跑"）→ monitor 透传 → `metrics.scene.traffic_density`；`demo_evaluator` 两级断言：① 声明了就必须有块可读（无块 = 透传断了或 spawn 路径压根没跑，走 `require` 记为**无法判定**而非通过）② `spawned >= 1` **且** 世界车辆实体峰值 > `actors[]` 能解释的数量（防止 spawn 数字自说自话，不经 scene/frame 真值交叉校验）；flowsim 侧日志改为无条件（0 辆时打 WARN，并把"够了所以停 max_npcs"与"装不下所以停 pool 满"分开记） | `flowsim/scene_pub.h` `ScenePubTrafficDensity` / `flowsim/scene_pub.cpp:538` / `monitor_node.c:297,709,1526` / `ci/evaluators/demo_evaluator.py:2732`（`traffic_density_spawn`） |
+
+| 故障注入后目标 topic 从 `metrics.topics` **整个消失**（不是显示 0 Hz），门禁误判"注入没生效" | 注入点在 `message_bus_publish` **之前**（`transport_publish` 入口），消息从未进过 bus → 该 topic 的 `pub_count` 恒 0 → stats 表里根本没有这个条目。A/B 实测：干净跑 43 个 topic（含 `perception/obstacles`），永久注入后 41 个（不含）。修复：门禁的"topic 缺席"判定改为**有丢弃计数时缺席即为注入生效的强证据**（`inject_dropped > 0`），而非一律判"无法确认" | `ci/gates/fault_inject_gate.py` `check_class` / `src/core/transport.c` `transport_publish` 注入点 |
 
 ## 6. 框架 / 工具链
 

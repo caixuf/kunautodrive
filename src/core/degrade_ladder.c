@@ -296,22 +296,10 @@ int degrade_supervisor_summary(char* buf, int buf_size) {
 
     int level  = (int)FLOW_ATOMIC_LOAD(&g_degrade.degrade_level);
     int reason = (int)FLOW_ATOMIC_LOAD(&g_degrade.degrade_reason);
-    const char* reason_str = "none";
-    switch (reason) {
-        case DEGRADE_REASON_PLANNING_TO:  reason_str = "planning_timeout"; break;
-        case DEGRADE_REASON_CONTROL_TO:   reason_str = "control_timeout";  break;
-        case DEGRADE_REASON_FUSION_TO:    reason_str = "fusion_timeout";   break;
-        case DEGRADE_REASON_SENSOR_TO:    reason_str = "sensor_timeout";   break;
-        case DEGRADE_REASON_LARGE_CTE:    reason_str = "large_cte";        break;
-        case DEGRADE_REASON_COLLISION:    reason_str = "collision_risk";   break;
-        case DEGRADE_REASON_LOCALIZATION: reason_str = "localization_lost";break;
-        case DEGRADE_REASON_MANUAL:       reason_str = "manual";           break;
-        case DEGRADE_REASON_HEARTBEAT:    reason_str = "heartbeat_lost";   break;
-    }
 
     int pos = snprintf(buf, buf_size,
         "degrade: level=%d reason=%s nodes=%d",
-        level, reason_str, g_supervisor.node_count);
+        level, degrade_reason_name(reason), g_supervisor.node_count);
 
     for (int i = 0; i < g_supervisor.node_count && pos < buf_size - 30; i++) {
         pos += snprintf(buf + pos, buf_size - pos,
@@ -322,4 +310,48 @@ int degrade_supervisor_summary(char* buf, int buf_size) {
     }
 
     return 0;
+}
+
+const char* degrade_reason_name(int reason) {
+    switch (reason) {
+        case DEGRADE_REASON_PLANNING_TO:  return "planning_timeout";
+        case DEGRADE_REASON_CONTROL_TO:   return "control_timeout";
+        case DEGRADE_REASON_FUSION_TO:    return "fusion_timeout";
+        case DEGRADE_REASON_SENSOR_TO:    return "sensor_timeout";
+        case DEGRADE_REASON_LARGE_CTE:    return "large_cte";
+        case DEGRADE_REASON_COLLISION:    return "collision_risk";
+        case DEGRADE_REASON_LOCALIZATION: return "localization_lost";
+        case DEGRADE_REASON_MANUAL:       return "manual";
+        case DEGRADE_REASON_HEARTBEAT:    return "heartbeat_lost";
+        case DEGRADE_REASON_NONE:         return "none";
+        default:                          return "unknown";
+    }
+}
+
+int degrade_supervisor_node_count(void) {
+    return g_supervisor.node_count;
+}
+
+int degrade_supervisor_node_health(DegradeNodeHealth* out, int max, int64_t now_ms) {
+    int n = g_supervisor.node_count;
+    if (n > max) n = max;
+    for (int i = 0; i < n; i++) {
+        const DegradeNodeEntry* e = &g_supervisor.nodes[i];
+        DegradeNodeHealth* h = &out[i];
+        memset(h, 0, sizeof(*h));
+        snprintf(h->name, sizeof(h->name), "%s", e->name);
+        h->last_heartbeat_ms = e->last_heartbeat_ms;
+        if (e->last_heartbeat_ms <= 0) {
+            h->age_ms = -1;
+        } else {
+            int64_t age = now_ms - e->last_heartbeat_ms;
+            h->age_ms = age < 0 ? 0 : age;
+        }
+        /* 与 degrade_supervisor_tick 的确认条件保持一致：超时窗口起算后再
+         * 持续 150ms 才算确认超时（去抖，抗调度抖动误判）。 */
+        h->timed_out = (e->timeout_since_ms != 0 &&
+                        now_ms - e->timeout_since_ms >= 150);
+        h->lost = (h->age_ms > 2000);
+    }
+    return n;
 }
