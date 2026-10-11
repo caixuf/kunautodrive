@@ -32,13 +32,13 @@
 
 | # | 分类 | 条数 |
 |---|------|------|
-| 1 | 控制 / 规划 / 安全层 | 18 |
+| 1 | 控制 / 规划 / 安全层 | 21 |
 | 2 | 感知 / 点云 | 6 |
 | 3 | 仿真 / 几何 / NPC | 7 |
 | 4 | 仪表盘 / 监控 / 前端 | 9 |
 | 5 | 评估器 / 门禁 | 4 |
-| 6 | 框架 / 工具链 | 2 |
-| | **合计** | **46** |
+| 6 | 框架 / 工具链 | 3 |
+| | **合计** | **50** |
 
 ## 1. 控制 / 规划 / 安全层
 
@@ -66,6 +66,7 @@
 | 幽灵刹车：本车道前方 80m 内"有静止障碍物"，实际空无一物（起步被压到 3.7 m/s） | `planning on_perception_obstacles` 每帧清零 128 槽后只填 `list.count` 个，而 TTC 跟车 / 窄路会车 / Frenet 注入 / ST 图四处循环**扫满 128 槽** → 未用槽 `(0,0)` 被当成"世界原点有障碍物"（同一份数据在 `forward_space` 里另有一条 `(0,0) continue` 豁免，一个文件两套有效性语义）。实测 `TTC follow: gap=20.0 -> 3.7 m/s`（ego 起点 x=20 朝 −x，原点恰在前方 20m 同车道），两种编排都命中。修复：引入权威计数 `g.obs_count`（与 `truth_obs_count` 对称），四处循环改 `i < g.obs_count`，删豁免 | `planning_node.cpp` `on_perception_obstacles` + TTC/会车/Frenet/ST 四处循环 |
 | 单向直路巡航 ego 漂出前进车道（`committed_lane` 2→1→0、y 从 −1.75 涨到 +5.3 越参考线；长跑 soak 全程压线） | **单向路两套车道横向布局相反**：`lane_center_d` 把车道对称铺在参考线两侧（idx0=+5.25），而 flowsim/OpenDRIVE 单向路全部车道在 −y 侧（`json_to_xodr.py` 只生成 `<right>`，lane −1..−4 于 −1.75…−12.25）→ idx0/1 映射到路面外；叠加 behavior"超车后归位"分支缺 `!road_oneway` 守卫，每帧触发往 idx−1(+y) 的 LEFT_CHANGE。修复：新增 `lane_group_side_offset(N,w,oneway)=−N·w/2`（单向；双向 0），`lane_center_d`/`nearest_lane` 增 `side_offset` 形参；归位分支加 `!road_oneway`；单向 idx0=−1.75…idx3=−12.25 与物理车道对齐 | `planning_coordinates.h` `lane_center_d`/`lane_group_side_offset`；`planning_node.cpp`/`behavior_planner_node.cpp`/`flowsim_node.cpp` 调用点；`behavior_planner_node.cpp` 归位分支（~line 1339） |
 | **压车道线：CRUISE 状态骑在 2/3 号车道线上不动，`steer` 恒 0，control 看起来"很听话"** | **缺陷在 planning，不在 control。** 有 `lane_ref` 时"强制锁车道中心"整块被跳过，居中全交给 Frenet；但 Frenet 横向走廊 `max_road_width_l/r = 6.0m`（≈1.7 个车道宽）**无任何车道边界约束**，`d_road_w=1.5` 的格点又恰好让落点等于车道线。实测 `dense_route_traffic` 280s：ego 停在 `ego_d=-3.24`（车道线 -3.5，车身宽 2.0m 直接压线），planning 发布 `d_start≈d_lookahead≈d_end≈-1.5` 的**恒定偏移直线**、全程不收敛 → control 忠实跟随 → steer=0 → 每帧从当前位置重规划又得到 -1.5 → **自锁**（压线 125 连续帧）。**排查陷阱**：control 层一切正常（steer/限幅/Stanley 均无异常），只看 control 会误判成"车自己不开转向"；必须看 `planning/debug` 的 `d_start/d_lookahead/d_end` 是否收敛。**修复不能只夹紧**：夹紧是恒等映射，ego 会永久停在带沿同样压线（Python 反例验证），必须"安全带内放行 Frenet（保 W1 车道内避障）、带外强制回 d=0" | `planning_node.cpp` d_out 后处理块（`lane_ref_count < 2` 分支的 `else`）+ `frenet_bridge.cpp` `max_road_width_l/r` |
+| **MRM 发出后车不停，1~2s 就宣告"停稳完成"并退回 OFF，随后重新加速**（L3：车还在 20 m/s 时 `tor.state=MRM→OFF`，`mrm.active` 只闪 2 帧） | **`tor_manager` 读错车速字段名**。`flowsim` 的 `vehicle/state` 车速字段是 **`spd`**；全仓其余消费者（control/planning/perception/behavior/sensor_model/object_tracker/monitor）都读 `spd`，唯独 `tor_manager_node.c` 读 `"speed"` → `g.speed` 恒 0 → MRM 停稳判据 `fabs(speed) < 0.1` **在进入 MRM 的那一刻就为真** → 立即 `MRM_COMPLETE` → `OFF` → planning 重新给速度。**排查陷阱**：只看 `tor.state` 序列（`ACTIVE→TOR_REQUESTED→MRM→OFF`）会以为链路全通，必须同时看 `mrm.active` 持续帧数 + 车速曲线。修复：以 `"spd"` 为准、保留 `"speed"` 作兼容回退。**门禁教训**：只断言"MRM 状态出现过"会全绿放过本缺陷，必须断言"MRM 生效后车速收敛到 ~0" | `modules/adas_nodes/tor_manager_node.c` `on_vehicle_state` |
 
 ## 2. 感知 / 点云
 
@@ -127,5 +128,6 @@
 
 | 现象 | 根因 | 位置 |
 |------|------|------|
+| 场景 JSON 里写了 `odd` / `driver` 注入块，但 ODD 判据从未触发（`l3_odd_exit_*` 场景必 FAIL，`odd.violations` 里只有 `route_stale` 没有 `visibility`） | **`demo.sh` 的 `scenario_file` sed 漏 patch 新节点**：`odd_monitor` / `tor_manager` 的 `params` 被写成 compact 形式 `"scenario_file":"..."`（冒号后**无空格**），而 sed 模式 `\"scenario_file\": \"` 强制要求一个空格 → 这两节点永远拿不到 `--scenario` 指定的场景，注入块静默失效。同一类漏洞也在 `demo_evaluator.pipeline_scenario_override` 的白名单里（只含 flowsim/planning/navigation/control）。修复：sed 改 `\\\": *\\\"`（零或多个空白）+ 白名单补两节点。**通用教训**：给 pipeline 节点加 `scenario_file` 参数时，params 的序列化风格（有无空格）必须与 `demo.sh`/评估器的 patcher 兼容，否则新节点会静默读旧场景 | `scripts/demo.sh` scenario patch sed / `ci/evaluators/demo_evaluator.py` `pipeline_scenario_override` |
 | 8 个节点线程各占满一个核 | 裸 `while(!stop) ex.run();` 忙等；`idle_sleep_us` 只被零调用者的 `run_blocking()` 读取。改用 `node_pump()` | `coroutine_task.h` node_pump |
 | 管道检查 topics 列表缺 perception/obstacles | `monitor_node.c` 的 `TopicStats tstats[16]` 只能装 16 个 topic，第 17 个静默丢弃。扩到 64 | `monitor_node.c:1304` |

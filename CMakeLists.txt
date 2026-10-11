@@ -1303,6 +1303,15 @@ set_tests_properties(astar_route_tools PROPERTIES
     ENVIRONMENT "PYTHONPATH=${CMAKE_SOURCE_DIR}:$ENV{PYTHONPATH}"
 )
 
+# L3-P1（方向六）：TOR / MRM 状态机 Python 仿真门禁。CLAUDE.md 铁律要求算法升级
+# 先 Python 仿真先行；C 侧 tor_manager 的转移表逐行镜像本文件的 TOR_TRANSITIONS。
+# 退出码 = 失败断言数，故直接作 ctest 判据（--run-all = FSM 自检 + 两场景）。
+add_test(NAME tor_mrm_sim_tools
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/tor_mrm_sim.py --run-all
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(tor_mrm_sim_tools PROPERTIES TIMEOUT 60)
+
 # ── Smoke test: flow_launcher short integration run ──
 find_program(BASH_EXECUTABLE bash)
 if(BASH_EXECUTABLE AND NOT WIN32)

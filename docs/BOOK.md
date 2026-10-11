@@ -397,7 +397,7 @@
 - `modules/adas_nodes/sensor_model_weather.c`，`modules/adas_nodes/sensor_model_weather.h`：`sensor_model_camera_visibility`，`sensor_model_weather_attenuation`。**全文件 25 行**，天气只是 `strstr` 子串测试 + 0.3 地板。**无太阳角度模型，无天气-μ 耦合**；且 `flowsim_node.cpp:2572` 比较的 `storm`/`sandstorm` 不在加载器白名单（`rain/snow/overcast/fog/clear`）里
 - `modules/adas_nodes/flowsim/road_position.h`：`RoadPosition`。**每车一个 esmini 句柄**。运行时必须用 `relocate()` 不能用 `init()`（后者会让所有 NPC 一起偏移约 200 m）
 - `modules/adas_nodes/flowsim/test_entity_physics.cpp`，`modules/adas_nodes/flowsim/test_road_network.cpp`：ctest `entity_physics_tests`（17 用例，**依赖 `ESMINI_RMLIB_TEST`**）、`flowsim_road_network` / `_cross`
-- `scenarios/`（23 个场景 + `suite.json` 清单）
+- `scenarios/`（25 个场景 + `suite.json` 清单）
 
 ### 21　VLA、世界模型与无人车前沿
 

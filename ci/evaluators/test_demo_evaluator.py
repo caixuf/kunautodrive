@@ -1042,5 +1042,95 @@ class DemoEvaluatorTest(unittest.TestCase):
         )
 
 
+class L3ExpectationGateTest(unittest.TestCase):
+    """L3-P1（方向六）ODD / TOR / MRM 判据：请求与执行都要校验，遥测缺失≠通过。"""
+
+    @staticmethod
+    def _frames(mrm_active=False):
+        """构造一段最小 series：ODD 退出 → TOR_REQUESTED（倒计时递减）→ 末端状态。"""
+        base = {"speed": 20.0, "odd_in_odd": True, "odd_violations": (),
+                "tor_state": "ACTIVE", "tor_countdown_s": 0.0,
+                "mrm_active": False, "mrm_target_speed": 0.0}
+        frames = [dict(base)]
+        frames.append({**base, "odd_in_odd": False, "odd_violations": ("visibility",)})
+        for cd in (10.0, 8.0, 4.0, 2.0):
+            frames.append({**base, "odd_in_odd": False, "odd_violations": ("visibility",),
+                           "tor_state": "TOR_REQUESTED", "tor_countdown_s": cd})
+        return frames, base
+
+    def test_missing_telemetry_is_inconclusive_not_pass(self):
+        """场景声明了 l3_expect 但 monitor 没透传 metrics.odd/tor → 必须 FAIL。
+
+        这是"门禁抓不住已知故障 = PASS 不可信"的直接体现：静默 PASS 会让
+        odd_monitor/tor_manager 掉线在 CI 里完全隐形。
+        """
+        evaluator = load_evaluator()
+        series = [{"speed": 10.0, "odd_in_odd": None, "tor_state": ""} for _ in range(5)]
+        out = evaluator._evaluate_l3_expectations(series, {"odd_exit": True, "tor_requested": True})
+        self.assertTrue(any("INCONCLUSIVE" in f for f in out["failures"]),
+                        f"absent telemetry must be INCONCLUSIVE, got {out['failures']}")
+
+    def test_full_chain_passes(self):
+        evaluator = load_evaluator()
+        frames, base = self._frames()
+        # 接管分支：TOR_REQUESTED → DRIVER_TAKEOVER，不进 MRM
+        frames += [{**base, "odd_in_odd": False, "odd_violations": ("visibility",),
+                    "tor_state": "DRIVER_TAKEOVER"} for _ in range(3)]
+        out = evaluator._evaluate_l3_expectations(
+            frames, {"odd_exit": True, "tor_requested": True, "driver_takeover": True})
+        self.assertEqual(out["failures"], [], f"full takeover chain must pass: {out['failures']}")
+
+    def test_odd_exit_without_reason_fails(self):
+        """in_odd=false 但 violations 空 = 分类器无理由判出域（强制标记嫌疑）。"""
+        evaluator = load_evaluator()
+        frames, base = self._frames()
+        # 所有出域帧都必须无理由，否则并集里仍有别的理由，判据（正确地）不触发
+        frames = [{**f, "odd_violations": ()} for f in frames]
+        out = evaluator._evaluate_l3_expectations(frames, {"odd_exit": True})
+        self.assertTrue(any("violations[] was empty" in f for f in out["failures"]),
+                        f"reasonless ODD exit must FAIL, got {out['failures']}")
+
+    def test_countdown_must_not_increase(self):
+        evaluator = load_evaluator()
+        frames, base = self._frames()
+        frames[2] = {**frames[2], "tor_countdown_s": 9.0}
+        frames[3] = {**frames[3], "tor_countdown_s": 9.5}  # 倒计时回涨 = 时序 bug
+        out = evaluator._evaluate_l3_expectations(frames, {"tor_requested": True})
+        self.assertTrue(any("countdown increased" in f for f in out["failures"]),
+                        f"non-monotonic countdown must FAIL, got {out['failures']}")
+
+    def test_mrm_request_without_execution_fails(self):
+        """tor 发了 mrm.active 但 control 没降速 → 必须 FAIL（跨模块断链）。
+
+        这正是本次实测抓到的真实缺陷：tor_manager 用 "speed" 读 flowsim 的 "spd"
+        （字段名不匹配）→ |speed| 恒 0 → MRM 在 20 m/s 时判"已停稳"提前完成。
+        只断言 tor.state==MRM 会漏掉它，故必须有"执行后速度必须收敛"这一断言。
+        """
+        evaluator = load_evaluator()
+        frames, base = self._frames()
+        frames += [{**base, "odd_in_odd": False, "tor_state": "MRM", "mrm_active": True,
+                    "speed": 20.0} for _ in range(5)]
+        out = evaluator._evaluate_l3_expectations(
+            frames, {"tor_timeout_mrm": True, "mrm_stop": True})
+        self.assertTrue(any("never slowed below 1 m/s" in f for f in out["failures"]),
+                        f"unhonoured MRM must FAIL, got {out['failures']}")
+
+    def test_mrm_stop_passes_when_actually_stopped(self):
+        evaluator = load_evaluator()
+        frames, base = self._frames()
+        frames += [{**base, "odd_in_odd": False, "tor_state": "MRM", "mrm_active": True,
+                    "speed": s} for s in (8.0, 3.0, 0.8, 0.0, 0.0)]
+        out = evaluator._evaluate_l3_expectations(
+            frames, {"tor_timeout_mrm": True, "mrm_stop": True})
+        self.assertEqual(out["failures"], [], f"honoured MRM must pass: {out['failures']}")
+
+    def test_no_expectation_is_noop(self):
+        """未声明 l3_expect 的场景（默认路径）不得产生任何判据 —— 零影响。"""
+        evaluator = load_evaluator()
+        out = evaluator._evaluate_l3_expectations([{"speed": 1.0}], {})
+        self.assertEqual(out["failures"], [])
+        self.assertEqual(out["warnings"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -149,7 +149,7 @@
 | 分期 | 内容 | 放行条件 |
 |------|------|----------|
 | **P0 地基补牢** | ① 定位并修复 `lane_change_traffic` 车道保持 FAIL；② `demo_evaluator` 增加 min TTC / critical 次数 / jerk·加速度 FAIL 门槛（配 `test_evaluator_gate.py` 自测）；③ 缺 Eigen 时构建/CI 直接失败而非静默退化；④ 每次评估输出 `safety_evidence` | 场景矩阵 8/8 稳定全绿 |
-| **P1 L3 核心闭环** | ODD 监控 → TOR 状态机 → MRM 升级（先 Python 仿真），DMS 驾驶员模型 | ODD 退出 / TOR 超时场景进 suite 且 PASS |
+| **P1 L3 核心闭环** | ODD 监控 → TOR 状态机 → MRM 升级（先 Python 仿真），DMS 驾驶员模型 | ODD 退出 / TOR 超时场景进 suite 且 PASS → ✅ **2026-10-11 达成**（见下 P1 进展） |
 | **P2 验证体系** | 法规场景库 + 故障注入 + 批量并行仿真；冗余（雷达模型、定位交叉校验、看门狗）；EDR | 每类注入故障都有可观测的降级路径 |
 | **P3 安全论证与前端** | ISO 26262 / SOTIF / R155·R156 文档链；统计里程目标；FlowBoard L3 面板与事故回放；补 `/api/map/preview` | 需求→测试→证据可追溯 |
 
@@ -223,6 +223,62 @@ jerk 100+；(3) `periods` 过滤非正 dt 后变短却仍按 `periods[index-1]` 
   **2 次全 PASS**；`dense_npc` 12/12 PASS（jerk 修复）。**P0 放行条件「8/8 稳定全绿」达成**。
   注：16km 直道 soak 无掉头故 0 压线；**未改门禁阈值**（未掩盖真实落位缺陷）。
 - `no topology samples collected` 间歇（~1/6）：启动竞态（monitor 首帧 vs 采样开始），原评估器同样复现。
+
+
+### P1 进展（2026-10-11）
+
+两节点本体（`odd_monitor_node.c` 无状态 ODD 分类器 / `tor_manager_node.c` 5 状态
+10 转移 TOR FSM + 内嵌 DMS + MRM 权威）与管线接线已由 `76071e6` / `ad015c9` 落地，
+Python 先行仿真在 `tools/tor_mrm_sim.py`。**本轮补的是放行条件本身**——原先
+"ODD 退出 / TOR 超时场景进 suite 且 PASS"这一条**没有任何场景与判据承载**：
+`suite.json` 里 0 个 L3 场景，`demo_evaluator` 里 0 条 ODD/TOR 断言。
+
+| 项 | 状态 | 落地 |
+|----|------|------|
+| L3 行为判据（新增） | ✅ 完成 | `demo_evaluator.py::_evaluate_l3_expectations`：场景 `pass_criteria.l3_expect` 声明 `odd_exit` / `tor_requested` / `driver_takeover` / `tor_timeout_mrm` / `mrm_stop`。**遥测缺失 = INCONCLUSIVE ≠ PASS**（沿用 `require()` 语义）——`odd_monitor`/`tor_manager` 掉线不会静默变绿。7 条单测 `L3ExpectationGateTest` |
+| ODD / TOR 遥测透传 | ✅ 已具备 | `monitor_node` 透传 `metrics.odd` / `metrics.tor`（`76071e6`）；评估器逐帧提取 `odd_in_odd` / `odd_violations` / `tor_state` / `tor_countdown_s` / `mrm_active`，并在 summary 输出 `l3_*` 事实键供回归对比 |
+| ODD 退出 → 接管场景 | ✅ 完成 | `scenarios/l3_odd_exit_takeover.json` + 进 `suite.json`。`odd` 块在 t=5s 注入能见度 1000→80m（**分类器真判** out，非强制标记）；DMS `will_takeover=true`/延迟 1.5s → `TOR_REQUESTED` → `DRIVER_TAKEOVER`，**不得**进 MRM。实测 PASS：`l3_odd_violations_seen=['visibility']`、`l3_tor_states_seen=[ACTIVE, DRIVER_TAKEOVER, OFF, TOR_REQUESTED]` |
+| ODD 退出 → 超时 → MRM 场景 | ✅ 完成 | `scenarios/l3_odd_exit_timeout_mrm.json` + 进 `suite.json`。同注入，DMS `will_takeover=false` → 10s 倒计时耗尽 → `MRM` → 车道内停稳。**同时校验请求与执行**：只看 `tor.state=MRM` 会漏掉"发了 MRM 但 control 没降速"，故 `mrm_stop` 额外要求 `mrm.active` 出现且速度收敛到 1 m/s 以下。实测 PASS：`l3_mrm_active_frames=12` |
+| Python 仿真进门禁 | ✅ 完成 | `tools/tor_mrm_sim.py --run-all` 注册为 ctest `tor_mrm_sim_tools`（退出码 = 失败断言数）。此前它是**孤儿工具**——CI/ctest 零调用，铁律要求的"Python 先行"没有守门 |
+
+**本轮抓出并修掉的真实缺陷（均由新判据暴露，非既有 flake）**：
+
+1. **`tor_manager` 车速字段名错**（🔴 功能性，MRM 等于没接）。
+   `flowsim` 的 `vehicle/state` 车速字段是 **`spd`**（`flowsim_node.cpp` vstate 发布），
+   全仓其余消费者（control / planning / perception / behavior / monitor / sensor_model /
+   object_tracker）**都读 `spd`**；唯独 `tor_manager_node.c` 读 `"speed"` → `g.speed` 恒为 0
+   → MRM 的停稳判据 `|speed| < 0.1` **立刻就真** → 车还在 20 m/s 时宣告 `MRM_COMPLETE`
+   并退回 `OFF`，随后重新加速。实测时间线（修复前）：
+
+   ```
+   t=15.6  tor=MRM            mrm.active=True   v=20.03   ← MRM 进入，车仍在 20 m/s
+   t=17.3  tor=OFF            mrm.active=False  v=11.39   ← 1.7s 后"停稳完成"，其实没停
+   t=23.6  tor=OFF            ...               v=10.33   ← 重新加速
+   ```
+
+   修法：以 `"spd"` 为准、保留 `"speed"` 作兼容回退。**这正是"门禁抓不住已知故障 =
+   它的 PASS 不可信"的实例**——若只断言 `tor.state` 出现过 `MRM`，本缺陷会全绿通过。
+
+2. **`demo.sh` 的 `scenario_file` sed 漏 patch 新节点**（🔴 接线，L3 场景必然 FAIL）。
+   `odd_monitor` / `tor_manager` 的 `params` 写成 compact 形式
+   `"scenario_file":"..."`（冒号后**无空格**），而 `demo.sh` 的 sed 模式
+   `\\\"scenario_file\\\": \\\"...` 强制要求一个空格 → 这两节点永远拿不到
+   `--scenario` 指定的场景，其 `odd` / `driver` 注入块**静默失效**。
+   同一类漏洞也在 `demo_evaluator.pipeline_scenario_override` 的白名单里
+   （只含 flowsim/planning/navigation/control）。修法：sed 改 `: *`（零或多个空白），
+   白名单补两节点。
+
+**验证**：34 ctest 全绿（新增 `tor_mrm_sim_tools`）；`test_demo_evaluator` 47 项全绿
+（新增 7 条 L3 判据测试）；9 条静态 gate 全绿；两 L3 场景 `demo_evaluator` 实跑 PASS；
+`npm run vis:check:all` 45 项全绿。
+
+**P1 放行条件「ODD 退出 / TOR 超时场景进 suite 且 PASS」→ 达成**（两场景进 `suite.json`
+且各自 PASS）。
+
+**遗留（转 P2）**：DMS 目前是 `scenario` 里写死的模型参数（`driver` 块），尚无
+"驾驶员注视/分心随仿真时间变化"的动力学；TOR 倒计时期间 `safety_control` 的双闪只在
+`mrm_request` active 时点亮，TOR 阶段（尚未确认接管）的 HMI 提示尚未分级；
+MRM 只有"车道内减速停车"一种，靠边停车 / ODD 边界前提前降速属 P2。
 
 
 ## 与近期工作的关系

@@ -1,0 +1,52 @@
+{
+  "name": "l3_odd_exit_takeover",
+  "description": "L3-P1 方向六：ODD 退出 → TOR 请求 → 驾驶员按时接管。平直 4 车道 6000m 无障碍路，t=5s 由 scenario 的 odd 块注入降级能见度（1000→80m，低于 odd_min_visibility_m=150），odd_monitor 的分类器**真的**判 out-of-ODD（非强制标记）。tor_manager 去抖 0.5s 后发 TOR_REQUESTED，内嵌 DMS 模型 will_takeover=true / latency=1.5s，在 10s 倒计时内接管 → DRIVER_TAKEOVER，**不得**进入 MRM。断言由 demo_evaluator 的 pass_criteria.l3_expect 承载（odd_exit + tor_requested + driver_takeover）。故障表中『TOR 发了但接管链路没通』『本该接管却升级成 MRM』由它拦截。",
+  "random_seed": 313,
+  "duration_s": 0,
+  "weather": "clear",
+  "visibility_m": 1000,
+  "ego": {
+    "x": 5.0,
+    "y": -1.75,
+    "heading": 0.0,
+    "init_speed": 15.0,
+    "target_speed": 18.0
+  },
+  "road_network": {
+    "edges": [
+      {
+        "id": 0,
+        "type": "highway",
+        "name": "l3_straight",
+        "length_m": 6000,
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 22.0,
+        "nodes": [[0, 0, 0], [6000, 0, 0]]
+      }
+    ]
+  },
+  "actors": [],
+  "traffic_lights": [],
+  "odd": {
+    "visibility_drop_at_s": 5.0,
+    "degraded_visibility_m": 80.0
+  },
+  "driver": {
+    "attention": true,
+    "will_takeover": true,
+    "takeover_latency_s": 1.5
+  },
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 60.0,
+    "min_avg_speed_mps": 5.0,
+    "l3_expect": {
+      "odd_exit": true,
+      "tor_requested": true,
+      "driver_takeover": true
+    }
+  },
+  "route": [],
+  "scenarios": []
+}

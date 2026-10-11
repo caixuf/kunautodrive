@@ -334,6 +334,19 @@ jobs:
         run: python3 ci/evaluators/demo_evaluator.py --duration 45 --interval 0.5
       - name: Pipeline integrity check
         run: python3 tools/pipeline_check.py --json /tmp/flow_topology.json
+      # ── L3-P1（方向六）：ODD / TOR / MRM 行为门禁 ──
+      # 两场景各自断言一条完整安全链路，判据来自场景的 pass_criteria.l3_expect
+      # （demo_evaluator._evaluate_l3_expectations）：
+      #   l3_odd_exit_takeover   → ODD 退出 → TOR 请求 → 驾驶员接管（不得进 MRM）
+      #   l3_odd_exit_timeout_mrm→ ODD 退出 → TOR 超时 → MRM 车道内停稳
+      # 放这里（每次 push 都跑）而非只挂 nightly：这两条是 P1 的放行条件本身，
+      # 且 2026-10-11 实测正是它们抓出 tor_manager 读错车速字段名（MRM 从未真停）。
+      - name: L3 safety-closure scenarios (ODD/TOR/MRM)
+        run: |
+          python3 ci/evaluators/demo_evaluator.py \
+            --scenario scenarios/l3_odd_exit_takeover.json --duration 45 --interval 0.5
+          python3 ci/evaluators/demo_evaluator.py \
+            --scenario scenarios/l3_odd_exit_timeout_mrm.json --duration 60 --interval 0.5
 
   # ── Visualization layer (flowmond) + algorithm regression ──
   # Builds flowmond (the C dashboard daemon; sole HTTP backend for FlowBoard)

@@ -33,6 +33,8 @@
     {"file": "scenarios/dense_npc.json",           "duration_s": 45, "enabled": true},
     {"file": "scenarios/dense_route_traffic.json", "duration_s": 45, "enabled": true},
     {"file": "scenarios/oncoming.json",            "duration_s": 45, "enabled": true},
+    {"file": "scenarios/l3_odd_exit_takeover.json", "duration_s": 45, "enabled": true},
+    {"file": "scenarios/l3_odd_exit_timeout_mrm.json", "duration_s": 60, "enabled": true},
     {"file": "scenarios/auto_parking.json",        "duration_s": 45, "enabled": false},
     {"file": "scenarios/right_turn_side_parking.json", "duration_s": 35, "enabled": false},
     {"file": "scenarios/traffic_rules_exam.json",       "duration_s": 120, "enabled": false},

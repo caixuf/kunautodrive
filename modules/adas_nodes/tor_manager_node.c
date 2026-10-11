@@ -165,7 +165,13 @@ static void on_vehicle_state(const Message* msg, void* ud) {
     if (!root) return;
     cJSON* j = cJSON_GetObjectItemCaseSensitive(root, "t_us");
     if (cJSON_IsNumber(j)) g.sim_t_us = j->valuedouble;
-    j = cJSON_GetObjectItemCaseSensitive(root, "speed");
+    /* flowsim 的 vehicle/state 车速字段是 "spd"（见 flowsim_node.cpp 的 vstate 发布），
+     * 全仓其余消费者（control/planning/perception/behavior/monitor）都读 "spd"。
+     * 这里原写 "speed" → g.speed 恒为 0 → MRM 的停稳判据 |speed|<0.1 立刻就真，
+     * MRM 在车还在 20 m/s 时就宣告 MRM_COMPLETE 并退回 OFF（L3 门禁实测捕获）。
+     * 保留 "speed" 作为兼容回退，但以 "spd" 为准。 */
+    j = cJSON_GetObjectItemCaseSensitive(root, "spd");
+    if (!cJSON_IsNumber(j)) j = cJSON_GetObjectItemCaseSensitive(root, "speed");
     if (cJSON_IsNumber(j)) { g.speed = j->valuedouble; g.has_vehicle = 1; }
     cJSON_Delete(root);
 }

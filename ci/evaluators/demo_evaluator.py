@@ -786,8 +786,12 @@ def pipeline_scenario_override(scenario_file: str | None):
     original_text = pipeline_path.read_text(encoding="utf-8")
     pipeline = json.loads(original_text)
     patched_nodes = []
+    # odd_monitor / tor_manager 也读 scenario_file（L3-P1 的 `odd` / `driver` 注入块），
+    # 漏掉它们会让 L3 场景静默退化成"无 ODD 退出"，判据必然 FAIL。
+    _scenario_aware = ("flowsim", "planning", "navigation", "control",
+                       "odd_monitor", "tor_manager")
     for node in _pipeline_nodes(pipeline):
-        if not isinstance(node, dict) or node.get("name") not in ("flowsim", "planning", "navigation", "control"):
+        if not isinstance(node, dict) or node.get("name") not in _scenario_aware:
             continue
         params = node.get("params")
         # params may be a JSON string (launcher format) or a plain dict.
@@ -1145,6 +1149,38 @@ def sample_metrics(sample: dict, road: dict | None = None,
             except (TypeError, ValueError):
                 continue
 
+    # L3-P1：ODD / TOR / MRM 遥测（monitor 透传 metrics.odd / metrics.tor）。
+    # 缺失时一律取 None/空，门禁按"无法判定"处理而不是静默当成"通过"——
+    # 与 safety_evidence 的 require 语义一致（门禁抓不住已知故障 = PASS 不可信）。
+    odd_metrics = metrics.get("odd") if isinstance(metrics.get("odd"), dict) else None
+    tor_metrics = metrics.get("tor") if isinstance(metrics.get("tor"), dict) else None
+    odd_in_odd = None
+    odd_violations: tuple[str, ...] = ()
+    if odd_metrics is not None:
+        raw_in = odd_metrics.get("in_odd")
+        if isinstance(raw_in, bool):
+            odd_in_odd = raw_in
+        raw_viol = odd_metrics.get("violations")
+        if isinstance(raw_viol, list):
+            odd_violations = tuple(str(v) for v in raw_viol)
+    tor_state = ""
+    tor_countdown_s = None
+    mrm_active = None
+    mrm_target_speed = None
+    if tor_metrics is not None:
+        tor_state = str(tor_metrics.get("state", "") or "")
+        raw_cd = tor_metrics.get("countdown_s")
+        if isinstance(raw_cd, (int, float)) and not isinstance(raw_cd, bool):
+            tor_countdown_s = float(raw_cd)
+        mrm = tor_metrics.get("mrm")
+        if isinstance(mrm, dict):
+            raw_act = mrm.get("active")
+            if isinstance(raw_act, bool):
+                mrm_active = raw_act
+            raw_tgt = mrm.get("target_speed")
+            if isinstance(raw_tgt, (int, float)) and not isinstance(raw_tgt, bool):
+                mrm_target_speed = float(raw_tgt)
+
     return {
         "speed": speed,
         "x": x,
@@ -1152,6 +1188,12 @@ def sample_metrics(sample: dict, road: dict | None = None,
         "heading": heading,
         "steer": steer,
         "steer_signed": steer_signed,
+        "odd_in_odd": odd_in_odd,
+        "odd_violations": odd_violations,
+        "tor_state": tor_state,
+        "tor_countdown_s": tor_countdown_s,
+        "mrm_active": mrm_active,
+        "mrm_target_speed": mrm_target_speed,
         "lane_error": lane_error,
         "road_edge_margin": road_edge_margin,
         "road_heading": road_heading,          # road_network 局部道路朝向（rad）或 None
@@ -1880,6 +1922,114 @@ def require(failures: list[str], gate_name: str, conditions: dict) -> bool:
         )
         return False
     return True
+
+
+def _evaluate_l3_expectations(series: list[dict], l3_expect: dict) -> dict:
+    """L3-P1 行为断言：ODD 退出 / TOR 请求 / 接管 / 超时 MRM / MRM 停稳。
+
+    只在场景 ``pass_criteria.l3_expect`` 声明了期望时判定（默认场景零影响）。
+    设计遵循仓库既有的 **require 语义**：遥测缺失 = 无法判定 ≠ 通过。
+
+    ``series`` 是 ``sample_metrics`` 的逐帧输出（含 odd_*/tor_*/mrm_* 字段）。
+    返回 ``{"failures": [...], "warnings": [...]}``；同时把观测到的 L3 事实
+    写进 summary（见 score() 的 l3_* 键），供回归对比与 FlowBoard 消费。
+    """
+    failures: list[str] = []
+    warnings: list[str] = []
+    if not l3_expect:
+        return {"failures": failures, "warnings": warnings}
+
+    # ── 前置：场景声明了 l3_expect，则 L3 遥测必须真的存在 ──
+    # monitor 未透传 metrics.odd/tor 时一律 None → INCONCLUSIVE，而不是"没观测到
+    # ODD 退出所以通过"。这正是 P0 那条教训（门禁判不准时 PASS 不可信）的延续。
+    has_odd = any(f.get("odd_in_odd") is not None for f in series)
+    has_tor = any(f.get("tor_state") for f in series)
+    if not require(failures, "l3_telemetry_present",
+                   {"metrics.odd telemetry absent (odd_monitor not wired?)": has_odd,
+                    "metrics.tor telemetry absent (tor_manager not wired?)": has_tor}):
+        return {"failures": failures, "warnings": warnings}
+
+    odd_exit_frames = [f for f in series if f.get("odd_in_odd") is False]
+    tor_states = [f.get("tor_state", "") for f in series]
+    tor_req_frames = [f for f in series if f.get("tor_state") == "TOR_REQUESTED"]
+    takeover_frames = [f for f in series if f.get("tor_state") == "DRIVER_TAKEOVER"]
+    mrm_frames = [f for f in series if f.get("tor_state") == "MRM"]
+    mrm_active_frames = [f for f in series if f.get("mrm_active") is True]
+
+    # ── ① ODD 必须真的退出（由分类器判定，非强制标记）──
+    if l3_expect.get("odd_exit"):
+        if not odd_exit_frames:
+            failures.append(
+                "L3 ODD: expected an out-of-ODD excursion but odd.in_odd was never false "
+                f"(states seen: {sorted({f.get('odd_in_odd') for f in series}, key=str)})"
+            )
+        else:
+            viol = sorted({v for f in odd_exit_frames for v in (f.get("odd_violations") or ())})
+            if not viol:
+                failures.append(
+                    "L3 ODD: in_odd became false but violations[] was empty "
+                    "— classifier marked out-of-ODD without a stated reason"
+                )
+
+    # ── ② TOR 请求必须发出 ──
+    if l3_expect.get("tor_requested") and not tor_req_frames:
+        failures.append(
+            f"L3 TOR: expected state TOR_REQUESTED but never observed (states: {sorted(set(tor_states))})"
+        )
+
+    # ── ③ 驾驶员接管必须被观察到 ──
+    if l3_expect.get("driver_takeover") and not takeover_frames:
+        failures.append(
+            "L3 TOR: expected DRIVER_TAKEOVER but never observed "
+            f"(states: {sorted(set(tor_states))})"
+        )
+
+    # ── ④ TOR 超时 → MRM ──
+    if l3_expect.get("tor_timeout_mrm") and not mrm_frames:
+        failures.append(
+            "L3 MRM: expected TOR timeout to escalate into MRM but MRM never observed "
+            f"(states: {sorted(set(tor_states))})"
+        )
+    # TOR_REQUESTED 之后的 countdown 必须单调不增（倒计时语义反转 = 时序 bug）
+    for prev, cur in zip(tor_req_frames, tor_req_frames[1:]):
+        a, b = prev.get("tor_countdown_s"), cur.get("tor_countdown_s")
+        if isinstance(a, (int, float)) and isinstance(b, (int, float)) and b > a + 1e-6:
+            failures.append(
+                f"L3 TOR: countdown increased ({a:.2f}s → {b:.2f}s) — expected monotonic decrease"
+            )
+            break
+
+    # ── ⑤ MRM 必须真的把车停住（执行，而非只发请求）──
+    if l3_expect.get("mrm_stop"):
+        if not mrm_active_frames:
+            failures.append(
+                "L3 MRM: expected mrm.active=true (MRM execution) but never observed"
+            )
+        else:
+            # MRM 生效后速度必须收敛到怠速以下 —— 只看请求不看执行会漏掉
+            # "tor_manager 发了 MRM 但 control 没降速"这类跨模块断链。
+            first_mrm = series.index(mrm_active_frames[0])
+            tail = series[first_mrm:]
+            tail_speeds = [abs(float(f.get("speed", 0.0) or 0.0)) for f in tail]
+            if tail_speeds and min(tail_speeds) > 1.0:
+                failures.append(
+                    f"L3 MRM: mrm.active engaged but ego never slowed below 1 m/s "
+                    f"(min {min(tail_speeds):.2f} m/s over {len(tail_speeds)} frames) "
+                    "— MRM request not honoured by control"
+                )
+
+    # ── 反向断言：未声明接管/超时时不应自发进入 MRM 或 TOR ──
+    if not l3_expect.get("tor_requested") and tor_req_frames:
+        warnings.append(
+            "L3 TOR: TOR_REQUESTED observed although the scenario did not expect a TOR "
+            f"({len(tor_req_frames)} frames)"
+        )
+    if not l3_expect.get("mrm_stop") and mrm_active_frames:
+        warnings.append(
+            f"L3 MRM: mrm.active observed ({len(mrm_active_frames)} frames) although the "
+            "scenario did not expect an MRM"
+        )
+    return {"failures": failures, "warnings": warnings}
 
 
 def scenario_actor_layer_counts(scenario: dict | None) -> dict[str, int]:
@@ -3082,6 +3232,19 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         warnings.append(f"perception degradation: perception output in "
                         f"{perception_coverage*100:.1f}% of truth-obstacle frames")
 
+    # ── L3-P1：ODD / TOR / MRM 行为门禁（方向六）──
+    # 只在场景声明了 l3_expect 时启用（默认场景零影响）。声明即要求：
+    #   * odd_exit          — ODD 必须真的退出过（分类器判 out，非强制）
+    #   * tor_requested     — TOR 状态机必须进入过 TOR_REQUESTED
+    #   * driver_takeover   — 必须观察到驾驶员接管（DMS 按时接管）
+    #   * tor_timeout_mrm   — 必须 TOR 超时 → MRM → 停稳
+    #   * mrm_stop          — MRM 必须真的把车停住（速度收敛到 ~0 且保持）
+    # 缺失遥测 = 无法判定 → FAIL（require 语义），不能静默 PASS。
+    l3_expect = criteria.get("l3_expect") if isinstance(criteria.get("l3_expect"), dict) else {}
+    l3_summary = _evaluate_l3_expectations(series, l3_expect)
+    failures.extend(l3_summary["failures"])
+    warnings.extend(l3_summary["warnings"])
+
     summary = {
         "scenario": scenario_name or "(unknown)",
         "samples": len(samples),
@@ -3229,6 +3392,19 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
             f"but simulation time is {sim_span:.1f}s — startup/teardown or machine "
             f"load, not a hanging run"
         )
+
+    # ── L3-P1（方向六）：ODD / TOR / MRM 观测事实 ──
+    # 场景未声明 l3_expect 时仍如实输出（默认场景 ODD 在域、TOR=ACTIVE），
+    # 让"L3 链路还活着"可被回归对比；判据本身在上文的 _evaluate_l3_expectations。
+    summary["l3_odd_exit_observed"] = any(f.get("odd_in_odd") is False for f in series)
+    summary["l3_odd_violations_seen"] = sorted({
+        v for f in series for v in (f.get("odd_violations") or ())})
+    summary["l3_tor_states_seen"] = sorted({
+        f.get("tor_state", "") for f in series if f.get("tor_state")})
+    summary["l3_tor_requested_frames"] = sum(
+        1 for f in series if f.get("tor_state") == "TOR_REQUESTED")
+    summary["l3_mrm_active_frames"] = sum(1 for f in series if f.get("mrm_active") is True)
+    summary["l3_expect"] = sorted(k for k, v in (l3_expect or {}).items() if v)
 
     return failures, warnings, summary
 

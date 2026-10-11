@@ -1,0 +1,54 @@
+{
+  "name": "l3_odd_exit_timeout_mrm",
+  "description": "L3-P1 方向六：ODD 退出 → TOR 请求 → 驾驶员不接管 → 超时 → MRM 车道内停稳。与 l3_odd_exit_takeover 同路同注入（t=5s 能见度 1000→80m），唯一差异是 DMS 模型 will_takeover=false —— 驾驶员对 TOR 无响应。tor_manager 在 10s 倒计时耗尽后发 TOR_EV_TOR_TIMEOUT → MRM，tor 节点发 safety/mrm_request(active)，control 把纵向目标降到 0（保留横向跟随，沿轨迹车道内减速），safety_control 抬制动下限 + 双闪。断言（l3_expect.tor_timeout_mrm + mrm_stop）**同时校验请求与执行**：只看 tor.state=MRM 会漏掉『tor_manager 发了 MRM 但 control 没降速』这类跨模块断链，故 mrm_stop 额外要求 mrm.active 出现过且自车速度收敛到 1 m/s 以下。故障表中『TOR 超时没进 MRM』『MRM 只发请求不执行』由它拦截。",
+  "random_seed": 314,
+  "duration_s": 0,
+  "weather": "clear",
+  "visibility_m": 1000,
+  "ego": {
+    "x": 5.0,
+    "y": -1.75,
+    "heading": 0.0,
+    "init_speed": 15.0,
+    "target_speed": 18.0
+  },
+  "road_network": {
+    "edges": [
+      {
+        "id": 0,
+        "type": "highway",
+        "name": "l3_straight",
+        "length_m": 6000,
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 22.0,
+        "nodes": [[0, 0, 0], [6000, 0, 0]]
+      }
+    ]
+  },
+  "actors": [],
+  "traffic_lights": [],
+  "odd": {
+    "visibility_drop_at_s": 5.0,
+    "degraded_visibility_m": 80.0
+  },
+  "driver": {
+    "attention": true,
+    "will_takeover": false,
+    "takeover_latency_s": 1.5
+  },
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 75.0,
+    "_min_avg_speed_note": "0.1 而非缺省：本场景的**预期行为**就是 MRM 停稳，故平均速度门禁必须让位于 l3_expect.mrm_stop。设 >0 同时关掉评估器的 legacy 低速停滞 fallback（它只在 min_avg_speed 缺省时才生效），避免把『设计内的停车』判成死锁。",
+    "min_avg_speed_mps": 0.1,
+    "l3_expect": {
+      "odd_exit": true,
+      "tor_requested": true,
+      "tor_timeout_mrm": true,
+      "mrm_stop": true
+    }
+  },
+  "route": [],
+  "scenarios": []
+}

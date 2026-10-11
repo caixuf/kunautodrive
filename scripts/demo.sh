@@ -243,7 +243,12 @@ if [ -n "$SCENARIO" ]; then
     SCENARIO_ABS="$ROUTE_SCENARIO_TMP"
   fi
   # `params` is itself a JSON string, so its inner quotes are escaped.
-  sed 's|\\\"scenario_file\\\": \\\"[^\\\"]*\\\"|\\\"scenario_file\\\": \\\"'"$SCENARIO_ABS"'\\\"|g' \
+  # 冒号后的空白用 ` *`（零或多个）而非固定一个空格：老节点写成
+  # `"scenario_file": "..."`（带空格），而 L3 新增的 odd_monitor / tor_manager
+  # 用 compact 形式 `"scenario_file":"..."`（无空格）。原模式强制要求一个空格，
+  # 这两个节点永远拿不到 --scenario 指定的场景，其 `odd` / `driver` 注入块静默
+  # 失效（L3 场景判 ODD 退出必 FAIL）。
+  sed 's|\\\"scenario_file\\\": *\\\"[^\\\"]*\\\"|\\\"scenario_file\\\": \\\"'"$SCENARIO_ABS"'\\\"|g' \
     "$PIPELINE_ORIG" > "$PIPELINE_TMP"
   if [ -n "$START_S" ] || [ -n "$START_D" ]; then
     python3 - "$PIPELINE_TMP" "$START_S" "$START_D" <<'PY'

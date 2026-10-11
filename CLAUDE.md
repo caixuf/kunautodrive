@@ -44,6 +44,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | lanelet-consistency-gate | `python3 ci/gates/lanelet_consistency_check.py` | `map.json` ↔ `lanelet.osm` Rule 1–5 漂移 |
 | lane-match-schema-gate | `python3 ci/gates/lane_match_schema_check.py` | 车道匹配 schema ↔ codegen 契约不一致（`--self-test`） |
 | scenario / clock / map | `tools/scenarioctl.py validate` / 禁 `modules/` 裸 `clock_gettime` / `tools/check_map_connectivity.py` | 空场景引用 / raw clock / 断链地图 |
+| L3 安全闭环（P1） | `ctest -R tor_mrm_sim` + `python3 ci/evaluators/demo_evaluator.py --scenario scenarios/l3_odd_exit_takeover.json` / `..._timeout_mrm.json` | ODD 退出 / TOR 请求 / 接管 / 超时 MRM 链路断开；**MRM 只发请求没真停**（遥测缺失=INCONCLUSIVE≠PASS）。判据在场景 `pass_criteria.l3_expect`，CI `evaluator` job 每次 push 跑 |
 
 **新增/改名的闸门必须同步这张表** —— 只加 job 不登记，下一个人会以为没有它。
 
@@ -129,7 +130,7 @@ sim_world → sensor_model → perception → fusion → planning → control �
 | `include/platform_compat.h` | 跨平台兼容层（macOS⇄Linux，CMake force-include，仅 APPLE 生效）：pthread 命名签名、robust mutex、condvar 时钟降级 |
 | `modules/adas_nodes/flowsim/physics.cpp` | 运动学自行车模型 + 可选线性轮胎二自由度动态模型（pipeline.json `physics_model`，低速<5m/s 退化运动学）；碰撞/护栏/重力见 [FLOWSIM_PHYSICS.md](docs/FLOWSIM_PHYSICS.md)、`/flowsim-physics` |
 | `modules/adas_nodes/flowsim/entity.h` | 仿真实体（含 v_x_body/v_y_body/yaw_rate/F_yf/F_yr、垂直速度 vz、crash_cooldown、route_s；EntityPool 边界检查） |
-| `scenarios/straight_road.json` | 直道导航场景（默认；另有 curve_road/dense_npc/multi_light/oncoming/城市环线/OSM 城市/泊车/驾考科目一~四等共 23 个场景 + `suite.json` 场景矩阵，契约校验 `tools/scenarioctl.py validate`） |
+| `scenarios/straight_road.json` | 直道导航场景（默认；另有 curve_road/dense_npc/multi_light/oncoming/城市环线/OSM 城市/泊车/驾考科目一~四/`l3_odd_exit_*` 等共 25 个场景 + `suite.json` 场景矩阵，契约校验 `tools/scenarioctl.py validate`） |
 | `modules/adas_nodes/data_recorder_node.c` | 训练样本采集（Learning Loop Stage 0） |
 | `modules/adas_nodes/inference_node.cpp` | tiny-MLP 影子推理（Learning Loop Stage 2） |
 | `modules/adas_nodes/tiny_mlp.h` | 纯 C 单隐层 MLP 推理内核 |
