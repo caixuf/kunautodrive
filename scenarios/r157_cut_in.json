@@ -1,0 +1,71 @@
+{
+  "name": "r157_cut_in",
+  "description": "UN R157 (ALKS) 法规场景：旁车切入本车道（cut-in）。双向 4 车道 3000m 直道。ego 定速巡航；**邻道车用 vy（连续横向速度）从右侧车道切入本车道** —— 与 choreography 的 dl 传送不同，vy 是连续量，不产生瞬移（历史 cutin 场景即用此法）。覆盖：前方突然出现低速车 → planning/safety 必须减速避让而非追尾。判据：无碰撞 + 不超时 + 不低于最低均速。",
+  "random_seed": 157,
+  "duration_s": 0,
+  "ego": {
+    "x": 20.0,
+    "y": -1.75,
+    "heading": 0.0,
+    "init_speed": 16.0,
+    "target_speed": 20.0
+  },
+  "road_network": {
+    "edges": [
+      {
+        "id": 0,
+        "type": "highway",
+        "name": "r157_straight",
+        "length_m": 3000,
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 22.0,
+        "nodes": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            3000,
+            0,
+            0
+          ]
+        ]
+      }
+    ]
+  },
+  "actors": [
+    {
+      "id": 0,
+      "type": "car",
+      "x": 60.0,
+      "y": -1.75,
+      "vx": 7.0,
+      "vy": 0.0,
+      "len": 4.6,
+      "wid": 2.0,
+      "_comment": "本车道前方慢车（跟车目标）"
+    },
+    {
+      "id": 1,
+      "type": "car",
+      "x": 30.0,
+      "y": -5.25,
+      "vx": 13.0,
+      "vy": -3.0,
+      "len": 4.6,
+      "wid": 2.0,
+      "_comment": "右后加速，vy<0（向左）切入 ego 车道"
+    }
+  ],
+  "traffic_lights": [],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 60.0,
+    "min_avg_speed_mps": 4.0,
+    "min_distance_m": 50.0
+  },
+  "route": [],
+  "scenarios": []
+}

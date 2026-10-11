@@ -34,6 +34,8 @@
     {"file": "scenarios/dense_route_traffic.json", "duration_s": 45, "enabled": true},
     {"file": "scenarios/oncoming.json",            "duration_s": 45, "enabled": true},
     {"file": "scenarios/l3_odd_exit_takeover.json", "duration_s": 45, "enabled": true},
+    {"file": "scenarios/r157_cut_in.json",         "duration_s": 40, "enabled": true},
+    {"file": "scenarios/r157_cut_out.json",        "duration_s": 45, "enabled": true},
     {"file": "scenarios/l3_odd_exit_timeout_mrm.json", "duration_s": 60, "enabled": true},
     {"file": "scenarios/auto_parking.json",        "duration_s": 45, "enabled": false},
     {"file": "scenarios/right_turn_side_parking.json", "duration_s": 35, "enabled": false},

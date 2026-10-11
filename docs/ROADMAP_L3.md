@@ -477,8 +477,53 @@ P2 的「冗余（**雷达模型**、…）」是最后一块空白：`sensor_mo
 实跑 `enable_radar=1` 时 `sensor/radar` 稳定 ~10Hz（182 帧/18s）；
 `scenario_regression --baseline` 11/11 PASS 0 回归。
 
-**P2 遗留**：法规场景库仍不完整（缺 UN R157 要求的 cut-in / cut-out / 静止障碍 /
-传感器失效注入四类）；另有"感知降级后系统行为是否仍安全"的专项判据。
+### P2 进展（2026-10-11，第六刀：UN R157 法规场景库）
+
+P2 的「法规场景库（UN R157 ALKS + 国内 L3 测试规程：切入/切出、前车急刹、
+静止障碍、施工区、ODD 退出、传感器失效注入）」此前只有零散覆盖。本刀补齐
+**切入 / 切出 + 静止障碍**三类，并在补的过程中**抓出一个真实死锁**。
+
+| 项 | 状态 | 落地 |
+|----|------|------|
+| `allow_npc_lane_change` 实现 | ✅ 完成 | `scene_events.cpp` 里**注释写着"若未来需要恢复 NPC 编导变道（如 cutin 测试场景），加 allow_npc_lane_change: true 开关"——但这个开关从未实现**（NPC 横控被无条件归零）。没有它，任何"NPC 切入 ego 车道"的法规场景在结构上都写不出来（写了也只是 NPC 在原车道直行 = 假绿）。已实现：`Choreography.allow_npc_lane_change`（默认 false，既有场景零变化）+ 解析 + 消费点条件判断 |
+| `r157_cut_in` | ✅ 完成 | 旁车切入：邻道车用 `vy`（**连续**横向速度）切入本车道。**没用 choreography 的 `dl` 传送** —— 传送是位置跳变，实测会直接撞上（`dl` 适合"重置到 ego 前方"而非"切进来"）。判据：无碰撞 + 不超时 + 均速。实测 PASS |
+| `r157_cut_out` | ✅ 完成 | 前车切出暴露静止障碍：本车道前车用 `vy` 切到外侧车道让开，同时正前方有静止车。实测 PASS（**修完死锁后**，见下） |
+| 进 suite + 门禁 | ✅ 完成 | 两场景进 `suite.json`（13 个 enabled），由 `scenario_regression` 覆盖 |
+
+**🔴 本刀抓出的真实死锁（由 r157_cut_out 当场暴露）**：
+
+静止障碍停在 ego 正前方时，ego 正常跟停后**永久堵死**（实测
+`stagnation_duration_s=44.6`、`lane_change_count=0`、avg_speed 0.40 m/s、
+behavior 恒为 `FOLLOW`）。
+
+根因在 `behavior_planner` 的超车价值判据：
+
+```
+worthwhile = blocked && (best_gap > min_gap)
+min_gap    = min_overtake_gap_base(25.0) + rel_speed × 2.0
+```
+
+实测日志 `best_gap=7.2 blocked=1 worthwhile=0` —— ego 跟停在 desired_gap≈5m
+（实测 7.2m），而 `min_gap` 是 **25m 起跳**，故 `best_gap > min_gap`
+**恒不成立** → `worthwhile` 恒 false → 永不评估变道 → 永久堵死。
+
+**关键洞察**：`min_gap` 的语义（"前方留够空间才**值得**超车"）对**运动**前车
+成立（逼近过程中 best_gap 从大到小穿过阈值），但对**已经停在正前方**的障碍物
+无解 —— **车越守规矩停得越近，越永远不绕行**。
+
+**修法**：前车速度低于 `min_overtake_lead_moving_mps`（新参数，默认 0.5 m/s）
+即视为"已停住"→ 绕行价值**恒真**，把"可不可行"交给下游的变道安全评估
+（目标车道 rear/front gap）—— 那才是正确的守门人。运动前车仍走原判据，
+避免低速跟车时误触发无效变道。
+
+**修后实测**：avg_speed 0.40 → **14.26 m/s**，`lane_change_count` 0 → **4**，
+stagnation 44.6s → 消失，场景 PASS。
+
+**验证**：`r157_cut_in` / `r157_cut_out` 均 PASS；`behavior_fsm_check` 全绿
+（转移表完整性未被破坏）；9 条静态 gate 全绿；`scenario_regression` 见下。
+
+**P2 遗留**：法规场景库仍缺"前车急刹 / 施工区 / 传感器失效注入"三类；
+另有"感知降级后系统行为是否仍安全"的专项判据（需构造"盲开仍不撞"场景）。
 
 
 ## 与近期工作的关系

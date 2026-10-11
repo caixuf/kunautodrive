@@ -206,6 +206,10 @@ struct BehaviorContext {
 
     /* 超车参数 */
     double min_overtake_gap_base{25.0};
+    /* 前车速度低于此值视为"已停住"→ 绕行价值恒真（见 worthwhile 处注释）。
+     * 取 0.5 m/s：明显低于任何正常行驶速度，又不至于把跟停时的速度噪声
+     * （ego 跟停后 lead 报 0.0）判成"在动"。 */
+    double min_overtake_lead_moving_mps{0.5};
     double min_overtake_gap_cap{90.0};
     double min_overtake_gap_speed_mult{2.0};
 
@@ -708,6 +712,8 @@ protected:
             g.blocked_range_mult        = param_get_float("behavior.blocked_range_mult");
             g.blocked_range_min         = param_get_float("behavior.blocked_range_min");
             g.follow_hysteresis         = param_get_float("behavior.follow_hysteresis");
+            g.min_overtake_lead_moving_mps =
+                param_get_float("behavior.min_overtake_lead_moving_mps");
             g.lane_change_timeout_s     = param_get_float("behavior.lane_change_timeout_s");
             g.lane_change_cooldown_s    = param_get_float("behavior.lane_change_cooldown_s");
             g.lc_gap_mult               = param_get_float("behavior.lc_gap_mult");
@@ -880,7 +886,22 @@ protected:
              * 强制 COMPLETED）的补丁；方向修正后返程变道评估正确，堵车
              * 超车与去程同权。committed_lane 锁定由下方 on_return 分支
              * 独立处理（几何镜像锁定当前车道），不受放开影响。 */
-            bool worthwhile = blocked && (best_gap > min_gap);
+            /* 静止障碍（lead_speed ≈ 0）必须无条件判为"值得绕行"。
+             *
+             * 原判据 `blocked && best_gap > min_gap` 对**运动**前车成立
+             * （逼近过程 best_gap 从大到小穿过阈值），但对**已停在正前方**的
+             * 障碍物是死锁：ego 正常跟停在 desired_gap≈5m（实测 7.2m），
+             * 而 min_gap base=25m（+ rel_speed×2，跟停时 ego_v≈0.9）→
+             * best_gap 永远 < min_gap → worthwhile 恒 false → 永不评估变道
+             * → **永久堵死**（实测 R157 cut-out 场景 stagnation 44.6s、
+             * lane_change_count=0）。洞察：车越守规矩停得越近，越永远不绕行。
+             *
+             * 修法：前车速度低于"确实停住"的阈值时，绕行价值不取决于间距
+             * （它已经在挡路，且不会再走），改为恒真，让下游的变道安全评估
+             * （目标车道 rear/front gap）去决定可不可行 —— 那是正确的守门人。
+             * 运动前车仍走原判据，避免低速跟车时误触发无效变道。 */
+            const bool lead_stopped = (lead_speed < g.min_overtake_lead_moving_mps);
+            bool worthwhile = blocked && (lead_stopped || (best_gap > min_gap));
 
             /* ── D: 行为决策 debug 日志（每 10 帧，复盘跟车/追尾过程） ── */
             if (g.seq % 10 == 0) {
@@ -1821,6 +1842,8 @@ static int behavior_init(MessageBus* bus, Transport* transport,
             }
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "min_overtake_gap_base")) && cJSON_IsNumber(j))
                 g.min_overtake_gap_base = j->valuedouble;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "min_overtake_lead_moving_mps")) && cJSON_IsNumber(j))
+                g.min_overtake_lead_moving_mps = j->valuedouble;
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "min_overtake_gap_cap")) && cJSON_IsNumber(j))
                 g.min_overtake_gap_cap = j->valuedouble;
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "acc_standoff")) && cJSON_IsNumber(j))
@@ -1854,6 +1877,9 @@ static int behavior_init(MessageBus* bus, Transport* transport,
                          "blocked 检测最小距离 (m)");
     param_register_float("behavior.follow_hysteresis",      g.follow_hysteresis,      1.0, 3.0,
                          "FOLLOW→CRUISE 退出滞环倍数（进入紧退出松）");
+    param_register_float("behavior.min_overtake_lead_moving_mps",
+                         g.min_overtake_lead_moving_mps, 0.0, 5.0,
+                         "前车速度低于此值视为已停住→绕行价值恒真（破静止障碍死锁）");
     param_register_float("behavior.lane_change_timeout_s",  g.lane_change_timeout_s,  3.0, 20.0,
                          "变道超时时间 (s)，超时回退 CRUISE");
     param_register_float("behavior.lane_change_cooldown_s", g.lane_change_cooldown_s, 1.0, 10.0,

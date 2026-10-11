@@ -785,6 +785,9 @@ ScenarioConfig* scenario_load(const char* path) {
         if (cJSON_IsNumber(j)) sc->choreography.loop_period_s = j->valuedouble;
         if (sc->choreography.loop_period_s <= 0.0) sc->choreography.loop_period_s = 45.0;
 
+        cJSON* jlchg = cJSON_GetObjectItemCaseSensitive(jchoreo, "allow_npc_lane_change");
+        sc->choreography.allow_npc_lane_change = cJSON_IsTrue(jlchg);
+
         cJSON* jbeats = cJSON_GetObjectItemCaseSensitive(jchoreo, "beats");
         if (cJSON_IsArray(jbeats)) {
             int nb = cJSON_GetArraySize(jbeats);

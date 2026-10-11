@@ -1,0 +1,81 @@
+{
+  "name": "r157_cut_out",
+  "description": "UN R157 (ALKS) 法规场景：前车切出（cut-out）暴露静止障碍。双向 4 车道 3000m 直道。ego 跟车巡航；**本车道前车用 vy（连续横向速度）切到外侧车道让开本车道**，同时另一辆**静止车**就在 ego 前方 —— 前车切出后 ego 才发现静止障碍，必须自行刹停/绕行。持续一个 loop 周期后前车回到本车道（vy 反向），构成 R157 的循环测试。判据：无碰撞 + 不超时。",
+  "random_seed": 158,
+  "duration_s": 0,
+  "ego": {
+    "x": 20.0,
+    "y": -1.75,
+    "heading": 0.0,
+    "init_speed": 15.0,
+    "target_speed": 18.0
+  },
+  "road_network": {
+    "edges": [
+      {
+        "id": 0,
+        "type": "highway",
+        "name": "r157_straight",
+        "length_m": 3000,
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 22.0,
+        "nodes": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            3000,
+            0,
+            0
+          ]
+        ]
+      }
+    ]
+  },
+  "actors": [
+    {
+      "id": 0,
+      "type": "car",
+      "x": 70.0,
+      "y": -1.75,
+      "vx": 11.0,
+      "vy": -3.2,
+      "len": 4.6,
+      "wid": 2.0,
+      "_comment": "本车道前车，vy<0 向左切出到外侧车道（让开本车道）"
+    },
+    {
+      "id": 1,
+      "type": "car",
+      "x": 45.0,
+      "y": -1.75,
+      "vx": 0.0,
+      "vy": 0.0,
+      "len": 4.6,
+      "wid": 2.0,
+      "_comment": "静止障碍：前车切出后暴露在 ego 前方"
+    },
+    {
+      "id": 2,
+      "type": "car",
+      "x": 300.0,
+      "y": -5.25,
+      "vx": 12.0,
+      "vy": 0.0,
+      "len": 4.6,
+      "wid": 2.0
+    }
+  ],
+  "traffic_lights": [],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 70.0,
+    "min_avg_speed_mps": 1.0,
+    "min_distance_m": 30.0
+  },
+  "route": [],
+  "scenarios": []
+}

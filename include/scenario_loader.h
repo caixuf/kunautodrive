@@ -319,6 +319,14 @@ typedef struct Choreography {
     ChoreoBeat   beats[SCENARIO_MAX_CHOREO_BEATS];
     int          beat_count;
     bool         enabled;            /**< 是否有 choreography 块 */
+    /* 允许 choreography beat 的 dl 驱动 NPC 横向变道。
+     *
+     * 默认 false：NPC 横控归零，仅按初始 offset 直行（配合 MOBIL #if 0），
+     * 保证既有场景行为完全不变。
+     * 置 true 才启用 —— cut-in / cut-out / 加塞 这类**法规场景**
+     * （UN R157 ALKS 要求）必须让 NPC 真的切入 ego 车道，否则测的是
+     * "NPC 在原车道直行"，压根没测到被加塞的处置。 */
+    bool         allow_npc_lane_change;
 } Choreography;
 
 /* ── 通过 / 失败判据 ──────────────────────────────────────── */

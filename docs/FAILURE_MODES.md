@@ -32,13 +32,13 @@
 
 | # | 分类 | 条数 |
 |---|------|------|
-| 1 | 控制 / 规划 / 安全层 | 30 |
+| 1 | 控制 / 规划 / 安全层 | 32 |
 | 2 | 感知 / 点云 | 6 |
 | 3 | 仿真 / 几何 / NPC | 7 |
 | 4 | 仪表盘 / 监控 / 前端 | 9 |
 | 5 | 评估器 / 门禁 | 5 |
 | 6 | 框架 / 工具链 | 4 |
-| | **合计** | **61** |
+| | **合计** | **63** |
 
 ## 1. 控制 / 规划 / 安全层
 
@@ -80,6 +80,9 @@
 | **安全闸门/感知链掉线无人发现**：`safety_control`、`sensor_model`、`perception`、`object_tracker`、`behavior_planner` 全部静默，而 `metrics.degrade` 显示"心跳都健康" | supervisor 的递进策略（L1/L2/L3+去抖+自动恢复）本身完整，但**只有 3 个节点上报心跳**（control/fusion/planning）—— 覆盖面而非机制的问题。`safety_control` 是最后一层保护，它掉线最不该无人发现。修复：新增 5 个上报点，覆盖面 3→8；并给 `reason_for_node` 补感知链映射（`sensor_model`/`perception`/`object_tracker` → `sensor_timeout`），否则感知掉线会报 `control_timeout` 把人指向明明在跑的 control | `degrade_ladder.c` `reason_for_node` + 各节点的 `degrade_supervisor_record_heartbeat` |
 | **第 17 个节点起的心跳被静默丢弃**，而默认 `pipeline.json` 恰好有 19 个节点 → 运维侧看到"心跳都健康"的假绿 | `DEGRADE_MAX_NODES` 为 16，`degrade_supervisor_record_heartbeat` 在表满时直接 `return`（**不报错**）。这是本仓库反复出现的"最贵的失败形态"：静默截断被当成正常。修复：上限 16→32（与 `HEALTH_MAX_NODES` 对齐），表满改 `LOG_ERROR` 点名（带防刷屏） | `include/degrade_ladder.h` `DEGRADE_MAX_NODES` / `degrade_ladder.c` 心跳注册分支 |
 
+
+| **前方静止障碍把 ego 永久堵死**（`stagnation 44.6s` / `lane_change_count=0` / avg_speed 0.40 m/s / behavior 恒 `FOLLOW`） | `behavior_planner` 超车价值判据 `worthwhile = blocked && (best_gap > min_gap)` 而 `min_gap = min_overtake_gap_base(25.0) + rel_speed×2.0`。ego 正常跟停在 desired_gap≈5m（实测 7.2m），`min_gap` 却是 25m 起跳 → `best_gap > min_gap` **恒不成立** → 永不评估变道 → 永久堵死。**关键洞察**：该判据的语义（"前方留够空间才**值得**超车"）对**运动**前车成立（逼近过程 best_gap 从大到小穿过阈值），但对**已停在正前方**的障碍物无解 —— **车越守规矩停得越近，越永远不绕行**。修复：前车速度 < `min_overtake_lead_moving_mps`（新参数，默认 0.5 m/s）即视为已停住 → 绕行价值恒真，可不可行交给下游变道安全评估（目标车道 rear/front gap）。修后实测 avg_speed 0.40→14.26 m/s、变道 0→4 次 | `behavior_planner_node.cpp` `worthwhile` 判据（`min_overtake_lead_moving_mps`） |
+| 场景写了 `allow_npc_lane_change: true` 想让 NPC 切入 ego 车道，NPC 却始终在原车道直行 | 该开关在 `scene_events.cpp` 的注释里被写为"未来需要时再加"，但**从未实现** —— NPC 横控被无条件归零（配合 MOBIL `#if 0`）。于是任何"NPC 切入"的法规场景（UN R157 cut-in/cut-out）在结构上写不出来，写了也只测到"没被加塞"（假绿）。修复：`Choreography.allow_npc_lane_change` 字段 + 解析 + 消费点条件判断，默认 false 保既有场景零变化。**另**：cut-in 应用 actor 的 `vy`（连续横向速度），**不要**用 choreography 的 `dl` 传送 —— 传送是位置跳变，实测会直接撞上 ego | `include/scenario_loader.h` `Choreography` / `src/core/scenario_loader.c` / `flowsim/scene_events.cpp` `effective_dl` |
 
 ## 2. 感知 / 点云
 

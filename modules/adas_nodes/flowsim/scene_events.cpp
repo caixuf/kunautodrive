@@ -286,11 +286,15 @@ void tick_choreography(EntityPool& pool, const Entity& ego,
          * 这从根上杜绝"choreography beat 让 NPC 变道"的行为，
          * 配合 MOBIL #if 0 禁用，NPC 横向控制权完全归零，仅按初始 offset 直行。
          *
-         * 若未来需要恢复 NPC 编导变道（如 cutin 测试场景），
-         * 在场景文件加 "allow_npc_lane_change": true 开关，并在下方条件判断。 */
+         * 若需要 NPC 编导变道（如 cutin 法规场景），在 choreography 块里加
+         * "allow_npc_lane_change": true —— 该开关已实现，见上方 effective_dl
+         * 的条件判断。默认 false 保证既有场景零行为变化。 */
         double effective_dl = b->dl;
         if (target->is_vehicle() && target->type != EntityType::Ego) {
-            effective_dl = 0.0;
+            /* NPC 横控默认归零（见下方注释），仅当场景显式开启
+             * allow_npc_lane_change 时才让 beat 的 dl 真正驱动横向 ——
+             * 这是 cut-in / cut-out 等法规场景的前提。 */
+            if (!choreo->allow_npc_lane_change) effective_dl = 0.0;
         }
 
         /* ── 重置到 ego 前方 ──
