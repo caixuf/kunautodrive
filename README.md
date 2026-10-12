@@ -8,6 +8,12 @@
 ![C](https://img.shields.io/badge/C-11-555555)
 ![C++](https://img.shields.io/badge/C++-20-659ad2)
 
+**体量速览**：C 核心与节点 ~4 万行 · C++ ADAS 节点 ~2.8 万行 · Python 工具链/
+评估器/门禁 ~4 万行 · 手写前端（3D 仪表盘，无框架 ES modules）~2.2 万行；
+默认管线 17 节点、L3 sensor 编排 16 节点；9 条静态门禁 + 6 组前端门禁 +
+40 项 ctest + 16 场景回归基线；配套 5 部 26 章技术专著
+（[docs/BOOK.md](docs/BOOK.md)）。
+
 ## 演示截图
 
 <!--
