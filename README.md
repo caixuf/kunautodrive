@@ -28,6 +28,7 @@ KunAutoDrive 当前是**仿真优先、可复现的实验与集成平台**：感
 |---|---|
 | 运行 3D 自动驾驶演示 | [快速开始](#快速开始) |
 | 用键盘接管车辆、检查轮向/车身方向 | [游戏诊断模式](#游戏诊断模式) |
+| 了解 L3 安全能力（ODD/TOR/MRM/故障注入/EDR/R157） | [L3 安全闭环](#l3-安全闭环) |
 | 部署到 RC 小车 | [车辆部署](#车辆部署) |
 | 记录并分析 PEM 车端数据 | [PEM 数据闭环](#pem-数据闭环) |
 | 修改算法并做回归 | [验证与 CI](#验证与-ci) |
@@ -92,6 +93,24 @@ flowsim -> sensor_model -> perception -> fusion -> planning -> control
 [可视化架构](docs/VISUALIZATION_ARCHITECTURE.md)、
 [监控架构](docs/MONITORING_ARCHITECTURE.md)和
 [数据闭环](docs/DATA_CLOSED_LOOP.md)。
+
+## L3 安全闭环
+
+在核心中间件之上，项目实现了一条完整的 SAE L3 安全闭环，全部由带牙的
+CI 门禁锁定（门禁抓不住已知故障 = 它的 PASS 不可信）：
+
+| 能力 | 内容 | 验证 |
+|------|------|------|
+| ODD / TOR / MRM | 运行设计域监控 → 脱离请求 → 最小风险机动，MRM 真停（遥测缺失=INCONCLUSIVE≠PASS） | `ctest -R tor_mrm_sim` + `l3_odd_exit_*` 场景 |
+| 故障注入 | 6 类故障（定位丢失/感知丢失/规划丢失/原始指令超时/GPS 冗余/全源丢失），每类都有**可观测**的降级路径 | `ci/gates/fault_inject_gate.py`（6/6） |
+| 降级阶梯 + 看门狗 | L1/L2/L3 单调降级、8 节点心跳覆盖、心跳表满静默丢弃已修复 | `ctest -R safety_fault_evidence` |
+| 定位冗余 | GPS/航位推算交叉校验，单源丢失不误判为定位丢失 | `tools/localization_integrity_sim.py --run-all` |
+| 毫米波雷达模型 | 量程/FOV/方位基准/径向速度符号的观测模型，IDL 线格式与 C 结构体逐字节对齐 | `ctest -R "adas_nodes_logic\|new_module"` |
+| EDR 事件记录 | L3 法规事件（激活/退出/TOR/MRM/ODD 退出/碰撞）落 PEM，关键事件 fsync | `ci/gates/l3_edr_gate.py` |
+| UN R157 法规场景 | ALKS 切入/切出/急刹/施工区/传感器失效五类场景，场景可声明故障注入 | `scenario_regression --baseline`（16 场景基线门禁） |
+
+排查此类问题的方法论沉淀在[故障模式表](docs/FAILURE_MODES.md)（67 行现象 →
+根因 → 位置，6 类分节），Roadmap 见 [docs/ROADMAP_L3.md](docs/ROADMAP_L3.md)。
 
 ## 车辆部署
 
