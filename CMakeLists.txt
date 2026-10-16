@@ -1256,6 +1256,12 @@ target_link_libraries(test_ltv_mpc m)
 add_test(NAME ltv_mpc_kkt COMMAND test_ltv_mpc)
 set_tests_properties(ltv_mpc_kkt PROPERTIES TIMEOUT 10)
 
+# D2-06 / A11: localization/lane_match 失效降级单测 (planning nearest_lane fallback)
+add_executable(test_planning_fallback_when_match_invalid modules/adas_nodes/test_planning_fallback_when_match_invalid.cpp)
+target_include_directories(test_planning_fallback_when_match_invalid PRIVATE modules/adas_nodes)
+add_test(NAME test_planning_fallback_when_match_invalid COMMAND test_planning_fallback_when_match_invalid)
+set_tests_properties(test_planning_fallback_when_match_invalid PROPERTIES TIMEOUT 10)
+
 # traversability_node 算法单元测试（单 TU 包含节点 .c 以访问 static 函数）
 add_executable(test_traversability tests/test_traversability.c)
 target_link_libraries(test_traversability flowengine_core scheduler_cpp m)
