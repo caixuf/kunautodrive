@@ -36,7 +36,7 @@
 | 2 | 感知 / 点云 | 6 |
 | 3 | 仿真 / 几何 / NPC | 8 |
 | 4 | 仪表盘 / 监控 / 前端 | 9 |
-| 5 | 评估器 / 门禁 | 6 |
+| 5 | 评估器 / 门禁 | 7 |
 | 6 | 框架 / 工具链 | 4 |
 | | **合计** | **67** |
 
@@ -148,6 +148,7 @@
 | 故障注入后目标 topic 从 `metrics.topics` **整个消失**（不是显示 0 Hz），门禁误判"注入没生效" | 注入点在 `message_bus_publish` **之前**（`transport_publish` 入口），消息从未进过 bus → 该 topic 的 `pub_count` 恒 0 → stats 表里根本没有这个条目。A/B 实测：干净跑 43 个 topic（含 `perception/obstacles`），永久注入后 41 个（不含）。修复：门禁的"topic 缺席"判定改为**有丢弃计数时缺席即为注入生效的强证据**（`inject_dropped > 0`），而非一律判"无法确认" | `ci/gates/fault_inject_gate.py` `check_class` / `src/core/transport.c` `transport_publish` 注入点 |
 
 | 场景声明"切断某传感器"，而评估器的 topic 频率门禁要求该 topic 达最低频率 → **该场景永远不可能 PASS**（门禁与它要验证的行为互相矛盾） | 门禁把"topic 必须在发"当无条件要求。但对**故意注入失效**的场景，"该 topic 停发"正是它的预期行为。修复：① 场景 `fault_injection` 里直接切断的 topic 跳过频率门禁，但仍断言它**确实停了**（还在发 → WARN 提示注入可能没生效）；② **级联豁免** —— 切断某模态后其**直接消费者**掉频是正确后果（切 lidar → fusion 只能靠 GPS 慢速更新 → `fusion/localization` 20Hz→10Hz）。级联映射**只覆盖直接消费者、不做传递闭包**，避免一次注入把整条链的判据全豁免 | `ci/evaluators/demo_evaluator.py` `injected_topics` / `INJECT_CASCADE` + `load_scenario_criteria_from_pipeline` 透传 `_inject_topics` |
+| nightly `scenario_regression` 每个场景都是 `no topology samples collected`，stress test 却绿 | 同一 `build/` 先开 `ENABLE_COVERAGE`（且 UBSAN 留在 CMake 缓存里）。`libflowengine_core.a` 因此引用 `__gcov_merge_add`，插件 cmake 不链 `-lgcov`，`dlopen` 全部 `undefined symbol: __gcov_merge_add` 后被跳过。launcher 仍睡满 duration 并退出 0，monitor 从未写 `topology.json`。修复：行为门禁前把 `build/` 重配成 Release 且四个插桩开关显式 OFF，删掉插件构建目录重链；一个插件都没加载时 launcher 直接非 0 退出，不再空转 | `.github/workflows/ci.yml` nightly Release rebuild / `src/flow_launcher.c` `run_dlopen_mode` |
 
 ## 6. 框架 / 工具链
 

@@ -432,6 +432,14 @@ static int run_dlopen_mode(int duration, int stagger_ms,
 
     LOG_INFO("launcher", "mode: dlopen (single-process)");
 
+    /* attempted = 真正去 dlopen 的节点。全部失败时若继续睡满 duration，
+     * 调用方（nightly stress / scenario_regression）会把“一个插件都没
+     * 起来”记成成功运行。2026-10-03..16 nightly：coverage 构建的
+     * libflowengine_core.a 带 gcov，插件 .so 未链 -lgcov，dlopen 全部
+     * undefined symbol: __gcov_merge_add，launcher 仍退出 0。 */
+    int attempted = 0;
+    int loaded = 0;
+
     /* 初始化所有节点插件 */
     for (int i = 0; i < g_node_count; i++) {
         NodeDesc* nd = &g_nodes[i];
@@ -448,6 +456,7 @@ static int run_dlopen_mode(int duration, int stagger_ms,
         /* 尝试加载 .so — 支持绝对路径、相对路径和库名三种格式 */
         /* RTLD_GLOBAL: 把 .so 的符号暴露给后续加载的库 (依赖传递) */
         /* RTLD_LAZY:   推迟解析, 让 .so 能从主进程继承 net_transport* 等符号 */
+        attempted++;
         int dlflags = RTLD_LAZY | RTLD_GLOBAL;
         nd->lib_handle = dlopen(nd->library, dlflags);
         if (!nd->lib_handle) {
@@ -530,7 +539,15 @@ static int run_dlopen_mode(int duration, int stagger_ms,
         LOG_INFO("launcher", "[%d/%d] loaded  %-16s  v%s — %s",
                  i + 1, g_node_count, nd->name,
                  nd->plugin->version, nd->plugin->description);
+        loaded++;
         usleep((unsigned)stagger_ms * 1000);
+    }
+
+    if (attempted > 0 && loaded == 0) {
+        LOG_ERROR("launcher",
+                  "no plugin loaded (%d configured, all dlopen/init failed) — not idling",
+                  attempted);
+        return ERR_NOT_FOUND;
     }
 
     /* 启动所有已初始化的节点（留微小间隔避免多节点广播同一 topic 时
@@ -788,6 +805,7 @@ int main(int argc, char** argv) {
 
     signal(SIGINT, sig_handler); signal(SIGTERM, sig_handler);
 
+    int nodes_rc = 0;
     if (multi_mode) {
 #if !defined(_WIN32)
         signal(SIGCHLD, SIG_DFL);
@@ -915,7 +933,7 @@ int main(int argc, char** argv) {
         scheduler_set_choreo_bus(scheduler, bus);
         scheduler_start(scheduler);
 
-        run_dlopen_mode(duration, stagger_ms, bus, transport, discovery, scheduler, &replay);
+        nodes_rc = run_dlopen_mode(duration, stagger_ms, bus, transport, discovery, scheduler, &replay);
 
         if (bag_writer) {
             bag_writer_close(bag_writer);
@@ -950,5 +968,5 @@ int main(int argc, char** argv) {
     }
 
     log_shutdown();
-    return 0;
+    return nodes_rc == 0 ? 0 : 1;
 }

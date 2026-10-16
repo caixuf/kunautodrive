@@ -44,7 +44,8 @@ fi
 # flow_launcher_smoke 复现）。改数日志文件里**本次 run 的增量**（文件追加式
 # 写入，跨 run 累积，必须在 run 前取 before 再取差值）。
 LOGDIR="${FLOW_LOG_DIR:-/tmp/flow_logs}"
-loaded_before=$(grep -c "loaded  " "$LOGDIR/launcher.log" 2>/dev/null || echo 0)
+loaded_before=$(grep -c "loaded  " "$LOGDIR/launcher.log" 2>/dev/null || true)
+loaded_before=${loaded_before:-0}
 echo "INFO: running flow_launcher (duration=${DURATION}s) ..."
 timeout 90 "$BUILD_DIR/bin/flow_launcher" config/pipeline.json --duration "$DURATION" \
     > "$LOG" 2>&1
@@ -59,7 +60,8 @@ if [ $rc -ne 0 ]; then
 fi
 
 # 至少加载的节点数（planning_node 依赖 Eigen，可能缺失，故用下限 6）。
-loaded_after=$(grep -c "loaded  " "$LOGDIR/launcher.log" 2>/dev/null || echo 0)
+loaded_after=$(grep -c "loaded  " "$LOGDIR/launcher.log" 2>/dev/null || true)
+loaded_after=${loaded_after:-0}
 loaded=$((loaded_after - loaded_before))
 if [ "$loaded" -lt 6 ]; then
     echo "FAIL: only $loaded nodes loaded (expected >= 6)"

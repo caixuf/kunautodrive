@@ -541,6 +541,15 @@ done
 if [ ! -s "$JSON_FILE" ]; then
   echo "  ✗ Timeout waiting for $JSON_FILE after $((WAIT_STEPS/2))s — monitor node may have failed"
   echo "    检查 $LAUNCHER_STDERR；CI/并行可调大 FLOW_TOPO_WAIT_STEPS"
+  # 把失败原因带进评估器日志。nightly 2026-10 全部插件 dlopen 失败时，
+  # 原因只写在 launcher stderr，这里不打印的话上游只看得到 "no topology samples"。
+  if [ -s "$LAUNCHER_STDERR" ]; then
+    echo "    --- $LAUNCHER_STDERR (tail) ---"
+    tail -n 40 "$LAUNCHER_STDERR" || true
+  fi
+  if ! kill -0 "$LAUNCHER_PID" 2>/dev/null; then
+    echo "    launcher PID $LAUNCHER_PID already exited"
+  fi
   if [ "$SKIP_SERVICES" = "1" ] || [ "${FLOW_REQUIRE_TOPOLOGY:-0}" = "1" ]; then
     # 非交互调用方：无 topology 即无法评估，直接失败而非让下游误报空样本
     exit 4

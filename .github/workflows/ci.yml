@@ -467,7 +467,8 @@ jobs:
         run: ctest --test-dir build --output-on-failure --timeout 120 -LE "benchmark|manual|stability|integration"
       # ── Coverage build + test + report ──
       - name: Configure (Coverage)
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DENABLE_COVERAGE=ON
+        # 关掉 UBSAN：option() 进了 CMake 缓存，不显式 OFF 会和 coverage 叠在同一个 build/ 上。
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DENABLE_UBSAN=OFF -DENABLE_COVERAGE=ON
       - name: Build (Coverage)
         run: cmake --build build -j$(nproc)
       - name: Test (Coverage)
@@ -477,9 +478,19 @@ jobs:
           lcov --capture --directory build --output-file coverage.info --ignore-errors mismatch,empty,unused,negative
           lcov --remove coverage.info '/usr/*' '*/_deps/*' '*/build/*' --output-file coverage.info --ignore-errors unused,empty
           lcov --list coverage.info --ignore-errors unused
-      # ── Stress test (15s pipeline) ──
+      # ── Runtime gates run on a clean Release tree ──
+      # coverage/UBSAN 把 libflowengine_core.a 编进 gcov/ubsan 符号，而插件是
+      # 另一个 cmake，链接时不带 -lgcov。结果每个 .so dlopen 都是
+      # "undefined symbol: __gcov_merge_add"，launcher 空转退出 0，
+      # scenario_regression 对全部场景报 no topology samples
+      # （nightly 2026-10-03 .. 2026-10-16）。行为门禁必须回到未插桩的 Release。
+      - name: Configure (Release for runtime gates)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DENABLE_ASAN=OFF -DENABLE_TSAN=OFF -DENABLE_UBSAN=OFF -DENABLE_COVERAGE=OFF
+      - name: Build (Release for runtime gates)
+        run: cmake --build build -j$(nproc)
       - name: Build node plugins
         run: |
+          rm -rf build/modules/adas_nodes
           cmake -B build/modules/adas_nodes -S modules/adas_nodes -DFLOWENGINE_BUILD="$PWD/build"
           cmake --build build/modules/adas_nodes -j$(nproc)
       - name: Stress test (15s pipeline run)
