@@ -265,7 +265,8 @@
         "environment/state",
         "scene/frame",
         "planning/behavior",
-        "navigation/path"
+        "navigation/path",
+        "localization/lane_match"
       ],
       "publish": [
         {

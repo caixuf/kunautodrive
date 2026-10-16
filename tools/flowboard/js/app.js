@@ -1647,6 +1647,23 @@ function updateDriveHud(force) {
   var drv = document.getElementById('dh-drv');
   if (drv) drv.textContent = st.driverMode || '—';
 
+  /* L3 TOR 状态与接管指示 */
+  var torEl = document.getElementById('dh-tor');
+  if (torEl) {
+    if (st.tor && st.tor.state && st.tor.state !== 'OFF') {
+      torEl.style.display = '';
+      _dhChip('dh-tor', st.tor.label, st.tor.tone);
+      if (st.tor.state === 'TOR_REQUESTED') torEl.classList.add('dh-tor-alert');
+      else if (st.tor.state === 'MRM') torEl.classList.add('dh-tor-mrm');
+    } else {
+      torEl.style.display = 'none';
+    }
+  } else if (st.tor && st.tor.state && st.tor.state !== 'OFF') {
+    if (st.tor.state === 'TOR_REQUESTED' || st.tor.state === 'MRM') {
+      _dhChip('dh-beh', st.tor.label, st.tor.tone);
+    }
+  }
+
   /* 踏板 + 方向盘 */
   _dhWidth('dh-thr', st.throttle);
   _dhWidth('dh-brk', st.brake);
@@ -1678,9 +1695,14 @@ function updateDriveHud(force) {
     }
   }
 
-  /* 整条 HUD 边框按最高严重度发光：碰撞风险 / MRM > 注意 / 安全介入 */
+  /* 整条 HUD 边框按最高严重度发光：碰撞风险 / MRM / TOR > 注意 / 安全介入 */
   var tones = [st.risk.tone, st.control.tone, st.behavior.tone];
+  if (st.tor && st.tor.state && st.tor.state !== 'OFF') {
+    tones.push(st.tor.tone);
+  }
   var frame = tones.indexOf('bad') >= 0 ? 'tone-bad' : (tones.indexOf('warn') >= 0 ? 'tone-warn' : 'tone-ok');
+  if (st.tor && st.tor.state === 'TOR_REQUESTED') frame += ' tor-alert';
+  else if (st.tor && st.tor.state === 'MRM') frame += ' tor-mrm';
   hud.className = frame;
 }
 

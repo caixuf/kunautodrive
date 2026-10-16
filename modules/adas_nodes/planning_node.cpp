@@ -209,6 +209,23 @@ struct PlanningContext {
     int    road_oneway{0};   /* 道路单双向（road/geometry oneway 字段，W1 需要：单向路
                               * 全部车道都是本向，nearest_lane 不得强制右半幅） */
 
+    /* D2-06: 车道级定位权威匹配（localization/lane_match 订阅） */
+    struct {
+        bool     valid{false};
+        uint64_t llt_id{0};
+        double   llt_s{0.0};
+        double   llt_offset{0.0};
+        double   llt_heading_err_rad{0.0};
+        double   curvature{0.0};
+        double   lane_width{3.5};
+        uint64_t left_lanelet_id{0};
+        uint64_t right_lanelet_id{0};
+        uint32_t flags{0};
+        int      road_id{0};
+        int      lane_id{0};
+        uint64_t last_us{0};
+    } lane_match;
+
     /* 变道圆弧曲率（固定方向盘 = 固定 kappa，2026-08）：
      * 变道轨迹生成时计算，回填后填给轨迹点，control kappa 前馈用 */
     double lane_change_kappa{0.0};
@@ -1416,6 +1433,42 @@ static void on_navigation_path(const Message* msg, void* user_data) {
     cJSON_Delete(root);
 }
 
+/* ── localization/lane_match 订阅 — 权威车道匹配（D2-06） ── */
+static void on_lane_match(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg || msg->data_size == 0) return;
+    cJSON* root = cJSON_Parse((const char*)msg->data);
+    if (!root) return;
+
+    cJSON* j_val = cJSON_GetObjectItemCaseSensitive(root, "valid");
+    cJSON* j_id = cJSON_GetObjectItemCaseSensitive(root, "llt_id");
+    cJSON* j_s = cJSON_GetObjectItemCaseSensitive(root, "llt_s");
+    cJSON* j_off = cJSON_GetObjectItemCaseSensitive(root, "llt_offset");
+    cJSON* j_herr = cJSON_GetObjectItemCaseSensitive(root, "llt_heading_err_rad");
+    cJSON* j_curv = cJSON_GetObjectItemCaseSensitive(root, "curvature");
+    cJSON* j_lw = cJSON_GetObjectItemCaseSensitive(root, "lane_width");
+    cJSON* j_lid = cJSON_GetObjectItemCaseSensitive(root, "left_lanelet_id");
+    cJSON* j_rid = cJSON_GetObjectItemCaseSensitive(root, "right_lanelet_id");
+    cJSON* j_flags = cJSON_GetObjectItemCaseSensitive(root, "flags");
+    cJSON* j_road = cJSON_GetObjectItemCaseSensitive(root, "road_id");
+    cJSON* j_lane = cJSON_GetObjectItemCaseSensitive(root, "lane_id");
+
+    g.lane_match.valid = (j_val && cJSON_IsNumber(j_val) && j_val->valuedouble > 0.5);
+    if (j_id && cJSON_IsNumber(j_id)) g.lane_match.llt_id = (uint64_t)j_id->valuedouble;
+    if (j_s && cJSON_IsNumber(j_s)) g.lane_match.llt_s = j_s->valuedouble;
+    if (j_off && cJSON_IsNumber(j_off)) g.lane_match.llt_offset = j_off->valuedouble;
+    if (j_herr && cJSON_IsNumber(j_herr)) g.lane_match.llt_heading_err_rad = j_herr->valuedouble;
+    if (j_curv && cJSON_IsNumber(j_curv)) g.lane_match.curvature = j_curv->valuedouble;
+    if (j_lw && cJSON_IsNumber(j_lw) && j_lw->valuedouble > 0.5) g.lane_match.lane_width = j_lw->valuedouble;
+    if (j_lid && cJSON_IsNumber(j_lid)) g.lane_match.left_lanelet_id = (uint64_t)j_lid->valuedouble;
+    if (j_rid && cJSON_IsNumber(j_rid)) g.lane_match.right_lanelet_id = (uint64_t)j_rid->valuedouble;
+    if (j_flags && cJSON_IsNumber(j_flags)) g.lane_match.flags = (uint32_t)j_flags->valuedouble;
+    if (j_road && cJSON_IsNumber(j_road)) g.lane_match.road_id = (int)j_road->valuedouble;
+    if (j_lane && cJSON_IsNumber(j_lane)) g.lane_match.lane_id = (int)j_lane->valuedouble;
+    g.lane_match.last_us = clock_now_us();
+    cJSON_Delete(root);
+}
+
 /* ── scene/frame 订阅回调 ─────────────────────────────────── */
 /* 1) 施工区权威几何（每帧，掉头可通行域）
  * 2) NOA Phase 6 merge 闭环：主线来车前后 gap（仅 ROUTE_MERGE）
@@ -2127,24 +2180,25 @@ protected:
                     (g.current_behavior.command == BEH_LEFT_CHANGE || g.current_behavior.command == BEH_RIGHT_CHANGE)) {
                     g.target_lane_offset = lane_center_offset(g.current_behavior.target_lane_idx, n_lanes, lane_w, g.road_oneway);
                 } else {
-                    /* 巡航/跟车：计算 ego 当前最近车道，目标其中心。
-                     * 双向道路只允许本方向合法车道（行进坐标系下右半幅，
-                     * idx ≥ n_lanes/2）：map_ref 已随行进方向对齐（返程反向采样），
-                     * 左侧半幅恒为对向车道。不 clamp 则 ego 被扰动推过道路中心时
-                     * "最近车道"跟着 ego 翻到对向侧（正反馈），最终锁定逆行目标
-                     * （2026-08-03 demo12 实测：返程 ego 漂到 y=-8，目标锁 y=-5.25）。
-                     * W1：单向道路（road_oneway=1，如 lane_change_traffic）全部车道
-                     * 都是本向且整体偏在 -y 侧，side_offset 已把车道组对齐物理布局，
-                     * clamp 到 [0, n_lanes-1] 即可。own_side_only 仅对双向路生效
-                     * （限制在本向半幅）；单向路无对向半幅，on_return 时也必须是
-                     * false，否则 clamp 下限 N/2 会把正确的最内侧 idx0 抬到 idx2
-                     * （返程半程重新引入横向漂移）。 */
-                    const bool own_side_only = !g.road_oneway;
-                    const double side_offset = planning_coord::lane_group_side_offset(
-                        n_lanes, lane_w, g.road_oneway != 0);
-                    int cur_lane = planning_coord::nearest_lane(
-                        ego_lane_d, n_lanes, lane_w, own_side_only, side_offset);
-                    g.target_lane_offset = lane_center_offset(cur_lane, n_lanes, lane_w, g.road_oneway);
+                    /* D2-06: 优先消费权威 localization/lane_match。
+                     * 若 lane_match 有效且新鲜（500ms 内，且偏移在合理车道宽内）：
+                     *   当前车道中心相对参考线的横向偏移即为 ego_lane_d - llt_offset
+                     * 否则优雅回退到 nearest_lane 启发式计算（防启动/无匹配时震荡）。 */
+                    const uint64_t now_us = clock_now_us();
+                    const bool lane_match_fresh = g.lane_match.valid && (g.lane_match.last_us != 0) &&
+                                                  (now_us - g.lane_match.last_us < 500000ULL) &&
+                                                  (fabs(g.lane_match.llt_offset) < lane_w * 1.5);
+                    if (lane_match_fresh) {
+                        g.target_lane_offset = ego_lane_d - g.lane_match.llt_offset;
+                    } else {
+                        /* 巡航/跟车回退：计算 ego 当前最近车道，目标其中心。 */
+                        const bool own_side_only = !g.road_oneway;
+                        const double side_offset = planning_coord::lane_group_side_offset(
+                            n_lanes, lane_w, g.road_oneway != 0);
+                        int cur_lane = planning_coord::nearest_lane(
+                            ego_lane_d, n_lanes, lane_w, own_side_only, side_offset);
+                        g.target_lane_offset = lane_center_offset(cur_lane, n_lanes, lane_w, g.road_oneway);
+                    }
                 }
                 if (g.plan_count % 200 == 0) {
                     LOG_WARN("planning", "[DBG_LC] pc=%d has_beh=%d cmd=%d tgt_lane=%d n_lanes=%d offset=%.2f ego_y=%.2f",
@@ -2895,6 +2949,9 @@ publish_trajectory:
                 cJSON_AddNumberToObject(dbg, "ref_y", dbg_ref_y);
                 cJSON_AddNumberToObject(dbg, "ref_heading", dbg_ref_heading);
                 cJSON_AddNumberToObject(dbg, "target_lane_offset", g.target_lane_offset);
+                cJSON_AddBoolToObject(dbg, "lane_match_valid", g.lane_match.valid);
+                cJSON_AddNumberToObject(dbg, "lane_match_offset", g.lane_match.llt_offset);
+                cJSON_AddNumberToObject(dbg, "lane_match_llt_id", (double)g.lane_match.llt_id);
                 cJSON_AddNumberToObject(dbg, "command_speed", command_speed);
                 cJSON_AddNumberToObject(dbg, "n_wp", n_wp);
                 cJSON_AddNumberToObject(dbg, "traj_valid", traj.valid ? 1.0 : 0.0);
@@ -3040,6 +3097,7 @@ static const char* s_inputs[]  = {
     TOPIC_SCENE_FRAME,
     TOPIC_PLANNING_BEHAVIOR,
     TOPIC_NAVIGATION_PATH,
+    TOPIC_LOCALIZATION_LANE_MATCH,
     nullptr
 };
 static const char* s_outputs[] = { TOPIC_PLANNING_TRAJECTORY, nullptr };
@@ -3083,6 +3141,8 @@ static int planning_init(MessageBus* bus, Transport* transport,
     g.overtake_state = 0;
     g.committed_lane_idx = 0;
     g.target_lane_offset = 0.0;
+    g.lane_match = {};
+    g.lane_match.lane_width = 3.5;
 
     g.ego_x = g.ego_y = g.ego_v = g.ego_heading = 0.0;
     g.cz_count = 0;
@@ -3172,6 +3232,7 @@ static int planning_init(MessageBus* bus, Transport* transport,
     transport_subscribe(transport, TOPIC_SCENE_FRAME, on_scene_frame, nullptr);
     transport_subscribe(transport, TOPIC_PLANNING_BEHAVIOR, on_planning_behavior, nullptr);
     transport_subscribe(transport, TOPIC_NAVIGATION_PATH, on_navigation_path, nullptr);
+    transport_subscribe(transport, TOPIC_LOCALIZATION_LANE_MATCH, on_lane_match, nullptr);
     transport_advertise(transport, TOPIC_PLANNING_TRAJECTORY, 0x3A7B1C2Du);
     transport_advertise(transport, TOPIC_PLANNING_DEBUG, 0u);  /* JSON text */
 
@@ -3190,6 +3251,8 @@ static int planning_init(MessageBus* bus, Transport* transport,
     discovery_advertise(discovery, TOPIC_PLANNING_BEHAVIOR,   0u,
                         CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, TOPIC_NAVIGATION_PATH,     0u,
+                        CAP_SUBSCRIBER, 0);
+    discovery_advertise(discovery, TOPIC_LOCALIZATION_LANE_MATCH, 0u,
                         CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, TOPIC_PLANNING_TRAJECTORY, 0x3A7B1C2Du,
                         CAP_PUBLISHER, 10.0);

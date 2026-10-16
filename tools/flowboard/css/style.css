@@ -160,6 +160,10 @@ body[data-workspace="perf"] .ws-operate,
 #drive-hud.hidden,#game-hud.active~#drive-hud{display:none}
 #drive-hud.tone-warn{border-color:#d2992299;box-shadow:0 10px 32px #000c,0 0 0 1px #d2992233,0 0 22px #d2992240}
 #drive-hud.tone-bad{border-color:#f85149;box-shadow:0 10px 32px #000c,0 0 0 1px #f8514966,0 0 26px #f8514966;animation:dh-pulse 1s ease-in-out infinite}
+#drive-hud.tor-alert{border-color:#f85149;box-shadow:0 10px 32px #000c,0 0 0 2px #f85149,0 0 32px #f85149aa;animation:dh-pulse .5s ease-in-out infinite}
+#drive-hud.tor-mrm{border-color:#da3633;box-shadow:0 10px 32px #000c,0 0 0 2px #da3633,0 0 40px #f85149cc;animation:dh-pulse .3s ease-in-out infinite}
+#drive-hud .dh-tor-alert{animation:dh-pulse .6s ease-in-out infinite}
+#drive-hud .dh-tor-mrm{animation:dh-pulse .3s ease-in-out infinite}
 @keyframes dh-pulse{50%{box-shadow:0 10px 32px #000c,0 0 0 1px #f8514999,0 0 38px #f85149aa}}
 #drive-hud .dh-speed,#drive-hud .dh-col{padding:0 14px;display:flex;flex-direction:column;justify-content:center;gap:5px}
 #drive-hud .dh-col{border-left:1px solid #21262d}

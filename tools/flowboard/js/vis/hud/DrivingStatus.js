@@ -61,6 +61,51 @@ export function controlModeInfo(mode, hazard) {
   return { label: '轨迹跟随', tone: TONE.OK };
 }
 
+/**
+ * L3 TOR 接管态势解析：
+ * 解析 tor.state:
+ *   - "ACTIVE": label "L3 激活", tone TONE.OK
+ *   - "TOR_REQUESTED": label "接管请求 (" + countdown_s.toFixed(1) + "s)", tone TONE.BAD
+ *   - "DRIVER_TAKEOVER": label "驾驶员接管", tone TONE.INFO
+ *   - "MRM": label "MRM 风险减速", tone TONE.BAD
+ *   - "READY": label "L3 就绪", tone TONE.IDLE
+ *   - "OFF" 或其他: label "L3 关闭", tone TONE.IDLE
+ */
+export function torInfo(tor) {
+  if (!tor || typeof tor !== 'object') {
+    return { state: '', label: 'L3 关闭', tone: TONE.IDLE, countdown_s: 0, reason: '', dms: null };
+  }
+  const state = typeof tor.state === 'string' ? tor.state.trim().toUpperCase() : '';
+  const countdown_s = Math.max(0, num(tor.countdown_s, 0));
+  const reason = typeof tor.reason === 'string' ? tor.reason : '';
+  const dms = tor.dms && typeof tor.dms === 'object' ? tor.dms : null;
+
+  let label = 'L3 关闭';
+  let tone = TONE.IDLE;
+
+  if (state === 'ACTIVE') {
+    label = 'L3 激活';
+    tone = TONE.OK;
+  } else if (state === 'TOR_REQUESTED') {
+    label = '接管请求 (' + countdown_s.toFixed(1) + 's)';
+    tone = TONE.BAD;
+  } else if (state === 'DRIVER_TAKEOVER') {
+    label = '驾驶员接管';
+    tone = TONE.INFO;
+  } else if (state === 'MRM') {
+    label = 'MRM 风险减速';
+    tone = TONE.BAD;
+  } else if (state === 'READY') {
+    label = 'L3 就绪';
+    tone = TONE.IDLE;
+  } else {
+    label = 'L3 关闭';
+    tone = TONE.IDLE;
+  }
+
+  return { state, label, tone, countdown_s, reason, dms };
+}
+
 function num(v, fallback) {
   if (v === null || v === undefined || v === '') return fallback;
   const n = Number(v);
@@ -129,12 +174,54 @@ const LIGHTING_LABELS = {
 };
 const TONE_RANK = { ok: 0, idle: 0, info: 0, warn: 1, bad: 2 };
 
+const ODD_VIOLATION_LABELS = {
+  visibility: '能见度超限',
+  loc_diverged: '定位发散',
+  loc_untrustworthy: '定位不可信',
+  loc_stale: '定位超时',
+  route_stale: '路线超时',
+  degraded: '系统降级',
+  weather: '天气超限',
+};
+
 /**
- * ODD 环境提示（仅前端观测提示，不是系统的 ODD 判定；
- * 真正的 ODD 监控节点见 docs/ROADMAP_L3.md 方向六）。
+ * ODD 环境提示：
+ * 优先消费权威 oddMetric（monitor 透传 metrics.odd）；
+ * 若不存在或为空，优雅降级为既有的基于 scene 的推断逻辑。
  */
-export function oddInfo(scene) {
+export function oddInfo(scene, oddMetric) {
   const s = scene || {};
+  // 权威 oddMetric 优先
+  if (oddMetric && typeof oddMetric === 'object' && Object.keys(oddMetric).length > 0) {
+    const items = [];
+    const viols = Array.isArray(oddMetric.violations) ? oddMetric.violations : [];
+    for (const v of viols) {
+      items.push({ label: ODD_VIOLATION_LABELS[v] || String(v), tone: TONE.BAD });
+    }
+
+    const vis = num(oddMetric.visibility_m !== undefined ? oddMetric.visibility_m : s.visibility_m, NaN);
+    if (Number.isFinite(vis)) {
+      const tone = vis < 150 ? TONE.BAD : (vis < 400 ? TONE.WARN : TONE.OK);
+      const txt = vis >= 1000 ? (vis / 1000).toFixed(1) + 'km' : Math.round(vis) + 'm';
+      items.push({ label: '能见度 ' + txt, tone });
+    }
+
+    const wStr = String(oddMetric.weather || s.weather || '').toLowerCase();
+    const w = WEATHER_LABELS[wStr];
+    if (w && !viols.includes('weather')) {
+      items.push({ label: w[0], tone: w[1] });
+    }
+    const l = LIGHTING_LABELS[String(s.lighting || '').toLowerCase()];
+    if (l) items.push({ label: l[0], tone: l[1] });
+
+    const inOdd = !!oddMetric.in_odd;
+    if (inOdd && viols.length === 0) {
+      return { items, tone: TONE.OK, label: 'ODD 域内' };
+    }
+    return { items, tone: TONE.BAD, label: '超出 ODD' };
+  }
+
+  // 优雅降级：基于 scene 粗糙推断
   const items = [];
   const w = WEATHER_LABELS[String(s.weather || '').toLowerCase()];
   if (w) items.push({ label: w[0], tone: w[1] });
@@ -179,7 +266,7 @@ export function computeDrivingStatus(metrics) {
   else if (typeof m.driver_mode === 'string') driverMode = m.driver_mode;
 
   return {
-    hasData: !!(ego || m.control_debug || m.behavior),
+    hasData: !!(ego || m.control_debug || m.behavior || m.tor || m.odd),
     speed,
     speedKmh: speed === null ? null : speed * 3.6,
     cruiseSpeed: num(beh.target_speed, num(pd.command_speed, null)),
@@ -194,6 +281,7 @@ export function computeDrivingStatus(metrics) {
     lead,
     risk: ttcRisk(lead),
     perceptionSource: perceived ? '感知' : '真值',
-    odd: oddInfo(scene),
+    odd: oddInfo(scene, m.odd),
+    tor: torInfo(m.tor),
   };
 }

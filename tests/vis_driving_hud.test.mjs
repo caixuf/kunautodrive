@@ -14,7 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ok, eq, done } from './test-utils.mjs';
 import {
-  behaviorInfo, controlModeInfo, findLeadVehicle, ttcRisk, oddInfo, computeDrivingStatus,
+  behaviorInfo, controlModeInfo, findLeadVehicle, ttcRisk, oddInfo, torInfo, computeDrivingStatus,
 } from '../tools/flowboard/js/vis/hud/DrivingStatus.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -95,12 +95,86 @@ eq('fog → 超出 ODD', oddInfo({ weather: 'fog', lighting: 'day', visibility_m
 eq('visibility 100m → 超出 ODD', oddInfo({ weather: 'clear', visibility_m: 100 }).label, '超出 ODD');
 eq('no env → ODD 未知', oddInfo({}).label, 'ODD 未知');
 
+console.log('\n=== driving HUD: torInfo ===\n');
+
+eq('tor undefined → L3 关闭', torInfo(undefined).label, 'L3 关闭');
+eq('tor undefined tone → idle', torInfo(undefined).tone, 'idle');
+eq('tor null state → empty', torInfo(null).state, '');
+eq('tor null countdown_s → 0', torInfo(null).countdown_s, 0);
+eq('tor null reason → empty', torInfo(null).reason, '');
+ok('tor null dms → null', torInfo(null).dms === null);
+eq('tor empty object → L3 关闭', torInfo({}).label, 'L3 关闭');
+eq('tor OFF → L3 关闭', torInfo({ state: 'OFF' }).label, 'L3 关闭');
+eq('tor OFF tone → idle', torInfo({ state: 'OFF' }).tone, 'idle');
+eq('tor READY → L3 就绪', torInfo({ state: 'READY' }).label, 'L3 就绪');
+eq('tor READY tone → idle', torInfo({ state: 'READY' }).tone, 'idle');
+eq('tor ACTIVE → L3 激活', torInfo({ state: 'ACTIVE' }).label, 'L3 激活');
+eq('tor ACTIVE tone → ok', torInfo({ state: 'ACTIVE' }).tone, 'ok');
+
+{
+  const tr = torInfo({ state: 'TOR_REQUESTED', countdown_s: 7.23, reason: 'visibility' });
+  eq('tor TOR_REQUESTED label with countdown', tr.label, '接管请求 (7.2s)');
+  eq('tor TOR_REQUESTED tone → bad', tr.tone, 'bad');
+  eq('tor TOR_REQUESTED reason passthrough', tr.reason, 'visibility');
+  ok('tor TOR_REQUESTED countdown numeric', near(tr.countdown_s, 7.23));
+}
+{
+  const dt = torInfo({
+    state: 'DRIVER_TAKEOVER',
+    dms: { attention: true, will_takeover: true, takeover_latency_s: 1.5 },
+  });
+  eq('tor DRIVER_TAKEOVER → 驾驶员接管', dt.label, '驾驶员接管');
+  eq('tor DRIVER_TAKEOVER tone → info', dt.tone, 'info');
+  ok('tor dms passthrough', dt.dms && dt.dms.attention === true && dt.dms.will_takeover === true);
+}
+{
+  const mrm = torInfo({ state: 'MRM', reason: 'timeout' });
+  eq('tor MRM → MRM 风险减速', mrm.label, 'MRM 风险减速');
+  eq('tor MRM tone → bad', mrm.tone, 'bad');
+  eq('tor MRM reason passthrough', mrm.reason, 'timeout');
+}
+
+console.log('\n=== driving HUD: oddInfo authoritative ===\n');
+
+eq('empty oddMetric falls back to scene', oddInfo({ weather: 'clear', visibility_m: 1000 }, {}).label, 'ODD 内');
+{
+  const o1 = oddInfo({ weather: 'clear' }, { in_odd: true, violations: [], visibility_m: 1200 });
+  eq('authoritative odd in_odd true → ODD 域内', o1.label, 'ODD 域内');
+  eq('authoritative odd in_odd true tone → ok', o1.tone, 'ok');
+  ok('odd items preserves visibility', o1.items.some((it) => it.label === '能见度 1.2km' && it.tone === 'ok'));
+}
+{
+  const o2 = oddInfo(null, { in_odd: false, violations: ['visibility'], visibility_m: 80 });
+  eq('authoritative odd in_odd false → 超出 ODD', o2.label, '超出 ODD');
+  eq('authoritative odd in_odd false tone → bad', o2.tone, 'bad');
+  ok('violation visibility mapped to 能见度超限', o2.items.some((it) => it.label === '能见度超限' && it.tone === 'bad'));
+}
+{
+  const viols = ['loc_diverged', 'loc_untrustworthy', 'loc_stale', 'route_stale', 'degraded', 'weather'];
+  const o3 = oddInfo(null, { in_odd: false, violations: viols });
+  eq('all violations mapped', o3.label, '超出 ODD');
+  const mapped = o3.items.map((it) => it.label);
+  ok('loc_diverged mapped', mapped.includes('定位发散'));
+  ok('loc_untrustworthy mapped', mapped.includes('定位不可信'));
+  ok('loc_stale mapped', mapped.includes('定位超时'));
+  ok('route_stale mapped', mapped.includes('路线超时'));
+  ok('degraded mapped', mapped.includes('系统降级'));
+  ok('weather mapped', mapped.includes('天气超限'));
+}
+{
+  const o4 = oddInfo(null, { in_odd: false, violations: [] });
+  eq('in_odd false with empty violations → 超出 ODD', o4.label, '超出 ODD');
+  eq('in_odd false tone → bad', o4.tone, 'bad');
+}
+
 console.log('\n=== driving HUD: computeDrivingStatus ===\n');
 
 {
   const st = computeDrivingStatus(undefined);
   ok('undefined metrics → hasData false, no throw', st.hasData === false && st.speed === null);
   eq('undefined metrics → behavior 未决策', st.behavior.label, '未决策');
+  eq('undefined metrics → tor L3 关闭', st.tor.label, 'L3 关闭');
+  eq('undefined metrics → odd ODD 未知', st.odd.label, 'ODD 未知');
 }
 {
   const metrics = {
@@ -128,6 +202,31 @@ console.log('\n=== driving HUD: computeDrivingStatus ===\n');
   eq('command from control_debug.target_speed', st.commandSpeed, 18);
 }
 {
+  const l3Metrics = {
+    scene: { ego: egoEast, weather: 'clear', visibility_m: 1000 },
+    odd: {
+      in_odd: false,
+      violations: ['visibility'],
+      visibility_m: 80,
+    },
+    tor: {
+      state: 'TOR_REQUESTED',
+      countdown_s: 5.5,
+      reason: 'visibility',
+      dms: { attention: true, will_takeover: true, takeover_latency_s: 1.2 },
+    },
+  };
+  const st = computeDrivingStatus(l3Metrics);
+  ok('computeDrivingStatus exports tor', !!st.tor);
+  eq('st.tor.label reflects countdown', st.tor.label, '接管请求 (5.5s)');
+  eq('st.tor.tone is bad', st.tor.tone, 'bad');
+  eq('st.tor.reason is visibility', st.tor.reason, 'visibility');
+  ok('st.tor.dms attention is true', st.tor.dms && st.tor.dms.attention === true);
+  eq('st.odd.label is 超出 ODD', st.odd.label, '超出 ODD');
+  eq('st.odd.tone is bad', st.odd.tone, 'bad');
+  ok('st.odd.items has violation', st.odd.items.some((it) => it.label === '能见度超限'));
+}
+{
   const st = computeDrivingStatus({
     scene: { ego: egoEast, entities: [npc(30, -1.75, 15)], perception_entities: [] },
   });
@@ -141,11 +240,12 @@ const app = read('tools/flowboard/js/app.js');
 const css = read('tools/flowboard/css/style.css');
 const mod = read('tools/flowboard/js/vis/hud/DrivingStatus.js');
 
-for (const id of ['drive-hud', 'dh-kmh', 'dh-beh', 'dh-ctl', 'dh-risk', 'dh-gap', 'dh-ttc', 'dh-thr', 'dh-brk', 'dh-odd']) {
+for (const id of ['drive-hud', 'dh-kmh', 'dh-beh', 'dh-ctl', 'dh-risk', 'dh-gap', 'dh-ttc', 'dh-thr', 'dh-brk', 'dh-odd', 'dh-tor']) {
   ok('index.html has #' + id, html.includes('id="' + id + '"'));
 }
 ok('app.js imports computeDrivingStatus', /import \{ computeDrivingStatus \} from '\.\/vis\/hud\/DrivingStatus\.js'/.test(app));
 ok('app.js calls updateDriveHud from updateAll', /updateDriveHud\(false\)/.test(app));
+ok('app.js handles st.tor', app.includes('st.tor'));
 ok('app.js binds shortcut I', app.includes("key === 'i'") && app.includes('toggleDriveHud()'));
 ok('app.js honors ?hud=0', app.includes("params.get('hud') === '0'"));
 ok('CSS hides HUD in manual game mode', css.includes('#game-hud.active~#drive-hud'));
