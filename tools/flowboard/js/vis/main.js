@@ -344,6 +344,11 @@ function _startRenderLoop() {
       // BEV（正交）GTAO 由 _syncPostProc 关掉（正交不兼容），但保留
       // Bloom+SMAA → 车道线/车灯在 BEV 下也有辉光。low/ultra 仍走旁路。
       const noPost = _perfTier === 'low' || _perfTier === 'ultra';
+      /* 每帧渲染前手动清零一次 draw call / 三角形计数。
+       * renderer.info.autoReset 已在 createRenderer 里关掉（见那里的注释）：
+       * 开后处理时 composer 内部每趟 pass 各调一次 renderer.render()，若让 three
+       * 自动清零，本帧结束时只剩最后一趟 OutputPass 的 1 draw / 1 tri。 */
+      _renderer.info.reset();
       if (noPost) {
         _renderer.render(_scene, activeCam);
       } else {

@@ -26,6 +26,16 @@ export function createRenderer(canvas) {
   /* exposure 1.0：配合 ACES tonemap，避免纯白车道线过曝辉光 */
   renderer.toneMappingExposure = 1.0;
 
+  /* 🔴 renderer.info.autoReset 必须关掉，改由渲染循环每帧手动 reset 一次。
+   * 原因：开后处理时走 `composer.render()`，而 EffectComposer 内部对每趟 pass
+   * 都调一次 `renderer.render()`；three 的 autoReset 会在**每次 render 开头清零**
+   * 计数，于是整帧渲染结束后 `info.render` 只剩最后一趟的值 —— 也就是 OutputPass
+   * 那个全屏三角形。实测性能面板因此长期显示 `Draw 1 / Tri 1`（场景实际 766 个
+   * mesh / 17 个 InstancedMesh），面板变成废数，任何"降 draw call"的优化都失去
+   * 度量基准。关掉 autoReset 后 info 跨 pass 累加，配合循环里的 info.reset()
+   * 得到整帧真值。 */
+  renderer.info.autoReset = false;
+
   return renderer;
 }
 

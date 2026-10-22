@@ -81,12 +81,6 @@ export function createStatsView() {
     return String(n);
   }
 
-  function _formatBytes(bytes) {
-    if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + 'MB';
-    if (bytes >= 1024) return (bytes / 1024).toFixed(1) + 'KB';
-    return bytes + 'B';
-  }
-
   /**
    * 每帧调用（在 renderer.render 之后）
    * @param {THREE.WebGLRenderer} renderer
@@ -114,8 +108,14 @@ export function createStatsView() {
       const info = renderer.info;
       rows.draw.textContent = _formatNumber(info.render.calls);
       rows.tri.textContent = _formatNumber(info.render.triangles);
-      rows.geo.textContent = _formatBytes(info.memory.geometries * 1000);  // 估算
-      rows.tex.textContent = _formatBytes(info.memory.textures * 1000);    // 估算
+      /* 🔴 Geo / Tex 显示的是**个数**，不是字节。
+       * three 的 `info.memory.geometries` / `.textures` 是计数器（几何体数、纹理数），
+       * 旧实现写 `_formatBytes(n * 1000)` 把它们乘 1000 再按 KB/MB 格式化 ——
+       * 于是「215 个几何体」被显示成「Geo 215.0KB」，一个凭空捏造的内存读数。
+       * 这里改为如实显示计数：泄漏排查（纹理缓存/几何体只增不减）看的正是这两个
+       * 数字的单调增长，伪装成字节反而把判据盖掉了。 */
+      rows.geo.textContent = _formatNumber(info.memory.geometries);
+      rows.tex.textContent = _formatNumber(info.memory.textures);
     }
 
     rows.cache.textContent = getTextureCacheSize();
