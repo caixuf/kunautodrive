@@ -16,7 +16,7 @@
 
 import { deriveLightState, LIGHT_TURN_LEFT, LIGHT_TURN_RIGHT, LIGHT_HAZARD, LIGHT_HIGH_BEAM, LIGHT_LOW_BEAM, LIGHT_CLEARANCE, LIGHT_FOG } from './VehicleLights.js';
 import { getStdMaterial } from '../core/AssetFactory.js';
-import { initModelCache, getModel, _setVehicleLights, _relinkWheelUserData } from '../../models.js';
+import { initModelCache, getModel, _setVehicleLights, _relinkWheelUserData, mergeStaticVehicleMeshes } from '../../models.js';
 import { worldToThree, headingToRotationY, forwardENU } from '../math/Coord.js';
 import { roadHeightAt } from '../math/RoadHeight.js';
 
@@ -764,6 +764,11 @@ export function createVehicleView(scene, renderer, modelCache) {
     // 没有内饰，需要程序化补一个方向盘以提供转向反馈。SU7 是授权高精度模型，
     // 驾驶位自带方向盘（interior.009 @ 左舵驾驶位），不能再叠一个丑的。
     if (type !== 'su7') scene.add(_createSteeringWheel());
+    /* 静态件合批（降 draw call）必须在**以上所有按名改造之后**：
+     * 车漆 / 绿牌 / 方向盘注入都是 traverse 找 mesh 名字，先合并会让它们找不到目标。
+     * 合批只吃「可动祖先之外 + 属性齐全」的件，轮轴/方向盘/灯光一律跳过（见
+     * mergeStaticVehicleMeshes 的四条安全底线）。 */
+    mergeStaticVehicleMeshes(scene);
     return scene;
   }
 
