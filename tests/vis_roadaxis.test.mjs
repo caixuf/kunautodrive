@@ -115,6 +115,17 @@ const baseline = computeRoadAxis(centered);
 ok('无 elevation/level：py 与基准一致（未误加高程）',
   r7.spine.every((p, i) => p.py === baseline.spine[i].py));
 
+// ── 5. 虚拟车道合成：无 lanes 数组但有 lanes 数量和 lane_width ──
+const synth = {
+  centerline: [[0, 0, 0], [10, 0, 0], [20, 0, 0]],
+  lanes: 4,
+  lane_width: 3.5,
+};
+const r8 = computeRoadAxis(synth);
+ok('虚拟车道合成：fromLanes=true', r8.fromLanes === true);
+ok('虚拟车道合成：halfWidth=7.0 (4*3.5/2)', Math.abs(r8.halfWidth - 7.0) < 1e-6);
+ok('虚拟车道合成：centerOffset=0 (中心线居中)', Math.abs(r8.centerOffset) < 1e-6);
+
 console.log('\n全图规模量化（手动，需真实 map.json，结果摘要）：');
 console.log('  osm_lujiazui_v2 9675 路 → 修复救回 2684 路（OLD 误杀→NEW 接受）；');
 console.log('  OLD 误偏移 769 路→NEW 正确居中（修正非平行/退化 stub）；末点-only 翻转=0（无残留 bug）。');

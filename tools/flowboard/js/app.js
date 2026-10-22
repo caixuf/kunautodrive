@@ -1664,6 +1664,23 @@ function updateDriveHud(force) {
     }
   }
 
+  /* L3 法规与关键事件指示（Roadmap P3）*/
+  var incEl = document.getElementById('dh-incident');
+  if (incEl) {
+    var traceEvents = _lastIncidentTrace && _lastIncidentTrace.events;
+    var traceHit = _lastIncidentTrace && _lastIncidentTrace.summary && _lastIncidentTrace.summary.has_incident;
+    var hasEv = (st.l3Events && st.l3Events.length > 0) || traceHit || (traceEvents && traceEvents.length > 0);
+    if (hasEv) {
+      incEl.style.display = '';
+      var activeEv = (st.l3Events && st.l3Events[0]) || (_lastIncidentTrace && _lastIncidentTrace.events && _lastIncidentTrace.events[0]);
+      var incLabel = activeEv ? (activeEv.label || activeEv.type) : '关键事件';
+      var incTone = activeEv ? (activeEv.tone || 'warn') : 'warn';
+      _dhChip('dh-incident', incLabel, incTone);
+    } else {
+      incEl.style.display = 'none';
+    }
+  }
+
   /* 踏板 + 方向盘 */
   _dhWidth('dh-thr', st.throttle);
   _dhWidth('dh-brk', st.brake);
@@ -1706,6 +1723,114 @@ function updateDriveHud(force) {
   hud.className = frame;
 }
 
+// ═══════════════════════════════════════════════════════════════
+// 事故与 EDR 事件时间轴（Roadmap P3）
+// ═══════════════════════════════════════════════════════════════
+var _lastIncidentTrace = null;
+var _incidentTraceFetching = false;
+var _lastIncidentTraceFetchMs = 0;
+var _INCIDENT_POLL_MS = 3000;
+
+async function fetchIncidentTrace(force) {
+  if (_incidentTraceFetching) return;
+  var now = performance.now();
+  if (!force && now - _lastIncidentTraceFetchMs < _INCIDENT_POLL_MS) return;
+  _lastIncidentTraceFetchMs = now;
+  _incidentTraceFetching = true;
+  try {
+    var res = await fetch(serverUrl + '/api/incident/trace');
+    if (res.ok) {
+      var data = await res.json();
+      if (data && data.ok) {
+        _lastIncidentTrace = data;
+        renderIncidentTimeline(data);
+      }
+    }
+  } catch (_) {
+    // 静默降级
+  } finally {
+    _incidentTraceFetching = false;
+  }
+}
+
+function renderIncidentTimeline(traceData) {
+  var timeline = document.getElementById('incident-timeline');
+  if (!timeline) return;
+  var events = (traceData && traceData.events) || [];
+  var incident = traceData && traceData.incident;
+  if (!events.length && !incident) {
+    timeline.style.display = 'none';
+    timeline.classList.remove('has-incident');
+    return;
+  }
+  timeline.style.display = '';
+  var hasFail = !!(traceData && traceData.summary && traceData.summary.status === 'fail');
+  timeline.classList.toggle('has-incident', !!(incident || hasFail || events.length));
+
+  var chip = document.getElementById('incident-chip');
+  if (chip) {
+    var incType = (incident && incident.type) || (events[0] && events[0].type) || '正常';
+    var text = incType === 'collision' ? '碰撞事故'
+      : (incType === 'road_departure' ? '出路沿'
+      : (incType.includes('tor') ? 'L3 TOR 接管'
+      : (incType.includes('mrm') ? 'MRM 减速' : incType)));
+    chip.textContent = text;
+    chip.className = 'dh-chip tone-' + (hasFail ? 'bad' : 'warn');
+  }
+
+  var statusText = document.getElementById('incident-status-text');
+  if (statusText && traceData.verdicts && traceData.verdicts.length) {
+    var primary = traceData.verdicts.find(function(v) { return v.includes('❌'); }) || traceData.verdicts[0];
+    statusText.textContent = primary;
+    statusText.title = traceData.verdicts.join('\n');
+  }
+
+  var markersContainer = document.getElementById('incident-markers');
+  if (markersContainer) {
+    markersContainer.innerHTML = '';
+    var samples = (traceData && traceData.timing_samples) || [];
+    var tMin = samples.length ? samples[0].t : 0;
+    var tMax = samples.length ? samples[samples.length - 1].t : Math.max(10, ((incident && incident.at_s) || 10));
+    var span = Math.max(1.0, tMax - tMin);
+
+    events.forEach(function(ev) {
+      var evT = typeof ev.t_s === 'number' ? ev.t_s : (typeof ev.t === 'number' ? ev.t : 0);
+      var pct = Math.max(0, Math.min(100, ((evT - tMin) / span) * 100));
+      var m = document.createElement('div');
+      var cls = 'incident-marker ';
+      var icon = '⚠️';
+      if (ev.type === 'l3_tor' || (ev.type && ev.type.includes('tor'))) { cls += 'ev-tor'; icon = '⚡'; }
+      else if (ev.type === 'l3_mrm' || (ev.type && ev.type.includes('mrm'))) { cls += 'ev-mrm'; icon = '🛑'; }
+      else if (ev.type === 'l3_collision' || (ev.type && ev.type.includes('collision'))) { cls += 'ev-collision'; icon = '💥'; }
+      else if (ev.type === 'road_departure') { cls += 'ev-departure'; icon = '🚨'; }
+      else { cls += 'ev-tor'; }
+      m.className = cls;
+      m.style.left = pct.toFixed(1) + '%';
+      m.textContent = icon;
+      m.title = (ev.type || '事件') + ' @ ' + evT.toFixed(1) + 's' + (ev.state ? ' (' + ev.state + ')' : '');
+      m.onclick = function(e) {
+        e.stopPropagation();
+        if (statusText) statusText.textContent = '[' + (ev.type || '') + ' @ ' + evT.toFixed(1) + 's] ' + (ev.reason || ev.state || '');
+      };
+      markersContainer.appendChild(m);
+    });
+  }
+
+  var listContainer = document.getElementById('incident-events-list');
+  if (listContainer) {
+    listContainer.innerHTML = '';
+    events.slice(0, 4).forEach(function(ev) {
+      var tag = document.createElement('span');
+      tag.className = 'dh-chip tone-' + (ev.type === 'l3_collision' || ev.type === 'l3_mrm' ? 'bad' : 'warn');
+      tag.textContent = (ev.type === 'l3_tor' ? '⚡ ' + (ev.state || 'TOR')
+        : (ev.type === 'l3_mrm' ? '🛑 MRM'
+        : (ev.type === 'l3_collision' ? '💥 碰撞'
+        : (ev.type === 'road_departure' ? '🚨 出路沿' : ev.type)))) + ' (' + (Number(ev.t_s || 0)).toFixed(1) + 's)';
+      listContainer.appendChild(tag);
+    });
+  }
+}
+
 function clearFrames() {
   frames = [];
   frameCount = 0;
@@ -1731,6 +1856,8 @@ function updateAll() {
   updateLaneDiagHud(false);
   /* 驾驶态势 HUD：同样 4Hz 限流 */
   updateDriveHud(false);
+  /* 周期性拉取 /api/incident/trace 事故摘要（节流 3s） */
+  fetchIncidentTrace(false);
 
   const now = performance.now();
   // ── 工作区可见性门控 ──
@@ -3072,6 +3199,7 @@ window.flowboard = {
   doPause: doPause,
   toggleLaneDiag: toggleLaneDiag,
   toggleDriveHud: toggleDriveHud,
+  refreshIncidentTrace: function() { fetchIncidentTrace(true); },
   clearFrames: clearFrames,
   resetView: resetView,
   // filter

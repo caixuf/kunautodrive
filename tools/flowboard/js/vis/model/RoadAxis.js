@@ -182,7 +182,9 @@ export function computeRoadAxis(road) {
    * road S 弯 277/277 压路）。空数组按"未知车道数"处理，用 lanes_count 兜底。 */
   const laneCount = (Array.isArray(road.lanes) && road.lanes.length)
     ? road.lanes.length
-    : (Number(road.lanes_count) || 2);
+    : (typeof road.lanes === 'number' && road.lanes > 0
+      ? road.lanes
+      : (Number(road.lanes_count) || 2));
   const fallbackHw = laneCount * laneWidth / 2;
 
   /* 阶段2 竖向分层（安全消费，零回归）：若 road 携带逐路 elevation / level
@@ -198,8 +200,35 @@ export function computeRoadAxis(road) {
     return s;
   };
 
-  // 2) 有车道数据 → 垂直投影 envelope 求 TRUE 中心
-  const lanes = Array.isArray(road.lanes) ? road.lanes : [];
+  // 2) 有车道数据或可由车道数与中心线合成虚拟车道 → 垂直投影 envelope 求 TRUE 中心
+  let lanes = Array.isArray(road.lanes) ? road.lanes : [];
+  if (lanes.length === 0 && laneCount > 0 && cl.length >= 2) {
+    lanes = [];
+    for (let k = 0; k < laneCount; k++) {
+      const d = (k - (laneCount - 1) / 2.0) * laneWidth;
+      const laneCl = [];
+      for (let i = 0; i < cl.length; i++) {
+        let tx = 1, ty = 0;
+        if (i + 1 < cl.length) {
+          tx = cl[i + 1][0] - cl[i][0];
+          ty = cl[i + 1][1] - cl[i][1];
+        } else if (i > 0) {
+          tx = cl[i][0] - cl[i - 1][0];
+          ty = cl[i][1] - cl[i - 1][1];
+        }
+        const len = Math.hypot(tx, ty);
+        const nx = len > 1e-6 ? -ty / len : 0;
+        const ny = len > 1e-6 ? tx / len : 1;
+        laneCl.push([
+          cl[i][0] + nx * d,
+          cl[i][1] + ny * d,
+          cl[i][2] || 0,
+        ]);
+      }
+      lanes.push({ centerline: laneCl, width: laneWidth });
+    }
+  }
+
   if (lanes.length > 0) {
     const env = laneGroupEnvelope(lanes, spine, laneWidth);
     if (env) {
@@ -214,7 +243,7 @@ export function computeRoadAxis(road) {
     return { ok: true, fromLanes: false, spine: applyElevation(spine), cum, halfWidth: fallbackHw, centerOffset: 0, leftEdge: left, rightEdge: right };
   }
 
-  // 3) 无 lanes：以 centerline 为居中、警告（单次去重，避免每帧刷屏），绝不静默左偏
+  // 3) 无 lanes：以 centerline 为居中、单次去重记录，避免每帧刷屏
   const roadIdStr = String((road && road.id) || '0');
   if (!_warnedRoadIds.has(roadIdStr)) {
     _warnedRoadIds.add(roadIdStr);

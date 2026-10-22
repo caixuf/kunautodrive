@@ -158,7 +158,7 @@ function buildIndex(map, routes) {
      * （此前整条跳过 → 交叉处无车道线"混乱"）。 */
     if (Array.isArray(r.lanes) && r.lanes.length) laneData[r.id] = r.lanes;
     if (isInternalRoad(r)) continue;
-    const cl = Array.isArray(r.centerline) ? r.centerline : [];
+    const cl = Array.isArray(r.centerline) ? r.centerline : (Array.isArray(r.nodes) ? r.nodes : []);
     if (cl.length < 2) continue;
     /* edge schema 对齐 scene_pub.cpp build_road_network_json（FrameValidator
      * 必填：id/name/type/lanes/lane_width/nodes/oneway + length）；
@@ -171,7 +171,7 @@ function buildIndex(map, routes) {
       id: i,
       name: String(r.id),
       type: r.type || 'urban',
-      lanes: Array.isArray(r.lanes) && r.lanes.length ? r.lanes.length : 2,
+      lanes: typeof r.lanes === 'number' ? r.lanes : (Array.isArray(r.lanes) && r.lanes.length ? r.lanes.length : 2),
       lane_width: Number(r.lane_width) || 3.5,
       length,
       oneway: !!r.oneway,
@@ -290,7 +290,7 @@ function mergeSegmentRoads(roads) {
       _data.laneData[r.id] = r.lanes;
     }
     if (isInternalRoad(r)) continue;
-    const cl = Array.isArray(r.centerline) ? r.centerline : [];
+    const cl = Array.isArray(r.centerline) ? r.centerline : (Array.isArray(r.nodes) ? r.nodes : []);
     if (cl.length < 2) continue;
     const existing = _data.edges.find((e) => e.name === String(r.id));
     let length = existing ? existing.length : 0;

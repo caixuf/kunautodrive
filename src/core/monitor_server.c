@@ -772,6 +772,90 @@ static void exec_opsctl(int fd, const char* cmd, const char* json_body,
     exec_python_tool(fd, "opsctl.py", cmd, json_body, ms);
 }
 
+static void exec_incident_trace(int fd, const char* topology_file, MonitorServer* ms) {
+#if defined(_WIN32)
+    (void)topology_file; (void)ms;
+    send_response(fd, "501 Not Implemented", "application/json",
+                  "{\"ok\":false,\"error\":\"incident trace is not available on Windows\"}");
+    close(fd);
+#else
+    int stdout_pipe[2];
+    if (pipe(stdout_pipe) == -1) {
+        send_response(fd, "500 Internal Server Error", "application/json",
+                      "{\"ok\":false,\"error\":\"pipe failed\"}");
+        close(fd);
+        return;
+    }
+
+    pid_t pid = fork();
+    if (pid == -1) {
+        close(stdout_pipe[0]); close(stdout_pipe[1]);
+        send_response(fd, "500 Internal Server Error", "application/json",
+                      "{\"ok\":false,\"error\":\"fork failed\"}");
+        close(fd);
+        return;
+    }
+
+    if (pid == 0) {
+        close(stdout_pipe[0]);
+        dup2(stdout_pipe[1], STDOUT_FILENO);
+        close(stdout_pipe[1]);
+
+        char script[768];
+        resolve_tools_script_path(ms, "trace_incident.py", script, sizeof(script));
+        const char* tf = (topology_file && topology_file[0]) ? topology_file : "/tmp/flow_topology.json";
+        const char* argv[] = {"python3", script, "--json", tf, "--export-json", NULL};
+        execvp("python3", (char* const*)argv);
+        _exit(1);
+    }
+
+    close(stdout_pipe[1]);
+
+    size_t cap = 65536;
+    size_t total = 0;
+    char* result = (char*)malloc(cap);
+    if (!result) {
+        close(stdout_pipe[0]);
+        waitpid(pid, NULL, 0);
+        send_response(fd, "500 Internal Server Error", "application/json",
+                      "{\"ok\":false,\"error\":\"out of memory\"}");
+        close(fd);
+        return;
+    }
+
+    ssize_t nread;
+    while ((nread = read(stdout_pipe[0], result + total, cap - 1 - total)) > 0) {
+        total += (size_t)nread;
+        if (total + 1024 >= cap) {
+            cap *= 2;
+            char* tmp = (char*)realloc(result, cap);
+            if (!tmp) break;
+            result = tmp;
+        }
+    }
+    result[total] = '\0';
+    close(stdout_pipe[0]);
+    waitpid(pid, NULL, 0);
+
+    if (total > 0 && result[0] == '{') {
+        send_response(fd, "200 OK", "application/json", result);
+    } else if (total > 0) {
+        cJSON* wrap = cJSON_CreateObject();
+        cJSON_AddBoolToObject(wrap, "ok", false);
+        cJSON_AddStringToObject(wrap, "raw_output", result);
+        char* wrap_s = cJSON_PrintUnformatted(wrap);
+        send_response(fd, "200 OK", "application/json", wrap_s ? wrap_s : "{\"ok\":false}");
+        if (wrap_s) free(wrap_s);
+        cJSON_Delete(wrap);
+    } else {
+        send_response(fd, "500 Internal Server Error", "application/json",
+                      "{\"ok\":false,\"error\":\"no output from trace_incident\"}");
+    }
+    free(result);
+    close(fd);
+#endif
+}
+
 /* ── 处理单个连接 ────────────────────────────────────────── */
 
 /* dispatch_request: 处理单个 HTTP 请求。
@@ -946,6 +1030,51 @@ static bool dispatch_request(int fd, MonitorServer* ms,
                         map_json = read_file(map_path, &map_len);
                         snprintf(routes_path, sizeof(routes_path), "%s/maps/%s/routes.json", repo_root, map_id);
                         routes_json = read_file(routes_path, &routes_len);
+                    }
+                }
+
+                /* 若 maps/<map_id>/map.json 仍不存在，尝试查找 scenarios/<map_id>.json 智能合成 */
+                if (!map_json) {
+                    char sc_path[PATH_MAX];
+                    size_t sc_len = 0;
+                    snprintf(sc_path, sizeof(sc_path), "scenarios/%s.json", map_id);
+                    char* sc_json = read_file(sc_path, &sc_len);
+                    if (!sc_json && ms->html_path[0]) {
+                        char repo_root[512];
+                        snprintf(repo_root, sizeof(repo_root), "%s", ms->html_path);
+                        char* s = path_last_sep(repo_root);
+                        if (s) *s = '\0';
+                        s = path_last_sep(repo_root);
+                        if (s) *s = '\0';
+                        s = path_last_sep(repo_root);
+                        if (s) *s = '\0';
+                        if (repo_root[0]) {
+                            snprintf(sc_path, sizeof(sc_path), "%s/scenarios/%s.json", repo_root, map_id);
+                            sc_json = read_file(sc_path, &sc_len);
+                        }
+                    }
+                    if (sc_json) {
+                        cJSON* sc_root = cJSON_Parse(sc_json);
+                        cJSON* rn = sc_root ? cJSON_GetObjectItemCaseSensitive(sc_root, "road_network") : NULL;
+                        if (rn) {
+                            cJSON* edges = cJSON_GetObjectItemCaseSensitive(rn, "edges");
+                            cJSON* map_obj = cJSON_CreateObject();
+                            cJSON_AddNumberToObject(map_obj, "schema_version", 1);
+                            cJSON_AddStringToObject(map_obj, "map_id", map_id);
+                            cJSON_AddItemToObject(map_obj, "road_network", cJSON_Duplicate(rn, 1));
+                            if (edges) {
+                                cJSON_AddItemToObject(map_obj, "roads", cJSON_Duplicate(edges, 1));
+                            } else {
+                                cJSON_AddItemToObject(map_obj, "roads", cJSON_CreateArray());
+                            }
+                            map_json = cJSON_PrintUnformatted(map_obj);
+                            if (map_json) {
+                                map_len = strlen(map_json);
+                            }
+                            cJSON_Delete(map_obj);
+                        }
+                        if (sc_root) cJSON_Delete(sc_root);
+                        free(sc_json);
                     }
                 }
 
@@ -1371,6 +1500,22 @@ static bool dispatch_request(int fd, MonitorServer* ms,
     }
     if (strcmp(path, "/api/ops/status") == 0) {
         exec_opsctl(fd, "status", "{}", ms);
+        return false;
+    }
+
+    /* GET: /api/incident/trace → 事故追溯与 EDR 关键事件结构化摘要 */
+    if (strcmp(path, "/api/incident/trace") == 0 ||
+        strncmp(path, "/api/incident/trace?", 20) == 0) {
+        const char* env_tf = getenv("FLOW_TOPOLOGY_FILE");
+        const char* tf_path = (env_tf && env_tf[0]) ? env_tf : "/tmp/flow_topology.json";
+        if (access(tf_path, R_OK) != 0) {
+            send_response_full(fd, "404 Not Found", "application/json",
+                               "{\"ok\":false,\"error\":\"topology data not found\"}",
+                               client_keep_alive, "no-cache",
+                               true, accept_encoding);
+            return finish_response(fd, client_keep_alive);
+        }
+        exec_incident_trace(fd, tf_path, ms);
         return false;
     }
 

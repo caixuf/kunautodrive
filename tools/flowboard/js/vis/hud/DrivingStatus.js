@@ -240,6 +240,36 @@ export function oddInfo(scene, oddMetric) {
   return { items, tone: TONE.OK, label: 'ODD 内' };
 }
 
+export function l3EventsInfo(eventsRaw) {
+  if (!Array.isArray(eventsRaw) || !eventsRaw.length) return [];
+  return eventsRaw.map((ev) => {
+    if (!ev || typeof ev !== 'object') return null;
+    const type = typeof ev.type === 'string' ? ev.type : (ev.event || 'event');
+    let label = type;
+    let tone = TONE.INFO;
+    if (type === 'l3_tor' || type.includes('tor')) {
+      label = ev.state ? ('TOR: ' + ev.state) : 'TOR 请求';
+      tone = TONE.WARN;
+    } else if (type === 'l3_mrm' || type.includes('mrm')) {
+      label = 'MRM 减速';
+      tone = TONE.BAD;
+    } else if (type === 'l3_collision' || type.includes('collision')) {
+      label = '碰撞风险';
+      tone = TONE.BAD;
+    } else if (type === 'road_departure') {
+      label = '出路沿';
+      tone = TONE.BAD;
+    }
+    return {
+      type,
+      label,
+      tone,
+      t_s: num(ev.t_s, num(ev.t, 0)),
+      details: ev,
+    };
+  }).filter(Boolean);
+}
+
 /**
  * 顶层归约：metrics → HUD 视图模型。缺字段一律降级为 null / '—'，不抛错。
  */
@@ -266,7 +296,7 @@ export function computeDrivingStatus(metrics) {
   else if (typeof m.driver_mode === 'string') driverMode = m.driver_mode;
 
   return {
-    hasData: !!(ego || m.control_debug || m.behavior || m.tor || m.odd),
+    hasData: !!(ego || m.control_debug || m.behavior || m.tor || m.odd || m.l3_events),
     speed,
     speedKmh: speed === null ? null : speed * 3.6,
     cruiseSpeed: num(beh.target_speed, num(pd.command_speed, null)),
@@ -283,5 +313,6 @@ export function computeDrivingStatus(metrics) {
     perceptionSource: perceived ? '感知' : '真值',
     odd: oddInfo(scene, m.odd),
     tor: torInfo(m.tor),
+    l3Events: l3EventsInfo(m.l3_events),
   };
 }

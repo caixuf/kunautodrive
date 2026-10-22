@@ -1373,6 +1373,20 @@ add_test(NAME l3_edr_sim_tools
 )
 set_tests_properties(l3_edr_sim_tools PROPERTIES TIMEOUT 30)
 
+# 方向五：场景模糊测试工具自检与 16 场景合法性校验
+add_test(NAME scenario_fuzzer_tests
+    COMMAND ${Python3_EXECUTABLE} -m unittest tests/test_scenario_fuzzer.py
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(scenario_fuzzer_tests PROPERTIES TIMEOUT 30)
+
+# 事故追溯 JSON 契约：巡航不误报 TOR，碰撞/出路沿/接管才出事件
+add_test(NAME trace_incident_tests
+    COMMAND ${Python3_EXECUTABLE} -m unittest tests/test_trace_incident.py
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(trace_incident_tests PROPERTIES TIMEOUT 30)
+
 # ── Smoke test: flow_launcher short integration run ──
 find_program(BASH_EXECUTABLE bash)
 if(BASH_EXECUTABLE AND NOT WIN32)

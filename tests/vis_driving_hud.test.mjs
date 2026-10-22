@@ -240,12 +240,13 @@ const app = read('tools/flowboard/js/app.js');
 const css = read('tools/flowboard/css/style.css');
 const mod = read('tools/flowboard/js/vis/hud/DrivingStatus.js');
 
-for (const id of ['drive-hud', 'dh-kmh', 'dh-beh', 'dh-ctl', 'dh-risk', 'dh-gap', 'dh-ttc', 'dh-thr', 'dh-brk', 'dh-odd', 'dh-tor']) {
+for (const id of ['drive-hud', 'dh-kmh', 'dh-beh', 'dh-ctl', 'dh-risk', 'dh-gap', 'dh-ttc', 'dh-thr', 'dh-brk', 'dh-odd', 'dh-tor', 'dh-incident', 'incident-timeline']) {
   ok('index.html has #' + id, html.includes('id="' + id + '"'));
 }
 ok('app.js imports computeDrivingStatus', /import \{ computeDrivingStatus \} from '\.\/vis\/hud\/DrivingStatus\.js'/.test(app));
 ok('app.js calls updateDriveHud from updateAll', /updateDriveHud\(false\)/.test(app));
 ok('app.js handles st.tor', app.includes('st.tor'));
+ok('app.js handles /api/incident/trace', app.includes('/api/incident/trace'));
 ok('app.js binds shortcut I', app.includes("key === 'i'") && app.includes('toggleDriveHud()'));
 ok('app.js honors ?hud=0', app.includes("params.get('hud') === '0'"));
 ok('CSS hides HUD in manual game mode', css.includes('#game-hud.active~#drive-hud'));
