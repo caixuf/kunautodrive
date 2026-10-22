@@ -105,6 +105,28 @@ int flowsim_lm_pick_adjacent_lane_id(int current_lane,
     return best;
 }
 
+/* 迟滞带宽占车道宽的比例：与 planning_coord::hold_lane_index 的 0.25 同口径，
+ * 两层用同一个数，避免源头与消费侧互相拉扯。 */
+static constexpr double LM_LANE_STICK_RATIO = 0.25;
+
+int flowsim_lm_hold_lane_id(int candidate_lane, int held_lane,
+                            double offset_in_lane, double lane_width) {
+    /* 未锁存 / 车道宽未知 → 无从判断分界在哪，直接采纳硬判据。 */
+    if (held_lane == 0 || !(lane_width > 0.0)) return candidate_lane;
+    if (candidate_lane == held_lane) return held_lane;
+
+    /* 迟滞带半宽。offset_in_lane > 0 = 自车在 held 车道中心左侧，
+     * 即正往 offset 增大方向（OpenDRIVE：lane id 增大）越线。 */
+    const double band = LM_LANE_STICK_RATIO * lane_width;
+
+    if (candidate_lane > held_lane) {
+        /* 候选在左侧：必须真越过左侧分界（offset > +band）才改判。 */
+        return (offset_in_lane > band) ? candidate_lane : held_lane;
+    }
+    /* 候选在右侧：必须真越过右侧分界（offset < -band）才改判。 */
+    return (offset_in_lane < -band) ? candidate_lane : held_lane;
+}
+
 void flowsim_lm_zero_outputs_on_failure(
     uint64_t* out_llt_id, double* out_llt_s, double* out_llt_offset,
     double* out_heading_err, int* out_valid,

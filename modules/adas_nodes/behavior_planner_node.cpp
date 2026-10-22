@@ -770,11 +770,16 @@ protected:
                 if (dist_to_target < lw * 0.3) {
                     g.committed_lane_idx = g.target_lane_idx;
                 } else {
-                    /* 变道中但未到位：用重算值但不锁定（供前车检测使用） */
-                    g.committed_lane_idx = recalc_idx;
+                    /* 未进入目标车道：滞回，避免贴线时 committed 每帧翻转，
+                     * 前车集合跟着变，巡航/跟车再被打回另一次变道。 */
+                    g.committed_lane_idx = planning_coord::hold_lane_index(
+                        ego_lane_d, recalc_idx, g.committed_lane_idx,
+                        lc, lw, side_offset);
                 }
             } else {
-                g.committed_lane_idx = recalc_idx;
+                g.committed_lane_idx = planning_coord::hold_lane_index(
+                    ego_lane_d, recalc_idx, g.committed_lane_idx,
+                    lc, lw, side_offset);
             }
 
             int current_idx = g.committed_lane_idx;

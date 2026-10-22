@@ -292,6 +292,26 @@ LANE_KEEP_RATIO_WARN = 0.10       # 越线帧占比 → WARN
 LANE_KEEP_RATIO_FAIL = 0.30       # 越线帧占比 → FAIL
 LANE_KEEP_MIN_COVERAGE = 0.50     # lane_match 有效帧占比低于此值则不判（只 WARN）
 
+# ── 横向目标跳变门禁（2026-10-22 超车摇摆）──
+# 故障实测（straight_road，修复前，真实数据回放）：planning target_lane_offset
+# 在相邻车道中心之间跳 63 次/45s = 1.40/s，跳变幅度中位 2.96m（车道宽 3.5m），
+# control lat_err 中位 1.58m。修复后：0.11/s、幅度中位 0.03m、lat_err 中位 0.11m。
+#
+# ⚠ 这个判据**不是**为了替代压线判据，而是补一个更早、更准的定位信号：
+#   同一批故障数据回放，压线判据也会 FAIL（554/554 帧压线，worst |off| 1.75m
+#   = 车道半宽），但它是**后果**层面的判据 —— 只有当车真骑到线上才红，且无法
+#   区分"目标在跳"与"控制器跟不住"。本判据直接指向根因层（planning 输出），
+#   故障定位从"车压线"缩短到"规划目标不稳"。
+#   注：早先短跑（30s）demo_evaluator 给 PASS 是采样窗口问题（该窗口内车尚未
+#   骑到线上，只 3 帧触线 < 30 帧 CONSEC 阈值），不是判据本身失效。
+#
+# FAIL 阈值取"修复后健康值 ~5×、故障值 ~0.4×"，只拦持续高频阶跃。
+TARGET_CHATTER_RATE_WARN = 0.30   # 目标跳变次数/秒 → WARN
+TARGET_CHATTER_RATE_FAIL = 0.60   # → FAIL（需同时满足幅度条件）
+TARGET_CHATTER_AMP_FAIL = 1.00    # 跳变幅度中位数下限 (m)，佐证"跳的是车道宽不是噪声"
+TARGET_CHATTER_MIN_SPEED = 2.0    # 低于此速度不计（起步/停车附近目标本就会变）
+TARGET_CHATTER_MIN_FRAMES = 10    # 样本太少不判（避免方差主导）
+
 # ── 控制层量化门禁（Phase 1.3）：病理性抖动 FAIL 阻断 ──
 # 抓 bang-bang 转向（MPC 每帧翻符号）与 1-2Hz 横向极限环。
 # 健康实测（straight_road 30s，2026-08-01）：yaw_rms≈0.02 rad/s、
@@ -1056,6 +1076,19 @@ def sample_metrics(sample: dict, road: dict | None = None,
             except (TypeError, ValueError):
                 lm_lane_id = 0
 
+    # planning 下发的横向目标（metrics.planning_debug.target_lane_offset）。
+    # 门禁"横向目标跳变"用它：2026-10-22 超车摇摆故障里，这个值在相邻车道
+    # 中心之间每 0.6s 阶跃一个车道宽（直接指向 planning 层根因）。
+    planning_target_offset = None
+    _pd = metrics.get("planning_debug", {})
+    if isinstance(_pd, dict):
+        try:
+            _pto = float(_pd.get("target_lane_offset"))
+            if math.isfinite(_pto):
+                planning_target_offset = _pto
+        except (TypeError, ValueError):
+            planning_target_offset = None
+
     speed = float(vehicle.get("speed", ego.get("speed", 0.0)) or 0.0)
     x = float(vehicle.get("x", ego.get("x", 0.0)) or 0.0)
     y = float(ego.get("y", 0.0) or 0.0)
@@ -1222,6 +1255,7 @@ def sample_metrics(sample: dict, road: dict | None = None,
         "lane_match_valid": lm_valid,
         "lane_match_offset": lm_offset,
         "lane_match_lane_id": lm_lane_id,
+        "planning_target_offset": planning_target_offset,
     }
 
 
@@ -1886,6 +1920,58 @@ LIVENESS_FIELDS = [
 ]
 
 
+def lateral_target_chatter(series: list[dict]) -> dict:
+    """统计 planning 横向目标（target_lane_offset）的跳变率与幅度。
+
+    2026-10-22 超车摇摆故障的直接量化：故障时该值在相邻车道中心之间每帧
+    阶跃一个车道宽（真实数据回放：1.40 次/s，幅度中位 2.96m，而同批数据的
+    压线判据也会 FAIL —— 那是后果层判据）。本判据的价值在于直接指向
+    planning 层的输出不稳，是根因层信号，不必等到车真骑到线上才红。
+
+    抽成纯函数的原因：demo_evaluator 的门禁与 ci/gates/long_run_lane_keep.py
+    的 Rule 要共用同一套口径（仓库铁律：同一判据不得有第二份实现）。
+
+    只统计巡航帧（非机动、速度 > TARGET_CHATTER_MIN_SPEED）——显式变道/掉头
+    本来就会让目标跳一个车道宽。
+
+    返回 dict：
+      frames      参与统计的帧数
+      span_s      这些帧的时间跨度（s）
+      jumps       跳变次数（相邻采样变化 > 0.5·lane_width）
+      rate        跳变率（次/秒）
+      amp_median  跳变幅度中位数（m）
+      verdict     "fail" / "warn" / "ok" / "insufficient_data"
+    """
+    frames = [
+        m for m in series
+        if m.get("planning_target_offset") is not None
+        and not m.get("maneuver_active")
+        and float(m.get("speed", 0.0) or 0.0) > TARGET_CHATTER_MIN_SPEED
+    ]
+    out = {"frames": len(frames), "span_s": 0.0, "jumps": 0, "rate": 0.0,
+           "amp_median": 0.0, "verdict": "insufficient_data"}
+    if len(frames) < TARGET_CHATTER_MIN_FRAMES:
+        return out
+    span = _sample_time_seconds(frames[-1]) - _sample_time_seconds(frames[0])
+    jumps: list[float] = []
+    for prev, cur in zip(frames, frames[1:]):
+        lane_w = float(cur.get("lane_width") or 3.5)
+        delta = abs(float(cur["planning_target_offset"])
+                    - float(prev["planning_target_offset"]))
+        if delta > 0.5 * lane_w:
+            jumps.append(delta)
+    rate = (len(jumps) / span) if span > 0.0 else 0.0
+    amp = statistics.median(jumps) if jumps else 0.0
+    out.update(span_s=span, jumps=len(jumps), rate=rate, amp_median=amp)
+    if rate >= TARGET_CHATTER_RATE_FAIL and amp >= TARGET_CHATTER_AMP_FAIL:
+        out["verdict"] = "fail"
+    elif rate >= TARGET_CHATTER_RATE_WARN:
+        out["verdict"] = "warn"
+    else:
+        out["verdict"] = "ok"
+    return out
+
+
 def liveness_report(series: list[dict]) -> dict:
     """统计每个受监控量的取值分布，识别结构性死值。
 
@@ -2463,6 +2549,24 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
                 f"frames ({lane_straddle_ratio:.0%}, max consecutive "
                 f"{lane_straddle_consec_max}) {_lane_keep_tail}"
             )
+
+    # ── 横向目标跳变门禁（2026-10-22 超车摇摆故障的直接判据）──
+    # 判据本体在 lateral_target_chatter()（纯函数，long_run_lane_keep 复用同一份，
+    # 仓库铁律：同一判据不得有第二份实现）。这里只做 verdict → 门禁结果映射。
+    tb = lateral_target_chatter(series)
+    if tb["verdict"] in ("fail", "warn"):
+        _tb_tail = (
+            f"({tb['jumps']} target jumps > 0.5×lane_width over {tb['span_s']:.1f}s "
+            f"= {tb['rate']:.2f}/s, median jump {tb['amp_median']:.2f} m, of "
+            f"{tb['frames']} cruise frames)"
+        )
+        if tb["verdict"] == "fail":
+            failures.append(
+                f"lateral target chatter: planning target_lane_offset keeps "
+                f"stepping between lane centers {_tb_tail}"
+            )
+        else:
+            warnings.append(f"lateral target chatter: planning target jumps often {_tb_tail}")
 
     # 掉头返程合法沿 −x 行驶：净 x 位移≈0，用累计路径长代替"前进距离"。
     # 城市路网（map_file 多 edge）路线转弯，净 x 位移同样不代表行驶里程。

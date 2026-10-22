@@ -81,6 +81,32 @@ inline int nearest_own_lane(double d, int lane_count, double lane_width) {
     return nearest_lane(d, lane_count, lane_width, true);
 }
 
+/**
+ * 巡航车道索引滞回。
+ *
+ * nearest_lane 在车道分界上把索引阶跃到邻道。贴线时候选每帧翻转，
+ * 规划把整段横向参考锁到新中心，横向误差变号，车沿分界摇摆。
+ *
+ * held_idx < 0 或越界：尚未锁存，直接采纳候选。
+ * 候选与锁存不同道时，自车必须比锁存中心更靠近候选中心至少一个
+ * 0.25 车道宽才切换。3.5m 车道上即越过分界约 0.44m。
+ * 显式变道不走这里，由调用方直接写入目标车道。
+ */
+inline int hold_lane_index(double ego_d, int candidate_idx, int held_idx,
+                           int lane_count, double lane_width,
+                           double side_offset = 0.0) {
+    if (lane_count <= 0 || !(lane_width > 0.0)) return 0;
+    if (candidate_idx < 0 || candidate_idx >= lane_count) candidate_idx = 0;
+    if (held_idx < 0 || held_idx >= lane_count) return candidate_idx;
+    if (candidate_idx == held_idx) return held_idx;
+    const double cand = lane_center_d(candidate_idx, lane_count, lane_width, side_offset);
+    const double held = lane_center_d(held_idx, lane_count, lane_width, side_offset);
+    const double margin = lane_width * 0.25;
+    if (std::fabs(ego_d - cand) + margin < std::fabs(ego_d - held))
+        return candidate_idx;
+    return held_idx;
+}
+
 inline bool project_to_path(double x, double y,
                             const double* ref_x, const double* ref_y,
                             const double* ref_s, int count,

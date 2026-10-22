@@ -142,6 +142,32 @@ def _run_demo(duration: int, interval: float) -> list[dict]:
     return samples
 
 
+def _lateral_chatter(samples: list[dict]) -> dict:
+    """Rule5：横向目标跳变。判据本体复用 demo_evaluator.lateral_target_chatter。
+
+    仓库铁律"同一判据不得有第二份实现"，所以这里只做 raw topology sample →
+    evaluator series 的字段搬运，阈值/口径全在 evaluator 里。
+    """
+    sys.path.insert(0, str(ROOT / "ci" / "evaluators"))
+    import demo_evaluator as de  # noqa: E402
+
+    series: list[dict] = []
+    for s in samples:
+        m = s.get("metrics", {})
+        ego = (m.get("scene", {}) or {}).get("ego", {})
+        pd = m.get("planning_debug", {}) or {}
+        beh = (m.get("behavior", {}).get("state") or "").upper()
+        lane = m.get("scene", {}).get("lane", {}) or {}
+        series.append({
+            "t_demo": s.get("t_demo", s.get("t", 0.0)),
+            "planning_target_offset": pd.get("target_lane_offset"),
+            "speed": float(ego.get("speed", 0.0) or 0.0),
+            "maneuver_active": any(t in beh for t in ("CHANGE", "OVERTAKE", "UTURN", "PARK")),
+            "lane_width": float(lane.get("width", 3.5) or 3.5),
+        })
+    return de.lateral_target_chatter(series)
+
+
 def _lane_keep_stats(samples: list[dict]) -> dict:
     """复用 demo_evaluator 的机动/近静止豁免口径，统计巡航帧压线。"""
     lm_valid = 0
@@ -196,6 +222,12 @@ def run(duration: int, interval: float) -> tuple[list[str], dict]:
     st = _lane_keep_stats(samples)
     failures: list[str] = []
 
+    # Rule 5 判据复用 demo_evaluator 的纯函数（同口径，无第二份实现）。
+    # 长跑是这类"目标持续阶跃"故障最该显形的场合：短跑里压线判据可能因为
+    # 车恰好停在车道线上而全绿（2026-10-22 超车摇摆即如此）。
+    chatter = _lateral_chatter(samples)
+    st["target_chatter"] = chatter
+
     coverage = (st["lane_match_valid"] / st["samples"]) if st["samples"] else 0.0
     if st["samples"] < LANE_MATCH_MIN_SAMPLES:
         failures.append(f"Rule0 样本过少：{st['samples']} 帧（< {LANE_MATCH_MIN_SAMPLES}）——"
@@ -220,6 +252,12 @@ def run(duration: int, interval: float) -> tuple[list[str], dict]:
             failures.append(f"Rule3 长跑车心越线 {st['center_cross']} 帧 ({cross_ratio:.0%})")
     if st["collision"]:
         failures.append(f"Rule4 长跑发生碰撞 {st['collision']} 帧")
+    if chatter["verdict"] == "fail":
+        failures.append(
+            f"Rule5 横向目标跳变：planning target_lane_offset 持续在车道中心之间"
+            f"阶跃（{chatter['jumps']} 次 > 0.5×车道宽 / {chatter['span_s']:.0f}s "
+            f"= {chatter['rate']:.2f}/s，幅度中位 {chatter['amp_median']:.2f}m）"
+            f"—— 车会在两车道中心之间摇摆")
     return failures, st
 
 

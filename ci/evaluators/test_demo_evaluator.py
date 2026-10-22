@@ -1132,5 +1132,64 @@ class L3ExpectationGateTest(unittest.TestCase):
         self.assertEqual(out["warnings"], [])
 
 
+class LateralTargetChatterTest(unittest.TestCase):
+    """2026-10-22 超车摇摆故障的量化门禁（lateral_target_chatter）。
+
+    故障形态：planning target_lane_offset 在相邻车道中心之间每帧阶跃一个
+    车道宽，车恰好停在两中心的中点（= 车道线上），所以压线判据全绿。
+    门禁必须直接判"目标本身是否在跳"，否则抓不住已知故障。
+    """
+
+    def test_fails_on_lane_center_stepping(self):
+        """故障实测值：1.40 次/s、幅度中位 2.96m → 必须 FAIL。"""
+        evaluator = load_evaluator()
+        series = [{"t_demo": i * 0.5,
+                   "planning_target_offset": (-5.25 if i % 2 else -1.75),
+                   "maneuver_active": False, "speed": 20.0, "lane_width": 3.5}
+                  for i in range(90)]
+        out = evaluator.lateral_target_chatter(series)
+        self.assertEqual(out["verdict"], "fail", out)
+        self.assertGreaterEqual(out["jumps"], 80)
+        self.assertAlmostEqual(out["amp_median"], 3.5, places=2)
+
+    def test_passes_on_stable_target(self):
+        """目标恒定（健康巡航）→ ok，不得误报。"""
+        evaluator = load_evaluator()
+        series = [{"t_demo": i * 0.5, "planning_target_offset": -1.75,
+                   "maneuver_active": False, "speed": 20.0, "lane_width": 3.5}
+                  for i in range(90)]
+        out = evaluator.lateral_target_chatter(series)
+        self.assertEqual(out["verdict"], "ok", out)
+        self.assertEqual(out["jumps"], 0)
+
+    def test_ignores_maneuvers_and_slow_frames(self):
+        """显式变道/掉头/低速帧本就会让目标跳 → 不得计入，否则每次变道都误报。"""
+        evaluator = load_evaluator()
+        series = [{"t_demo": i * 0.5,
+                   "planning_target_offset": (-5.25 if i % 2 else -1.75),
+                   "maneuver_active": True, "speed": 20.0, "lane_width": 3.5}
+                  for i in range(90)]
+        self.assertEqual(evaluator.lateral_target_chatter(series)["verdict"],
+                         "insufficient_data")
+        slow = [{"t_demo": i * 0.5,
+                 "planning_target_offset": (-5.25 if i % 2 else -1.75),
+                 "maneuver_active": False, "speed": 0.5, "lane_width": 3.5}
+                for i in range(90)]
+        self.assertEqual(evaluator.lateral_target_chatter(slow)["verdict"],
+                         "insufficient_data")
+
+    def test_ignores_sub_half_lane_noise(self):
+        """噪声级抖动（< 0.5·lane_width）不得计入 —— 修复后的真实形态是
+        llt_offset 符号过零的小幅抖动（实测幅度中位 0.03m），那不是换道。"""
+        evaluator = load_evaluator()
+        series = [{"t_demo": i * 0.5,
+                   "planning_target_offset": -1.75 + (0.05 if i % 2 else -0.05),
+                   "maneuver_active": False, "speed": 20.0, "lane_width": 3.5}
+                  for i in range(90)]
+        out = evaluator.lateral_target_chatter(series)
+        self.assertEqual(out["verdict"], "ok", out)
+        self.assertEqual(out["jumps"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

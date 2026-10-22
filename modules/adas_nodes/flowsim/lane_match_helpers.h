@@ -81,6 +81,44 @@ int flowsim_lm_pick_adjacent_lane_id(int current_lane,
                                      int side);
 
 /**
+ * 车道归属迟滞（贴分界线时防止 lane_id 每帧翻转）。
+ *
+ * 背景（2026-10-22 实测）：esmini `RM_SetWorldXYHPosition` 给出的 lane_id 是
+ * **最近车道中心**的硬判据。自车贴在两条车道分界上时（实测直道巡航 ego 距
+ * 分界 0.13m），该判据每帧在两侧 lane 之间翻转，`llt_offset` 随之在
+ * +1.6 / -1.6 之间翻转 —— 下游把 `llt_offset` 当"相对当前车道中心"用，
+ * 于是横向参考每次翻转都阶跃一个车道宽（实测 63 次/45s，车在两车道中心
+ * 之间锯来锯去）。
+ *
+ * 规则：held_lane 是上一帧归属；只有当自车**越过**分界线超过
+ * `LM_LANE_STICK_RATIO · lane_width` 之后才改判。0.25 与 planning 侧
+ * `planning_coord::hold_lane_index` 同一余量口径，两层不会互相打架。
+ *
+ * 迟滞带要占一半车道宽，所以判据只做**符号化比较**，不用真实几何距离：
+ * 传入 `offset_in_lane` = 自车相对**held 车道**中心的横向偏移（左正），
+ * `lane_width` = 当前车道宽，`candidate_lane` = 硬判据给出的最近车道，
+ * `lane_id_sign` = lane id 增大方向与横向正方向的符号关系（OpenDRIVE 靠右
+ * 行驶时 lane id 增大 = 向左 = 横向正，传 +1；拿不准时传 +2 表示"未知"，
+ * 此时只做单向保护，见下）。
+ *
+ * @param candidate_lane   硬判据（world_to_frenet）给出的最近 lane id
+ * @param held_lane        上一帧归属 lane id（0 = 尚未锁存，直接采纳候选）
+ * @param offset_in_lane   自车相对 held_lane 中心的横向偏移 (m)，左正
+ * @param lane_width       held_lane 的车道宽 (m)；≤0 视为未知 → 直接采纳候选
+ * @return 本帧应发布的 lane id
+ *
+ * 语义：
+ *   - held_lane == 0（未锁存）或 lane_width 非法 → 返回 candidate_lane
+ *   - candidate_lane == held_lane → 返回 held_lane（常规）
+ *   - 候选在左（candidate > held，OpenDRIVE id 左增）：只有 offset_in_lane >
+ *     +0.25·lane_width 才改判；否则保持 held
+ *   - 候选在右（candidate < held）：只有 offset_in_lane < -0.25·lane_width 才改判
+ *   - 因此自车在分界附近（|offset| < 0.25·w）时归属恒定，不会翻转
+ */
+int flowsim_lm_hold_lane_id(int candidate_lane, int held_lane,
+                            double offset_in_lane, double lane_width);
+
+/**
  * 失败路径：把 compute_lane_match 所有 10 个输出参数全部置 0。
  *
  * 调用方在 world_to_frenet / frenet_to_world 失败、或 road_id < 0 时调用，

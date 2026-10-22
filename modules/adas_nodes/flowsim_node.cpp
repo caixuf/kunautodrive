@@ -163,6 +163,10 @@ struct FlowSimContext {
      * （见 topic_registry.h 的 TOPIC_LOCALIZATION_LANE_MATCH 说明）。 */
     uint32_t          lane_match_id_mismatch{0};
     uint32_t          lane_match_frames{0};
+    /* 车道归属迟滞锁存（compute_lane_match 用）：road 变了就作废，
+     * 避免跨 road / 掉头后粘在旧 lane 上。0 = 尚未锁存。 */
+    int               lm_held_lane{0};
+    int               lm_held_road{-1};
     uint64_t          sim_start_us{0};
     bool              roads_loaded{false};
     int               last_road_geom_road_id{-9999};
@@ -240,6 +244,8 @@ static void reset_runtime_state() {
     g.cycle = 0;
     g.lane_match_id_mismatch = 0;
     g.lane_match_frames = 0;
+    g.lm_held_lane = 0;
+    g.lm_held_road = -1;
     g.sim_start_us = 0;
     g.roads_loaded = false;
     g.last_road_geom_road_id = -9999;
@@ -1477,6 +1483,40 @@ static void publish_road_geometry(void) {
  * （通过 lane_match_helpers.h 的 `flowsim_lm_zero_outputs_on_failure` 保证字段
  * 一致性，避免漏写新字段导致 valid=0 时仍有 stale 值）。
  */
+
+/**
+ * 求自车相对**指定 lane** 中心线的横向偏移（OpenDRIVE offset 语义：左正）。
+ *
+ * 用于车道归属迟滞：world_to_frenet 只给"最近车道"的 offset，但迟滞需要知道
+ * 自车相对**锁存车道**偏了多少，才能判断是否真的越过了分界。
+ *
+ * 做法：沿用同一把 esmini position handle（单线程独占，与 road_network 其余
+ * 查询一致）设到 (road, lane, s, offset=0) 拿到该 lane 中心的世界坐标，
+ * 再和自车位置求横向距离，符号按 lane 中心切线左法向投影。
+ *
+ * @return true 成功；false 表示 road/lane 不存在或几何退化（调用方须放弃迟滞）
+ */
+static bool lane_offset_to_lane(int road_id, int lane_id, double s,
+                                double x, double y, double* out_offset) {
+    if (!out_offset) return false;
+    flowsim::WorldPos c0, c1;
+    if (!g.roads.frenet_to_world(road_id, lane_id, s, 0.0, c0)) return false;
+    /* 取 s+0.5 处一点求切线（与 world_to_frenet 里 h 的求法同源） */
+    const double ds = 0.5;
+    if (!g.roads.frenet_to_world(road_id, lane_id, s + ds, 0.0, c1)) {
+        if (!g.roads.frenet_to_world(road_id, lane_id, s - ds, 0.0, c1)) return false;
+    }
+    const double tx = c1.x - c0.x;
+    const double ty = c1.y - c0.y;
+    const double len = std::hypot(tx, ty);
+    if (len < 1e-6) return false;
+    /* 左法向 n̂ = (-ty, tx)/|t|；offset = (ego - center) · n̂ */
+    const double nx = -ty / len;
+    const double ny = tx / len;
+    *out_offset = (x - c0.x) * nx + (y - c0.y) * ny;
+    return true;
+}
+
 static void compute_lane_match(double x, double y, double ego_heading,
                                uint64_t* out_llt_id, double* out_llt_s,
                                double* out_llt_offset, double* out_heading_err,
@@ -1490,14 +1530,43 @@ static void compute_lane_match(double x, double y, double ego_heading,
     flowsim::FrenetPos fp;
     const bool ok = g.roads_loaded && g.roads.world_to_frenet(x, y, fp);
     if (!ok || fp.road_id < 0) {
+        /* 丢失匹配：清掉锁存，下次重新采纳硬判据（防止跨 road/掉头后粘在旧 lane） */
+        g.lm_held_lane = 0;
+        g.lm_held_road = -1;
         flowsim_lm_zero_outputs_on_failure(
             out_llt_id, out_llt_s, out_llt_offset, out_heading_err, out_valid,
             out_curvature, out_lane_width,
             out_left_lanelet_id, out_right_lanelet_id, out_flags);
         return;
     }
+
+    /* ── 车道归属迟滞（2026-10-22）──
+     * world_to_frenet 的 lane_id 是"最近车道中心"的硬判据，自车贴分界时每帧
+     * 翻转，llt_offset 随之在 ±半车道宽之间翻转。下游 planning 把 llt_offset
+     * 当"相对当前车道中心"直接换算横向参考，于是每次翻转目标阶跃一个车道宽
+     * （实测 63 次/45s，超车时车在两车道中心之间锯）。
+     * 这里锁存车道归属，只有真越过分界 0.25·lane_width 才改判。 */
+    int lane_id = fp.lane_id;
+    double lane_off = fp.offset;
+    {
+        const int prev = (g.lm_held_road == fp.road_id) ? g.lm_held_lane : 0;
+        if (prev != 0 && prev != lane_id) {
+            double off_to_held = 0.0;
+            if (lane_offset_to_lane(fp.road_id, prev, fp.s, x, y, &off_to_held)) {
+                double lw = g.roads.lane_width(fp.road_id, prev, fp.s);
+                if (!(lw > 0.5)) lw = 3.5;   /* 未知宽度 → 按标准车道宽判 */
+                if (flowsim_lm_hold_lane_id(lane_id, prev, off_to_held, lw) == prev) {
+                    lane_id = prev;
+                    lane_off = off_to_held;
+                }
+            }
+        }
+        g.lm_held_lane = lane_id;
+        g.lm_held_road = fp.road_id;
+    }
+
     flowsim::WorldPos wp;
-    if (!g.roads.frenet_to_world(fp.road_id, fp.lane_id, fp.s, fp.offset, wp)) {
+    if (!g.roads.frenet_to_world(fp.road_id, lane_id, fp.s, lane_off, wp)) {
         flowsim_lm_zero_outputs_on_failure(
             out_llt_id, out_llt_s, out_llt_offset, out_heading_err, out_valid,
             out_curvature, out_lane_width,
@@ -1509,9 +1578,9 @@ static void compute_lane_match(double x, double y, double ego_heading,
     while (err < -M_PI) err += 2.0 * M_PI;
 
     /* M2 字段 */
-    *out_llt_id = flowsim_lm_synthesize_lanelet_id(fp.road_id, fp.lane_id);
+    *out_llt_id = flowsim_lm_synthesize_lanelet_id(fp.road_id, lane_id);
     *out_llt_s = fp.s;
-    *out_llt_offset = fp.offset;
+    *out_llt_offset = lane_off;
     *out_heading_err = err;
     *out_valid = 1;
 
@@ -1519,11 +1588,11 @@ static void compute_lane_match(double x, double y, double ego_heading,
     /* curvature：±0.5m centerline 三点采样 → Menger 公式（退化返 0） */
     constexpr double kCurvatureDs = 0.5;
     flowsim::WorldPos p_prev, p_cur, p_next;
-    bool have_prev = g.roads.frenet_to_world(fp.road_id, fp.lane_id,
+    bool have_prev = g.roads.frenet_to_world(fp.road_id, lane_id,
                                              fp.s - kCurvatureDs, 0.0, p_prev);
-    bool have_cur  = g.roads.frenet_to_world(fp.road_id, fp.lane_id,
+    bool have_cur  = g.roads.frenet_to_world(fp.road_id, lane_id,
                                              fp.s, 0.0, p_cur);
-    bool have_next = g.roads.frenet_to_world(fp.road_id, fp.lane_id,
+    bool have_next = g.roads.frenet_to_world(fp.road_id, lane_id,
                                              fp.s + kCurvatureDs, 0.0, p_next);
     if (have_prev && have_cur && have_next) {
         *out_curvature = flowsim_lm_curvature_3pt(
@@ -1532,17 +1601,18 @@ static void compute_lane_match(double x, double y, double ego_heading,
         *out_curvature = 0.0;   /* s 越界或 road 退化（<0.5m 长）→ 0 */
     }
 
-    /* lane_width：直接透传 road_network API（0 = 未知；spec §6.1 允许） */
-    *out_lane_width = g.roads.lane_width(fp.road_id, fp.lane_id, fp.s);
+    /* lane_width：直接透传 road_network API（0 = 未知；spec §6.1 允许）。
+     * 用迟滞后的 lane_id：否则车道宽会跟着硬判据每帧翻。 */
+    *out_lane_width = g.roads.lane_width(fp.road_id, lane_id, fp.s);
 
     /* left/right_lanelet_id：枚举 drivable lane ids，挑 closest-on-side 邻 lane，
      * 合成 llt_id。无邻 → 0。`drivable_lane_ids` 把 esmini RM_GetDrivableLaneIdByIndex
      * 封装在 FlowRoadNetwork 内，flowsim_node.cpp 不直接耦合 esminiRMLib。 */
     const std::vector<int> drivable_ids = g.roads.drivable_lane_ids(fp.road_id, fp.s);
     const int left_lid  = flowsim_lm_pick_adjacent_lane_id(
-        fp.lane_id, drivable_ids.data(), (int)drivable_ids.size(), +1);
+        lane_id, drivable_ids.data(), (int)drivable_ids.size(), +1);
     const int right_lid = flowsim_lm_pick_adjacent_lane_id(
-        fp.lane_id, drivable_ids.data(), (int)drivable_ids.size(), -1);
+        lane_id, drivable_ids.data(), (int)drivable_ids.size(), -1);
     *out_left_lanelet_id  = (left_lid  != 0)
         ? flowsim_lm_synthesize_lanelet_id(fp.road_id, left_lid)  : 0ULL;
     *out_right_lanelet_id = (right_lid != 0)

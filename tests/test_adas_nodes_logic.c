@@ -1249,6 +1249,99 @@ static void test_compute_lane_match_failure_path_zeros(void) {
     PASS();
 }
 
+/* ── 6. 车道归属迟滞: 贴分界线时 lane_id 不得每帧翻转 ── */
+/* 2026-10-22 实测根因：world_to_frenet 的 lane_id 是"最近车道中心"硬判据，
+ * 自车贴在分界上（实测直道巡航 ego 距分界 0.13m）时每帧翻转，llt_offset
+ * 随之在 ±1.6m 之间翻。下游 planning 把 llt_offset 当"相对当前车道中心"
+ * 换算横向参考 → 目标每次翻转阶跃一个车道宽（实测 63 次/45s）。
+ * flowsim_lm_hold_lane_id 在源头加 0.25·lane_width 迟滞带。
+ *
+ * 车道宽 3.5m ⇒ 迟滞带 ±0.875m，即必须越过中点 0.875m 以上才改判。 */
+static void test_flowsim_lm_hold_lane_id(void) {
+    TEST("flowsim_lm_hold_lane_id: 分界附近归属恒定，真越界才改判");
+
+    /* ① 未锁存（held=0）→ 直接采纳候选 */
+    ASSERT_EQ(flowsim_lm_hold_lane_id(-2, 0, 0.0, 3.5), -2,
+              "held=0 must adopt candidate");
+    /* ② 车道宽未知（0 或负）→ 直接采纳候选（无从判断分界位置） */
+    ASSERT_EQ(flowsim_lm_hold_lane_id(-1, -2, 0.0, 0.0), -1,
+              "unknown lane width must adopt candidate");
+    ASSERT_EQ(flowsim_lm_hold_lane_id(-1, -2, 0.0, -1.0), -1,
+              "negative lane width must adopt candidate");
+    /* ③ 候选与锁存一致 → 恒等 */
+    ASSERT_EQ(flowsim_lm_hold_lane_id(-2, -2, 1.5, 3.5), -2,
+              "same lane is identity even with large offset");
+
+    /* ④ 候选在左（id 增大）：分界带内必须保持锁存 -2。
+     *    offset 从 -1.75（锁存车道中心）到 +0.875（分界带边缘）都不改判。 */
+    ASSERT_EQ(flowsim_lm_hold_lane_id(-1, -2, -1.75, 3.5), -2,
+              "at held lane center must stay");
+    ASSERT_EQ(flowsim_lm_hold_lane_id(-1, -2, 0.0, 3.5), -2,
+              "at boundary must stay (no chatter)");
+    ASSERT_EQ(flowsim_lm_hold_lane_id(-1, -2, 0.80, 3.5), -2,
+              "just inside hysteresis band must stay");
+    ASSERT_EQ(flowsim_lm_hold_lane_id(-1, -2, 0.875, 3.5), -2,
+              "exactly at band edge must stay (strict >)");
+    /* 越过带 → 改判到候选 */
+    ASSERT_EQ(flowsim_lm_hold_lane_id(-1, -2, 1.00, 3.5), -1,
+              "past hysteresis band must switch to candidate");
+
+    /* ⑤ 候选在右（id 减小）：镜像语义，符号必须反过来 */
+    ASSERT_EQ(flowsim_lm_hold_lane_id(-3, -2, -0.80, 3.5), -2,
+              "right candidate inside band must stay");
+    ASSERT_EQ(flowsim_lm_hold_lane_id(-3, -2, -1.00, 3.5), -3,
+              "right candidate past band must switch");
+    /* 符号镜像不能写反：候选在右时，正向 offset（往左偏）绝不该改判 */
+    ASSERT_EQ(flowsim_lm_hold_lane_id(-3, -2, 2.0, 3.5), -2,
+              "right candidate with leftward offset must NOT switch");
+
+    /* ⑥ 抖动用例（本次故障的复现）：自车骑在分界上 ±0.05m 来回抖 40 帧，
+     *    硬判据每帧翻，迟滞必须 0 次翻转。 */
+    {
+        int held = -2;
+        int flips_hard = 0, flips_hold = 0;
+        int hard_prev = -2;
+        int i;
+        for (i = 0; i < 40; ++i) {
+            /* ±0.05m 抖动相当于 offset 在分界两侧小幅摆动 */
+            const double off = (i % 2) ? 0.05 : -0.05;
+            const int cand = (off > 0.0) ? -1 : -2;   /* 硬判据：符号一翻就换道 */
+            if (cand != hard_prev) flips_hard++;
+            hard_prev = cand;
+            {
+                const int next = flowsim_lm_hold_lane_id(cand, held, off, 3.5);
+                if (next != held) flips_hold++;
+                held = next;
+            }
+        }
+        ASSERT(flips_hard >= 10, "hard criterion must chatter on boundary");
+        ASSERT_EQ(flips_hold, 0, "hysteresis must not chatter on boundary");
+        ASSERT_EQ(held, -2, "hysteresis stays on the held lane");
+    }
+
+    /* ⑦ 真实超车：从 -5.25 扫到 -1.75（车道宽 3.5），每道只切一次，
+     *    且切换点必须落在越过分界之后。 */
+    {
+        int held = 0;
+        int switches = 0;
+        double switch_at = 0.0;
+        double ego;
+        for (ego = -5.25; ego <= -1.75 + 1e-9; ego += 0.05) {
+            /* 相对锁存车道中心的偏移：分界在中心 +1.75 */
+            const double off = ego - (-5.25);
+            const int cand = (off < 1.75) ? -2 : -1;
+            const int next = flowsim_lm_hold_lane_id(cand, held, off, 3.5);
+            if (held != 0 && next != held) { switches++; switch_at = ego; }
+            held = next;
+        }
+        ASSERT_EQ(switches, 1, "sweep across one boundary switches once");
+        ASSERT_EQ(held, -1, "sweep ends on the outer lane");
+        ASSERT(switch_at > -3.5,
+               "switch happens past the boundary (at -3.5), not before");
+    }
+    PASS();
+}
+
 /* ══════════════════════════════════════════════════════════ */
 /* D2-07 phase 2: obs_lane_match_hint 计算 (fusion_lane_hint.h) */
 /* ══════════════════════════════════════════════════════════ */
@@ -2035,6 +2128,7 @@ int main(void) {
     test_compute_lane_match_synthesize_and_zero_path();
     test_compute_lane_match_left_right_neighbors();
     test_compute_lane_match_failure_path_zeros();
+    test_flowsim_lm_hold_lane_id();
 
     printf("\n═══ obs_lane_match_hint (D2-07 phase 2 — fusion lane hint) ═══\n");
     test_compute_hint_same_lane();

@@ -267,7 +267,7 @@ struct PlanningContext {
      * 状态机已拆到 behavior_planner_node，此处只消费 Behavior 指令。 */
     int    overtake_state{0};       /* 0=巡航, 1=左变道, 2=右变道（缓存 behavior.command） */
     double target_lane_offset{0.0}; /* 当前目标车道偏移 (m, 相对于道路中心) */
-    int    committed_lane_idx{0};  /* 当前所在车道索引（从 behavior_planner 的 Behavior.target_lane_idx 推导） */
+    int    committed_lane_idx{-1}; /* 巡航车道滞回锁存；-1 = 尚未采纳。变道中写入目标车道 */
     Behavior current_behavior{};    /* 最新 behavior 指令 */
     volatile int has_behavior{0};
 
@@ -2175,30 +2175,36 @@ protected:
                  *   变道 COMPLETED 后 ego 可能还未到新车道中心（如 y=-3.5），
                  *   若 target_lane_offset=0（道路中心），Frenet 会保持当前 y 不动，
                  *   ego 卡在两车道之间。改为跟踪最近车道中心，让 ego 继续归位。 */
+                const bool own_side_only = !g.road_oneway;
+                const double side_offset = planning_coord::lane_group_side_offset(
+                    n_lanes, lane_w, g.road_oneway != 0);
                 if (g.has_behavior && g.current_behavior.target_lane_idx >= 0 &&
                     g.current_behavior.target_lane_idx < n_lanes &&
                     (g.current_behavior.command == BEH_LEFT_CHANGE || g.current_behavior.command == BEH_RIGHT_CHANGE)) {
-                    g.target_lane_offset = lane_center_offset(g.current_behavior.target_lane_idx, n_lanes, lane_w, g.road_oneway);
+                    /* 显式变道：跟行为目标，并把锁存写成该车道。
+                     * 回到巡航后从这里接着滞回，不会在分界上被最近车道立刻拽回去。 */
+                    g.committed_lane_idx = g.current_behavior.target_lane_idx;
+                    g.target_lane_offset = lane_center_offset(
+                        g.committed_lane_idx, n_lanes, lane_w, g.road_oneway);
                 } else {
-                    /* D2-06: 优先消费权威 localization/lane_match。
-                     * 若 lane_match 有效且新鲜（500ms 内，且偏移在合理车道宽内）：
-                     *   当前车道中心相对参考线的横向偏移即为 ego_lane_d - llt_offset
-                     * 否则优雅回退到 nearest_lane 启发式计算（防启动/无匹配时震荡）。 */
+                    /* 巡航/跟车：候选车道来自 lane_match 中心，缺匹配时用 nearest_lane。
+                     * 候选再经 hold_lane_index。贴在分界上时最近车道每帧翻转，
+                     * 直接把 target 锁过去会让横向参考阶跃一个车道宽（实测 20:49
+                     * 一分钟 96 次变号）。输出用车道网格中心，避免 llt_offset≈0
+                     * 时参考跟着自车走到分界线上。 */
                     const uint64_t now_us = clock_now_us();
                     const bool lane_match_fresh = g.lane_match.valid && (g.lane_match.last_us != 0) &&
                                                   (now_us - g.lane_match.last_us < 500000ULL) &&
                                                   (fabs(g.lane_match.llt_offset) < lane_w * 1.5);
-                    if (lane_match_fresh) {
-                        g.target_lane_offset = ego_lane_d - g.lane_match.llt_offset;
-                    } else {
-                        /* 巡航/跟车回退：计算 ego 当前最近车道，目标其中心。 */
-                        const bool own_side_only = !g.road_oneway;
-                        const double side_offset = planning_coord::lane_group_side_offset(
-                            n_lanes, lane_w, g.road_oneway != 0);
-                        int cur_lane = planning_coord::nearest_lane(
-                            ego_lane_d, n_lanes, lane_w, own_side_only, side_offset);
-                        g.target_lane_offset = lane_center_offset(cur_lane, n_lanes, lane_w, g.road_oneway);
-                    }
+                    const double cand_d = lane_match_fresh
+                        ? (ego_lane_d - g.lane_match.llt_offset) : ego_lane_d;
+                    const int cand_lane = planning_coord::nearest_lane(
+                        cand_d, n_lanes, lane_w, own_side_only, side_offset);
+                    g.committed_lane_idx = planning_coord::hold_lane_index(
+                        ego_lane_d, cand_lane, g.committed_lane_idx,
+                        n_lanes, lane_w, side_offset);
+                    g.target_lane_offset = lane_center_offset(
+                        g.committed_lane_idx, n_lanes, lane_w, g.road_oneway);
                 }
                 if (g.plan_count % 200 == 0) {
                     LOG_WARN("planning", "[DBG_LC] pc=%d has_beh=%d cmd=%d tgt_lane=%d n_lanes=%d offset=%.2f ego_y=%.2f",
@@ -3139,7 +3145,7 @@ static int planning_init(MessageBus* bus, Transport* transport,
     memset(&g.current_behavior, 0, sizeof(g.current_behavior));
     g.has_behavior = 0;
     g.overtake_state = 0;
-    g.committed_lane_idx = 0;
+    g.committed_lane_idx = -1;
     g.target_lane_offset = 0.0;
     g.lane_match = {};
     g.lane_match.lane_width = 3.5;
