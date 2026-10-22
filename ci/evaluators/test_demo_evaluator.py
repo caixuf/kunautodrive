@@ -1190,6 +1190,38 @@ class LateralTargetChatterTest(unittest.TestCase):
         self.assertEqual(out["verdict"], "ok", out)
         self.assertEqual(out["jumps"], 0)
 
+    def test_missing_timestamp_is_insufficient_not_pass(self):
+        """缺时间戳 → span=0 → 不得判 ok（否则是永远绿的假门禁）。
+
+        实测踩过：long_run_lane_keep 采样漏记时间戳，rate 恒 0，任何数据都
+        返回 ok。这条用例锁住"无法判定 ≠ 通过"。
+        """
+        evaluator = load_evaluator()
+        # 完全没有 t_demo 字段
+        no_ts = [{"planning_target_offset": (-5.25 if i % 2 else -1.75),
+                  "maneuver_active": False, "speed": 20.0, "lane_width": 3.5}
+                 for i in range(90)]
+        out = evaluator.lateral_target_chatter(no_ts)
+        self.assertEqual(out["verdict"], "insufficient_data", out)
+        # 时间戳全相同（span=0）同样不能判 ok
+        same_ts = [{"t_demo": 0.0,
+                    "planning_target_offset": (-5.25 if i % 2 else -1.75),
+                    "maneuver_active": False, "speed": 20.0, "lane_width": 3.5}
+                   for i in range(90)]
+        self.assertEqual(evaluator.lateral_target_chatter(same_ts)["verdict"],
+                         "insufficient_data")
+
+    def test_fault_still_fails_with_timestamps(self):
+        """加了时间戳防护后，真故障仍必须 FAIL（防护不得把门禁挡死）。"""
+        evaluator = load_evaluator()
+        series = [{"t_demo": i * 0.5,
+                   "planning_target_offset": (-5.25 if i % 2 else -1.75),
+                   "maneuver_active": False, "speed": 20.0, "lane_width": 3.5}
+                  for i in range(90)]
+        out = evaluator.lateral_target_chatter(series)
+        self.assertEqual(out["verdict"], "fail", out)
+        self.assertGreater(out["span_s"], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

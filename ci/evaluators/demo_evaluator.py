@@ -1960,8 +1960,15 @@ def lateral_target_chatter(series: list[dict]) -> dict:
                     - float(prev["planning_target_offset"]))
         if delta > 0.5 * lane_w:
             jumps.append(delta)
-    rate = (len(jumps) / span) if span > 0.0 else 0.0
     amp = statistics.median(jumps) if jumps else 0.0
+    # span <= 0 说明样本没有可用时间戳 —— 此时 rate 无意义，**不能**据此判 ok。
+    # 实测踩过：long_run_lane_keep 采样漏记时间戳 → span=0 → rate=0 →
+    # 门禁对任何数据都返回 ok（永远绿的假门禁）。没有时间基准就明确报
+    # insufficient_data，让调用方知道"这条没判"，而不是"A 这条通过了"。
+    if span <= 0.0:
+        out.update(span_s=0.0, jumps=len(jumps), amp_median=amp)
+        return out
+    rate = len(jumps) / span
     out.update(span_s=span, jumps=len(jumps), rate=rate, amp_median=amp)
     if rate >= TARGET_CHATTER_RATE_FAIL and amp >= TARGET_CHATTER_AMP_FAIL:
         out["verdict"] = "fail"

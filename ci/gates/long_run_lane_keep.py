@@ -119,13 +119,22 @@ def _run_demo(duration: int, interval: float) -> list[dict]:
     started = time.monotonic()
     deadline = started + duration + 150.0   # 启动/收尾余量（长跑 wait budget 40s）
     first_seen = False
+    t_start = time.monotonic()
     try:
         while proc.poll() is None and time.monotonic() < deadline:
             try:
                 with topo_path.open(encoding="utf-8") as fh:
                     data = json.load(fh)
                 if isinstance(data, dict):
-                    samples.append(data)
+                    # 采样时刻必须随样本记录：Rule5（横向目标跳变）要用它算
+                    # 次/秒。漏记时 span=0 → rate 恒为 0 → 门禁永远绿
+                    # （实测踩过一次，见 _lateral_chatter 的 span 断言）。
+                    # 用 monitor 自带的 timestamp（仿真/墙钟均可）优先，
+                    # 缺失才回退本进程单调钟相对时间。
+                    ts = data.get("timestamp")
+                    if not isinstance(ts, (int, float)):
+                        ts = time.monotonic() - t_start
+                    samples.append({"t_demo": float(ts), "metrics": data.get("metrics", {})})
                     first_seen = True
             except (FileNotFoundError, json.JSONDecodeError, OSError):
                 pass
@@ -223,8 +232,11 @@ def run(duration: int, interval: float) -> tuple[list[str], dict]:
     failures: list[str] = []
 
     # Rule 5 判据复用 demo_evaluator 的纯函数（同口径，无第二份实现）。
-    # 长跑是这类"目标持续阶跃"故障最该显形的场合：短跑里压线判据可能因为
-    # 车恰好停在车道线上而全绿（2026-10-22 超车摇摆即如此）。
+    # 长跑是这类"目标持续阶跃"故障最该显形的场合。
+    #
+    # ⚠ 无法判定 ≠ 通过：insufficient_data（样本不足 / 缺时间戳 / 目标字段
+    # 全程缺失）必须报出来，不能让它静默变成 PASS —— 那等于门禁永远绿。
+    # 实测踩过：采样漏记时间戳时 span=0 → rate=0 → 对任何数据都 ok。
     chatter = _lateral_chatter(samples)
     st["target_chatter"] = chatter
 
@@ -258,6 +270,12 @@ def run(duration: int, interval: float) -> tuple[list[str], dict]:
             f"阶跃（{chatter['jumps']} 次 > 0.5×车道宽 / {chatter['span_s']:.0f}s "
             f"= {chatter['rate']:.2f}/s，幅度中位 {chatter['amp_median']:.2f}m）"
             f"—— 车会在两车道中心之间摇摆")
+    elif chatter["verdict"] == "insufficient_data":
+        failures.append(
+            f"Rule5 无法判定（不等于通过）：横向目标跳变判据缺样本 —— "
+            f"frames={chatter['frames']}, span_s={chatter['span_s']:.1f}, "
+            f"jumps={chatter['jumps']}。目标字段缺失/采样无时间戳都会走到这里，"
+            f"修好采样再看，别把这条当 PASS")
     return failures, st
 
 
