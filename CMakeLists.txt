@@ -395,8 +395,12 @@ else()
     # 缺 Eigen 时**直接构建失败**，不再静默退化（L3-P0③）。
     # 旧行为：planning_node 退化为 lane-keep-only，ego 永不变道/超车，但构建成功、
     # CI 绿 —— 于是"换台机器忘了装 libeigen3-dev"表现为"算法变差"而非"环境坏了"，
-    # 排查方向被彻底带偏。CI 三个 job 都已 apt install libeigen3-dev（ci.yml:278/
-    # 312/412），故这里 FATAL_ERROR 不会误伤正常 CI。
+    # 排查方向被彻底带偏。
+    # ⚠️ 不写具体行号：这里原先写死「ci.yml:278/312/412」，随 ci.yml 增删行而腐烂，
+    # 且当时 build-release/build-asan/viz 三个 job 其实**没装** libeigen3-dev，只能
+    # 联网下载 Eigen —— 网络一抖三个 job 齐红（2026-10-22 实测，已补齐 apt 包）。
+    # 判据改为可 grep 的不变量：每个会跑 `cmake -S . -B` 的 Linux job，
+    # 其 apt install 行必须含 libeigen3-dev。
     message(FATAL_ERROR
         "Eigen3 not found — refusing to build. The Frenet planner (planning_node) "
         "requires Eigen; without it the ego silently degrades to lane-keep-only and "

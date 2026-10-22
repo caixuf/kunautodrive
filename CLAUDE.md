@@ -38,6 +38,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | plugin-symbol-gate | `python3 ci/gates/plugin_symbol_check.py` | 插件 .so 未解析的项目符号（launcher `dlopen` 即失败） |
 | sensor-wiring-gate | `python3 ci/gates/sensor_wiring_check.py` | sensor 模式下 `lidar_mode`/两处 `lidar_max_range_m` 不一致（静默丢点） |
 | zombie-ban-gate | `python3 ci/gates/zombie_ban_check.py` | 退役 Python 仪表盘入口回潮 |
+| ci-eigen-gate | `python3 ci/gates/ci_eigen_check.py` | 会跑 `cmake -S` 的 CI job 漏装 `libeigen3-dev` → configure 退到联网 git clone Eigen，网络一抖整片红（2026-10-22 三个 job 齐红）；豁免只认显式 `-DFLOWENGINE_ALLOW_NO_EIGEN=ON` |
 | book-guard-gate | `python3 ci/gates/book_guard.py` | `docs/book/` 掉回"按源码逐条重建"（行数上限 / 行号密度 / 突变） |
 | behavior-fsm-gate | `python3 ci/gates/behavior_fsm_check.py` | `behavior_planner` 转移表死状态 / 死事件 / 变道缺超时回退 |
 | long-run-lane-keep | `python3 ci/gates/long_run_lane_keep.py --duration 600` | 10min demo.sh soak：巡航压线 / 车心越线 / **横向目标跳变（Rule5：planning target_lane_offset 在车道中心间阶跃）**（长跑才显形的漂移退化；nightly，过渡期 continue-on-error） |
@@ -300,7 +301,7 @@ python3 tools/trace_incident.py                     # 事故逐层追溯（碰�
 门禁有效性由 liveness gate（死信号 FAIL）+ require（无法判定≠通过）+ test_evaluator_gate.py（门禁自测）兜底——**门禁抓不住已知故障 = 它的 PASS 不可信**。
 
 **frontend 改动另走 `npm run vis:check:all`（6 个门禁），C 链门禁覆盖不到它。**
-CI 的 job 全量在 `.github/workflows/ci.yml`：9 条静态 gate（见上文"低维护治理"表）+
+CI 的 job 全量在 `.github/workflows/ci.yml`：静态 gate（见上文"低维护治理"表，勿在此写死条数——已漂移过一次）+
 `build-release` / `build-asan`（ctest）+ `build-windows-mingw`（交叉编译）+ `integration-test`
 （起真实管线，内含 plugin symbol gate）+ `evaluator`（45s demo 回归）+ `viz` / `vis-js-tests`
 （前端 6 门禁）+ `nightly`（Debug/UBSAN/Coverage + 长稳 + 场景回归，仅 schedule/dispatch 触发）。本地复现任一 gate 直接抄它的 `run:` 行。

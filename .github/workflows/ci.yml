@@ -117,6 +117,18 @@ jobs:
       - name: Reject retired Python dashboard entrypoint / orphan pyc
         run: python3 ci/gates/zombie_ban_check.py
 
+  # ── CI Eigen wiring gate ───────────────────────────────────
+  # 凡会跑 `cmake -S` 的 job 必须装 libeigen3-dev，否则 configure 退到联网
+  # git clone Eigen，网络一抖整片红（2026-10-22：build-release/build-asan/viz
+  # 三个 job 齐红，同一提交重跑又转绿 —— 红绿取决于 runner 网络而非代码）。
+  # 豁免只认显式 -DFLOWENGINE_ALLOW_NO_EIGEN=ON。
+  ci-eigen-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce libeigen3-dev in every CMake-configure job
+        run: python3 ci/gates/ci_eigen_check.py
+
   # ── behavior FSM gate (L3-P0) ──────────────────────────────
   # 模块职责铁律：「状态转移表缺行」此前只写在文档里、无门禁。本 gate 解析
   # behavior_planner_node.cpp 的 BEH_TRANSITIONS[]，断言无死状态 / 无死事件 /
@@ -198,7 +210,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq libcjson-dev python3 libsqlite3-dev
+          sudo apt-get install -y -qq libcjson-dev libeigen3-dev python3 libsqlite3-dev
       - name: Configure (Release)
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - name: Build
@@ -214,7 +226,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libcjson-dev python3 libsqlite3-dev
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libcjson-dev libeigen3-dev python3 libsqlite3-dev
       - name: Configure (ASAN)
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DENABLE_ASAN=ON
       - name: Build
@@ -256,7 +268,7 @@ jobs:
       - name: Install mingw-w64 toolchain
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 ninja-build python3
+          sudo apt-get install -y -qq gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 ninja-build python3 libeigen3-dev
       - name: Configure (mingw-w64 cross)
         run: |
           cmake -S . -B build-mingw -G Ninja \
@@ -379,7 +391,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq libcjson-dev
+          sudo apt-get install -y -qq libcjson-dev libeigen3-dev
           python -m pip install --upgrade pip -q
           pip install -q -r ci/evaluators/requirements-dev.txt
       - name: Configure (Release)
