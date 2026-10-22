@@ -103,7 +103,13 @@ body[data-workspace="perf"] .ws-observe-analyze{display:none!important}
 .card.collapsed .card-header .toggle{transform:rotate(-90deg)}
 .card.alert{border-color:#f85149;box-shadow:0 0 8px #f8514933}
 .card-body{padding:14px 18px;display:block}
-#topo{width:100%;height:420px;position:relative;overflow:hidden;
+/* 拓扑图容器高度：19 个节点、节点球最大半径 27px（最小间距 54px）时，
+ * 力导向自然高度约 340px，再留 ~80px 给球与下方名字标签。
+ * 取 clamp(200px,26vh,400px) —— 拓扑是"网络总览"的次要视图，纵向空间优先
+ * 让给 3D 场景（主视图）：1366×768 下 3D 可视高度 287px→327px，
+ * 1440×900 下 407px→425px。缩放带来的标签变小由 _fitTopoToContainer 的
+ * 字号补偿抵消（渲染后恒 9px）。 */
+#topo{width:100%;height:clamp(200px,26vh,400px);position:relative;overflow:hidden;
   background:
     radial-gradient(ellipse at 50% 30%, rgba(88,166,255,.10), transparent 55%),
     radial-gradient(ellipse at 82% 82%, rgba(188,140,255,.09), transparent 50%),
@@ -118,17 +124,31 @@ body[data-workspace="perf"] .ws-observe-analyze{display:none!important}
   mask-image:radial-gradient(ellipse at 50% 40%, #000 35%, transparent 78%)}
 #topo svg{width:100%;height:100%;position:relative;z-index:1}
 #frames,#process-topics{max-height:280px;overflow-y:auto;font:11px/1.7 'JetBrains Mono',monospace}
-#charts{display:flex;gap:12px}
-.chart-box{flex:1;min-width:280px;height:240px;background:#090c10;border:1px solid#1a1f2b;border-radius:12px;overflow:hidden;position:relative;cursor:crosshair}
+/* #charts 的 display/gap/padding 写在 index.html 的 inline style 上，
+ * 这里只补它没声明的 flex-wrap：3 张图各 min-width:280px + gap 需要 856px，
+ * 1024 宽视口下主区只剩 ~646px，nowrap 会让第三张图直接溢出到视口外
+ * （实测 #ch-frames right=1176 > vw=1024，被窗口裁掉一半）。
+ * 允许换行后窄屏自动变 2+1 两行。 */
+#charts{display:flex;gap:12px;flex-wrap:wrap}
+.chart-box{flex:1 1 280px;min-width:0;height:240px;background:#090c10;border:1px solid#1a1f2b;border-radius:12px;overflow:hidden;position:relative;cursor:crosshair}
 .chart-box canvas{width:100%;height:100%;display:block}
 .chart-tooltip{position:absolute;background:#1c2128cc;backdrop-filter:blur(4px);color:#c9d1d9;padding:4px 10px;border-radius:4px;font:11px 'JetBrains Mono',monospace;pointer-events:none;white-space:nowrap;border:1px solid#30363d;display:none;z-index:20}
-/* 3D 场景卡片：固定 16:9 aspect ratio + 显式高度，避免父级
- * (#main 有 overflow-y:auto) 计算高度时把 card 挤压出"上方黑色未渲染区"。
- * aspect-ratio 让浏览器自动算 height，无需 JS 介入。
- * min-height 480 保证即使在很窄的视口下 3D 区域仍可看。 */
-#scene3d-card{flex-shrink:0;display:flex;flex-direction:column;min-height:520px}
-#scene3d-card .card-body{flex:1;min-height:480px;padding:0;display:flex;overflow:hidden}
-#scene3d{flex:1;min-height:480px;background:#5588aa;position:relative;aspect-ratio:16/9;width:100%}
+/* 3D 场景卡片：吃掉「工作区导航 + 拓扑图」之后的剩余视口高度。
+ * 旧实现把 aspect-ratio:16/9 挂在 #scene3d 上，高度 = 宽/1.7778：
+ * 2560 宽视口下算出 1250px 高，卡片总高 1316px 远超一屏（1440），
+ * 驾驶 HUD（绝对定位在场景底部）整条掉到首屏之外——用户"看不到车在干什么"。
+ * 现改为 flex 填充：#main 是定高（100vh）的 flex 列，让场景卡 flex:1 吸收
+ * 剩余空间，HUD 永远贴着场景底边出现在首屏内。
+ *   - min-height 兜底：视口很矮时仍保留可用的 3D 区域，超出部分由 #main 滚动
+ *   - 各工作区（分析/运维/性能）里该卡 display:none，不受影响 */
+#scene3d-card{flex:1 1 auto;display:flex;flex-direction:column;min-height:320px}
+#scene3d-card .card-body{flex:1 1 auto;min-height:240px;padding:0;display:flex;overflow:hidden}
+#scene3d{flex:1 1 auto;min-height:200px;background:#5588aa;position:relative;width:100%}
+/* ⚠️ 折叠态必须显式覆盖，否则 #scene3d-card .card-body 的 ID 特异性(1,1,0)
+ * 压过 .card.collapsed .card-body(0,2,0)，点标题加 collapsed 类后 body 仍显示
+ * ——实测点击「场景视图」标题无法折叠。这里用 (1,2,0) 盖回去。 */
+#scene3d-card.collapsed .card-body{display:none}
+#scene3d-card.collapsed{flex:0 0 auto;min-height:0}
 /* canvas 显式 width/height: 100% + display:block，避免 inline canvas
  * 底部 4px 空隙和 css 高度与 setSize 物理 height 不一致 */
 #scene3d canvas{display:block;width:100%!important;height:100%!important}
@@ -160,9 +180,15 @@ body[data-workspace="perf"] .ws-observe-analyze{display:none!important}
 #lane-diag-hud .ld-c-match{color:#3fb950}
 #lane-diag-hud .ld-c-det{color:#ff9f1c}
 /* ── 事故与 EDR 事件时间轴（Roadmap P3）── */
-#incident-timeline{position:absolute;left:50%;bottom:104px;transform:translateX(-50%);z-index:28;width:min(90%,760px);padding:8px 14px;border-radius:12px;background:linear-gradient(180deg,#0d1524f2,#080d17f7);border:1px solid #30363d;box-shadow:0 8px 30px rgba(0,0,0,0.65);backdrop-filter:blur(10px);pointer-events:auto;font:11px/1.45 system-ui,sans-serif;color:#c9d1d9;transition:all .25s ease}
+/* 事故时间轴叠在 3D 场景里，必须让位给底部的驾驶态势 HUD。
+ * 旧实现写死 `bottom:104px`，并想用 `#drive-hud.hidden ~ #incident-timeline`
+ * 在 HUD 关闭时下移——但那条规则**永远不会命中**：`~` 只选「后面的兄弟」，
+ * 而 DOM 顺序是 …#incident-timeline … #drive-hud…，时间轴在 HUD 之前。
+ * 结果 HUD 可见时两者重叠（实测 721×29px 压住 HUD 顶部）。那条死规则已删。
+ * 现改为读取 JS 实测的 HUD 高度变量 --dh-h（HUD 关闭时由 _syncHudHeightVar
+ * 置 0），时间轴永远贴在 HUD 正上方。 */
+#incident-timeline{position:absolute;left:50%;bottom:calc(var(--dh-h,0px) + 22px);transform:translateX(-50%);z-index:28;width:min(90%,760px);padding:8px 14px;border-radius:12px;background:linear-gradient(180deg,#0d1524f2,#080d17f7);border:1px solid #30363d;box-shadow:0 8px 30px rgba(0,0,0,0.65);backdrop-filter:blur(10px);pointer-events:auto;font:11px/1.45 system-ui,sans-serif;color:#c9d1d9;transition:all .25s ease}
 #incident-timeline.has-incident{border-color:#f85149;box-shadow:0 8px 30px rgba(0,0,0,0.65),0 0 16px rgba(248,81,73,0.3)}
-#drive-hud.hidden ~ #incident-timeline{bottom:18px}
 #incident-track{position:relative;height:18px;background:#161b22;border-radius:6px;border:1px solid #21262d;margin:5px 0;cursor:pointer;overflow:hidden}
 #incident-progress{position:absolute;left:0;top:0;bottom:0;width:0%;background:rgba(88,166,255,0.22);border-radius:5px 0 0 5px}
 .incident-marker{position:absolute;top:1px;bottom:1px;transform:translateX(-50%);width:14px;height:14px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;cursor:pointer;z-index:2;box-shadow:0 1px 4px rgba(0,0,0,0.5);transition:transform .15s}
@@ -268,10 +294,23 @@ input:focus,select:focus{border-color:#58a6ff}
 .role-pubsub{background:#1f1440;color:#bc8cff;border:1px solid#3a1a6e}
 .role-unknown{background:#161b22;color:#484f58}
 .topic-full{color:#58a6ff;font-weight:500}.muted{color:#484f58}.mono{font-family:'JetBrains Mono',monospace}
-.metric-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.mini-stat{background:#0d1117;border-radius:8px;padding:12px 14px;text-align:center}
-.mini-stat .val{font-size:18px;font-weight:800;color:#58a6ff;line-height:1.2}
-.mini-stat .lbl{font-size:10px;color:#8b949e;margin-top:4px;letter-spacing:.2px}
+
+/* 话题/进程矩阵表格（app.js _ensureTable 生成 <table class="inc-table">）。
+ * 行内样式已给容器设 overflow-y:auto，但没管横向：1024 宽视口下
+ * 「进程 / 角色 / 话题 / 类型ID / 频率」5 列的最小内容宽 > 卡片可用宽，
+ * 实测卡片 scrollWidth 866 > clientWidth 686，表格右侧被卡片的
+ * overflow:hidden 直接裁掉（类型ID/频率两列看不见）。
+ * 这里给容器补横向滚动 + 给单元格禁用折行，让超宽内容可横向拖看。 */
+#topic-stats,#process-topics,#frames{overflow-x:auto}
+.inc-table{min-width:100%}
+.inc-table th,.inc-table td{white-space:nowrap;padding:3px 6px}
+/* minmax(0,1fr) 而不是 1fr：`1fr` 的最小尺寸是 auto（= 内容 min-content），
+ * 计数到千万级时 "10,788,122" 的 min-content 比可用列宽还宽，网格直接
+ * 撑破卡片（实测 .card-body scrollWidth 261 > clientWidth 249）。 */
+.metric-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}
+.mini-stat{background:#0d1117;border-radius:8px;padding:12px 14px;text-align:center;min-width:0}
+.mini-stat .val{font-size:18px;font-weight:800;color:#58a6ff;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mini-stat .lbl{font-size:10px;color:#8b949e;margin-top:4px;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .form-field label{display:block;font-size:11px;color:#8b949e;margin-bottom:4px;letter-spacing:.2px}
 .log-box{background:#090c10;border:1px solid#1a1f2b;border-radius:8px;padding:12px;min-height:160px;max-height:260px;overflow:auto;font:11px/1.7 'JetBrains Mono',monospace;color:#8b949e;white-space:pre-wrap}
@@ -333,11 +372,13 @@ input:focus,select:focus{border-color:#58a6ff}
   .row{flex-direction:column!important}
   .row>div{min-width:auto!important}
   .ops-grid{grid-template-columns:1fr}
-  #charts{flex-direction:column}
-  .chart-box{min-width:auto;height:180px}
+  #charts{flex-direction:column;flex-wrap:nowrap}
+  .chart-box{flex:1 1 auto;min-width:0;height:180px}
   #topo{height:300px}
   #detail-panel{width:100vw;right:-100vw}
-  /* Keep scene canvases within the visible viewport so the car is never cropped */
+  /* Keep scene canvases within the visible viewport so the car is never cropped.
+     移动端 #main 也变矮，这里只放宽最小高度让 flex 填充生效。 */
+  #scene3d-card{min-height:280px}
   #scene3d{min-height:220px}
 }
 @media (max-width:500px){

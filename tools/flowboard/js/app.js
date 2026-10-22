@@ -823,6 +823,133 @@ function switchWorkspace(mode) {
 // ═══════════════════════════════════════════════════════════════
 var topoLinks = [], nodePositions = {};
 var _topoSim = null;
+var _topoZoom = null;          // 当前 d3.zoom 行为（resize 后重新 fit 用）
+var _topoZoomG = null;         // 被 zoom 变换的那个 <g>
+var _topoUserZoomed = false;    // 用户手动缩放/平移过就不再自动 fit
+var _topoAutoFit = false;       // 程序化 set transform 时的屏蔽标志
+var _topoResizeObs = null;      // 监听 #topo 容器尺寸变化
+var _topoFitTimer = null;       // 力导向收敛后精修 fit 的定时器
+var _topoBoundsForce = null;    // 椭圆边界力（容器 resize 后重设半径）
+
+/* 让拓扑图不越出容器的椭圆软边界力（只拉回，不外推）。
+ * 背景：charge/link/collide 各向同性，19 个节点自然团成 ~400×450 的圆形，
+ * 而 #topo 容器是宽扁矩形。越界的节点按比例拉回后，图会被压成更贴合的
+ * 椭圆（实测自然高度 448 → 373），后续 _fitTopoToContainer 的缩放比也更大。
+ * 目标椭圆由容器尺寸与节点半径/标签余量算出，容器 resize 时重设。 */
+function _forceEllipseBounds(cx, cy, rx, ry, strength) {
+  var nodes = [];
+  function force(alpha) {
+    var k = strength * alpha;
+    for (var i = 0; i < nodes.length; i++) {
+      var d = nodes[i];
+      if (d.fx != null) continue;           // 用户拖住的节点不动
+      var dx = d.x - cx, dy = d.y - cy;
+      var nx = dx / rx, ny = dy / ry;
+      var r = Math.sqrt(nx * nx + ny * ny);
+      if (r > 1) {
+        var f = (r - 1) / r * k;
+        d.x -= dx * f;
+        d.y -= dy * f;
+      }
+    }
+  }
+  force.initialize = function(_) { nodes = _; };
+  force.radius = function(_rx, _ry) { rx = _rx; ry = _ry; return force; };
+  force.center = function(_cx, _cy) { cx = _cx; cy = _cy; return force; };
+  return force;
+}
+
+/* 图形四周留白：横向给节点半径 + 标签半宽，纵向给光晕与下方 30px 处的名字标签 */
+var _TOPO_PAD_X = 52, _TOPO_PAD_TOP = 34, _TOPO_PAD_BOTTOM = 46;
+function _topoBoundsRadii(cw, ch) {
+  return {
+    rx: Math.max(90, (cw - _TOPO_PAD_X * 2) / 2),
+    ry: Math.max(60, (ch - _TOPO_PAD_TOP - _TOPO_PAD_BOTTOM) / 2)
+  };
+}
+
+/* 把拓扑图 fit 进容器：以节点实际包围盒为准，等比缩放并居中。
+ * 这是兜底（力导向未收敛 / 用户拖拽后仍越界时把图摆正），正常情况下
+ * 椭圆边界力已让图恰好落在容器内，这里算出的 k 会接近 1。 */
+function _fitTopoToContainer(animate) {
+  if (!_topoZoom || !_topoZoomG) return;
+  var el = document.getElementById('topo');
+  if (!el) return;
+  var cw = el.clientWidth, ch = el.clientHeight;
+  if (cw <= 0 || ch <= 0) return;
+  var nodes = _topoSim ? _topoSim.nodes() : [];
+  if (!nodes.length) return;
+
+  var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  nodes.forEach(function(n) {
+    if (!isFinite(n.x) || !isFinite(n.y)) return;
+    minX = Math.min(minX, n.x); maxX = Math.max(maxX, n.x);
+    minY = Math.min(minY, n.y); maxY = Math.max(maxY, n.y);
+  });
+  if (!isFinite(minX) || !isFinite(maxX)) return;
+  var bw = Math.max(1, (maxX - minX) + _TOPO_PAD_X * 2);
+  var bh = Math.max(1, (maxY - minY) + _TOPO_PAD_TOP + _TOPO_PAD_BOTTOM);
+  var k = Math.min(cw / bw, ch / bh);
+  // 不放大：k>1 时图本来就能完整显示，放大反而糊
+  k = Math.min(k, 1);
+  var tx = cw / 2 - k * (minX + maxX) / 2;
+  var ty = ch / 2 - k * (minY + maxY) / 2;
+  var t = d3.zoomIdentity.translate(tx, ty).scale(k);
+
+  _topoAutoFit = true;
+  var svg = d3.select('#topo svg');
+  /* 字号补偿：fit 的缩放 k 会把 SVG 里的文字一起缩小（k=0.53 时 9px 标签
+   * 只剩 4.8px 不可读）。这里把 SVG 内的字号按 1/k 放大，使**渲染后**的
+   * 字高恒定 —— 节点名 9px、链路名 8px，与 k 无关。
+   * 标签 dy 保持 30（节点坐标系），它会随 k 缩放，正好让下边距预算
+   * （_TOPO_PAD_BOTTOM）在 k≥0.56 时够用。 */
+  if (k > 0.01) {
+    svg.selectAll('.topo-node-label').attr('font-size', (9 / k).toFixed(2) + 'px');
+    svg.selectAll('.link-label').attr('font-size', (8 / k).toFixed(2) + 'px');
+  }
+  if (animate) {
+    // d3 过渡被新过渡取代时触发 interrupt 而不是 end，只挂 end 会让
+    // _topoAutoFit 永久卡在 true（用户后续缩放都不再被识别）——两个都挂。
+    var _clear = function() { _topoAutoFit = false; };
+    svg.transition().duration(300).call(_topoZoom.transform, t)
+      .on('end', _clear).on('interrupt', _clear);
+  } else {
+    svg.call(_topoZoom.transform, t);
+    _topoAutoFit = false;
+  }
+  _topoUserZoomed = false;
+}
+
+/* 容器尺寸变化 → 重新 fit。ResizeObserver 比 window.resize 准：
+ * 切工作区（观察/分析/运维/性能）时 #topo 会被 display:none→block，
+ * 宽度从 0 变回实际值，window.resize 根本不会触发。 */
+function _initTopoResizeObserver() {
+  if (typeof ResizeObserver === 'undefined') return;
+  var el = document.getElementById('topo');
+  if (!el) return;
+  if (_topoResizeObs) { _topoResizeObs.disconnect(); _topoResizeObs = null; }
+  var _t = null;
+  _topoResizeObs = new ResizeObserver(function() {
+    clearTimeout(_t);
+    _t = setTimeout(function() {
+      if (_topoUserZoomed) return;  // 尊重用户手动视图
+      // 容器形状变了 → 椭圆边界跟着改（只改目标，不 restart）
+      if (_topoSim && _topoBoundsForce && _topoBoundsForce.radius) {
+        var cw = el.clientWidth, ch = el.clientHeight;
+        if (cw > 0 && ch > 0) {
+          var r = _topoBoundsRadii(cw, ch);
+          _topoBoundsForce.radius(r.rx, r.ry);
+          _topoBoundsForce.center(cw / 2, ch / 2);
+        }
+      }
+      /* 这里刻意**不** restart 仿真：restart 会让节点在 fit 之后继续漂移，
+       * 实测 resize 后 1.6s 内出现 6~29px 越界（旧坐标 + 新变换不匹配）。
+       * 节点位置本来就还在，直接按新容器 fit 即可，结果立即可见且稳定。 */
+      _fitTopoToContainer(true);
+    }, 120);
+  });
+  _topoResizeObs.observe(el);
+}
 
 function initTopo() {
   // D3 topology is fully rebuilt on each data change by updateTopo().
@@ -833,6 +960,8 @@ function initTopo() {
   // Show the placeholder message until then.
   var msg = document.getElementById('msg');
   if (msg) msg.style.display = 'block';
+  // 容器尺寸变化（切工作区 / 拖窗口 / 分屏）时重新把图摆正
+  _initTopoResizeObserver();
 }
 
 function updateTopo(data) {
@@ -841,11 +970,19 @@ function updateTopo(data) {
   var prevPos = nodePositions;
   nodePositions = {};
 
+  /* 初始坐标必须跟着容器尺寸走。
+   * 旧实现硬编码 100..700 / 80..300 的绝对随机种子，而容器宽度随视口从
+   * 686px 到 2222px 变化——在 1920/2560 宽下种子只占容器左侧 1/3，
+   * 力导向虽然会把图拉开，但 `.forceX(cx).strength(0.03)` 太弱拉不回中心，
+   * 实测 1920 宽时图中心比容器中心偏左 312px、2560 宽偏左 632px。
+   * 现改为按容器宽高的比例撒种，初次布局天然居中。 */
+  var _seedW = Math.max(320, (document.getElementById('topo') || {}).clientWidth || 800);
+  var _seedH = Math.max(200, (document.getElementById('topo') || {}).clientHeight || 400);
   var ns = (data.nodes||[]).map(function(n, i) {
     var nm = n.name || ('_'+i);
     var prev = prevPos[nm];
-    var x = prev ? prev.x : 100 + Math.random()*600;
-    var y = prev ? prev.y : 80 + Math.random()*220;
+    var x = prev ? prev.x : _seedW * (0.28 + Math.random()*0.44);
+    var y = prev ? prev.y : _seedH * (0.22 + Math.random()*0.56);
     nodePositions[nm] = {x:x, y:y};
     return {
       name: n.name, id: i, x: x, y: y, alive: n.alive, caps: n.caps,
@@ -997,9 +1134,12 @@ function updateTopo(data) {
     pairIdx[k] = l._idx + 1;
   });
 
-  svg.call(d3.zoom().scaleExtent([0.15,4]).on('zoom', function(e) {
+  svg.call(_topoZoom = d3.zoom().scaleExtent([0.15,4]).on('zoom', function(e) {
+    // 用户手动平移/缩放后不再自动 fit，避免抢操作（程序化 set 时用 _topoAutoFit 屏蔽）
+    if (!_topoAutoFit) _topoUserZoomed = true;
     g.attr('transform', e.transform);
   }));
+  _topoZoomG = g;
 
   // Links
   // 关键链路（cmd/plan/traj）叠加发光的"电光"底层 + 流动虚线层，突出数据流动
@@ -1083,6 +1223,7 @@ function updateTopo(data) {
     .text(function(d) { return d.name+' (PID '+(d.pid||'—')+')\n'+(d.description||'')+'\n'+(d.plugin||''); });
 
   nodeG.append('text')
+    .attr('class','topo-node-label')   // _fitTopoToContainer 按 1/k 补偿字号用
     .text(function(d) { return d.name; })
     .attr('text-anchor','middle').attr('dy',30)
     .attr('fill','#c9d1d9').attr('font-size','9px');
@@ -1114,6 +1255,8 @@ function updateTopo(data) {
   }
 
   // Force simulation
+  var _r0 = _topoBoundsRadii(cw, ch);
+  _topoBoundsForce = _forceEllipseBounds(cx, cy, _r0.rx, _r0.ry, 0.6);
   _topoSim = d3.forceSimulation(ns)
     .force('link', d3.forceLink(links).distance(160))
     .force('charge', d3.forceManyBody().strength(-200))
@@ -1121,6 +1264,8 @@ function updateTopo(data) {
     .force('x', d3.forceX(cx).strength(0.03))
     .force('y', d3.forceY(cy).strength(0.03))
     .force('collision', d3.forceCollide(50))
+    // 椭圆边界必须最后加：d3 按注册顺序施加力，边界力放在排斥力之后才能压住外扩
+    .force('bounds', _topoBoundsForce)
     .on('tick', function() {
       linkG.attr('d', function(d) {
         var sx = d.source.x, sy = d.source.y, tx = d.target.x, ty = d.target.y;
@@ -1169,12 +1314,23 @@ function updateTopo(data) {
         var u=1-pt;
         return u*u*sy + 2*u*pt*ccy + pt*pt*ty;
       });
+    })
+    /* 仿真收敛（alpha 衰减到 alphaMin）后再 fit 一次：700ms 那次只是首帧
+     * 摆正，节点在随后的冷却过程中还会移动（实测收敛后顶部又溢出 19px）。 */
+    .on('end', function() {
+      if (_topoUserZoomed) return;
+      _fitTopoToContainer(true);
     });
 
   _topoSim.alpha(1).restart();
-  setTimeout(function() {
-    svg.transition().duration(500).call(d3.zoom().transform, d3.zoomIdentity);
-  }, 100);
+  /* 旧的收尾是 `svg.transition().call(d3.zoom().transform, d3.zoomIdentity)`
+   * ——identity 只是把图复位到「未变换」，而节点坐标本来就在容器坐标系里
+   * 按旧容器的尺寸算出来的，复位不会让图居中。现改为力导向稳定后按
+   * 节点真实包围盒 fit 一次（含垂直方向，同时修掉上下各裁 14px）。 */
+  _topoUserZoomed = false;
+  _fitTopoToContainer(false);                                  // 立刻摆正（首帧就不歪）
+  clearTimeout(_topoFitTimer);
+  _topoFitTimer = setTimeout(function() { _fitTopoToContainer(true); }, 700);  // 力导向收敛后再精修
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1595,6 +1751,8 @@ function setDriveHud(on, opts) {
   var hud = document.getElementById('drive-hud');
   if (hud) hud.classList.toggle('hidden', !driveHudOn);
   if (driveHudOn) updateDriveHud(true);
+  // HUD 隐藏后 --dh-h 要归零，事故时间轴才能落回底部
+  _syncHudHeightVar();
   if (!opts || !opts.silent) toast(driveHudOn ? '驾驶态势 HUD：开' : '驾驶态势 HUD：关');
 }
 
@@ -1605,6 +1763,50 @@ function _dhChip(id, text, tone) {
   if (!el) return;
   el.textContent = text;
   el.className = 'dh-chip tone-' + (tone || 'idle');
+}
+
+/* HUD 根节点只切外观类（tone-xxx / tor-xxx），其它类（hidden / active）必须保留。
+ * 旧实现直接 `hud.className = frame`——整串替换会把 setDriveHud 加上的
+ * `hidden` 抹掉：用户按 I 关掉 HUD 后，只要数据刷新一次就自己又冒出来。
+ * 现只摘掉旧的 tone-/tor- 类再挂新的。 */
+function _applyHudTone(hud, frame) {
+  if (!hud) return;
+  Array.prototype.slice.call(hud.classList).forEach(function(c) {
+    if (/^(tone-|tor-)/.test(c)) hud.classList.remove(c);
+  });
+  String(frame || '').split(/\s+/).forEach(function(c) {
+    if (c) hud.classList.add(c);
+  });
+}
+
+/* 把 HUD 实测高度写进 CSS 变量 --dh-h，供 #incident-timeline 定位避让。
+ * HUD 是 flex 自适应宽度的，高度随 ODD 项/前车块换行变化（实测 105~119px），
+ * 写死 bottom 值必然错位。 */
+function _syncHudHeightVar() {
+  var hud = document.getElementById('drive-hud');
+  var host = document.getElementById('scene3d');
+  if (!host) return;
+  var h = 0;
+  if (hud && getComputedStyle(hud).display !== 'none') {
+    h = Math.round(hud.getBoundingClientRect().height) || 0;
+  }
+  if (host._dhH !== h) {
+    host._dhH = h;
+    host.style.setProperty('--dh-h', h + 'px');
+  }
+}
+
+/* 只靠 updateDriveHud 里"渲染完顺手测一次"会漏：实测 1920 宽下 HUD 真实
+ * 高 119px，而变量停在早先测到的 105px（内容/字体在测量之后才落定），
+ * 时间轴按 105 定位 → 与 HUD 顶部重叠 6px。ResizeObserver 是唯一能在
+ * HUD 盒子真正变化时被通知的原语，与谁改的内容无关。 */
+function _initHudHeightObserver() {
+  if (typeof ResizeObserver === 'undefined') return;
+  var hud = document.getElementById('drive-hud');
+  if (!hud || hud._dhObs) return;
+  hud._dhObs = new ResizeObserver(function() { _syncHudHeightVar(); });
+  hud._dhObs.observe(hud);
+  _syncHudHeightVar();
 }
 
 function _dhWidth(id, frac) {
@@ -1622,7 +1824,8 @@ function updateDriveHud(force) {
 
   var st = computeDrivingStatus(topoData && topoData.metrics);
   if (!st.hasData) {
-    hud.className = 'tone-idle';
+    _applyHudTone(hud, 'tone-idle');
+    _syncHudHeightVar();
     return;
   }
 
@@ -1720,7 +1923,8 @@ function updateDriveHud(force) {
   var frame = tones.indexOf('bad') >= 0 ? 'tone-bad' : (tones.indexOf('warn') >= 0 ? 'tone-warn' : 'tone-ok');
   if (st.tor && st.tor.state === 'TOR_REQUESTED') frame += ' tor-alert';
   else if (st.tor && st.tor.state === 'MRM') frame += ' tor-mrm';
-  hud.className = frame;
+  _applyHudTone(hud, frame);
+  _syncHudHeightVar();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2155,13 +2359,44 @@ function drawPerfChart(canvasId, data, color, title, unit, fixedMax) {
   ctx.fillText(latest.toFixed(1) + (unit || ''), W - pad.r, ly - 6);
 }
 
+/* 总线计数器紧凑格式：18px 粗体 + tabular-nums 下每字符约 11px，
+ * 侧栏 mini-stat 内容宽只有 ~74px（card 251 − 卡内 padding − 网格 gap），
+ * 只装得下 6~7 字符。"10,788,122"（10 字符 ≈ 104px）必然溢出把卡片撑破
+ * ——实测 .card-body scrollWidth 261 > clientWidth 249。
+ * 因此 ≥10 万起改用 K/M/B 紧凑写法（保留 2~3 位有效数字），
+ * 精确值放 title 悬浮显示。仪表盘要的是量级，不是逐位读数。 */
+function _fmtCount(n) {
+  n = Number(n) || 0;
+  var abs = Math.abs(n);
+  if (abs < 100000) return n.toLocaleString();
+  var units = [[1e9,'B'],[1e6,'M'],[1e3,'K']];
+  for (var i = 0; i < units.length; i++) {
+    var div = units[i][0], suf = units[i][1];
+    if (abs >= div) {
+      var v = n / div;
+      var digits = Math.abs(v) >= 100 ? 0 : (Math.abs(v) >= 10 ? 1 : 2);
+      return v.toFixed(digits) + suf;
+    }
+  }
+  return n.toLocaleString();
+}
+
+function _setCount(id, value) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = _fmtCount(value);
+  el.title = (Number(value) || 0).toLocaleString();
+}
+
 function updateMetrics() {
   var m = topoData.metrics || {}, b = m.bus || {}, l = m.latency || {};
-  document.getElementById('m-pub').textContent = (b.published||0).toLocaleString();
-  document.getElementById('m-del').textContent = (b.delivered||0).toLocaleString();
+  _setCount('m-pub', b.published);
+  _setCount('m-del', b.delivered);
   document.getElementById('m-drop').textContent = (b.dropped||0);
+  document.getElementById('m-drop').title = (b.dropped||0) + ' 条丢弃';
   document.getElementById('m-drop').style.color = (b.dropped||0) > 0 ? '#f85149' : '#3fb950';
   document.getElementById('m-lat').textContent = (l.avg_us||0);
+  document.getElementById('m-lat').title = (l.avg_us||0) + ' µs（平均）';
 
   // Alert: drop > 0 -> flash bus card
   var bc = document.getElementById('bus-card');
@@ -2960,6 +3195,9 @@ function initAll() {
 
   // 3. Initialize charts
   initCharts();
+
+  // 3b. HUD 高度 → CSS 变量（事故时间轴据此避让，见 _initHudHeightObserver）
+  _initHudHeightObserver();
 
   // 5. Restore saved UI state
   setTimeout(function() {
