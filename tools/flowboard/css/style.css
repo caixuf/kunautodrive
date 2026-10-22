@@ -377,15 +377,20 @@ input:focus,select:focus{border-color:#58a6ff}
   #topo{height:300px}
   #detail-panel{width:100vw;right:-100vw}
   /* Keep scene canvases within the visible viewport so the car is never cropped.
-     移动端 #main 也变矮，这里只放宽最小高度让 flex 填充生效。 */
-  #scene3d-card{min-height:280px}
-  #scene3d{min-height:220px}
+     窄屏（手机/竖屏平板）下 #main 变矮，桌面那条 flex 填充链拿不到高度，
+     会退化到 min-height。这里给足 3D 高度：旧实现靠 aspect-ratio + 480px
+     min-height 撑着，改成 flex 后若不显式抬高，手机上 3D 只剩 240px
+     （实测 390 宽），而 3D 恰是手机端的主内容。 */
+  #scene3d-card{min-height:380px}
+  #scene3d{min-height:320px}
 }
 @media (max-width:500px){
   #sidebar{padding:10px;gap:8px}
   .mini-stat .val{font-size:14px}
   .card-header h2{font-size:11px}
   button{padding:6px 12px;font-size:11px}
-  #scene3d{min-height:180px}
+  /* 不要在这里把 #scene3d 的 min-height 压到 180px：本块在 900px 块之后，
+   * 会盖掉上面给手机留的 320px（实测 390 宽时 3D 只剩 240px 高）。
+   * 手机上 3D 是主内容，保持 320px。 */
 }
 ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:#0d1117}::-webkit-scrollbar-thumb{background:#1a1f2b;border-radius:3px}

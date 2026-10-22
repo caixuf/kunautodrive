@@ -2160,7 +2160,11 @@ function _perfRowHTML(kind, it) {
     meta = 'TID '+key+' · '+st;
   }
   var fn = kind === 'proc' ? 'selectPerfProc' : 'selectPerfThread';
+  /* title 提供全名：.perf-row .nm 在窄侧栏里必然被省略号截断
+   * （实测 1024 宽下 scrollWidth 68 > clientWidth 29），没有 title 就再也
+   * 看不到完整进程/线程名。 */
   return '<div class="perf-row'+(active ? ' active' : '')+'" data-key="'+key+'" '+
+    'title="'+it.name+'" '+
     'onclick="flowboard.'+fn+'('+key+')">'+
     '<span class="pct" style="color:'+color+'">'+(it.cpu_pct||0).toFixed(1)+'%</span>'+
     '<span class="nm">'+it.name+'</span>'+
