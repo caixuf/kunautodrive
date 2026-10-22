@@ -56,6 +56,9 @@ export function createConstructionView(scene) {
         // 纹理由 CanvasTextureFactory 缓存，不在这里 dispose
         c.material.dispose();
       }
+      /* InstancedMesh 另持一份实例矩阵缓冲，Object3D 层不会回收 —— 显式释放，
+       * 否则每次 rebuild（路网/场景切换）都漏一份 GPU 缓冲。 */
+      if (c.isInstancedMesh && c.dispose) c.dispose();
     }
   }
 
@@ -101,7 +104,7 @@ export function createConstructionView(scene) {
     const barrierX = constructionStartX;                    // 围栏 = 施工前缘（权威）
     const signX = barrierX - BARRIER_BUFFER - 5.0;           // 指示牌仍在围栏前
 
-    // ── 1. 围栏（横跨整个路面，BoxGeometry 分段） ──
+    // ── 1. 围栏（横跨整个路面，BoxGeometry 分段 → InstancedMesh 合批） ──
     const barrierTex = makeStripeTexture('#ff6600', '#f0f0f0', { width: 64, height: 256, stripeCount: 8 });
     const barrierMat = new THREE.MeshStandardMaterial({
       map: barrierTex,
@@ -110,15 +113,24 @@ export function createConstructionView(scene) {
     });
     const segCount = Math.ceil((halfW * 2) / BARRIER_SEG_W);
     const segGeo = new THREE.BoxGeometry(BARRIER_T, BARRIER_H, BARRIER_SEG_W);
+    /* 实例化：原先每段围栏一个 Mesh，实测施工区共 50 个 mesh（围栏分段 + 每锥两件），
+     * 而三角形只有 1800 —— 纯 draw call 浪费。同类件合成 InstancedMesh 后
+     * 施工区从 ~50 次调用降到 6 次（围栏/锥/反光带各 1 + 两块指示牌 + 立柱）。 */
+    const dummy = new THREE.Object3D();
+    const barrierMesh = new THREE.InstancedMesh(segGeo, barrierMat, segCount);
     for (let i = 0; i < segCount; i++) {
       const segZ = -halfW + (i + 0.5) * BARRIER_SEG_W;
       const clampZ = Math.max(-halfW, Math.min(halfW, segZ));
-      const mesh = new THREE.Mesh(segGeo, barrierMat);
-      mesh.position.set(barrierX, BARRIER_H / 2, clampZ);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      group.add(mesh);
+      dummy.position.set(barrierX, BARRIER_H / 2, clampZ);
+      dummy.rotation.set(0, 0, 0);
+      dummy.scale.set(1, 1, 1);
+      dummy.updateMatrix();
+      barrierMesh.setMatrixAt(i, dummy.matrix);
     }
+    barrierMesh.instanceMatrix.needsUpdate = true;
+    barrierMesh.castShadow = true;
+    barrierMesh.receiveShadow = true;
+    group.add(barrierMesh);
 
     // ── 2. "禁止通行"指示牌（红底白字，挂在围栏右侧） ──
     const noEntryMat = new THREE.MeshStandardMaterial({
@@ -159,21 +171,35 @@ export function createConstructionView(scene) {
     const bandGeo = new THREE.CylinderGeometry(CONE_RADIUS * 0.88, CONE_RADIUS * 0.82, 0.08, 12);
 
     const coneCount = Math.floor(bufferLen / CONE_SPACING);
-    for (let i = 0; i < coneCount; i++) {
-      const cx = constructionStartX + (i + 0.5) * CONE_SPACING;
-      // 左右交错
-      for (const side of [-1, 1]) {
-        const cz = side * halfW * 0.6;
-        const cone = new THREE.Mesh(coneGeo, coneMat);
-        cone.position.set(cx, CONE_H / 2, cz);
-        cone.castShadow = true;
-        group.add(cone);
+    /* 交通锥与反光带同样实例化：每锥原本 2 个 Mesh（锥 + 带），
+     * 左右交错 → 2*coneCount 个实例，合并后各 1 次 draw call。 */
+    const totalCones = coneCount * 2;
+    if (totalCones > 0) {
+      const coneMesh = new THREE.InstancedMesh(coneGeo, coneMat, totalCones);
+      const bandMesh = new THREE.InstancedMesh(bandGeo, bandMat, totalCones);
+      let k = 0;
+      for (let i = 0; i < coneCount; i++) {
+        const cx = constructionStartX + (i + 0.5) * CONE_SPACING;
+        // 左右交错
+        for (const side of [-1, 1]) {
+          const cz = side * halfW * 0.6;
+          dummy.position.set(cx, CONE_H / 2, cz);
+          dummy.rotation.set(0, 0, 0);
+          dummy.scale.set(1, 1, 1);
+          dummy.updateMatrix();
+          coneMesh.setMatrixAt(k, dummy.matrix);
 
-        // 反光带
-        const band = new THREE.Mesh(bandGeo, bandMat);
-        band.position.set(cx, CONE_H * 0.55, cz);
-        group.add(band);
+          dummy.position.set(cx, CONE_H * 0.55, cz);
+          dummy.updateMatrix();
+          bandMesh.setMatrixAt(k, dummy.matrix);
+          k++;
+        }
       }
+      coneMesh.instanceMatrix.needsUpdate = true;
+      bandMesh.instanceMatrix.needsUpdate = true;
+      coneMesh.castShadow = true;
+      group.add(coneMesh);
+      group.add(bandMesh);
     }
   }
 
