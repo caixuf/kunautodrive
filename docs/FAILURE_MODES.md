@@ -32,13 +32,13 @@
 
 | # | 分类 | 条数 |
 |---|------|------|
-| 1 | 控制 / 规划 / 安全层 | 34 |
+| 1 | 控制 / 规划 / 安全层 | 36 |
 | 2 | 感知 / 点云 | 6 |
 | 3 | 仿真 / 几何 / NPC | 8 |
-| 4 | 仪表盘 / 监控 / 前端 | 9 |
-| 5 | 评估器 / 门禁 | 7 |
+| 4 | 仪表盘 / 监控 / 前端 | 22 |
+| 5 | 评估器 / 门禁 | 8 |
 | 6 | 框架 / 工具链 | 4 |
-| | **合计** | **67** |
+| | **合计** | **84** |
 
 ## 1. 控制 / 规划 / 安全层
 
@@ -145,6 +145,7 @@
 | **1024 宽下「分析」页图表溢出视口被裁（#ch-frames right=1176 > vw=1024），进程/话题矩阵表格右侧两列看不见** | `#charts{display:flex}` 无 wrap + `.chart-box{min-width:280px}`×3 需 856px，主区只剩 ~646px；`.inc-table` 无横向滚动容器。修复：`#charts` 加 flex-wrap、`.chart-box` 改 `flex:1 1 280px;min-width:0`；`#topic-stats/#process-topics/#frames` 补 `overflow-x:auto` | `tools/flowboard/css/style.css` #charts/.chart-box/.inc-table |
 | **性能面板长期显示 `Draw 1 / Tri 1`（场景实际 766 个 mesh）；`Geo`/`Tex` 显示的是伪字节** | `main.js` 渲染分叉 `noPost = tier==='low'||'ultra'`，其余档位走 `composer.render()`，而 EffectComposer 对**每趟 pass** 都调一次 `renderer.render()`；three 的 `renderer.info.autoReset`（默认 true）在每次 render 开头清零计数 → 整帧结束只剩最后一趟 `OutputPass`（单个全屏三角形）= 1 draw / 1 tri。另 `StatsView.update` 把 `info.memory.geometries`（**个数**，非字节）乘 1000 后按 KB/MB 格式化，「215 个几何体」被显示成「Geo 215.0KB」。修复：`createRenderer` 里 `renderer.info.autoReset=false` + 渲染循环每帧 `info.reset()` 一次（计数跨 pass 累加）；`Geo/Tex` 改为如实显示计数（泄漏排查看的正是这两个数字的单调增长）。判据：面板值与 `window.__vis.renderer.info` 逐项一致 | `tools/flowboard/js/vis/core/Renderer.js` createRenderer / `js/vis/main.js` 渲染循环 / `js/vis/view/StatsView.js` update |
 | **合并 glTF 几何时 `RangeError: offset is out of bounds`（`Float32Array.set`），随后整批车不再创建** | `mergeGeometries` 用 `dst.set(src.array, offset)` 直接拷属性，而 glTF 常用 **InterleavedBufferAttribute**（多属性共用一条交错缓冲）—— 此时 `src.array` 是**整条交错缓冲**、长度远大于该属性本身，必然越界。实测车辆 glTF 的 normal/uv 就是交错属性：合并时抛错 → `_createGltfVehicle` 中断 → 该视图被 ViewRegistry 判失败并退避 → 16 台车只剩 1 台（行人，在合并调用前就 return）。既有 4 个调用点（Road/Building/Viaduct/Connector）只是恰好没喂交错几何。修复：逐元素经 `getX/getY/getZ` 访问器拷贝（对两种属性都正确），并按 `src.count` 截断 | `tools/flowboard/js/vis/math/GeometryMerge.js` mergeGeometries |
+| **矮视口（实测 1990×688）下 3D 主视图只剩 ~212px 高，底部两个绝对定位浮层压住近四成；拓扑图反而比主视图还高** | 三个下限都是按高视口调的，矮屏下全部反客为主：① `#topo{height:clamp(200px,26vh,400px)}` —— 688 高时 26vh=179 < 200 → 取到 200px 下限，比 3D 区还高；② 3D 卡 min-height 320/240/200 太低，flex 拿不到高度时退到下限；③ `#drive-hud`(~86px) 与 `#incident-timeline`(~64px) 是**绝对定位浮层**，尺寸由字号/内边距写死、不随视口高度缩放 —— 视口越矮，它们占 3D 的比例越大（688 高时两个浮层吃掉 ~150px）。修复：`#topo` 下限 200px→132px、26vh→20vh；`#scene3d-card`/`.card-body`/`#scene3d` min-height 320/240/200 → 392/320/320（宁可让 `#main` 滚动也不把主视图压成横条）；新增 `@media (max-height:860px)` 收 `#drive-hud` 与 `#incident-timeline` 的字号/内边距。判据：矮视口下 3D 可视高 ≥ 浮层高之和，且浮层不与场景内容重叠 | `tools/flowboard/css/style.css` #topo / #scene3d-card / @media(max-height:860px) |
 | **车辆 glTF 静态件合批后车身/车顶/尾灯出现斑点噪点（车"起砂"）** | 把车辆静止件按材质合并成 InstancedMesh 式大几何后，**车模渲染退化**：A/B 实测（同一视口/相机/画质档，仅切换合批开关）合批前车身干净、合批后车顶与尾灯出现斑点噪点；被合并的正是 `cabin` / `windshield` / `headlight_L` / `brakelight_L` / `turnsignal_FL` 这些**灯光与玻璃件**，合并后几何只剩 `position`+`normal`（**uv 丢失**）。两条相互叠加的机制（**哪条为主尚未隔离**）：① 车灯件的 `emissiveMap` 是**建车之后**才由灯光接线挂上，合批时材质还没有贴图 → 按"当前无贴图就不带 uv"的规则丢掉了 uv，贴图挂上后只能采样同一 texel；② 合并把 mesh 改名 `X → X_merged`，而车灯/车漆逻辑**按名字**找件（`VehicleView.js:296` `name.includes('light')`、`:402` `name === 'ChePai'`），且语义灯光是在建车**之后**从 group 里按名收集灯件。**处置：撤掉车辆合批（`models.js`/`VehicleView.js` 回到 `f359f19`），`GeometryMerge` 的交错属性修复保留**。教训：给"有按名查找 + 材质后挂贴图"的模型层级做几何合批，必须先确认没有按名/按件的后续接线，且属性要全量保留（不能只留 position/normal/uv） | `tools/flowboard/js/models.js` mergeStaticVehicleMeshes（已撤） / `js/vis/view/VehicleView.js` `_createGltfVehicle`（已撤） |
 
 | **仪表盘拿不到真实拓扑、一直显示演示数据（`/api/topology` 响应体在 `{"source":"live","stale":false,"age_sec":N,` 之后被 `BCDEFGHIJKLMNOPQRSTUVWXYZ` 循环字符填充，JSON 解析失败）** | 复现条件（2026-10-22 实测）：先跑 `demo.sh` 再让管线退出，**只留 flowmond 单独监听 8800**（`flowmond --port 8800 --html-path …`），此时 `curl /api/topology` 返回 10044 字节坏体；管线在跑时同一接口正常（61298 字节、19 节点合法 JSON，`age_sec 0.0`）。怀疑落在 `build_cached_dashboard_json()` 的过期缓存分支，但**根因未定位**（未读 IPC 侧缓存写入路径）。⚠️ 未修，仅登记现象与复现条件 | `src/core/monitor_server.c` build_cached_dashboard_json |
@@ -165,6 +166,7 @@
 
 | 场景声明"切断某传感器"，而评估器的 topic 频率门禁要求该 topic 达最低频率 → **该场景永远不可能 PASS**（门禁与它要验证的行为互相矛盾） | 门禁把"topic 必须在发"当无条件要求。但对**故意注入失效**的场景，"该 topic 停发"正是它的预期行为。修复：① 场景 `fault_injection` 里直接切断的 topic 跳过频率门禁，但仍断言它**确实停了**（还在发 → WARN 提示注入可能没生效）；② **级联豁免** —— 切断某模态后其**直接消费者**掉频是正确后果（切 lidar → fusion 只能靠 GPS 慢速更新 → `fusion/localization` 20Hz→10Hz）。级联映射**只覆盖直接消费者、不做传递闭包**，避免一次注入把整条链的判据全豁免 | `ci/evaluators/demo_evaluator.py` `injected_topics` / `INJECT_CASCADE` + `load_scenario_criteria_from_pipeline` 透传 `_inject_topics` |
 | nightly `scenario_regression` 每个场景都是 `no topology samples collected`，stress test 却绿 | 同一 `build/` 先开 `ENABLE_COVERAGE`（且 UBSAN 留在 CMake 缓存里）。`libflowengine_core.a` 因此引用 `__gcov_merge_add`，插件 cmake 不链 `-lgcov`，`dlopen` 全部 `undefined symbol: __gcov_merge_add` 后被跳过。launcher 仍睡满 duration 并退出 0，monitor 从未写 `topology.json`。修复：行为门禁前把 `build/` 重配成 Release 且四个插桩开关显式 OFF，删掉插件构建目录重链；一个插件都没加载时 launcher 直接非 0 退出，不再空转 | `.github/workflows/ci.yml` nightly Release rebuild / `src/flow_launcher.c` `run_dlopen_mode` |
+| **同一份代码重跑，`straight_road` 判定在 PASS/FAIL 间摇摆，FAIL 项恒为 `comfort: jerk max N m/s³ exceeds 15.0`（2026-10-24 实测三次 9.6 / 12.4 / 16.1，只有 16.1 越线）** | jerk 取**整段逐帧加速度差分的最大值**（极值统计，不是分位数）→ 单帧尖峰独自决定判定，而 demo 仿真 run-to-run 混沌（无共享逻辑钟，涌现量不可复现）；阈值 15.0 恰好落在该场景实测分布中段 → 同一二进制三次分居阈值两侧。**旁证**：仓库基线 `tests/baseline/straight_road.json` 里 `comfort_jerk_max_mps3 = 1293`（物理上不可能 —— 一个坏帧就能把极值拉高两个数量级），说明这个量的尾部完全由尖峰支配，本不该拿来在门槛附近判 PASS/FAIL。⚠️ **未修，仅登记**：D2-10 的 4×3「12/12 PASS」正是被它挡住 —— 2026-10-24 实测 12 次真跑，**横向判据 12/12 达标**（`max_abs_llt_offset_m` 最差 1.192 ≤ 1.65），总判定却是 **11/12**，唯一 FAIL 就是 `straight_road` 这一次的 jerk（D2-03 自述也把 comfort jerk 标为 orthogonal 量）。修法方向：改用分位数（p95 已有独立门禁），或对尖峰先做去噪保护再取极值 | `ci/evaluators/demo_evaluator.py:249` `jerk_max_fail_mps3` / `:3618` 判据 |
 
 ## 6. 框架 / 工具链
 

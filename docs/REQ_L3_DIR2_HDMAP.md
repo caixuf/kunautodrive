@@ -399,6 +399,13 @@ python3 tools/json_to_lanelet.py \
 - `ab05f6e feat(vis): 车道可观测性叠加层 —— 规划/地图/定位/感知四方对账` 已在 main 落地：lane_match / planning_debug / lane_data（启发式）/ perceived_lanes 四组数据在同一 3D 屏可对账。这正是 D2-06（planning 真切换横向参考系）的**前置**——可视化先让横向跑偏问题可被肉眼定位，D2-06 在它的基础上完成"让 planning 决策也消费 lane_match"。
 - 本规格 v1.0 与 `ab05f6e` 不冲突：`ab05f6e` 没动 `localization/lane_match` cJSON 契约本身（仅透传到前端），因此 §6.1 的 cJSON 字段扩展计划仍按原定节奏推进。
 
+**v1.1 状态对齐（2026-10-24）** —— ⚠️ §1.1 那张「当前状态（2026-09-24）」表已成快照（其 ❌ 三行现已落地），**以本节为准**：
+
+- **D2-01~D2-05 / D2-08 / D2-09 已落地**：Lanelet2 引入 + `tools/json_to_lanelet.py`（字节级确定性输出）+ flowsim 启动期加载（`3903a05`，dual-mode：有 `lanelet.osm` 用真 `lanelet::Id`、无则合成，启动日志分开记）+ `lane_match_schema_check.py` 有 CI job（`--self-test` 15/15）+ `lanelet_consistency_check.py` Rule 1–5（8 maps 全绿，M2 step 2 收口见 `HANDOFF_2026-09-26.md`）。
+- **D2-06 已落地**（`351aa1e` 真消费 + `a3947f0` 补参考系一致性前提）：巡航/跟车横向参考系 = `ego_d − llt_offset`，**只在 ref 法向与 lanelet 法向同向时成立**（`planning_coord::lane_ref_aligned`）；不满足走 A11 网格回退（不引入第三套路径）。实测 straight_road 掉头段骑线帧 16/180 → 0/180，门禁 verdict fail → ok。门禁两条：Rule5 目标跳变（chatter）、**Rule6 目标骑线**（`lateral_target_offgrid`，含机动帧）。
+- **D2-07 已落地**（`fa10aca`）：fusion 只在 obs 上挂 `obs_lane_match_hint: bool`，不硬过滤、不丢 obs。
+- **D2-10 部分达标（不宣称 DONE）**：横向判据 `max_lane_offset_m = 1.65`（= `lane_width/2 − 0.1`）已进 suite + 评估器（`--d2-10-scenes` 同时打开 enforce，越线即 FAIL）；**4×3 十二次真跑横向判据 12/12 达标**（`max_abs_llt_offset_m` 最差 **1.192** ≤ 1.65；另 45s 单跑 0.999、120s 长跑 Rule1–6 全绿：246 帧 lane_match 全有效、压线 0、车心越线 0）。但总判定只有 **11/12 PASS** —— 唯一 FAIL 是**正交**的 `comfort jerk max` 抖动（同一二进制三次 9.6 / 12.4 / 16.1 m/s³，阈值 15.0）→ 已登记 `docs/FAILURE_MODES.md` §5「评估器/门禁」，闭环判据与完整数据见 `_reports/D2_10_4x3_validation_plan.md`。
+
 ### 10.2 既有门禁联动
 
 | 既有 gate | 改动 |

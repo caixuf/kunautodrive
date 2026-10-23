@@ -5,6 +5,33 @@
 2. GT 4×3 is green with `max_lane_offset_m` enforced, and
 3. 扳手 lifts the narrow (control retune may follow).
 
+---
+
+### 2026-10-24 4×3 实测（本机 Release，HEAD `a3947f0`；本格**仍不宣称 DONE**）
+
+前置 1 / 2 已满足：#104 在 main（`351aa1e`），且 `a3947f0` 补了参考系一致性前提 + Rule6 骑线判据。
+
+命令（plan 里那条，未加 `--workers`，默认串行；12 次真跑）：
+
+```bash
+python3 ci/evaluators/scenario_regression.py --d2-10-scenes --repeats 3 \
+  --collect-fixtures /tmp/d2_10_fixtures --results-dir /tmp/flow_regression_d210
+```
+
+| 结论 | 数据 |
+|---|---|
+| **横向判据 12/12 达标** | `max_abs_llt_offset_m`：straight 0.932 / 1.082 / 1.095、curve 0.070 / 0.103 / 0.108、urban 1.192 / 1.153 / 1.170、city 0.152 / 0.156 / 0.153 —— **最差 1.192 ≤ 1.65** |
+| A1 / A2 / A3 / A4 | ✅（suite 有阈值、每次都记 `max_abs_llt_offset_m`、越线走 FAIL、`test_evaluator_gate.py` 68 passed） |
+| **A5（12/12 PASS）** | ❌ **11/12** —— 唯一 FAIL = `straight_road` 第 2 次重复 `comfort: jerk max 16.1 m/s³ exceeds 15.0`（同一二进制同场景三次 9.6 / 12.4 / 16.1） |
+| A6 / A7 | 未做（A7 控制重调不在本批范围） |
+
+**挡点与横向无关**：`comfort jerk max` 是逐帧加速度差分的**极值**统计，单帧尖峰独自决定判定
+（仓库基线里该值 1293 m/s³，物理上不可能）→ 已登记 `docs/FAILURE_MODES.md` §5。
+**解除条件**因此从"横向达标"变成"把 comfort jerk 判据换成可复现量（分位数 / 尖峰去噪）"。
+
+结果文件在 `/tmp/flow_regression_d210/*.json`、fixtures 在 `/tmp/d2_10_fixtures`、日志
+`/tmp/d210_harness.log`（均在临时目录，**未入库**）；完整交付说明见 `docs/HANDOFF_2026-10-24.md`。
+
 **Rails:** `REQ-D2-10-lane-offset-closeout.md` · `kun-d2-10-lane-offset-rails.md`  
 **Branch:** `feat/l3-d2-10-lane-offset-gate` · **Base tip:** `dccd907` (+ rebase onto #104 when merged)
 
