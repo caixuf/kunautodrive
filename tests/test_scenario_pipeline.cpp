@@ -1,0 +1,408 @@
+/**
+ * @file test_scenario_pipeline.cpp
+ * @brief Unit tests for Scenario-Stage-Task Decision Planning Framework (Milestone 1).
+ *
+ * Test Coverage:
+ *   1. Blackboard Context Data Sharing (type-safe, zero heap allocation)
+ *   2. LaneFollow Scenario: Cruising and Lead Vehicle Following (CTG law)
+ *   3. Scenario Registration and Priority Arbitration Scheduling
+ *   4. Hysteresis and Anti-Chatter Debounce Mechanism
+ *   5. Immediate Preemption for EmergencyStop Scenario (L3 MRM and Critical Stop)
+ *   6. Emergency Stop Trajectory and Standstill Stage Completion
+ */
+
+#include <cassert>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <string_view>
+
+#include "planning_context.h"
+#include "task.h"
+#include "stage.h"
+#include "scenario.h"
+#include "scenario_manager.h"
+#include "lane_follow_scenario.h"
+#include "emergency_stop_scenario.h"
+
+using namespace flowengine::planning;
+
+static int g_failures = 0;
+
+#define TEST_CHECK(cond, msg) \
+    do { \
+        if (!(cond)) { \
+            std::printf("  [FAIL] %s:%d: %s\n", __FILE__, __LINE__, msg); \
+            g_failures++; \
+        } \
+    } while (0)
+
+#define TEST_CHECK_NEAR(val, expected, eps, msg) \
+    do { \
+        if (std::abs((val) - (expected)) > (eps)) { \
+            std::printf("  [FAIL] %s:%d: %s (got %f, expected %f, eps %f)\n", \
+                        __FILE__, __LINE__, msg, (double)(val), (double)(expected), (double)(eps)); \
+            g_failures++; \
+        } \
+    } while (0)
+
+// ── Test 1: Blackboard Inter-Task Data Sharing ─────────────────────────────────
+static void test_blackboard_operations() {
+    std::printf("[RUN] test_blackboard_operations\n");
+    Blackboard bb;
+
+    TEST_CHECK(bb.Size() == 0, "Initial blackboard size should be 0");
+    TEST_CHECK(!bb.Has("key1"), "Has should return false for nonexistent key");
+
+    // Bool
+    TEST_CHECK(bb.Set("flag_active", true), "Set bool should succeed");
+    bool b_val = false;
+    TEST_CHECK(bb.Get("flag_active", b_val) && b_val == true, "Get bool should match");
+
+    // Int / Integral
+    TEST_CHECK(bb.Set("counter", 42), "Set int should succeed");
+    int i_val = 0;
+    TEST_CHECK(bb.Get("counter", i_val) && i_val == 42, "Get int should match");
+
+    uint32_t u_val = 0;
+    TEST_CHECK(bb.Get("counter", u_val) && u_val == 42, "Get uint32 should match");
+
+    // Double / Floating point
+    TEST_CHECK(bb.Set("speed_limit", 22.5), "Set double should succeed");
+    double d_val = 0.0;
+    TEST_CHECK(bb.Get("speed_limit", d_val), "Get double should succeed");
+    TEST_CHECK_NEAR(d_val, 22.5, 1e-4, "speed_limit value mismatch");
+
+    float f_val = 0.0f;
+    TEST_CHECK(bb.Get("speed_limit", f_val), "Get float should succeed");
+    TEST_CHECK_NEAR(f_val, 22.5f, 1e-3, "float value mismatch");
+
+    // String / string_view
+    TEST_CHECK(bb.Set("driving_mode", "CRUISE"), "Set string should succeed");
+    std::string_view s_val;
+    TEST_CHECK(bb.Get("driving_mode", s_val) && s_val == "CRUISE", "Get string_view should match");
+
+    // Pointer
+    int dummy = 123;
+    TEST_CHECK(bb.Set("dummy_ptr", &dummy), "Set pointer should succeed");
+    int* p_val = nullptr;
+    TEST_CHECK(bb.Get("dummy_ptr", p_val) && p_val == &dummy, "Get pointer should match");
+
+    // GetOrDefault
+    TEST_CHECK(bb.GetOrDefault<int>("nonexistent", 999) == 999, "GetOrDefault should return default");
+    TEST_CHECK(bb.GetOrDefault<int>("counter", 999) == 42, "GetOrDefault should return stored value");
+
+    // Clear
+    bb.Clear();
+    TEST_CHECK(bb.Size() == 0, "Size should be 0 after Clear");
+    TEST_CHECK(!bb.Has("flag_active"), "Has should return false after Clear");
+
+    // Capacity limit verification (max 32 entries)
+    char key_buf[16];
+    for (int i = 0; i < 32; ++i) {
+        std::snprintf(key_buf, sizeof(key_buf), "k_%d", i);
+        TEST_CHECK(bb.Set(key_buf, i), "Insert within capacity should succeed");
+    }
+    TEST_CHECK(bb.Size() == 32, "Blackboard should have 32 entries");
+    TEST_CHECK(!bb.Set("overflow_key", 999), "Insert beyond capacity should return false gracefully");
+    std::printf("[PASS] test_blackboard_operations\n");
+}
+
+// ── Test 2: LaneFollow Scenario - Cruise Execution ────────────────────────────
+static void test_lane_follow_cruise() {
+    std::printf("[RUN] test_lane_follow_cruise\n");
+    LaneFollowScenario scenario;
+    FrameContext context;
+    Trajectory traj{};
+
+    context.seq = 101;
+    context.timestamp_us = 1000000;
+    context.vehicle_state.x = 0.0;
+    context.vehicle_state.y = 0.0;
+    context.vehicle_state.v = 10.0;
+    context.vehicle_state.heading = 0.0;
+    context.road_geometry.lane_width = 3.5;
+    context.l3_state.degrade_level = 0;
+
+    TEST_CHECK(scenario.IsApplicable(context), "LaneFollowScenario should be applicable under normal conditions");
+
+    ScenarioStatus st = scenario.Run(context, traj);
+    TEST_CHECK(st == ScenarioStatus::RUNNING, "Scenario status should be RUNNING");
+
+    // Verify Blackboard context data generated by LaneFollowDeciderTask
+    bool is_following = true;
+    TEST_CHECK(context.blackboard.Get("is_following", is_following) && !is_following, "is_following should be false in cruise");
+
+    std::string_view mode;
+    TEST_CHECK(context.blackboard.Get("behavior_mode", mode) && mode == "CRUISE", "behavior_mode should be CRUISE");
+
+    double target_speed = 0.0;
+    TEST_CHECK(context.blackboard.Get("target_speed", target_speed), "target_speed should be in blackboard");
+    TEST_CHECK_NEAR(target_speed, 15.0, 1e-3, "target_speed should equal default cruise speed (15.0 m/s)");
+
+    // Verify Trajectory generated by LaneFollowTrajectoryTask
+    TEST_CHECK(traj.seq == 101, "Trajectory seq mismatch");
+    TEST_CHECK(traj.point_count == 64, "Trajectory should have 64 points");
+    TEST_CHECK(traj.valid == 1, "Trajectory should be valid");
+    TEST_CHECK(traj.planner_state == 1, "Trajectory planner_state should be 1 (normal follow)");
+
+    // Since current speed (10.0) < target speed (15.0), trajectory points should accelerate forward
+    TEST_CHECK(traj.points[0].v >= 10.0f, "Point 0 speed should be at least ego speed");
+    TEST_CHECK(traj.points[63].v > traj.points[0].v, "Trajectory should accelerate towards cruise speed");
+    TEST_CHECK(traj.points[63].x > 0.0f, "Trajectory points should advance longitudinally");
+    std::printf("[PASS] test_lane_follow_cruise\n");
+}
+
+// ── Test 3: LaneFollow Scenario - Lead Vehicle Following (CTG Law) ─────────────
+static void test_lane_follow_lead_following() {
+    std::printf("[RUN] test_lane_follow_lead_following\n");
+    LaneFollowScenario scenario;
+    FrameContext context;
+    Trajectory traj{};
+
+    context.seq = 202;
+    context.timestamp_us = 2000000;
+    context.vehicle_state.x = 0.0;
+    context.vehicle_state.y = 0.0;
+    context.vehicle_state.v = 12.0;
+    context.vehicle_state.heading = 0.0;
+    context.road_geometry.lane_width = 3.5;
+
+    // Add lead obstacle ahead in same lane
+    Obstacle lead_obs{};
+    lead_obs.id = 42;
+    lead_obs.x = 25.0f; // 25m ahead
+    lead_obs.y = 0.1f;  // slightly offset but well within 3.5m lane
+    lead_obs.vx = 8.0f; // lead car moving at 8.0 m/s
+    lead_obs.vy = 0.0f;
+    lead_obs.length = 4.0f;
+    lead_obs.width = 1.8f;
+    lead_obs.type = OBJ_TYPE_VEHICLE;
+    context.AddObstacle(lead_obs);
+
+    ScenarioStatus st = scenario.Run(context, traj);
+    TEST_CHECK(st == ScenarioStatus::RUNNING, "Scenario status should be RUNNING");
+
+    // Verify Blackboard context data
+    bool is_following = false;
+    TEST_CHECK(context.blackboard.Get("is_following", is_following) && is_following, "is_following should be true");
+
+    uint32_t follow_id = 0;
+    TEST_CHECK(context.blackboard.Get("follow_obs_id", follow_id) && follow_id == 42, "follow_obs_id should match obstacle ID");
+
+    std::string_view mode;
+    TEST_CHECK(context.blackboard.Get("behavior_mode", mode) && mode == "FOLLOW", "behavior_mode should be FOLLOW");
+
+    // Verify CTG calculations:
+    // desired_gap = acc_standoff + headway * ego_v = 5.0 + 1.5 * 12.0 = 23.0m
+    // gap = 25.0 - (4.0 * 0.5) = 23.0m
+    // gap_err = 23.0 - 23.0 = 0.0m
+    // target_speed = lead_v + 0.4 * 0.0 = 8.0 m/s
+    double target_speed = 0.0;
+    TEST_CHECK(context.blackboard.Get("target_speed", target_speed), "target_speed should be in blackboard");
+    TEST_CHECK_NEAR(target_speed, 8.0, 0.1, "target_speed should equal lead car speed when at desired gap");
+
+    // Trajectory should slow down from 12.0 to 8.0 m/s
+    TEST_CHECK(traj.points[63].v < 12.0f, "Trajectory should decelerate towards lead vehicle speed");
+    std::printf("[PASS] test_lane_follow_lead_following\n");
+}
+
+// ── Test 4: Scenario Registration and Priority Arbitration Scheduling ──────────
+static void test_scenario_manager_arbitration() {
+    std::printf("[RUN] test_scenario_manager_arbitration\n");
+    ScenarioManager manager;
+    LaneFollowScenario lane_follow;
+    EmergencyStopScenario emergency_stop;
+
+    TEST_CHECK(manager.RegisterScenario(&lane_follow), "Register lane_follow should succeed");
+    TEST_CHECK(manager.RegisterScenario(&emergency_stop), "Register emergency_stop should succeed");
+    TEST_CHECK(!manager.RegisterScenario(&lane_follow), "Duplicate registration should fail");
+    TEST_CHECK(manager.ScenarioCount() == 2, "Scenario count should be 2");
+
+    FrameContext context;
+    Trajectory traj{};
+    context.vehicle_state.v = 10.0;
+    context.l3_state.degrade_level = 0;
+
+    // Under normal context, lane_follow is applicable, emergency_stop is not
+    Scenario* selected = manager.SelectScenario(context);
+    TEST_CHECK(selected == &lane_follow, "LaneFollowScenario should be selected under normal driving");
+
+    ScenarioStatus st = manager.Update(context, traj);
+    TEST_CHECK(st == ScenarioStatus::RUNNING, "Manager update should succeed");
+    TEST_CHECK(manager.CurrentScenario() == &lane_follow, "Active scenario should be LaneFollowScenario");
+    std::printf("[PASS] test_scenario_manager_arbitration\n");
+}
+
+// ── Test 5: Debounce / Anti-Chatter Mechanism ──────────────────────────────────
+class CustomTestScenario : public Scenario {
+public:
+    int priority_{20};
+    bool applicable_{false};
+
+    ScenarioType Type() const override { return ScenarioType::INTERSECTION; }
+    std::string_view Name() const override { return "CustomTestScenario"; }
+    int Priority() const override { return priority_; }
+    bool IsApplicable(const FrameContext&) const override { return applicable_; }
+    ScenarioStatus Run(FrameContext&, Trajectory&) override { return ScenarioStatus::RUNNING; }
+    void Reset() override { finished_ = false; }
+};
+
+static void test_anti_chatter_debounce() {
+    std::printf("[RUN] test_anti_chatter_debounce\n");
+    ScenarioManager manager;
+    LaneFollowScenario lane_follow;       // Priority 10
+    CustomTestScenario custom_scenario;   // Priority 20 (< 100, requires debounce)
+
+    manager.RegisterScenario(&lane_follow);
+    manager.RegisterScenario(&custom_scenario);
+    manager.SetDebounceThreshold(3); // 3 consecutive frames required to switch
+
+    FrameContext context;
+    Trajectory traj{};
+    context.vehicle_state.v = 10.0;
+    context.l3_state.degrade_level = 0;
+
+    // Frame 0: LaneFollow initialized
+    manager.Update(context, traj);
+    TEST_CHECK(manager.CurrentScenario() == &lane_follow, "Frame 0: LaneFollow should be active");
+
+    // Frame 1: Sensor flicker makes custom_scenario applicable
+    custom_scenario.applicable_ = true;
+    manager.Update(context, traj);
+    // Anti-chatter: should NOT switch immediately!
+    TEST_CHECK(manager.CurrentScenario() == &lane_follow, "Frame 1: Should remain in LaneFollow due to debounce");
+    TEST_CHECK(manager.PendingScenario() == &custom_scenario, "Frame 1: Pending scenario should be CustomTestScenario");
+    TEST_CHECK(manager.PendingFrameCount() == 1, "Frame 1: Pending count should be 1");
+
+    // Case A: Flicker disappears on Frame 2
+    custom_scenario.applicable_ = false;
+    manager.Update(context, traj);
+    TEST_CHECK(manager.CurrentScenario() == &lane_follow, "Frame 2: Remained in LaneFollow");
+    TEST_CHECK(manager.PendingScenario() == nullptr, "Frame 2: Pending scenario should be reset");
+    TEST_CHECK(manager.PendingFrameCount() == 0, "Frame 2: Pending count should be reset");
+
+    // Case B: Persistent candidate for 3 frames triggers actual transition
+    custom_scenario.applicable_ = true;
+    manager.Update(context, traj); // Frame 1 of persistent candidate
+    TEST_CHECK(manager.CurrentScenario() == &lane_follow, "Persistent frame 1: Still LaneFollow");
+    TEST_CHECK(manager.PendingFrameCount() == 1, "Pending count == 1");
+
+    manager.Update(context, traj); // Frame 2
+    TEST_CHECK(manager.CurrentScenario() == &lane_follow, "Persistent frame 2: Still LaneFollow");
+    TEST_CHECK(manager.PendingFrameCount() == 2, "Pending count == 2");
+
+    manager.Update(context, traj); // Frame 3 (Threshold reached!)
+    TEST_CHECK(manager.CurrentScenario() == &custom_scenario, "Persistent frame 3: Transition to CustomTestScenario");
+    TEST_CHECK(manager.PendingScenario() == nullptr, "Pending scenario cleared after transition");
+    std::printf("[PASS] test_anti_chatter_debounce\n");
+}
+
+// ── Test 6: Immediate Preemption for EmergencyStop Scenario (L3 MRM & Critical) ─
+static void test_emergency_preemption_and_mrm() {
+    std::printf("[RUN] test_emergency_preemption_and_mrm\n");
+    ScenarioManager manager;
+    LaneFollowScenario lane_follow;
+    EmergencyStopScenario emergency_stop;
+
+    manager.RegisterScenario(&lane_follow);
+    manager.RegisterScenario(&emergency_stop);
+    manager.SetDebounceThreshold(5); // Even with 5-frame debounce, emergency must preempt in 0 frames!
+
+    FrameContext context;
+    Trajectory traj{};
+    context.vehicle_state.v = 15.0;
+    context.l3_state.degrade_level = 0;
+
+    // Normal driving
+    manager.Update(context, traj);
+    TEST_CHECK(manager.CurrentScenario() == &lane_follow, "Normal: LaneFollow active");
+
+    // L3 MRM triggered (e.g. Degrade Level 2 or mrm_requested)
+    context.l3_state.degrade_level = 2; // DEGRADE_L2 (MRM)
+    context.l3_state.mrm_requested = true;
+
+    manager.Update(context, traj);
+
+    // Preemption MUST be instantaneous (0 frame delay)
+    TEST_CHECK(manager.CurrentScenario() == &emergency_stop, "EmergencyStop MUST preempt immediately (0-delay)");
+
+    // Check MRM mode decisions in Blackboard
+    bool is_emergency = false;
+    TEST_CHECK(context.blackboard.Get("emergency_stop", is_emergency) && is_emergency, "emergency_stop should be true");
+
+    bool hazard_warning = false;
+    TEST_CHECK(context.blackboard.Get("hazard_warning", hazard_warning) && hazard_warning, "hazard_warning should be true");
+
+    std::string_view stop_mode;
+    TEST_CHECK(context.blackboard.Get("stop_mode", stop_mode) && stop_mode == "MRM_STOP", "stop_mode should be MRM_STOP");
+
+    double decel = 0.0;
+    TEST_CHECK(context.blackboard.Get("emergency_decel", decel), "emergency_decel should be in blackboard");
+    TEST_CHECK_NEAR(decel, -2.5, 1e-3, "MRM deceleration should be -2.5 m/s^2");
+
+    double target_speed = -1.0;
+    TEST_CHECK(context.blackboard.Get("target_speed", target_speed) && target_speed == 0.0, "target_speed should be 0.0");
+
+    // Trajectory should reflect failsafe / MRM stop
+    TEST_CHECK(traj.planner_state == 3, "planner_state should be 3 (failsafe)");
+    TEST_CHECK(traj.valid == 1, "Emergency trajectory should be valid");
+    TEST_CHECK(traj.points[63].v <= traj.points[0].v, "Trajectory speed should decrease");
+    std::printf("[PASS] test_emergency_preemption_and_mrm\n");
+}
+
+// ── Test 7: Critical Collision Risk Emergency Brake ────────────────────────────
+static void test_critical_hard_brake() {
+    std::printf("[RUN] test_critical_hard_brake\n");
+    EmergencyStopScenario scenario;
+    FrameContext context;
+    Trajectory traj{};
+
+    context.vehicle_state.v = 20.0;
+    context.l3_state.collision_risk = true;
+    context.l3_state.min_ttc_s = 0.6; // Critical TTC < 1.0s
+
+    TEST_CHECK(scenario.IsApplicable(context), "EmergencyStopScenario should be applicable under collision risk");
+
+    ScenarioStatus st = scenario.Run(context, traj);
+    TEST_CHECK(st == ScenarioStatus::RUNNING, "Scenario status should be RUNNING while vehicle is in motion");
+
+    std::string_view stop_mode;
+    TEST_CHECK(context.blackboard.Get("stop_mode", stop_mode) && stop_mode == "HARD_BRAKE", "stop_mode should be HARD_BRAKE");
+
+    double decel = 0.0;
+    TEST_CHECK(context.blackboard.Get("emergency_decel", decel), "emergency_decel should be in blackboard");
+    TEST_CHECK_NEAR(decel, -5.0, 1e-3, "Hard brake deceleration should be -5.0 m/s^2");
+
+    // Verify vehicle standstill finish condition
+    context.vehicle_state.v = 0.0; // Vehicle has stopped!
+    st = scenario.Run(context, traj);
+    TEST_CHECK(st == ScenarioStatus::FINISHED, "Scenario should finish when vehicle stops");
+    TEST_CHECK(scenario.IsFinished(), "scenario.IsFinished() should return true");
+    std::printf("[PASS] test_critical_hard_brake\n");
+}
+
+int main() {
+    std::printf("============================================================\n");
+    std::printf("  Running Scenario-Stage-Task Decision Planning Framework Tests\n");
+    std::printf("============================================================\n");
+
+    test_blackboard_operations();
+    test_lane_follow_cruise();
+    test_lane_follow_lead_following();
+    test_scenario_manager_arbitration();
+    test_anti_chatter_debounce();
+    test_emergency_preemption_and_mrm();
+    test_critical_hard_brake();
+
+    std::printf("============================================================\n");
+    if (g_failures == 0) {
+        std::printf("  ALL TESTS PASSED (100%%)\n");
+        std::printf("============================================================\n");
+        return 0;
+    } else {
+        std::printf("  %d TEST FAILURES DETECTED!\n", g_failures);
+        std::printf("============================================================\n");
+        return 1;
+    }
+}

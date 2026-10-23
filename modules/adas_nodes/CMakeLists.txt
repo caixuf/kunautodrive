@@ -516,6 +516,68 @@ add_executable(test_planning_fallback_when_match_invalid test_planning_fallback_
 target_include_directories(test_planning_fallback_when_match_invalid PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME test_planning_fallback_when_match_invalid COMMAND test_planning_fallback_when_match_invalid)
 
+# planning_framework: Apollo 对标 Scenario-Stage-Task 决策规划框架 (Milestone 1)
+add_library(planning_framework STATIC
+    planning_framework/scenario_manager.cpp
+    planning_framework/lane_follow_scenario.cpp
+    planning_framework/emergency_stop_scenario.cpp
+)
+target_include_directories(planning_framework PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/planning_framework
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${FLOWENGINE_BUILD}/gen
+    ${FLOW_ROOT}/include
+)
+target_link_libraries(planning_framework PUBLIC m)
+
+# open_space_planner: Apollo 对标 Hybrid A* 与 Reeds-Shepp 自由空间规划器 (Milestone 2)
+add_library(open_space_planner STATIC
+    planning_framework/open_space/box2d.cpp
+    planning_framework/open_space/reeds_shepp_path.cpp
+    planning_framework/open_space/grid_search.cpp
+    planning_framework/open_space/hybrid_a_star.cpp
+)
+target_include_directories(open_space_planner PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/planning_framework/open_space
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${FLOW_ROOT}/include
+)
+target_link_libraries(open_space_planner PUBLIC m)
+
+add_executable(test_hybrid_a_star
+    ../../tests/test_hybrid_a_star.cpp
+)
+target_include_directories(test_hybrid_a_star PRIVATE
+    ${FLOW_ROOT}
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/planning_framework/open_space
+)
+target_link_libraries(test_hybrid_a_star open_space_planner m)
+add_test(NAME hybrid_a_star_tests COMMAND test_hybrid_a_star)
+
+# perception_model_inference: Apollo 对标 3D 目标与车道线端侧推理包装器 (Milestone 3)
+add_library(perception_model_inference STATIC
+    perception/model_inference_backend.cpp
+    perception/obstacle_detection_postprocess.cpp
+)
+target_include_directories(perception_model_inference PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/perception
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${FLOWENGINE_BUILD}/gen
+    ${FLOW_ROOT}/include
+)
+target_link_libraries(perception_model_inference PUBLIC m)
+if(ENABLE_ONNX)
+    if(onnxruntime_FOUND)
+        target_compile_definitions(perception_model_inference PRIVATE HAVE_ONNXRUNTIME)
+        target_link_libraries(perception_model_inference PUBLIC onnxruntime::onnxruntime)
+    elseif(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIB)
+        target_compile_definitions(perception_model_inference PRIVATE HAVE_ONNXRUNTIME)
+        target_include_directories(perception_model_inference PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
+        target_link_libraries(perception_model_inference PUBLIC ${ONNXRUNTIME_LIB})
+    endif()
+endif()
+
 # control_node: PID 纵向/横向控制 (FlowCoro 协程版)
 # 采用 CoroutineTask（同步 resume）：control 是延迟敏感的闭环控制，FlowCoroTask
 # 线程池 resume 的调度抖动会导致 20Hz 周期不一致，prev_steer 低通滤波时间间隔

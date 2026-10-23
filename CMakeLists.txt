@@ -1298,6 +1298,58 @@ else()
     message(WARNING "test_entity_physics: esminiRMLib NOT found — physics unit test not registered")
 endif()
 
+# ── Scenario-Stage-Task 决策规划框架单元测试 (Milestone 1) ──
+add_executable(test_scenario_pipeline
+    tests/test_scenario_pipeline.cpp
+    modules/adas_nodes/planning_framework/scenario_manager.cpp
+    modules/adas_nodes/planning_framework/lane_follow_scenario.cpp
+    modules/adas_nodes/planning_framework/emergency_stop_scenario.cpp
+)
+target_include_directories(test_scenario_pipeline PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/adas_nodes
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/adas_nodes/planning_framework
+    ${CMAKE_BINARY_DIR}/gen
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(test_scenario_pipeline m)
+add_test(NAME scenario_pipeline_tests COMMAND test_scenario_pipeline)
+set_tests_properties(scenario_pipeline_tests PROPERTIES TIMEOUT 10)
+
+# ── Hybrid A* 与 Reeds-Shepp 自由空间规划器单元与性能测试 (Milestone 2) ──
+add_executable(test_hybrid_a_star
+    tests/test_hybrid_a_star.cpp
+    modules/adas_nodes/planning_framework/open_space/box2d.cpp
+    modules/adas_nodes/planning_framework/open_space/reeds_shepp_path.cpp
+    modules/adas_nodes/planning_framework/open_space/grid_search.cpp
+    modules/adas_nodes/planning_framework/open_space/hybrid_a_star.cpp
+)
+target_include_directories(test_hybrid_a_star PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/adas_nodes
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/adas_nodes/planning_framework/open_space
+)
+target_link_libraries(test_hybrid_a_star m)
+add_test(NAME hybrid_a_star_tests COMMAND test_hybrid_a_star)
+set_tests_properties(hybrid_a_star_tests PROPERTIES TIMEOUT 20)
+
+# ── 3D 目标与车道线端侧模型推理包装器单元测试 (Milestone 3) ──
+add_executable(test_model_inference_pipeline
+    tests/test_model_inference_pipeline.cpp
+    modules/adas_nodes/perception/model_inference_backend.cpp
+    modules/adas_nodes/perception/obstacle_detection_postprocess.cpp
+)
+target_include_directories(test_model_inference_pipeline PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/adas_nodes
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/adas_nodes/perception
+    ${CMAKE_BINARY_DIR}/gen
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(test_model_inference_pipeline flowengine_core m pthread)
+add_test(NAME model_inference_pipeline_tests COMMAND test_model_inference_pipeline)
+set_tests_properties(model_inference_pipeline_tests PROPERTIES TIMEOUT 20)
+
 
 add_test(NAME e2e_training_tools
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/ci/evaluators/test_e2e_training_tools.py
