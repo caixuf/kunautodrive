@@ -22,7 +22,6 @@
  */
 
 import { _buildSedan, _buildObstacle, _buildContactShadow } from './utils.js';
-import { mergeGeometries } from './vis/math/GeometryMerge.js';
 
 const THREE = window.THREE;
 
@@ -911,154 +910,15 @@ export function getModel(type) {
     if (model.userData.frontAxle || model.userData.wheels) {
       _relinkWheelUserData(clone);
     }
-    /* 车辆静态件合批**不在这里**做：车漆 / 绿牌 / 方向盘注入都按 mesh 名字
-     * traverse（见 VehicleView._createGltfVehicle），先合并会让它们找不到目标。
-     * 调用点在那些改造完成之后，由 VehicleView 调 mergeStaticVehicleMeshes()。 */
     return clone;
   }
   return null;
 }
 
-/** 材质是否依赖贴图 —— 决定合并时要不要带 uv 属性。
- *  无贴图件（车辆 glTF 里 368/554 个：body/cabin/hood/door…）本来就没有 uv，
- *  硬补零毫无意义；带贴图件缺 uv 会让贴图只采样一个 texel，必须排除。 */
-function _materialUsesTexture(mat) {
-  if (!mat) return false;
-  return !!(mat.map || mat.alphaMap || mat.normalMap || mat.roughnessMap ||
-            mat.metalnessMap || mat.aoMap || mat.emissiveMap || mat.bumpMap ||
-            mat.displacementMap || mat.lightMap || mat.specularMap);
-}
-
-/** 材质「视觉签名」：只有签名相同的材质才允许被合并共用一份。
- *  为什么不用材质 uuid：`getModel()` 给每个 mesh 克隆独立材质，且实测 glTF 里
- *  36 个部件的材质 uuid 两两不同（按 uuid 分桶得 34 个桶，等于并不动）；
- *  为什么不用材质名：同名不同色/不同粗糙度会被错误合并成一种外观。
- *  故取「名字 + 类型 + 颜色 + 金属度 + 粗糙度 + 透明度 + 贴图 + 自发光」全同才算等价。 */
-function _materialSignature(m) {
-  if (!m) return 'none';
-  return [
-    m.name || '', m.type || '',
-    m.color ? m.color.getHexString() : '-',
-    m.emissive ? m.emissive.getHexString() : '-',
-    m.emissiveIntensity != null ? m.emissiveIntensity : '-',
-    m.metalness != null ? m.metalness : '-',
-    m.roughness != null ? m.roughness : '-',
-    m.opacity != null ? m.opacity : '-',
-    m.transparent ? 1 : 0,
-    m.side != null ? m.side : '-',
-    m.map ? m.map.uuid : '-',
-    m.normalMap ? m.normalMap.uuid : '-',
-    m.roughnessMap ? m.roughnessMap.uuid : '-',
-    m.metalnessMap ? m.metalnessMap.uuid : '-',
-    m.emissiveMap ? m.emissiveMap.uuid : '-',
-    m.alphaMap ? m.alphaMap.uuid : '-',
-    m.aoMap ? m.aoMap.uuid : '-'
-  ].join('|');
-}
-
-/** 把车辆 glTF 里**静态**的散件按「视觉等价材质」合并，降 draw call。
- *
- * ## 为什么（2026-10-22 实测）
- * 场景里 16 台车合计 554 个 mesh，而 RoadView / BuildingView / ViaductView /
- * ConnectorView 早就调了 `mergeGeometries` —— **唯独车辆 glTF 漏了**。
- * 实测车头视角 666 次 draw call、视锥内仅 145 个 mesh（多材质分组把每 mesh
- * 放大到 ~2.7 次调用），车辆是最大单一来源。
- * 按原型材质分桶后：每台 NPC 26 → 2 个 mesh，ego(SU7) 28 → 14，
- * 合计约 418 个候选件可降到 ~44 个。
- *
- * ## 四条安全底线（任一不满足就跳过该 mesh：宁可不并，也不能画错）
- * 1. **可动/可切换祖先下的不并**：轮轴（转向+滚动）、方向盘、灯光（开闭/闪烁）都靠
- *    traverse 按名字找节点后改 transform/material，合并会把节点吃掉。
- *    （实测被这条正确排除 143 件：axle_front 30 / axle_rear 29 / steering_* 84）
- * 2. **按「材质视觉签名」分桶，不按材质实例 uuid**：`getModel()` 为了实例隔离给每个
- *    mesh 克隆了独立材质，且实测 glTF 里 36 个部件的材质**uuid 两两不同**（按实例分桶
- *    得 34 个桶、几乎并不动）。而其中 25 个部件的材质在名字/类型/颜色/金属度/粗糙度/
- *    透明度/贴图/自发光上**完全一致** —— 只有视觉等价的材质才允许共用一份，故用
- *    `_materialSignature()` 当桶键：既并得动，又不会把两种不同颜色的件错误合并。
- * 3. **属性表按材质是否需要贴图决定**：`mergeGeometries` 对缺失属性会补零 —— 法线补零
- *    渲染成纯黑，uv 补零贴图错乱。无贴图件只并 position+normal，带贴图件才要求 uv；
- *    不同属性表的几何分到不同桶，绝不混并。
- * 4. **绝不 dispose 原几何**：`Object3D.clone()` 只克隆材质，几何体是与缓存原型**共享**的，
- *    dispose 会连带毁掉原型（后续同型车消失/报错）。只 dispose 自己 clone 出来的副本。
- *
- * ⚠️ 必须在 `_createGltfVehicle` 的**按名改造之后**调用（车漆 / 绿牌 / 方向盘注入都按
- * mesh 名字 traverse，先合并会让它们找不到目标）。
- *
- * @returns {{mergedMeshes:number, removedMeshes:number, skipped:object}|null}
- */
-export function mergeStaticVehicleMeshes(root) {
-  if (!THREE || !root || !root.traverse) return null;
-  var ANIMATABLE = /wheel|axle|steer|light|signal|brake|head|tail|turn|lamp/i;
-  var buckets = new Map();
-  var skipped = { animatable: 0, noNormal: 0, noUv: 0, multiMaterial: 0 };
-
-  root.traverse(function(o) {
-    if (!o.isMesh || o.isInstancedMesh || !o.geometry) return;
-    if (Array.isArray(o.material) || !o.material) { skipped.multiMaterial++; return; }
-    var g = o.geometry;
-    if (!g.attributes || !g.attributes.position) return;
-    for (var p = o.parent; p && p !== root.parent; p = p.parent) {     // 底线 1
-      if (ANIMATABLE.test(p.name || '')) { skipped.animatable++; return; }
-    }
-    if (!g.attributes.normal) { skipped.noNormal++; return; }
-    var needsUv = _materialUsesTexture(o.material);                    // 底线 3
-    if (needsUv && !g.attributes.uv) { skipped.noUv++; return; }
-    var attrKey = needsUv ? 'pnuv' : 'pn';
-    var key = o.parent.uuid + '|' + _materialSignature(o.material) + '|' + attrKey; // 底线 2
-    var b = buckets.get(key);
-    if (!b) {
-      b = { parent: o.parent, material: o.material,
-            attrs: needsUv ? ['position', 'normal', 'uv'] : ['position', 'normal'],
-            geos: [], meshes: [] };
-      buckets.set(key, b);
-    }
-    o.updateMatrix();
-    b.geos.push(o.geometry.clone().applyMatrix4(o.matrix));            // 烘焙局部变换
-    b.meshes.push(o);
-  });
-
-  /* 三角形计数：合并**绝不能丢几何**。把合并前后各记一次，建车时就地自证
-   * （比事后眯眼看截图可靠：`mergeStats.trisBefore === trisAfter` 是硬判据）。 */
-  function _tris(geoms) {
-    var t = 0;
-    geoms.forEach(function(g) {
-      t += g.index ? g.index.count / 3
-                   : (g.attributes && g.attributes.position ? g.attributes.position.count / 3 : 0);
-    });
-    return Math.round(t);
-  }
-
-  var mergedMeshes = 0, removedMeshes = 0, trisBefore = 0, trisAfter = 0;
-  buckets.forEach(function(b) {
-    if (b.meshes.length < 2) { b.geos.forEach(function(g) { g.dispose(); }); return; }
-    var tBefore = _tris(b.geos);
-    var merged = mergeGeometries(b.geos, b.attrs);
-    b.geos.forEach(function(g) { g.dispose(); });
-    if (!merged || !merged.attributes || !merged.attributes.position) return;
-    trisBefore += tBefore;
-    trisAfter += _tris([merged]);
-    var first = b.meshes[0];
-    var mesh = new THREE.Mesh(merged, b.material);
-    mesh.name = (first.name || 'part') + '_merged';
-    mesh.castShadow = first.castShadow;
-    mesh.receiveShadow = first.receiveShadow;
-    mesh.renderOrder = first.renderOrder;
-    mesh.frustumCulled = first.frustumCulled;
-    b.parent.add(mesh);
-    b.meshes.forEach(function(m) { m.parent.remove(m); });             // 底线 4：不 dispose 共享几何
-    mergedMeshes++;
-    removedMeshes += b.meshes.length;
-  });
-
-  var stats = { mergedMeshes: mergedMeshes, removedMeshes: removedMeshes,
-                trisBefore: trisBefore, trisAfter: trisAfter, skipped: skipped };
-  if (removedMeshes > 0) {
-    root.userData = root.userData || {};
-    root.userData.mergeStats = stats;
-  }
-  return stats;
-}
-
+/** clone() 后 userData.frontAxle / rearAxle / wheels 引用失效。
+ *  clone 已保留完整层级（axle_front / axle_rear 含 wheel_* 子节点），
+ *  仅需按名查找并重建 userData 引用，无需重建 Group。
+ *  同时为新克隆的 wheel_* 节点重新打 rollAxis='z' 标记（GLTF cylinder axis=Z）。 */
 export function _relinkWheelUserData(clone) {
   var fwGroup = null, rwGroup = null;
   var fl = null, fr = null, rl = null, rr = null;
