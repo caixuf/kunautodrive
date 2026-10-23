@@ -318,6 +318,32 @@ TARGET_CHATTER_AMP_FAIL = 1.00    # 跳变幅度中位数下限 (m)，佐证"跳
 TARGET_CHATTER_MIN_SPEED = 2.0    # 低于此速度不计（起步/停车附近目标本就会变）
 TARGET_CHATTER_MIN_FRAMES = 10    # 样本太少不判（避免方差主导）
 
+# ── 横向目标骑线门禁（2026-10-23 掉头/返程参考系反平行）──
+# target_lane_offset 的定义就是"相对道路参考线的**车道中心**偏移"，所以任何一帧
+# 它都必须落在车道网格上：所有车道中心相差整数倍 lane_width → 对 lane_width 取余
+# 的相位恒定。出现骑线值（相位偏离）即说明该帧的横向目标不是一个合法车道中心。
+#
+# 2026-10-23 实测（straight_road 开场掉头）：planning 巡航分支直接写
+# target = ego_d − llt_offset，而该式只在 ref 法向与 lanelet 法向**同向**时成立；
+# 双向路返程半幅 / 掉头中段两者反平行，误差恰为 −2·llt_offset → 掉头段 target
+# 扫到 +4.09~+4.22 m（该路车道中心只有 ±1.75/±5.25/±8.75/±12.25）。掉头窗口内
+# 24/62 帧骑线；整段按本门禁口径（tol 0.5m）16/180 帧 —— 三次运行完全一致
+# （确定性，不受 demo 混沌影响）。
+#
+# ⚠ 与 lateral_target_chatter 的分工：那条判"目标在跳"（只统计巡航帧、要求单次
+#   幅度 > 半车道宽）；这条判"目标根本不是车道中心"（**全部帧，含机动帧**）。
+#   掉头段的漂移每帧只走 0.07~1.45 m（< 半车道宽），chatter 结构上看不见；骑线
+#   判据才抓得住。两条互补，都要留。
+#
+# ⚠ 本判据假定车道中心与 lane_width 网格对齐（合成 lanelet 场景成立）。真 lanelet
+#   地图（map_file）下 lanelet 中心可与网格**有意**偏离 → 场景用
+#   `pass_criteria.lateral_grid_tolerance_m: null` 关闭本条（该 key 走
+#   `criteria = scenario.get("pass_criteria", {})` 这条既有通路，无需新增管线；
+#   scenarioctl 只校验 pass_criteria 是 object，不拒未知 key）。
+LATERAL_GRID_TOL_M = 0.5          # 相位偏离上限 (m)
+LATERAL_GRID_MAX_RATIO = 0.05     # 骑线帧占比 → FAIL
+LATERAL_GRID_MIN_FRAMES = 10      # 样本太少不判
+
 # ── 控制层量化门禁（Phase 1.3）：病理性抖动 FAIL 阻断 ──
 # 抓 bang-bang 转向（MPC 每帧翻符号）与 1-2Hz 横向极限环。
 # 健康实测（straight_road 30s，2026-08-01）：yaw_rms≈0.02 rad/s、
@@ -2072,6 +2098,75 @@ def lateral_target_chatter(series: list[dict]) -> dict:
     return out
 
 
+def _grid_phase_distance(a: float, b: float, period: float) -> float:
+    """环形距离：车道中心对 lane_width 取余后落在周长为 period 的圆上。"""
+    d = abs(a - b) % period
+    return min(d, period - d)
+
+
+def lateral_target_offgrid(series: list[dict],
+                           tol_m: float = LATERAL_GRID_TOL_M) -> dict:
+    """判 planning 横向目标是否落在**合法车道中心**上（骑线检测）。
+
+    见上方 LATERAL_GRID_TOL_M 注释块：target_lane_offset 是车道中心偏移，任何帧
+    都必须与车道网格同相位；相位偏离 = 该帧目标不是车道中心。
+
+    相位用**众数**估计（取邻域内样本最多的候选残差），避免被少数骑线帧带偏。
+
+    ⚠ 众数法有盲区：若**全部**帧被系统性地偏了同一个量（例如车道中心公式本身
+    被改错），众数会把那个偏掉的值当成相位而放行。故再对相位做一次**合法性**
+    检查：车道中心相对道路参考线只能是半整数倍车道宽 → 相位必为 `w/2`
+    （N 偶 / 单向路）或 `0`（N 奇双向路）。众数相位不落在二者之一即判 fail。
+
+    抽成纯函数的原因同 lateral_target_chatter：demo_evaluator 与
+    ci/gates/long_run_lane_keep.py 共用同一份口径（仓库铁律：不得有第二份实现）。
+
+    返回 dict：
+      frames     参与统计的帧数（有 target 且 lane_width 可用）
+      offgrid    相位偏离 > tol_m 的帧数
+      ratio      骑线帧占比
+      max_dev_m  最大相位偏离 (m)
+      phase_m    估计出的网格相位（target mod lane_width）
+      phase_legal 众数相位是否落在 {0, w/2} 上
+      verdict    "fail" / "ok" / "insufficient_data"
+    """
+    frames = [
+        m for m in series
+        if m.get("planning_target_offset") is not None
+        and float(m.get("lane_width") or 0.0) > 1.0
+    ]
+    out = {"frames": len(frames), "offgrid": 0, "ratio": 0.0, "max_dev_m": 0.0,
+           "phase_m": None, "phase_legal": True, "verdict": "insufficient_data"}
+    if len(frames) < LATERAL_GRID_MIN_FRAMES:
+        return out
+
+    w_ref = statistics.median(float(m["lane_width"]) for m in frames)
+    if w_ref <= 1.0:
+        return out
+    res = [float(m["planning_target_offset"]) % w_ref for m in frames]
+
+    best_phase, best_n = res[0], -1
+    for cand in res:
+        n = sum(1 for r in res if _grid_phase_distance(r, cand, w_ref) <= tol_m)
+        if n > best_n:
+            best_n, best_phase = n, cand
+    inliers = [r for r in res
+               if _grid_phase_distance(r, best_phase, w_ref) <= tol_m]
+    phase = statistics.median(inliers)
+
+    devs = [_grid_phase_distance(r, phase, w_ref) for r in res]
+    offgrid = sum(1 for d in devs if d > tol_m)
+    ratio = offgrid / len(frames)
+    # 相位合法性（防"全部帧被系统性带偏"骗过众数法）
+    phase_legal = min(_grid_phase_distance(phase, w_ref * 0.5, w_ref),
+                      _grid_phase_distance(phase, 0.0, w_ref)) <= tol_m
+    out.update(frames=len(frames), offgrid=offgrid, ratio=ratio,
+               max_dev_m=max(devs), phase_m=phase, phase_legal=phase_legal)
+    out["verdict"] = ("fail" if (ratio > LATERAL_GRID_MAX_RATIO
+                                 or not phase_legal) else "ok")
+    return out
+
+
 def liveness_report(series: list[dict]) -> dict:
     """统计每个受监控量的取值分布，识别结构性死值。
 
@@ -2719,6 +2814,29 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
             f"lateral target chatter: 无法判定（有效巡航帧 {tb['frames']} 帧，"
             f"时间跨度 {tb['span_s']:.1f}s —— 样本不足或无时间基准）"
         )
+
+    # ── 横向目标骑线门禁（2026-10-23 掉头/返程参考系反平行）──
+    # 判据本体在 lateral_target_offgrid()（纯函数，long_run_lane_keep 复用同一份，
+    # 仓库铁律：同一判据不得有第二份实现）。这里只做 verdict → 门禁结果映射。
+    # 场景可用 `pass_criteria.lateral_grid_tolerance_m: null` 显式关闭（真 lanelet
+    # 地图下 lanelet 中心可与网格**有意**偏离，本条前提不成立）。
+    _grid_tol = (criteria or {}).get("lateral_grid_tolerance_m",
+                                     LATERAL_GRID_TOL_M)
+    if _grid_tol is not None:
+        og = lateral_target_offgrid(series, tol_m=float(_grid_tol))
+        if og["verdict"] == "fail":
+            failures.append(
+                f"lateral target off-grid: planning target_lane_offset 取到非车道"
+                f"中心值 {og['offgrid']}/{og['frames']} 帧 "
+                f"({og['ratio']:.0%} > {LATERAL_GRID_MAX_RATIO:.0%})，最大相位偏离 "
+                f"{og['max_dev_m']:.2f} m（网格相位 {og['phase_m']:.2f} m）—— "
+                f"横向目标不是合法车道中心（根因层：参考系法向不一致）"
+            )
+        elif og["verdict"] == "insufficient_data":
+            # 「无法判定≠通过」：没判出来要显式可见，不能静默绿。
+            warnings.append(
+                f"lateral target off-grid: 无法判定（有效帧 {og['frames']} 帧 —— 样本不足）"
+            )
 
     # 掉头返程合法沿 −x 行驶：净 x 位移≈0，用累计路径长代替"前进距离"。
     # 城市路网（map_file 多 edge）路线转弯，净 x 位移同样不代表行驶里程。

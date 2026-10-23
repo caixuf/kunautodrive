@@ -598,6 +598,79 @@ def run_all_checks() -> int:
           and abs(_g_cf["max_abs_llt_offset_m"] - 2.0) < 1e-9, str(_g_cf))
 
 
+    print("\n[31] 横向目标骑线门禁（lateral_target_offgrid，2026-10-23 掉头参考系反平行）")
+    # 故障实测：straight_road 掉头段 target 扫到 +4.08 m，而该路车道中心只有
+    # ±1.75/±5.25/±8.75/±12.25 → 16/180 帧骑线（三次运行完全一致，确定性）。
+    _og_bad = []
+    for i in range(20):
+        _og_bad.append({
+            "speed": 12.0, "x": 10.0 + i, "y": -1.75, "heading": 0.0,
+            "steer_signed": 0.0, "lane_count": 4, "lane_width": 3.5,
+            "lane_match_valid": True, "lane_match_offset": 0.0,
+            "maneuver_active": True, "planning_target_offset": 4.08,
+        })
+    _g_og = de.lateral_target_offgrid(_og_bad)
+    check("pure gate: off-grid target → fail", _g_og["verdict"] == "fail", str(_g_og))
+    check("pure gate: counts maneuver frames (unlike chatter)",
+          _g_og["frames"] == 20, str(_g_og))
+    # 全部帧被系统性偏同一个量时众数法会被骗 → 靠相位合法性兜住
+    check("pure gate: systematic offset caught by phase legality",
+          _g_og["phase_legal"] is False, str(_g_og))
+
+    # 混合形态（真故障实测形状）：多数帧在网格上、少数骑线 → 靠 ratio 判 fail
+    _og_mix = []
+    for i in range(20):
+        _og_mix.append({
+            "speed": 12.0, "x": 10.0 + i, "y": -1.75, "heading": 0.0,
+            "steer_signed": 0.0, "lane_count": 4, "lane_width": 3.5,
+            "lane_match_valid": True, "lane_match_offset": 0.0,
+            "maneuver_active": True,
+            "planning_target_offset": (4.08 if i % 4 == 0 else -1.75),
+        })
+    _g_mix2 = de.lateral_target_offgrid(_og_mix)
+    check("pure gate: mixed on/off grid → fail by ratio",
+          _g_mix2["verdict"] == "fail" and _g_mix2["phase_legal"] is True
+          and _g_mix2["offgrid"] > 0, str(_g_mix2))
+
+    _og_ok = [{
+        "speed": 12.0, "x": 10.0 + i, "y": -1.75, "heading": 0.0,
+        "steer_signed": 0.0, "lane_count": 4, "lane_width": 3.5,
+        "lane_match_valid": True, "lane_match_offset": 0.0,
+        "maneuver_active": False,
+        "planning_target_offset": (-1.75 if i % 2 else -5.25),
+    } for i in range(20)]
+    check("pure gate: lane centers → ok",
+          de.lateral_target_offgrid(_og_ok)["verdict"] == "ok")
+
+    # Through score(): 必须作为 FAIL 冒出来（根因层，不依赖车真骑到线上）。
+    def _mk_og(target, state="U_TURN"):
+        scene = {
+            "ego": {"x": 10.0, "y": -1.75, "speed": 12.0, "steer": 0.0,
+                    "heading": 0.0},
+            "lane": {"width": 3.5, "count": 4},
+            "obstacles": [],
+            "entities": [],
+        }
+        metrics = {
+            "topics": _TOPICS,
+            "vehicle": {"speed": 12.0, "x": 10.0},
+            "scene": scene,
+            "driver_mode": "NOA:CRUISE",
+            "planning_debug": {"target_lane_offset": target, "lane_width": 3.5},
+            "behavior": {"state": state},
+        }
+        return {"timestamp": 0.25, "metrics": metrics, "nodes": []}
+
+    _f_og, _w_og, _ = _score_fw(
+        "offgrid", [_mk_og(4.08) for _ in range(20)], dict(_ZERO_CRIT))
+    check("score FAILs on off-grid lateral target",
+          any("off-grid" in x for x in _f_og), str(_f_og)[:240])
+    _f_og_ok, _, _ = _score_fw(
+        "offgrid-ok", [_mk_og(-1.75, state="CRUISE") for _ in range(20)],
+        dict(_ZERO_CRIT))
+    check("score does not FAIL on lane-center targets",
+          not any("off-grid" in x for x in _f_og_ok), str(_f_og_ok)[:240])
+
     print(f"\n{'='*52}")
     print(f"gate self-test: {_passed} passed, {_failed} failed")
     print(f"{'='*52}")

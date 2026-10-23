@@ -2162,7 +2162,10 @@ protected:
                 int n_lanes = g.lane_count;
                 double ego_lane_d = g.ego_y;
                 double ego_ref_s = 0.0;
-                (void)project_to_reference_path(g.ego_x, g.ego_y, ego_ref_s, ego_lane_d);
+                double ego_ref_heading = 0.0;
+                const bool have_ref = project_to_reference_path(
+                    g.ego_x, g.ego_y, ego_ref_s, ego_lane_d,
+                    nullptr, nullptr, &ego_ref_heading);
 
                 if (g.lane_count < 1 || g.lane_count > 16 || g.lane_width < 1.0 || g.lane_width > 10.0) {
                     LOG_WARN("planning", "lane invariant: lane_count=%d lane_width=%.1f (unreasonable)",
@@ -2194,7 +2197,20 @@ protected:
                     const double lw_gate = (g.lane_match.lane_width > 1.0)
                                          ? g.lane_match.lane_width : lane_w;
                     const double max_lane_offset_m = lw_gate * 0.5 - 0.1;
+                    /* 参考系一致性前置条件（2026-10-23 横向摇摆根因）：
+                     * target = ego_d − llt_offset 只在 ref 法向与 lanelet 法向**同向**
+                     * 时成立。双向路返程半幅 / 掉头中段两者反平行，误差恰为 −2·llt_offset
+                     * （随自车偏离车道中心线性放大；实测掉头中段 target 扫到 +4.08 m，
+                     * 而该路车道中心只有 ±1.75/±5.25/±8.75/±12.25）。无新鲜 map_ref
+                     * （have_ref=false）时同样无有效参考系。两种情况一律走 A11 回退。
+                     * 判据取 ref 航向 vs lane 航向（几何量，掉头窗口内恒定）——不用
+                     * 自车航向，否则掉头中自车扫过阈值会让分支来回翻转。 */
+                    const double lane_heading =
+                        g.ego_heading - g.lane_match.llt_heading_err_rad;
+                    const bool ref_frame_ok = have_ref &&
+                        planning_coord::lane_ref_aligned(ego_ref_heading, lane_heading);
                     const bool lane_match_fresh =
+                        ref_frame_ok &&
                         g.lane_match.valid &&
                         (g.lane_match.llt_id != 0) &&
                         (g.lane_match.last_us != 0) &&

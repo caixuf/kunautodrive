@@ -9,6 +9,8 @@
   Rule 2  巡航帧（非机动、非近静止）车身不压线：越线帧占比 < 阈值
   Rule 3  巡航帧车心不越线（D2-06 原文判据）
   Rule 4  全程无碰撞、无 road departure、无 top-level FAIL 以外的严重项
+  Rule 5  巡航帧 planning 横向目标不跳变（target_lane_offset 不在车道中心间阶跃）
+  Rule 6  全帧 planning 横向目标不骑线（target_lane_offset 必须落在合法车道中心上）
 
 判据与 demo_evaluator 的车道保持门禁同源（同阈值常量、同机动豁免口径），
 复用它避免第二份实现。长跑的价值在"时间跨度"，不在"新判据"。
@@ -151,15 +153,12 @@ def _run_demo(duration: int, interval: float) -> list[dict]:
     return samples
 
 
-def _lateral_chatter(samples: list[dict]) -> dict:
-    """Rule5：横向目标跳变。判据本体复用 demo_evaluator.lateral_target_chatter。
+def _to_series(samples: list[dict]) -> list[dict]:
+    """raw topology sample → evaluator series 字段搬运。
 
-    仓库铁律"同一判据不得有第二份实现"，所以这里只做 raw topology sample →
-    evaluator series 的字段搬运，阈值/口径全在 evaluator 里。
+    阈值/口径全在 demo_evaluator 里（仓库铁律"同一判据不得有第二份实现"），
+    这里只搬字段，供 Rule5 / Rule6 共用。
     """
-    sys.path.insert(0, str(ROOT / "ci" / "evaluators"))
-    import demo_evaluator as de  # noqa: E402
-
     series: list[dict] = []
     for s in samples:
         m = s.get("metrics", {})
@@ -182,7 +181,23 @@ def _lateral_chatter(samples: list[dict]) -> dict:
             ),
             "lane_width": float(lane.get("width", 3.5) or 3.5),
         })
-    return de.lateral_target_chatter(series)
+    return series
+
+
+def _demo_evaluator():
+    sys.path.insert(0, str(ROOT / "ci" / "evaluators"))
+    import demo_evaluator as de  # noqa: E402
+    return de
+
+
+def _lateral_chatter(samples: list[dict]) -> dict:
+    """Rule5：横向目标跳变。判据本体复用 demo_evaluator.lateral_target_chatter。"""
+    return _demo_evaluator().lateral_target_chatter(_to_series(samples))
+
+
+def _lateral_offgrid(samples: list[dict]) -> dict:
+    """Rule6：横向目标骑线。判据本体复用 demo_evaluator.lateral_target_offgrid。"""
+    return _demo_evaluator().lateral_target_offgrid(_to_series(samples))
 
 
 def _lane_keep_stats(samples: list[dict]) -> dict:
@@ -251,6 +266,12 @@ def run(duration: int, interval: float) -> tuple[list[str], dict]:
     # 实测踩过：采样漏记时间戳时 span=0 → rate=0 → 对任何数据都 ok。
     chatter = _lateral_chatter(samples)
     st["target_chatter"] = chatter
+    # Rule 6 同样复用 demo_evaluator 纯函数（同口径，无第二份实现）。
+    # 与 Rule5 分工：Rule5 判"目标在跳"（只巡航帧、幅度 > 半车道宽）；Rule6 判
+    # "目标根本不是车道中心"（**含机动帧**）。掉头/返程段的漂移每帧只走
+    # 0.07~1.45 m，Rule5 结构上看不见，只有 Rule6 抓得住（2026-10-23 实测）。
+    offgrid = _lateral_offgrid(samples)
+    st["target_offgrid"] = offgrid
 
     coverage = (st["lane_match_valid"] / st["samples"]) if st["samples"] else 0.0
     if st["samples"] < LANE_MATCH_MIN_SAMPLES:
@@ -288,6 +309,17 @@ def run(duration: int, interval: float) -> tuple[list[str], dict]:
             f"frames={chatter['frames']}, span_s={chatter['span_s']:.1f}, "
             f"jumps={chatter['jumps']}。目标字段缺失/采样无时间戳都会走到这里，"
             f"修好采样再看，别把这条当 PASS")
+    if offgrid["verdict"] == "fail":
+        failures.append(
+            f"Rule6 横向目标骑线：planning target_lane_offset 取到非车道中心值 "
+            f"{offgrid['offgrid']}/{offgrid['frames']} 帧 ({offgrid['ratio']:.0%})，"
+            f"最大相位偏离 {offgrid['max_dev_m']:.2f} m（网格相位 "
+            f"{offgrid['phase_m']:.2f} m）—— 横向目标不是合法车道中心，"
+            f"车会被引到两车道之间（参考系法向不一致）")
+    elif offgrid["verdict"] == "insufficient_data":
+        failures.append(
+            f"Rule6 无法判定（不等于通过）：横向目标骑线判据缺样本 —— "
+            f"frames={offgrid['frames']}。目标字段缺失/车道宽缺失都会走到这里")
     return failures, st
 
 

@@ -1223,5 +1223,97 @@ class LateralTargetChatterTest(unittest.TestCase):
         self.assertGreater(out["span_s"], 0.0)
 
 
+class LateralTargetOffgridTest(unittest.TestCase):
+    """2026-10-23 掉头/返程参考系反平行 → 横向目标骑线（lateral_target_offgrid）。
+
+    故障形态：planning 巡航分支写 target = ego_d − llt_offset，该式只在 ref 法向
+    与 lanelet 法向**同向**时成立；反平行（双向路返程半幅 / 掉头中段）时误差恰为
+    −2·llt_offset → 掉头段 target 扫到 +4.08~+4.22 m，而该路车道中心只有
+    ±1.75/±5.25/±8.75/±12.25。
+
+    与 chatter 的关键差别：**本判据必须统计机动帧** —— 掉头段的漂移正是发生在
+    机动期，而 chatter 把机动帧全豁免了，结构上看不见。
+    """
+
+    def test_passes_on_grid_centers(self):
+        """目标恰好落在车道中心（健康）→ ok，不得误报。"""
+        evaluator = load_evaluator()
+        series = [{"planning_target_offset": v, "lane_width": 3.5}
+                  for v in (-1.75, -5.25, -8.75, -12.25) * 25]
+        out = evaluator.lateral_target_offgrid(series)
+        self.assertEqual(out["verdict"], "ok", out)
+        self.assertEqual(out["offgrid"], 0)
+        self.assertAlmostEqual(out["phase_m"], 1.75, places=2)
+
+    def test_two_way_centers_share_phase(self):
+        """双向路 +1.75/+5.25 与 -1.75/-5.25 同相位 → 不得误报。"""
+        evaluator = load_evaluator()
+        series = [{"planning_target_offset": v, "lane_width": 3.5}
+                  for v in (1.75, 5.25, -1.75, -5.25) * 25]
+        self.assertEqual(evaluator.lateral_target_offgrid(series)["verdict"], "ok")
+
+    def test_fails_on_offgrid_target(self):
+        """故障实测值（掉头段 target 扫到 +4.08 / +2.58 / +3.46…）→ 必须 FAIL。"""
+        evaluator = load_evaluator()
+        vals = ([-1.75] * 60
+                + [4.080, 1.027, 2.582, 3.458, -0.422, -0.267] * 5)
+        series = [{"planning_target_offset": v, "lane_width": 3.5} for v in vals]
+        out = evaluator.lateral_target_offgrid(series)
+        self.assertEqual(out["verdict"], "fail", out)
+        self.assertGreater(out["offgrid"], 0)
+        self.assertGreater(out["ratio"], evaluator.LATERAL_GRID_MAX_RATIO)
+        self.assertAlmostEqual(out["phase_m"], 1.75, places=2)
+
+    def test_counts_maneuver_frames_unlike_chatter(self):
+        """掉头/变道帧也要算 —— chatter 全豁免它们，本判据不能。"""
+        evaluator = load_evaluator()
+        series = [{"planning_target_offset": (4.080 if i % 3 else -1.75),
+                   "lane_width": 3.5, "maneuver_active": True, "speed": 20.0}
+                  for i in range(90)]
+        self.assertEqual(evaluator.lateral_target_chatter(series)["verdict"],
+                         "insufficient_data")
+        self.assertEqual(evaluator.lateral_target_offgrid(series)["verdict"],
+                         "fail")
+
+    def test_systematic_offset_caught_by_phase_legality(self):
+        """全部帧被系统性偏同一个量 → 众数法会被骗，必须靠相位合法性兜住。
+
+        车道中心相对道路参考线只能是半整数倍车道宽 → 相位必为 w/2 或 0。
+        众数相位不落在二者之一 = 整套目标都被带偏了（如车道中心公式被改错）。
+        """
+        evaluator = load_evaluator()
+        series = [{"planning_target_offset": 4.08, "lane_width": 3.5}
+                  for _ in range(50)]
+        out = evaluator.lateral_target_offgrid(series)
+        self.assertEqual(out["verdict"], "fail", out)
+        self.assertFalse(out["phase_legal"])
+        self.assertAlmostEqual(out["phase_m"], 0.58, places=2)
+
+    def test_odd_lane_count_zero_phase_is_legal(self):
+        """N 奇双向路相位为 0（整数倍车道宽）→ 合法，不得误报。"""
+        evaluator = load_evaluator()
+        series = [{"planning_target_offset": v, "lane_width": 3.5}
+                  for v in (0.0, -3.5, -7.0, 3.5) * 15]
+        out = evaluator.lateral_target_offgrid(series)
+        self.assertEqual(out["verdict"], "ok", out)
+        self.assertTrue(out["phase_legal"])
+
+    def test_insufficient_frames(self):
+        """样本太少 → insufficient_data（不等于通过）。"""
+        evaluator = load_evaluator()
+        series = [{"planning_target_offset": 4.08, "lane_width": 3.5}
+                  for _ in range(3)]
+        self.assertEqual(evaluator.lateral_target_offgrid(series)["verdict"],
+                         "insufficient_data")
+
+    def test_missing_lane_width_is_insufficient(self):
+        """lane_width 不可用（<=1.0）→ 无网格基准 → insufficient_data。"""
+        evaluator = load_evaluator()
+        series = [{"planning_target_offset": 4.08, "lane_width": 0.0}
+                  for _ in range(50)]
+        self.assertEqual(evaluator.lateral_target_offgrid(series)["verdict"],
+                         "insufficient_data")
+
+
 if __name__ == "__main__":
     unittest.main()

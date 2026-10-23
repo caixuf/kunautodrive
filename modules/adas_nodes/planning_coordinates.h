@@ -107,6 +107,28 @@ inline int hold_lane_index(double ego_d, int candidate_idx, int held_idx,
     return held_idx;
 }
 
+/**
+ * 参考系一致性：两个航向是否同向（|wrap(a − b)| ≤ max_misalign_rad）。
+ *
+ * 用于 `target_lane_offset` 的真消费前置条件。target = ego_d − llt_offset 只在
+ * **参考线法向与 lanelet 法向同向**时成立：双向路返程半幅 / 掉头中段两法向
+ * 反平行（夹角 π），减法变加法，误差 = −2·llt_offset（随自车偏离车道中心线性
+ * 放大）。故判据取 ref 航向与 lane 航向，二者都是几何量、在掉头窗口内恒定，
+ * 不会像"自车航向 vs 参考航向"那样随自车扫过阈值来回翻转（实测那样做会把
+ * steer_flip_rate 从 0.111 推到 0.200）。
+ *
+ * 2026-10-23 实测（straight_road 开场掉头）：正常巡航/变道 ref 与 lane 夹角
+ * ≤ 0.09 rad；掉头中段 3.00–3.14 rad —— 阈值 45°(0.785) 两侧余量充足。
+ */
+inline bool lane_ref_aligned(double a_heading, double b_heading,
+                             double max_misalign_rad = 0.7853981633974483) {
+    constexpr double kPi = 3.14159265358979323846;
+    double d = a_heading - b_heading;
+    while (d > kPi) d -= 2.0 * kPi;
+    while (d < -kPi) d += 2.0 * kPi;
+    return std::fabs(d) <= max_misalign_rad;
+}
+
 inline bool project_to_path(double x, double y,
                             const double* ref_x, const double* ref_y,
                             const double* ref_s, int count,

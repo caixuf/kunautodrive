@@ -41,7 +41,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | ci-eigen-gate | `python3 ci/gates/ci_eigen_check.py` | 会跑 `cmake -S` 的 CI job 漏装 `libeigen3-dev` → configure 退到联网 git clone Eigen，网络一抖整片红（2026-10-22 三个 job 齐红）；豁免只认显式 `-DFLOWENGINE_ALLOW_NO_EIGEN=ON` |
 | book-guard-gate | `python3 ci/gates/book_guard.py` | `docs/book/` 掉回"按源码逐条重建"（行数上限 / 行号密度 / 突变） |
 | behavior-fsm-gate | `python3 ci/gates/behavior_fsm_check.py` | `behavior_planner` 转移表死状态 / 死事件 / 变道缺超时回退 |
-| long-run-lane-keep | `python3 ci/gates/long_run_lane_keep.py --duration 600` | 10min demo.sh soak：巡航压线 / 车心越线 / **横向目标跳变（Rule5：planning target_lane_offset 在车道中心间阶跃）**（长跑才显形的漂移退化；nightly，过渡期 continue-on-error） |
+| long-run-lane-keep | `python3 ci/gates/long_run_lane_keep.py --duration 600` | 10min demo.sh soak：巡航压线 / 车心越线 / **横向目标跳变（Rule5：planning target_lane_offset 在车道中心间阶跃）** / **横向目标骑线（Rule6：target 必须落在合法车道中心上，含机动帧）**（长跑才显形的漂移退化；nightly，过渡期 continue-on-error） |
 | lanelet-consistency-gate | `python3 ci/gates/lanelet_consistency_check.py` | `map.json` ↔ `lanelet.osm` Rule 1–5 漂移 |
 | lane-match-schema-gate | `python3 ci/gates/lane_match_schema_check.py` | 车道匹配 schema ↔ codegen 契约不一致（`--self-test`） |
 | scenario / clock / map | `tools/scenarioctl.py validate` / 禁 `modules/` 裸 `clock_gettime` / `tools/check_map_connectivity.py` | 空场景引用 / raw clock / 断链地图 |
