@@ -1169,6 +1169,10 @@ set_tests_properties(fusion_degraded_tests PROPERTIES TIMEOUT 20)
 # ── ADAS 节点纯逻辑单元测试（imu / slam / actuator_pwm dry-run 路径）──
 # 真车部署 roadmap 第一步：把"两头"占位实现的纯逻辑钉死，避免后续接入真实
 # 算法/驱动时回归掉已验证过的行为。副本 + 行号标注策略，详见文件头注释。
+# D2-03 Prefer A: Lanelet2 for logic tests (real-ID proof)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Lanelet2Standalone.cmake)
+kun_add_lanelet2()
+
 add_executable(test_adas_nodes_logic tests/test_adas_nodes_logic.c
                                 modules/adas_nodes/imu_protocol.c
                                 modules/adas_nodes/perception_points.c
@@ -1182,6 +1186,10 @@ add_executable(test_adas_nodes_logic tests/test_adas_nodes_logic.c
                                 modules/adas_nodes/flowsim/lane_match_helpers.cpp)
 set_source_files_properties(tests/test_adas_nodes_logic.c PROPERTIES LANGUAGE CXX)
 target_link_libraries(test_adas_nodes_logic flowengine_core)
+if(TARGET kun_lanelet2)
+  target_link_libraries(test_adas_nodes_logic kun_lanelet2)
+  target_compile_definitions(test_adas_nodes_logic PRIVATE KUN_HAS_LANELET2=1)
+endif()
 add_dependencies(test_adas_nodes_logic msg_codegen)
 target_include_directories(test_adas_nodes_logic PRIVATE ${GEN_DIR}
                                                     modules/adas_nodes)

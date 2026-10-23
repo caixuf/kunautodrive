@@ -29,6 +29,11 @@ endif()
 
 message(STATUS "FlowEngine root:  ${FLOW_ROOT}")
 message(STATUS "FlowEngine build: ${FLOWENGINE_BUILD}")
+
+# D2-03 Prefer A: Lanelet2 standalone (core/io/projection)
+include(${FLOW_ROOT}/cmake/Lanelet2Standalone.cmake)
+kun_add_lanelet2()
+
 if(WIN32 AND NOT TARGET m)
     add_library(m INTERFACE)
 endif()
@@ -394,6 +399,16 @@ else()
     target_link_libraries(flowsim_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
     message(WARNING "flowsim_node: esminiRMLib NOT found — using limited RoadManager stub")
 endif()
+
+# D2-03 Prefer A: Lanelet2 real IDs (core/io/projection)
+if(TARGET kun_lanelet2)
+    target_link_libraries(flowsim_node kun_lanelet2)
+    target_compile_definitions(flowsim_node PRIVATE KUN_HAS_LANELET2=1)
+    message(STATUS "flowsim_node: linked kun_lanelet2 (D2-03 Prefer A)")
+else()
+    message(WARNING "flowsim_node: kun_lanelet2 missing — real-ID path compile-disabled")
+endif()
+
 
 # ── 离线 esmini 链路自检（挂 ctest）───────────────────────────
 # test_road_network 是场景无关的 invariant 测试：json_to_xodr.py 把场景 JSON 转成
