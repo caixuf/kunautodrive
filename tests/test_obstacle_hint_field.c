@@ -1,6 +1,6 @@
 /**
- * test_obstacle_hint_field.c — D2-07 phase 1: Obstacle.obs_lane_match_hint
- *                              序列化 round-trip + 字段契约测试
+ * test_obstacle_hint_field.c — D2-07 Prefer A: Obstacle.obs_lane_match_hint (int8)
+ *                              serialize round-trip + field contract
  *
  * 覆盖：
  *   1. test_obstacle_serialize_with_hint_true   — 构造 hint=true,  round-trip → true
@@ -44,7 +44,7 @@ static void test_obstacle_serialize_with_hint_true(void) {
     src.lane_id      = 0;
     src.type         = OBJ_TYPE_VEHICLE;
     src.confidence   = 0.95f;
-    src.obs_lane_match_hint = true;  /* 关键: fusion 标记为同/邻车道 */
+    src.obs_lane_match_hint = 1;  /* Prefer A: lane_match.valid==1 */
 
     uint8_t buf[64] = {0};
     size_t out_size = 0;
@@ -65,8 +65,8 @@ static void test_obstacle_serialize_with_hint_true(void) {
     TEST(dst.lane_id == src.lane_id, "round-trip lane_id preserved");
     TEST(dst.type == src.type, "round-trip type preserved");
     TEST(dst.confidence == src.confidence, "round-trip confidence preserved");
-    TEST(dst.obs_lane_match_hint == true,
-         "round-trip obs_lane_match_hint == true (fused to true → still true)");
+    TEST(dst.obs_lane_match_hint == 1,
+         "round-trip obs_lane_match_hint == 1 (valid→hint=1)");
 }
 
 /* ──────────────────────────────────────────────────────────────
@@ -86,7 +86,7 @@ static void test_obstacle_serialize_with_hint_false(void) {
     src.lane_id      = -1;  /* 未分配 */
     src.type         = OBJ_TYPE_PEDESTRIAN;
     src.confidence   = 0.40f;
-    src.obs_lane_match_hint = false;  /* 关键: fusion 暂无法判断 */
+    src.obs_lane_match_hint = 0;  /* Prefer A: no usable lane_match */
 
     uint8_t buf[64] = {0};
     size_t out_size = 0;
@@ -99,8 +99,8 @@ static void test_obstacle_serialize_with_hint_false(void) {
     TEST(rc == 0, "deserialize hint=false returns 0");
     TEST(dst.confidence == src.confidence, "confidence preserved (false)");
     TEST(dst.lane_id == -1, "lane_id=-1 preserved (false case)");
-    TEST(dst.obs_lane_match_hint == false,
-         "round-trip obs_lane_match_hint == false (default / undecided preserved)");
+    TEST(dst.obs_lane_match_hint == 0,
+         "round-trip obs_lane_match_hint == 0 (missing/valid0 preserved)");
     /* 反向断言: 必须 *不* 因为 hint=false 而丢失 lane_id 等其他字段 */
     TEST(dst.x == src.x, "x preserved alongside false hint");
     TEST(dst.type == src.type, "type preserved alongside false hint");
@@ -140,19 +140,19 @@ static void test_obstacle_hint_byte_position(void) {
     Obstacle src = {0};
     src.id = 1; src.x = 1.0f; src.y = 2.0f; src.vx = 0; src.vy = 0;
     src.width = 0; src.length = 0; src.lane_id = 0; src.type = 0;
-    src.confidence = 0; src.obs_lane_match_hint = true;
+    src.confidence = 0; src.obs_lane_match_hint = 1;
 
     uint8_t buf[64] = {0};
     size_t out_size = 0;
     Obstacle_serialize(&src, buf, &out_size);
     TEST(out_size == 35, "wire size stays 35");
-    TEST(buf[34] == 1, "wire[34] == 1 when hint=true");
+    TEST(buf[34] == 1, "wire[34] == 1 when hint=1");
 
-    src.obs_lane_match_hint = false;
+    src.obs_lane_match_hint = 0;
     memset(buf, 0, sizeof(buf));
     Obstacle_serialize(&src, buf, &out_size);
-    TEST(buf[34] == 0, "wire[34] == 0 when hint=false");
-    /* 前 34B 在序列化时不应被 bool 字段污染(serialize 顺序固定) */
+    TEST(buf[34] == 0, "wire[34] == 0 when hint=0");
+    /* 前 34B 在序列化时不应被 hint 字段污染(serialize 顺序固定) */
     TEST(buf[0] == 0x01 && buf[1] == 0x00 && buf[2] == 0x00 && buf[3] == 0x00,
          "wire[0..3] == id=1 little-endian (前 34B 未受 hint 影响)");
 }
@@ -168,7 +168,8 @@ static void test_obstacle_field_desc_present(void) {
         if (strcmp(Obstacle_fields[i].name, "obs_lane_match_hint") == 0) {
             found_hint = 1;
             /* 字段类型/offset/size 校验 */
-            TEST(Obstacle_fields[i].elem_size == 1, "FIELD_KIND_BOOL: elem_size == 1");
+            TEST(Obstacle_fields[i].elem_size == 1, "int8 hint: elem_size == 1");
+            TEST(Obstacle_fields[i].kind == FIELD_KIND_INT, "Prefer A: FIELD_KIND_INT for int8");
             TEST(Obstacle_fields[i].array_len == 1, "hint is scalar (array_len == 1)");
             /* offset = offsetof(Obstacle, obs_lane_match_hint) — 由 codegen 自动注入 */
         } else if (strcmp(Obstacle_fields[i].name, "type") == 0) {
