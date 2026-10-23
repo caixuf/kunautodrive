@@ -1977,6 +1977,7 @@ def max_lane_offset_gate(series: list[dict], max_lane_offset_m: float) -> dict:
 
     Invalid / missing lane_match frames are skipped (A11). Returns a dict with
     verdict in {pass, fail, skip}, max_abs_llt_offset_m, frames_counted.
+    score() maps fail→WARN by default; FAIL only under enforce_max_lane_offset.
     """
     counted = 0
     max_abs = 0.0
@@ -2645,7 +2646,10 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
             )
 
     # ── D2-10 max_lane_offset_m gate (FR-CI-02) ──
-    # Run metric over valid lane_match frames only; over threshold → FAIL.
+    # Always record max_abs_llt_offset_m. Over threshold → WARN by default
+    # (北极星: do not CI-block until 4×3 closeout). FAIL only when
+    # criteria.enforce_max_lane_offset / --enforce-max-lane-offset is set
+    # (scenario_regression --d2-10-scenes turns that on for closeout).
     # Threshold Prefer: criteria.max_lane_offset_m (suite/CLI injected) else width/2-0.1.
     _lw_for_gate = DEFAULT_LANE_WIDTH_M
     for _m in lm_valid_frames:
@@ -2660,12 +2664,19 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         criteria, lane_width_m=_lw_for_gate)
     _mlo = max_lane_offset_gate(series, max_lane_offset_m)
     max_abs_llt_offset_m = float(_mlo["max_abs_llt_offset_m"])
+    _enforce_mlo = bool((criteria or {}).get("enforce_max_lane_offset"))
     if _mlo["verdict"] == "fail":
-        failures.append(
+        _mlo_msg = (
             f"max lane offset: max |llt_offset| {max_abs_llt_offset_m:.3f} m "
             f"> max_lane_offset_m {max_lane_offset_m:.3f} m "
             f"(over {_mlo['frames_counted']} valid lane_match frames)"
         )
+        if _enforce_mlo:
+            failures.append(_mlo_msg)
+        else:
+            warnings.append(
+                _mlo_msg + " [WARN only; pass --enforce-max-lane-offset to FAIL]"
+            )
     elif _mlo["verdict"] == "skip":
         warnings.append(
             "max_lane_offset_m gate skipped: no valid lane_match frames "
@@ -3695,6 +3706,9 @@ def main() -> int:
                         help="require injected raw_cmd timeout evidence with L3 emergency stop")
     parser.add_argument("--max-lane-offset-m", type=float, default=None,
                         help="D2-10 gate threshold (m); overrides suite/criteria; default lane_width/2-0.1")
+    parser.add_argument("--enforce-max-lane-offset", action="store_true",
+                        help="D2-10: escalate max_lane_offset over-threshold from WARN to FAIL "
+                             "(default WARN so CI demo_evaluator stays non-blocking until 4x3)")
     args = parser.parse_args()
     if args.json_file is None:
         args.json_file = runtime_topology_path()
@@ -3835,6 +3849,13 @@ def main() -> int:
             criteria["max_lane_offset_m"] = float(os.environ["FLOW_MAX_LANE_OFFSET_M"])
         except ValueError:
             pass
+    if getattr(args, "enforce_max_lane_offset", False):
+        criteria = dict(criteria or {})
+        criteria["enforce_max_lane_offset"] = True
+    elif os.environ.get("FLOW_ENFORCE_MAX_LANE_OFFSET", "").strip().lower() in (
+            "1", "true", "yes", "on"):
+        criteria = dict(criteria or {})
+        criteria["enforce_max_lane_offset"] = True
 
 
     failures, warnings, summary = score(samples, runtime_launcher_stderr_path(), criteria,

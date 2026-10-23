@@ -304,7 +304,8 @@ def scenario_key(entry: dict) -> str:
 
 
 def run_scenario(entry: dict, default_duration: int, interval: float,
-                 results_dir: Path, max_lane_offset_m: float | None = None) -> dict:
+                 results_dir: Path, max_lane_offset_m: float | None = None,
+                 enforce_max_lane_offset: bool = False) -> dict:
     """Run one scenario through demo_evaluator and return its result payload.
 
     Returns the dict written by ``demo_evaluator --json-out``:
@@ -327,6 +328,8 @@ def run_scenario(entry: dict, default_duration: int, interval: float,
     ]
     if max_lane_offset_m is not None:
         cmd.extend(["--max-lane-offset-m", str(max_lane_offset_m)])
+    if enforce_max_lane_offset:
+        cmd.append("--enforce-max-lane-offset")
     print(f"\n─── running scenario '{key}' ({duration}s) ───", flush=True)
     # 超时兜底：demo_evaluator 理论上不会挂（select 限时读取），但冷构建
     # （adas_nodes 子项目 ~2.5min）+ 运行 + 收尾可能很长，给足余量后仍超时
@@ -443,7 +446,8 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true",
                         help="list the scenarios that would run without executing the demo")
     parser.add_argument("--d2-10-scenes", action="store_true",
-                        help="scaffold filter: only straight_road/curve_road/city_comprehensive/urban_challenge (D2-10 4×3 set)")
+                        help="scaffold filter: only straight_road/curve_road/city_comprehensive/urban_challenge "
+                             "(D2-10 4x3 set); also turns on --enforce-max-lane-offset for closeout FAIL")
     parser.add_argument("--collect-fixtures", type=Path, default=None,
                         help="write slim result fixtures under this dir (payload collection for D2-10 gate prep; non-blocking)")
     args = parser.parse_args()
@@ -464,6 +468,7 @@ def main() -> int:
         if not scenarios:
             raise SystemExit("no enabled D2-10 scenes in suite (expected "
                              + ", ".join(D2_10_SCENES) + ")")
+    enforce_mlo = bool(args.d2_10_scenes)
     default_duration = int(suite.get("default_duration_s", 30))
     raw_tolerances = suite.get("baseline_tolerances")
     tolerances = raw_tolerances if isinstance(raw_tolerances, dict) else {}
@@ -494,14 +499,14 @@ def main() -> int:
         mlo = resolve_suite_max_lane_offset_m(suite, entry)
         if repeats <= 1:
             payload = run_scenario(entry, default_duration, args.interval,
-                                   args.results_dir, max_lane_offset_m=mlo)
+                                   args.results_dir, max_lane_offset_m=mlo, enforce_max_lane_offset=enforce_mlo)
             if args.collect_fixtures is not None:
                 collect_fixture_payload(payload, args.collect_fixtures, scenario_key(entry))
             return payload
         payloads_r = []
         for ri in range(repeats):
             p = run_scenario(entry, default_duration, args.interval,
-                             args.results_dir, max_lane_offset_m=mlo)
+                             args.results_dir, max_lane_offset_m=mlo, enforce_max_lane_offset=enforce_mlo)
             if args.collect_fixtures is not None:
                 collect_fixture_payload(p, args.collect_fixtures, scenario_key(entry), ri)
             payloads_r.append(p)
