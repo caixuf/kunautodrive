@@ -1,10 +1,11 @@
 /**
  * test_planning_fallback_when_match_invalid.cpp — D2-06 / A11 验收单测:
  *
- * 验证 localization/lane_match 失效降级 (A11 铁律)：
- *   - 当 valid=1 且新鲜/合理时：消费权威 llt_offset (target = ego_lane_d - llt_offset)
- *   - 当 valid=0 时：走 fallback 巡航 (nearest_lane 启发式)，不崩溃、不丢帧、横向走廊自洽
- *   - 当 lane_match 超时 (>500ms) 或异常跳变 (|offset| >= 1.5*lane_w) 时：防御性回退
+ * 验证 localization/lane_match 真消费 + 失效降级 (A11 铁律)：
+ *   - 当 valid=1 且 llt_id!=0 且新鲜 且 |llt_offset|<=lane_w/2-0.1：
+ *       target = ego_lane_d - llt_offset（lanelet 中心，不再网格取整）
+ *   - 当 valid=0 时：走 fallback 巡航 (nearest_lane 网格中心绝对 d)
+ *   - 当 lane_match 超时 (>500ms) 或越界 (|offset| > max_lane_offset_m) 时：防御性回退
  *   - 单向路与双向路下 fallback 均严格收敛在对应合法车道中心
  */
 
@@ -33,7 +34,7 @@ struct LaneMatchSnapshot {
     uint64_t last_us{0};
 };
 
-/* 纯算法函数：计算 target_lane_offset，完全对齐 planning_node.cpp:2188-2195 */
+/* 纯算法函数：计算 target_lane_offset，对齐 planning_node.cpp D2-06 Prefer */
 static double compute_target_lane_offset(
     double ego_lane_d,
     int lane_count,
@@ -43,18 +44,19 @@ static double compute_target_lane_offset(
     uint64_t now_us,
     bool* used_lane_match = nullptr)
 {
-    const bool lane_match_fresh = lm.valid && (lm.last_us != 0) &&
+    const double lw_gate = (lm.lane_width > 1.0) ? lm.lane_width : lane_w;
+    const double max_lane_offset_m = lw_gate * 0.5 - 0.1;
+    const bool lane_match_fresh = lm.valid && (lm.llt_id != 0) && (lm.last_us != 0) &&
                                   (now_us - lm.last_us < 500000ULL) &&
-                                  (std::fabs(lm.llt_offset) < lane_w * 1.5);
+                                  (std::fabs(lm.llt_offset) <= max_lane_offset_m);
     if (used_lane_match) *used_lane_match = lane_match_fresh;
 
     if (lane_match_fresh) {
         return ego_lane_d - lm.llt_offset;
     } else {
-        /* A11 fallback: 回退到 nearest_lane 启发式 */
+        /* A11 fallback: nearest_lane 网格中心（绝对 d，与 planning_node 一致） */
         const int lane_idx = planning_coord::nearest_lane(ego_lane_d, lane_count, lane_w, false, side_offset);
-        const double lane_center = planning_coord::lane_center_d(lane_idx, lane_count, lane_w, side_offset);
-        return ego_lane_d - lane_center;
+        return planning_coord::lane_center_d(lane_idx, lane_count, lane_w, side_offset);
     }
 }
 
@@ -97,9 +99,8 @@ int main() {
         double ego_d = -1.50;
         double target_offset = compute_target_lane_offset(ego_d, lane_count, lane_w, side_offset, lm, t0 + 10000ULL, &used_lm);
         CHECK(used_lm == false);
-        // fallback to nearest_lane: nearest to -1.50 is lane 0 (center -1.75)
-        // target_offset = ego_d - center = -1.50 - (-1.75) = +0.25
-        CHECK(nearly_equal(target_offset, 0.25));
+        // fallback: nearest to -1.50 is lane 0 center -1.75 (absolute d)
+        CHECK(nearly_equal(target_offset, -1.75));
         CHECK(!std::isnan(target_offset) && !std::isinf(target_offset));
     }
 
@@ -116,11 +117,11 @@ int main() {
         // now = t0 + 600ms (> 500ms)
         double target_offset = compute_target_lane_offset(ego_d, lane_count, lane_w, side_offset, lm, t0 + 600000ULL, &used_lm);
         CHECK(used_lm == false);
-        // nearest_lane to -5.25 is lane 1 (-5.25), target_offset = 0.0
-        CHECK(nearly_equal(target_offset, 0.0));
+        // nearest_lane to -5.25 is lane 1 center -5.25 (absolute d)
+        CHECK(nearly_equal(target_offset, -5.25));
     }
 
-    /* ── 4. 防御性过滤: 异常跳变 (|offset| >= 1.5 * lane_w) ── */
+    /* ── 4. 防御性过滤: 越出 max_lane_offset_m (=lane_w/2-0.1) ── */
     {
         LaneMatchSnapshot lm;
         lm.valid = true;
@@ -132,7 +133,8 @@ int main() {
         double ego_d = -1.75;
         double target_offset = compute_target_lane_offset(ego_d, lane_count, lane_w, side_offset, lm, t0 + 10000ULL, &used_lm);
         CHECK(used_lm == false);
-        CHECK(nearly_equal(target_offset, 0.0));
+        // ego at -1.75 → lane 0 center -1.75 absolute
+        CHECK(nearly_equal(target_offset, -1.75));
     }
 
     /* ── 5. 多车道遍历与双向路兼容性验证 ── */
@@ -145,10 +147,32 @@ int main() {
             bool used_lm = true;
             double off = compute_target_lane_offset(center, lane_count, lane_w, two_way_so, lm_invalid, t0, &used_lm);
             CHECK(used_lm == false);
-            CHECK(nearly_equal(off, 0.0));
+            CHECK(nearly_equal(off, center));
         }
     }
 
-    printf("PASS: test_planning_fallback_when_match_invalid (all 5 A11 test suites passed)\n");
+    /* ── 6. 门禁边界: |llt_offset| == max_lane_offset_m 仍消费；越界回退 ── */
+    {
+        const double max_off = lane_w * 0.5 - 0.1; // 1.65
+        LaneMatchSnapshot lm;
+        lm.valid = true;
+        lm.llt_id = 1001;
+        lm.lane_width = lane_w;
+        lm.last_us = t0;
+        lm.llt_offset = max_off;
+        bool used_lm = false;
+        double ego_d = -1.75 + max_off;
+        double target_offset = compute_target_lane_offset(ego_d, lane_count, lane_w, side_offset, lm, t0 + 10000ULL, &used_lm);
+        CHECK(used_lm == true);
+        CHECK(nearly_equal(target_offset, -1.75));
+
+        lm.llt_offset = max_off + 0.01;
+        used_lm = true;
+        target_offset = compute_target_lane_offset(ego_d, lane_count, lane_w, side_offset, lm, t0 + 10000ULL, &used_lm);
+        CHECK(used_lm == false);
+        CHECK(nearly_equal(target_offset, -1.75));
+    }
+
+    printf("PASS: test_planning_fallback_when_match_invalid (all 6 A11 test suites passed)\n");
     return 0;
 }
