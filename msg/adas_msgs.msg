@@ -149,13 +149,13 @@ struct StereoFrame {
 # ── 感知输出 ─────────────────────────────────────────────────
 
 # 嵌套结构体 — 被 ObstacleList 引用
-# D2-07 phase 1 加 obs_lane_match_hint：
-#   fusion 在跨帧追踪阶段给目标打的"是否与 ego 同/邻车道"提示。
-#   语义（与 spec FR-RT-05 一致）：
-#     true  = fusion 已判断该 obs 位于 ego 当前车道或邻车道（±1 lane）；
-#     false = fusion 暂无法判断 obs 所属车道，不代表 obs 在其它车道。
-#   CLAUDE.md 职责铁律：fusion 不做硬过滤；planning 自行决定是否消费此 hint
-#   （例如用于缩小 collide-window 候选集，但绝不能据此直接过滤掉 false 项）。
+# D2-07 Prefer A (obs_lane_match_hint):
+#   perception_node (default Obstacles publisher) subscribes localization/lane_match,
+#   stamps every Obstacle in a publish with the same hint:
+#     1 = latest lane_match.valid == 1
+#     0 = never-received / valid==0 / parse fail
+#   Soft only — planning must not hard-FAIL solely because hint==0.
+#   lane_id unchanged; do not overload confidence/lane_id.
 struct Obstacle {
     uint32   id             # 目标 ID（跨帧唯一）
     float    x              # 纵向距离（米，车体坐标系）
@@ -167,7 +167,7 @@ struct Obstacle {
     int8     lane_id        # 感知计算的车道归属：0=最左, N-1=最右, -1=未分配
     ObstacleType type       # 目标类型（引用枚举）
     float    confidence     # 置信度 [0, 1]
-    bool     obs_lane_match_hint   # fusion 提示：是否与 ego 同/邻车道 (true=是, false=未知/不适用)
+    int8     obs_lane_match_hint   # 0 = no usable lane_match; 1 = lane_match.valid
 }
 
 struct ObstacleList {
