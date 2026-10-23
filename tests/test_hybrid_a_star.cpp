@@ -309,7 +309,16 @@ void TestPerformanceTypicalParking() {
               << ", Min = " << min_time << "ms"
               << ", Max = " << max_time << "ms" << std::endl;
 
-    TEST_CHECK(avg_time < 50.0, "Average planning time MUST be under 50ms (Requirement: < 50ms)");
+    // ASan (~2-3x slowdown) inflates Hybrid A* avg beyond the Release 50ms gate
+    // (CI saw ~63.8ms). Keep Release budget; relax only under AddressSanitizer.
+#if defined(__SANITIZE_ADDRESS__) || \
+    (defined(__has_feature) && __has_feature(address_sanitizer))
+    const double kAvgBudgetMs = 150.0;
+#else
+    const double kAvgBudgetMs = 50.0;
+#endif
+    TEST_CHECK(avg_time < kAvgBudgetMs,
+               "Average planning time MUST be under budget (Release <50ms; ASan <150ms)");
 }
 
 int main() {
