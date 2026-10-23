@@ -4,176 +4,47 @@
   "default_duration_s": 45,
   "baseline_tolerances": {
     "_comment": "min_ratio=max_abs_increase 两型门禁只查数值回归（current vs baseline），不查绝对通过。跑新 baseline 前确认当前是健康值。",
-    "avg_speed_mps": {
-      "min_ratio": 0.6
-    },
-    "x_delta_m": {
-      "min_ratio": 0.6
-    },
-    "max_lane_error_m": {
-      "max_abs_increase": 0.5
-    },
+    "avg_speed_mps":            {"min_ratio": 0.6},
+    "x_delta_m":                {"min_ratio": 0.6},
+    "max_lane_error_m":         {"max_abs_increase": 0.5},
     "_min_road_margin_is_a_min": "越小越危险 → min_ratio（当前 < 基线×0.4 = 回归）",
-    "min_road_margin_m": {
-      "min_ratio": 0.4
-    },
-    "steer_flip_rate_hz": {
-      "max_abs_increase": 0.5
-    },
-    "steer_rate_rms_per_s": {
-      "max_abs_increase": 0.5
-    },
-    "yaw_rate_rms_radps": {
-      "max_abs_increase": 0.2
-    },
-    "green_phase_max_stop_s": {
-      "max_abs_increase": 3.0
-    },
-    "lane_change_count": {
-      "max_abs_increase": 4
-    },
-    "stagnation_duration_s": {
-      "max_abs_increase": 5.0
-    }
+    "min_road_margin_m":        {"min_ratio": 0.4},
+    "steer_flip_rate_hz":       {"max_abs_increase": 0.5},
+    "steer_rate_rms_per_s":     {"max_abs_increase": 0.5},
+    "yaw_rate_rms_radps":       {"max_abs_increase": 0.2},
+    "green_phase_max_stop_s":   {"max_abs_increase": 3.0},
+    "lane_change_count":        {"max_abs_increase": 4},
+    "stagnation_duration_s":    {"max_abs_increase": 5.0}
   },
   "scenarios": [
-    {
-      "file": "scenarios/straight_road.json",
-      "duration_s": 45,
-      "enabled": true,
-      "baseline_tolerances": {
-        "stagnation_duration_s": {
-          "max_abs_increase": 18.0
-        },
-        "steer_rate_rms_per_s": {
-          "max_abs_increase": 0.7
-        }
-      },
-      "max_lane_offset_m": 1.65
-    },
-    {
-      "file": "scenarios/cross_intersection.json",
-      "duration_s": 30,
-      "enabled": false
-    },
-    {
-      "file": "scenarios/curve_road.json",
-      "duration_s": 60,
-      "enabled": true,
-      "max_lane_offset_m": 1.65
-    },
-    {
-      "file": "scenarios/lane_change_traffic.json",
-      "duration_s": 45,
-      "enabled": true,
-      "baseline_tolerances": {
-        "stagnation_duration_s": {
-          "max_abs_increase": 10.0
-        }
-      }
-    },
-    {
-      "file": "scenarios/urban_challenge.json",
-      "duration_s": 60,
-      "enabled": true,
-      "max_lane_offset_m": 1.65
-    },
-    {
-      "file": "scenarios/city_comprehensive.json",
-      "duration_s": 45,
-      "enabled": true,
-      "max_lane_offset_m": 1.65
-    },
-    {
-      "file": "scenarios/multi_light.json",
-      "duration_s": 60,
-      "enabled": true,
-      "baseline_tolerances": {
-        "stagnation_duration_s": {
-          "max_abs_increase": 12.0
-        }
-      }
-    },
-    {
-      "file": "scenarios/dense_npc.json",
-      "duration_s": 45,
-      "enabled": true
-    },
-    {
-      "file": "scenarios/dense_route_traffic.json",
-      "duration_s": 45,
-      "enabled": true
-    },
-    {
-      "file": "scenarios/oncoming.json",
-      "duration_s": 45,
-      "enabled": true
-    },
-    {
-      "file": "scenarios/l3_odd_exit_takeover.json",
-      "duration_s": 45,
-      "enabled": true
-    },
-    {
-      "file": "scenarios/r157_cut_in.json",
-      "duration_s": 40,
-      "enabled": true
-    },
-    {
-      "file": "scenarios/r157_cut_out.json",
-      "duration_s": 45,
-      "enabled": true
-    },
-    {
-      "file": "scenarios/r157_hard_brake.json",
-      "duration_s": 45,
-      "enabled": true
-    },
-    {
-      "file": "scenarios/r157_construction_zone.json",
-      "duration_s": 45,
-      "enabled": true
-    },
-    {
-      "file": "scenarios/r157_sensor_failure.json",
-      "duration_s": 40,
-      "enabled": true
-    },
-    {
-      "file": "scenarios/l3_odd_exit_timeout_mrm.json",
-      "duration_s": 60,
-      "enabled": true
-    },
-    {
-      "file": "scenarios/auto_parking.json",
-      "duration_s": 45,
-      "enabled": false
-    },
-    {
-      "file": "scenarios/right_turn_side_parking.json",
-      "duration_s": 35,
-      "enabled": false
-    },
-    {
-      "file": "scenarios/traffic_rules_exam.json",
-      "duration_s": 120,
-      "enabled": false
-    },
-    {
-      "file": "scenarios/parallel_parking_exam.json",
-      "duration_s": 60,
-      "enabled": false
-    },
-    {
-      "file": "scenarios/road_driving_exam.json",
-      "duration_s": 120,
-      "enabled": false
-    },
-    {
-      "file": "scenarios/safe_driving_exam.json",
-      "duration_s": 120,
-      "enabled": false
-    }
-  ],
-  "max_lane_offset_m": 1.65
+    {"file": "scenarios/straight_road.json",       "duration_s": 45, "enabled": true,
+     "baseline_tolerances": {
+       "stagnation_duration_s": {"max_abs_increase": 18.0},
+       "steer_rate_rms_per_s": {"max_abs_increase": 0.7}
+     }},
+    {"file": "scenarios/cross_intersection.json",  "duration_s": 30, "enabled": false},
+    {"file": "scenarios/curve_road.json",          "duration_s": 60, "enabled": true},
+    {"file": "scenarios/lane_change_traffic.json", "duration_s": 45, "enabled": true,
+     "baseline_tolerances": {"stagnation_duration_s": {"max_abs_increase": 10.0}}},
+    {"file": "scenarios/urban_challenge.json",     "duration_s": 60, "enabled": true},
+    {"file": "scenarios/city_comprehensive.json",  "duration_s": 45, "enabled": true},
+    {"file": "scenarios/multi_light.json",         "duration_s": 60, "enabled": true,
+     "baseline_tolerances": {"stagnation_duration_s": {"max_abs_increase": 12.0}}},
+    {"file": "scenarios/dense_npc.json",           "duration_s": 45, "enabled": true},
+    {"file": "scenarios/dense_route_traffic.json", "duration_s": 45, "enabled": true},
+    {"file": "scenarios/oncoming.json",            "duration_s": 45, "enabled": true},
+    {"file": "scenarios/l3_odd_exit_takeover.json", "duration_s": 45, "enabled": true},
+    {"file": "scenarios/r157_cut_in.json",         "duration_s": 40, "enabled": true},
+    {"file": "scenarios/r157_cut_out.json",        "duration_s": 45, "enabled": true},
+    {"file": "scenarios/r157_hard_brake.json",     "duration_s": 45, "enabled": true},
+    {"file": "scenarios/r157_construction_zone.json", "duration_s": 45, "enabled": true},
+    {"file": "scenarios/r157_sensor_failure.json", "duration_s": 40, "enabled": true},
+    {"file": "scenarios/l3_odd_exit_timeout_mrm.json", "duration_s": 60, "enabled": true},
+    {"file": "scenarios/auto_parking.json",        "duration_s": 45, "enabled": false},
+    {"file": "scenarios/right_turn_side_parking.json", "duration_s": 35, "enabled": false},
+    {"file": "scenarios/traffic_rules_exam.json",       "duration_s": 120, "enabled": false},
+    {"file": "scenarios/parallel_parking_exam.json",    "duration_s": 60,  "enabled": false},
+    {"file": "scenarios/road_driving_exam.json",        "duration_s": 120, "enabled": false},
+    {"file": "scenarios/safe_driving_exam.json",        "duration_s": 120, "enabled": false}
+  ]
 }

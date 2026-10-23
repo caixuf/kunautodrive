@@ -7,12 +7,9 @@ from unittest.mock import patch
 
 from ci.evaluators import scenario_regression
 from ci.evaluators.scenario_regression import (
-    D2_10_SCENES,
     archive_failed_result,
-    collect_fixture_payload,
     merge_repeats,
     prepare_worker_workspace,
-    resolve_suite_max_lane_offset_m,
     sha256_file,
     write_run_manifest,
 )
@@ -78,7 +75,7 @@ class ScenarioRegressionArtifactsTest(unittest.TestCase):
                 ],
             }), encoding="utf-8")
 
-            def fake_run(entry, _duration, _interval, _results_dir, **_kwargs):
+            def fake_run(entry, _duration, _interval, _results_dir):
                 key = Path(entry["file"]).stem
                 return {
                     "scenario": key, "result": "PASS",
@@ -169,7 +166,7 @@ class ScenarioRegressionArtifactsTest(unittest.TestCase):
 
             calls = {"n": 0}
 
-            def fake_run(entry, _duration, _interval, _results_dir, **_kwargs):
+            def fake_run(entry, _duration, _interval, _results_dir):
                 calls["n"] += 1
                 return {"scenario": "straight_road", "result": "PASS",
                         "failures": [], "warnings": [],
@@ -193,39 +190,4 @@ class ScenarioRegressionArtifactsTest(unittest.TestCase):
             self.assertEqual(baseline["summary"]["avg_speed_mps"], 12.0)   # median(11,12,13)
             self.assertEqual(baseline["summary"]["_repeats"], 3)
             self.assertEqual(baseline["summary"]["_spread"]["avg_speed_mps"], [11.0, 13.0])
-
-
-class D210ScaffoldTest(unittest.TestCase):
-    """D2-10 scaffolding: suite threshold resolve + fixture collection (non-blocking)."""
-
-    def test_resolve_max_lane_offset_prefers_entry_then_suite(self):
-        suite = {"max_lane_offset_m": 1.65, "scenarios": []}
-        self.assertAlmostEqual(resolve_suite_max_lane_offset_m(suite, None), 1.65)
-        self.assertAlmostEqual(
-            resolve_suite_max_lane_offset_m(suite, {"max_lane_offset_m": 1.4}), 1.4)
-        self.assertAlmostEqual(resolve_suite_max_lane_offset_m({}, None), 1.65)
-
-    def test_d2_10_scene_names_locked(self):
-        self.assertEqual(
-            set(D2_10_SCENES),
-            {"straight_road", "curve_road", "city_comprehensive", "urban_challenge"},
-        )
-
-    def test_collect_fixture_payload_writes_slim(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            fixtures = Path(tmp) / "fixtures"
-            payload = {
-                "scenario": "straight_road",
-                "result": "PASS",
-                "failures": [],
-                "warnings": [],
-                "summary": {"max_abs_llt_offset_m": 0.4, "max_lane_offset_m": 1.65},
-                "samples": [{"x": 1}],  # must NOT land in fixture
-            }
-            path = collect_fixture_payload(payload, fixtures, "straight_road")
-            self.assertTrue(path.is_file())
-            data = json.loads(path.read_text(encoding="utf-8"))
-            self.assertEqual(data["scenario"], "straight_road")
-            self.assertEqual(data["summary"]["max_abs_llt_offset_m"], 0.4)
-            self.assertNotIn("samples", data)
 
