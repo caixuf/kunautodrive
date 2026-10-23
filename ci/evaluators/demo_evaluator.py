@@ -2303,10 +2303,17 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     scenario_road_network = (
         scenario.get("road_network") if isinstance(scenario, dict) else None
     )
-    series = [
-        sample_metrics(s, road, scenario_road_network)
-        for s in samples
-    ]
+    # 🔴 必须把**采样时刻**带进 series：sample_metrics() 的返回 dict 不含任何时间
+    # 字段，而 lateral_target_chatter() 用 `_sample_time_seconds(frames[-1]) -
+    # _sample_time_seconds(frames[0])` 算 span → 全为 0.0 → span<=0 → 恒返回
+    # `insufficient_data` → 该门禁在真实路径上**永不 fail/warn**（假绿）。
+    # 2026-10-23 实测：14 次 run 的告警数全为 0，包括 target_lane_offset 摆动
+    # 5.85 m 的那次。此处补上时间基准后判据才真正生效。
+    series = []
+    for s in samples:
+        _m = sample_metrics(s, road, scenario_road_network)
+        _m["t_demo"] = _sample_time_seconds(s)
+        series.append(_m)
     speeds = [m["speed"] for m in series]
     xs = [m["x"] for m in series]
     ys = [m["y"] for m in series]
@@ -2705,6 +2712,13 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
             )
         else:
             warnings.append(f"lateral target chatter: planning target jumps often {_tb_tail}")
+    elif tb["verdict"] == "insufficient_data":
+        # 仓库铁律「无法判定≠通过」：这条判据没判出来就要**显式可见**，
+        # 否则样本不足/时间基准丢失会表现为静默通过（本次假绿事故的成因）。
+        warnings.append(
+            f"lateral target chatter: 无法判定（有效巡航帧 {tb['frames']} 帧，"
+            f"时间跨度 {tb['span_s']:.1f}s —— 样本不足或无时间基准）"
+        )
 
     # 掉头返程合法沿 −x 行驶：净 x 位移≈0，用累计路径长代替"前进距离"。
     # 城市路网（map_file 多 edge）路线转弯，净 x 位移同样不代表行驶里程。

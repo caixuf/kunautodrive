@@ -173,10 +173,21 @@ def analyze_incident(data: dict, at_s: float | None = None, verbose: bool = Fals
         else:
             lateral_verdicts.append(f"✅ planning→control 横向偏移一致: d={pd_d:.3f}m")
 
-        expected_target = cd.get("road_center_y", 0) + cd_lane_d
+        # control 的 target_y = 道路中心 + lane_d 沿**道路法向**的投影，即
+        #   target_py = road_center_y + lane_d * cos(ref_road_heading)
+        # （control_node.cpp:713-714）。本判据原先漏掉 cos 因子，等价于假设道路
+        # 恒朝 +y —— 只要 ref_road_heading≠0（弯道 / S 弯 / 掉头）就必然报红。
+        # 2026-10-23 实测：HEAD 与 2026-09-28 稳定点**同样 27/90 帧"违例"且数字
+        # 完全相同**，最坏 ref_road_heading=4.7165 rad（期望 -7.385 / 实际 -3.700），
+        # 即纯判据假阳性，与被测提交无关。
+        _ref_heading = float(cd.get("ref_road_heading", 0.0) or 0.0)
+        expected_target = cd.get("road_center_y", 0) + cd_lane_d * math.cos(_ref_heading)
         actual_target = cd.get("target_y", 0)
         if abs(expected_target - actual_target) > 0.05:
-            lateral_verdicts.append(f"❌ target_y计算错误: expected rc_y+lane_d={expected_target:.3f}, got {actual_target:.3f}")
+            lateral_verdicts.append(
+                f"❌ target_y计算错误: expected rc_y+lane_d·cos({_ref_heading:.3f})"
+                f"={expected_target:.3f}, got {actual_target:.3f}"
+            )
 
         beh_target = pd.get("beh_target_lane", -1)
         if beh_target >= 0 and cd.get("lat_error", 0) != 0:

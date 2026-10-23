@@ -171,7 +171,15 @@ def _lateral_chatter(samples: list[dict]) -> dict:
             "t_demo": s.get("t_demo", s.get("t", 0.0)),
             "planning_target_offset": pd.get("target_lane_offset"),
             "speed": float(ego.get("speed", 0.0) or 0.0),
-            "maneuver_active": any(t in beh for t in ("CHANGE", "OVERTAKE", "UTURN", "PARK")),
+            # ⚠️ 必须先去下划线再匹配：behavior 状态名是 `U_TURN` / `LEFT_CHANGE`
+            # 这种带下划线写法，而 `"UTURN" in "U_TURN"` 恒为 False —— 掉头帧
+            # 不会被豁免，掉头期间 target_lane_offset 跨车道摆动会被误算成 chatter
+            # 跳变（2026-10-23 实测：HEAD 4 次 vs 稳定点 2 次，多出的全是掉头伪跳变）。
+            # 归一化口径与 demo_evaluator.py:1060 `behavior_state.replace("_","")` 对齐。
+            "maneuver_active": any(
+                t in beh.replace("_", "")
+                for t in ("CHANGE", "OVERTAKE", "UTURN", "PARK")
+            ),
             "lane_width": float(lane.get("width", 3.5) or 3.5),
         })
     return de.lateral_target_chatter(series)
@@ -193,8 +201,12 @@ def _lane_keep_stats(samples: list[dict]) -> dict:
         if lm.get("ok") and isinstance(lm.get("offset"), (int, float)):
             lm_valid += 1
         beh = (m.get("behavior", {}).get("state") or "")
-        # 复用 evaluator 的机动判据：状态名含 CHANGE/OVERTAKE/UTURN/PARK
-        maneuver = any(t in beh.upper() for t in ("CHANGE", "OVERTAKE", "UTURN", "PARK"))
+        # 复用 evaluator 的机动判据：状态名含 CHANGE/OVERTAKE/UTURN/PARK。
+        # 同样先去下划线（`upper()` 解决不了 `U_TURN` vs `UTURN`）。
+        maneuver = any(
+            t in beh.replace("_", "").upper()
+            for t in ("CHANGE", "OVERTAKE", "UTURN", "PARK")
+        )
         ego = (m.get("scene", {}) or {}).get("ego", {})
         speed = float(ego.get("speed", 0.0) or 0.0)
         if maneuver or speed <= 0.5:
