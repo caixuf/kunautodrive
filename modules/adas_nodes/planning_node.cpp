@@ -2169,12 +2169,14 @@ protected:
                              g.lane_count, g.lane_width);
                 }
 
-                /* 更新 target_lane_offset
-                 * 变道中：目标 = behavior 下发的目标车道中心
-                 * 巡航/跟车：目标 = ego 当前最近车道中心（而非道路中心 y=0）。
-                 *   变道 COMPLETED 后 ego 可能还未到新车道中心（如 y=-3.5），
-                 *   若 target_lane_offset=0（道路中心），Frenet 会保持当前 y 不动，
-                 *   ego 卡在两车道之间。改为跟踪最近车道中心，让 ego 继续归位。 */
+                /* 更新 target_lane_offset（D2-06 Prefer @ dccd907）
+                 * 变道中：行为 FSM 不变 —— 仍跟 behavior.target_lane_idx 网格中心。
+                 * 巡航/跟车：真消费 lane_match 横向权威，删除 nearest_lane 网格启发式：
+                 *   target = ego_d - llt_offset  （= 当前 lanelet 中心在 map_ref 的 d）
+                 *   门禁 |llt_offset| ≤ lane_width/2 - 0.1m（max_lane_offset_m）
+                 *   要求 valid + llt_id!=0 + 新鲜 <500ms；A11 失效才回 nearest_lane。
+                 * map_ref_count>0 时 build_lane_reference 仍平移 map_ref；=0 时
+                 * lane_ref 空，后续 d_out 直写 target（lanelet-only）。 */
                 const bool own_side_only = !g.road_oneway;
                 const double side_offset = planning_coord::lane_group_side_offset(
                     n_lanes, lane_w, g.road_oneway != 0);
@@ -2187,24 +2189,40 @@ protected:
                     g.target_lane_offset = lane_center_offset(
                         g.committed_lane_idx, n_lanes, lane_w, g.road_oneway);
                 } else {
-                    /* 巡航/跟车：候选车道来自 lane_match 中心，缺匹配时用 nearest_lane。
-                     * 候选再经 hold_lane_index。贴在分界上时最近车道每帧翻转，
-                     * 直接把 target 锁过去会让横向参考阶跃一个车道宽（实测 20:49
-                     * 一分钟 96 次变号）。输出用车道网格中心，避免 llt_offset≈0
-                     * 时参考跟着自车走到分界线上。 */
+                    /* 巡航/跟车：lateral ref = lane_match.{llt_id, llt_offset, llt_s} */
                     const uint64_t now_us = clock_now_us();
-                    const bool lane_match_fresh = g.lane_match.valid && (g.lane_match.last_us != 0) &&
-                                                  (now_us - g.lane_match.last_us < 500000ULL) &&
-                                                  (fabs(g.lane_match.llt_offset) < lane_w * 1.5);
-                    const double cand_d = lane_match_fresh
-                        ? (ego_lane_d - g.lane_match.llt_offset) : ego_lane_d;
-                    const int cand_lane = planning_coord::nearest_lane(
-                        cand_d, n_lanes, lane_w, own_side_only, side_offset);
-                    g.committed_lane_idx = planning_coord::hold_lane_index(
-                        ego_lane_d, cand_lane, g.committed_lane_idx,
-                        n_lanes, lane_w, side_offset);
-                    g.target_lane_offset = lane_center_offset(
-                        g.committed_lane_idx, n_lanes, lane_w, g.road_oneway);
+                    const double lw_gate = (g.lane_match.lane_width > 1.0)
+                                         ? g.lane_match.lane_width : lane_w;
+                    const double max_lane_offset_m = lw_gate * 0.5 - 0.1;
+                    const bool lane_match_fresh =
+                        g.lane_match.valid &&
+                        (g.lane_match.llt_id != 0) &&
+                        (g.lane_match.last_us != 0) &&
+                        (now_us - g.lane_match.last_us < 500000ULL) &&
+                        (fabs(g.lane_match.llt_offset) <= max_lane_offset_m);
+                    if (lane_match_fresh) {
+                        /* 真消费：不再经 nearest_lane / lane_center_offset 取整 */
+                        g.target_lane_offset = ego_lane_d - g.lane_match.llt_offset;
+                        /* committed 仅作诊断/滞回；横向目标已是 lanelet 中心 */
+                        const int cand_lane = planning_coord::nearest_lane(
+                            g.target_lane_offset, n_lanes, lane_w,
+                            own_side_only, side_offset);
+                        g.committed_lane_idx = planning_coord::hold_lane_index(
+                            ego_lane_d, cand_lane, g.committed_lane_idx,
+                            n_lanes, lane_w, side_offset);
+                        /* llt_s：map_ref 在时纵向由 project 提供；lanelet-only 时
+                         * 无 centerline 几何可投，保留权威 s 供 debug / 后续刀 */
+                        (void)g.lane_match.llt_s;
+                    } else {
+                        /* A11 fallback：匹配失效/超时/越界 → 网格中心启发式 */
+                        const int cand_lane = planning_coord::nearest_lane(
+                            ego_lane_d, n_lanes, lane_w, own_side_only, side_offset);
+                        g.committed_lane_idx = planning_coord::hold_lane_index(
+                            ego_lane_d, cand_lane, g.committed_lane_idx,
+                            n_lanes, lane_w, side_offset);
+                        g.target_lane_offset = lane_center_offset(
+                            g.committed_lane_idx, n_lanes, lane_w, g.road_oneway);
+                    }
                 }
                 if (g.plan_count % 200 == 0) {
                     LOG_WARN("planning", "[DBG_LC] pc=%d has_beh=%d cmd=%d tgt_lane=%d n_lanes=%d offset=%.2f ego_y=%.2f",
@@ -2958,6 +2976,7 @@ publish_trajectory:
                 cJSON_AddBoolToObject(dbg, "lane_match_valid", g.lane_match.valid);
                 cJSON_AddNumberToObject(dbg, "lane_match_offset", g.lane_match.llt_offset);
                 cJSON_AddNumberToObject(dbg, "lane_match_llt_id", (double)g.lane_match.llt_id);
+                cJSON_AddNumberToObject(dbg, "lane_match_llt_s", g.lane_match.llt_s);
                 cJSON_AddNumberToObject(dbg, "command_speed", command_speed);
                 cJSON_AddNumberToObject(dbg, "n_wp", n_wp);
                 cJSON_AddNumberToObject(dbg, "traj_valid", traj.valid ? 1.0 : 0.0);
