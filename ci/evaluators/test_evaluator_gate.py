@@ -452,6 +452,69 @@ def run_all_checks() -> int:
     check("summary records sim clock",
           _sj.get("formal_metrics", {}).get("timing_clock") == "sim")
 
+
+    print("\n[30] D2-10 max_lane_offset_m — over-threshold must FAIL; invalid frames skipped")
+    # Prefer field path: series already carries lane_match_offset (planning/debug Prefer).
+    # Negative: valid frames with |offset|=2.0 > 1.65 → FAIL.
+    _over = []
+    for i in range(20):
+        _over.append({
+            "speed": 12.0, "x": 10.0 + i, "y": -1.75, "heading": 0.0,
+            "steer_signed": 0.0, "lane_count": 4, "lane_width": 3.5,
+            "lane_match_valid": True, "lane_match_offset": 2.0,
+            "maneuver_active": False, "planning_target_offset": 0.0,
+        })
+    _g = de.max_lane_offset_gate(_over, 1.65)
+    check("pure gate FAILs over threshold", _g["verdict"] == "fail", str(_g))
+    check("records max abs", abs(_g["max_abs_llt_offset_m"] - 2.0) < 1e-9)
+
+    # Through score(): inject localization/lane_match so sample parse fills series.
+    def _mk_lm(offset, ok=True, via="lane_match"):
+        scene = {
+            "ego": {"x": 10.0, "y": -1.75, "speed": 12.0, "steer": 0.0, "heading": 0.0},
+            "lane": {"width": 3.5, "count": 4},
+            "obstacles": [],
+            "entities": [],
+        }
+        metrics = {
+            "topics": _TOPICS,
+            "vehicle": {"speed": 12.0, "x": 10.0},
+            "scene": scene,
+            "driver_mode": "NOA:CRUISE",
+        }
+        if via == "planning_debug":
+            metrics["planning_debug"] = {"lane_match_offset": offset, "target_lane_offset": 0.0}
+            metrics["lane_match"] = {"ok": False}  # Prefer planning; invalid loc must not win
+        else:
+            metrics["lane_match"] = {"ok": ok, "offset": offset, "lane_id": -1}
+        return {"timestamp": 0.25, "metrics": metrics, "nodes": []}
+
+    _bad = [_mk_lm(2.0) for _ in range(16)]
+    _f_bad = _score("mlo-over", _bad, {**_ZERO_CRIT, "max_lane_offset_m": 1.65})
+    check("score FAILs over max_lane_offset_m",
+          any("max lane offset" in x for x in _f_bad), str(_f_bad)[:200])
+
+    _ok = [_mk_lm(0.4) for _ in range(16)]
+    _f_ok = _score("mlo-ok", _ok, {**_ZERO_CRIT, "max_lane_offset_m": 1.65})
+    check("under-threshold does not trip max lane offset",
+          not any("max lane offset" in x for x in _f_ok), str(_f_ok)[:200])
+
+    # Invalid lane_match frames must not count (A11) — all ok=false → skip, not FAIL.
+    _inv = [_mk_lm(9.0, ok=False) for _ in range(16)]
+    _g_inv = de.max_lane_offset_gate(
+        [{"lane_match_valid": False, "lane_match_offset": 9.0} for _ in range(16)], 1.65)
+    check("invalid frames → skip (not FAIL)", _g_inv["verdict"] == "skip", str(_g_inv))
+    _f_inv = _score("mlo-invalid", _inv, {**_ZERO_CRIT, "max_lane_offset_m": 1.65})
+    check("score does not FAIL on invalid-only lane_match",
+          not any("max lane offset" in x for x in _f_inv), str(_f_inv)[:200])
+
+    # Prefer planning_debug.lane_match_offset even when localization ok=false
+    _pref = [_mk_lm(2.2, via="planning_debug") for _ in range(16)]
+    _f_pref = _score("mlo-prefer-pd", _pref, {**_ZERO_CRIT, "max_lane_offset_m": 1.65})
+    check("Prefer planning_debug.lane_match_offset drives FAIL",
+          any("max lane offset" in x for x in _f_pref), str(_f_pref)[:200])
+
+
     print(f"\n{'='*52}")
     print(f"gate self-test: {_passed} passed, {_failed} failed")
     print(f"{'='*52}")
