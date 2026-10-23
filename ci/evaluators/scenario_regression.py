@@ -64,6 +64,11 @@ DEFAULT_BASELINE_DIR = ROOT / "tests" / "baseline"
 BASELINE_KEYS = ("scenario", "result", "failures", "warnings", "summary")
 RUN_MANIFEST_SCHEMA = "flowengine.evaluation_run.v1"
 
+# D2-10 closeout scenes (FR-CI-02). Scaffolding filter only — do NOT claim
+# 12/12 PASS until #104 consume lands and 4×3 is green.
+D2_10_SCENES = ("straight_road", "curve_road", "city_comprehensive", "urban_challenge")
+DEFAULT_MAX_LANE_OFFSET_M = 1.65  # lane_width/2 - 0.1 with width=3.5
+
 
 def load_json(path: Path) -> dict | None:
     try:
@@ -252,6 +257,42 @@ def merge_repeats(payloads: list[dict], repeats: int) -> dict:
     return merged
 
 
+
+def resolve_suite_max_lane_offset_m(suite: dict, entry: dict | None = None) -> float:
+    """Per-scenario override wins; else suite default; else 1.65."""
+    if isinstance(entry, dict) and entry.get("max_lane_offset_m") is not None:
+        try:
+            v = float(entry["max_lane_offset_m"])
+            if v > 0.0:
+                return v
+        except (TypeError, ValueError):
+            pass
+    if isinstance(suite, dict) and suite.get("max_lane_offset_m") is not None:
+        try:
+            v = float(suite["max_lane_offset_m"])
+            if v > 0.0:
+                return v
+        except (TypeError, ValueError):
+            pass
+    return DEFAULT_MAX_LANE_OFFSET_M
+
+
+def collect_fixture_payload(payload: dict, fixtures_dir: Path, key: str,
+                            repeat_idx: int | None = None) -> Path:
+    """Write a slim fixture payload for offline gate/replay (scaffolding).
+
+    Keeps BASELINE_KEYS plus max_abs_llt_offset_m echo when present in summary.
+    Full samples stay in results_dir; fixtures are reviewable diffs.
+    """
+    fixtures_dir.mkdir(parents=True, exist_ok=True)
+    slim = {k: payload.get(k) for k in BASELINE_KEYS}
+    name = f"{key}.json" if repeat_idx is None else f"{key}__r{repeat_idx}.json"
+    path = fixtures_dir / name
+    path.write_text(json.dumps(slim, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return path
+
+
+
 def enabled_scenarios(suite: dict) -> list[dict]:
     return [s for s in suite["scenarios"]
             if isinstance(s, dict) and s.get("file") and s.get("enabled", True)]
@@ -263,7 +304,8 @@ def scenario_key(entry: dict) -> str:
 
 
 def run_scenario(entry: dict, default_duration: int, interval: float,
-                 results_dir: Path) -> dict:
+                 results_dir: Path, max_lane_offset_m: float | None = None,
+                 enforce_max_lane_offset: bool = False) -> dict:
     """Run one scenario through demo_evaluator and return its result payload.
 
     Returns the dict written by ``demo_evaluator --json-out``:
@@ -284,6 +326,10 @@ def run_scenario(entry: dict, default_duration: int, interval: float,
         "--json-file", str(topology_path),
         "--json-out", str(out_path),
     ]
+    if max_lane_offset_m is not None:
+        cmd.extend(["--max-lane-offset-m", str(max_lane_offset_m)])
+    if enforce_max_lane_offset:
+        cmd.append("--enforce-max-lane-offset")
     print(f"\n─── running scenario '{key}' ({duration}s) ───", flush=True)
     # 超时兜底：demo_evaluator 理论上不会挂（select 限时读取），但冷构建
     # （adas_nodes 子项目 ~2.5min）+ 运行 + 收尾可能很长，给足余量后仍超时
@@ -399,6 +445,11 @@ def main() -> int:
                         help="run only the scenario whose file stem matches this value")
     parser.add_argument("--dry-run", action="store_true",
                         help="list the scenarios that would run without executing the demo")
+    parser.add_argument("--d2-10-scenes", action="store_true",
+                        help="scaffold filter: only straight_road/curve_road/city_comprehensive/urban_challenge "
+                             "(D2-10 4x3 set); also turns on --enforce-max-lane-offset for closeout FAIL")
+    parser.add_argument("--collect-fixtures", type=Path, default=None,
+                        help="write slim result fixtures under this dir (payload collection for D2-10 gate prep; non-blocking)")
     args = parser.parse_args()
     if args.workers < 1:
         raise SystemExit("--workers must be at least 1")
@@ -412,15 +463,25 @@ def main() -> int:
         scenarios = [s for s in scenarios if scenario_key(s) == args.only]
         if not scenarios:
             raise SystemExit(f"no enabled scenario matches --only {args.only!r}")
+    if args.d2_10_scenes:
+        scenarios = [s for s in scenarios if scenario_key(s) in D2_10_SCENES]
+        if not scenarios:
+            raise SystemExit("no enabled D2-10 scenes in suite (expected "
+                             + ", ".join(D2_10_SCENES) + ")")
+    enforce_mlo = bool(args.d2_10_scenes)
     default_duration = int(suite.get("default_duration_s", 30))
     raw_tolerances = suite.get("baseline_tolerances")
     tolerances = raw_tolerances if isinstance(raw_tolerances, dict) else {}
 
     if args.dry_run:
-        print(f"suite: {suite.get('name')} ({len(scenarios)} scenarios)")
+        print(f"suite: {suite.get('name')} ({len(scenarios)} scenarios); "
+              f"suite max_lane_offset_m="
+              f"{resolve_suite_max_lane_offset_m(suite, None)}")
         for entry in scenarios:
+            mlo = resolve_suite_max_lane_offset_m(suite, entry)
             print(f"  - {scenario_key(entry):<26} "
-                  f"{entry.get('duration_s', default_duration)}s  {entry['file']}")
+                  f"{entry.get('duration_s', default_duration)}s  "
+                  f"max_lane_offset_m={mlo}  {entry['file']}")
         return 0
 
     args.results_dir.mkdir(parents=True, exist_ok=True)
@@ -435,12 +496,21 @@ def main() -> int:
         """同一场景的 N 次重复**串行**跑：worker 工作区按场景 key 隔离，
         同场景并发会互相覆写 topology.json（见 HANDOFF §15）。
         两次以上时数值字段取中位、极差记进 summary._spread。"""
+        mlo = resolve_suite_max_lane_offset_m(suite, entry)
         if repeats <= 1:
-            return run_scenario(entry, default_duration, args.interval, args.results_dir)
-        return merge_repeats(
-            [run_scenario(entry, default_duration, args.interval, args.results_dir)
-             for _ in range(repeats)],
-            repeats)
+            payload = run_scenario(entry, default_duration, args.interval,
+                                   args.results_dir, max_lane_offset_m=mlo, enforce_max_lane_offset=enforce_mlo)
+            if args.collect_fixtures is not None:
+                collect_fixture_payload(payload, args.collect_fixtures, scenario_key(entry))
+            return payload
+        payloads_r = []
+        for ri in range(repeats):
+            p = run_scenario(entry, default_duration, args.interval,
+                             args.results_dir, max_lane_offset_m=mlo, enforce_max_lane_offset=enforce_mlo)
+            if args.collect_fixtures is not None:
+                collect_fixture_payload(p, args.collect_fixtures, scenario_key(entry), ri)
+            payloads_r.append(p)
+        return merge_repeats(payloads_r, repeats)
 
     if repeats > 1:
         print(f"repeats: {repeats} per scenario（数值取中位，极差记入 summary._spread）")
