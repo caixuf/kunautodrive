@@ -1973,8 +1973,11 @@ def resolve_max_lane_offset_m(criteria: dict | None = None,
 
 
 def max_lane_offset_gate(series: list[dict], max_lane_offset_m: float) -> dict:
-    """D2-10 gate: max abs(lane_match_offset) over valid frames vs threshold.
+    """D2-10 gate: max abs(lane_match_offset) over cruise/follow valid frames vs threshold.
 
+    Prefer A (老法师): skip maneuver_active frames (LEFT_CHANGE / RIGHT_CHANGE /
+    UTURN / same spirit as lane_keep). Mid-LC |llt_offset| ≈ lane_width/2 is
+    geometry before llt_id hysteresis, not tracking lag — gate owns cruise hold.
     Invalid / missing lane_match frames are skipped (A11). Returns a dict with
     verdict in {pass, fail, skip}, max_abs_llt_offset_m, frames_counted.
     score() maps fail→WARN by default; FAIL only under enforce_max_lane_offset.
@@ -1982,6 +1985,8 @@ def max_lane_offset_gate(series: list[dict], max_lane_offset_m: float) -> dict:
     counted = 0
     max_abs = 0.0
     for m in series or []:
+        if m.get("maneuver_active"):
+            continue
         if not m.get("lane_match_valid"):
             continue
         try:
