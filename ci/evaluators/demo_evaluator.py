@@ -292,6 +292,12 @@ LANE_KEEP_RATIO_WARN = 0.10       # 越线帧占比 → WARN
 LANE_KEEP_RATIO_FAIL = 0.30       # 越线帧占比 → FAIL
 LANE_KEEP_MIN_COVERAGE = 0.50     # lane_match 有效帧占比低于此值则不判（只 WARN）
 
+# ── D2-10 max_lane_offset_m gate (FR-CI-02 / NFR-04) ──
+# Suite default = lane_width/2 - 0.1 (3.5 → 1.65). Measured offset Prefer
+# planning/debug lane_match_offset; invalid lane_match frames do not count.
+DEFAULT_LANE_WIDTH_M = 3.5
+DEFAULT_MAX_LANE_OFFSET_M = DEFAULT_LANE_WIDTH_M / 2.0 - LANE_KEEP_MARGIN_M  # 1.65
+
 # ── 横向目标跳变门禁（2026-10-22 超车摇摆）──
 # 故障实测（straight_road，修复前，真实数据回放）：planning target_lane_offset
 # 在相邻车道中心之间跳 63 次/45s = 1.40/s，跳变幅度中位 2.96m（车道宽 3.5m），
@@ -1056,25 +1062,44 @@ def sample_metrics(sample: dict, road: dict | None = None,
         "CHANGE", "OVERTAKE", "UTURN", "PARK",
     ))
 
-    # 权威车道级定位（monitor 把 localization/lane_match 透传到 metrics）：
-    # (road_id, lane_id, s, offset)。ok=false 或字段缺失时视为无效，不参与门禁
-    # —— 宁可不判，也不能把"无参考"当成"没越线"。
+    # D2-10 Prefer: planning/debug lane_match_offset first; fallback
+    # localization/lane_match offset (alias llt_offset). ok=false / missing →
+    # invalid — do not count toward max_lane_offset_m (A11).
     lane_match = metrics.get("lane_match", {})
+    _pd_early = metrics.get("planning_debug", {})
     lm_valid = False
     lm_offset = None
     lm_lane_id = None
-    if isinstance(lane_match, dict) and lane_match.get("ok", True):
+    _lm_off = None
+    if isinstance(_pd_early, dict) and _pd_early.get("lane_match_offset") is not None:
         try:
-            _lm_off = float(lane_match.get("offset"))
+            _cand = float(_pd_early.get("lane_match_offset"))
+            if math.isfinite(_cand):
+                _lm_off = _cand
         except (TypeError, ValueError):
             _lm_off = None
-        if _lm_off is not None and math.isfinite(_lm_off):
-            lm_valid = True
-            lm_offset = _lm_off
+    if _lm_off is None and isinstance(lane_match, dict) and lane_match.get("ok", True):
+        for _key in ("offset", "llt_offset", "lane_match_offset"):
+            if lane_match.get(_key) is None:
+                continue
             try:
-                lm_lane_id = int(lane_match.get("lane_id", 0) or 0)
+                _cand = float(lane_match.get(_key))
             except (TypeError, ValueError):
-                lm_lane_id = 0
+                continue
+            if math.isfinite(_cand):
+                _lm_off = _cand
+                break
+    if _lm_off is not None:
+        lm_valid = True
+        lm_offset = _lm_off
+        try:
+            lm_lane_id = int(
+                (lane_match.get("lane_id") if isinstance(lane_match, dict) else None)
+                or (_pd_early.get("lane_id") if isinstance(_pd_early, dict) else None)
+                or 0
+            )
+        except (TypeError, ValueError):
+            lm_lane_id = 0
 
     # planning 下发的横向目标（metrics.planning_debug.target_lane_offset）。
     # 门禁"横向目标跳变"用它：2026-10-22 超车摇摆故障里，这个值在相邻车道
@@ -1920,6 +1945,68 @@ LIVENESS_FIELDS = [
 ]
 
 
+
+def resolve_max_lane_offset_m(criteria: dict | None = None,
+                              lane_width_m: float | None = None,
+                              explicit: float | None = None) -> float:
+    """Resolve max_lane_offset_m Prefer: explicit CLI > criteria > width/2-0.1."""
+    if explicit is not None:
+        try:
+            v = float(explicit)
+            if math.isfinite(v) and v > 0.0:
+                return v
+        except (TypeError, ValueError):
+            pass
+    crit = criteria or {}
+    raw = crit.get("max_lane_offset_m")
+    if raw is not None:
+        try:
+            v = float(raw)
+            if math.isfinite(v) and v > 0.0:
+                return v
+        except (TypeError, ValueError):
+            pass
+    width = float(lane_width_m) if lane_width_m is not None else DEFAULT_LANE_WIDTH_M
+    if not math.isfinite(width) or width <= 0.0:
+        width = DEFAULT_LANE_WIDTH_M
+    return width / 2.0 - LANE_KEEP_MARGIN_M
+
+
+def max_lane_offset_gate(series: list[dict], max_lane_offset_m: float) -> dict:
+    """D2-10 gate: max abs(lane_match_offset) over valid frames vs threshold.
+
+    Invalid / missing lane_match frames are skipped (A11). Returns a dict with
+    verdict in {pass, fail, skip}, max_abs_llt_offset_m, frames_counted.
+    """
+    counted = 0
+    max_abs = 0.0
+    for m in series or []:
+        if not m.get("lane_match_valid"):
+            continue
+        try:
+            off = float(m.get("lane_match_offset"))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(off):
+            continue
+        counted += 1
+        max_abs = max(max_abs, abs(off))
+    if counted == 0:
+        return {
+            "verdict": "skip",
+            "max_abs_llt_offset_m": 0.0,
+            "frames_counted": 0,
+            "max_lane_offset_m": float(max_lane_offset_m),
+        }
+    fail = max_abs > float(max_lane_offset_m)
+    return {
+        "verdict": "fail" if fail else "pass",
+        "max_abs_llt_offset_m": max_abs,
+        "frames_counted": counted,
+        "max_lane_offset_m": float(max_lane_offset_m),
+    }
+
+
 def lateral_target_chatter(series: list[dict]) -> dict:
     """统计 planning 横向目标（target_lane_offset）的跳变率与幅度。
 
@@ -2556,6 +2643,34 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
                 f"frames ({lane_straddle_ratio:.0%}, max consecutive "
                 f"{lane_straddle_consec_max}) {_lane_keep_tail}"
             )
+
+    # ── D2-10 max_lane_offset_m gate (FR-CI-02) ──
+    # Run metric over valid lane_match frames only; over threshold → FAIL.
+    # Threshold Prefer: criteria.max_lane_offset_m (suite/CLI injected) else width/2-0.1.
+    _lw_for_gate = DEFAULT_LANE_WIDTH_M
+    for _m in lm_valid_frames:
+        try:
+            _lw = float(_m.get("lane_width") or 0.0)
+        except (TypeError, ValueError):
+            _lw = 0.0
+        if _lw > 0.0:
+            _lw_for_gate = _lw
+            break
+    max_lane_offset_m = resolve_max_lane_offset_m(
+        criteria, lane_width_m=_lw_for_gate)
+    _mlo = max_lane_offset_gate(series, max_lane_offset_m)
+    max_abs_llt_offset_m = float(_mlo["max_abs_llt_offset_m"])
+    if _mlo["verdict"] == "fail":
+        failures.append(
+            f"max lane offset: max |llt_offset| {max_abs_llt_offset_m:.3f} m "
+            f"> max_lane_offset_m {max_lane_offset_m:.3f} m "
+            f"(over {_mlo['frames_counted']} valid lane_match frames)"
+        )
+    elif _mlo["verdict"] == "skip":
+        warnings.append(
+            "max_lane_offset_m gate skipped: no valid lane_match frames "
+            "(invalid match ≠ out-of-lane; other gates still apply)"
+        )
 
     # ── 横向目标跳变门禁（2026-10-22 超车摇摆故障的直接判据）──
     # 判据本体在 lateral_target_chatter()（纯函数，long_run_lane_keep 复用同一份，
@@ -3412,6 +3527,8 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         "lane_keep_center_cross_frames": lane_center_cross_frames,
         "lane_keep_center_cross_ratio": lane_center_cross_ratio,
         "lane_keep_max_excess_m": lane_keep_max_excess,
+        "max_abs_llt_offset_m": max_abs_llt_offset_m,
+        "max_lane_offset_m": max_lane_offset_m,
         "min_road_margin_m": min_road_margin,
         "min_road_margin_at_s": max(0.0, samples[min_road_margin_index].get("timestamp", 0) - samples[0].get("timestamp", 0)),
         "steer_saturation_ratio": steer_saturation_ratio,
@@ -3576,6 +3693,8 @@ def main() -> int:
                         help="evaluation mode recorded in the result envelope")
     parser.add_argument("--require-safety-evidence", action="store_true",
                         help="require injected raw_cmd timeout evidence with L3 emergency stop")
+    parser.add_argument("--max-lane-offset-m", type=float, default=None,
+                        help="D2-10 gate threshold (m); overrides suite/criteria; default lane_width/2-0.1")
     args = parser.parse_args()
     if args.json_file is None:
         args.json_file = runtime_topology_path()
@@ -3705,6 +3824,18 @@ def main() -> int:
             _map_rn = road_network_from_map_file(_scn_dict, _scn_path)
             if _map_rn is not None:
                 _scn_dict["road_network"] = _map_rn
+
+    # D2-10: CLI / env can inject max_lane_offset_m into criteria (suite harness uses CLI).
+    if getattr(args, "max_lane_offset_m", None) is not None:
+        criteria = dict(criteria or {})
+        criteria["max_lane_offset_m"] = float(args.max_lane_offset_m)
+    elif "max_lane_offset_m" not in (criteria or {}) and os.environ.get("FLOW_MAX_LANE_OFFSET_M"):
+        try:
+            criteria = dict(criteria or {})
+            criteria["max_lane_offset_m"] = float(os.environ["FLOW_MAX_LANE_OFFSET_M"])
+        except ValueError:
+            pass
+
 
     failures, warnings, summary = score(samples, runtime_launcher_stderr_path(), criteria,
                                          scenario_name, has_noa_route=has_noa_route,
