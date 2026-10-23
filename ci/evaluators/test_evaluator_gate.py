@@ -542,6 +542,61 @@ def run_all_checks() -> int:
     check("Prefer planning_debug drives FAIL when enforced",
           any("max lane offset" in x for x in _f_pref_e), str(_f_pref_e)[:200])
 
+    # Prefer A: maneuver_active frames excluded from max|llt_offset| FAIL aggregation.
+    # Cruise over-thr still FAILs under enforce; maneuver-only over-thr must not FAIL alone.
+    _maneuver_only = []
+    for i in range(20):
+        _maneuver_only.append({
+            "speed": 12.0, "x": 10.0 + i, "y": -1.75, "heading": 0.0,
+            "steer_signed": 0.0, "lane_count": 4, "lane_width": 3.5,
+            "lane_match_valid": True, "lane_match_offset": 1.75,
+            "maneuver_active": True, "planning_target_offset": 1.75,
+        })
+    _g_man = de.max_lane_offset_gate(_maneuver_only, 1.65)
+    check("maneuver-only over-thr → skip (not FAIL)",
+          _g_man["verdict"] == "skip" and _g_man["frames_counted"] == 0, str(_g_man))
+
+    _mixed = []
+    for i in range(10):
+        _mixed.append({
+            "speed": 12.0, "x": 10.0 + i, "y": -0.4, "heading": 0.0,
+            "steer_signed": 0.0, "lane_count": 4, "lane_width": 3.5,
+            "lane_match_valid": True, "lane_match_offset": 0.4,
+            "maneuver_active": False, "planning_target_offset": 0.0,
+        })
+    for i in range(10):
+        _mixed.append({
+            "speed": 12.0, "x": 20.0 + i, "y": -1.75, "heading": 0.0,
+            "steer_signed": 0.0, "lane_count": 4, "lane_width": 3.5,
+            "lane_match_valid": True, "lane_match_offset": 1.75,
+            "maneuver_active": True, "planning_target_offset": 1.75,
+        })
+    _g_mix = de.max_lane_offset_gate(_mixed, 1.65)
+    check("mixed: cruise under-thr + maneuver over-thr → pass",
+          _g_mix["verdict"] == "pass"
+          and abs(_g_mix["max_abs_llt_offset_m"] - 0.4) < 1e-9
+          and _g_mix["frames_counted"] == 10, str(_g_mix))
+
+    _cruise_fail = []
+    for i in range(10):
+        _cruise_fail.append({
+            "speed": 12.0, "x": 10.0 + i, "y": -2.0, "heading": 0.0,
+            "steer_signed": 0.0, "lane_count": 4, "lane_width": 3.5,
+            "lane_match_valid": True, "lane_match_offset": 2.0,
+            "maneuver_active": False, "planning_target_offset": 0.0,
+        })
+    for i in range(5):
+        _cruise_fail.append({
+            "speed": 12.0, "x": 20.0 + i, "y": -1.75, "heading": 0.0,
+            "steer_signed": 0.0, "lane_count": 4, "lane_width": 3.5,
+            "lane_match_valid": True, "lane_match_offset": 1.80,
+            "maneuver_active": True, "planning_target_offset": 1.80,
+        })
+    _g_cf = de.max_lane_offset_gate(_cruise_fail, 1.65)
+    check("cruise over-thr still FAILs under Prefer A (maneuver ignored)",
+          _g_cf["verdict"] == "fail"
+          and abs(_g_cf["max_abs_llt_offset_m"] - 2.0) < 1e-9, str(_g_cf))
+
 
     print(f"\n{'='*52}")
     print(f"gate self-test: {_passed} passed, {_failed} failed")

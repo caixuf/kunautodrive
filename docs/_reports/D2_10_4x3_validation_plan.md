@@ -60,3 +60,14 @@ python3 -m pytest tests/test_scenario_regression_artifacts.py -q
 ## Rebase note
 
 PR #104 (`feat/l3-d2-06-planning-lane-match` @ `173d917`) was **OPEN** at scaffold time. After merge: rebase this branch onto latest main before running the real 4×3.
+
+## Prefer A amend (2026-10-23 — 老法师 locked)
+
+**Pick: A.** Skip `maneuver_active` frames in `max_lane_offset_gate` (same spirit as lane_keep). Threshold **stays 1.65**.
+
+Evidence @ tip `7bbd07df`: FAIL peaks (1.748 / 1.723) are **only** RIGHT_CHANGE frames ≈ lane_width/2 geometry before `llt_id` hysteresis; cruise/lane_keep worst ≤1.07. Stanley retune cannot close geometric LC straddle. B (raise thr) / C / D vetoed or OOS.
+
+- Land: evaluator + tests + rails wording only; control param commit **optional SKIP** (cruise already under thr).
+- Frame eligibility: count cruise/follow with `lane_match.valid`; exclude `maneuver_active` and invalid match (A11).
+- Box rails: `/workspace/contracts/kun-d2-10-lane-offset-rails.md` · `/workspace/kunautodrive-docs/REQ-D2-10-lane-offset-closeout.md`
+
