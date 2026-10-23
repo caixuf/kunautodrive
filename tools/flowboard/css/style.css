@@ -105,11 +105,14 @@ body[data-workspace="perf"] .ws-observe-analyze{display:none!important}
 .card-body{padding:14px 18px;display:block}
 /* 拓扑图容器高度：19 个节点、节点球最大半径 27px（最小间距 54px）时，
  * 力导向自然高度约 340px，再留 ~80px 给球与下方名字标签。
- * 取 clamp(200px,26vh,400px) —— 拓扑是"网络总览"的次要视图，纵向空间优先
+ * 取 clamp(132px,20vh,400px) —— 拓扑是"网络总览"的次要视图，纵向空间优先
  * 让给 3D 场景（主视图）：1366×768 下 3D 可视高度 287px→327px，
  * 1440×900 下 407px→425px。缩放带来的标签变小由 _fitTopoToContainer 的
- * 字号补偿抵消（渲染后恒 9px）。 */
-#topo{width:100%;height:clamp(200px,26vh,400px);position:relative;overflow:hidden;
+ * 字号补偿抵消（渲染后恒 9px）。
+ * 2026-10-23 再下调下限：200px→132px（26vh→20vh）。矮视口（实测 1990×688）
+ * 下 26vh 仍把 3D 压到 ~212px，拓扑反而比主视图高；20vh 让主次关系在矮屏
+ * 也成立。拓扑被压扁由力导向自身的软边界兜住（不裁切、标签恒 9px）。 */
+#topo{width:100%;height:clamp(132px,20vh,400px);position:relative;overflow:hidden;
   background:
     radial-gradient(ellipse at 50% 30%, rgba(88,166,255,.10), transparent 55%),
     radial-gradient(ellipse at 82% 82%, rgba(188,140,255,.09), transparent 50%),
@@ -140,10 +143,12 @@ body[data-workspace="perf"] .ws-observe-analyze{display:none!important}
  * 现改为 flex 填充：#main 是定高（100vh）的 flex 列，让场景卡 flex:1 吸收
  * 剩余空间，HUD 永远贴着场景底边出现在首屏内。
  *   - min-height 兜底：视口很矮时仍保留可用的 3D 区域，超出部分由 #main 滚动
+ *     （2026-10-23：下限 320/240/200px → 392/320/320px。矮视口实测 3D 只剩
+ *     ~212px，连 HUD 都盖住近四成；宁可让 #main 滚动，也不把主视图压成横条）
  *   - 各工作区（分析/运维/性能）里该卡 display:none，不受影响 */
-#scene3d-card{flex:1 1 auto;display:flex;flex-direction:column;min-height:320px}
-#scene3d-card .card-body{flex:1 1 auto;min-height:240px;padding:0;display:flex;overflow:hidden}
-#scene3d{flex:1 1 auto;min-height:200px;background:#5588aa;position:relative;width:100%}
+#scene3d-card{flex:1 1 auto;display:flex;flex-direction:column;min-height:392px}
+#scene3d-card .card-body{flex:1 1 auto;min-height:320px;padding:0;display:flex;overflow:hidden}
+#scene3d{flex:1 1 auto;min-height:320px;background:#5588aa;position:relative;width:100%}
 /* ⚠️ 折叠态必须显式覆盖，否则 #scene3d-card .card-body 的 ID 特异性(1,1,0)
  * 压过 .card.collapsed .card-body(0,2,0)，点标题加 collapsed 类后 body 仍显示
  * ——实测点击「场景视图」标题无法折叠。这里用 (1,2,0) 盖回去。 */
@@ -363,6 +368,25 @@ input:focus,select:focus{border-color:#58a6ff}
 /* ── Toast ────────────────────────────────── */
 #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1c2128;border:1px solid#30363d;padding:10px 24px;border-radius:10px;font-size:13px;z-index:100;opacity:0;transition:opacity .3s;pointer-events:none}
 #toast.show{opacity:1}
+
+/* ── 矮视口：压缩底部浮层，把纵向空间还给 3D 场景 ────────────────
+ * 2026-10-23：1990×688 实测 3D 只剩 ~212px 高，而 #drive-hud(~86px) 与
+ * #incident-timeline(~64px) 两个绝对定位浮层压在场景底部，遮挡掉近四成。
+ * 浮层尺寸不该固定 —— 视口越矮，它占 3D 的比例越大。矮屏下收字号/内边距。 */
+@media (max-height:860px){
+  #drive-hud{padding:5px 2px;bottom:10px}
+  #drive-hud .dh-speed{min-width:96px}
+  #drive-hud .dh-speed b{font-size:23px}
+  #drive-hud .dh-speed,#drive-hud .dh-col{padding:0 10px;gap:3px}
+  #incident-timeline{padding:6px 12px}
+}
+/* ⚠️ `.dh-lead` 单独收窄成「宽屏 + 矮屏」才生效：窄屏块（max-width:860px）
+ * 已把它置 min-width:0（越窄越该收），而 (max-height:860px) 与
+ * (max-width:860px) 可同时命中（如 390×844 手机、800×600 窗口），本块写在
+ * 后面会把那个 0 顶回 140px —— 同在 `#drive-hud .dh-lead` 同特异性下后者胜。 */
+@media (max-height:860px) and (min-width:861px){
+  #drive-hud .dh-lead{min-width:140px}
+}
 
 /* ── Responsive ───────────────────────────── */
 @media (max-width:900px){
