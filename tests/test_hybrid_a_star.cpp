@@ -311,8 +311,7 @@ void TestPerformanceTypicalParking() {
 
     // ASan (~2-3x slowdown) inflates Hybrid A* avg beyond the Release 50ms gate
     // (CI saw ~63.8ms). Keep Release budget; relax only under AddressSanitizer.
-#if defined(__SANITIZE_ADDRESS__) || \
-    (defined(__has_feature) && __has_feature(address_sanitizer))
+#if defined(__SANITIZE_ADDRESS__)
     const double kAvgBudgetMs = 150.0;
 #else
     const double kAvgBudgetMs = 50.0;
