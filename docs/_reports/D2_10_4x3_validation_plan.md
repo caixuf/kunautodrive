@@ -21,13 +21,26 @@ python3 ci/evaluators/scenario_regression.py --d2-10-scenes --repeats 3 \
 | 结论 | 数据 |
 |---|---|
 | **横向判据 12/12 达标** | `max_abs_llt_offset_m`：straight 0.932 / 1.082 / 1.095、curve 0.070 / 0.103 / 0.108、urban 1.192 / 1.153 / 1.170、city 0.152 / 0.156 / 0.153 —— **最差 1.192 ≤ 1.65** |
-| A1 / A2 / A3 / A4 | ✅（suite 有阈值、每次都记 `max_abs_llt_offset_m`、越线走 FAIL、`test_evaluator_gate.py` 68 passed） |
-| **A5（12/12 PASS）** | ❌ **11/12** —— 唯一 FAIL = `straight_road` 第 2 次重复 `comfort: jerk max 16.1 m/s³ exceeds 15.0`（同一二进制同场景三次 9.6 / 12.4 / 16.1） |
+| A1 / A2 / A3 / A4 | ✅（suite 有阈值、每次都记 `max_abs_llt_offset_m`、越线走 FAIL、`test_evaluator_gate.py` 71 passed） |
+| **A5（12/12 PASS）** | 第 1 轮 ❌ 11/12（唯一 FAIL = `comfort: jerk max 16.1 > 15.0`）；**判据形态修复后第 2 轮 ✅ 12/12**，见下方小节 |
 | A6 / A7 | 未做（A7 控制重调不在本批范围） |
 
 **挡点与横向无关**：`comfort jerk max` 是逐帧加速度差分的**极值**统计，单帧尖峰独自决定判定
 （仓库基线里该值 1293 m/s³，物理上不可能）→ 已登记 `docs/FAILURE_MODES.md` §5。
-**解除条件**因此从"横向达标"变成"把 comfort jerk 判据换成可复现量（分位数 / 尖峰去噪）"。
+
+### 2026-10-24 复跑：判据形态修掉后 **A5 达成（12/12 PASS）**
+
+`comfort jerk` 的判据从"单帧极值"改成"**连续 3 帧超阈**才 FAIL（单帧只 WARN，另留
+单帧 >3× 阈值的野尖峰硬线）"（commit `d927717`，理由与实测见该 commit body 与
+`docs/FAILURE_MODES.md` §5）。同命令复跑 12 次：
+
+| 结论 | 数据 |
+|---|---|
+| **A5（12/12 PASS）** | ✅ **全绿**；逐次 `max_abs_llt_offset_m` = 1.084 / 1.406 / 0.988、0.101 / 0.070 / 0.057、0.994 / 1.225 / 1.159、0.144 / 0.141 / 0.148（**最差 1.406 ≤ 1.65**） |
+| 判据是否被改哑 | 同一轮里有两次 `comfort: jerk max 17.9 / 15.8 m/s³`（**高于旧 15.0 FAIL 线**）而判 WARN —— 因为 `longest consecutive over-15.0 run = 1 frame(s)`；这正是 A/B：旧判据 FAIL、新判据 WARN |
+| A6 / A7 | 仍未做（A7 控制重调不在本批范围） |
+
+结果文件在 `/tmp/flow_regression_d210_c/*.json`、日志 `/tmp/d210_harness_c.log`（临时目录，未入库）。
 
 结果文件在 `/tmp/flow_regression_d210/*.json`、fixtures 在 `/tmp/d2_10_fixtures`、日志
 `/tmp/d210_harness.log`（均在临时目录，**未入库**）；完整交付说明见 `docs/HANDOFF_2026-10-24.md`。
