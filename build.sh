@@ -129,6 +129,11 @@ build_node_plugins() {
         "-DFLOWENGINE_BUILD=$(cd "$(dirname "$0")" && pwd)/$BUILD_DIR"
     )
     [ -n "$onnx_flag" ] && cmake_args+=("-DENABLE_ONNX=$onnx_flag")
+    # 真 lanelet::Id 路径（D2-03）默认编译期关闭；要开就 FLOWENGINE_FETCH_LANELET2=ON
+    # 传给 build.sh —— 插件是独立 cmake 子项目，不转发这个开关它拿不到。
+    # 源码若已在主 build/_deps 里（候选链第二级），插件 configure 会直接命中、不再联网。
+    [ -n "${FLOWENGINE_FETCH_LANELET2:-}" ] && \
+        cmake_args+=("-DFLOWENGINE_FETCH_LANELET2=${FLOWENGINE_FETCH_LANELET2}")
     
     cmake "${cmake_args[@]}"
     if [ $? -ne 0 ]; then

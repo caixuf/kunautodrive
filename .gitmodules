@@ -2,7 +2,10 @@
 	path = third_party/esmini
 	url = https://github.com/esmini/esmini
 
-[submodule "third_party/lanelet2"]
-	path = third_party/lanelet2
-	url = https://github.com/fzi-forschungszentrum-informatik/Lanelet2.git
-	branch = master
+# ⚠️ 原先这里还有一条 [submodule "third_party/lanelet2"]，但**索引里从来没有它的
+# gitlink**（`git ls-files -s third_party/lanelet2` 只有那个占位 README，mode 100644），
+# 于是文档里那句 `git submodule update --init third_party/lanelet2` 必然失败
+# （"pathspec did not match"）。2026-10-24 移除这条悬空声明，改用能真正跑通的两条路：
+#   1) cmake -DFLOWENGINE_FETCH_LANELET2=ON ...（configure 期 FetchContent，本地验证真 ID 用）
+#   2) 手动把源码放到 third_party/lanelet2（须含 lanelet2_core/include/lanelet2_core/LaneletMap.h）
+# 详见 third_party/lanelet2/README.md 与 docs/M1_SUBMODULE_SETUP.md。

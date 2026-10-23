@@ -2,6 +2,11 @@ if(NOT DEFINED FLOW_ROOT)
   set(FLOW_ROOT "${CMAKE_SOURCE_DIR}")
 endif()
 
+# 显式开关：默认 OFF。ON 时若本地找不到 Lanelet2 源码，则 configure 期联网拉取
+# （本地想验证 flowsim 的"真 lanelet::Id"路径时才开；CI 一律不开 —— 见 kun_add_lanelet2 注释）。
+option(FLOWENGINE_FETCH_LANELET2
+       "Fetch Lanelet2 source from GitHub at configure time (needs network)" OFF)
+
 # cmake/Lanelet2Standalone.cmake — Lanelet2 without ROS/mrt (D2-03 Prefer A)
 # Builds lanelet2_core + lanelet2_io + lanelet2_projection from source tree.
 # Candidates: third_party/lanelet2 (if fully checked out) → build/_deps/lanelet2-src.
@@ -27,8 +32,35 @@ function(kun_add_lanelet2)
     return()
   endif()
   kun_find_lanelet2_src(_LL2_SRC)
+
+  # 第三级兜底：显式开关下联网拉源码（文档里的候选链第三级）。
+  # 默认 OFF —— configure 期联网是本仓库明令避免的失败形态：2026-10-22 三个
+  # CI job 因 libeigen3-dev 漏装退到联网下载、网络一抖整片红（见 ci-eigen-gate）。
+  # 本地想开真 ID 路径：cmake -DFLOWENGINE_FETCH_LANELET2=ON ...
+  # 只 Populate 源码、不 add_subdirectory —— Lanelet2 自己的 CMakeLists 要
+  # mrt_cmake_modules，本文件是按源文件直接编的（见下方 add_library）。
+  if(NOT _LL2_SRC AND FLOWENGINE_FETCH_LANELET2)
+    message(STATUS "Lanelet2 source not local — fetching master (FLOWENGINE_FETCH_LANELET2=ON)")
+    include(FetchContent)
+    FetchContent_Declare(lanelet2
+      GIT_REPOSITORY https://github.com/fzi-forschungszentrum-informatik/Lanelet2.git
+      GIT_TAG        master
+      GIT_SHALLOW    TRUE
+    )
+    FetchContent_GetProperties(lanelet2)
+    if(NOT lanelet2_POPULATED)
+      FetchContent_Populate(lanelet2)
+    endif()
+    if(EXISTS "${lanelet2_SOURCE_DIR}/lanelet2_core/include/lanelet2_core/LaneletMap.h")
+      set(_LL2_SRC "${lanelet2_SOURCE_DIR}")
+    endif()
+  endif()
+
   if(NOT _LL2_SRC)
-    message(WARNING "Lanelet2 source not found — flowsim real-ID path disabled at link time")
+    message(WARNING
+      "Lanelet2 source not found — flowsim real-ID path disabled at link time.\n"
+      "  想启用：cmake -DFLOWENGINE_FETCH_LANELET2=ON ...（联网拉 master，需 libpugixml-dev + libgeographiclib-dev）\n"
+      "  或把源码放到 third_party/lanelet2（须含 lanelet2_core/include/lanelet2_core/LaneletMap.h）")
     set(KUN_HAS_LANELET2 OFF PARENT_SCOPE)
     return()
   endif()

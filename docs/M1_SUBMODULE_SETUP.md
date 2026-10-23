@@ -6,32 +6,54 @@
 
 ## 1. 拉取
 
-```bash
-# 在已有 .gitmodules 条目的前提下：
-git submodule update --init --recursive third_party/lanelet2
+> ⚠️ **2026-10-24 更正**：本节原先写"在已有 .gitmodules 条目的前提下跑
+> `git submodule update --init --recursive third_party/lanelet2`" —— 但那个 submodule
+> **从来没有对应的 gitlink**（`git ls-files -s third_party/lanelet2` 只有占位 README，
+> mode 100644），命令必然以 `pathspec did not match` 失败。悬空的 `.gitmodules` 声明
+> 已移除，改用下面两条**实际跑通过**的路。
 
-# 验证：
-ls third_party/lanelet2/include/lanelet2_core/LaneletMap.h
+```bash
+# 路 1（推荐，本地验证"真 lanelet::Id"路径）：configure 期 FetchContent 拉 master 到 build/_deps
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DFLOWENGINE_FETCH_LANELET2=ON
+cmake --build build -j"$(nproc)"
+FLOWENGINE_FETCH_LANELET2=ON bash build.sh release   # build.sh 会把开关转给插件子项目
+# 验证：configure 输出应出现 "Lanelet2 source: …/build/_deps/lanelet2-src"，
+#      且不再出现 "Lanelet2 source not found" 那条 WARNING
+
+# 路 2（离线 / 要锁版本）：手动放源码
+git clone --depth 1 https://github.com/fzi-forschungszentrum-informatik/Lanelet2.git \
+    third_party/lanelet2
+ls third_party/lanelet2/lanelet2_core/include/lanelet2_core/LaneletMap.h
 # 预期：文件存在
 ```
+
+**默认 OFF**：configure 期联网是本仓库刻意避免的失败形态（2026-10-22 三个 CI job 因
+`libeigen3-dev` 漏装退到联网下载、网络一抖整片红，见 `ci-eigen-gate`）。
+CI 一律不开这个开关，继续走"源码缺失 → 编译期关闭真 ID 路径"的默认分支。
 
 锁定的远端：<https://github.com/fzi-forschungszentrum-informatik/Lanelet2.git>
 锁定的分支：`master`（Lanelet2 无稳定 tag 体系，master 即稳定）
 
 ## 2. 编译依赖
 
-Lanelet2 运行时依赖（按上游 README）：
-| 依赖 | 版本下限 | 本项目现状 |
-|---|---|---|
-| C++14 | — | ✅ 项目用 C++20，满足 |
-| CMake | 3.10 | ✅ 项目用 3.22+ |
-| Eigen | 3.3 | ✅ third_party/eigen vendored |
-| Boost | 1.71 | ❌ **缺失**——vendored 无，需 FetchContent 或 apt |
-| pugixml | 1.8 | ❌ 缺失 |
-| Glibmm / GTK | — | 仅 GUI 工具需要，runtime 不需要 |
+Lanelet2 运行时依赖（上游 README + 本仓库 `cmake/Lanelet2Standalone.cmake` 实际要求）。
+2026-10-24 本机逐项核查：
+| 依赖 | 本项目现状 |
+|---|---|
+| C++17 | ✅ 项目用 C++20，满足（`kun_lanelet2_core` 显式 `cxx_std_17`） |
+| CMake | ✅ 3.16+ |
+| Eigen | ✅ 系统 `/usr/include/eigen3`（或 vendored） |
+| Boost（filesystem） | ✅ 已装（`find_package(Boost REQUIRED COMPONENTS filesystem)`） |
+| pugixml | ✅ 已装（缺 → configure `FATAL_ERROR`：apt `libpugixml-dev`） |
+| GeographicLib | ✅ 已装（缺 → configure `FATAL_ERROR`：apt `libgeographiclib-dev`） |
+| Glibmm / GTK | 仅上游 GUI 工具需要，本仓库不编 → 不需要 |
 
-**M1 不集成编译**，仅在 `.gitmodules` + `third_party/lanelet2/README.md` 占位。
-**M2 集成时**需先评估 Boost 引入成本（apt vs FetchContent vs vendored）。
+缺失依赖的**表现**：只有把源码放进候选路径时才会 `FATAL_ERROR`；源码缺失时只是
+`WARNING` + 编译期关闭真 ID 路径（默认路径不受影响）。
+
+**M1 只做工具层**（`tools/json_to_lanelet.py` + `ci/gates/lanelet_consistency_check.py`，
+纯 Python，不依赖本 submodule）。**M2 起** flowsim 启动期 load `lanelet.osm` 时才需要
+上面两条路之一。
 
 ## 3. 与现有 esmini 子模块的对比
 
@@ -39,24 +61,23 @@ Lanelet2 运行时依赖（按上游 README）：
 - `CMakeLists.txt` 第 ~370-450 行：`add_subdirectory(${_esmini_path})` + `target_link_libraries(... esmini)`
 - esmini 走完整的 add_subdirectory，Lanelet2 因依赖更多，建议走 **INTERFACE library + FetchContent** 模式（仅暴露头文件 + 链接 lanelet2_core / lanelet2_io / lanelet2_projection / lanelet2_matching 子集）
 
-## 4. CI 集成策略（建议）
+## 4. CI 集成策略（**已落地**，2026-10-24）
 
-参照 esmini 的"四级 fallback"，Lanelet2 也建议：
+实现在 `cmake/Lanelet2Standalone.cmake`（**不是** CMakeLists 里的内联片段）。与早期
+"建议草图"的三点差别，都是实测踩出来的：
 
-```cmake
-# CMakeLists.txt (M2 阶段落地)
-set(_LANELET2_CANDIDATES
-    "${CMAKE_CURRENT_SOURCE_DIR}/../lanelet2"           # 同级目录
-    "${CMAKE_CURRENT_SOURCE_DIR}/build/_deps/lanelet2-src"  # FetchContent 缓存
-    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lanelet2"  # submodule
-)
-foreach(_cand IN LISTS _LANELET2_CANDIDATES)
-    if(EXISTS "${_cand}/lanelet2_core/include/LaneletMap.h")
-        add_subdirectory("${_cand}" "${CMAKE_BINARY_DIR}/_deps/lanelet2-build")
-        break()
-    endif()
-endforeach()
-```
+| 早期建议 | 实际实现 | 为什么 |
+|---|---|---|
+| `add_subdirectory(${_cand} …)` | **只 `FetchContent_Populate` 源码**，随后 `file(GLOB … lanelet2_core/src/*.cpp)` 直接编 | Lanelet2 自己的 `CMakeLists.txt` 依赖 `mrt_cmake_modules`，`add_subdirectory` 直接 configure 失败（本仓库不带 ROS/mrt） |
+| 候选链查 `include/LaneletMap.h` | 查 `lanelet2_core/include/lanelet2_core/LaneletMap.h` | 上游真实布局是这样；旧草图的路径少一层、永远命中不了 |
+| 找不到就联网 clone | **显式开关** `FLOWENGINE_FETCH_LANELET2`（默认 OFF）才联网 | configure 期联网是本仓库刻意避免的失败形态（2026-10-22 三个 CI job 齐红那次，见 `ci-eigen-gate`）；默认走"源码缺失 → 编译期关闭真 ID 路径" |
+
+候选链（三级，`kun_find_lanelet2_src()`）：`third_party/lanelet2` → `build/_deps/lanelet2-src`
+（FetchContent 缓存，插件 configure 会命中它、不重复拉）→ 开关打开时联网拉 master。
+
+**CI 现状**：不开开关 → 编译期关闭真 ID 路径（`flowsim` 用合成 `llt_id`，行为正确）。
+要进 CI 覆盖真 ID 路径，需先给 CI 装 `libpugixml-dev` + `libgeographiclib-dev`，并接受
+拉源码的时间/网络成本 —— 这一步**尚未做**。
 
 ## 5. 已知坑
 
