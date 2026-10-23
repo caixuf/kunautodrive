@@ -1257,6 +1257,58 @@ static void test_compute_lane_match_failure_path_zeros(void) {
  * flowsim_lm_hold_lane_id 在源头加 0.25·lane_width 迟滞带。
  *
  * 车道宽 3.5m ⇒ 迟滞带 ±0.875m，即必须越过中点 0.875m 以上才改判。 */
+
+/* ── D2-03 Prefer A: real Lanelet2 IDs ≠ synthesize; load-fail ───────── */
+static void test_d2_03_lanelet_real_ids(void) {
+    TEST("D2-03 Prefer A: load osm_test → real id in Layer and != synthesize");
+
+#if !defined(KUN_HAS_LANELET2) || !KUN_HAS_LANELET2
+    printf("  [SKIP] KUN_HAS_LANELET2 not enabled\n");
+    return;
+#else
+    char osm[1024];
+    int declared = 0;
+    const char* scen = "scenarios/osm_city_map.json";
+    if (flowsim_lm_resolve_lanelet_osm(scen, osm, sizeof(osm), &declared) != 0) {
+        scen = "../scenarios/osm_city_map.json";
+        ASSERT(flowsim_lm_resolve_lanelet_osm(scen, osm, sizeof(osm), &declared) == 0,
+               "resolve osm_city_map lanelet.osm");
+    }
+    ASSERT(declared == 1, "map_file scenario must be declared");
+    ASSERT(strstr(osm, "lanelet.osm") != NULL, "path ends with lanelet.osm");
+
+    char err[512];
+    FlowsimLaneletMap* map = flowsim_lm_map_load(osm, err, sizeof(err));
+    ASSERT(map != NULL, "load osm_test lanelet.osm (err=%s)", err);
+    ASSERT(flowsim_lm_map_size(map) > 0, "laneletLayer non-empty");
+
+    /* osm_test node N0: lat=y=146.919678 lon=x=211.507821 */
+    const double probe_x = 211.507821;
+    const double probe_y = 146.919678;
+    const uint64_t real_id = flowsim_lm_map_id_at(map, probe_x, probe_y);
+    ASSERT(real_id != 0ULL, "findNearest returned non-zero id");
+    ASSERT(flowsim_lm_map_contains(map, real_id) == 1,
+           "real id %llu in laneletLayer", (unsigned long long)real_id);
+
+    ASSERT(real_id != flowsim_lm_synthesize_lanelet_id(0, -1),
+           "real %llu != synthesize(0,-1)=499", (unsigned long long)real_id);
+    ASSERT(real_id != flowsim_lm_synthesize_lanelet_id(1, -1),
+           "real %llu != synthesize(1,-1)=1499", (unsigned long long)real_id);
+    ASSERT(flowsim_lm_map_contains(map, 0) == 0, "id 0 not in Layer");
+
+    flowsim_lm_map_free(map);
+    PASS();
+
+    TEST("D2-03 Prefer A: load missing osm -> FAIL (NULL)");
+    char err2[256];
+    FlowsimLaneletMap* bad = flowsim_lm_map_load(
+        "/tmp/kun_d2_03_definitely_missing_lanelet.osm", err2, sizeof(err2));
+    ASSERT(bad == NULL, "missing osm must not load");
+    ASSERT(err2[0] != '\0', "error message populated");
+    PASS();
+#endif
+}
+
 static void test_flowsim_lm_hold_lane_id(void) {
     TEST("flowsim_lm_hold_lane_id: 分界附近归属恒定，真越界才改判");
 
@@ -2129,6 +2181,7 @@ int main(void) {
     test_compute_lane_match_left_right_neighbors();
     test_compute_lane_match_failure_path_zeros();
     test_flowsim_lm_hold_lane_id();
+    test_d2_03_lanelet_real_ids();
 
     printf("\n═══ obs_lane_match_hint (D2-07 phase 2 — fusion lane hint) ═══\n");
     test_compute_hint_same_lane();
