@@ -40,7 +40,7 @@
 #include "coroutine_task.h"
 #include "topic_registry.h"
 #include "flowsim/building.h"   /* OSM 建筑 OBB：传感器视线遮挡 */
-#include "fusion_lane_hint.h"   /* A-F5: default profile 下 perception_node 直接消费 lane_match 打 hint（路径 α） */
+#include "obs_lane_match_hint.h" /* D2-07 Prefer A: whole-publish obs_lane_match_hint from lane_match.valid */
 #undef LOG_TRACE
 #undef LOG_DEBUG
 #undef LOG_INFO
@@ -141,14 +141,11 @@ struct PerceptionContext {
     /* DBSCAN 输入点缓冲（真点云，最多 PERCEPTION_MAX_CLOUD_POINTS 点） */
     Point3D  pts[PERCEPTION_MAX_CLOUD_POINTS]{};
 
-    /* A-F5 (路径 α): default profile 下 perception_node 直接消费 lane_match
-     * 给 obs 打 obs_lane_match_hint。复用 perception_fusion_node 的
-     * fusion_lane_hint helper（pure header，cache + apply_hint 同一函数）。
-     * 线程：on_lane_match 跑在 transport 分发线程 → lm_mtx 保护 cache 写；
-     *       apply_hint 在 run() 主循环调用前 snapshot 一份（短持锁）。 */
-    LaneMatchCache lm_cache{};
+    /* D2-07 Prefer A: cache latest localization/lane_match.valid only.
+     * Same hint stamped on every Obstacle in a publish (not per-obs).
+     * on_lane_match on transport thread → lm_mtx; publish path snapshots. */
+    int             lm_valid{0};  /* 0/1 from latest lane_match.valid */
     pthread_mutex_t lm_mtx = PTHREAD_MUTEX_INITIALIZER;
-    uint64_t        lm_max_age_us{1000000};  /* 默认 1s；params_json 可覆盖 */
 
     /* TaskBase 包装器（由 EXPORT_COROUTINE_TASK 宏创建） */
     struct perception_Wrapper* task_wrapper{nullptr};
@@ -170,39 +167,24 @@ static void on_world_buildings(const Message* msg, void* user_data) {
     }
 }
 
-/* A-F5 (路径 α): default profile 下 perception_node 也订阅 lane_match。
- * 与 perception_fusion_node 共用同一份 cache 字段语义；解析 cJSON
- * payload 后把 valid / lane_width / llt_offset 写入 lm_cache。
- * 不下结论，仅给每个 obs 打 hint 字段 — CLAUDE.md 职责铁律：
- * perception 不做硬过滤。 */
+/* D2-07 Prefer A: subscribe localization/lane_match; cache valid only.
+ * Parse fail / missing valid / valid==0 → lm_valid=0 (hint=0).
+ * Soft: never block publish. */
 static void on_lane_match(const Message* msg, void* user_data) {
     (void)user_data;
-    if (!msg || msg->data_size == 0) return;
-
-    cJSON* root = cJSON_Parse((const char*)msg->data);
-    if (!root) return;  /* 非 JSON 静默忽略 */
-
-    bool     valid      = false;
-    double   lane_width = 0.0;
-    double   llt_offset = 0.0;
-    uint64_t stamp_us   = msg->timestamp_us;
-
-    cJSON* j;
-    if ((j = cJSON_GetObjectItem(root, "valid")) && cJSON_IsNumber(j))
-        valid = (j->valueint != 0);
-    if ((j = cJSON_GetObjectItem(root, "lane_width")) && cJSON_IsNumber(j))
-        lane_width = j->valuedouble;
-    if ((j = cJSON_GetObjectItem(root, "llt_offset")) && cJSON_IsNumber(j))
-        llt_offset = j->valuedouble;
-    cJSON_Delete(root);
-
-    if (!valid || !(lane_width > 0.0) || !isfinite(lane_width)) valid = false;
-
+    int valid = 0;
+    if (msg && msg->data_size > 0) {
+        cJSON* root = cJSON_Parse((const char*)msg->data);
+        if (root) {
+            cJSON* j = cJSON_GetObjectItem(root, "valid");
+            if (j && cJSON_IsNumber(j) && j->valueint == 1)
+                valid = 1;
+            cJSON_Delete(root);
+        }
+        /* parse fail → valid stays 0 */
+    }
     pthread_mutex_lock(&g.lm_mtx);
-    g.lm_cache.valid      = valid;
-    g.lm_cache.lane_width = lane_width;
-    g.lm_cache.llt_offset = llt_offset;
-    g.lm_cache.stamp_us   = stamp_us;
+    g.lm_valid = valid;
     pthread_mutex_unlock(&g.lm_mtx);
 }
 
@@ -501,16 +483,15 @@ protected:
             g.last_obs_list = obs_list;
             g.has_last_obs  = 1;
 
-            /* A-F5 (路径 α): 应用 lane_match hint。snapshot cache 后调 apply_hint；
-             * mutex 持锁时间 ≤ O(1) 字段拷贝（cache 只有 4 字段）。 */
-            LaneMatchCache lm_snapshot;
+            /* D2-07 Prefer A: whole-publish hint from latest lane_match.valid. */
+            int lm_valid_snap = 0;
             pthread_mutex_lock(&g.lm_mtx);
-            lm_snapshot = g.lm_cache;
+            lm_valid_snap = g.lm_valid;
             pthread_mutex_unlock(&g.lm_mtx);
-            fusion_lane_hint_cache_check_freshness(&lm_snapshot, clock_now_us(), g.lm_max_age_us);
-            fusion_apply_hint(&obs_list, &lm_snapshot);
+            obs_lane_match_hint_apply(&obs_list,
+                obs_lane_match_hint_from_valid(lm_valid_snap));
 
-            uint8_t obs_buf[sizeof(ObstacleList)];  /* ObstacleList 序列化大小 = 16 + 128*35 wire (D2-07 M3 加 obs_lane_match_hint); sizeof 包含 alignment padding 5144B 一定够用 */
+            uint8_t obs_buf[sizeof(ObstacleList)];  /* ObstacleList wire = 16 + 128*35 (D2-07 Prefer A int8 hint); sizeof has alignment pad */
             size_t obs_len = 0;
             if (ObstacleList_serialize(&obs_list, obs_buf, &obs_len) == 0 && obs_len > 0) {
                 transport_publish(transport_, "perception/obstacles", obs_buf, (uint32_t)obs_len);
@@ -534,7 +515,7 @@ EXPORT_COROUTINE_TASK(PerceptionTask, perception)
 
 static const char* s_inputs[]  = { "vehicle/state", "sensor/lidar", "sensor/lidar_points",
                                    "road/geometry",
-                                   TOPIC_LOCALIZATION_LANE_MATCH,  /* A-F5 路径 α */
+                                   TOPIC_LOCALIZATION_LANE_MATCH,  /* D2-07 Prefer A */
                                    nullptr };
 static const char* s_outputs[] = { "perception/obstacles", nullptr };
 
@@ -615,14 +596,14 @@ static int perception_init(MessageBus* bus, Transport* transport,
     transport_subscribe(transport, "road/geometry", on_road_geometry, nullptr);
     /* 订阅 OSM 建筑（静态，init 时发布一次），供视线遮挡 */
     transport_subscribe(transport, TOPIC_WORLD_BUILDINGS, on_world_buildings, nullptr);
-    /* A-F5 (路径 α): default profile 下也订阅 lane_match，给每个 obs 打 obs_lane_match_hint。
-     * allow_hung_subs 兜底：当 default profile 没启用 flowsim 时，订阅链路空跑无副作用。 */
+    /* D2-07 Prefer A: subscribe lane_match for obs_lane_match_hint (soft). */
     transport_subscribe(transport, TOPIC_LOCALIZATION_LANE_MATCH, on_lane_match, nullptr);
 
     discovery_advertise(discovery, "vehicle/state",         0x1C0E5A7Eu, CAP_SUBSCRIBER,  0);
     discovery_advertise(discovery, "sensor/lidar",          LIDARFRAME_TYPE_ID, CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, TOPIC_SENSOR_LIDAR_POINTS, LIDARPOINTCLOUD_TYPE_ID, CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, "road/geometry",         0x80AD5C12u, CAP_SUBSCRIBER,  0);
+    discovery_advertise(discovery, TOPIC_LOCALIZATION_LANE_MATCH, 0u, CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, "perception/obstacles",  OBSTACLELIST_TYPE_ID, CAP_PUBLISHER, 20.0);
 
     transport_advertise(transport, "perception/obstacles", OBSTACLELIST_TYPE_ID);
