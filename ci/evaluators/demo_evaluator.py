@@ -235,6 +235,20 @@ COMFORT_JERK_MAX_WARN_MPS3 = 20.0    # 默认告警线
 COMFORT_JERK_MAX_FAIL_MPS3 = 40.0    # 默认 FAIL 线
 COMFORT_ACCEL_RMS_MAX_WARN_MPS2 = 3.0
 
+# ── 判据形态：**连续几帧**超阈才算 FAIL，单帧极值只告警 ──────────────────
+# 2026-10-24 实测（straight_road 三次 0.25s 采样）：巡航 jerk 的 max 在 9.9~16.1
+# 之间抖（阈值 15.0 恰落在抖动中段 → 同一二进制三次跑分居阈值两侧），而 p95 稳定
+# 在 0.6~1.1 —— 78 个巡航 jerk 帧里超阈 0~1 帧，且三次的峰值**都落在 t≈43.5s 的
+# 减速起点**、每次都只有 1 帧。原因：jerk = |Δa|/Δt 在 0.25s 采样下把 1 m/s 的
+# 速度抖动放大成 ~16 m/s³，刹车起点/换挡瞬态这类**单帧**事件轻松越过阈值。
+# 而 ISO 2631 关心的是持续数秒的加权量 —— 单帧瞬态不是"坐着颠"。
+# 故：FAIL 判**连续**超阈帧数（3 帧 ≈ 0.75s 持续），单帧冒尖只 WARN；
+#    另留一条"野尖峰"硬线：单帧超过阈值的 SPIKE_FAIL_FACTOR 倍仍判 FAIL
+#    （那不是刹车瞬态的量级，是真出事了）。
+# 手法与长跑门禁的 LANE_KEEP_CONSEC_FAIL 同源。
+COMFORT_JERK_CONSEC_FAIL_FRAMES = 3      # 连续超阈帧数达到它 → FAIL
+COMFORT_JERK_SPIKE_FAIL_FACTOR = 3.0     # 单帧 > 阈值×它 → 仍判 FAIL
+
 # 按场景名（scenario_file 的词干）给出的严门槛。含 None 的键视为"该键用默认值"。
 # 例：straight_road 是纯直道，本应无任何险情，故把 TTC/舒适性收到体检发现的
 # 数值以下。dict 形式便于后续把更多场景的分级门槛加进来。
@@ -261,6 +275,17 @@ def _scenario_gate(scenario_id: str | None, key: str, default):
         return default
     value = over.get(key)
     return default if value is None else value
+
+
+def resolve_jerk_fail_mps3(criteria: dict | None, scenario_id: str | None) -> float:
+    """jerk FAIL 线的**唯一**解析入口（criteria > scenario override > 模块默认）。
+
+    必须同源：门禁判"连续几帧超阈"要用它，compute_formal_metrics 数那个"连续几帧"
+    也要用它。两处各写一遍就会重演 2026-10-23 那次"横向判据三处口径不一致"。
+    """
+    return float((criteria or {}).get(
+        "jerk_max_fail_mps3",
+        _scenario_gate(scenario_id, "jerk_max_fail_mps3", COMFORT_JERK_MAX_FAIL_MPS3)))
 
 
 def _lane_idx(value) -> int:
@@ -1340,12 +1365,16 @@ def _p95(values: list[float]) -> float:
     return values[low] + (values[high] - values[low]) * (index - low)
 
 
-def compute_formal_metrics(series: list[dict], samples: list[dict]) -> dict:
+def compute_formal_metrics(series: list[dict], samples: list[dict],
+                           jerk_fail_mps3: float | None = None) -> dict:
     """Compute grouped, data-backed metrics for the unified result protocol.
 
     The trajectory ADE/FDE names are deliberately qualified as lane-tracking
     errors: they compare ego against the nearest lane center, not a prediction
     ground truth that the closed-loop evaluator does not possess.
+
+    `jerk_fail_mps3`：数"连续几帧超阈"用的阈值（见 COMFORT_JERK_CONSEC_FAIL_FRAMES）。
+    由调用方经 resolve_jerk_fail_mps3() 解析后传入 —— 门禁与这里必须同一个数。
     """
     if not series:
         return {
@@ -1355,6 +1384,7 @@ def compute_formal_metrics(series: list[dict], samples: list[dict]) -> dict:
             "comfort_accel_rms_mps2": None,
             "comfort_jerk_p95_mps3": None,
             "comfort_jerk_max_mps3": None,
+            "comfort_jerk_max_run_frames": 0,
             "timing_sample_period_mean_s": None,
             "timing_sample_period_p99_s": None,
             "timing_sample_count": 0,
@@ -1411,6 +1441,14 @@ def compute_formal_metrics(series: list[dict], samples: list[dict]) -> dict:
         if maneuver[cur["i0"]] or maneuver[cur["i1"]]:
             continue
         jerk.append(abs((cur["a"] - prev["a"]) / cur["dt"]))
+
+    # 连续超阈帧数（最长段）：判据用"持续几帧"而不是单帧极值 —— 0.25s 采样下刹车
+    # 起点/换挡瞬态都会给出单帧大 jerk，见常量处注释。
+    _jf = COMFORT_JERK_MAX_FAIL_MPS3 if jerk_fail_mps3 is None else float(jerk_fail_mps3)
+    _run = _run_max = 0
+    for _value in jerk:
+        _run = _run + 1 if _value > _jf else 0
+        _run_max = max(_run_max, _run)
     accel_rms = (
         math.sqrt(statistics.fmean(value * value for value in
                                    (pair["a"] for pair in accel_pairs)))
@@ -1423,6 +1461,7 @@ def compute_formal_metrics(series: list[dict], samples: list[dict]) -> dict:
         "comfort_accel_rms_mps2": accel_rms,
         "comfort_jerk_p95_mps3": _p95(jerk),
         "comfort_jerk_max_mps3": max(jerk) if jerk else 0.0,
+        "comfort_jerk_max_run_frames": _run_max,
         "timing_sample_period_mean_s": statistics.fmean(periods) if periods else 0.0,
         "timing_sample_period_p99_s": _p95(periods),
         "timing_sample_count": len(series),
@@ -2424,7 +2463,9 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     # "exceeded max duration"，属于度量伪影（run 本身完全正常）。
     # 取不到（老 series / 单测构造的样本）→ 空列表，调用方回退墙钟并在 summary 标注。
     sim_timestamps = _sim_timestamps(samples)
-    formal_metrics = compute_formal_metrics(series, samples)
+    # 门槛必须先解析出来再算 metrics：metrics 里那个"连续几帧超阈"要用同一个数。
+    _jerk_fail_mps3 = resolve_jerk_fail_mps3(criteria, scenario_name)
+    formal_metrics = compute_formal_metrics(series, samples, _jerk_fail_mps3)
     scenario_layer_counts = scenario_actor_layer_counts(scenario)
 
     # ── 掉头检测（防巡航向门禁对合法掉头误报）──
@@ -3607,19 +3648,31 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         )
 
     # ── 舒适性门禁（L3-P0②）：jerk 与加速度 RMS 超限 FAIL ──
-    # 2026-10-31 CI flake：straight_road 夜间偶发 comfort_jerk_max 15–18
-    # （严门槛 15）而 p95≈0.9–1.0。单尖峰来自采样/控制瞬态，持续颠簸才会
-    # 把 p95 也抬高。故：max 超 FAIL 但 p95 ≤ WARN 且 max 未破默认硬顶（40）
-    # → 降级 WARN（记 spike-only）；持续超限或硬顶仍 FAIL。
+    # 判据形态：**连续** COMFORT_JERK_CONSEC_FAIL_FRAMES 帧超阈才算 FAIL，
+    # 单帧极值只 WARN（理由见常量处实测注释；p95 ≤ WARN 时记 spike-only）；
+    # 另有单帧野尖峰硬线（COMFORT_JERK_SPIKE_FAIL_FACTOR × 阈值）。
     jerk_max = float(formal_metrics.get("comfort_jerk_max_mps3", 0.0) or 0.0)
     jerk_p95_raw = formal_metrics.get("comfort_jerk_p95_mps3")
     jerk_p95 = float(jerk_p95_raw) if isinstance(jerk_p95_raw, (int, float)) else None
-    jerk_fail = float(criteria.get("jerk_max_fail_mps3",
-                                    _scenario_gate(scenario_id, "jerk_max_fail_mps3", COMFORT_JERK_MAX_FAIL_MPS3)))
+    jerk_run = int(formal_metrics.get("comfort_jerk_max_run_frames", 0) or 0)
+    jerk_fail = resolve_jerk_fail_mps3(criteria, scenario_id)
     jerk_warn = float(criteria.get("jerk_max_warn_mps3",
                                     _scenario_gate(scenario_id, "jerk_max_warn_mps3", COMFORT_JERK_MAX_WARN_MPS3)))
+    jerk_spike = jerk_fail * COMFORT_JERK_SPIKE_FAIL_FACTOR
     accel_rms = float(formal_metrics.get("comfort_accel_rms_mps2", 0.0) or 0.0)
-    if jerk_max > jerk_fail:
+    if jerk_run >= COMFORT_JERK_CONSEC_FAIL_FRAMES:
+        failures.append(
+            f"comfort: jerk sustained — {jerk_run} consecutive cruise frames > "
+            f"{jerk_fail:.1f} m/s³ (peak {jerk_max:.1f}); sustained harshness, "
+            f"not a one-frame brake onset (ISO 2631 comfort band ~10)"
+        )
+    elif jerk_max > jerk_spike:
+        failures.append(
+            f"comfort: jerk spike {jerk_max:.1f} m/s³ single-frame exceeds "
+            f"{COMFORT_JERK_SPIKE_FAIL_FACTOR:g}× the {jerk_fail:.1f} line "
+            f"(not a brake-onset transient — something is wrong physically)"
+        )
+    elif jerk_max > jerk_fail:
         spike_only = (
             jerk_p95 is not None
             and jerk_p95 <= jerk_warn
@@ -3636,7 +3689,11 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
                 f"(ISO 2631 comfort band ~10; accelerometer-grade ride)"
             )
     elif jerk_max > jerk_warn:
-        warnings.append(f"comfort: jerk max {jerk_max:.1f} m/s³ (WARN > {jerk_warn:.1f})")
+        warnings.append(
+            f"comfort: jerk max {jerk_max:.1f} m/s³ (WARN > {jerk_warn:.1f}; "
+            f"longest consecutive over-{jerk_fail:.1f} run = {jerk_run} frame(s), "
+            f"FAIL needs {COMFORT_JERK_CONSEC_FAIL_FRAMES})"
+        )
     if accel_rms > COMFORT_ACCEL_RMS_MAX_WARN_MPS2:
         warnings.append(
             f"comfort: accel RMS {accel_rms:.2f} m/s² (WARN > {COMFORT_ACCEL_RMS_MAX_WARN_MPS2:.1f})"

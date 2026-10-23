@@ -462,6 +462,33 @@ def run_all_checks() -> int:
     _f2 = _score_full("jerk-bad-dup", _jerky_dup, _ZERO_CRIT)[0]
     check("genuinely jerky run still FAILs despite duplicate tail",
           any("comfort: jerk" in x for x in _f2))
+
+    print("\n[29] 舒适性门禁形态：单帧瞬态不得 FAIL；连续超阈帧才 FAIL；野尖峰仍 FAIL")
+    # 2026-10-24 根因：0.25s 采样下 jerk=|Δa|/Δt 把 1 m/s 的速度抖动放大成 ~16 m/s³，
+    # 于是**刹车起点/换挡瞬态**这种单帧（严格说是两帧：加速对 + 回落对）事件
+    # 就能越过 15 的直道严线 → 同一二进制三次跑分居阈值两侧（9.6/12.4/16.1）。
+    # 判据改为"连续 ≥3 帧"（见 demo_evaluator.COMFORT_JERK_CONSEC_FAIL_FRAMES）。
+    _crit_fl_tight = {"jerk_max_fail_mps3": 15.0, "jerk_max_warn_mps3": 12.0}
+    # (a) 单次 1 m/s 阶跃 = 一次刹车起点：两帧 jerk=16 → 不足 3 帧 → 只 WARN，不得 FAIL
+    _step = [_mk(10 + i * 3, -1.75, 12.0 + (1.0 if i >= 10 else 0.0), 0.0, i * 0.25)
+             for i in range(40)]
+    _f = _score_full("jerk-step", _step, _crit_fl_tight)[0]
+    check("single brake-onset transient does not FAIL (only WARN)",
+          not any("comfort: jerk" in x for x in _f))
+    # (b) 持续颠簸（±1 m/s 逐帧交替 → 每帧 jerk=16）→ 连续段远超 3 帧 → FAIL
+    _osc = [_mk(10 + i * 3, -1.75, 12.0 + (1.0 if i % 2 else 0.0), 0.0, i * 0.25)
+            for i in range(40)]
+    _f2 = _score_full("jerk-osc", _osc, _crit_fl_tight)[0]
+    check("sustained oscillation FAILs on consecutive frames",
+          any("comfort: jerk sustained" in x for x in _f2))
+    # (c) 野尖峰硬线：一次 8 m/s 的瞬时跳变（32 m/s²）落在**样本末尾**——
+    #     单次阶跃本来会产生 2~3 帧 jerk（升沿/反转/降沿），末尾那次只剩升沿，
+    #     于是这段只有 1 帧超阈、连续段不到 3 帧：正好把"野尖峰"分支隔离出来测。
+    _spike = ([_mk(10 + i * 3, -1.75, 12.0, 0.0, i * 0.25) for i in range(30)]
+              + [_mk(100, -1.75, 20.0, 0.0, 30 * 0.25)])
+    _f3 = _score_full("jerk-spike", _spike, _crit_fl_tight)[0]
+    check("wild single-frame spike still FAILs (3x line)",
+          any("comfort: jerk spike" in x for x in _f3))
     # 直道严门槛（straight_road：FAIL 15.0）：平稳 + 尾巴 不得误报
     _f3 = _score_full("straight_road", _body + _tail, _ZERO_CRIT)[0]
     check("straight_road tight jerk gate not tripped by stale tail",
