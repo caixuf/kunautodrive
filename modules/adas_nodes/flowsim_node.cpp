@@ -47,7 +47,14 @@
 #include "flowsim/route.h"
 #include "flowsim/sim_digest.h"
 #include "flowsim/lane_frenet.h"          /* C-2: 共享车道中心横向偏移公式 */
-#include "flowsim/lane_match_helpers.h"   /* D2-04 M3: lane_match 纯算法 helper（曲率/synthesize/邻车道查找/失败归零） */
+#include "flowsim/lane_match_helpers.h"
+
+#if defined(KUN_HAS_LANELET2) && KUN_HAS_LANELET2
+#include <lanelet2_core/LaneletMap.h>
+#include <stdexcept>
+#include <fstream>
+#endif
+   /* D2-04 M3: lane_match 纯算法 helper（曲率/synthesize/邻车道查找/失败归零） */
 #include "flowsim/flowsim_time.h"
 #include "scenario_router.h"              /* 车道级 A*：主循环建图 + ego 起终点路由 */
 
@@ -167,6 +174,12 @@ struct FlowSimContext {
      * 避免跨 road / 掉头后粘在旧 lane 上。0 = 尚未锁存。 */
     int               lm_held_lane{0};
     int               lm_held_road{-1};
+#if defined(KUN_HAS_LANELET2) && KUN_HAS_LANELET2
+    /* D2-03 Prefer A: loaded once at init when sibling lanelet.osm exists. */
+    lanelet::LaneletMapPtr lanelet_map{};
+    bool                   lanelet_synthesize_warned{false};
+#endif
+
     uint64_t          sim_start_us{0};
     bool              roads_loaded{false};
     int               last_road_geom_road_id{-9999};
@@ -248,6 +261,11 @@ static void reset_runtime_state() {
     g.lm_held_road = -1;
     g.sim_start_us = 0;
     g.roads_loaded = false;
+#if defined(KUN_HAS_LANELET2) && KUN_HAS_LANELET2
+    g.lanelet_map.reset();
+    g.lanelet_synthesize_warned = false;
+#endif
+
     g.last_road_geom_road_id = -9999;
     g.last_road_geom_lane_count = -1;
     g.ego_route_s_hint = -1.0;
@@ -1577,8 +1595,16 @@ static void compute_lane_match(double x, double y, double ego_heading,
     while (err > M_PI)  err -= 2.0 * M_PI;
     while (err < -M_PI) err += 2.0 * M_PI;
 
-    /* M2 字段 */
+    /* M2 / D2-03 Prefer A dual-mode fields */
+#if defined(KUN_HAS_LANELET2) && KUN_HAS_LANELET2
+    if (g.lanelet_map) {
+        *out_llt_id = flowsim_lm::real_lanelet_id_at(*g.lanelet_map, x, y);
+    } else {
+        *out_llt_id = flowsim_lm_synthesize_lanelet_id(fp.road_id, lane_id);
+    }
+#else
     *out_llt_id = flowsim_lm_synthesize_lanelet_id(fp.road_id, lane_id);
+#endif
     *out_llt_s = fp.s;
     *out_llt_offset = lane_off;
     *out_heading_err = err;
@@ -1613,10 +1639,30 @@ static void compute_lane_match(double x, double y, double ego_heading,
         lane_id, drivable_ids.data(), (int)drivable_ids.size(), +1);
     const int right_lid = flowsim_lm_pick_adjacent_lane_id(
         lane_id, drivable_ids.data(), (int)drivable_ids.size(), -1);
+#if defined(KUN_HAS_LANELET2) && KUN_HAS_LANELET2
+    if (g.lanelet_map) {
+        /* Loaded path: real IDs via findNearest at neighbour centre; never synthesize. */
+        auto id_at_lane = [&](int odr_lane) -> uint64_t {
+            if (odr_lane == 0) return 0ULL;
+            flowsim::WorldPos nwp;
+            if (!g.roads.frenet_to_world(fp.road_id, odr_lane, fp.s, 0.0, nwp))
+                return 0ULL;
+            return flowsim_lm::real_lanelet_id_at(*g.lanelet_map, nwp.x, nwp.y);
+        };
+        *out_left_lanelet_id  = id_at_lane(left_lid);
+        *out_right_lanelet_id = id_at_lane(right_lid);
+    } else {
+        *out_left_lanelet_id  = (left_lid  != 0)
+            ? flowsim_lm_synthesize_lanelet_id(fp.road_id, left_lid)  : 0ULL;
+        *out_right_lanelet_id = (right_lid != 0)
+            ? flowsim_lm_synthesize_lanelet_id(fp.road_id, right_lid) : 0ULL;
+    }
+#else
     *out_left_lanelet_id  = (left_lid  != 0)
         ? flowsim_lm_synthesize_lanelet_id(fp.road_id, left_lid)  : 0ULL;
     *out_right_lanelet_id = (right_lid != 0)
         ? flowsim_lm_synthesize_lanelet_id(fp.road_id, right_lid) : 0ULL;
+#endif
 
     /* flags：ABI 保留位，本期必须置 0 */
     *out_flags = 0U;
@@ -3534,6 +3580,43 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
             }
         }
     }
+
+
+    /* --- D2-03 Prefer A: load sibling lanelet.osm once (dual-mode) ---
+     * declared map_file/map_id + missing/load-fail -> startup FAIL.
+     * no-osm road_network scenes -> keep synthesize + one-shot WARN. */
+#if defined(KUN_HAS_LANELET2) && KUN_HAS_LANELET2
+    if (g.scenario_file[0] != '\0') {
+        bool declared = false;
+        const std::string osm_path =
+            flowsim_lm::resolve_lanelet_osm_path(g.scenario_file, &declared);
+        if (declared) {
+            try {
+                if (osm_path.empty()) {
+                    throw std::runtime_error("declared map but osm path empty");
+                }
+                std::ifstream _osm_probe(osm_path);
+                if (!_osm_probe.good()) {
+                    throw std::runtime_error("lanelet.osm missing: " + osm_path);
+                }
+                _osm_probe.close();
+                g.lanelet_map = flowsim_lm::load_lanelet_map(osm_path);
+                LOG_INFO("flowsim",
+                         "D2-03 lanelet map loaded once: %zu lanelets from %s",
+                         g.lanelet_map->laneletLayer.size(), osm_path.c_str());
+            } catch (const std::exception& ex) {
+                LOG_ERROR("flowsim",
+                          "D2-03 lanelet load FAIL (declared osm): %s", ex.what());
+                return -1;
+            }
+        } else if (!g.lanelet_synthesize_warned) {
+            LOG_WARN("flowsim",
+                     "D2-03: no map_file/map_id — using synthesize llt_id "
+                     "(temporary; road_network-only scenes)");
+            g.lanelet_synthesize_warned = true;
+        }
+    }
+#endif
 
     /* 专项回归起点覆盖：route 构建后把 (start_s,start_d) 精确映射到世界
      * 坐标。无需复制/修改场景 JSON，可直接从施工区、路口或掉头前起跑。 */
