@@ -78,6 +78,7 @@ typedef struct {
     size_t            cached_json_len;
     uint64_t          cached_json_time_us;
     uint64_t          cached_json_version;  /**< bumped on every fresh dashboard payload */
+    uint64_t          rejected_payloads;    /**< 非 JSON 负载被拒次数（陈旧 SHM 探测） */
     pthread_mutex_t   cached_mutex;
     pthread_cond_t    cached_cond;           /**< signaled when cached_json_version changes */
     /* Count of in-flight per-connection handler threads (e.g. SSE streams).
@@ -353,7 +354,11 @@ static void build_sse_json(MonitorServer* ms, char* buf, size_t sz) {
     }
     pthread_mutex_unlock(&ms->remote_mutex);
 
-    /* Close topics + close metrics + top-level.
+    /* Close topics + scene + road_network + metrics + top-level（**五**层，别数漏：
+     * 2026-10-24 实测这段原本只闭合到 metrics，根对象留了个开口 ——
+     * /api/topology 的兜底 body 只有 489 字节且缺最后一个 '}'，任何客户端
+     * json.loads 都会在 EOF 报 "Expecting ',' delimiter"；SSE 的 data: 帧走的是
+     * 同一个函数，管线停时同样吐非法 JSON）。判据见 tests/test_monitor_http_integrity.py。
      * pipeline 停止时无真实场景数据 —— 发空场景（前端显示"无数据"），
      * 而不是编造一条 2000m 高架路网（会渲染成一条根本不存在的路）。 */
     SSE_APPEND("],"
@@ -361,11 +366,15 @@ static void build_sse_json(MonitorServer* ms, char* buf, size_t sz) {
         "\"vehicle\":{},"
         "\"scene\":{\"entities\":[],"
         "\"ego\":{\"x\":0,\"y\":0,\"heading\":0,\"speed\":0},"
-        "\"road_network\":{\"edges\":[]}}}");
+        "\"road_network\":{\"edges\":[]}}}}");
 #undef SSE_APPEND
 }
 
 /* ── HTTP 响应 ──────────────────────────────────────────── */
+
+/* 定义在下方（SSE 段附近）。响应路径要在它之前用它 —— 裸 write 丢返回值
+ * 会把大 body 静默截断，见 send_response 注释。 */
+static int safe_write(int fd, const void* buf, size_t len);
 
 static void send_response(int fd, const char* status, const char* content_type,
                           const char* body) {
@@ -380,12 +389,13 @@ static void send_response(int fd, const char* status, const char* content_type,
         "Connection: close\r\n"
         "\r\n",
         status, content_type, body_len);
-    ssize_t w = write(fd, header, (size_t)hl);
-    (void)w;
-    if (body && body_len > 0) {
-        w = write(fd, body, (size_t)body_len);
-        (void)w;
-    }
+    /* safe_write 而不是裸 write：裸 write 在发送缓冲填满时**只写一部分就返回**，
+     * 返回值又在这里被丢掉 → 响应被静默截断（Content-Length 说 N，实际发 M<N），
+     * keep-alive 复用下客户端会把**下一个响应**的字节当成这次 body 的尾巴，
+     * 表现为"合法 JSON 前缀 + 垃圾尾巴 + 解析失败"。本文件 SSE 路径一直用
+     * safe_write，HTTP 响应路径漏了 —— 见 docs/FAILURE_MODES.md §4 最后两行。 */
+    if (safe_write(fd, header, (size_t)hl) != 0) return;
+    if (body && body_len > 0) safe_write(fd, body, (size_t)body_len);
 }
 
 /* ── P1-4: gzip + keep-alive + 路径分级缓存 ──────────────────
@@ -493,12 +503,12 @@ static void send_response_full_bytes(int fd, const char* status, const char* con
         enc_header,
         actual_body_len,
         keep_alive ? "keep-alive" : "close");
-    ssize_t w = write(fd, header, (size_t)hl);
-    (void)w;
-    if (actual_body && actual_body_len > 0) {
-        w = write(fd, actual_body, (size_t)actual_body_len);
-        (void)w;
+    if (safe_write(fd, header, (size_t)hl) != 0) {
+        if (gz_body) free(gz_body);
+        return;
     }
+    if (actual_body && actual_body_len > 0)
+        safe_write(fd, actual_body, (size_t)actual_body_len);
     if (gz_body) free(gz_body);
 }
 
@@ -916,8 +926,7 @@ static bool dispatch_request(int fd, MonitorServer* ms,
         const char* cors = "HTTP/1.1 204\r\nAccess-Control-Allow-Origin: *\r\n"
             "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
             "Access-Control-Allow-Headers: Content-Type\r\n\r\n";
-        ssize_t w = write(fd, cors, strlen(cors));
-        (void)w;
+        safe_write(fd, cors, strlen(cors));
         close(fd);
         return false;
     }
@@ -2155,6 +2164,30 @@ void monitor_server_get_remote_stats_summary(MonitorServer* ms,
 void monitor_server_inject_dashboard_json(MonitorServer* ms,
                                           const char* json, size_t len) {
     if (!ms || !json || len == 0) return;
+
+    /* ── 先验负载是不是 JSON ──────────────────────────────────────
+     * 只看长度/首字符不够：**陈旧的 IPC 共享内存段**会被订阅端读成"一帧新快照"。
+     * 实测（2026-10-24 定位）：`tests/test_bridges.c` 往 dashboard 通道发布的
+     * 10000 字节 'ABCDEFG…' 字母负载，在测试进程退出后仍留在
+     * /dev/shm/flow_dashboard_shm；随后启动的 flowmond 连上这段陈旧 SHM，把它
+     * 当数据缓存下来 → `/api/topology` 变成「合法前缀 + 垃圾尾巴」、JSON 解析
+     * 失败（`{"source":"live","stale":false,"age_sec":2.0,BCDEFGHIJKLMNOP…`，
+     * 10044 字节，与 docs/FAILURE_MODES.md §4 登记的原文一致；首字符 'A' 被
+     * 缓存拼接逻辑当作 JSON 的 '{' 吃掉了）。
+     * 管线被 kill 或前一个进程崩溃同样会留下这种段 —— 所以这是**消费侧**必须
+     * 自己守住的边界，不能假设对端一定写过合法负载。
+     * 用 cJSON_Parse 而不是手写嗅探：本仓库 JSON 判据唯一合法入口。 */
+    cJSON* probe = cJSON_ParseWithLength(json, len);
+    if (!probe) {
+        if (!ms->rejected_payloads) {   /* 只吵一次，防刷屏 */
+            fprintf(stderr, "[monitor_server] WARN: 拒收非 JSON dashboard 负载 "
+                    "(%zu 字节) —— 通常是陈旧 IPC 共享内存段"
+                    "（前一个进程崩溃/测试退出后残留）\n", len);
+        }
+        ms->rejected_payloads++;
+        return;
+    }
+    cJSON_Delete(probe);
 
     pthread_mutex_lock(&ms->cached_mutex);
 

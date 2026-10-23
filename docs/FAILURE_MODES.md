@@ -35,10 +35,10 @@
 | 1 | 控制 / 规划 / 安全层 | 36 |
 | 2 | 感知 / 点云 | 6 |
 | 3 | 仿真 / 几何 / NPC | 8 |
-| 4 | 仪表盘 / 监控 / 前端 | 22 |
+| 4 | 仪表盘 / 监控 / 前端 | 24 |
 | 5 | 评估器 / 门禁 | 8 |
 | 6 | 框架 / 工具链 | 4 |
-| | **合计** | **84** |
+| | **合计** | **86** |
 
 ## 1. 控制 / 规划 / 安全层
 
@@ -148,8 +148,9 @@
 | **矮视口（实测 1990×688）下 3D 主视图只剩 ~212px 高，底部两个绝对定位浮层压住近四成；拓扑图反而比主视图还高** | 三个下限都是按高视口调的，矮屏下全部反客为主：① `#topo{height:clamp(200px,26vh,400px)}` —— 688 高时 26vh=179 < 200 → 取到 200px 下限，比 3D 区还高；② 3D 卡 min-height 320/240/200 太低，flex 拿不到高度时退到下限；③ `#drive-hud`(~86px) 与 `#incident-timeline`(~64px) 是**绝对定位浮层**，尺寸由字号/内边距写死、不随视口高度缩放 —— 视口越矮，它们占 3D 的比例越大（688 高时两个浮层吃掉 ~150px）。修复：`#topo` 下限 200px→132px、26vh→20vh；`#scene3d-card`/`.card-body`/`#scene3d` min-height 320/240/200 → 392/320/320（宁可让 `#main` 滚动也不把主视图压成横条）；新增 `@media (max-height:860px)` 收 `#drive-hud` 与 `#incident-timeline` 的字号/内边距。判据：矮视口下 3D 可视高 ≥ 浮层高之和，且浮层不与场景内容重叠 | `tools/flowboard/css/style.css` #topo / #scene3d-card / @media(max-height:860px) |
 | **车辆 glTF 静态件合批后车身/车顶/尾灯出现斑点噪点（车"起砂"）** | 把车辆静止件按材质合并成 InstancedMesh 式大几何后，**车模渲染退化**：A/B 实测（同一视口/相机/画质档，仅切换合批开关）合批前车身干净、合批后车顶与尾灯出现斑点噪点；被合并的正是 `cabin` / `windshield` / `headlight_L` / `brakelight_L` / `turnsignal_FL` 这些**灯光与玻璃件**，合并后几何只剩 `position`+`normal`（**uv 丢失**）。两条相互叠加的机制（**哪条为主尚未隔离**）：① 车灯件的 `emissiveMap` 是**建车之后**才由灯光接线挂上，合批时材质还没有贴图 → 按"当前无贴图就不带 uv"的规则丢掉了 uv，贴图挂上后只能采样同一 texel；② 合并把 mesh 改名 `X → X_merged`，而车灯/车漆逻辑**按名字**找件（`VehicleView.js:296` `name.includes('light')`、`:402` `name === 'ChePai'`），且语义灯光是在建车**之后**从 group 里按名收集灯件。**处置：撤掉车辆合批（`models.js`/`VehicleView.js` 回到 `f359f19`），`GeometryMerge` 的交错属性修复保留**。教训：给"有按名查找 + 材质后挂贴图"的模型层级做几何合批，必须先确认没有按名/按件的后续接线，且属性要全量保留（不能只留 position/normal/uv） | `tools/flowboard/js/models.js` mergeStaticVehicleMeshes（已撤） / `js/vis/view/VehicleView.js` `_createGltfVehicle`（已撤） |
 
-| **仪表盘拿不到真实拓扑、一直显示演示数据（`/api/topology` 响应体在 `{"source":"live","stale":false,"age_sec":N,` 之后被 `BCDEFGHIJKLMNOPQRSTUVWXYZ` 循环字符填充，JSON 解析失败）** | 复现条件（2026-10-22 实测）：先跑 `demo.sh` 再让管线退出，**只留 flowmond 单独监听 8800**（`flowmond --port 8800 --html-path …`），此时 `curl /api/topology` 返回 10044 字节坏体；管线在跑时同一接口正常（61298 字节、19 节点合法 JSON，`age_sec 0.0`）。怀疑落在 `build_cached_dashboard_json()` 的过期缓存分支，但**根因未定位**（未读 IPC 侧缓存写入路径）。⚠️ 未修，仅登记现象与复现条件 | `src/core/monitor_server.c` build_cached_dashboard_json |
-
+| **仪表盘拿不到真实拓扑、`/api/topology` 响应体在 `{"source":"live","stale":false,"age_sec":N,` 之后被 `BCDEFGHIJKLMNOPQRSTUVWXYZ` 循环字符填充、JSON 解析失败（10044 字节）** | **根因 2026-10-24 定位（上一版只登记了现象）**：那不是乱码，是**陈旧 IPC 共享内存段里的毒负载被当成 live dashboard JSON**。链路：`tests/test_bridges.c` 往 dashboard 通道发布 10000 字节 `'A'+i%26` 字母负载（验证分块重组），而它**只 stop 订阅端、不 stop 发布端** → 段留在 `/dev/shm/flow_dashboard_shm`；此后启动的 flowmond 连上这段陈旧段、读成一帧新快照，缓存下来（10044 = 信封头 44 + 10000，首字符 'A' 还被缓存拼接逻辑 `cached_json + 1` 当成 JSON 的 `{` 吃掉）。管线被 kill / 进程崩溃留下同样的段，所以这是**消费侧必须自己守的边界**。修复：`monitor_server_inject_dashboard_json()` 用 `cJSON_ParseWithLength` 先验负载，非 JSON 直接拒收 + 只记一次日志（该函数是 IPC 与文件桥两个注入源的唯一交汇点）。判据：`ctest -R monitor_http_integrity` —— 用例自己跑 `test_bridges` 播下这个前提再断言 body 合法 | `src/core/monitor_server.c` `monitor_server_inject_dashboard_json`；`tests/test_monitor_http_integrity.py` |
+| **`/api/topology` 无缓存时的兜底 body 只有 489 字节且缺最后一个 `}`（任何客户端 json.loads 都在 EOF 报 `Expecting ',' delimiter`）；SSE 的 `data:` 帧同因吐非法 JSON** | `build_sse_json()` 收尾那条 `SSE_APPEND` 只闭合到 `metrics`：字面量括号数 16 开 / 15 闭，注释写"close topics + close metrics + top-level"（**少算一层**，实测走字面量顺序的深度收在 1 而非 0）。该函数同时供 `/api/topology` 兜底、`/api/topics` 兜底与 SSE 帧（`ss_frame` 直接 `data: %s`，无人补括号），所以**管线一停、缓存一空，两条路径都吐坏 JSON**。修复：补上根对象的收尾大括号，并把注释改成五层闭合。判据同上（`monitor_http_integrity` 在无缓存条件下断言 body 可解析） | `src/core/monitor_server.c` `build_sse_json` 收尾块 |
+| **大 body（> 内核发送缓冲）在客户端慢读/停读时被静默截断：Content-Length 说 N，客户端只收到 M<N，keep-alive 复用下再把下一个响应的字节读成这次 body 的尾巴** | 发送路径用裸 `write()` 且**把返回值 `(void)` 丢掉**，而 monitor_server 给每个客户端 socket 设了 `SO_SNDTIMEO=5s` —— 带发送超时的阻塞 `write()` 在发送缓冲填满、等对端窗口超时后**返回"已写字节数"**（partial），剩余字节永不发出。SSE 路径一直用 `safe_write`（循环写 + EAGAIN 重试 + EPIPE 正常退出），HTTP 响应路径漏了。修复：`send_response` / `send_response_full_bytes` / CORS 204 三处改走 `safe_write`。判据：`monitor_http_integrity` 起临时 doc root 放 8MB 不可压文件 + 停读 8s 的客户端 —— 旧代码实测丢 6592512 字节（声明 8388608 / 实收 1796096） | `src/core/monitor_server.c` `send_response` / `send_response_full_bytes` |
 
 ## 5. 评估器 / 门禁
 

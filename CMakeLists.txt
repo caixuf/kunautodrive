@@ -1379,6 +1379,14 @@ add_test(NAME demo_evaluator_tools
 )
 set_tests_properties(demo_evaluator_tools PROPERTIES TIMEOUT 30)
 
+# monitor_server 响应完整性：长度自洽 + /api JSON 合法 + 大 body 慢读不截断 +
+# keep-alive 复用安全（接收端守护"裸 write 丢返回值 → 静默截断"那类缺陷）。
+add_test(NAME monitor_http_integrity
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_monitor_http_integrity.py
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+set_tests_properties(monitor_http_integrity PROPERTIES TIMEOUT 90)
+
 add_test(NAME shadow_mode_evaluator_tools
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_evaluate_shadow_mode.py
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
