@@ -2197,7 +2197,8 @@ protected:
                     const double lw_gate = (g.lane_match.lane_width > 1.0)
                                          ? g.lane_match.lane_width : lane_w;
                     const double max_lane_offset_m = lw_gate * 0.5 - 0.1;
-                    /* 参考系一致性前置条件（2026-10-23 横向摇摆根因）：
+                    /* 参考系一致性前置条件（2026-10-23 横向摇摆根因；
+                     * Prefer KAD offgrid-fix / deepen² #113 Outcome B deferred weld）：
                      * target = ego_d − llt_offset 只在 ref 法向与 lanelet 法向**同向**
                      * 时成立。双向路返程半幅 / 掉头中段两者反平行，误差恰为 −2·llt_offset
                      * （随自车偏离车道中心线性放大；实测掉头中段 target 扫到 +4.08 m，
