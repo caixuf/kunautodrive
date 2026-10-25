@@ -1,0 +1,83 @@
+{
+  "schema": "kad.product_suite_pack.v1",
+  "pack_id": "product_suite_pack_v1",
+  "name": "KAD product suite pack v1",
+  "description": "Frozen Prefer-KAD-deepen pack: enabled suite.json product scenes (lateral/product-relevant, count=6). Not the plant cold-pack (straight/lane_change/curve/obstacle/merge/cutin). No silent drop.",
+  "source_suite": "scenarios/suite.json",
+  "base_tip": "9b62cd01877178e962a21959e841fff345a42b2b",
+  "base_tip_short": "9b62cd01",
+  "frozen_scene_count": 6,
+  "scenes": [
+    {
+      "pack_scene_id": "straight_road",
+      "file": "scenarios/straight_road.json",
+      "duration_s": 45,
+      "enabled": true
+    },
+    {
+      "pack_scene_id": "curve_road",
+      "file": "scenarios/curve_road.json",
+      "duration_s": 60,
+      "enabled": true
+    },
+    {
+      "pack_scene_id": "lane_change_traffic",
+      "file": "scenarios/lane_change_traffic.json",
+      "duration_s": 45,
+      "enabled": true
+    },
+    {
+      "pack_scene_id": "r157_cut_in",
+      "file": "scenarios/r157_cut_in.json",
+      "duration_s": 40,
+      "enabled": true
+    },
+    {
+      "pack_scene_id": "oncoming",
+      "file": "scenarios/oncoming.json",
+      "duration_s": 45,
+      "enabled": true
+    },
+    {
+      "pack_scene_id": "dense_npc",
+      "file": "scenarios/dense_npc.json",
+      "duration_s": 45,
+      "enabled": true
+    }
+  ],
+  "exclusions_note": "Exam/disabled suite rows out (parking/exam HOLD). urban_challenge/city_comprehensive/multi_light/dense_route and other enabled suite rows not in this ≤6 lock are intentionally out — not a silent drop of locked IDs.",
+  "plant_cold_pack": {
+    "status": "UNTOUCHED",
+    "ids": [
+      "straight",
+      "lane_change",
+      "curve",
+      "obstacle",
+      "merge",
+      "cutin"
+    ],
+    "harness": "tools/bench_kad_baseline_cte.py"
+  },
+  "dual_ceiling_cite": {
+    "lock_w1": {
+      "cellular_pr": 3,
+      "tip": "2922599a",
+      "wl": "9W/7L",
+      "label": "ceiling evidence, NOT a win"
+    },
+    "a6_reopen": {
+      "cellular_pr": 15,
+      "tip": "50431c48",
+      "wl": "7W/9L",
+      "label": "A6 CEILING · PARK · STOP+ask",
+      "champ_md5": "7424dd1115b60c675aded7a59efae30a"
+    }
+  },
+  "non_claims": [
+    "Does not claim cellular beat Stanley",
+    "Does not invent ≥12W from ceilings",
+    "Does not paste cellular W/L as KAD product score",
+    "Cellular ADAS PARK — no champ / P0 / P1",
+    "Pack freeze ≠ product ship win"
+  ]
+}
