@@ -64,6 +64,21 @@ jobs:
       - name: CI-lock product_suite_pack_v1 ×6 (fail-closed)
         run: python3 ci/gates/kad_product_suite_lock_check.py
 
+  # ── KAD Stanley/baseline regression gate (Prefer Stanley gate · post #115) ──
+  # Fail-closed on evaluator FAIL / missing artifact / tip_hash mismatch /
+  # pack freeze drift / controller != Stanley. Invokes
+  # tools/bench_kad_stanley_baseline_gate.py --dry-run. KEEP #115 product-suite
+  # lock. Plant cold-pack UNTOUCHED. Dual-ceiling #3 9W/7L + #15 7W/9L =
+  # ceiling NOT win. No invent-scenario / no beat-Stanley / no greenwash.
+  kad-stanley-baseline-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Stanley/baseline × product_suite_pack_v1 ×6 (fail-closed)
+        run: python3 ci/gates/kad_stanley_baseline_gate_check.py
+
   # ── clock_service enforcement gate ─────────────────────────
   # clock_service.h must be the only time source for nodes. Raw
   # clock_gettime(CLOCK_MONOTONIC) in modules/ bypasses sim-time injection

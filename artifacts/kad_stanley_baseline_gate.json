@@ -1,0 +1,215 @@
+{
+  "schema": "kad.stanley_baseline_gate.v1",
+  "status": "ok",
+  "tip_hash": "dbae06abb7cce18316589c071e2c58af31eed483",
+  "pack_id": "product_suite_pack_v1",
+  "pack_path": "scenarios/packs/product_suite_pack_v1.json",
+  "controller": "Stanley",
+  "controller_label": "Stanley (default product lateral; use_ltv_mpc=0 per control_node; no retune; no plant cold-pack rewrite)",
+  "gate_kind": "stanley_baseline_regression",
+  "metric_primary": "cte_m",
+  "metric_mapping": "demo_evaluator lane_error meters ↔ ControlRaw.cte (docs/contracts/ADAS_CELLULAR_TRANSFER_INTERFACE_CONTRACT.md §5); product lateral = Stanley (use_ltv_mpc=0)",
+  "dual_ceiling_cite": {
+    "lock_w1": {
+      "cellular_pr": 3,
+      "tip": "2922599a",
+      "wl": "9W/7L",
+      "label": "ceiling evidence, NOT a win"
+    },
+    "a6_reopen": {
+      "cellular_pr": 15,
+      "tip": "50431c48",
+      "wl": "7W/9L",
+      "label": "A6 CEILING · PARK · STOP+ask",
+      "champ_md5": "7424dd1115b60c675aded7a59efae30a"
+    },
+    "note": "Cellular cortex vs Stanley = ceiling/PARK, not a KAD product win. Gate ≥12W/4L never green from ceilings. Soft ≥10/16 ≠ closeout. This Stanley/baseline gate is ready for later compare only — no beat-Stanley claim."
+  },
+  "plant_cold_pack": {
+    "untouched": true,
+    "harness": "tools/bench_kad_baseline_cte.py",
+    "note": "Plant cold-pack IDs (straight/lane_change/…) stay; this gate covers product_suite pack IDs only"
+  },
+  "distinct_from_product_suite_lock": {
+    "pr": 115,
+    "gate": "ci/gates/kad_product_suite_lock_check.py",
+    "job": "kad-product-suite-lock-gate",
+    "note": "#115 CI-locks product suite runner ×6; this Prefer adds a separate fail-closed Stanley/baseline regression gate on the same pack×6"
+  },
+  "frozen_scene_count": 6,
+  "frozen_ids": [
+    "straight_road",
+    "curve_road",
+    "lane_change_traffic",
+    "r157_cut_in",
+    "oncoming",
+    "dense_npc"
+  ],
+  "frozen_scenes": [
+    {
+      "pack_scene_id": "straight_road",
+      "file": "scenarios/straight_road.json",
+      "duration_s": 45,
+      "enabled": true
+    },
+    {
+      "pack_scene_id": "curve_road",
+      "file": "scenarios/curve_road.json",
+      "duration_s": 60,
+      "enabled": true
+    },
+    {
+      "pack_scene_id": "lane_change_traffic",
+      "file": "scenarios/lane_change_traffic.json",
+      "duration_s": 45,
+      "enabled": true
+    },
+    {
+      "pack_scene_id": "r157_cut_in",
+      "file": "scenarios/r157_cut_in.json",
+      "duration_s": 40,
+      "enabled": true
+    },
+    {
+      "pack_scene_id": "oncoming",
+      "file": "scenarios/oncoming.json",
+      "duration_s": 45,
+      "enabled": true
+    },
+    {
+      "pack_scene_id": "dense_npc",
+      "file": "scenarios/dense_npc.json",
+      "duration_s": 45,
+      "enabled": true
+    }
+  ],
+  "scenes": [
+    {
+      "pack_scene_id": "straight_road",
+      "file": "scenarios/straight_road.json",
+      "duration_s_requested": 45,
+      "duration_s_observed": 45.04744911193848,
+      "status": "ok",
+      "block_reason": null,
+      "cte_mean": 0.502119,
+      "cte_p95": 1.477914,
+      "cte_max": 1.731115,
+      "n_samples": 181,
+      "cte_definition": "demo_evaluator lane_error meters (scene road_network / nearest-lane geometric proxy) ↔ ControlRaw.cte (B2-a §5)",
+      "harvest": "demo_evaluator.sample_metrics.lane_error",
+      "evaluator_result": "PASS",
+      "evaluator_failures": [],
+      "summary_max_lane_error_m": 1.731115304114165,
+      "source_json_out": "/tmp/kad_stanley_retry/straight_road.json",
+      "controller": "Stanley"
+    },
+    {
+      "pack_scene_id": "curve_road",
+      "file": "scenarios/curve_road.json",
+      "duration_s_requested": 60,
+      "duration_s_observed": 60.07368612289429,
+      "status": "ok",
+      "block_reason": null,
+      "cte_mean": 0.022024,
+      "cte_p95": 0.045029,
+      "cte_max": 0.071585,
+      "n_samples": 241,
+      "cte_definition": "demo_evaluator lane_error meters (scene road_network / nearest-lane geometric proxy) ↔ ControlRaw.cte (B2-a §5)",
+      "harvest": "demo_evaluator.sample_metrics.lane_error",
+      "evaluator_result": "PASS",
+      "evaluator_failures": [],
+      "summary_max_lane_error_m": 0.0715848937741097,
+      "source_json_out": "/tmp/kad_stanley_baseline_gate/curve_road.json",
+      "controller": "Stanley"
+    },
+    {
+      "pack_scene_id": "lane_change_traffic",
+      "file": "scenarios/lane_change_traffic.json",
+      "duration_s_requested": 45,
+      "duration_s_observed": 45.091110944747925,
+      "status": "ok",
+      "block_reason": null,
+      "cte_mean": 0.327639,
+      "cte_p95": 1.374008,
+      "cte_max": 1.741155,
+      "n_samples": 181,
+      "cte_definition": "demo_evaluator lane_error meters (scene road_network / nearest-lane geometric proxy) ↔ ControlRaw.cte (B2-a §5)",
+      "harvest": "demo_evaluator.sample_metrics.lane_error",
+      "evaluator_result": "PASS",
+      "evaluator_failures": [],
+      "summary_max_lane_error_m": 1.7411553668250002,
+      "source_json_out": "/tmp/kad_stanley_baseline_gate/lane_change_traffic.json",
+      "controller": "Stanley"
+    },
+    {
+      "pack_scene_id": "r157_cut_in",
+      "file": "scenarios/r157_cut_in.json",
+      "duration_s_requested": 40,
+      "duration_s_observed": 40.04769587516785,
+      "status": "ok",
+      "block_reason": null,
+      "cte_mean": 0.253211,
+      "cte_p95": 1.298773,
+      "cte_max": 1.715184,
+      "n_samples": 161,
+      "cte_definition": "demo_evaluator lane_error meters (scene road_network / nearest-lane geometric proxy) ↔ ControlRaw.cte (B2-a §5)",
+      "harvest": "demo_evaluator.sample_metrics.lane_error",
+      "evaluator_result": "PASS",
+      "evaluator_failures": [],
+      "summary_max_lane_error_m": 1.715183828445947,
+      "source_json_out": "/tmp/kad_stanley_retry/r157_cut_in.json",
+      "controller": "Stanley"
+    },
+    {
+      "pack_scene_id": "oncoming",
+      "file": "scenarios/oncoming.json",
+      "duration_s_requested": 45,
+      "duration_s_observed": 45.04918098449707,
+      "status": "ok",
+      "block_reason": null,
+      "cte_mean": 0.0,
+      "cte_p95": 0.0,
+      "cte_max": 0.0,
+      "n_samples": 181,
+      "cte_definition": "demo_evaluator lane_error meters (scene road_network / nearest-lane geometric proxy) ↔ ControlRaw.cte (B2-a §5)",
+      "harvest": "demo_evaluator.sample_metrics.lane_error",
+      "evaluator_result": "PASS",
+      "evaluator_failures": [],
+      "summary_max_lane_error_m": 8.750777880095484e-13,
+      "source_json_out": "/tmp/kad_stanley_baseline_gate/oncoming.json",
+      "controller": "Stanley"
+    },
+    {
+      "pack_scene_id": "dense_npc",
+      "file": "scenarios/dense_npc.json",
+      "duration_s_requested": 45,
+      "duration_s_observed": 45.075474977493286,
+      "status": "ok",
+      "block_reason": null,
+      "cte_mean": 0.438425,
+      "cte_p95": 1.475656,
+      "cte_max": 1.707051,
+      "n_samples": 181,
+      "cte_definition": "demo_evaluator lane_error meters (scene road_network / nearest-lane geometric proxy) ↔ ControlRaw.cte (B2-a §5)",
+      "harvest": "demo_evaluator.sample_metrics.lane_error",
+      "evaluator_result": "PASS",
+      "evaluator_failures": [],
+      "summary_max_lane_error_m": 1.7070510757908464,
+      "source_json_out": "/tmp/kad_stanley_baseline_gate/dense_npc.json",
+      "controller": "Stanley"
+    }
+  ],
+  "ready_for_later_compare": true,
+  "numbers_claimed": true,
+  "non_claims": [
+    "Does not claim cellular beat Stanley",
+    "Does not invent ≥12W from ceilings",
+    "Does not paste cellular W/L as KAD product score",
+    "Cellular ADAS PARK — no champ / P0 / P1 in this harness",
+    "Soft ≥10/16 ≠ closeout; gate ≥12W/4L never green from ceilings",
+    "evaluator PASS/FAIL is regression-envelope — CTE digest ≠ ship win",
+    "Plant cold-pack frozen 6 untouched",
+    "Does not claim pack CTE = cellular win / beat-Stanley",
+    "No invent-scenario / 7th scene / control retune"
+  ]
+}
