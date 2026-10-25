@@ -87,7 +87,7 @@ Artifact: [`docs/contracts/ADAS_CELLULAR_TRANSFER_INTERFACE_CONTRACT.md`](../con
 ## Next thin step
 
 1. Keep cellular ADAS **PARK** (no reopen without explicit STOP+ask owner decision).
-2. Optionally add a **read-only** CTE digest hook in KAD demos that logs `ControlRaw.cte` mean/p95 for named scenes — still **not** a cellular W/L scoreboard.
+2. **B2-b shipped** — thin baseline harness: `tools/bench_kad_baseline_cte.py` + `docs/handoff/2026-10-25-kad-b2b-baseline-harness.md` (frozen control_sim scenes → JSON CTE; ready for later compare; dual-ceiling held). Optional later: bus-native `ControlRaw.cte` digest for `scenarios/suite.json` product scenes — still **not** a cellular W/L scoreboard.
 3. Any future cortex experiment on KAD must cite the dual-ceiling table and must not claim beat-Stanley / ≥12W from ceilings.
 4. Claim-language gate (找茬喵): reject PRs that greenwash ceiling rows or ship cellular champ bins as product.
 
