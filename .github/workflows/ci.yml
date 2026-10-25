@@ -48,6 +48,22 @@ jobs:
       - name: Validate scenario and suite contracts
         run: python3 tools/scenarioctl.py validate
 
+
+  # ── KAD product_suite_pack_v1 ×6 CI-lock (Prefer suite-expand · knife B) ──
+  # Fail-closed on evaluator FAIL / missing artifact / tip_hash mismatch /
+  # pack freeze drift. Invokes tools/bench_kad_product_suite_cte.py --dry-run.
+  # Does NOT invent a 7th scene. Does NOT remeasure full demos in this thin job.
+  # Evidence: #114 pack×6 all PASS @ tip_hash d12e0a64… Dual-ceiling #3 9W/7L
+  # + #15 7W/9L = ceiling NOT win. Plant cold-pack UNTOUCHED.
+  kad-product-suite-lock-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: CI-lock product_suite_pack_v1 ×6 (fail-closed)
+        run: python3 ci/gates/kad_product_suite_lock_check.py
+
   # ── clock_service enforcement gate ─────────────────────────
   # clock_service.h must be the only time source for nodes. Raw
   # clock_gettime(CLOCK_MONOTONIC) in modules/ bypasses sim-time injection
