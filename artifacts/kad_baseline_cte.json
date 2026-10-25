@@ -1,0 +1,232 @@
+{
+  "schema": "kad.baseline_cte.v1",
+  "tip_hash": "c557058c8d38bc7f6f177135cd1e87192c6d3dc6",
+  "controller_label": "Stanley (default product lateral in control_sim; no retune)",
+  "metric_primary": "cte_m",
+  "metric_mapping": "control_sim lat_error / lateral_offset meters ↔ ControlRaw.cte (see docs/contracts/ADAS_CELLULAR_TRANSFER_INTERFACE_CONTRACT.md §5)",
+  "dual_ceiling_cite": {
+    "lock_w1": {
+      "cellular_pr": 3,
+      "tip": "2922599a",
+      "wl": "9W/7L",
+      "label": "ceiling evidence, NOT a win"
+    },
+    "a6_reopen": {
+      "cellular_pr": 15,
+      "tip": "50431c48",
+      "wl": "7W/9L",
+      "label": "A6 CEILING · PARK · STOP+ask",
+      "champ_md5": "7424dd1115b60c675aded7a59efae30a"
+    },
+    "note": "Cellular cortex vs Stanley = ceiling/PARK, not a KAD product win. Gate ≥12W/4L never green from ceilings. Soft ≥10/16 ≠ closeout. This harness is ready for later compare only — no beat-Stanley claim."
+  },
+  "frozen_scene_count": 6,
+  "frozen_scenes": [
+    {
+      "scene_id": "straight",
+      "source": "control_sim.run_simulation",
+      "params": {
+        "do_lane_change": false,
+        "target_speed": 12.0,
+        "duration": 20.0,
+        "seed": null
+      },
+      "notes": "Straight lane-keep; Stanley default product lateral path"
+    },
+    {
+      "scene_id": "lane_change",
+      "source": "control_sim.run_simulation",
+      "params": {
+        "do_lane_change": true,
+        "target_speed": 12.0,
+        "duration": 20.0,
+        "seed": null
+      },
+      "notes": "Step lane-change at LC_TRIGGER_TIME; lat_error vs target lane"
+    },
+    {
+      "scene_id": "curve",
+      "source": "control_sim.run_curve_scenario",
+      "params": {
+        "kappa": 0.005,
+        "target_speed": 12.0,
+        "duration": 15.0,
+        "seed": null
+      },
+      "notes": "Constant-curvature R≈200m; lateral_offset via circle-distance"
+    },
+    {
+      "scene_id": "obstacle",
+      "source": "control_sim.run_obstacle_avoid_scenario",
+      "params": {
+        "init_speed": 12.0,
+        "obs_x": 60.0,
+        "duration": 10.0,
+        "seed": null
+      },
+      "notes": "Obstacle avoid then return; CTE = lane_center_y(2) - y (start-lane proxy)"
+    },
+    {
+      "scene_id": "merge",
+      "source": "control_sim.run_merge_scenario",
+      "params": {
+        "init_speed": 8.0,
+        "target_speed": 15.0,
+        "merge_x": 50.0,
+        "seed": null
+      },
+      "notes": "Ramp merge; CTE = lane_center_y(1) - y (merge target)"
+    },
+    {
+      "scene_id": "cutin",
+      "source": "control_sim.run_cutin_scenario",
+      "params": {
+        "init_speed": 12.0,
+        "cutin_speed": 10.0,
+        "cutin_x": 30.0,
+        "seed": null
+      },
+      "notes": "Cut-in response; CTE = lane_center_y(2) - y (ego lane)"
+    }
+  ],
+  "scenes": [
+    {
+      "scene_id": "straight",
+      "source": "control_sim.run_simulation",
+      "params": {
+        "do_lane_change": false,
+        "target_speed": 12.0,
+        "duration": 20.0,
+        "seed": null
+      },
+      "controller": "Stanley",
+      "cte_mean": 0.0,
+      "cte_p95": 0.0,
+      "cte_max": 0.0,
+      "n_samples": 400,
+      "pass": true,
+      "extra": {
+        "collided": false,
+        "stable": true,
+        "steady_state_error_m": 0.0,
+        "settling_time_s": null
+      }
+    },
+    {
+      "scene_id": "lane_change",
+      "source": "control_sim.run_simulation",
+      "params": {
+        "do_lane_change": true,
+        "target_speed": 12.0,
+        "duration": 20.0,
+        "seed": null
+      },
+      "controller": "Stanley",
+      "cte_mean": 0.506634,
+      "cte_p95": 2.751097,
+      "cte_max": 3.5,
+      "n_samples": 400,
+      "pass": true,
+      "extra": {
+        "collided": false,
+        "stable": true,
+        "steady_state_error_m": 0.060493639688087394,
+        "settling_time_s": 6.35
+      }
+    },
+    {
+      "scene_id": "curve",
+      "source": "control_sim.run_curve_scenario",
+      "params": {
+        "kappa": 0.005,
+        "target_speed": 12.0,
+        "duration": 15.0,
+        "seed": null
+      },
+      "controller": "Stanley",
+      "cte_mean": 0.006624,
+      "cte_p95": 0.008571,
+      "cte_max": 0.008872,
+      "n_samples": 300,
+      "pass": true,
+      "extra": {
+        "off_road": false,
+        "summary": "curve(kappa=0.0050, R=200m) @ 12m/s: avg_heading_err=0.0052rad, avg_lat_err=0.01m"
+      }
+    },
+    {
+      "scene_id": "obstacle",
+      "source": "control_sim.run_obstacle_avoid_scenario",
+      "params": {
+        "init_speed": 12.0,
+        "obs_x": 60.0,
+        "duration": 10.0,
+        "seed": null
+      },
+      "controller": "Stanley",
+      "cte_mean": 1.483147,
+      "cte_p95": 2.944477,
+      "cte_max": 3.001304,
+      "n_samples": 200,
+      "pass": true,
+      "extra": {
+        "collision": false,
+        "off_road": false,
+        "summary": "obstacle_avoid(v0=12m/s, obs_x=60m): passed=True, final_y_err=1.26m, max|y|=1.75m",
+        "cte_definition": "lane_center_y(2) - ego_y (start-lane proxy during avoid)"
+      }
+    },
+    {
+      "scene_id": "merge",
+      "source": "control_sim.run_merge_scenario",
+      "params": {
+        "init_speed": 8.0,
+        "target_speed": 15.0,
+        "merge_x": 50.0,
+        "seed": null
+      },
+      "controller": "Stanley",
+      "cte_mean": 3.01485,
+      "cte_p95": 7.0,
+      "cte_max": 7.0,
+      "n_samples": 300,
+      "pass": true,
+      "extra": {
+        "collision": false,
+        "off_road": false,
+        "summary": "merge(v0=8→15m/s, merge_x=50m): speed_at_merge=12.9m/s, final_y_err=0.10m, final_speed=14.0m/s",
+        "cte_definition": "lane_center_y(1) - ego_y (merge target lane)"
+      }
+    },
+    {
+      "scene_id": "cutin",
+      "source": "control_sim.run_cutin_scenario",
+      "params": {
+        "init_speed": 12.0,
+        "cutin_speed": 10.0,
+        "cutin_x": 30.0,
+        "seed": null
+      },
+      "controller": "Stanley",
+      "cte_mean": 0.0,
+      "cte_p95": 0.0,
+      "cte_max": 0.0,
+      "n_samples": 240,
+      "pass": true,
+      "extra": {
+        "collision": false,
+        "off_road": false,
+        "summary": "cutin(v0=12m/s, cutin_v=10m/s): min_gap=25.0m, final_gap=24.5m, final_speed=10.9m/s",
+        "cte_definition": "lane_center_y(2) - ego_y (ego-lane keep)"
+      }
+    }
+  ],
+  "ready_for_later_compare": true,
+  "non_claims": [
+    "Does not claim cellular beat Stanley",
+    "Does not invent ≥12W from ceilings",
+    "Does not paste cellular W/L as KAD product score",
+    "Cellular ADAS PARK — no champ / P0 / P1 in this harness",
+    "Soft ≥10/16 ≠ closeout; gate ≥12W/4L never green from ceilings"
+  ]
+}
