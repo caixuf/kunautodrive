@@ -76,6 +76,10 @@ KNOWN_LOCK_TIPS: frozenset[str] = frozenset(
         # adds harness+CI gate after measure; runtime weld already measured.
         # Allowlist skips drift for first-land only; pack/harness/evaluator still validated.
         "dbae06abb7cce18316589c071e2c58af31eed483",
+        # Post-gate pack×6 remeasure tip @ b0103bf5… (#116 Stanley gate on main).
+        # Artifact tip_hash stays on measure tip after handoff/KNOWN_LOCK_TIPS commit;
+        # fail-closed rules unchanged (no tol raise / no scene drop / no invent PASS).
+        "b0103bf51b952cda9b69b36610f78e16b31e887f",
     }
 )
 
