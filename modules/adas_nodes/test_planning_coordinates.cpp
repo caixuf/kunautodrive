@@ -127,5 +127,47 @@ int main() {
     /* 未锁存（-1）立刻采纳候选。 */
     expect(planning_coord::hold_lane_index(-5.25, 3, -1, 4, 3.5, 0.0) == 3,
            "unset hold adopts the candidate");
+
+    /* Prefer offgrid-fix / deepen2 RCA: ref vs lanelet anti-parallel must reject.
+     * target = ego_d - llt_offset only holds for co-directed normals; U-turn mid
+     * angle ~pi must fall through to A11 lane-center grid. Geometric headings only. */
+    {
+        constexpr double kPi = 3.14159265358979323846;
+        expect(planning_coord::lane_ref_aligned(0.0, 0.05),
+               "co-directed small misalign stays aligned");
+        expect(planning_coord::lane_ref_aligned(0.0, 0.09),
+               "cruise/LC misalign <=0.09 stays aligned");
+        expect(!planning_coord::lane_ref_aligned(0.0, kPi),
+               "exact anti-parallel (U-turn mid) rejected");
+        expect(!planning_coord::lane_ref_aligned(0.0, 3.00),
+               "deepen2 measured U-turn mid ~3.00 rad rejected");
+        expect(!planning_coord::lane_ref_aligned(0.0, 3.14),
+               "deepen2 measured U-turn mid ~3.14 rad rejected");
+        expect(!planning_coord::lane_ref_aligned(0.1, 0.1 + kPi),
+               "return-half anti-parallel with small offset rejected");
+        expect(planning_coord::lane_ref_aligned(kPi - 0.05, -kPi + 0.05),
+               "wrap-around near +/-pi still co-directed");
+        expect(!planning_coord::lane_ref_aligned(0.0, 0.9),
+               "above 45deg default threshold rejected");
+
+        const double lane_w = 3.5;
+        const double ego_d = 4.66;
+        const double llt_offset = 0.570;
+        const double bad_target = ego_d - llt_offset;
+        const double phase = std::fmod(std::fabs(bad_target), lane_w);
+        const double half = lane_w * 0.5;
+        const double phase_err = std::min(std::fabs(phase - half),
+                                          std::min(phase, lane_w - phase));
+        expect(phase_err > 0.5, "anti-parallel formula lands off lane-center grid");
+
+        const int cand = planning_coord::nearest_lane(ego_d, 4, lane_w, false, 0.0);
+        const double grid = planning_coord::lane_center_d(cand, 4, lane_w, 0.0);
+        const double gphase = std::fmod(std::fabs(grid), lane_w);
+        const double gerr = std::min(std::fabs(gphase - half),
+                                     std::min(gphase, lane_w - gphase));
+        expect(gerr <= 1e-9, "A11 nearest-lane center stays on legal grid");
+        (void)bad_target;
+    }
+
     return g_fails == 0 ? 0 : 1;
 }
