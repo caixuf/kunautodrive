@@ -367,6 +367,9 @@ jobs:
       # 2026-10-11 首次上线即抓出：EDR 的事件源订阅被关在 `if (!g.embedded_mode)`
       # 里，而写 PEM 恰恰只在 embedded 模式 —— 两个条件永不同时成立，l3_* 事件
       # 一条都记不下来。
+      # 2026-10-31 schedule flake (run 41183249548): duration+120 -> exit 124, empty PEM.
+      # Gate-side: wider timeout margin, PEM appear poll, one auto-retry on timeout/empty PEM;
+      # still forces FLOWENGINE_TEMP_DIR + monitor production PEM (no product knife change).
       - name: L3 EDR event-record gate (P2)
         run: python3 ci/gates/l3_edr_gate.py --duration 28
 
