@@ -412,6 +412,38 @@ def run_all_checks() -> int:
     check("smooth run not flagged for comfort",
           not any("comfort: jerk" in x for x in _f2))
 
+    print("\n[27b] 舒适性门禁：单尖峰 max>FAIL 且 p95≤WARN → WARN（非 FAIL）；持续颠簸仍 FAIL")
+    # 复现 2026-10-28/26 夜间 flake：straight_road max≈15–18、p95≈0.95。
+    # 构造：几乎匀速巡航 + 中段一帧速度阶跃，使 max 破 15 而 p95 仍低。
+    _spike = []
+    for i in range(40):
+        spd = 12.0
+        if i == 20:
+            # δ≈0.55 → jerk max ≈ 32*δ ≈ 17.6（对齐 2026-10-28 flake 的 15–18），
+            # 低于默认硬顶 40，才能走 spike-only 降级路径。
+            spd = 12.0 + 0.55
+        elif i == 21:
+            spd = 12.0         # 立刻回到巡航
+        _spike.append(_mk(10 + i * 3, -1.75, spd, 0.0, i * 0.25))
+    _fs, _ws, _ss = de.score(_spike, ROOT / "does-not-exist.log",
+                             criteria=dict(_ZERO_CRIT),
+                             scenario_name="straight_road",
+                             expected_edges=[], road=None)
+    _jmax = float((_ss.get("formal_metrics") or {}).get("comfort_jerk_max_mps3") or 0.0)
+    _jp95 = (_ss.get("formal_metrics") or {}).get("comfort_jerk_p95_mps3")
+    check("spike fixture produces max above straight_road fail line",
+          _jmax > 15.0, f"max={_jmax} p95={_jp95}")
+    check("spike-only on straight_road is WARN not FAIL",
+          not any("comfort: jerk" in x for x in _fs)
+          and any("spike-only" in x for x in _ws),
+          f"fail={_fs} warn={_ws}")
+    # 持续交替颠簸：p95 也会爆 → 仍须 FAIL（守卫没改哑）
+    _sust = [_mk(10 + i * 3, -1.75, 12.0 + (3.0 if i % 2 else -3.0), 0.0, i * 0.25)
+             for i in range(40)]
+    _fs2 = _score_full("straight_road", _sust, _ZERO_CRIT)[0]
+    check("sustained jerky straight_road still FAILs",
+          any("comfort: jerk" in x for x in _fs2))
+
     print("\n[28] 舒适性门禁抗抖动：重复时间戳尾巴不得灌爆 jerk；真颠簸仍须 FAIL")
     # 2026-10-09 根因：仿真结束后 collect_samples 每 interval 重复 append 冻结的
     # 拓扑 JSON → 尾部一长串 dt=0 重复帧；dt 进分母 → 正常减速被炸成 jerk 100+。
