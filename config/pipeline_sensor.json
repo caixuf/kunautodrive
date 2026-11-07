@@ -273,7 +273,8 @@
         "scene/frame",
         "planning/behavior",
         "navigation/path",
-        "localization/lane_match"
+        "localization/lane_match",
+        "inference/assist"
       ],
       "publish": [
         {

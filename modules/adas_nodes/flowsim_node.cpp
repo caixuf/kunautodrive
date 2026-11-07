@@ -146,6 +146,10 @@ struct FlowSimContext {
      * 两次同 seed 运行必须相同 —— 这是 RNG 隔离后能确定性断言的部分
      * （动态轨迹仍受墙钟/调度影响，见 FAILURE_MODES §6）。 */
     uint64_t          init_fingerprint{0};
+    /* 方向五：确定性轨迹 dump（非空时每 10 cycle 写一行全实体哈希）。
+     * 门禁用它证明"同 seed → 同动态轨迹"（只跑 flowsim 单节点时无调度干扰）。 */
+    char              deterministic_dump_path[256]{};
+    FILE*             deterministic_dump{nullptr};
     double            start_s{-1.0};   /* >=0: route 弧长起点覆盖 */
     double            start_d{0.0};    /* route 参考线横向偏移 */
 
@@ -3178,6 +3182,25 @@ protected:
             }
             co_await sleep_us(sleep_us_val);
 
+            /* 方向五：确定性轨迹指纹（每 10 cycle 一行，全实体状态哈希）。 */
+            if (g.deterministic_dump && (g.cycle % 10u) == 0u) {
+                uint64_t h = 1469598103934665603ULL;
+                auto mix = [&h](uint64_t v) { h ^= v; h *= 1099511628211ULL; };
+                auto q = [](double v) { return (uint64_t)(int64_t)llround(v * 1000.0); };
+                mix((uint64_t)g.cycle);
+                mix(sim_time_us);
+                for (int i = 0; i < g.pool.size(); ++i) {
+                    const flowsim::Entity& e = g.pool[i];
+                    if (!e.active) continue;
+                    mix((uint64_t)e.id);
+                    mix((uint64_t)(int)e.type);
+                    mix(q(e.x)); mix(q(e.y)); mix(q(e.heading)); mix(q(e.speed));
+                    mix(q(e.offset)); mix(q(e.throttle)); mix(q(e.brake));
+                }
+                fprintf(g.deterministic_dump, "%u,%llu,%016llx\n",
+                        g.cycle, (unsigned long long)sim_time_us,
+                        (unsigned long long)h);
+            }
             g.cycle++;
             if (g.cycle % 600 == 0) {
                 uint64_t last_cmd = g.last_control_cmd_us.load(std::memory_order_relaxed);
@@ -3287,6 +3310,11 @@ protected:
 
         LOG_INFO("flowsim", "stopped (%u cycles, sim_time=%.3fs, final speed=%.1f)",
                  g.cycle, (double)clock_now_us() / 1e6, ego.speed);
+        if (g.deterministic_dump) {
+            fflush(g.deterministic_dump);
+            fclose(g.deterministic_dump);
+            g.deterministic_dump = nullptr;
+        }
     }
 
 private:
@@ -3583,6 +3611,11 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
                 g.poisson_rate = j->valuedouble;
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "poisson_max_vehicles")) && cJSON_IsNumber(j))
                 g.poisson_max_vehicles = (int)j->valuedouble;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "deterministic_dump")) &&
+                cJSON_IsString(j) && j->valuestring) {
+                strncpy(g.deterministic_dump_path, j->valuestring,
+                        sizeof(g.deterministic_dump_path) - 1);
+            }
             cJSON_Delete(p);
         }
     }
@@ -3929,6 +3962,16 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
     if (!g.task_wrapper) return -1;
     g.task_wrapper->impl->set_params(transport);
     s_plugin.taskbase = flowsim_get_base(g.task_wrapper);
+
+    if (g.deterministic_dump_path[0]) {
+        g.deterministic_dump = fopen(g.deterministic_dump_path, "w");
+        if (!g.deterministic_dump) {
+            LOG_WARN("flowsim", "cannot open deterministic dump '%s'",
+                     g.deterministic_dump_path);
+        } else {
+            LOG_INFO("flowsim", "deterministic dump → %s", g.deterministic_dump_path);
+        }
+    }
 
     LOG_INFO("flowsim", "initialized (scenario=%s, actors=%d, traffic_lights=%d, esmini=%s)",
              g.scenario_file[0] ? g.scenario_file : "(default)",

@@ -10,8 +10,8 @@
 
 **体量速览**：C 核心与节点 ~4 万行 · C++ ADAS 节点 ~2.8 万行 · Python 工具链/
 评估器/门禁 ~4 万行 · 手写前端（3D 仪表盘，无框架 ES modules）~2.2 万行；
-默认管线 19 节点、L3 sensor 编排 16 节点；16 条静态门禁 CI job + 6 组前端门禁 +
-53 项 ctest + 18 场景回归基线；配套 5 部 26 章技术专著
+默认管线 19 节点、L3 sensor 编排 16 节点；17 条静态门禁 CI job + 6 组前端门禁 +
+53 项 ctest + 19 场景回归基线；配套 5 部 26 章技术专著
 （[docs/BOOK.md](docs/BOOK.md)）。
 
 ## 演示截图
@@ -113,7 +113,7 @@ CI 门禁锁定（门禁抓不住已知故障 = 它的 PASS 不可信）：
 | 定位冗余 | GPS/航位推算交叉校验，单源丢失不误判为定位丢失 | `tools/localization_integrity_sim.py --run-all` |
 | 毫米波雷达模型 | 量程/FOV/方位基准/径向速度符号的观测模型，IDL 线格式与 C 结构体逐字节对齐 | `ctest -R "adas_nodes_logic\|new_module"` |
 | EDR 事件记录 | L3 法规事件（激活/退出/TOR/MRM/ODD 退出/碰撞）落 PEM，关键事件 fsync | `ci/gates/l3_edr_gate.py` |
-| UN R157 法规场景 | ALKS 切入/切出/急刹/施工区/传感器失效五类场景，场景可声明故障注入 | `scenario_regression --baseline`（18 场景基线门禁） |
+| UN R157 法规场景 | ALKS 切入/切出/急刹/施工区/传感器失效五类场景，场景可声明故障注入 | `scenario_regression --baseline`（19 场景基线门禁） |
 
 排查此类问题的方法论沉淀在[故障模式表](docs/FAILURE_MODES.md)（67 行现象 →
 根因 → 位置，6 类分节），Roadmap 见 [docs/ROADMAP_L3.md](docs/ROADMAP_L3.md)。

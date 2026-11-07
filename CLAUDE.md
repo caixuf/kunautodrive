@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 >
 > ⚠️ **`~/.claude/skills/*` 路径未随仓库分发**（本机 2026-09 核查不存在）。读不到时按其
 > 自述的方法论执行即可：分层探针 + 值传播验证 + 状态锁死 + 缓存层检查；下方各节的铁律与
-> [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)（运行期故障模式表，95 行 / 6 类）才是仓库内的权威副本。
+> [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)（运行期故障模式表，96 行 / 6 类）才是仓库内的权威副本。
 >
 > **行为异常排查**（转向灯反/该停不停/该走不走/刹停到 0/改代码现象不变）→
 > 先按 [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md) 的**现象列**对号入座，再看
@@ -45,6 +45,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | determinism-gate | `python3 ci/gates/determinism_gate.py` | 同 scenario+seed 两次启动的 `scene.init_fingerprint` 不一致（flowsim/NPC 随机源被其他节点 `srand()` 污染）；改 seed 指纹不变（指纹恒真、不是 seed 派生量） |
 | npc-multi-route-gate | `python3 ci/gates/npc_multi_route_check.py` | 场景声明 `npc_routes` 但 `npc_route_spawned=0`（多 OD 链没建/没分到 NPC）；多 OD 链 spawn 期间 invariant 爆炸或 ego 碰撞 |
 | bev-shadow-gate | `python3 ci/gates/bev_shadow_check.py` | BEV 影子输出 `bev/obstacles` 停摆（频率/计数为 0）或目标数与覆盖范围内真值不符；永久注入丢帧后门禁仍绿（自检失效） |
+| plant-determinism-gate | `python3 ci/gates/plant_determinism_gate.py` | flowsim 单节点同 seed 两次动态轨迹 dump 不一致（随机源/积分仍有非确定性）；改 seed 轨迹不变（dump 恒真） |
 | long-run-lane-keep | `python3 ci/gates/long_run_lane_keep.py --duration 600` | 10min demo.sh soak：巡航压线 / 车心越线 / **横向目标跳变（Rule5：planning target_lane_offset 在车道中心间阶跃）** / **横向目标骑线（Rule6：target 必须落在合法车道中心上，含机动帧）**（长跑才显形的漂移退化；nightly，过渡期 continue-on-error） |
 | lanelet-consistency-gate | `python3 ci/gates/lanelet_consistency_check.py` | `map.json` ↔ `lanelet.osm` Rule 1–5 漂移 |
 | lane-match-schema-gate | `python3 ci/gates/lane_match_schema_check.py` | 车道匹配 schema ↔ codegen 契约不一致（`--self-test`） |
@@ -54,7 +55,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | L3 定位冗余（P2） | `python3 tools/localization_integrity_sim.py --run-all` + `ctest -R localization_integrity` | 单源丢失被误判成定位丢失（冗余失效）/ 双源互相矛盾却无人发现；**死原因码** `DEGRADE_REASON_LOCALIZATION` 回潮；`fusion/localization` 多发布点漏加完整性字段。规则单一事实源两条同步：`tools/localization_integrity_sim.py` ↔ `include/localization_integrity.h` |
 | L3 看门狗（P2） | `ctest -R safety_fault_evidence` | 安全相关节点掉线无人发现（心跳覆盖面不足）/ 感知链超时被报成 `control_timeout` 指错层 / `DEGRADE_MAX_NODES` 表满**静默丢弃**心跳（默认管线 19 节点 > 旧上限 16，运维看到假绿） | 
 | L3 雷达冗余（P2） | `ctest -R "adas_nodes_logic\|new_module"` | 雷达观测模型几何错（量程/FOV/方位基准/径向速度符号）/ 目标数越界 / 不可复现；新增 IDL 类型的 padding 失配（`msg_layout`）。模型单一事实源 `modules/adas_nodes/radar_model.h`（节点与单测共享，无副本漂移） |
-| L3 法规场景（P2） | `python3 ci/evaluators/scenario_regression.py --only r157_cut_out`（或 `r157_sensor_failure`） | UN R157 六类场景：**前方静止障碍把 ego 永久堵死**（超车价值判据对停止前车恒 false 的死锁）；`allow_npc_lane_change` 未实现导致"NPC 切入"类场景写不出来（假绿）；场景声明的 `fault_injection` 因 hook 早于场景加载而静默不生效。场景 `scenarios/r157_{cut_in,cut_out,hard_brake,construction_zone,sensor_failure}.json` 已进 suite（当前 18 enabled，含 `npc_cutin` / `pedestrian_flow`） |
+| L3 法规场景（P2） | `python3 ci/evaluators/scenario_regression.py --only r157_cut_out`（或 `r157_sensor_failure`） | UN R157 六类场景：**前方静止障碍把 ego 永久堵死**（超车价值判据对停止前车恒 false 的死锁）；`allow_npc_lane_change` 未实现导致"NPC 切入"类场景写不出来（假绿）；场景声明的 `fault_injection` 因 hook 早于场景加载而静默不生效。场景 `scenarios/r157_{cut_in,cut_out,hard_brake,construction_zone,sensor_failure}.json` 已进 suite（当前 19 enabled，含 `npc_cutin` / `pedestrian_flow` / `congestion_merge`） |
 | L3 EDR（P2） | `python3 ci/gates/l3_edr_gate.py --duration 28` + `ctest -R l3_edr` | L3 法规事件（激活/退出、TOR、MRM、ODD 退出）没真写进 PEM；事件未走 fsync；PEM 出现未声明的事件名。**实测抓过**：事件源订阅被关在 `if (!g.embedded_mode)` 里、而写 PEM 只在 embedded 模式 → 两个条件永不同时成立，`l3_*` 一条都记不下。分类单一事实源 `tools/l3_edr_sim.py` ↔ `include/l3_edr.h`，CI `integration-test` 跑 |
 
 **新增/改名的闸门必须同步这张表** —— 只加 job 不登记，下一个人会以为没有它。
@@ -724,7 +725,7 @@ frame: THREE  | up: +Y | 单位: m | ENU→THREE: [x, z, -y] | ego_centered: tru
 
 ## 常见故障模式
 
-> **完整 95 行表（现象 → 根因 → 位置）见 [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)**
+> **完整 96 行表（现象 → 根因 → 位置）见 [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)**
 > —— 仓库内权威副本，按 6 类分节：控制/规划/安全层 · 感知/点云 · 仿真/几何/NPC ·
 > 仪表盘/监控/前端 · 评估器/门禁 · 框架/工具链。
 >

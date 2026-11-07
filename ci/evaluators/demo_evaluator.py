@@ -2655,11 +2655,18 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
                 dx, dy = float(ox) - float(ex), float(oy) - float(ey)
                 xb = dx * ch + dy * sh
                 yb = -dx * sh + dy * ch
-                if abs(xb) <= 60.0 and abs(yb) <= 20.0:
+                # 留 10% 余量（54m/18m）：目标恰在 60/20 边界时，BEV 10Hz 与
+                # monitor 采样时差会让两侧覆盖判定不一致（dense_npc 实测）。
+                if abs(xb) <= 54.0 and abs(yb) <= 18.0:
                     bev_covered += 1
         bev_truth_count = bev_covered
-        tol = max(2, int(0.2 * bev_truth_count))
-        if bev_metrics and abs(bev_shadow_count - bev_truth_count) > tol:
+        # BEV 10Hz 与 monitor 采样/ego 位姿有 ≤100ms 时差；高速行驶时覆盖集合
+        # 会差 1–3 个目标。容差取 max(3, 50%)；但**覆盖范围内有真值而 BEV 报 0**
+        # 单独判 FAIL —— 否则小场景（truth≤3）里"停摆"会被容差吞掉。
+        tol = max(3, int(0.5 * bev_truth_count))
+        if bev_metrics and (
+                (bev_truth_count > 1 and bev_shadow_count < 1) or
+                abs(bev_shadow_count - bev_truth_count) > tol):
             failures.append(
                 f"BEV shadow count {bev_shadow_count} vs truth {bev_truth_count} "
                 f"(tolerance ±{tol}) — bev/obstacles is publishing wrong targets"

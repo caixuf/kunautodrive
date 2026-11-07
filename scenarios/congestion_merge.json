@@ -1,0 +1,58 @@
+{
+  "name": "congestion_merge",
+  "description": "方向三难例：拥堵汇入。ego 在最右车道，前方整条路网按 25 veh/km 自动补给多车道车流（lane_spread），x=80 处被路线指令要求并入左侧车道（target_lane=0）。判据：无碰撞、不超时、均速不低于 3 m/s（能在拥堵中完成并入而不是永久堵死）。",
+  "random_seed": 909,
+  "duration_s": 45,
+  "lighting": "day",
+  "weather": "clear",
+  "visibility_m": 1000,
+  "ego": {
+    "x": 20.0,
+    "y": -5.25,
+    "heading": 0.0,
+    "init_speed": 8.0,
+    "target_speed": 12.0
+  },
+  "road_network": {
+    "edges": [
+      {
+        "id": 0,
+        "type": "urban",
+        "name": "congestion_merge_straight",
+        "length_m": 1200,
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 18.0,
+        "nodes": [
+          [0, 0, 0],
+          [1200, 0, 0]
+        ],
+        "oneway": true
+      }
+    ]
+  },
+  "actors": [],
+  "traffic_density": {
+    "cars_per_km": 25,
+    "spawn_jitter_m": 2.0,
+    "lane_spread": true,
+    "max_npcs": 26,
+    "random_seed_offset": 0
+  },
+  "route": [
+    {
+      "trigger_x": 80.0,
+      "type": "lane_change",
+      "target_lane": 0,
+      "target_speed": 12.0,
+      "label": "merge_into_congestion"
+    }
+  ],
+  "traffic_lights": [],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 50.0,
+    "min_avg_speed_mps": 3.0
+  },
+  "scenarios": []
+}

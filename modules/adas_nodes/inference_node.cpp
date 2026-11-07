@@ -1112,6 +1112,8 @@ protected:
                 cJSON_AddStringToObject(as_root, "type", "assist");
                 cJSON_AddNumberToObject(as_root, "speed", pred_speed);
                 cJSON_AddNumberToObject(as_root, "d", pred_d);
+                /* 方向四：planning 的 model_assist 消费速度建议（speed 已在上方）+ 置信度。 */
+                cJSON_AddNumberToObject(as_root, "confidence", pred_conf);
                 cJSON_AddNumberToObject(as_root, "throttle", pred_throttle);
                 cJSON_AddNumberToObject(as_root, "steer", pred_steer);
                 cJSON_AddNumberToObject(as_root, "infer", g.infer_count);

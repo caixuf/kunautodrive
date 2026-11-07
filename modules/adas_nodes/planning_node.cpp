@@ -41,6 +41,7 @@
 
 #include "construction_zones.h"
 #include "planning_ttc_candidate.h"   /* D2-06: TTC follow lead 候选选择 helper */
+#include "planning_model_assist.h"    /* 方向四：模型 → planning 软建议（默认关闭） */
 #ifdef HAVE_FRENET
 #include "frenet_bridge.h"
 #include "st_graph.h"   /* ST 图 + DP 速度规划（planning 重生 M1，替代线性斜坡+override 堆） */
@@ -174,6 +175,12 @@ struct PlanningContext {
      * guard 是车身与车道线之间保留的余量（0.20m）。 */
     double cfg_lane_edge_guard_m{0.20};
     double cfg_ego_half_width_m{1.00};
+    /* 方向四：模型 → planning 软建议。默认 gain=0（关闭，零行为变化）。 */
+    double cfg_model_assist_gain{0.0};
+    double cfg_model_assist_min_conf{PLANNING_MODEL_ASSIST_CONF_MIN};
+    double assist_speed{0.0};
+    double assist_confidence{0.0};
+    uint64_t assist_last_us{0};
     double        ref_path_start_x{0.0};
     double        map_ref_x[128]{};
     double        map_ref_y[128]{};
@@ -1662,6 +1669,8 @@ protected:
             /* 参数热重载（三处之三）：漏了这步，注册了也改不动，只能重启。 */
             g.cfg_lane_edge_guard_m = param_get_float("planning.lane_edge_guard_m");
             g.cfg_ego_half_width_m  = param_get_float("planning.ego_half_width_m");
+            g.cfg_model_assist_gain = param_get_float("planning.model_assist");
+            g.cfg_model_assist_min_conf = param_get_float("planning.model_assist_min_conf");
 
             /* ── 驾驶模式仲裁：周期性检查条件，尝试升级；定位丢失时立即降级 ── */
             uint64_t now_us = clock_now_us();
@@ -1748,6 +1757,16 @@ protected:
                      g.has_behavior ? (double)g.current_behavior.target_speed : -1.0,
                      command_speed, g.has_behavior);
         }
+            /* 方向四：模型软建议（model_assist gain>0 才生效；置信度低/过期自动回退）。
+             * 放在安全夹紧之前 —— 模型建议先被 0.6×~1.2× 规则值夹住，再经下面的
+             * cfg_max/road_limit/environment 上限；规则层仍是硬护栏。 */
+            if (g.cfg_model_assist_gain > 0.0 && g.assist_last_us > 0 &&
+                (clock_now_us() - g.assist_last_us) < 250000ULL) {
+                command_speed = planning_model_assist_blend(
+                    command_speed, g.assist_speed, g.assist_confidence,
+                    g.cfg_model_assist_min_conf, g.cfg_model_assist_gain);
+            }
+
             /* 安全夹紧：scenario JSON 的 target_speed 是"信任来源"，但安全上限不变量
              * 应在规划层就守住——任何来源的目标速度都不能超过 cfg_max_speed。
              *
@@ -3129,6 +3148,20 @@ EXPORT_COROUTINE_TASK(PlanningTask, planning)
 
 /* ── NodePlugin 实现 ─────────────────────────────────────────── */
 
+/* 方向四：模型 → planning 软建议（仅 plan_assist 模式发布；默认关闭）。 */
+static void on_model_assist(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg || !msg->data) return;
+    cJSON* root = cJSON_Parse((const char*)msg->data);
+    if (!root) return;
+    cJSON* j = cJSON_GetObjectItemCaseSensitive(root, "speed");
+    if (cJSON_IsNumber(j)) g.assist_speed = j->valuedouble;
+    j = cJSON_GetObjectItemCaseSensitive(root, "confidence");
+    if (cJSON_IsNumber(j)) g.assist_confidence = j->valuedouble;
+    g.assist_last_us = clock_now_us();
+    cJSON_Delete(root);
+}
+
 static const char* s_inputs[]  = {
     TOPIC_FUSION_LOCALIZATION,
     TOPIC_PERCEPTION_OBSTACLES,
@@ -3140,6 +3173,7 @@ static const char* s_inputs[]  = {
     TOPIC_PLANNING_BEHAVIOR,
     TOPIC_NAVIGATION_PATH,
     TOPIC_LOCALIZATION_LANE_MATCH,
+    "inference/assist",      /* 方向四：plan_assist 软建议（默认 gain=0 不消费） */
     nullptr
 };
 static const char* s_outputs[] = { TOPIC_PLANNING_TRAJECTORY, nullptr };
@@ -3196,6 +3230,9 @@ static int planning_init(MessageBus* bus, Transport* transport,
         g.obs_confidence[i] = 0.0f;
     }
 
+    g.assist_speed = 0.0;
+    g.assist_confidence = 0.0;
+    g.assist_last_us = 0;
     g.curve_start_x   = 0.0;
     g.curve_length_m  = 0.0;
     g.curve_offset_m  = 0.0;
@@ -3230,6 +3267,10 @@ static int planning_init(MessageBus* bus, Transport* transport,
                 g.cfg_lane_edge_guard_m = item->valuedouble;
             if ((item = cJSON_GetObjectItem(root, "ego_half_width_m")))
                 g.cfg_ego_half_width_m = item->valuedouble;
+            if ((item = cJSON_GetObjectItem(root, "model_assist")) && cJSON_IsNumber(item))
+                g.cfg_model_assist_gain = item->valuedouble;
+            if ((item = cJSON_GetObjectItem(root, "model_assist_min_conf")) && cJSON_IsNumber(item))
+                g.cfg_model_assist_min_conf = item->valuedouble;
             cJSON_Delete(root);
         }
     }
@@ -3243,6 +3284,12 @@ static int planning_init(MessageBus* bus, Transport* transport,
     param_register_float("planning.ego_half_width_m", g.cfg_ego_half_width_m,
                          0.5, 3.0,
                          "ego 车身半宽 (m)，用于计算轨迹横向偏移的安全带");
+    param_register_float("planning.model_assist", g.cfg_model_assist_gain,
+                         0.0, 1.0,
+                         "模型 → planning 软建议混合增益 (0=关闭；建议 [0,1])");
+    param_register_float("planning.model_assist_min_conf", g.cfg_model_assist_min_conf,
+                         0.0, 1.0,
+                         "模型软建议最低置信度（低于此值忽略模型）");
 
     g.target_speed = g.cfg_target_speed;
     g.route_target_speed = -1.0;  /* -1=未设置 */
@@ -3275,6 +3322,7 @@ static int planning_init(MessageBus* bus, Transport* transport,
     transport_subscribe(transport, TOPIC_PLANNING_BEHAVIOR, on_planning_behavior, nullptr);
     transport_subscribe(transport, TOPIC_NAVIGATION_PATH, on_navigation_path, nullptr);
     transport_subscribe(transport, TOPIC_LOCALIZATION_LANE_MATCH, on_lane_match, nullptr);
+    transport_subscribe(transport, "inference/assist", on_model_assist, nullptr);
     transport_advertise(transport, TOPIC_PLANNING_TRAJECTORY, 0x3A7B1C2Du);
     transport_advertise(transport, TOPIC_PLANNING_DEBUG, 0u);  /* JSON text */
 

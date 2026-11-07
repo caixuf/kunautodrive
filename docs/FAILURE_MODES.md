@@ -33,12 +33,12 @@
 | # | 分类 | 条数 |
 |---|------|------|
 | 1 | 控制 / 规划 / 安全层 | 36 |
-| 2 | 感知 / 点云 | 9 |
+| 2 | 感知 / 点云 | 10 |
 | 3 | 仿真 / 几何 / NPC | 11 |
 | 4 | 仪表盘 / 监控 / 前端 | 24 |
 | 5 | 评估器 / 门禁 | 10 |
 | 6 | 框架 / 工具链 | 5 |
-| | **合计** | **95** |
+| | **合计** | **96** |
 
 ## 1. 控制 / 规划 / 安全层
 
@@ -103,7 +103,8 @@
 | sensor 模式"预警提前量"恒为 0（且伪造 critical event） | `perception_clusters_to_obstacles` 用 `frame_id*100+ci` 当障碍物 id → 每帧都变，跨帧跟踪失效。ground_truth 模式用 `vehicle/state` 的 `oid%d` 已修，sensor 模式无 oid 可用，需给簇做跨帧关联或用 tracker 的已确认航迹 id | `perception_points.c` / `ci/evaluators/demo_evaluator.py` 预警提前量 |
 | 真点云写点越界（潜在崩溃） | 旧射线循环 `cloud.points[cloud.count++]` **无容量守卫**；`n_rays=240 < 2048` 时侥幸没炸，提高射线数/密集场景（42 actor）即越界写。修复：写满即停 + `dropped` 上报 | `lidar_scan.c` `lidar_scan_generate` |
 | **打开了雷达（`enable_radar=1`）但感知/融合根本没人消费 `sensor/radar`** —— 冗余模态等于没接，夜间/远距短板照旧 | 雷达模型（P2）只做到"生产者发得出"，全仓订阅者只有单测。修复（方向一）：① 纯转换 `radar_post.h`（RadarFrame → 车体系 ObstacleList，径向速度沿视线转成相对速度、宽/长/类型不伪造）；② `perception_node` 可选 `enable_radar_fusion=1` 并入（按距离去重，同一目标不因多模态变两个）；③ sensor 模式下 **LiDAR 无新点云时雷达单独发一帧**（真正的模态冗余）；④ `sensor_wiring_check.py` 断言 `enable_radar=1` 必须有声明消费者 | `modules/adas_nodes/radar_post.h` / `perception_node.cpp`（`on_sensor_radar` / `enable_radar_fusion`）/ `ci/gates/sensor_wiring_check.py` |
-| **BEV 视觉影子检测停摆无人发现**（`bev/obstacles` 零消费者、零门禁；节点在编排里但一帧不发，所有门禁照绿） | BEV 直通/ONNX 输出只发 `bev/obstacles` 供前端对比，不参与控制，因此"不发"不会引发任何下游症状。修复（方向一）：① `demo_evaluator` 在 `pipeline_has_node("bev_detection")` 时要求 `metrics.topics` 存在 `bev/obstacles` 且频率 ≥1Hz；② monitor 订阅并透传 `metrics.bev.count`，评估器把 BEV 目标数与**覆盖范围内**（前/后 60m、横向 ±20m）真值目标数对比（差 >max(2,20%) 判 FAIL）；③ `ci/gates/bev_shadow_check.py` 用永久丢帧 A/B 证明门禁有牙（丢帧后必须红） | `ci/evaluators/demo_evaluator.py` / `monitor_node.c`（bev/obstacles 订阅）/ `ci/gates/bev_shadow_check.py` |
+| **BEV 目标数为 0 被误判成"检测坏了"**（straight_road 19 个真值目标、BEV count=0） | BEV 栅格只覆盖前/后 60m、横向 ±20m（`bev_pre` 默认 `range_x=60/range_y_half=20`）；场景真值目标从 83m 起跳时 0 是**正确输出**。门禁若拿全场景真值目标数对比会误报。修复：评估器先把真值按 ego 位姿投到车体系并只统计覆盖范围内的目标，再与 `metrics.bev.count` 比较 | `ci/evaluators/demo_evaluator.py` BEV 精度判据 / `modules/adas_nodes/bev_pre.h` 默认量程 |
+| **BEV 视觉影子检测停摆无人发现**（`bev/obstacles` 零消费者、零门禁；节点在编排里但一帧不发，所有门禁照绿） | BEV 直通/ONNX 输出只发 `bev/obstacles` 供前端对比，不参与控制，因此"不发"不会引发任何下游症状。修复（方向一）：① `demo_evaluator` 在 `pipeline_has_node("bev_detection")` 时要求 `metrics.topics` 存在 `bev/obstacles` 且频率 ≥1Hz；② monitor 订阅并透传 `metrics.bev.count`，评估器把 BEV 目标数与**覆盖范围内**（前/后 60m、横向 ±20m）真值目标数对比（有真值却报 0，或差 > max(3,50%) 判 FAIL）；③ `ci/gates/bev_shadow_check.py` 用永久丢帧 A/B 证明门禁有牙（丢帧后必须红） | `ci/evaluators/demo_evaluator.py` / `monitor_node.c`（bev/obstacles 订阅）/ `ci/gates/bev_shadow_check.py` |
 | 配置里 publish `type` 写了一个**不存在的 IDL 类型**，门禁与构建都不报 | 实测：`sensor/camera` 配置写 `CameraFrame`，代码发 `LidarFrame`（相机本就是 LiDAR 帧副本）；`sensor/gps` 写 `GpsFrame`，代码发 `GpsData`。运行时由代码决定线格式所以不炸，但按配置生成反序列化的订阅方会读错类型、`flowctl inspect` 展示假类型。修复：两处改为真实类型 + `topic_contract_check.py` 新增"publish type 必须是 `msg/adas_msgs.msg` 里的 struct"（JSON 载荷 topic 显式白名单） | `config/pipeline*.json` / `ci/gates/topic_contract_check.py` `idl_struct_names` |
 
 

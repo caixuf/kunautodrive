@@ -266,7 +266,8 @@
         "road/traffic_lights",
         "scene/frame",
         "planning/behavior",
-        "navigation/path"
+        "navigation/path",
+        "inference/assist"
       ],
       "publish": [
         {

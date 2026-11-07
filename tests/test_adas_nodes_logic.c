@@ -52,6 +52,7 @@
  * 节点 + 测试共用同一份实现（与 imu_protocol.h / perception_points.h / lidar_scan.h
  * 一致的 header-only 抽取模式，无副本漂移）。 */
 #include "fusion_lane_hint.h"
+#include "planning_model_assist.h"
 #include "planning_ttc_candidate.h"   /* D2-06: TTC follow lead 候选选择 helper */
 #include "traffic_density_spawn.h"   /* D3-2: traffic_density spawn 算式 helper */
 
@@ -2137,6 +2138,36 @@ static void test_sim_rng_ranges(void) {
     PASS();
 }
 
+/* ── 方向四：模型 → planning 软建议的硬边界 ── */
+static void test_planning_model_assist_blend(void) {
+    TEST("model_assist: 低置信/关闭/越界/NaN 均回退规则速度");
+    /* gain=0（默认关闭）→ 规则值 */
+    ASSERT_NEAR(planning_model_assist_blend(10.0, 15.0, 0.9, 0.5, 0.0), 10.0, 1e-6,
+                "gain 0 must be a no-op");
+    /* 低置信 → 规则值 */
+    ASSERT_NEAR(planning_model_assist_blend(10.0, 15.0, 0.2, 0.5, 1.0), 10.0, 1e-6,
+                "low confidence must fall back to rule");
+    /* 模型越界 → 夹到 1.2× */
+    ASSERT_NEAR(planning_model_assist_blend(10.0, 100.0, 0.9, 0.5, 1.0), 12.0, 1e-6,
+                "model suggestion must clamp to 1.2x rule");
+    ASSERT_NEAR(planning_model_assist_blend(10.0, -5.0, 0.9, 0.5, 1.0), 6.0, 1e-6,
+                "model suggestion must clamp to 0.6x rule");
+    /* 半增益混合 */
+    ASSERT_NEAR(planning_model_assist_blend(10.0, 14.0, 0.9, 0.5, 0.5), 11.0, 1e-6,
+                "gain 0.5 must blend halfway");
+    /* NaN/Inf → 规则值 */
+    ASSERT_NEAR(planning_model_assist_blend(10.0, NAN, 0.9, 0.5, 1.0), 10.0, 1e-6,
+                "NaN model speed must be ignored");
+    ASSERT_NEAR(planning_model_assist_blend(10.0, 12.0, NAN, 0.5, 1.0), 10.0, 1e-6,
+                "NaN confidence must be ignored");
+    /* gain > 1 必须夹到 1：否则 0.6x 的下夹会因外推变成负速度 */
+    ASSERT_NEAR(planning_model_assist_blend(10.0, 6.0, 0.9, 0.5, 3.0), 6.0, 1e-6,
+                "gain>1 must clamp to 1 (no extrapolation past 0.6x)");
+    ASSERT_NEAR(planning_model_assist_blend(10.0, 15.0, 0.9, 0.5, 3.0), 12.0, 1e-6,
+                "gain>1 must clamp to 1 (no extrapolation past 1.2x)");
+    PASS();
+}
+
 /* ══════════════════════════════════════════════════════════════
  * L3-P2 冗余：毫米波雷达观测模型（radar_model.h）
  *
@@ -2470,6 +2501,9 @@ int main(void) {
     test_radar_survives_bad_weather();
     test_radar_target_capacity();
     test_radar_deterministic();
+
+    printf("\n═══ Model assist (方向四：模型 → planning 软建议) ═══\n");
+    test_planning_model_assist_blend();
 
     printf("\n═══ Sim RNG (方向五：确定性根因) ═══\n");
     test_sim_rng_reproducible_and_isolated();

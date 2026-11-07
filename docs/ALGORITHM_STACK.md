@@ -20,14 +20,14 @@ flowsim(60Hz 真值) → sensor_model(FOV/遮挡/噪声) → perception(DBSCAN)
 | 模块 | 算法 | 文件 | 要点 |
 |------|------|------|------|
 | 仿真 | 运动学自行车模型（中心参考点含 half_wb·yaw_rate 切向项） | `flowsim/physics.cpp` | 纯被控对象，只执行指令不做驾驶决策 |
-| NPC | IDM 跟车 + 中央 Route Frenet 车道跟随（MOBIL 由运行时 `enable_mobil` 控制，默认关；部分场景 `npc_lane_change=true` 已打开，但存在"变道一帧中止"已知缺陷） | `flowsim/npc_ai.cpp` `flowsim/route.cpp` | 安全间距 = 5.0 + v×1.5 |
+| NPC | IDM 跟车 + 中央 Route Frenet 车道跟随 + MOBIL（运行时 `enable_mobil`，状态保持/完成事件已修）+ 多 OD 链分配 + 行人路边行走 | `flowsim/npc_ai.cpp` `flowsim/route.cpp` `flowsim_node.cpp` | 安全间距 = 5.0 + v×1.5；行人沿 road s 推进 |
 | 传感器模型 | FOV 裁剪 + 视线遮挡 + 高斯噪声（LiDAR/GPS/Camera）+ 毫米波雷达（默认 `enable_radar=0`） | `sensor_model_node.c` / `radar_model.h` | 雷达目标经 `radar_post.h` 可选并入 perception（`enable_radar_fusion`） |
 | 感知 | DBSCAN 点云聚类 | `perception_node.cpp` | 点云过多时聚类耗时可能超 deadline（已知降频点） |
 | 跟踪 | 卡尔曼多目标跟踪 | `object_tracker_node.c` | 20Hz |
 | 融合 | EKF（GPS+IMU 定位、时间对齐） | `fusion_node.cpp` | 20Hz |
 | 行为 | 8 状态 FSM：CRUISE / FOLLOW / LEFT_CHANGE / RIGHT_CHANGE / STOP / YIELD / U_TURN / EMERGENCY | `behavior_planner_node.cpp` | 只决定"做什么"，不输出连续控制量 |
 | 导航 | 路由步骤（enter_noa / prepare_u_turn）+ travel_dir（唯一事实源 = flowsim `ref_path.reverse`） | `navigation_node.c` | 10Hz |
-| 规划-路径 | Frenet 最优轨迹（横向五次多项式；变道段固定曲率圆弧回填 kappa） | `planning_node.cpp` | 速度/轨迹唯一权威 |
+| 规划-路径 | Frenet 最优轨迹（横向五次多项式；变道段固定曲率圆弧回填 kappa）+ 可选模型软建议（`model_assist`，默认 0） | `planning_node.cpp` / `planning_model_assist.h` | 速度/轨迹唯一权威；模型建议被 0.6×~1.2× 规则值与置信度门夹住 |
 | 规划-速度 | **ST 图 + DP 速度规划**（红灯墙 + 动态障碍占据 + 曲率限速，90×101 DP 表） | `st_graph.c` | 由 `tools/speed_planner_sim.py --run-all` 对照验证 |
 | 规划-掉头 | N 把方向多段掉头（前进满舵弧 → 刹停换 R → 倒车反打 → 循环，≤5 把），512 点细生成 + 段感知下采样 64 | `planning_node.cpp` generate_uturn_trajectory | 生成一次即缓存重放，防「重规划抖动死循环」 |
 | 控制-横向 | Stanley + kappa 前馈（默认）；LTV MPC（`use_ltv_mpc` 参数启用，机动模式跳过） | `control_node.cpp` `ltv_mpc.c` | MPC 求解前注入真实 steer 限幅（内外限幅必须一致） |

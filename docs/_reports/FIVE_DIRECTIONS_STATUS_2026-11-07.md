@@ -140,6 +140,18 @@ behavior/planning 决策层（只在 control 指令层经仲裁器参与）；�
 融合层重构，超出本轮切片）；`CI gate` 的"订阅≠消费"更深修法（运行时条件订阅 + 契约支持可选
 topic）同样留作后续。
 
+## 第三轮（夜间队列：T1/T2/T6 + 补口）
+
+| 项 | 状态 | 证据 |
+|---|---|---|
+| T2 BEV 影子精度门禁 | ✅ DONE（commit `d866a83`） | monitor 透传 `metrics.bev.count`；评估器按 BEV 覆盖范围（前/后 60m、±20m）对比真值；`bev_shadow_check.py` 正常 3/3、永久丢帧被拒 |
+| 模型 → planning 软建议 | ✅ DONE | `planning_model_assist.h`（置信度门 + 0.6×~1.2× 夹紧 + gain 默认 0）；planning 订阅 `inference/assist`（speed/confidence）；`test_adas_nodes_logic` 108/108 |
+| 动态轨迹确定性 | ✅ DONE（门禁通过） | `plant-determinism-gate.py`：flowsim 单节点同 seed 轨迹 dump 逐字节相同、改 seed 必变 |
+| 拥堵汇入难例 | ✅ DONE | `scenarios/congestion_merge.json`（25 veh/km + x=80 并入左道）；场景回归 PASS（24 NPC，lane_change=1，avg 11.6 m/s） |
+| 无保护左转难例 | ❌ 未做 | 需要 junction connecting_road 级 route 编排；`cross_intersection` 的 json_to_xodr 不生成 junction 连接路，city_grid 需按 xodr junction 反查 branch_id —— 属独立小项目 |
+| T1 Flake 猎杀 | ✅ 7/8 轮全绿 | 8 轮 `--workers 4`：7 轮 18/18；第 1 轮与并发编译重叠时 2 个 `no topology samples`（启动竞态，非场景逻辑） |
+| T6 长稳 | 🔄 进行中 | T1 结束后 3×600s，结果写回 NIGHT_QUEUE |
+
 ## code-review 第二轮（第二轮改动）抓出并已修
 
 1. `control/cmd` 的 `confidence` wire 字段在 `publish_cmd` 里从未赋值（未初始化栈值）→ 补 `bin.confidence`。

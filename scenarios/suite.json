@@ -130,6 +130,11 @@
       "enabled": true
     },
     {
+      "file": "scenarios/congestion_merge.json",
+      "duration_s": 45,
+      "enabled": true
+    },
+    {
       "file": "scenarios/city_multiroute.json",
       "duration_s": 20,
       "enabled": false
