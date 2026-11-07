@@ -59,7 +59,7 @@
 - 覆盖范围按 BEV 栅格（前/后 60m、横向 ±20m）过滤真值；全场景目标数不再误判
 
 ### 最终验证（队列外补口）
-- 全场景矩阵（19 enabled）：**19/19 PASS**（新增 `congestion_merge`）
+- 全场景矩阵（20 enabled）：**20/20 PASS**（新增 `congestion_merge` / `unprotected_left_turn`）
 - `test_adas_nodes_logic` **108/108**；`traffic_density_scenario` 6/6
 - `ctest` 快速套件 **48/48**；`pytest ci/evaluators` **107 passed / 1 skipped**
 - 16 条静态 gate + `determinism` / `npc-multi-route` / `plant-determinism` / `bev-shadow` 全绿

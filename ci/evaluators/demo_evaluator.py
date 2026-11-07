@@ -3689,6 +3689,26 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
                     f"— MOBIL/choreography set the state but the change never finished"
                 )
 
+    # ── 方向三：无保护左转必须真完成（不是"直行通过"）──
+    left_turn_completed = False
+    if criteria.get("left_turn_completed"):
+        final_ego = (((last or {}).get("metrics") or {}).get("scene") or {}).get("ego") or {}
+        ego_cfg = scenario.get("ego") if isinstance(scenario, dict) else {}
+        try:
+            y0 = float((ego_cfg or {}).get("y", 0.0))
+            yf = float(final_ego.get("y", y0))
+            hf = float(final_ego.get("heading", 0.0))
+        except (TypeError, ValueError):
+            y0 = yf = hf = 0.0
+        dh = (hf - math.pi / 2.0 + math.pi) % (2.0 * math.pi) - math.pi
+        left_turn_completed = (yf - y0 >= 10.0) and (abs(dh) <= 0.35)
+        if not left_turn_completed:
+            failures.append(
+                f"left turn not completed: final y={yf:.1f} (start {y0:.1f}), "
+                f"heading={hf:.2f} rad (expected ≈{math.pi/2:.2f}) — "
+                f"ego drove through instead of turning left"
+            )
+
     # ── 方向三：声明 npc_routes ⇒ 多 OD 链上必须真分到 NPC ──
     declared_npc_routes = scenario.get("npc_routes") if isinstance(scenario, dict) else None
     npc_route_spawned = 0
@@ -3958,6 +3978,7 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         "npc_lane_changes_completed": npc_lane_changes_completed,
         "pedestrian_max": pedestrian_max,
         "npc_route_spawned": npc_route_spawned,
+        "left_turn_completed": left_turn_completed,
         "bev_obstacles_hz": bev_obstacles_hz,
         "bev_shadow_count": bev_shadow_count,
         "bev_truth_count": bev_truth_count,

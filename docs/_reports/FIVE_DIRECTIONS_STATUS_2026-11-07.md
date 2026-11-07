@@ -102,9 +102,10 @@ A6（均速基线偏差 ≤2.2%）与 A9（匹配耗时 P99 0.354μs）此前已
 | 随机源隔离 | `flowsim/sim_rng.h`，flowsim/NPC/行人三条自持流；删除全局 `srand/rand` 依赖 | 单测 2 例（同 seed 同序列/范围） |
 | 确定性门禁 | `scene.init_fingerprint`（seed + 初始实体布局/转向意图）+ 两次启动比较 + 改 seed 必变 | `determinism-gate` PASS |
 
-**仍未完成（如实）**：BEV 检测仍为直通影子（仅有活性门禁，**无精度/影子对比门禁**）；模型仍不参与
-behavior/planning 决策层（只在 control 指令层经仲裁器参与）；动态轨迹本身仍受墙钟/调度
-影响，确定性只覆盖启动期指纹与闭环评估。
+**仍未完成（如实）**：BEV 仍是直通影子（已有活性 + 覆盖范围内精度门禁，但无真实
+模型权重/端到端影子对比）；模型已参与 planning 软建议（`model_assist`），但 **behavior
+决策层**仍不消费模型输出；flowsim 单节点动态轨迹已确定性（plant gate），**全链路异步
+调度**下的逐帧复现仍不成立。
 
 ## code-review 抓出并已修的问题（同一 PR 内）
 
@@ -148,7 +149,7 @@ topic）同样留作后续。
 | 模型 → planning 软建议 | ✅ DONE | `planning_model_assist.h`（置信度门 + 0.6×~1.2× 夹紧 + gain 默认 0）；planning 订阅 `inference/assist`（speed/confidence）；`test_adas_nodes_logic` 108/108 |
 | 动态轨迹确定性 | ✅ DONE（门禁通过） | `plant-determinism-gate.py`：flowsim 单节点同 seed 轨迹 dump 逐字节相同、改 seed 必变 |
 | 拥堵汇入难例 | ✅ DONE | `scenarios/congestion_merge.json`（25 veh/km + x=80 并入左道）；场景回归 PASS（24 NPC，lane_change=1，avg 11.6 m/s） |
-| 无保护左转难例 | ❌ 未做 | 需要 junction connecting_road 级 route 编排；`cross_intersection` 的 json_to_xodr 不生成 junction 连接路，city_grid 需按 xodr junction 反查 branch_id —— 属独立小项目 |
+| 无保护左转难例 | ✅ DONE | `scenarios/unprotected_left_turn.json`：L 形双向路（东行→北支）+ 对向西行来车；`left_turn_completed` 判据要求最终 heading≈π/2 且 y 增益 ≥10m；场景 PASS |
 | T1 Flake 猎杀 | ✅ 7/8 轮全绿 | 8 轮 `--workers 4`：7 轮 18/18；第 1 轮与并发编译重叠时 2 个 `no topology samples`（启动竞态，非场景逻辑） |
 | T6 长稳 | 🔄 进行中 | T1 结束后 3×600s，结果写回 NIGHT_QUEUE |
 

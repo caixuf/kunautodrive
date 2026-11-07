@@ -193,6 +193,11 @@
       "file": "scenarios/safe_driving_exam.json",
       "duration_s": 120,
       "enabled": false
+    },
+    {
+      "file": "scenarios/unprotected_left_turn.json",
+      "duration_s": 45,
+      "enabled": true
     }
   ],
   "max_lane_offset_m": 1.65

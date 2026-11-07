@@ -1,0 +1,99 @@
+{
+  "name": "unprotected_left_turn",
+  "description": "\u65b9\u5411\u4e09\u96be\u4f8b\uff1a\u65e0\u4fdd\u62a4\u5de6\u8f6c\u3002\u4e24\u6bb5 L \u5f62\u53cc\u5411\u8def\uff08\u4e1c\u884c\u897f\u652f \u2192 \u5317\u652f\uff09\uff1bego \u5728\u4e1c\u884c\u897f\u652f\u4e0a\uff0c\u63a5\u8fd1 x=0 \u5de6\u8f6c\u8fdb\u5165\u5317\u652f\uff0c\u5bf9\u5411\u8f66\u9053\u6709\u897f\u884c\u6765\u8f66\uff08\u65e0\u5de6\u8f6c\u4fdd\u62a4/\u4fe1\u53f7\uff09\u3002\u5224\u636e\uff1a\u65e0\u78b0\u649e\u3001\u5b8c\u6210\u5de6\u8f6c\uff08\u6700\u7ec8 heading\u2248+\u03c0/2 \u4e14 y>10\uff09\u3001\u4e0d\u8d85\u65f6\u3001\u5747\u901f\u22651\u3002",
+  "random_seed": 779,
+  "duration_s": 45,
+  "lighting": "day",
+  "weather": "clear",
+  "visibility_m": 1000,
+  "ego": {
+    "x": -300.0,
+    "y": -1.75,
+    "heading": 0.0,
+    "init_speed": 8.0,
+    "target_speed": 9.0,
+    "wheelbase": 2.7,
+    "length": 4.6,
+    "width": 2.0,
+    "max_steer": 0.6
+  },
+  "road_network": {
+    "edges": [
+      {
+        "id": 0,
+        "type": "urban",
+        "name": "west_leg",
+        "length_m": 1500,
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 15.0,
+        "nodes": [
+          [
+            -1500,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0
+          ]
+        ],
+        "oneway": false
+      },
+      {
+        "id": 1,
+        "type": "urban",
+        "name": "north_leg",
+        "length_m": 1000,
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 15.0,
+        "nodes": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            1000,
+            0
+          ]
+        ],
+        "oneway": false
+      }
+    ]
+  },
+  "actors": [
+    {
+      "id": 1,
+      "type": "car",
+      "x": -80.0,
+      "y": 1.75,
+      "vx": -7.0,
+      "vy": 0.0,
+      "len": 4.6,
+      "wid": 2.0
+    },
+    {
+      "id": 2,
+      "type": "car",
+      "x": 120.0,
+      "y": 1.75,
+      "vx": -7.0,
+      "vy": 0.0,
+      "len": 4.6,
+      "wid": 2.0
+    }
+  ],
+  "traffic_lights": [],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 50.0,
+    "min_avg_speed_mps": 1.0,
+    "left_turn_completed": true
+  },
+  "route": [],
+  "scenarios": []
+}

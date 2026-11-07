@@ -152,8 +152,9 @@
 行人自动生成、`npc_cutin` 加塞场景、MOBIL 一帧中止修复、模型置信度仲裁门、
 flowsim/NPC 自持 RNG + `init_fingerprint` 确定性门禁。
 
-**仍未完成**（诚实清单）：BEV 精度/影子对比门禁（目前只有 `bev/obstacles` 活性门禁）；模型参与 behavior/planning 决策层；
-动态轨迹本身仍受墙钟/调度影响（确定性只覆盖启动期与闭环评估）。逐项证据与命令见
+**仍未完成**（诚实清单）：BEV 真实模型权重/端到端影子对比（已有活性 + 覆盖范围精度门禁）；
+模型尚未参与 behavior 决策层（planning 已消费软建议）；全链路异步调度下逐帧复现
+（flowsim 单节点轨迹已由 plant gate 覆盖）。逐项证据与命令见
 [`docs/_reports/FIVE_DIRECTIONS_STATUS_2026-11-07.md`](_reports/FIVE_DIRECTIONS_STATUS_2026-11-07.md)。
 
 ## 推荐节奏（依赖顺序）
