@@ -66,6 +66,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "traffic_density_window.h"   /* D3-3：时段/区域密度窗单一事实源 */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -363,26 +365,17 @@ typedef struct {
  */
 #define SCENARIO_MAX_DENSITY_WINDOWS 8
 
-/** 时段 / 区域密度窗（D3-3，方向三）：半开区间 [start, end) + 倍率。
- *  - time_windows: start/end = 仿真时间（s）
- *  - zones:        start/end = route 累计弧长 s（m）
- *  窗内 → 倍率；窗外 → 基线 1.0；多窗首个命中者生效。 */
-typedef struct {
-    double start;
-    double end;
-    double multiplier;
-} ScenarioDensityWindow;
-
 typedef struct {
     int    cars_per_km;          /* 沿 route 每公里车辆数（默认 0 = 不 spawn） */
     double spawn_jitter_m;       /* s 抖动半宽（m），默认 2.0 */
     int    lane_spread;          /* 是否跨多车道 spawn（0/1，默认 1） */
     int    max_npcs;             /* 上限（默认 50） */
     int    random_seed_offset;   /* RNG 偏置（默认 0） */
-    /* D3-3：按时段 / 按区域调密度（可选；缺省 count=0 = 全局基线） */
-    ScenarioDensityWindow time_windows[SCENARIO_MAX_DENSITY_WINDOWS];
+    /* D3-3：按时段 / 按区域调密度（可选；缺省 count=0 = 全局基线）。
+     * 窗口结构与纯算法共用 include/traffic_density_window.h 的单一事实源。 */
+    TrafficDensityWindow time_windows[SCENARIO_MAX_DENSITY_WINDOWS];
     int    time_window_count;
-    ScenarioDensityWindow zones[SCENARIO_MAX_DENSITY_WINDOWS];
+    TrafficDensityWindow zones[SCENARIO_MAX_DENSITY_WINDOWS];
     int    zone_count;
 } ScenarioTrafficDensity;
 

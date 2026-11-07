@@ -87,13 +87,29 @@ A6（均速基线偏差 ≤2.2%）与 A9（匹配耗时 P99 0.354μs）此前已
 
 ---
 
+## code-review 抓出并已修的问题（同一 PR 内）
+
+1. **密度倍率只改计数、不改落点** → 计数与落点共用 `traffic_density_effective_spacing()`；
+   实测 `dense_route_traffic` base 12 / ×2 **26** / ×0.5 **4**（修复前 ×2 会被段尾 clamp 吞掉）。
+2. **learning_loop 不写 `shadow_steer_mae`** → 新增 `shadow_eval_summary()` 透传门禁消费的全部字段；
+   新增"生产端→promote 门禁"契约测试。
+3. **sensor-wiring 门禁只查 subscribe、不查 `enable_radar_fusion`** → 改为"有效消费者"判据；
+   A/B：雷达开 + 订阅在但 fusion=0 → FAIL，fusion=1 → PASS。
+4. **IDL 索引为空时类型门禁静默跳过** → 空索引本身 FAIL。
+5. **仲裁器检查可被注释掉的调用骗过** → 先剥离 C/C++ 注释与 `#if 0` 死代码再匹配；
+   A/B：注释掉 `safety_arbiter_apply` → FAIL。
+6. **`shadow_ade_mean: null` 绕过阈值** → 显式 None 回退到 `shadow_ade`；加负例测试。
+7. **两套同义窗口结构 + 手工适配层** → 收敛到 `include/traffic_density_window.h` 单一事实源，
+   删除适配函数。
+8. **故障表行号漂移** → 按当前源码修正（`sensor_model_node.c:634` / `perception_node.cpp:696`）。
+
 ## 本轮验证（全绿）
 
 ```bash
 cmake --build build -j$(nproc) && cmake --build build/modules/adas_nodes -j$(nproc)   # ✅
 env -u LD_LIBRARY_PATH ctest --test-dir build --timeout 60 \
   -LE "benchmark|manual|stability|integration"                                        # 48/48 passed
-python3 -m pytest ci/evaluators -q                                                    # 105 passed, 1 skipped
+python3 -m pytest ci/evaluators -q                                                    # 107 passed, 1 skipped
 python3 ci/gates/topic_contract_check.py                                              # OK（含新类型检查）
 python3 ci/gates/sensor_wiring_check.py                                               # OK（含雷达消费者检查）
 python3 ci/gates/model_takeover_boundary_check.py                                     # OK（新增）

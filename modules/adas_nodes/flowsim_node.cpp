@@ -638,21 +638,6 @@ static void apply_scenario_scripts(double sim_time_s) {
  *                      "够了所以停"（max_npcs）与"装不下了所以停"（pool 满）是
  *                      两种完全不同的结论，混成一个 spawned 数字排查时分不清。
  */
-/* D3-3：Scenario 侧窗口 → 纯算法窗口的适配（避免 core 头文件依赖模块头文件）。
- * 两结构字段同义同序；这里显式复制，不做指针别名。 */
-static double density_window_scale(const ScenarioDensityWindow* in, int n,
-                                   double t) {
-    TrafficDensityWindow w[SCENARIO_MAX_DENSITY_WINDOWS];
-    int count = 0;
-    for (int i = 0; i < n && i < SCENARIO_MAX_DENSITY_WINDOWS; i++) {
-        w[count].start      = in[i].start;
-        w[count].end        = in[i].end;
-        w[count].multiplier = in[i].multiplier;
-        count++;
-    }
-    return traffic_density_window_scale(t, w, count);
-}
-
 static int flowsim_auto_populate_traffic_density(const ScenarioConfig* sc,
                                                  bool* pool_full_out) {
     if (pool_full_out) *pool_full_out = false;
@@ -687,20 +672,26 @@ static int flowsim_auto_populate_traffic_density(const ScenarioConfig* sc,
     const double jitter     = (td->spawn_jitter_m > 0.0) ? td->spawn_jitter_m : 0.0;
     const bool   do_spread  = (td->lane_spread != 0);
     /* D3-3：启动期按 t=0 所在时段窗缩放（无窗口 = 1.0，行为零变化）。 */
-    const double time_scale_start = density_window_scale(
-        td->time_windows, td->time_window_count, 0.0);
+    const double time_scale_start = traffic_density_window_scale(
+        0.0, td->time_windows, td->time_window_count);
 
     int spawned = 0;
     int route_segs = g.route.count();
     for (int si = 0; si < route_segs && spawned < kScenarioMaxNpc; si++) {
         const flowsim::RouteSeg& seg = g.route.seg(si);
         /* D3-3：按本段所在 route 弧长（取段中点）查区域窗倍率。 */
-        const double zone_scale = density_window_scale(
-            td->zones, td->zone_count, seg.s_start + seg.length * 0.5);
+        const double zone_scale = traffic_density_window_scale(
+            seg.s_start + seg.length * 0.5, td->zones, td->zone_count);
         const double seg_scale = time_scale_start * zone_scale;
         int n_in_seg = traffic_density_seg_spawn_count_scaled(
             seg.length, spacing_m, seg_scale);
         if (n_in_seg < 1) continue;
+        /* 落点间距必须与计数用**同一个**等效间距：只改循环次数不改 i*spacing，
+         * 会在 scale>1 时把多出来的车全 clamp 到段尾、scale<1 时只占段前半段
+         * （2026-11-07 code-review 当场抓出：计数与落点两套间距）。 */
+        const double spacing_eff = traffic_density_effective_spacing(
+            spacing_m, seg_scale);
+        if (spacing_eff <= 0.0) continue;
 
         /* 本段的同向可行驶车道表（lane_spread 的落点池）。
          *   - 负 lane id = 本仓右行地图的行进方向（正 id 在对向），故只留负 id；
@@ -724,7 +715,7 @@ static int flowsim_auto_populate_traffic_density(const ScenarioConfig* sc,
             /* s 在本段内均匀分布 + 抖动（cap 到段边界）。
              * 内联 rand_uniform 而不用 lambda 转函数指针（C++ capture lambda
              * 不能 decay 成函数指针；D3-2 后续若需要可加 std::function 接口）。 */
-            double s_local = (double)i * spacing_m;
+            double s_local = (double)i * spacing_eff;
             if (jitter > 0.0) {
                 double r = (double)rand_r(&seed) / (double)RAND_MAX;
                 s_local += -jitter + r * (2.0 * jitter);
@@ -2051,10 +2042,10 @@ static void step_poisson_traffic(double dt, double ego_route_s, double sim_time_
     double density_scale = 1.0;
     if (g.scenario) {
         const ScenarioTrafficDensity* td = &g.scenario->traffic_density;
-        density_scale = density_window_scale(
-                            td->time_windows, td->time_window_count, sim_time_s)
-                      * density_window_scale(
-                            td->zones, td->zone_count, ego_route_s);
+        density_scale = traffic_density_window_scale(
+                            sim_time_s, td->time_windows, td->time_window_count)
+                      * traffic_density_window_scale(
+                            ego_route_s, td->zones, td->zone_count);
     }
     double arrival_prob = g.poisson_rate * density_scale * dt;
     if (arrival_prob > 1.0) arrival_prob = 1.0;

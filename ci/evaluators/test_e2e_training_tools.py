@@ -617,6 +617,80 @@ class E2ETrainingToolsTest(unittest.TestCase):
                 self.assertEqual(runtime.read_text(encoding="utf-8"), "old-runtime\n",
                                  "rejected artifact must NOT overwrite runtime model")
 
+    def test_promote_gate_null_primary_falls_back_to_alias(self):
+        """`shadow_ade_mean: null` 时不得绕过阈值（必须回退到 shadow_ade）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            runtime = work / "runtime" / "model.txt"
+            runtime.parent.mkdir(parents=True)
+            runtime.write_text("old-runtime\n", encoding="utf-8")
+            artifact = self._write_promotable_artifact(work, ade=1.0)
+            shadow_path = artifact / "shadow_eval.json"
+            shadow = json.loads(shadow_path.read_text(encoding="utf-8"))
+            shadow["shadow_ade_mean"] = None      # 主键存在但为 null
+            shadow["shadow_ade"] = 9.0            # 别名超阈值
+            shadow_path.write_text(json.dumps(shadow) + "\n", encoding="utf-8")
+
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "tools/modelctl.py"), "promote",
+                 str(artifact), "--runtime-model", str(runtime)],
+                cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("shadow_ade_mean", result.stdout + result.stderr)
+            self.assertEqual(runtime.read_text(encoding="utf-8"), "old-runtime\n")
+
+    def test_learning_loop_shadow_summary_feeds_promote_gate(self):
+        """生产端 ↔ promote 门禁字段契约：learning_loop 写出的 shadow_eval 必须能晋级。
+
+        回归背景：promote 新增 `shadow_steer_mae` 缺失即拒绝后，learning_loop 仍只
+        透传速度三项 → 正规闭环产物全部被挡。本用例用 sidecar 完整形状跑一遍
+        `shadow_eval_summary`，再喂给 promote，锁死"门禁读什么、生产端就写什么"。
+        """
+        sys.path.insert(0, str(ROOT / "tools"))
+        import learning_loop
+
+        sidecar = {
+            "shadow_speed_mae": 1.2,
+            "shadow_speed_rmse": 1.6,
+            "shadow_n": 120,
+            "shadow_steer_mae": 0.03,
+            "shadow_steer_rmse": 0.05,
+            "shadow_steer_n": 110,
+            "shadow_ade_mean": 1.0,
+            "shadow_fde_mean": 1.8,
+            "model": "tiny",
+        }
+        summary = learning_loop.shadow_eval_summary(sidecar)
+        for key in ("shadow_steer_mae", "shadow_ade_mean", "shadow_fde_mean"):
+            self.assertIn(key, summary, f"learning_loop must forward {key} to promote gate")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            runtime = work / "runtime" / "model.txt"
+            runtime.parent.mkdir(parents=True)
+            runtime.write_text("old-runtime\n", encoding="utf-8")
+            artifact = self._write_promotable_artifact(work)
+            # 精确模拟 learning_loop 的落盘形状（无手写补字段）
+            (artifact / "shadow_eval.json").write_text(
+                json.dumps({
+                    "schema": "flowengine.shadow_eval.v1",
+                    "created_unix_ms": int(time.time() * 1000),
+                    "eval_duration_s": 30,
+                    "scenario": "default",
+                    "evaluator_result": "PASS",
+                    **summary,
+                }) + "\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "tools/modelctl.py"), "promote",
+                 str(artifact), "--runtime-model", str(runtime)],
+                cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(runtime.read_text(encoding="utf-8"), "artifact-model\n")
+
     def test_ota_push_cannot_bypass_promote_gate(self):
         """方向五：OTA 是上车的最后一公里，不能被 `ota push` 绕过门禁。"""
         ota_cmd = Path("/tmp/flow_ota_cmd.json")

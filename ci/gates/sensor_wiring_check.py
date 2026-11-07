@@ -77,17 +77,26 @@ def check_config(path: Path) -> list[str]:
     # 2026-11 实证：`enable_radar=1` 时 sensor_model 会稳定发 sensor/radar，
     # 但全仓 perception/fusion 都不订阅 —— 雷达发进虚空，冗余等于没接。
     if sens_node is not None and _params(sens_node).get("enable_radar") == 1:
-        consumers = [
-            proc.get("name")
-            for proc in (cfg.get("processes") or [])
-            if isinstance(proc, dict)
-            and "sensor/radar" in (proc.get("subscribe") or [])
-        ]
-        if not consumers:
+        # 订阅 ≠ 消费：perception 的 on_sensor_radar 首行在
+        # enable_radar_fusion != 1 时直接 return。只查 subscribe 会让门禁对
+        # "声明了订阅、参数没开"这个已知失败模式判绿（2026-11-07 review 抓出）。
+        active_consumers = []
+        for proc in cfg.get("processes") or []:
+            if not isinstance(proc, dict):
+                continue
+            if "sensor/radar" not in (proc.get("subscribe") or []):
+                continue
+            if proc.get("name") == "perception":
+                if _params(proc).get("enable_radar_fusion") == 1:
+                    active_consumers.append(proc.get("name"))
+            else:
+                active_consumers.append(proc.get("name"))
+        if not active_consumers:
             errors.append(
-                f"{path.name}: sensor_model.enable_radar=1 但没有任何节点声明 "
-                f"subscribe sensor/radar —— 雷达目标发进虚空，"
-                f"冗余链路等于没接（要么关掉 enable_radar，要么接一个消费者）"
+                f"{path.name}: sensor_model.enable_radar=1 但没有**有效**消费者 —— "
+                f"订阅 sensor/radar 不等于消费（perception 还需 "
+                f"enable_radar_fusion=1，否则回调首行 early-return）；"
+                f"雷达目标发进虚空，冗余链路等于没接"
             )
 
     if _params(perc_node).get("mode") != "sensor":

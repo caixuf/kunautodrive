@@ -173,6 +173,13 @@ def check_config(path: Path, macros: dict[str, str]) -> list[str]:
     profile = infer_profile(path, cfg)
     errors: list[str] = []
     idl_types = idl_struct_names()
+    if not idl_types:
+        # 空索引会让下面所有类型检查静默跳过 —— 必须把"无法判定"本身当失败，
+        # 否则 msg 改名/改语法后 gate 会退化成 no-op 而不报警。
+        errors.append(
+            f"{path.name}: 无法从 msg/adas_msgs.msg 解析出任何 struct —— "
+            f"publish type 契约检查失效（检查 msg 文件是否存在/语法是否变化）"
+        )
     for proc in cfg.get("processes") or []:
         name = proc.get("name")
         if not name:

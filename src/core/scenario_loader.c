@@ -271,7 +271,7 @@ static void resolve_map_reference(cJSON* scenario, const char* scenario_path) {
  * 元素 {start, end, multiplier}；单条非法（缺字段/end<start/负倍率）跳过，
  * 不让一个坏窗口阻塞整个场景加载（与 traffic_density 其余字段同策略）。 */
 static int parse_density_windows(const cJSON* arr,
-                                 ScenarioDensityWindow* out, int cap) {
+                                 TrafficDensityWindow* out, int cap) {
     if (!cJSON_IsArray(arr) || !out || cap <= 0) return 0;
     int n = 0;
     const cJSON* item = NULL;
@@ -1044,7 +1044,7 @@ char* scenario_to_json(const ScenarioConfig* scenario) {
         if (scenario->traffic_density.time_window_count > 0) {
             cJSON* jtw = cJSON_CreateArray();
             for (int i = 0; i < scenario->traffic_density.time_window_count; i++) {
-                const ScenarioDensityWindow* w = &scenario->traffic_density.time_windows[i];
+                const TrafficDensityWindow* w = &scenario->traffic_density.time_windows[i];
                 cJSON* jw = cJSON_CreateObject();
                 cJSON_AddNumberToObject(jw, "start", w->start);
                 cJSON_AddNumberToObject(jw, "end", w->end);
@@ -1056,7 +1056,7 @@ char* scenario_to_json(const ScenarioConfig* scenario) {
         if (scenario->traffic_density.zone_count > 0) {
             cJSON* jz = cJSON_CreateArray();
             for (int i = 0; i < scenario->traffic_density.zone_count; i++) {
-                const ScenarioDensityWindow* w = &scenario->traffic_density.zones[i];
+                const TrafficDensityWindow* w = &scenario->traffic_density.zones[i];
                 cJSON* jw = cJSON_CreateObject();
                 cJSON_AddNumberToObject(jw, "start", w->start);
                 cJSON_AddNumberToObject(jw, "end", w->end);

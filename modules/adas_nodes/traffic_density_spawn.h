@@ -19,6 +19,8 @@
 #include <math.h>
 #include <stdbool.h>
 
+#include "traffic_density_window.h"   /* D3-3：窗口结构 + scale 的单一事实源 */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -77,47 +79,24 @@ static inline int traffic_density_lane_slot(bool spread, int i) {
     return i % 2;
 }
 
-/* ── D3-3：按时段 / 按区域调密度（方向三）──────────────────────────
- *
- * 语义：`TrafficDensityWindow` 是一个半开区间 [start, end) + 倍率。
- *   时段窗：`t` = 仿真时间（s），在窗口内 → 倍率，否则 1.0（基线密度）。
- *   区域窗：`t` = route 累计弧长 s（m），在窗口内 → 倍率，否则 1.0。
- *
- * 多窗口**首个命中者生效**（显式、可测；不做叠加 —— 叠加会让一个车道的密度
- * 变成两段系数相乘，调参时无法判断是哪条规则生效）。
- * 非法窗口（end<start / 非有限值）跳过；倍率 <0 钳到 0。
- *
- * 这是纯标量算术，节点与单测共用同一份实现（同 traffic_density_* 系列）。
- */
-typedef struct {
-    double start;       /* 区间起点（s 或 route_s，m） */
-    double end;         /* 区间终点（开区间） */
-    double multiplier;  /* 密度倍率，>= 0；0 = 该窗口内不生成 */
-} TrafficDensityWindow;
+/* ── D3-3：按密度倍率缩放 spawn（窗口结构/scale 在共享头，见文件顶注释）── */
 
-static inline double traffic_density_window_scale(
-    double t, const TrafficDensityWindow* windows, int n_windows
+/** 密度倍率 → 等效间距。计数与落点**必须共用**这一个函数（2026-11-07
+ * code-review 抓到的缺陷：只改计数不改落点，多出的车会被 clamp 到段尾）。 */
+static inline double traffic_density_effective_spacing(
+    double spacing_m, double scale
 ) {
-    if (!windows || n_windows <= 0) return 1.0;
-    for (int i = 0; i < n_windows; i++) {
-        const TrafficDensityWindow* w = &windows[i];
-        if (!isfinite(w->start) || !isfinite(w->end) || !isfinite(w->multiplier))
-            continue;
-        if (w->end < w->start) continue;          /* 非法窗口：忽略 */
-        if (t >= w->start && t < w->end) {
-            return (w->multiplier < 0.0) ? 0.0 : w->multiplier;
-        }
-    }
-    return 1.0;
+    if (scale <= 0.0 || !isfinite(scale)) return 0.0;
+    const double eff = spacing_m / scale;
+    return (isfinite(eff) && eff > 0.0) ? eff : 0.0;
 }
 
 /** 带密度倍率的段内 spawn 数：等效 spacing = spacing/scale。 */
 static inline int traffic_density_seg_spawn_count_scaled(
     double L, double spacing_m, double scale
 ) {
-    if (scale <= 0.0 || !isfinite(scale)) return 0;
-    const double eff = spacing_m / scale;
-    if (!isfinite(eff) || eff <= 0.0) return 0;
+    const double eff = traffic_density_effective_spacing(spacing_m, scale);
+    if (eff <= 0.0) return 0;
     int n = traffic_density_seg_spawn_count(L, eff);
     /* 防御恶意/误配倍率把 int 撑爆；1e5/段远超实体池容量。 */
     if (n > 100000) n = 100000;

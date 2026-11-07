@@ -130,6 +130,34 @@ def build_shadow_pipeline(model_file: Path) -> Path:
     return Path(tmp)
 
 
+# sidecar → shadow_eval.json 必须透传的字段。**与 modelctl.promote_gate 的判据
+# 同集合** —— 门禁读什么，这里就得写什么；少写一个字段会让正规学习闭环产物
+# 恒被 promote 拒绝（2026-11-07 实测：只写速度三项时，新增的
+# shadow_steer_mae 缺失判据把 learning_loop 的 artifact 全部挡下）。
+SHADOW_SIDECAR_KEYS = (
+    "shadow_speed_mae",
+    "shadow_speed_rmse",
+    "shadow_speed_mae_settled",
+    "shadow_speed_rmse_settled",
+    "shadow_settled_n",
+    "shadow_n",
+    "shadow_steer_mae",
+    "shadow_steer_rmse",
+    "shadow_steer_n",
+    "shadow_ade",
+    "shadow_fde",
+    "shadow_ade_mean",
+    "shadow_fde_mean",
+    "shadow_gate_supported",
+    "model",
+)
+
+
+def shadow_eval_summary(sidecar: dict) -> dict:
+    """从 inference sidecar 抽取 promote 门禁消费的字段（纯函数，可单测）。"""
+    return {k: sidecar[k] for k in SHADOW_SIDECAR_KEYS if k in sidecar}
+
+
 def stage_shadow_eval(model_dir: Path, duration: int, run_dir: Path,
                       scenario: str | None) -> tuple[int, dict]:
     manifest = json.loads((model_dir / "manifest.json").read_text(encoding="utf-8"))
@@ -163,10 +191,7 @@ def stage_shadow_eval(model_dir: Path, duration: int, run_dir: Path,
     if TINY_SIDECAR.exists():
         sidecar = json.loads(TINY_SIDECAR.read_text(encoding="utf-8"))
         shutil.copyfile(TINY_SIDECAR, run_dir / "shadow_sidecar.json")
-        result["shadow_speed_mae"] = sidecar.get("shadow_speed_mae")
-        result["shadow_speed_rmse"] = sidecar.get("shadow_speed_rmse")
-        result["shadow_n"] = sidecar.get("shadow_n")
-        result["model"] = sidecar.get("model")
+        result.update(shadow_eval_summary(sidecar))
     else:
         log("shadow", f"sidecar 未生成（{TINY_SIDECAR}）——模型没加载成功？")
         result["shadow_speed_mae"] = None

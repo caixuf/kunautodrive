@@ -1988,6 +1988,20 @@ static void test_traffic_density_seg_spawn_count_scaled(void) {
               "negative scale must not spawn");
     ASSERT_EQ(traffic_density_seg_spawn_count_scaled(1000.0, 100.0, NAN), 0,
               "NaN scale must not spawn");
+
+    /* 计数与落点必须共用同一等效间距：scale=2 时第 19 辆应落在 950m，
+     * 而不是 19×100m=1900m 被 clamp 到段尾（2026-11-07 实测缺陷）。 */
+    ASSERT(traffic_density_effective_spacing(100.0, 2.0) == 50.0,
+           "scale 2 must halve effective spacing");
+    ASSERT(traffic_density_effective_spacing(100.0, 0.5) == 200.0,
+           "scale 0.5 must double effective spacing");
+    ASSERT(traffic_density_effective_spacing(100.0, 0.0) == 0.0,
+           "zero scale must yield 0 spacing (no placement)");
+    const double eff = traffic_density_effective_spacing(100.0, 2.0);
+    const int n_scaled = traffic_density_seg_spawn_count_scaled(1000.0, 100.0, 2.0);
+    ASSERT(n_scaled == 20, "scaled count must be 20");
+    ASSERT((double)(n_scaled - 1) * eff <= 1000.0,
+           "last placement index must stay inside the segment (no end clamp)");
     PASS();
 }
 

@@ -366,8 +366,14 @@ def promote_gate(artifact_dir: Path, force: bool = False) -> list[str]:
                     )
 
                 # 轨迹误差：有则判、无则跳过（速度-only backend 不做轨迹 rollout）。
-                ade = shadow.get("shadow_ade_mean", shadow.get("shadow_ade"))
-                fde = shadow.get("shadow_fde_mean", shadow.get("shadow_fde"))
+                # 显式 None 回退，不用 dict.get(primary, fallback)：primary 键存在
+                # 但值为 null 时 get 会返回 None 而不回退（可被用来绕过阈值）。
+                ade = shadow.get("shadow_ade_mean")
+                if ade is None:
+                    ade = shadow.get("shadow_ade")
+                fde = shadow.get("shadow_fde_mean")
+                if fde is None:
+                    fde = shadow.get("shadow_fde")
                 if ade is not None and float(ade) > PROMOTE_SHADOW_ADE_MAX_M:
                     errors.append(
                         f"shadow_ade_mean={float(ade):.2f} m 超阈值 "

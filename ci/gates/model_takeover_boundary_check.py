@@ -21,6 +21,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -75,10 +76,18 @@ def check_config(path: Path) -> list[str]:
     return errors
 
 
+def _strip_comments_and_dead_code(src: str) -> str:
+    """去注释 + 去掉 `#if 0` 死代码块，避免"被注释掉的调用"让子串检查假绿。"""
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.DOTALL)
+    src = re.sub(r"//[^\n]*", "", src)
+    src = re.sub(r"#\s*if\s+0\b.*?#\s*endif", "", src, flags=re.DOTALL)
+    return src
+
+
 def check_arbiter_in_path() -> list[str]:
     if not ARBITER_SRC.is_file():
         return [f"missing {ARBITER_SRC.relative_to(ROOT)} — 无法确认安全仲裁仍在控制链"]
-    src = ARBITER_SRC.read_text(encoding="utf-8")
+    src = _strip_comments_and_dead_code(ARBITER_SRC.read_text(encoding="utf-8"))
     if ARBITER_CALL not in src:
         return [
             "safety_control_node.cpp 未调用 safety_arbiter_apply(...) —— "
