@@ -1,0 +1,77 @@
+{
+  "name": "bev_shadow",
+  "description": "方向一 BEV 影子精度门禁用静态场景：ego 停在 (20,-1.75)，3 个静止目标都在 BEV 前向 60m / 横向 20m 覆盖内（45/55/72m）。BEV 直通模式应报出同样 3 个目标；注入 bev/obstacles 丢弃后必须报 0 并被门禁拒绝。",
+  "random_seed": 20261108,
+  "duration_s": 10,
+  "lighting": "day",
+  "weather": "clear",
+  "visibility_m": 1000,
+  "ego": {
+    "x": 20.0,
+    "y": -1.75,
+    "heading": 0.0,
+    "init_speed": 0.0,
+    "target_speed": 0.0,
+    "wheelbase": 2.7,
+    "length": 4.6,
+    "width": 2.0,
+    "max_steer": 0.6
+  },
+  "road_network": {
+    "edges": [
+      {
+        "id": 0,
+        "type": "highway",
+        "name": "bev_shadow_straight",
+        "length_m": 400,
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 20.0,
+        "nodes": [
+          [0, 0, 0],
+          [400, 0, 0]
+        ],
+        "oneway": false
+      }
+    ]
+  },
+  "actors": [
+    {
+      "id": 1,
+      "type": "car",
+      "x": 45.0,
+      "y": -1.75,
+      "vx": 0.0,
+      "vy": 0.0,
+      "len": 4.6,
+      "wid": 2.0
+    },
+    {
+      "id": 2,
+      "type": "car",
+      "x": 55.0,
+      "y": -5.25,
+      "vx": 0.0,
+      "vy": 0.0,
+      "len": 4.6,
+      "wid": 2.0
+    },
+    {
+      "id": 3,
+      "type": "pedestrian",
+      "x": 72.0,
+      "y": -1.75,
+      "vx": 0.0,
+      "vy": 0.0,
+      "len": 0.5,
+      "wid": 0.5
+    }
+  ],
+  "traffic_lights": [],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 15.0
+  },
+  "route": [],
+  "scenarios": []
+}

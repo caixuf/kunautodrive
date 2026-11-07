@@ -372,6 +372,9 @@ jobs:
       # 方向三：OSM 多 OD 路线分配（npc_routes → 独立 Route → 轮转分配）
       - name: NPC multi-OD route assignment gate
         run: python3 ci/gates/npc_multi_route_check.py
+      # 方向一：BEV 影子输出精度（正常必须与覆盖范围内真值一致；永久丢帧必须红）
+      - name: BEV shadow accuracy gate
+        run: python3 ci/gates/bev_shadow_check.py
       # ── L3-P2（方向六）：故障注入 → 降级路径 门禁 ──
       # P2 放行条件「每类注入故障都有可观测的降级路径」的有牙实现：
       # 对 tools/fault_degrade_sim.py 登记的每一类故障真起一条管线、真注入、

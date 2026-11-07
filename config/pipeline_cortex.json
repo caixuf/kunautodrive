@@ -7,7 +7,8 @@
   "allow_hung_subs": ["sensor/pose", "control/raw_cmd",
     "odd/state",
     "tor/state",
-    "safety/mrm_request"],
+    "safety/mrm_request",
+    "bev/obstacles"],
   "scheduler": {
     "mode": "choreo",
     "worker_threads": 0,
@@ -399,6 +400,7 @@
       "auto_start": true,
       "subscribe": [
         "perception/obstacles",
+        "bev/obstacles",
         "vehicle/state",
         "fusion/latency",
         "flowengine/node_info",

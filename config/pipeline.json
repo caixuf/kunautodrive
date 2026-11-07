@@ -486,6 +486,7 @@
       "auto_start": true,
       "subscribe": [
         "perception/obstacles",
+        "bev/obstacles",
         "vehicle/state",
         "fusion/latency",
         "fusion/localization",

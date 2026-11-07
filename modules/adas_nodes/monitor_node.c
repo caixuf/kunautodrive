@@ -207,6 +207,11 @@ static struct {
     ObstacleList    latest_perceived;
     pthread_mutex_t perceived_mutex;
     volatile int    has_perceived;
+    /* 方向一：BEV 影子输出（bev/obstacles）观测。此前零订阅者、零精度门禁，
+     * 只能靠 topic 频率判断"在跑"，无法判断"跑出来的东西对不对"。 */
+    pthread_mutex_t bev_mutex;
+    int             bev_count;
+    uint64_t        bev_last_us;
     /* ego 位姿历史（scene.perceived 车体系→世界系的时刻对齐，见 ego_pose_at()） */
     EgoPoseSample   ego_pose_hist[EGO_POSE_HIST];
     int             ego_pose_hist_n;
@@ -466,6 +471,21 @@ static void on_obstacles(const Message* msg, void* user_data) {
     g.latest_perceived = parsed;
     g.has_perceived = 1;
     pthread_mutex_unlock(&g.perceived_mutex);
+}
+
+/* bev/obstacles 订阅回调（方向一）：BEV 影子输出也是 ObstacleList 二进制。
+ * 只缓存 count/时间戳 —— 评估器用它和 scene 真值目标数做影子对比。 */
+static void on_bev_obstacles(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg || msg->data_size == 0) return;
+    const uint8_t* data = (const uint8_t*)message_bus_message_data(msg);
+    if (!data) return;
+    ObstacleList parsed;
+    if (ObstacleList_deserialize(&parsed, data, msg->data_size) != 0) return;
+    pthread_mutex_lock(&g.bev_mutex);
+    g.bev_count = (int)(parsed.count > 128 ? 128 : parsed.count);
+    g.bev_last_us = clock_now_us();
+    pthread_mutex_unlock(&g.bev_mutex);
 }
 
 /* perception/tracked_objects 订阅回调 — 缓存感知语义障碍物（JSON，车体系）。
@@ -1288,6 +1308,17 @@ static void export_dashboard_json(void) {
 
     /* ── metrics sub-object ── */
     cJSON* metrics = cJSON_AddObjectToObject(root, "metrics");
+    /* 方向一：BEV 影子观测（count / age）。评估器据此与 scene 真值对比。 */
+    {
+        pthread_mutex_lock(&g.bev_mutex);
+        const int bev_count = g.bev_count;
+        const uint64_t bev_us = g.bev_last_us;
+        pthread_mutex_unlock(&g.bev_mutex);
+        cJSON* bev = cJSON_AddObjectToObject(metrics, "bev");
+        cJSON_AddNumberToObject(bev, "count", (double)bev_count);
+        cJSON_AddNumberToObject(bev, "age_ms",
+            bev_us ? (double)(clock_now_us() - bev_us) / 1000.0 : -1.0);
+    }
 
     cJSON* bus_o = cJSON_AddObjectToObject(metrics, "bus");
     cJSON_AddNumberToObject(bus_o, "published", (double)pub);
@@ -2503,6 +2534,7 @@ static const TaskInterface monitor_vtable = {
 /* ── NodePlugin 实现 ─────────────────────────────────────────── */
 
 static const char* s_inputs[]  = { TOPIC_PERCEPTION_OBSTACLES, TOPIC_VEHICLE_STATE,
+                                   "bev/obstacles",         /* 方向一：BEV 影子对比 */
                                    TOPIC_FUSION_LATENCY,
                                    "fusion/localization",   /* L3-P2 定位完整性 */
                                    TOPIC_FLOWENGINE_NODE_INFO,
@@ -2643,6 +2675,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     /* embedded 模式只依赖总线原生统计，不订阅大消息或 scene。 */
     if (!g.embedded_mode) {
     transport_subscribe(transport, TOPIC_PERCEPTION_OBSTACLES, on_obstacles, NULL);
+    transport_subscribe(transport, "bev/obstacles", on_bev_obstacles, NULL);
     transport_subscribe(transport, TOPIC_PERCEPTION_TRACKED_OBJECTS, on_tracked_objects, NULL);
     transport_subscribe(transport, TOPIC_VEHICLE_STATE, on_vehicle_state, NULL);
     transport_subscribe(transport, TOPIC_PLANNING_TRAJECTORY, on_planning_trajectory, NULL);
@@ -2674,6 +2707,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     transport_subscribe(transport, TOPIC_FUSION_LATENCY, on_fusion_latency, NULL);
 
     discovery_advertise(discovery, TOPIC_PERCEPTION_OBSTACLES, 0x0B5A010Eu, CAP_SUBSCRIBER, 0);
+    discovery_advertise(discovery, "bev/obstacles", 0x4BE1DEa3u, CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, TOPIC_VEHICLE_STATE,        0x1C0E5A7Eu, CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, TOPIC_FUSION_LATENCY,       0x1A7E9C01u, CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, TOPIC_ROAD_GEOMETRY,        0x80AD5C12u, CAP_SUBSCRIBER, 0);

@@ -2610,6 +2610,8 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     # BEV 默认是直通影子（只发 bev/obstacles，不污染控制）。这不代表它可以
     # 静默停摆：节点在编排里却没有该 topic = 视觉半边断链，先前任何门禁都看不见。
     bev_obstacles_hz = 0.0
+    bev_shadow_count = 0
+    bev_truth_count = 0
     if pipeline_has_node("bev_detection"):
         st = topics.get("bev/obstacles")
         if require(failures, "bev_shadow", {
@@ -2625,6 +2627,43 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
                     f"bev/obstacles publishing at {bev_obstacles_hz:.2f} Hz "
                     f"(< 1 Hz) — BEV shadow detection is not running"
                 )
+        # 影子精度（passthrough 模式）：BEV 目标数必须与 scene 真值目标数一致。
+        # 此前只有频率门禁 —— "在发垃圾"也能绿。允许 ±2 或 20%（模型模式放宽），
+        # 直通模式实测应完全相等。
+        bev_metrics = (last.get("metrics") or {}).get("bev") or {}
+        try:
+            bev_shadow_count = int(bev_metrics.get("count", 0) or 0)
+        except (TypeError, ValueError):
+            bev_shadow_count = 0
+        scene_m = (last.get("metrics") or {}).get("scene") or {}
+        truth_obs = scene_m.get("obstacles") or []
+        # BEV 只覆盖前/后 60m、横向 ±20m 的栅格（bev_pre 默认 range_x=60,
+        # range_y_half=20）。拿全场景障碍数比会误判"远处目标看不见"。
+        ego_m = scene_m.get("ego") or {}
+        ex, ey = ego_m.get("x"), ego_m.get("y")
+        eh = ego_m.get("heading", 0.0)
+        bev_covered = 0
+        if isinstance(truth_obs, list) and isinstance(ex, (int, float)) \
+                and isinstance(ey, (int, float)):
+            ch, sh = math.cos(float(eh)), math.sin(float(eh))
+            for o in truth_obs:
+                if not isinstance(o, dict):
+                    continue
+                ox, oy = o.get("x"), o.get("y")
+                if not isinstance(ox, (int, float)) or not isinstance(oy, (int, float)):
+                    continue
+                dx, dy = float(ox) - float(ex), float(oy) - float(ey)
+                xb = dx * ch + dy * sh
+                yb = -dx * sh + dy * ch
+                if abs(xb) <= 60.0 and abs(yb) <= 20.0:
+                    bev_covered += 1
+        bev_truth_count = bev_covered
+        tol = max(2, int(0.2 * bev_truth_count))
+        if bev_metrics and abs(bev_shadow_count - bev_truth_count) > tol:
+            failures.append(
+                f"BEV shadow count {bev_shadow_count} vs truth {bev_truth_count} "
+                f"(tolerance ±{tol}) — bev/obstacles is publishing wrong targets"
+            )
     pubs, subs = node_topic_roles(last)
     expected_edges = expected_edges if expected_edges is not None else load_pipeline_expected_edges()
     for pub_node, topic, sub_node in expected_edges:
@@ -3913,6 +3952,8 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         "pedestrian_max": pedestrian_max,
         "npc_route_spawned": npc_route_spawned,
         "bev_obstacles_hz": bev_obstacles_hz,
+        "bev_shadow_count": bev_shadow_count,
+        "bev_truth_count": bev_truth_count,
         # behavior 指标（从最后一个 sample 的 metrics.behavior 提取，
         # 仅在 behavior/state 已发布时可用）
         "behavior_state": last.get("metrics", {}).get("behavior", {}).get("state", ""),

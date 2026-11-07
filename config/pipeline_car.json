@@ -16,7 +16,8 @@
   ,
     "odd/state",
     "tor/state",
-    "safety/mrm_request"],
+    "safety/mrm_request",
+    "bev/obstacles"],
   "log_file": "launcher_car.log",
   "log_level": 2,
   "monitor_interval": 5,
@@ -380,6 +381,7 @@
       "auto_start": true,
       "subscribe": [
         "perception/obstacles",
+        "bev/obstacles",
         "fusion/latency",
         "flowengine/node_info",
         "planning/trajectory"

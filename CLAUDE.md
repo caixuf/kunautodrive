@@ -44,6 +44,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | model-takeover-boundary-gate | `python3 ci/gates/model_takeover_boundary_check.py` | 非实验管线把 `inference.control_mode` 接成 `direct_ctrl`（绕过影子评估）/ `safety_arbiter_apply` 从控制链被移除（规则主干失去护栏） |
 | determinism-gate | `python3 ci/gates/determinism_gate.py` | 同 scenario+seed 两次启动的 `scene.init_fingerprint` 不一致（flowsim/NPC 随机源被其他节点 `srand()` 污染）；改 seed 指纹不变（指纹恒真、不是 seed 派生量） |
 | npc-multi-route-gate | `python3 ci/gates/npc_multi_route_check.py` | 场景声明 `npc_routes` 但 `npc_route_spawned=0`（多 OD 链没建/没分到 NPC）；多 OD 链 spawn 期间 invariant 爆炸或 ego 碰撞 |
+| bev-shadow-gate | `python3 ci/gates/bev_shadow_check.py` | BEV 影子输出 `bev/obstacles` 停摆（频率/计数为 0）或目标数与覆盖范围内真值不符；永久注入丢帧后门禁仍绿（自检失效） |
 | long-run-lane-keep | `python3 ci/gates/long_run_lane_keep.py --duration 600` | 10min demo.sh soak：巡航压线 / 车心越线 / **横向目标跳变（Rule5：planning target_lane_offset 在车道中心间阶跃）** / **横向目标骑线（Rule6：target 必须落在合法车道中心上，含机动帧）**（长跑才显形的漂移退化；nightly，过渡期 continue-on-error） |
 | lanelet-consistency-gate | `python3 ci/gates/lanelet_consistency_check.py` | `map.json` ↔ `lanelet.osm` Rule 1–5 漂移 |
 | lane-match-schema-gate | `python3 ci/gates/lane_match_schema_check.py` | 车道匹配 schema ↔ codegen 契约不一致（`--self-test`） |
