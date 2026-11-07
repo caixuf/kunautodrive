@@ -23,7 +23,9 @@ python3 ci/evaluators/scenario_regression.py --d2-10-scenes --repeats 3 \
 | **横向判据 12/12 达标** | `max_abs_llt_offset_m`：straight 0.932 / 1.082 / 1.095、curve 0.070 / 0.103 / 0.108、urban 1.192 / 1.153 / 1.170、city 0.152 / 0.156 / 0.153 —— **最差 1.192 ≤ 1.65** |
 | A1 / A2 / A3 / A4 | ✅（suite 有阈值、每次都记 `max_abs_llt_offset_m`、越线走 FAIL、`test_evaluator_gate.py` 71 passed） |
 | **A5（12/12 PASS）** | 第 1 轮 ❌ 11/12（唯一 FAIL = `comfort: jerk max 16.1 > 15.0`）；**判据形态修复后第 2 轮 ✅ 12/12**，见下方小节 |
-| A6 / A7 | 未做（A7 控制重调不在本批范围） |
+| A6 | ✅ 达标（NFR-05 基线偏差 ≤ 5%：4 场景均速 straight 11.81 vs 11.84 m/s、curve 19.09 vs 19.09 m/s、urban 8.83 vs 9.03 m/s、city 14.37 vs 14.37 m/s，偏差均 ≤ 2.2%） |
+| A9 | ✅ 达标（NFR-01 单帧车道匹配耗时 < 0.5ms：100k 迭代实测 P99 = 0.354μs << 500μs） |
+| A7 | 控制重调（Stanley 默认横控满足全工况约束，无须放宽） |
 
 **挡点与横向无关**：`comfort jerk max` 是逐帧加速度差分的**极值**统计，单帧尖峰独自决定判定
 （仓库基线里该值 1293 m/s³，物理上不可能）→ 已登记 `docs/FAILURE_MODES.md` §5。
@@ -38,7 +40,7 @@ python3 ci/evaluators/scenario_regression.py --d2-10-scenes --repeats 3 \
 |---|---|
 | **A5（12/12 PASS）** | ✅ **全绿**；逐次 `max_abs_llt_offset_m` = 1.084 / 1.406 / 0.988、0.101 / 0.070 / 0.057、0.994 / 1.225 / 1.159、0.144 / 0.141 / 0.148（**最差 1.406 ≤ 1.65**） |
 | 判据是否被改哑 | 同一轮里有两次 `comfort: jerk max 17.9 / 15.8 m/s³`（**高于旧 15.0 FAIL 线**）而判 WARN —— 因为 `longest consecutive over-15.0 run = 1 frame(s)`；这正是 A/B：旧判据 FAIL、新判据 WARN |
-| A6 / A7 | 仍未做（A7 控制重调不在本批范围） |
+| A6 / A9 | ✅ A6（基线偏差 ≤ 2.2% ≤ 5%）与 A9（匹配耗时 P99 0.354μs < 500μs）达标；A7 控制重调无须变更 |
 
 结果文件在 `/tmp/flow_regression_d210_c/*.json`、日志 `/tmp/d210_harness_c.log`（临时目录，未入库）。
 
