@@ -20,8 +20,8 @@ flowsim(60Hz 真值) → sensor_model(FOV/遮挡/噪声) → perception(DBSCAN)
 | 模块 | 算法 | 文件 | 要点 |
 |------|------|------|------|
 | 仿真 | 运动学自行车模型（中心参考点含 half_wb·yaw_rate 切向项） | `flowsim/physics.cpp` | 纯被控对象，只执行指令不做驾驶决策 |
-| NPC | IDM 跟车 + 中央 Route Frenet 车道跟随（MOBIL 变道已 `#if 0` 禁用） | `flowsim/npc_ai.cpp` `flowsim/route.cpp` | 安全间距 = 5.0 + v×1.5 |
-| 传感器模型 | FOV 裁剪 + 视线遮挡 + 高斯噪声（LiDAR/GPS/Camera） | `sensor_model_node.c` | |
+| NPC | IDM 跟车 + 中央 Route Frenet 车道跟随（MOBIL 由运行时 `enable_mobil` 控制，默认关；部分场景 `npc_lane_change=true` 已打开，但存在"变道一帧中止"已知缺陷） | `flowsim/npc_ai.cpp` `flowsim/route.cpp` | 安全间距 = 5.0 + v×1.5 |
+| 传感器模型 | FOV 裁剪 + 视线遮挡 + 高斯噪声（LiDAR/GPS/Camera）+ 毫米波雷达（默认 `enable_radar=0`） | `sensor_model_node.c` / `radar_model.h` | 雷达目标经 `radar_post.h` 可选并入 perception（`enable_radar_fusion`） |
 | 感知 | DBSCAN 点云聚类 | `perception_node.cpp` | 点云过多时聚类耗时可能超 deadline（已知降频点） |
 | 跟踪 | 卡尔曼多目标跟踪 | `object_tracker_node.c` | 20Hz |
 | 融合 | EKF（GPS+IMU 定位、时间对齐） | `fusion_node.cpp` | 20Hz |

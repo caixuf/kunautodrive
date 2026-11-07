@@ -282,6 +282,15 @@ def cmd_promote(args: argparse.Namespace) -> int:
 PROMOTE_SHADOW_MAE_MAX = 2.0
 # 影子评估最少样本数：少于此数说明 sidecar 几乎没跑起来，评估不可信。
 PROMOTE_SHADOW_MIN_N = 50
+# 影子转向偏差上限（弧度）。与 evaluate_shadow_mode.THRESHOLDS["steer_mae_fail_deg"]
+# (6.9° ≈ 0.12 rad) 同源，也是 safety_arbiter 的 steer 安全包络上限 —— 三个门禁
+# 必须同一个数，否则"影子评估 FAIL 的模型"能靠 promote 只看速度 MAE 混进 runtime。
+PROMOTE_SHADOW_STEER_MAE_MAX_RAD = 0.12
+# 影子轨迹误差上限（米），与 evaluate_shadow_mode 的 ade_fail/fde_fail 同源。
+# 缺这些字段的旧 sidecar 不判（速度-only backend 不产生轨迹 rollout），
+# 但一旦存在就必须达标 —— 不能靠"不写字段"绕过。
+PROMOTE_SHADOW_ADE_MAX_M = 3.0
+PROMOTE_SHADOW_FDE_MAX_M = 5.0
 # shadow_eval.json 最大年龄（秒）：过旧的评估结论不能为当前代码/场景背书。
 PROMOTE_SHADOW_MAX_AGE_S = 7 * 24 * 3600
 # 闭环安全评估 (eval_closed_loop.py) 结果最大年龄（秒）。
@@ -341,6 +350,34 @@ def promote_gate(artifact_dir: Path, force: bool = False) -> list[str]:
                     )
                 if n is not None and int(n) < PROMOTE_SHADOW_MIN_N:
                     errors.append(f"shadow_n={n} < {PROMOTE_SHADOW_MIN_N}，评估样本太少不可信")
+
+                # 转向偏差：影子模式与规则控制的方向一致性。缺字段 = 无法判定，
+                # 按 require 语义拒绝（此前只查速度 MAE，转向严重偏离的模型能混过去）。
+                steer = shadow.get("shadow_steer_mae")
+                if steer is None:
+                    errors.append(
+                        "shadow_steer_mae 缺失 — sidecar 未采集转向偏差，无法判定"
+                        "模型与规则控制的横向一致性"
+                    )
+                elif float(steer) > PROMOTE_SHADOW_STEER_MAE_MAX_RAD:
+                    errors.append(
+                        f"shadow_steer_mae={float(steer):.3f} rad 超阈值 "
+                        f"{PROMOTE_SHADOW_STEER_MAE_MAX_RAD:.2f} rad (≈6.9°)"
+                    )
+
+                # 轨迹误差：有则判、无则跳过（速度-only backend 不做轨迹 rollout）。
+                ade = shadow.get("shadow_ade_mean", shadow.get("shadow_ade"))
+                fde = shadow.get("shadow_fde_mean", shadow.get("shadow_fde"))
+                if ade is not None and float(ade) > PROMOTE_SHADOW_ADE_MAX_M:
+                    errors.append(
+                        f"shadow_ade_mean={float(ade):.2f} m 超阈值 "
+                        f"{PROMOTE_SHADOW_ADE_MAX_M:.1f} m"
+                    )
+                if fde is not None and float(fde) > PROMOTE_SHADOW_FDE_MAX_M:
+                    errors.append(
+                        f"shadow_fde_mean={float(fde):.2f} m 超阈值 "
+                        f"{PROMOTE_SHADOW_FDE_MAX_M:.1f} m"
+                    )
 
     # 闭环安全评估门禁（Phase 0 — 2026-08）。
     # 影子 MAE 只衡量"像不像 teacher"，不衡量"能不能用"。模型会倒车/横漂/冲路沿/
@@ -620,10 +657,38 @@ def _ota_write_cmd(cmd_json: str) -> None:
 
 
 def cmd_ota_push(args: argparse.Namespace) -> int:
-    """加载并激活一个新模型版本（通过 model_ota_node）。"""
+    """加载并激活一个新模型版本（通过 model_ota_node）。
+
+    OTA 是模型**真正上车**的最后一道门 —— 此前它直接写命令文件，
+    完全不问 promote_gate，等于影子评估/闭环门禁可以被 `ota push` 绕过。
+    现在默认要求 path 所在目录是可验证 artifact（有 manifest.json）且
+    promote_gate 放行；`--force` 保留人工逃生口（会打印被覆盖的原因）。
+    """
     path = Path(args.path)
     if not path.exists():
         raise SystemExit(f"error: model file not found: {path}")
+
+    artifact_dir = path.parent
+    has_manifest = (artifact_dir / "manifest.json").is_file()
+    if not has_manifest:
+        if not args.force:
+            raise SystemExit(
+                f"error: OTA push 拒绝：{artifact_dir} 不是可验证 artifact（缺 manifest.json）—— "
+                f"无法确认它通过了影子/闭环门禁。先 `modelctl promote` 或用 --force 人工放行"
+            )
+        print(f"  OTA GATE OVERRIDDEN (--force): {artifact_dir} 缺 manifest.json",
+              file=sys.stderr)
+    else:
+        gate_errors = promote_gate(artifact_dir)
+        if gate_errors:
+            if not args.force:
+                for err in gate_errors:
+                    print(f"  OTA GATE REJECT: {err}", file=sys.stderr)
+                print("error: OTA push blocked by promote gate", file=sys.stderr)
+                return 1
+            for err in gate_errors:
+                print(f"  OTA GATE OVERRIDDEN (--force): {err}", file=sys.stderr)
+
     version_id = args.id or path.stem
     cmd = f'{{"cmd":"load","id":"{version_id}","path":"{path}"}}'
     _ota_write_cmd(cmd)
@@ -735,6 +800,8 @@ def main() -> int:
     ota_push = ota_cmds.add_parser("push", help="Load and activate a new model version via OTA")
     ota_push.add_argument("path", help="Path to the model file (.txt for tiny-MLP)")
     ota_push.add_argument("--id", default=None, help="Version ID (defaults to filename stem)")
+    ota_push.add_argument("--force", action="store_true",
+                          help="Skip promote gate (manual override, prints every bypassed reason)")
     ota_push.set_defaults(func=cmd_ota_push)
 
     ota_rollback = ota_cmds.add_parser("rollback", help="Rollback to the previous model version")

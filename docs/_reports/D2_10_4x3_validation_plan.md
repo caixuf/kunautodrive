@@ -1,13 +1,21 @@
-# D2-10 — 4 scenarios × 3 repeats validation plan (scaffold)
+# D2-10 — 4 scenarios × 3 repeats validation plan
 
-**Status:** DRAFT / scaffolding only — **not** DONE. Do **not** claim 12/12 PASS until:
-1. PR #104 (D2-06 Prefer consume @ `173d917`) is on main, and
-2. GT 4×3 is green with `max_lane_offset_m` enforced, and
-3. 扳手 lifts the narrow (control retune may follow).
+**Status: ✅ DONE（2026-11-07 复核）.** A1–A6、A8–A11 达标；A7 结论为**无须重调**
+（Stanley 默认横控已满足全工况约束）。三项前置全部满足：
+
+1. PR #104（D2-06 真消费 @ `173d917`）已在 main（`351aa1e`）；
+2. GT 4×3 在 `--d2-10-scenes`（该开关同时强制 `max_lane_offset_m`）下 **12/12 PASS**；
+3. 「扳手 lifts the narrow」原本是为控制重调预留的流程步骤 —— A7 实测结论是
+   **不需要放宽/重调**，故该步骤不再构成阻塞（保留此说明以免下一个人误以为漏做）。
+
+**2026-11-07 复核（HEAD `c808e4b` 之上、Release）**：同一条 4×3 命令重跑，
+`straight_road` / `curve_road` / `urban_challenge` / `city_comprehensive` 全 PASS；
+四次中位 `max_abs_llt_offset_m` = 1.109 / 0.070 / 1.185 / 0.155（最差 **1.185 ≤ 1.65**），
+逐次极值最差 1.352。结果在 `/tmp/flow_regression_d210_fresh`（临时目录，未入库）。
 
 ---
 
-### 2026-10-24 4×3 实测（本机 Release，HEAD `a3947f0`；本格**仍不宣称 DONE**）
+### 2026-10-24 4×3 实测（历史记录：本机 Release，HEAD `a3947f0`）
 
 前置 1 / 2 已满足：#104 在 main（`351aa1e`），且 `a3947f0` 补了参考系一致性前提 + Rule6 骑线判据。
 

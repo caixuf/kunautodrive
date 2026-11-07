@@ -115,7 +115,7 @@
         },
         {
           "topic": "sensor/gps",
-          "type": "GpsFrame",
+          "type": "GpsData",
           "qos": {
             "depth": 1,
             "policy": "drop_oldest",
@@ -125,9 +125,18 @@
         },
         {
           "topic": "sensor/camera",
-          "type": "CameraFrame",
+          "type": "LidarFrame",
           "qos": {
             "depth": 1,
+            "policy": "drop_oldest",
+            "reliability": "best_effort"
+          }
+        },
+        {
+          "topic": "sensor/radar",
+          "type": "RadarFrame",
+          "qos": {
+            "depth": 2,
             "policy": "drop_oldest",
             "reliability": "best_effort"
           }
@@ -143,7 +152,8 @@
         "vehicle/state",
         "sensor/lidar",
         "sensor/lidar_points",
-        "localization/lane_match"
+        "localization/lane_match",
+        "sensor/radar"
       ],
       "publish": [
         {

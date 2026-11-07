@@ -68,11 +68,30 @@ def check_config(path: Path) -> list[str]:
     perc_node = _node(cfg, "perception")
     if perc_node is None:
         return []  # 该 config 没有感知节点（如 pipeline_car.json）→ 不适用
-    if _params(perc_node).get("mode") != "sensor":
-        return []  # 非 sensor 模式（ground_truth 直通）→ 不适用
 
     errors: list[str] = []
     sens_node = _node(cfg, "sensor_model")
+
+    # ── 不变式 4：启用雷达 ⇔ 必须有声明消费者 ──
+    # 与 perception.mode 无关：ground_truth 编排同样可能开 radar 却没人订阅。
+    # 2026-11 实证：`enable_radar=1` 时 sensor_model 会稳定发 sensor/radar，
+    # 但全仓 perception/fusion 都不订阅 —— 雷达发进虚空，冗余等于没接。
+    if sens_node is not None and _params(sens_node).get("enable_radar") == 1:
+        consumers = [
+            proc.get("name")
+            for proc in (cfg.get("processes") or [])
+            if isinstance(proc, dict)
+            and "sensor/radar" in (proc.get("subscribe") or [])
+        ]
+        if not consumers:
+            errors.append(
+                f"{path.name}: sensor_model.enable_radar=1 但没有任何节点声明 "
+                f"subscribe sensor/radar —— 雷达目标发进虚空，"
+                f"冗余链路等于没接（要么关掉 enable_radar，要么接一个消费者）"
+            )
+
+    if _params(perc_node).get("mode") != "sensor":
+        return errors  # 非 sensor 模式（ground_truth 直通）→ 其余不变式不适用
     if sens_node is None:
         return [f"{path.name}: perception.mode=sensor 但没有 sensor_model 节点 —— "
                 f"没人发布 sensor/lidar_points，感知将永远等不到点云"]
@@ -111,6 +130,7 @@ def check_config(path: Path) -> list[str]:
             f"sensor_model.lidar_max_range_m={s_val:g} —— 消费者会把 "
             f">{p_val:g}m 的点静默丢弃（无日志），远处目标全部消失"
         )
+
     return errors
 
 

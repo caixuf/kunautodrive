@@ -172,6 +172,17 @@ jobs:
       - name: Enforce behavior FSM transition-table completeness
         run: python3 ci/gates/behavior_fsm_check.py
 
+  # ── model takeover boundary gate (方向四: 规则主干 vs 模型层) ──
+  # 规则层是最低安全护栏。除 pipeline_cortex.json（experimental）外，
+  # 任何管线把 inference.control_mode 接成 direct_ctrl 都阻断；同时断言
+  # safety_control 仍调用 safety_arbiter_apply()（模型不达标回退规则的执行点）。
+  model-takeover-boundary-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce model takeover boundary (shadow-only outside cortex)
+        run: python3 ci/gates/model_takeover_boundary_check.py
+
   # ── book_guard gate (CLAUDE.md docs/book 整治后新增) ──────────
   # docs/book/ 真技术书风格守门：单章节 800 行上限、行号密度 ≤5 处/100 行、
   # 超长对比表检测、commit-level >20% 行数突变。当前以 --warn-only 启动，

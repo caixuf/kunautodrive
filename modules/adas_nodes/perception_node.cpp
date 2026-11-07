@@ -41,6 +41,7 @@
 #include "topic_registry.h"
 #include "flowsim/building.h"   /* OSM 建筑 OBB：传感器视线遮挡 */
 #include "obs_lane_match_hint.h" /* D2-07 Prefer A: whole-publish obs_lane_match_hint from lane_match.valid */
+#include "radar_post.h"          /* 方向一：RadarFrame → ObstacleList 冗余并入 */
 #undef LOG_TRACE
 #undef LOG_DEBUG
 #undef LOG_INFO
@@ -128,6 +129,20 @@ struct PerceptionContext {
     int mode{0};  /* 0 = ground_truth (default) — obstacles from vehicle/state JSON */
     double lid_x{0}, lid_y{0};
     volatile int has_lidar{0};
+
+    /* ── 方向一：雷达冗余接入（默认关闭；enable_radar_fusion=1 才生效）──
+     * 雷达目标并入 perception/obstacles：LiDAR 正常时按距离去重（同一目标不
+     * 重复计数）；sensor 模式下 LiDAR 无新帧时，雷达仍可单独发一帧 ——
+     * 这才是"任一模态失效时剩余模态仍能支撑安全"的实际兑现。 */
+    int    enable_radar_fusion{0};
+    double radar_max_range_m{200.0};
+    float  radar_dedupe_radius_m{2.5f};
+    pthread_mutex_t radar_mtx = PTHREAD_MUTEX_INITIALIZER;
+    RadarFrame radar{};
+    uint32_t radar_seq{0};
+    uint32_t last_radar_seq{0};
+    uint32_t radar_bad{0};
+    uint32_t radar_merged_total{0};
 
     /* sensor/lidar_points 真点云缓冲。
      * 回调跑在消息总线分发线程、run() 跑在线程池 → pthread_mutex_t 保护
@@ -307,6 +322,45 @@ static void on_lidar_points(const Message* msg, void* user_data) {
     pthread_mutex_unlock(&g.cloud_mtx);
 }
 
+/* ── sensor/radar 订阅（方向一）— 仅在 enable_radar_fusion=1 时缓存 ──── */
+static void on_sensor_radar(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!g.enable_radar_fusion || !msg || msg->data_size == 0) return;
+    const uint8_t* data = (const uint8_t*)message_bus_message_data(msg);
+    if (!data) return;
+
+    RadarFrame tmp;
+    if (RadarFrame_deserialize(&tmp, data, msg->data_size) != 0) {
+        if (++g.radar_bad % 100 == 1) {
+            LOG_WARN("perception", "RadarFrame deserialize failed (size=%u, bad=%u)",
+                     msg->data_size, g.radar_bad);
+        }
+        return;
+    }
+    pthread_mutex_lock(&g.radar_mtx);
+    g.radar = tmp;
+    g.radar_seq++;
+    pthread_mutex_unlock(&g.radar_mtx);
+}
+
+/* 发布一帧障碍物（统一入口）：whole-publish lane hint + 序列化 + publish。
+ * 常规路径与"LiDAR 掉线、仅雷达"路径共用，避免两处各写一份 hint/序列化逻辑
+ * （本仓库已多次因多发点漏字段/漏 hint 栽跟头）。 */
+static void publish_obstacles(ObstacleList* obs_list) {
+    int lm_valid_snap = 0;
+    pthread_mutex_lock(&g.lm_mtx);
+    lm_valid_snap = g.lm_valid;
+    pthread_mutex_unlock(&g.lm_mtx);
+    obs_lane_match_hint_apply(obs_list,
+        obs_lane_match_hint_from_valid(lm_valid_snap));
+
+    uint8_t obs_buf[sizeof(ObstacleList)];  /* wire = 16 + 128*35; sizeof has alignment pad */
+    size_t obs_len = 0;
+    if (ObstacleList_serialize(obs_list, obs_buf, &obs_len) == 0 && obs_len > 0) {
+        transport_publish(g.transport, "perception/obstacles", obs_buf, (uint32_t)obs_len);
+    }
+}
+
 /* ── road/geometry 订阅 — 获取车道参数（用于 lane_id 赋值） ──── */
 static void on_road_geometry(const Message* msg, void* user_data) {
     (void)user_data;
@@ -407,6 +461,34 @@ protected:
                                  " — check sensor_model params lidar_mode=1",
                                  g.frame_id, g.no_cloud_warn);
                     }
+                    /* 方向一：LiDAR 无新点云时，若雷达有新帧则单独发一帧。
+                     * 不能拿旧点云计算（会重复同一批障碍物），但雷达是独立模态，
+                     * 其新鲜度不依赖 LiDAR —— 这是"任一模态失效时剩余模态仍能
+                     * 支撑安全"在感知出口上的实际兑现。只在雷达确实有目标时发，
+                     * 避免在点云仅延迟一帧时用空列表清掉跟踪。 */
+                    if (g.enable_radar_fusion) {
+                        uint32_t rseq;
+                        RadarFrame rf;
+                        pthread_mutex_lock(&g.radar_mtx);
+                        rf = g.radar;
+                        rseq = g.radar_seq;
+                        pthread_mutex_unlock(&g.radar_mtx);
+                        if (rseq != g.last_radar_seq) {
+                            g.last_radar_seq = rseq;
+                            ObstacleList radar_only;
+                            radar_frame_to_obstacles(&rf, g.radar_max_range_m,
+                                                      &radar_only);
+                            radar_only.frame_id = g.frame_id;
+                            radar_only.timestamp_us = clock_now_us();
+                            if (radar_only.count > 0) {
+                                g.last_obs_list = radar_only;
+                                g.has_last_obs = 1;
+                                publish_obstacles(&radar_only);
+                                g.frame_id++;
+                                continue;
+                            }
+                        }
+                    }
                     g.frame_id++;
                     continue;
                 }
@@ -480,22 +562,37 @@ protected:
                 perception_clusters_to_obstacles(clusters, n_clusters, &pose, &obs_list);
             }
 
+            /* 方向一：雷达冗余并入（enable_radar_fusion 默认 0 → 零行为变化）。
+             * 按车体系距离去重：与已有 LiDAR/视觉目标重合的雷达点不再追加，
+             * 保证"多一个模态"不会把一个物理目标变成两个障碍物。 */
+            if (g.enable_radar_fusion) {
+                uint32_t rseq;
+                RadarFrame rf;
+                pthread_mutex_lock(&g.radar_mtx);
+                rf = g.radar;
+                rseq = g.radar_seq;
+                pthread_mutex_unlock(&g.radar_mtx);
+                if (rseq != g.last_radar_seq) {
+                    g.last_radar_seq = rseq;
+                    ObstacleList radar_obs;
+                    radar_frame_to_obstacles(&rf, g.radar_max_range_m, &radar_obs);
+                    const uint32_t added = radar_merge_into_obstacles(
+                        &radar_obs, &obs_list, g.radar_dedupe_radius_m);
+                    g.radar_merged_total += added;
+                    if (added > 0 && (g.frame_id % 100u) == 0) {
+                        LOG_INFO("perception",
+                                 "radar redundancy: +%u target(s) (total=%u, list=%u)",
+                                 added, g.radar_merged_total, obs_list.count);
+                    }
+                }
+            }
+
             g.last_obs_list = obs_list;
             g.has_last_obs  = 1;
 
-            /* D2-07 Prefer A: whole-publish hint from latest lane_match.valid. */
-            int lm_valid_snap = 0;
-            pthread_mutex_lock(&g.lm_mtx);
-            lm_valid_snap = g.lm_valid;
-            pthread_mutex_unlock(&g.lm_mtx);
-            obs_lane_match_hint_apply(&obs_list,
-                obs_lane_match_hint_from_valid(lm_valid_snap));
-
-            uint8_t obs_buf[sizeof(ObstacleList)];  /* ObstacleList wire = 16 + 128*35 (D2-07 Prefer A int8 hint); sizeof has alignment pad */
-            size_t obs_len = 0;
-            if (ObstacleList_serialize(&obs_list, obs_buf, &obs_len) == 0 && obs_len > 0) {
-                transport_publish(transport_, "perception/obstacles", obs_buf, (uint32_t)obs_len);
-            }
+            /* D2-07 Prefer A: whole-publish hint from latest lane_match.valid.
+             * 方向一：雷达目标也走同一入口，保持"整帧统一 hint"语义。 */
+            publish_obstacles(&obs_list);
 
             g.frame_id++;
         }
@@ -516,6 +613,7 @@ EXPORT_COROUTINE_TASK(PerceptionTask, perception)
 static const char* s_inputs[]  = { "vehicle/state", "sensor/lidar", "sensor/lidar_points",
                                    "road/geometry",
                                    TOPIC_LOCALIZATION_LANE_MATCH,  /* D2-07 Prefer A */
+                                   "sensor/radar",                 /* 方向一：冗余模态 */
                                    nullptr };
 static const char* s_outputs[] = { "perception/obstacles", nullptr };
 
@@ -538,6 +636,13 @@ static int perception_init(MessageBus* bus, Transport* transport,
     g.obs_noise_std_m = 0.08;
     g.enable_simple_occlusion = 1;
     g.mode         = 0;       /* 默认 ground_truth 模式 — 从 vehicle/state 读障碍物 */
+    g.enable_radar_fusion = 0;   /* 方向一：默认不并入雷达（行为零变化） */
+    g.radar_max_range_m = 200.0;
+    g.radar_dedupe_radius_m = 2.5f;
+    g.radar_seq = 0;
+    g.last_radar_seq = 0;
+    g.radar_bad = 0;
+    g.radar_merged_total = 0;
     g.has_lidar    = 0;
     g.lid_x = g.lid_y = 0.0;
     g.cloud_seq = 0;
@@ -570,6 +675,19 @@ static int perception_init(MessageBus* bus, Transport* transport,
                 j->valuestring && strcmp(j->valuestring, "sensor") == 0) {
                 g.mode = 1;
             }
+            /* 方向一：雷达冗余并入（默认关闭）。
+             *   enable_radar_fusion   0/1
+             *   radar_max_range_m     置信度曲线用（量程门在 sensor_model 侧）
+             *   radar_dedupe_radius_m 与已有目标的重合判定半径（m）。
+             *     默认 2.5m < 车道中心距 3.5m（不会把相邻车道两车合并）；但雷达
+             *     方位噪声 1° 在 200m 处横向约 3.5m，远距重复目标可能超出该半径 ——
+             *     调大前先确认不会跨车道合并，或只在 LiDAR 失效场景开启本开关。 */
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "enable_radar_fusion")) && cJSON_IsNumber(j))
+                g.enable_radar_fusion = (j->valueint != 0);
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "radar_max_range_m")) && cJSON_IsNumber(j))
+                g.radar_max_range_m = j->valuedouble;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "radar_dedupe_radius_m")) && cJSON_IsNumber(j))
+                g.radar_dedupe_radius_m = (float)j->valuedouble;
             cJSON_Delete(p);
         }
     }
@@ -598,12 +716,15 @@ static int perception_init(MessageBus* bus, Transport* transport,
     transport_subscribe(transport, TOPIC_WORLD_BUILDINGS, on_world_buildings, nullptr);
     /* D2-07 Prefer A: subscribe lane_match for obs_lane_match_hint (soft). */
     transport_subscribe(transport, TOPIC_LOCALIZATION_LANE_MATCH, on_lane_match, nullptr);
+    /* 方向一：雷达冗余（enable_radar_fusion=0 时回调直接 return，零开销） */
+    transport_subscribe(transport, "sensor/radar", on_sensor_radar, nullptr);
 
     discovery_advertise(discovery, "vehicle/state",         0x1C0E5A7Eu, CAP_SUBSCRIBER,  0);
     discovery_advertise(discovery, "sensor/lidar",          LIDARFRAME_TYPE_ID, CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, TOPIC_SENSOR_LIDAR_POINTS, LIDARPOINTCLOUD_TYPE_ID, CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, "road/geometry",         0x80AD5C12u, CAP_SUBSCRIBER,  0);
     discovery_advertise(discovery, TOPIC_LOCALIZATION_LANE_MATCH, 0u, CAP_SUBSCRIBER, 0);
+    discovery_advertise(discovery, "sensor/radar", RADARFRAME_TYPE_ID, CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, "perception/obstacles",  OBSTACLELIST_TYPE_ID, CAP_PUBLISHER, 20.0);
 
     transport_advertise(transport, "perception/obstacles", OBSTACLELIST_TYPE_ID);

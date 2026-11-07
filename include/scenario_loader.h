@@ -342,7 +342,8 @@ typedef struct {
 
 /* ── 自动交通密度（D3-1，L3 方向三 NPC 自动填充）─────────────────────
  * 场景文件顶层加 "traffic_density" 块时，flowsim 在 populate 阶段自动沿
- * ego 的 route 步骤按 Poisson 分布批量 spawn NPC 车辆，无需在 "actors"
+ * ego 的 route 步骤按 cars_per_km 密度批量 spawn NPC 车辆（s 位置加均匀
+ * 抖动；运行期另有顶层 enable_poisson_traffic 的泊松到达路径），无需在 "actors"
  * 数组里逐条手列。hand-list 仍有效；auto-spawn 与 hand-list 共用同一个
  * entity pool（index 续编）。
  *
@@ -353,13 +354,36 @@ typedef struct {
  *                          false=全部 spawn 在 ego 同车道（压力测试）
  *   max_npcs               上限（防 entity pool 128 满）
  *   random_seed_offset     spawn RNG seed 偏置（同一场景可复现）
+ *   time_windows           可选：按时段调密度。元素 {start, end, multiplier}，
+ *                          start/end 为仿真秒（半开区间），窗外用基线密度。
+ *                          启动期 spawn 取 t=0 所在窗；运行期泊松到达率逐 tick
+ *                          按当前仿真时间缩放（D3-3）。
+ *   zones                  可选：按 route 弧长（m）调密度。元素同上，
+ *                          start/end 为 route 累计 s；启动期逐段应用。
  */
+#define SCENARIO_MAX_DENSITY_WINDOWS 8
+
+/** 时段 / 区域密度窗（D3-3，方向三）：半开区间 [start, end) + 倍率。
+ *  - time_windows: start/end = 仿真时间（s）
+ *  - zones:        start/end = route 累计弧长 s（m）
+ *  窗内 → 倍率；窗外 → 基线 1.0；多窗首个命中者生效。 */
+typedef struct {
+    double start;
+    double end;
+    double multiplier;
+} ScenarioDensityWindow;
+
 typedef struct {
     int    cars_per_km;          /* 沿 route 每公里车辆数（默认 0 = 不 spawn） */
     double spawn_jitter_m;       /* s 抖动半宽（m），默认 2.0 */
     int    lane_spread;          /* 是否跨多车道 spawn（0/1，默认 1） */
     int    max_npcs;             /* 上限（默认 50） */
     int    random_seed_offset;   /* RNG 偏置（默认 0） */
+    /* D3-3：按时段 / 按区域调密度（可选；缺省 count=0 = 全局基线） */
+    ScenarioDensityWindow time_windows[SCENARIO_MAX_DENSITY_WINDOWS];
+    int    time_window_count;
+    ScenarioDensityWindow zones[SCENARIO_MAX_DENSITY_WINDOWS];
+    int    zone_count;
 } ScenarioTrafficDensity;
 
 typedef struct {

@@ -33,12 +33,12 @@
 | # | 分类 | 条数 |
 |---|------|------|
 | 1 | 控制 / 规划 / 安全层 | 36 |
-| 2 | 感知 / 点云 | 6 |
-| 3 | 仿真 / 几何 / NPC | 8 |
+| 2 | 感知 / 点云 | 8 |
+| 3 | 仿真 / 几何 / NPC | 9 |
 | 4 | 仪表盘 / 监控 / 前端 | 24 |
-| 5 | 评估器 / 门禁 | 8 |
-| 6 | 框架 / 工具链 | 4 |
-| | **合计** | **86** |
+| 5 | 评估器 / 门禁 | 10 |
+| 6 | 框架 / 工具链 | 5 |
+| | **合计** | **92** |
 
 ## 1. 控制 / 规划 / 安全层
 
@@ -102,6 +102,8 @@
 | 点云永远 z=0、装在 1.8m 高却看不见 1.5m 高的车 | 旧观测模型只发射**单层方位射线**（elevation 恒 0），AABB 求交也是 2D、不检查 z。改为"方位 × 仰角层"3D 射线 + 3D AABB；仰角层间距须 ≤ 目标在 R 处的张角（车 1.5m 在 120m 处 ≈0.7° → 至少 32 层/22°） | `lidar_scan.c` `channels` / `sensor_model_node.c` |
 | sensor 模式"预警提前量"恒为 0（且伪造 critical event） | `perception_clusters_to_obstacles` 用 `frame_id*100+ci` 当障碍物 id → 每帧都变，跨帧跟踪失效。ground_truth 模式用 `vehicle/state` 的 `oid%d` 已修，sensor 模式无 oid 可用，需给簇做跨帧关联或用 tracker 的已确认航迹 id | `perception_points.c` / `ci/evaluators/demo_evaluator.py` 预警提前量 |
 | 真点云写点越界（潜在崩溃） | 旧射线循环 `cloud.points[cloud.count++]` **无容量守卫**；`n_rays=240 < 2048` 时侥幸没炸，提高射线数/密集场景（42 actor）即越界写。修复：写满即停 + `dropped` 上报 | `lidar_scan.c` `lidar_scan_generate` |
+| **打开了雷达（`enable_radar=1`）但感知/融合根本没人消费 `sensor/radar`** —— 冗余模态等于没接，夜间/远距短板照旧 | 雷达模型（P2）只做到"生产者发得出"，全仓订阅者只有单测。修复（方向一）：① 纯转换 `radar_post.h`（RadarFrame → 车体系 ObstacleList，径向速度沿视线转成相对速度、宽/长/类型不伪造）；② `perception_node` 可选 `enable_radar_fusion=1` 并入（按距离去重，同一目标不因多模态变两个）；③ sensor 模式下 **LiDAR 无新点云时雷达单独发一帧**（真正的模态冗余）；④ `sensor_wiring_check.py` 断言 `enable_radar=1` 必须有声明消费者 | `modules/adas_nodes/radar_post.h` / `perception_node.cpp`（`on_sensor_radar` / `enable_radar_fusion`）/ `ci/gates/sensor_wiring_check.py` |
+| 配置里 publish `type` 写了一个**不存在的 IDL 类型**，门禁与构建都不报 | 实测：`sensor/camera` 配置写 `CameraFrame`，代码发 `LidarFrame`（相机本就是 LiDAR 帧副本）；`sensor/gps` 写 `GpsFrame`，代码发 `GpsData`。运行时由代码决定线格式所以不炸，但按配置生成反序列化的订阅方会读错类型、`flowctl inspect` 展示假类型。修复：两处改为真实类型 + `topic_contract_check.py` 新增"publish type 必须是 `msg/adas_msgs.msg` 里的 struct"（JSON 载荷 topic 显式白名单） | `config/pipeline*.json` / `ci/gates/topic_contract_check.py` `idl_struct_names` |
 
 
 ## 3. 仿真 / 几何 / NPC
@@ -119,6 +121,7 @@
 | S 弯不跟弯（curve_road 场景车沿 y=-1.75 直开，heading 恒 0） | **四层连环**（2026-08-04 排查）：① `json_to_xodr.py` roads_from_road_network 只认 curvature_profile/length_m，完全忽略 `road_network.edges[].nodes` → 生成直道 XODR → ref_path 全 y=0；② 即便 XODR 弯了，control 横向目标 `target_path_y` 是轨迹 0.5s 前视点绝对 y，弯道上该点比 ego 当前位置高 → lat_error 虚高 → 车往弯内侧漂 ~3m；③ `scene_pub.cpp` `ROAD_NODES_PER_EDGE=8` 固定采样 → 前端 CR 过 8 点严重过冲、评估器弦长偏离真值 ~14m → 车在车道里被判 road departure；④ demo_evaluator 逆行/横向摆动检查假设直路（y<0 朝东 / 绝对 y 范围<4.5m），S 弯 ego y 合法扫过 ±103 却 heading 恒朝东 → 误报 WRONG-WAY/lateral excursion。修复：nodes 折线 → 三次 Hermite（端点切线 = 相邻 chord 平均，**不用 CR**——coarse 节点 CR 过冲生成 R≈19m 发卡弯，a_lat≈21m/s² 拐不过来；Hermite min R≈546m 可跟）密采样 5m → 逐段 line；planning map_ref 分支 kappa 从恒 0 改为切线中心差分恢复前馈；control 横向目标改用 query_ref_at **本地**参考（离 ego 最近轨迹点），cruise_lane_y = 本地 road_c + lane_d·cos(h)，只有本地查询失败才回退前视点；scene_pub 节点数按长度自适应（~25m 一点，8..128）；curve_road.json nodes 由 13 粗点重采样为 194 平滑点（前端 CR 与物理 Hermite 偏差 5.7m→<0.8m）；评估器弯道用局部 road_heading / road_signed_offset 替代绝对 y 启发 | `tools/json_to_xodr.py` build_polyline_road / `planning_node.cpp` frenet_to_cartesian / `control_node.cpp` query_ref_at 覆盖块+cruise_lane_y / `flowsim/scene_pub.cpp` road_nodes_per_edge / `scenarios/curve_road.json` / `ci/evaluators/demo_evaluator.py` |
 
 | 场景里声明了 `fault_injection` 但注入**完全没生效**（`dropped=0`、目标 topic 照常发布） | hook 放在了 `flowsim` 的 **reset 函数**里，而那是**场景加载之前**执行的 —— 此时 `g.scenario` 仍是 nullptr，条件判断直接短路。**通用教训**：依赖"场景已加载"的逻辑必须放在 `g.scenario = scenario_load(...)` **之后**；reset/init 早于加载是容易踩的时序陷阱。修复：移到场景加载语句之后（实测 `dropped` 由 0 → 603） | `modules/adas_nodes/flowsim_node.cpp` 场景加载之后的注入应用点 |
+| **MOBIL 变道只横移一帧即中止**（开启 `npc_lane_change` 的场景里看起来"没变道"，实际是变道失败） | 旧文档写"MOBIL 已 `#if 0` 禁用"，实际是运行时 `NpcAiConfig.enable_mobil`（默认 false），且 `lane_change_traffic` / 若干 `osm_*` 场景已打开 → CI 真在跑它。缺陷：MOBIL 决策置 `state=LaneChange` 后，同一帧纵向分发无条件改回 `Follow/Cruise`；下一帧横向插值条件不成立并把 `target_offset` 重置回当前 offset。**未修**（需保留状态直到完成 + 补完成事件 + 门禁），修前不要扩大 `npc_lane_change` 覆盖面；现有基线无法区分"未变道"与"变道失败" | `modules/adas_nodes/flowsim/npc_ai.cpp:716`（决策）vs `:745/:755`（同帧覆盖）/:599（重置 offset） |
 
 ## 4. 仪表盘 / 监控 / 前端
 
@@ -169,6 +172,9 @@
 | nightly `scenario_regression` 每个场景都是 `no topology samples collected`，stress test 却绿 | 同一 `build/` 先开 `ENABLE_COVERAGE`（且 UBSAN 留在 CMake 缓存里）。`libflowengine_core.a` 因此引用 `__gcov_merge_add`，插件 cmake 不链 `-lgcov`，`dlopen` 全部 `undefined symbol: __gcov_merge_add` 后被跳过。launcher 仍睡满 duration 并退出 0，monitor 从未写 `topology.json`。修复：行为门禁前把 `build/` 重配成 Release 且四个插桩开关显式 OFF，删掉插件构建目录重链；一个插件都没加载时 launcher 直接非 0 退出，不再空转 | `.github/workflows/ci.yml` nightly Release rebuild / `src/flow_launcher.c` `run_dlopen_mode` |
 | **同一份代码重跑，`straight_road` 判定在 PASS/FAIL 间摇摆，FAIL 项恒为 `comfort: jerk max N m/s³ exceeds 15.0`（2026-10-24 实测三次 9.6 / 12.4 / 16.1，只有 16.1 越线）** | 判据形态错了：jerk 取**整段逐帧加速度差分的最大值**，而 `jerk = |Δa|/Δt` 在 0.25s 采样下把 1 m/s 的速度抖动放大成 ~16 m/s³ —— **刹车起点/换挡瞬态**这种单帧（严格说是升沿+降沿两帧）事件就能越过直道的 15 严线。实测（straight_road 三次 0.25s 采样）：78 个巡航 jerk 帧里超阈 0~1 帧、峰值**都落在 t≈43.5s 的减速起点**、每次只 1 帧，而 p95 稳定在 0.6~1.1（极值与 p95 差近 20 倍）→ 阈值恰落在单帧抖动中段，同一二进制三次分居两侧。旁证：仓库基线里该值是 **1293**（物理上不可能，一个坏帧就能拉高两个数量级）。**修复（2026-10-24）**：判据改成**连续** `COMFORT_JERK_CONSEC_FAIL_FRAMES=3` 帧超阈才 FAIL（3 帧 ≈ 0.75s 持续，ISO 2631 关心的是持续加权量）；单帧只 WARN；另留单帧野尖峰硬线 `> 3×阈值` 仍 FAIL（那不是刹车瞬态的量级）。手法与长跑门禁 `LANE_KEEP_CONSEC_FAIL` 同源。门槛解析收敛到 `resolve_jerk_fail_mps3()` 唯一入口（metrics 里"连续几帧"与门禁必须同一个数）。判据：`test_evaluator_gate.py [29]` 单帧瞬态不得 FAIL / 连续超阈须 FAIL / 野尖峰仍 FAIL | `ci/evaluators/demo_evaluator.py` `COMFORT_JERK_CONSEC_FAIL_FRAMES` / `compute_formal_metrics` / `resolve_jerk_fail_mps3`；`ci/evaluators/test_evaluator_gate.py` [29] |
 
+| **`ota push` 直接让模型上车，绕过影子/闭环门禁** | OTA 是部署最后一公里，但 `cmd_ota_push` 只写 `/tmp/flow_ota_cmd.json`，从不调用 `promote_gate` —— 影子评估 PASS/FAIL 根本拦不住它。修复（方向五）：默认要求 path 所在目录是可验证 artifact（有 `manifest.json`）且 `promote_gate` 放行，`--force` 保留人工逃生口（逐条打印被覆盖的原因） | `tools/modelctl.py` `cmd_ota_push` |
+| **promote 只看速度 MAE，转向严重跑偏的模型也能晋级** | `promote_gate` 的 shadow 分支只查 `shadow_speed_mae`，而 sidecar 里有 `shadow_steer_mae` / `shadow_ade` / `shadow_fde`；影子评估 `evaluate_shadow_mode.py` 却按 6.9°/ADE 3m/FDE 5m 判 FAIL —— **两套口径不一致**，影子 FAIL 的模型可被 promote 放行。修复：promote 增加 steer ≤0.12rad（缺字段 = 无法判定 → 拒绝）+ ADE/FDE 阈值（有则判），阈值与 evaluate_shadow_mode 同源；`test_e2e_training_tools.py` 加负例 | `tools/modelctl.py` `promote_gate` / `PROMOTE_SHADOW_STEER_MAE_MAX_RAD` |
+
 ## 6. 框架 / 工具链
 
 消息总线 / 调度 / `node_pump` / 启动脚本。
@@ -179,3 +185,4 @@
 | 8 个节点线程各占满一个核 | 裸 `while(!stop) ex.run();` 忙等；`idle_sleep_us` 只被零调用者的 `run_blocking()` 读取。改用 `node_pump()` | `coroutine_task.h` node_pump |
 | 管道检查 topics 列表缺 perception/obstacles | `monitor_node.c` 的 `TopicStats tstats[16]` 只能装 16 个 topic，第 17 个静默丢弃。扩到 64 | `monitor_node.c:1304` |
 | 新增 IDL 类型后 `msg_layout_check` 报 `wire=N struct=N+4`，构建通过但序列化/直读两套约定不一致 | `msg_codegen` 的 wire size 是字段尺寸朴素累加（无 padding），C 结构体按自然对齐插 padding。把 `uint64` 放结构体中间就会失配（实测 RadarFrame 原顺序 wire=1044/struct=1048）。**两种修法**：① 加进 `KNOWN_MISMATCHES` 记录既有失配；② **更好的修法**是从设计上消除它 —— 调整字段顺序（大对齐成员前置）+ 显式 `reserved` 填平尾部，使 wire == struct。新增类型优先 ②，别让已知失配表继续变长 | `msg/adas_msgs.msg` 新类型字段布局 / `ci/gates/msg_layout_check.py` |
+| **同 seed 重跑 demo 轨迹仍不同**（`--repeats` 只能靠中位/极差兜底） | 全局 `rand()` 是**进程级**状态：`flowsim` 用 `srand(random_seed)` 播种后，`sensor_model` / `perception` 在 init 里又 `srand(42)` 把它覆盖；`npc_ai.cpp` 的路口转向意图与 `step_poisson_traffic` 的到达抽样都吃这条被污染的流。叠加墙钟节拍与线程调度 → 同 seed 不保证同轨迹。**未修**（方向五待办：把 flowsim/NPC 的随机源换成自持 RNG 状态，再给 headless 跑加确定性断言）；当前可复现口径只有 `eval_closed_loop.py`（固定 DT、无随机，已加确定性回归测试） | `flowsim_node.cpp` `srand`/`rand` / `npc_ai.cpp:910` / `sensor_model_node.c:633` / `perception_node.cpp:578` |

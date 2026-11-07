@@ -638,6 +638,21 @@ static void apply_scenario_scripts(double sim_time_s) {
  *                      "够了所以停"（max_npcs）与"装不下了所以停"（pool 满）是
  *                      两种完全不同的结论，混成一个 spawned 数字排查时分不清。
  */
+/* D3-3：Scenario 侧窗口 → 纯算法窗口的适配（避免 core 头文件依赖模块头文件）。
+ * 两结构字段同义同序；这里显式复制，不做指针别名。 */
+static double density_window_scale(const ScenarioDensityWindow* in, int n,
+                                   double t) {
+    TrafficDensityWindow w[SCENARIO_MAX_DENSITY_WINDOWS];
+    int count = 0;
+    for (int i = 0; i < n && i < SCENARIO_MAX_DENSITY_WINDOWS; i++) {
+        w[count].start      = in[i].start;
+        w[count].end        = in[i].end;
+        w[count].multiplier = in[i].multiplier;
+        count++;
+    }
+    return traffic_density_window_scale(t, w, count);
+}
+
 static int flowsim_auto_populate_traffic_density(const ScenarioConfig* sc,
                                                  bool* pool_full_out) {
     if (pool_full_out) *pool_full_out = false;
@@ -665,18 +680,26 @@ static int flowsim_auto_populate_traffic_density(const ScenarioConfig* sc,
     }
 
     /* s-spacing：cars_per_km 越大间距越小。每米一辆 = 1000 cars_per_km。
-     * 但我们想"均匀分布"而非"绝对均匀"，加 Poisson 抖动打破规律性。
+     * 但我们想"均匀分布"而非"绝对等距"，加均匀抖动打破规律性。
      * 用 [-spawn_jitter_m, +spawn_jitter_m] 的均匀抖动，0 → 严格等距。
      * 算式抽到 traffic_density_spawn.h，便于单测。 */
     const double spacing_m = traffic_density_spacing_from_density(td->cars_per_km);
     const double jitter     = (td->spawn_jitter_m > 0.0) ? td->spawn_jitter_m : 0.0;
     const bool   do_spread  = (td->lane_spread != 0);
+    /* D3-3：启动期按 t=0 所在时段窗缩放（无窗口 = 1.0，行为零变化）。 */
+    const double time_scale_start = density_window_scale(
+        td->time_windows, td->time_window_count, 0.0);
 
     int spawned = 0;
     int route_segs = g.route.count();
     for (int si = 0; si < route_segs && spawned < kScenarioMaxNpc; si++) {
         const flowsim::RouteSeg& seg = g.route.seg(si);
-        int n_in_seg = traffic_density_seg_spawn_count(seg.length, spacing_m);
+        /* D3-3：按本段所在 route 弧长（取段中点）查区域窗倍率。 */
+        const double zone_scale = density_window_scale(
+            td->zones, td->zone_count, seg.s_start + seg.length * 0.5);
+        const double seg_scale = time_scale_start * zone_scale;
+        int n_in_seg = traffic_density_seg_spawn_count_scaled(
+            seg.length, spacing_m, seg_scale);
         if (n_in_seg < 1) continue;
 
         /* 本段的同向可行驶车道表（lane_spread 的落点池）。
@@ -1992,7 +2015,7 @@ static double forward_construction_front_s(const flowsim::Entity& ego) {
 }
 
 /* ── 随机泊松动态交通流发生与超距淘汰 ────────────────────────────── */
-static void step_poisson_traffic(double dt, double ego_route_s) {
+static void step_poisson_traffic(double dt, double ego_route_s, double sim_time_s) {
     if (!g.enable_poisson_traffic || !g.roads_loaded || !g.route.ok()) return;
 
     const flowsim::Entity& ego = g.pool[0];
@@ -2022,8 +2045,19 @@ static void step_poisson_traffic(double dt, double ego_route_s) {
     if (active_dynamic_count >= g.poisson_max_vehicles) return;
     if (g.pool.active_count() >= flowsim::MAX_ENTITIES - 10) return;
 
-    /* 3. 泊松到达抽样：时间微元 dt 内到达概率 P = lambda * dt */
-    double arrival_prob = g.poisson_rate * dt;
+    /* 3. 泊松到达抽样：时间微元 dt 内到达概率 P = lambda * dt
+     * D3-3：lambda 按时段窗（当前仿真时间）与区域窗（ego 所在 route s）
+     * 缩放；无窗口时倍率 1.0，行为与旧实现完全一致。 */
+    double density_scale = 1.0;
+    if (g.scenario) {
+        const ScenarioTrafficDensity* td = &g.scenario->traffic_density;
+        density_scale = density_window_scale(
+                            td->time_windows, td->time_window_count, sim_time_s)
+                      * density_window_scale(
+                            td->zones, td->zone_count, ego_route_s);
+    }
+    double arrival_prob = g.poisson_rate * density_scale * dt;
+    if (arrival_prob > 1.0) arrival_prob = 1.0;
     double sample = (double)(rand() % 100000) / 100000.0;
     if (sample >= arrival_prob) return;
 
@@ -2839,7 +2873,7 @@ protected:
             if (ego_route_s < 0.0) ego_route_s = 0.0;  /* 不在 route 上时回退到起点 */
 
             /* ── Step 2.8: 随机泊松动态交通流发生与超距淘汰 ── */
-            step_poisson_traffic(FLOWSIM_DT_SEC, ego_route_s);
+            step_poisson_traffic(FLOWSIM_DT_SEC, ego_route_s, pre_time_s);
 
             for (int i = 1; i < g.pool.size(); i++) {
                 flowsim::Entity& e = g.pool[i];

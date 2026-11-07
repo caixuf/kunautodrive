@@ -136,6 +136,22 @@
 
 ---
 
+## 2026-11-07 落地切片
+
+本轮把方向一~五各推进到一个**可验证切片**（代码 + 门禁 + 实测，非文档）：
+
+- 方向一：`radar_post.h` + perception 可选并入（LiDAR 失效时雷达单独出帧）+ 接线门禁；
+  视觉仍是直通影子。
+- 方向二：D2-10 收口（4×3 = 12/12 PASS，最差横向 1.185 ≤ 1.65）。
+- 方向三：`traffic_density.time_windows` / `zones`（按时间/区域调密度）+ 运行期泊松缩放；
+  实测 `dense_route_traffic` 基线 20 辆 → 零密度窗 0 辆。
+- 方向四：promote 门禁补转向/轨迹阈值 + 新增 `model-takeover-boundary-gate`。
+- 方向五：`ota push` 强制过 promote gate + 闭环评估确定性回归测试。
+
+**仍未完成**（诚实清单）：OSM 多 OD 路线分配、加塞场景、MOBIL 状态机修复、整车确定性
+（全局 `rand()`/墙钟）、相机退化成像、模型参与行为决策。逐项证据与命令见
+[`docs/_reports/FIVE_DIRECTIONS_STATUS_2026-11-07.md`](_reports/FIVE_DIRECTIONS_STATUS_2026-11-07.md)。
+
 ## 推荐节奏（依赖顺序）
 
 1. **先地基**：救活并打磨方向一（感知）、方向二（地图自动化）。没地图和感知，

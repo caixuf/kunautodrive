@@ -25,6 +25,29 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
+# 发布声明的 `type` 必须是 msg_codegen 里真实存在的 IDL 结构体；否则运行时
+# 只是"声明了一个不存在的类型"。2026-11 实测抓到两处静默错配：
+#   sensor/gps    = 代码发 GpsData，配置写 GpsFrame
+#   sensor/camera = 代码发 LidarFrame，配置写 CameraFrame
+# 两者都不影响当前总线（JSON/二进制由代码决定），但会误导订阅方按错误类型
+# 生成反序列化代码，且 `flowctl inspect` 展示的类型是假的。
+# 例外：以下 topic 承载 cJSON 文本，`type` 只是描述性标签，不对应 IDL。
+JSON_PAYLOAD_TYPES = frozenset({
+    "raw", "text",
+    "VehicleState",       # vehicle/state：cJSON
+    "RoadGeometry",       # road/geometry：cJSON
+    "TrackedObjectList",  # perception/tracked_objects：cJSON
+})
+
+
+def idl_struct_names() -> set[str]:
+    """msg/adas_msgs.msg 里的 struct 名（msg_codegen 会生成同名头文件）。"""
+    src = ROOT / "msg" / "adas_msgs.msg"
+    if not src.is_file():
+        return set()
+    return set(re.findall(r"^struct\s+(\w+)", src.read_text(encoding="utf-8"),
+                          re.MULTILINE))
+
 # System topics always published by the runtime/launcher, not by any
 # NodePlugin's s_outputs. These need to be considered "published" without
 # showing up in any process's s_outputs[] or JSON publish list.
@@ -149,6 +172,7 @@ def check_config(path: Path, macros: dict[str, str]) -> list[str]:
     cfg = json.loads(path.read_text())
     profile = infer_profile(path, cfg)
     errors: list[str] = []
+    idl_types = idl_struct_names()
     for proc in cfg.get("processes") or []:
         name = proc.get("name")
         if not name:
@@ -178,6 +202,20 @@ def check_config(path: Path, macros: dict[str, str]) -> list[str]:
             errors.append(
                 f"{path.name}:{name}: JSON publish not in s_outputs: {sorted(phantom_out)}"
             )
+
+        # ── 发布类型必须是真实 IDL 类型（或已登记的 JSON 载荷标签）──
+        for pub in proc.get("publish") or []:
+            if not isinstance(pub, dict):
+                continue
+            decl_type = pub.get("type")
+            if not decl_type or decl_type in JSON_PAYLOAD_TYPES:
+                continue
+            if idl_types and decl_type not in idl_types:
+                errors.append(
+                    f"{path.name}:{name}: publish '{pub.get('topic')}' declares "
+                    f"type '{decl_type}' which is not a struct in msg/adas_msgs.msg "
+                    f"— 声明了不存在的 IDL 类型（订阅方会按错误类型反序列化）"
+                )
 
         if profile == "default":
             missing_in = code_in - json_in

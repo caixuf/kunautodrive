@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 >
 > ⚠️ **`~/.claude/skills/*` 路径未随仓库分发**（本机 2026-09 核查不存在）。读不到时按其
 > 自述的方法论执行即可：分层探针 + 值传播验证 + 状态锁死 + 缓存层检查；下方各节的铁律与
-> [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)（运行期故障模式表，86 行 / 6 类）才是仓库内的权威副本。
+> [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)（运行期故障模式表，92 行 / 6 类）才是仓库内的权威副本。
 >
 > **行为异常排查**（转向灯反/该停不停/该走不走/刹停到 0/改代码现象不变）→
 > 先按 [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md) 的**现象列**对号入座，再看
@@ -33,14 +33,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | 闸门（CI job） | 本地命令 | 挡住什么 |
 |------|------|----------|
-| topic-contract-gate | `python3 ci/gates/topic_contract_check.py` | `pipeline*.json` ↔ `s_inputs`/`s_outputs` 漂移 |
+| topic-contract-gate | `python3 ci/gates/topic_contract_check.py` | `pipeline*.json` ↔ `s_inputs`/`s_outputs` 漂移；publish `type` 声明了 `msg/adas_msgs.msg` 里不存在的 IDL 类型 |
 | msg-layout-gate | `python3 ci/gates/msg_layout_check.py` | `msg_codegen` 线格式尺寸 ≠ C 结构体尺寸（padding 陷阱） |
 | plugin-symbol-gate | `python3 ci/gates/plugin_symbol_check.py` | 插件 .so 未解析的项目符号（launcher `dlopen` 即失败） |
-| sensor-wiring-gate | `python3 ci/gates/sensor_wiring_check.py` | sensor 模式下 `lidar_mode`/两处 `lidar_max_range_m` 不一致（静默丢点） |
+| sensor-wiring-gate | `python3 ci/gates/sensor_wiring_check.py` | sensor 模式下 `lidar_mode`/两处 `lidar_max_range_m` 不一致（静默丢点）；`enable_radar=1` 却没有任何 `sensor/radar` 消费者（雷达发进虚空） |
 | zombie-ban-gate | `python3 ci/gates/zombie_ban_check.py` | 退役 Python 仪表盘入口回潮 |
 | ci-eigen-gate | `python3 ci/gates/ci_eigen_check.py` | 会跑 `cmake -S` 的 CI job 漏装 `libeigen3-dev` → configure 退到联网 git clone Eigen，网络一抖整片红（2026-10-22 三个 job 齐红）；豁免只认显式 `-DFLOWENGINE_ALLOW_NO_EIGEN=ON` |
 | book-guard-gate | `python3 ci/gates/book_guard.py` | `docs/book/` 掉回"按源码逐条重建"（行数上限 / 行号密度 / 突变） |
 | behavior-fsm-gate | `python3 ci/gates/behavior_fsm_check.py` | `behavior_planner` 转移表死状态 / 死事件 / 变道缺超时回退 |
+| model-takeover-boundary-gate | `python3 ci/gates/model_takeover_boundary_check.py` | 非实验管线把 `inference.control_mode` 接成 `direct_ctrl`（绕过影子评估）/ `safety_arbiter_apply` 从控制链被移除（规则主干失去护栏） |
 | long-run-lane-keep | `python3 ci/gates/long_run_lane_keep.py --duration 600` | 10min demo.sh soak：巡航压线 / 车心越线 / **横向目标跳变（Rule5：planning target_lane_offset 在车道中心间阶跃）** / **横向目标骑线（Rule6：target 必须落在合法车道中心上，含机动帧）**（长跑才显形的漂移退化；nightly，过渡期 continue-on-error） |
 | lanelet-consistency-gate | `python3 ci/gates/lanelet_consistency_check.py` | `map.json` ↔ `lanelet.osm` Rule 1–5 漂移 |
 | lane-match-schema-gate | `python3 ci/gates/lane_match_schema_check.py` | 车道匹配 schema ↔ codegen 契约不一致（`--self-test`） |
@@ -76,7 +77,7 @@ sim_world → sensor_model → perception → fusion → planning → control �
                              flowmond (IPC stats bridge + HTTP/SSE) → DashBoard
 ```
 
-上图是核心控制链。`config/pipeline.json`（default profile）实际跑 **17 个进程**，
+上图是核心控制链。`config/pipeline.json`（default profile）实际跑 **19 个进程**，
 在核心链之外还有 `lane_detection`（车道线，发 `perception/lanes`）、`object_tracker`（感知跟踪）、
 `navigation`（路由 + 行进方向）、`behavior_planner`（FSM）、`inference` / `data_recorder` /
 `learner` / `model_ota`（学习闭环 Stage 0→2→OTA）、`bev_detection`（BEV 视觉）。节点清单以
@@ -202,7 +203,7 @@ bash scripts/demo.sh --no-browser 15      # 不自动开浏览器
 
 | 文件 | profile | 用途 |
 |------|---------|------|
-| `config/pipeline.json` | `default` | 仿真/算法开发/可视化主路径，**CI 与 demo 都用它**（17 节点，不写 PEM） |
+| `config/pipeline.json` | `default` | 仿真/算法开发/可视化主路径，**CI 与 demo 都用它**（19 节点，不写 PEM） |
 | `config/pipeline_sensor.json` | `default` | 同上但走**真点云链路**（sensor 编排，16 节点）；nightly 的三场景门禁跑它，见"验证"节 |
 | `config/pipeline_car.json` | `hw` | RC 小车真车模板（GPS/IMU/激光雷达/执行器 + `pem_collector`，19 节点） |
 | `config/pipeline_cortex.json` | `experimental` | cortex 变体，启动会打警告 |
@@ -636,7 +637,12 @@ npm run vis:check:all
 
 ### MOBIL 变道
 
-MOBIL 变道已禁用（`#if 0`）。完整代码保留在 `npc_ai.cpp` 中作为参考，可通过将 `#if 0` 改为 `#if 1` 重新启用。当前演示场景中 NPC 各守其道不变道。
+MOBIL 变道由**运行时开关** `enable_mobil` 控制（`NpcAiConfig`，默认 false），不是
+`#if 0` 编译期禁用 —— 旧的 `#if 0` 说法已过期。场景顶层 `npc_lane_change: true` 会打开它
+（`lane_change_traffic`、若干 `osm_*` 场景已打开），所以 CI 场景里 MOBIL **确实会执行**。
+⚠️ 已知缺陷（未修，见 `docs/FAILURE_MODES.md` §3）：MOBIL 决策置 `LaneChange` 后，
+同一帧纵向分发会把状态改回 `Follow/Cruise`，横向插值条件随之失效 → **变道只横移一帧即中止**。
+开启 MOBIL 的场景基线因此不能区分"未变道"与"变道失败"；修状态保持前不要扩大 `npc_lane_change` 覆盖面。
 
 | 参数 | 默认值 | 含义 |
 |------|--------|------|
@@ -713,7 +719,7 @@ frame: THREE  | up: +Y | 单位: m | ENU→THREE: [x, z, -y] | ego_centered: tru
 
 ## 常见故障模式
 
-> **完整 86 行表（现象 → 根因 → 位置）见 [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)**
+> **完整 92 行表（现象 → 根因 → 位置）见 [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)**
 > —— 仓库内权威副本，按 6 类分节：控制/规划/安全层 · 感知/点云 · 仿真/几何/NPC ·
 > 仪表盘/监控/前端 · 评估器/门禁 · 框架/工具链。
 >

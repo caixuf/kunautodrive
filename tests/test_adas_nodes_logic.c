@@ -38,6 +38,7 @@
 #include "traj_safety.h"
 #include "lidar_scan.h"
 #include "radar_model.h"
+#include "radar_post.h"
 #include "lidar_contract.h"
 
 /* D2-04 / D2-05 M3: lane_match 10 字段契约 -> 抽出 helper 到 flowsim/lane_match_helpers.h。
@@ -1936,6 +1937,60 @@ static void test_traffic_density_lane_slot(void) {
 }
 
 
+/* ── D3-3: 时段 / 区域密度窗 ── */
+static void test_traffic_density_window_scale(void) {
+    TEST("traffic_density_window_scale: 半开区间命中，窗外=1.0，非法窗跳过");
+    const TrafficDensityWindow w[3] = {
+        {  0.0, 30.0, 0.5},
+        { 30.0, 60.0, 1.5},
+        { 60.0, 90.0, 0.0},
+    };
+    ASSERT(traffic_density_window_scale(-1.0, w, 3) == 1.0,
+           "before first window → baseline density");
+    ASSERT(traffic_density_window_scale(0.0, w, 3) == 0.5,
+           "window start is inclusive");
+    ASSERT(traffic_density_window_scale(29.999, w, 3) == 0.5,
+           "inside first window keeps its multiplier");
+    ASSERT(traffic_density_window_scale(30.0, w, 3) == 1.5,
+           "window end is exclusive → next window applies");
+    ASSERT(traffic_density_window_scale(59.999, w, 3) == 1.5,
+           "inside second window keeps its multiplier");
+    ASSERT(traffic_density_window_scale(60.0, w, 3) == 0.0,
+           "explicit 0 multiplier disables spawn in that window");
+    ASSERT(traffic_density_window_scale(90.0, w, 3) == 1.0,
+           "after last window → baseline density");
+
+    const TrafficDensityWindow bad[2] = {
+        {80.0, 70.0, 2.0},   /* end < start */
+        {10.0, 20.0, -1.0},  /* negative multiplier */
+    };
+    ASSERT(traffic_density_window_scale(80.0, bad, 2) == 1.0,
+           "invalid (end<start) window must be ignored");
+    ASSERT(traffic_density_window_scale(15.0, bad, 2) == 0.0,
+           "negative multiplier must clamp to 0 (never negative density)");
+    ASSERT(traffic_density_window_scale(10.0, NULL, 0) == 1.0,
+           "no windows → baseline");
+    PASS();
+}
+
+static void test_traffic_density_seg_spawn_count_scaled(void) {
+    TEST("traffic_density_seg_spawn_count_scaled: 倍率精确缩放 spawn 数");
+    /* 1000m 段、10 veh/km → spacing 100m → 基线 10 辆 */
+    ASSERT_EQ(traffic_density_seg_spawn_count_scaled(1000.0, 100.0, 1.0), 10,
+              "scale 1.0 must match the unscaled count");
+    ASSERT_EQ(traffic_density_seg_spawn_count_scaled(1000.0, 100.0, 2.0), 20,
+              "scale 2.0 must double the spawn count");
+    ASSERT_EQ(traffic_density_seg_spawn_count_scaled(1000.0, 100.0, 0.5), 5,
+              "scale 0.5 must halve the spawn count");
+    ASSERT_EQ(traffic_density_seg_spawn_count_scaled(1000.0, 100.0, 0.0), 0,
+              "scale 0 must disable spawning");
+    ASSERT_EQ(traffic_density_seg_spawn_count_scaled(1000.0, 100.0, -1.0), 0,
+              "negative scale must not spawn");
+    ASSERT_EQ(traffic_density_seg_spawn_count_scaled(1000.0, 100.0, NAN), 0,
+              "NaN scale must not spawn");
+    PASS();
+}
+
 /* ══════════════════════════════════════════════════════════════
  * L3-P2 冗余：毫米波雷达观测模型（radar_model.h）
  *
@@ -2037,6 +2092,147 @@ static void test_radar_range_rate_sign(void) {
     PASS();
 }
 
+/* ── 雷达后处理：RadarFrame → ObstacleList（方向一：让雷达目标进感知链）── */
+
+static RadarFrame radar_frame_one(float range_m, float az_deg, float rate_mps,
+                                  float rcs, uint32_t frame_id) {
+    RadarFrame f;
+    memset(&f, 0, sizeof(f));
+    f.frame_id = frame_id;
+    f.timestamp_us = 123456u;
+    f.count = 1;
+    f.targets[0].range_m = range_m;
+    f.targets[0].azimuth_deg = az_deg;
+    f.targets[0].range_rate_mps = rate_mps;
+    f.targets[0].rcs_dbsm = rcs;
+    return f;
+}
+
+/* 正前方：车体系 x = range，y = 0；相对速度沿视线=径向速度 */
+static void test_radar_post_ahead_maps_to_body_frame(void) {
+    TEST("radar_post: 正前方目标 → body (x=r, y=0)，vx=range_rate");
+    RadarFrame f = radar_frame_one(50.0f, 0.0f, -10.0f, 6.0f, 7u);
+    ObstacleList out;
+    const uint32_t n = radar_frame_to_obstacles(&f, 200.0, &out);
+    ASSERT_EQ(n, 1, "one valid radar target must yield one obstacle");
+    ASSERT_EQ(out.count, 1, "list count must match returned count");
+    ASSERT_EQ(out.frame_id, 7u, "frame id must be carried through");
+    ASSERT_EQ(out.timestamp_us, 123456u, "timestamp must be carried through");
+    ASSERT_NEAR((double)out.obstacles[0].x, 50.0, 0.01, "x must be range ahead");
+    ASSERT_NEAR((double)out.obstacles[0].y, 0.0, 0.01, "y must be 0 for az=0");
+    ASSERT_NEAR((double)out.obstacles[0].vx, -10.0, 0.01,
+                "range_rate along LOS must become body vx");
+    ASSERT_NEAR((double)out.obstacles[0].vy, 0.0, 0.01, "vy must be 0 for az=0");
+    PASS();
+}
+
+/* 方位正 = 左（+y）：az=+30° 时 y > 0，且 x/y 满足极坐标 */
+static void test_radar_post_azimuth_sign(void) {
+    TEST("radar_post: azimuth 正 = 左（+y），x/y 满足极坐标");
+    RadarFrame f = radar_frame_one(10.0f, 30.0f, 0.0f, 6.0f, 1u);
+    ObstacleList out;
+    ASSERT_EQ(radar_frame_to_obstacles(&f, 200.0, &out), 1,
+              "target must be converted");
+    const double expect_x = 10.0 * cos(30.0 * M_PI / 180.0);
+    const double expect_y = 10.0 * sin(30.0 * M_PI / 180.0);
+    ASSERT_NEAR((double)out.obstacles[0].x, expect_x, 0.01,
+                "x must follow r*cos(az)");
+    ASSERT_NEAR((double)out.obstacles[0].y, expect_y, 0.01,
+                "positive azimuth (left) must map to +y");
+    ASSERT(out.obstacles[0].y > 0.0f, "left target must have y > 0");
+    PASS();
+}
+
+/* 置信度：随距离单调不增；弱 RCS 更低；恒在 [0,1] */
+static void test_radar_post_confidence_monotonic(void) {
+    TEST("radar_post: confidence 随距离单调不增 / 弱 RCS 更低");
+    const float near_c = radar_obstacle_confidence(10.0f, 200.0f, 6.0f);
+    const float mid_c  = radar_obstacle_confidence(100.0f, 200.0f, 6.0f);
+    const float far_c  = radar_obstacle_confidence(190.0f, 200.0f, 6.0f);
+    ASSERT(near_c > mid_c && mid_c > far_c,
+           "confidence must decrease monotonically with range");
+    ASSERT(radar_obstacle_confidence(10.0f, 200.0f, -5.0f) <
+           radar_obstacle_confidence(10.0f, 200.0f, 6.0f),
+           "weak RCS target must have lower confidence");
+    ASSERT(near_c >= 0.0f && near_c <= 1.0f, "confidence must stay in [0,1]");
+    ASSERT_EQ(radar_obstacle_confidence(10.0f, 0.0, 6.0f), 0.0f,
+              "invalid range_max must yield 0 confidence");
+    PASS();
+}
+
+/* 不伪造宽/长/类型/车道；ID 落在雷达命名空间 */
+static void test_radar_post_does_not_fabricate_unknowns(void) {
+    TEST("radar_post: 宽度/长度/类型/车道为未知，ID 带雷达命名空间");
+    RadarFrame f = radar_frame_one(20.0f, -5.0f, -3.0f, 3.0f, 9u);
+    ObstacleList out;
+    ASSERT_EQ(radar_frame_to_obstacles(&f, 200.0, &out), 1, "must convert");
+    const Obstacle* o = &out.obstacles[0];
+    ASSERT_EQ(o->width, 0.0f, "width must stay unknown (0), not fabricated");
+    ASSERT_EQ(o->length, 0.0f, "length must stay unknown (0), not fabricated");
+    ASSERT_EQ(o->type, OBJ_TYPE_UNKNOWN, "radar has no type information");
+    ASSERT_EQ(o->lane_id, -1, "lane id must stay unassigned");
+    ASSERT_EQ(o->obs_lane_match_hint, 0, "radar must not emit lane hint");
+    ASSERT((o->id & RADAR_OBSTACLE_ID_NAMESPACE) != 0u,
+           "radar obstacle id must carry the radar namespace bit");
+    PASS();
+}
+
+/* 容量守卫 / 空帧 / 非法输入：不得越界读 targets[64..]，不得写脏 out */
+static void test_radar_post_capacity_and_invalid(void) {
+    TEST("radar_post: count>64 截断，空帧/空指针安全");
+    RadarFrame f;
+    memset(&f, 0, sizeof(f));
+    f.count = 200u;                       /* 恶意/损坏帧：超过 targets[64] */
+    for (int i = 0; i < RADAR_MAX_TARGETS; i++) {
+        f.targets[i].range_m = 10.0f;
+    }
+    f.targets[0].azimuth_deg = 0.0f;
+    ObstacleList out;
+    ASSERT_EQ(radar_frame_to_obstacles(&f, 200.0, &out), RADAR_MAX_TARGETS,
+              "converter must clamp to RADAR_MAX_TARGETS, never read past array");
+    ASSERT_EQ(radar_frame_to_obstacles(NULL, 200.0, &out), 0,
+              "null frame must yield 0");
+    ASSERT_EQ(radar_frame_to_obstacles(&f, 200.0, NULL), 0,
+              "null out must yield 0");
+    f.count = 0;
+    ASSERT_EQ(radar_frame_to_obstacles(&f, 200.0, &out), 0, "empty frame → 0");
+    ASSERT_EQ(out.count, 0, "empty frame must zero the output list");
+    PASS();
+}
+
+/* 并入感知输出：同一目标不得因多一个模态而变成两个 */
+static void test_radar_post_merge_dedupes_and_appends(void) {
+    TEST("radar_post: 并入感知时按距离去重，不同目标追加");
+    ObstacleList out;
+    memset(&out, 0, sizeof(out));
+    out.frame_id = 3u;
+    out.count = 1;
+    out.obstacles[0].x = 10.0f;
+    out.obstacles[0].y = 0.0f;
+    out.obstacles[0].confidence = 0.9f;
+
+    ObstacleList radar;
+    memset(&radar, 0, sizeof(radar));
+    radar.count = 3;
+    radar.obstacles[0].x = 11.0f; radar.obstacles[0].y = 0.0f;   /* duplicate */
+    radar.obstacles[1].x = 20.0f; radar.obstacles[1].y = 0.0f;   /* new */
+    radar.obstacles[2].x = 20.2f; radar.obstacles[2].y = 0.3f;   /* duplicate of [1] */
+
+    ASSERT_EQ(radar_merge_into_obstacles(&radar, &out, 2.5f), 1,
+              "only the genuinely new target may be appended");
+    ASSERT_EQ(out.count, 2, "merged count must be 2 (1 existing + 1 new)");
+    ASSERT_NEAR((double)out.obstacles[1].x, 20.0, 0.01, "new target appended in order");
+    ASSERT_EQ(out.obstacles[0].confidence, 0.9f,
+              "existing perception obstacle must be untouched");
+
+    /* 容量守卫 */
+    out.count = 128;
+    ASSERT_EQ(radar_merge_into_obstacles(&radar, &out, 0.0f), 0,
+              "full ObstacleList (128) must not be overrun");
+    ASSERT_EQ(radar_merge_into_obstacles(NULL, &out, 2.5f), 0, "null radar → 0");
+    PASS();
+}
+
 /* 冗余核心断言：恶劣天气下雷达仍报同一目标（相机可见度会被乘性衰减，
  * 雷达只降 RCS 幅度）—— 这正是"任一模态退化时剩余模态仍能支撑安全"。 */
 static void test_radar_survives_bad_weather(void) {
@@ -2129,6 +2325,14 @@ int main(void) {
     test_radar_target_capacity();
     test_radar_deterministic();
 
+    printf("\n═══ Radar post (RadarFrame → ObstacleList，方向一接线) ═══\n");
+    test_radar_post_ahead_maps_to_body_frame();
+    test_radar_post_azimuth_sign();
+    test_radar_post_confidence_monotonic();
+    test_radar_post_does_not_fabricate_unknowns();
+    test_radar_post_capacity_and_invalid();
+    test_radar_post_merge_dedupes_and_appends();
+
     printf("\n═══ Actuator PWM (ControlCmd → PWM mapping) ═══\n");
     test_pwm_throttle_full_forward();
     test_pwm_throttle_full_reverse();
@@ -2207,6 +2411,8 @@ int main(void) {
     test_traffic_density_seg_spawn_count();
     test_traffic_density_compute_s_local();
     test_traffic_density_lane_slot();
+    test_traffic_density_window_scale();
+    test_traffic_density_seg_spawn_count_scaled();
 
     printf("\n═══ LiDAR Observation Model (3D scan / capacity guard) ═══\n");
     test_lidar_scan_azimuth_fov_bounds();

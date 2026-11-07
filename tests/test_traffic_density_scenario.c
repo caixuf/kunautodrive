@@ -160,13 +160,64 @@ static void test_traffic_density_serialize_when_disabled(void) {
     PASS();
 }
 
+/* ── Test: D3-3 时段 / 区域窗解析 + 非法窗跳过 + 序列化不丢字段 ── */
+static void test_traffic_density_parse_windows(void) {
+    TEST("traffic_density: time_windows/zones 解析，非法窗跳过，序列化保留");
+    const char* path = "/tmp/_td_windows.json";
+    write_file(path,
+        "{\"name\":\"td_windows\",\"actors\":[],"
+        "\"traffic_density\":{"
+            "\"cars_per_km\":12,"
+            "\"time_windows\":["
+                "{\"start\":0,\"end\":30,\"multiplier\":0.5},"
+                "{\"start\":30,\"end\":60,\"multiplier\":1.5},"
+                "{\"start\":60,\"end\":50,\"multiplier\":2.0},"
+                "{\"start\":70,\"end\":80}"
+            "],"
+            "\"zones\":["
+                "{\"start\":0,\"end\":100,\"multiplier\":2.0}"
+            "]"
+        "}}");
+    ScenarioConfig* sc = scenario_load(path);
+    ASSERT(sc != NULL, "scenario_load returned NULL");
+    if (!sc) { unlink(path); return; }
+
+    ASSERT(sc->traffic_density.time_window_count == 2,
+           "invalid windows (end<start / missing multiplier) must be skipped, got %d",
+           sc->traffic_density.time_window_count);
+    ASSERT(sc->traffic_density.time_windows[0].start == 0.0 &&
+           sc->traffic_density.time_windows[0].end == 30.0 &&
+           sc->traffic_density.time_windows[0].multiplier == 0.5,
+           "first time window must round-trip exactly");
+    ASSERT(sc->traffic_density.time_windows[1].multiplier == 1.5,
+           "second time window multiplier must be 1.5");
+    ASSERT(sc->traffic_density.zone_count == 1, "one valid zone expected");
+    ASSERT(sc->traffic_density.zones[0].end == 100.0 &&
+           sc->traffic_density.zones[0].multiplier == 2.0,
+           "zone must round-trip exactly");
+
+    char* js = scenario_to_json(sc);
+    ASSERT(js != NULL, "scenario_to_json returned NULL");
+    if (js) {
+        ASSERT(strstr(js, "\"time_windows\"") != NULL,
+               "serialized JSON must keep time_windows (no silent field loss)");
+        ASSERT(strstr(js, "\"zones\"") != NULL,
+               "serialized JSON must keep zones (no silent field loss)");
+        free(js);
+    }
+    scenario_free(sc);
+    unlink(path);
+    PASS();
+}
+
 int main(void) {
-    printf("═══ traffic_density scenario 契约 (D3-2) ═══\n");
+    printf("═══ traffic_density scenario 契约 (D3-2/D3-3) ═══\n");
     test_traffic_density_parse_full();
     test_traffic_density_parse_absent();
     test_traffic_density_parse_type_errors();
     test_traffic_density_serialize_when_enabled();
     test_traffic_density_serialize_when_disabled();
+    test_traffic_density_parse_windows();
     printf("\n════════════════════════════════════\n");
     printf("  Total: %d  ✅ Passed: %d  ❌ Failed: %d\n",
            g_passed + g_failed, g_passed, g_failed);

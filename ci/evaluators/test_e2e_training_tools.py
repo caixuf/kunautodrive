@@ -474,6 +474,9 @@ class E2ETrainingToolsTest(unittest.TestCase):
                         "evaluator_result": "PASS",
                         "shadow_speed_mae": 1.2,
                         "shadow_n": 120,
+                        "shadow_steer_mae": 0.03,
+                        "shadow_ade_mean": 1.0,
+                        "shadow_fde_mean": 1.8,
                     }
                 )
                 + "\n",
@@ -533,6 +536,132 @@ class E2ETrainingToolsTest(unittest.TestCase):
             self.assertEqual(promote_result.returncode, 0, promote_result.stderr)
             self.assertEqual(runtime.read_text(encoding="utf-8"), "artifact-model\n")
             self.assertIn("promoted", promote_result.stdout)
+
+    @staticmethod
+    def _write_promotable_artifact(work: Path, *, steer=0.03, ade=1.0, manifest=True):
+        """构造 promote_gate 可判定的最小 artifact（manifest + shadow + closed loop）。"""
+        artifact = work / "models" / "tiny_v001"
+        artifact.mkdir(parents=True)
+        (artifact / "model.txt").write_text("artifact-model\n", encoding="utf-8")
+        if manifest:
+            (artifact / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "backend": "tiny_mlp",
+                        "model_format": "flowengine-tinymlp-v3",
+                        "model_path": "model.txt",
+                        "dataset": {"sample_count": 12, "scenario": "unit"},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        (artifact / "shadow_eval.json").write_text(
+            json.dumps(
+                {
+                    "schema": "flowengine.shadow_eval.v1",
+                    "created_unix_ms": int(time.time() * 1000),
+                    "evaluator_result": "PASS",
+                    "shadow_speed_mae": 1.2,
+                    "shadow_n": 120,
+                    "shadow_steer_mae": steer,
+                    "shadow_ade_mean": ade,
+                    "shadow_fde_mean": 1.8,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (artifact / "closed_loop_eval.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "flowengine.e2e_closed_loop.v1",
+                    "created_unix_ms": int(time.time() * 1000),
+                    "evaluator_result": "PASS",
+                    "scenarios": {
+                        "cruise": {"result": "PASS"},
+                        "lead": {"result": "PASS"},
+                        "emergency": {"result": "PASS"},
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return artifact
+
+    def test_promote_gate_rejects_steer_and_trajectory_drift(self):
+        """方向四/五：promote 不能只看速度 MAE。
+
+        横向偏差 / 轨迹误差超阈值必须拒绝 —— 否则"速度像 teacher、方向却跑偏"
+        的模型能混进 runtime；这正是 shadow verdict 与 promote 口径不一致的漏洞。
+        """
+        for label, kwargs, needle in (
+            ("steer", {"steer": 0.15}, "shadow_steer_mae"),
+            ("ade", {"ade": 3.5}, "shadow_ade_mean"),
+        ):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                work = Path(tmp)
+                runtime = work / "runtime" / "model.txt"
+                runtime.parent.mkdir(parents=True)
+                runtime.write_text("old-runtime\n", encoding="utf-8")
+                artifact = self._write_promotable_artifact(work, **kwargs)
+
+                result = subprocess.run(
+                    [sys.executable, str(ROOT / "tools/modelctl.py"), "promote",
+                     str(artifact), "--runtime-model", str(runtime)],
+                    cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(needle, result.stdout + result.stderr)
+                self.assertEqual(runtime.read_text(encoding="utf-8"), "old-runtime\n",
+                                 "rejected artifact must NOT overwrite runtime model")
+
+    def test_ota_push_cannot_bypass_promote_gate(self):
+        """方向五：OTA 是上车的最后一公里，不能被 `ota push` 绕过门禁。"""
+        ota_cmd = Path("/tmp/flow_ota_cmd.json")
+        if ota_cmd.exists():
+            ota_cmd.unlink()
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+
+            # 1) 裸模型文件（无 manifest）→ 拒绝，且不写 OTA 命令
+            unverified = work / "models" / "raw"
+            unverified.mkdir(parents=True)
+            (unverified / "model.txt").write_text("raw-model\n", encoding="utf-8")
+            rejected = subprocess.run(
+                [sys.executable, str(ROOT / "tools/modelctl.py"), "ota", "push",
+                 str(unverified / "model.txt")],
+                cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            self.assertNotEqual(rejected.returncode, 0, rejected.stdout + rejected.stderr)
+            self.assertIn("manifest.json", rejected.stdout + rejected.stderr)
+            self.assertFalse(ota_cmd.exists(), "rejected push must not write an OTA command")
+
+            # 1b) 人工 --force 逃生口：放行，但必须把"绕过了什么"打到 stderr
+            forced = subprocess.run(
+                [sys.executable, str(ROOT / "tools/modelctl.py"), "ota", "push",
+                 str(unverified / "model.txt"), "--force"],
+                cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            self.assertEqual(forced.returncode, 0, forced.stdout + forced.stderr)
+            self.assertIn("OVERRIDDEN", forced.stdout + forced.stderr)
+            self.assertTrue(ota_cmd.exists(), "--force must still write the OTA command")
+            ota_cmd.unlink()
+
+            # 2) 通过 promote gate 的 artifact → 放行并写命令
+            artifact = self._write_promotable_artifact(work)
+            accepted = subprocess.run(
+                [sys.executable, str(ROOT / "tools/modelctl.py"), "ota", "push",
+                 str(artifact / "model.txt"), "--id", "tiny_v001"],
+                cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+            self.assertTrue(ota_cmd.exists(), "accepted push must write an OTA command")
+            payload = json.loads(ota_cmd.read_text(encoding="utf-8"))
+            self.assertEqual(payload.get("cmd"), "load")
+            self.assertEqual(payload.get("id"), "tiny_v001")
+            ota_cmd.unlink()
 
     def test_train_demo_model_exports_trains_and_evaluates_tiny(self):
         with tempfile.TemporaryDirectory() as tmp:

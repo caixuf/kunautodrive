@@ -114,7 +114,7 @@
         },
         {
           "topic": "sensor/gps",
-          "type": "GpsFrame",
+          "type": "GpsData",
           "qos": {
             "depth": 1,
             "policy": "drop_oldest",
@@ -124,7 +124,7 @@
         },
         {
           "topic": "sensor/camera",
-          "type": "CameraFrame",
+          "type": "LidarFrame",
           "qos": {
             "depth": 1,
             "policy": "drop_oldest",
@@ -153,7 +153,8 @@
         "sensor/lidar",
         "sensor/lidar_points",
         "road/geometry",
-        "localization/lane_match"
+        "localization/lane_match",
+        "sensor/radar"
       ],
       "publish": [
         {
