@@ -1966,27 +1966,44 @@ static void test_traffic_density_window_scale(void) {
     };
     ASSERT(traffic_density_window_scale(80.0, bad, 2) == 1.0,
            "invalid (end<start) window must be ignored");
-    ASSERT(traffic_density_window_scale(15.0, bad, 2) == 0.0,
-           "negative multiplier must clamp to 0 (never negative density)");
+    ASSERT(traffic_density_window_scale(15.0, bad, 2) == 1.0,
+           "negative multiplier window is invalid → baseline (parser skips it too)");
     ASSERT(traffic_density_window_scale(10.0, NULL, 0) == 1.0,
            "no windows → baseline");
+
+    /* 时段 × 区域组合：启动期与运行期共用同一 helper。 */
+    const TrafficDensityWindow tw[1] = {{0.0, 10.0, 0.5}};
+    const TrafficDensityWindow zs[1] = {{0.0, 100.0, 2.0}};
+    ASSERT(traffic_density_combined_scale(tw, 1, 5.0, zs, 1, 50.0) == 1.0,
+           "both windows hit → 0.5 * 2.0 = 1.0");
+    ASSERT(traffic_density_combined_scale(tw, 1, 20.0, zs, 1, 50.0) == 2.0,
+           "time window missed → baseline * zone = 2.0");
+    ASSERT(traffic_density_combined_scale(tw, 1, 5.0, zs, 1, 200.0) == 0.5,
+           "zone window missed → time * baseline = 0.5");
     PASS();
 }
 
-static void test_traffic_density_seg_spawn_count_scaled(void) {
-    TEST("traffic_density_seg_spawn_count_scaled: 倍率精确缩放 spawn 数");
+/* 生产路径 = effective_spacing → seg_spawn_count；这里用同一组合验算。 */
+static int density_count_scaled(double L, double spacing_m, double scale) {
+    const double eff = traffic_density_effective_spacing(spacing_m, scale);
+    if (eff <= 0.0) return 0;
+    return traffic_density_seg_spawn_count(L, eff);
+}
+
+static void test_traffic_density_scaled_spawn_count(void) {
+    TEST("density scale: 倍率经 effective_spacing 精确缩放 spawn 数与落点");
     /* 1000m 段、10 veh/km → spacing 100m → 基线 10 辆 */
-    ASSERT_EQ(traffic_density_seg_spawn_count_scaled(1000.0, 100.0, 1.0), 10,
+    ASSERT_EQ(density_count_scaled(1000.0, 100.0, 1.0), 10,
               "scale 1.0 must match the unscaled count");
-    ASSERT_EQ(traffic_density_seg_spawn_count_scaled(1000.0, 100.0, 2.0), 20,
+    ASSERT_EQ(density_count_scaled(1000.0, 100.0, 2.0), 20,
               "scale 2.0 must double the spawn count");
-    ASSERT_EQ(traffic_density_seg_spawn_count_scaled(1000.0, 100.0, 0.5), 5,
+    ASSERT_EQ(density_count_scaled(1000.0, 100.0, 0.5), 5,
               "scale 0.5 must halve the spawn count");
-    ASSERT_EQ(traffic_density_seg_spawn_count_scaled(1000.0, 100.0, 0.0), 0,
+    ASSERT_EQ(density_count_scaled(1000.0, 100.0, 0.0), 0,
               "scale 0 must disable spawning");
-    ASSERT_EQ(traffic_density_seg_spawn_count_scaled(1000.0, 100.0, -1.0), 0,
+    ASSERT_EQ(density_count_scaled(1000.0, 100.0, -1.0), 0,
               "negative scale must not spawn");
-    ASSERT_EQ(traffic_density_seg_spawn_count_scaled(1000.0, 100.0, NAN), 0,
+    ASSERT_EQ(density_count_scaled(1000.0, 100.0, NAN), 0,
               "NaN scale must not spawn");
 
     /* 计数与落点必须共用同一等效间距：scale=2 时第 19 辆应落在 950m，
@@ -1998,7 +2015,7 @@ static void test_traffic_density_seg_spawn_count_scaled(void) {
     ASSERT(traffic_density_effective_spacing(100.0, 0.0) == 0.0,
            "zero scale must yield 0 spacing (no placement)");
     const double eff = traffic_density_effective_spacing(100.0, 2.0);
-    const int n_scaled = traffic_density_seg_spawn_count_scaled(1000.0, 100.0, 2.0);
+    const int n_scaled = density_count_scaled(1000.0, 100.0, 2.0);
     ASSERT(n_scaled == 20, "scaled count must be 20");
     ASSERT((double)(n_scaled - 1) * eff <= 1000.0,
            "last placement index must stay inside the segment (no end clamp)");
@@ -2426,7 +2443,7 @@ int main(void) {
     test_traffic_density_compute_s_local();
     test_traffic_density_lane_slot();
     test_traffic_density_window_scale();
-    test_traffic_density_seg_spawn_count_scaled();
+    test_traffic_density_scaled_spawn_count();
 
     printf("\n═══ LiDAR Observation Model (3D scan / capacity guard) ═══\n");
     test_lidar_scan_azimuth_fov_bounds();

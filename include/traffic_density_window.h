@@ -26,20 +26,37 @@ typedef struct {
     double multiplier;
 } TrafficDensityWindow;
 
+/** 窗口合法性**唯一判据**：场景解析器与运行时 scale 共用，避免
+ * "加载时接受、运行时按另一套规则忽略"（负倍率曾一处丢弃、一处钳到 0）。 */
+static inline int traffic_density_window_valid(const TrafficDensityWindow* w) {
+    if (!w) return 0;
+    if (!isfinite(w->start) || !isfinite(w->end) || !isfinite(w->multiplier))
+        return 0;
+    if (w->end < w->start) return 0;
+    if (w->multiplier < 0.0) return 0;
+    return 1;
+}
+
 static inline double traffic_density_window_scale(
     double t, const TrafficDensityWindow* windows, int n_windows
 ) {
     if (!windows || n_windows <= 0) return 1.0;
     for (int i = 0; i < n_windows; i++) {
         const TrafficDensityWindow* w = &windows[i];
-        if (!isfinite(w->start) || !isfinite(w->end) || !isfinite(w->multiplier))
-            continue;
-        if (w->end < w->start) continue;          /* 非法窗口：忽略 */
-        if (t >= w->start && t < w->end) {
-            return (w->multiplier < 0.0) ? 0.0 : w->multiplier;
-        }
+        if (!traffic_density_window_valid(w)) continue;
+        if (t >= w->start && t < w->end) return w->multiplier;
     }
     return 1.0;
+}
+
+/** 时段窗 × 区域窗的组合倍率。启动期 spawn 与运行期泊松必须共用这一处，
+ * 否则两条路径的"窗外=1.0 / 首个命中"口径会再次分叉。 */
+static inline double traffic_density_combined_scale(
+    const TrafficDensityWindow* time_windows, int n_time, double t,
+    const TrafficDensityWindow* zones, int n_zones, double s
+) {
+    return traffic_density_window_scale(t, time_windows, n_time)
+         * traffic_density_window_scale(s, zones, n_zones);
 }
 
 #ifdef __cplusplus

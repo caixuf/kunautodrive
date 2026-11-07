@@ -39,6 +39,9 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from shadow_contract import SHADOW_SIDECAR_KEYS  # noqa: E402
+
 DEFAULT_SAMPLES = Path("/tmp/flow_train_samples.jsonl")
 TINY_SIDECAR = Path("/tmp/flow_tiny_inference.json")
 DEFAULT_RUNS_DIR = ROOT / "runs"
@@ -134,25 +137,7 @@ def build_shadow_pipeline(model_file: Path) -> Path:
 # 同集合** —— 门禁读什么，这里就得写什么；少写一个字段会让正规学习闭环产物
 # 恒被 promote 拒绝（2026-11-07 实测：只写速度三项时，新增的
 # shadow_steer_mae 缺失判据把 learning_loop 的 artifact 全部挡下）。
-SHADOW_SIDECAR_KEYS = (
-    "shadow_speed_mae",
-    "shadow_speed_rmse",
-    "shadow_speed_mae_settled",
-    "shadow_speed_rmse_settled",
-    "shadow_settled_n",
-    "shadow_n",
-    "shadow_steer_mae",
-    "shadow_steer_rmse",
-    "shadow_steer_n",
-    "shadow_ade",
-    "shadow_fde",
-    "shadow_ade_mean",
-    "shadow_fde_mean",
-    "shadow_gate_supported",
-    "model",
-)
-
-
+# 集合唯一事实源 = tools/shadow_contract.py（modelctl 也 import 它）。
 def shadow_eval_summary(sidecar: dict) -> dict:
     """从 inference sidecar 抽取 promote 门禁消费的字段（纯函数，可单测）。"""
     return {k: sidecar[k] for k in SHADOW_SIDECAR_KEYS if k in sidecar}

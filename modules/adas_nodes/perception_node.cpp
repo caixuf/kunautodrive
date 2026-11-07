@@ -343,6 +343,24 @@ static void on_sensor_radar(const Message* msg, void* user_data) {
     pthread_mutex_unlock(&g.radar_mtx);
 }
 
+/* 取一帧"新到达"的雷达并转成车体系 ObstacleList。
+ * 返回 false = 本帧没有新雷达（含 enable_radar_fusion=0）。last_radar_seq 的
+ * 推进收敛在这里：两条使用路径（LiDAR 断流单独出帧 / 正常帧去重并入）共用
+ * 同一份新鲜度语义，避免两处各写一遍加锁+比较。 */
+static bool take_new_radar(ObstacleList* out) {
+    if (!g.enable_radar_fusion || !out) return false;
+    uint32_t rseq;
+    RadarFrame rf;
+    pthread_mutex_lock(&g.radar_mtx);
+    rf = g.radar;
+    rseq = g.radar_seq;
+    pthread_mutex_unlock(&g.radar_mtx);
+    if (rseq == g.last_radar_seq) return false;
+    g.last_radar_seq = rseq;
+    radar_frame_to_obstacles(&rf, g.radar_max_range_m, out);
+    return true;
+}
+
 /* 发布一帧障碍物（统一入口）：whole-publish lane hint + 序列化 + publish。
  * 常规路径与"LiDAR 掉线、仅雷达"路径共用，避免两处各写一份 hint/序列化逻辑
  * （本仓库已多次因多发点漏字段/漏 hint 栽跟头）。 */
@@ -466,28 +484,15 @@ protected:
                      * 其新鲜度不依赖 LiDAR —— 这是"任一模态失效时剩余模态仍能
                      * 支撑安全"在感知出口上的实际兑现。只在雷达确实有目标时发，
                      * 避免在点云仅延迟一帧时用空列表清掉跟踪。 */
-                    if (g.enable_radar_fusion) {
-                        uint32_t rseq;
-                        RadarFrame rf;
-                        pthread_mutex_lock(&g.radar_mtx);
-                        rf = g.radar;
-                        rseq = g.radar_seq;
-                        pthread_mutex_unlock(&g.radar_mtx);
-                        if (rseq != g.last_radar_seq) {
-                            g.last_radar_seq = rseq;
-                            ObstacleList radar_only;
-                            radar_frame_to_obstacles(&rf, g.radar_max_range_m,
-                                                      &radar_only);
-                            radar_only.frame_id = g.frame_id;
-                            radar_only.timestamp_us = clock_now_us();
-                            if (radar_only.count > 0) {
-                                g.last_obs_list = radar_only;
-                                g.has_last_obs = 1;
-                                publish_obstacles(&radar_only);
-                                g.frame_id++;
-                                continue;
-                            }
-                        }
+                    ObstacleList radar_only;
+                    if (take_new_radar(&radar_only) && radar_only.count > 0) {
+                        radar_only.frame_id = g.frame_id;
+                        radar_only.timestamp_us = clock_now_us();
+                        g.last_obs_list = radar_only;
+                        g.has_last_obs = 1;
+                        publish_obstacles(&radar_only);
+                        g.frame_id++;
+                        continue;
                     }
                     g.frame_id++;
                     continue;
@@ -565,25 +570,15 @@ protected:
             /* 方向一：雷达冗余并入（enable_radar_fusion 默认 0 → 零行为变化）。
              * 按车体系距离去重：与已有 LiDAR/视觉目标重合的雷达点不再追加，
              * 保证"多一个模态"不会把一个物理目标变成两个障碍物。 */
-            if (g.enable_radar_fusion) {
-                uint32_t rseq;
-                RadarFrame rf;
-                pthread_mutex_lock(&g.radar_mtx);
-                rf = g.radar;
-                rseq = g.radar_seq;
-                pthread_mutex_unlock(&g.radar_mtx);
-                if (rseq != g.last_radar_seq) {
-                    g.last_radar_seq = rseq;
-                    ObstacleList radar_obs;
-                    radar_frame_to_obstacles(&rf, g.radar_max_range_m, &radar_obs);
-                    const uint32_t added = radar_merge_into_obstacles(
-                        &radar_obs, &obs_list, g.radar_dedupe_radius_m);
-                    g.radar_merged_total += added;
-                    if (added > 0 && (g.frame_id % 100u) == 0) {
-                        LOG_INFO("perception",
-                                 "radar redundancy: +%u target(s) (total=%u, list=%u)",
-                                 added, g.radar_merged_total, obs_list.count);
-                    }
+            ObstacleList radar_obs;
+            if (take_new_radar(&radar_obs)) {
+                const uint32_t added = radar_merge_into_obstacles(
+                    &radar_obs, &obs_list, g.radar_dedupe_radius_m);
+                g.radar_merged_total += added;
+                if (added > 0 && (g.frame_id % 100u) == 0) {
+                    LOG_INFO("perception",
+                             "radar redundancy: +%u target(s) (total=%u, list=%u)",
+                             added, g.radar_merged_total, obs_list.count);
                 }
             }
 

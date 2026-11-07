@@ -671,27 +671,25 @@ static int flowsim_auto_populate_traffic_density(const ScenarioConfig* sc,
     const double spacing_m = traffic_density_spacing_from_density(td->cars_per_km);
     const double jitter     = (td->spawn_jitter_m > 0.0) ? td->spawn_jitter_m : 0.0;
     const bool   do_spread  = (td->lane_spread != 0);
-    /* D3-3：启动期按 t=0 所在时段窗缩放（无窗口 = 1.0，行为零变化）。 */
-    const double time_scale_start = traffic_density_window_scale(
-        0.0, td->time_windows, td->time_window_count);
-
     int spawned = 0;
     int route_segs = g.route.count();
     for (int si = 0; si < route_segs && spawned < kScenarioMaxNpc; si++) {
         const flowsim::RouteSeg& seg = g.route.seg(si);
-        /* D3-3：按本段所在 route 弧长（取段中点）查区域窗倍率。 */
-        const double zone_scale = traffic_density_window_scale(
-            seg.s_start + seg.length * 0.5, td->zones, td->zone_count);
-        const double seg_scale = time_scale_start * zone_scale;
-        int n_in_seg = traffic_density_seg_spawn_count_scaled(
-            seg.length, spacing_m, seg_scale);
-        if (n_in_seg < 1) continue;
+        /* D3-3：倍率 = 时段窗(t=0) × 区域窗(本段中点)。启动期与运行期共用
+         * traffic_density_combined_scale()，避免两条路径口径分叉。 */
+        const double seg_scale = traffic_density_combined_scale(
+            td->time_windows, td->time_window_count, 0.0,
+            td->zones, td->zone_count, seg.s_start + seg.length * 0.5);
         /* 落点间距必须与计数用**同一个**等效间距：只改循环次数不改 i*spacing，
          * 会在 scale>1 时把多出来的车全 clamp 到段尾、scale<1 时只占段前半段
          * （2026-11-07 code-review 当场抓出：计数与落点两套间距）。 */
         const double spacing_eff = traffic_density_effective_spacing(
             spacing_m, seg_scale);
         if (spacing_eff <= 0.0) continue;
+        const double raw_n = seg.length / spacing_eff;
+        const int remaining = kScenarioMaxNpc - spawned;
+        int n_in_seg = (raw_n > (double)remaining) ? remaining : (int)raw_n;
+        if (n_in_seg < 1) continue;
 
         /* 本段的同向可行驶车道表（lane_spread 的落点池）。
          *   - 负 lane id = 本仓右行地图的行进方向（正 id 在对向），故只留负 id；
@@ -2042,10 +2040,9 @@ static void step_poisson_traffic(double dt, double ego_route_s, double sim_time_
     double density_scale = 1.0;
     if (g.scenario) {
         const ScenarioTrafficDensity* td = &g.scenario->traffic_density;
-        density_scale = traffic_density_window_scale(
-                            sim_time_s, td->time_windows, td->time_window_count)
-                      * traffic_density_window_scale(
-                            ego_route_s, td->zones, td->zone_count);
+        density_scale = traffic_density_combined_scale(
+            td->time_windows, td->time_window_count, sim_time_s,
+            td->zones, td->zone_count, ego_route_s);
     }
     double arrival_prob = g.poisson_rate * density_scale * dt;
     if (arrival_prob > 1.0) arrival_prob = 1.0;

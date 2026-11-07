@@ -41,6 +41,11 @@ extern "C" {
  * 小整数 ID 撞号（消费者合并多路时靠它区分来源）。 */
 #define RADAR_OBSTACLE_ID_NAMESPACE 0x80000000u
 
+/* ObstacleList 的槽位数（与 msg/adas_msgs.msg 的 obstacles[128] 同源推导，
+ * 不在两处各写一个 128 魔数）。 */
+#define RADAR_OBSTACLE_CAPACITY \
+    (sizeof(((ObstacleList*)0)->obstacles) / sizeof(Obstacle))
+
 /**
  * 确定性置信度：距离越远越低，弱 RCS 再降一档。
  *
@@ -82,7 +87,6 @@ static inline uint32_t radar_frame_to_obstacles(const RadarFrame* frame,
 
     uint32_t cap = frame->count;
     if (cap > RADAR_MAX_TARGETS) cap = RADAR_MAX_TARGETS;
-    if (cap > 128u) cap = 128u;
 
     uint32_t n = 0;
     for (uint32_t i = 0; i < cap; i++) {
@@ -138,8 +142,8 @@ static inline uint32_t radar_merge_into_obstacles(const ObstacleList* radar,
     const float r2 = dedupe_radius_m * dedupe_radius_m;
 
     uint32_t added = 0;
-    for (uint32_t i = 0; i < radar->count && i < 128u; i++) {
-        if (out->count >= 128u) break;
+    for (uint32_t i = 0; i < radar->count && i < RADAR_OBSTACLE_CAPACITY; i++) {
+        if (out->count >= RADAR_OBSTACLE_CAPACITY) break;
         const Obstacle* cand = &radar->obstacles[i];
 
         int duplicate = 0;

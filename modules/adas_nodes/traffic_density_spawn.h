@@ -88,20 +88,11 @@ static inline double traffic_density_effective_spacing(
 ) {
     if (scale <= 0.0 || !isfinite(scale)) return 0.0;
     const double eff = spacing_m / scale;
-    return (isfinite(eff) && eff > 0.0) ? eff : 0.0;
+    /* < 1nm 的等效间距只可能来自恶意/误配倍率；返回 0 让调用方跳过，
+     * 避免 L/eff 溢出。 */
+    return (isfinite(eff) && eff >= 1e-9) ? eff : 0.0;
 }
 
-/** 带密度倍率的段内 spawn 数：等效 spacing = spacing/scale。 */
-static inline int traffic_density_seg_spawn_count_scaled(
-    double L, double spacing_m, double scale
-) {
-    const double eff = traffic_density_effective_spacing(spacing_m, scale);
-    if (eff <= 0.0) return 0;
-    int n = traffic_density_seg_spawn_count(L, eff);
-    /* 防御恶意/误配倍率把 int 撑爆；1e5/段远超实体池容量。 */
-    if (n > 100000) n = 100000;
-    return n;
-}
 
 #ifdef __cplusplus
 }

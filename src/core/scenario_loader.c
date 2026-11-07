@@ -283,17 +283,30 @@ static int parse_density_windows(const cJSON* arr,
         const cJSON* j_mult  = cJSON_GetObjectItemCaseSensitive(item, "multiplier");
         if (!cJSON_IsNumber(j_start) || !cJSON_IsNumber(j_end) ||
             !cJSON_IsNumber(j_mult)) continue;
-        const double start = j_start->valuedouble;
-        const double end   = j_end->valuedouble;
-        const double mult  = j_mult->valuedouble;
-        if (!isfinite(start) || !isfinite(end) || !isfinite(mult)) continue;
-        if (end < start || mult < 0.0) continue;
-        out[n].start = start;
-        out[n].end = end;
-        out[n].multiplier = mult;
-        n++;
+        TrafficDensityWindow w = {
+            j_start->valuedouble, j_end->valuedouble, j_mult->valuedouble };
+        /* 合法性判据与运行时 scale 共用（include/traffic_density_window.h），
+         * 不再各写一套"负倍率怎么办"。 */
+        if (!traffic_density_window_valid(&w)) continue;
+        out[n++] = w;
     }
     return n;
+}
+
+/* 序列化一组密度窗（time_windows / zones 共用）。有才写，保持
+ * "disabled 不写噪声字段"风格。 */
+static void add_density_windows(cJSON* parent, const char* key,
+                                const TrafficDensityWindow* wins, int n) {
+    if (!parent || !key || !wins || n <= 0) return;
+    cJSON* arr = cJSON_CreateArray();
+    for (int i = 0; i < n; i++) {
+        cJSON* w = cJSON_CreateObject();
+        cJSON_AddNumberToObject(w, "start", wins[i].start);
+        cJSON_AddNumberToObject(w, "end", wins[i].end);
+        cJSON_AddNumberToObject(w, "multiplier", wins[i].multiplier);
+        cJSON_AddItemToArray(arr, w);
+    }
+    cJSON_AddItemToObject(parent, key, arr);
 }
 
 ScenarioConfig* scenario_load(const char* path) {
@@ -1041,30 +1054,12 @@ char* scenario_to_json(const ScenarioConfig* scenario) {
         cJSON_AddNumberToObject(jtd, "max_npcs",           scenario->traffic_density.max_npcs);
         cJSON_AddNumberToObject(jtd, "random_seed_offset", scenario->traffic_density.random_seed_offset);
         /* D3-3：时段 / 区域窗（有才写，保持"disabled 不写噪声字段"风格）。 */
-        if (scenario->traffic_density.time_window_count > 0) {
-            cJSON* jtw = cJSON_CreateArray();
-            for (int i = 0; i < scenario->traffic_density.time_window_count; i++) {
-                const TrafficDensityWindow* w = &scenario->traffic_density.time_windows[i];
-                cJSON* jw = cJSON_CreateObject();
-                cJSON_AddNumberToObject(jw, "start", w->start);
-                cJSON_AddNumberToObject(jw, "end", w->end);
-                cJSON_AddNumberToObject(jw, "multiplier", w->multiplier);
-                cJSON_AddItemToArray(jtw, jw);
-            }
-            cJSON_AddItemToObject(jtd, "time_windows", jtw);
-        }
-        if (scenario->traffic_density.zone_count > 0) {
-            cJSON* jz = cJSON_CreateArray();
-            for (int i = 0; i < scenario->traffic_density.zone_count; i++) {
-                const TrafficDensityWindow* w = &scenario->traffic_density.zones[i];
-                cJSON* jw = cJSON_CreateObject();
-                cJSON_AddNumberToObject(jw, "start", w->start);
-                cJSON_AddNumberToObject(jw, "end", w->end);
-                cJSON_AddNumberToObject(jw, "multiplier", w->multiplier);
-                cJSON_AddItemToArray(jz, jw);
-            }
-            cJSON_AddItemToObject(jtd, "zones", jz);
-        }
+        add_density_windows(jtd, "time_windows",
+                            scenario->traffic_density.time_windows,
+                            scenario->traffic_density.time_window_count);
+        add_density_windows(jtd, "zones",
+                            scenario->traffic_density.zones,
+                            scenario->traffic_density.zone_count);
         cJSON_AddItemToObject(root, "traffic_density", jtd);
     }
 

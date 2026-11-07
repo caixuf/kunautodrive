@@ -103,6 +103,24 @@ A6（均速基线偏差 ≤2.2%）与 A9（匹配耗时 P99 0.354μs）此前已
    删除适配函数。
 8. **故障表行号漂移** → 按当前源码修正（`sensor_model_node.c:634` / `perception_node.cpp:696`）。
 
+## simplify 轮（净 -70 行）
+
+- `ci/gates/_common.py`：`params` / `node` / `strip_comments` / `strip_comments_and_dead_code`
+  收敛三个 gate 的重复实现（此前 comment 剥离有 3 份、`_params` 2 份）。
+- `tools/shadow_contract.py`：影子阈值（0.12rad / 3m / 5m）、`SHADOW_SIDECAR_KEYS`、
+  数值门禁表**单一事实源**；`modelctl` / `learning_loop` / `evaluate_shadow_mode` 全部 import。
+- `traffic_density_window.h` 增加 `traffic_density_window_valid()`（解析与运行时同判据）、
+  `traffic_density_combined_scale()`（启动期/运行期组合倍率同一处）。
+- perception 抽出 `take_new_radar()`，两条雷达路径不再各写一份加锁+序号比较。
+- 删除 `traffic_density_seg_spawn_count_scaled` 包装层；计数与落点共用 effective spacing。
+- topic 契约白名单从"类型名"改成 **(topic, type) 对**，禁止任意 topic 冒用 `raw` 绕过 IDL 校验。
+- `idl_struct_names()` 每次 main 只读一次（原为每 config 读一次）。
+- radar_post 删除死代码 cap 判断；128 槽改用 `sizeof` 从 ObstacleList 推导。
+
+**跳过（记录理由）**：雷达并入放在 perception 而非 `perception_fusion`（需要新节点/topic 与
+融合层重构，超出本轮切片）；`CI gate` 的"订阅≠消费"更深修法（运行时条件订阅 + 契约支持可选
+topic）同样留作后续。
+
 ## 本轮验证（全绿）
 
 ```bash
@@ -116,4 +134,7 @@ python3 ci/gates/model_takeover_boundary_check.py                               
 python3 ci/gates/behavior_fsm_check.py                                                # OK
 python3 ci/gates/lanelet_consistency_check.py                                         # OK
 python3 tools/scenarioctl.py validate                                                 # OK
+python3 ci/evaluators/scenario_regression.py --workers 4                              # 16/16 PASS
+python3 ci/evaluators/scenario_regression.py --only dense_npc                          # PASS（改后复跑）
+python3 ci/evaluators/scenario_regression.py --only straight_road                      # PASS（改后复跑）
 ```

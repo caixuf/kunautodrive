@@ -32,27 +32,11 @@ from typing import Any, Dict, List, Optional, Tuple
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from shadow_contract import THRESHOLDS  # noqa: E402
+
 SCHEMA_VERSION = "flowengine.shadow_matrix.v1"
-
-# 门禁阈值基准 (与 Apollo / KunAutoDrive L3 规范对齐)
-THRESHOLDS = {
-    # 影子模式精度
-    "speed_mae_warn": 2.0,      # m/s
-    "speed_mae_fail": 5.0,      # m/s
-    "steer_mae_warn_deg": 4.0,  # deg (~0.07 rad)
-    "steer_mae_fail_deg": 6.9,  # deg (~0.12 rad，Simplex 安全包络上限)
-    "ade_warn_m": 1.5,          # m (3s 时域内平均位移误差)
-    "ade_fail_m": 3.0,          # m
-    "fde_warn_m": 2.5,          # m (3s 终点位移误差)
-    "fde_fail_m": 5.0,          # m
-    "arbiter_intervention_max_pct": 10.0, # 仲裁介入率上限 (%)
-
-    # 闭环动力学与舒适度
-    "jerk_max": 12.0,           # m/s^3
-    "min_ttc_warn_s": 2.5,      # s
-    "min_ttc_fail_s": 1.2,      # s
-    "min_gap_fail_m": 0.5,      # m
-}
+# 阈值唯一事实源在 tools/shadow_contract.py（与 modelctl promote_gate 共用）。
 
 
 def _point(val: Any, label: str = "point") -> Tuple[float, float]:

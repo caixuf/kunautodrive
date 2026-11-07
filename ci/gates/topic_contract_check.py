@@ -24,6 +24,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _common import strip_comments  # noqa: E402
 
 # 发布声明的 `type` 必须是 msg_codegen 里真实存在的 IDL 结构体；否则运行时
 # 只是"声明了一个不存在的类型"。2026-11 实测抓到两处静默错配：
@@ -31,12 +34,18 @@ ROOT = Path(__file__).resolve().parents[2]
 #   sensor/camera = 代码发 LidarFrame，配置写 CameraFrame
 # 两者都不影响当前总线（JSON/二进制由代码决定），但会误导订阅方按错误类型
 # 生成反序列化代码，且 `flowctl inspect` 展示的类型是假的。
-# 例外：以下 topic 承载 cJSON 文本，`type` 只是描述性标签，不对应 IDL。
-JSON_PAYLOAD_TYPES = frozenset({
-    "raw", "text",
-    "VehicleState",       # vehicle/state：cJSON
-    "RoadGeometry",       # road/geometry：cJSON
-    "TrackedObjectList",  # perception/tracked_objects：cJSON
+#
+# 例外按 **(topic, type) 对** 登记，而不是按类型名：`raw` / `text` 是通用标签，
+# 若按类型名白名单，任何 topic 写 `raw` 都能绕过 IDL 校验。以下 topic 承载
+# cJSON 文本，`type` 只是描述性标签。
+JSON_PAYLOAD_PAIRS = frozenset({
+    ("vehicle/state", "VehicleState"),
+    ("road/geometry", "RoadGeometry"),
+    ("perception/tracked_objects", "TrackedObjectList"),
+    ("localization/lane_match", "raw"),
+    ("perception/traversability", "text"),
+    ("pem/degrade_event", "text"),
+    ("perf_diag", "text"),
 })
 
 
@@ -110,12 +119,6 @@ ARR_RE = re.compile(
 )
 
 
-def strip_comments(text: str) -> str:
-    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
-    text = re.sub(r"//.*?$", " ", text, flags=re.M)
-    return text
-
-
 def load_macros() -> dict[str, str]:
     macros: dict[str, str] = {}
     for hdr in (ROOT / "include").glob("*.h"):
@@ -168,18 +171,11 @@ def infer_profile(path: Path, cfg: dict) -> str:
     return "experimental"
 
 
-def check_config(path: Path, macros: dict[str, str]) -> list[str]:
+def check_config(path: Path, macros: dict[str, str],
+                 idl_types: set[str]) -> list[str]:
     cfg = json.loads(path.read_text())
     profile = infer_profile(path, cfg)
     errors: list[str] = []
-    idl_types = idl_struct_names()
-    if not idl_types:
-        # 空索引会让下面所有类型检查静默跳过 —— 必须把"无法判定"本身当失败，
-        # 否则 msg 改名/改语法后 gate 会退化成 no-op 而不报警。
-        errors.append(
-            f"{path.name}: 无法从 msg/adas_msgs.msg 解析出任何 struct —— "
-            f"publish type 契约检查失效（检查 msg 文件是否存在/语法是否变化）"
-        )
     for proc in cfg.get("processes") or []:
         name = proc.get("name")
         if not name:
@@ -215,9 +211,10 @@ def check_config(path: Path, macros: dict[str, str]) -> list[str]:
             if not isinstance(pub, dict):
                 continue
             decl_type = pub.get("type")
-            if not decl_type or decl_type in JSON_PAYLOAD_TYPES:
+            topic = pub.get("topic")
+            if not decl_type or (topic, decl_type) in JSON_PAYLOAD_PAIRS:
                 continue
-            if idl_types and decl_type not in idl_types:
+            if decl_type not in idl_types:
                 errors.append(
                     f"{path.name}:{name}: publish '{pub.get('topic')}' declares "
                     f"type '{decl_type}' which is not a struct in msg/adas_msgs.msg "
@@ -304,13 +301,19 @@ def main() -> int:
         else sorted((ROOT / "config").glob("pipeline*.json"))
     )
     macros = load_macros()
+    # 只读一次 / 只正则一次；空索引必须当失败，否则类型检查会静默变 no-op。
+    idl_types = idl_struct_names()
+    if not idl_types:
+        print("::error::无法从 msg/adas_msgs.msg 解析出任何 struct —— "
+              "publish type 契约检查失效（检查 msg 文件是否存在/语法是否变化）")
+        return 1
     errors: list[str] = []
     for path in configs:
         resolved = path if path.is_absolute() else ROOT / path
         if not resolved.is_file():
             errors.append(f"missing config: {path}")
             continue
-        errors.extend(check_config(resolved, macros))
+        errors.extend(check_config(resolved, macros, idl_types))
         errors.extend(check_publisher_existence(resolved, macros))
 
     if errors:

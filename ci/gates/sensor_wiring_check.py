@@ -33,24 +33,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-
-def _params(proc: dict) -> dict:
-    """processes[].params 是 JSON 编码的字符串，需二次 json.loads（兼容 dict）。"""
-    raw = proc.get("params")
-    if isinstance(raw, str):
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            return {}
-    return raw if isinstance(raw, dict) else {}
-
-
-def _node(cfg: dict, name: str) -> dict | None:
-    for proc in cfg.get("processes") or []:
-        if isinstance(proc, dict) and proc.get("name") == name:
-            return proc
-    return None
+from _common import node as _node, params as _params  # noqa: E402
 
 
 def check_config(path: Path) -> list[str]:

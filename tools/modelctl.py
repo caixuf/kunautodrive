@@ -14,6 +14,14 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from shadow_contract import (  # noqa: E402
+    PROMOTE_NUMERIC_CHECKS,
+    PROMOTE_SHADOW_MAE_MAX,
+    PROMOTE_SHADOW_MIN_N,
+    shadow_value,
+)
+
 DEFAULT_MODELS_DIR = ROOT / "models"
 DEFAULT_RUNTIME_MODEL = ROOT / "tools" / "train" / "model.txt"
 TRAINING_STATE_DIR = DEFAULT_MODELS_DIR / ".training"
@@ -277,20 +285,8 @@ def cmd_promote(args: argparse.Namespace) -> int:
 #  Promote 门禁 (Phase 2.2)
 # ─────────────────────────────────────────────────────────────
 
-# 影子推理 vs planning 的速度偏差上限 (m/s)。与 demo_evaluator.SHADOW_DELTA_WARN
-# 对齐：整段 run 的 MAE 超过 WARN 阈值说明模型系统性偏离规则控制，不该进 runtime。
-PROMOTE_SHADOW_MAE_MAX = 2.0
-# 影子评估最少样本数：少于此数说明 sidecar 几乎没跑起来，评估不可信。
-PROMOTE_SHADOW_MIN_N = 50
-# 影子转向偏差上限（弧度）。与 evaluate_shadow_mode.THRESHOLDS["steer_mae_fail_deg"]
-# (6.9° ≈ 0.12 rad) 同源，也是 safety_arbiter 的 steer 安全包络上限 —— 三个门禁
-# 必须同一个数，否则"影子评估 FAIL 的模型"能靠 promote 只看速度 MAE 混进 runtime。
-PROMOTE_SHADOW_STEER_MAE_MAX_RAD = 0.12
-# 影子轨迹误差上限（米），与 evaluate_shadow_mode 的 ade_fail/fde_fail 同源。
-# 缺这些字段的旧 sidecar 不判（速度-only backend 不产生轨迹 rollout），
-# 但一旦存在就必须达标 —— 不能靠"不写字段"绕过。
-PROMOTE_SHADOW_ADE_MAX_M = 3.0
-PROMOTE_SHADOW_FDE_MAX_M = 5.0
+# 影子门禁阈值唯一事实源 = tools/shadow_contract.py（与 evaluate_shadow_mode、
+# learning_loop 共用）。这里只保留"年龄/闭环场景"这类 promote 专属常量。
 # shadow_eval.json 最大年龄（秒）：过旧的评估结论不能为当前代码/场景背书。
 PROMOTE_SHADOW_MAX_AGE_S = 7 * 24 * 3600
 # 闭环安全评估 (eval_closed_loop.py) 结果最大年龄（秒）。
@@ -351,39 +347,23 @@ def promote_gate(artifact_dir: Path, force: bool = False) -> list[str]:
                 if n is not None and int(n) < PROMOTE_SHADOW_MIN_N:
                     errors.append(f"shadow_n={n} < {PROMOTE_SHADOW_MIN_N}，评估样本太少不可信")
 
-                # 转向偏差：影子模式与规则控制的方向一致性。缺字段 = 无法判定，
-                # 按 require 语义拒绝（此前只查速度 MAE，转向严重偏离的模型能混过去）。
-                steer = shadow.get("shadow_steer_mae")
-                if steer is None:
-                    errors.append(
-                        "shadow_steer_mae 缺失 — sidecar 未采集转向偏差，无法判定"
-                        "模型与规则控制的横向一致性"
-                    )
-                elif float(steer) > PROMOTE_SHADOW_STEER_MAE_MAX_RAD:
-                    errors.append(
-                        f"shadow_steer_mae={float(steer):.3f} rad 超阈值 "
-                        f"{PROMOTE_SHADOW_STEER_MAE_MAX_RAD:.2f} rad (≈6.9°)"
-                    )
-
-                # 轨迹误差：有则判、无则跳过（速度-only backend 不做轨迹 rollout）。
-                # 显式 None 回退，不用 dict.get(primary, fallback)：primary 键存在
-                # 但值为 null 时 get 会返回 None 而不回退（可被用来绕过阈值）。
-                ade = shadow.get("shadow_ade_mean")
-                if ade is None:
-                    ade = shadow.get("shadow_ade")
-                fde = shadow.get("shadow_fde_mean")
-                if fde is None:
-                    fde = shadow.get("shadow_fde")
-                if ade is not None and float(ade) > PROMOTE_SHADOW_ADE_MAX_M:
-                    errors.append(
-                        f"shadow_ade_mean={float(ade):.2f} m 超阈值 "
-                        f"{PROMOTE_SHADOW_ADE_MAX_M:.1f} m"
-                    )
-                if fde is not None and float(fde) > PROMOTE_SHADOW_FDE_MAX_M:
-                    errors.append(
-                        f"shadow_fde_mean={float(fde):.2f} m 超阈值 "
-                        f"{PROMOTE_SHADOW_FDE_MAX_M:.1f} m"
-                    )
+                # 横向/轨迹指标：门禁表在 shadow_contract.PROMOTE_NUMERIC_CHECKS，
+# 与 evaluate_shadow_mode 的阈值同源。missing_required=True 的项
+# （转向偏差）缺字段即"无法判定"→ 拒绝；其余有则判、无则跳过。
+                for key, alias, limit, unit, required in PROMOTE_NUMERIC_CHECKS:
+                    value = shadow_value(shadow, key, alias)
+                    if value is None:
+                        if required:
+                            errors.append(
+                                f"{key} 缺失 — sidecar 未采集该指标，无法判定"
+                                f"模型与规则控制的一致性"
+                            )
+                        continue
+                    if float(value) > limit:
+                        errors.append(
+                            f"{key}={float(value):.3f} {unit} 超阈值 "
+                            f"{limit:.2f} {unit}"
+                        )
 
     # 闭环安全评估门禁（Phase 0 — 2026-08）。
     # 影子 MAE 只衡量"像不像 teacher"，不衡量"能不能用"。模型会倒车/横漂/冲路沿/
@@ -675,25 +655,21 @@ def cmd_ota_push(args: argparse.Namespace) -> int:
         raise SystemExit(f"error: model file not found: {path}")
 
     artifact_dir = path.parent
-    has_manifest = (artifact_dir / "manifest.json").is_file()
-    if not has_manifest:
-        if not args.force:
-            raise SystemExit(
-                f"error: OTA push 拒绝：{artifact_dir} 不是可验证 artifact（缺 manifest.json）—— "
-                f"无法确认它通过了影子/闭环门禁。先 `modelctl promote` 或用 --force 人工放行"
-            )
-        print(f"  OTA GATE OVERRIDDEN (--force): {artifact_dir} 缺 manifest.json",
-              file=sys.stderr)
-    else:
+    if (artifact_dir / "manifest.json").is_file():
         gate_errors = promote_gate(artifact_dir)
-        if gate_errors:
-            if not args.force:
-                for err in gate_errors:
-                    print(f"  OTA GATE REJECT: {err}", file=sys.stderr)
-                print("error: OTA push blocked by promote gate", file=sys.stderr)
-                return 1
-            for err in gate_errors:
-                print(f"  OTA GATE OVERRIDDEN (--force): {err}", file=sys.stderr)
+    else:
+        gate_errors = [
+            f"{artifact_dir} 不是可验证 artifact（缺 manifest.json）—— 无法确认它"
+            f"通过了影子/闭环门禁。先 `modelctl promote` 或用 --force 人工放行"
+        ]
+
+    if gate_errors:
+        label = "OVERRIDDEN (--force)" if args.force else "REJECT"
+        for err in gate_errors:
+            print(f"  OTA GATE {label}: {err}", file=sys.stderr)
+        if not args.force:
+            print("error: OTA push blocked by promote gate", file=sys.stderr)
+            return 1
 
     version_id = args.id or path.stem
     cmd = f'{{"cmd":"load","id":"{version_id}","path":"{path}"}}'
