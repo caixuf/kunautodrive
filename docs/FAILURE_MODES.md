@@ -33,12 +33,12 @@
 | # | 分类 | 条数 |
 |---|------|------|
 | 1 | 控制 / 规划 / 安全层 | 36 |
-| 2 | 感知 / 点云 | 8 |
-| 3 | 仿真 / 几何 / NPC | 10 |
+| 2 | 感知 / 点云 | 9 |
+| 3 | 仿真 / 几何 / NPC | 11 |
 | 4 | 仪表盘 / 监控 / 前端 | 24 |
 | 5 | 评估器 / 门禁 | 10 |
 | 6 | 框架 / 工具链 | 5 |
-| | **合计** | **93** |
+| | **合计** | **95** |
 
 ## 1. 控制 / 规划 / 安全层
 
@@ -103,6 +103,7 @@
 | sensor 模式"预警提前量"恒为 0（且伪造 critical event） | `perception_clusters_to_obstacles` 用 `frame_id*100+ci` 当障碍物 id → 每帧都变，跨帧跟踪失效。ground_truth 模式用 `vehicle/state` 的 `oid%d` 已修，sensor 模式无 oid 可用，需给簇做跨帧关联或用 tracker 的已确认航迹 id | `perception_points.c` / `ci/evaluators/demo_evaluator.py` 预警提前量 |
 | 真点云写点越界（潜在崩溃） | 旧射线循环 `cloud.points[cloud.count++]` **无容量守卫**；`n_rays=240 < 2048` 时侥幸没炸，提高射线数/密集场景（42 actor）即越界写。修复：写满即停 + `dropped` 上报 | `lidar_scan.c` `lidar_scan_generate` |
 | **打开了雷达（`enable_radar=1`）但感知/融合根本没人消费 `sensor/radar`** —— 冗余模态等于没接，夜间/远距短板照旧 | 雷达模型（P2）只做到"生产者发得出"，全仓订阅者只有单测。修复（方向一）：① 纯转换 `radar_post.h`（RadarFrame → 车体系 ObstacleList，径向速度沿视线转成相对速度、宽/长/类型不伪造）；② `perception_node` 可选 `enable_radar_fusion=1` 并入（按距离去重，同一目标不因多模态变两个）；③ sensor 模式下 **LiDAR 无新点云时雷达单独发一帧**（真正的模态冗余）；④ `sensor_wiring_check.py` 断言 `enable_radar=1` 必须有声明消费者 | `modules/adas_nodes/radar_post.h` / `perception_node.cpp`（`on_sensor_radar` / `enable_radar_fusion`）/ `ci/gates/sensor_wiring_check.py` |
+| **BEV 视觉影子检测停摆无人发现**（`bev/obstacles` 零消费者、零门禁；节点在编排里但一帧不发，所有门禁照绿） | BEV 直通/ONNX 输出只发 `bev/obstacles` 供前端对比，不参与控制，因此"不发"不会引发任何下游症状。修复（方向一）：`demo_evaluator` 在 `pipeline_has_node("bev_detection")` 时要求 `metrics.topics` 存在 `bev/obstacles` 且频率 ≥1Hz，否则 FAIL；summary 输出 `bev_obstacles_hz` | `ci/evaluators/demo_evaluator.py`（BEV 活性判据） |
 | 配置里 publish `type` 写了一个**不存在的 IDL 类型**，门禁与构建都不报 | 实测：`sensor/camera` 配置写 `CameraFrame`，代码发 `LidarFrame`（相机本就是 LiDAR 帧副本）；`sensor/gps` 写 `GpsFrame`，代码发 `GpsData`。运行时由代码决定线格式所以不炸，但按配置生成反序列化的订阅方会读错类型、`flowctl inspect` 展示假类型。修复：两处改为真实类型 + `topic_contract_check.py` 新增"publish type 必须是 `msg/adas_msgs.msg` 里的 struct"（JSON 载荷 topic 显式白名单） | `config/pipeline*.json` / `ci/gates/topic_contract_check.py` `idl_struct_names` |
 
 
@@ -122,7 +123,8 @@
 
 | 场景里声明了 `fault_injection` 但注入**完全没生效**（`dropped=0`、目标 topic 照常发布） | hook 放在了 `flowsim` 的 **reset 函数**里，而那是**场景加载之前**执行的 —— 此时 `g.scenario` 仍是 nullptr，条件判断直接短路。**通用教训**：依赖"场景已加载"的逻辑必须放在 `g.scenario = scenario_load(...)` **之后**；reset/init 早于加载是容易踩的时序陷阱。修复：移到场景加载语句之后（实测 `dropped` 由 0 → 603） | `modules/adas_nodes/flowsim_node.cpp` 场景加载之后的注入应用点 |
 | **按倍率调交通密度后，spawn 数量变了但车全挤在路段尾部/前半段**（`zones` 倍率 2 时实际 ~11 辆而非 20，倍率 0.5 时后半段全空） | 计数用了**等效间距**（`spacing/scale`），落点仍用未缩放的 `i*spacing`：`scale>1` 时多出的索引全部被 clamp 到段尾，再被 25m 防重叠检查拒掉；`scale<1` 时只占段前半段。修复：计数与落点共用 `traffic_density_effective_spacing()`（单一入口），落点 `s_local = i * spacing_eff`。单测锁定"最后一个索引的 s ≤ 段长" | `modules/adas_nodes/traffic_density_spawn.h` `traffic_density_effective_spacing` / `flowsim_node.cpp` spawn 循环 |
-| **MOBIL 变道只横移一帧即中止**（开启 `npc_lane_change` 的场景里看起来"没变道"，实际是变道失败） | 旧文档写"MOBIL 已 `#if 0` 禁用"，实际是运行时 `NpcAiConfig.enable_mobil`（默认 false），且 `lane_change_traffic` / 若干 `osm_*` 场景已打开 → CI 真在跑它。缺陷：MOBIL 决策置 `state=LaneChange` 后，同一帧纵向分发无条件改回 `Follow/Cruise`；下一帧横向插值条件不成立并把 `target_offset` 重置回当前 offset。**未修**（需保留状态直到完成 + 补完成事件 + 门禁），修前不要扩大 `npc_lane_change` 覆盖面；现有基线无法区分"未变道"与"变道失败" | `modules/adas_nodes/flowsim/npc_ai.cpp:716`（决策）vs `:745/:755`（同帧覆盖）/:599（重置 offset） |
+| **MOBIL 变道只横移一帧即中止**（开启 `npc_lane_change` 的场景里看起来"没变道"，实际是变道失败） | 旧文档写"MOBIL 已 `#if 0` 禁用"，实际是运行时 `NpcAiConfig.enable_mobil`（默认 false），且 `lane_change_traffic` / 若干 `osm_*` 场景已打开 → CI 真在跑它。缺陷：MOBIL 决策置 `state=LaneChange` 后，同一帧纵向分发无条件改回 `Follow/Cruise`；下一帧横向插值条件不成立并把 `target_offset` 重置回当前 offset。**已修（2026-11）**：纵向分发对 `LaneChange` 保持状态；E2 到达目标后显式 `LeadLost`→Cruise 并累计 `lane_changes_completed`；进入状态统一走 `npc_request_state`。门禁：`scene.npc.lane_changes_completed` + `demo_evaluator` 的 `expect_npc_lane_change`（`scenarios/npc_cutin.json`） | `modules/adas_nodes/flowsim/npc_ai.cpp`（MOBIL 决策 / 纵向分发 / E2 完成）/ `flowsim/scene_pub.cpp` / `ci/evaluators/demo_evaluator.py` |
+| **choreography `act:"cutin"` 一触发就把邻道车瞬移到 ego 车道（当场碰撞，PID 根本没跑）** | beat 统一按 `teleport = !brake && !cross` 处理；cutin 不在豁免名单里 → 无 `ds/dl` 的 beat 把 `target->x/y` 重置为 `ego.x + ds` / `ego.y + dl(=0)`，横向瞬移 3.5m。修复：`teleport` 再排除 `act=="cutin"`（与 brake/cross 一样只下指令、不重置位置），CutIn PID 才能从原车道连续切入 | `modules/adas_nodes/flowsim/scene_events.cpp` beat 分发 |
 
 ## 4. 仪表盘 / 监控 / 前端
 
@@ -186,4 +188,4 @@
 | 8 个节点线程各占满一个核 | 裸 `while(!stop) ex.run();` 忙等；`idle_sleep_us` 只被零调用者的 `run_blocking()` 读取。改用 `node_pump()` | `coroutine_task.h` node_pump |
 | 管道检查 topics 列表缺 perception/obstacles | `monitor_node.c` 的 `TopicStats tstats[16]` 只能装 16 个 topic，第 17 个静默丢弃。扩到 64 | `monitor_node.c:1304` |
 | 新增 IDL 类型后 `msg_layout_check` 报 `wire=N struct=N+4`，构建通过但序列化/直读两套约定不一致 | `msg_codegen` 的 wire size 是字段尺寸朴素累加（无 padding），C 结构体按自然对齐插 padding。把 `uint64` 放结构体中间就会失配（实测 RadarFrame 原顺序 wire=1044/struct=1048）。**两种修法**：① 加进 `KNOWN_MISMATCHES` 记录既有失配；② **更好的修法**是从设计上消除它 —— 调整字段顺序（大对齐成员前置）+ 显式 `reserved` 填平尾部，使 wire == struct。新增类型优先 ②，别让已知失配表继续变长 | `msg/adas_msgs.msg` 新类型字段布局 / `ci/gates/msg_layout_check.py` |
-| **同 seed 重跑 demo 轨迹仍不同**（`--repeats` 只能靠中位/极差兜底） | 全局 `rand()` 是**进程级**状态：`flowsim` 用 `srand(random_seed)` 播种后，`sensor_model` / `perception` 在 init 里又 `srand(42)` 把它覆盖；`npc_ai.cpp` 的路口转向意图与 `step_poisson_traffic` 的到达抽样都吃这条被污染的流。叠加墙钟节拍与线程调度 → 同 seed 不保证同轨迹。**未修**（方向五待办：把 flowsim/NPC 的随机源换成自持 RNG 状态，再给 headless 跑加确定性断言）；当前可复现口径只有 `eval_closed_loop.py`（固定 DT、无随机，已加确定性回归测试） | `flowsim_node.cpp` `srand`/`rand` / `npc_ai.cpp:910` / `sensor_model_node.c:634` / `perception_node.cpp:696` |
+| **同 seed 重跑 demo 轨迹仍不同**（`--repeats` 只能靠中位/极差兜底） | 全局 `rand()` 是**进程级**状态：`flowsim` 用 `srand(random_seed)` 播种后，`sensor_model` / `perception` 在 init 里又 `srand(42)` 把它覆盖；`npc_ai.cpp` 的路口转向意图与 `step_poisson_traffic` 的到达抽样都吃这条被污染的流。**已修随机源污染（2026-11）**：flowsim 用自持 `flowsim/sim_rng.h`、NPC 用模块私有 `npc_ai_seed_rng`、行人槽位独立流，全部不再碰全局 rand()。**残余**：墙钟节拍 + 线程调度仍让动态轨迹不可复现；当前确定性口径 = `eval_closed_loop.py`（固定 DT）+ `ci/gates/determinism_gate.py`（同 seed 的 `scene.init_fingerprint` 必须相同；改 seed 必须不同） | `flowsim_node.cpp`（`sim_rng`）/ `flowsim/sim_rng.h` / `npc_ai.cpp` `npc_ai_seed_rng` / `ci/gates/determinism_gate.py` |

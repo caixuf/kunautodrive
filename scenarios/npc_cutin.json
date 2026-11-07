@@ -1,0 +1,76 @@
+{
+  "name": "npc_cutin",
+  "description": "方向三难例场景：NPC 编舞加塞。邻道车在 t=6s 触发 act=cutin，用 CutIn 横向 PID 连续切入 ego 车道（不是 dl 传送）。判据：无碰撞、不超时、不低于最低均速，且 scene.npc.lane_changes_completed >= 1（证明变道真正完成，而不是只置了 LaneChange 状态）。",
+  "random_seed": 303,
+  "duration_s": 45,
+  "ego": {
+    "x": 20.0,
+    "y": -1.75,
+    "heading": 0.0,
+    "init_speed": 14.0,
+    "target_speed": 18.0
+  },
+  "road_network": {
+    "edges": [
+      {
+        "id": 0,
+        "type": "highway",
+        "name": "npc_cutin_straight",
+        "length_m": 1500,
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 22.0,
+        "nodes": [
+          [0, 0, 0],
+          [1500, 0, 0]
+        ]
+      }
+    ]
+  },
+  "actors": [
+    {
+      "id": 0,
+      "type": "car",
+      "x": 90.0,
+      "y": -1.75,
+      "vx": 12.0,
+      "vy": 0.0,
+      "len": 4.6,
+      "wid": 2.0,
+      "_comment": "本车道前方慢车（跟车目标，给 ego 一个稳定前车）"
+    },
+    {
+      "id": 1,
+      "type": "car",
+      "x": 40.0,
+      "y": -5.25,
+      "vx": 14.0,
+      "vy": 0.0,
+      "len": 4.6,
+      "wid": 2.0,
+      "_comment": "右后邻道车：t=6s 编舞触发 cutin，横移到 ego 车道"
+    }
+  ],
+  "choreography": {
+    "loop_period_s": 45,
+    "allow_npc_lane_change": true,
+    "beats": [
+      {
+        "t": 6.0,
+        "actor": 1,
+        "vx": 14.0,
+        "act": "cutin"
+      }
+    ]
+  },
+  "traffic_lights": [],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 60.0,
+    "min_avg_speed_mps": 4.0,
+    "min_distance_m": 50.0,
+    "expect_npc_lane_change": true
+  },
+  "route": [],
+  "scenarios": []
+}

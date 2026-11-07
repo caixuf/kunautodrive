@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import node as _node, params as _params  # noqa: E402
 from _common import strip_comments_and_dead_code  # noqa: E402
 CORTEX_CONFIG = "pipeline_cortex.json"
-ARBITER_CALL = "safety_arbiter_apply("
+ARBITER_CALLS = ("safety_arbiter_apply(", "safety_arbiter_apply_ex(")
 ARBITER_SRC = ROOT / "modules" / "adas_nodes" / "safety_control_node.cpp"
 
 
@@ -69,7 +69,7 @@ def check_arbiter_in_path() -> list[str]:
     if not ARBITER_SRC.is_file():
         return [f"missing {ARBITER_SRC.relative_to(ROOT)} — 无法确认安全仲裁仍在控制链"]
     src = strip_comments_and_dead_code(ARBITER_SRC.read_text(encoding="utf-8"))
-    if ARBITER_CALL not in src:
+    if not any(call in src for call in ARBITER_CALLS):
         return [
             "safety_control_node.cpp 未调用 safety_arbiter_apply(...) —— "
             "规则主干失去最低安全护栏（模型不达标时不再回退规则）"

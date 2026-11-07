@@ -1,9 +1,9 @@
 {
   "name": "kunautodrive_v0.2",
-  "description": "KunAutoDrive v0.2 场景矩阵：故障表中每类高频 bug 至少一个场景兜底（Phase 1.1）。各场景时长覆盖其 choreography 与目标故障被触发的窗口。",
+  "description": "KunAutoDrive v0.2 \u573a\u666f\u77e9\u9635\uff1a\u6545\u969c\u8868\u4e2d\u6bcf\u7c7b\u9ad8\u9891 bug \u81f3\u5c11\u4e00\u4e2a\u573a\u666f\u515c\u5e95\uff08Phase 1.1\uff09\u3002\u5404\u573a\u666f\u65f6\u957f\u8986\u76d6\u5176 choreography \u4e0e\u76ee\u6807\u6545\u969c\u88ab\u89e6\u53d1\u7684\u7a97\u53e3\u3002",
   "default_duration_s": 45,
   "baseline_tolerances": {
-    "_comment": "min_ratio=max_abs_increase 两型门禁只查数值回归（current vs baseline），不查绝对通过。跑新 baseline 前确认当前是健康值。",
+    "_comment": "min_ratio=max_abs_increase \u4e24\u578b\u95e8\u7981\u53ea\u67e5\u6570\u503c\u56de\u5f52\uff08current vs baseline\uff09\uff0c\u4e0d\u67e5\u7edd\u5bf9\u901a\u8fc7\u3002\u8dd1\u65b0 baseline \u524d\u786e\u8ba4\u5f53\u524d\u662f\u5065\u5eb7\u503c\u3002",
     "avg_speed_mps": {
       "min_ratio": 0.6
     },
@@ -13,7 +13,7 @@
     "max_lane_error_m": {
       "max_abs_increase": 0.5
     },
-    "_min_road_margin_is_a_min": "越小越危险 → min_ratio（当前 < 基线×0.4 = 回归）",
+    "_min_road_margin_is_a_min": "\u8d8a\u5c0f\u8d8a\u5371\u9669 \u2192 min_ratio\uff08\u5f53\u524d < \u57fa\u7ebf\u00d70.4 = \u56de\u5f52\uff09",
     "min_road_margin_m": {
       "min_ratio": 0.4
     },
@@ -118,6 +118,21 @@
       "file": "scenarios/r157_cut_in.json",
       "duration_s": 40,
       "enabled": true
+    },
+    {
+      "file": "scenarios/npc_cutin.json",
+      "duration_s": 30,
+      "enabled": true
+    },
+    {
+      "file": "scenarios/pedestrian_flow.json",
+      "duration_s": 25,
+      "enabled": true
+    },
+    {
+      "file": "scenarios/city_multiroute.json",
+      "duration_s": 20,
+      "enabled": false
     },
     {
       "file": "scenarios/r157_cut_out.json",

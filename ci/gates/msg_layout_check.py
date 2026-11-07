@@ -60,7 +60,7 @@ IDL_FILE = ROOT / "msg" / "adas_msgs.msg"
 KNOWN_MISMATCHES: dict[str, tuple[int, int]] = {
     # name: (wire_size, struct_size)
     "Behavior":             (22, 32),
-    "ControlRaw":           (59, 60),
+    "ControlRaw":           (63, 64),   # +confidence float（方向四仲裁置信度）
     "GpsData":              (36, 40),
     "ImuData":              (36, 40),
     "LidarPointCloud":      (40980, 40984),

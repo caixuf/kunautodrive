@@ -1,0 +1,51 @@
+{
+  "name": "pedestrian_flow",
+  "description": "方向三：traffic_density 自动补给同时生成车辆与行人（pedestrian_ratio=0.3）。行人沿内侧车道边缘 0.8m/s 步行（不横穿），车辆按 IDM 跟车。判据：声明了 pedestrian_ratio ⇒ scene.entities 里必须出现 pedestrian；无碰撞、无 invariant 失败。",
+  "random_seed": 404,
+  "duration_s": 30,
+  "lighting": "day",
+  "weather": "clear",
+  "visibility_m": 1000,
+  "ego": {
+    "x": 20.0,
+    "y": -1.75,
+    "heading": 0.0,
+    "init_speed": 10.0,
+    "target_speed": 14.0
+  },
+  "road_network": {
+    "edges": [
+      {
+        "id": 0,
+        "type": "highway",
+        "name": "pedestrian_flow_straight",
+        "length_m": 1200,
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 20.0,
+        "nodes": [
+          [0, 0, 0],
+          [1200, 0, 0]
+        ],
+        "oneway": false
+      }
+    ]
+  },
+  "actors": [],
+  "traffic_lights": [],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 45.0,
+    "min_avg_speed_mps": 2.0
+  },
+  "traffic_density": {
+    "cars_per_km": 10,
+    "spawn_jitter_m": 2.0,
+    "lane_spread": true,
+    "max_npcs": 24,
+    "pedestrian_ratio": 0.3,
+    "random_seed_offset": 0
+  },
+  "route": [],
+  "scenarios": []
+}

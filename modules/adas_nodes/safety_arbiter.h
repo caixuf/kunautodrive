@@ -32,6 +32,8 @@ typedef struct {
 #define SAFETY_ARBITER_RULE_BRAKE_ACTIVE   0.10
 /** 规则未制动时，模型油门的上限基准（取 max(rule.throttle, 它)）。 */
 #define SAFETY_ARBITER_MODEL_THROTTLE_CAP  0.85
+/** 模型命令自评置信度低于该值 → 回退规则主干（"逐步接管"的置信度门）。 */
+#define SAFETY_ARBITER_MODEL_CONF_MIN      0.50
 
 /**
  * 仲裁规则主干与模型命令。
@@ -54,6 +56,22 @@ SafetyArbiterCmd safety_arbiter_apply(const SafetyArbiterCmd* rule_cmd,
                                       int has_fresh_model,
                                       int is_degraded,
                                       int* out_intervened);
+
+/**
+ * 带置信度门的仲裁（方向四"逐步接管"）。
+ *
+ * 在 safety_arbiter_apply 的三条规则之前先判：
+ *   model_conf < conf_min（或 NaN）→ 直接返回规则命令并标记干预。
+ * 规则主干本身无置信度概念，传 1.0；模型用 inference 的 pred_conf。
+ * conf_min <= 0 表示关闭置信度门（等价旧行为）。
+ */
+SafetyArbiterCmd safety_arbiter_apply_ex(const SafetyArbiterCmd* rule_cmd,
+                                         const SafetyArbiterCmd* model_cmd,
+                                         int has_fresh_model,
+                                         int is_degraded,
+                                         double model_conf,
+                                         double conf_min,
+                                         int* out_intervened);
 
 #ifdef __cplusplus
 }

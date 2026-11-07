@@ -86,6 +86,7 @@ static struct {
     uint64_t radar_rng;
     uint64_t last_radar_us;
     char   weather[32];
+    char   lighting[16];         /* day / dusk / night（environment/state） */
     double weather_attenuation;  /* 0.0=clear, 0.5=moderate rain/fog, 1.0=dense fog */
 
     /* 真实 GPS 传感器格式接入：可选 NMEA 0183 日志回放 */
@@ -330,9 +331,18 @@ static void on_environment_state(const Message* msg, void* user_data) {
         strncpy(g.weather, weather_obj->valuestring, sizeof(g.weather) - 1);
         g.weather[sizeof(g.weather) - 1] = '\0';
     }
-    /* 可见度/天气 → 相机可见度 + 传感器衰减：纯逻辑在 sensor_model_weather.c
-     * （与单测共用同一份实现，见 tests/test_adas_nodes_logic.c）。 */
-    g.camera_visibility_factor = sensor_model_camera_visibility(visibility_m);
+    cJSON* lighting_obj = cJSON_GetObjectItemCaseSensitive(root, "lighting");
+    if (cJSON_IsString(lighting_obj) && lighting_obj->valuestring) {
+        strncpy(g.lighting, lighting_obj->valuestring, sizeof(g.lighting) - 1);
+        g.lighting[sizeof(g.lighting) - 1] = '\0';
+    }
+    /* 可见度/天气/光照 → 相机退化 + 传感器衰减：纯逻辑在 sensor_model_weather.c
+     * （与单测共用同一份实现，见 tests/test_adas_nodes_logic.c）。
+     * 方向一：相机不再是"LiDAR 帧 × 可见度"，而是可见度 × 天气对比度 × 光照，
+     * 夜间/逆光/雾霾各有确定性分量，与雷达构成可对比的退化模态。 */
+    const SensorCameraDegradation cam_deg =
+        sensor_model_camera_degradation(visibility_m, g.weather, g.lighting);
+    g.camera_visibility_factor = cam_deg.effective;
     g.weather_attenuation = sensor_model_weather_attenuation(visibility_m, g.weather);
 
     cJSON_Delete(root);
@@ -549,6 +559,7 @@ static int sensor_model_init(MessageBus* bus, Transport* transport,
     g.lidar_max_range_m = 60.0;
     g.obs_noise_std_m = 0.08;
     g.camera_visibility_factor = 1.0;
+    snprintf(g.lighting, sizeof(g.lighting), "day");
     g.enable_radar            = 0;      /* 默认关闭：不加雷达的管线行为零变化 */
     g.radar_max_range_m       = 200.0;
     g.radar_fov_deg           = 90.0;

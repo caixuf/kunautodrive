@@ -33,7 +33,7 @@ flowsim(60Hz 真值) → sensor_model(FOV/遮挡/噪声) → perception(DBSCAN)
 | 控制-横向 | Stanley + kappa 前馈（默认）；LTV MPC（`use_ltv_mpc` 参数启用，机动模式跳过） | `control_node.cpp` `ltv_mpc.c` | MPC 求解前注入真实 steer 限幅（内外限幅必须一致） |
 | 控制-纵向 | PID + ACC 跟车（anti-windup：error 翻负清正积分） | `control_node.cpp` | 20Hz |
 | 控制-机动 | ManeuverTracker：弧长推进 + D/R 挡位状态机 + 倒挡横向反馈反号 | `maneuver_tracker.h` | 掉头/泊车共用；header-only 可独立单测 |
-| 安全 | TTC 闸门（前车/迎头/行人/横向交叉，全部沿车头方向投影）+ MRM + 机动窗口豁免 | `safety_control_node.cpp` | FlowCoro 协程；只做限幅+紧急制动，不理解任务意图 |
+| 安全 | TTC 闸门（前车/迎头/行人/横向交叉，全部沿车头方向投影）+ MRM + 机动窗口豁免 + 模型置信度门（`ControlRaw.confidence < 0.5` 回退规则主干） | `safety_control_node.cpp` / `safety_arbiter.c` | FlowCoro 协程；只做限幅+紧急制动，不理解任务意图 |
 | 学习 | BC（tiny-MLP / PyTorch）→ DAgger 自我对弈回灌 → PPO（换老师路线）；ONNX 导出 + 等价性门禁；影子评估 + promote 门禁 + OTA | `inference_node.cpp` `tools/train_e2e/` | 详见 [LEARNING_LOOP.md](LEARNING_LOOP.md) |
 
 ## 关键设计约束（跨模块铁律）

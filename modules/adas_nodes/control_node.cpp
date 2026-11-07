@@ -609,6 +609,7 @@ protected:
                 raw.speed    = (float)g.current_speed;
                 raw.target   = (float)fb_target_y;  /* 跟随 ego 所在车道中心 */
                 raw.error    = (float)fb_lat_error;
+                raw.confidence = 1.0f;   /* 规则主干：自评满置信 */
                 memset(raw.mode, 0, sizeof(raw.mode));
                 snprintf(raw.mode, sizeof(raw.mode), "DATA_TIMEOUT");
 
@@ -1219,6 +1220,7 @@ protected:
             raw.turn_signal = turn_signal;
             raw.hazard   = hazard;
             raw.gear     = g.gear;
+            raw.confidence = 1.0f;   /* 规则主干：自评满置信 */
             memset(raw.mode, 0, sizeof(raw.mode));
             /* 机动期（掉头/倒车）打 MANEUVER 标签：safety_control 据此放行
              * 满舵/豁免巡航级 TTC（Phase 1 直行减速段 steer 还小、挡位还是 D，

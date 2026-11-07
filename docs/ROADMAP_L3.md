@@ -148,8 +148,12 @@
 - 方向四：promote 门禁补转向/轨迹阈值 + 新增 `model-takeover-boundary-gate`。
 - 方向五：`ota push` 强制过 promote gate + 闭环评估确定性回归测试。
 
-**仍未完成**（诚实清单）：OSM 多 OD 路线分配、加塞场景、MOBIL 状态机修复、整车确定性
-（全局 `rand()`/墙钟）、相机退化成像、模型参与行为决策。逐项证据与命令见
+**第二轮补齐**：相机退化（可见度×天气×光照）、OSM 多 OD 路线分配（`npc_routes`）、
+行人自动生成、`npc_cutin` 加塞场景、MOBIL 一帧中止修复、模型置信度仲裁门、
+flowsim/NPC 自持 RNG + `init_fingerprint` 确定性门禁。
+
+**仍未完成**（诚实清单）：BEV 精度/影子对比门禁（目前只有 `bev/obstacles` 活性门禁）；模型参与 behavior/planning 决策层；
+动态轨迹本身仍受墙钟/调度影响（确定性只覆盖启动期与闭环评估）。逐项证据与命令见
 [`docs/_reports/FIVE_DIRECTIONS_STATUS_2026-11-07.md`](_reports/FIVE_DIRECTIONS_STATUS_2026-11-07.md)。
 
 ## 推荐节奏（依赖顺序）

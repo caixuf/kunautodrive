@@ -57,6 +57,10 @@ struct ControlCmd {
     int    turn_signal{0};   /* 0=off, 1=left, 2=right */
     bool   hazard{false};
     int    gear{GEAR_DRIVE}; /* 档位，从 control_node 透传 */
+    /* 方向四：命令自评置信度。规则主干=1.0；模型=inference pred_conf。
+     * 旧版 ControlRaw 没有该字段（反序列化后为 0），这里默认 1.0 以兼容
+     * 未升级的文本路径；二进制路径会显式覆盖。 */
+    double confidence{1.0};
 };
 
 struct VehicleState {
@@ -84,6 +88,8 @@ struct SafetyParams {
     double hard_brake_ratio{0.45};
     bool fault_inject_raw_cmd_timeout{false};
     uint64_t fault_inject_after_us{0};
+    /* 方向四：模型接管置信度门。低于此值即使影子评估过了也回退规则主干。 */
+    double model_conf_min{0.50};
 };
 
 struct SafetyContext {
@@ -140,6 +146,7 @@ ControlCmd parse_control_cmd(const Message& msg) {
             cmd.target   = raw.target;
             cmd.error    = raw.error;
             cmd.mode     = raw.mode;
+            cmd.confidence  = raw.confidence;
             cmd.turn_signal = (int)raw.turn_signal;
             cmd.hazard      = raw.hazard;
             cmd.gear        = (int)raw.gear;
@@ -156,6 +163,8 @@ ControlCmd parse_control_cmd(const Message& msg) {
     scan_double(text, "speed=", &cmd.speed);
     scan_double(text, "target=", &cmd.target);
     scan_double(text, "error=", &cmd.error);
+    double conf = 1.0;
+    if (scan_double(text, "confidence=", &conf)) cmd.confidence = (float)conf;
     cmd.mode = scan_mode(text);
     /* 灯光指令：turn_signal 和 hazard 从 text 解析 */
     {
@@ -421,6 +430,7 @@ static ControlCmd arbitrate_control(const ControlCmd& rule_cmd,
                                    const ControlCmd& model_cmd,
                                    bool has_fresh_model,
                                    bool is_degraded,
+                                   double model_conf_min,
                                    bool* out_intervened = nullptr) {
     const SafetyArbiterCmd rule_a = {
         rule_cmd.throttle, rule_cmd.brake, rule_cmd.steer,
@@ -432,8 +442,10 @@ static ControlCmd arbitrate_control(const ControlCmd& rule_cmd,
     };
 
     int intervened = 0;
-    const SafetyArbiterCmd res = safety_arbiter_apply(
-        &rule_a, &model_a, has_fresh_model ? 1 : 0, is_degraded ? 1 : 0, &intervened);
+    /* 方向四：模型命令带自评置信度；低于阈值回退规则主干。规则主干传 1.0。 */
+    const SafetyArbiterCmd res = safety_arbiter_apply_ex(
+        &rule_a, &model_a, has_fresh_model ? 1 : 0, is_degraded ? 1 : 0,
+        (double)model_cmd.confidence, model_conf_min, &intervened);
 
     ControlCmd out = rule_cmd;          /* speed/target/error 等透传字段 */
     out.throttle    = res.throttle;
@@ -522,7 +534,9 @@ protected:
                     ControlCmd base_cmd = is_rule ? arbiter.last_rule_cmd : arbiter.last_model_cmd;
                     ControlCmd cmd = is_rule
                         ? arbitrate_control(arbiter.last_rule_cmd, arbiter.last_model_cmd,
-                                            has_fresh_model, is_degraded, &arbiter_intervened)
+                                            has_fresh_model, is_degraded,
+                                            g.params.model_conf_min,
+                                            &arbiter_intervened)
                         : base_cmd;
 
                     VehicleState state;
@@ -862,6 +876,9 @@ private:
         }
         bin.turn_signal = (uint8_t)cmd.turn_signal;
         bin.hazard      = cmd.hazard;
+        /* 方向四：把仲裁后的置信度透传到 control/cmd（否则该 wire 字段是
+         * 未初始化栈值，消费者读到随机字节）。 */
+        bin.confidence  = (float)cmd.confidence;
 
         uint8_t buf[32];
         size_t len = sizeof(buf);
@@ -967,6 +984,8 @@ int safety_init(MessageBus* bus, Transport* transport, DiscoveryManager* discove
         cJSON* params = cJSON_Parse(params_json);
         if (params) {
             cJSON* item;
+            if ((item = cJSON_GetObjectItemCaseSensitive(params, "model_conf_min")) &&
+                cJSON_IsNumber(item)) g.params.model_conf_min = item->valuedouble;
             if ((item = cJSON_GetObjectItemCaseSensitive(params, "max_throttle")) &&
                 cJSON_IsNumber(item)) g.params.max_throttle = item->valuedouble;
             if ((item = cJSON_GetObjectItemCaseSensitive(params, "max_steer")) &&

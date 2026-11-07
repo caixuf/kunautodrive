@@ -2606,6 +2606,25 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
             )
 
     topics = topic_map(last)
+    # ── 方向一：BEV 影子检测必须真的在跑（原先只有零消费者、零门禁）──
+    # BEV 默认是直通影子（只发 bev/obstacles，不污染控制）。这不代表它可以
+    # 静默停摆：节点在编排里却没有该 topic = 视觉半边断链，先前任何门禁都看不见。
+    bev_obstacles_hz = 0.0
+    if pipeline_has_node("bev_detection"):
+        st = topics.get("bev/obstacles")
+        if require(failures, "bev_shadow", {
+            "bev_detection node is in the pipeline but bev/obstacles never "
+            "appeared in metrics.topics (BEV shadow path is dead)": st is not None,
+        }):
+            try:
+                bev_obstacles_hz = float(st.get("freq", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                bev_obstacles_hz = 0.0
+            if bev_obstacles_hz < 1.0:
+                failures.append(
+                    f"bev/obstacles publishing at {bev_obstacles_hz:.2f} Hz "
+                    f"(< 1 Hz) — BEV shadow detection is not running"
+                )
     pubs, subs = node_topic_roles(last)
     expected_edges = expected_edges if expected_edges is not None else load_pipeline_expected_edges()
     for pub_node, topic, sub_node in expected_edges:
@@ -3592,6 +3611,83 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
                     f"{declared_actor_vehicles} declared actors) — the spawn count "
                     f"is not corroborated by scene/frame truth"
                 )
+    # ── 方向三：NPC 变道/加塞完成可观测 ──
+    # 场景声明 expect_npc_lane_change ⇒ 必须看到 scene.npc.lane_changes_completed>=1。
+    # 只看 ai_state 曾经等于 LaneChange 会漏掉"置了状态但一帧中止"的旧缺陷
+    # （2026-11 修复前 MOBIL 正是如此），所以判据必须落在**完成计数**上。
+    expect_npc_lc = bool(criteria.get("expect_npc_lane_change", False))
+    reported_npc = None
+    for s in reversed(samples):
+        scene_m = (s.get("metrics") or {}).get("scene") if isinstance(s, dict) else None
+        cand = scene_m.get("npc") if isinstance(scene_m, dict) else None
+        if isinstance(cand, dict):
+            reported_npc = cand
+            break
+    npc_lane_changes_completed = 0
+    if reported_npc is not None:
+        try:
+            npc_lane_changes_completed = int(
+                reported_npc.get("lane_changes_completed", 0) or 0)
+        except (TypeError, ValueError):
+            npc_lane_changes_completed = 0
+    if expect_npc_lc:
+        if require(failures, "npc_lane_change", {
+            "scenario expects an NPC lane change but no scene.npc block ever "
+            "reached the evaluator (scene/frame→monitor passthrough broken)":
+                reported_npc is not None,
+        }):
+            if npc_lane_changes_completed < 1:
+                failures.append(
+                    f"scenario expects an NPC lane change but none completed "
+                    f"(scene.npc.lane_changes_completed={npc_lane_changes_completed}) "
+                    f"— MOBIL/choreography set the state but the change never finished"
+                )
+
+    # ── 方向三：声明 npc_routes ⇒ 多 OD 链上必须真分到 NPC ──
+    declared_npc_routes = scenario.get("npc_routes") if isinstance(scenario, dict) else None
+    npc_route_spawned = 0
+    if isinstance(reported_td, dict):
+        try:
+            npc_route_spawned = int(reported_td.get("npc_route_spawned", 0) or 0)
+        except (TypeError, ValueError):
+            npc_route_spawned = 0
+    if isinstance(declared_npc_routes, list) and declared_npc_routes:
+        if require(failures, "npc_multi_route", {
+            "scenario declares npc_routes but no traffic_density block reached the "
+            "evaluator": reported_td is not None,
+        }):
+            if npc_route_spawned < 1:
+                failures.append(
+                    f"scenario declares npc_routes={declared_npc_routes} but flowsim "
+                    f"spawned no NPC on those chains (npc_route_spawned=0) — "
+                    f"multi-OD route assignment did not happen"
+                )
+
+    # ── 方向三：声明 pedestrian_ratio ⇒ 世界里必须出现行人 ──
+    declared_ped_ratio = 0.0
+    if isinstance(declared_td, dict):
+        try:
+            declared_ped_ratio = float(declared_td.get("pedestrian_ratio", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            declared_ped_ratio = 0.0
+    pedestrian_max = 0
+    for m in series:
+        ents = m.get("entities") or []
+        n_ped = sum(1 for e in ents
+                    if isinstance(e, dict) and e.get("type") == "pedestrian")
+        pedestrian_max = max(pedestrian_max, n_ped)
+    if declared_ped_ratio > 0.0:
+        if require(failures, "pedestrian_spawn", {
+            "scenario declares traffic_density.pedestrian_ratio but no scene "
+            "samples were collected to check pedestrian entities":
+                bool(series),
+        }):
+            if pedestrian_max < 1:
+                failures.append(
+                    f"scenario declares pedestrian_ratio={declared_ped_ratio:.2f} "
+                    f"but no pedestrian entity ever appeared in scene/frame"
+                )
+
     # 预警提前量 FAIL/WARN（仅当发生过临界事件时才判定）
     if perception["critical_event_count"] > 0:
         min_lead = perception["warning_lead_min_gate_s"]
@@ -3813,6 +3909,10 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         # 记进 summary 使 baseline/回归能覆盖"密度场景真的补给了 NPC"这件事。
         "traffic_density_cars_per_km": declared_cars_per_km,
         "traffic_density_spawned": traffic_density_spawned,
+        "npc_lane_changes_completed": npc_lane_changes_completed,
+        "pedestrian_max": pedestrian_max,
+        "npc_route_spawned": npc_route_spawned,
+        "bev_obstacles_hz": bev_obstacles_hz,
         # behavior 指标（从最后一个 sample 的 metrics.behavior 提取，
         # 仅在 behavior/state 已发布时可用）
         "behavior_state": last.get("metrics", {}).get("behavior", {}).get("state", ""),

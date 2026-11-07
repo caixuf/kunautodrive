@@ -25,9 +25,17 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>   /* rand()：M3 路口转向意图随机重分配 */
+#include "sim_rng.h"  /* 自持 RNG：M3 路口转向意图，不碰全局 rand() */
 
 namespace flowsim {
+
+/* 模块自持 RNG（只有路口转向意图用）。seed 由 flowsim init 按场景 seed 播种；
+ * 与全局 rand() 隔离后，其他节点的 srand(42) 不再改变 NPC 的意图序列。 */
+static SimRng g_npc_rng = {0x9E3779B97F4A7C15ULL};
+
+void npc_ai_seed_rng(uint64_t seed) {
+    sim_rng_seed(&g_npc_rng, seed);
+}
 
 /* ── 稳定道路切线航向 ──
  * esmini 对 lane_id=0（type="none" 参考线）RM_SetLanePosition/world 可能返回
@@ -539,6 +547,7 @@ void step_npc_vehicle(Entity& npc, const EntityPool& pool,
         // 释放横向控制权，后续 MOBIL/IDM 可接管
         if (std::fabs(npc.target_offset - npc.offset) < cfg.cutin_completion_threshold) {
             npc.offset = npc.target_offset;
+            npc.lane_changes_completed++;   /* 加塞也是一次完成的横向机动 */
             /* ── P1.1 修复：状态转移改走统一入口 npc_request_state ──
              *
              * 原 4 行手动副作用（state=Cruise + 清 PID 积分 + 清 cutin_active）
@@ -554,30 +563,27 @@ void step_npc_vehicle(Entity& npc, const EntityPool& pool,
              * 重复实现清理逻辑（之前就有遗漏 case，见 P1.3）。 */
             npc_request_state(npc, {NpcEvent::LeadLost}, cfg);
         }
-    } else if (!in_crash_cooldown && npc.state == NpcState::LaneChange &&
-               std::fabs(npc.offset - npc.target_offset) > 0.01) {
-        /* ── E2: 平滑横移到 target_offset ──
+    } else if (!in_crash_cooldown && npc.state == NpcState::LaneChange) {
+        /* ── E2: 平滑横移到 target_offset（MOBIL 自主变道）──
          *
-         * 用户需求：演示场景中 NPC 各守其道不变道，仅 ego 变道超车。
-         * 此分支原为 MOBIL 自主变道服务——MOBIL 把 state 置为 LaneChange 后，
-         * E2 在 1.5s 内把 offset 平滑插值到 target_offset。
-         *
-         * 现在 MOBIL 已 #if 0 禁用，state==LaneChange 永远不会被设置，
-         * 此分支事实上是死代码。但保留它（带 state 门禁）有两个好处：
-         *   1. 未来重新启用 MOBIL 时无需改这里，把 #if 0 改回 #if 1 即可联动恢复。
-         *   2. 防御性：即使有 bug 让 target_offset != offset（如 Frenet 投影漂移、
-         *      外部代码误写），Cruise/Follow/StopForTL 状态下也不会触发横移，
-         *      NPC 严格按当前 offset 直行。
-         *
-         * 关键改动：原条件 `std::fabs(offset - target_offset) > 0.01` 不带 state 门禁，
-         * 任何状态下只要 target_offset != offset 就横移——这是"NPC 禁用后仍变来变去"
-         * 的根因（target_offset 可能被 recycle/外部代码/choreography 残留值污染，
-         * 与 offset 不同步）。加 state==LaneChange 门禁后，仅 MOBIL 显式变道时触发。 */
-        double dir = (npc.target_offset > npc.offset) ? 1.0 : -1.0;
-        double step = 2.3 * dt;  // ≈2.3 m/s 横移速率
+         * 状态门禁 `state==LaneChange` 防止 Cruise/Follow 下被残留 target_offset
+         * 拽着横移（历史 bug）。变道**完成**时不能只停止横移 —— 还要显式离开
+         * LaneChange 状态，否则纵向分发会一直看到该状态（见下方保持分支），
+         * 且 lane_change_timer 冷却/下一次 MOBIL 评估都无从恢复。
+         * 2026-11 修复：此前完成判据放在分支条件里（`>0.01` 才进入），
+         * 到达目标后既不转移也不计数 → 变道"永不完成"；同时纵向分发同帧
+         * 把 state 改回 Follow/Cruise → 只横移一帧即中止。 */
         double remain = std::fabs(npc.target_offset - npc.offset);
-        if (step > remain) step = remain;
-        npc.offset += dir * step;
+        if (remain > 0.01) {
+            double dir = (npc.target_offset > npc.offset) ? 1.0 : -1.0;
+            double step = 2.3 * dt;  // ≈2.3 m/s 横移速率
+            if (step > remain) step = remain;
+            npc.offset += dir * step;
+        } else {
+            npc.offset = npc.target_offset;
+            npc.lane_changes_completed++;
+            npc_request_state(npc, {NpcEvent::LeadLost}, cfg);
+        }
         /* 中心线硬 clamp：同向 NPC(route_dir>0) 的 offset 严禁跨过 0 进入对向。
          * 即使 target_offset 异常为正（cutin 时 ego.y>0、或 Frenet 同步错误），
          * 也强制卡在 -0.3m（留余量防越线）。对向 NPC(route_dir<0) 对称处理。
@@ -628,16 +634,16 @@ void step_npc_vehicle(Entity& npc, const EntityPool& pool,
     //    防止 MOBIL 覆盖场景导演的横向指令。
     //    红绿灯/让行期间不评估变道（StopForTL/Yield 状态下保持当前车道）
     /* ──────────────────────────────────────────────────────────────
-     * MOBIL 自主变道已被有意禁用。
+     * MOBIL 自主变道：运行时开关 `enable_mobil`（NpcAiConfig，默认 false）；
+     * 场景 `npc_lane_change: true` 会打开（lane_change_traffic / 部分 osm 场景）。
      *
-     * 用户需求：演示场景中 NPC 各守其道不变道，仅 ego 变道超车。
-     * 启用 MOBIL 后 NPC 会自主换道避堵/超车，与"NPC 不变道"需求冲突。
-     * 场景编导（choreography）才是横向指令的唯一来源。
-     *
-     * 保留完整 MOBIL 实现作为参考，便于未来重新启用（如 NOA 高密度
-     * 车流场景）。重新启用步骤：
-     *   1. 把配置 enable_mobil 置 true（当前默认 false，即下方运行时门）
-     *   2. 验证 lane_change_timer 冷却期间 target_offset 平滑插值无抖动
+     * 2026-11 修复：状态机此前"变道一帧中止"——MOBIL 置 LaneChange 后，
+     * 同一帧纵向分发无条件改回 Follow/Cruise；下一帧横向分支因状态已变而
+     * 不再插值，target_offset 又被重置。现在：
+     *   - 纵向分发对 LaneChange 保持状态（只算纵向目标）；
+     *   - E2 到达 target_offset 后显式 LeadLost → Cruise，并累计
+     *     lane_changes_completed（scene/frame 暴露给门禁）；
+     *   - 进入 LaneChange 走 npc_request_state（冷却计时统一）。
      * 注：mobil_idm_accel 的自由流加速项已修为标准 IDM (1−(v/v0)^4)。
      * ────────────────────────────────────────────────────────────── */
     if (cfg.enable_mobil) {
@@ -713,8 +719,8 @@ void step_npc_vehicle(Entity& npc, const EntityPool& pool,
 
             if (chosen > -900) {
                 npc.target_offset = chosen;
-                npc.state = NpcState::LaneChange;
-                npc.lane_change_timer = cfg.mobil_lane_change_cooldown;
+                /* 统一入口：设置 state + 变道冷却（npc_request_state 内部处理）。 */
+                npc_request_state(npc, {NpcEvent::MobilChange}, cfg);
             }
         }
 mobil_done: ;
@@ -741,6 +747,13 @@ mobil_done: ;
             }
             // 保持 ai_state==CutIn（不要被 lead 分支覆盖成 Follow）
             npc.state = NpcState::CutIn;
+        } else if (npc.state == NpcState::LaneChange) {
+            /* 保持 ai_state==LaneChange（MOBIL 横向插值进行中）：
+             * 纵向只按 IDM/目标速度推进，不得把状态改回 Follow/Cruise ——
+             * 旧实现无条件覆盖，导致变道只横移一帧即中止（2026-11 修复）。 */
+            v_desired = (lead != INVALID_ENTITY)
+                ? idm_desired_speed(v, gap, npc.target_vx, cfg, dt)
+                : npc.target_vx;
         } else if (lead != INVALID_ENTITY) {
             npc.state = NpcState::Follow;
             /* E4: 碰撞死锁恢复 — 碰撞分离后两车间距过小（gap < 2m），
@@ -907,7 +920,7 @@ mobil_done: ;
                  * 会改 road_id）不触发——recycle 后 road_pos.relocate 已重新定位，
                  * 此处 fp 反映的是推进后位置，正常路口穿越才会跨 road。 */
                 if (fp.road_id != npc.road_id) {
-                    int r = rand() % 10;
+                    int r = sim_rng_below(&g_npc_rng, 10);
                     npc.turn_intent = (r < 6) ? 0 : ((r % 2) ? 1 : 2);  /* 60% 直, 20% 左, 20% 右 */
                     LOG_INFO("flowsim", "M3 diag: npc%d crossed %d -> %d intent=%d",
                              npc.scenario_id, npc.road_id, fp.road_id, npc.turn_intent);
@@ -1065,7 +1078,8 @@ void npc_init_route(Entity& npc, const Route& route, int dir) {
     npc.route_s   = route.to_route_s(idx, npc.s);
 }
 
-void step_npc_pedestrian(Entity& ped, double dt, const NpcAiConfig& cfg) {
+void step_npc_pedestrian(Entity& ped, double dt, const NpcAiConfig& cfg,
+                         FlowRoadNetwork* roads) {
     // 完全静止的行人（vx=0 && vy=0）保持原地
     if (ped.vx == 0.0 && ped.vy == 0.0) {
         ped.speed = 0.0;
@@ -1081,6 +1095,24 @@ void step_npc_pedestrian(Entity& ped, double dt, const NpcAiConfig& cfg) {
             ped.vy = -ped.vy;  // 反向横穿
         }
         return;
+    }
+
+    // 沿路网步行（有 road_id 的路边行人）：推进 s 并按车道几何取世界坐标，
+    // 弯道/OSM 路上不会沿世界直线走出路面。横穿行人（vy!=0）仍走世界系。
+    if (roads && roads->loaded() && ped.road_id >= 0 &&
+        std::fabs(ped.vy) < 0.01 && std::fabs(ped.vx) > 0.01) {
+        ped.s += std::fabs(ped.vx) * dt;
+        const double lane_off = lane_internal_from_offset(
+            *roads, ped.road_id, ped.lane_id, ped.s, ped.offset);
+        WorldPos wp;
+        if (roads->frenet_to_world(ped.road_id, ped.lane_id, ped.s, lane_off, wp)) {
+            ped.x = wp.x;
+            ped.y = wp.y;
+            ped.z = wp.z;
+            ped.heading = wp.h;
+            ped.speed = std::fabs(ped.vx);
+            return;
+        }
     }
 
     // 移动
@@ -1137,9 +1169,18 @@ bool npc_request_state(Entity& npc, const NpcTransitionRequest& req,
             npc.cutin_pid_integral = 0.0;
             npc.cutin_pid_prev = 0.0;
         }
-        /* 进入 LaneChange → 设冷却 */
+        /* 进入 LaneChange → 设冷却 + 记录源车道（中止时回退，避免停在两车道之间） */
         if (target == NpcState::LaneChange) {
             npc.lane_change_timer = cfg.mobil_lane_change_cooldown;
+            npc.lane_change_from_offset = npc.offset;
+        }
+        /* 离开 LaneChange 但**未完成**（外部事件锁死：红灯/脚本 override 等）→
+         * 回到源车道。否则 target_offset=offset 的兜底会把半途的跨线 offset
+         * 当成新车道中心，车永久骑线。 */
+        if (old == NpcState::LaneChange && target != NpcState::LaneChange &&
+            std::fabs(npc.offset - npc.target_offset) > 0.01) {
+            npc.offset = npc.lane_change_from_offset;
+            npc.target_offset = npc.lane_change_from_offset;
         }
         /* 进入 StopForTL/Stopped → 立即减速 */
         if (target == NpcState::StopForTL || target == NpcState::Stopped) {

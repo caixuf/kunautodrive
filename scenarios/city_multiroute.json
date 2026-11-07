@@ -1,0 +1,45 @@
+{
+  "name": "city_multiroute",
+  "description": "\u65b9\u5411\u4e09\uff1aOSM \u591a OD \u8def\u7ebf\u5206\u914d\u3002ego \u8d70 routes.json \u7684 main \u94fe\uff1btraffic_density \u81ea\u52a8\u8865\u7ed9\u7684 NPC \u540c\u65f6\u5206\u914d\u5230 npc_routes \u6307\u5b9a\u7684 ew_spine \u94fe\uff08road_chain \u7531 scenario_loader \u5e76\u5165 road_network\uff0cflowsim \u4e3a\u6bcf\u6761\u94fe\u5efa\u72ec\u7acb Route\uff09\u3002\u5224\u636e\uff1a\u65e0\u78b0\u649e\u3001\u4e0d\u8d85\u65f6\uff0c\u4e14 scene.traffic_density.spawned >= 1\u3002",
+  "map_file": "../maps/city_grid/map.json",
+  "route_file": "../maps/city_grid/routes.json",
+  "route_id": "main",
+  "npc_routes": [
+    "ew_spine"
+  ],
+  "random_seed": 303,
+  "duration_s": 20,
+  "lighting": "day",
+  "weather": "clear",
+  "visibility_m": 1200,
+  "ego": {
+    "x": 1.75,
+    "y": 0.0,
+    "heading": 1.5708,
+    "init_speed": 10.0,
+    "target_speed": 12.0,
+    "wheelbase": 2.7,
+    "length": 4.6,
+    "width": 2.0,
+    "max_steer": 0.6
+  },
+  "actors": [],
+  "traffic_density": {
+    "cars_per_km": 10,
+    "spawn_jitter_m": 2.0,
+    "lane_spread": true,
+    "max_npcs": 12,
+    "random_seed_offset": 0
+  },
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 45.0,
+    "min_avg_speed_mps": 1.0
+  },
+  "route": [],
+  "scenarios": [],
+  "choreography": {
+    "loop_period_s": 999,
+    "beats": []
+  }
+}

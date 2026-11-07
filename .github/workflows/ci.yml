@@ -364,6 +364,14 @@ jobs:
         run: timeout 35 ./build/bin/flow_launcher config/pipeline.json --duration 15
       - name: Integration smoke (ctest -L integration)
         run: ctest --test-dir build --output-on-failure -L integration
+      # ── 方向五：同 seed 启动期确定性 ──
+      # RNG 隔离后，seed 派生的初始化结果（实体布局/转向意图/密度）必须可复现；
+      # 动态轨迹仍受墙钟/调度影响，故只断言 init_fingerprint（见 gate 头部注释）。
+      - name: Determinism gate (same seed → same init fingerprint)
+        run: python3 ci/gates/determinism_gate.py
+      # 方向三：OSM 多 OD 路线分配（npc_routes → 独立 Route → 轮转分配）
+      - name: NPC multi-OD route assignment gate
+        run: python3 ci/gates/npc_multi_route_check.py
       # ── L3-P2（方向六）：故障注入 → 降级路径 门禁 ──
       # P2 放行条件「每类注入故障都有可观测的降级路径」的有牙实现：
       # 对 tools/fault_degrade_sim.py 登记的每一类故障真起一条管线、真注入、

@@ -8,11 +8,11 @@
 
 | 方向 | 本轮状态 | 一句话 |
 |---|---|---|
-| 一 · 多模态感知 | 🟡 雷达链路打通 | `RadarFrame → ObstacleList` 纯转换 + perception 可选并入 + LiDAR 失效时雷达单独出帧 + 接线门禁；视觉仍为直通影子 |
+| 一 · 多模态感知 | ✅ 雷达 + 视觉退化 + 契约 + BEV 活性 | 雷达转换/并入/断流兜底 + 相机退化模型 + publish 类型门禁 + `bev/obstacles` 活性门禁（<1Hz FAIL）；BEV 仍为直通影子、无精度对比 |
 | 二 · 地图自动化 | ✅ D2-10 收口 | 4 场景 × 3 次实测 12/12 PASS，最差横向 1.185 ≤ 1.65；A1–A6、A8–A11 达标 |
-| 三 · 交通流 | 🟡 密度可按时间/区域调 | `time_windows` / `zones` 纯算法 + 场景解析 + 启动期与运行期泊松接入；OSM 多路线分配、加塞场景未做 |
-| 四 · 混合决策 | 🟡 门禁闭合 | promote 门禁补转向/轨迹阈值；新增 `model-takeover-boundary-gate`（非实验管线禁 `direct_ctrl`、仲裁器必须在链上）；模型仍不参与行为决策 |
-| 五 · 仿真闭环 | 🟡 部署门禁 + 确定性评估 | `ota push` 必须过 promote gate；闭环评估新增确定性回归测试；整车仿真确定性仍受全局 `rand()`/墙钟限制 |
+| 三 · 交通流 | ✅ 密度/多 OD/行人/加塞 | 时间+区域密度、OSM 多 OD 链逐车分配、行人自动生成、`npc_cutin` 场景、MOBIL 一帧中止修复 |
+| 四 · 混合决策 | ✅ 影子/仲裁/置信度 | promote 转向+轨迹阈值、接管边界 gate、`ControlRaw.confidence` + 置信度门（<0.5 回退规则） |
+| 五 · 仿真闭环 | ✅ RNG 隔离 + 确定性门禁 | flowsim/NPC 自持 RNG、`init_fingerprint` 确定性 gate、`ota push` 强制过 gate、闭环评估确定性回归 |
 
 ---
 
@@ -87,6 +87,25 @@ A6（均速基线偏差 ≤2.2%）与 A9（匹配耗时 P99 0.354μs）此前已
 
 ---
 
+## 第二轮：把"未完成"逐项补掉
+
+| 项 | 落地 | 证据 |
+|---|---|---|
+| 相机退化模型 | `sensor_model_camera_degradation()`：visibility × weather contrast × lighting − dusk glare；camera 出帧用 effective 因子 | 单测 4 例（clear/night+fog/dusk 眩光/单调+地板） |
+| 视觉 → 契约纠错 | `sensor/camera` 类型 `CameraFrame→LidarFrame`、`sensor/gps→GpsData` | topic gate A/B |
+| MOBIL 变道修复 | 纵向分发保持 `LaneChange`；E2 到达后 `LeadLost`→Cruise 并计数 | `npc_cutin` 场景 PASS，`lane_changes_completed=1` |
+| choreography cutin 瞬移 | `act:"cutin"` 不再走 teleport 重置位置 | 修复前 t=6 邻道车瞬移到 ego 车道当场碰撞 |
+| 加塞场景 | `scenarios/npc_cutin.json` + `expect_npc_lane_change` 判据 | PASS（min TTC 3.6s，无碰撞） |
+| 行人自动生成 | `traffic_density.pedestrian_ratio` + 路边步行（不横穿）+ 独立 RNG 流 | `pedestrian_flow` PASS，`pedestrian_max=5` |
+| OSM 多 OD 路线 | scenario `npc_routes` → 并入 road_network → flowsim 建独立 Route → 轮转交织分配 | `npc_route_spawned=5`；`npc-multi-route-gate` PASS |
+| 模型置信度门 | `ControlRaw.confidence` + `safety_arbiter_apply_ex`（<0.5 回退规则，NaN 拒绝）；inference 写 pred_conf、control 写 1.0 | 单测 1 例三段（低/高/关闭/NaN） |
+| 随机源隔离 | `flowsim/sim_rng.h`，flowsim/NPC/行人三条自持流；删除全局 `srand/rand` 依赖 | 单测 2 例（同 seed 同序列/范围） |
+| 确定性门禁 | `scene.init_fingerprint`（seed + 初始实体布局/转向意图）+ 两次启动比较 + 改 seed 必变 | `determinism-gate` PASS |
+
+**仍未完成（如实）**：BEV 检测仍为直通影子（仅有活性门禁，**无精度/影子对比门禁**）；模型仍不参与
+behavior/planning 决策层（只在 control 指令层经仲裁器参与）；动态轨迹本身仍受墙钟/调度
+影响，确定性只覆盖启动期指纹与闭环评估。
+
 ## code-review 抓出并已修的问题（同一 PR 内）
 
 1. **密度倍率只改计数、不改落点** → 计数与落点共用 `traffic_density_effective_spacing()`；
@@ -121,6 +140,24 @@ A6（均速基线偏差 ≤2.2%）与 A9（匹配耗时 P99 0.354μs）此前已
 融合层重构，超出本轮切片）；`CI gate` 的"订阅≠消费"更深修法（运行时条件订阅 + 契约支持可选
 topic）同样留作后续。
 
+## code-review 第二轮（第二轮改动）抓出并已修
+
+1. `control/cmd` 的 `confidence` wire 字段在 `publish_cmd` 里从未赋值（未初始化栈值）→ 补 `bin.confidence`。
+2. MOBIL `LaneChange` 被外部事件（红灯/脚本 override）打断时没有回退路径 → 记录源车道
+   `lane_change_from_offset`，未完成离开时回到源车道，避免永久骑线。
+3. `npc_multi_route_check` 用 `"invariant failed"` 子串（flowsim 从不输出）→ 改为解析
+   `[INV] summary total=N` 并判 >0。
+4. `act:"cutin"` 的 target 用世界 `ego.y` 当道路参考系 offset → 弯道/OSM 会偏出路面；
+   改为 `world_to_frenet + offset_from_lane_internal`（直道行为不变）。
+5. `npc_routes` 合并去重只在主链过滤成功（有 `legacy_id`）时有效 → 过滤失败回退全量时
+   会重复追加道路；加 `roads_filtered` 条件。
+6. `determinism_gate` 只比指纹，spawn 全断时仍绿 → 默认场景换成 `dense_route_traffic`，
+   并断言 `traffic_density.spawned >= 1` 且实体数 ≥2。
+7. 自动补给的行人是世界直线行走 → `step_npc_pedestrian` 增加 roads 参数，有 road_id 时
+   沿 road s 推进（弯道/OSM 不跑出车道）。
+8. choreography actor 查找把 ego（scenario_id=0）当成 actor 0 → 跳过 Ego 类型。
+9. `sim_rng_seed` 直接用 42 这类小状态，xorshift 前几次抽样偏小 → 加 splitmix64 混淆。
+
 ## 本轮验证（全绿）
 
 ```bash
@@ -134,7 +171,14 @@ python3 ci/gates/model_takeover_boundary_check.py                               
 python3 ci/gates/behavior_fsm_check.py                                                # OK
 python3 ci/gates/lanelet_consistency_check.py                                         # OK
 python3 tools/scenarioctl.py validate                                                 # OK
-python3 ci/evaluators/scenario_regression.py --workers 4                              # 16/16 PASS
+python3 ci/evaluators/scenario_regression.py --workers 4                              # 18/18 PASS（新增 cutin/pedestrian）
 python3 ci/evaluators/scenario_regression.py --only dense_npc                          # PASS（改后复跑）
 python3 ci/evaluators/scenario_regression.py --only straight_road                      # PASS（改后复跑）
+python3 ci/evaluators/scenario_regression.py --only npc_cutin                          # PASS
+python3 ci/evaluators/scenario_regression.py --only pedestrian_flow                    # PASS
+python3 ci/gates/determinism_gate.py                                                   # OK
+python3 ci/gates/npc_multi_route_check.py                                              # OK
 ```
+
+单测：`test_adas_nodes_logic` **107/107**、`traffic_density_scenario` **6/6**；
+`pytest ci/evaluators` **107 passed / 1 skipped**。

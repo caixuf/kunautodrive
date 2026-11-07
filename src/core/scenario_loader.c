@@ -108,12 +108,19 @@ static void resolve_map_reference(cJSON* scenario, const char* scenario_path) {
         return;
     }
 
+    /* npc_routes 需要从**全量** roads 里查链；过滤会把 map.roads 整个替换掉
+     * （原数组被 cJSON_DeleteItemFromObjectCaseSensitive 释放），故先深拷贝一份。 */
+    cJSON* full_roads = cJSON_Duplicate(roads, 1);
+
     /* route_file/route_id：按 json_to_xodr 同款语义把 roads 过滤到 road_chain 顺序。
      * 保证注入的 road_network 与 json_to_xodr 生成的 xodr 是同一套 road 集合、
      * 同一套数字 id（legacy_id 或过滤后索引）——A* 输出才能直接映射回 esmini。
      * 过滤失败（缺 route / chain 引用缺失 road）时回退全量 roads，不阻断场景加载。 */
     cJSON* jroute_file = cJSON_GetObjectItemCaseSensitive(scenario, "route_file");
     cJSON* jroute_id  = cJSON_GetObjectItemCaseSensitive(scenario, "route_id");
+    /* 主链过滤是否成功：失败时 map.roads 仍是全量、且没有 legacy_id 字段，
+     * npc_routes 的"已存在"判断会恒 false → 每段路被重复追加。 */
+    bool roads_filtered = false;
     if (cJSON_IsString(jroute_file) && jroute_file->valuestring &&
         cJSON_IsString(jroute_id) && jroute_id->valuestring) {
         char routes_path[1024] = {0};
@@ -192,6 +199,7 @@ static void resolve_map_reference(cJSON* scenario, const char* scenario_path) {
                     cJSON_DeleteItemFromObjectCaseSensitive(map, "roads");
                     cJSON_AddItemToObject(map, "roads", filtered);
                     roads = cJSON_GetObjectItemCaseSensitive(map, "roads");
+                    roads_filtered = true;
                     LOG_INFO("scenario", "map '%s' roads filtered to route '%s' (%d road(s))",
                              map_path, jroute_id->valuestring, cJSON_GetArraySize(roads));
                 } else {
@@ -201,6 +209,80 @@ static void resolve_map_reference(cJSON* scenario, const char* scenario_path) {
                                  "keep full roads", jroute_id->valuestring);
                 }
             }
+            /* ── 方向三：NPC 多 OD 路线（npc_routes）──
+                 * 把每条 NPC route 的 road_chain 也并入 road_network（按
+                 * legacy_id 去重），并记录 legacy id 链，供 flowsim 建
+                 * 独立 Route。ego 仍走 route_id 指定的主链。 */
+                cJSON* jnpc_routes =
+                    cJSON_GetObjectItemCaseSensitive(scenario, "npc_routes");
+                if (cJSON_IsArray(jnpc_routes) && cJSON_IsArray(routes_arr)) {
+                    cJSON* chains_out = cJSON_CreateArray();
+                    cJSON* rn = NULL;
+                    cJSON_ArrayForEach(rn, jnpc_routes) {
+                        if (!cJSON_IsString(rn) || !rn->valuestring) continue;
+                        cJSON* sel = NULL;
+                        cJSON* cand = NULL;
+                        cJSON_ArrayForEach(cand, routes_arr) {
+                            cJSON* cid = cJSON_GetObjectItemCaseSensitive(cand, "id");
+                            if (cJSON_IsString(cid) && cid->valuestring &&
+                                strcmp(cid->valuestring, rn->valuestring) == 0) {
+                                sel = cand; break;
+                            }
+                        }
+                        cJSON* nchain = sel
+                            ? cJSON_GetObjectItemCaseSensitive(sel, "road_chain") : NULL;
+                        if (!cJSON_IsArray(nchain)) continue;
+                        cJSON* legacy_chain = cJSON_CreateArray();
+                        cJSON* jr = NULL;
+                        cJSON_ArrayForEach(jr, nchain) {
+                            if (!cJSON_IsString(jr) || !jr->valuestring) continue;
+                            int full_idx = 0, found_idx = -1;
+                            cJSON* road2 = NULL;
+                            cJSON_ArrayForEach(road2, full_roads) {
+                                cJSON* rid3 = road2
+                                    ? cJSON_GetObjectItemCaseSensitive(road2, "id") : NULL;
+                                if (cJSON_IsString(rid3) && rid3->valuestring &&
+                                    strcmp(rid3->valuestring, jr->valuestring) == 0) {
+                                    found_idx = full_idx; break;
+                                }
+                                full_idx++;
+                            }
+                            if (found_idx < 0) continue;
+                            cJSON_AddItemToArray(legacy_chain,
+                                                 cJSON_CreateNumber(found_idx));
+                            /* 已并入（ego 链与 npc 链共道）→ 不重复加。 */
+                            int present = 0;
+                            cJSON* fr = NULL;
+                            cJSON_ArrayForEach(fr, roads) {
+                                cJSON* lid = fr ? cJSON_GetObjectItemCaseSensitive(
+                                    fr, "legacy_id") : NULL;
+                                if (cJSON_IsNumber(lid) &&
+                                    (int)lid->valuedouble == found_idx) {
+                                    present = 1; break;
+                                }
+                            }
+                            if (roads_filtered && !present) {
+                                cJSON* dup = cJSON_Duplicate(
+                                    cJSON_GetArrayItem(full_roads, found_idx), 1);
+                                cJSON_DeleteItemFromObjectCaseSensitive(dup, "legacy_id");
+                                cJSON_AddNumberToObject(dup, "legacy_id", found_idx);
+                                cJSON_AddItemToArray(roads, dup);
+                            }
+                        }
+                        if (cJSON_GetArraySize(legacy_chain) > 0)
+                            cJSON_AddItemToArray(chains_out, legacy_chain);
+                        else
+                            cJSON_Delete(legacy_chain);
+                    }
+                    if (cJSON_GetArraySize(chains_out) > 0) {
+                        cJSON_AddItemToObject(map, "npc_route_chains", chains_out);
+                        LOG_INFO("scenario",
+                                 "npc_routes: %d chain(s) merged into road network",
+                                 cJSON_GetArraySize(chains_out));
+                    } else {
+                        cJSON_Delete(chains_out);
+                    }
+                }
             if (routes_doc) cJSON_Delete(routes_doc);
         } else {
             LOG_WARN("scenario", "route file '%s' could not be opened — keep full roads",
@@ -248,6 +330,10 @@ static void resolve_map_reference(cJSON* scenario, const char* scenario_path) {
     if (extra) cJSON_AddItemToObject(network, "cross_roads", cJSON_Duplicate(extra, 1));
     extra = cJSON_GetObjectItemCaseSensitive(map, "junctions");
     if (extra) cJSON_AddItemToObject(network, "junctions", cJSON_Duplicate(extra, 1));
+    /* 方向三：NPC 多 OD 链（legacy road id 数组），flowsim 据此建 Route。 */
+    extra = cJSON_GetObjectItemCaseSensitive(map, "npc_route_chains");
+    if (extra) cJSON_AddItemToObject(network, "npc_route_chains",
+                                     cJSON_Duplicate(extra, 1));
     /* 建筑：单源真相（footprint+height+x+y+rotation）。随 road_network_json 一起
      * 保留，flowsim 初始化阶段直接解析为静态碰撞/遮挡体，与路由共用同一 JSON 通道。 */
     extra = cJSON_GetObjectItemCaseSensitive(map, "buildings");
@@ -262,6 +348,7 @@ static void resolve_map_reference(cJSON* scenario, const char* scenario_path) {
         if (extra) cJSON_AddItemToObject(scenario, static_fields[i], cJSON_Duplicate(extra, 1));
     }
     LOG_INFO("scenario", "resolved map '%s' (%d road(s))", map_path, index);
+    if (full_roads) cJSON_Delete(full_roads);
     cJSON_Delete(map);
 }
 
@@ -469,7 +556,21 @@ ScenarioConfig* scenario_load(const char* path) {
     sc->traffic_density.lane_spread          = 1;
     sc->traffic_density.max_npcs             = 50;
     sc->traffic_density.random_seed_offset   = 0;
+    sc->traffic_density.pedestrian_ratio     = 0.0;
     sc->traffic_density.time_window_count    = 0;
+    sc->npc_route_count                      = 0;
+    {
+        cJSON* jnr = cJSON_GetObjectItemCaseSensitive(root, "npc_routes");
+        if (cJSON_IsArray(jnr)) {
+            cJSON* it = NULL;
+            cJSON_ArrayForEach(it, jnr) {
+                if (sc->npc_route_count >= SCENARIO_MAX_NPC_ROUTES) break;
+                if (!cJSON_IsString(it) || !it->valuestring) continue;
+                snprintf(sc->npc_route_ids[sc->npc_route_count++], 32, "%s",
+                         it->valuestring);
+            }
+        }
+    }
     sc->traffic_density.zone_count           = 0;
     cJSON* jtd = cJSON_GetObjectItemCaseSensitive(root, "traffic_density");
     if (cJSON_IsObject(jtd)) {
@@ -484,6 +585,13 @@ ScenarioConfig* scenario_load(const char* path) {
         if (cJSON_IsNumber(jv) && jv->valueint > 0) sc->traffic_density.max_npcs = jv->valueint;
         jv = cJSON_GetObjectItemCaseSensitive(jtd, "random_seed_offset");
         if (cJSON_IsNumber(jv)) sc->traffic_density.random_seed_offset = jv->valueint;
+        jv = cJSON_GetObjectItemCaseSensitive(jtd, "pedestrian_ratio");
+        if (cJSON_IsNumber(jv)) {
+            double pr = jv->valuedouble;
+            if (pr < 0.0) pr = 0.0;
+            if (pr > 1.0) pr = 1.0;
+            sc->traffic_density.pedestrian_ratio = pr;
+        }
         /* D3-3：时段 / 区域密度窗（可选；解析失败 = 用基线密度） */
         sc->traffic_density.time_window_count = parse_density_windows(
             cJSON_GetObjectItemCaseSensitive(jtd, "time_windows"),
@@ -1044,6 +1152,14 @@ char* scenario_to_json(const ScenarioConfig* scenario) {
     }
     cJSON_AddItemToObject(root, "scenarios", jscripts);
 
+    /* 方向三：NPC 多 OD 路线 id（有才写，保持 disabled 不写噪声字段）。 */
+    if (scenario->npc_route_count > 0) {
+        cJSON* arr = cJSON_CreateArray();
+        for (int i = 0; i < scenario->npc_route_count; i++)
+            cJSON_AddItemToArray(arr, cJSON_CreateString(scenario->npc_route_ids[i]));
+        cJSON_AddItemToObject(root, "npc_routes", arr);
+    }
+
     /* traffic_density (D3-2): 仅在 cars_per_km > 0 时输出块（与场景文件
      * 写盘风格一致：disabled 状态不写噪声字段）。 */
     if (scenario->traffic_density.cars_per_km > 0) {
@@ -1053,6 +1169,9 @@ char* scenario_to_json(const ScenarioConfig* scenario) {
         cJSON_AddBoolToObject(jtd,   "lane_spread",        scenario->traffic_density.lane_spread != 0);
         cJSON_AddNumberToObject(jtd, "max_npcs",           scenario->traffic_density.max_npcs);
         cJSON_AddNumberToObject(jtd, "random_seed_offset", scenario->traffic_density.random_seed_offset);
+        if (scenario->traffic_density.pedestrian_ratio > 0.0)
+            cJSON_AddNumberToObject(jtd, "pedestrian_ratio",
+                                    scenario->traffic_density.pedestrian_ratio);
         /* D3-3：时段 / 区域窗（有才写，保持"disabled 不写噪声字段"风格）。 */
         add_density_windows(jtd, "time_windows",
                             scenario->traffic_density.time_windows,

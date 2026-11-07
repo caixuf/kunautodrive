@@ -224,6 +224,9 @@ struct ControlRaw {
     float    error          # 速度误差 (m/s)
     float    cte            # 横向跟踪误差 (m)，正=偏左，负=偏右
     char     mode[24]       # 模式字符串: ACCEL/BRAKE/HOLD/ROAD_GUARD等
+    float    confidence     # 命令自评置信度 [0,1]；规则主干=1.0，模型=pred_conf。
+                            # 方向四：safety_arbiter 用它做"逐步接管"门限——低置信度模型
+                            # 即使影子评估过了，也先回退规则主干（默认阈值 0.5）。
     uint8    turn_signal    # 转向灯指令：0=off, 1=left, 2=right（planning/control 决策下发）
     bool     hazard         # 双闪灯指令（紧急停车 / 碰撞时 planning/control 决策下发）
     Gear     gear           # 档位（DRIVE=1/REVERSE=-1/NEUTRAL=0），control 从 trajectory v 符号推导
@@ -234,6 +237,7 @@ struct ControlCmd {
     float    throttle       # 油门 [0.0, 1.0]
     float    brake          # 制动 [0.0, 1.0]
     float    steering       # 转向角（rad）：正值右转，负值左转，范围约 ±0.22 rad，actuator 负责归一化
+    float    confidence     # 命令自评置信度 [0,1]（ControlRaw → 仲裁后的透传副本）
     Gear     gear           # 档位
     bool     emergency_stop # 紧急制动标志
     uint8    turn_signal    # 转向灯指令：0=off, 1=left, 2=right（planning/control 决策下发，意图先行）

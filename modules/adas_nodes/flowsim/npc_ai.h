@@ -119,6 +119,13 @@ bool npc_request_state(Entity& npc, const NpcTransitionRequest& req,
                        const NpcAiConfig& cfg);
 
 /**
+ * 播种 NPC AI 自持随机源（路口转向意图）。
+ * 与 flowsim 的 SimRng 分开：模块内逻辑不受其他节点 srand() 干扰。
+ * @param seed 通常用 scenario.random_seed（可再异或一个常数区分流）。
+ */
+void npc_ai_seed_rng(uint64_t seed);
+
+/**
  * 单步 NPC 车辆 AI（每帧 tick）。
  * 内部按 npc.state 分发纵向+横向行为；状态内自行调用 npc_request_state
  * 完成自动转移（如找到前车 → Follow，CutIn 完成 → Cruise 等）。
@@ -146,7 +153,8 @@ void npc_init_route(Entity& npc, const Route& route, int dir);
  * 行为：按 vx/vy 匀速横穿，到达 |y| >= ped_boundary 后等待 ped_wait_time 反向。
  * 沿车道行走的行人（vy=0）保持直线运动。
  */
-void step_npc_pedestrian(Entity& ped, double dt, const NpcAiConfig& cfg);
+void step_npc_pedestrian(Entity& ped, double dt, const NpcAiConfig& cfg,
+                         FlowRoadNetwork* roads = nullptr);
 
 }  // namespace flowsim
 

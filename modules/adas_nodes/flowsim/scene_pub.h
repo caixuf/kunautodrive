@@ -81,6 +81,7 @@ struct ScenePubTrafficDensity {
     int  cars_per_km{0};      /* 声明的密度 */
     int  route_segs{0};       /* route 段数（spawn 骨架；0 = route 未加载） */
     int  spawned{0};          /* 实际落入 entity pool 的 NPC 数 */
+    int  npc_route_spawned{0};/* 其中落在 npc_routes 多 OD 链上的数量 */
     bool pool_full{false};    /* 是否为 pool 容量耗尽而提前停止 */
 };
 
@@ -95,6 +96,12 @@ struct ScenePubConfig {
     double curve_offset_m{0};
     double lane_width{3.5};
     int    lane_count{2};
+    /* 方向三：NPC MOBIL 变道完成次数（所有实体累计）。门禁用它断言
+     * "场景声明允许变道 → 真发生了完成的变道"，而不是只看 ai_state 曾经是
+     * LaneChange（旧缺陷正是"置了状态但一帧中止"，状态量看不出来）。 */
+    int    npc_lane_changes_completed{0};
+    /* 方向五：初始化指纹（seed + 启动期实体布局/转向意图的 FNV-1a）。 */
+    uint64_t init_fingerprint{0};
 
     /* esmini 道路网络（加载成功时非空，优先用其采样节点） */
     FlowRoadNetwork* roads{nullptr};

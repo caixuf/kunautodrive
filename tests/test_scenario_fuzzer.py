@@ -160,9 +160,14 @@ class TestScenarioFuzzer(unittest.TestCase):
         self.assertTrue(any("ego.init_speed" in e for e in errs))
 
     def test_suite_enabled_scenarios_validation(self):
-        """The 16 enabled scenarios in suite.json must all pass strict validation."""
+        """All enabled scenarios in suite.json must pass strict validation.
+
+        Count 不再写死：suite 会随方向二/三新增场景增长，硬编码条数只会让
+        "加场景"变成无意义的红灯（旧测试卡 16，新增 npc_cutin/pedestrian_flow
+        后误报）。这里只守下界 + 全部通过。
+        """
         enabled = get_enabled_suite_scenarios()
-        self.assertEqual(len(enabled), 16)
+        self.assertGreaterEqual(len(enabled), 16)
         rc = validate_suite_scenarios()
         self.assertEqual(rc, 0)
 

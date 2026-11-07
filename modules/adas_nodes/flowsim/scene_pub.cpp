@@ -547,7 +547,24 @@ char* build_scene_frame_json(const EntityPool& pool,
         cJSON_AddNumberToObject(td, "cars_per_km", (double)cfg.traffic_density.cars_per_km);
         cJSON_AddNumberToObject(td, "route_segs", (double)cfg.traffic_density.route_segs);
         cJSON_AddNumberToObject(td, "spawned", (double)cfg.traffic_density.spawned);
+        cJSON_AddNumberToObject(td, "npc_route_spawned",
+                                (double)cfg.traffic_density.npc_route_spawned);
         cJSON_AddBoolToObject(td, "pool_full", cfg.traffic_density.pool_full);
+    }
+
+    /* NPC 行为可观测（方向三）：MOBIL 变道完成次数。始终发布（0 也要可读），
+     * 让门禁能区分"没打算变道"与"打算了但一帧中止"。 */
+    {
+        cJSON* npc = cJSON_AddObjectToObject(root, "npc");
+        cJSON_AddNumberToObject(npc, "lane_changes_completed",
+                                (double)cfg.npc_lane_changes_completed);
+    }
+
+    /* 方向五：初始化指纹（hex 字符串，避免 uint64 在 cJSON double 里丢精度）。 */
+    {
+        char fp[32];
+        snprintf(fp, sizeof(fp), "%016llx", (unsigned long long)cfg.init_fingerprint);
+        cJSON_AddStringToObject(root, "init_fingerprint", fp);
     }
 
     char* s = cJSON_PrintUnformatted(root);

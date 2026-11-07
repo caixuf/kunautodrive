@@ -39,6 +39,7 @@
 #include "lidar_scan.h"
 #include "radar_model.h"
 #include "radar_post.h"
+#include "flowsim/sim_rng.h"
 #include "lidar_contract.h"
 
 /* D2-04 / D2-05 M3: lane_match 10 字段契约 -> 抽出 helper 到 flowsim/lane_match_helpers.h。
@@ -425,6 +426,48 @@ static void test_weather_attenuation_dense_fog(void) {
     PASS();
 }
 
+/* ── 方向一：相机退化（visibility × weather contrast × lighting − glare）── */
+static void test_camera_degradation_clear_day(void) {
+    TEST("camera degradation: clear/day/200m → effective 1.0");
+    SensorCameraDegradation d = sensor_model_camera_degradation(200.0, "clear", "day");
+    ASSERT_NEAR(d.visibility, 1.0, 1e-6, "200m visibility = full");
+    ASSERT_NEAR(d.contrast, 1.0, 1e-6, "clear weather = full contrast");
+    ASSERT_NEAR(d.lighting, 1.0, 1e-6, "day = full lighting");
+    ASSERT_NEAR(d.glare, 0.0, 1e-6, "day has no glare");
+    ASSERT_NEAR(d.effective, 1.0, 1e-6, "clear day must be un-degraded");
+    PASS();
+}
+
+static void test_camera_degradation_night_fog(void) {
+    TEST("camera degradation: fog/night 200m → 0.45*0.30 = 0.135");
+    SensorCameraDegradation d = sensor_model_camera_degradation(200.0, "dense_fog", "night");
+    ASSERT_NEAR(d.contrast, 0.45, 1e-6, "fog contrast must be 0.45");
+    ASSERT_NEAR(d.lighting, 0.30, 1e-6, "night lighting must be 0.30");
+    ASSERT_NEAR(d.effective, 0.135, 1e-6, "fog×night must multiply");
+    PASS();
+}
+
+static void test_camera_degradation_dusk_glare(void) {
+    TEST("camera degradation: dusk 逆光 → 0.65 − 0.15 = 0.50；大小写不敏感");
+    SensorCameraDegradation d = sensor_model_camera_degradation(200.0, "Clear", "DUSK");
+    ASSERT_NEAR(d.glare, 0.15, 1e-6, "dusk must carry glare loss");
+    ASSERT_NEAR(d.effective, 0.50, 1e-6, "dusk effective = lighting − glare");
+    PASS();
+}
+
+static void test_camera_degradation_monotonic_and_floor(void) {
+    TEST("camera degradation: 能见度↑ → effective 不降；极端输入有地板");
+    SensorCameraDegradation far_d = sensor_model_camera_degradation(200.0, "clear", "day");
+    SensorCameraDegradation mid_d = sensor_model_camera_degradation(50.0, "clear", "day");
+    SensorCameraDegradation low_d = sensor_model_camera_degradation(1.0, "clear", "day");
+    ASSERT(far_d.effective >= mid_d.effective && mid_d.effective >= low_d.effective,
+           "effective must be monotonic in visibility");
+    SensorCameraDegradation bad = sensor_model_camera_degradation(-5.0, "fog", "night");
+    ASSERT(bad.effective >= 0.05, "extreme degradation must clamp to floor 0.05");
+    ASSERT(bad.visibility >= 0.1, "visibility factor floor 0.1");
+    PASS();
+}
+
 /* ══════════════════════════════════════════════════════════ */
 /* Safety Control: Dynamic Arbiter                             */
 /* ══════════════════════════════════════════════════════════ */
@@ -502,6 +545,35 @@ static void test_arbiter_brake_priority(void) {
     ASSERT_NEAR(out.brake, 0.7, 1e-6, "should enforce rule brake");
     ASSERT_NEAR(out.throttle, 0.0, 1e-6, "should clamp throttle to 0");
     ASSERT_EQ(intervened, 1, "should flag intervention");
+    PASS();
+}
+
+static void test_arbiter_conf_gate(void) {
+    TEST("arbiter: 模型置信度 < 0.5 → 回退规则并标记干预");
+    SafetyArbiterCmd rule = make_cmd(0.5, 0.0, 0.00, 1);
+    SafetyArbiterCmd model = make_cmd(0.8, 0.0, 0.02, 1);
+    int intervened = 0;
+    SafetyArbiterCmd out = safety_arbiter_apply_ex(
+        &rule, &model, 1, 0, 0.20, SAFETY_ARBITER_MODEL_CONF_MIN, &intervened);
+    ASSERT_NEAR(out.throttle, 0.5, 1e-6, "low confidence must fall back to rule throttle");
+    ASSERT_NEAR(out.steer, 0.0, 1e-6, "low confidence must fall back to rule steer");
+    ASSERT_EQ(intervened, 1, "confidence rejection counts as intervention");
+
+    /* 高置信度 + 包络内 → 采纳模型 */
+    out = safety_arbiter_apply_ex(&rule, &model, 1, 0, 0.90,
+                                  SAFETY_ARBITER_MODEL_CONF_MIN, &intervened);
+    ASSERT_NEAR(out.throttle, 0.8, 1e-6, "high confidence within envelope accepts model");
+    ASSERT_EQ(intervened, 0, "no intervention when accepted");
+
+    /* conf_min<=0 关闭置信度门（旧行为） */
+    out = safety_arbiter_apply_ex(&rule, &model, 1, 0, 0.0, 0.0, &intervened);
+    ASSERT_NEAR(out.throttle, 0.8, 1e-6, "conf gate off must accept model throttle");
+
+    /* NaN 置信度 = 不可判定 → 拒绝 */
+    out = safety_arbiter_apply_ex(&rule, &model, 1, 0, NAN,
+                                  SAFETY_ARBITER_MODEL_CONF_MIN, &intervened);
+    ASSERT_NEAR(out.throttle, 0.5, 1e-6, "NaN confidence must be rejected");
+    ASSERT_EQ(intervened, 1, "NaN confidence counts as intervention");
     PASS();
 }
 
@@ -2022,6 +2094,49 @@ static void test_traffic_density_scaled_spawn_count(void) {
     PASS();
 }
 
+/* ── 方向五：自持 RNG 的确定性/隔离性 ── */
+static void test_sim_rng_reproducible_and_isolated(void) {
+    TEST("sim_rng: 同 seed 同序列，不同 seed 不同，零 seed 不锁死");
+    SimRng a, b, c;
+    sim_rng_seed(&a, 42);
+    sim_rng_seed(&b, 42);
+    sim_rng_seed(&c, 43);
+    uint32_t seq_a[16], seq_b[16], seq_c[16];
+    for (int i = 0; i < 16; i++) {
+        seq_a[i] = sim_rng_next_u32(&a);
+        seq_b[i] = sim_rng_next_u32(&b);
+        seq_c[i] = sim_rng_next_u32(&c);
+    }
+    ASSERT(memcmp(seq_a, seq_b, sizeof(seq_a)) == 0,
+           "same seed must produce the same sequence (deterministic)");
+    ASSERT(memcmp(seq_a, seq_c, sizeof(seq_a)) != 0,
+           "different seed must produce a different sequence");
+    ASSERT(seq_a[0] != 0 && seq_a[1] != 0, "sequence must not collapse to zeros");
+
+    SimRng z;
+    sim_rng_seed(&z, 0);
+    ASSERT(z.state != 0, "zero seed must be replaced by a non-zero constant");
+    ASSERT(sim_rng_next_u32(&z) != 0, "zero-seeded RNG must still produce output");
+    PASS();
+}
+
+static void test_sim_rng_ranges(void) {
+    TEST("sim_rng: uniform01 ∈ [0,1)，below 命中 [0,n)");
+    SimRng r;
+    sim_rng_seed(&r, 7);
+    int below_ok = 1;
+    for (int i = 0; i < 10000; i++) {
+        double u = sim_rng_uniform01(&r);
+        if (!(u >= 0.0 && u < 1.0)) { below_ok = 0; break; }
+        int k = sim_rng_below(&r, 10);
+        if (k < 0 || k >= 10) { below_ok = 0; break; }
+    }
+    ASSERT(below_ok, "uniform01 must stay in [0,1), below(n) in [0,n)");
+    ASSERT_EQ(sim_rng_below(&r, 0), 0, "below(0) must not advance/crash");
+    ASSERT_EQ(sim_rng_below(&r, -5), 0, "negative bound must return 0");
+    PASS();
+}
+
 /* ══════════════════════════════════════════════════════════════
  * L3-P2 冗余：毫米波雷达观测模型（radar_model.h）
  *
@@ -2356,6 +2471,10 @@ int main(void) {
     test_radar_target_capacity();
     test_radar_deterministic();
 
+    printf("\n═══ Sim RNG (方向五：确定性根因) ═══\n");
+    test_sim_rng_reproducible_and_isolated();
+    test_sim_rng_ranges();
+
     printf("\n═══ Radar post (RadarFrame → ObstacleList，方向一接线) ═══\n");
     test_radar_post_ahead_maps_to_body_frame();
     test_radar_post_azimuth_sign();
@@ -2381,6 +2500,10 @@ int main(void) {
     test_weather_attenuation_fog();
     test_weather_attenuation_rain_floor();
     test_weather_attenuation_dense_fog();
+    test_camera_degradation_clear_day();
+    test_camera_degradation_night_fog();
+    test_camera_degradation_dusk_glare();
+    test_camera_degradation_monotonic_and_floor();
 
     printf("\n═══ Safety Control Dynamic Arbiter ═══\n");
     test_arbiter_no_model();
@@ -2388,6 +2511,7 @@ int main(void) {
     test_arbiter_model_within_envelope();
     test_arbiter_steer_reject();
     test_arbiter_brake_priority();
+    test_arbiter_conf_gate();
 
     printf("\n═══ Trajectory Swept Collision Check (W3) ═══\n");
     test_swept_catches_thin_obstacle_between_samples();

@@ -822,7 +822,7 @@ static void build_control_raw(double pred_speed, double pred_d,
                               double pred_throttle, double pred_brake,
                               double pred_steer, double pred_lc, double pred_conf,
                               uint8_t* buf, size_t* len, const char* mode_tag) {
-    (void)pred_lc; (void)pred_conf;
+    (void)pred_lc;
     double throttle = pred_throttle, brake = pred_brake, steer = pred_steer;
 
     /* 模型未输出有效控制时回退到 PD 推算 */
@@ -852,6 +852,10 @@ static void build_control_raw(double pred_speed, double pred_d,
     raw.speed    = (float)g.ego_v;
     raw.target   = (float)pred_speed;
     raw.error    = (float)(pred_speed - g.ego_v);
+    /* 方向四：模型自评置信度随命令下发，safety_arbiter 据此决定是否接管。
+     * 旧实现 pred_conf 被 (void) 丢弃，仲裁层只能看转向包络——低置信度模型
+     * 照样能驱动，违背"达标再逐步接管"。 */
+    raw.confidence = (float)(pred_conf < 0.0 ? 0.0 : (pred_conf > 1.0 ? 1.0 : pred_conf));
     snprintf(raw.mode, sizeof(raw.mode), "%s", mode_tag);
 
     ControlRaw_serialize(&raw, buf, len);

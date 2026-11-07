@@ -28,6 +28,32 @@ double sensor_model_camera_visibility(double visibility_m);
  */
 double sensor_model_weather_attenuation(double visibility_m, const char* weather);
 
+/**
+ * 相机退化模型（方向一：多模态感知的"视觉退化"侧）。
+ *
+ * 此前相机只是 LiDAR 帧副本 × 可见度 —— 夜间/逆光对相机的影响完全没建模，
+ * 于是"雷达冗余"缺少一个可对比的退化模态。本函数给出三个确定性分量：
+ *
+ *   visibility = clamp(visibility_m / 200, 0.1, 1.0)     （雾/雨/雪 → 能见度）
+ *   contrast   = 天气串查表（clear 1.0 / rain 0.75 / snow 0.65 / fog 0.45）
+ *   lighting   = 光照串查表（day 1.0 / dusk 0.65 / night 0.30；未知按 day）
+ *   glare      = dusk 逆光额外损失 0.15；其它 0
+ *   effective  = clamp(visibility * contrast * lighting - glare, 0.05, 1.0)
+ *
+ * 性质（单测锁定）：各分量 ∈[0,1]，effective 对 visibility 单调不减；
+ * 同一输入恒等；天气/光照串大小写不敏感。
+ */
+typedef struct {
+    double visibility;
+    double contrast;
+    double lighting;
+    double glare;
+    double effective;
+} SensorCameraDegradation;
+
+SensorCameraDegradation sensor_model_camera_degradation(
+    double visibility_m, const char* weather, const char* lighting);
+
 #ifdef __cplusplus
 }
 #endif

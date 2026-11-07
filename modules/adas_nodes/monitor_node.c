@@ -315,7 +315,11 @@ static struct {
     int    scene_td_cars_per_km;
     int    scene_td_route_segs;
     int    scene_td_spawned;
+    int    scene_td_npc_route;
     int    scene_td_pool_full;
+    /* 方向三：NPC MOBIL/加塞完成次数（flowsim 每帧发，0 也要可读）。 */
+    int    scene_npc_lc_completed;
+    char   scene_init_fingerprint[32];  /* 方向五：启动期初始化指纹（hex） */
 
 #define MAX_SAMPLES 200  /* samples 环形缓冲长度：50ms 采样 × 200 = 10s 窗口 */
     /* ── samples 环形缓冲：最近 ~10s 的 ego 快照 ── */
@@ -722,18 +726,39 @@ static void on_scene_frame(const Message* msg, void* user_data) {
         cJSON* j_cpk  = cJSON_GetObjectItemCaseSensitive(td, "cars_per_km");
         cJSON* j_seg  = cJSON_GetObjectItemCaseSensitive(td, "route_segs");
         cJSON* j_sp   = cJSON_GetObjectItemCaseSensitive(td, "spawned");
+        cJSON* j_nr   = cJSON_GetObjectItemCaseSensitive(td, "npc_route_spawned");
         cJSON* j_pf   = cJSON_GetObjectItemCaseSensitive(td, "pool_full");
         g.scene_td_enabled     = 1;
         g.scene_td_cars_per_km = cJSON_IsNumber(j_cpk) ? (int)j_cpk->valuedouble : 0;
         g.scene_td_route_segs  = cJSON_IsNumber(j_seg) ? (int)j_seg->valuedouble : 0;
         g.scene_td_spawned     = cJSON_IsNumber(j_sp)  ? (int)j_sp->valuedouble  : 0;
+        g.scene_td_npc_route   = cJSON_IsNumber(j_nr)  ? (int)j_nr->valuedouble  : 0;
         g.scene_td_pool_full   = cJSON_IsBool(j_pf)    ? (cJSON_IsTrue(j_pf) ? 1 : 0) : 0;
     } else {
         g.scene_td_enabled     = 0;
         g.scene_td_cars_per_km = 0;
         g.scene_td_route_segs  = 0;
         g.scene_td_spawned     = 0;
+        g.scene_td_npc_route   = 0;
         g.scene_td_pool_full   = 0;
+    }
+
+    /* NPC 行为（方向三）：变道完成次数，最新帧覆盖。 */
+    cJSON* npc_obj = cJSON_GetObjectItemCaseSensitive(root, "npc");
+    if (npc_obj && cJSON_IsObject(npc_obj)) {
+        cJSON* j_lc = cJSON_GetObjectItemCaseSensitive(npc_obj, "lane_changes_completed");
+        g.scene_npc_lc_completed = cJSON_IsNumber(j_lc) ? (int)j_lc->valuedouble : 0;
+    } else {
+        g.scene_npc_lc_completed = 0;
+    }
+
+    /* 初始化指纹（方向五）：字符串直接缓存（定长 16 hex）。 */
+    cJSON* j_fp = cJSON_GetObjectItemCaseSensitive(root, "init_fingerprint");
+    if (cJSON_IsString(j_fp) && j_fp->valuestring) {
+        snprintf(g.scene_init_fingerprint, sizeof(g.scene_init_fingerprint),
+                 "%s", j_fp->valuestring);
+    } else {
+        g.scene_init_fingerprint[0] = '\0';
     }
     pthread_mutex_unlock(&g.scene_frame_mutex);
 
@@ -1666,18 +1691,40 @@ static void export_dashboard_json(void) {
      * spawn 数 0 时完全静默）。锁内读 5 个标量、锁外建对象，与上面的
      * lighting/weather 同 pattern。 */
     if (g.has_scene_frame && g.scene_td_enabled) {
-        int td_cpk, td_seg, td_sp, td_pf;
+        int td_cpk, td_seg, td_sp, td_nr, td_pf;
         pthread_mutex_lock(&g.scene_frame_mutex);
         td_cpk = g.scene_td_cars_per_km;
         td_seg = g.scene_td_route_segs;
         td_sp  = g.scene_td_spawned;
+        td_nr  = g.scene_td_npc_route;
         td_pf  = g.scene_td_pool_full;
         pthread_mutex_unlock(&g.scene_frame_mutex);
         cJSON* td = cJSON_AddObjectToObject(scene, "traffic_density");
         cJSON_AddNumberToObject(td, "cars_per_km", (double)td_cpk);
         cJSON_AddNumberToObject(td, "route_segs", (double)td_seg);
         cJSON_AddNumberToObject(td, "spawned", (double)td_sp);
+        cJSON_AddNumberToObject(td, "npc_route_spawned", (double)td_nr);
         cJSON_AddBoolToObject(td, "pool_full", td_pf ? 1 : 0);
+    }
+
+    /* NPC 行为（方向三）：变道完成次数。始终发（0 可读），供
+     * demo_evaluator 的 expect_npc_lane_change 判据区分"没打算变道"与
+     * "打算了但一帧中止"。 */
+    if (g.has_scene_frame) {
+        pthread_mutex_lock(&g.scene_frame_mutex);
+        const int npc_lc = g.scene_npc_lc_completed;
+        pthread_mutex_unlock(&g.scene_frame_mutex);
+        cJSON* npc = cJSON_AddObjectToObject(scene, "npc");
+        cJSON_AddNumberToObject(npc, "lane_changes_completed", (double)npc_lc);
+    }
+
+    /* 初始化指纹（方向五）：确定性门禁的唯一数据来源。 */
+    if (g.has_scene_frame) {
+        char fp[32];
+        pthread_mutex_lock(&g.scene_frame_mutex);
+        snprintf(fp, sizeof(fp), "%s", g.scene_init_fingerprint);
+        pthread_mutex_unlock(&g.scene_frame_mutex);
+        if (fp[0]) cJSON_AddStringToObject(scene, "init_fingerprint", fp);
     }
 
     /* 施工区（后端单一事实源）：从 scene/frame 缓存透传给前端。

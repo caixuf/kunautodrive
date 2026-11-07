@@ -371,6 +371,10 @@ typedef struct {
     int    lane_spread;          /* 是否跨多车道 spawn（0/1，默认 1） */
     int    max_npcs;             /* 上限（默认 50） */
     int    random_seed_offset;   /* RNG 偏置（默认 0） */
+    /* 方向三：行人占比 [0,1]。0 = 只生成车辆（默认，既有场景零变化）；
+     * >0 时按确定性哈希把一部分 spawn 槽位改成路边行人（0.5m 尺寸、
+     * 沿车道边缘 0.8m/s 步行，不横穿以避免 NPC 车流直接撞人）。 */
+    double pedestrian_ratio;
     /* D3-3：按时段 / 按区域调密度（可选；缺省 count=0 = 全局基线）。
      * 窗口结构与纯算法共用 include/traffic_density_window.h 的单一事实源。 */
     TrafficDensityWindow time_windows[SCENARIO_MAX_DENSITY_WINDOWS];
@@ -417,6 +421,11 @@ typedef struct {
      * 被版本化/复现，而不是只能靠外部环境变量传（环境变量无法进 suite、
      * 无法随场景回归矩阵一起跑）。空串 = 不注入。 */
     char              fault_injection[256];
+    /* 方向三：NPC 多 OD 路线（routes.json 的 route id 列表）。ego 仍走
+     * route_id 指定的主链；这些链的 roads 会被并入 road_network。 */
+#define SCENARIO_MAX_NPC_ROUTES 4
+    char              npc_route_ids[SCENARIO_MAX_NPC_ROUTES][32];
+    int               npc_route_count;
     /* ── 解析后的 road_network JSON（A* 主循环建图用）──
      * resolve_map_reference 注入后保留一份 cJSON_PrintUnformatted 字符串：
      * edges[].lanes[] 含 id/direction/successors，供 flowsim 初始化阶段

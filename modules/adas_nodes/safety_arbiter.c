@@ -10,11 +10,13 @@
 #include <math.h>
 #include <string.h>
 
-SafetyArbiterCmd safety_arbiter_apply(const SafetyArbiterCmd* rule_cmd,
-                                      const SafetyArbiterCmd* model_cmd,
-                                      int has_fresh_model,
-                                      int is_degraded,
-                                      int* out_intervened) {
+SafetyArbiterCmd safety_arbiter_apply_ex(const SafetyArbiterCmd* rule_cmd,
+                                         const SafetyArbiterCmd* model_cmd,
+                                         int has_fresh_model,
+                                         int is_degraded,
+                                         double model_conf,
+                                         double conf_min,
+                                         int* out_intervened) {
     SafetyArbiterCmd zero;
     memset(&zero, 0, sizeof(zero));
     if (!rule_cmd) {
@@ -23,6 +25,13 @@ SafetyArbiterCmd safety_arbiter_apply(const SafetyArbiterCmd* rule_cmd,
     }
     if (!has_fresh_model || is_degraded || !model_cmd) {
         if (out_intervened) *out_intervened = 0;
+        return *rule_cmd;
+    }
+
+    /* 0. 置信度门（方向四）：模型自评不足 → 回退规则主干，算一次干预。
+     *    NaN 视为不可判定（拒绝）；conf_min<=0 关闭此门（旧行为）。 */
+    if (conf_min > 0.0 && (!isfinite(model_conf) || model_conf < conf_min)) {
+        if (out_intervened) *out_intervened = 1;
         return *rule_cmd;
     }
 
@@ -57,4 +66,14 @@ SafetyArbiterCmd safety_arbiter_apply(const SafetyArbiterCmd* rule_cmd,
 
     if (out_intervened) *out_intervened = intervened;
     return out;
+}
+
+SafetyArbiterCmd safety_arbiter_apply(const SafetyArbiterCmd* rule_cmd,
+                                      const SafetyArbiterCmd* model_cmd,
+                                      int has_fresh_model,
+                                      int is_degraded,
+                                      int* out_intervened) {
+    /* 旧入口 = 置信度门关闭，行为与重构前逐位一致。 */
+    return safety_arbiter_apply_ex(rule_cmd, model_cmd, has_fresh_model,
+                                   is_degraded, 1.0, 0.0, out_intervened);
 }

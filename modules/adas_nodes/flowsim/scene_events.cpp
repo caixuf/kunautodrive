@@ -267,14 +267,21 @@ void tick_choreography(EntityPool& pool, const Entity& ego,
         Entity* target = nullptr;
         for (int j = 0; j < pool.size(); ++j) {
             Entity& e = pool[j];
-            if (e.active && e.scenario_id == actor_id) { target = &e; break; }
+            /* ego 的 scenario_id 也是 0；跳过 ego，避免 beat(actor=0) 误改 ego。 */
+            if (e.active && e.type != EntityType::Ego && e.scenario_id == actor_id) {
+                target = &e; break;
+            }
         }
         if (!target) continue;
 
         /* ── 动作类型判断：brake/cross 为"原地指令"，不重置位置 ── */
         bool is_brake = (strcmp(b->act, "brake") == 0);
         bool is_cross = (strcmp(b->act, "cross") == 0);
-        bool teleport = !is_brake && !is_cross;
+        /* cutin 是"连续横向机动"指令，不是传送：旧实现把 cutin 也当 teleport，
+         * 无 ds/dl 的 beat 会直接把邻道车瞬移到 ego 车道（ego.y+0）→ 当场碰撞，
+         * 且 cutin PID 根本没机会执行。与 brake/cross 一样只下指令、不重置位置。 */
+        bool is_cutin = (strcmp(b->act, "cutin") == 0);
+        bool teleport = !is_brake && !is_cross && !is_cutin;
 
         if (teleport) {
         /* ── NPC 变道防御性禁用 ──
@@ -395,7 +402,19 @@ void tick_choreography(EntityPool& pool, const Entity& ego,
                 req.target_offset = target->offset;
             } else if (strcmp(b->act, "cutin") == 0) {
                 req.event = NpcEvent::ChoreoCutIn;
+                /* target_offset 是**道路参考线**系横向偏移，不是世界 y。
+                 * 直道（参考线沿 x 轴）两者相等，所以旧写法在 straight_road
+                 * 上"碰巧"能跑；弯道/旋转的 OSM 路上 ego.y 与 ref offset 差一个
+                 * 参考线世界偏移，会把 NPC 送到路外。 */
                 double cutin_target = ego.y;
+                if (roads && roads->loaded()) {
+                    FrenetPos fp_ego;
+                    if (roads->world_to_frenet(ego.x, ego.y, fp_ego)) {
+                        cutin_target = offset_from_lane_internal(
+                            *roads, fp_ego.road_id, fp_ego.lane_id,
+                            fp_ego.s, fp_ego.offset);
+                    }
+                }
                 if (target->route_dir > 0 && cutin_target > -0.3) cutin_target = -0.3;
                 if (target->route_dir < 0 && cutin_target <  0.3) cutin_target =  0.3;
                 req.target_offset = cutin_target;

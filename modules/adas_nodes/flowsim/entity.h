@@ -157,6 +157,8 @@ struct Entity {
 
     /* ── NPC 避障换道（让 NPC 不再"堵成一坨"）── */
     double lane_change_timer{0.0};  /**< 换道冷却计时器 (s)：>0 期间不评估换道，避免频繁抖动 */
+    uint32_t lane_changes_completed{0}; /**< 已完成的 MOBIL 变道次数（门禁可观测） */
+    double lane_change_from_offset{0.0}; /**< 进入 LaneChange 时的源车道 offset（中止时回退） */
     double target_offset{0.0};      /**< E2: 换道目标横向偏移，offset 每帧向此值平滑插值 */
 
     /* ── CutIn 加塞状态机（横向 PID 跨实线变道）── */
