@@ -67,6 +67,8 @@
 ## Morning handoff
 
 - 队列状态：T1 DONE（7/8 轮全绿）/ T2 DONE（`d866a83`）/ T6 DONE（3/3 长稳）
+- 补口代码提交：`978109e`（模型→planning 软建议、plant determinism、拥堵汇入、
+  BEV 精度收紧、三条新场景 baseline）
 - 附加落地（队列外，等待 T1/T6 结束后统一验证与提交）：
   - 模型 → planning 软建议（`planning_model_assist.h`，默认 gain=0；单测 108/108）
   - flowsim 单节点动态轨迹 dump + `plant-determinism-gate`（PASS）
