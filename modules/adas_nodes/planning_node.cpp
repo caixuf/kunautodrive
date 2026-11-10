@@ -254,6 +254,19 @@ struct PlanningContext {
 
     int tid{0};  /* scheduler task id */
 
+    /* M2: 运动预测切入目标缓存 (来自 prediction/tracks) */
+    struct PredCutinTarget {
+        int object_id;
+        double along;
+        double lat;
+        double rel_v;
+        double prob_cutin;
+        double t_enter;
+    };
+    PredCutinTarget pred_cutin_targets[16];
+    int             pred_cutin_count{0};
+    pthread_mutex_t pred_mutex;
+
     /* §9 轨迹拼接：上帧轨迹缓存 */
     /* W3 诊断：发布轨迹的扫掠碰撞命中计数（handoff §4.4 W3，详见 traj_safety.h）
      * 障碍物数组是块内局部变量，发布点看不到，故在喂 Frenet 时留一份副本。
@@ -2782,8 +2795,24 @@ protected:
                             stg.obstacles[stg.n_obstacles].s0 = along;
                             stg.obstacles[stg.n_obstacles].v = rel_v;
                             stg.obstacles[stg.n_obstacles].half_len = 2.5;        /* 车长/2+0.25 */
+                            stg.obstacles[stg.n_obstacles].t_enter = 0.0;
                             stg.n_obstacles++;
                         }
+
+                        /* M2: 消费 prediction/tracks 邻车道高概率 cut-in 目标进 ST 图 */
+                        pthread_mutex_lock(&g.pred_mutex);
+                        for (int p = 0; p < g.pred_cutin_count && stg.n_obstacles < STG_MAX_OBS; p++) {
+                            const auto& po = g.pred_cutin_targets[p];
+                            if (po.along <= 2.0 || po.along > 65.0) continue;
+                            if (po.rel_v < -2.0) continue;
+                            if (std::fabs(po.lat) <= lane_half) continue; /* 已在车道内，原障碍物循环已加 */
+                            stg.obstacles[stg.n_obstacles].s0 = po.along;
+                            stg.obstacles[stg.n_obstacles].v = po.rel_v;
+                            stg.obstacles[stg.n_obstacles].half_len = 3.0;
+                            stg.obstacles[stg.n_obstacles].t_enter = po.t_enter > 0.0 ? po.t_enter : 1.5;
+                            stg.n_obstacles++;
+                        }
+                        pthread_mutex_unlock(&g.pred_mutex);
                     }
 
                     /* kappa 剖面：用轨迹已回填的 kappa（含变道固定曲率）。
@@ -3151,7 +3180,7 @@ EXPORT_COROUTINE_TASK(PlanningTask, planning)
 /* 方向四：模型 → planning 软建议（仅 plan_assist 模式发布；默认关闭）。 */
 static void on_model_assist(const Message* msg, void* user_data) {
     (void)user_data;
-    if (!msg || !msg->data) return;
+    if (!msg || msg->data_size == 0) return;
     cJSON* root = cJSON_Parse((const char*)msg->data);
     if (!root) return;
     cJSON* j = cJSON_GetObjectItemCaseSensitive(root, "speed");
@@ -3160,6 +3189,101 @@ static void on_model_assist(const Message* msg, void* user_data) {
     if (cJSON_IsNumber(j)) g.assist_confidence = j->valuedouble;
     g.assist_last_us = clock_now_us();
     cJSON_Delete(root);
+}
+
+/* M2: 运动预测切入目标订阅 (prediction/tracks) */
+static void on_prediction_tracks(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg || msg->data_size == 0) return;
+    cJSON* root = cJSON_Parse((const char*)msg->data);
+    if (!root) return;
+
+    cJSON* j_tracks = cJSON_GetObjectItemCaseSensitive(root, "tracks");
+    if (!cJSON_IsArray(j_tracks)) {
+        cJSON_Delete(root);
+        return;
+    }
+
+    int n = cJSON_GetArraySize(j_tracks);
+    decltype(g)::PredCutinTarget targets[16];
+    int count = 0;
+
+    const double ego_x = g.ego_x;
+    const double ego_y = g.ego_y;
+    const double fwd_x = std::cos(g.ego_heading);
+    const double fwd_y = std::sin(g.ego_heading);
+
+    for (int i = 0; i < n && count < 16; i++) {
+        cJSON* trk = cJSON_GetArrayItem(j_tracks, i);
+        if (!trk) continue;
+        cJSON* j_trajs = cJSON_GetObjectItemCaseSensitive(trk, "trajectories");
+        if (!cJSON_IsArray(j_trajs)) continue;
+
+        cJSON* j_id = cJSON_GetObjectItemCaseSensitive(trk, "object_id");
+        int obj_id = (j_id && cJSON_IsNumber(j_id)) ? (int)j_id->valuedouble : (i + 1);
+
+        double max_cutin_prob = 0.0;
+        double t_enter = 0.0;
+        int n_trajs = cJSON_GetArraySize(j_trajs);
+        cJSON* cutin_traj = nullptr;
+
+        for (int m = 0; m < n_trajs; m++) {
+            cJSON* tr = cJSON_GetArrayItem(j_trajs, m);
+            if (!tr) continue;
+            cJSON* j_intent = cJSON_GetObjectItemCaseSensitive(tr, "intent");
+            const char* intent_str = (j_intent && cJSON_IsString(j_intent)) ? j_intent->valuestring : "";
+            if (strncmp(intent_str, "cut_in", 6) == 0) {
+                cJSON* j_prob = cJSON_GetObjectItemCaseSensitive(tr, "prob");
+                double prob = (j_prob && cJSON_IsNumber(j_prob)) ? j_prob->valuedouble : 0.0;
+                if (prob > max_cutin_prob) {
+                    max_cutin_prob = prob;
+                    cutin_traj = tr;
+                    cJSON* j_te = cJSON_GetObjectItemCaseSensitive(tr, "t_enter");
+                    t_enter = (j_te && cJSON_IsNumber(j_te)) ? j_te->valuedouble : 2.0;
+                }
+            }
+        }
+
+        if (max_cutin_prob >= 0.40 && cutin_traj) {
+            double along = 0.0, lat = 0.0, rel_v = 0.0;
+            cJSON* wps = cJSON_GetObjectItemCaseSensitive(cutin_traj, "waypoints");
+            if (cJSON_IsArray(wps) && cJSON_GetArraySize(wps) > 0) {
+                cJSON* wp0 = cJSON_GetArrayItem(wps, 0);
+                if (cJSON_IsArray(wp0) && cJSON_GetArraySize(wp0) >= 3) {
+                    along = cJSON_GetArrayItem(wp0, 0)->valuedouble;
+                    lat   = cJSON_GetArrayItem(wp0, 1)->valuedouble;
+                    rel_v = cJSON_GetArrayItem(wp0, 2)->valuedouble - g.ego_v;
+                }
+            } else {
+                cJSON* j_wx = cJSON_GetObjectItemCaseSensitive(trk, "wx");
+                cJSON* j_wy = cJSON_GetObjectItemCaseSensitive(trk, "wy");
+                if (j_wx && j_wy) {
+                    double rx = j_wx->valuedouble - ego_x;
+                    double ry = j_wy->valuedouble - ego_y;
+                    along = rx * fwd_x + ry * fwd_y;
+                    lat   = -rx * fwd_y + ry * fwd_x;
+                }
+            }
+
+            if (along > 2.0 && along < 65.0 && rel_v > -2.0) {
+                targets[count].object_id = obj_id;
+                targets[count].along = along;
+                targets[count].lat = lat;
+                targets[count].rel_v = rel_v;
+                targets[count].prob_cutin = max_cutin_prob;
+                targets[count].t_enter = t_enter > 0.0 ? t_enter : 1.5;
+                count++;
+            }
+        }
+    }
+    cJSON_Delete(root);
+
+    pthread_mutex_lock(&g.pred_mutex);
+    g.pred_cutin_count = count;
+    for (int i = 0; i < count; i++) {
+        g.pred_cutin_targets[i] = targets[i];
+    }
+    pthread_mutex_unlock(&g.pred_mutex);
 }
 
 static const char* s_inputs[]  = {
@@ -3174,6 +3298,7 @@ static const char* s_inputs[]  = {
     TOPIC_NAVIGATION_PATH,
     TOPIC_LOCALIZATION_LANE_MATCH,
     "inference/assist",      /* 方向四：plan_assist 软建议（默认 gain=0 不消费） */
+    TOPIC_PREDICTION_TRACKS,
     nullptr
 };
 static const char* s_outputs[] = { TOPIC_PLANNING_TRAJECTORY, nullptr };
@@ -3189,6 +3314,8 @@ static int planning_init(MessageBus* bus, Transport* transport,
     g.scheduler    = scheduler;
     g.has_fusion   = 0;
     g.has_vstate   = 0;
+    pthread_mutex_init(&g.pred_mutex, nullptr);
+    g.pred_cutin_count = 0;
 
     g.mode_last_check_us = 0;
     g.last_fusion_us     = 0;
@@ -3323,6 +3450,7 @@ static int planning_init(MessageBus* bus, Transport* transport,
     transport_subscribe(transport, TOPIC_NAVIGATION_PATH, on_navigation_path, nullptr);
     transport_subscribe(transport, TOPIC_LOCALIZATION_LANE_MATCH, on_lane_match, nullptr);
     transport_subscribe(transport, "inference/assist", on_model_assist, nullptr);
+    transport_subscribe(transport, TOPIC_PREDICTION_TRACKS, on_prediction_tracks, nullptr);
     transport_advertise(transport, TOPIC_PLANNING_TRAJECTORY, 0x3A7B1C2Du);
     transport_advertise(transport, TOPIC_PLANNING_DEBUG, 0u);  /* JSON text */
 
@@ -3343,6 +3471,8 @@ static int planning_init(MessageBus* bus, Transport* transport,
     discovery_advertise(discovery, TOPIC_NAVIGATION_PATH,     0u,
                         CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, TOPIC_LOCALIZATION_LANE_MATCH, 0u,
+                        CAP_SUBSCRIBER, 0);
+    discovery_advertise(discovery, TOPIC_PREDICTION_TRACKS, 0u,
                         CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, TOPIC_PLANNING_TRAJECTORY, 0x3A7B1C2Du,
                         CAP_PUBLISHER, 10.0);
@@ -3401,6 +3531,7 @@ static void planning_cleanup(void) {
 #endif
     statem_cleanup(&g.sm);
     statem_cleanup(&g.mode_sm);
+    pthread_mutex_destroy(&g.pred_mutex);
     LOG_INFO("planning", "cleanup done");
 }
 

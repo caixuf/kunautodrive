@@ -8,7 +8,8 @@
     "odd/state",
     "tor/state",
     "safety/mrm_request",
-    "bev/obstacles"],
+    "bev/obstacles",
+    "prediction/tracks"],
   "scheduler": {
     "mode": "choreo",
     "worker_threads": 0,

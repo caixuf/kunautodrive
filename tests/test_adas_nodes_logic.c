@@ -55,6 +55,8 @@
 #include "planning_model_assist.h"
 #include "planning_ttc_candidate.h"   /* D2-06: TTC follow lead 候选选择 helper */
 #include "traffic_density_spawn.h"   /* D3-2: traffic_density spawn 算式 helper */
+#include "hungarian_tracker.h"       /* M2: 64 槽匈牙利匹配与卡尔曼滤波纯算法 */
+#include "st_graph.h"                /* M2: ST 图切入预减速 */
 
 #include <math.h>
 #include <stdint.h>
@@ -2468,6 +2470,73 @@ static void test_radar_deterministic(void) {
     PASS();
 }
 
+/* ══════════════════════════════════════════════════════════ */
+/* M2: 64 槽匈牙利匹配与 ST 图切入预减速纯算法单测           */
+/* ══════════════════════════════════════════════════════════ */
+
+static void test_hungarian_competition_matrix(void) {
+    TEST("hungarian: 竞争代价矩阵下全局最优严格优于贪心 (零冲突)");
+    double cost[HUNGARIAN_TRACKER_MAX][HUNGARIAN_TRACKER_MAX];
+    for (int r = 0; r < HUNGARIAN_TRACKER_MAX; r++) {
+        for (int c = 0; c < HUNGARIAN_TRACKER_MAX; c++) {
+            cost[r][c] = 999.0;
+        }
+    }
+    cost[0][0] = 1.0; cost[0][1] = 1.1;
+    cost[1][0] = 1.0; cost[1][1] = 10.0;
+
+    int match[HUNGARIAN_TRACKER_MAX];
+    int n_matches = hungarian_solve(2, 2, cost, 15.0, match);
+
+    ASSERT_EQ(n_matches, 2, "both rows must be matched");
+    ASSERT_EQ(match[0], 1, "row 0 must match col 1");
+    ASSERT_EQ(match[1], 0, "row 1 must match col 0");
+
+    double total_cost = cost[0][match[0]] + cost[1][match[1]];
+    ASSERT_NEAR(total_cost, 2.1, 1e-4, "hungarian cost must be 2.1 < greedy 11.0");
+    PASS();
+}
+
+static void test_hungarian_64_targets_full_capacity(void) {
+    TEST("hungarian: 64 目标满载最优二分图匹配与无越界");
+    double cost[HUNGARIAN_TRACKER_MAX][HUNGARIAN_TRACKER_MAX];
+    for (int r = 0; r < 64; r++) {
+        for (int c = 0; c < 64; c++) {
+            cost[r][c] = (r == c) ? 0.35 : (3.0 + 0.1 * fabs((double)(r - c)));
+        }
+    }
+    int match[HUNGARIAN_TRACKER_MAX];
+    int n_matches = hungarian_solve(64, 64, cost, 4.0, match);
+    ASSERT_EQ(n_matches, 64, "all 64 targets must be matched");
+    for (int i = 0; i < 64; i++) {
+        ASSERT_EQ(match[i], i, "each track i must map to detection i");
+    }
+    PASS();
+}
+
+static void test_st_graph_cutin_t_enter_occupancy(void) {
+    TEST("st_graph: 邻车道切入目标 t_enter 占据生效与平顺减速");
+    StgInput in;
+    memset(&in, 0, sizeof(in));
+    in.v0 = 15.0;
+    in.v_target = 15.0;
+    in.t0 = 5.0;
+    in.stop_s = -1.0;
+    in.n_obstacles = 1;
+    in.obstacles[0].s0 = 35.0;
+    in.obstacles[0].v = 6.0;
+    in.obstacles[0].half_len = 2.5;
+    in.obstacles[0].t_enter = 2.0;
+
+    StgResult res;
+    memset(&res, 0, sizeof(res));
+    int rc = st_graph_plan(&in, &res);
+    ASSERT_EQ(rc, 0, "st_graph_plan must succeed with t_enter cut-in obstacle");
+    ASSERT(res.n > 0, "speed profile points must be generated");
+    ASSERT(res.v_out[0] > 5.0, "speed profile at ego position must not stall to 0");
+    PASS();
+}
+
 int main(void) {
     printf("\n╔══════════════════════════════════════════╗\n");
     printf("║  FlowEngine ADAS Nodes Logic Tests        ║\n");
@@ -2612,6 +2681,11 @@ int main(void) {
     test_lidar_scan_detectable_range();
     test_lidar_scan_plan_sanitize();
     test_lidar_scan_height_and_range_contract();
+
+    printf("\n═══ M2: 64-Slot Hungarian Tracker & ST-Graph Cut-in Occupancy ═══\n");
+    test_hungarian_competition_matrix();
+    test_hungarian_64_targets_full_capacity();
+    test_st_graph_cutin_t_enter_occupancy();
 
     printf("\n═══════════════════════════════════\n");
     printf("  Total: %d  ✅ Passed: %d  ❌ Failed: %d\n",

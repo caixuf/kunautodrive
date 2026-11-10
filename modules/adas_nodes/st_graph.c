@@ -33,6 +33,8 @@ static int occupied_at(const StgInput* in, double s, double t)
     for (int i = 0; i < in->n_obstacles; i++) {
         const StgObstacle* o = &in->obstacles[i];
         double t_rel = t - in->t0;
+        /* M2: 邻车道切入目标在未进入前 (t_rel < t_enter) 不占据本车道 ST 区域 */
+        if (o->t_enter > 0.0 && t_rel < o->t_enter) continue;
         if (fabs(s - (o->s0 + o->v * t_rel)) <= o->half_len) return 1;
     }
     return 0;

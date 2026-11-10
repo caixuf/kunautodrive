@@ -51,13 +51,14 @@ extern "C" {
                                    * a_lat 恰超 5.0 → 可行性整帧 invalid（陆家嘴实测
                                    * κ=0.101/v=7.2/a_lat=5.2）。0.85 留 ~15% 余量。 */
 #define STG_MAX_GRID        90    /* 视界扩展后的最大格数（50+40 停点） */
-#define STG_MAX_OBS          8    /* 本车道 ST 占据障碍物上限 */
+#define STG_MAX_OBS         16    /* 本车道 ST 占据障碍物上限 (M2: 扩至 16 容纳多目标与切入) */
 
-/* ST 占据体：s0=起始弧长(ego 系), v=沿向速度, 占据半宽 */
+/* ST 占据体：s0=起始弧长(ego 系), v=沿向速度, 占据半宽, t_enter=预计切入时刻(s) */
 typedef struct {
     double s0;
     double v;
     double half_len;
+    double t_enter;  /* 预计切入本车道时刻 s，<=0 表示已在本车道内 */
 } StgObstacle;
 
 /* 红灯墙：停止线前 wall_margin 处静止占据；t_red<0 表示一直红（无变绿） */

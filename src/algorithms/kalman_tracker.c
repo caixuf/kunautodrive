@@ -6,6 +6,7 @@
  */
 
 #include "kalman_tracker.h"
+#include "../../modules/adas_nodes/hungarian_tracker.h"
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
@@ -150,90 +151,10 @@ static double mahalanobis_dist(const KTrack* t, const KTrackDetection* d,
 }
 
 /* ══════════════════════════════════════════════════════════ */
-/*  内部: Hungarian Algorithm (Munkres)                       */
+/*  内部: Hungarian Algorithm — 复用 hungarian_tracker.h 单一事实源 */
 /* ══════════════════════════════════════════════════════════ */
 
-#define HUNGARIAN_MAX 32
-
-static double hungarian_solve(double cost[HUNGARIAN_MAX][HUNGARIAN_MAX],
-                               int n_rows, int n_cols,
-                               int assignment[HUNGARIAN_MAX]) {
-    /* 防御性夹取:cost 矩阵与下列工作数组按 HUNGARIAN_MAX 维护,n_rows/n_cols
-     * 绝不能超过它,否则 1-indexed 访问越界写栈(见下)。 */
-    if (n_rows > HUNGARIAN_MAX) n_rows = HUNGARIAN_MAX;
-    if (n_cols > HUNGARIAN_MAX) n_cols = HUNGARIAN_MAX;
-
-    /* 本实现是 1-indexed 匈牙利算法:下标从 1 取到 n(=n_rows/n_cols)。当 n 恰好
-     * 等于 HUNGARIAN_MAX 时,minv[n]/used[n]/u[i0]/v[j] 等会访问下标 == HUNGARIAN_MAX,
-     * 即"数组尾后一格"。故工作数组必须多留 1 格(HUNGARIAN_MAX + 1),否则 n==32
-     * 时越界写栈,在 Linux 上侥幸落在栈填充里不崩、在 macOS 上直接 SIGSEGV。 */
-    /* 初始化: 每行减行最小值 */
-    double u[HUNGARIAN_MAX + 1] = {0};
-    double v[HUNGARIAN_MAX + 1] = {0};
-    int    p[HUNGARIAN_MAX + 1]  = {0};  /* p[j] = 匹配到列 j 的行 */
-    int    way[HUNGARIAN_MAX + 1] = {0};
-
-    for (int i = 1; i <= n_rows; i++) {
-        p[0] = i;
-        int j0 = 0;
-        double minv[HUNGARIAN_MAX + 1];
-        for (int j = 0; j <= n_cols; j++) minv[j] = 1e12;
-        int used[HUNGARIAN_MAX + 1] = {0};
-
-        do {
-            used[j0] = 1;
-            int i0 = p[j0];
-            double delta = 1e12;
-            int j1 = 0;
-
-            for (int j = 1; j <= n_cols; j++) {
-                if (!used[j]) {
-                    double cur = cost[i0-1][j-1] - u[i0] - v[j];
-                    if (cur < minv[j]) {
-                        minv[j] = cur;
-                        way[j] = j0;
-                    }
-                    if (minv[j] < delta) {
-                        delta = minv[j];
-                        j1 = j;
-                    }
-                }
-            }
-
-            for (int j = 0; j <= n_cols; j++) {
-                if (used[j]) {
-                    u[p[j]] += delta;
-                    v[j]    -= delta;
-                } else {
-                    minv[j] -= delta;
-                }
-            }
-            j0 = j1;
-        } while (p[j0] != 0);
-
-        do {
-            int j1 = way[j0];
-            p[j0] = p[j1];
-            j0 = j1;
-        } while (j0);
-    }
-
-    /* 输出 assignment: assignment[row] = col */
-    for (int j = 1; j <= n_cols; j++) {
-        if (p[j] > 0)
-            assignment[p[j] - 1] = j - 1;
-    }
-    /* 未匹配的行标记为 -1 */
-    for (int i = 0; i < n_rows; i++) {
-        int matched = 0;
-        for (int j = 1; j <= n_cols; j++) {
-            if (p[j] == i + 1) { matched = 1; break; }
-        }
-        if (!matched) assignment[i] = -1;
-    }
-
-    return -v[0]; /* 总代价 */
-}
+#define HUNGARIAN_MAX HUNGARIAN_TRACKER_MAX
 
 /* ══════════════════════════════════════════════════════════ */
 /*  Public API                                                */
@@ -330,18 +251,9 @@ void ktracker_associate_and_update(KalmanTracker* kt,
         }
     }
 
-    /* Hungarian 求解 */
-    int n_match = (n_trk > n_dets) ? n_trk : n_dets;
-    /* 方形化: 填充大代价 */
-    for (int t = 0; t < n_match; t++) {
-        for (int d = 0; d < n_match; d++) {
-            if (t >= n_trk || d >= n_dets)
-                cost[t][d] = 1e9;
-        }
-    }
-
+    /* Hungarian 求解（复用 hungarian_tracker.h 方形化 + 门限过滤） */
     int assignment[HUNGARIAN_MAX];
-    hungarian_solve(cost, n_match, n_match, assignment);
+    hungarian_solve(n_trk, n_dets, cost, 1e8, assignment);
 
     /* ── Step 2: 处理匹配对 ── */
     bool det_matched[KTRACKER_MAX_DETS] = {0};

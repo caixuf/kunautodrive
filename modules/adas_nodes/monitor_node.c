@@ -276,6 +276,10 @@ static struct {
     /* 感知车道线（来自 perception/lanes，诊断透传：沙箱合成边界 + 世界坐标
      * 折线 pts）。boundaries ≤ 8 条 × 17 点 × 2 坐标，故留 8KB。 */
     char perceived_lanes_json[8192];
+    /* M2: 运动预测 (来自 prediction/tracks，透传至 metrics.scene.predictions) */
+    char prediction_tracks_json[65536];
+    volatile int has_prediction_tracks;
+    pthread_mutex_t prediction_mutex;
     /* 安全故障注入/超时证据：保留最近一条完整 JSON，供 dashboard 与 CI evaluator
      * 消费。锁避免 topic 回调写入与 dashboard 序列化并发。 */
     char safety_evidence_json[2048];
@@ -699,6 +703,19 @@ static void on_road_geometry(const Message* msg, void* user_data) {
         cJSON_Delete(root);
     }
     g.has_road_geometry = 1;
+}
+
+/* M2: prediction/tracks 订阅 — 缓存最新预测 JSON 供 export_dashboard_json 透传至 metrics.scene.predictions */
+static void on_prediction_tracks(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg || msg->data_size == 0) return;
+    size_t len = strlen((const char*)msg->data);
+    if (len >= sizeof(g.prediction_tracks_json)) len = sizeof(g.prediction_tracks_json) - 1;
+    pthread_mutex_lock(&g.prediction_mutex);
+    memcpy(g.prediction_tracks_json, msg->data, len);
+    g.prediction_tracks_json[len] = '\0';
+    g.has_prediction_tracks = 1;
+    pthread_mutex_unlock(&g.prediction_mutex);
 }
 
 /* Phase 3: scene/frame 订阅 — 从 flowsim_node 获取完整场景帧。
@@ -1992,6 +2009,30 @@ static void export_dashboard_json(void) {
         cJSON_AddNumberToObject(scene, "trajectory_edge_id", (double)g.ego_road_id);
     }
 
+    /* M2: 多模态运动预测透传至 metrics.scene.predictions (供 3D 前端流光带渲染) */
+    if (g.has_prediction_tracks && g.prediction_tracks_json[0] != '\0') {
+        static char pred_snap[sizeof(g.prediction_tracks_json)];
+        size_t pred_len;
+        pthread_mutex_lock(&g.prediction_mutex);
+        pred_len = strlen(g.prediction_tracks_json);
+        if (pred_len >= sizeof(pred_snap)) pred_len = sizeof(pred_snap) - 1;
+        memcpy(pred_snap, g.prediction_tracks_json, pred_len);
+        pred_snap[pred_len] = '\0';
+        pthread_mutex_unlock(&g.prediction_mutex);
+        cJSON* pred = (pred_len > 2) ? monitor_cJSON_Parse(pred_snap) : NULL;
+        if (pred) {
+            cJSON* tracks = cJSON_GetObjectItemCaseSensitive(pred, "tracks");
+            if (tracks) {
+                cJSON* dup = cJSON_Duplicate(tracks, 1);
+                if (dup) cJSON_AddItemToObject(scene, "predictions", dup);
+            } else {
+                cJSON_AddItemToObject(scene, "predictions", pred);
+                pred = NULL;
+            }
+            if (pred) cJSON_Delete(pred);
+        }
+    }
+
     /* 障碍物（从 vehicle/state 动态读取） */
     int n_obs = json_extract_int(vehicle_state_snap, "n_obs");
     if (n_obs < 0 || n_obs > 128) n_obs = 0;
@@ -2591,7 +2632,8 @@ static const char* s_inputs[]  = { TOPIC_PERCEPTION_OBSTACLES, TOPIC_VEHICLE_STA
                                    TOPIC_PLANNING_TRAJECTORY, TOPIC_ROAD_GEOMETRY,
                                    TOPIC_SCENE_FRAME, TOPIC_CONTROL_CTE,
                                    TOPIC_ROAD_TRAFFIC_LIGHTS, "safety/evidence",
-                                   TOPIC_ODD_STATE, TOPIC_TOR_STATE, NULL };
+                                   TOPIC_ODD_STATE, TOPIC_TOR_STATE,
+                                   TOPIC_PREDICTION_TRACKS, NULL };
 static const char* s_outputs[] = { "pem/degrade_event", NULL };
 
 static NodePlugin s_plugin;
@@ -2739,6 +2781,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     transport_subscribe(transport, "fusion/localization", on_fusion_localization, NULL);
     transport_subscribe(transport, TOPIC_PERCEPTION_LANES, on_perceived_lanes, NULL);
     transport_subscribe(transport, "safety/evidence", on_safety_evidence, NULL);
+    transport_subscribe(transport, TOPIC_PREDICTION_TRACKS, on_prediction_tracks, NULL);
     /* 收集其他节点的自描述广播 (方案B: 数据驱动拓扑感知) */
     transport_subscribe(transport, TOPIC_FLOWENGINE_NODE_INFO, on_node_info, NULL);
     g.node_info_count = 0;
@@ -2763,6 +2806,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     discovery_advertise(discovery, TOPIC_ROAD_GEOMETRY,        0x80AD5C12u, CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, TOPIC_SCENE_FRAME,          0x5CE4E011u, CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, TOPIC_FLOWENGINE_NODE_INFO, 0xF10E10F0u, CAP_SUBSCRIBER, 0);
+    discovery_advertise(discovery, TOPIC_PREDICTION_TRACKS,    0u,          CAP_SUBSCRIBER, 0);
 
     if (g.embedded_mode) {
         transport_advertise(transport, "pem/degrade_event", 0u);
@@ -2803,6 +2847,9 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     pthread_mutex_init(&g.tracked_mutex, NULL);
     pthread_mutex_init(&g.perceived_mutex, NULL);
     pthread_mutex_init(&g.ego_pose_mutex, NULL);
+    pthread_mutex_init(&g.prediction_mutex, NULL);
+    g.has_prediction_tracks = 0;
+    g.prediction_tracks_json[0] = '\0';
     /* P3 修复：初始化 scene_frame 缓存 mutex，避免未初始化锁行为未定义。
      * on_scene_frame（消息总线线程）写 scene_entities_json，
      * export_dashboard_json（主线程）读同一 buffer。 */
@@ -2883,6 +2930,7 @@ static void monitor_cleanup(void) {
     pthread_mutex_destroy(&g.vehicle_state_mutex);
     pthread_mutex_destroy(&g.safety_evidence_mutex);
     pthread_mutex_destroy(&g.scene_frame_mutex);
+    pthread_mutex_destroy(&g.prediction_mutex);
     LOG_INFO("monitor", "cleanup done");
 }
 static int  monitor_health(void)        { return 0; }

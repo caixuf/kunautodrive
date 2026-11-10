@@ -182,6 +182,28 @@
       "params": "{\"rate_hz\":20.0}"
     },
     {
+      "name": "prediction",
+      "library_path": "build/lib/libprediction_node.so",
+      "auto_start": true,
+      "subscribe": [
+        "perception/tracked_objects",
+        "fusion/localization",
+        "road/geometry",
+        "road/ref_path"
+      ],
+      "publish": [
+        {
+          "topic": "prediction/tracks",
+          "qos": {
+            "depth": 1,
+            "policy": "drop_oldest",
+            "reliability": "best_effort"
+          }
+        }
+      ],
+      "params": "{\"rate_hz\":10.0}"
+    },
+    {
       "name": "fusion",
       "library_path": "build/lib/libfusion_node.so",
       "auto_start": true,
@@ -272,7 +294,8 @@
         "planning/behavior",
         "navigation/path",
         "localization/lane_match",
-        "inference/assist"
+        "inference/assist",
+        "prediction/tracks"
       ],
       "publish": [
         {
@@ -502,7 +525,8 @@
         "road/traffic_lights",
         "safety/evidence",
         "odd/state",
-        "tor/state"
+        "tor/state",
+        "prediction/tracks"
       ],
       "params": "{\"state_file\":\"/tmp/flow_topology.json\",\"export_scene\":true}",
       "publish": [

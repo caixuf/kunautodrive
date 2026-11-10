@@ -80,7 +80,7 @@ static struct {
     uint64_t      traversability_ts_us;
 
     /* 运动预测 */
-    char    prediction_json[16384];
+    char    prediction_json[32768];
     volatile int has_prediction;
     uint64_t      prediction_ts_us;
 

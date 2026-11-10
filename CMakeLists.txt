@@ -1182,6 +1182,7 @@ add_executable(test_adas_nodes_logic tests/test_adas_nodes_logic.c
                                 modules/adas_nodes/safety_arbiter.c
                                 modules/adas_nodes/traj_safety.c
                                 modules/adas_nodes/lidar_scan.c
+                                modules/adas_nodes/st_graph.c
                                 # D2-04 M3 lane_match 10 字段契约 helper（纯算法）
                                 modules/adas_nodes/flowsim/lane_match_helpers.cpp)
 set_source_files_properties(tests/test_adas_nodes_logic.c PROPERTIES LANGUAGE CXX)

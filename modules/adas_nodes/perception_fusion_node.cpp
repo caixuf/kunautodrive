@@ -41,6 +41,7 @@
 #undef LOG_ERROR
 #undef LOG_FATAL
 #include "logger.h"
+#include "hungarian_tracker.h"
 #include "fusion_lane_hint.h"   /* D2-07: lane_match hint 纯算法（cache + compute_hint + apply_hint）*/
 #include <cjson/cJSON.h>
 
@@ -56,8 +57,8 @@
 
 namespace {
 
-/* ── Phase 2: 跨帧追踪 track（原样保留） ─────────────────── */
-#define PF_MAX_TRACKS 16
+/* ── Phase 2: 跨帧追踪 track（M2 升级至 64 槽） ─────────────────── */
+#define PF_MAX_TRACKS 64
 
 typedef struct {
     int      id;              /* 持久 track ID（单调递增） */
@@ -240,16 +241,16 @@ static int cmp_obs_by_x(const void* a, const void* b) {
 
 static void fuse_obstacles(const ObstacleList* a, const ObstacleList* b,
                            double merge_dist, ObstacleList* out) {
-    ObsEntry pool[16];
+    ObsEntry pool[64];
     int n = 0;
 
     if (a) {
-        for (uint32_t i = 0; i < a->count && n < 16; i++) {
+        for (uint32_t i = 0; i < a->count && n < 64; i++) {
             pool[n++].obs = a->obstacles[i];
         }
     }
     if (b) {
-        for (uint32_t i = 0; i < b->count && n < 16; i++) {
+        for (uint32_t i = 0; i < b->count && n < 64; i++) {
             pool[n++].obs = b->obstacles[i];
         }
     }
@@ -263,7 +264,7 @@ static void fuse_obstacles(const ObstacleList* a, const ObstacleList* b,
     qsort(pool, (size_t)n, sizeof(ObsEntry), cmp_obs_by_x);
 
     /* 去重合并 */
-    Obstacle selected[8];
+    Obstacle selected[64];
     int sel_n = 0;
     int merges = 0;
 
@@ -296,7 +297,7 @@ static void fuse_obstacles(const ObstacleList* a, const ObstacleList* b,
                 break;
             }
         }
-        if (!merged && sel_n < 8) {
+        if (!merged && sel_n < 64) {
             selected[sel_n++] = *cand;
         }
     }
@@ -324,54 +325,67 @@ static void fuse_obstacles(const ObstacleList* a, const ObstacleList* b,
 static void associate_and_track(const ObstacleList* detections,
                                  uint64_t now_us, ObstacleList* out) {
     int nd = (int)detections->count;
-    int matched_det[8] = {0};  /* detection i 是否已关联到 track */
+    if (nd > PF_MAX_TRACKS) nd = PF_MAX_TRACKS;
+    int matched_det[PF_MAX_TRACKS] = {0};  /* detection i 是否已关联到 track */
     int matched_trk[PF_MAX_TRACKS] = {0};  /* track j 本轮是否已关联 */
 
-    /* ── Pass 1: 对每个 detection 找最近 track ──────────── */
-    for (int i = 0; i < nd; i++) {
-        const Obstacle* d = &detections->obstacles[i];
-        int best_j = -1;
-        double best_d2 = g.track_assoc_dist * g.track_assoc_dist;
+    /* 收集当前活跃 track 索引 */
+    int active_trks[PF_MAX_TRACKS];
+    int n_active = 0;
+    for (int j = 0; j < PF_MAX_TRACKS; j++) {
+        if (g.tracks[j].active) {
+            active_trks[n_active++] = j;
+        }
+    }
 
-        for (int j = 0; j < PF_MAX_TRACKS; j++) {
-            if (!g.tracks[j].active || matched_trk[j]) continue;
-            double dx = (double)d->x - g.tracks[j].x;
-            double dy = (double)d->y - g.tracks[j].y;
-            double d2 = dx * dx + dy * dy;
-            if (d2 < best_d2) {
-                best_d2 = d2;
-                best_j = j;
+    /* ── Pass 1: Kuhn-Munkres 匈牙利算法最优二分图关联 ──────────── */
+    if (n_active > 0 && nd > 0) {
+        double cost[HUNGARIAN_TRACKER_MAX][HUNGARIAN_TRACKER_MAX];
+        for (int r = 0; r < n_active; r++) {
+            int j = active_trks[r];
+            for (int c = 0; c < nd; c++) {
+                const Obstacle* d = &detections->obstacles[c];
+                double dx = (double)d->x - g.tracks[j].x;
+                double dy = (double)d->y - g.tracks[j].y;
+                cost[r][c] = sqrt(dx * dx + dy * dy);
             }
         }
 
-        if (best_j >= 0) {
-            /* 匹配成功: 更新 track */
-            Track* t = &g.tracks[best_j];
-            uint64_t dt_us = now_us - t->last_update_us;
-            double dt_s = (dt_us > 0) ? (double)dt_us / 1000000.0 : 0.1;
+        int row_match[HUNGARIAN_TRACKER_MAX];
+        hungarian_solve(n_active, nd, cost, g.track_assoc_dist, row_match);
 
-            /* 差分测速 */
-            double raw_vx = (dt_s > 1e-6) ? ((double)d->x - t->x) / dt_s : 0.0;
-            double raw_vy = (dt_s > 1e-6) ? ((double)d->y - t->y) / dt_s : 0.0;
+        for (int r = 0; r < n_active; r++) {
+            int c = row_match[r];
+            if (c >= 0 && c < nd) {
+                int best_j = active_trks[r];
+                const Obstacle* d = &detections->obstacles[c];
+                Track* t = &g.tracks[best_j];
+                uint64_t dt_us = now_us - t->last_update_us;
+                double dt_s = (dt_us > 0) ? (double)dt_us / 1000000.0 : 0.1;
 
-            /* EMA 平滑 */
-            double a = g.track_ema_alpha;
-            t->vx = a * raw_vx + (1.0 - a) * t->vx;
-            t->vy = a * raw_vy + (1.0 - a) * t->vy;
+                /* 差分测速 */
+                double raw_vx = (dt_s > 1e-6) ? ((double)d->x - t->x) / dt_s : 0.0;
+                double raw_vy = (dt_s > 1e-6) ? ((double)d->y - t->y) / dt_s : 0.0;
 
-            t->x = (double)d->x;
-            t->y = (double)d->y;
-            t->width  = (double)d->width;
-            t->length = (double)d->length;
-            t->type   = d->type;
-            t->confidence    = d->confidence;
-            t->last_update_us = now_us;
-            t->age++;
-            t->missed = 0;
+                /* EMA 平滑 */
+                double a = g.track_ema_alpha;
+                t->vx = a * raw_vx + (1.0 - a) * t->vx;
+                t->vy = a * raw_vy + (1.0 - a) * t->vy;
 
-            matched_det[i] = 1;
-            matched_trk[best_j] = 1;
-            g.tracks_matched++;
+                t->x = (double)d->x;
+                t->y = (double)d->y;
+                t->width  = (double)d->width;
+                t->length = (double)d->length;
+                t->type   = d->type;
+                t->confidence    = d->confidence;
+                t->last_update_us = now_us;
+                t->age++;
+                t->missed = 0;
+
+                matched_det[c] = 1;
+                matched_trk[best_j] = 1;
+                g.tracks_matched++;
+            }
         }
     }
 
@@ -449,8 +463,8 @@ static void associate_and_track(const ObstacleList* detections,
 
     /* ── 收集活跃 track → 输出 ─────────────────────────── */
     int n_out = 0;
-    Obstacle sorted[8];
-    for (int j = 0; j < PF_MAX_TRACKS && n_out < 8; j++) {
+    Obstacle sorted[PF_MAX_TRACKS];
+    for (int j = 0; j < PF_MAX_TRACKS && n_out < PF_MAX_TRACKS; j++) {
         if (!g.tracks[j].active) continue;
         /* 外推 track 置信度打折,type 标记为 UNKNOWN(远距无法分类) */
         Obstacle o;
