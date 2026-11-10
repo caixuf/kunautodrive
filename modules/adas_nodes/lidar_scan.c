@@ -149,33 +149,60 @@ uint32_t lidar_scan_generate(const LidarScanPlan* plan,
     const double mount     = plan->mount_height_m;
     const double range_max = plan->range_max_m;
     const double tau       = (plan->intensity_tau_m > 0.0) ? plan->intensity_tau_m : 30.0;
-    const double cos_h     = cos(ego_heading);
-    const double sin_h     = sin(ego_heading);
 
-    /* 目标 → 传感器系：2D 旋转 + z 减去安装高度（z 相对传感器）。 */
-    double t_cx[LIDAR_SCAN_MAX_TARGETS], t_cy[LIDAR_SCAN_MAX_TARGETS],
-           t_cz[LIDAR_SCAN_MAX_TARGETS], t_hx[LIDAR_SCAN_MAX_TARGETS],
-           t_hy[LIDAR_SCAN_MAX_TARGETS], t_hz[LIDAR_SCAN_MAX_TARGETS];
+    /* 自车姿态三角函数（ENU 车体系右手定则：x前 y左 z上） */
+    const double cos_yaw   = cos(ego_heading);
+    const double sin_yaw   = sin(ego_heading);
+    const double cos_pitch = cos(plan->ego_pitch);
+    const double sin_pitch = sin(plan->ego_pitch);
+    const double cos_roll  = cos(plan->ego_roll);
+    const double sin_roll  = sin(plan->ego_roll);
+
+    /* 传感器世界坐标 */
+    const double sensor_world_x = ego_x;
+    const double sensor_world_y = ego_y;
+    const double sensor_world_z = plan->ego_z + mount;
+
+    /* 目标预处理：转入世界坐标与自身局部坐标系（支持 3D OBB 旋转框） */
+    double t_ox[LIDAR_SCAN_MAX_TARGETS], t_oy[LIDAR_SCAN_MAX_TARGETS],
+           t_oz[LIDAR_SCAN_MAX_TARGETS];
+    double t_hx[LIDAR_SCAN_MAX_TARGETS], t_hy[LIDAR_SCAN_MAX_TARGETS],
+           t_hz[LIDAR_SCAN_MAX_TARGETS];
+    double t_cos_h[LIDAR_SCAN_MAX_TARGETS], t_sin_h[LIDAR_SCAN_MAX_TARGETS];
     int    t_active[LIDAR_SCAN_MAX_TARGETS];
+
     for (int i = 0; i < n_targets; i++) {
-        const double dx = targets[i].x - ego_x;
-        const double dy = targets[i].y - ego_y;
         const double len = (targets[i].length > 0.0) ? targets[i].length : 4.6;
         const double wid = (targets[i].width  > 0.0) ? targets[i].width  : 2.0;
         const double hgt = (targets[i].height > 0.0) ? targets[i].height : 1.5;
 
-        t_cx[i] =  dx * cos_h + dy * sin_h;
-        t_cy[i] = -dx * sin_h + dy * cos_h;
         t_hx[i] = 0.5 * len;
         t_hy[i] = 0.5 * wid;
         t_hz[i] = 0.5 * hgt;
-        t_cz[i] = 0.5 * hgt - mount;
 
-        /* 便宜的外接球预筛：整框都在量程外就不参与逐射线求交 */
-        const double r_center = sqrt(t_cx[i] * t_cx[i] + t_cy[i] * t_cy[i] +
-                                     t_cz[i] * t_cz[i]);
-        const double r_bound  = sqrt(t_hx[i] * t_hx[i] + t_hy[i] * t_hy[i] +
-                                     t_hz[i] * t_hz[i]);
+        const double center_world_x = targets[i].x;
+        const double center_world_y = targets[i].y;
+        const double center_world_z = targets[i].z + 0.5 * hgt;
+
+        /* 传感器原点相对目标中心的矢量（世界系） */
+        const double delta_x = sensor_world_x - center_world_x;
+        const double delta_y = sensor_world_y - center_world_y;
+        const double delta_z = sensor_world_z - center_world_z;
+
+        /* 目标朝向角 (若无显式 heading 且为 0 则为 0) */
+        const double th = (targets[i].has_heading || targets[i].heading != 0.0)
+                        ? targets[i].heading : 0.0;
+        t_cos_h[i] = cos(th);
+        t_sin_h[i] = sin(th);
+
+        /* 将传感器相对原点旋入目标局部坐标系 */
+        t_ox[i] =  delta_x * t_cos_h[i] + delta_y * t_sin_h[i];
+        t_oy[i] = -delta_x * t_sin_h[i] + delta_y * t_cos_h[i];
+        t_oz[i] =  delta_z;
+
+        /* 外接球预筛：相对距离超量程则跳过 */
+        const double r_center = sqrt(delta_x * delta_x + delta_y * delta_y + delta_z * delta_z);
+        const double r_bound  = sqrt(t_hx[i] * t_hx[i] + t_hy[i] * t_hy[i] + t_hz[i] * t_hz[i]);
         t_active[i] = (r_center - r_bound <= range_max) ? 1 : 0;
     }
 
@@ -186,27 +213,59 @@ uint32_t lidar_scan_generate(const LidarScanPlan* plan,
                         ? 0.0
                         : vmin + (vmax - vmin) * (double)c / (double)(channels - 1);
         const double cos_el = cos(el);
-        const double dz     = sin(el);
+        const double dz_s   = sin(el);
 
         for (int r = 0; r < az_rays; r++) {
             const double frac = (az_rays == 1) ? 0.5
                                                : (double)r / (double)(az_rays - 1);
             const double az = -hfov * 0.5 + frac * hfov;
-            const double dx = cos_el * cos(az);
-            const double dy = cos_el * sin(az);
+            const double dx_s = cos_el * cos(az);
+            const double dy_s = cos_el * sin(az);
+
+            /* 传感器系射线 (dx_s, dy_s, dz_s) 旋转至世界系 (dx_w, dy_w, dz_w)
+             * 旋转顺序：R_z(yaw) * R_y(pitch) * R_x(roll) */
+            const double x1 = dx_s;
+            const double y1 = dy_s * cos_roll - dz_s * sin_roll;
+            const double z1 = dy_s * sin_roll + dz_s * cos_roll;
+
+            const double x2 =  x1 * cos_pitch + z1 * sin_pitch;
+            const double y2 =  y1;
+            const double z2 = -x1 * sin_pitch + z1 * cos_pitch;
+
+            const double dx_w = x2 * cos_yaw - y2 * sin_yaw;
+            const double dy_w = x2 * sin_yaw + y2 * cos_yaw;
+            const double dz_w = z2;
 
             double t_best  = range_max;
             int    hit_idx = -1;
+
+            /* 与全部 3D OBB 目标求交 */
             for (int i = 0; i < n_targets; i++) {
                 if (!t_active[i]) continue;
-                const double t = ray_aabb_3d(0.0, 0.0, 0.0, dx, dy, dz,
-                                             t_cx[i], t_cy[i], t_cz[i],
+                /* 将世界系射线方向旋入目标局部坐标系 */
+                const double d_tx =  dx_w * t_cos_h[i] + dy_w * t_sin_h[i];
+                const double d_ty = -dx_w * t_sin_h[i] + dy_w * t_cos_h[i];
+                const double d_tz =  dz_w;
+
+                const double t = ray_aabb_3d(t_ox[i], t_oy[i], t_oz[i],
+                                             d_tx, d_ty, d_tz,
+                                             0.0, 0.0, 0.0,
                                              t_hx[i], t_hy[i], t_hz[i]);
                 if (t > 0.0 && t < t_best) {
                     t_best  = t;
                     hit_idx = i;
                 }
             }
+
+            /* 可选地面射线求交（enable_ground_hits）：向下的射线与局部水平地面相交 */
+            if (plan->enable_ground_hits && dz_w < -1e-6) {
+                const double t_ground = mount / (-dz_w);
+                if (t_ground > 0.0 && t_ground < t_best && t_ground <= range_max) {
+                    t_best  = t_ground;
+                    hit_idx = 999999; /* 地面命中标记 */
+                }
+            }
+
             if (hit_idx < 0) continue;
 
             if (plan->loss_rate > 0.0 &&
@@ -214,8 +273,7 @@ uint32_t lidar_scan_generate(const LidarScanPlan* plan,
                 continue;
             }
 
-            /* 测距噪声：σ = 绝对项 + 相对项·range（真实 LiDAR 量级，2~5cm 起）。
-             * 旧的 σ=α·range 在 33m 就有 2.6m，会把相邻目标糊成一个宽簇。 */
+            /* 测距噪声：σ = 绝对项 + 相对项·range */
             double t_noisy = t_best;
             const double sigma = plan->noise_std_m + plan->noise_rel * t_best;
             if (sigma > 0.0) {
@@ -225,13 +283,13 @@ uint32_t lidar_scan_generate(const LidarScanPlan* plan,
             if (t_noisy > range_max)   t_noisy = range_max;
 
             if (out->count >= capacity) {
-                dropped++;   /* 容量守卫：绝不越界写（旧实现的越界 bug） */
+                dropped++;   /* 容量守卫：绝不越界写 */
                 continue;
             }
             LidarPoint* p = &out->points[out->count];
-            p->x = (float)(dx * t_noisy);
-            p->y = (float)(dy * t_noisy);
-            p->z = (float)(dz * t_noisy);
+            p->x = (float)(dx_s * t_noisy);
+            p->y = (float)(dy_s * t_noisy);
+            p->z = (float)(dz_s * t_noisy);
             p->intensity      = (float)exp(-t_best / tau);
             p->time_offset_us = (uint32_t)(plan->sweep_us * frac);
             out->count++;

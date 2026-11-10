@@ -123,6 +123,22 @@ struct Entity {
     double pacejka_e{0};           /**< 曲率因子 E，默认 0 = 未初始化 */
     double pacejka_mu{0};          /**< 峰值附着系数 μ，默认 0 = 未初始化（摩擦圆上限） */
 
+    /* ── 3D 簧载姿态动力学与路面环境字段（Milestone M4）──
+     * ENU 车体系右手定则：x前 y左 z上。
+     * 制动点头 nose-down 为 pitch > 0，加速抬头为 pitch < 0；
+     * 左转离心力向右车身右倾为 roll > 0，右转左倾为 roll < 0。 */
+    double pitch{0};               /**< 俯仰角 (rad) */
+    double pitch_rate{0};          /**< 俯仰角速度 (rad/s) */
+    double roll{0};                /**< 侧倾角 (rad) */
+    double roll_rate{0};           /**< 侧倾角速度 (rad/s) */
+    double a_x_body{0};            /**< 车体系纵向加速度 (m/s²) */
+    double a_y_body{0};            /**< 车体系横向加速度 (m/s²) */
+    double cg_height{0.55};        /**< 质心高 (m，轿车 0.55, SUV 0.68, 卡车 1.10) */
+    double road_grade{0};          /**< 道路坡度 (rad，上坡>0，下坡<0) */
+    double surface_mu_scale{1.0};  /**< 局部路面摩擦因数倍率 (默认 1.0，湿滑区 0.35) */
+    double F_zf{0};                /**< 前轴动态垂直载荷 (N) */
+    double F_zr{0};                /**< 后轴动态垂直载荷 (N) */
+
     /* ── 执行器滞后参数（运动学模型也启用，用于 yaw_rate 精确计算）── */
     double steer_tau{0.15};        /**< 转向执行器一阶滞后时间常数 (s)，典型 EPS 0.10-0.20 */
     double steer_rate_max{0.6};    /**< 最大转向速率 (rad/s)，EPS 物理限制 */

@@ -1213,13 +1213,13 @@ target_include_directories(test_obs_lane_match_hint_prefer_a PRIVATE ${GEN_DIR}
 target_link_libraries(test_obs_lane_match_hint_prefer_a flowengine_core)
 add_test(NAME obs_lane_match_hint_prefer_a_tests COMMAND test_obs_lane_match_hint_prefer_a)
 
-add_executable(test_lidar_contract tests/test_lidar_contract.c)
+add_executable(test_lidar_contract tests/test_lidar_contract.c modules/adas_nodes/lidar_scan.c)
 add_dependencies(test_lidar_contract msg_codegen)
 target_include_directories(test_lidar_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/adas_nodes
     ${GEN_DIR}
 )
-target_link_libraries(test_lidar_contract flowengine_core)
+target_link_libraries(test_lidar_contract flowengine_core m)
 add_test(NAME lidar_contract_tests COMMAND test_lidar_contract)
 set_tests_properties(adas_nodes_logic_tests PROPERTIES TIMEOUT 10)
 

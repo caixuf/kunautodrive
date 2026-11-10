@@ -1,6 +1,6 @@
 {
   "generated_by": "tools/build_showcase.py",
-  "count": 36,
+  "count": 37,
   "scenarios": [
     {
       "file": "scenarios/straight_road.json",
@@ -234937,6 +234937,92 @@
           "max_duration_s": 50.0,
           "min_avg_speed_mps": 1.0,
           "left_turn_completed": true
+        },
+        "route": [],
+        "scenarios": []
+      }
+    },
+    {
+      "file": "scenarios/wet_road_evasion.json",
+      "name": "wet_road_evasion",
+      "description": "低附着湿滑路段避障工况：双向 4 车道 2000m 直道，设置局部湿滑积水区 (x: 80~400, y: -8~8, mu_scale: 0.35, surface: 'wet')；自车巡航进入低附着湿滑路段，前方遇低速车辆，完成跟停/避障。验证 3D 姿态动力学、动态载荷转移、低附着下的制动与横向控制。",
+      "duration_s": 35,
+      "enabled": true,
+      "raw": {
+        "name": "wet_road_evasion",
+        "description": "低附着湿滑路段避障工况：双向 4 车道 2000m 直道，设置局部湿滑积水区 (x: 80~400, y: -8~8, mu_scale: 0.35, surface: 'wet')；自车巡航进入低附着湿滑路段，前方遇低速车辆，完成跟停/避障。验证 3D 姿态动力学、动态载荷转移、低附着下的制动与横向控制。",
+        "random_seed": 42,
+        "duration_s": 35,
+        "ego": {
+          "x": 20.0,
+          "y": -1.75,
+          "heading": 0.0,
+          "init_speed": 10.0,
+          "target_speed": 12.0
+        },
+        "road_network": {
+          "edges": [
+            {
+              "id": 0,
+              "type": "highway",
+              "name": "wet_highway_straight",
+              "length_m": 2000,
+              "lanes": 4,
+              "lane_width": 3.5,
+              "speed_limit": 18.0,
+              "nodes": [
+                [
+                  0,
+                  0,
+                  0
+                ],
+                [
+                  2000,
+                  0,
+                  0
+                ]
+              ]
+            }
+          ]
+        },
+        "friction_zones": [
+          {
+            "x_min": 80.0,
+            "x_max": 400.0,
+            "y_min": -8.0,
+            "y_max": 8.0,
+            "mu_scale": 0.35,
+            "surface": "wet"
+          }
+        ],
+        "actors": [
+          {
+            "id": 1,
+            "type": "car",
+            "x": 90.0,
+            "y": -1.75,
+            "vx": 6.0,
+            "vy": 0.0,
+            "len": 4.6,
+            "wid": 2.0
+          },
+          {
+            "id": 2,
+            "type": "car",
+            "x": 160.0,
+            "y": -5.25,
+            "vx": 8.0,
+            "vy": 0.0,
+            "len": 4.6,
+            "wid": 2.0
+          }
+        ],
+        "traffic_lights": [],
+        "pass_criteria": {
+          "no_collision": true,
+          "max_duration_s": 45.0,
+          "min_avg_speed_mps": 3.0,
+          "min_distance_m": 50.0
         },
         "route": [],
         "scenarios": []

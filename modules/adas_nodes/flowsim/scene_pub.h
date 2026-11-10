@@ -65,6 +65,18 @@ struct ScenePubConstructionZone {
 };
 
 /**
+ * 局部湿滑摩擦区（scene/frame 透传给前端渲染贴花与状态展示）。
+ */
+struct ScenePubFrictionZone {
+    double x_min{0};
+    double x_max{0};
+    double y_min{0};
+    double y_max{0};
+    double mu_scale{1.0};
+    std::string surface{"wet"};
+};
+
+/**
  * traffic_density 自动补给结果（D3-2 可观测性）。
  *
  * flowsim 启动时按 scenario 的 traffic_density 块沿 ego route 自动 spawn NPC。
@@ -128,6 +140,9 @@ struct ScenePubConfig {
      * 拷入。每帧序列化进 scene/frame，经 monitor 透传给前端 ConstructionView 渲染。
      * 空 → 前端回退到"道路末端 30m"旧逻辑。 */
     std::vector<ScenePubConstructionZone> construction_zones;
+
+    /* ── 局部湿滑摩擦区（Milestone M4）── */
+    std::vector<ScenePubFrictionZone> friction_zones;
 
     /* ── 性能优化：road_network JSON 缓存 ──
      * 道路网络在仿真过程中不变（仅 init 阶段加载 xodr），但 build_road_network_json

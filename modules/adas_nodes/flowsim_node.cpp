@@ -258,6 +258,7 @@ static void reset_runtime_state() {
     g.scene_pub_cfg.cached_road_network_json.clear();
     g.scene_pub_cfg.roads = nullptr;
     g.scene_pub_cfg.construction_zones.clear();
+    g.scene_pub_cfg.friction_zones.clear();
     g.scene_pub_cfg.traffic_density = flowsim::ScenePubTrafficDensity();
 
     g.has_control_input.store(0, std::memory_order_relaxed);
@@ -1504,6 +1505,12 @@ static void publish_vehicle_state(uint64_t sim_time_us) {
     cJSON_AddNumberToObject(vstate, "t_us", (double)sim_time_us);
     cJSON_AddNumberToObject(vstate, "road_id", (double)ego.road_id);
     cJSON_AddNumberToObject(vstate, "lane_id", (double)ego.lane_id);
+    /* M4 姿态与路面物理字段 */
+    cJSON_AddNumberToObject(vstate, "z", ego.z);
+    cJSON_AddNumberToObject(vstate, "pitch", ego.pitch);
+    cJSON_AddNumberToObject(vstate, "roll", ego.roll);
+    cJSON_AddNumberToObject(vstate, "mu_scale", ego.surface_mu_scale);
+    cJSON_AddNumberToObject(vstate, "road_grade", ego.road_grade);
     /* 车参广播（车参单一事实源 = 场景 ego 块）：仅场景显式配置时才发，
      * 下游（planning/control）收到字段即同步，未收到保持各自默认/配置。
      * 这样 RC 小车（pipeline_car.json 场景配 wheelbase=0.25）也能同步。 */
@@ -1550,6 +1557,10 @@ static void publish_vehicle_state(uint64_t sim_time_us) {
         cJSON_AddNumberToObject(vstate, key, e.length);
         snprintf(key, sizeof(key), "ow%d", n_obs);
         cJSON_AddNumberToObject(vstate, key, e.width);
+        snprintf(key, sizeof(key), "oz%d", n_obs);
+        cJSON_AddNumberToObject(vstate, key, e.z);
+        snprintf(key, sizeof(key), "ohdg%d", n_obs);
+        cJSON_AddNumberToObject(vstate, key, e.heading);
         n_obs++;
     }
     /* 施工区域障碍物（前方封路）：追加到障碍物列表供感知识别 */
@@ -2695,6 +2706,36 @@ protected:
                     g.prev_steer = ego.steer;
                 }
             }
+            /* 局部摩擦区与坡度更新（Milestone M4） */
+            {
+                double mu = 1.0;
+                if (g.scenario && g.scenario->friction_zone_count > 0) {
+                    for (int k = 0; k < g.scenario->friction_zone_count; ++k) {
+                        const auto& fz = g.scenario->friction_zones[k];
+                        if (ego.x >= fz.x_min && ego.x <= fz.x_max &&
+                            ego.y >= fz.y_min && ego.y <= fz.y_max) {
+                            mu = fz.mu_scale;
+                            break;
+                        }
+                    }
+                }
+                ego.surface_mu_scale = mu;
+
+                double grade = 0.0;
+                if (g.roads_loaded && ego.road_id >= 0) {
+                    flowsim::WorldPos wp_a, wp_b;
+                    double ds = 1.0;
+                    if (g.roads.frenet_to_world(ego.road_id, ego.lane_id, ego.s + ds, ego.offset, wp_a) &&
+                        g.roads.frenet_to_world(ego.road_id, ego.lane_id, ego.s - ds, ego.offset, wp_b)) {
+                        double dz = wp_a.z - wp_b.z;
+                        if (std::fabs(dz) > 1e-4) {
+                            grade = std::atan2(dz, 2.0 * ds);
+                        }
+                    }
+                }
+                ego.road_grade = grade;
+            }
+
             if (strcmp(g.physics_model, "dynamic") == 0) {
                 flowsim::step_bicycle_dynamic(ego, FLOWSIM_DT_SEC,
                                               ego.throttle, ego.brake, ego.steer);
@@ -2990,6 +3031,18 @@ protected:
                 flowsim::Entity& e = g.pool[i];
                 if (!e.active) continue;
                 if (e.is_npc_vehicle()) {
+                    double mu = 1.0;
+                    if (g.scenario && g.scenario->friction_zone_count > 0) {
+                        for (int k = 0; k < g.scenario->friction_zone_count; ++k) {
+                            const auto& fz = g.scenario->friction_zones[k];
+                            if (e.x >= fz.x_min && e.x <= fz.x_max &&
+                                e.y >= fz.y_min && e.y <= fz.y_max) {
+                                mu = fz.mu_scale;
+                                break;
+                            }
+                        }
+                    }
+                    e.surface_mu_scale = mu;
                     flowsim::step_npc_vehicle(e, g.pool, FLOWSIM_DT_SEC,
                                               g.ai_cfg, roads_ptr, route_ptr, ego_route_s,
                                               g.cycle, g.off_rails);
@@ -3952,6 +4005,20 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
         pz.length = cz->length;
         pz.width  = cz->width;
         g.scene_pub_cfg.construction_zones.push_back(pz);
+    }
+
+    /* 局部湿滑摩擦区：把 scenario 定义拷入 scene_pub_cfg，每帧透传给前端渲染 */
+    g.scene_pub_cfg.friction_zones.clear();
+    for (int z = 0; z < g.scenario->friction_zone_count; ++z) {
+        const ScenarioFrictionZone* fz = &g.scenario->friction_zones[z];
+        flowsim::ScenePubFrictionZone pz;
+        pz.x_min    = fz->x_min;
+        pz.x_max    = fz->x_max;
+        pz.y_min    = fz->y_min;
+        pz.y_max    = fz->y_max;
+        pz.mu_scale = fz->mu_scale;
+        pz.surface  = fz->surface;
+        g.scene_pub_cfg.friction_zones.push_back(pz);
     }
 
     /* 构造协程任务（托管模式） */

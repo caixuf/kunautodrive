@@ -33,6 +33,51 @@ static constexpr double CG_FRONT_FRAC = 0.45;
 /* 滑移角饱和：线性轮胎仅在小滑移角有效，超出近似摩擦极限而饱和。
  * 既贴近真实轮胎（friction circle），又保证任意控制输入下前向欧拉有界不发散。 */
 static constexpr double SLIP_ANGLE_MAX = 0.12;
+static constexpr double GRAV_CONST = 9.81;
+
+/* 悬架二阶弹簧阻尼模型常数（右手定则 ENU 车体系：x前 y左 z上）
+ * 俯仰：加速抬头 pitch<0，制动点头 pitch>0；
+ * 侧倾：左转离心力向右 roll>0，右转左倾 roll<0。 */
+static constexpr double SUSP_K_PITCH   = 100000.0;  // 俯仰等效刚度 (N·m/rad)
+static constexpr double SUSP_C_PITCH   = 35000.0;   // 俯仰阻尼 (N·m·s/rad，过阻尼 ζ≈1.1)
+static constexpr double SUSP_I_PITCH   = 2500.0;    // 绕 Y 轴转动惯量 (kg·m²)
+static constexpr double SUSP_K_ROLL    = 80000.0;   // 侧倾等效刚度 (N·m/rad，含防倾杆)
+static constexpr double SUSP_C_ROLL    = 16000.0;   // 侧倾阻尼 (N·m·s/rad，过阻尼 ζ≈1.1)
+static constexpr double SUSP_I_ROLL    = 700.0;     // 绕 X 轴转动惯量 (kg·m²)
+static constexpr double SUSP_ANGLE_MAX = 0.15;      // 悬架物理限位行程 (rad，约 8.6°)
+
+static void update_axle_loads(Entity& e, double* fz_f_clamped = nullptr, double* fz_r_clamped = nullptr) {
+    // 动态轴荷转移与对称守恒 (F_zf + F_zr = mg)
+    double a = CG_FRONT_FRAC * e.wheelbase;
+    double b = e.wheelbase - a;
+    double delta_fz = e.mass * e.a_x_body * e.cg_height / e.wheelbase;
+    double fz_f_static = e.mass * GRAV_CONST * b / e.wheelbase;
+    double fz_r_static = e.mass * GRAV_CONST * a / e.wheelbase;
+    e.F_zf = fz_f_static - delta_fz;
+    e.F_zr = fz_r_static + delta_fz;
+    if (fz_f_clamped) *fz_f_clamped = std::max(e.F_zf, 0.05 * fz_f_static);
+    if (fz_r_clamped) *fz_r_clamped = std::max(e.F_zr, 0.05 * fz_r_static);
+}
+
+static void update_suspension(Entity& e, double dt) {
+    update_axle_loads(e);
+
+    // 俯仰二阶动力学 (半隐式欧拉在 dt=0.05s 下稳定不发散)
+    double M_p = -e.mass * e.a_x_body * e.cg_height;
+    double p_acc = (M_p - SUSP_C_PITCH * e.pitch_rate - SUSP_K_PITCH * e.pitch) / SUSP_I_PITCH;
+    e.pitch_rate += p_acc * dt;
+    e.pitch += e.pitch_rate * dt;
+    if (e.pitch >  SUSP_ANGLE_MAX) e.pitch =  SUSP_ANGLE_MAX;
+    if (e.pitch < -SUSP_ANGLE_MAX) e.pitch = -SUSP_ANGLE_MAX;
+
+    // 侧倾二阶动力学
+    double M_r = e.mass * e.a_y_body * e.cg_height;
+    double r_acc = (M_r - SUSP_C_ROLL * e.roll_rate - SUSP_K_ROLL * e.roll) / SUSP_I_ROLL;
+    e.roll_rate += r_acc * dt;
+    e.roll += e.roll_rate * dt;
+    if (e.roll >  SUSP_ANGLE_MAX) e.roll =  SUSP_ANGLE_MAX;
+    if (e.roll < -SUSP_ANGLE_MAX) e.roll = -SUSP_ANGLE_MAX;
+}
 
 static inline double clamp_slip(double a) {
     if (a >  SLIP_ANGLE_MAX) return  SLIP_ANGLE_MAX;
@@ -92,7 +137,6 @@ static double pacejka_lateral_force(double alpha, double mu, double Fz,
  * 并把车体系速度投影回世界系 x/y。框架与 integrate_lateral_dynamics 一致，
  * 仅轮胎侧向力由魔术公式给出（不硬饱和滑移角）。 */
 static void integrate_lateral_dynamics_pacejka(Entity& e, double dt) {
-    constexpr double GRAV = 9.81;
     double a  = CG_FRONT_FRAC * e.wheelbase;          // 质心→前轴
     double b  = e.wheelbase - a;                      // 质心→后轴
     double vx = e.v_x_body;
@@ -101,13 +145,15 @@ static void integrate_lateral_dynamics_pacejka(Entity& e, double dt) {
     double alpha_f = e.steer - std::atan2(e.v_y_body + a * e.yaw_rate, vx);
     double alpha_r =        - std::atan2(e.v_y_body - b * e.yaw_rate, vx);
 
-    // 前/后轴静态轴荷（质心偏前 → 前轴分担 b/L，后轴分担 a/L）
-    double Fz_f = e.mass * GRAV * b / e.wheelbase;
-    double Fz_r = e.mass * GRAV * a / e.wheelbase;
+    // 前/后轴动态垂直载荷（含动态纵向轴荷转移 ΔFz 与正值下界夹紧）
+    double Fz_f = 0.0, Fz_r = 0.0;
+    update_axle_loads(e, &Fz_f, &Fz_r);
 
-    e.F_yf = pacejka_lateral_force(alpha_f, e.pacejka_mu, Fz_f,
+    double mu_effective = e.pacejka_mu * (e.surface_mu_scale > 0.0 ? e.surface_mu_scale : 1.0);
+
+    e.F_yf = pacejka_lateral_force(alpha_f, mu_effective, Fz_f,
                                    e.pacejka_b, e.pacejka_c, e.pacejka_e);
-    e.F_yr = pacejka_lateral_force(alpha_r, e.pacejka_mu, Fz_r,
+    e.F_yr = pacejka_lateral_force(alpha_r, mu_effective, Fz_r,
                                    e.pacejka_b, e.pacejka_c, e.pacejka_e);
 
     double vy_dot = (e.F_yf + e.F_yr) / e.mass - vx * e.yaw_rate;
@@ -115,12 +161,13 @@ static void integrate_lateral_dynamics_pacejka(Entity& e, double dt) {
 
     e.v_y_body += vy_dot * dt;
     e.yaw_rate += r_dot  * dt;
+    e.a_y_body = (e.F_yf + e.F_yr) / e.mass;
 
     /* 摩擦圆护栏（与线性模型一致）：|v_y| ≤ vx·tan(slip_max)·1.5,
      * |r| ≤ μ·g/vx。Pacejka 峰值本身受 μ·Fz 限制，护栏仅兜底非线性输入。 */
     const double max_vy = std::fabs(vx) * std::tan(SLIP_ANGLE_MAX) * 1.5;
     if (std::fabs(e.v_y_body) > max_vy) e.v_y_body = std::copysign(max_vy, e.v_y_body);
-    const double max_r = (0.8 * GRAV) / std::max(vx, 1.0);
+    const double max_r = (0.8 * GRAV_CONST) / std::max(vx, 1.0);
     if (std::fabs(e.yaw_rate) > max_r) e.yaw_rate = std::copysign(max_r, e.yaw_rate);
 
     e.heading  += e.yaw_rate * dt;
@@ -136,7 +183,10 @@ static void integrate_lateral_dynamics_pacejka(Entity& e, double dt) {
 }
 
 void step_bicycle(Entity& e, double dt, double throttle, double brake, double steer) {
-    e.speed += longitudinal_accel(e, throttle, brake, e.speed) * dt;
+    double grade_term = (e.road_grade != 0.0) ? (GRAV_CONST * std::sin(e.road_grade)) : 0.0;
+    double acc = longitudinal_accel(e, throttle, brake, e.speed) - grade_term;
+    e.a_x_body = acc;
+    e.speed += acc * dt;
     /* 倒车只允许显式负油门触发（三把方向掉头相位）。
      * 普通制动若穿过 0，必须钳回静止，不能误变成持续倒车。 */
     if (e.speed < 0.0 && throttle >= 0.0) e.speed = 0.0;
@@ -147,16 +197,11 @@ void step_bicycle(Entity& e, double dt, double throttle, double brake, double st
 
     // ── 运动学 yaw_rate（后轴参考点）──
     e.yaw_rate = (e.speed / e.wheelbase) * std::tan(e.steer);
+    e.a_y_body = e.speed * e.yaw_rate;
     e.heading += e.yaw_rate * dt;
     normalize_heading(e);
 
     // ── 车辆中心为参考点（非后轴）──
-    // 标准自行车模型的后轴速度 = v·cos(θ)/v·sin(θ)，后轴绕弯心转动。
-    // 车辆中心 = 后轴 + half_wb·forward，其速度需叠加绕后轴转动的切向分量。
-    // 若直接以后轴速度更新中心位置，车体会绕后轴转动导致车尾"平移"（视觉上
-    // 车尾横滑），与真实车辆后轴不可动不符。
-    // 推导：dx_c/dt = v·cos(θ) - half_wb·sin(θ)·yaw_rate
-    //       dy_c/dt = v·sin(θ) + half_wb·cos(θ)·yaw_rate
     double half_wb = e.wheelbase * 0.5;
     double vx_rear = e.speed * std::cos(e.heading);
     double vy_rear = e.speed * std::sin(e.heading);
@@ -166,6 +211,8 @@ void step_bicycle(Entity& e, double dt, double throttle, double brake, double st
     // 世界系速度（车辆中心，供 perception/sensor 使用）
     e.vx = vx_rear - half_wb * std::sin(e.heading) * e.yaw_rate;
     e.vy = vy_rear + half_wb * std::cos(e.heading) * e.yaw_rate;
+
+    update_suspension(e, dt);
 }
 
 void step_pedestrian(Entity& e, double dt) {
@@ -192,6 +239,7 @@ static void integrate_lateral_dynamics(Entity& e, double dt) {
 
     e.v_y_body += vy_dot * dt;
     e.yaw_rate += r_dot  * dt;
+    e.a_y_body = (e.F_yf + e.F_yr) / e.mass;
 
     /* 稳定性护栏：线性轮胎 + 滑移角硬饱和下，高速持续转向时 v_y 经陀螺项
      * −vx·r 正反馈而发散（2026-07 PR #72 实测：≥20 m/s 持续转向必然发散，
@@ -201,7 +249,7 @@ static void integrate_lateral_dynamics(Entity& e, double dt) {
      * 只在失控/极端输入时钳位，不影响正常操控。 */
     const double max_vy = std::fabs(vx) * std::tan(SLIP_ANGLE_MAX) * 1.5;
     if (std::fabs(e.v_y_body) > max_vy) e.v_y_body = std::copysign(max_vy, e.v_y_body);
-    const double max_r = (0.8 * 9.81) / std::max(vx, 1.0);
+    const double max_r = (0.8 * GRAV_CONST) / std::max(vx, 1.0);
     if (std::fabs(e.yaw_rate) > max_r) e.yaw_rate = std::copysign(max_r, e.yaw_rate);
 
     e.heading  += e.yaw_rate * dt;
@@ -225,17 +273,17 @@ void step_bicycle_dynamic(Entity& e, double dt, double throttle, double brake, d
         return;
     }
 
-    // 纵向车速积分：用 v_x_body 自身而非总速 e.speed —— 侧向速度持续存在时
-    // 用总速标量回灌会让 v_y² 项每帧注入纵向速度（自泵，实测 30 m/s 纯减速
-    // 下 v_x 反而增长），此处改自身体积分，纵向/横向解耦。
-    // 入口同步：实体可能直接以高速进入 dynamic（首帧 v_x_body 未初始化=0），
-    // 此时从 e.speed 取纵向分量（假定初始侧向≈0），避免从 0 起步。
+    // 纵向车速积分：用 v_x_body 自身而非总速 e.speed
     if (e.v_x_body <= 0.0 && e.speed > 0.0) e.v_x_body = e.speed;
-    e.v_x_body += longitudinal_accel(e, throttle, brake, e.v_x_body) * dt;
+    double grade_term = (e.road_grade != 0.0) ? (GRAV_CONST * std::sin(e.road_grade)) : 0.0;
+    double acc = longitudinal_accel(e, throttle, brake, e.v_x_body) - grade_term;
+    e.a_x_body = acc;
+    e.v_x_body += acc * dt;
     if (e.v_x_body < 0.0) e.v_x_body = 0.0;
 
     update_steer(e, steer, dt);
     integrate_lateral_dynamics(e, dt);               // 内部把 e.speed 更新为合速度大小
+    update_suspension(e, dt);
 }
 
 void step_bicycle_dynamic_pacejka(Entity& e, double dt, double throttle, double brake, double steer) {
@@ -248,17 +296,23 @@ void step_bicycle_dynamic_pacejka(Entity& e, double dt, double throttle, double 
     }
     // 入口同步 + 纵向解耦积分（与 step_bicycle_dynamic 同构）
     if (e.v_x_body <= 0.0 && e.speed > 0.0) e.v_x_body = e.speed;
-    e.v_x_body += longitudinal_accel(e, throttle, brake, e.v_x_body) * dt;
+    double grade_term = (e.road_grade != 0.0) ? (GRAV_CONST * std::sin(e.road_grade)) : 0.0;
+    double acc = longitudinal_accel(e, throttle, brake, e.v_x_body) - grade_term;
+    e.a_x_body = acc;
+    e.v_x_body += acc * dt;
     if (e.v_x_body < 0.0) e.v_x_body = 0.0;
 
     update_steer(e, steer, dt);
     integrate_lateral_dynamics_pacejka(e, dt);
+    update_suspension(e, dt);
 }
 
 void apply_vehicle_defaults(Entity& e) {
     /* 执行器滞后参数：所有车辆共用默认值 */
     e.steer_tau = 0.15;
     e.steer_rate_max = 0.6;
+    e.surface_mu_scale = 1.0;
+    e.road_grade = 0.0;
 
     /* Pacejka 魔术公式参数（physics_model=pacejka 时才被读取；运动学/线性模式
      * 无视）。乘用车标定扫描见 tools/tire_dynamics_sim.py --tune：
@@ -281,6 +335,7 @@ void apply_vehicle_defaults(Entity& e) {
             e.mass = 8000.0;
             e.drag_coeff = 0.6;
             e.max_brake = 3.0;
+            e.cg_height = 1.10;
             e.tire_stiffness_f = 180000.0;
             e.tire_stiffness_r = 180000.0;
             e.yaw_inertia = 25000.0;
@@ -291,6 +346,7 @@ void apply_vehicle_defaults(Entity& e) {
             e.mass = 1800.0;
             e.drag_coeff = 0.45;
             e.max_brake = 4.0;
+            e.cg_height = 0.68;
             e.tire_stiffness_f = 90000.0;
             e.tire_stiffness_r = 90000.0;
             e.yaw_inertia = 3200.0;
@@ -303,6 +359,7 @@ void apply_vehicle_defaults(Entity& e) {
             e.mass = 1500.0;
             e.drag_coeff = 0.4;
             e.max_brake = 4.0;
+            e.cg_height = 0.55;
             e.tire_stiffness_f = 80000.0;
             e.tire_stiffness_r = 80000.0;
             e.yaw_inertia = 2250.0;

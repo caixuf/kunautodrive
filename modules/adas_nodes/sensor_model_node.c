@@ -45,10 +45,15 @@ static struct {
     double ego_y;
     double ego_heading;
     double ego_speed;
+    double ego_z;
+    double ego_pitch;
+    double ego_roll;
 
     int n_obs;
     double obs_x[128];
     double obs_y[128];
+    double obs_z[128];
+    double obs_heading[128];
     /* 障碍物物理尺寸（vehicle/state 的 ol%d/ow%d，米）。真点云的 AABB 半宽
      * 直接取自这里 —— 旧实现对所有障碍物硬编码 4.6×2.0 的车盒，行人
      * （0.5×0.5）会被当成车聚出来，下游类型判定必然错。 */
@@ -208,6 +213,9 @@ static uint32_t publish_raycast_points(uint32_t frame_id, uint64_t timestamp_us)
     plan.intensity_tau_m = 30.0;
     /* 扫描周期：time_offset_us 按方位角在 FOV 上的进度分布（旋转式 LiDAR sweep） */
     plan.sweep_us        = 1e6 / (double)(g.lidar_rate_hz > 0 ? g.lidar_rate_hz : 20);
+    plan.ego_z           = g.ego_z;
+    plan.ego_pitch       = g.ego_pitch;
+    plan.ego_roll        = g.ego_roll;
     if (lidar_scan_plan_sanitize(&plan)) {
         static int warned = 0;   /* 只在首次越界时提示，避免每帧刷屏 */
         if (!warned) {
@@ -223,11 +231,14 @@ static uint32_t publish_raycast_points(uint32_t frame_id, uint64_t timestamp_us)
     LidarScanTarget targets[128];
     const int n_targets = (g.n_obs > 0 && g.n_obs <= 128) ? g.n_obs : 0;
     for (int i = 0; i < n_targets; i++) {
-        targets[i].x      = g.obs_x[i];
-        targets[i].y      = g.obs_y[i];
-        targets[i].length = g.obs_length[i];
-        targets[i].width  = g.obs_width[i];
-        targets[i].height = lidar_scan_height_from_width(g.obs_width[i]);
+        targets[i].x           = g.obs_x[i];
+        targets[i].y           = g.obs_y[i];
+        targets[i].z           = g.obs_z[i];
+        targets[i].heading     = g.obs_heading[i];
+        targets[i].has_heading = 1;
+        targets[i].length      = g.obs_length[i];
+        targets[i].width       = g.obs_width[i];
+        targets[i].height      = lidar_scan_height_from_width(g.obs_width[i]);
     }
 
     /* 40KB → 静态缓冲，不能放栈上 */
@@ -280,6 +291,18 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
         g.ego_heading = j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "spd")) && cJSON_IsNumber(j))
         g.ego_speed = j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(root, "z")) && cJSON_IsNumber(j))
+        g.ego_z = j->valuedouble;
+    else
+        g.ego_z = 0.0;
+    if ((j = cJSON_GetObjectItemCaseSensitive(root, "pitch")) && cJSON_IsNumber(j))
+        g.ego_pitch = j->valuedouble;
+    else
+        g.ego_pitch = 0.0;
+    if ((j = cJSON_GetObjectItemCaseSensitive(root, "roll")) && cJSON_IsNumber(j))
+        g.ego_roll = j->valuedouble;
+    else
+        g.ego_roll = 0.0;
 
     int n = 0;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "n_obs")) && cJSON_IsNumber(j))
@@ -298,6 +321,14 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
         snprintf(key, sizeof(key), "oy%d", i);
         if ((j = cJSON_GetObjectItemCaseSensitive(root, key)) && cJSON_IsNumber(j))
             g.obs_y[i] = j->valuedouble;
+        g.obs_z[i] = 0.0;
+        snprintf(key, sizeof(key), "oz%d", i);
+        if ((j = cJSON_GetObjectItemCaseSensitive(root, key)) && cJSON_IsNumber(j))
+            g.obs_z[i] = j->valuedouble;
+        g.obs_heading[i] = 0.0;
+        snprintf(key, sizeof(key), "ohdg%d", i);
+        if ((j = cJSON_GetObjectItemCaseSensitive(root, key)) && cJSON_IsNumber(j))
+            g.obs_heading[i] = j->valuedouble;
 
         /* 尺寸：真点云 AABB 用障碍物自己的长宽，缺字段时退回标准乘用车 */
         g.obs_length[i] = 4.6;

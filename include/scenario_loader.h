@@ -229,6 +229,17 @@ typedef struct {
     double width;           /**< 施工段横向宽度（m，默认跨全路面） */
 } ScenarioConstructionZone;
 
+/* ── 局部湿滑摩擦区（Milestone M4）─────────────────────────── */
+
+typedef struct {
+    double x_min;
+    double x_max;
+    double y_min;
+    double y_max;
+    double mu_scale;    /**< 摩擦因数倍率 (0.0~1.0, 默认 1.0) */
+    char   surface[16]; /**< "wet" | "ice" | "snow" | "dry" */
+} ScenarioFrictionZone;
+
 /* ── 光照模式（FlowSim v2 中凯路场景新增） ─────────────────── */
 
 /**
@@ -403,6 +414,10 @@ typedef struct {
     int               stop_line_count;
     ScenarioConstructionZone construction_zones[SCENARIO_MAX_CONSTRUCTION_ZONES];
     int               construction_zone_count;
+    /* ── 局部湿滑摩擦区（Milestone M4）── */
+#define SCENARIO_MAX_FRICTION_ZONES 16
+    ScenarioFrictionZone friction_zones[SCENARIO_MAX_FRICTION_ZONES];
+    int               friction_zone_count;
     /* ── 中凯路场景新增（Task 3 + Task 4）── */
     ScenarioLighting  lighting;        /**< 全局光照模式（day/night/dusk，默认 day） */
     char              weather[16];     /**< clear/rain/snow/overcast/fog */

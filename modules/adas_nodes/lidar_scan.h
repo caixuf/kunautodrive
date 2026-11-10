@@ -64,14 +64,22 @@ typedef struct {
     double loss_rate;       /**< 每根射线的丢失率 [0,1] */
     double intensity_tau_m; /**< intensity 指数衰减常数（米） */
     double sweep_us;        /**< 扫描周期（微秒，用于 time_offset_us） */
+    /* M4 姿态与高程扩展（默认全 0 完全向后兼容） */
+    double ego_z;           /**< 自车世界高程 (m，默认 0) */
+    double ego_pitch;       /**< 自车俯仰角 (rad，默认 0) */
+    double ego_roll;        /**< 自车侧倾角 (rad，默认 0) */
+    int    enable_ground_hits; /**< 1=计算地面射线交点，0=默认关闭以保护 2D DBSCAN */
 } LidarScanPlan;
 
-/** 一个被观测目标：世界系中心 + 尺寸（AABB 取车体轴，近似"与 ego 同向"）。 */
+/** 一个被观测目标：世界系中心 + 底部高程 + 航向角 + 尺寸（支持 3D OBB 精确求交）。 */
 typedef struct {
-    double x, y;      /**< 目标中心（世界系） */
-    double length;    /**< 沿车体 x 的尺寸（米，>0） */
-    double width;     /**< 沿车体 y 的尺寸（米，>0） */
-    double height;    /**< z 向尺寸（米，地面 0 → 目标顶） */
+    double x, y;        /**< 目标中心（世界系） */
+    double z;           /**< 目标底部世界高程（米，默认 0 向后兼容） */
+    double heading;     /**< 目标世界航向角（弧度，默认 0 向后兼容） */
+    int    has_heading; /**< 是否显式指定航向（0=未指定，1=指定） */
+    double length;      /**< 沿目标局部 x 的长（米，>0） */
+    double width;       /**< 沿目标局部 y 的宽（米，>0） */
+    double height;      /**< z 向尺寸（米，底部 z → 目标顶） */
 } LidarScanTarget;
 
 /* ── 自持 RNG（xorshift64*）────────────────────────────────────

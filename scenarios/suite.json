@@ -198,6 +198,11 @@
       "file": "scenarios/unprotected_left_turn.json",
       "duration_s": 45,
       "enabled": true
+    },
+    {
+      "file": "scenarios/wet_road_evasion.json",
+      "duration_s": 35,
+      "enabled": true
     }
   ],
   "max_lane_offset_m": 1.65

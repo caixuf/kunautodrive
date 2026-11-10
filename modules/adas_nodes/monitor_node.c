@@ -308,6 +308,7 @@ static struct {
                                           *   前端 3D 场景只剩 ego。扩到 256KB 足够 100+ 实体。 */
     char   scene_ego_json[4096];        /* ego 实体 JSON（含 lights/brake/vx/vy，~1.5KB 实测） */
     char   scene_construction_json[1024]; /* construction_zones（施工区几何，后端单一事实源，透传给前端） */
+    char   scene_friction_json[2048];     /* friction_zones（局部湿滑摩擦区，透传给前端贴花） */
     char   scene_scenario_name[64]; /* 场景语义名，供前端选择专属设施 */
     char   scene_lighting[16];
     char   scene_weather[16];
@@ -822,6 +823,30 @@ static void on_scene_frame(const Message* msg, void* user_data) {
             pthread_mutex_unlock(&g.scene_frame_mutex);
             free(cz_str);
         }
+    } else {
+        pthread_mutex_lock(&g.scene_frame_mutex);
+        g.scene_construction_json[0] = '\0';
+        pthread_mutex_unlock(&g.scene_frame_mutex);
+    }
+
+    cJSON* fzs = cJSON_GetObjectItem(root, "friction_zones");
+    if (fzs && cJSON_IsArray(fzs)) {
+        char* fz_str = cJSON_PrintUnformatted(fzs);
+        if (fz_str) {
+            size_t len = strlen(fz_str);
+            if (len >= sizeof(g.scene_friction_json)) {
+                len = sizeof(g.scene_friction_json) - 1;
+            }
+            pthread_mutex_lock(&g.scene_frame_mutex);
+            memcpy(g.scene_friction_json, fz_str, len);
+            g.scene_friction_json[len] = '\0';
+            pthread_mutex_unlock(&g.scene_frame_mutex);
+            free(fz_str);
+        }
+    } else {
+        pthread_mutex_lock(&g.scene_frame_mutex);
+        g.scene_friction_json[0] = '\0';
+        pthread_mutex_unlock(&g.scene_frame_mutex);
     }
 
     /* NOA Phase 2.2: 透传完整 entities 数组（不再过滤类型）。
@@ -1613,6 +1638,14 @@ static void export_dashboard_json(void) {
     cJSON_AddNumberToObject(ego_o, "heading", hdg);
     cJSON_AddNumberToObject(ego_o, "speed", spd);
     cJSON_AddNumberToObject(ego_o, "steer", steer);
+    {
+        double ego_pitch = json_extract_double(g.latest_vehicle_state, "pitch");
+        double ego_roll = json_extract_double(g.latest_vehicle_state, "roll");
+        double ego_mu = json_extract_double(g.latest_vehicle_state, "mu_scale");
+        if (!isnan(ego_pitch)) cJSON_AddNumberToObject(ego_o, "pitch", ego_pitch);
+        if (!isnan(ego_roll))  cJSON_AddNumberToObject(ego_o, "roll", ego_roll);
+        if (!isnan(ego_mu) && ego_mu > 0.0) cJSON_AddNumberToObject(ego_o, "mu_scale", ego_mu);
+    }
 
     /* 从 scene/frame 的 ego 实体缓存中补充旧架构缺失字段。
      * vehicle/state 只提供 x/y/hdg/speed/steer 5 个基础字段，
@@ -1642,9 +1675,11 @@ static void export_dashboard_json(void) {
                 "target_vx", "length", "width", "ai_state",
                 "lateral_offset",
                 "yaw_rate",  /* 前端 heading 外推用（位置/朝向同步，2026-08） */
+                "pitch", "roll", "mu_scale", "road_grade",
                 NULL
             };
             for (int i = 0; merge_fields[i]; i++) {
+                if (cJSON_GetObjectItemCaseSensitive(ego_o, merge_fields[i])) continue;
                 cJSON* field = cJSON_GetObjectItem(ego_src, merge_fields[i]);
                 if (field) {
                     cJSON* dup = cJSON_Duplicate(field, 1);
@@ -1773,6 +1808,21 @@ static void export_dashboard_json(void) {
         cJSON* czs = monitor_cJSON_Parse(cz_snap);
         if (czs) {
             cJSON_AddItemToObject(scene, "construction_zones", czs);
+        }
+    }
+
+    if (g.has_scene_frame && g.scene_friction_json[0] != '\0') {
+        char fz_snap[sizeof(g.scene_friction_json)];
+        size_t fz_snap_len;
+        pthread_mutex_lock(&g.scene_frame_mutex);
+        fz_snap_len = strlen(g.scene_friction_json);
+        if (fz_snap_len >= sizeof(fz_snap)) fz_snap_len = sizeof(fz_snap) - 1;
+        memcpy(fz_snap, g.scene_friction_json, fz_snap_len);
+        fz_snap[fz_snap_len] = '\0';
+        pthread_mutex_unlock(&g.scene_frame_mutex);
+        cJSON* fzs = monitor_cJSON_Parse(fz_snap);
+        if (fzs) {
+            cJSON_AddItemToObject(scene, "friction_zones", fzs);
         }
     }
 

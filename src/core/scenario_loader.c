@@ -832,6 +832,54 @@ ScenarioConfig* scenario_load(const char* path) {
         }
     }
 
+    /* friction_zones（可选，Milestone M4）：局部湿滑摩擦区。
+     * 缺省 = 无摩擦区，与既有场景完全兼容。见 ScenarioFrictionZone。 */
+    cJSON* jfz = cJSON_GetObjectItemCaseSensitive(root, "friction_zones");
+    if (cJSON_IsArray(jfz)) {
+        int n = cJSON_GetArraySize(jfz);
+        if (n > SCENARIO_MAX_FRICTION_ZONES) n = SCENARIO_MAX_FRICTION_ZONES;
+        int valid_count = 0;
+        for (int i = 0; i < n; i++) {
+            cJSON* jz = cJSON_GetArrayItem(jfz, i);
+            if (!cJSON_IsObject(jz)) continue;
+            cJSON* j_xmin = cJSON_GetObjectItemCaseSensitive(jz, "x_min");
+            cJSON* j_xmax = cJSON_GetObjectItemCaseSensitive(jz, "x_max");
+            cJSON* j_ymin = cJSON_GetObjectItemCaseSensitive(jz, "y_min");
+            cJSON* j_ymax = cJSON_GetObjectItemCaseSensitive(jz, "y_max");
+            cJSON* j_mu   = cJSON_GetObjectItemCaseSensitive(jz, "mu_scale");
+            cJSON* j_surf = cJSON_GetObjectItemCaseSensitive(jz, "surface");
+
+            if (!cJSON_IsNumber(j_xmin) || !cJSON_IsNumber(j_xmax) ||
+                !cJSON_IsNumber(j_ymin) || !cJSON_IsNumber(j_ymax)) {
+                continue;
+            }
+            double x_min = j_xmin->valuedouble;
+            double x_max = j_xmax->valuedouble;
+            double y_min = j_ymin->valuedouble;
+            double y_max = j_ymax->valuedouble;
+            if (isnan(x_min) || isnan(x_max) || isnan(y_min) || isnan(y_max) ||
+                x_min > x_max || y_min > y_max) {
+                continue;
+            }
+            double mu = (cJSON_IsNumber(j_mu) && j_mu->valuedouble > 0.0 && !isnan(j_mu->valuedouble))
+                        ? j_mu->valuedouble : 1.0;
+            ScenarioFrictionZone* fz = &sc->friction_zones[valid_count++];
+            fz->x_min = x_min;
+            fz->x_max = x_max;
+            fz->y_min = y_min;
+            fz->y_max = y_max;
+            fz->mu_scale = mu;
+            if (cJSON_IsString(j_surf) && j_surf->valuestring) {
+                strncpy(fz->surface, j_surf->valuestring, sizeof(fz->surface) - 1);
+                fz->surface[sizeof(fz->surface) - 1] = '\0';
+            } else {
+                strncpy(fz->surface, "wet", sizeof(fz->surface) - 1);
+                fz->surface[sizeof(fz->surface) - 1] = '\0';
+            }
+        }
+        sc->friction_zone_count = valid_count;
+    }
+
     /* lighting（可选，Task 4）：场景全局光照模式。
      * 缺省 = SCENARIO_LIGHT_DAY（与既有场景完全向后兼容）。
      * 字符串映射："day"→DAY, "night"→NIGHT, "dusk"→DUSK。 */
@@ -1088,6 +1136,23 @@ char* scenario_to_json(const ScenarioConfig* scenario) {
     if (scenario->road.lane_width > 0.0)
         cJSON_AddNumberToObject(jroad, "lane_width", scenario->road.lane_width);
     cJSON_AddItemToObject(root, "road", jroad);
+
+    /* friction_zones */
+    if (scenario->friction_zone_count > 0) {
+        cJSON* jfz = cJSON_CreateArray();
+        for (int i = 0; i < scenario->friction_zone_count; i++) {
+            const ScenarioFrictionZone* fz = &scenario->friction_zones[i];
+            cJSON* jz = cJSON_CreateObject();
+            cJSON_AddNumberToObject(jz, "x_min", fz->x_min);
+            cJSON_AddNumberToObject(jz, "x_max", fz->x_max);
+            cJSON_AddNumberToObject(jz, "y_min", fz->y_min);
+            cJSON_AddNumberToObject(jz, "y_max", fz->y_max);
+            cJSON_AddNumberToObject(jz, "mu_scale", fz->mu_scale);
+            cJSON_AddStringToObject(jz, "surface", fz->surface);
+            cJSON_AddItemToArray(jfz, jz);
+        }
+        cJSON_AddItemToObject(root, "friction_zones", jfz);
+    }
 
     /* traffic_lights */
     cJSON* jlights = cJSON_CreateArray();

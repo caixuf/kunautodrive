@@ -134,6 +134,22 @@ def validate_scenario(data: object, path: Path) -> list[str]:
             if "y" in actor:
                 _number(actor["y"], f"{label}.y", errors)
 
+    friction_zones = data.get("friction_zones")
+    if friction_zones is not None:
+        if not isinstance(friction_zones, list):
+            errors.append(f"{path}: friction_zones must be an array")
+        else:
+            for index, fz in enumerate(friction_zones):
+                label = f"{path}: friction_zones[{index}]"
+                if not isinstance(fz, dict):
+                    errors.append(f"{label} must be an object")
+                    continue
+                for key in ("x_min", "x_max", "y_min", "y_max", "mu_scale"):
+                    if key in fz:
+                        _number(fz[key], f"{label}.{key}", errors)
+                    else:
+                        errors.append(f"{label} missing '{key}'")
+
     if not isinstance(data.get("pass_criteria"), dict):
         errors.append(f"{path}: pass_criteria must be an object")
     return errors

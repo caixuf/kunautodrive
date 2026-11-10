@@ -328,6 +328,11 @@ cJSON* build_ego_json(const Entity& e) {
     cJSON_AddNumberToObject(j, "lights", (double)e.lights.mask);
     /* AI 状态字符串（ego 通常为空，兜底给空串） */
     cJSON_AddStringToObject(j, "ai_state", npc_state_str(e.state));
+    /* M4 姿态与路面物理状态 */
+    cJSON_AddNumberToObject(j, "pitch", e.pitch);
+    cJSON_AddNumberToObject(j, "roll", e.roll);
+    cJSON_AddNumberToObject(j, "mu_scale", e.surface_mu_scale);
+    cJSON_AddNumberToObject(j, "road_grade", e.road_grade);
     return j;
 }
 
@@ -359,6 +364,11 @@ cJSON* build_npc_vehicle_json(const Entity& e) {
     /* P3: 传播 last_teleport_cycle 供 evaluator 区分合法 recycle（设计内瞬移）
      * vs id-collision pollution。evaluator 据此跳过 recycle 引起的 >200m 位移 FAIL。 */
     cJSON_AddNumberToObject(j, "tp_cycle", (double)e.last_teleport_cycle);
+    /* M4 姿态与路面物理状态 */
+    cJSON_AddNumberToObject(j, "pitch", e.pitch);
+    cJSON_AddNumberToObject(j, "roll", e.roll);
+    cJSON_AddNumberToObject(j, "mu_scale", e.surface_mu_scale);
+    cJSON_AddNumberToObject(j, "road_grade", e.road_grade);
     return j;
 }
 
@@ -532,6 +542,21 @@ char* build_scene_frame_json(const EntityPool& pool,
             cJSON_AddNumberToObject(z, "length", cz.length);
             cJSON_AddNumberToObject(z, "width", cz.width);
             cJSON_AddItemToArray(czs, z);
+        }
+    }
+
+    /* 局部湿滑摩擦区（Milestone M4）：透传给前端渲染积水/冰面贴花与摩擦系数展示 */
+    if (!cfg.friction_zones.empty()) {
+        cJSON* fzs = cJSON_AddArrayToObject(root, "friction_zones");
+        for (const auto& fz : cfg.friction_zones) {
+            cJSON* z = cJSON_CreateObject();
+            cJSON_AddNumberToObject(z, "x_min", fz.x_min);
+            cJSON_AddNumberToObject(z, "x_max", fz.x_max);
+            cJSON_AddNumberToObject(z, "y_min", fz.y_min);
+            cJSON_AddNumberToObject(z, "y_max", fz.y_max);
+            cJSON_AddNumberToObject(z, "mu_scale", fz.mu_scale);
+            cJSON_AddStringToObject(z, "surface", fz.surface.c_str());
+            cJSON_AddItemToArray(fzs, z);
         }
     }
 

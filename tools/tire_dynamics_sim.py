@@ -51,6 +51,17 @@ PACEJKA = {
     'Fz_scale': 1.0,
 }
 
+# ── 悬架二阶弹簧阻尼模型常数（右手定则 ENU 车体系：x前 y左 z上）──
+# 约定：绕 y 轴右手定则下车头下压（nose-down）pitch > 0；左转离心力向右车身右倾 roll > 0
+CG_HEIGHT        = 0.55          # 轿车质心高 (m)
+SUSP_K_PITCH     = 100000.0      # 俯仰等效刚度 (N·m/rad)
+SUSP_C_PITCH     = 35000.0       # 俯仰阻尼 (N·m·s/rad，过阻尼 ζ≈1.1)
+SUSP_I_PITCH     = 2500.0        # 绕 Y 轴转动惯量 (kg·m²)
+SUSP_K_ROLL      = 80000.0       # 侧倾等效刚度 (N·m/rad，含防倾杆)
+SUSP_C_ROLL      = 16000.0       # 侧倾阻尼 (N·m·s/rad，过阻尼 ζ≈1.1)
+SUSP_I_ROLL      = 700.0         # 绕 X 轴转动惯量 (kg·m²)
+SUSP_ANGLE_MAX   = 0.15          # 悬架物理限位 (rad，约 8.6°)
+
 def clamp(v, lo, hi):
     if v < lo: return lo
     if v > hi: return hi
@@ -78,6 +89,18 @@ class TireVehicle:
         self.steer = 0.0
         self.F_yf = 0.0
         self.F_yr = 0.0
+        # 3D 姿态与动力学扩展（Milestone M4）
+        self.cg_height = CG_HEIGHT
+        self.a_x_body = 0.0         # 车体系纵向加速度 m/s²
+        self.a_y_body = 0.0         # 车体系横向加速度 m/s²
+        self.pitch = 0.0            # 俯仰角 rad (制动点头 > 0, 加速抬头 < 0)
+        self.pitch_rate = 0.0       # 俯仰角速度 rad/s
+        self.roll = 0.0             # 侧倾角 rad (左转右倾 > 0, 右转左倾 < 0)
+        self.roll_rate = 0.0        # 侧倾角速度 rad/s
+        self.road_grade = 0.0       # 道路坡度 rad (上坡 > 0, 下坡 < 0)
+        self.surface_mu_scale = 1.0 # 局部路面摩擦因数倍率 (干地 1.0, 湿滑 0.35)
+        self.F_zf = 0.0             # 前轴动态垂直载荷 N
+        self.F_zr = 0.0             # 后轴动态垂直载荷 N
         # 诊断
         self.lat_accel = 0.0        # 横向加速度 m/s²（= 侧向力/质量）
         self.alpha_f = 0.0
@@ -103,19 +126,48 @@ class TireVehicle:
         if d < -max_rate: nxt = self.steer - max_rate
         self.steer = nxt
 
-    # ── 轮胎侧向力 ──
+    # ── 纵向轴荷转移计算（守恒性：F_zf + F_zr = mg）──
+    def _compute_axle_loads(self):
+        a = CG_FRONT_FRAC * WHEELBASE
+        b = WHEELBASE - a
+        delta_fz = MASS * self.a_x_body * self.cg_height / WHEELBASE
+        fz_f_static = MASS * G * b / WHEELBASE
+        fz_r_static = MASS * G * a / WHEELBASE
+        self.F_zf = fz_f_static - delta_fz
+        self.F_zr = fz_r_static + delta_fz
+
+    # ── 悬架二阶弹簧阻尼姿态积分（半隐式欧拉在 dt=0.05s 下稳定不发散）──
+    def _update_suspension(self, dt):
+        self._compute_axle_loads()
+        # 俯仰动态：力矩 M_p = -m · a_x · h_cg (制动 a_x<0 时点头 pitch>0)
+        M_p = -MASS * self.a_x_body * self.cg_height
+        p_acc = (M_p - SUSP_C_PITCH * self.pitch_rate - SUSP_K_PITCH * self.pitch) / SUSP_I_PITCH
+        self.pitch_rate += p_acc * dt
+        self.pitch += self.pitch_rate * dt
+        self.pitch = clamp(self.pitch, -SUSP_ANGLE_MAX, SUSP_ANGLE_MAX)
+
+        # 侧倾动态：力矩 M_r = m · a_y · h_cg (左转 a_y>0 时车身右倾 roll>0)
+        M_r = MASS * self.a_y_body * self.cg_height
+        r_acc = (M_r - SUSP_C_ROLL * self.roll_rate - SUSP_K_ROLL * self.roll) / SUSP_I_ROLL
+        self.roll_rate += r_acc * dt
+        self.roll += self.roll_rate * dt
+        self.roll = clamp(self.roll, -SUSP_ANGLE_MAX, SUSP_ANGLE_MAX)
+
+    # ── 轮胎侧向力（含动态轴荷转移与摩擦倍率）──
     def _tire_force(self, alpha, is_front):
+        a = CG_FRONT_FRAC * WHEELBASE
+        b = WHEELBASE - a
+        fz_static = (MASS * G * b / WHEELBASE) if is_front else (MASS * G * a / WHEELBASE)
+        fz_dyn = self.F_zf if is_front else self.F_zr
+        # 正值下界夹紧防翻转负载荷 (不小于静态载荷的 5%)
+        fz = max(fz_dyn, 0.05 * fz_static)
+
         if self.model == 'pacejka':
-            # Pacejka 96 魔术公式（侧向）
             C = PACEJKA['C']
             B = PACEJKA['B']
             E = PACEJKA['E']
-            # 垂直载荷（静载荷分配，质心偏前）
-            a = CG_FRONT_FRAC * WHEELBASE
-            b = WHEELBASE - a
-            fz = (MASS * G * b / WHEELBASE) if is_front else (MASS * G * a / WHEELBASE)
             fz *= PACEJKA['Fz_scale']
-            D = PACEJKA['mu'] * fz          # 峰值侧向力 = μ·Fz
+            D = PACEJKA['mu'] * self.surface_mu_scale * fz   # 局部湿滑区调制峰值
             Bx = B * alpha
             y = D * math.sin(C * math.atan(Bx - E * (Bx - math.atan(Bx))))
             return y
@@ -132,11 +184,14 @@ class TireVehicle:
 
     # ── 运动学（对齐 step_bicycle）──
     def _step_kinematic(self, throttle, brake, steer_cmd, dt, steer_override):
-        self.speed += self._longitudinal_accel(throttle, brake, self.speed) * dt
+        acc = self._longitudinal_accel(throttle, brake, self.speed) - G * math.sin(self.road_grade)
+        self.a_x_body = acc
+        self.speed += acc * dt
         if self.speed < 0.0 and throttle >= 0.0: self.speed = 0.0
         self.speed = clamp(self.speed, -4.0, 60.0)
         self._update_steer(steer_cmd, dt, steer_override)
         self.yaw_rate = (self.speed / WHEELBASE) * math.tan(self.steer)
+        self.a_y_body = self.speed * self.yaw_rate
         self.heading += self.yaw_rate * dt
         self.heading = norm_angle(self.heading)
         half_wb = WHEELBASE * 0.5
@@ -146,6 +201,7 @@ class TireVehicle:
         self.y += vy_r * dt + half_wb * math.cos(self.heading) * self.yaw_rate * dt
         self.v_x_body = self.speed
         self.v_y_body = 0.0
+        self._update_suspension(dt)
 
     # ── 二自由度动力学（linear/pacejka；横向解对齐 integrate_lateral_dynamics）──
     def _step_dynamic(self, throttle, brake, steer_cmd, dt, steer_override):
@@ -155,8 +211,9 @@ class TireVehicle:
             return
         if self.v_x_body <= 0.0 and self.speed > 0.0:
             self.v_x_body = self.speed
-        # 纵向：用 v_x_body 自身积分（避免侧向速度注入自泵）
-        self.v_x_body += self._longitudinal_accel(throttle, brake, self.v_x_body) * dt
+        acc = self._longitudinal_accel(throttle, brake, self.v_x_body) - G * math.sin(self.road_grade)
+        self.a_x_body = acc
+        self.v_x_body += acc * dt
         if self.v_x_body < 0.0: self.v_x_body = 0.0
         self._update_steer(steer_cmd, dt, steer_override)
 
@@ -182,6 +239,7 @@ class TireVehicle:
 
         self.v_y_body += vy_dot * dt
         self.yaw_rate += r_dot * dt
+        self.a_y_body = (self.F_yf + self.F_yr) / MASS
 
         # 摩擦圆护栏（对齐 C++）：|v_y|≤vx·tan(slip_max)·1.5, |r|≤μ·g/vx
         max_vy = abs(vx) * math.tan(SLIP_ANGLE_MAX) * 1.5
@@ -201,6 +259,7 @@ class TireVehicle:
         self.y += self.vy * dt
         self.speed = math.sqrt(self.v_x_body ** 2 + self.v_y_body ** 2)
         self.lat_accel = math.sqrt(self.F_yf ** 2 + self.F_yr ** 2) / MASS
+        self._update_suspension(dt)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -401,10 +460,109 @@ def run_curve_compare():
                       f"(K_us={best[0]:.4f} rad·s²/m)")
 
 
+# ══════════════════════════════════════════════════════════════
+#  M4 新增：3D 悬架姿态、轴荷转移、坡道重力与湿滑摩擦自动化测试
+# ══════════════════════════════════════════════════════════════
+
+def run_suspension_test():
+    print("\n" + "=" * 62)
+    print("  M4 悬架点头/侧倾稳定性与轴荷转移守恒测试")
+    print("=" * 62)
+
+    # 1. 制动点头测试 (nose-down > 0)
+    v_brake = TireVehicle(model='kinematic', v0=15.0)
+    pitch_during_brake = []
+    for _ in range(int(1.5 / DT)):
+        v_brake.step(0.0, 1.0, 0.0)  # 全刹车
+        pitch_during_brake.append(v_brake.pitch)
+        # 轴荷转移对称守恒验证
+        assert abs((v_brake.F_zf + v_brake.F_zr) - MASS * G) < 1e-4, \
+            f"轴荷不守恒: F_zf={v_brake.F_zf}, F_zr={v_brake.F_zr}, mg={MASS*G}"
+    
+    max_pitch = max(pitch_during_brake)
+    print(f"  [制动点头] 初始15m/s刹车 1.5s: 峰值 pitch={max_pitch:.4f} rad ({math.degrees(max_pitch):.2f}°)")
+    assert max_pitch > 0.02, f"制动车头未下压: pitch={max_pitch}"
+    assert max_pitch < SUSP_ANGLE_MAX, f"俯仰超限位: pitch={max_pitch}"
+
+    # 制动停止后姿态回正
+    for _ in range(int(2.0 / DT)):
+        v_brake.step(0.0, 0.0, 0.0)
+    print(f"  [制动回正] 停止静止后: 最终 pitch={v_brake.pitch:.5f} rad")
+    assert abs(v_brake.pitch) < 1e-3, f"静止后未回正: pitch={v_brake.pitch}"
+
+    # 2. 转向侧倾测试 (左转右倾 roll > 0)
+    v_turn = TireVehicle(model='kinematic', v0=12.0)
+    rolls = []
+    for _ in range(int(3.0 / DT)):
+        v_turn.step(0.15, 0.0, 0.10, steer_override=False)  # 适度左转 (~0.45g)
+        rolls.append(v_turn.roll)
+    steady_roll = rolls[-1]
+    print(f"  [转向侧倾] 12m/s 左转 steer=0.10rad: 稳态 roll={steady_roll:.4f} rad ({math.degrees(steady_roll):.2f}°)")
+    assert steady_roll > 0.015, f"左转车身未右倾: roll={steady_roll}"
+    assert steady_roll < SUSP_ANGLE_MAX, f"侧倾超限位: roll={steady_roll}"
+
+    # 3. 悬架二阶过阻尼无振荡检验 (相邻差单调收敛，无发散)
+    diffs = [abs(rolls[i] - rolls[i-1]) for i in range(len(rolls)-20, len(rolls))]
+    assert max(diffs) < 1e-3, "稳态侧倾存在振荡发散"
+    print("  ✅ 悬架点头/侧倾与轴荷转移守恒全部验证通过")
+
+
+def run_road_grade_test():
+    print("\n" + "=" * 62)
+    print("  M4 坡道重力项加减速测试")
+    print("=" * 62)
+    v_flat = TireVehicle(model='kinematic', v0=15.0)
+    v_uphill = TireVehicle(model='kinematic', v0=15.0)
+    v_downhill = TireVehicle(model='kinematic', v0=15.0)
+
+    grade = 0.06  # 6% 坡度 (约 3.4°)
+    v_uphill.road_grade = grade
+    v_downhill.road_grade = -grade
+
+    # 滑行 2 秒（无油门无刹车，纯阻力+坡道重力）
+    for _ in range(int(2.0 / DT)):
+        v_flat.step(0.0, 0.0, 0.0)
+        v_uphill.step(0.0, 0.0, 0.0)
+        v_downhill.step(0.0, 0.0, 0.0)
+
+    print(f"  滑行 2.0s 终速: 平地={v_flat.speed:.2f}m/s, 上坡={v_uphill.speed:.2f}m/s, 下坡={v_downhill.speed:.2f}m/s")
+    assert v_uphill.speed < v_flat.speed - 0.8, "上坡重力减速不足"
+    assert v_downhill.speed > v_flat.speed + 0.8, "下坡重力加速不足"
+    print("  ✅ 坡道重力加减速物理验证通过")
+
+
+def run_friction_zone_test():
+    print("\n" + "=" * 62)
+    print("  M4 局部湿滑摩擦区 (mu_scale=0.35) 侧滑测试")
+    print("=" * 62)
+    v_dry = TireVehicle(model='pacejka', v0=12.0)
+    v_wet = TireVehicle(model='pacejka', v0=12.0)
+    v_wet.surface_mu_scale = 0.35  # 湿滑积水区
+
+    steer = 0.25
+    for _ in range(int(5.0 / DT)):
+        v_dry.step(0.15, 0.0, steer, steer_override=True)
+        v_wet.step(0.15, 0.0, steer, steer_override=True)
+
+    r_dry = v_dry.speed / v_dry.yaw_rate if abs(v_dry.yaw_rate) > 1e-4 else 999.0
+    r_wet = v_wet.speed / v_wet.yaw_rate if abs(v_wet.yaw_rate) > 1e-4 else 999.0
+
+    print(f"  干地 (mu_scale=1.00): 转弯半径 R={r_dry:.1f}m, 侧向加速度={v_dry.lat_accel:.2f}m/s²")
+    print(f"  湿滑 (mu_scale=0.35): 转弯半径 R={r_wet:.1f}m, 侧向加速度={v_wet.lat_accel:.2f}m/s²")
+
+    assert r_wet > r_dry * 1.3, f"湿滑路面侧滑半径应显著增大: wet={r_wet:.1f} vs dry={r_dry:.1f}"
+    assert v_wet.lat_accel <= (PACEJKA['mu'] * 0.35 * G * 1.15), \
+        f"湿滑区侧向加速度超出摩擦极限: {v_wet.lat_accel}"
+    print("  ✅ 湿滑区侧滑半径增大与摩擦力上限物理验证通过")
+
+
 def main():
     parser = argparse.ArgumentParser(description="FlowEngine 轮胎动力学仿真对比")
     parser.add_argument("--curve", action="store_true", help="闭环弯道跟随 A/B")
     parser.add_argument("--tune", action="store_true", help="Pacejka 参数扫描标定")
+    parser.add_argument("--suspension", action="store_true", help="悬架点头/侧倾与轴荷转移测试")
+    parser.add_argument("--grade", action="store_true", help="坡道重力测试")
+    parser.add_argument("--friction", action="store_true", help="湿滑摩擦区测试")
     parser.add_argument("--run-all", action="store_true", help="全量执行")
     args = parser.parse_args()
 
@@ -414,10 +572,22 @@ def main():
     if args.curve:
         run_curve_compare()
         return
+    if args.suspension:
+        run_suspension_test()
+        return
+    if args.grade:
+        run_road_grade_test()
+        return
+    if args.friction:
+        run_friction_zone_test()
+        return
     if args.run_all:
         run_steady_compare()
         run_curve_compare()
         tune_pacejka()
+        run_suspension_test()
+        run_road_grade_test()
+        run_friction_zone_test()
         return
     # 默认：恒定 steer 对比
     run_steady_compare()

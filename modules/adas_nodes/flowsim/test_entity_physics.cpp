@@ -416,6 +416,120 @@ static void test_pedestrian() {
     CHECK(approx(p.speed, 0.6), "ped speed = 0.6");
 }
 
+/* ── M4 新增测试 ──────────────────────────────────────────────── */
+
+static void test_braking_pitch() {
+    std::printf("--- M4 braking pitch (nose-down > 0) ---\n");
+    Entity e;
+    e.type = EntityType::Car;
+    apply_vehicle_defaults(e);
+    e.speed = 15.0;
+
+    double max_pitch = 0.0;
+    double dt = 0.05;
+    for (int i = 0; i < 30; ++i) { // 1.5s 减速
+        step_bicycle(e, dt, 0.0, 1.0, 0.0);
+        if (e.pitch > max_pitch) max_pitch = e.pitch;
+    }
+    std::printf("  1.5s brake: peak pitch=%.4f rad (%.2f deg), speed=%.2f m/s\n",
+                max_pitch, max_pitch * 180.0 / M_PI, e.speed);
+    CHECK(max_pitch > 0.02, "braking causes nose-down (pitch > 0.02 rad)");
+    CHECK(max_pitch < 0.15, "pitch within suspension limits (<0.15 rad)");
+
+    // 继续静止，检验悬架回正
+    for (int i = 0; i < 40; ++i) {
+        step_bicycle(e, dt, 0.0, 0.0, 0.0);
+    }
+    std::printf("  after stop: settled pitch=%.5f rad\n", e.pitch);
+    CHECK(std::fabs(e.pitch) < 1e-3, "suspension settles back to 0 when stopped");
+}
+
+static void test_turning_roll() {
+    std::printf("--- M4 turning roll (left turn roll-right > 0) ---\n");
+    Entity e;
+    e.type = EntityType::Car;
+    apply_vehicle_defaults(e);
+    e.speed = 12.0;
+
+    double dt = 0.05;
+    for (int i = 0; i < 40; ++i) { // 2.0s 适度左转
+        step_bicycle(e, dt, 0.15, 0.0, 0.10);
+    }
+    std::printf("  12m/s left turn (steer=0.10 rad): roll=%.4f rad (%.2f deg), a_y=%.2f m/s²\n",
+                e.roll, e.roll * 180.0 / M_PI, e.a_y_body);
+    CHECK(e.roll > 0.02, "left turn causes body roll to the right (roll > 0.02 rad)");
+    CHECK(e.roll < 0.15, "roll within suspension limits (<0.15 rad)");
+}
+
+static void test_load_transfer_conservation() {
+    std::printf("--- M4 load transfer conservation (F_zf + F_zr = mg) ---\n");
+    Entity e;
+    e.type = EntityType::Car;
+    apply_vehicle_defaults(e);
+    e.speed = 15.0;
+
+    const double mg = e.mass * 9.81;
+    double dt = 0.05;
+    bool all_conserved = true;
+    for (int i = 0; i < 20; ++i) {
+        step_bicycle(e, dt, 0.0, 1.0, 0.0);
+        double total_fz = e.F_zf + e.F_zr;
+        if (std::fabs(total_fz - mg) > 1e-3) {
+            all_conserved = false;
+        }
+    }
+    CHECK(all_conserved, "F_zf + F_zr == mg strictly conserved during braking");
+    CHECK(e.F_zf > e.F_zr, "braking shifts vertical load forward (F_zf > F_zr)");
+}
+
+static void test_road_grade_gravity() {
+    std::printf("--- M4 road grade gravity acceleration ---\n");
+    Entity flat, uphill, downhill;
+    flat.type = uphill.type = downhill.type = EntityType::Car;
+    apply_vehicle_defaults(flat);
+    apply_vehicle_defaults(uphill);
+    apply_vehicle_defaults(downhill);
+    flat.speed = uphill.speed = downhill.speed = 15.0;
+
+    uphill.road_grade = 0.05;     // 5% 坡度上坡
+    downhill.road_grade = -0.05;  // 5% 坡度下坡
+
+    double dt = 0.05;
+    for (int i = 0; i < 40; ++i) { // 2.0s 滑行
+        step_bicycle(flat, dt, 0.0, 0.0, 0.0);
+        step_bicycle(uphill, dt, 0.0, 0.0, 0.0);
+        step_bicycle(downhill, dt, 0.0, 0.0, 0.0);
+    }
+    std::printf("  coast 2s: flat=%.2f m/s, uphill=%.2f m/s, downhill=%.2f m/s\n",
+                flat.speed, uphill.speed, downhill.speed);
+    CHECK(uphill.speed < flat.speed - 0.7, "uphill gravity decelerates vehicle");
+    CHECK(downhill.speed > flat.speed + 0.7, "downhill gravity accelerates vehicle");
+}
+
+static void test_wet_road_slip_increase() {
+    std::printf("--- M4 wet road friction reduction and slip increase ---\n");
+    Entity dry, wet;
+    dry.type = wet.type = EntityType::Car;
+    apply_vehicle_defaults(dry);
+    apply_vehicle_defaults(wet);
+    dry.speed = wet.speed = 12.0;
+    wet.surface_mu_scale = 0.35; // 局部积水湿滑区
+
+    double dt = 0.05;
+    double steer = 0.10;
+    for (int i = 0; i < 80; ++i) { // 4.0s 动力学转弯
+        step_bicycle_dynamic_pacejka(dry, dt, 0.15, 0.0, steer);
+        step_bicycle_dynamic_pacejka(wet, dt, 0.15, 0.0, steer);
+    }
+    double r_dry = (std::fabs(dry.yaw_rate) > 1e-4) ? (dry.speed / dry.yaw_rate) : 999.0;
+    double r_wet = (std::fabs(wet.yaw_rate) > 1e-4) ? (wet.speed / wet.yaw_rate) : 999.0;
+    std::printf("  dry: R=%.1fm, a_y=%.2f m/s² | wet: R=%.1fm, a_y=%.2f m/s²\n",
+                r_dry, dry.a_y_body, r_wet, wet.a_y_body);
+    CHECK(r_wet > r_dry * 1.5, "wet road significantly increases turning radius (R_wet > 1.5*R_dry)");
+    CHECK(std::fabs(wet.a_y_body) <= (wet.pacejka_mu * 0.35 * 9.81 * 1.15),
+          "wet road lateral acceleration bounded by mu_scale * mu * g");
+}
+
 int main() {
     test_pool();
     test_vehicle_defaults();
@@ -434,6 +548,11 @@ int main() {
     test_pacejka_highspeed_bounded();
     test_pacejka_lowspeed_degrade();
     test_pedestrian();
+    test_braking_pitch();
+    test_turning_roll();
+    test_load_transfer_conservation();
+    test_road_grade_gravity();
+    test_wet_road_slip_increase();
     std::printf("=== %d failures ===\n", failures);
     return failures == 0 ? 0 : 1;
 }
