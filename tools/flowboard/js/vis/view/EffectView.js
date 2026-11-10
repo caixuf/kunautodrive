@@ -28,6 +28,45 @@ export function createEffectView(scene) {
   /* ── 内部状态 ── */
   let brakeGlow = null;      // THREE.Mesh
   let hazardFlash = null;    // THREE.Mesh
+  let _lastNow = 0;
+
+  /* ── M5: 雨雪天气粒子与后轮水雾尾迹 ── */
+  const MAX_WEATHER_PARTICLES = 360;
+  const weatherGeo = new THREE.BufferGeometry();
+  const weatherPositions = new Float32Array(MAX_WEATHER_PARTICLES * 3);
+  weatherGeo.setAttribute('position', new THREE.BufferAttribute(weatherPositions, 3));
+  const weatherMat = new THREE.PointsMaterial({
+    color: 0xc8e0f8,
+    size: 0.15,
+    transparent: true,
+    opacity: 0.7,
+    depthWrite: false,
+  });
+  const weatherParticles = new THREE.Points(weatherGeo, weatherMat);
+  weatherParticles.frustumCulled = false;
+  weatherParticles.visible = false;
+  group.add(weatherParticles);
+
+  const _weatherLocal = [];
+  for (let i = 0; i < MAX_WEATHER_PARTICLES; i++) {
+    const rx = ((i * 17) % 41 - 20);
+    const ry = ((i * 23) % 15);
+    const rz = ((i * 31) % 41 - 20);
+    _weatherLocal.push({ rx, ry, rz });
+  }
+
+  const wakeGeo = new THREE.PlaneGeometry(1.6, 0.4);
+  const wakeMat = new THREE.MeshBasicMaterial({
+    color: 0x90b8d8,
+    transparent: true,
+    opacity: 0.22,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const wakeMesh = new THREE.Mesh(wakeGeo, wakeMat);
+  wakeMesh.rotation.x = Math.PI / 2;
+  wakeMesh.visible = false;
+  group.add(wakeMesh);
 
   /** 清除所有视觉效果 */
   function clear() {
@@ -40,6 +79,8 @@ export function createEffectView(scene) {
     brakeGlow = null;
     hazardFlash = null;
     _hazardMat = null;
+    weatherParticles.visible = false;
+    wakeMesh.visible = false;
   }
 
   /** 更新紧急制动光晕（红色锥形，在 ego 车后） */
@@ -70,7 +111,7 @@ export function createEffectView(scene) {
     }
 
     // 位置：车后 1.5m，略低于车底
-    const [tx, ty, tz] = worldToThree(ego.x, ego.y, ego.z);
+    const [tx, , tz] = worldToThree(ego.x, ego.y, ego.z);
     const heading = ego.heading || 0;
     // 车后方向：用 Coord.forwardENU 取前向，取反得后向，ENU→THREE: bx=-fx, bz=fy
     const [fx, fy] = forwardENU(heading);  // Coord.forwardENU
@@ -83,7 +124,8 @@ export function createEffectView(scene) {
     // 脉冲亮度：根据 brake 力度
     const intensity = Math.min(1.0, ego.brake / 1.5);
     brakeGlow.material.opacity = 0.15 + intensity * 0.4;
-    brakeGlow.scale.setScalar(0.5 + intensity * 0.8);
+    const s = 0.5 + intensity * 0.8;
+    brakeGlow.scale.set(s, s, s);
   }
 
   /** 更新紧急双闪（红/黄交替闪烁） */
@@ -117,7 +159,8 @@ export function createEffectView(scene) {
     // 位置：车顶上方
     const [tx, ty, tz] = worldToThree(ego.x, ego.y, ego.z);
     hazardFlash.position.set(tx, ty + 1.5, tz);
-    hazardFlash.scale.setScalar(flashOn ? 1.0 : 0.3);
+    const hs = flashOn ? 1.0 : 0.3;
+    hazardFlash.scale.set(hs, hs, hs);
     if (_hazardMat) {
       _hazardMat.color.setHex(flashOn ? 0xff4400 : 0xffff00);
       _hazardMat.opacity = flashOn ? 0.8 : 0.2;
@@ -240,13 +283,67 @@ export function createEffectView(scene) {
 
   const cutinArrows = new Map();
 
-  function update(store, now) {
+  function _updateWeatherEffects(ego, env, dt) {
+    if (!env || !env.weather) {
+      weatherParticles.visible = false;
+      wakeMesh.visible = false;
+      return;
+    }
+
+    const weather = env.weather;
+    const isRain = (weather === 'rain' || weather === 'storm');
+    const isSnow = (weather === 'snow');
+
+    if (!isRain && !isSnow) {
+      weatherParticles.visible = false;
+      wakeMesh.visible = false;
+      return;
+    }
+
+    weatherParticles.visible = true;
+    weatherMat.color.setHex(isSnow ? 0xffffff : 0xa0c8f0);
+    weatherMat.size = isSnow ? 0.22 : 0.14;
+    weatherMat.opacity = isSnow ? 0.75 : 0.60;
+
+    const fallSpeed = isSnow ? 3.0 : 18.0;
+    const [ex, ey, ez] = worldToThree(ego.x, ego.y, ego.z || 0);
+
+    for (let i = 0; i < MAX_WEATHER_PARTICLES; i++) {
+      _weatherLocal[i].ry -= fallSpeed * dt;
+      if (_weatherLocal[i].ry < 0) {
+        _weatherLocal[i].ry = 14.0;
+      }
+      weatherPositions[i * 3 + 0] = ex + _weatherLocal[i].rx;
+      weatherPositions[i * 3 + 1] = Math.max(0.1, ey + _weatherLocal[i].ry);
+      weatherPositions[i * 3 + 2] = ez + _weatherLocal[i].rz;
+    }
+    weatherGeo.attributes.position.needsUpdate = true;
+
+    // 后轮水雾尾迹
+    const speed = Math.abs(ego.speed || 0);
+    if (isRain && speed > 2.0) {
+      wakeMesh.visible = true;
+      const [fx, fy] = forwardENU(ego.heading || 0);
+      const bx = -fx * 2.2;
+      const bz = fy * 2.2;
+      wakeMesh.position.set(ex + bx, 0.08, ez + bz);
+      wakeMesh.rotation.z = -(ego.heading || 0);
+      wakeMat.opacity = Math.min(0.35, 0.05 + speed * 0.02);
+    } else {
+      wakeMesh.visible = false;
+    }
+  }
+
+  function update(store, now = 0) {
     if (!store.ego) return;
+    const dt = _lastNow ? Math.min(0.1, Math.max(0.001, (now - _lastNow) / 1000)) : 0.016;
+    _lastNow = now;
 
     _updateBrakeGlow(store.ego, now);
     _updateHazardFlash(store.ego, now);
     _updateObstacleMarkers(store);
     _updateCutinWarning(store);
+    _updateWeatherEffects(store.ego, store.env, dt);
   }
 
   return { update, clear };

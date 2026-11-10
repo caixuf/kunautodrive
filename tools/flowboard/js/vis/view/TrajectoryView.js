@@ -58,6 +58,7 @@ const BEV_FLOW_ALPHA_SCALE = 1.9;        // 流动高亮峰值 alpha 放大（�
 const COLOR_NORMAL  = [0x00, 0xc8, 0xff];  // 科技蓝
 const COLOR_BRAKE   = [0xff, 0x88, 0x00];  // 制动橙
 const COLOR_ACCEL   = [0x00, 0xff, 0xaa];  // 加速青绿
+const COLOR_REVERSE = [0xff, 0x33, 0xaa];  // 倒车洋红/琥珀
 const BRAKE_DECEL   = -1.0;
 const ACCEL_THRESH  =  1.0;
 
@@ -255,9 +256,12 @@ export function createTrajectoryView(scene) {
       });
     }
 
-    /* 5. 速度→颜色：先整体判断加减速，再做远端向蓝色渐变 */
+    /* 5. 速度→颜色：先整体判断加减速/倒车，再做远端向蓝色渐变 */
     let baseColor;
-    if (result.length > 5) {
+    const isReversing = (result[0] && result[0].v < -0.05);
+    if (isReversing) {
+      baseColor = COLOR_REVERSE;
+    } else if (result.length > 5) {
       const vS = result[0].v;
       const vM = result[Math.min(Math.floor(result.length * 0.4), result.length - 1)].v;
       const dv = vM - vS;
@@ -268,13 +272,15 @@ export function createTrajectoryView(scene) {
       baseColor = COLOR_NORMAL;
     }
 
-    /* 为每个点附颜色：在基础色上根据局部速度变化微调 */
+    /* 为每个点附颜色：在基础色上根据局部速度变化微调，倒车段 (v < -0.05) 显式赋予倒车色 */
     for (let i = 0; i < result.length; i++) {
-      /* 远端颜色向蓝色过渡（无论什么状态），产生自然渐变 */
+      const ptV = result[i].v;
+      const ptBase = (ptV < -0.05) ? COLOR_REVERSE : baseColor;
+      const targetNormal = (ptV < -0.05) ? COLOR_REVERSE : COLOR_NORMAL;
       const t = result.length > 1 ? i / (result.length - 1) : 0;
-      const r = baseColor[_R] + (COLOR_NORMAL[_R] - baseColor[_R]) * t * 0.3;
-      const g = baseColor[_G] + (COLOR_NORMAL[_G] - baseColor[_G]) * t * 0.3;
-      const b = baseColor[_B] + (COLOR_NORMAL[_B] - baseColor[_B]) * t * 0.3;
+      const r = ptBase[_R] + (targetNormal[_R] - ptBase[_R]) * t * 0.3;
+      const g = ptBase[_G] + (targetNormal[_G] - ptBase[_G]) * t * 0.3;
+      const b = ptBase[_B] + (targetNormal[_B] - ptBase[_B]) * t * 0.3;
       result[i].rgb = [r / 255, g / 255, b / 255];
     }
 
@@ -343,6 +349,12 @@ export function createTrajectoryView(scene) {
   let _lastFrameT = 0;
 
   function update(store) {
+    if (store && store.layerVisibility && store.layerVisibility.corridor === false) {
+      group.visible = false;
+      return;
+    }
+    group.visible = true;
+
     const trajPath = store.trajectoryPath;
     const ego = store.ego;
     const now = performance.now() / 1000;
@@ -399,7 +411,7 @@ export function createTrajectoryView(scene) {
 
     /* 5. 流动高亮条（高亮主光带，略宽一点，用加法混合 + 时间偏移 sin 波）—— 低档跳过。
      * BEV 下光带随 wScale 加宽，流动峰值 alpha 再放大，俯视也能看清"光流"。 */
-    const totalLen = points[points.length - 1].dist || 1;
+    const _totalLen = points[points.length - 1].dist || 1;
     const flowOff = _flowTime % (FLOW_SEG_LEN * 2);
     if (!lowTier) {
       const flowW = FLOW_WIDTH * wScale;

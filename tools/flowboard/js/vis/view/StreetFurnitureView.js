@@ -11,9 +11,11 @@
 
 import { getStdMaterial, getCylinder, getBox } from '../core/AssetFactory.js';
 import { getTopology } from '../model/TopologyModel.js';
+import { directionToRotationY, tangentToNormal, offsetAlongNormal } from '../math/Coord.js';
 
-const SIGN_POLE_H = 1.2;
-const SIGN_PLATE = 0.35;
+const SIGN_POLE_H = 2.0;
+const STOP_SIGN_RADIUS = 0.36;
+const SPEED_SIGN_RADIUS = 0.32;
 const BUS_SHELTER_H = 2.0;
 const BUS_SHELTER_W = 2.0;
 const BUS_SHELTER_D = 1.0;
@@ -41,17 +43,64 @@ export function createStreetFurnitureView(scene) {
     /* 与其它静态 View 共享已缓存的拓扑，避免大地图重复做路口检测。 */
     const topology = getTopology(roadNetwork);
     const centers = topology ? topology.centers : [];
-    if (!centers.length) return;
 
-    // ── 停止标志（Stop Sign）：每个路口边上放 1~2 个 ──
+    // ── 停止标志（八角 STOP 牌）与限速圆牌 ──
     const stopSigns = []; // {x, z, rotY}
-    for (let ci = 0; ci < centers.length; ci++) {
-      const c = centers[ci];
-      // 隔一个路口放一对（避免全城密密麻麻）
-      if (ci % 3 !== 0) continue;
-      const offset = 4.0;
-      stopSigns.push({ x: c.x + offset, z: c.z, rotY: 0 });
-      stopSigns.push({ x: c.x - offset, z: c.z, rotY: Math.PI });
+    const speedSigns = []; // {x, z, rotY}
+
+    const edges = Array.isArray(roadNetwork.edges) ? roadNetwork.edges : [];
+    for (let ei = 0; ei < edges.length; ei++) {
+      const edge = edges[ei];
+      const nodes = Array.isArray(edge.nodes) ? edge.nodes : [];
+      if (nodes.length < 2) continue;
+      const lanes = edge.lanes || 2;
+      const laneWidth = edge.lane_width || 3.5;
+      const roadHalfW = (lanes * laneWidth) / 2 + 1.2;
+
+      // 靠近路口端（倒数第二到最后一个节点）放八角 STOP 牌
+      if (ei % 2 === 0) {
+        const a = nodes[nodes.length - 2];
+        const b = nodes[nodes.length - 1];
+        const ax = Array.isArray(a) ? a[0] : (a.x || 0);
+        const az = Array.isArray(a) ? -(a[1] || 0) : -(a.y || 0);
+        const bx = Array.isArray(b) ? b[0] : (b.x || 0);
+        const bz = Array.isArray(b) ? -(b[1] || 0) : -(b.y || 0);
+        const dx = bx - ax, dz = bz - az;
+        const len = Math.hypot(dx, dz);
+        if (len > 5) {
+          const [nx, nz] = tangentToNormal(dx, dz);
+          const [sx, sz] = offsetAlongNormal(bx - dx * 0.15, bz - dz * 0.15, nx, nz, -roadHalfW);
+          const rotY = directionToRotationY(-dx, -dz);
+          stopSigns.push({ x: sx, z: sz, rotY });
+        }
+      }
+
+      // 路段前段放限速圆牌
+      if (ei % 3 === 0) {
+        const a = nodes[0];
+        const b = nodes[1];
+        const ax = Array.isArray(a) ? a[0] : (a.x || 0);
+        const az = Array.isArray(a) ? -(a[1] || 0) : -(a.y || 0);
+        const bx = Array.isArray(b) ? b[0] : (b.x || 0);
+        const bz = Array.isArray(b) ? -(b[1] || 0) : -(b.y || 0);
+        const dx = bx - ax, dz = bz - az;
+        const len = Math.hypot(dx, dz);
+        if (len > 12) {
+          const [nx, nz] = tangentToNormal(dx, dz);
+          const [sx, sz] = offsetAlongNormal(ax + dx * 0.25, az + dz * 0.25, nx, nz, -roadHalfW);
+          const rotY = directionToRotationY(-dx, -dz);
+          speedSigns.push({ x: sx, z: sz, rotY });
+        }
+      }
+    }
+
+    // 兜底拓扑中心点
+    if (!stopSigns.length && centers.length) {
+      for (let ci = 0; ci < centers.length; ci++) {
+        if (ci % 3 !== 0) continue;
+        const c = centers[ci];
+        stopSigns.push({ x: c.x + 4.0, z: c.z, rotY: 0 });
+      }
     }
 
     // ── 公交站台（Bus Shelter）：每 5 个路口放一个 ──
@@ -65,22 +114,51 @@ export function createStreetFurnitureView(scene) {
     }
 
     // ── 渲染全部家具 ──
-
-    // 停止标志：红色圆盘（用 Box 近似）+ 杆
     const poleMat = getStdMaterial(0x888888, 0.6, 0.3);
-    const signMat = getStdMaterial(0xcc2222, 0.4, 0.1);
+    const dummy = new THREE.Object3D();
+
+    // 八角 STOP 标志：八角柱 + 杆
+    const stopSignMat = getStdMaterial(0xcc2222, 0.4, 0.1);
     if (stopSigns.length) {
       const poleGeo = getCylinder(0.025, 0.03, SIGN_POLE_H, 6);
-      const signGeo = getBox(SIGN_PLATE, SIGN_PLATE, 0.03);
+      const signGeo = new THREE.CylinderGeometry(STOP_SIGN_RADIUS, STOP_SIGN_RADIUS, 0.03, 8);
       const poleMesh = new THREE.InstancedMesh(poleGeo, poleMat, stopSigns.length);
-      const signMesh = new THREE.InstancedMesh(signGeo, signMat, stopSigns.length);
-      const dummy = new THREE.Object3D();
+      const signMesh = new THREE.InstancedMesh(signGeo, stopSignMat, stopSigns.length);
       stopSigns.forEach((s, i) => {
         dummy.position.set(s.x, SIGN_POLE_H / 2, s.z);
+        dummy.rotation.set(0, 0, 0);
+        dummy.scale.set(1, 1, 1);
         dummy.updateMatrix();
         poleMesh.setMatrixAt(i, dummy.matrix);
-        dummy.position.set(s.x, SIGN_POLE_H, s.z);
-        dummy.rotation.y = s.rotY;
+
+        dummy.position.set(s.x, SIGN_POLE_H + 0.1, s.z);
+        dummy.rotation.set(Math.PI / 2, 0, s.rotY);
+        dummy.scale.set(1, 1, 1);
+        dummy.updateMatrix();
+        signMesh.setMatrixAt(i, dummy.matrix);
+      });
+      poleMesh.instanceMatrix.needsUpdate = true;
+      signMesh.instanceMatrix.needsUpdate = true;
+      group.add(poleMesh, signMesh);
+    }
+
+    // 限速圆牌：白面圆盘 + 红边
+    const speedSignMat = getStdMaterial(0xeeeeee, 0.3, 0.1);
+    if (speedSigns.length) {
+      const poleGeo = getCylinder(0.025, 0.03, SIGN_POLE_H, 6);
+      const signGeo = new THREE.CylinderGeometry(SPEED_SIGN_RADIUS, SPEED_SIGN_RADIUS, 0.025, 24);
+      const poleMesh = new THREE.InstancedMesh(poleGeo, poleMat, speedSigns.length);
+      const signMesh = new THREE.InstancedMesh(signGeo, speedSignMat, speedSigns.length);
+      speedSigns.forEach((s, i) => {
+        dummy.position.set(s.x, SIGN_POLE_H / 2, s.z);
+        dummy.rotation.set(0, 0, 0);
+        dummy.scale.set(1, 1, 1);
+        dummy.updateMatrix();
+        poleMesh.setMatrixAt(i, dummy.matrix);
+
+        dummy.position.set(s.x, SIGN_POLE_H + 0.1, s.z);
+        dummy.rotation.set(Math.PI / 2, 0, s.rotY);
+        dummy.scale.set(1, 1, 1);
         dummy.updateMatrix();
         signMesh.setMatrixAt(i, dummy.matrix);
       });

@@ -55,20 +55,47 @@ export function cityBuildingPose(px, py, pz, nx, nz, offset, side) {
   };
 }
 
-function buildingTexture() {
+/**
+ * M5: 升级程序化立面纹理（增加竖向幕墙明框立柱 mullions 与冷暖双色内透窗格层次）
+ */
+export function _makeFacadeTexture() {
+  if (typeof document === 'undefined' || !document.createElement) return null;
   const canvas = document.createElement('canvas');
-  canvas.width = 64;
-  canvas.height = 128;
+  canvas.width = 128;
+  canvas.height = 256;
   const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#273446';
-  ctx.fillRect(0, 0, 64, 128);
-  for (let y = 7; y < 124; y += 14) {
-    for (let x = 6; x < 62; x += 14) {
-      const lit = ((x * 7 + y * 13) % 5) !== 0;
-      ctx.fillStyle = lit ? '#9ec7dc' : '#182433';
-      ctx.fillRect(x, y, 8, 7);
-      ctx.fillStyle = lit ? '#d7eef6' : '#223142';
-      ctx.fillRect(x + 1, y + 1, 6, 2);
+  if (!ctx) return null;
+  ctx.fillStyle = '#1c2633';
+  ctx.fillRect(0, 0, 128, 256);
+
+  // 竖向幕墙明框立柱 mullions 与横梁
+  ctx.strokeStyle = '#101722';
+  ctx.lineWidth = 2;
+  for (let x = 0; x <= 128; x += 16) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, 256);
+    ctx.stroke();
+  }
+  for (let y = 0; y <= 256; y += 16) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(128, y);
+    ctx.stroke();
+  }
+
+  // 窗格冷暖双色内透
+  for (let y = 3; y < 250; y += 16) {
+    for (let x = 3; x < 125; x += 16) {
+      const seed = ((x * 17 + y * 31) >>> 0) % 7;
+      if (seed === 0) {
+        ctx.fillStyle = '#141d28';
+      } else if (seed % 2 === 0) {
+        ctx.fillStyle = '#8ec3eb';
+      } else {
+        ctx.fillStyle = '#ffd180';
+      }
+      ctx.fillRect(x + 1, y + 1, 9, 8);
     }
   }
   const texture = new THREE.CanvasTexture(canvas);
@@ -76,6 +103,10 @@ function buildingTexture() {
   texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
   texture.anisotropy = 2;
   return texture;
+}
+
+function buildingTexture() {
+  return _makeFacadeTexture();
 }
 
 export function createBuildingView(scene) {
@@ -381,29 +412,118 @@ export function createBuildingView(scene) {
     const dummy = new THREE.Object3D();
     const buildBatch = function(slotList, facadeMat, roofMat) {
       if (!slotList.length) return;
+      const tallSlots = slotList.filter(s => s.height > 28);
+      const veryTallSlots = slotList.filter(s => s.height > 50);
+
       const bodies = new THREE.InstancedMesh(bodyGeo, facadeMat, slotList.length);
       const roofs = new THREE.InstancedMesh(roofGeo, roofMat, slotList.length);
-      slotList.forEach((slot, i) => {
-        dummy.position.set(slot.x, slot.y + slot.height / 2, slot.z);
-        dummy.rotation.set(0, slot.rotation, 0);
-        dummy.scale.set(slot.depth, slot.height, slot.width);
-        dummy.updateMatrix();
-        bodies.setMatrixAt(i, dummy.matrix);
 
-        dummy.position.set(slot.x, slot.y + slot.height + 0.5, slot.z);
-        dummy.scale.set(slot.depth * 0.72, 1, slot.width * 0.72);
-        dummy.updateMatrix();
-        roofs.setMatrixAt(i, dummy.matrix);
+      let podiums = null;
+      let penthouses = null;
+      if (tallSlots.length > 0) {
+        podiums = new THREE.InstancedMesh(bodyGeo, facadeMat, tallSlots.length);
+        penthouses = new THREE.InstancedMesh(roofGeo, roofMat, tallSlots.length);
+      }
+
+      let redLights = null;
+      if (veryTallSlots.length > 0) {
+        const lightGeo = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+        const redMat = new THREE.MeshBasicMaterial({ color: 0xff2222 });
+        redLights = new THREE.InstancedMesh(lightGeo, redMat, veryTallSlots.length);
+      }
+
+      let tallIdx = 0;
+      let vTallIdx = 0;
+
+      slotList.forEach((slot, i) => {
+        if (slot.height > 28) {
+          const pH = Math.min(10, slot.height * 0.22);
+          const tH = slot.height - pH;
+
+          // 裙楼 (Podium 阶梯体量)
+          dummy.position.set(slot.x, slot.y + pH / 2, slot.z);
+          dummy.rotation.set(0, slot.rotation, 0);
+          dummy.scale.set(slot.depth * 1.35, pH, slot.width * 1.35);
+          dummy.updateMatrix();
+          if (podiums) podiums.setMatrixAt(tallIdx, dummy.matrix);
+
+          // 主塔楼 (Tower)
+          dummy.position.set(slot.x, slot.y + pH + tH / 2, slot.z);
+          dummy.rotation.set(0, slot.rotation, 0);
+          dummy.scale.set(slot.depth, tH, slot.width);
+          dummy.updateMatrix();
+          bodies.setMatrixAt(i, dummy.matrix);
+
+          // 屋顶机房盒体 (Mechanical Penthouse)
+          dummy.position.set(slot.x, slot.y + slot.height + 1.2, slot.z);
+          dummy.scale.set(slot.depth * 0.45, 2.4, slot.width * 0.45);
+          dummy.updateMatrix();
+          if (penthouses) penthouses.setMatrixAt(tallIdx, dummy.matrix);
+
+          // 屋顶女儿墙
+          dummy.position.set(slot.x, slot.y + slot.height + 0.3, slot.z);
+          dummy.scale.set(slot.depth * 0.85, 0.6, slot.width * 0.85);
+          dummy.updateMatrix();
+          roofs.setMatrixAt(i, dummy.matrix);
+
+          // 高层航空障碍红灯点缀
+          if (slot.height > 50 && redLights) {
+            dummy.position.set(slot.x, slot.y + slot.height + 2.5, slot.z);
+            dummy.scale.set(1, 1, 1);
+            dummy.updateMatrix();
+            redLights.setMatrixAt(vTallIdx, dummy.matrix);
+            vTallIdx++;
+          }
+
+          tallIdx++;
+        } else {
+          dummy.position.set(slot.x, slot.y + slot.height / 2, slot.z);
+          dummy.rotation.set(0, slot.rotation, 0);
+          dummy.scale.set(slot.depth, slot.height, slot.width);
+          dummy.updateMatrix();
+          bodies.setMatrixAt(i, dummy.matrix);
+
+          dummy.position.set(slot.x, slot.y + slot.height + 0.5, slot.z);
+          dummy.scale.set(slot.depth * 0.72, 1, slot.width * 0.72);
+          dummy.updateMatrix();
+          roofs.setMatrixAt(i, dummy.matrix);
+        }
       });
+
       bodies.instanceMatrix.needsUpdate = true;
       roofs.instanceMatrix.needsUpdate = true;
       bodies.castShadow = slotList === nearMid ? tier === 'high' : false;
       bodies.receiveShadow = true;
       group.add(bodies, roofs);
+
+      if (podiums) {
+        podiums.instanceMatrix.needsUpdate = true;
+        podiums.castShadow = bodies.castShadow;
+        podiums.receiveShadow = true;
+        group.add(podiums);
+      }
+      if (penthouses) {
+        penthouses.instanceMatrix.needsUpdate = true;
+        group.add(penthouses);
+      }
+      if (redLights) {
+        redLights.instanceMatrix.needsUpdate = true;
+        group.add(redLights);
+      }
     };
     buildBatch(nearMid, facade, roof);
     buildBatch(far, farFacade, farRoof);
+
+    if (store && store.layerVisibility) {
+      group.visible = store.layerVisibility.buildings !== false;
+    }
   }
 
-  return { build, clear, getGroup: () => group };
+  function update(store) {
+    if (store && store.layerVisibility) {
+      group.visible = store.layerVisibility.buildings !== false;
+    }
+  }
+
+  return { build, clear, update, getGroup: () => group };
 }

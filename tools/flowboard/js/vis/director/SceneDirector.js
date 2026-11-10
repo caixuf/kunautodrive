@@ -39,11 +39,11 @@ import * as ViewRegistry from '../core/ViewRegistry.js';
 import { createLayer } from '../core/Layer.js';
 // Step 5 重构：纯函数 validateFrame 抽到 FrameValidator.js，
 // 零 THREE 依赖，便于 tests/vis_director_validation.test.mjs 直接 import。
-import { validateFrame } from './FrameValidator.js';
+import { validateFrame, validateSceneFrame, cleanEntity } from './FrameValidator.js';
 import { LANE_WIDTH, EDGE_TYPE, VIADUCT_VIS_LENGTH } from '../core/Constants.js';
 
 // 向后兼容：原调用方从 SceneDirector import validateFrame。
-export { validateFrame };
+export { validateFrame, validateSceneFrame, cleanEntity };
 
 /* P0-2 前端防御：dead-reckon Map key 用 (type, id) 复合键。
  * 后端已保证 e.id（pool 索引）全局唯一，这里再做一道独立命名空间防御，
@@ -162,16 +162,16 @@ export function createSceneDirector(scene) {
     store.laneMatch      = diagMetrics.lane_match || null;
     store.perceivedLanes = diagMetrics.perceived_lanes || null;
 
-    /* Step 5 重构：校验逻辑下沉到 validateFrame 纯函数，
+    /* Step 5 重构：校验逻辑下沉到 validateFrame / validateSceneFrame 纯函数，
      * update() 只负责把校验结果 emit 到 _warnOnce + 实际构建。 */
-    const v = validateFrame(topoData);
+    const v = validateSceneFrame(topoData);
     if (!v.ok) {
       for (const w of v.warnings) _warnOnce(w.key, w.msg);
       return;
     }
     for (const w of v.warnings) _warnOnce(w.key, w.msg);
 
-    const { frame, skipRoad, skipEgo, skipEntities } = v;
+    const { frame, clean, skipRoad, skipEgo, skipEntities } = v;
     let { rn } = v;
     if (Object.prototype.hasOwnProperty.call(frame, 'scenario_name')) {
       store.scenarioName = frame.scenario_name || '';
@@ -287,6 +287,10 @@ export function createSceneDirector(scene) {
         x: newX,
         y: e.y || 0,
         z: e.z || 0,
+        pitch: (typeof e.pitch === 'number' && isFinite(e.pitch)) ? e.pitch : 0,
+        roll: (typeof e.roll === 'number' && isFinite(e.roll)) ? e.roll : 0,
+        mu_scale: (typeof e.mu_scale === 'number' && isFinite(e.mu_scale)) ? e.mu_scale : 1.0,
+        road_grade: (typeof e.road_grade === 'number' && isFinite(e.road_grade)) ? e.road_grade : 0,
         heading: e.heading != null ? e.heading : (e.h || 0),
         speed: e.speed != null ? e.speed : (e.spd || 0),
         steer: e.steer || 0,
@@ -393,31 +397,14 @@ export function createSceneDirector(scene) {
           else heading = 0;
         }
 
+        const cleaned = cleanEntity(e);
         const ent = {
-          id: e.id,
-          type: etype,
-          x: e.x || 0,
-          y: e.y || 0,
-          z: e.z || 0,
+          ...cleaned,
           heading: heading,
           speed: e.speed != null ? e.speed : (e.spd != null ? e.spd : speedFromVel),
-          steer: e.steer || 0,
           length: rawLen,
           width: rawWid,
           height: rawH,
-          ai_state: e.ai_state || e.ai || '',
-          lights: e.lights || 0,
-          vx: evx,
-          vy: evy,
-          throttle: e.throttle || 0,
-          brake: e.brake || 0,
-          state: e.state || '',
-          progress: e.progress || 0,
-          remain_s: e.remain_s || 0,
-          parked: e.parked || false,
-          stop_x: e.stop_x,
-          stop_y: e.stop_y,
-          lane_offset: e.lane_offset,
         };
         /* 流畅专题：把真值喂进多实体 dead reckon Map。tickAnimation 每帧
          * 会用平滑后的 x/y/heading/speed 覆盖上面的真值，让 NPC 在 SSE
@@ -434,9 +421,22 @@ export function createSceneDirector(scene) {
       pruneEntities(new Set(store.entities.map(e => entityDrKey(e))));
     }
 
+    _applyToStore(store, clean, topoData);
+
     /* 动态 View 不在 update() 里调，统一由 tickAnimation(now) 每帧走 Layer 树
      * 递归 update（agent/infra 层）。update() 只负责写 store 数据 + 触发
      * 静态 View 的 build（roadHash 变了才重建）。 */
+  }
+
+  function _applyToStore(store, clean, raw) {
+    if (clean) {
+      store.predictions = Array.isArray(clean.predictions) ? clean.predictions : [];
+      store.frictionZones = Array.isArray(clean.friction_zones) ? clean.friction_zones : [];
+      store.parkingGoal = clean.parking_goal || null;
+    }
+    if (raw && raw.metrics && raw.metrics.bev) {
+      store.bev = raw.metrics.bev;
+    }
   }
 
   /* ── tickAnimation(now) — 每帧推进死推算 + Layer 树递归 update ──
@@ -497,6 +497,9 @@ export function createSceneDirector(scene) {
     /* Layer 树递归 update：agent(vehicle) + infra(trafficLight, etcGate) */
     rootLayer.update(store, now);
 
+    // M5: 根据 store.layerVisibility 渲染/控制各图层显隐
+    _renderViews(now);
+
     // B2 fix: 高架 deck 跟随 ego 移动，消除"钉死在世界原点"的视觉 bug
     if (store.isViaduct && store.ego) {
       const viaductView = ViewRegistry.get('viaduct');
@@ -505,6 +508,26 @@ export function createSceneDirector(scene) {
         viaductView.followEgo(store.ego.x + visLen / 2);
       }
     }
+  }
+
+  function _renderViews(_dt) {
+    if (!store.layerVisibility) return;
+    const bldg = ViewRegistry.get('building');
+    if (bldg && bldg.getGroup) {
+      bldg.getGroup().visible = store.layerVisibility.buildings !== false;
+    }
+    const traj = ViewRegistry.get('trajectory');
+    if (traj && traj.getGroup) {
+      traj.getGroup().visible = store.layerVisibility.corridor !== false;
+    }
+  }
+
+  function setLayerVisibility(layer, enabled) {
+    if (store && store.layerVisibility) {
+      store.layerVisibility[layer] = !!enabled;
+      _renderViews(0);
+    }
+    return store.layerVisibility;
   }
 
   function getStore() { return store; }
@@ -534,5 +557,6 @@ export function createSceneDirector(scene) {
 
   return { init, update, tickAnimation, dispose,
            getStore, getRoadView, getGroundView, getViaductView, getVehicleView,
-           getLaneDiagView, getRootLayer, getLayer, resetWarnings };
+           getLaneDiagView, getRootLayer, getLayer, resetWarnings,
+           setLayerVisibility, _applyToStore, _renderViews };
 }

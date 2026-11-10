@@ -6,39 +6,68 @@ import * as THREE from 'three';
  * 取代旧架构的 51 个模块级 let 全局变量。
  */
 
-export function createSceneStore() {
-  return {
+export class SceneStore {
+  constructor() {
     // ── 道路网络 ──
-    roadNetwork: null,        // { edges: [...], hash: string }
-    roadHash: '',             // 用于 diff 检测
-    isViaduct: false,         // 是否高架模式
-    viaductVisLength: 0,      // 高架段实际建造长度（米），用于 wrap 周期；0 = 未建
-    scenarioName: '',
+    this.roadNetwork = null;        // { edges: [...], hash: string }
+    this.roadHash = '';             // 用于 diff 检测
+    this.isViaduct = false;         // 是否高架模式
+    this.viaductVisLength = 0;      // 高架段实际建造长度（米），用于 wrap 周期；0 = 未建
+    this.scenarioName = '';
 
     // ── ego ──
-    ego: null,                // { x, y, heading, speed, steer, brake, throttle, lights, vx, vy, length, width }
+    this.ego = null;                // { x, y, heading, speed, steer, brake, throttle, lights, vx, vy, length, width, pitch, roll, mu_scale, road_grade }
 
     // ── 规划轨迹（planning_node 输出的全局 ENU 坐标点） ──
-    trajectoryPath: null,     // [[x, y, v], ...]  全局 ENU 坐标，或 null
+    this.trajectoryPath = null;     // [[x, y, v], ...]  全局 ENU 坐标，或 null
 
     // ── 实体列表 ──
-    entities: [],             // [{ id, type, x, y, heading, speed, lights, ai_state, ... }]
+    this.entities = [];             // [{ id, type, x, y, heading, speed, lights, ai_state, pitch, roll, mu_scale, road_grade, ... }]
+
+    // ── M5: 预测、摩擦区、泊车目标与图层可见性 ──
+    this.predictions = [];          // [{ id, x, y, vx, vy, branches: [...] }]
+    this.frictionZones = [];        // [{ x_min, x_max, y_min, y_max, mu_scale, surface }]
+    this.parkingGoal = null;        // { enabled, x, y, heading, width, length }
+    this.bev = null;                // { count, age_ms }
+    this.layerVisibility = {
+      predictions: true,
+      perception: true,
+      corridor: true,
+      buildings: true,
+    };
 
     // ── 环境配置 ──
-    env: {
+    this.env = {
       isNight: false,
       lighting: 'day',
       weather: 'clear',
       visibilityM: 20000,
-    },
+    };
 
     // ── 性能档位 ──
-    perfTier: 'high',         // high / medium / low
+    this.perfTier = 'high';         // high / medium / low
 
     // ── 调试 ──
-    showLabels: true,
-    paused: false,
-  };
+    this.showLabels = true;
+    this.paused = false;
+  }
+
+  reset() {
+    this.predictions = [];
+    this.frictionZones = [];
+    this.parkingGoal = null;
+    this.bev = null;
+    this.layerVisibility = {
+      predictions: true,
+      perception: true,
+      corridor: true,
+      buildings: true,
+    };
+  }
+}
+
+export function createSceneStore() {
+  return new SceneStore();
 }
 
 /** 计算 road_network 的 hash，用于 diff 检测。

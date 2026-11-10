@@ -295,8 +295,28 @@ export function computeDrivingStatus(metrics) {
   if (typeof pd.driver_mode === 'string' && pd.driver_mode) driverMode = pd.driver_mode;
   else if (typeof m.driver_mode === 'string') driverMode = m.driver_mode;
 
+  /* M5: 6-DOF 姿态角、路面附着系数、规划场景/阶段与 BEV 感知目标数 */
+  const pitch = num(ego && ego.pitch, 0);
+  const roll = num(ego && ego.roll, 0);
+  const pitchDeg = pitch * 180 / Math.PI;
+  const rollDeg = roll * 180 / Math.PI;
+  const pitchStr = (pitchDeg >= 0 ? '+' : '') + pitchDeg.toFixed(1) + '°';
+  const rollStr = (rollDeg >= 0 ? '+' : '') + rollDeg.toFixed(1) + '°';
+  const attitudeText = `P ${pitchStr} · R ${rollStr}`;
+
+  const muScale = num(ego && ego.mu_scale, num(scene && scene.mu_scale, 1.0));
+  const muText = `μ=${muScale.toFixed(2)}`;
+  const isSlippery = muScale < 0.7;
+
+  const activeScenario = (pd && pd.active_scenario) || 'LANE_FOLLOW';
+  const activeStage = (pd && pd.active_stage) || 'CRUISE';
+  const scenarioStageText = `${activeScenario} · ${activeStage}`;
+
+  const bevCount = num(m.bev && m.bev.count, null);
+  const bevText = bevCount !== null ? `BEV: ${bevCount}` : '';
+
   return {
-    hasData: !!(ego || m.control_debug || m.behavior || m.tor || m.odd || m.l3_events),
+    hasData: !!(ego || m.control_debug || m.behavior || m.tor || m.odd || m.l3_events || m.planning_debug),
     speed,
     speedKmh: speed === null ? null : speed * 3.6,
     cruiseSpeed: num(beh.target_speed, num(pd.command_speed, null)),
@@ -304,6 +324,17 @@ export function computeDrivingStatus(metrics) {
     throttle: Math.max(0, Math.min(1, num(cd.throttle, num(ego && ego.throttle, 0)))),
     brake: Math.max(0, Math.min(1, num(cd.brake, num(ego && ego.brake, 0)))),
     steerDeg: num(cd.steer, num(ego && ego.steer, 0)) * 180 / Math.PI,
+    pitchDeg,
+    rollDeg,
+    attitudeText,
+    muScale,
+    muText,
+    isSlippery,
+    activeScenario,
+    activeStage,
+    scenarioStageText,
+    bevCount,
+    bevText,
     behavior: behaviorInfo(beh.state),
     control: controlModeInfo(cd.mode, !!cd.hazard),
     driverMode,

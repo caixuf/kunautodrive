@@ -18,6 +18,7 @@ import { worldToThree, headingToRotationY } from '../tools/flowboard/js/vis/math
 import { roadHeightAt } from '../tools/flowboard/js/vis/math/RoadHeight.js';
 import { VEHICLE_GROUND_Y } from '../tools/flowboard/js/vis/view/VehicleView.js';
 import { selectCurrentMotionSegment } from '../tools/flowboard/js/vis/math/Trajectory.js';
+import { computeDrivingStatus } from '../tools/flowboard/js/vis/hud/DrivingStatus.js';
 import { ok, eq, done } from './test-utils.mjs';
 
 console.log('=== vis/ 单帧 tick 冒烟 ===\n');
@@ -145,6 +146,51 @@ function makeParkingExamFrame() {
           { id: 9, type: 'tl', x: 250, y: 8.5, stop_x: 248, stop_y: -1.75,
             heading: 0, speed: 0, state: 'red' },
         ],
+      },
+    },
+  };
+}
+
+function makeM5UpgradeFrame() {
+  return {
+    metrics: {
+      bev: { count: 8, age_ms: 12 },
+      planning_debug: {
+        active_scenario: 'VALET_PARKING',
+        active_stage: 'PRECISION_HOLD',
+      },
+      scene: {
+        road_network: {
+          edges: [{
+            id: 0, type: 'urban', name: 'm5_test_road',
+            lanes: 4, lane_width: 3.5, length: 500,
+            nodes: [[0, 0, 0], [500, 0, 0]],
+          }],
+        },
+        ego: {
+          x: 120, y: -1.75, heading: 0.1, speed: 5.5, z: 0,
+          pitch: 0.05, roll: -0.03, mu_scale: 0.65, road_grade: 0.02,
+          brake: 0.7, lights: 0x40,
+        },
+        entities: [
+          { id: 'npc_m5', type: 'car', x: 150, y: -1.75, heading: 0.1, speed: 6, z: 0,
+            pitch: 0.02, roll: 0.01, mu_scale: 0.8, road_grade: 0.01 },
+        ],
+        predictions: [
+          {
+            id: 'npc_m5', x: 150, y: -1.75, vx: 6, vy: 0, lane_idx: 0,
+            branches: [
+              { mode: 'lane_keep', probability: 0.8, points: [[150, -1.75], [160, -1.75], [170, -1.75]] },
+              { mode: 'cut_in_left', probability: 0.2, points: [[150, -1.75], [158, 1.75], [168, 1.75]] },
+            ],
+          },
+        ],
+        friction_zones: [
+          { x_min: 130, x_max: 180, y_min: -5, y_max: 5, mu_scale: 0.35, surface: 'ice' },
+        ],
+        parking_goal: {
+          enabled: true, x: 200, y: -3.5, heading: 1.57, width: 2.5, length: 5.3,
+        },
       },
     },
   };
@@ -372,6 +418,48 @@ function makeParkingExamFrame() {
     }
   }
   eq('连续 5 帧 tick 不抛错', consecutivePass, 5);
+}
+
+// ── 测试 6: Milestone M5 升级验证 ──
+
+{
+  console.log('--- 6. Milestone M5 升级验证 ---');
+  ViewRegistry.clear();
+  const scene = globalThis.THREE.Scene();
+  const director = createSceneDirector(scene);
+  const m5Frame = makeM5UpgradeFrame();
+  director.update(m5Frame);
+  director.tickAnimation(5000);
+
+  const store = director.getStore();
+  ok('M5: store.predictions 已写入', Array.isArray(store.predictions) && store.predictions.length === 1);
+  ok('M5: store.frictionZones 已写入', Array.isArray(store.frictionZones) && store.frictionZones.length === 1);
+  ok('M5: store.parkingGoal 已写入且 enabled', !!store.parkingGoal && store.parkingGoal.enabled === true);
+  ok('M5: store.bev 已写入', !!store.bev && store.bev.count === 8);
+
+  const vehicleView = ViewRegistry.get('vehicle');
+  ok('M5: 车辆视图已注册', !!vehicleView);
+  const egoEntry = vehicleView?.getVehicleMap?.().get('ego');
+  ok('M5: ego 车辆实例存在', !!egoEntry);
+  ok('M5: ego 存在 sprungGroup (独立簧上质量)', !!egoEntry?.sprungGroup);
+  if (egoEntry?.sprungGroup) {
+    ok('M5: sprungGroup 俯仰角 rotation.z = -pitch', Math.abs(egoEntry.sprungGroup.rotation.z - (-0.05)) < 1e-4);
+    ok('M5: sprungGroup 侧倾角 rotation.x = roll', Math.abs(egoEntry.sprungGroup.rotation.x - (-0.03)) < 1e-4);
+  }
+
+  // 图层显隐控制
+  director.setLayerVisibility('predictions', false);
+  eq('M5: layerVisibility.predictions 置 false', store.layerVisibility.predictions, false);
+  director.setLayerVisibility('predictions', true);
+  eq('M5: layerVisibility.predictions 置回 true', store.layerVisibility.predictions, true);
+
+  // HUD 纯函数视图模型验证
+  const hudStatus = computeDrivingStatus(m5Frame.metrics);
+  ok('M5: HUD attitudeText 格式正确', hudStatus.attitudeText.includes('P +2.9°') && hudStatus.attitudeText.includes('R -1.7°'));
+  eq('M5: HUD muText 正确', hudStatus.muText, 'μ=0.65');
+  eq('M5: HUD isSlippery 告警生效', hudStatus.isSlippery, true);
+  eq('M5: HUD scenarioStageText 正确', hudStatus.scenarioStageText, 'VALET_PARKING · PRECISION_HOLD');
+  eq('M5: HUD bevText 正确', hudStatus.bevText, 'BEV: 8');
 }
 
 done();

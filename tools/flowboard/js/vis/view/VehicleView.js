@@ -14,7 +14,9 @@
  * （车轮转向/滚动、方向盘、刹车灯/转向灯/大灯控制）
  */
 
-import { deriveLightState, LIGHT_TURN_LEFT, LIGHT_TURN_RIGHT, LIGHT_HAZARD, LIGHT_HIGH_BEAM, LIGHT_LOW_BEAM, LIGHT_CLEARANCE, LIGHT_FOG } from './VehicleLights.js';
+import {
+  deriveLightState, isEmergencyBrake, isReverseLight,
+} from './VehicleLights.js';
 import { getStdMaterial } from '../core/AssetFactory.js';
 import { initModelCache, getModel, _setVehicleLights, _relinkWheelUserData } from '../../models.js';
 import { worldToThree, headingToRotationY, forwardENU } from '../math/Coord.js';
@@ -204,21 +206,26 @@ function createVehicleLights(vehicleGroup, options = {}) {
   const turnRR = _makeRectMesh(GEO_TURN, LIGHT_OFF, rearTurn.x, rearTurn.y,  TURN_Z);
   const headL  = _makeRectMesh(GEO_HEAD, LIGHT_OFF, headX, headY, -headZ);
   const headR  = _makeRectMesh(GEO_HEAD, LIGHT_OFF, headX, headY,  headZ);
+  const reverseL = _makeRectMesh(GEO_BRAKE, LIGHT_OFF, BRAKE_X, BRAKE_Y - 0.12, -BRAKE_Z * 0.7);
+  const reverseR = _makeRectMesh(GEO_BRAKE, LIGHT_OFF, BRAKE_X, BRAKE_Y - 0.12,  BRAKE_Z * 0.7);
 
   // 熄灯时隐藏，避免暗色灯片显示为车身边缘的黑方块
   brakeL.visible = brakeR.visible = false;
   turnFL.visible = turnFR.visible = turnRL.visible = turnRR.visible = false;
   headL.visible = headR.visible = false;
+  reverseL.visible = reverseR.visible = false;
 
-  group.add(brakeL, brakeR, turnFL, turnFR, turnRL, turnRR, headL, headR);
+  group.add(brakeL, brakeR, turnFL, turnFR, turnRL, turnRR, headL, headR, reverseL, reverseR);
 
   return {
     group,
     update(v, nowMs, env) {
       const s = deriveLightState(v.lights || 0, v.brake || 0, env);
+      const isEmerg = isEmergencyBrake(v.brake);
+      const blinkFreq = isEmerg ? 4.0 : 1.5;
       const blinkOn = nowMs === undefined
         ? true
-        : (((nowMs / 1000) * 1.5) % 1) < 0.5;
+        : (((nowMs / 1000) * blinkFreq) % 1) < 0.5;
 
       // 刹车与示廓尾灯：刹车亮红(opacity 1.0)，示廓/大灯开启时常亮(opacity 0.45 示位红)
       const isTail = s.clearance || s.head || s.fog;
@@ -229,14 +236,27 @@ function createVehicleLights(vehicleGroup, options = {}) {
       brakeL.material.opacity = s.brake ? 1.0 : 0.45;
       brakeR.material.opacity = s.brake ? 1.0 : 0.45;
 
-      const turnL = showTurnOverlay && s.turnL && blinkOn;
-      const turnR = showTurnOverlay && s.turnR && blinkOn;
+      // 转向灯 / 急刹高频双闪
+      const emergencyFlash = isEmerg && blinkOn;
+      const turnL = showTurnOverlay && (emergencyFlash || (s.turnL && blinkOn));
+      const turnR = showTurnOverlay && (emergencyFlash || (s.turnR && blinkOn));
       turnFL.visible = turnRL.visible = turnL;
       turnFR.visible = turnRR.visible = turnR;
       turnFL.material.color.copy(LIGHT_TURN_ON);
       turnFR.material.color.copy(LIGHT_TURN_ON);
       turnRL.material.color.copy(LIGHT_TURN_ON);
       turnRR.material.color.copy(LIGHT_TURN_ON);
+
+      // 倒车白灯
+      const reversing = isReverseLight(v.speed, v.gear, v.lights);
+      reverseL.visible = reversing;
+      reverseR.visible = reversing;
+      if (reversing) {
+        reverseL.material.color.copy(LIGHT_HEAD_ON);
+        reverseR.material.color.copy(LIGHT_HEAD_ON);
+        reverseL.material.opacity = 0.95;
+        reverseR.material.opacity = 0.95;
+      }
 
       // 前大灯：近光高亮璀璨白光(0xfffaee, opacity 0.95)，示廓开启时微光(0.40)
       const isHeadOn = s.head || s.clearance;
@@ -668,6 +688,8 @@ export function createVehicleView(scene, renderer, modelCache) {
   /** 创建程序化 fallback（MeshPhysicalMaterial 车漆 + X-forward 朝向） */
   function _createFallbackVehicle(type, id) {
     const group = new THREE.Group();
+    const sprungGroup = new THREE.Group();
+    sprungGroup.name = 'sprungGroup';
 
     // 车型 → 车身颜色映射（与 gen_models.py 材质一致）
     const COLOR_MAP = {
@@ -696,7 +718,7 @@ export function createVehicleView(scene, renderer, modelCache) {
     body.castShadow = true;
     body.receiveShadow = true;
     body.position.y = 0.65;
-    group.add(body);
+    sprungGroup.add(body);
 
     // 挡风玻璃（半透明）
     const glassGeo = new THREE.BoxGeometry(0.1, 0.35, 1.6);
@@ -710,16 +732,16 @@ export function createVehicleView(scene, renderer, modelCache) {
     });
     const glass = new THREE.Mesh(glassGeo, glassMat);
     glass.position.set(0.8, 0.95, 0);
-    group.add(glass);
+    sprungGroup.add(glass);
 
     // 后窗
     const rearGlass = new THREE.Mesh(glassGeo.clone(), glassMat);
     rearGlass.position.set(-0.8, 0.95, 0);
-    group.add(rearGlass);
+    sprungGroup.add(rearGlass);
 
-    // 轮毂（4个圆柱，轴沿 Z 与 glTF 一致）
+    // 轮毂（4个圆柱，轴沿 Z 与 glTF 一致）保持挂在 group 根部（簧下质量，贴地）
     const wheelGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.2, 16);
-    const wheelMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.6, metalness: 0.7 });
+    const wheelMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.6, metalness: 0.2 });
     const wheelPositions = [
       [1.3, 0.3, -0.8], [1.3, 0.3, 0.8],
       [-1.3, 0.3, -0.8], [-1.3, 0.3, 0.8],
@@ -734,9 +756,11 @@ export function createVehicleView(scene, renderer, modelCache) {
 
     // 注入方向盘（fallback 车辆同样需要可见的转向反馈，行人跳过）
     if (type !== 'pedestrian') {
-      group.add(_createSteeringWheel());
+      sprungGroup.add(_createSteeringWheel());
     }
 
+    group.add(sprungGroup);
+    group.userData.sprungGroup = sprungGroup;
     group.name = 'fallback_' + type + '_' + id;
     return group;
   }
@@ -764,6 +788,39 @@ export function createVehicleView(scene, renderer, modelCache) {
     // 没有内饰，需要程序化补一个方向盘以提供转向反馈。SU7 是授权高精度模型，
     // 驾驶位自带方向盘（interior.009 @ 左舵驾驶位），不能再叠一个丑的。
     if (type !== 'su7') scene.add(_createSteeringWheel());
+
+    // M5: 创建 sprungGroup 并将非车轮/车桥子部件移入，车身俯仰侧倾时车轮始终贴地
+    const sprungGroup = new THREE.Group();
+    sprungGroup.name = 'sprungGroup';
+
+    const wheelNodes = new Set();
+    const ud = scene.userData || {};
+    if (ud.frontAxle) wheelNodes.add(ud.frontAxle);
+    if (ud.rearAxle) wheelNodes.add(ud.rearAxle);
+    if (Array.isArray(ud.wheels)) {
+      ud.wheels.forEach(w => {
+        wheelNodes.add(w);
+        if (w.parent && w.parent !== scene) wheelNodes.add(w.parent);
+      });
+    }
+
+    const nonWheelChildren = [];
+    for (let i = 0; i < scene.children.length; i++) {
+      const child = scene.children[i];
+      const name = (child.name || '').toLowerCase();
+      const isWheelOrAxle = wheelNodes.has(child) ||
+        name.includes('wheel') || name.includes('axle') || name.includes('tire') || name.includes('rim');
+      if (!isWheelOrAxle) {
+        nonWheelChildren.push(child);
+      }
+    }
+    nonWheelChildren.forEach(child => {
+      scene.remove(child);
+      sprungGroup.add(child);
+    });
+    scene.add(sprungGroup);
+    scene.userData.sprungGroup = sprungGroup;
+
     return scene;
   }
 
@@ -922,6 +979,16 @@ export function createVehicleView(scene, renderer, modelCache) {
       entry.group.position.set(tx, ty, tz);
       entry.group.rotation.set(0, headingToRotationY(vehicleData.heading || vehicleData.yaw || 0), 0);
       entry.steerAngle = vehicleData.steer ?? vehicleData.steerAngle ?? 0;
+
+      // M5: 6-DOF 悬架俯仰/侧倾驱动簧上质量 (sprungGroup)，车轮始终贴地不悬空/穿模
+      const sprung = entry.sprungGroup || entry.group.userData?.sprungGroup;
+      if (sprung) {
+        entry.sprungGroup = sprung;
+        const pitch = Number(vehicleData.pitch) || 0;
+        const roll = Number(vehicleData.roll) || 0;
+        sprung.rotation.z = -pitch;
+        sprung.rotation.x = roll;
+      }
     }
 
     return entry;
@@ -1056,6 +1123,11 @@ export function createVehicleView(scene, renderer, modelCache) {
         ? store.userLightOverride : null;
       const effectiveLights = (userOverride !== null) ? userOverride : (v.lights || 0);
       const ls = deriveLightState(effectiveLights, v.brake || 0, store.env);
+      if (isEmergencyBrake(v.brake)) {
+        const hazardBlink = (((now || 0) / 1000 * 4.0) % 1) < 0.5;
+        ls.turnL = hazardBlink;
+        ls.turnR = hazardBlink;
+      }
 
       // 模型和 fallback 都复用同一套可见灯光反馈；有语义 emissive 节点
       // 的模型同时保留其材质亮度控制。

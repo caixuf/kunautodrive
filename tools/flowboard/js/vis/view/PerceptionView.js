@@ -100,24 +100,175 @@ export function createPerceptionView(scene) {
   sweepEdgeMesh.frustumCulled = false;
   scene.add(sweepEdgeMesh);
 
+  // ── M5: 3D 雷达点云（高度梯度着色） ──
+  const MAX_RADAR_POINTS = 512;
+  const pointPositions = new Float32Array(MAX_RADAR_POINTS * 3);
+  const pointColors = new Float32Array(MAX_RADAR_POINTS * 3);
+  const pointGeo = new THREE.BufferGeometry();
+  pointGeo.setAttribute('position', new THREE.BufferAttribute(pointPositions, 3));
+  pointGeo.setAttribute('color', new THREE.BufferAttribute(pointColors, 3));
+  pointGeo.setDrawRange(0, 0);
+
+  const pointMat = new THREE.PointsMaterial({
+    size: 2.2,
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.85,
+    depthWrite: false,
+  });
+  const pointMesh = new THREE.Points(pointGeo, pointMat);
+  pointMesh.renderOrder = 24;
+  pointMesh.frustumCulled = false;
+  scene.add(pointMesh);
+
+  // ── M5: 多模态预测轨迹流光带 ──
+  const PREDICTION_COLORS = {
+    lane_keep: 0x00e676,     // 青绿
+    cut_in_left: 0xff9100,   // 琥珀橙红告警
+    cut_in_right: 0xff9100,  // 琥珀橙红告警
+    yield_decel: 0x2979ff,   // 蔚蓝
+    default: 0x00e5ff,
+  };
+
+  const predGroup = new THREE.Group();
+  predGroup.name = 'predictionTrajectories';
+  scene.add(predGroup);
+
+  function _clearPredictions() {
+    while (predGroup.children.length) {
+      const child = predGroup.children[0];
+      predGroup.remove(child);
+      child.geometry?.dispose?.();
+      child.material?.dispose?.();
+    }
+  }
+
+  function _syncPredictions(store) {
+    const showPred = !store.layerVisibility || store.layerVisibility.predictions !== false;
+    if (!showPred || !Array.isArray(store.predictions) || store.predictions.length === 0) {
+      predGroup.visible = false;
+      return;
+    }
+    predGroup.visible = true;
+    _clearPredictions();
+
+    store.predictions.forEach((pred) => {
+      const branches = Array.isArray(pred.branches) ? pred.branches : [];
+      branches.forEach((br) => {
+        const rawPts = Array.isArray(br.points) ? br.points : [];
+        if (rawPts.length < 2) return;
+
+        const mode = br.mode || 'lane_keep';
+        const prob = Math.max(0.1, Math.min(1.0, Number(br.probability) || 0.5));
+        const color = PREDICTION_COLORS[mode] || PREDICTION_COLORS.default;
+
+        const verts = [];
+        for (const pt of rawPts) {
+          const px = Number(pt[0]) || 0;
+          const py = Number(pt[1]) || 0;
+          const pz = Number(pt[2]) || 0;
+          const [tx, ty, tz] = worldToThree(px, py, pz + 0.25);
+          verts.push(tx, ty, tz);
+        }
+
+        const geom = new THREE.BufferGeometry();
+        geom.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+        const mat = new THREE.LineBasicMaterial({
+          color,
+          transparent: true,
+          opacity: 0.35 + 0.55 * prob,
+          depthWrite: false,
+        });
+        const line = new THREE.Line(geom, mat);
+        line.renderOrder = 25;
+        predGroup.add(line);
+      });
+    });
+  }
+
+  function _updatePointCloud(ego, entities, store) {
+    let pIdx = 0;
+    const addPt = (wx, wy, wz) => {
+      if (pIdx >= MAX_RADAR_POINTS) return;
+      const [tx, ty, tz] = worldToThree(wx, wy, wz);
+      const b = pIdx * 3;
+      pointPositions[b + 0] = tx;
+      pointPositions[b + 1] = ty;
+      pointPositions[b + 2] = tz;
+
+      // 根据 z 高度梯度着色：地面点低饱和暗色，障碍物高点高亮青/金色
+      const egoZ = ego.z || 0;
+      const relZ = Math.max(0, wz - egoZ);
+      if (relZ < 0.25) {
+        pointColors[b + 0] = 0.12;
+        pointColors[b + 1] = 0.28;
+        pointColors[b + 2] = 0.35;
+      } else if (relZ < 1.2) {
+        pointColors[b + 0] = 0.0;
+        pointColors[b + 1] = 0.95;
+        pointColors[b + 2] = 0.90;
+      } else {
+        pointColors[b + 0] = 1.0;
+        pointColors[b + 1] = 0.82;
+        pointColors[b + 2] = 0.15;
+      }
+      pIdx++;
+    };
+
+    if (Array.isArray(store.pointCloud) && store.pointCloud.length > 0) {
+      for (const pt of store.pointCloud) {
+        if (pIdx >= MAX_RADAR_POINTS) break;
+        addPt(pt.x ?? pt[0] ?? 0, pt.y ?? pt[1] ?? 0, pt.z ?? pt[2] ?? 0);
+      }
+    } else {
+      for (let i = 0; i < Math.min(entities.length, 16); i++) {
+        const ent = entities[i];
+        if (!ent) continue;
+        const dx = ent.x - ego.x;
+        const dy = ent.y - ego.y;
+        if (dx * dx + dy * dy > 80 * 80) continue;
+        const ez = ent.z || 0;
+        const h = ent.height || 1.5;
+        addPt(ent.x - 0.5, ent.y - 0.5, ez + 0.05);
+        addPt(ent.x + 0.5, ent.y - 0.5, ez + 0.10);
+        addPt(ent.x, ent.y, ez + h * 0.5);
+        addPt(ent.x - 0.3, ent.y + 0.4, ez + h * 0.8);
+        addPt(ent.x + 0.3, ent.y + 0.4, ez + h);
+      }
+    }
+
+    pointGeo.attributes.position.needsUpdate = true;
+    pointGeo.attributes.color.needsUpdate = true;
+    pointGeo.setDrawRange(0, pIdx);
+  }
+
   // ── 内部状态 ──
   let _entityCount = 0;
   let _frame = 0;
 
-  function update(store, now) {
+  function update(store, _now) {
     _frame++;
     const ego = store.ego;
-    if (!ego) {
+    const showPerc = !store.layerVisibility || store.layerVisibility.perception !== false;
+
+    // 1. 同步多模态预测轨迹
+    _syncPredictions(store);
+
+    if (!ego || !showPerc) {
       boxMesh.visible = false;
       rayMesh.visible = false;
       sweepMesh.visible = false;
       sweepEdgeMesh.visible = false;
+      pointMesh.visible = false;
+      pointGeo.setDrawRange(0, 0);
       return;
     }
+
     boxMesh.visible = true;
     rayMesh.visible = true;
     sweepMesh.visible = true;
     sweepEdgeMesh.visible = true;
+    pointMesh.visible = true;
 
     const entities = store.entities || [];
     const count = Math.min(entities.length, MAX_ENTITIES);
@@ -138,6 +289,9 @@ export function createPerceptionView(scene) {
     sweepGeo.attributes.position.needsUpdate = true;
     sweepEdgeGeo.attributes.position.needsUpdate = true;
 
+    // ── 更新 3D 点云 ──
+    _updatePointCloud(ego, entities, store);
+
     _entityCount = count;
   }
 
@@ -145,17 +299,24 @@ export function createPerceptionView(scene) {
     _entityCount = 0;
     boxGeo.setDrawRange(0, 0);
     rayGeo.setDrawRange(0, 0);
+    pointGeo.setDrawRange(0, 0);
+    _clearPredictions();
     boxMesh.visible = false;
     rayMesh.visible = false;
     sweepMesh.visible = false;
     sweepEdgeMesh.visible = false;
+    pointMesh.visible = false;
+    predGroup.visible = false;
   }
 
   function dispose() {
+    clear();
     scene.remove(boxMesh);
     scene.remove(rayMesh);
     scene.remove(sweepMesh);
     scene.remove(sweepEdgeMesh);
+    scene.remove(pointMesh);
+    scene.remove(predGroup);
     boxGeo.dispose();
     boxMat.dispose();
     rayGeo.dispose();
@@ -164,6 +325,8 @@ export function createPerceptionView(scene) {
     sweepMat.dispose();
     sweepEdgeGeo.dispose();
     sweepEdgeMat.dispose();
+    pointGeo.dispose();
+    pointMat.dispose();
   }
 
   return { update, clear, dispose };

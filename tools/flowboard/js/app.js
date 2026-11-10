@@ -1884,10 +1884,26 @@ function updateDriveHud(force) {
     }
   }
 
-  /* 踏板 + 方向盘 */
+  /* 踏板 + 方向盘 + M5 姿态与附着系数微仪表 */
   _dhWidth('dh-thr', st.throttle);
   _dhWidth('dh-brk', st.brake);
   _ldSet('dh-steer', (st.steerDeg >= 0 ? '+' : '') + st.steerDeg.toFixed(1) + '°');
+  _ldSet('dh-att', st.attitudeText || 'P +0.0° · R +0.0°');
+  _dhChip('dh-mu', st.muText || 'μ=1.00', st.isSlippery ? 'warn' : 'ok');
+  var muEl = document.getElementById('dh-mu');
+  if (muEl && st.isSlippery) muEl.classList.add('dh-mu-alert');
+
+  /* M5 规划场景/阶段徽章与 BEV 感知目标数 */
+  _ldSet('dh-scenario-stage', st.scenarioStageText || 'LANE_FOLLOW · CRUISE');
+  var bevEl = document.getElementById('dh-bev-count');
+  if (bevEl) {
+    if (st.bevText) {
+      bevEl.style.display = '';
+      bevEl.textContent = st.bevText;
+    } else {
+      bevEl.style.display = 'none';
+    }
+  }
 
   /* 前车 / TTC */
   _dhChip('dh-risk', st.risk.label, st.risk.tone);
@@ -3441,6 +3457,19 @@ window.flowboard = {
   doPause: doPause,
   toggleLaneDiag: toggleLaneDiag,
   toggleDriveHud: toggleDriveHud,
+  toggleVisLayer: function(layer, btn) {
+    if (typeof window !== 'undefined' && window.visApp && typeof window.visApp.setLayerVisibility === 'function') {
+      var current = typeof window.visApp.getLayerVisibility === 'function'
+        ? window.visApp.getLayerVisibility(layer)
+        : true;
+      var nextState = !current;
+      window.visApp.setLayerVisibility(layer, nextState);
+      if (btn) {
+        if (nextState) btn.classList.add('active');
+        else btn.classList.remove('active');
+      }
+    }
+  },
   refreshIncidentTrace: function() { fetchIncidentTrace(true); },
   clearFrames: clearFrames,
   resetView: resetView,

@@ -98,11 +98,13 @@ function buildGroundTexture() {
     }
   }
 
-  // ── 全局轻微噪点，避免色块生硬 ──
+  // ── 全局轻微噪点，避免色块生硬（确定性 PRNG，消除场景切换闪烁）──
   const imageData = ctx.getImageData(0, 0, size, size);
   const data = imageData.data;
+  let noiseSeed = 42;
   for (let i = 0; i < data.length; i += 4) {
-    const noise = (Math.random() - 0.5) * 12;
+    noiseSeed = (noiseSeed * 1664525 + 1013904223) >>> 0;
+    const noise = ((noiseSeed >>> 16) / 65535 - 0.5) * 12;
     data[i] = Math.max(0, Math.min(255, data[i] + noise));
     data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + noise));
     data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + noise));

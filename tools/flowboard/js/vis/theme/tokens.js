@@ -32,6 +32,13 @@ export const SCENE = {
   lineEmissiveWhite: 0x9fb8d8,
   lineEmissiveYellow: 0xffd700,
   srGroundTint: 0x39424d,
+  /* M5: 泊车车位、止轮器与路面摩擦系数贴花配色 */
+  parkingBox: 0x00e5ff,       // 目标车位框线（科技发光青）
+  parkingBoxYellow: 0xffd700, // 目标车位框线（发光黄）
+  stopperRubber: 0x222225,    // 橡胶止轮器主体（深黑橡胶）
+  stopperStripe: 0xffcc00,    // 止轮器黄色反光警示带
+  iceSurface: 0x80d8ff,       // 结冰路面贴花（冰蓝半透明）
+  wetSurface: 0x1e2630,       // 湿滑路面贴花（深灰水膜）
 };
 
 /* ── 车道诊断叠加层配色（诊断语义色，不参与 junction_markings 换肤锁定）──

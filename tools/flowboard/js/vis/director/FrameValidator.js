@@ -169,7 +169,52 @@ export function validateFrame(topoData) {
           msg: 'ego.lights 非 number: ' + _typeOf(e.lights) + '，回退 0（车灯不亮）',
         });
       }
+      if (e.pitch !== undefined && (typeof e.pitch !== 'number' || !isFinite(e.pitch))) {
+        warnings.push({
+          key: 'ego.pitch',
+          msg: 'ego.pitch 非 finite number: ' + _typeOf(e.pitch),
+        });
+      }
+      if (e.roll !== undefined && (typeof e.roll !== 'number' || !isFinite(e.roll))) {
+        warnings.push({
+          key: 'ego.roll',
+          msg: 'ego.roll 非 finite number: ' + _typeOf(e.roll),
+        });
+      }
+      if (e.mu_scale !== undefined && (typeof e.mu_scale !== 'number' || !isFinite(e.mu_scale))) {
+        warnings.push({
+          key: 'ego.mu_scale',
+          msg: 'ego.mu_scale 非 finite number: ' + _typeOf(e.mu_scale),
+        });
+      }
+      if (e.road_grade !== undefined && (typeof e.road_grade !== 'number' || !isFinite(e.road_grade))) {
+        warnings.push({
+          key: 'ego.road_grade',
+          msg: 'ego.road_grade 非 finite number: ' + _typeOf(e.road_grade),
+        });
+      }
     }
+  }
+
+  // M5: predictions / friction_zones / parking_goal schema 校验
+  if (frame.predictions !== undefined && !Array.isArray(frame.predictions)) {
+    warnings.push({
+      key: 'predictions.type',
+      msg: 'frame.predictions 非数组: ' + _typeOf(frame.predictions),
+    });
+  }
+  if (frame.friction_zones !== undefined && !Array.isArray(frame.friction_zones)) {
+    warnings.push({
+      key: 'friction_zones.type',
+      msg: 'frame.friction_zones 非数组: ' + _typeOf(frame.friction_zones),
+    });
+  }
+  if (frame.parking_goal !== undefined && frame.parking_goal !== null &&
+      (typeof frame.parking_goal !== 'object' || Array.isArray(frame.parking_goal))) {
+    warnings.push({
+      key: 'parking_goal.type',
+      msg: 'frame.parking_goal 非对象: ' + _typeOf(frame.parking_goal),
+    });
   }
 
   let skipEntities = false;
@@ -262,4 +307,143 @@ function _roadHeightAt(edges, px, py) {
     if (minDist <= halfWidth) break; // 已在道路范围内，不必继续
   }
   return resultZ;
+}
+
+/**
+ * M5: cleanEntity — 清洗并规范化单个实体字段（保留 6-DOF 姿态、路面坡度与摩擦系数）
+ * @param {object} e 原始实体对象
+ * @returns {object|null}
+ */
+export function cleanEntity(e) {
+  if (!e || typeof e !== 'object') return null;
+  const etype = e.type || 'car';
+  let defLen, defWid, defH;
+  switch (etype) {
+    case 'pedestrian': defLen = 0.5; defWid = 0.5; defH = 1.75; break;
+    case 'bicycle': case 'cyclist': case 'motorcycle': defLen = 1.8; defWid = 0.6; defH = 1.6; break;
+    case 'truck': case 'bus': defLen = 8.0; defWid = 2.5; defH = 4.0; break;
+    case 'suv': defLen = 4.7; defWid = 2.0; defH = 1.85; break;
+    case 'car': default: defLen = 4.6; defWid = 2.0; defH = 1.5; break;
+  }
+  const rawLen = e.length != null ? e.length : (e.len != null ? e.len : defLen);
+  const rawWid = e.width != null ? e.width : (e.wid != null ? e.wid : defWid);
+  const rawH   = e.height != null ? e.height : defH;
+  const evx = (typeof e.vx === 'number' && isFinite(e.vx)) ? e.vx : 0;
+  const evy = (typeof e.vy === 'number' && isFinite(e.vy)) ? e.vy : 0;
+  const speed = (typeof e.speed === 'number' && isFinite(e.speed))
+    ? e.speed
+    : ((typeof e.spd === 'number' && isFinite(e.spd)) ? e.spd : Math.hypot(evx, evy));
+
+  return {
+    id: e.id,
+    type: etype,
+    x: (typeof e.x === 'number' && isFinite(e.x)) ? e.x : 0,
+    y: (typeof e.y === 'number' && isFinite(e.y)) ? e.y : 0,
+    z: (typeof e.z === 'number' && isFinite(e.z)) ? e.z : 0,
+    pitch: (typeof e.pitch === 'number' && isFinite(e.pitch)) ? e.pitch : 0,
+    roll: (typeof e.roll === 'number' && isFinite(e.roll)) ? e.roll : 0,
+    mu_scale: (typeof e.mu_scale === 'number' && isFinite(e.mu_scale)) ? e.mu_scale : 1.0,
+    road_grade: (typeof e.road_grade === 'number' && isFinite(e.road_grade)) ? e.road_grade : 0,
+    heading: (typeof e.heading === 'number' && isFinite(e.heading))
+      ? e.heading
+      : ((typeof e.h === 'number' && isFinite(e.h)) ? e.h : 0),
+    speed,
+    steer: (typeof e.steer === 'number' && isFinite(e.steer)) ? e.steer : 0,
+    length: rawLen,
+    width: rawWid,
+    height: rawH,
+    ai_state: e.ai_state || e.ai || '',
+    lights: typeof e.lights === 'number' ? e.lights : 0,
+    vx: evx,
+    vy: evy,
+    throttle: (typeof e.throttle === 'number' && isFinite(e.throttle)) ? e.throttle : 0,
+    brake: (typeof e.brake === 'number' && isFinite(e.brake)) ? e.brake : 0,
+    state: e.state || '',
+    progress: (typeof e.progress === 'number' && isFinite(e.progress)) ? e.progress : 0,
+    remain_s: (typeof e.remain_s === 'number' && isFinite(e.remain_s)) ? e.remain_s : 0,
+    parked: !!e.parked,
+    stop_x: e.stop_x,
+    stop_y: e.stop_y,
+    lane_offset: e.lane_offset,
+  };
+}
+
+/**
+ * M5: validateSceneFrame — 校验并透传 predictions、friction_zones、parking_goal 等数据
+ * @param {*} raw 原始场景帧
+ * @returns {{ ok: boolean, clean?: object, frame?: object, rn?: object, warnings: Array }}
+ */
+export function validateSceneFrame(raw) {
+  const result = validateFrame(raw);
+  if (!result.ok || !result.frame) {
+    return { ok: false, clean: null, frame: null, warnings: result.warnings };
+  }
+  const frame = result.frame;
+  const warnings = [...result.warnings];
+
+  let predictions = [];
+  if (frame.predictions !== undefined) {
+    if (Array.isArray(frame.predictions)) {
+      predictions = frame.predictions;
+    } else {
+      warnings.push({
+        key: 'predictions.type',
+        msg: 'frame.predictions 非数组: ' + _typeOf(frame.predictions),
+      });
+    }
+  }
+
+  let friction_zones = [];
+  if (frame.friction_zones !== undefined) {
+    if (Array.isArray(frame.friction_zones)) {
+      friction_zones = frame.friction_zones;
+    } else {
+      warnings.push({
+        key: 'friction_zones.type',
+        msg: 'frame.friction_zones 非数组: ' + _typeOf(frame.friction_zones),
+      });
+    }
+  }
+
+  let parking_goal = null;
+  if (frame.parking_goal !== undefined) {
+    if (frame.parking_goal === null || (typeof frame.parking_goal === 'object' && !Array.isArray(frame.parking_goal))) {
+      parking_goal = frame.parking_goal;
+    } else {
+      warnings.push({
+        key: 'parking_goal.type',
+        msg: 'frame.parking_goal 非对象: ' + _typeOf(frame.parking_goal),
+      });
+    }
+  }
+
+  let cleanEgo = null;
+  if (frame.ego && typeof frame.ego === 'object') {
+    cleanEgo = {
+      ...frame.ego,
+      pitch: (typeof frame.ego.pitch === 'number' && isFinite(frame.ego.pitch)) ? frame.ego.pitch : 0,
+      roll: (typeof frame.ego.roll === 'number' && isFinite(frame.ego.roll)) ? frame.ego.roll : 0,
+      mu_scale: (typeof frame.ego.mu_scale === 'number' && isFinite(frame.ego.mu_scale)) ? frame.ego.mu_scale : 1.0,
+      road_grade: (typeof frame.ego.road_grade === 'number' && isFinite(frame.ego.road_grade)) ? frame.ego.road_grade : 0,
+    };
+  }
+
+  const clean = {
+    ...frame,
+    ego: cleanEgo,
+    predictions,
+    friction_zones,
+    parking_goal,
+  };
+
+  return {
+    ok: true,
+    clean,
+    frame,
+    rn: result.rn,
+    skipRoad: result.skipRoad,
+    skipEgo: result.skipEgo,
+    skipEntities: result.skipEntities,
+    warnings,
+  };
 }

@@ -233,8 +233,21 @@ body[data-workspace="perf"] .ws-observe-analyze{display:none!important}
 #drive-hud .dh-chip.tone-warn{background:#4d2a0a;border-color:#d2992288;color:#ffa94d}
 #drive-hud .dh-chip.tone-bad{background:#5a1616;border-color:#f85149;color:#ffdcd7}
 #drive-hud .dh-chip.tone-idle{background:#161b22;border-color:#30363d;color:#6e7681}
-#drive-hud .dh-pedals{display:grid;grid-template-columns:auto 70px auto 70px auto auto;align-items:center;gap:4px 7px;font-size:10px}
+#drive-hud .dh-pedals{display:grid;grid-template-columns:auto 60px auto 60px auto auto auto auto auto;align-items:center;gap:3px 6px;font-size:10px}
 #drive-hud .dh-pedals b,#drive-hud .dh-lead-grid b{color:#f0f6fc;font:700 11px 'JetBrains Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
+
+/* ── SR 世界模型图层开关栏 ── */
+#vis-layer-bar{position:absolute;top:10px;right:10px;z-index:25;display:flex;align-items:center;gap:5px;padding:4px 6px;border-radius:18px;background:rgba(13,17,23,.75);border:1px solid rgba(48,54,61,.8);backdrop-filter:blur(10px);box-shadow:0 4px 16px #0006}
+.vis-layer-btn{border:1px solid #30363d;background:rgba(33,38,45,.6);color:#8b949e;padding:3px 9px;border-radius:12px;cursor:pointer;font:600 11px/1.4 system-ui,-apple-system,sans-serif;transition:all .2s ease;user-select:none}
+.vis-layer-btn:hover{color:#f0f6fc;border-color:#58a6ff}
+.vis-layer-btn.active{background:rgba(31,111,235,.35);border-color:#58a6ff;color:#58a6ff;box-shadow:0 0 8px rgba(88,166,255,.35)}
+
+/* ── M5 驾驶舱 HUD 姿态与附着系数微仪表 ── */
+#dh-att{color:#79c0ff;font:700 11px/1 'JetBrains Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums;white-space:nowrap}
+#dh-mu{font:700 10px/1 'JetBrains Mono',ui-monospace,monospace;padding:2px 6px;font-variant-numeric:tabular-nums}
+#dh-mu.dh-mu-alert{background:#4d2a0a;border-color:#d29922;color:#ffa94d;box-shadow:0 0 8px rgba(210,153,34,.5)}
+#dh-scenario-stage{color:#bc8cff;border-color:rgba(188,140,255,.3);font-size:10px}
+#dh-bev-count{color:#7ee787;border-color:rgba(126,231,135,.3);font-size:10px}
 #drive-hud .dh-lead{min-width:170px}
 #drive-hud .dh-lead-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
 #drive-hud .dh-lead-grid{display:grid;grid-template-columns:auto 1fr auto 1fr auto auto;gap:2px 6px;align-items:baseline;font-size:10px}

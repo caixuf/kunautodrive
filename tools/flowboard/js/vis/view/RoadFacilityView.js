@@ -14,6 +14,7 @@ import {
   distanceENU, forwardENU, headingBetweenPoints, headingToRotationY,
   tangentToNormal, worldToThree,
 } from '../math/Coord.js';
+import { SCENE } from '../theme/tokens.js';
 
 const PAINT_Y = 0.155;
 const PAINT_H = 0.018;
@@ -263,19 +264,202 @@ export function createRoadFacilityView(scene) {
   const group = new THREE.Group();
   group.name = 'roadFacilities';
   scene.add(group);
+
+  const staticGroup = new THREE.Group();
+  staticGroup.name = 'staticFacilities';
+  group.add(staticGroup);
+
+  const parkingGoalGroup = new THREE.Group();
+  parkingGoalGroup.name = 'parkingGoal';
+  group.add(parkingGoalGroup);
+
+  const frictionZonesGroup = new THREE.Group();
+  frictionZonesGroup.name = 'frictionZones';
+  group.add(frictionZonesGroup);
+
   let lastSignature = '';
+  let lastParkingSig = '';
+  let lastFrictionSig = '';
+  let parkingPulseTime = 0;
+  let parkingPulseMesh = null;
+  let lastNow = 0;
   let stats = { marks: 0, poles: 0, parkingBays: 0, stopLines: 0, crosswalks: 0, arrows: 0 };
 
-  function clear() {
-    while (group.children.length) {
-      const child = group.children[0];
-      group.remove(child);
+  function disposeGroup(targetGroup) {
+    while (targetGroup.children.length) {
+      const child = targetGroup.children[0];
+      targetGroup.remove(child);
+      if (child.children && child.children.length > 0) {
+        disposeGroup(child);
+      }
       child.geometry?.dispose?.();
-      child.material?.dispose?.();
+      if (Array.isArray(child.material)) {
+        child.material.forEach(m => m?.dispose?.());
+      } else {
+        child.material?.dispose?.();
+      }
     }
   }
 
-  function update(store) {
+  function clear() {
+    disposeGroup(staticGroup);
+    disposeGroup(parkingGoalGroup);
+    disposeGroup(frictionZonesGroup);
+    lastSignature = '';
+    lastParkingSig = '';
+    lastFrictionSig = '';
+    parkingPulseMesh = null;
+  }
+
+  function _syncParkingGoal(store, dt = 0.016) {
+    const goal = store.parkingGoal;
+    if (!goal || !goal.enabled) {
+      parkingGoalGroup.visible = false;
+      return;
+    }
+    parkingGoalGroup.visible = true;
+
+    const gx = Number(goal.x) || 0;
+    const gy = Number(goal.y) || 0;
+    const gHeading = Number(goal.heading) || 0;
+    const gWidth = Number(goal.width) || 2.4;
+    const gLength = Number(goal.length) || 5.3;
+
+    const sig = `${gx.toFixed(2)}:${gy.toFixed(2)}:${gHeading.toFixed(3)}:${gWidth.toFixed(2)}:${gLength.toFixed(2)}`;
+    if (sig !== lastParkingSig) {
+      lastParkingSig = sig;
+      disposeGroup(parkingGoalGroup);
+
+      const anchor = new THREE.Group();
+      const [ax, ay, az] = worldToThree(gx, gy, PAINT_Y + 0.005);
+      anchor.position.set(ax, ay, az); // Coord.worldToThree
+      anchor.rotation.y = headingToRotationY(gHeading);
+
+      // 1. 发光车位框线（左右长边 + 后沿短边 + 前沿开口引导）
+      const boxMat = new THREE.MeshBasicMaterial({
+        color: SCENE.parkingBox,
+        transparent: true,
+        opacity: 0.9,
+      });
+      const sideGeom = new THREE.BoxGeometry(gLength, 0.01, LINE_W);
+      const endGeom = new THREE.BoxGeometry(LINE_W, 0.01, gWidth);
+
+      // 左侧边线
+      const leftLine = new THREE.Mesh(sideGeom, boxMat);
+      leftLine.position.set(0, 0, gWidth * 0.5);
+      anchor.add(leftLine);
+
+      // 右侧边线
+      const rightLine = new THREE.Mesh(sideGeom, boxMat);
+      rightLine.position.set(0, 0, -gWidth * 0.5);
+      anchor.add(rightLine);
+
+      // 后沿限位线
+      const rearLine = new THREE.Mesh(endGeom, boxMat);
+      rearLine.position.set(-gLength * 0.5, 0, 0);
+      anchor.add(rearLine);
+
+      // 2. 橡胶止轮器（Wheel Stopper）位于车位后沿，黄黑相间
+      const stopperGroup = new THREE.Group();
+      const stopperLen = 0.16;
+      const stopperH = 0.11;
+      const stopperW = gWidth * 0.72;
+      const rubberMat = new THREE.MeshStandardMaterial({
+        color: SCENE.stopperRubber,
+        roughness: 0.85,
+        metalness: 0.1,
+      });
+      const stopperBody = new THREE.Mesh(
+        new THREE.BoxGeometry(stopperLen, stopperH, stopperW),
+        rubberMat
+      );
+      stopperBody.position.set(0, stopperH * 0.5, 0);
+      stopperGroup.add(stopperBody);
+
+      // 两道反光警示黄带
+      const stripeMat = new THREE.MeshBasicMaterial({ color: SCENE.stopperStripe });
+      const stripeGeom = new THREE.BoxGeometry(stopperLen + 0.004, stopperH + 0.004, 0.18);
+      const stripeL = new THREE.Mesh(stripeGeom, stripeMat);
+      stripeL.position.set(0, stopperH * 0.5, -stopperW * 0.25);
+      const stripeR = new THREE.Mesh(stripeGeom, stripeMat);
+      stripeR.position.set(0, stopperH * 0.5, stopperW * 0.25);
+      stopperGroup.add(stripeL);
+      stopperGroup.add(stripeR);
+
+      stopperGroup.position.set(-gLength * 0.5 + 0.65, 0, 0);
+      anchor.add(stopperGroup);
+
+      // 3. 呼吸脉冲入库引导面
+      const pulseGeom = new THREE.BoxGeometry(gLength * 0.96, 0.004, gWidth * 0.94);
+      const pulseMat = new THREE.MeshBasicMaterial({
+        color: SCENE.parkingBox,
+        transparent: true,
+        opacity: 0.28,
+        depthWrite: false,
+      });
+      parkingPulseMesh = new THREE.Mesh(pulseGeom, pulseMat);
+      parkingPulseMesh.position.set(0, 0.002, 0);
+      anchor.add(parkingPulseMesh);
+
+      parkingGoalGroup.add(anchor);
+    }
+
+    parkingPulseTime += dt;
+    if (parkingPulseMesh && parkingPulseMesh.material) {
+      const pulse = 0.22 + 0.14 * Math.sin(parkingPulseTime * 3.2); // exempt: breathing pulse animation
+      parkingPulseMesh.material.opacity = pulse;
+    }
+  }
+
+  function _syncFrictionZones(store) {
+    const zones = Array.isArray(store.frictionZones) ? store.frictionZones : [];
+    if (zones.length === 0) {
+      frictionZonesGroup.visible = false;
+      return;
+    }
+    frictionZonesGroup.visible = true;
+
+    const sig = zones.map(z =>
+      `${z.x_min}:${z.x_max}:${z.y_min}:${z.y_max}:${z.surface || 'wet'}`).join(';');
+    if (sig === lastFrictionSig) return;
+    lastFrictionSig = sig;
+    disposeGroup(frictionZonesGroup);
+
+    zones.forEach((z) => {
+      const xMin = Number(z.x_min) || 0;
+      const xMax = Number(z.x_max) || 0;
+      const yMin = Number(z.y_min) || 0;
+      const yMax = Number(z.y_max) || 0;
+      const cx = (xMin + xMax) * 0.5;
+      const cy = (yMin + yMax) * 0.5;
+      const lenX = Math.max(0.1, Math.abs(xMax - xMin));
+      const lenY = Math.max(0.1, Math.abs(yMax - yMin));
+
+      const isIce = (z.surface === 'ice');
+      const mat = new THREE.MeshStandardMaterial({
+        color: isIce ? SCENE.iceSurface : SCENE.wetSurface,
+        transparent: true,
+        opacity: isIce ? 0.65 : 0.55,
+        roughness: isIce ? 0.10 : 0.16,
+        metalness: isIce ? 0.20 : 0.08,
+      });
+      const geom = new THREE.BoxGeometry(lenX, 0.008, lenY);
+      const mesh = new THREE.Mesh(geom, mat);
+      const [tx, ty, tz] = worldToThree(cx, cy, 0.12);
+      mesh.position.set(tx, ty, tz); // Coord.worldToThree
+      frictionZonesGroup.add(mesh);
+    });
+  }
+
+  function update(store, now = 0) {
+    const dt = lastNow ? Math.min(0.1, Math.max(0.001, (now - lastNow) / 1000)) : 0.016;
+    lastNow = now;
+
+    // 1. 同步泊车目标与路面摩擦系数区域
+    _syncParkingGoal(store, dt);
+    _syncFrictionZones(store);
+
+    // 2. 静态标线与设施
     const entities = store.entities || [];
     const fixed = entities.filter(e =>
       e && (e.type === 'tl' || e.type === 'traffic_light' ||
@@ -286,7 +470,7 @@ export function createRoadFacilityView(scene) {
       `${Math.round((e.heading || 0) * 10)}`).join(',');
     if (signature === lastSignature) return;
     lastSignature = signature;
-    clear();
+    disposeGroup(staticGroup);
 
     const layout = inferRoadFacilities(store.roadNetwork, fixed, store.scenarioName);
     stats = {
@@ -314,7 +498,7 @@ export function createRoadFacilityView(scene) {
       });
       mesh.instanceMatrix.needsUpdate = true;
       mesh.receiveShadow = true;
-      group.add(mesh);
+      staticGroup.add(mesh);
     }
 
     if (layout.poles.length) {
@@ -331,7 +515,7 @@ export function createRoadFacilityView(scene) {
         mesh.setMatrixAt(index, dummy.matrix);
       });
       mesh.instanceMatrix.needsUpdate = true;
-      group.add(mesh);
+      staticGroup.add(mesh);
     }
   }
 

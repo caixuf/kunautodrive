@@ -192,6 +192,8 @@ export function createRoadView(scene) {
    * real 风 emissiveIntensity=0（不发光，保持写实）；SR/BEV 风抬高配合 Bloom 辉光。 */
   let _whiteLineMat = null;
   let _yellowLineMat = null;
+  let _asphaltMat = null;
+  let _rampMat = null;
 
   // 确保纹理已生成
   _buildAsphaltTextures();
@@ -1247,6 +1249,7 @@ export function createRoadView(scene) {
         metalness: 0.02,
         side: THREE.DoubleSide,
       });
+      _asphaltMat = mat;
       addMergedByTile(roadGeos, mat);
     }
 
@@ -1261,6 +1264,7 @@ export function createRoadView(scene) {
         metalness: 0.02,
         side: THREE.DoubleSide,
       });
+      _rampMat = mat;
       addMergedByTile(rampGeos, mat);
     }
 
@@ -1341,5 +1345,21 @@ export function createRoadView(scene) {
     if (_yellowLineMat) _yellowLineMat.emissiveIntensity = yellowI;
   }
 
-  return { build, getRoadGroup, isBuilt, getStats, setMarkingEmissive };
+  /** M5: 根据天气（雨/雪）动态调整路面粗糙度与高光反射 */
+  function update(store) {
+    if (!store || !store.env) return;
+    const weather = store.env.weather;
+    if (weather === 'rain' || weather === 'storm') {
+      if (_asphaltMat) { _asphaltMat.roughness = 0.32; _asphaltMat.metalness = 0.08; }
+      if (_rampMat) { _rampMat.roughness = 0.32; _rampMat.metalness = 0.08; }
+    } else if (weather === 'snow') {
+      if (_asphaltMat) { _asphaltMat.roughness = 0.65; _asphaltMat.metalness = 0.05; }
+      if (_rampMat) { _rampMat.roughness = 0.65; _rampMat.metalness = 0.05; }
+    } else {
+      if (_asphaltMat) { _asphaltMat.roughness = 0.88; _asphaltMat.metalness = 0.02; }
+      if (_rampMat) { _rampMat.roughness = 0.85; _rampMat.metalness = 0.02; }
+    }
+  }
+
+  return { build, update, getRoadGroup, isBuilt, getStats, setMarkingEmissive };
 }

@@ -780,4 +780,26 @@ export function toggleMinimap() {
   return _minimap.isVisible();
 }
 
+/** M5: 设置 SR 世界模型图层可见性 */
+export function setLayerVisibility(key, val) {
+  if (_director) {
+    _director.setLayerVisibility(key, val);
+  }
+}
+
+/** M5: 获取 SR 世界模型图层可见性 */
+export function getLayerVisibility(key) {
+  if (_director) {
+    const store = _director.getStore();
+    return store && store.layerVisibility ? store.layerVisibility[key] : true;
+  }
+  return true;
+}
+
+if (typeof window !== 'undefined') {
+  window.visApp = window.visApp || {};
+  window.visApp.setLayerVisibility = setLayerVisibility;
+  window.visApp.getLayerVisibility = getLayerVisibility;
+}
+
 export { initWorkerBridge, processTopologyAsync, isWorkerSupported };

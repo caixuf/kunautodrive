@@ -52,3 +52,13 @@ export function deriveLightState(mask, brake, env) {
     fog: hasFog,
   };
 }
+
+/** 判断是否触发急刹车高频双闪（GB 标准：brake > 0.6） */
+export function isEmergencyBrake(brake) {
+  return (Number(brake) || 0) > 0.6;
+}
+
+/** 判断是否触发倒车白灯（负速度、倒挡或 LIGHT_REVERSE 掩码） */
+export function isReverseLight(speed, gear, mask) {
+  return (Number(speed) < -0.1) || (gear === 'R') || (gear === -1) || !(!((mask || 0) & LIGHT_REVERSE));
+}
