@@ -108,3 +108,79 @@ size_t bev_pre_rasterize(const BevPreConfig* cfg,
     (void)res_x; /* 保留公式，目前 bbox 单格代表 */
     return total;
 }
+
+size_t bev_pre_rasterize_sensors(const BevPreConfig* cfg,
+                                 const BevSensorInput* input,
+                                 float* feat) {
+    if (!cfg || !feat || cfg->w <= 0 || cfg->h <= 0) return 0;
+    const int W = cfg->w, H = cfg->h;
+    const size_t total = 6 * (size_t)H * (size_t)W;
+    memset(feat, 0, total * sizeof(float));
+
+    if (!input || !input->points || input->n_points <= 0) return total;
+
+    const double res_x = (2.0 * cfg->range_x) / W;
+    const double res_y = (2.0 * cfg->range_y_half) / H;
+
+    for (int i = 0; i < input->n_points; ++i) {
+        const BevSensorPoint* p = &input->points[i];
+        int ix, iy;
+        if (!project_cell(cfg, (double)p->x, (double)p->y, &ix, &iy)) continue;
+
+        /* ch0: 占据响应（每命中一采样点累加 0.25，饱和至 1.0） */
+        size_t i0 = idx(cfg, 0, iy, ix);
+        if (feat[i0] < 1.0f) {
+            feat[i0] = fminf(1.0f, feat[i0] + 0.25f);
+        }
+
+        /* ch1: 强度与归一化高度响应（[-2.0, +2.0]m 线性映射至 [0, 1]） */
+        size_t i1 = idx(cfg, 1, iy, ix);
+        float norm_z = (p->z + 2.0f) / 4.0f;
+        if (norm_z < 0.0f) norm_z = 0.0f;
+        if (norm_z > 1.0f) norm_z = 1.0f;
+        float val1 = 0.5f * (p->intensity + norm_z);
+        if (val1 > feat[i1]) feat[i1] = val1;
+
+        /* ch2: 相机前向锥能见度响应（x > 0 且 |y| <= 1.732 * x） */
+        size_t i2 = idx(cfg, 2, iy, ix);
+        if (p->x > 0.0f && fabsf(p->y) <= p->x * 1.7320508f) {
+            float dist = sqrtf(p->x * p->x + p->y * p->y);
+            float cam_vis = input->camera_visibility * (1.0f - dist / 70.0f);
+            if (cam_vis < 0.0f) cam_vis = 0.0f;
+            if (cam_vis > feat[i2]) feat[i2] = cam_vis;
+        }
+
+        /* ch3: 纵向运动/速度先验 */
+        size_t i3 = idx(cfg, 3, iy, ix);
+        float v_norm = fabsf(input->ego_speed) / (float)(cfg->v_scale > 0 ? cfg->v_scale : 30.0);
+        if (v_norm > 1.0f) v_norm = 1.0f;
+        if (v_norm > feat[i3]) feat[i3] = v_norm;
+
+        /* ch4: 横向位置线索 */
+        size_t i4 = idx(cfg, 4, iy, ix);
+        float lat_norm = 1.0f - fabsf(p->y) / (float)cfg->range_y_half;
+        if (lat_norm < 0.0f) lat_norm = 0.0f;
+        if (lat_norm > feat[i4]) feat[i4] = lat_norm;
+    }
+
+    /* ch5: 局部 3x3 邻域平滑先验（ch0 的 3x3 均值，为 CNN 提供空间渐变先验） */
+    for (int r = 0; r < H; ++r) {
+        for (int c = 0; c < W; ++c) {
+            float sum = 0.0f;
+            for (int dr = -1; dr <= 1; ++dr) {
+                int nr = r + dr;
+                if (nr < 0) nr = 0; else if (nr >= H) nr = H - 1;
+                for (int dc = -1; dc <= 1; ++dc) {
+                    int nc = c + dc;
+                    if (nc < 0) nc = 0; else if (nc >= W) nc = W - 1;
+                    sum += feat[idx(cfg, 0, nr, nc)];
+                }
+            }
+            feat[idx(cfg, 5, r, c)] = sum / 9.0f;
+        }
+    }
+
+    (void)res_x;
+    (void)res_y;
+    return total;
+}

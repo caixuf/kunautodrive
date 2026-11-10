@@ -39,7 +39,7 @@
     {
       "id": 1,
       "type": "car",
-      "x": 45.0,
+      "x": 52.0,
       "y": -1.75,
       "vx": 0.0,
       "vy": 0.0,
@@ -49,7 +49,7 @@
     {
       "id": 2,
       "type": "car",
-      "x": 55.0,
+      "x": 60.0,
       "y": -5.25,
       "vx": 0.0,
       "vy": 0.0,
@@ -59,7 +59,7 @@
     {
       "id": 3,
       "type": "pedestrian",
-      "x": 72.0,
+      "x": 70.0,
       "y": -1.75,
       "vx": 0.0,
       "vy": 0.0,
@@ -70,7 +70,8 @@
   "traffic_lights": [],
   "pass_criteria": {
     "no_collision": true,
-    "max_duration_s": 15.0
+    "max_duration_s": 15.0,
+    "min_avg_speed_mps": 1.0
   },
   "route": [],
   "scenarios": []

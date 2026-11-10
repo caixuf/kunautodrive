@@ -377,7 +377,10 @@
       "subscribe": [
         "vehicle/state",
         "road/geometry",
-        "model_ota/active"
+        "model_ota/active",
+        "sensor/lidar",
+        "sensor/lidar_points",
+        "sensor/camera"
       ],
       "publish": [
         {
@@ -389,7 +392,7 @@
           }
         }
       ],
-      "params": "{\"frequency_hz\":10.0,\"enable\":true,\"model_path\":\"\"}"
+      "params": "{\"frequency_hz\":10.0,\"enable\":true,\"model_path\":\"models/bev_centernet_v1.bin\",\"use_sensor_input\":true}"
     },
     {
       "name": "data_recorder",

@@ -82,6 +82,41 @@ size_t bev_pre_rasterize(const BevPreConfig* cfg,
                          const BevPreObs* obs, int n_obs,
                          float* feat);
 
+/* 传感器输入点（车体系：x 前、y 左、z 上） */
+typedef struct BevSensorPoint {
+    float x;
+    float y;
+    float z;
+    float intensity;
+} BevSensorPoint;
+
+/* 真实传感器多模态输入包 */
+typedef struct BevSensorInput {
+    const BevSensorPoint* points;
+    int                   n_points;
+    float                 lidar_intensity;     /* 来自 sensor/lidar LidarFrame */
+    float                 camera_visibility;   /* 来自 sensor/camera LidarFrame */
+    float                 ego_speed;           /* 自车速度 m/s */
+} BevSensorInput;
+
+/**
+ * 多模态带噪传感器 BEV 栅格化（6 通道 [1, 6, H, W]）：
+ *   ch0: 占据响应（点数饱和至 1.0）
+ *   ch1: 强度与归一化高度响应
+ *   ch2: 相机视场与能见度响应
+ *   ch3: 纵向运动/速度先验（基于自车速度归一化）
+ *   ch4: 横向位置线索（车道横向偏离权重）
+ *   ch5: 局部 3x3 邻域平滑先验（引导 CNN 感受野）
+ *
+ * @param cfg    栅格参数（H=88, W=88, range_x=60.0, range_y_half=20.0）
+ * @param input  传感器输入
+ * @param feat   输出浮点张量，大小至少 6 * H * W
+ * @return 实际写入的 float 个数（6 * H * W）；非法输入返回 0
+ */
+size_t bev_pre_rasterize_sensors(const BevPreConfig* cfg,
+                                 const BevSensorInput* input,
+                                 float* feat);
+
 #ifdef __cplusplus
 }
 #endif

@@ -143,7 +143,7 @@
           }
         }
       ],
-      "params": "{\"lidar_rate_hz\":20,\"lidar_fov_deg\":120.0,\"lidar_max_range_m\":60.0,\"obs_noise_std_m\":0.08,\"enable_simple_occlusion\":1,\"enable_radar\":0,\"radar_max_range_m\":200.0,\"radar_fov_deg\":90.0,\"radar_rate_hz\":20.0}"
+      "params": "{\"lidar_rate_hz\":20,\"lidar_fov_deg\":120.0,\"lidar_max_range_m\":60.0,\"obs_noise_std_m\":0.08,\"enable_simple_occlusion\":1,\"lidar_mode\":1,\"enable_radar\":0,\"radar_max_range_m\":200.0,\"radar_fov_deg\":90.0,\"radar_rate_hz\":20.0}"
     },
     {
       "name": "perception",
@@ -375,7 +375,10 @@
       "subscribe": [
         "vehicle/state",
         "road/geometry",
-        "model_ota/active"
+        "model_ota/active",
+        "sensor/lidar",
+        "sensor/lidar_points",
+        "sensor/camera"
       ],
       "publish": [
         {
@@ -387,7 +390,7 @@
           }
         }
       ],
-      "params": "{\"frequency_hz\":10.0,\"enable\":true,\"model_path\":\"\"}"
+      "params": "{\"frequency_hz\":10.0,\"enable\":true,\"model_path\":\"models/bev_centernet_v1.bin\",\"use_sensor_input\":true}"
     },
     {
       "name": "data_recorder",

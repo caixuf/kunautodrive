@@ -44,8 +44,10 @@
 #include "coroutine_task.h"
 #include "clock_service.h"
 #include "bev_onnx_backend.h"
+#include "bev_cnn_native.h"
 #include "bev_pre.h"
 #include "bev_post.h"
+#include "serializer.h"
 #undef LOG_TRACE
 #undef LOG_DEBUG
 #undef LOG_INFO
@@ -73,12 +75,24 @@ struct BevDetectionContext {
     ReflectiveStateMachine sm{};
 
     /* BEV 检测头（可选）。未加载/未编译 ORT 时 loaded=0 → 真值直通回退。 */
+    BevCnnModel     cnn_model{};
     BevOnnxBackend  onnx{};
     pthread_mutex_t model_mutex{};
     char    model_path[256]{};
 
+    int     use_sensor_input{0};
     int     enable_shadow{1};   /* 1=发布 bev/obstacles shadow 输出 */
     double  cfg_frequency_hz{10.0};
+
+    /* 真实传感器输入缓存（静态缓冲，避免 41KB LidarPointCloud 进回调栈/协程帧） */
+    pthread_mutex_t sensor_mutex = PTHREAD_MUTEX_INITIALIZER;
+    LidarPointCloud cloud{};
+    BevSensorPoint  sensor_pts[2048]{};
+    uint32_t        cloud_seq{0};
+    LidarFrame      lidar_frame{};
+    int             has_lidar_frame{0};
+    LidarFrame      camera_frame{};
+    int             has_camera_frame{0};
 
     /* OTA 热重载：model_ota/active 收到 "reload" 信号时置 1 */
     volatile int reload_flag{0};
@@ -199,6 +213,42 @@ static void on_model_ota_active(const Message* msg, void* user_data) {
     }
 }
 
+static void on_sensor_lidar(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg || msg->data_size == 0) return;
+    const uint8_t* data = (const uint8_t*)message_bus_message_data(msg);
+    if (!data) return;
+    LidarFrame tmp;
+    if (LidarFrame_deserialize(&tmp, data, msg->data_size) == 0) {
+        g.lidar_frame = tmp;
+        g.has_lidar_frame = 1;
+    }
+}
+
+static void on_lidar_points(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg || msg->data_size == 0) return;
+    const uint8_t* data = (const uint8_t*)message_bus_message_data(msg);
+    if (!data) return;
+    pthread_mutex_lock(&g.sensor_mutex);
+    if (LidarPointCloud_deserialize(&g.cloud, data, msg->data_size) == 0) {
+        g.cloud_seq++;
+    }
+    pthread_mutex_unlock(&g.sensor_mutex);
+}
+
+static void on_sensor_camera(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg || msg->data_size == 0) return;
+    const uint8_t* data = (const uint8_t*)message_bus_message_data(msg);
+    if (!data) return;
+    LidarFrame tmp;
+    if (LidarFrame_deserialize(&tmp, data, msg->data_size) == 0) {
+        g.camera_frame = tmp;
+        g.has_camera_frame = 1;
+    }
+}
+
 /* ── 解码：模型输出 → BevPostDet[] ───────────────────────────── */
 
 /*
@@ -315,39 +365,81 @@ protected:
             if (g.reload_flag) {
                 g.reload_flag = 0;
                 pthread_mutex_lock(&g.model_mutex);
-                BevOnnxBackend nb{};
-                if (bev_onnx_backend_load(&nb, g.model_path) == 0) {
-                    bev_onnx_backend_free(&g.onnx);
-                    g.onnx = nb;
-                    g.reload_count++;
-                    LOG_INFO("bev_detection", "OTA hot-reload #%d ONNX from %s",
-                             g.reload_count, g.model_path);
-                } else {
-                    bev_onnx_backend_free(&nb);
-                    LOG_WARN("bev_detection", "OTA ONNX hot-reload failed: %s", g.model_path);
+                if (strstr(g.model_path, ".bin")) {
+                    BevCnnModel nb{};
+                    if (bev_cnn_load(&nb, g.model_path) == 0) {
+                        bev_cnn_free(&g.cnn_model);
+                        g.cnn_model = nb;
+                        g.reload_count++;
+                        LOG_INFO("bev_detection", "OTA hot-reload #%d BIN from %s",
+                                 g.reload_count, g.model_path);
+                    } else {
+                        bev_cnn_free(&nb);
+                        LOG_WARN("bev_detection", "OTA BIN hot-reload failed: %s", g.model_path);
+                    }
+                } else if (strstr(g.model_path, ".onnx")) {
+                    BevOnnxBackend nb{};
+                    if (bev_onnx_backend_load(&nb, g.model_path) == 0) {
+                        bev_onnx_backend_free(&g.onnx);
+                        g.onnx = nb;
+                        g.reload_count++;
+                        LOG_INFO("bev_detection", "OTA hot-reload #%d ONNX from %s",
+                                 g.reload_count, g.model_path);
+                    } else {
+                        bev_onnx_backend_free(&nb);
+                        LOG_WARN("bev_detection", "OTA ONNX hot-reload failed: %s", g.model_path);
+                    }
                 }
                 pthread_mutex_unlock(&g.model_mutex);
             }
 
-            if (!g.has_ego) continue;
+            if (!g.has_ego && !g.has_lidar_frame) continue;
 
-            /* ── 1) 前处理：真值 → NCHW 特征图 ── */
-            size_t n_f = bev_pre_rasterize(&g.precfg, g.ego_x, g.ego_y, g.ego_heading,
-                                           g.obs, g.n_obs, g.feat);
-            if (n_f != g.feat_elems) {
-                LOG_ERROR("bev_detection", "rasterize elems mismatch (%zu != %zu)", n_f, g.feat_elems);
-                continue;
+            /* ── 1) 前处理：传感器/真值 → NCHW 特征图 ── */
+            if (g.use_sensor_input) {
+                int n_pts = 0;
+                pthread_mutex_lock(&g.sensor_mutex);
+                n_pts = (int)g.cloud.count;
+                if (n_pts > 2048) n_pts = 2048;
+                for (int i = 0; i < n_pts; ++i) {
+                    g.sensor_pts[i].x = g.cloud.points[i].x;
+                    g.sensor_pts[i].y = g.cloud.points[i].y;
+                    g.sensor_pts[i].z = g.cloud.points[i].z;
+                    g.sensor_pts[i].intensity = g.cloud.points[i].intensity;
+                }
+                pthread_mutex_unlock(&g.sensor_mutex);
+
+                BevSensorInput sin{};
+                sin.points = g.sensor_pts;
+                sin.n_points = n_pts;
+                sin.lidar_intensity = g.has_lidar_frame ? g.lidar_frame.intensity : 0.85f;
+                sin.camera_visibility = g.has_camera_frame ? (g.camera_frame.intensity / 0.5f) : 1.0f;
+                sin.ego_speed = (float)g.ego_speed;
+
+                bev_pre_rasterize_sensors(&g.precfg, &sin, g.feat);
+            } else {
+                size_t n_f = bev_pre_rasterize(&g.precfg, g.ego_x, g.ego_y, g.ego_heading,
+                                               g.obs, g.n_obs, g.feat);
+                if (n_f != g.feat_elems) {
+                    LOG_ERROR("bev_detection", "rasterize elems mismatch (%zu != %zu)", n_f, g.feat_elems);
+                    continue;
+                }
             }
 
             /* ── 2) 模型前向（若加载）→ 解码；否则真值直通 ── */
-            int loaded = 0;
-            pthread_mutex_lock(&g.model_mutex);
-            loaded = g.onnx.loaded;
-            pthread_mutex_unlock(&g.model_mutex);
-
             if (g.enable_shadow) {
-                int use_model = loaded && (g.onnx.n_out >= 1);
-                if (use_model) {
+                pthread_mutex_lock(&g.model_mutex);
+                int has_cnn = g.cnn_model.loaded;
+                int has_onnx = g.onnx.loaded && (g.onnx.n_out >= 1);
+                if (has_cnn) {
+                    if (bev_cnn_forward(&g.cnn_model, g.feat, g.out_buf) == 0) {
+                        g.n_dets = bev_cnn_decode(&g.cnn_model, g.out_buf, &g.precfg,
+                                                  g.ego_heading, g.ego_y,
+                                                  g.dets, BEV_POST_MAX_DET);
+                    } else {
+                        g.n_dets = 0;
+                    }
+                } else if (has_onnx) {
                     float* in_bufs[BEV_ONNX_MAX_IN]  = { g.feat };
                     const int64_t in_shape[4] = { 1, g.precfg.channels, g.precfg.h, g.precfg.w };
                     const int64_t* in_shp[BEV_ONNX_MAX_IN] = { in_shape };
@@ -360,25 +452,29 @@ protected:
                     int n_out = bev_onnx_backend_forward(&g.onnx, in_bufs, in_shp, in_rk, out_seq);
                     if (n_out >= 1) {
                         decode_heatmap(&g.onnx, out_seq);
-                    } else {
+                    } else if (!g.use_sensor_input) {
                         decode_passthrough();  /* 前向失败 → 安全回退真值基线 */
+                    } else {
+                        g.n_dets = 0;
                     }
-                } else {
+                } else if (!g.use_sensor_input) {
                     decode_passthrough();
+                } else {
+                    g.n_dets = 0;
                 }
+                pthread_mutex_unlock(&g.model_mutex);
 
-                /* ── 3) 后处理：解码目标 → ObstacleList（老协议）── */
-                ObstacleList list;
-                memset(&list, 0, sizeof(list));
-                bev_post_to_obstacle_list(&list, g.dets, g.n_dets, g.frame_id,
+                /* ── 3) 后处理：解码目标 → ObstacleList（复用 g.out_list 省栈）── */
+                memset(&g.out_list, 0, sizeof(g.out_list));
+                bev_post_to_obstacle_list(&g.out_list, g.dets, g.n_dets, g.frame_id,
                                           g.lane_count, g.lane_width);
-                list.timestamp_us = clock_now_realtime_us();
+                g.out_list.timestamp_us = clock_now_realtime_us();
 
                 /* 影子发布（独立 topic，不覆盖 perception/obstacles） */
-                uint8_t buf[sizeof(ObstacleList)];
-                size_t  len = sizeof(buf);
-                ObstacleList_serialize(&list, buf, &len);
-                transport_publish(transport_, "bev/obstacles", buf, (uint32_t)len);
+                static thread_local uint8_t tx_buf[sizeof(ObstacleList)];
+                size_t len = sizeof(tx_buf);
+                ObstacleList_serialize(&g.out_list, tx_buf, &len);
+                transport_publish(transport_, "bev/obstacles", tx_buf, (uint32_t)len);
             }
 
 #if 0  /* 调试用：每 25 帧打一条链路摘要 */
@@ -412,6 +508,9 @@ static const char* s_inputs[]  = {
     "vehicle/state",
     "road/geometry",
     "model_ota/active",       /* OTA 热重载信号 */
+    "sensor/lidar",
+    "sensor/lidar_points",
+    "sensor/camera",
     nullptr
 };
 static const char* s_outputs[] = {
@@ -431,6 +530,10 @@ static int bev_detection_init(MessageBus* bus, Transport* transport,
     g.reload_flag = 0;
     g.ego_x = g.ego_y = g.ego_heading = g.ego_speed = 0.0;
     g.has_ego = 0;
+    g.has_lidar_frame = 0;
+    g.has_camera_frame = 0;
+    g.cloud_seq = 0;
+    g.use_sensor_input = 0;
     g.n_obs = 0;
     g.lane_count = 2;
     g.lane_width = 3.5;
@@ -456,6 +559,9 @@ static int bev_detection_init(MessageBus* bus, Transport* transport,
                 strncpy(g.model_path, j->valuestring, sizeof(g.model_path) - 1);
                 g.model_path[sizeof(g.model_path) - 1] = '\0';
             }
+            j = cJSON_GetObjectItemCaseSensitive(p, "use_sensor_input");
+            if (cJSON_IsBool(j)) g.use_sensor_input = cJSON_IsTrue(j) ? 1 : 0;
+            else if (cJSON_IsNumber(j)) g.use_sensor_input = (j->valuedouble != 0.0) ? 1 : 0;
             j = cJSON_GetObjectItemCaseSensitive(p, "enable");
             if (cJSON_IsBool(j)) g.enable_shadow = cJSON_IsTrue(j) ? 1 : 0;
             else if (cJSON_IsNumber(j)) g.enable_shadow = (j->valuedouble != 0.0) ? 1 : 0;
@@ -467,6 +573,7 @@ static int bev_detection_init(MessageBus* bus, Transport* transport,
     bev_pre_config_default(&g.precfg);
     g.precfg.h = 88;
     g.precfg.w = 88;
+    if (g.use_sensor_input) g.precfg.channels = 6;
     /* 允许通过环境变量覆盖栅格尺寸（与大 BEV 模型对齐） */
     const char* env_w = getenv("BEV_GRID_W");
     const char* env_h = getenv("BEV_GRID_H");
@@ -478,20 +585,35 @@ static int bev_detection_init(MessageBus* bus, Transport* transport,
         LOG_ERROR("bev_detection", "feat alloc failed (%zu floats)", g.feat_elems);
         return -1;
     }
+    g.out_buf = (float*)calloc(10 * g.precfg.h * g.precfg.w, sizeof(float));
+    if (!g.out_buf) {
+        LOG_ERROR("bev_detection", "out_buf alloc failed");
+        return -1;
+    }
 
     pthread_mutex_init(&g.model_mutex, nullptr);
+    pthread_mutex_init(&g.sensor_mutex, nullptr);
 
-    /* 加载 .onnx 检测头（若配置且可编译）。失败/未编译 → loaded=0 → 真值直通回退 */
+    /* 加载模型：.bin 走纯 C 原生核；.onnx 走 ORT；否则回退直通 */
     if (g.model_path[0]) {
-        if (bev_onnx_backend_load(&g.onnx, g.model_path) == 0) {
-            LOG_INFO("bev_detection", "BEV ONNX loaded from %s (in=%d out=%d)",
-                     g.model_path, g.onnx.n_in, g.onnx.n_out);
-            for (int i = 0; i < g.onnx.n_in; i++)
-                LOG_INFO("bev_detection", "  in[%d] rank=%d", i, (int)g.onnx.in_desc[i].rank);
-        } else {
-            LOG_INFO("bev_detection",
-                     "no BEV model at %s (or ORT not compiled) — passthrough baseline",
-                     g.model_path);
+        if (strstr(g.model_path, ".bin")) {
+            if (bev_cnn_load(&g.cnn_model, g.model_path) == 0) {
+                LOG_INFO("bev_detection", "BEV CNN native model loaded from %s (layers=%u)",
+                         g.model_path, g.cnn_model.n_layers);
+            } else {
+                LOG_WARN("bev_detection", "Failed to load BEV CNN native model from %s", g.model_path);
+            }
+        } else if (strstr(g.model_path, ".onnx")) {
+            if (bev_onnx_backend_load(&g.onnx, g.model_path) == 0) {
+                LOG_INFO("bev_detection", "BEV ONNX loaded from %s (in=%d out=%d)",
+                         g.model_path, g.onnx.n_in, g.onnx.n_out);
+                for (int i = 0; i < g.onnx.n_in; i++)
+                    LOG_INFO("bev_detection", "  in[%d] rank=%d", i, (int)g.onnx.in_desc[i].rank);
+            } else {
+                LOG_INFO("bev_detection",
+                         "no BEV model at %s (or ORT not compiled) — passthrough baseline",
+                         g.model_path);
+            }
         }
     } else {
         LOG_INFO("bev_detection", "no model_path configured — passthrough baseline");
@@ -500,10 +622,17 @@ static int bev_detection_init(MessageBus* bus, Transport* transport,
     transport_subscribe(transport, "vehicle/state", on_vehicle_state, nullptr);
     transport_subscribe(transport, "road/geometry", on_road_geometry, nullptr);
     transport_subscribe(transport, "model_ota/active", on_model_ota_active, nullptr);
+    transport_subscribe(transport, "sensor/lidar", on_sensor_lidar, nullptr);
+    transport_subscribe(transport, "sensor/lidar_points", on_lidar_points, nullptr);
+    transport_subscribe(transport, "sensor/camera", on_sensor_camera, nullptr);
+
     if (g.enable_shadow)
         transport_advertise(transport, "bev/obstacles", 0x4BE1DEa3u);
 
     discovery_advertise(discovery, "vehicle/state", 0xF0ED1110u, CAP_SUBSCRIBER, 0);
+    discovery_advertise(discovery, "sensor/lidar", LIDARFRAME_TYPE_ID, CAP_SUBSCRIBER, 0);
+    discovery_advertise(discovery, "sensor/lidar_points", LIDARPOINTCLOUD_TYPE_ID, CAP_SUBSCRIBER, 0);
+    discovery_advertise(discovery, "sensor/camera", LIDARFRAME_TYPE_ID, CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, "bev/obstacles", 0x4BE1DEa3u,
                         CAP_PUBLISHER, g.cfg_frequency_hz);
 
@@ -525,7 +654,7 @@ static int bev_detection_init(MessageBus* bus, Transport* transport,
              "initialized (FlowCoro, shadow=%s, %.0f Hz, grid=%dx%d C=%d, %s)",
              g.enable_shadow ? "on" : "off", g.cfg_frequency_hz,
              g.precfg.w, g.precfg.h, g.precfg.channels,
-             g.onnx.loaded ? "onnx loaded" : "passthrough baseline");
+             g.cnn_model.loaded ? "cnn native loaded" : (g.onnx.loaded ? "onnx loaded" : "passthrough baseline"));
     return 0;
 }
 
@@ -548,9 +677,12 @@ static void bev_detection_cleanup(void) {
         g.task_wrapper = nullptr;
     }
     s_plugin.taskbase = nullptr;
+    bev_cnn_free(&g.cnn_model);
     bev_onnx_backend_free(&g.onnx);
     if (g.feat) { free(g.feat); g.feat = nullptr; }
+    if (g.out_buf) { free(g.out_buf); g.out_buf = nullptr; }
     pthread_mutex_destroy(&g.model_mutex);
+    pthread_mutex_destroy(&g.sensor_mutex);
     statem_cleanup(&g.sm);
 }
 

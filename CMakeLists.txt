@@ -1236,8 +1236,18 @@ add_executable(test_bev_pre_post
     tests/test_bev_pre_post.c
     modules/adas_nodes/bev_pre.c
     modules/adas_nodes/bev_post.c
+    modules/adas_nodes/bev_cnn_native.c
 )
-target_link_libraries(test_bev_pre_post m)
+find_package(OpenMP QUIET)
+target_compile_options(test_bev_pre_post PRIVATE -O3)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    target_compile_options(test_bev_pre_post PRIVATE -mavx2 -mfma)
+endif()
+if(OpenMP_C_FOUND)
+    target_link_libraries(test_bev_pre_post m OpenMP::OpenMP_C)
+else()
+    target_link_libraries(test_bev_pre_post m)
+endif()
 add_dependencies(test_bev_pre_post msg_codegen)
 target_include_directories(test_bev_pre_post PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/adas_nodes

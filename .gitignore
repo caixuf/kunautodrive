@@ -83,7 +83,10 @@ lcov.info
 
 # 本地训练产物
 datasets/
-models/
+models/*
+!models/registry.json
+!models/bev_centernet_v1.bin
+!models/bev_centernet_v1.onnx
 runs/
 # 例外：FlowBoard 3D 模型资产（非训练产物）
 !tools/flowboard/models/

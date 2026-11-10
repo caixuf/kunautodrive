@@ -304,6 +304,106 @@ def check_lane_id():
     return 0
 
 
+def rasterize_sensors(points, lidar_intensity=0.85, camera_visibility=1.0, ego_speed=0.0,
+                      w=W, h=H, range_x=RANGE_X, range_y_half=RANGE_Y_HALF, v_scale=V_SCALE):
+    """6通道传感器 BEV 栅格化（镜像 bev_pre.c bev_pre_rasterize_sensors）。
+    points: 序列 [(x, y, z, intensity)]，车体系。
+    返回 [6 * h * w] float 列表。
+    """
+    total = 6 * h * w
+    feat = [0.0] * total
+    if not points:
+        return feat
+
+    def get_idx(ch, r, c):
+        return ((ch * h) + r) * w + c
+
+    for p in points:
+        px, py, pz, p_int = float(p[0]), float(p[1]), float(p[2]), float(p[3])
+        cell = project_cell(px, py, w, h)
+        if cell is None:
+            continue
+        c, r = cell
+
+        # ch0: 占据响应
+        i0 = get_idx(0, r, c)
+        if feat[i0] < 1.0:
+            feat[i0] = min(1.0, feat[i0] + 0.25)
+
+        # ch1: 强度与归一化高度响应
+        i1 = get_idx(1, r, c)
+        norm_z = (pz + 2.0) / 4.0
+        norm_z = max(0.0, min(1.0, norm_z))
+        val1 = 0.5 * (p_int + norm_z)
+        if val1 > feat[i1]:
+            feat[i1] = val1
+
+        # ch2: 相机前向锥能见度响应 (x > 0 且 |y| <= 1.7320508 * x)
+        i2 = get_idx(2, r, c)
+        if px > 0.0 and abs(py) <= px * 1.7320508:
+            dist = math.sqrt(px * px + py * py)
+            cam_vis = camera_visibility * (1.0 - dist / 70.0)
+            if cam_vis < 0.0:
+                cam_vis = 0.0
+            if cam_vis > feat[i2]:
+                feat[i2] = cam_vis
+
+        # ch3: 纵向速度先验
+        i3 = get_idx(3, r, c)
+        v_norm = min(1.0, abs(ego_speed) / (v_scale if v_scale > 0 else 30.0))
+        if v_norm > feat[i3]:
+            feat[i3] = v_norm
+
+        # ch4: 横向位置线索
+        i4 = get_idx(4, r, c)
+        lat_norm = max(0.0, 1.0 - abs(py) / range_y_half)
+        if lat_norm > feat[i4]:
+            feat[i4] = lat_norm
+
+    # ch5: 局部 3x3 邻域平滑先验
+    for r in range(h):
+        for c in range(w):
+            s = 0.0
+            for dr in (-1, 0, 1):
+                nr = max(0, min(h - 1, r + dr))
+                for dc in (-1, 0, 1):
+                    nc = max(0, min(w - 1, c + dc))
+                    s += feat[get_idx(0, nr, nc)]
+            feat[get_idx(5, r, c)] = s / 9.0
+
+    return feat
+
+
+def check_sensors_rasterize():
+    """验证多模态传感器栅格化基本属性与不变式"""
+    pts = [
+        (10.0, 0.0, 0.0, 0.8),
+        (10.0, 0.0, 0.2, 0.9),
+        (10.0, 0.0, -0.1, 0.7),
+        (10.0, 0.0, 0.0, 0.85),  # 4 points -> occ = 1.0
+        (-20.0, 5.0, 0.0, 0.5),   # 后方左侧 (x<0 -> no cam_vis)
+    ]
+    feat = rasterize_sensors(pts, lidar_intensity=0.85, camera_visibility=0.9, ego_speed=15.0)
+    c1, r1 = project_cell(10.0, 0.0)
+    i0 = ((0 * H) + r1) * W + c1
+    assert abs(feat[i0] - 1.0) < 1e-6, f"occ expected 1.0, got {feat[i0]}"
+    i1 = ((1 * H) + r1) * W + c1
+    assert feat[i1] > 0.5, f"ch1 expected >0.5, got {feat[i1]}"
+    i2 = ((2 * H) + r1) * W + c1
+    assert feat[i2] > 0.0, f"ch2 cam expected >0, got {feat[i2]}"
+    i3 = ((3 * H) + r1) * W + c1
+    assert abs(feat[i3] - 0.5) < 1e-6, f"ch3 speed 15/30 expected 0.5, got {feat[i3]}"
+    i5 = ((5 * H) + r1) * W + c1
+    assert feat[i5] > 0.0, f"ch5 smooth expected >0, got {feat[i5]}"
+
+    # 后方点无相机视野
+    c2, r2 = project_cell(-20.0, 5.0)
+    i2_rear = ((2 * H) + r2) * W + c2
+    assert feat[i2_rear] == 0.0, f"rear point should have 0 cam_vis, got {feat[i2_rear]}"
+    print("PASS check_sensors_rasterize: 6通道传感器栅格化正常")
+    return 0
+
+
 def export_samples(path, n=5, seed=7):
     random.seed(seed)
     rows = []
@@ -340,4 +440,5 @@ if __name__ == "__main__":
     rc = check_lane_id()
     rc += check_pre_rotation()
     rc += check_roundtrip()
+    rc += check_sensors_rasterize()
     sys.exit(0 if rc == 0 else 1)
