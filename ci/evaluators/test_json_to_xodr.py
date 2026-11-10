@@ -127,6 +127,61 @@ class JsonToXodrTest(unittest.TestCase):
         self.assertEqual(len(roads[0].geoms), 1)
         self.assertAlmostEqual(roads[0].geoms[0].curvature, 1.0 / 45.0)
 
+    def test_friction_zones_and_superelevation_profile_export(self):
+        """含 friction_zones 与 superelevation_profile 的场景导出 <lateralProfile><superelevation> 与 <material> 节点。"""
+        scenario = {
+            "name": "test_superelevation_and_friction",
+            "road_network": {
+                "edges": [
+                    {
+                        "id": 0,
+                        "type": "urban",
+                        "lanes": 2,
+                        "lane_width": 3.5,
+                        "nodes": [[0.0, 0.0, 0.0], [200.0, 0.0, 5.0]],
+                        "superelevation_profile": [
+                            {"s": 0.0, "a": 0.04, "b": 0.0, "c": 0.0, "d": 0.0},
+                            {"s": 100.0, "a": 0.02, "b": 0.0, "c": 0.0, "d": 0.0},
+                        ],
+                    }
+                ]
+            },
+            "friction_zones": [
+                {
+                    "x_min": 50.0,
+                    "x_max": 150.0,
+                    "y_min": -5.0,
+                    "y_max": 5.0,
+                    "mu_scale": 0.35,
+                    "surface": "wet",
+                    "roughness": 0.02,
+                }
+            ],
+        }
+        xml_str = X.convert(scenario)
+        root = ET.fromstring(xml_str)
+        road = root.find("road")
+        self.assertIsNotNone(road)
+
+        # 验证 <lateralProfile><superelevation> 节点
+        lat_profile = road.find("lateralProfile")
+        self.assertIsNotNone(lat_profile, "必须导出 <lateralProfile> 节点")
+        superelevations = lat_profile.findall("superelevation")
+        self.assertEqual(len(superelevations), 2)
+        self.assertEqual(superelevations[0].get("s"), "0.000000")
+        self.assertEqual(superelevations[0].get("a"), "0.040000")
+        self.assertEqual(superelevations[1].get("s"), "100.000000")
+        self.assertEqual(superelevations[1].get("a"), "0.020000")
+
+        # 验证 <lanes> 下各 driving 车道导出 <material> 节点
+        materials = road.findall(".//material")
+        self.assertGreater(len(materials), 0, "必须在车道下导出 <material> 节点")
+        mat = materials[0]
+        self.assertEqual(mat.get("sOffset"), "50.000000")
+        self.assertEqual(mat.get("surface"), "wet")
+        self.assertEqual(mat.get("friction"), "0.3500")
+        self.assertEqual(mat.get("roughness"), "0.0200")
+
 
 if __name__ == "__main__":
     unittest.main()

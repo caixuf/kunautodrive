@@ -103,6 +103,10 @@ class Road:
     # esmini 解析后通过 RM_PositionData.z 暴露给 frenet_to_world，再经 scene_pub
     # 透传成 nodes 三元组 [x, y, z]，前端 scene3d.js 用 z 做路面 Y 高度。
     elevation_profile: list = field(default_factory=list)
+    # 横坡 superelevation profile: list[{"s": float, "a": float, ...}]
+    superelevation_profile: list = field(default_factory=list)
+    # 车道摩擦材质: list[{"s": float, "sOffset": float, "friction": float, "surface": str, "roughness": float}]
+    friction_materials: list = field(default_factory=list)
     oneway: bool = False  # True=单向道路(不生成对向车道)，False=双向对称
     # ── lane 级拓扑（laneLink 生成用，2026-08）──
     # lane_meta: [{id, index, direction, successors:[str]}] —— map.json lanes[]
@@ -256,6 +260,15 @@ def build_polyline_road(rid: int, name: str, nodes: list, lanes: int,
         road = Road(rid, name, chord, lanes, lane_width, speed, [
             GeometrySeg(0.0, pts[0][0], pts[0][1], hdg, chord, 0.0),
         ])
+        if any(abs(p[2]) > 1e-6 for p in pts):
+            elev = []
+            s_acc = 0.0
+            elev.append({"s": 0.0, "h": pts[0][2]})
+            for i in range(len(pts) - 1):
+                seg_len = math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1])
+                s_acc += seg_len
+                elev.append({"s": s_acc, "h": pts[i + 1][2]})
+            road.elevation_profile = elev
         end_state = RoadState(pts[-1][0], pts[-1][1], hdg)
         return road, end_state
 
@@ -364,6 +377,88 @@ def _parse_lane_succ(succ: str) -> tuple[Optional[str], Optional[int]]:
     return road_str, int(tail)
 
 
+def _road_friction_offset(road: Road, fz: dict) -> Optional[float]:
+    """若 friction_zone 落在 road 的包围盒内，计算沿 road 的起点里程 sOffset >= 0.0；否则返回 None。"""
+    fz_xmin = float(fz.get("x_min", -1e9))
+    fz_xmax = float(fz.get("x_max", 1e9))
+    fz_ymin = float(fz.get("y_min", -1e9))
+    fz_ymax = float(fz.get("y_max", 1e9))
+
+    pts: list[tuple[float, float, float]] = []
+    for g in road.geoms:
+        pts.append((g.s, g.x, g.y))
+    if road.geoms:
+        last = road.geoms[-1]
+        end_x = last.x + last.length * math.cos(last.hdg)
+        end_y = last.y + last.length * math.sin(last.hdg)
+        pts.append((road.length, end_x, end_y))
+
+    if not pts:
+        return None
+
+    xs = [p[1] for p in pts]
+    ys = [p[2] for p in pts]
+    lw_margin = max(road.lane_width * road.lane_count, 1.0)
+    r_xmin, r_xmax = min(xs) - lw_margin, max(xs) + lw_margin
+    r_ymin, r_ymax = min(ys) - lw_margin, max(ys) + lw_margin
+
+    if fz_xmax < r_xmin or fz_xmin > r_xmax or fz_ymax < r_ymin or fz_ymin > r_ymax:
+        return None
+
+    if fz_xmin <= pts[0][1] <= fz_xmax and fz_ymin <= pts[0][2] <= fz_ymax:
+        return 0.0
+
+    for g in road.geoms:
+        x0, y0 = g.x, g.y
+        cos_h = math.cos(g.hdg)
+        sin_h = math.sin(g.hdg)
+        x1 = x0 + g.length * cos_h
+        y1 = y0 + g.length * sin_h
+        seg_xmin, seg_xmax = min(x0, x1), max(x0, x1)
+        seg_ymin, seg_ymax = min(y0, y1), max(y0, y1)
+        if fz_xmax < seg_xmin or fz_xmin > seg_xmax or fz_ymax < seg_ymin or fz_ymin > seg_ymax:
+            continue
+        if fz_xmin <= x0 <= fz_xmax and fz_ymin <= y0 <= fz_ymax:
+            return max(0.0, g.s)
+        t_candidates = []
+        if abs(cos_h) > 1e-6:
+            for bx in (fz_xmin, fz_xmax):
+                t = (bx - x0) / cos_h
+                if 0.0 <= t <= g.length:
+                    yt = y0 + t * sin_h
+                    if fz_ymin - 1e-3 <= yt <= fz_ymax + 1e-3:
+                        t_candidates.append(t)
+        if abs(sin_h) > 1e-6:
+            for by in (fz_ymin, fz_ymax):
+                t = (by - y0) / sin_h
+                if 0.0 <= t <= g.length:
+                    xt = x0 + t * cos_h
+                    if fz_xmin - 1e-3 <= xt <= fz_xmax + 1e-3:
+                        t_candidates.append(t)
+        if t_candidates:
+            return max(0.0, g.s + min(t_candidates))
+
+    if fz_xmin > pts[0][1]:
+        return max(0.0, fz_xmin - pts[0][1])
+    return 0.0
+
+
+def _apply_friction_zones_to_road(road: Road, friction_zones: list[dict]) -> None:
+    for fz in friction_zones:
+        s_offset = _road_friction_offset(road, fz)
+        if s_offset is not None:
+            fric = float(fz.get("mu_scale", fz.get("friction", 1.0)))
+            surf = str(fz.get("surface", "wet"))
+            rough = float(fz.get("roughness", 0.0))
+            road.friction_materials.append({
+                "s": s_offset,
+                "sOffset": s_offset,
+                "friction": fric,
+                "surface": surf,
+                "roughness": rough,
+            })
+
+
 def roads_from_road_network(rn_cfg: dict) -> tuple[list[Road], list[Junction]]:
     """新格式 road_network{edges:[...], junctions[...]} → (roads, junctions)。
 
@@ -382,6 +477,7 @@ def roads_from_road_network(rn_cfg: dict) -> tuple[list[Road], list[Junction]]:
     connecting road 设 predecessor_junction（<link> 指向 junction 而非 incoming）。
     """
     edges = rn_cfg.get("edges") or rn_cfg.get("segments") or []
+    friction_zones = rn_cfg.get("friction_zones") or []
     state = RoadState(0.0, 0.0, 0.0)
     roads: list[Road] = []
     end_states: dict[int, RoadState] = {}   # road id → 该 road 终点的全局状态
@@ -451,7 +547,14 @@ def roads_from_road_network(rn_cfg: dict) -> tuple[list[Road], list[Junction]]:
         if "ramp" in etype.lower():
             r.oneway = True
         # 高架 elevation_profile 透传（ [{"s":0,"h":0},{"s":250,"h":8}] ）
-        r.elevation_profile = list(e.get("elevation_profile") or [])
+        if e.get("elevation_profile"):
+            r.elevation_profile = list(e["elevation_profile"])
+        if e.get("superelevation_profile"):
+            r.superelevation_profile = list(e["superelevation_profile"])
+        if e.get("friction_materials"):
+            r.friction_materials = list(e["friction_materials"])
+        elif friction_zones:
+            _apply_friction_zones_to_road(r, friction_zones)
         r.lane_meta = lane_meta
         roads.append(r)
         end_states[eid] = state
@@ -572,7 +675,14 @@ def roads_from_road_network(rn_cfg: dict) -> tuple[list[Road], list[Junction]]:
                         cr, cend = build_straight_road(cid, cname, clen, clanes, clw, csp, start_state)
                     cr.junction_id = jid
                     cr.predecessor_junction = jid
-                    cr.elevation_profile = list(c.get("elevation_profile") or [])
+                    if c.get("elevation_profile"):
+                        cr.elevation_profile = list(c["elevation_profile"])
+                    if c.get("superelevation_profile"):
+                        cr.superelevation_profile = list(c["superelevation_profile"])
+                    if c.get("friction_materials"):
+                        cr.friction_materials = list(c["friction_materials"])
+                    elif friction_zones:
+                        _apply_friction_zones_to_road(cr, friction_zones)
                     roads.append(cr)
                     road_by_id[cr.id] = cr
                 # 若配置了 target_road，分支末端接续到目标主路
@@ -818,6 +928,23 @@ def road_to_xml(road: Road) -> ET.Element:
                 "b": "0.0", "c": "0.0", "d": "0.0",
             })
 
+    # 横坡 lateralProfile（超高 superelevation）
+    if road.superelevation_profile:
+        lp = ET.SubElement(r, "lateralProfile")
+        for sp in road.superelevation_profile:
+            s_val = float(sp.get("s", 0.0))
+            a_val = float(sp.get("a", sp.get("superelevation", 0.0)))
+            b_val = float(sp.get("b", 0.0))
+            c_val = float(sp.get("c", 0.0))
+            d_val = float(sp.get("d", 0.0))
+            ET.SubElement(lp, "superelevation", {
+                "s": f"{s_val:.6f}",
+                "a": f"{a_val:.6f}",
+                "b": f"{b_val:.9f}",
+                "c": f"{c_val:.9f}",
+                "d": f"{d_val:.9f}",
+            })
+
     # 判断是否单向道路：匝道(ramp)、加速车道等名称包含 ramp/oneway 或显式 oneway=True
     is_oneway = ("ramp" in road.name.lower() or
                  road.lane_count == 1 or
@@ -846,6 +973,17 @@ def road_to_xml(road: Road) -> ET.Element:
             "sOffset": "0.0", "type": rtype, "color": color,
             "width": f"{ROADMARK_WIDTH:.3f}", "laneChange": "none",
         })
+        for fm in road.friction_materials:
+            s_off = float(fm.get("sOffset", fm.get("s", 0.0)))
+            surf = str(fm.get("surface", "asphalt"))
+            fric = float(fm.get("friction", fm.get("mu_scale", 1.0)))
+            rough = float(fm.get("roughness", 0.0))
+            ET.SubElement(ln, "material", {
+                "sOffset": f"{s_off:.6f}",
+                "surface": surf,
+                "friction": f"{fric:.4f}",
+                "roughness": f"{rough:.4f}",
+            })
     # left 侧：对向车道（id=+1,+2,...,+n_per_side），双向道路才生成
     if not is_oneway:
         left = ET.SubElement(ls, "left")
@@ -860,6 +998,17 @@ def road_to_xml(road: Road) -> ET.Element:
                 "sOffset": "0.0", "type": rtype, "color": color,
                 "width": f"{ROADMARK_WIDTH:.3f}", "laneChange": "none",
             })
+            for fm in road.friction_materials:
+                s_off = float(fm.get("sOffset", fm.get("s", 0.0)))
+                surf = str(fm.get("surface", "asphalt"))
+                fric = float(fm.get("friction", fm.get("mu_scale", 1.0)))
+                rough = float(fm.get("roughness", 0.0))
+                ET.SubElement(ln, "material", {
+                    "sOffset": f"{s_off:.6f}",
+                    "surface": surf,
+                    "friction": f"{fric:.4f}",
+                    "roughness": f"{rough:.4f}",
+                })
     # 限速 via type/speed (OpenDRIVE 用 road type 元素)
     t = ET.SubElement(r, "type", {"s": "0.0", "type": "town"})
     ET.SubElement(t, "speed", {"max": f"{road.speed_limit:.4f}", "unit": "m/s"})
@@ -905,13 +1054,22 @@ def build_xodr(roads: list[Road], junctions: list[Junction] | None = None) -> ET
 def convert(scenario: dict) -> str:
     """场景 dict → xodr XML 字符串。"""
     junctions: list[Junction] = []
+    fz = scenario.get("friction_zones")
     if "road_network" in scenario:
-        roads, junctions = roads_from_road_network(scenario["road_network"])
+        rn_cfg = dict(scenario["road_network"])
+        if fz and "friction_zones" not in rn_cfg:
+            rn_cfg["friction_zones"] = fz
+        roads, junctions = roads_from_road_network(rn_cfg)
     elif "road" in scenario:
         roads = roads_from_legacy_road(scenario["road"])
+        if fz:
+            for rd in roads:
+                _apply_friction_zones_to_road(rd, fz)
     else:
         r, _ = build_straight_road(0, "urban", 1000.0, 2, DEFAULT_LANE_WIDTH,
                                    DEFAULT_SPEED, RoadState())
+        if fz:
+            _apply_friction_zones_to_road(r, fz)
         roads = [r]
     root = build_xodr(roads, junctions)
     ET.indent(root, space="  ")

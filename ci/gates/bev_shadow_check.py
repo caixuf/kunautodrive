@@ -82,6 +82,7 @@ def _measure(doc: dict) -> tuple[int, int, float]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--duration", type=int, default=4)
+    ap.add_argument("--self-test", action="store_true", default=False, help="Run self-test (A/B fault injection)")
     args = ap.parse_args()
     if not LAUNCHER.is_file():
         raise SystemExit(f"missing {LAUNCHER} — build first")

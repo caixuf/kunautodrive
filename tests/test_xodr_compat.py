@@ -8,6 +8,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from tools import json_to_xodr
 from tools.xodr_compat_check import check_xodr, check_xodr_text
 
 
@@ -147,6 +148,93 @@ class XodrCompatibilityTest(unittest.TestCase):
         missing = check_xodr(ROOT / "does-not-exist.xodr")
         self.assertEqual(missing["status"], "FAIL")
         self.assertEqual(missing["issues"][0]["code"], "file_not_found")
+
+    def test_json_to_xodr_3d_nodes_and_friction_zones_generation(self):
+        # 1. 3D 共线斜坡道路：验证 elevationProfile 与 friction_zones material 导出
+        scenario_collinear = {
+            "name": "collinear_slope_and_friction",
+            "road_network": {
+                "edges": [
+                    {
+                        "id": 0,
+                        "type": "urban",
+                        "lanes": 2,
+                        "lane_width": 3.5,
+                        "nodes": [[0.0, 0.0, 0.0], [100.0, 0.0, 8.0]],
+                    }
+                ]
+            },
+            "friction_zones": [
+                {
+                    "x_min": 20.0,
+                    "x_max": 80.0,
+                    "y_min": -5.0,
+                    "y_max": 5.0,
+                    "mu_scale": 0.35,
+                    "surface": "wet",
+                }
+            ],
+        }
+        xml_collinear = json_to_xodr.convert(scenario_collinear)
+        self.assertIn("<elevationProfile>", xml_collinear)
+        self.assertIn('<material sOffset="20.000000"', xml_collinear)
+        self.assertIn('friction="0.3500"', xml_collinear)
+
+        report_collinear = check_xodr_text(xml_collinear)
+        self.assertEqual(report_collinear["status"], "PASS")
+        self.assertTrue(report_collinear["compatible"])
+        self.assertEqual(report_collinear["counts"].get("elevation", 0), 2)
+        self.assertEqual(report_collinear["features"].get("lane.material", {}).get("status"), "supported")
+
+        # 2. 3D 非共线高架道路：验证曲线密采样 elevationProfile 导出
+        scenario_elevated = {
+            "name": "elevated_curve",
+            "road_network": {
+                "edges": [
+                    {
+                        "id": 1,
+                        "type": "highway",
+                        "lanes": 4,
+                        "lane_width": 3.75,
+                        "nodes": [[0.0, 0.0, 0.0], [50.0, 15.0, 6.0], [100.0, 0.0, 12.0]],
+                    }
+                ]
+            },
+        }
+        xml_elevated = json_to_xodr.convert(scenario_elevated)
+        self.assertIn("<elevationProfile>", xml_elevated)
+        report_elevated = check_xodr_text(xml_elevated)
+        self.assertEqual(report_elevated["status"], "PASS")
+        self.assertTrue(report_elevated["compatible"])
+        self.assertGreater(report_elevated["counts"].get("elevation", 0), 2)
+
+    def test_steep_grade_warning_and_invalid_friction_error(self):
+        # 1. 陡坡预检 (|b| > 0.25) 触发 steep_elevation_grade warning
+        steep_elevation = """
+          <elevationProfile>
+            <elevation s="0" a="0" b="0.30" c="0" d="0" />
+            <elevation s="100" a="30" b="0" c="0" d="0" />
+          </elevationProfile>
+        """
+        report_steep = check_xodr_text(_document(_road(extra=steep_elevation)))
+        self.assertEqual(report_steep["status"], "WARN")
+        self.assertTrue(any(issue["code"] == "steep_elevation_grade" for issue in report_steep["issues"]))
+
+        # 2. 非法负摩擦系数 (<material sOffset="0" friction="-0.2"/>) 触发 invalid_lane_friction error
+        lanes_invalid_friction = """
+          <laneSection s="0">
+            <center><lane id="0" type="none" /></center>
+            <right>
+              <lane id="-1" type="driving">
+                <width s="0" a="3.5" b="0" c="0" d="0" />
+                <material sOffset="0" surface="ice" friction="-0.2" roughness="0.0" />
+              </lane>
+            </right>
+          </laneSection>
+        """
+        report_bad_friction = check_xodr_text(_document(_road(lanes=lanes_invalid_friction)))
+        self.assertEqual(report_bad_friction["status"], "FAIL")
+        self.assertTrue(any(issue["code"] == "invalid_lane_friction" for issue in report_bad_friction["issues"]))
 
 
 if __name__ == "__main__":

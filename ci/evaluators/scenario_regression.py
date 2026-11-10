@@ -460,7 +460,8 @@ def main() -> int:
     suite = load_suite(args.suite)
     scenarios = enabled_scenarios(suite)
     if args.only:
-        scenarios = [s for s in scenarios if scenario_key(s) == args.only]
+        only_keys = {k.strip() for k in args.only.split(",") if k.strip()}
+        scenarios = [s for s in scenarios if scenario_key(s) in only_keys]
         if not scenarios:
             raise SystemExit(f"no enabled scenario matches --only {args.only!r}")
     if args.d2_10_scenes:

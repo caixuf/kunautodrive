@@ -384,6 +384,13 @@ def _check_profiles(report: CompatibilityReport, road: ET.Element, road_id: str)
                 report.issue("error", "elevation_s_order", f"{context} 的 s 顺序不是单调递增。")
             if s is not None:
                 previous_s = s
+            b = _finite_number(elevation.get("b"))
+            if b is not None and abs(b) > 0.25:
+                report.issue(
+                    "warning",
+                    "steep_elevation_grade",
+                    f"{context} 纵向坡度 b={b:.4f} 超过 25% (|b| > 0.25)。",
+                )
 
     for name, message in PARTIAL_FEATURES.items():
         elements = _descendants(road, name)
@@ -479,6 +486,32 @@ def _check_lanes(report: CompatibilityReport, road: ET.Element, road_id: str) ->
                         else:
                             _required_number(report, width, "s", width_context, minimum=0.0)
                         _check_coefficients(report, width, ("a", "b", "c", "d"), width_context)
+                    materials = _children(lane, "material")
+                    if materials:
+                        report.count("lane.material", len(materials))
+                        report.feature(
+                            "lane.material",
+                            "supported",
+                            len(materials),
+                            "lane material friction 在 esmini/FlowEngine 物理层支持范围内。",
+                        )
+                        for mat_index, material in enumerate(materials):
+                            mat_context = f"{lane_context}/material[{mat_index}]"
+                            _required_number(report, material, "sOffset", mat_context, minimum=0.0)
+                            friction = _finite_number(material.get("friction"))
+                            if friction is None or friction <= 0.0:
+                                report.issue(
+                                    "error",
+                                    "invalid_lane_friction",
+                                    f"{mat_context} 缺少有效 friction 或 friction <= 0 ({material.get('friction')})。",
+                                )
+                            elif friction < 0.01:
+                                report.issue(
+                                    "error",
+                                    "negative_value",
+                                    f"{mat_context} 的 friction={friction:g} 小于允许下限 0.01。",
+                                    attribute="friction",
+                                )
         center = _first_child(section, "center")
         if center is None or not _children(center, "lane"):
             report.issue("warning", "missing_center_lane", f"{context} 缺少 center lane。")

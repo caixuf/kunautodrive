@@ -284,9 +284,17 @@ static void test_cnn_native_inference(void) {
     double elapsed_ms = ((double)(ts_end.tv_sec - ts_start.tv_sec) * 1000.0 +
                         (double)(ts_end.tv_nsec - ts_start.tv_nsec) / 1000000.0) / n_runs;
 
-    printf("INFO bev_cnn_forward latency (avg of %d): %.3f ms (gate limit < 10.0 ms)\n",
-           n_runs, elapsed_ms);
-    assert(elapsed_ms < 10.0);
+    double max_latency_ms = 10.0;
+#ifdef __SANITIZE_ADDRESS__
+    max_latency_ms = 150.0;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+    max_latency_ms = 150.0;
+#endif
+#endif
+    printf("INFO bev_cnn_forward latency (avg of %d): %.3f ms (gate limit < %.1f ms)\n",
+           n_runs, elapsed_ms, max_latency_ms);
+    assert(elapsed_ms < max_latency_ms);
 
     BevPostDet dets[BEV_POST_MAX_DET];
     int n_dets = bev_cnn_decode(&model, out_feat, &cfg, 0.0, 0.0, dets, BEV_POST_MAX_DET);

@@ -87,6 +87,15 @@ sim_world → sensor_model → perception → fusion → planning → control �
 `learner` / `model_ota`（学习闭环 Stage 0→2→OTA）、`bev_detection`（BEV 视觉）。节点清单以
 `config/pipeline.json` 的 `processes[]` 为准，勿信任何手写拓扑文档。
 
+全栈算法能力（Milestones M1~M6）覆盖：
+- **M1 感知**：真实传感器 6 通道 BEV 栅格化 + CenterPoint-Lite CNN（纯 C 原生推理核 `bev_cnn_native.c`）；
+- **M2 跟踪与预测**：64 槽 Kuhn-Munkres 匈牙利跟踪器（`hungarian_tracker.h`）+ Frenet 三模态预测（LK/Cut-In/Yield）与 ST 图切入障碍物减速注入；
+- **M3 规划与控制**：ScenarioManager 解耦架构（`LaneFollowScenario`, `ValetParkingScenario` Hybrid A* + Reeds-Shepp 64 点尖点保留轨迹）+ ManeuverTracker D/R 闭环；
+- **M4 仿真与传感器**：flowsim 6-DOF 簧载悬架（pitch/roll）、纵向轴荷转移 $\Delta F_z$、坡道重力与局部 `friction_zones` 湿滑路面、16 线 3D OBB LiDAR；
+- **M5 数字孪生**：`VehicleView.js` 簧上/簧下分离、SR 世界模型（流光带/点云/泊车框/结冰贴花）与 HUD；
+- **M6 仿真生态桥接**：OpenDRIVE 1.4 3D 路网/超高/车道材质导出预检（`tools/json_to_xodr.py`, `tools/xodr_compat_check.py`）+ CARLA 6-DOF 双向桥接（`tools/carla_bridge.py`）。
+详见 [docs/ALGORITHM_STACK.md](docs/ALGORITHM_STACK.md)。
+
 ## 模块职责铁律（架构设计 — 2026-08 掉头死锁 8 环连坏后确立）
 
 > 2026-08 排掉头死锁时发现 8 个环环相扣的坏因,根源全是**职责越界**:
@@ -142,7 +151,14 @@ sim_world → sensor_model → perception → fusion → planning → control �
 | `include/platform_compat.h` | 跨平台兼容层（macOS⇄Linux，CMake force-include，仅 APPLE 生效）：pthread 命名签名、robust mutex、condvar 时钟降级 |
 | `modules/adas_nodes/flowsim/physics.cpp` | 运动学自行车模型 + 可选线性轮胎二自由度动态模型（pipeline.json `physics_model`，低速<5m/s 退化运动学）；碰撞/护栏/重力见 [FLOWSIM_PHYSICS.md](docs/FLOWSIM_PHYSICS.md)、`/flowsim-physics` |
 | `modules/adas_nodes/flowsim/entity.h` | 仿真实体（含 v_x_body/v_y_body/yaw_rate/F_yf/F_yr、垂直速度 vz、crash_cooldown、route_s；EntityPool 边界检查） |
-| `scenarios/straight_road.json` | 直道导航场景（默认；另有 curve_road/dense_npc/multi_light/oncoming/城市环线/OSM 城市/泊车/驾考科目一~四/`l3_odd_exit_*` 等共 25 个场景 + `suite.json` 场景矩阵，契约校验 `tools/scenarioctl.py validate`） |
+| `scenarios/straight_road.json` | 直道导航场景（默认；另含 `wet_road_evasion` 湿滑避险、`bev_shadow` 影子评测、`valet_parking` 代客泊车，以及 curve_road/dense_npc/multi_light/oncoming/城市环线/OSM 城市/驾考科目一~四/`l3_odd_exit_*` 等场景 + `suite.json` 场景矩阵，契约校验 `tools/scenarioctl.py validate`） |
+| `tools/tire_dynamics_sim.py` | 轮胎动力学仿真：对比验证运动学、线性 2-DOF 与非线性 Pacejka 魔术公式及局部摩擦区（`friction_zones`）降级 |
+| `tools/train_bev/train_bev_centernet.py` | CenterPoint-Lite BEV 卷积检测网络训练与 ONNX / 纯 C 紧凑二进制权重导出 |
+| `tools/tracker_prediction_sim.py` | 64 槽匈牙利二分图卡尔曼跟踪与 Frenet 交互式多模态预测算法仿真 |
+| `tools/open_space_parking_sim.py` | 开放空间泊车 Hybrid A* / Reeds-Shepp 与 ManeuverTracker 挡位推进闭环仿真 |
+| `tools/json_to_xodr.py` | OpenDRIVE 1.4 3D 导出器（含 elevationProfile 高程、lateralProfile 超高横坡、lane material 摩擦材质） |
+| `tools/xodr_compat_check.py` | OpenDRIVE 兼容性与物理预检（支持 steep_elevation_grade 陡坡告警与 invalid_lane_friction 摩擦系数拦截） |
+| `tools/carla_bridge.py` | CARLA 6-DOF 双向桥接器（坐标轴翻转、VehiclePose6DOF、friction_zones 降级与 capabilities_6dof 契约） |
 | `modules/adas_nodes/data_recorder_node.c` | 训练样本采集（Learning Loop Stage 0） |
 | `modules/adas_nodes/inference_node.cpp` | tiny-MLP 影子推理（Learning Loop Stage 2） |
 | `modules/adas_nodes/tiny_mlp.h` | 纯 C 单隐层 MLP 推理内核 |

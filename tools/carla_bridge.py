@@ -43,6 +43,24 @@ class SimulationClock:
 
 
 @dataclass(frozen=True)
+class VehiclePose6DOF:
+    x: float
+    y: float
+    z: float = 0.0
+    roll: float = 0.0
+    pitch: float = 0.0
+    heading: float = 0.0
+    vx: float = 0.0
+    vy: float = 0.0
+    vz: float = 0.0
+    ax: float = 0.0
+    ay: float = 0.0
+    az: float = 0.0
+    mu_scale: float = 1.0
+    road_grade: float = 0.0
+
+
+@dataclass(frozen=True)
 class ControlCommand:
     throttle: float = 0.0
     brake: float = 0.0
@@ -126,6 +144,12 @@ def _carla_spec() -> dict[str, Any]:
             "The bridge does not implement planning or safety policy.",
             "A CARLA server and compatible Python API are required for connect.",
         ],
+        "capabilities_6dof": {
+            "sprung_suspension_pitch_roll": True,
+            "friction_zones": True,
+            "open_space_reverse_gear": True,
+            "lidar_3d_obb": True,
+        },
         "error": reason,
     }
 
@@ -154,6 +178,12 @@ def _flowsim_spec() -> dict[str, Any]:
         "limitations": [
             "FlowSim is exercised through flow_launcher, not this CARLA adapter.",
         ],
+        "capabilities_6dof": {
+            "sprung_suspension_pitch_roll": True,
+            "friction_zones": True,
+            "open_space_reverse_gear": True,
+            "lidar_3d_obb": True,
+        },
         "error": None if launcher.is_file() and pipeline.is_file()
         else "FlowSim build or pipeline is unavailable",
     }
@@ -200,6 +230,91 @@ def to_carla_control(command: ControlCommand, carla_module: Any) -> Any:
         reverse=normalized.gear < 0,
         hand_brake=normalized.hand_brake,
     )
+
+
+def extract_ego_pose_6dof(actor: Any, friction_zones: list[dict[str, Any]] | None = None) -> VehiclePose6DOF:
+    """从 CARLA actor 转换提取 FlowEngine 右手 ENU 系下的 6-DOF 车辆姿态与动力学状态。"""
+    transform = actor.get_transform()
+    loc = transform.location
+    rot = transform.rotation
+    vel = actor.get_velocity()
+    acc = getattr(actor, "get_acceleration", lambda: None)()
+
+    # CARLA 左手系 (x 前, y 右, z 上, roll/pitch/yaw 角度) → FlowEngine 右手 ENU 系 (x 东/前, y 北/左, z 上)
+    x = float(loc.x)
+    y = -float(loc.y)
+    z = float(loc.z)
+
+    heading = math.radians(-float(rot.yaw))
+    pitch = math.radians(-float(rot.pitch))
+    roll = math.radians(float(rot.roll))
+
+    vx = float(vel.x)
+    vy = -float(vel.y)
+    vz = float(vel.z)
+
+    if acc is not None:
+        ax = float(acc.x)
+        ay = -float(acc.y)
+        az = float(acc.z)
+    else:
+        ax = 0.0
+        ay = 0.0
+        az = 0.0
+
+    mu_scale = 1.0
+    if friction_zones:
+        hits = []
+        for fz in friction_zones:
+            x_min = float(fz.get("x_min", -1e9))
+            x_max = float(fz.get("x_max", 1e9))
+            y_min = float(fz.get("y_min", -1e9))
+            y_max = float(fz.get("y_max", 1e9))
+            if x_min <= x <= x_max and y_min <= y <= y_max:
+                hits.append(float(fz.get("mu_scale", fz.get("friction", 1.0))))
+        if hits:
+            mu_scale = max(0.1, min(1.0, min(hits)))
+
+    # 由 pitch 估算 road_grade (tan(pitch))
+    road_grade = math.tan(pitch)
+
+    return VehiclePose6DOF(
+        x=x,
+        y=y,
+        z=z,
+        roll=roll,
+        pitch=pitch,
+        heading=heading,
+        vx=vx,
+        vy=vy,
+        vz=vz,
+        ax=ax,
+        ay=ay,
+        az=az,
+        mu_scale=mu_scale,
+        road_grade=road_grade,
+    )
+
+
+def to_flowsim_ego_dict(pose: VehiclePose6DOF) -> dict[str, float]:
+    """输出与 FlowSim scene/frame ego 完全一致的字段字典。"""
+    return {
+        "x": float(pose.x),
+        "y": float(pose.y),
+        "z": float(pose.z),
+        "heading": float(pose.heading),
+        "pitch": float(pose.pitch),
+        "roll": float(pose.roll),
+        "vx": float(pose.vx),
+        "vy": float(pose.vy),
+        "vz": float(pose.vz),
+        "ax": float(pose.ax),
+        "ay": float(pose.ay),
+        "az": float(pose.az),
+        "speed": float(math.hypot(pose.vx, pose.vy)),
+        "mu_scale": float(pose.mu_scale),
+        "road_grade": float(pose.road_grade),
+    }
 
 
 class CarlaBridge:
@@ -250,6 +365,11 @@ class CarlaBridge:
         if self._ego is None:
             raise RuntimeError("no ego actor is bound")
         self._ego.apply_control(to_carla_control(command, self._carla))
+
+    def read_ego_pose_6dof(self, friction_zones: list[dict[str, Any]] | None = None) -> VehiclePose6DOF:
+        if self._ego is None:
+            raise RuntimeError("no ego actor is bound")
+        return extract_ego_pose_6dof(self._ego, friction_zones)
 
     def tick(self) -> SimulationClock:
         if self._world is None:
