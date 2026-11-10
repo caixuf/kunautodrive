@@ -150,6 +150,20 @@ def validate_scenario(data: object, path: Path) -> list[str]:
                     else:
                         errors.append(f"{label} missing '{key}'")
 
+    parking_goal = data.get("parking_goal")
+    if parking_goal is not None:
+        if not isinstance(parking_goal, dict):
+            errors.append(f"{path}: parking_goal must be an object")
+        else:
+            for key in ("x", "y", "heading"):
+                if key in parking_goal:
+                    _number(parking_goal[key], f"{path}: parking_goal.{key}", errors)
+                else:
+                    errors.append(f"{path}: parking_goal missing '{key}'")
+            for key in ("width", "length"):
+                if key in parking_goal:
+                    _number(parking_goal[key], f"{path}: parking_goal.{key}", errors)
+
     if not isinstance(data.get("pass_criteria"), dict):
         errors.append(f"{path}: pass_criteria must be an object")
     return errors

@@ -2358,6 +2358,70 @@ def _evaluate_l3_expectations(series: list[dict], l3_expect: dict) -> dict:
     return {"failures": failures, "warnings": warnings}
 
 
+def _evaluate_parking_goal_expectations(
+    series: list[dict],
+    parking_goal: dict,
+    parking_goal_expect: dict,
+    collision_count: int = 0,
+) -> dict:
+    """Evaluate open-space parking terminal accuracy and constraints (Milestone M3)."""
+    failures: list[str] = []
+    warnings: list[str] = []
+    if not parking_goal_expect or not parking_goal or not series:
+        return {
+            "failures": failures,
+            "warnings": warnings,
+            "pos_err": 0.0,
+            "heading_err_deg": 0.0,
+            "final_v": 0.0,
+        }
+
+    goal_x = float(parking_goal.get("x", 0.0))
+    goal_y = float(parking_goal.get("y", 0.0))
+    goal_h = float(parking_goal.get("heading", 0.0))
+
+    max_pos_err = float(parking_goal_expect.get("max_pos_err_m", 0.40))
+    max_heading_err_deg = float(parking_goal_expect.get("max_heading_err_deg", 6.0))
+    max_heading_err_rad = math.radians(max_heading_err_deg)
+
+    final_frame = series[-1]
+    final_x = float(final_frame.get("x", 0.0) or 0.0)
+    final_y = float(final_frame.get("y", 0.0) or 0.0)
+    final_h = float(final_frame.get("heading", 0.0) or 0.0)
+    final_v = abs(float(final_frame.get("speed", 0.0) or 0.0))
+
+    pos_err = math.hypot(final_x - goal_x, final_y - goal_y)
+    heading_err = abs(math.atan2(math.sin(final_h - goal_h), math.cos(final_h - goal_h)))
+    heading_err_deg = math.degrees(heading_err)
+
+    if pos_err > max_pos_err:
+        failures.append(
+            f"parking goal position error {pos_err:.3f} m > threshold {max_pos_err:.3f} m "
+            f"(final=({final_x:.2f}, {final_y:.2f}), goal=({goal_x:.2f}, {goal_y:.2f}))"
+        )
+    if heading_err > max_heading_err_rad:
+        failures.append(
+            f"parking goal heading error {heading_err_deg:.2f}° > threshold {max_heading_err_deg:.2f}° "
+            f"(final={math.degrees(final_h):.2f}°, goal={math.degrees(goal_h):.2f}°)"
+        )
+    if final_v > 0.2:
+        failures.append(
+            f"parking final speed {final_v:.2f} m/s > 0.2 m/s (vehicle not stopped in slot)"
+        )
+    if collision_count > 0:
+        failures.append(
+            f"parking collision count {collision_count} > 0 (hit boundary or obstacles during maneuver)"
+        )
+
+    return {
+        "failures": failures,
+        "warnings": warnings,
+        "pos_err": pos_err,
+        "heading_err_deg": heading_err_deg,
+        "final_v": final_v,
+    }
+
+
 def scenario_actor_layer_counts(scenario: dict | None) -> dict[str, int]:
     """场景 JSON 声明的各感知层 actor 数量。
 
@@ -2479,8 +2543,9 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     # 掉头自身的正确性由 wrong-way + uturn-oscillation 门禁（下方）兜底，
     # 巡航向门禁只为巡航行为服务。
     heading_norm = [math.atan2(math.sin(h), math.cos(h)) for h in headings]
-    uturn_detected = any(abs(h) > math.pi / 2.0 for h in heading_norm)
-    maneuver_mask = [abs(h) > math.pi / 2.0 for h in heading_norm]
+    has_parking_goal = bool(scenario.get("parking_goal", {}).get("enabled", False)) if isinstance(scenario, dict) else False
+    uturn_detected = any(abs(h) > math.pi / 2.0 for h in heading_norm) or has_parking_goal
+    maneuver_mask = [(abs(h) > math.pi / 2.0 or has_parking_goal) for h in heading_norm]
     # 掉头是连续机动：三把方向（倒车/停车回正/前进满舵）中 heading 已进入
     # ±90° 以内但仍未回正（实测 -88°→-11° 段满舵 0.60 是执行掉头弧的唯一
     # 方式）。从 |heading|>90° 帧向前后邻帧扩散掩码，直到 heading 回正
@@ -2664,7 +2729,7 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         # 会差 1–3 个目标。容差取 max(3, 50%)；但**覆盖范围内有真值而 BEV 报 0**
         # 单独判 FAIL —— 否则小场景（truth≤3）里"停摆"会被容差吞掉。
         tol = max(3, int(0.5 * bev_truth_count))
-        if bev_metrics and (
+        if bev_metrics and not has_parking_goal and (
                 (bev_truth_count > 1 and bev_shadow_count < 1) or
                 abs(bev_shadow_count - bev_truth_count) > tol):
             failures.append(
@@ -2767,10 +2832,10 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
                 road_departure_max_consecutive = road_departure_consecutive
         else:
             road_departure_consecutive = 0
-    if min_road_margin < -1.5 or road_departure_max_consecutive >= 10:
+    if not has_parking_goal and (min_road_margin < -1.5 or road_departure_max_consecutive >= 10):
         failures.append(f"road departure: ego body exceeded road edge by {-min_road_margin:.2f} m"
                         f" (consecutive={road_departure_max_consecutive} frames)")
-    elif min_road_margin < 0.0:
+    elif not has_parking_goal and min_road_margin < 0.0:
         warnings.append(f"brief road edge excursion during lane-count transition: {-min_road_margin:.2f} m"
                         f" (consecutive={road_departure_max_consecutive} frames, < 10 threshold)")
     if max_lane_error > 2.0:
@@ -2960,10 +3025,14 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     if progress < required_distance:
         failures.append(f"vehicle stuck or no progress: x delta {progress:.1f} m < {required_distance:.1f} m")
 
-    avg_speed = statistics.fmean(speeds) if speeds else 0.0
+    avg_speed = (
+        statistics.fmean(abs(s) for s in speeds)
+        if (uturn_detected or has_parking_goal) and speeds
+        else (statistics.fmean(speeds) if speeds else 0.0)
+    )
     min_avg_speed = float(criteria.get("min_avg_speed_mps", 0.0) or 0.0)
     required_avg_speed = min_avg_speed if min_avg_speed > 0.0 else 1.0
-    if avg_speed < required_avg_speed:
+    if not has_parking_goal and avg_speed < required_avg_speed:
         failures.append(f"average speed too low: {avg_speed:.1f} m/s < {required_avg_speed:.1f} m/s")
     if max(speeds) > 25.0:
         failures.append(f"unrealistic speed spike: max speed {max(speeds):.1f} m/s")
@@ -3010,7 +3079,7 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     # use hardcoded stagnation thresholds to catch deadlocks that pass_criteria
     # can't express. When min_avg_speed_mps IS set, low-speed is governed by that
     # check above (more precise than generic stagnation thresholds).
-    if not min_avg_speed and low_speed_ratio > 0.50 and stagnation_duration_s > 5.0:
+    if not has_parking_goal and not min_avg_speed and low_speed_ratio > 0.50 and stagnation_duration_s > 5.0:
         failures.append(
             f"low-speed stagnation: {low_speed_ratio*100:.0f}% samples below {low_speed_thresh} m/s, "
             f"longest run {stagnation_duration_s:.1f}s"
@@ -3890,8 +3959,21 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     failures.extend(l3_summary["failures"])
     warnings.extend(l3_summary["warnings"])
 
+    # ── 开放空间泊车终态门禁 (Milestone M3: parking_goal_expect) ──
+    parking_goal = scenario.get("parking_goal") if isinstance(scenario, dict) and isinstance(scenario.get("parking_goal"), dict) else {}
+    parking_goal_expect = criteria.get("parking_goal_expect") if isinstance(criteria.get("parking_goal_expect"), dict) else {}
+    pg_summary = None
+    if parking_goal_expect and parking_goal:
+        pg_summary = _evaluate_parking_goal_expectations(
+            series, parking_goal, parking_goal_expect, collision_count=collision_pub + collision_log_count
+        )
+        failures.extend(pg_summary["failures"])
+        warnings.extend(pg_summary["warnings"])
+
     summary = {
         "scenario": scenario_name or "(unknown)",
+        "parking_goal_pos_err_m": pg_summary["pos_err"] if pg_summary else None,
+        "parking_goal_heading_err_deg": pg_summary["heading_err_deg"] if pg_summary else None,
         "samples": len(samples),
         "duration_s": max(0.0, samples[-1].get("timestamp", 0) - samples[0].get("timestamp", 0)),
         # 仿真钟跨度（权威）；None = 样本里没有 metrics.scene.t_us（回退墙钟）

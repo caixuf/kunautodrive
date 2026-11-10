@@ -880,6 +880,24 @@ ScenarioConfig* scenario_load(const char* path) {
         sc->friction_zone_count = valid_count;
     }
 
+    /* parking_goal（可选，Milestone M3 开放空间泊车） */
+    cJSON* jpg = cJSON_GetObjectItemCaseSensitive(root, "parking_goal");
+    if (cJSON_IsObject(jpg)) {
+        sc->parking_goal.enabled = true;
+        cJSON* j = cJSON_GetObjectItemCaseSensitive(jpg, "enabled");
+        if (cJSON_IsBool(j)) sc->parking_goal.enabled = cJSON_IsTrue(j);
+        j = cJSON_GetObjectItemCaseSensitive(jpg, "x");
+        if (cJSON_IsNumber(j)) sc->parking_goal.x = j->valuedouble;
+        j = cJSON_GetObjectItemCaseSensitive(jpg, "y");
+        if (cJSON_IsNumber(j)) sc->parking_goal.y = j->valuedouble;
+        j = cJSON_GetObjectItemCaseSensitive(jpg, "heading");
+        if (cJSON_IsNumber(j)) sc->parking_goal.heading = j->valuedouble;
+        j = cJSON_GetObjectItemCaseSensitive(jpg, "width");
+        sc->parking_goal.width = (cJSON_IsNumber(j) && j->valuedouble > 0) ? j->valuedouble : 2.8;
+        j = cJSON_GetObjectItemCaseSensitive(jpg, "length");
+        sc->parking_goal.length = (cJSON_IsNumber(j) && j->valuedouble > 0) ? j->valuedouble : 6.0;
+    }
+
     /* lighting（可选，Task 4）：场景全局光照模式。
      * 缺省 = SCENARIO_LIGHT_DAY（与既有场景完全向后兼容）。
      * 字符串映射："day"→DAY, "night"→NIGHT, "dusk"→DUSK。 */
@@ -1245,6 +1263,18 @@ char* scenario_to_json(const ScenarioConfig* scenario) {
                             scenario->traffic_density.zones,
                             scenario->traffic_density.zone_count);
         cJSON_AddItemToObject(root, "traffic_density", jtd);
+    }
+
+    /* parking_goal（可选，Milestone M3 开放空间泊车） */
+    if (scenario->parking_goal.enabled) {
+        cJSON* jpg = cJSON_CreateObject();
+        cJSON_AddBoolToObject(jpg, "enabled", true);
+        cJSON_AddNumberToObject(jpg, "x", scenario->parking_goal.x);
+        cJSON_AddNumberToObject(jpg, "y", scenario->parking_goal.y);
+        cJSON_AddNumberToObject(jpg, "heading", scenario->parking_goal.heading);
+        cJSON_AddNumberToObject(jpg, "width", scenario->parking_goal.width);
+        cJSON_AddNumberToObject(jpg, "length", scenario->parking_goal.length);
+        cJSON_AddItemToObject(root, "parking_goal", jpg);
     }
 
     char* out = cJSON_Print(root);

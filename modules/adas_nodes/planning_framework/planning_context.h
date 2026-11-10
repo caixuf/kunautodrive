@@ -287,6 +287,18 @@ struct L3SafetyState {
 };
 
 /**
+ * @brief Parking goal target pose and slot geometry (Milestone M3).
+ */
+struct ParkingGoal {
+    bool enabled{false};
+    double x{0.0};
+    double y{0.0};
+    double heading{0.0};
+    double width{2.8};
+    double length{6.0};
+};
+
+/**
  * @brief Planning Frame Context per cycle (zero dynamic allocation, passed by reference).
  *
  * Encapsulates vehicle state, perception obstacles, road layout, L3 safety status,
@@ -300,6 +312,7 @@ struct FrameContext {
     ObstacleList obstacles{};
     RoadGeometryContext road_geometry{};
     L3SafetyState l3_state{};
+    ParkingGoal parking_goal{};
     Blackboard blackboard{};
 
     void Reset() noexcept {
@@ -309,6 +322,7 @@ struct FrameContext {
         obstacles.count = 0;
         road_geometry = RoadGeometryContext{};
         l3_state = L3SafetyState{};
+        parking_goal = ParkingGoal{};
         blackboard.Clear();
     }
 

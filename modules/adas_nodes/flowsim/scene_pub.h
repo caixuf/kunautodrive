@@ -144,6 +144,16 @@ struct ScenePubConfig {
     /* ── 局部湿滑摩擦区（Milestone M4）── */
     std::vector<ScenePubFrictionZone> friction_zones;
 
+    /* ── 泊车目标（Milestone M3 开放空间泊车）── */
+    struct ScenePubParkingGoal {
+        bool enabled{false};
+        double x{0.0};
+        double y{0.0};
+        double heading{0.0};
+        double width{2.8};
+        double length{6.0};
+    } parking_goal;
+
     /* ── 性能优化：road_network JSON 缓存 ──
      * 道路网络在仿真过程中不变（仅 init 阶段加载 xodr），但 build_road_network_json
      * 每帧调用 sample_road_nodes → roads->frenet_to_world 做全网采样，20Hz 下

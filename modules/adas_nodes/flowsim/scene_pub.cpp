@@ -560,6 +560,18 @@ char* build_scene_frame_json(const EntityPool& pool,
         }
     }
 
+    /* 泊车目标（Milestone M3 开放空间泊车）：透传给前端渲染车位指示框 */
+    if (cfg.parking_goal.enabled) {
+        cJSON* jpg = cJSON_CreateObject();
+        cJSON_AddBoolToObject(jpg, "enabled", true);
+        cJSON_AddNumberToObject(jpg, "x", cfg.parking_goal.x);
+        cJSON_AddNumberToObject(jpg, "y", cfg.parking_goal.y);
+        cJSON_AddNumberToObject(jpg, "heading", cfg.parking_goal.heading);
+        cJSON_AddNumberToObject(jpg, "width", cfg.parking_goal.width);
+        cJSON_AddNumberToObject(jpg, "length", cfg.parking_goal.length);
+        cJSON_AddItemToObject(root, "parking_goal", jpg);
+    }
+
     /* traffic_density 自动补给结果（D3-2 可观测性）：spawn 结论此前只有一条
      * `if (spawned > 0) LOG_INFO`，spawn 数为 0 时静默，门禁无从断言。
      * 这里随静态段发出去，经 monitor 进 /tmp/flow_topology.json，由

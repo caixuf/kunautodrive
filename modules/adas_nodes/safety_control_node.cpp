@@ -454,7 +454,10 @@ static ControlCmd arbitrate_control(const ControlCmd& rule_cmd,
     out.turn_signal = res.turn_signal;
     out.hazard      = res.hazard != 0;
     out.gear        = res.gear;
-    out.mode        = intervened ? "ARBITER[OVERRIDE]" : "ARBITER[MODEL]";
+    out.mode = intervened ? "ARBITER[OVERRIDE]" : "ARBITER[MODEL]";
+    if (rule_cmd.mode.find("MANEUVER") != std::string::npos) {
+        out.mode += "+MANEUVER";
+    }
 
     if (out_intervened) *out_intervened = intervened != 0;
     return out;

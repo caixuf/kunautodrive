@@ -58,6 +58,11 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "planning_framework/scenario_manager.h"
+#include "planning_framework/lane_follow_scenario.h"
+#include "planning_framework/emergency_stop_scenario.h"
+#include "planning_framework/valet_parking_scenario.h"
+
 namespace {
 
 /* ── 节点本地状态 ───────────────────────────────────────────── */
@@ -310,6 +315,15 @@ struct PlanningContext {
 
     /* TaskBase 包装器（由 EXPORT_COROUTINE_TASK 宏创建） */
     struct planning_Wrapper* task_wrapper{nullptr};
+
+    /* Milestone M3: Scenario-Stage-Task 决策规划框架与开放空间泊车 */
+    flowengine::planning::ScenarioManager       scenario_manager;
+    flowengine::planning::LaneFollowScenario    lane_follow_scenario;
+    flowengine::planning::EmergencyStopScenario emergency_stop_scenario;
+    flowengine::planning::ValetParkingScenario  valet_parking_scenario;
+    flowengine::planning::ParkingGoal           parking_goal;
+    std::string active_scenario_name{"LANE_FOLLOW"};
+    std::string active_stage_name{"CRUISE"};
 };
 
 PlanningContext g;
@@ -1257,6 +1271,22 @@ static void on_road_geometry(const Message* msg, void* user_data) {
         }
         if ((item = cJSON_GetObjectItem(root, "oneway")) && cJSON_IsNumber(item)) {
             g.road_oneway = (item->valuedouble != 0.0) ? 1 : 0;
+        }
+        cJSON* jpg = cJSON_GetObjectItem(root, "parking_goal");
+        if (jpg && cJSON_IsObject(jpg)) {
+            g.parking_goal.enabled = true;
+            cJSON* j = cJSON_GetObjectItem(jpg, "enabled");
+            if (j && cJSON_IsBool(j)) g.parking_goal.enabled = cJSON_IsTrue(j);
+            j = cJSON_GetObjectItem(jpg, "x");
+            if (j && cJSON_IsNumber(j)) g.parking_goal.x = j->valuedouble;
+            j = cJSON_GetObjectItem(jpg, "y");
+            if (j && cJSON_IsNumber(j)) g.parking_goal.y = j->valuedouble;
+            j = cJSON_GetObjectItem(jpg, "heading");
+            if (j && cJSON_IsNumber(j)) g.parking_goal.heading = j->valuedouble;
+            j = cJSON_GetObjectItem(jpg, "width");
+            g.parking_goal.width = (j && cJSON_IsNumber(j)) ? j->valuedouble : 2.8;
+            j = cJSON_GetObjectItem(jpg, "length");
+            g.parking_goal.length = (j && cJSON_IsNumber(j)) ? j->valuedouble : 6.0;
         }
         cJSON_Delete(root);
     } else {
@@ -2301,6 +2331,52 @@ protected:
                 (void)project_to_reference_path(g.ego_x, g.ego_y, ego_ref_s, ego_ref_d);
             }
 
+            /* ── Scenario-Stage-Task: 开放空间泊车场景 (ValetParkingScenario) ── */
+            if (g.parking_goal.enabled) {
+                flowengine::planning::FrameContext fctx;
+                fctx.seq = g.plan_count;
+                fctx.timestamp_us = clock_now_us();
+                fctx.vehicle_state.x = g.ego_x;
+                fctx.vehicle_state.y = g.ego_y;
+                fctx.vehicle_state.v = g.ego_v;
+                fctx.vehicle_state.heading = g.ego_heading;
+                fctx.vehicle_state.wheelbase = g.wheelbase;
+                fctx.parking_goal = g.parking_goal;
+                for (int i = 0; i < g.obs_count && i < 128; ++i) {
+                    Obstacle obs{};
+                    obs.id = i;
+                    obs.x = (float)g.obs_x[i];
+                    obs.y = (float)g.obs_y[i];
+                    obs.vx = (float)g.obs_vx[i];
+                    obs.vy = (float)g.obs_vy[i];
+                    obs.length = 4.6f;
+                    obs.width = 2.0f;
+                    fctx.AddObstacle(obs);
+                }
+
+                Trajectory plan_traj{};
+                flowengine::planning::ScenarioStatus st = g.scenario_manager.Update(fctx, plan_traj);
+                (void)st;
+
+                flowengine::planning::Scenario* cur_sc = g.scenario_manager.CurrentScenario();
+                if (cur_sc) {
+                    g.active_scenario_name = std::string(cur_sc->Name());
+                    flowengine::planning::Stage* cur_st = cur_sc->CurrentStage();
+                    g.active_stage_name = cur_st ? std::string(cur_st->Name()) : "UNKNOWN";
+                }
+
+                // 在所有泊车阶段直接消费规划框架输出的带符号轨迹
+                if (g.valet_parking_scenario.IsActive()) {
+                    n_pts = 64;
+                    std::memcpy(points, plan_traj.points, sizeof(TrajectoryPoint) * 64);
+                    use_stitch = false;
+                    goto publish_trajectory;
+                }
+            } else {
+                g.active_scenario_name = "LANE_FOLLOW";
+                g.active_stage_name = "CRUISE";
+            }
+
             /* ── UTurnPlanner: 掉头时跳过 Frenet，直接生成自行车模型轨迹 ── */
             if (g.overtake_state == 3) {
                 /* 车参单一事实源：场景 ego 块 → flowsim 广播 → 此处同步。
@@ -3009,8 +3085,8 @@ publish_trajectory:
                          g.has_behavior ? (int)g.current_behavior.command : -1);
             }
 
-            /* 发布 planning/debug（全链路横向调试，每10帧≈2Hz） */
-            if (g.plan_count % 10 == 0) {
+            /* 发布 planning/debug（全链路横向调试，每10帧≈2Hz；泊车场景全帧发布） */
+            if (g.plan_count % 10 == 0 || g.parking_goal.enabled) {
                 double dbg_rc_y = road_center_y(g.ego_x, g.curve_start_x, g.curve_length_m, g.curve_offset_m);
                 double dbg_ref_s = g.ego_x;
                 double dbg_ego_d = g.ego_y - dbg_rc_y;
@@ -3028,6 +3104,8 @@ publish_trajectory:
                 cJSON_AddNumberToObject(dbg, "ego_y", g.ego_y);
                 cJSON_AddNumberToObject(dbg, "ego_v", g.ego_v);
                 cJSON_AddStringToObject(dbg, "driver_mode", mode_buf[0] ? mode_buf : "NA:READY");
+                cJSON_AddStringToObject(dbg, "active_scenario", g.active_scenario_name.c_str());
+                cJSON_AddStringToObject(dbg, "active_stage", g.active_stage_name.c_str());
                 cJSON_AddNumberToObject(dbg, "route_lane", g.route_target_lane);
                 cJSON_AddNumberToObject(dbg, "route_count", g.route_count);
                 cJSON_AddNumberToObject(dbg, "route_next_idx", g.route_next_idx);
@@ -3485,6 +3563,12 @@ static int planning_init(MessageBus* bus, Transport* transport,
     /* 初始化驾驶模式状态机（NA/ACC/CP/NP/NOA）：真实条件驱动升降级 */
     statem_init(&g.mode_sm, SM_TABLE_MODE_SWITCHING, SM_MODE_NA, "driving_mode");
     statem_set_guard(&g.mode_sm, mode_transition_guard);
+
+    /* Milestone M3: 注册 Scenario-Stage-Task 决策规划框架场景 */
+    g.scenario_manager.Reset();
+    g.scenario_manager.RegisterScenario(&g.emergency_stop_scenario);
+    g.scenario_manager.RegisterScenario(&g.valet_parking_scenario);
+    g.scenario_manager.RegisterScenario(&g.lane_follow_scenario);
 
     /* 创建 TaskBase 包装器（托管模式） */
     TaskConfig tcfg = {};

@@ -24,6 +24,7 @@
 #include "scenario_manager.h"
 #include "lane_follow_scenario.h"
 #include "emergency_stop_scenario.h"
+#include "valet_parking_scenario.h"
 
 using namespace flowengine::planning;
 
@@ -382,6 +383,97 @@ static void test_critical_hard_brake() {
     std::printf("[PASS] test_critical_hard_brake\n");
 }
 
+// ── Test 8: ValetParkingScenario Three-Stage Pipeline (Milestone M3) ────────────
+static void test_valet_parking_three_stages() {
+    std::printf("[RUN] test_valet_parking_three_stages\n");
+    ValetParkingScenario scenario;
+    FrameContext context;
+    Trajectory traj{};
+
+    context.parking_goal.enabled = true;
+    context.parking_goal.x = 10.0;
+    context.parking_goal.y = -3.5;
+    context.parking_goal.heading = M_PI * 0.5;
+    context.vehicle_state.x = -25.0; // Far away (35m)
+    context.vehicle_state.y = 2.0;
+    context.vehicle_state.v = 6.0;
+    context.vehicle_state.heading = 0.0;
+
+    TEST_CHECK(scenario.IsApplicable(context), "ValetParkingScenario should be applicable when parking_goal.enabled=true");
+    TEST_CHECK(scenario.Priority() == 50, "ValetParking priority should be 50");
+
+    // Stage 1: APPROACH (distance > 18m)
+    ScenarioStatus st = scenario.Run(context, traj);
+    TEST_CHECK(st == ScenarioStatus::RUNNING, "Scenario should be RUNNING in APPROACH stage");
+    TEST_CHECK(scenario.CurrentStageName() == "APPROACH", "Stage name should be APPROACH");
+    TEST_CHECK(traj.points[0].v > 0.0f, "Approach trajectory speed should be positive");
+
+    // Transition condition: vehicle arrives within 18m and slows down <= 3.5 m/s
+    context.vehicle_state.x = 0.0; // dist ~ 11.5m < 18m
+    context.vehicle_state.v = 2.0; // speed <= 3.5 m/s
+    st = scenario.Run(context, traj);
+    TEST_CHECK(st == ScenarioStatus::RUNNING, "Scenario should be RUNNING after transitioning to OPEN_SPACE_CRUISE");
+    TEST_CHECK(scenario.CurrentStageName() == "OPEN_SPACE_CRUISE", "Stage name should be OPEN_SPACE_CRUISE");
+
+    // Verify Hybrid A* trajectory points (contains forward v>0 and reverse v<0)
+    bool has_forward = false;
+    bool has_reverse = false;
+    bool has_stop = false;
+    for (int i = 0; i < 64; ++i) {
+        if (traj.points[i].v > 0.5f) has_forward = true;
+        if (traj.points[i].v < -0.5f) has_reverse = true;
+        if (std::fabs(traj.points[i].v) < 0.05f) has_stop = true;
+    }
+    TEST_CHECK(has_forward, "OPEN_SPACE_CRUISE trajectory must contain forward points (v > 0)");
+    TEST_CHECK(has_reverse, "OPEN_SPACE_CRUISE trajectory must contain reverse points (v < 0)");
+    TEST_CHECK(has_stop, "OPEN_SPACE_CRUISE trajectory must contain stop points (v = 0)");
+
+    // Stage 3: PRECISION_HOLD (vehicle reaches parking slot pose)
+    context.vehicle_state.x = 10.02;
+    context.vehicle_state.y = -3.49;
+    context.vehicle_state.heading = M_PI * 0.5;
+    context.vehicle_state.v = 0.0;
+
+    st = scenario.Run(context, traj);
+    TEST_CHECK(scenario.CurrentStageName() == "PRECISION_HOLD", "Stage name should be PRECISION_HOLD");
+    TEST_CHECK(std::fabs(traj.points[0].v) < 0.01f, "PRECISION_HOLD trajectory speed must be 0.0 m/s");
+    TEST_CHECK(st == ScenarioStatus::FINISHED, "Scenario should be FINISHED in PRECISION_HOLD");
+    TEST_CHECK(scenario.IsFinished(), "Valet parking scenario should be marked finished");
+    std::printf("[PASS] test_valet_parking_three_stages\n");
+}
+
+// ── Test 9: Cusp Preservation and Downsampling in OpenSpace Trajectory ─────────
+static void test_open_space_cusp_preservation() {
+    std::printf("[RUN] test_open_space_cusp_preservation\n");
+    std::vector<PathPoint> raw_path;
+    // 40 forward points
+    for (int i = 0; i < 40; ++i) {
+        raw_path.push_back({(double)i * 0.2, 0.0, 0.0, 0.0, 1, (double)i * 0.2, 0.0});
+    }
+    // 50 reverse points
+    for (int i = 0; i < 50; ++i) {
+        raw_path.push_back({8.0 - (double)i * 0.15, -1.0, M_PI * 0.5, -0.4, -1, 8.0 + (double)i * 0.15, -0.15});
+    }
+
+    Trajectory traj{};
+    int n_pts = OpenSpaceCruiseStage::DownsampleTrajectory(raw_path, traj, 2.7);
+    TEST_CHECK(n_pts <= 64, "Downsampled trajectory points must be <= 64");
+
+    // Verify reverse velocity identification
+    int reverse_count = 0;
+    int forward_count = 0;
+    int zero_count = 0;
+    for (int i = 0; i < n_pts; ++i) {
+        if (traj.points[i].v < -0.1f) reverse_count++;
+        else if (traj.points[i].v > 0.1f) forward_count++;
+        else zero_count++;
+    }
+    TEST_CHECK(forward_count > 0, "Must have forward velocity points");
+    TEST_CHECK(reverse_count > 0, "Must have reverse velocity points for downstream ManeuverTracker");
+    TEST_CHECK(zero_count > 0, "Must preserve zero velocity cusp/endpoint");
+    std::printf("[PASS] test_open_space_cusp_preservation\n");
+}
+
 int main() {
     std::printf("============================================================\n");
     std::printf("  Running Scenario-Stage-Task Decision Planning Framework Tests\n");
@@ -394,6 +486,8 @@ int main() {
     test_anti_chatter_debounce();
     test_emergency_preemption_and_mrm();
     test_critical_hard_brake();
+    test_valet_parking_three_stages();
+    test_open_space_cusp_preservation();
 
     std::printf("============================================================\n");
     if (g_failures == 0) {

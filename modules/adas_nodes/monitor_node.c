@@ -313,6 +313,7 @@ static struct {
     char   scene_ego_json[4096];        /* ego 实体 JSON（含 lights/brake/vx/vy，~1.5KB 实测） */
     char   scene_construction_json[1024]; /* construction_zones（施工区几何，后端单一事实源，透传给前端） */
     char   scene_friction_json[2048];     /* friction_zones（局部湿滑摩擦区，透传给前端贴花） */
+    char   scene_parking_goal_json[512];  /* parking_goal（开放空间泊车目标车位，透传给前端框线渲染） */
     char   scene_scenario_name[64]; /* 场景语义名，供前端选择专属设施 */
     char   scene_lighting[16];
     char   scene_weather[16];
@@ -863,6 +864,26 @@ static void on_scene_frame(const Message* msg, void* user_data) {
     } else {
         pthread_mutex_lock(&g.scene_frame_mutex);
         g.scene_friction_json[0] = '\0';
+        pthread_mutex_unlock(&g.scene_frame_mutex);
+    }
+
+    cJSON* pg = cJSON_GetObjectItem(root, "parking_goal");
+    if (pg && cJSON_IsObject(pg)) {
+        char* pg_str = cJSON_PrintUnformatted(pg);
+        if (pg_str) {
+            size_t len = strlen(pg_str);
+            if (len >= sizeof(g.scene_parking_goal_json)) {
+                len = sizeof(g.scene_parking_goal_json) - 1;
+            }
+            pthread_mutex_lock(&g.scene_frame_mutex);
+            memcpy(g.scene_parking_goal_json, pg_str, len);
+            g.scene_parking_goal_json[len] = '\0';
+            pthread_mutex_unlock(&g.scene_frame_mutex);
+            free(pg_str);
+        }
+    } else {
+        pthread_mutex_lock(&g.scene_frame_mutex);
+        g.scene_parking_goal_json[0] = '\0';
         pthread_mutex_unlock(&g.scene_frame_mutex);
     }
 
@@ -1840,6 +1861,21 @@ static void export_dashboard_json(void) {
         cJSON* fzs = monitor_cJSON_Parse(fz_snap);
         if (fzs) {
             cJSON_AddItemToObject(scene, "friction_zones", fzs);
+        }
+    }
+
+    if (g.has_scene_frame && g.scene_parking_goal_json[0] != '\0') {
+        char pg_snap[sizeof(g.scene_parking_goal_json)];
+        size_t pg_snap_len;
+        pthread_mutex_lock(&g.scene_frame_mutex);
+        pg_snap_len = strlen(g.scene_parking_goal_json);
+        if (pg_snap_len >= sizeof(pg_snap)) pg_snap_len = sizeof(pg_snap) - 1;
+        memcpy(pg_snap, g.scene_parking_goal_json, pg_snap_len);
+        pg_snap[pg_snap_len] = '\0';
+        pthread_mutex_unlock(&g.scene_frame_mutex);
+        cJSON* pg = monitor_cJSON_Parse(pg_snap);
+        if (pg) {
+            cJSON_AddItemToObject(scene, "parking_goal", pg);
         }
     }
 

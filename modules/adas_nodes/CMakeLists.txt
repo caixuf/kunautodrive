@@ -503,22 +503,62 @@ find_library(FRENET_PLANNER
     NAMES frenet_planner
     HINTS ${FLOWENGINE_BUILD}/lib ${FLOWENGINE_BUILD}/lib/Release ${FLOWENGINE_BUILD}/lib/Debug
 )
+# open_space_planner: Apollo 对标 Hybrid A* 与 Reeds-Shepp 自由空间规划器 (Milestone 2)
+add_library(open_space_planner STATIC
+    planning_framework/open_space/box2d.cpp
+    planning_framework/open_space/reeds_shepp_path.cpp
+    planning_framework/open_space/grid_search.cpp
+    planning_framework/open_space/hybrid_a_star.cpp
+)
+set_target_properties(open_space_planner PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(open_space_planner PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/planning_framework/open_space
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${FLOW_ROOT}/include
+)
+target_link_libraries(open_space_planner PUBLIC m)
+
+# planning_framework: Apollo 对标 Scenario-Stage-Task 决策规划框架 (Milestone 1 & 3)
+add_library(planning_framework STATIC
+    planning_framework/scenario_manager.cpp
+    planning_framework/lane_follow_scenario.cpp
+    planning_framework/emergency_stop_scenario.cpp
+    planning_framework/valet_parking_scenario.cpp
+)
+set_target_properties(planning_framework PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(planning_framework PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/planning_framework
+    ${CMAKE_CURRENT_SOURCE_DIR}/planning_framework/open_space
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${FLOWENGINE_BUILD}/gen
+    ${FLOW_ROOT}/include
+)
+target_link_libraries(planning_framework PUBLIC open_space_planner m)
+
 # traj_safety.c：W3 诊断用的轨迹扫掠碰撞检查，与 tests/test_adas_nodes_logic.c 共用
 add_library(planning_node SHARED planning_node.cpp st_graph.c traj_safety.c)
 target_compile_definitions(planning_node PRIVATE FLOWCORO_INTEGRATION)
 target_compile_options(planning_node PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fcoroutines>)
 if(FRENET_BRIDGE AND FRENET_PLANNER AND _EIGEN_INC)
     target_link_libraries(planning_node ${NODE_LINK_LIBS}
-        ${FRENET_BRIDGE} ${FRENET_PLANNER} ${NODE_CXX_RT})
+        ${FRENET_BRIDGE} ${FRENET_PLANNER} ${NODE_CXX_RT}
+        planning_framework open_space_planner)
     target_include_directories(planning_node PRIVATE
         ${FLOW_ROOT}/third_party/frenet_planner/src
         ${FLOW_ROOT}/third_party/frenet_planner/src/FrenetOptimalTrajectory
         ${_EIGEN_INC}
+        ${CMAKE_CURRENT_SOURCE_DIR}/planning_framework
+        ${CMAKE_CURRENT_SOURCE_DIR}/planning_framework/open_space
     )
     target_compile_definitions(planning_node PRIVATE HAVE_FRENET)
     message(STATUS "planning_node: frenet_bridge=${FRENET_BRIDGE}; eigen=${_EIGEN_INC}")
 else()
-    target_link_libraries(planning_node ${NODE_LINK_LIBS} ${NODE_CXX_RT})
+    target_link_libraries(planning_node ${NODE_LINK_LIBS} ${NODE_CXX_RT}
+        planning_framework open_space_planner)
+    target_include_directories(planning_node PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/planning_framework
+        ${CMAKE_CURRENT_SOURCE_DIR}/planning_framework/open_space
+    )
     message(STATUS "planning_node: building in fallback mode "
         "(frenet_bridge=${FRENET_BRIDGE}, frenet_planner=${FRENET_PLANNER}, eigen=${_EIGEN_INC})")
 endif()
@@ -530,34 +570,6 @@ add_test(NAME planning_coordinates COMMAND test_planning_coordinates)
 add_executable(test_planning_fallback_when_match_invalid test_planning_fallback_when_match_invalid.cpp)
 target_include_directories(test_planning_fallback_when_match_invalid PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME test_planning_fallback_when_match_invalid COMMAND test_planning_fallback_when_match_invalid)
-
-# planning_framework: Apollo 对标 Scenario-Stage-Task 决策规划框架 (Milestone 1)
-add_library(planning_framework STATIC
-    planning_framework/scenario_manager.cpp
-    planning_framework/lane_follow_scenario.cpp
-    planning_framework/emergency_stop_scenario.cpp
-)
-target_include_directories(planning_framework PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/planning_framework
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${FLOWENGINE_BUILD}/gen
-    ${FLOW_ROOT}/include
-)
-target_link_libraries(planning_framework PUBLIC m)
-
-# open_space_planner: Apollo 对标 Hybrid A* 与 Reeds-Shepp 自由空间规划器 (Milestone 2)
-add_library(open_space_planner STATIC
-    planning_framework/open_space/box2d.cpp
-    planning_framework/open_space/reeds_shepp_path.cpp
-    planning_framework/open_space/grid_search.cpp
-    planning_framework/open_space/hybrid_a_star.cpp
-)
-target_include_directories(open_space_planner PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/planning_framework/open_space
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${FLOW_ROOT}/include
-)
-target_link_libraries(open_space_planner PUBLIC m)
 
 add_executable(test_hybrid_a_star
     ../../tests/test_hybrid_a_star.cpp

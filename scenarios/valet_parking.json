@@ -1,0 +1,56 @@
+{
+  "name": "valet_parking",
+  "description": "自主代客泊车场景 (Valet Parking)：车辆接近路侧垂直车位触发开放空间 Hybrid A* 规划，前进摆头后倒车换挡精准入库停稳。",
+  "random_seed": 42,
+  "duration_s": 35,
+  "ego": {
+    "x": 5.0,
+    "y": -1.75,
+    "heading": 0.0,
+    "init_speed": 4.0,
+    "target_speed": 4.0
+  },
+  "road_network": {
+    "edges": [
+      {
+        "id": 0,
+        "type": "urban",
+        "name": "valet_parking_road",
+        "length_m": 200,
+        "lanes": 2,
+        "lane_width": 3.5,
+        "speed_limit": 10.0,
+        "nodes": [[0, 0, 0], [200, 0, 0]]
+      }
+    ]
+  },
+  "actors": [
+    {"id": 101, "type": "car", "x": 27.0, "y": -4.0, "vx": 0.0, "vy": 0.0, "len": 4.6, "wid": 2.0},
+    {"id": 102, "type": "car", "x": 41.5, "y": -4.0, "vx": 0.0, "vy": 0.0, "len": 4.6, "wid": 2.0}
+  ],
+  "traffic_lights": [],
+  "parking_goal": {
+    "enabled": true,
+    "x": 35.65,
+    "y": -3.75,
+    "heading": 1.20,
+    "width": 2.8,
+    "length": 6.0
+  },
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 35.0,
+    "min_avg_speed_mps": 0.2,
+    "lateral_grid_tolerance_m": null,
+    "parking_goal_expect": {
+      "max_pos_err_m": 0.40,
+      "max_heading_err_deg": 6.0
+    }
+  },
+  "route": [],
+  "scenarios": [],
+  "choreography": {
+    "loop_period_s": 999,
+    "beats": []
+  }
+}

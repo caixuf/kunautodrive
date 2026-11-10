@@ -418,6 +418,15 @@ typedef struct {
 #define SCENARIO_MAX_FRICTION_ZONES 16
     ScenarioFrictionZone friction_zones[SCENARIO_MAX_FRICTION_ZONES];
     int               friction_zone_count;
+    /* ── 泊车目标（Milestone M3 开放空间泊车）── */
+    struct {
+        bool   enabled;
+        double x;
+        double y;
+        double heading;
+        double width;
+        double length;
+    } parking_goal;
     /* ── 中凯路场景新增（Task 3 + Task 4）── */
     ScenarioLighting  lighting;        /**< 全局光照模式（day/night/dusk，默认 day） */
     char              weather[16];     /**< clear/rain/snow/overcast/fog */

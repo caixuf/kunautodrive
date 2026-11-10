@@ -132,9 +132,28 @@ class ManeuverTracker:
     # 挡位意图。只有扫到真正的运动点才决定挡位。
     def _update_gear(self, base_i, current_speed):
         want = self.gear
-        for i in range(base_i, self.n):
-            if abs(self.traj[i].v) > 0.3:
-                want = -1 if self.traj[i].v < 0 else 1
+        base_v = self.traj[base_i].v
+        has_base_motion = abs(base_v) > 0.3
+        if has_base_motion:
+            want = -1 if base_v < 0 else 1
+
+        scan = max(1.0, current_speed * current_speed / 4.0 + 0.5)
+        arc = 0.0
+        for i in range(base_i, self.n - 1):
+            dx = self.traj[i + 1].x - self.traj[i].x
+            dy = self.traj[i + 1].y - self.traj[i].y
+            arc += math.hypot(dx, dy)
+            if arc > min(6.0, scan):
+                break
+            v = self.traj[i + 1].v
+            if abs(v) <= 0.3:
+                continue
+            cand = -1 if v < 0 else 1
+            if not has_base_motion:
+                want = cand
+                break
+            if cand != want:
+                want = cand
                 break
         if want != self.gear and abs(current_speed) > 0.8:
             return True   # gear_pending：带速想换挡，本帧刹停
@@ -147,18 +166,30 @@ class ManeuverTracker:
         exec_pt, exec_i = self._exec()
         # 挡位（向前扫第一个运动点，跳过 v=0 刹停点）
         gear_pending = self._update_gear(exec_i, current_speed)
-        # 目标速度 = 执行点 |v|，前视 6m 内同挡段最小 |v|，下限 1.5
+
+        # 换挡已落定但执行点仍卡在相反挡段（与 C++ maneuver_tracker.h 一致）
+        if self.gear == -1 and self.traj[exec_i].v > 0.1:
+            for i in range(exec_i, self.n - 1):
+                if self.traj[i + 1].v < -0.1:
+                    self.s = self.cum_s[i]
+                    break
+            exec_pt, exec_i = self._exec()
+
+        exec_rev = (self.gear == -1)
+        # 目标速度幅值 = 执行点 |v|，前视 6m 内同挡段最小 |v|，下限 0.5
         mag = abs(exec_pt.v)
         arc = 0.0
         for i in range(exec_i, self.n - 1):
             dx = self.traj[i + 1].x - self.traj[i].x
             dy = self.traj[i + 1].y - self.traj[i].y
             arc += math.hypot(dx, dy)
-            if arc > 6.0 or (self.traj[i + 1].v < -0.1) != (exec_pt.v < -0.1):
+            next_rev = self.traj[i + 1].v < -0.1
+            if arc > 6.0 or next_rev != exec_rev:
                 break
-            mag = min(mag, abs(self.traj[i + 1].v))
-        mag = max(mag, 1.5)
-        target_speed = -mag if exec_pt.v < -0.1 else mag
+            if abs(self.traj[i + 1].v) > 0.3:
+                mag = min(mag, abs(self.traj[i + 1].v))
+        mag = max(mag, 0.5)
+        target_speed = -mag if exec_rev else mag
         # 轨迹终点 = 机动完成 → 目标 0，车刹停（不继续反向冲）。
         # 注意：末段刹停点零空间（x,y 与前一运动点重合，cum_s 相等），
         # 弧长索引看不到它，故用 s 是否到尽头顶判断。
@@ -182,11 +213,14 @@ class ManeuverTracker:
         steer = max(-MAX_STEER, min(MAX_STEER, steer))
         self.prev_steer = steer
 
-        # ── 纵向：PID ──
+        # ── 纵向：PID（倒车时镜像速度符号，与 control_node.cpp 一致）──
         if gear_pending:
             return steer, 0.0, 1.0, self.gear   # 换挡刹停
-        pid_target = abs(target_speed)
-        pid_current = abs(current_speed)
+        pid_target = target_speed
+        pid_current = current_speed
+        if self.gear == -1:
+            pid_target = -target_speed
+            pid_current = -current_speed
         err = pid_target - pid_current
         self.integral = max(-200.0, min(500.0, self.integral + err * dt))
         deriv = (err - getattr(self, '_prev_err', 0.0)) / dt

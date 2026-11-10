@@ -208,6 +208,11 @@
       "file": "scenarios/wet_road_evasion.json",
       "duration_s": 35,
       "enabled": true
+    },
+    {
+      "file": "scenarios/valet_parking.json",
+      "duration_s": 35,
+      "enabled": true
     }
   ],
   "max_lane_offset_m": 1.65

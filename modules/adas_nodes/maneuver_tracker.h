@@ -176,13 +176,15 @@ private:
 
     /// 前视点：执行点前视 ~2m 弧长，同一挡段内（跨 D/R 边界就停）（Python _lookahead）。
     TrackPoint lookahead(int base_i) {
-        bool rev = (double)pts_[base_i].v < -p_.segment_v_threshold;
+        bool rev = (gear_ == -1);
         TrackPoint target = toTrack(pts_[base_i]);
         int j = base_i;
         double arc = 0.0;
-        while (j + 1 < n_ && arc < p_.lookahead_m) {
-            bool next_rev = (double)pts_[j + 1].v < -p_.segment_v_threshold;
-            if (next_rev != rev) break;
+        // 泊车低速弯弧紧凑，前视弧长适配低速避免提早切角
+        const double la_limit = std::min(p_.lookahead_m, 0.8);
+        while (j + 1 < n_ && arc < la_limit) {
+            double next_v = (double)pts_[j + 1].v;
+            if (std::fabs(next_v) > p_.segment_v_threshold && (next_v < -p_.segment_v_threshold) != rev) break;
             arc += std::hypot((double)pts_[j + 1].x - (double)pts_[j].x,
                               (double)pts_[j + 1].y - (double)pts_[j].y);
             j++;
@@ -195,26 +197,19 @@ private:
     /// 挡位：默认跟随执行点当前段；若前视 speed_scan_m 内出现相反挡段，
     /// 则提前请求刹停换挡。这样短机动（倒库/侧方）不会因为 s 逼近太慢而错过换挡。
     bool updateGear(int base_i, double current_speed) {
-        int want = gear_;
         const double base_v = (double)pts_[base_i].v;
         const bool has_base_motion = (std::fabs(base_v) > p_.gear_v_threshold);
-        if (has_base_motion) want = (base_v < 0) ? -1 : 1;
-
-        // 前视窗口按刹车距离收缩（v²/4+0.5，下限 1.0），别用固定 6m：
-        // 掉头前进弧总长才 ~8-10m，车刚进弧 2m 时固定 6m 前视就能扫到倒车段 →
-        // gear_pending 过早刹停（实测 h=1.05 就停，远没到 corner），换 R 挡后
-        // 执行点还卡在前进弧内 → steer 前馈取错方向 → 倒车画圆死锁。低速时窗口
-        // 缩短到 < 到倒车段的弧长，只有真正能刹住时才请求换挡。
-        double scan = std::max(1.0, current_speed * current_speed / (2.0 * 2.0) + 0.5);
-        double arc = 0.0;
-        for (int i = base_i; i < n_ - 1 && arc <= std::min(p_.speed_scan_m, scan); i++) {
-            arc += std::hypot((double)pts_[i + 1].x - (double)pts_[i].x,
-                              (double)pts_[i + 1].y - (double)pts_[i].y);
-            const double v = (double)pts_[i + 1].v;
-            if (std::fabs(v) <= p_.gear_v_threshold) continue;
-            const int candidate = (v < 0) ? -1 : 1;
-            if (!has_base_motion) { want = candidate; break; }
-            if (candidate != want) { want = candidate; break; }
+        int want = gear_;
+        if (has_base_motion) {
+            want = (base_v < 0) ? -1 : 1;
+        } else {
+            for (int i = base_i; i < n_; i++) {
+                const double v = (double)pts_[i].v;
+                if (std::fabs(v) > p_.gear_v_threshold) {
+                    want = (v < 0) ? -1 : 1;
+                    break;
+                }
+            }
         }
         if (want != gear_ && std::fabs(current_speed) > p_.gear_pending_speed)
             return true;   // gear_pending：带速想换挡，本帧刹停
@@ -258,7 +253,8 @@ inline ManeuverResult ManeuverTracker::tick(double ego_x, double ego_y,
         arc += std::hypot((double)pts_[i + 1].x - (double)pts_[i].x,
                           (double)pts_[i + 1].y - (double)pts_[i].y);
         bool next_rev = (double)pts_[i + 1].v < -p_.segment_v_threshold;
-        if (arc > p_.speed_scan_m || next_rev != exec_rev) break;
+        const double scan_limit = exec_rev ? std::min(p_.speed_scan_m, 2.0) : p_.speed_scan_m;
+        if (arc > scan_limit || next_rev != exec_rev) break;
         // 与 updateGear 一致：跳过 v≈0 的换挡刹停/驻停点，否则 min|v| 被
         // 压成 floor，车在短前进段里 0.5m/s 爬行，200 tick 到不了 D/R 边界
         // 进不了倒挡（parking/parallel CI 失败，2026-08-05 实测）。

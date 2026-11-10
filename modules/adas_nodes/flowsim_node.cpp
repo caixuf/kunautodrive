@@ -1607,6 +1607,17 @@ static void publish_road_geometry(void) {
     /* 单双向：behavior 变道候选限制用（双向路禁止越线变道到对向） */
     cJSON_AddNumberToObject(root, "oneway",
                             (g.scenario && g.scenario->road.oneway) ? 1 : 0);
+    /* 泊车目标（Milestone M3 开放空间泊车）：透传给 planning_node */
+    if (g.scenario && g.scenario->parking_goal.enabled) {
+        cJSON* jpg = cJSON_CreateObject();
+        cJSON_AddBoolToObject(jpg, "enabled", 1);
+        cJSON_AddNumberToObject(jpg, "x", g.scenario->parking_goal.x);
+        cJSON_AddNumberToObject(jpg, "y", g.scenario->parking_goal.y);
+        cJSON_AddNumberToObject(jpg, "heading", g.scenario->parking_goal.heading);
+        cJSON_AddNumberToObject(jpg, "width", g.scenario->parking_goal.width);
+        cJSON_AddNumberToObject(jpg, "length", g.scenario->parking_goal.length);
+        cJSON_AddItemToObject(root, "parking_goal", jpg);
+    }
     /* 同步到 scene_pub_cfg，供 ego fallback 横向控制（lane_keep_ego_fallback）
      * 和 scene/frame 发布使用，否则它们仍用 init 默认值 2，导致 4 车道场景
      * ego target_y 算错。 */
@@ -3295,7 +3306,7 @@ protected:
                  *   掉头倒车是仿真里唯一的倒车场景（GEAR_REVERSE 只由掉头轨迹
                  *   触发），故 gear==REVERSE 并入豁免 = 覆盖整个掉头执行窗口。 */
                 const int8_t gear = g.ego_gear.load(std::memory_order_relaxed);
-                if (g.u_turn_active || g.off_rails || gear == GEAR_REVERSE) {
+                if (g.u_turn_active || g.off_rails || gear == GEAR_REVERSE || (g.scenario && g.scenario->parking_goal.enabled)) {
                     g.ego_maneuver_grace_until = g.cycle + 120;  // ~2s at 60Hz
                 }
                 bool ego_maneuver = (g.cycle <= g.ego_maneuver_grace_until);
@@ -4019,6 +4030,16 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
         pz.mu_scale = fz->mu_scale;
         pz.surface  = fz->surface;
         g.scene_pub_cfg.friction_zones.push_back(pz);
+    }
+
+    /* 泊车目标（Milestone M3 开放空间泊车）：把 scenario 定义拷入 scene_pub_cfg */
+    if (g.scenario && g.scenario->parking_goal.enabled) {
+        g.scene_pub_cfg.parking_goal.enabled = true;
+        g.scene_pub_cfg.parking_goal.x = g.scenario->parking_goal.x;
+        g.scene_pub_cfg.parking_goal.y = g.scenario->parking_goal.y;
+        g.scene_pub_cfg.parking_goal.heading = g.scenario->parking_goal.heading;
+        g.scene_pub_cfg.parking_goal.width = g.scenario->parking_goal.width;
+        g.scene_pub_cfg.parking_goal.length = g.scenario->parking_goal.length;
     }
 
     /* 构造协程任务（托管模式） */

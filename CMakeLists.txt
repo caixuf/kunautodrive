@@ -1331,11 +1331,17 @@ add_executable(test_scenario_pipeline
     modules/adas_nodes/planning_framework/scenario_manager.cpp
     modules/adas_nodes/planning_framework/lane_follow_scenario.cpp
     modules/adas_nodes/planning_framework/emergency_stop_scenario.cpp
+    modules/adas_nodes/planning_framework/valet_parking_scenario.cpp
+    modules/adas_nodes/planning_framework/open_space/box2d.cpp
+    modules/adas_nodes/planning_framework/open_space/reeds_shepp_path.cpp
+    modules/adas_nodes/planning_framework/open_space/grid_search.cpp
+    modules/adas_nodes/planning_framework/open_space/hybrid_a_star.cpp
 )
 target_include_directories(test_scenario_pipeline PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/adas_nodes
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/adas_nodes/planning_framework
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/adas_nodes/planning_framework/open_space
     ${CMAKE_BINARY_DIR}/gen
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
