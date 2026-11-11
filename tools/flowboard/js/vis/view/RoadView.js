@@ -28,7 +28,7 @@ import { mergeGeometries } from '../math/GeometryMerge.js';
 import { LANE_WIDTH, DEFAULT_LANES, EDGE_TYPE, isTunnelEdge } from '../core/Constants.js';
 import { tangentToNormal, forwardENU, worldToThree } from '../math/Coord.js';
 import { getTopology } from '../model/TopologyModel.js';
-import { computeEdgeAxis, sampleCleanPolyline, offsetSpine as axisOffsetSpine } from '../model/RoadAxis.js';
+import { computeEdgeAxis, sampleCleanPolyline, offsetSpine as axisOffsetSpine, buildCumulative } from '../model/RoadAxis.js';
 import { isAuthoritativeMap, setGroundAuthoritativeMode } from './GroundView.js';
 import { SCENE } from '../theme/tokens.js';
 import { MARKING } from '../theme/roadStyle.js';
@@ -448,15 +448,6 @@ export function createRoadView(scene) {
   /** 把中心线整体横向偏移 d（委托 RoadAxis.offsetSpine 单一实现：曲率钳制 + 前向单调防回折环结）。 */
   function offsetSpine(spine, d) {
     return axisOffsetSpine(spine, d);
-  }
-
-  /** 构建 spine 的累计弧长数组 */
-  function buildCumulative(spine) {
-    const cum = [0];
-    for (let i = 1; i < spine.length; i++) {
-      cum.push(cum[i - 1] + Math.hypot(spine[i].px - spine[i - 1].px, spine[i].pz - spine[i - 1].pz));
-    }
-    return cum;
   }
 
   /** 沿 spine 按弧长比例插值样点 */

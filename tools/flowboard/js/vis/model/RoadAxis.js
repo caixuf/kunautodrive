@@ -150,7 +150,7 @@ function buildSpineFromPoints(points) {
 }
 
 /** 构建 spine 累计弧长。 */
-function buildCumulative(spine) {
+export function buildCumulative(spine) {
   const cum = [0];
   for (let i = 1; i < spine.length; i++) {
     cum.push(cum[i - 1] + Math.hypot(spine[i].px - spine[i - 1].px, spine[i].pz - spine[i - 1].pz));
