@@ -800,6 +800,26 @@ static void test_bus_qos_drop_oldest(void) {
     PASS();
 }
 
+static void test_bus_long_topic_truncation(void) {
+    TEST("bus long topic (>cap-1) maps to one truncated entry");
+    MessageBus* bus = message_bus_create("test_long_topic");
+    char topic[MSG_BUS_MAX_TOPIC_LEN + 8];
+    memset(topic, 'a', sizeof(topic) - 1);
+    topic[sizeof(topic) - 1] = '\0';
+    int v = 1;
+    ASSERT_EQ(message_bus_publish(bus, topic, "tester", &v, sizeof(v)), 0,
+              "publish 1");
+    ASSERT_EQ(message_bus_publish(bus, topic, "tester", &v, sizeof(v)), 0,
+              "publish 2");
+
+    TopicStats st[4];
+    int n = message_bus_get_all_topic_stats(bus, st, 4);
+    ASSERT_EQ(n, 1, "long topic must not create duplicate entries (got %d)", n);
+    ASSERT_EQ((int)st[0].publish_count, 2, "both publishes in one entry");
+    message_bus_destroy(bus);
+    PASS();
+}
+
 static void test_bus_qos_lifespan(void) {
     TEST("bus QoS lifespan_ms drops stale messages");
     MessageBus* bus = message_bus_create("test_lifespan");
@@ -1387,6 +1407,7 @@ int main(void) {
     test_bus_qos_config();
     test_bus_qos_drop_latest();
     test_bus_qos_drop_oldest();
+    test_bus_long_topic_truncation();
     test_bus_qos_lifespan();
     test_bus_qos_deadline_violations();
 

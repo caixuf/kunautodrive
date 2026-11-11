@@ -336,6 +336,13 @@ static uint32_t topic_hash(const char* s) {
     return h ? h : 1u;
 }
 
+/* topic_entries 里的名字按 MSG_BUS_MAX_TOPIC_LEN 截断存储；所有查找都必须
+ * 用同一截断视图比较，否则超长 topic 在 stats/QoS 路径上会查不到条目
+ * （旧实现先截断再比较，语义就是前缀相等）。 */
+static inline bool topic_entry_matches(const char* stored, const char* topic) {
+    return strncmp(stored, topic, MSG_BUS_MAX_TOPIC_LEN - 1) == 0;
+}
+
 /* 有界字符串拷贝：语义同 snprintf(dst, cap, "%s", src)（截断 + NUL 结尾），
  * 但省掉格式串解析。发布热路径每条消息都要拷 topic/sender。 */
 static inline void copy_cstr(char* dst, size_t cap, const char* src) {
@@ -366,7 +373,7 @@ static void update_subscriber_count(MessageBus* bus, const char* topic) {
         if (bus->subs[i].active && topic_match(bus->subs[i].topic, topic)) c++;
     pthread_mutex_lock(&bus->topic_mutex);
     for (int i = 0; i < atomic_load(&bus->topic_count); i++)
-        if (strcmp(bus->topic_entries[i].topic, topic) == 0)
+        if (topic_entry_matches(bus->topic_entries[i].topic, topic))
             bus->topic_entries[i].stats.subscriber_count = (uint32_t)c;
     pthread_mutex_unlock(&bus->topic_mutex);
 }
@@ -436,9 +443,9 @@ static bool rb_evict_oldest_topic(RingBuffer* rb, MsgPool* pool, const char* top
     /* Scan from oldest (tail) toward newest for the first topic match */
     for (uint32_t i = 0; i < rb->count; i++) {
         uint32_t idx = (rb->tail + i) % MSG_BUS_QUEUE_SIZE;
-        /* 队列里的 msg->topic 是截断存储的；入参可能是超长原名，按旧语义
-         * （截断后比较）用 strncmp 前 N-1 字节。 */
-        if (strncmp(rb->msgs[idx]->topic, topic, MSG_BUS_MAX_TOPIC_LEN - 1) == 0) {
+        /* 队列里的 msg->topic 是截断存储的；入参可能是超长原名，
+         * 用同一截断视图比较（topic_entry_matches）。 */
+        if (topic_entry_matches(rb->msgs[idx]->topic, topic)) {
             /* 被移除的是匹配元素（原 tail+i）。移位前先捕获其指针： */
             Message* to_free = rb->msgs[idx];
             /* 把更旧的元素 [0..i-1] 向上移一位（向 idx 处的空洞靠拢），
@@ -886,14 +893,12 @@ int message_bus_publish_typed(MessageBus* bus, const char* topic, const char* se
         const int cache_i = atomic_load_explicit(&bus->topic_cache_idx[slot],
                                                  memory_order_relaxed);
         if (cache_h == h && cache_i >= 0 && cache_i < tc &&
-            strncmp(bus->topic_entries[cache_i].topic, resolved_topic,
-                    MSG_BUS_MAX_TOPIC_LEN - 1) == 0) {
+            topic_entry_matches(bus->topic_entries[cache_i].topic, resolved_topic)) {
             ti = cache_i;
         }
         if (ti < 0) {
             for (int i = 0; i < tc && i < BUS_MAX_TOPIC_ENTRIES; i++) {
-                if (strncmp(bus->topic_entries[i].topic, resolved_topic,
-                            MSG_BUS_MAX_TOPIC_LEN - 1) == 0) {
+                if (topic_entry_matches(bus->topic_entries[i].topic, resolved_topic)) {
                     ti = i;
                     break;
                 }
@@ -910,7 +915,7 @@ int message_bus_publish_typed(MessageBus* bus, const char* topic, const char* se
         /* 慢路径：注册新 topic（罕见）。取锁避免并发 double-create。 */
         pthread_mutex_lock(&bus->topic_mutex);
         for (int i = 0; i < atomic_load(&bus->topic_count); i++) {
-            if (strcmp(bus->topic_entries[i].topic, resolved_topic) == 0) { ti = i; break; }
+            if (topic_entry_matches(bus->topic_entries[i].topic, resolved_topic)) { ti = i; break; }
         }
         if (ti < 0) {
             /* 先在锁内把条目完整初始化，最后才 release 递增 topic_count：
@@ -1096,7 +1101,7 @@ int message_bus_publish_loaned(MessageBus* bus, const char* topic,
     int ti = -1;
     int tc = atomic_load_explicit(&bus->topic_count, memory_order_acquire);
     for (int i = 0; i < tc && i < BUS_MAX_TOPIC_ENTRIES; i++) {
-        if (strcmp(bus->topic_entries[i].topic, resolved_topic) == 0) {
+        if (topic_entry_matches(bus->topic_entries[i].topic, resolved_topic)) {
             ti = i;
             break;
         }
@@ -1105,7 +1110,7 @@ int message_bus_publish_loaned(MessageBus* bus, const char* topic,
         pthread_mutex_lock(&bus->topic_mutex);
         tc = atomic_load(&bus->topic_count);
         for (int i = 0; i < tc; i++) {
-            if (strcmp(bus->topic_entries[i].topic, resolved_topic) == 0) {
+            if (topic_entry_matches(bus->topic_entries[i].topic, resolved_topic)) {
                 ti = i;
                 break;
             }
@@ -1544,7 +1549,7 @@ int message_bus_set_topic_qos(MessageBus* bus, const char* topic,
     pthread_mutex_lock(&bus->topic_mutex);
     /* Find or create topic entry */
     for (int i = 0; i < atomic_load(&bus->topic_count); i++) {
-        if (strcmp(bus->topic_entries[i].topic, topic) == 0) {
+        if (topic_entry_matches(bus->topic_entries[i].topic, topic)) {
             bus->topic_entries[i].qos = *qos;
             atomic_store(&bus->topic_entries[i].depth_eff,
                          qos->depth > 0 ? qos->depth : MSG_BUS_QUEUE_SIZE);
@@ -1585,7 +1590,7 @@ const TopicQos* message_bus_get_topic_qos(MessageBus* bus, const char* topic) {
     if (!bus || !topic) return NULL;
     pthread_mutex_lock(&bus->topic_mutex);
     for (int i = 0; i < atomic_load(&bus->topic_count); i++) {
-        if (strcmp(bus->topic_entries[i].topic, topic) == 0) {
+        if (topic_entry_matches(bus->topic_entries[i].topic, topic)) {
             const TopicQos* q = &bus->topic_entries[i].qos;
             pthread_mutex_unlock(&bus->topic_mutex);
             return q;
@@ -1630,7 +1635,7 @@ int message_bus_get_topic_stats(MessageBus* bus, const char* topic,
     if (!bus || !topic || !stats) return ERR_INVALID_PARAM;
     pthread_mutex_lock(&bus->topic_mutex);
     for (int i = 0; i < atomic_load(&bus->topic_count); i++) {
-        if (strcmp(bus->topic_entries[i].topic, topic) == 0) {
+        if (topic_entry_matches(bus->topic_entries[i].topic, topic)) {
             merge_topic_stats(bus, i, stats);
             pthread_mutex_unlock(&bus->topic_mutex);
             return 0;
@@ -1644,7 +1649,7 @@ int message_bus_topic_pending(MessageBus* bus, const char* topic) {
     if (!bus || !topic) return -1;
     pthread_mutex_lock(&bus->topic_mutex);
     for (int i = 0; i < atomic_load(&bus->topic_count); i++) {
-        if (strcmp(bus->topic_entries[i].topic, topic) == 0) {
+        if (topic_entry_matches(bus->topic_entries[i].topic, topic)) {
             int pending = (int)atomic_load(&bus->topic_entries[i].pending_count);
             pthread_mutex_unlock(&bus->topic_mutex);
             return pending;
@@ -1658,7 +1663,7 @@ int message_bus_topic_is_full(MessageBus* bus, const char* topic) {
     if (!bus || !topic) return -1;
     pthread_mutex_lock(&bus->topic_mutex);
     for (int i = 0; i < atomic_load(&bus->topic_count); i++) {
-        if (strcmp(bus->topic_entries[i].topic, topic) == 0) {
+        if (topic_entry_matches(bus->topic_entries[i].topic, topic)) {
             uint32_t depth = bus->topic_entries[i].qos.depth > 0
                            ? bus->topic_entries[i].qos.depth
                            : MSG_BUS_QUEUE_SIZE;
