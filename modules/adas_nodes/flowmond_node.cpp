@@ -17,6 +17,7 @@
 #include "node_plugin.h"
 #include "monitor_server.h"
 #include "logger.h"
+#include <cjson/cJSON.h>
 
 #include <cstdlib>
 #include <cstring>
@@ -74,33 +75,32 @@ static int flowmond_init(MessageBus* bus, Transport* transport,
     snprintf(g.bind_addr, sizeof(g.bind_addr), "127.0.0.1");
     g.pipeline[0]  = '\0';
 
-    /* 解析参数 */
+    /* 解析参数（cJSON，CLAUDE.md 唯一合法入口） */
     if (params_json) {
-        const char* p;
-        if ((p = strstr(params_json, "\"port\":")))
-            sscanf(p + 7, "%d", &g.port);
-        if ((p = strstr(params_json, "\"bind\":"))) {
-            char val[64] = "";
-            sscanf(p + 7, "%63s", val);
-            size_t vl = strlen(val);
-            if (vl > 2 && val[0] == '"' && val[vl-1] == '"') {
-                val[vl-1] = '\0';
-                snprintf(g.bind_addr, sizeof(g.bind_addr), "%s", val + 1);
-            } else if (vl > 0) {
-                snprintf(g.bind_addr, sizeof(g.bind_addr), "%s", val);
+        cJSON* root = cJSON_Parse(params_json);
+        if (root) {
+            cJSON* j;
+            j = cJSON_GetObjectItemCaseSensitive(root, "port");
+            if (cJSON_IsNumber(j)) {
+                g.port = j->valueint;
+            } else if (cJSON_IsString(j) && j->valuestring) {
+                g.port = (int)strtol(j->valuestring, nullptr, 10);
             }
-        }
-        if ((p = strstr(params_json, "\"pipeline\":"))) {
-            char val[256] = "";
-            sscanf(p + 11, "%255s", val);
-            size_t vl = strlen(val);
-            if (vl > 2 && val[0] == '"' && val[vl-1] == '"') {
-                val[vl-1] = '\0';
-                snprintf(g.pipeline, sizeof(g.pipeline), "%s", val + 1);
-            } else if (vl > 0) {
-                snprintf(g.pipeline, sizeof(g.pipeline), "%s", val);
+            j = cJSON_GetObjectItemCaseSensitive(root, "bind");
+            if (cJSON_IsString(j) && j->valuestring)
+                snprintf(g.bind_addr, sizeof(g.bind_addr), "%s", j->valuestring);
+            j = cJSON_GetObjectItemCaseSensitive(root, "pipeline");
+            if (cJSON_IsString(j) && j->valuestring) {
+                snprintf(g.pipeline, sizeof(g.pipeline), "%s", j->valuestring);
+                if (g.pipeline[0]) setenv("FLOW_PIPELINE", g.pipeline, 1);
             }
-            if (g.pipeline[0]) setenv("FLOW_PIPELINE", g.pipeline, 1);
+            cJSON_Delete(root);
+        } else {
+            /* 解析失败不能静默退回默认值：dashboard 会悄悄起在 8800/127.0.0.1，
+             * 且 FLOW_PIPELINE 不会被设置。留下一条可定位的告警。 */
+            LOG_WARN("flowmond", "params_json parse failed; using defaults "
+                     "(port=%d bind=%s pipeline=%s)",
+                     g.port, g.bind_addr, g.pipeline[0] ? g.pipeline : "<unset>");
         }
     }
 
