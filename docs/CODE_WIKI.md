@@ -425,7 +425,7 @@ C wrapper 封装开源 Frenet Optimal Trajectory (FOT) 规划器（Apache-2.0）
 | `ControlTask::run()` | [control_node.cpp](../modules/adas_nodes/control_node.cpp) | 20Hz 协程主循环 |
 | `control_init()` | [control_node.cpp](../modules/adas_nodes/control_node.cpp) | 节点初始化（参数解析+注册+状态机） |
 | `steer_limit_for_speed()` | control_node.cpp | speed-dependent 转向限幅（lat_accel 约束） |
-| `lane_center_y()` / `lane_idx_from_y()` | control_node.cpp | N 车道模型：y↔车道索引互转 |
+| `lane_center_y()` / `lane_idx_from_y()` | [road_geometry.h](../include/road_geometry.h) | N 车道模型：y↔车道索引互转（含单向路 side_offset；perception/behavior/planning/flowsim 共用） |
 | `PlanningContext` / `PlanningTask` | [planning_node.cpp](../modules/adas_nodes/planning_node.cpp) | 规划节点 |
 | `FrenetHandle` / `frenet_plan()` | [frenet_bridge.cpp](../src/algorithms/frenet_bridge.cpp) | FOT 包装 |
 | `step_bicycle()` | [physics.cpp](../modules/adas_nodes/flowsim/physics.cpp) | 运动学自行车积分 |
