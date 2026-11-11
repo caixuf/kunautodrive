@@ -174,11 +174,12 @@ function buildIndex(map, routes) {
       lanes: typeof r.lanes === 'number' ? r.lanes : (Array.isArray(r.lanes) && r.lanes.length ? r.lanes.length : 2),
       lane_width: Number(r.lane_width) || 3.5,
       length,
+      length_m: Number(r.length_m) || length,
       oneway: !!r.oneway,
       speed_limit: r.speed_limit,
       nodes: cl.map((p) => [p[0] || 0, p[1] || 0, p[2] || 0]),
-      tunnel: r.tunnel != null,    // elevation_patch 补的 OSM tunnel 标记
-      bridge: r.bridge != null,    // elevation_patch 补的 OSM bridge 标记
+      tunnel: r.tunnel != null && r.tunnel !== false,    // elevation_patch 补的 OSM tunnel 标记
+      bridge: r.bridge != null && r.bridge !== false,    // elevation_patch 补的 OSM bridge 标记
       detail: r.detail || 'high',  // LOD 分级（corridor_map.py 生成，缺省高细节零回归）
     });
   }
@@ -306,11 +307,12 @@ function mergeSegmentRoads(roads) {
       lanes: Array.isArray(r.lanes) && r.lanes.length ? r.lanes.length : 2,
       lane_width: Number(r.lane_width) || 3.5,
       length,
+      length_m: Number(r.length_m) || length,
       oneway: !!r.oneway,
       speed_limit: r.speed_limit,
       nodes: cl.map((p) => [p[0] || 0, p[1] || 0, p[2] || 0]),
-      tunnel: r.tunnel != null,
-      bridge: r.bridge != null,
+      tunnel: r.tunnel != null && r.tunnel !== false,
+      bridge: r.bridge != null && r.bridge !== false,
       detail: r.detail || 'high',
     };
     if (existing) Object.assign(existing, edge);

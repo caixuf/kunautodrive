@@ -9,46 +9,48 @@
 
 | 入口 | 用途 |
 |------|------|
-| [**KunAutoDrive 技术全书**（BOOK.md）](BOOK.md) | **通读用**：总序 + 九卷分卷目录 + 每卷导读 + 五条阅读路线 |
+| [**KunAutoDrive 技术全书**（BOOK.md）](BOOK.md) | **通读用**：总序 + 第零至第六部（26 章）目录 + 章节依赖与源码对照 |
 | [**术语表**（GLOSSARY.md）](GLOSSARY.md) | 查术语：全书反复出现的名词一句话定义 |
 | [**全书索引**（INDEX.md）](INDEX.md) | 检索用：按「任务 / 主题 / 文件」三种方式找文档 |
 | 本页（README.md） | 快速导航：按模块查阅权威文档 |
 
-新手从 [BOOK.md](BOOK.md) 的「新人线」读起；老手直接用 [INDEX.md](INDEX.md) 检索。
+新手从 [BOOK.md](BOOK.md) 的第零部读起；老手直接用 [INDEX.md](INDEX.md) 检索。
 
 ## 按模块查阅
 
 | 模块 / 任务 | 权威文档 | 辅助资料 |
 |---|---|---|
 | 构建、运行与项目定位 | [根目录 README](../README.md) | [仿真指南](SIMULATION_GUIDE.md) |
-| 核心运行时、插件和源码入口 | [代码索引](CODE_WIKI.md) | [API 速查](API_QUICK_REFERENCE.md)、[教程 01–11](book/) |
-| 默认 ADAS 节点、topic 与配置 | [Pipeline 架构](PIPELINE_ARCHITECTURE.md) | [代码索引](CODE_WIKI.md) |
-| 当前算法与职责边界 | [算法栈](ALGORITHM_STACK.md) | [算法验证](ALGORITHM_VERIFY_PATTERN.md)、[算法集成](ALGORITHM_INTEGRATION.md) |
-| 规划速度剖面（ST 图 + DP） | [速度规划说明](PLANNING_SPEED_UPGRADE_DESIGN.md) | [算法栈](ALGORITHM_STACK.md) |
-| 控制与真车标定 | [标定指南](CALIBRATION_GUIDE.md) | [算法验证](ALGORITHM_VERIFY_PATTERN.md) |
-| LTV MPC 横向控制器 | [LTV MPC 设计](LTV_MPC_DESIGN.md) | [算法栈](ALGORITHM_STACK.md)（Stanley/MPC/PID） |
-| FlowSim、场景与场景回归 | [仿真指南](SIMULATION_GUIDE.md) | [场景设计教程](book/20_flowsim_scenario_design.md) |
+| 核心运行时、插件和源码入口 | [代码索引](CODE_WIKI.md) | [API 速查](API_QUICK_REFERENCE.md)、[专著 01–11](book/) |
+| 默认 ADAS 20 节点拓扑与配置 | `config/pipeline.json`（单一事实源） | [代码索引](CODE_WIKI.md)（历史参考：[Pipeline 架构](PIPELINE_ARCHITECTURE.md)） |
+| 全栈算法（M1~M6）与职责边界 | [算法栈](ALGORITHM_STACK.md) | [算法验证](ALGORITHM_VERIFY_PATTERN.md)、[算法集成](ALGORITHM_INTEGRATION.md) |
+| 规划架构（ScenarioManager / ST 图 / Hybrid A*） | [速度规划说明](PLANNING_SPEED_UPGRADE_DESIGN.md) | [算法栈](ALGORITHM_STACK.md) |
+| 控制与真车标定 | [标定指南](CALIBRATION_GUIDE.md) | [LTV MPC 设计](LTV_MPC_DESIGN.md)、[算法验证](ALGORITHM_VERIFY_PATTERN.md) |
+| FlowSim 6-DOF 物理、湿滑路面与场景回归 | [仿真物理引擎](FLOWSIM_PHYSICS.md) | [仿真指南](SIMULATION_GUIDE.md)、[场景设计专章](book/20_flowsim_scenario_design.md) |
 | FlowSim 几何 / 运动 invariant | [Sim Digest](SIM_DIGEST.md) | [仿真指南](SIMULATION_GUIDE.md) |
-| Bag 通用录制与回放 | [Bag 教程](book/12_bag_recording.md) | [API 速查](API_QUICK_REFERENCE.md) |
+| OSM 大地图生成、路网路由与外部生态桥接 | [地图生成模块](MAP_GENERATION_MODULE.md) | [路网路由契约](MAP_ENGINE_ROUTING.md)、[算法栈 M6](ALGORITHM_STACK.md) |
+| Bag / MCAP 通用录制与回放 | [Bag 专章](book/12_bag_recording.md) | [API 速查](API_QUICK_REFERENCE.md) |
 | flowrec 配置化留存节点 | [flowrec](FLOWREC.md) | [监控架构](MONITORING_ARCHITECTURE.md) |
 | 监控、flowmond 与 HTTP/SSE | [监控架构](MONITORING_ARCHITECTURE.md) | [FlowBoard API 契约](FLOWBOARD_CONTRACT.md) |
 | FlowBoard 场景帧与 `road_network` schema | [FlowBoard Scene 契约](FLOWBOARD_SCENE_CONTRACT.md) | [可视化架构](VISUALIZATION_ARCHITECTURE.md) |
-| FlowBoard 运行时架构 | [可视化架构](VISUALIZATION_ARCHITECTURE.md) | [vis View 接入规范](VIS_MODULE_GUIDE.md) |
+| FlowBoard 3D 数字孪生、SR 世界模型与大地图渲染 | [可视化架构](VISUALIZATION_ARCHITECTURE.md) | [3D 渲染沉淀](VIS_3D_RENDERING.md)、[车道级渲染管线](VIS_3D_LANE_PIPELINE.md)、[vis 接入规范](VIS_MODULE_GUIDE.md) |
+| L3 安全闭环（ODD / TOR / MRM / EDR / R157） | [L3 安全案例](SAFETY_CASE_L3.md) | [L3 路线图](ROADMAP_L3.md)、[安全包络专章](book/18_safety_envelope.md) |
 | PEM 与车端数据采集 | [数据闭环](DATA_CLOSED_LOOP.md) | [硬件部署](HARDWARE_DEPLOYMENT.md) |
-| 训练、影子推理与 OTA | [学习闭环](LEARNING_LOOP.md) | [学习教程](book/24_e2e_learning_loop.md) |
-| 真车 profile、打包与升级 | [硬件部署](HARDWARE_DEPLOYMENT.md) | [RC 小车清单](RC_CAR_HARDWARE_CHECKLIST.md) |
+| 训练、影子推理与 OTA | [学习闭环](LEARNING_LOOP.md) | [学习闭环专章](book/24_e2e_learning_loop.md) |
+| 真车 profile、Windows 原生支持与打包升级 | [硬件部署](HARDWARE_DEPLOYMENT.md) | [RC 小车清单](RC_CAR_HARDWARE_CHECKLIST.md)、[平台抽象层](PLATFORM_ABSTRACTION.md) |
 | 3D 仪表盘故障 | [3D 仪表盘排查](TROUBLESHOOTING_3D_DASHBOARD.md) | [监控架构](MONITORING_ARCHITECTURE.md) |
 | 运行期行为异常（控制/规划/感知/仿真） | [故障模式表](FAILURE_MODES.md) | [算法排查范式](ALGORITHM_VERIFY_PATTERN.md) |
 
-## 教程
+## 专著导览
 
-`book/` 是循序渐进的学习资料，不重复定义模块契约：
+`book/` 是 26 章循序渐进的系统实战专著，不重复定义模块契约：
 
-| 范围 | 教程 |
+| 范围 | 章节 |
 |---|---|
-| C / 插件 / 消息总线 / IPC / Bag / 时钟 / 序列化 / 状态机 / 发现 | [01–09](book/) |
-| 融合、协程、评估器 | [10–12](book/) |
-| 学习闭环、航位推算、SocketCAN、场景 | [13–16](book/)；vis View 见 [接入规范](VIS_MODULE_GUIDE.md) |
+| 构建启动、C 对象模型、插件、参数注册、反射状态机 | [00–04](BOOK.md) |
+| 消息总线、IDL 序列化、SHM IPC、服务发现、时钟、协程、调度器、Bag/MCAP | [05–12](BOOK.md) |
+| 感知跟踪、EKF 融合、行为决策、Frenet/ST 规划、跟踪控制、安全包络、CAN/PWM | [13–19](BOOK.md) |
+| FlowSim 场景、VLA/世界模型、3D 可视化、黑盒评估器、端到端学习闭环 | [20–24](BOOK.md)；vis View 见 [接入规范](VIS_MODULE_GUIDE.md) |
 
 ## 维护约定
 
@@ -83,7 +85,7 @@
 
 | 文档 | 说明 |
 |------|------|
-| [FAILURE_MODES.md](FAILURE_MODES.md) | 运行期故障模式表（43 行「现象 → 根因 → 位置」，按 6 类分节，仓库权威副本） |
+| [FAILURE_MODES.md](FAILURE_MODES.md) | 运行期故障模式表（96 行「现象 → 根因 → 位置」，按 6 类分节，仓库权威副本） |
 | [TROUBLESHOOTING_3D_DASHBOARD.md](TROUBLESHOOTING_3D_DASHBOARD.md) | 3D 仪表盘"加载失败"排查与修复 |
 
 > 行为异常（转向灯反 / 该停不停 / 该走不走 / 刹停到 0 / 改代码现象不变）先按

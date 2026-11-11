@@ -7,12 +7,13 @@
 
 ## 1. 版本
 
-- **版本**: 2.1.0
-- **生效日期**: 2026-08-12
+- **版本**: 2.2.0
+- **生效日期**: 2026-11-11
 - **变更**:
+  - v2.2.0 同步 M2/M4/M5 及大地图扩展字段：`ego` 新增 6-DOF 簧上姿态与路面附着字段（`pitch`, `roll`, `mu_scale`, `road_grade`, `lights`, `lateral_offset`, `yaw_rate`）；`scene` 新增多模态预测轨迹 `predictions[]`（`lane_keep` / `cut_in_left` / `cut_in_right` / `yield_decel`）、局部湿滑摩擦区 `friction_zones[]`、代客泊车车位 `parking_goal` / `parking_bays[]`，以及独立 HD 大地图通道 `road_network.lane_data` / `map_junctions` / `edges[].detail`（`high` | `low` LOD）。
   - v2.1.0 新增 `scene.source`（实体渲染数据源开关）与 `scene.perception_entities`（感知输出实体，世界坐标）。可视化与仿真解耦：`source:"perception"` 时前端实体渲染改用感知输出，`source:"ground_truth"`（默认）时沿用仿真真值 `entities`。
   - v2.0.0 **破坏性变更**：移除 `scene.traffic_lights`（ego-relative fallback）字段，红绿灯统一由 `scene.entities` 中的 `tl`（world 坐标）提供。monitor 不再订阅 `road/traffic_lights` 透传到 scene（该 topic 仍由 flowsim 发布，供 planning/inference/recognition 消费）
-- **维护者**: flowsim / perception / flowboard 三端共同维护
+- **维护者**: flowsim / perception / prediction / planning / flowboard 共同维护
 
 ## 2. 数据链路
 
@@ -60,9 +61,15 @@ headingToRotationY(heading) = heading
   "ego": {
     "x": 102.5,          // double, 世界坐标 X
     "y": -1.75,          // double, 世界坐标 Y（ENU North）
+    "z": 0.0,            // double?, 世界高程 Z（ENU Up）
     "heading": 0.05,     // double, 航向角（rad）
     "speed": 8.0,        // double, m/s
-    "steer": 0.02        // double, 方向盘转角（rad）
+    "steer": 0.02,       // double, 前轮转角（rad）
+    "pitch": 0.004,      // double?, M4 簧上质量俯仰角（rad，制动点头/加速抬头）
+    "roll": -0.006,      // double?, M4 簧上质量侧倾角（rad，过弯离心侧倾）
+    "mu_scale": 1.0,     // double?, M4 当前路面附着系数缩放（湿滑/结冰区 < 1.0）
+    "road_grade": 0.0,   // double?, M4 当前道路纵向坡度 tan(theta)
+    "lights": 16         // int?, BCM 车灯位掩码
   },
 
   "lane": {
@@ -125,10 +132,26 @@ headingToRotationY(heading) = heading
   ],
   "trajectory_edge_id": 0,  // int, ego 所在 road edge id，前端用它定位轨迹起始曲线（v1.2.1 新增）
 
-  // LiDAR 点云（ego-relative）
+  // LiDAR 点云（ego-relative 16 线 3D 采样点）
   "lidar": [
     [10.0, 1.75, 0.2],  // [x, y, z]
     [15.0, -1.75, 0.1]
+  ],
+
+  // M2 多模态交互式预测轨迹（prediction_node 经 monitor 导出，PerceptionView 渲染贴地 3D 流光带）
+  "predictions": [
+    {
+      "id": 1,
+      "modes": [
+        { "intent": "lane_keep", "prob": 0.62, "points": [[120.0, -1.75], [128.0, -1.75], [136.0, -1.75]] },
+        { "intent": "cut_in_left", "prob": 0.28, "points": [[120.0, -1.75], [128.0, -0.4], [136.0, 1.75]] }
+      ]
+    }
+  ],
+
+  // M4 局部低附着摩擦区（湿滑积水/结冰路面贴花与附着系数折减）
+  "friction_zones": [
+    { "x_min": 80.0, "x_max": 400.0, "y_min": -8.0, "y_max": 8.0, "mu_scale": 0.35, "surface": "wet" }
   ]
 }
 ```

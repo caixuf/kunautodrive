@@ -32,11 +32,98 @@
  *   - 无 lanes 时 fromLanes=false：以 centerline 为居中、打 console.warn，绝不静默左偏。
  */
 
-import { sampleEdgeNodes } from '../math/Curve.js';
-import { tangentToNormal, offsetAlongNormal, signedAngleBetween, radiusFromChord } from '../math/Coord.js';
+import { sampleEdgeNodes, edgeSampleCount } from '../math/Curve.js';
+import { worldToThree, tangentToNormal, offsetAlongNormal, signedAngleBetween, radiusFromChord } from '../math/Coord.js';
 
 const LANE_WIDTH_DEFAULT = 3.5;
 const _warnedRoadIds = new Set();
+
+/**
+ * 抗过冲折线重采样：OSM 急转弯/掉头道/不等步长折线（相邻弦长比 > 3.2 或转角 > 31.5°）
+ * 直接喂给 CatmullRom 会产生剧烈外甩环结。此类折线改用保端点限距 Chaikin 切角 + 等弧长
+ * 线性插值（严格满足凸包变差缩减性质，数学上绝不外甩打结）；平缓曲线保持原样走 CatmullRom。
+ */
+export function sampleCleanPolyline(nodes, sampleCount) {
+  if (!Array.isArray(nodes) || nodes.length < 2) return [];
+  const raw = nodes.map((n) => (Array.isArray(n)
+    ? [Number(n[0]) || 0, Number(n[1]) || 0, Number(n[2]) || 0]
+    : [Number(n.x) || 0, Number(n.y) || 0, Number(n.z) || 0]));
+
+  // 剔除 <0.25m 的近重合控制点（保留首尾），防止零弦长导数爆炸
+  const clean = [raw[0]];
+  for (let i = 1; i < raw.length - 1; i++) {
+    const prev = clean[clean.length - 1];
+    if (Math.hypot(raw[i][0] - prev[0], raw[i][1] - prev[1]) >= 0.25) {
+      clean.push(raw[i]);
+    }
+  }
+  const lastRaw = raw[raw.length - 1];
+  if (clean.length === 1 || Math.hypot(lastRaw[0] - clean[clean.length - 1][0], lastRaw[1] - clean[clean.length - 1][1]) >= 1e-4) {
+    clean.push(lastRaw);
+  }
+  if (clean.length === 1) clean.push([lastRaw[0] + 0.01, lastRaw[1], lastRaw[2]]);
+  if (clean.length === 2) return sampleEdgeNodes(clean, sampleCount);
+
+  let sharpOrUneven = false;
+  for (let i = 1; i < clean.length - 1; i++) {
+    const a = clean[i - 1], m = clean[i], b = clean[i + 1];
+    const v1x = m[0] - a[0], v1y = m[1] - a[1];
+    const v2x = b[0] - m[0], v2y = b[1] - m[1];
+    const l1 = Math.hypot(v1x, v1y), l2 = Math.hypot(v2x, v2y);
+    if (l1 < 1e-4 || l2 < 1e-4) { sharpOrUneven = true; break; }
+    const ratio = l1 > l2 ? l1 / l2 : l2 / l1;
+    const ang = Math.abs(signedAngleBetween(v1x, -v1y, v2x, -v2y));
+    if (ang > 0.55 || ratio > 3.2) { sharpOrUneven = true; break; }
+  }
+  if (!sharpOrUneven) return sampleEdgeNodes(clean, sampleCount);
+
+  // 2 轮保端点限距 Chaikin 圆角化（切角距离不超过 min(0.25*弦长, 3.5m)，长直边不塌缩）
+  let poly = clean;
+  for (let pass = 0; pass < 2; pass++) {
+    const next = [poly[0]];
+    for (let i = 1; i < poly.length - 1; i++) {
+      const a = poly[i - 1], m = poly[i], b = poly[i + 1];
+      const l1 = Math.hypot(m[0] - a[0], m[1] - a[1]);
+      const l2 = Math.hypot(b[0] - m[0], b[1] - m[1]);
+      const t1 = l1 > 1e-6 ? Math.min(0.25, 3.5 / l1) : 0.25;
+      const t2 = l2 > 1e-6 ? Math.min(0.25, 3.5 / l2) : 0.25;
+      next.push([
+        m[0] + (a[0] - m[0]) * t1,
+        m[1] + (a[1] - m[1]) * t1,
+        m[2] + (a[2] - m[2]) * t1,
+      ]);
+      next.push([
+        m[0] + (b[0] - m[0]) * t2,
+        m[1] + (b[1] - m[1]) * t2,
+        m[2] + (b[2] - m[2]) * t2,
+      ]);
+    }
+    next.push(poly[poly.length - 1]);
+    poly = next;
+  }
+
+  const cum = [0];
+  for (let i = 1; i < poly.length; i++) {
+    cum.push(cum[i - 1] + Math.hypot(poly[i][0] - poly[i - 1][0], poly[i][1] - poly[i - 1][1]));
+  }
+  const total = cum[cum.length - 1];
+  const count = Math.max(2, sampleCount || 16);
+  const out = [];
+  let segIdx = 1;
+  for (let k = 0; k < count; k++) {
+    const s = (total * k) / (count - 1);
+    while (segIdx < cum.length - 1 && cum[segIdx] < s) segIdx++;
+    const segLen = cum[segIdx] - cum[segIdx - 1];
+    const t = segLen > 1e-9 ? Math.max(0, Math.min(1, (s - cum[segIdx - 1]) / segLen)) : 0;
+    const p0 = poly[segIdx - 1], p1 = poly[segIdx];
+    const ex = p0[0] + (p1[0] - p0[0]) * t;
+    const ey = p0[1] + (p1[1] - p0[1]) * t;
+    const ez = p0[2] + (p1[2] - p0[2]) * t;
+    const [tx, ty, tz] = worldToThree(ex, ey, ez);
+    out.push(tx, ty, tz);
+  }
+  return out;
+}
 
 /* 一致性守卫（移植自 RoadView.laneGroupEnvelope）：
  * 各站位横向偏移应稳定；急弯/环道/掉头路 lane centerline 相对 spine 大幅摆动
@@ -71,21 +158,24 @@ function buildCumulative(spine) {
   return cum;
 }
 
-/** 把 spine 整体横向偏移 d（沿各点法线）。含曲率钳制防止急弯自相交打结。 */
-function offsetSpine(spine, d) {
-  return spine.map((c, i) => {
+/** 把 spine 整体横向偏移 d（沿各点法线）。含曲率钳制与前向单调防折叠保护，杜绝急弯/掉头自相交打结。 */
+export function offsetSpine(spine, d) {
+  const n = spine.length;
+  if (n === 0) return [];
+  const raw = spine.map((c, i) => {
     let off = d;
-    if (i > 0 && i < spine.length - 1) {
-      const a = spine[i - 1], b = spine[i + 1];
-      const v1x = c.px - a.px, v1z = c.pz - a.pz;
-      const v2x = b.px - c.px, v2z = b.pz - c.pz;
+    if (n >= 3) {
+      const idx = i === 0 ? 1 : (i === n - 1 ? n - 2 : i);
+      const a = spine[idx - 1], m = spine[idx], b = spine[idx + 1];
+      const v1x = m.px - a.px, v1z = m.pz - a.pz;
+      const v2x = b.px - m.px, v2z = b.pz - m.pz;
       const l1 = Math.hypot(v1x, v1z), l2 = Math.hypot(v2x, v2z);
       if (l1 > 1e-6 && l2 > 1e-6) {
         const ang = signedAngleBetween(v1x, v1z, v2x, v2z);
         if (Math.abs(ang) > 1e-4) {
           const chord = (l1 + l2) * 0.5;
           const R = radiusFromChord(chord, ang);
-          const maxOff = Math.max(0.3, R - 0.3);
+          const maxOff = Math.max(0.25, R * 0.85 - 0.25);
           off = Math.max(-maxOff, Math.min(d, maxOff));
         }
       }
@@ -93,6 +183,21 @@ function offsetSpine(spine, d) {
     const [opx, , opz] = offsetAlongNormal(c.px, c.pz, c.nx, c.nz, off);
     return { px: opx, py: c.py, pz: opz, nx: c.nx, nz: c.nz };
   });
+  if (n <= 2) return raw;
+  const out = [raw[0]];
+  let lastSpineIdx = 0;
+  for (let i = 1; i < n - 1; i++) {
+    const prevOut = out[out.length - 1];
+    const spPrev = spine[lastSpineIdx];
+    const spCur = spine[i];
+    const fdx = spCur.px - spPrev.px, fdz = spCur.pz - spPrev.pz;
+    const odx = raw[i].px - prevOut.px, odz = raw[i].pz - prevOut.pz;
+    if (odx * fdx + odz * fdz <= 0) continue; // 急弯内侧回折尖点直接剔除，防鱼尾环结
+    out.push(raw[i]);
+    lastSpineIdx = i;
+  }
+  out.push(raw[n - 1]);
+  return out;
 }
 
 /**
@@ -167,9 +272,16 @@ export function computeRoadAxis(road) {
     return { ok: false, fromLanes: false, spine: [], cum: [], halfWidth: 0, centerOffset: 0, leftEdge: [], rightEdge: [] };
   }
 
-  // 1) 基础 spine（THREE 帧）。采样密度：多段 32，直道 24。
-  const sampleCount = cl.length > 2 ? 32 : 24;
-  const points = sampleEdgeNodes(cl, sampleCount);
+  // 1) 基础 spine（THREE 帧）。多点曲线按弧长自适应采样并走抗过冲采样，
+  // 两点直道无需按 4m 过密切分（polygonOffset 已根除地面穿模，限制在 ≤32 站降低大图碰撞网格开销）。
+  let sampleCount = 24;
+  if (cl.length > 2) {
+    sampleCount = edgeSampleCount(cl);
+  } else {
+    const chord = Math.hypot((cl[1][0] || 0) - (cl[0][0] || 0), (cl[1][1] || 0) - (cl[0][1] || 0));
+    sampleCount = Math.min(64, Math.max(24, Math.ceil(chord / 18)));
+  }
+  const points = sampleCleanPolyline(cl, sampleCount);
   const spine = buildSpineFromPoints(points);
   if (spine.length < 2) {
     return { ok: false, fromLanes: false, spine: [], cum: [], halfWidth: 0, centerOffset: 0, leftEdge: [], rightEdge: [] };

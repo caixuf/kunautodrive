@@ -80,11 +80,16 @@ function levelOf(py) {
   return Math.round(py / LEVEL_STEP_M);
 }
 
-/** 把 edge 的起点/终点匹配到最近的路口中心（<= CLUSTER_RADIUS_M），
+/** 把 edge 的起点/终点匹配到最近的路口中心（<= max(CLUSTER_RADIUS_M, c.radius + 3)），
  *  构建 byId: Map<edgeId, {start:中心索引|null, end:中心索引|null}>。 */
 function matchEdgesToCenters(edges, centers) {
   const byId = new Map();
-  const index = spatialGrid(centers);
+  let maxSearchR = CLUSTER_RADIUS_M;
+  for (const c of centers) {
+    const cr = (c && c.radius ? c.radius : 0) + 3;
+    if (cr > maxSearchR) maxSearchR = cr;
+  }
+  const index = spatialGrid(centers, Math.max(CLUSTER_RADIUS_M, Math.ceil(maxSearchR)));
   for (const edge of edges) {
     if (!edge || !Array.isArray(edge.nodes) || edge.nodes.length < 2) continue;
     const id = String(edge?.id ?? '');
@@ -96,20 +101,24 @@ function matchEdgesToCenters(edges, centers) {
     const sLv = start ? levelOf(start.yUp) : 0;
     const eLv = end ? levelOf(end.yUp) : 0;
     const candidates = new Set([
-      ...nearbyCenterIndices(index, start?.x || 0, start?.z || 0, CLUSTER_RADIUS_M),
-      ...nearbyCenterIndices(index, end?.x || 0, end?.z || 0, CLUSTER_RADIUS_M),
+      ...nearbyCenterIndices(index, start?.x || 0, start?.z || 0, maxSearchR),
+      ...nearbyCenterIndices(index, end?.x || 0, end?.z || 0, maxSearchR),
     ]);
     for (const i of candidates) {
       const c = centers[i];
-      if (c.level != null && c.level !== sLv && c.level !== eLv) continue;   // 高度层不符
-      const dS = start ? dist2(start, c) : Infinity;
-      const dE = end ? dist2(end, c) : Infinity;
-      if (dS < sBest) { sBest = dS; sIdx = i; }
-      if (dE < eBest) { eBest = dE; eIdx = i; }
+      const matchR = Math.max(CLUSTER_RADIUS_M, (c.radius || 0) + 3);
+      if (start && (c.level == null || c.level === sLv)) {
+        const dS = dist2(start, c);
+        if (dS <= matchR && dS < sBest) { sBest = dS; sIdx = i; }
+      }
+      if (end && (c.level == null || c.level === eLv)) {
+        const dE = dist2(end, c);
+        if (dE <= matchR && dE < eBest) { eBest = dE; eIdx = i; }
+      }
     }
     byId.set(id, {
-      start: sIdx >= 0 && sBest <= CLUSTER_RADIUS_M ? sIdx : null,
-      end: eIdx >= 0 && eBest <= CLUSTER_RADIUS_M ? eIdx : null,
+      start: sIdx != null ? sIdx : null,
+      end: eIdx != null ? eIdx : null,
     });
   }
   return byId;
@@ -234,10 +243,19 @@ function junctionsFromData(roadNetwork, dataJunctions) {
 function forksFromData(roadNetwork, dataJunctions) {
   const laneData = roadNetwork?.lane_data || {};
   const edges = Array.isArray(roadNetwork?.edges) ? roadNetwork.edges : [];
-  const edgeMap = new Map(edges.map((e) => [String(e.id), e]));
+  const edgeMap = new Map();
+  for (const e of edges) {
+    if (!e) continue;
+    if (e.id != null) edgeMap.set(String(e.id), e);
+    if (e.name != null && !edgeMap.has(String(e.name))) edgeMap.set(String(e.name), e);
+  }
   const centers = [];
 
-  const groups = new Map();   // key "x,y"(2m 格) → {x,y,z,radius,n}
+  const FORK_CLUSTER_RADIUS_M = 22;   // 聚合双幅分离主干道交叉口的四角的 SUMO 子节点（通常相距 12~22m）
+  const groups = [];                  // [{x,y,z,level,maxBaseR,pts:[{x,y,r}]}]
+  const gCell = FORK_CLUSTER_RADIUS_M;
+  const gGrid = new Map();
+  const gKey = (x, y) => `${Math.floor(x / gCell)},${Math.floor(y / gCell)}`;
 
   for (const j of dataJunctions || []) {
     if (!j || j.type !== 'fork') continue;
@@ -283,24 +301,53 @@ function forksFromData(roadNetwork, dataJunctions) {
       if (half > maxHalf) maxHalf = half;
     }
     const radius = Math.max(8, Math.min(maxHalf + 3, 20));
+    const lv = levelOf(cz);
 
-    const key = `${Math.round(cx / 2)},${Math.round(cy / 2)}`;   // 2m 格去重
-    const g = groups.get(key);
-    if (g) {
-      g.radius = Math.max(g.radius, radius);
-      g.n++;
-      g.x = (g.x * (g.n - 1) + cx) / g.n;
-      g.y = (g.y * (g.n - 1) + cy) / g.n;
+    const gx = Math.floor(cx / gCell), gy = Math.floor(cy / gCell);
+    let bestGi = -1, bestD = Infinity;
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const bucket = gGrid.get(`${gx + dx},${gy + dy}`);
+        if (!bucket) continue;
+        for (const gi of bucket) {
+          const cand = groups[gi];
+          if (cand.level !== lv) continue;
+          const d = Math.hypot(cx - cand.x, cy - cand.y);
+          if (d <= FORK_CLUSTER_RADIUS_M && d < bestD) { bestD = d; bestGi = gi; }
+        }
+      }
+    }
+    if (bestGi >= 0) {
+      const g = groups[bestGi];
+      g.pts.push({ x: cx, y: cy, r: radius });
+      const n = g.pts.length;
+      g.x = (g.x * (n - 1) + cx) / n;
+      g.y = (g.y * (n - 1) + cy) / n;
       g.z = Math.max(g.z, cz);
+      g.maxBaseR = Math.max(g.maxBaseR, radius);
     } else {
-      groups.set(key, { x: cx, y: cy, z: cz, radius, n: 1 });
+      const gi = groups.length;
+      groups.push({ x: cx, y: cy, z: cz, level: lv, maxBaseR: radius, pts: [{ x: cx, y: cy, r: radius }] });
+      const k = gKey(cx, cy);
+      let bucket = gGrid.get(k);
+      if (!bucket) { bucket = []; gGrid.set(k, bucket); }
+      bucket.push(gi);
     }
   }
-  if (!groups.size) return { centers: [], byId: new Map() };
+  if (!groups.length) return { centers: [], byId: new Map() };
 
-  for (const g of groups.values()) {
+  for (const g of groups) {
+    let maxSpread = 0;
+    for (const p of g.pts) {
+      const d = Math.hypot(p.x - g.x, p.y - g.y);
+      if (d > maxSpread) maxSpread = d;
+    }
+    const mergedFork = maxSpread > 2.5;
+    const finalR = mergedFork
+      ? Math.min(28, Math.max(g.maxBaseR, maxSpread + 6))
+      : g.maxBaseR;
     const [tx, , tz] = worldToThree(g.x, g.y, g.z);
-    centers.push({ x: tx, z: tz, py: g.z, level: levelOf(g.z), radius: g.radius });
+    centers.push({ x: tx, z: tz, py: g.z, level: g.level, radius: finalR, mergedFork });
   }
   const byId = matchEdgesToCenters(edges, centers);
   return { centers, byId };
@@ -322,13 +369,42 @@ export function detectJunctions(roadNetwork) {
   const dataJ = Array.isArray(roadNetwork?.junctions) ? roadNetwork.junctions : [];
   const mapJ = Array.isArray(roadNetwork?.map_junctions) ? roadNetwork.map_junctions : [];
   const allDataJ = [...dataJ, ...mapJ];
-  const dataHasCoords = allDataJ.length &&
-    allDataJ.some((j) => j.x != null || j.y != null || j.z != null ||
-      (Array.isArray(j.shape) && j.shape.length > 0));
-  if (dataHasCoords) return junctionsFromData(roadNetwork, allDataJ);
+  const hasCoordOrShape = (j) => j && (
+    (j.x != null && Number.isFinite(Number(j.x))) ||
+    (j.y != null && Number.isFinite(Number(j.y))) ||
+    (j.z != null && Number.isFinite(Number(j.z))) ||
+    (Array.isArray(j.shape) && j.shape.length > 0)
+  );
+  const coordJ = allDataJ.filter(hasCoordOrShape);
+  const forkJ = allDataJ.filter((j) => j && j.type === 'fork' && !hasCoordOrShape(j));
+  if (coordJ.length) {
+    const base = junctionsFromData(roadNetwork, coordJ);
+    if (!forkJ.length) return base;
+    const extra = forksFromData(roadNetwork, forkJ);
+    if (!extra || !extra.centers.length) return base;
+    const mergedCenters = [...base.centers];
+    const grid = spatialGrid(mergedCenters);
+    for (const fc of extra.centers) {
+      const near = nearbyCenterIndices(grid, fc.x, fc.z, CLUSTER_RADIUS_M);
+      const dup = near.some((idx) => {
+        const c = mergedCenters[idx];
+        return c.level === fc.level && dist2(c, fc) <= CLUSTER_RADIUS_M;
+      });
+      if (!dup) {
+        const ni = mergedCenters.length;
+        mergedCenters.push(fc);
+        const k = grid.key(fc.x, fc.z);
+        let bucket = grid.grid.get(k);
+        if (!bucket) { bucket = []; grid.grid.set(k, bucket); }
+        bucket.push(ni);
+      }
+    }
+    const edges = Array.isArray(roadNetwork?.edges) ? roadNetwork.edges : [];
+    return { centers: mergedCenters, byId: matchEdgesToCenters(edges, mergedCenters) };
+  }
 
   // ── fork 数据 → centers（OSM 大地图根治断裂）──
-  const forkCenters = forksFromData(roadNetwork, mapJ);
+  const forkCenters = forksFromData(roadNetwork, forkJ.length ? forkJ : mapJ);
   if (forkCenters && forkCenters.centers.length) return forkCenters;
 
   // ── 兜底：端点几何聚类 ──

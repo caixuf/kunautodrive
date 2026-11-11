@@ -23,9 +23,10 @@
  */
 
 import { detectJunctions } from '../view/JunctionDetect.js';
-import { worldToThree, pointInPolygonXZ } from '../math/Coord.js';
+import { worldToThree, pointInPolygonXZ, tangentToNormal, offsetAlongNormal } from '../math/Coord.js';
 import { roadNetworkHash } from '../store/SceneStore.js';
 import { LANE_WIDTH, DEFAULT_LANES } from '../core/Constants.js';
+import { computeEdgeAxis } from './RoadAxis.js';
 
 /** 沿 edge 折线从路口端向外走，停在「到路口中心径向距离 ≥ exitRadius」的
  *  第一处，返回 {x, z, ux, uz}（THREE 坐标，(ux,uz)=远离路口的局部切线）。
@@ -69,21 +70,59 @@ export function walkFromJunction(pts, fromEnd, cx, cz, exitRadius, insideFn) {
 }
 
 /** 路口裁剪半径：不超过检测圆，但按车道组半宽收口。
- *  OSM fork 常把 radius 抬到 20m（connector 半长），圆会吃掉整段引道标线。 */
+ *  OSM fork 常把 radius 抬到 20m（connector 半长），圆会吃掉整段引道标线；
+ *  而双幅分离主干道聚合路口（arms≥5）各分幅端点距质心可达 10~22m，需保证 exitRadius 越过子端点外缘。 */
 export function clipRadiusFor(center, arms) {
   const r = Number(center && center.radius);
   let maxHw = 0;
+  let maxEndDist = 0;
+  if (center && center.mergedFork && Array.isArray(arms)) {
+    for (const a of arms) {
+      if (!a || !a.pts || a.pts.length < 2) continue;
+      const ep = a.pts[a.fromEnd ? a.pts.length - 1 : 0];
+      const d = Math.hypot(ep.x - center.x, ep.z - center.z);
+      if (d <= 28 && d > maxEndDist) maxEndDist = d;
+    }
+  }
   for (const a of arms || []) {
     const hw = Number(a && a.hw);
     if (hw > maxHw) maxHw = hw;
   }
-  const fitted = Math.max(6, 2.2 * (maxHw || 3.5));
+  const baseFitted = Math.max(6, 2.2 * (maxHw || 3.5));
+  const fitted = maxEndDist > 3 ? Math.max(baseFitted, maxEndDist + 2.5) : baseFitted;
   if (!Number.isFinite(r) || r <= 0) return fitted;
-  return Math.min(r, fitted);
+  return maxEndDist > 3 ? Math.max(Math.min(r, fitted), maxEndDist + 2.0) : Math.min(r, fitted);
 }
 
-/** 由各臂出圈点左右缘构成的凸包多边形（THREE x,z）。无足够臂则 []。 */
-export function buildJunctionPolygon(center, arms) {
+/** 二维凸包（Andrew Monotone Chain，按角度递增序 = THREE 顺时针，与 buildJunctionPolygon 一致）。
+ *  多臂分裂主干道交叉口（≥5 臂，如双向分离双幅路 8 臂汇聚）直接极角排序会在两幅路之间向内凹陷成锯齿，
+ *  取凸包可无缝覆盖中央分隔带开口，彻底消除锯齿与自相交。 */
+function convexHullXZ(points) {
+  if (points.length <= 3) return points;
+  const sorted = [...points].sort((a, b) => (a.x - b.x) || (a.z - b.z));
+  const cross = (o, a, b) => (a.x - o.x) * (b.z - o.z) - (a.z - o.z) * (b.x - o.x);
+  const lower = [];
+  for (const p of sorted) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 1e-6) {
+      lower.pop();
+    }
+    lower.push(p);
+  }
+  const upper = [];
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const p = sorted[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 1e-6) {
+      upper.pop();
+    }
+    upper.push(p);
+  }
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
+}
+
+/** 由各臂出圈点左右缘（及可选内部转向道连接器包络点）构成的凸包多边形（THREE x,z）。无足够臂则 []。 */
+export function buildJunctionPolygon(center, arms, extraHullPts = null) {
   if (!center || !arms || arms.length < 2) return [];
   const exitR = clipRadiusFor(center, arms);
   const pts = [];
@@ -97,7 +136,17 @@ export function buildJunctionPolygon(center, arms) {
     pts.push({ x: bx, z: bz, ang: Math.atan2(bz - center.z, bx - center.x) }); // exempt: 排序用，非 heading
     pts.push({ x: tx, z: tz, ang: Math.atan2(tz - center.z, tx - center.x) }); // exempt: 排序用，非 heading
   }
+  const hasExtra = Array.isArray(extraHullPts) && extraHullPts.length > 0;
+  if (hasExtra) {
+    for (const ep of extraHullPts) {
+      pts.push({ x: ep.x, z: ep.z, ang: 0 });
+    }
+  }
   if (pts.length < 3) return [];
+  if (arms.length >= 5 || hasExtra) {
+    const hull = convexHullXZ(pts);
+    if (hull.length >= 3) return hull.map((p) => ({ x: p.x, z: p.z }));
+  }
   pts.sort((a, b) => a.ang - b.ang);
   return pts.map((p) => ({ x: p.x, z: p.z }));
 }
@@ -106,12 +155,52 @@ function _build(rn) {
   const { centers, byId } = detectJunctions(rn);
   const edges = Array.isArray(rn.edges) ? rn.edges : [];
   const edgeMap = new Map(edges.map((e) => [String(e.id), e]));
+  const laneData = rn.lane_data || null;
+
+  // edge 真实路轴缓存（有 lane_data 时走 RoadAxis 单一事实源，消除 OSM 左缘参考线 3~5m 侧偏，并供 RoadView 直接复用免二次计算）
+  const _rawAxisCache = new Map();
+  function edgeAxis(edgeId) {
+    const id = String(edgeId);
+    if (_rawAxisCache.has(id)) return _rawAxisCache.get(id);
+    const edge = edgeMap.get(id);
+    const axis = edge ? computeEdgeAxis(edge, laneData) : null;
+    _rawAxisCache.set(id, axis);
+    return axis;
+  }
+
+  const _axisCache = new Map();
+  function edgeAxisInfo(edgeId) {
+    const id = String(edgeId);
+    if (_axisCache.has(id)) return _axisCache.get(id);
+    const edge = edgeMap.get(id);
+    let info = null;
+    if (edge && laneData) {
+      const key = edge.name != null ? String(edge.name) : id;
+      const lanes = laneData[key] || laneData[id];
+      if (Array.isArray(lanes) && lanes.length > 0) {
+        const axis = edgeAxis(id);
+        if (axis && axis.ok && axis.fromLanes && axis.spine.length >= 2) {
+          info = {
+            pts: axis.spine.map((p) => ({ x: p.px, z: p.pz })),
+            hw: axis.halfWidth,
+          };
+        }
+      }
+    }
+    _axisCache.set(id, info);
+    return info;
+  }
 
   // edge 折线点（THREE XZ）每 edge 只转一次，arms/裁剪共用
   const _ptsCache = new Map();
   function edgePts(edgeId) {
     const id = String(edgeId);
     if (_ptsCache.has(id)) return _ptsCache.get(id);
+    const axisInfo = edgeAxisInfo(id);
+    if (axisInfo && axisInfo.pts) {
+      _ptsCache.set(id, axisInfo.pts);
+      return axisInfo.pts;
+    }
     const edge = edgeMap.get(id);
     let pts = null;
     if (edge && Array.isArray(edge.nodes) && edge.nodes.length >= 2) {
@@ -161,20 +250,112 @@ function _build(rn) {
       const edge = edgeMap.get(edgeId);
       const pts = edgePts(edgeId);
       if (!edge || !pts) continue;
+      // 双幅分离主干道聚合路口（mergedFork）内部连接段（首尾两端均落在同一路口 ci 内且长度 < 60m）不是外部进出臂，
+      // 跳过以免在中央分隔带开口内部误画斑马线与停止线（单节点弯道环或长闭合环道仍正常保留）。
+      const cObj = centers[ci];
+      if (cObj && cObj.mergedFork && entry.start === ci && entry.end === ci) {
+        let approxLen = Number(edge.length_m || edge.length) || 0;
+        if (approxLen <= 0) {
+          for (let k = 1; k < pts.length; k++) {
+            approxLen += Math.hypot(pts[k].x - pts[k - 1].x, pts[k].z - pts[k - 1].z);
+          }
+        }
+        if (approxLen < 60) continue;
+      }
       const fromEnd = entry.end === ci;
+      const axisInfo = edgeAxisInfo(edgeId);
       const laneW = Number(edge.lane_width) || LANE_WIDTH;
       const lanesN = Number(edge.lanes) || DEFAULT_LANES;
-      arms.push({ edgeId, fromEnd, pts, hw: (lanesN * laneW) / 2, roadW: lanesN * laneW + 0.6, edge });
+      const hw = (axisInfo && axisInfo.hw > 0) ? axisInfo.hw : (lanesN * laneW) / 2;
+      const roadW = (axisInfo && axisInfo.hw > 0) ? axisInfo.hw * 2 : (lanesN * laneW + 0.6);
+      arms.push({ edgeId, fromEnd, pts, hw, roadW, edge });
     }
     _armsCache.set(ci, arms);
     return arms;
   }
 
+  const junctionData = rn.map_junctions || rn.junctions || [];
+  const forkByPrefix = new Map();
+  if (laneData && Array.isArray(junctionData)) {
+    for (const f of junctionData) {
+      if (!f || f.type !== 'fork' || !f.incoming_road) continue;
+      const inc = String(f.incoming_road);
+      const alt = inc.startsWith('road_r') ? inc.replace('road_r', 'road_') : inc;
+      for (const k of [inc, alt]) {
+        let bucket = forkByPrefix.get(k);
+        if (!bucket) { bucket = []; forkByPrefix.set(k, bucket); }
+        if (!bucket.includes(f)) bucket.push(f);
+      }
+    }
+  }
+  const collectPrefixKeys = (str) => {
+    if (!str) return [];
+    const parts = String(str).split('_');
+    const out = [];
+    let cur = '';
+    for (let i = 0; i < parts.length; i++) {
+      cur = cur ? `${cur}_${parts[i]}` : parts[i];
+      out.push(cur);
+    }
+    return out;
+  };
+
   for (let ci = 0; ci < centers.length; ci++) {
     const c = centers[ci];
     const arms = armsOfJunction(ci);
     c.clipRadius = clipRadiusFor(c, arms);
-    c.poly = buildJunctionPolygon(c, arms);
+    let extraHullPts = null;
+    if (laneData && arms.length >= 3 && forkByPrefix.size > 0) {
+      const maxHullR = Math.max(c.clipRadius + 8, (Number(c.radius) || 8) + 4);
+      const seenForks = new Set();
+      const seenConns = new Set();
+      for (const a of arms) {
+        const eName = a.edge && a.edge.name != null ? String(a.edge.name) : '';
+        const keys = [...collectPrefixKeys(a.edgeId), ...collectPrefixKeys(eName)];
+        for (const k of keys) {
+          const forks = forkByPrefix.get(k);
+          if (!forks) continue;
+          for (const f of forks) {
+            if (seenForks.has(f)) continue;
+            seenForks.add(f);
+            for (const conn of (f.connecting_roads || [])) {
+              const cid = conn && conn.id != null ? String(conn.id) : '';
+              if (!cid || seenConns.has(cid)) continue;
+              const connLanes = laneData[cid];
+              if (!Array.isArray(connLanes) || !connLanes.length) continue;
+              seenConns.add(cid);
+              for (const clane of connLanes) {
+                const cl = clane && clane.centerline;
+                if (!Array.isArray(cl) || cl.length < 2) continue;
+                const [sx, , sz] = worldToThree(Number(cl[0][0]) || 0, Number(cl[0][1]) || 0, 0);
+                const last = cl[cl.length - 1];
+                const [ex, , ez] = worldToThree(Number(last[0]) || 0, Number(last[1]) || 0, 0);
+                if (Math.hypot(sx - c.x, sz - c.z) > maxHullR || Math.hypot(ex - c.x, ez - c.z) > maxHullR) {
+                  continue;
+                }
+                const pad = (Number(clane.width) || 3.5) * 0.5 + 0.8;
+                const tPts = cl.map((p) => {
+                  const [px, , pz] = worldToThree(Number(p[0]) || 0, Number(p[1]) || 0, 0);
+                  return { x: px, z: pz };
+                });
+                for (let m = 0; m < tPts.length; m++) {
+                  const cur = tPts[m];
+                  if (Math.hypot(cur.x - c.x, cur.z - c.z) > maxHullR) continue;
+                  const pPrev = tPts[Math.max(0, m - 1)];
+                  const pNext = tPts[Math.min(tPts.length - 1, m + 1)];
+                  const [nx, nz] = tangentToNormal(pNext.x - pPrev.x, pNext.z - pPrev.z);
+                  const [lx, , lz] = offsetAlongNormal(cur.x, cur.z, nx, nz, -pad);
+                  const [rx, , rz] = offsetAlongNormal(cur.x, cur.z, nx, nz, pad);
+                  if (!extraHullPts) extraHullPts = [];
+                  extraHullPts.push({ x: lx, z: lz }, { x: rx, z: rz });
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    c.poly = buildJunctionPolygon(c, arms, extraHullPts);
   }
 
   // 本 edge 路口列表（带 poly / clipRadius）
@@ -195,21 +376,56 @@ function _build(rn) {
   }
 
   /** spine 按「本 edge 路口多边形外」拆成若干连续段（路口内不画
-   *  标线/侧向元素），返回段数组（每段 ≥2 点）。无路口 → [spine]。 */
+   *  标线/侧向元素），并在进出路口边界处二分插值交点，消除采样步长导致的数米断缝
+   *  及短连接段仅 1 个外点被整段丢弃的问题。无路口 → [spine]。 */
   function segmentsOutsideJunctions(edgeId, spine) {
     const js = junctionCirclesOfEdge(edgeId);
-    if (!js.length) return [spine];
+    if (!js.length || !spine || spine.length < 2) return [spine];
+    const isOut = (x, z) => js.every((j) => !centerContains(j, x, z, 0));
+    const interpBorder = (inPt, outPt) => {
+      let lo = 0, hi = 1;
+      for (let iter = 0; iter < 10; iter++) {
+        const mid = (lo + hi) * 0.5;
+        const mx = inPt.px + (outPt.px - inPt.px) * mid;
+        const mz = inPt.pz + (outPt.pz - inPt.pz) * mid;
+        if (isOut(mx, mz)) hi = mid; else lo = mid;
+      }
+      const nxRaw = inPt.nx + (outPt.nx - inPt.nx) * hi;
+      const nzRaw = inPt.nz + (outPt.nz - inPt.nz) * hi;
+      const nl = Math.hypot(nxRaw, nzRaw) || 1;
+      return {
+        px: inPt.px + (outPt.px - inPt.px) * hi,
+        py: (inPt.py || 0) + ((outPt.py || 0) - (inPt.py || 0)) * hi,
+        pz: inPt.pz + (outPt.pz - inPt.pz) * hi,
+        nx: nxRaw / nl,
+        nz: nzRaw / nl,
+      };
+    };
+
     const segs = [];
     let cur = [];
+    let prev = null;
+    let prevOut = false;
     for (const c of spine) {
-      const outside = js.every((j) => !centerContains(j, c.px, c.pz, 0));
-      if (outside) {
+      const out = isOut(c.px, c.pz);
+      if (out) {
+        if (prev && !prevOut) {
+          cur.push(interpBorder(prev, c));
+        }
         cur.push(c);
-      } else if (cur.length >= 2) {
-        segs.push(cur); cur = [];
       } else {
+        if (prev && prevOut) {
+          const border = interpBorder(c, prev);
+          const last = cur[cur.length - 1];
+          if (!last || Math.hypot(border.px - last.px, border.pz - last.pz) > 0.05) {
+            cur.push(border);
+          }
+        }
+        if (cur.length >= 2) segs.push(cur);
         cur = [];
       }
+      prev = c;
+      prevOut = out;
     }
     if (cur.length >= 2) segs.push(cur);
     return segs;
@@ -256,11 +472,32 @@ function _build(rn) {
     return false;
   }
 
+  /** 检测点是否落在除 excludeCi 外的任一同高程层路口多边形内（防止紧密相邻路口斑马线互踩） */
+  function nearOtherJunction(excludeCi, level, x, z, margin = 0) {
+    const range = Math.ceil((maxCenterRadius + margin) / CENTER_CELL) + 1;
+    const cx = Math.floor(x / CENTER_CELL);
+    const cz = Math.floor(z / CENTER_CELL);
+    for (let dx = -range; dx <= range; dx++) {
+      for (let dz = -range; dz <= range; dz++) {
+        const bucket = centerGrid.get(`${cx + dx},${cz + dz}`);
+        if (!bucket) continue;
+        for (const i of bucket) {
+          if (i === excludeCi) continue;
+          const c = centers[i];
+          if (level != null && c.level != null && c.level !== level) continue;
+          if (Math.hypot(x - c.x, z - c.z) > (c.radius || 0) + margin) continue;
+          if (centerContains(c, x, z, margin)) return true;
+        }
+      }
+    }
+    return false;
+  }
+
   return {
     centers, byId,
     armsOfJunction, junctionsOfEdge,
-    segmentsOutsideJunctions, pointInJunction, nearJunction,
-    edgePts,
+    segmentsOutsideJunctions, pointInJunction, nearJunction, nearOtherJunction,
+    edgePts, edgeAxis,
   };
 }
 

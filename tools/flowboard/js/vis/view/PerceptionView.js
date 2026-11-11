@@ -1,43 +1,129 @@
 /**
- * PerceptionView.js — 3D 感知标注覆盖层
+ * PerceptionView.js — 3D 感知标注与多模态预测光带覆盖层
  *
- * 在 3D 场景中叠加感知风格的可视化元素：
- * - 绿色角标框（corner brackets）包围检测到的实体
- * - 检测射线（detection rays）从 ego 指向每个实体
- * - 雷达扫描扇形（radar sweep）动画
+ * 车规级 SR（Surrounding Reality）视觉元素：
+ * - 3D 角标框（8 个三轴短臂角标包围感知目标）
+ * - 精细圆形 LiDAR 点云（真实点云高度渐变 / 目标受照面轮廓扫描点）
+ * - 前保险杠传感器视场包络扇区 + 距离脉冲弧 + 贴地弱目标连线
+ * - 多模态 Frenet 预测贴地 3D 渐变流光带（主模态 ~0.20m / 次模态 ~0.14m）
  *
- * 所有坐标使用 worldToThree 映射，零魔法数。
+ * 所有坐标/朝向/法线偏移均走 Coord.js，所有配色均取自 tokens.js (SCENE)。
  */
 
-import { worldToThree, forwardENU } from '../math/Coord.js';
+import {
+  worldToThree,
+  forwardENU,
+  tangentToNormal,
+  offsetAlongNormal,
+  distanceENU,
+} from '../math/Coord.js';
+import { roadHeightAt } from '../math/RoadHeight.js';
+import { SCENE } from '../theme/tokens.js';
 
-// ── 角标框几何体常量（模块级，供 _updateBrackets 使用） ──
-const CORNER_LEN = 0.6;  // 角标臂长（米），稍短更精致
-const BOX_COLOR = 0x00ff88;  // 科技青绿
-const SWEEP_SEGMENTS = 32;
-const SWEEP_RADIUS = 80;  // 米
-// 每实体几何数据大小：每个角（top/bottom）3 segments（1 vertical + 2 horizontal）
+// ── 角标框几何常量（每实体 8 个三轴 L 角标：4 顶角 + 4 底角） ──
+const CORNER_LEN = 0.50;
 const SEGMENTS_PER_CORNER = 3;
 const VERTS_PER_SEGMENT = 2;
 const COMPS_PER_VERT = 3;
-const FLOATS_PER_CORNER = SEGMENTS_PER_CORNER * VERTS_PER_SEGMENT * COMPS_PER_VERT;  // 18
-const FLOATS_PER_VEDGE = 2 * 3;       // 6
-const CORNERS = 8;                    // 4 top + 4 bottom
-const VEDGES = 4;
-const FLOATS_PER_BOX = CORNERS * FLOATS_PER_CORNER + VEDGES * FLOATS_PER_VEDGE;  // 8*18+4*6 = 168
-const VERTICES_PER_BOX = CORNERS * SEGMENTS_PER_CORNER * VERTS_PER_SEGMENT + VEDGES * 2; // 8*6+8 = 56
+const FLOATS_PER_CORNER = SEGMENTS_PER_CORNER * VERTS_PER_SEGMENT * COMPS_PER_VERT; // 18
+const CORNERS = 8;
+const FLOATS_PER_BOX = CORNERS * FLOATS_PER_CORNER; // 144
+const VERTICES_PER_BOX = CORNERS * SEGMENTS_PER_CORNER * VERTS_PER_SEGMENT; // 48
 const MAX_ENTITIES = 32;
 
+// ── 传感器前视包络常量 ──
+const SWEEP_SEGMENTS = 32;
+const SWEEP_RADIUS = 36;
+const BOUNDARY_RAY_LEN = 18;
+const PULSE_CYCLE_FRAMES = 90;
+
+// ── LiDAR 点云常量（真实世界尺度 ~0.12m 柔和圆点） ──
+const MAX_RADAR_POINTS = 2048;
+const LIDAR_POINT_SIZE = 0.12;
+
+// ── 多模态预测贴地光带常量 ──
+const PRED_LIFT_M = 0.15;
+const PRIMARY_WIDTH_START = 0.21;
+const PRIMARY_WIDTH_END = 0.14;
+const SECONDARY_WIDTH_START = 0.14;
+const SECONDARY_WIDTH_END = 0.09;
+const BEV_PRED_WIDTH_SCALE = 1.8;
+const MAX_PRED_VERTS = 2048;
+const MAX_PRED_INDICES = 6144;
+
+const PREDICTION_COLORS = {
+  lane_keep: SCENE.predLaneKeep,
+  cut_in_left: SCENE.predCutIn,
+  cut_in_right: SCENE.predCutIn,
+  yield_decel: SCENE.predYield,
+  default: SCENE.predDefault,
+};
+
+function _hexToRgb01(hex) {
+  const n = Number(hex) || 0;
+  return [
+    ((n >> 16) & 255) / 255,
+    ((n >> 8) & 255) / 255,
+    (n & 255) / 255,
+  ];
+}
+
+function _createLidarSpriteTexture() {
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  const grad = ctx.createRadialGradient(32, 32, 0, 32, 32, 30);
+  grad.addColorStop(0.0, 'rgba(255, 255, 255, 1.0)');
+  grad.addColorStop(0.45, 'rgba(235, 255, 252, 0.92)');
+  grad.addColorStop(0.78, 'rgba(150, 245, 240, 0.30)');
+  grad.addColorStop(1.0, 'rgba(0, 220, 210, 0.0)');
+  ctx.clearRect(0, 0, 64, 64);
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(32, 32, 30, 0, Math.PI * 2);
+  ctx.fill();
+  return new THREE.CanvasTexture(canvas);
+}
+
+function _entityDims(ent) {
+  const etype = ent.type || 'car';
+  let defLen, defWid, defH;
+  switch (etype) {
+    case 'pedestrian':
+      defLen = 0.55; defWid = 0.55; defH = 1.75; break;
+    case 'bicycle': case 'cyclist': case 'motorcycle':
+      defLen = 1.8; defWid = 0.65; defH = 1.6; break;
+    case 'truck': case 'bus':
+      defLen = 8.0; defWid = 2.5; defH = 3.6; break;
+    case 'suv':
+      defLen = 4.7; defWid = 2.0; defH = 1.82; break;
+    case 'car': default:
+      defLen = 4.6; defWid = 2.0; defH = 1.5; break;
+  }
+  return {
+    halfL: (ent.length || defLen) * 0.5,
+    halfW: (ent.width || defWid) * 0.5,
+    vehH: ent.height || defH,
+  };
+}
+
+function _isPerceivableObstacle(ent) {
+  return !!ent && ent.type !== 'ego' && ent.type !== 'tl';
+}
+
 export function createPerceptionView(scene) {
-  // ── 角标框 ──
+  // ── 1. 3D 角标框 ──
   const boxPositions = new Float32Array(MAX_ENTITIES * FLOATS_PER_BOX);
   const boxGeo = new THREE.BufferGeometry();
   boxGeo.setAttribute('position', new THREE.BufferAttribute(boxPositions, 3));
   boxGeo.setDrawRange(0, 0);
   const boxMat = new THREE.LineBasicMaterial({
-    color: BOX_COLOR,
+    color: SCENE.percBracket,
     transparent: true,
-    opacity: 0.9,
+    opacity: 0.76,
     depthTest: true,
     depthWrite: false,
   });
@@ -46,8 +132,7 @@ export function createPerceptionView(scene) {
   boxMesh.frustumCulled = false;
   scene.add(boxMesh);
 
-  // ── 检测射线 ──
-  // 每实体 1 条线段 × 2 端点
+  // ── 2. 贴地感知目标关联线（从自车外廓地面出发，低不透明度，绝不穿自车后挡风玻璃） ──
   const rayPositions = new Float32Array(MAX_ENTITIES * 2 * 3);
   const rayColors = new Float32Array(MAX_ENTITIES * 2 * 3);
   const rayGeo = new THREE.BufferGeometry();
@@ -57,26 +142,36 @@ export function createPerceptionView(scene) {
   const rayMat = new THREE.LineBasicMaterial({
     vertexColors: true,
     transparent: true,
-    opacity: 0.5,
-    depthTest: false,
+    opacity: 0.16,
+    depthTest: true,
     depthWrite: false,
   });
   const rayMesh = new THREE.LineSegments(rayGeo, rayMat);
-  rayMesh.renderOrder = 23;
+  rayMesh.renderOrder = 21;
   rayMesh.frustumCulled = false;
   scene.add(rayMesh);
 
-  // ── 雷达扫描扇形 ──
-  const sweepPositions = new Float32Array((SWEEP_SEGMENTS + 2) * 3);
+  // ── 3. 前保险杠传感器视场扇形（带索引三角扇 + 径向顶点色衰减至 0） ──
+  const sweepVertCount = SWEEP_SEGMENTS + 2;
+  const sweepPositions = new Float32Array(sweepVertCount * 3);
+  const sweepColors = new Float32Array(sweepVertCount * 3);
+  const sweepIndices = new Uint16Array(SWEEP_SEGMENTS * 3);
+  for (let i = 0; i < SWEEP_SEGMENTS; i++) {
+    sweepIndices[i * 3 + 0] = 0;
+    sweepIndices[i * 3 + 1] = i + 1;
+    sweepIndices[i * 3 + 2] = i + 2;
+  }
   const sweepGeo = new THREE.BufferGeometry();
   sweepGeo.setAttribute('position', new THREE.BufferAttribute(sweepPositions, 3));
+  sweepGeo.setAttribute('color', new THREE.BufferAttribute(sweepColors, 3));
+  sweepGeo.setIndex(new THREE.BufferAttribute(sweepIndices, 1));
   const sweepMat = new THREE.MeshBasicMaterial({
-    color: BOX_COLOR,
+    vertexColors: true,
     transparent: true,
-    opacity: 0.08,
+    opacity: 0.06,
     side: THREE.DoubleSide,
+    depthTest: true,
     depthWrite: false,
-    depthTest: false,
     blending: THREE.AdditiveBlending,
   });
   const sweepMesh = new THREE.Mesh(sweepGeo, sweepMat);
@@ -84,24 +179,26 @@ export function createPerceptionView(scene) {
   sweepMesh.frustumCulled = false;
   scene.add(sweepMesh);
 
-  // 扫描前沿线
-  const sweepEdgePositions = new Float32Array(2 * 3);
+  // 前视视场左右短边界线 (2 段) + 向前传播的距离脉冲弧 (SWEEP_SEGMENTS 段)
+  const sweepEdgeSegs = 2 + SWEEP_SEGMENTS;
+  const sweepEdgePositions = new Float32Array(sweepEdgeSegs * 2 * 3);
+  const sweepEdgeColors = new Float32Array(sweepEdgeSegs * 2 * 3);
   const sweepEdgeGeo = new THREE.BufferGeometry();
   sweepEdgeGeo.setAttribute('position', new THREE.BufferAttribute(sweepEdgePositions, 3));
+  sweepEdgeGeo.setAttribute('color', new THREE.BufferAttribute(sweepEdgeColors, 3));
   const sweepEdgeMat = new THREE.LineBasicMaterial({
-    color: BOX_COLOR,
+    vertexColors: true,
     transparent: true,
-    opacity: 0.65,
+    opacity: 0.18,
+    depthTest: true,
     depthWrite: false,
-    depthTest: false,
   });
-  const sweepEdgeMesh = new THREE.Line(sweepEdgeGeo, sweepEdgeMat);
+  const sweepEdgeMesh = new THREE.LineSegments(sweepEdgeGeo, sweepEdgeMat);
   sweepEdgeMesh.renderOrder = 21;
   sweepEdgeMesh.frustumCulled = false;
   scene.add(sweepEdgeMesh);
 
-  // ── M5: 3D 雷达点云（高度梯度着色） ──
-  const MAX_RADAR_POINTS = 512;
+  // ── 4. 3D LiDAR 点云（柔和圆形精灵 + 真实厘米级尺度） ──
   const pointPositions = new Float32Array(MAX_RADAR_POINTS * 3);
   const pointColors = new Float32Array(MAX_RADAR_POINTS * 3);
   const pointGeo = new THREE.BufferGeometry();
@@ -109,11 +206,16 @@ export function createPerceptionView(scene) {
   pointGeo.setAttribute('color', new THREE.BufferAttribute(pointColors, 3));
   pointGeo.setDrawRange(0, 0);
 
+  const pointSpriteTex = _createLidarSpriteTexture();
   const pointMat = new THREE.PointsMaterial({
-    size: 2.2,
+    size: LIDAR_POINT_SIZE,
+    sizeAttenuation: true,
+    map: pointSpriteTex,
+    alphaTest: 0.04,
     vertexColors: true,
     transparent: true,
-    opacity: 0.85,
+    opacity: 0.82,
+    depthTest: true,
     depthWrite: false,
   });
   const pointMesh = new THREE.Points(pointGeo, pointMat);
@@ -121,119 +223,293 @@ export function createPerceptionView(scene) {
   pointMesh.frustumCulled = false;
   scene.add(pointMesh);
 
-  // ── M5: 多模态预测轨迹流光带 ──
-  const PREDICTION_COLORS = {
-    lane_keep: 0x00e676,     // 青绿
-    cut_in_left: 0xff9100,   // 琥珀橙红告警
-    cut_in_right: 0xff9100,  // 琥珀橙红告警
-    yield_decel: 0x2979ff,   // 蔚蓝
-    default: 0x00e5ff,
-  };
-
+  // ── 5. 多模态预测贴地渐变 3D 光带（单 Mesh 批处理，零逐帧分配） ──
   const predGroup = new THREE.Group();
   predGroup.name = 'predictionTrajectories';
   scene.add(predGroup);
 
+  const predPositions = new Float32Array(MAX_PRED_VERTS * 3);
+  const predColors = new Float32Array(MAX_PRED_VERTS * 4);
+  const predIndices = new Uint16Array(MAX_PRED_INDICES);
+  const predGeo = new THREE.BufferGeometry();
+  predGeo.setAttribute('position', new THREE.BufferAttribute(predPositions, 3));
+  predGeo.setAttribute('color', new THREE.BufferAttribute(predColors, 4));
+  predGeo.setIndex(new THREE.BufferAttribute(predIndices, 1));
+  predGeo.setDrawRange(0, 0);
+
+  const predMat = new THREE.MeshBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    depthTest: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const predMesh = new THREE.Mesh(predGeo, predMat);
+  predMesh.renderOrder = 25;
+  predMesh.frustumCulled = false;
+  predGroup.add(predMesh);
+
   function _clearPredictions() {
-    while (predGroup.children.length) {
-      const child = predGroup.children[0];
-      predGroup.remove(child);
-      child.geometry?.dispose?.();
-      child.material?.dispose?.();
+    predGeo.setDrawRange(0, 0);
+  }
+
+  function _sampleBranchPoints(rawPts, store) {
+    const raw3d = [];
+    for (let i = 0; i < rawPts.length; i++) {
+      const pt = rawPts[i];
+      if (!pt) continue;
+      const px = Number(pt[0]);
+      const py = Number(pt[1]);
+      if (!Number.isFinite(px) || !Number.isFinite(py)) continue;
+      const baseZ = (pt.length >= 3 && Number.isFinite(Number(pt[2])))
+        ? Number(pt[2])
+        : roadHeightAt(store, px, py);
+      const [tx, ty, tz] = worldToThree(px, py, baseZ + PRED_LIFT_M);
+      raw3d.push(new THREE.Vector3(tx, ty, tz));
     }
+    if (raw3d.length < 2) return [];
+
+    if (raw3d.length === 2) {
+      const a = raw3d[0], b = raw3d[1];
+      const steps = 10;
+      const out = [];
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps;
+        out.push({
+          x: a.x + (b.x - a.x) * t,
+          y: a.y + (b.y - a.y) * t,
+          z: a.z + (b.z - a.z) * t,
+        });
+      }
+      return out;
+    }
+
+    const subdiv = Math.max(12, Math.min(28, (raw3d.length - 1) * 6));
+    const curve = new THREE.CatmullRomCurve3(raw3d, false);
+    return curve.getPoints(subdiv);
   }
 
   function _syncPredictions(store) {
     const showPred = !store.layerVisibility || store.layerVisibility.predictions !== false;
     if (!showPred || !Array.isArray(store.predictions) || store.predictions.length === 0) {
       predGroup.visible = false;
+      _clearPredictions();
       return;
     }
     predGroup.visible = true;
-    _clearPredictions();
 
-    store.predictions.forEach((pred) => {
-      const branches = Array.isArray(pred.branches) ? pred.branches : [];
-      branches.forEach((br) => {
-        const rawPts = Array.isArray(br.points) ? br.points : [];
-        if (rawPts.length < 2) return;
+    const wScale = store.isBev ? BEV_PRED_WIDTH_SCALE : 1.0;
+    let vCursor = 0;
+    let iCursor = 0;
+
+    for (let p = 0; p < store.predictions.length; p++) {
+      const pred = store.predictions[p];
+      if (!pred || !Array.isArray(pred.branches) || pred.branches.length === 0) continue;
+
+      let maxProb = 0;
+      for (let b = 0; b < pred.branches.length; b++) {
+        const pr = Number(pred.branches[b]?.probability) || 0;
+        if (pr > maxProb) maxProb = pr;
+      }
+
+      for (let b = 0; b < pred.branches.length; b++) {
+        const br = pred.branches[b];
+        if (!br || !Array.isArray(br.points) || br.points.length < 2) continue;
+
+        const pts = _sampleBranchPoints(br.points, store);
+        const n = pts.length;
+        if (n < 2) continue;
+        if (vCursor + n * 2 > MAX_PRED_VERTS || iCursor + (n - 1) * 6 > MAX_PRED_INDICES) break;
 
         const mode = br.mode || 'lane_keep';
         const prob = Math.max(0.1, Math.min(1.0, Number(br.probability) || 0.5));
-        const color = PREDICTION_COLORS[mode] || PREDICTION_COLORS.default;
+        const isPrimary = prob >= maxProb - 1e-3;
+        const hex = PREDICTION_COLORS[mode] || PREDICTION_COLORS.default;
+        const [baseR, baseG, baseB] = _hexToRgb01(hex);
 
-        const verts = [];
-        for (const pt of rawPts) {
-          const px = Number(pt[0]) || 0;
-          const py = Number(pt[1]) || 0;
-          const pz = Number(pt[2]) || 0;
-          const [tx, ty, tz] = worldToThree(px, py, pz + 0.25);
-          verts.push(tx, ty, tz);
+        const wStart = (isPrimary ? PRIMARY_WIDTH_START : SECONDARY_WIDTH_START) * wScale;
+        const wEnd = (isPrimary ? PRIMARY_WIDTH_END : SECONDARY_WIDTH_END) * wScale;
+        const alphaStart = isPrimary ? (0.54 + 0.34 * prob) : (0.30 + 0.28 * prob);
+        const alphaEnd = isPrimary ? 0.05 : 0.02;
+
+        const baseVert = vCursor;
+        for (let i = 0; i < n; i++) {
+          const cur = pts[i];
+          const prev = pts[Math.max(0, i - 1)];
+          const next = pts[Math.min(n - 1, i + 1)];
+          const dx = next.x - prev.x;
+          const dz = next.z - prev.z;
+          const [nx, nz] = tangentToNormal(dx, dz);
+
+          const u = i / (n - 1);
+          let width = wStart + (wEnd - wStart) * u;
+          // 末端收尖为平滑导向箭头尖端
+          if (u > 0.86) {
+            const tipU = (u - 0.86) / 0.14;
+            width = tipU < 0.28
+              ? wEnd * (1.0 + 0.55 * (tipU / 0.28))
+              : wEnd * 1.55 * (1.0 - (tipU - 0.28) / 0.72);
+          }
+          const halfW = Math.max(0.004, width * 0.5);
+
+          const [lx, , lz] = offsetAlongNormal(cur.x, cur.z, nx, nz, -halfW);
+          const [rx, , rz] = offsetAlongNormal(cur.x, cur.z, nx, nz, halfW);
+
+          // 起点略提亮，沿远端地平线平滑衰减 alpha
+          const glowBoost = (1.0 - u) * 0.22;
+          const cr = Math.min(1.0, baseR + glowBoost);
+          const cg = Math.min(1.0, baseG + glowBoost);
+          const cb = Math.min(1.0, baseB + glowBoost);
+          const alpha = alphaStart * (1.0 - u * 0.90) + alphaEnd * (u * 0.90);
+
+          const vp = vCursor * 3;
+          const vc = vCursor * 4;
+          predPositions[vp + 0] = lx;
+          predPositions[vp + 1] = cur.y;
+          predPositions[vp + 2] = lz;
+          predColors[vc + 0] = cr;
+          predColors[vc + 1] = cg;
+          predColors[vc + 2] = cb;
+          predColors[vc + 3] = alpha;
+
+          predPositions[vp + 3] = rx;
+          predPositions[vp + 4] = cur.y;
+          predPositions[vp + 5] = rz;
+          predColors[vc + 4] = cr;
+          predColors[vc + 5] = cg;
+          predColors[vc + 6] = cb;
+          predColors[vc + 7] = alpha;
+
+          vCursor += 2;
         }
 
-        const geom = new THREE.BufferGeometry();
-        geom.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-        const mat = new THREE.LineBasicMaterial({
-          color,
-          transparent: true,
-          opacity: 0.35 + 0.55 * prob,
-          depthWrite: false,
-        });
-        const line = new THREE.Line(geom, mat);
-        line.renderOrder = 25;
-        predGroup.add(line);
-      });
-    });
+        for (let i = 0; i < n - 1; i++) {
+          const a = baseVert + i * 2;
+          const bIdx = a + 1;
+          const c = a + 2;
+          const d = a + 3;
+          predIndices[iCursor++] = a;
+          predIndices[iCursor++] = bIdx;
+          predIndices[iCursor++] = c;
+          predIndices[iCursor++] = bIdx;
+          predIndices[iCursor++] = d;
+          predIndices[iCursor++] = c;
+        }
+      }
+    }
+
+    predGeo.attributes.position.needsUpdate = true;
+    predGeo.attributes.color.needsUpdate = true;
+    predGeo.index.needsUpdate = true;
+    predGeo.setDrawRange(0, iCursor);
   }
 
   function _updatePointCloud(ego, entities, store) {
     let pIdx = 0;
-    const addPt = (wx, wy, wz) => {
-      if (pIdx >= MAX_RADAR_POINTS) return;
-      const [tx, ty, tz] = worldToThree(wx, wy, wz);
-      const b = pIdx * 3;
-      pointPositions[b + 0] = tx;
-      pointPositions[b + 1] = ty;
-      pointPositions[b + 2] = tz;
+    const egoZ = ego.z || 0;
 
-      // 根据 z 高度梯度着色：地面点低饱和暗色，障碍物高点高亮青/金色
-      const egoZ = ego.z || 0;
-      const relZ = Math.max(0, wz - egoZ);
-      if (relZ < 0.25) {
-        pointColors[b + 0] = 0.12;
-        pointColors[b + 1] = 0.28;
-        pointColors[b + 2] = 0.35;
-      } else if (relZ < 1.2) {
-        pointColors[b + 0] = 0.0;
-        pointColors[b + 1] = 0.95;
-        pointColors[b + 2] = 0.90;
-      } else {
-        pointColors[b + 0] = 1.0;
-        pointColors[b + 1] = 0.82;
-        pointColors[b + 2] = 0.15;
-      }
+    const pushThreePt = (tx, ty, tz, r, g, b) => {
+      if (pIdx >= MAX_RADAR_POINTS) return;
+      const base = pIdx * 3;
+      pointPositions[base + 0] = tx;
+      pointPositions[base + 1] = ty;
+      pointPositions[base + 2] = tz;
+      pointColors[base + 0] = r;
+      pointColors[base + 1] = g;
+      pointColors[base + 2] = b;
       pIdx++;
     };
 
     if (Array.isArray(store.pointCloud) && store.pointCloud.length > 0) {
-      for (const pt of store.pointCloud) {
+      for (let i = 0; i < store.pointCloud.length; i++) {
         if (pIdx >= MAX_RADAR_POINTS) break;
-        addPt(pt.x ?? pt[0] ?? 0, pt.y ?? pt[1] ?? 0, pt.z ?? pt[2] ?? 0);
+        const pt = store.pointCloud[i];
+        const wx = pt.x ?? pt[0] ?? 0;
+        const wy = pt.y ?? pt[1] ?? 0;
+        const wz = pt.z ?? pt[2] ?? 0;
+        const [tx, ty, tz] = worldToThree(wx, wy, wz);
+        const relZ = Math.max(0, wz - egoZ);
+
+        // 连续高度梯度：地面深青 → 车身青绿 → 高处柔和暖琥珀（杜绝亮黄方块）
+        let r, g, b;
+        if (relZ < 0.22) {
+          r = 0.08; g = 0.42; b = 0.54;
+        } else if (relZ < 1.35) {
+          const t = (relZ - 0.22) / 1.13;
+          r = 0.02 + 0.06 * t;
+          g = 0.80 + 0.14 * t;
+          b = 0.92 - 0.20 * t;
+        } else {
+          const t = Math.min(1.0, (relZ - 1.35) / 1.85);
+          r = 0.08 + 0.82 * t;
+          g = 0.94 - 0.22 * t;
+          b = 0.72 - 0.40 * t;
+        }
+        pushThreePt(tx, ty, tz, r, g, b);
       }
     } else {
-      for (let i = 0; i < Math.min(entities.length, 16); i++) {
+      // 无原始点云流时：在感知目标朝向自车的保险杠与侧翼表面合成精细双线束 LiDAR 扫描轮廓点
+      const [ego3X, , ego3Z] = worldToThree(ego.x, ego.y, egoZ);
+      const bumperRatios = [-0.86, -0.57, -0.29, 0.0, 0.29, 0.57, 0.86];
+      const flankRatios = [-0.72, -0.36, 0.0, 0.36, 0.72];
+      const cabinRatios = [-0.54, -0.18, 0.18, 0.54];
+
+      const maxScanEntities = Math.min(entities.length, 24);
+      for (let i = 0; i < maxScanEntities; i++) {
         const ent = entities[i];
-        if (!ent) continue;
-        const dx = ent.x - ego.x;
-        const dy = ent.y - ego.y;
-        if (dx * dx + dy * dy > 80 * 80) continue;
-        const ez = ent.z || 0;
-        const h = ent.height || 1.5;
-        addPt(ent.x - 0.5, ent.y - 0.5, ez + 0.05);
-        addPt(ent.x + 0.5, ent.y - 0.5, ez + 0.10);
-        addPt(ent.x, ent.y, ez + h * 0.5);
-        addPt(ent.x - 0.3, ent.y + 0.4, ez + h * 0.8);
-        addPt(ent.x + 0.3, ent.y + 0.4, ez + h);
+        if (!_isPerceivableObstacle(ent)) continue;
+        const dist = distanceENU(ego.x, ego.y, ent.x || 0, ent.y || 0);
+        if (dist > 75 || dist < 1.8) continue;
+
+        const { halfL, halfW, vehH } = _entityDims(ent);
+        const entGroundZ = (ent.z != null) ? ent.z : roadHeightAt(store, ent.x || 0, ent.y || 0);
+        const [cx, cy, cz] = worldToThree(ent.x || 0, ent.y || 0, entGroundZ);
+
+        const [efx, efy] = forwardENU(ent.heading || 0);
+        const [fwdX, , fwdZ] = worldToThree(efx, efy, 0);
+        const [normX, normZ] = tangentToNormal(fwdX, fwdZ);
+
+        const toEgoX = ego3X - cx;
+        const toEgoZ = ego3Z - cz;
+        const faceLong = (toEgoX * fwdX + toEgoZ * fwdZ) >= 0 ? 1 : -1;
+        const faceLat = (toEgoX * normX + toEgoZ * normZ) >= 0 ? 1 : -1;
+
+        const fade = Math.max(0.42, 1.0 - dist / 90);
+        const yBand1 = cy + vehH * 0.28;
+        const yBand2 = cy + vehH * 0.54;
+        const yBand3 = cy + vehH * 0.78;
+
+        // 受照前/后保险杠双层水平激光线束
+        const bumperCenterX = cx + faceLong * halfL * fwdX;
+        const bumperCenterZ = cz + faceLong * halfL * fwdZ;
+        for (let k = 0; k < bumperRatios.length; k++) {
+          const lat = bumperRatios[k] * halfW;
+          const [px, , pz] = offsetAlongNormal(bumperCenterX, bumperCenterZ, normX, normZ, lat);
+          pushThreePt(px, yBand1, pz, 0.02 * fade, 0.84 * fade, 0.86 * fade);
+          pushThreePt(px, yBand2, pz, 0.06 * fade, 0.94 * fade, 0.78 * fade);
+        }
+
+        // 受照侧翼双层水平激光线束（仅在存在侧向视角夹角时可见）
+        const flankDot = Math.abs(toEgoX * normX + toEgoZ * normZ) / (dist || 1);
+        if (flankDot > 0.06) {
+          for (let k = 0; k < flankRatios.length; k++) {
+            const lon = flankRatios[k] * halfL;
+            const baseX = cx + lon * fwdX;
+            const baseZ = cz + lon * fwdZ;
+            const [px, , pz] = offsetAlongNormal(baseX, baseZ, normX, normZ, faceLat * halfW);
+            pushThreePt(px, yBand1, pz, 0.02 * fade, 0.80 * fade, 0.84 * fade);
+            pushThreePt(px, yBand2, pz, 0.06 * fade, 0.92 * fade, 0.76 * fade);
+          }
+        }
+
+        // 舱体肩线/风挡受照微弱回波点
+        const cabinCenterX = cx + faceLong * (halfL * 0.62) * fwdX;
+        const cabinCenterZ = cz + faceLong * (halfL * 0.62) * fwdZ;
+        for (let k = 0; k < cabinRatios.length; k++) {
+          const lat = cabinRatios[k] * (halfW * 0.82);
+          const [px, , pz] = offsetAlongNormal(cabinCenterX, cabinCenterZ, normX, normZ, lat);
+          pushThreePt(px, yBand3, pz, 0.10 * fade, 0.95 * fade, 0.84 * fade);
+        }
       }
     }
 
@@ -242,8 +518,6 @@ export function createPerceptionView(scene) {
     pointGeo.setDrawRange(0, pIdx);
   }
 
-  // ── 内部状态 ──
-  let _entityCount = 0;
   let _frame = 0;
 
   function update(store, _now) {
@@ -251,7 +525,7 @@ export function createPerceptionView(scene) {
     const ego = store.ego;
     const showPerc = !store.layerVisibility || store.layerVisibility.perception !== false;
 
-    // 1. 同步多模态预测轨迹
+    // 1. 同步多模态预测贴地光带
     _syncPredictions(store);
 
     if (!ego || !showPerc) {
@@ -273,30 +547,29 @@ export function createPerceptionView(scene) {
     const entities = store.entities || [];
     const count = Math.min(entities.length, MAX_ENTITIES);
 
-    // ── 更新角标框 ──
-    _updateBrackets(ego, entities, count, boxPositions);
+    // 2. 更新 3D 感知角标框
+    _updateBrackets(ego, entities, count, store, boxPositions);
     boxGeo.attributes.position.needsUpdate = true;
     boxGeo.setDrawRange(0, count * VERTICES_PER_BOX);
 
-    // ── 更新检测射线 ──
-    _updateRays(ego, entities, count, rayPositions, rayColors);
+    // 3. 更新贴地传感器目标关联线
+    _updateRays(ego, entities, count, store, rayPositions, rayColors);
     rayGeo.attributes.position.needsUpdate = true;
     rayGeo.attributes.color.needsUpdate = true;
     rayGeo.setDrawRange(0, count * 2);
 
-    // ── 更新雷达扫描 ──
-    _updateSweep(ego, _frame, sweepPositions, sweepEdgePositions);
+    // 4. 更新前保险杠传感器视场包络与脉冲弧
+    _updateSweep(ego, store, _frame, sweepPositions, sweepColors, sweepEdgePositions, sweepEdgeColors);
     sweepGeo.attributes.position.needsUpdate = true;
+    sweepGeo.attributes.color.needsUpdate = true;
     sweepEdgeGeo.attributes.position.needsUpdate = true;
+    sweepEdgeGeo.attributes.color.needsUpdate = true;
 
-    // ── 更新 3D 点云 ──
+    // 5. 更新精细 LiDAR 点云
     _updatePointCloud(ego, entities, store);
-
-    _entityCount = count;
   }
 
   function clear() {
-    _entityCount = 0;
     boxGeo.setDrawRange(0, 0);
     rayGeo.setDrawRange(0, 0);
     pointGeo.setDrawRange(0, 0);
@@ -327,184 +600,221 @@ export function createPerceptionView(scene) {
     sweepEdgeMat.dispose();
     pointGeo.dispose();
     pointMat.dispose();
+    pointSpriteTex?.dispose?.();
+    predGeo.dispose();
+    predMat.dispose();
   }
 
   return { update, clear, dispose };
 }
 
-// ── 内部函数 ──
+// ── 内部几何更新函数 ──
 
-function _updateBrackets(ego, entities, count, positions) {
+function _updateBrackets(ego, entities, count, store, positions) {
   for (let i = 0; i < count; i++) {
     const ent = entities[i];
-    if (!ent) continue;
-    const dx = ent.x - ego.x;
-    const dy = ent.y - ego.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
     const bi = i * FLOATS_PER_BOX;
-    if (dist > 100 || dist < 2) {
+    if (!_isPerceivableObstacle(ent)) {
       for (let j = 0; j < FLOATS_PER_BOX; j++) positions[bi + j] = 0;
       continue;
     }
 
-    /* ── 按实体类型确定尺寸/高度（使用 ent.length/width 优先，兜底值按类型） ── */
-    const etype = ent.type || 'car';
-    let defLen, defWid, defH;
-    switch (etype) {
-      case 'pedestrian':
-        defLen = 0.5; defWid = 0.5; defH = 1.75; break;
-      case 'bicycle': case 'cyclist': case 'motorcycle':
-        defLen = 1.8; defWid = 0.6; defH = 1.6; break;
-      case 'truck': case 'bus':
-        defLen = 8.0; defWid = 2.5; defH = 4.0; break;
-      case 'suv':
-        defLen = 4.7; defWid = 2.0; defH = 1.85; break;
-      case 'car': default:
-        defLen = 4.6; defWid = 2.0; defH = 1.5; break;
-    }
-    const halfL = (ent.length || defLen) / 2;
-    const halfW = (ent.width  || defWid) / 2;
-    const vehH  = ent.height || defH;
-
-    /* 角标臂长：实体最小维度的 25%，但不超过 CORNER_LEN，也不小于 0.08m */
-    const minDim = Math.min(halfL * 2, halfW * 2);
-    const cl = Math.max(0.08, Math.min(CORNER_LEN, minDim * 0.25));
-
-    // Entity ground Z (ENU up)
-    const entZ = ent.z || 0;
-    const [cx, , cz] = worldToThree(ent.x, ent.y, entZ);
-    const cy = entZ;                          // THREE Y = ENU Z（地面高度）
-    const roofY = cy + vehH;                  // THREE Y（顶部高度）
-
-    // Coord 纯函数：heading → ENU 前向 [cos(h), sin(h)]
-    const [fx, fz] = forwardENU(ent.heading || 0);
-    const fwdX = fx, fwdZ = -fz;              // ENU → THREE 前向
-    const sideX = -fwdZ, sideZ = fwdX;        // 左向（逆时针 90°）
-
-    // 4 角：[前/后偏移, 左/右偏移]
-    const cornerOffsets = [
-      [ halfL,  halfW],  // 0: front-left
-      [ halfL, -halfW],  // 1: front-right
-      [-halfL, -halfW],  // 2: back-right
-      [-halfL,  halfW],  // 3: back-left
-    ];
-
-    let idx = 0;
-    function addCorner(base3X, base3Y, base3Z, isTop) {
-      for (const [foff, soff] of cornerOffsets) {
-        const cx3 = base3X + foff * fwdX + soff * sideX;
-        const cz3 = base3Z + foff * fwdZ + soff * sideZ;
-
-        const inFwd = -Math.sign(foff);
-        const inSide = -Math.sign(soff);
-
-        // 垂直短臂
-        const vDir = isTop ? -1 : 1;
-        positions[bi + idx++] = cx3; positions[bi + idx++] = base3Y;          positions[bi + idx++] = cz3;
-        positions[bi + idx++] = cx3; positions[bi + idx++] = base3Y + vDir * cl; positions[bi + idx++] = cz3;
-
-        // 沿长度方向向内
-        positions[bi + idx++] = cx3; positions[bi + idx++] = base3Y; positions[bi + idx++] = cz3;
-        positions[bi + idx++] = cx3 + inFwd * cl * fwdX; positions[bi + idx++] = base3Y; positions[bi + idx++] = cz3 + inFwd * cl * fwdZ;
-
-        // 沿宽度方向向内
-        positions[bi + idx++] = cx3; positions[bi + idx++] = base3Y; positions[bi + idx++] = cz3;
-        positions[bi + idx++] = cx3 + inSide * cl * sideX; positions[bi + idx++] = base3Y; positions[bi + idx++] = cz3 + inSide * cl * sideZ;
-      }
-    }
-
-    addCorner(cx, roofY, cz, true);   // 顶角（车顶）
-    addCorner(cx, cy, cz, false);    // 底角（地面）
-
-    // 4 条垂直连接棱
-    for (const [foff, soff] of cornerOffsets) {
-      const topX = cx + foff * fwdX + soff * sideX;
-      const topZ = cz + foff * fwdZ + soff * sideZ;
-      positions[bi + idx++] = topX; positions[bi + idx++] = roofY; positions[bi + idx++] = topZ;
-      positions[bi + idx++] = topX; positions[bi + idx++] = cy;    positions[bi + idx++] = topZ;
-    }
-  }
-}
-
-function _updateRays(ego, entities, count, positions, colors) {
-  const [ex, ey, ez] = worldToThree(ego.x, ego.y, (ego.z || 0) + 0.5);
-
-  for (let i = 0; i < count; i++) {
-    const ent = entities[i];
-    if (!ent) continue;
-    const dx = ent.x - ego.x;
-    const dy = ent.y - ego.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    const baseIdx = i * 2 * 3;
-
-    // 近端（ego 位置）—— 2026-08 提亮：旧值 (0, 0.2, 0) 暗绿 ≈ 黑线
-    positions[baseIdx + 0] = ex;
-    positions[baseIdx + 1] = ey;
-    positions[baseIdx + 2] = ez;
-    colors[baseIdx + 0] = 0.2;
-    colors[baseIdx + 1] = 0.8;
-    colors[baseIdx + 2] = 0.3;
-
-    if (dist > 100) {
-      // 远端缩到近端（不可见）
-      positions[baseIdx + 3] = ex;
-      positions[baseIdx + 4] = ey;
-      positions[baseIdx + 5] = ez;
-      colors[baseIdx + 3] = 0.2;
-      colors[baseIdx + 4] = 0.8;
-      colors[baseIdx + 5] = 0.3;
+    const dist = distanceENU(ego.x, ego.y, ent.x || 0, ent.y || 0);
+    if (dist > 95 || dist < 1.8) {
+      for (let j = 0; j < FLOATS_PER_BOX; j++) positions[bi + j] = 0;
       continue;
     }
 
-    const [tx, ty, tz] = worldToThree(ent.x, ent.y, (ent.z || 0) + 0.5);
-    positions[baseIdx + 3] = tx;
-    positions[baseIdx + 4] = ty;
-    positions[baseIdx + 5] = tz;
-    colors[baseIdx + 3] = 0;
-    colors[baseIdx + 4] = 1;
-    colors[baseIdx + 5] = 0.5;
+    const { halfL: rawHalfL, halfW: rawHalfW, vehH } = _entityDims(ent);
+    const halfL = rawHalfL + 0.08;
+    const halfW = rawHalfW + 0.06;
+
+    const minDim = Math.min(halfL * 2, halfW * 2);
+    const cl = Math.max(0.10, Math.min(CORNER_LEN, minDim * 0.24));
+
+    const entZ = (ent.z != null) ? ent.z : roadHeightAt(store, ent.x || 0, ent.y || 0);
+    const [cx, cyRaw, cz] = worldToThree(ent.x || 0, ent.y || 0, entZ);
+    const bottomY = cyRaw + 0.04;
+    const roofY = cyRaw + vehH + 0.04;
+
+    const [efx, efy] = forwardENU(ent.heading || 0);
+    const [fwdX, , fwdZ] = worldToThree(efx, efy, 0);
+    const [normX, normZ] = tangentToNormal(fwdX, fwdZ);
+
+    // 4 个角点：[前/后偏移 (沿 fwd), 右/左偏移 (沿右侧法线 norm)]
+    const cornerOffsets = [
+      [ halfL, -halfW], // front-left
+      [ halfL,  halfW], // front-right
+      [-halfL,  halfW], // back-right
+      [-halfL, -halfW], // back-left
+    ];
+
+    let idx = 0;
+    const writeCorners = (planeY, isTop) => {
+      const vDir = isTop ? -1 : 1;
+      for (let c = 0; c < cornerOffsets.length; c++) {
+        const [foff, roff] = cornerOffsets[c];
+        const longX = cx + foff * fwdX;
+        const longZ = cz + foff * fwdZ;
+        const [cx3, , cz3] = offsetAlongNormal(longX, longZ, normX, normZ, roff);
+
+        const inFwd = -Math.sign(foff);
+        const inNorm = -Math.sign(roff);
+        const [latEndX, , latEndZ] = offsetAlongNormal(cx3, cz3, normX, normZ, inNorm * cl);
+
+        // 1) 垂直短臂
+        positions[bi + idx++] = cx3; positions[bi + idx++] = planeY;            positions[bi + idx++] = cz3;
+        positions[bi + idx++] = cx3; positions[bi + idx++] = planeY + vDir * cl; positions[bi + idx++] = cz3;
+
+        // 2) 纵向向内短臂
+        positions[bi + idx++] = cx3;                   positions[bi + idx++] = planeY; positions[bi + idx++] = cz3;
+        positions[bi + idx++] = cx3 + inFwd * cl * fwdX; positions[bi + idx++] = planeY; positions[bi + idx++] = cz3 + inFwd * cl * fwdZ;
+
+        // 3) 横向向内短臂
+        positions[bi + idx++] = cx3;     positions[bi + idx++] = planeY; positions[bi + idx++] = cz3;
+        positions[bi + idx++] = latEndX; positions[bi + idx++] = planeY; positions[bi + idx++] = latEndZ;
+      }
+    };
+
+    writeCorners(roofY, true);
+    writeCorners(bottomY, false);
   }
 }
 
-function _updateSweep(ego, frame, positions, edgePositions) {
-  // 雷达扫描扇形（2026-08 修复）：
-  //  1. FOV 120°（匹配 sensor_model lidar_fov_deg=120）—— 旧值 90° 显示
-  //     与实际传感器不符（用户反馈"雷达难道只有 90 度"）
-  //  2. 车头前向 ±60°（随 ego heading 旋转）—— 旧值世界系固定角度
-  //     （-135°~-45°）不随车头转，掉头/转向时扇形指错方向
-  //  3. 轻微摆动（±8°）模拟扫描动画
+function _updateRays(ego, entities, count, store, positions, colors) {
+  const egoGroundZ = (ego.z != null) ? ego.z : roadHeightAt(store, ego.x, ego.y);
+  const [ex, ey, ez] = worldToThree(ego.x, ego.y, egoGroundZ + 0.06);
+  const [efx, efy] = forwardENU(ego.heading || 0);
+  const [egoFwdX, , egoFwdZ] = worldToThree(efx, efy, 0);
+  const egoHalfL = (ego.length || 4.6) * 0.5;
+  const [fovR, fovG, fovB] = _hexToRgb01(SCENE.percFov);
+  const [brkR, brkG, brkB] = _hexToRgb01(SCENE.percBracket);
+
+  for (let i = 0; i < count; i++) {
+    const ent = entities[i];
+    const baseIdx = i * 6;
+    if (!_isPerceivableObstacle(ent)) {
+      for (let j = 0; j < 6; j++) { positions[baseIdx + j] = 0; colors[baseIdx + j] = 0; }
+      continue;
+    }
+
+    const dist = distanceENU(ego.x, ego.y, ent.x || 0, ent.y || 0);
+    const entGroundZ = (ent.z != null) ? ent.z : roadHeightAt(store, ent.x || 0, ent.y || 0);
+    const [tx, ty, tz] = worldToThree(ent.x || 0, ent.y || 0, entGroundZ + 0.06);
+
+    const dirX = (tx - ex) / (dist || 1);
+    const dirZ = (tz - ez) / (dist || 1);
+    const forwardDot = dirX * egoFwdX + dirZ * egoFwdZ;
+
+    // 仅对自车前向/侧前方视场内 (forwardDot >= -0.10) 且距离适中的目标绘制贴地弱连线
+    if (dist > 75 || dist < 4.5 || forwardDot < -0.10) {
+      for (let j = 0; j < 6; j++) { positions[baseIdx + j] = 0; colors[baseIdx + j] = 0; }
+      continue;
+    }
+
+    const { halfL: targetHalfL } = _entityDims(ent);
+    const startOff = egoHalfL + 0.55;
+    const endOff = Math.max(startOff, dist - targetHalfL - 0.35);
+    const atten = Math.max(0.20, 1.0 - dist / 80);
+
+    positions[baseIdx + 0] = ex + dirX * startOff;
+    positions[baseIdx + 1] = ey;
+    positions[baseIdx + 2] = ez + dirZ * startOff;
+    colors[baseIdx + 0] = fovR * 0.55 * atten;
+    colors[baseIdx + 1] = fovG * 0.55 * atten;
+    colors[baseIdx + 2] = fovB * 0.55 * atten;
+
+    positions[baseIdx + 3] = ex + dirX * endOff;
+    positions[baseIdx + 4] = ty;
+    positions[baseIdx + 5] = ez + dirZ * endOff;
+    colors[baseIdx + 3] = brkR * atten;
+    colors[baseIdx + 4] = brkG * atten;
+    colors[baseIdx + 5] = brkB * atten;
+  }
+}
+
+function _updateSweep(ego, store, frame, positions, colors, edgePositions, edgeColors) {
   const heading = ego.heading || 0;
-  const halfFov = Math.PI * 60 / 180;
-  // 扫描摆动：三角波，约 1 秒一个完整来回（60 帧 @60fps），幅度 ±0.2（约 ±11°）。
-  // 旧实现 ((sweepAngle*10)%0.6)-0.3 是高频锯齿，每 3 帧跳变一次 ±17°，导致线条"抽搐/扫太快"。
-  const cycle = 60;
-  const wobble = (Math.abs((frame % cycle) - cycle / 2) / (cycle / 2)) * 0.4 - 0.2;
-  const sweepStart = heading - halfFov + wobble;
-  const sweepEnd = heading + halfFov + wobble;
+  const halfFov = Math.PI * 55 / 180;
+  const sweepStart = heading - halfFov;
+  const sweepEnd = heading + halfFov;
 
-  const [ex, ey, ez] = worldToThree(ego.x, ego.y, (ego.z || 0) + 0.2);
-  const R = SWEEP_RADIUS;
+  const egoHalfL = (ego.length || 4.6) * 0.5;
+  const [efx, efy] = forwardENU(heading);
+  const bumperEnuX = ego.x + efx * egoHalfL;
+  const bumperEnuY = ego.y + efy * egoHalfL;
+  const egoGroundZ = (ego.z != null) ? ego.z : roadHeightAt(store, bumperEnuX, bumperEnuY);
+  const [bx, by, bz] = worldToThree(bumperEnuX, bumperEnuY, egoGroundZ + 0.05);
 
-  // 扇形顶点：原点 + 弧顶点
-  // Coord 纯函数：角度 t → 前向单位向量 [fx, fz]，然后乘以半径 R
-  positions[0] = ex;
-  positions[1] = ey;
-  positions[2] = ez;
+  const [fovR, fovG, fovB] = _hexToRgb01(SCENE.percFov);
+
+  // 扇形中心顶点（前保险杠正中央，径向亮度最高，向外缘平滑衰减至 0）
+  positions[0] = bx;
+  positions[1] = by;
+  positions[2] = bz;
+  colors[0] = fovR;
+  colors[1] = fovG;
+  colors[2] = fovB;
+
   for (let i = 0; i <= SWEEP_SEGMENTS; i++) {
     const t = sweepStart + (sweepEnd - sweepStart) * (i / SWEEP_SEGMENTS);
-    const [fx, fz] = forwardENU(t);  // ENU 前向向量 [east, north]
-    // ENU(east,north) → THREE(east, -north)，所以 Z 分量 = -fz*R
-    positions[(i + 1) * 3 + 0] = ex + fx * R;
-    positions[(i + 1) * 3 + 1] = ey;
-    positions[(i + 1) * 3 + 2] = ez - fz * R;
+    const [fx, fy] = forwardENU(t);
+    const [px, py, pz] = worldToThree(
+      bumperEnuX + fx * SWEEP_RADIUS,
+      bumperEnuY + fy * SWEEP_RADIUS,
+      egoGroundZ + 0.05
+    );
+    const vi = (i + 1) * 3;
+    positions[vi + 0] = px;
+    positions[vi + 1] = py;
+    positions[vi + 2] = pz;
+    colors[vi + 0] = 0;
+    colors[vi + 1] = 0;
+    colors[vi + 2] = 0;
   }
 
-  // 前沿线（原点 → 弧终点）
-  edgePositions[0] = ex;
-  edgePositions[1] = ey;
-  edgePositions[2] = ez;
-  const [fxEnd, fzEnd] = forwardENU(sweepEnd);
-  edgePositions[3] = ex + fxEnd * R;
-  edgePositions[4] = ey;
-  edgePositions[5] = ez - fzEnd * R;
+  // 左右短视场边界线（长 18m，远端顶点色衰减至 0）
+  const [fxL, fyL] = forwardENU(sweepEnd);
+  const [lx, ly, lz] = worldToThree(bumperEnuX + fxL * BOUNDARY_RAY_LEN, bumperEnuY + fyL * BOUNDARY_RAY_LEN, egoGroundZ + 0.05);
+  const [fxR, fyR] = forwardENU(sweepStart);
+  const [rx, ry, rz] = worldToThree(bumperEnuX + fxR * BOUNDARY_RAY_LEN, bumperEnuY + fyR * BOUNDARY_RAY_LEN, egoGroundZ + 0.05);
+
+  edgePositions[0] = bx; edgePositions[1] = by; edgePositions[2] = bz;
+  edgeColors[0] = fovR;  edgeColors[1] = fovG;  edgeColors[2] = fovB;
+  edgePositions[3] = lx; edgePositions[4] = ly; edgePositions[5] = lz;
+  edgeColors[3] = 0;     edgeColors[4] = 0;     edgeColors[5] = 0;
+
+  edgePositions[6] = bx;  edgePositions[7] = by;  edgePositions[8] = bz;
+  edgeColors[6] = fovR;   edgeColors[7] = fovG;   edgeColors[8] = fovB;
+  edgePositions[9] = rx;  edgePositions[10] = ry; edgePositions[11] = rz;
+  edgeColors[9] = 0;      edgeColors[10] = 0;     edgeColors[11] = 0;
+
+  // 向前推进的柔和雷达距离脉冲弧（4m → 34m 循环扩散并自然淡出）
+  const pulsePhase = (frame % PULSE_CYCLE_FRAMES) / PULSE_CYCLE_FRAMES;
+  const pulseRadius = 4.0 + pulsePhase * 30.0;
+  const pulseFade = (1.0 - pulsePhase) * (0.35 + 0.65 * Math.min(1.0, pulsePhase * 4.0));
+
+  for (let i = 0; i < SWEEP_SEGMENTS; i++) {
+    const u0 = i / SWEEP_SEGMENTS;
+    const u1 = (i + 1) / SWEEP_SEGMENTS;
+    const t0 = sweepStart + (sweepEnd - sweepStart) * u0;
+    const t1 = sweepStart + (sweepEnd - sweepStart) * u1;
+    const [f0x, f0y] = forwardENU(t0);
+    const [f1x, f1y] = forwardENU(t1);
+    const [p0x, p0y, p0z] = worldToThree(bumperEnuX + f0x * pulseRadius, bumperEnuY + f0y * pulseRadius, egoGroundZ + 0.05);
+    const [p1x, p1y, p1z] = worldToThree(bumperEnuX + f1x * pulseRadius, bumperEnuY + f1y * pulseRadius, egoGroundZ + 0.05);
+
+    // 两侧边缘羽化，中间最清晰
+    const edgeFeather0 = 1.0 - Math.abs(2.0 * u0 - 1.0) * 0.85;
+    const edgeFeather1 = 1.0 - Math.abs(2.0 * u1 - 1.0) * 0.85;
+    const a0 = pulseFade * edgeFeather0;
+    const a1 = pulseFade * edgeFeather1;
+
+    const base = (2 + i) * 6;
+    edgePositions[base + 0] = p0x; edgePositions[base + 1] = p0y; edgePositions[base + 2] = p0z;
+    edgeColors[base + 0] = fovR * a0; edgeColors[base + 1] = fovG * a0; edgeColors[base + 2] = fovB * a0;
+
+    edgePositions[base + 3] = p1x; edgePositions[base + 4] = p1y; edgePositions[base + 5] = p1z;
+    edgeColors[base + 3] = fovR * a1; edgeColors[base + 4] = fovG * a1; edgeColors[base + 5] = fovB * a1;
+  }
 }

@@ -62,14 +62,14 @@
 | 状态机 | [book/04_state_machine.md](book/04_state_machine.md) | [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（8 状态 FSM） |
 | 协程 | [book/10_coroutine.md](book/10_coroutine.md) | [ALGORITHM_STACK.md](ALGORITHM_STACK.md) |
 | 融合/定位 | [book/14_sensor_fusion.md](book/14_sensor_fusion.md) | [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（EKF） |
-| 感知/跟踪 | — | [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（DBSCAN/卡尔曼） |
-| 行为决策 | — | [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（FSM） |
-| 规划（轨迹+速度） | [PLANNING_SPEED_UPGRADE_DESIGN.md](PLANNING_SPEED_UPGRADE_DESIGN.md) | [ALGORITHM_STACK.md](ALGORITHM_STACK.md) |
-| 控制 | [CALIBRATION_GUIDE.md](CALIBRATION_GUIDE.md) | [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（Stanley/MPC/PID） |
-| 安全 | — | [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（TTC/MRM） |
-| 仿真物理 | [FLOWSIM_PHYSICS.md](FLOWSIM_PHYSICS.md) | [SIM_DIGEST.md](SIM_DIGEST.md) |
-| 地图生成 | [MAP_GENERATION_MODULE.md](MAP_GENERATION_MODULE.md) | [MAP_ENGINE_ROUTING.md](MAP_ENGINE_ROUTING.md) |
-| 可视化/3D | [VISUALIZATION_ARCHITECTURE.md](VISUALIZATION_ARCHITECTURE.md) | [VIS_3D_RENDERING.md](VIS_3D_RENDERING.md) |
+| 感知/跟踪/预测 | [book/13_lidar_tracking.md](book/13_lidar_tracking.md) | [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（M1 CenterPoint-Lite BEV CNN / M2 64 槽匈牙利 KF + Frenet 三模态预测） |
+| 行为决策 | [book/15_behavior_decision.md](book/15_behavior_decision.md) | [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（8 状态 FSM） |
+| 规划（轨迹+速度+泊车） | [book/16_trajectory_planning.md](book/16_trajectory_planning.md) · [PLANNING_SPEED_UPGRADE_DESIGN.md](PLANNING_SPEED_UPGRADE_DESIGN.md) | [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（M3 ScenarioManager / ST 图 DP / Hybrid A* 代客泊车） |
+| 控制 | [book/17_tracking_control.md](book/17_tracking_control.md) · [CALIBRATION_GUIDE.md](CALIBRATION_GUIDE.md) | [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（级联 PD / LTV MPC / ManeuverTracker） |
+| 安全与 L3 法规 | [book/18_safety_envelope.md](book/18_safety_envelope.md) | [SAFETY_CASE_L3.md](SAFETY_CASE_L3.md) · [ROADMAP_L3.md](ROADMAP_L3.md)（ODD/TOR/MRM/EDR/R157） |
+| 仿真物理（6-DOF） | [FLOWSIM_PHYSICS.md](FLOWSIM_PHYSICS.md) | [SIM_DIGEST.md](SIM_DIGEST.md) · [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（M4 簧载悬架 / 轴荷转移 / 湿滑摩擦区） |
+| OSM 大地图与桥接 | [MAP_GENERATION_MODULE.md](MAP_GENERATION_MODULE.md) | [MAP_ENGINE_ROUTING.md](MAP_ENGINE_ROUTING.md) · [ALGORITHM_STACK.md](ALGORITHM_STACK.md)（M6 OpenDRIVE 1.4 / Lanelet2 / CARLA 6-DOF） |
+| 可视化/3D 数字孪生 | [VISUALIZATION_ARCHITECTURE.md](VISUALIZATION_ARCHITECTURE.md) | [VIS_3D_RENDERING.md](VIS_3D_RENDERING.md) · [VIS_3D_LANE_PIPELINE.md](VIS_3D_LANE_PIPELINE.md)（M5 SR 世界模型 + OSM 大地图） |
 | 学习闭环 | [book/24_e2e_learning_loop.md](book/24_e2e_learning_loop.md) | [LEARNING_LOOP.md](LEARNING_LOOP.md) |
 | 数据采集 | [FLOWREC.md](FLOWREC.md) | [DATA_CLOSED_LOOP.md](DATA_CLOSED_LOOP.md) |
 | 验证/门禁 | [book/23_demo_evaluator.md](book/23_demo_evaluator.md) | [ALGORITHM_VERIFY_PATTERN.md](ALGORITHM_VERIFY_PATTERN.md) |
@@ -81,33 +81,34 @@
 | 文档 | 一句话定位 |
 |------|-----------|
 | [ALGORITHM_INTEGRATION.md](ALGORITHM_INTEGRATION.md) | 第三方算法库如何接成插件节点（步骤 + 推荐/不推荐做法） |
-| [ALGORITHM_STACK.md](ALGORITHM_STACK.md) | 当前代码里真实跑着的算法总览 + 跨模块铁律 |
+| [ALGORITHM_STACK.md](ALGORITHM_STACK.md) | 当前代码里真实跑着的 M1~M6 全栈算法总览 + 跨模块铁律 |
 | [ALGORITHM_VERIFY_PATTERN.md](ALGORITHM_VERIFY_PATTERN.md) | 分层验证阶梯（L0~L3）+ Python 仿真先行流程 |
 | [API_QUICK_REFERENCE.md](API_QUICK_REFERENCE.md) | 中间件 API 速查（工具书） |
 | [CALIBRATION_GUIDE.md](CALIBRATION_GUIDE.md) | 控制参数标定（仿真/真车双路径） |
-| [CODE_WIKI.md](CODE_WIKI.md) | 代码地图：15 节点、控制子系统详解、构建运行 |
+| [CODE_WIKI.md](CODE_WIKI.md) | 代码地图：默认 20 节点 pipeline、M1~M6 模块、控制子系统详解、构建运行 |
 | [DATA_CLOSED_LOOP.md](DATA_CLOSED_LOOP.md) | PEM 与车端数据采集链路 |
-| [FAILURE_MODES.md](FAILURE_MODES.md) | 运行期故障模式表（43 行「现象 → 根因 → 位置」，按 6 类分节；仓库权威副本） |
+| [FAILURE_MODES.md](FAILURE_MODES.md) | 运行期故障模式表（96 行「现象 → 根因 → 位置」，按 6 类分节；仓库权威副本） |
 | [FLOWBOARD_CONTRACT.md](FLOWBOARD_CONTRACT.md) | FlowBoard /api/topology 归一化数据契约 |
-| [FLOWBOARD_SCENE_CONTRACT.md](FLOWBOARD_SCENE_CONTRACT.md) | road_network schema + 场景帧字段（唯一权威） |
+| [FLOWBOARD_SCENE_CONTRACT.md](FLOWBOARD_SCENE_CONTRACT.md) | road_network schema + 6-DOF/SR 预测/湿滑区场景帧字段（唯一权威） |
 | [FLOWREC.md](FLOWREC.md) | flowrec 配置化留存节点 |
-| [FLOWSIM_PHYSICS.md](FLOWSIM_PHYSICS.md) | 车辆物理模型（运动学/动力学）+ 碰撞/护栏/重力 |
-| [HARDWARE_DEPLOYMENT.md](HARDWARE_DEPLOYMENT.md) | 真车部署 + 硬件调试 + FAST-LIO2 |
+| [FLOWSIM_PHYSICS.md](FLOWSIM_PHYSICS.md) | 车辆物理模型（运动学/2-DOF/6-DOF 簧载悬架）+ 湿滑摩擦区 + 碰撞/护栏/重力 |
+| [HARDWARE_DEPLOYMENT.md](HARDWARE_DEPLOYMENT.md) | 真车部署 + Windows 原生编译 + 硬件调试 + FAST-LIO2 |
 | [LEARNING_LOOP.md](LEARNING_LOOP.md) | 车端学习闭环总纲（四阶段 + 契约 + OTA） |
 | [LTV_MPC_DESIGN.md](LTV_MPC_DESIGN.md) | LTV MPC 横向控制器设计（Riccati 递推 + 失败兜底） |
 | [MAP_GENERATION_MODULE.md](MAP_GENERATION_MODULE.md) | 地图生成 DSL 单一枢纽架构 + 五条铁律 |
 | [MONITORING_ARCHITECTURE.md](MONITORING_ARCHITECTURE.md) | flowmond 监控 + IPC/文件桥接 + HTTP/SSE |
-| [PIPELINE_ARCHITECTURE.md](PIPELINE_ARCHITECTURE.md) | 15 节点 pipeline 数据流 + 关键参数 |
-| [PLANNING_SPEED_UPGRADE_DESIGN.md](PLANNING_SPEED_UPGRADE_DESIGN.md) | ST 图 + DP 速度规划设计 |
-| [PLATFORM_ABSTRACTION.md](PLATFORM_ABSTRACTION.md) | macOS/Linux 平台差异收口层 |
+| [PIPELINE_ARCHITECTURE.md](PIPELINE_ARCHITECTURE.md) | 历史 pipeline 设计说明（实时拓扑以 `config/pipeline.json` 20 节点为准） |
+| [PLANNING_SPEED_UPGRADE_DESIGN.md](PLANNING_SPEED_UPGRADE_DESIGN.md) | ST 图 + DP 速度规划与交互切入预制动设计 |
+| [PLATFORM_ABSTRACTION.md](PLATFORM_ABSTRACTION.md) | Linux / macOS / Windows (MinGW-w64) 平台差异收口层 |
 | [RC_CAR_HARDWARE_CHECKLIST.md](RC_CAR_HARDWARE_CHECKLIST.md) | RC 小车组装/验收清单 |
 | [ROAD_MARKINGS_MODULE.md](ROAD_MARKINGS_MODULE.md) | 道路标线（虚线/实线/双黄）生成与渲染 |
-| [SIMULATION_GUIDE.md](SIMULATION_GUIDE.md) | 仿真三层体系 + 场景库 + 场景矩阵回归 |
+| [SAFETY_CASE_L3.md](SAFETY_CASE_L3.md) | SAE L3 安全案例（ODD/TOR/MRM/故障注入/EDR/UN R157） |
+| [SIMULATION_GUIDE.md](SIMULATION_GUIDE.md) | 仿真三层体系 + 38 个场景库 + 场景矩阵回归 |
 | [SIM_DIGEST.md](SIM_DIGEST.md) | 仿真 digest + invariant 断言 |
 | [TROUBLESHOOTING_3D_DASHBOARD.md](TROUBLESHOOTING_3D_DASHBOARD.md) | 3D 仪表盘故障排查 |
-| [VISUALIZATION_ARCHITECTURE.md](VISUALIZATION_ARCHITECTURE.md) | 前端 3D 分层架构 + 坐标约定 + 帧契约 |
-| [VIS_3D_LANE_PIPELINE.md](VIS_3D_LANE_PIPELINE.md) | 车道线/路面 3D 渲染管线 |
-| [VIS_3D_RENDERING.md](VIS_3D_RENDERING.md) | 渲染经验沉淀（性能/贴地/相机） |
-| [VIS_MODULE_GUIDE.md](VIS_MODULE_GUIDE.md) | 新增 View 的规范 + 前端门禁 |
+| [VISUALIZATION_ARCHITECTURE.md](VISUALIZATION_ARCHITECTURE.md) | 前端 3D 52 模块分层架构 + SR 世界模型 + OSM 大地图渲染 + 帧契约 |
+| [VIS_3D_LANE_PIPELINE.md](VIS_3D_LANE_PIPELINE.md) | 权威车道级/OSM 大地图 3D 渲染管线（米制沥青 UV/路缘人行道/路口渠化/高架） |
+| [VIS_3D_RENDERING.md](VIS_3D_RENDERING.md) | 3D 渲染沉淀（6-DOF SU7/SR 感知光带/大地图走廊 LOD/相机/PHM） |
+| [VIS_MODULE_GUIDE.md](VIS_MODULE_GUIDE.md) | 新增 View 的规范 + 6 组前端门禁 |
 | [map_engine_boundary.md](map_engine_boundary.md) | esmini vs 自研 MapEngine 职责边界 |
-| book/01–16 | 16 篇循序渐进教程（见 [BOOK.md](BOOK.md) 卷二/卷四/卷七/卷八/卷九） |
+| book/00–24 | 26 篇循序渐进系统实战专章（第零至第六部，见 [BOOK.md](BOOK.md)） |

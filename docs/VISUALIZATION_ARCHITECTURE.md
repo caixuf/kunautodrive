@@ -302,46 +302,69 @@ tools/flowboard/js/
 ├── models.js                 # glTF 车辆模型工厂（车灯/车轮节点约定）
 ├── charts.js                # D3 图表
 ├── utils.js                  # safeCall / reportDiag
-└── vis/                      # 3D 可视化模块树（本架构核心）
-    ├── main.js               # 3D 入口：Three.js scene 初始化 + rAF 循环
+└── vis/                      # 3D 可视化模块树（52 个 ES Module，零构建工具直跑）
+    ├── main.js               # 3D 入口：Three.js r160 scene + GTAO/Bloom/SMAA + rAF 循环
+    ├── MinimapHUD.js         # 右上角 2D Canvas 航向锁定小地图叠加层
     ├── core/                 # 核心抽象（View 只能 import，不能修改）
     │   ├── Layer.js          # Qt 对象树节点（父子 + 递归 dispose + 错误隔离）
     │   ├── ViewRegistry.js   # View 插件注册 + 工厂实例化 + safeCall
     │   ├── AssetFactory.js   # 共享几何体/材质工厂（getBox/getCylinder/...）
+    │   ├── Constants.js      # 车道宽/默认车道数/道路类型/隧道判定常量
     │   ├── DeadReckon.js     # 死推算引擎（帧率无关指数平滑）
-    │   ├── Renderer.js       # WebGL 渲染器 + Composer 管理（perfTier 分档）
-    │   ├── CameraRig.js      # 6 种相机模式（chase/top/driver/front/map/orbit）
-    │   ├── Lighting.js       # 太阳光 + 半球光 + 阴影管理
-    │   └── SkyEnv.js         # 天空穹顶 + 雨粒子 + 天气系统
-    ├── math/                 # 数学工具（坐标/曲线/几何合并）
-    │   ├── Coord.js          # ENU↔THREE 坐标映射（worldToThree/headingToRotationY）
-    │   ├── Curve.js          # 道路曲线采样（sampleEdgeNodes，内部做 ENU→THREE 交换）
-    │   └── GeometryMerge.js  # mergeGeometries（静态批量合并）
+    │   ├── Renderer.js       # WebGL 渲染器 + EffectComposer（high/medium/low/ultra 四档）
+    │   ├── PerfMonitor.js    # 独立 watchdog 帧率监控与自动降档保护
+    │   ├── CameraRig.js      # 7 种相机模式（chase/top/driver/front/map/orbit/bev）
+    │   ├── Lighting.js       # 太阳光 + 半球光 + 2048/4096 级联阴影管理
+    │   ├── SkyEnv.js         # 天空穹顶 + 时段光照 + 统一雨丝/涟漪/雪花天气系统
+    │   └── WorkerBridge.js   # Web Worker 异步拓扑预处理桥接
+    ├── math/                 # 数学工具（坐标/曲线/高程/轨迹/几何合并）
+    │   ├── Coord.js          # ENU↔THREE 唯一坐标映射（worldToThree/headingToRotationY）
+    │   ├── Curve.js          # 自适应道路曲线采样（sampleEdgeNodes）
+    │   ├── RoadHeight.js     # 路面高程贴地插值（roadHeightAt）
+    │   ├── Trajectory.js     # 机动段与规划轨迹几何工具
+    │   ├── MapProjection.js  # 地图投影与坐标换算
+    │   └── GeometryMerge.js  # mergeGeometries（静态批量合批降 draw call）
+    ├── model/                # 道路拓扑与权威大地图数据层
+    │   ├── MapData.js        # 权威 HD Map 走廊裁剪、分段加载与内部连接路过滤
+    │   ├── RoadAxis.js       # 道路中心脊线/半宽唯一事实源（computeEdgeAxis/sampleCleanPolyline）
+    │   └── TopologyModel.js  # 路口多边形/臂廊切线/裁剪区间单一事实源
+    ├── hud/
+    │   └── DrivingStatus.js  # 驾驶舱底部 HUD 态势聚合纯函数（车速/L3/姿态/μ/TTC/ODD）
+    ├── theme/
+    │   ├── tokens.js         # 3D 场景与 UI 语义配色单一事实源（SCENE token 门禁守护）
+    │   └── roadStyle.js      # 声明式道路样式表（real 写实风 / sr 科技风一键切换）
+    ├── utils/
+    │   └── CanvasTextureFactory.js # 缓存式程序化 Canvas 纹理工厂
+    ├── worker/
+    │   └── TopologyWorker.js # 后台拓扑计算 Worker
     ├── store/
-    │   └── SceneStore.js     # 单一数据源（ego/entities/roadNetwork/isViaduct）
+    │   └── SceneStore.js     # 单一数据源（ego 6-DOF / entities / predictions / roadNetwork）
     ├── director/
     │   ├── SceneDirector.js  # 导演：校验 + 写 store + 静态 build + tickAnimation
     │   └── FrameValidator.js # 纯函数 validateFrame（零 THREE 依赖，可单测）
-    └── view/                 # View 模块（插件式，每个独立）
-        ├── RoadView.js       # 路面 ribbon + 车道线（静态 build）
-        ├── GroundView.js     # 草地地面（静态 build）
-        ├── VehicleView.js    # 车辆（动态 update，含车灯闪烁/车轮滚动）
-        ├── ConnectorView.js  # 路口连接段（静态 build）
-        ├── TrafficLightView.js # 红绿灯（动态 update，emissive 切换）
+    └── view/                 # View 模块（插件式，每个独立错误隔离）
+        ├── RoadView.js       # 8m 世界米制沥青 PBR 路面 + 车道级标线 + 花岗岩路缘/人行道/绿化带
+        ├── GroundView.js     # 程序化草地 / 权威城市基底地面（静态 build）
+        ├── VehicleView.js    # Xiaomi SU7 meshopt + 6-DOF 簧上/簧下分离 + kingpin 转向 + GA36 绿牌
+        ├── ConnectorView.js  # 无缝渠化路口多边形 + 斑马线/停止线/转向引导弧 + 匝道汇入 + 桥墩
+        ├── JunctionDetect.js # 路口几何聚类兜底（归口供 TopologyModel 调用）
+        ├── TrafficLightView.js # 红绿灯（动态 update，emissive 相位切换）
         ├── ETCGateView.js    # ETC 门架（动态 update，boom 抬杆）
-        ├── ViaductView.js    # 高架桥（静态 build，含环境）
-        ├── StreetlightView.js # 路灯（InstancedMesh 静态 build）
-        ├── BarrierView.js    # 护栏（InstancedMesh 静态 build）
-        ├── ConstructionView.js # 施工区（静态 build，黄黑锥桶/围挡）
-        ├── RoadFacilityView.js # 场景设施（停车位/斑马线/导向箭头/驾考桩杆，2 个实例化 draw call）
-        ├── TreeView.js       # 树（InstancedMesh 静态 build）
-        ├── BuildingView.js   # 建筑/楼宇（静态 build，单独 build 不入 Layer 树）
-        ├── VehicleLights.js  # 纯函数：车灯位掩码 → 状态（零 THREE 依赖）
-        ├── LabelView.js      # 实体标签（动态 update，CSS2D-style Sprite 文字标签）
-        ├── PerceptionView.js # 感知标注覆盖层（3D 角标框 + 检测射线 + 雷达扫描）
-        ├── EffectView.js     # 动态特效（紧急制动光晕/双闪/障碍物标记/切入预警）
-        ├── TrajectoryView.js # 预测轨迹线（运动学外推 3s，颜色编码速度/转向/急刹）
-        └── StatsView.js      # 性能统计 HUD（帧率/耗时，Canvas 2D，独立挂载）
+        ├── ViaductView.js    # 多层高架桥面与横梁支撑（静态 build）
+        ├── StreetlightView.js # 路灯（InstancedMesh 沿 clippedRanges 静态布设）
+        ├── StreetFurnitureView.js # 城市街道家具（InstancedMesh 静态布设）
+        ├── BarrierView.js    # 双波镀锌钢护栏（InstancedMesh 路口自动断开）
+        ├── ConstructionView.js # 施工区（黄黑锥桶/围挡/警示灯）
+        ├── RoadFacilityView.js # 场景设施（代客泊车发光车位框/导向箭头/湿滑结冰区贴花）
+        ├── LaneDiagView.js   # 车道四层对账诊断叠加层（快捷键 K）
+        ├── TreeView.js       # 行道树（InstancedMesh 静态 build）
+        ├── BuildingView.js   # OSM 真实建筑轮廓挤出 + 程序化高层退台天际线
+        ├── VehicleLights.js  # 纯函数：BCM 车灯位掩码 → 状态（零 THREE 依赖）
+        ├── LabelView.js      # 实体距离/速度悬浮标签
+        ├── PerceptionView.js # SR 感知世界模型（8 角三轴角标框 + 柔和 LiDAR 轮廓点云 + 多模态 3D 预测流光带）
+        ├── EffectView.js     # 车周物理与安全贴地特效（制动红晕/双闪/切入双 V 警示翼/雨天轮胎水雾）
+        ├── TrajectoryView.js # 自车规划走廊与速度编码轨迹带
+        └── StatsView.js      # 性能诊断面板（FPS/Draw/Tri/内存，快捷键 P 切换显示）
 ```
 > 另有 `MinimapHUD.js`（小地图 + HUD 叠加层，Canvas 2D）位于 vis/ 根目录，非 view/。
 
@@ -735,23 +758,22 @@ HTML inline `onclick` 全部改走 `window.flowboard.X()`，集中式重命名�
 - 检测射线使用 `lineDashOffset` 动画实现流动效果
 - 雷达扫描使用 `RadialGradient` 渐变填充，降低视觉侵入性
 
-### 3D 感知覆盖层（`PerceptionView.js`）
+### 3D SR 感知与车周特效层（`PerceptionView.js` + `EffectView.js`）
 
 ```
-3D 场景覆盖层（注册到 agent 层，每帧更新）：
-├── 角标框           — 用 THREE.LineSegments 单 draw call 渲染所有实体
-│   ├─ 4 个 L 形 bracket 包围每个实体（随朝向旋转）
-│   ├─ 绿色 #00ff88，带行内辉光
-│   ├─ 距离过滤（< 100m 显示，> 100m 隐藏）
-│   └─ 最大跟踪 32 实体
-├── 检测射线         — 从 ego 到每个实体的线段
-│   ├─ vertexColors 渐变：近端淡绿 → 远端亮绿
-│   ├─ 透明度 0.3，depthTest: false（始终可见）
-│   └─ 与 2D 同一数据源（store.entities）
-└── 雷达扫描扇形     — 扇形网格 + 前沿线
-    ├─ 半径 80m，32 段分割
-    ├─ 每帧旋转，与 2D 扫描同相位
-    └─ 透明度 0.06（低视觉侵入性）
+3D SR 世界模型覆盖层（注册到 agent 层，每帧更新）：
+├── 3D 三轴角标框      — 单 THREE.LineSegments draw call 渲染最多 32 个感知目标
+│   ├─ 每个目标 8 个顶/底三轴短臂 L 角标（48 顶点/目标，随车体朝向旋转并贴合路面高程）
+│   └─ 距离衰减与配色统一取自 tokens.js (SCENE)
+├── 柔和精灵 LiDAR 点云 — 0.12m 世界尺度径向渐变圆点（支持真实点云高度渐变 + 目标受照面轮廓扫描点）
+├── 多模态 3D 预测流光带 — 单索引网格合批渲染 Frenet 多模态轨迹（lane_keep / cut_in / yield_decel）
+│   ├─ 主模态宽 0.21m→0.14m，次模态宽 0.14m→0.09m，贴地抬升 0.15m
+│   └─ BEV 正交视角自动按 1.8× 拓宽保证远距清晰可读
+├── 传感器前视视场包络  — 前保险杠 36m 扇区 + 距离脉冲弧 + 贴地弱目标连线
+└── 车周贴地安全/天气特效（EffectView.js）
+    ├─ 旁车切入贴地双 V 警示翼（切入侧法线贴地边条 + 双 V 导流翼标）
+    ├─ 紧急制动车尾贴地红光晕 & 双闪警示
+    └─ 雨暴天气双后轮高速轮胎水雾尾迹（全局雨丝/涟漪归口 SkyEnv.js 统一渲染，零重复粒子）
 ```
 
 **关键实现细节**：

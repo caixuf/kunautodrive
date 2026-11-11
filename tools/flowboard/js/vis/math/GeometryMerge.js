@@ -64,7 +64,7 @@ export function mergeGeometries(geometries, attributes) {
       iOff += idx.length;
     } else {
       const count = g.attributes.position.count;
-      for (let i = 0; i < count; i++) indices[iOff + i] = i;
+      for (let i = 0; i < count; i++) indices[iOff + i] = i + idxBase;
       iOff += count;
     }
     idxBase += g.attributes.position.count;

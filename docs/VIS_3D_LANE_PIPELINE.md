@@ -1,20 +1,19 @@
-# 车道级 3D 渲染管线
+# 车道级与城市级 OSM 大地图 3D 渲染管线
 
-> 2026-08-14 原设计方案。2026-09 路轴/标线权威已改，**不要把下面的「竣工」当现状**。
->
-> **当前权威（2026-09，以代码和门禁为准）**
+> **当前权威（2026-11，以代码和前端门禁为准）**
 >
 > | 事实 | 入口 | 门禁 |
 > |------|------|------|
-> | 路面中心 / 半宽 | `RoadAxis.computeEdgeAxis`（RoadView 不再有本地 envelope） | `vis_grep_enforce` 禁 `laneGroupEnvelope` |
+> | 路面中心 / 半宽 / 清洁脊线采样 | `RoadAxis.computeEdgeAxis` + `sampleCleanPolyline`（去抖/共线合并，RoadView 不再有本地 envelope） | `vis_grep_enforce` 禁 `laneGroupEnvelope` |
+> | 世界米制沥青 PBR 纹理 | `RoadView.ASPHALT_TILE_M = 8.0`（无缝 albedo + normal map，10m 短路与 600m 长路颗粒密度严格一致） | `vis_render_tick` + `vis:check` |
+> | 城市道路横断面五级分层 | 沥青路面 → 花岗岩路缘石（`curb`）→ 人行道（`sidewalk`）→ 绿化带（`verge`），避免建筑直接落在沥青上 | `tokens.js` SCENE 单一事实源 |
 > | 沿路标线 | `map.json` `lanes[].markings`；生产规则只在 `tools/lane_markings.py` | `vis_marking_types`；有 `lane_data` 禁止启发式 |
-> | 路口裁剪 | TopologyModel 臂廊多边形 + `clipRadius`（不靠虚高圆） | `junction_markings` §15/§16 |
-> | 静态车道几何 | `POST /api/map/preview` 一次注入 `lane_data` / `map_junctions` | 禁止 scene_pub 每帧透传 |
+> | 路口渠化与无缝铺装 | `TopologyModel` 臂廊多边形 + `clipRadius`；`ConnectorView` 共享世界米制沥青材质 + `polygonOffset` 渲染斑马线/停止线/转向引导虚线 | `junction_markings` + `junction_fork_alignment` |
+> | 多层高架与立交匝道 | `ViaductView` + `ConnectorView` 桥墩支撑 + `RoadView` 平行出入口渐变段/45° 导流 V 纹 | `vis_audit_route` |
+> | 静态车道几何与大地图走廊优化 | `POST /api/map/preview` 优先加载 `map_corridor.json`（郑东 12,435 路段 76.5MB→12.4MB，`detail='high'\|'low'` LOD 控制全走廊 ~1.3M 三角面） | 禁止 `scene_pub` 每帧透传 `lanes` |
 >
-> demo / 无 map.json 的场景仍允许启发式标线。OSM 路有 `lane_data` 时 P2 返回 0 也不发明 `lanes×width`。
-> 匝道/`*_link` 的 `deceleration` 只写在生产规则里；现成 `map.json` 要重跑 osm2kmap 才带上。
->
-> 原方案里「scene_pub 每帧透传 lanes」**没有做、也不该做**（~20MB/s）。车道数据走 MapData 一次拉取。
+> demo / 无 `map.json` 的程序化场景仍允许启发式标线；权威 OSM 大地图（`osm_munich`、`osm_lujiazui_v2`、`beijing_guomao`、`osm_zhengdong`）通过 `isAuthoritativeMap` 自动启用干净城市基底并跳过启发式伪造。
+> 原早期草案里「scene_pub 每帧透传 lanes」**没有做、也不该做**（~20MB/s），静态车道与路口数据统一走 `MapData` 一次拉取。
 
 ---
 

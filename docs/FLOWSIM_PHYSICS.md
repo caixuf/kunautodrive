@@ -1,15 +1,21 @@
-# FlowSim 物理引擎 — 现状与经验沉淀
+# FlowSim 物理引擎 — 6-DOF 簧载悬架、轮胎动力学与碰撞沉淀
 
-> FlowSim 是 2D 平面运动学/动力学 + OBB 碰撞/护栏 + 垂直重力贴地的三层能力。
-> 本文沉淀物理引擎的模型选择、碰撞检测接入流程、垂直物理改造点与踩过的坑。
+> FlowSim 提供**运动学自行车 / 2-DOF 轮胎动力学 / 6-DOF 簧载质量悬架（俯仰 pitch + 侧倾 roll + 纵向轴荷转移 $\Delta F_z$）+ 局部湿滑摩擦区 `friction_zones` + 坡道高程重力补偿 + OBB 碰撞/护栏**的全套车辆物理仿真能力。
+> 本文沉淀物理引擎的模型选择、M4 6-DOF 升级架构、碰撞检测接入流程与工程踩坑。
 > 改动 `flowsim` 物理/碰撞/重力相关代码前先读本文。
 
-## 1. 物理模型：仍是 2D 平面，但有动力学选项
+## 1. 物理模型（运动学 / 2-DOF 动力学 / M4 6-DOF 簧载悬架）
 
-- 定义：`modules/adas_nodes/flowsim/physics.h`；实现 `physics.cpp`。
-- **默认 `step_bicycle`**（运动学自行车模型，`physics.cpp:79-110`）：纵向力（drive 5000N / brake 8000N / drag 按系数×v²，`longitudinal_accel` :47-53）+ 转向执行器一阶滞后限幅（`update_steer` :56-72）+ yaw_rate 积分。**全在 x/y 平面，无 z、无重力**。速度钳制 -4~60 m/s（:84-85）。
-- **可选 `step_bicycle_dynamic`**（线性轮胎二自由度，`physics.cpp:160-180`）：`integrate_lateral_dynamics`（:120-158）解 v_y_body + yaw_rate，含滑移角饱和 ±0.12 rad（`SLIP_ANGLE_MAX` :35）与摩擦圆护栏（:143-146）；低速 <5 m/s 退化为运动学（`LOW_SPEED_MS` :30，:162-167）。
-- 启用：`flowsim_node.cpp:132,236,2376-2379` 读 pipeline.json 的 `physics_model`（默认 `kinematic`）。Ego 步进 `flowsim_node.cpp:1832-1836`；NPC 在 `step_npc_vehicle`（npc_ai.cpp）。
+- 定义：`modules/adas_nodes/flowsim/physics.h`；实现 `modules/adas_nodes/flowsim/physics.cpp`；离线原型与参数对照 `tools/tire_dynamics_sim.py`。
+- **运动学基线 `step_bicycle`**（`physics.cpp`）：纵向驱动/制动/风阻合力 + 转向执行器一阶滞后限幅 + yaw_rate 积分。速度钳制 `-4 ~ 60 m/s`。
+- **2-DOF 横向轮胎动力学 `step_bicycle_dynamic`**：积分车身侧向速度 `v_y_body` 与横摆角速度 `yaw_rate`，含滑移角饱和（`±0.12 rad`）、摩擦圆护栏以及低速 `< 5 m/s` 运动学平滑退化。
+- **M4 6-DOF 簧上质量悬架与环境耦合**：
+  - **俯仰（Pitch）与侧倾（Roll）动态解算**：根据纵向加速度 $a_x$（制动点头 dive / 加速抬头 squat）与侧向向心加速度 $a_y$（过弯离心侧倾）二阶阻尼积分车身姿态角 `pitch`、`roll`，透传至 `VehicleState`、`scene/frame` 与 CARLA 6-DOF 桥接器；
+  - **纵向轴荷转移 $\Delta F_z$**：前/后轴法向载荷随纵向加减速动态重分配，耦合前后轮地面最大附着力包络；
+  - **局部湿滑摩擦区（`friction_zones`）**：场景 JSON 可声明矩形低附着区（如 `wet_road_evasion.json` 的 `surface: "wet"`, `mu_scale: 0.35` 或结冰路面），命中区域内轮胎峰值摩擦系数按最小 `mu_scale` 实时折减，并输出至 HUD `μ` 指标与 3D 积水/结冰贴花；
+  - **道路坡度高程驱动与重力补偿**：由路网高程剖面推导 `road_grade`，在纵向动力学中注入坡道重力分力 $-g \sin\theta$。
+- **M4 16 线束旋转 3D OBB LiDAR**：配合 6-DOF 车身与 3D 障碍物尺寸，`modules/adas_nodes/lidar_3d.h` 与 `sensor_model_node.c` 执行 16 线几何光线投影、视线遮挡裁剪、高斯测距噪声与 3D OBB 旋转包围盒输出。
+- 启用方式：`config/pipeline.json` 的 `flowsim` 参数 `physics_model`（`kinematic` 或 `dynamic`）。Ego 在 `flowsim_node.cpp` 步进；NPC 在 `npc_ai.cpp` 走 IDM + Route Frenet + 可选 MOBIL 自主变道。
 
 ## 2. 碰撞检测（collision.cpp/h）
 
@@ -37,7 +43,7 @@
 - **z 数据来源**：`FlowRoadNetwork::frenet_to_world` `road_network.cpp:96-109`，`out.z = pd.z`（OpenDRIVE `<elevationProfile>` 高架高程，平地恒 0）。
 - **后端贴地（`apply_gravity`）**：每 tick `vz -= 9.81*dt`（:207）；反查 `world_to_frenet` → `frenet_to_world` 取路面高度 ground_z（:211-220）；在道路上且 z≤ground_z → z=ground_z、vz=0（:229-232）；高于路面 → 下落落回（:233-240）；不在道路上 → 自由下落，钳制 z≥-200（:222-227）。
 - **前端贴地（独立实现）**：`roadHeightAt` + `Y_ROAD=0.10`（路面厚度），车辆 y = 道路高度 + 0.10，匝道/高架自动跟随，非固定偏移。
-- **语义差异待对齐**：后端 `apply_gravity` 贴地 z 直接用道路高程，**未叠加 Y_ROAD(0.10) 路面厚度**；前端 y 落在高程+0.1。两端贴地语义不同，后续改造需统一。地面支撑目前是硬贴合（z=ground_z 即 vz=0），无悬挂/轮胎模型。
+- **3D 姿态分离渲染（M5 `VehicleView.js`）**：前端将车轮/底盘（簧下质量）贴合 `roadHeightAt + Y_ROAD(0.10)`，而车身主体挂载在 `sprungGroup`（簧上质量）上叠加后端实时解算的 `pitch` 与 `roll`，使急刹点头、过弯侧倾和匝道爬坡在视觉与物理上完全同源。
 
 ## 5. 经验坑速查（改物理/碰撞必读）
 
@@ -52,8 +58,8 @@
 9. **纵向力耗散方向随运动方向**：brake/drag 符号必须跟 v 的符号，否则倒车时越刹越快（`physics.cpp:47-53`）。
 10. **重力贴地 z 与前端 Y_ROAD 语义差异**：见 §4，改造时统一。
 
-## 6. 文档覆盖现状
+## 6. 关联文档
 
-- `docs/SIMULATION_GUIDE.md`：运动学模型（:108-111）、collision 日志 grep（:79）。**未覆盖** OBB 算法/响应/护栏/重力。
-- `docs/book/16_flowsim_scenario_design.md`：高架 elevation/z 抬升约定（:38,45）、碰撞/幽灵变道调试（:61,114）。
-- `docs/DATA_CLOSED_LOOP.md`：完全未涉及物理。
+- [ALGORITHM_STACK.md](ALGORITHM_STACK.md)：M4 6-DOF 簧载悬架、轴荷转移、湿滑摩擦区与 M6 OpenDRIVE 1.4 / CARLA 6-DOF 桥接契约。
+- [SIMULATION_GUIDE.md](SIMULATION_GUIDE.md)：仿真三层体系与 38 场景回归验证（含 `wet_road_evasion.json`）。
+- [book/20_flowsim_scenario_design.md](book/20_flowsim_scenario_design.md)：高架高程、多段路网与 NPC 交互设计。

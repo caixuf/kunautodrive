@@ -11,6 +11,7 @@
  *       → update3D({metrics:{scene}})
  *         → SceneDirector 渲染
  */
+import '/tools/flowboard/js/bootstrap.js';
 import {
   init3DScene,
   update3D,

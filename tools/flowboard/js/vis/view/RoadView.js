@@ -23,12 +23,13 @@
  * road_network 变化时重建，ego 位姿变化不重建。
  */
 
-import { sampleEdgeNodes, edgeSampleCount as adaptiveEdgeSampleCount } from '../math/Curve.js';
+import { edgeSampleCount as adaptiveEdgeSampleCount } from '../math/Curve.js';
 import { mergeGeometries } from '../math/GeometryMerge.js';
 import { LANE_WIDTH, DEFAULT_LANES, EDGE_TYPE, isTunnelEdge } from '../core/Constants.js';
-import { tangentToNormal, offsetAlongNormal, forwardENU, worldToThree } from '../math/Coord.js';
+import { tangentToNormal, forwardENU, worldToThree } from '../math/Coord.js';
 import { getTopology } from '../model/TopologyModel.js';
-import { computeEdgeAxis } from '../model/RoadAxis.js';
+import { computeEdgeAxis, sampleCleanPolyline, offsetSpine as axisOffsetSpine } from '../model/RoadAxis.js';
+import { isAuthoritativeMap, setGroundAuthoritativeMode } from './GroundView.js';
 import { SCENE } from '../theme/tokens.js';
 import { MARKING } from '../theme/roadStyle.js';
 
@@ -71,9 +72,17 @@ const TAPER_DEFAULT_M = 90.0;
 const TAPER_MIN_M = 35.0;
 const TAPER_MAX_M = 160.0;
 const RAMP_JOIN_DISTANCE_M = 16.0;
+const OSM_SIDEWALK_W = 1.8;
+const URBAN_OSM_TYPES = new Set([
+  'urban', 'primary', 'secondary', 'tertiary',
+  'residential', 'living_street', 'unclassified', 'trunk', 'service', 'road',
+]);
+
+/** 沥青纹理世界空间平铺尺度（米）：保证 10m 短路与 600m 长路颗粒密度严格一致 */
+export const ASPHALT_TILE_M = 8.0;
 
 // ═══════════════════════════════════════════════════════════
-// 程序化沥青纹理（CanvasTexture，零外部资源）
+// 程序化沥青纹理（CanvasTexture，零外部资源，周期无缝 + 中性亮度调制）
 // ═══════════════════════════════════════════════════════════
 
 let _asphaltTex = null;
@@ -85,79 +94,85 @@ function _buildAsphaltTextures() {
   if (typeof document === 'undefined') return;
 
   const SIZE = 512;
+  const MASK = SIZE - 1;
   const canvas = document.createElement('canvas');
   canvas.width = SIZE; canvas.height = SIZE;
   const ctx = canvas.getContext('2d');
   // jsdom 等无头环境有 document 但 canvas 无 2D 上下文（无 canvas 包），同样跳过
   if (!ctx || typeof ctx.getImageData !== 'function') return;
 
-  // 基底：深灰沥青色（与 SCENE.asphalt 同值，纹理叠在 asphalt 材质色上）
-  ctx.fillStyle = '#24262b';
+  // 基底：近白中性调制色（Three.js MeshStandardMaterial 会做 color * map 乘法，
+  // 若基底填暗色 #24262b 会与 SCENE.asphalt 二次相乘压成纯黑死墨；近白调制让真实色相/明度由 token 精确控制）
+  ctx.fillStyle = '#e8eaee';
   ctx.fillRect(0, 0, SIZE, SIZE);
 
-  // 随机噪声颗粒（模拟沥青骨料）
   const imageData = ctx.getImageData(0, 0, SIZE, SIZE);
   // 无头 canvas 桩（tests/support Proxy ctx）只写不读：getImageData 返回空壳，
   // 读不回像素就放弃纹理（材质 map 为 null 也能正常渲染纯色沥青）
   if (!imageData || !imageData.data || !imageData.data.length) return;
   const data = imageData.data;
-  for (let i = 0; i < data.length; i += 4) {
-    const noise = (Math.random() - 0.5) * 28;
-    data[i]     = Math.max(0, Math.min(255, data[i] + noise));
-    data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + noise));
-    data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + noise));
+
+  // 确定性周期哈希噪声（双尺度玄武岩/石英骨料颗粒，边界天然无缝）
+  const hash2 = (ix, iy, salt) => {
+    let h = ((ix & MASK) * 374761393 + (iy & MASK) * 668265263 + salt * 1442695041) | 0;
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  };
+
+  const heightMap = new Float32Array(SIZE * SIZE);
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const fine = (hash2(x, y, 1) - 0.5) * 30;
+      const med = (hash2(x >> 1, y >> 1, 7) - 0.5) * 18;
+      const coarse = (hash2(x >> 3, y >> 3, 19) - 0.5) * 10;
+      // 稀疏高光石英碎石点，增强近景微表面颗粒质感
+      const spark = hash2(x, y, 31) > 0.965 ? 16 : (hash2(x, y, 43) < 0.04 ? -14 : 0);
+      const delta = fine + med + coarse + spark;
+      const pi = (y * SIZE + x) * 4;
+      const r = Math.max(170, Math.min(255, Math.round(232 + delta)));
+      const g = Math.max(172, Math.min(255, Math.round(234 + delta)));
+      const b = Math.max(176, Math.min(255, Math.round(238 + delta)));
+      data[pi] = r;
+      data[pi + 1] = g;
+      data[pi + 2] = b;
+      data[pi + 3] = 255;
+      heightMap[y * SIZE + x] = g / 255;
+    }
   }
   ctx.putImageData(imageData, 0, 0);
-
-  // 细纹裂缝（随机短线，模拟沥青路面微裂纹）
-  ctx.strokeStyle = 'rgba(20,20,20,0.15)';
-  ctx.lineWidth = 0.5;
-  for (let i = 0; i < 80; i++) {
-    const x = Math.random() * SIZE, y = Math.random() * SIZE;
-    const len = 10 + Math.random() * 40;
-    const angle = Math.random() * Math.PI;
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + Math.cos(angle) * len, y + Math.sin(angle) * len);
-    ctx.stroke();
-  }
 
   _asphaltTex = new THREE.CanvasTexture(canvas);
   _asphaltTex.wrapS = THREE.RepeatWrapping;
   _asphaltTex.wrapT = THREE.RepeatWrapping;
-  _asphaltTex.repeat.set(8, 8);  // 8m 重复，匹配路面尺度
+  _asphaltTex.repeat.set(1, 1);  // 配合世界米制 UV（ASPHALT_TILE_M = 8m）
+  _asphaltTex.anisotropy = 8;
   _asphaltTex.colorSpace = THREE.SRGBColorSpace;
 
-  // 法线贴图：从灰度高度图生成
+  // 法线贴图：全图周期环绕 Sobel（消除旧版 x=0/511, y=0/511 未初始化导致的横向黑缝）
   const normalCanvas = document.createElement('canvas');
   normalCanvas.width = SIZE; normalCanvas.height = SIZE;
   const nctx = normalCanvas.getContext('2d');
-  nctx.drawImage(canvas, 0, 0);  // 复制噪声图
-  const nImgData = nctx.getImageData(0, 0, SIZE, SIZE);
-  const nd = nImgData.data;
-
-  // Sobel 算子转法线
-  const heightMap = new Float32Array(SIZE * SIZE);
-  for (let i = 0; i < SIZE * SIZE; i++) {
-    heightMap[i] = nd[i * 4] / 255;  // 灰度值
-  }
 
   const out = new Uint8ClampedArray(SIZE * SIZE * 4);
-  for (let y = 1; y < SIZE - 1; y++) {
-    for (let x = 1; x < SIZE - 1; x++) {
-      const idx = (y * SIZE + x);
-      const tl = heightMap[(y - 1) * SIZE + (x - 1)];
-      const t  = heightMap[(y - 1) * SIZE + x];
-      const tr = heightMap[(y - 1) * SIZE + (x + 1)];
-      const l  = heightMap[y * SIZE + (x - 1)];
-      const r  = heightMap[y * SIZE + (x + 1)];
-      const bl = heightMap[(y + 1) * SIZE + (x - 1)];
-      const b  = heightMap[(y + 1) * SIZE + x];
-      const br = heightMap[(y + 1) * SIZE + (x + 1)];
+  const strength = 2.2;
+  for (let y = 0; y < SIZE; y++) {
+    const ym = (y - 1 + SIZE) & MASK;
+    const yp = (y + 1) & MASK;
+    for (let x = 0; x < SIZE; x++) {
+      const xm = (x - 1 + SIZE) & MASK;
+      const xp = (x + 1) & MASK;
+      const idx = y * SIZE + x;
+      const tl = heightMap[ym * SIZE + xm];
+      const t  = heightMap[ym * SIZE + x];
+      const tr = heightMap[ym * SIZE + xp];
+      const l  = heightMap[y * SIZE + xm];
+      const r  = heightMap[y * SIZE + xp];
+      const bl = heightMap[yp * SIZE + xm];
+      const b  = heightMap[yp * SIZE + x];
+      const br = heightMap[yp * SIZE + xp];
 
       const gx = (tr + 2 * r + br) - (tl + 2 * l + bl);
       const gy = (bl + 2 * b + br) - (tl + 2 * t + tr);
-      const strength = 2.5;
 
       const nx = -gx * strength;
       const ny = -gy * strength;
@@ -177,8 +192,21 @@ function _buildAsphaltTextures() {
   _asphaltNormal = new THREE.CanvasTexture(normalCanvas);
   _asphaltNormal.wrapS = THREE.RepeatWrapping;
   _asphaltNormal.wrapT = THREE.RepeatWrapping;
-  _asphaltNormal.repeat.set(8, 8);
-  _asphaltNormal.colorSpace = THREE.LinearSRGBColorSpace;
+  _asphaltNormal.repeat.set(1, 1);
+  _asphaltNormal.anisotropy = 8;
+  if (THREE.NoColorSpace !== undefined) {
+    _asphaltNormal.colorSpace = THREE.NoColorSpace;
+  }
+}
+
+export function getAsphaltTexture() {
+  _buildAsphaltTextures();
+  return _asphaltTex;
+}
+
+export function getAsphaltNormalTexture() {
+  _buildAsphaltTextures();
+  return _asphaltNormal;
 }
 
 export function createRoadView(scene) {
@@ -188,6 +216,12 @@ export function createRoadView(scene) {
   let stats = { rampTransitions: 0 };
   let _topo = null;    // TopologyModel（P0 单一事实源，build 时按 hash 缓存共享）
   let _laneData = null; // P2 车道级 lane_data（MapData/预览注入，无则启发式兜底）
+  let _axisByEdgeId = null; // build 周期内 computeEdgeAxis 缓存
+  let _roadOccGrid = null;  // 同层相邻机动车道空间占用网格（防分幅路中央路缘石切入邻道）
+  let _totalEdges = 0;      // 当前路网总边数（大图细分与侧向几何预算分级）
+  let _hasFocus = false;
+  let _focusX = 0;
+  let _focusZ = 0;
   /* 标线材质引用（SR/BEV 科技风发光用）：build 时赋值，setMarkingEmissive 改。
    * real 风 emissiveIntensity=0（不发光，保持写实）；SR/BEV 风抬高配合 Bloom 辉光。 */
   let _whiteLineMat = null;
@@ -200,16 +234,25 @@ export function createRoadView(scene) {
 
   // ── 几何辅助 ──
 
-  /** 从中心线样点（含法线）+ 半宽构建朝上的 ribbon 几何体。
+  /** 从中心线样点（含法线）+ 半宽构建朝上的 ribbon 几何体（世界米制 UV）。
    *  centers: [{px,py,pz,nx,nz}]，法线在 XZ 平面。yOff: 抬高量。 */
   function ribbonGeo(centers, halfW, yOff) {
     if (centers.length < 2) return null;
     const positions = [], indices = [], uvs = [];
+    const invTile = 1 / ASPHALT_TILE_M;
+    const uL = -halfW * invTile;
+    const uR = halfW * invTile;
+    let cumS = 0;
     for (let k = 0; k < centers.length; k++) {
       const c = centers[k];
+      if (k > 0) {
+        const prev = centers[k - 1];
+        cumS += Math.hypot(c.px - prev.px, (c.py || 0) - (prev.py || 0), c.pz - prev.pz);
+      }
       positions.push(c.px + c.nx * halfW, c.py + yOff, c.pz + c.nz * halfW);
       positions.push(c.px - c.nx * halfW, c.py + yOff, c.pz - c.nz * halfW);
-      uvs.push(0, k); uvs.push(1, k);
+      const v = cumS * invTile;
+      uvs.push(uL, v, uR, v);
     }
     const vertCount = positions.length / 3;
     for (let i = 0; i < vertCount - 2; i += 2) {
@@ -402,35 +445,9 @@ export function createRoadView(scene) {
     }
   }
 
-  /** 把中心线整体横向偏移 d（沿各点法线方向）。
-   *  2026-08-14 曲率钳制：急弯处（局部曲率半径 R < |d|）偏移折线会回折自相交
-   *  → 车道线/边线"打结"（OSM S 弯实测）。按每点局部曲率半径把偏移量钳到
-   *  R - 余量，内侧偏移折线不再自相交。 */
+  /** 把中心线整体横向偏移 d（委托 RoadAxis.offsetSpine 单一实现：曲率钳制 + 前向单调防回折环结）。 */
   function offsetSpine(spine, d) {
-    return spine.map((c, i) => {
-      let off = d;
-      if (i > 0 && i < spine.length - 1) {
-        const a = spine[i - 1], b = spine[i + 1];
-        const v1x = c.px - a.px, v1z = c.pz - a.pz;
-        const v2x = b.px - c.px, v2z = b.pz - c.pz;
-        const l1 = Math.hypot(v1x, v1z), l2 = Math.hypot(v2x, v2z);
-        if (l1 > 1e-6 && l2 > 1e-6) {
-          const cross = (v1x * v2z - v1z * v2x) / (l1 * l2);
-          const dot = (v1x * v2x + v1z * v2z) / (l1 * l2);
-          const ang = Math.atan2(cross, dot);   // exempt: 曲率钳制用有向转角，非坐标/朝向计算
-          if (Math.abs(ang) > 1e-4) {
-            const chord = (l1 + l2) * 0.5;
-            const R = chord / (2 * Math.sin(Math.abs(ang) / 2));  // exempt: 局部曲率半径几何，非偏移手算
-            // 对称钳制：内侧防自相交（打结），外侧急弯略收窄（可接受）。
-            // 留 0.3m 余量防贴死。
-            const maxOff = Math.max(0.3, R - 0.3);
-            off = Math.max(-maxOff, Math.min(d, maxOff));
-          }
-        }
-      }
-      const [opx, , opz] = offsetAlongNormal(c.px, c.pz, c.nx, c.nz, off);
-      return { px: opx, py: c.py, pz: opz, nx: c.nx, nz: c.nz };
-    });
+    return axisOffsetSpine(spine, d);
   }
 
   /** 构建 spine 的累计弧长数组 */
@@ -578,7 +595,7 @@ export function createRoadView(scene) {
     const centers = offsetSpine(spine, d);
     const cum = buildCumulative(centers);
     const total = cum[cum.length - 1];
-    const positions = [], indices = [];
+    const positions = [], indices = [], uvs = [];
     const dHw = 0.20, dLen = 1.4;
     let quads = 0;
     for (let s = 0; s < total; s += 3.0) {
@@ -595,6 +612,7 @@ export function createRoadView(scene) {
         positions.push(cx - nx * dHw, mid.py + Y_MARK, cz - nz * dHw);
         positions.push(cx + nx * dHw, mid.py + Y_MARK, cz + nz * dHw);
         positions.push(cx + tx * (dLen * 0.5), mid.py + Y_MARK, cz + tz * (dLen * 0.5));
+        uvs.push(0.5, 0, 0, 0.5, 1, 0.5, 0.5, 1);
         indices.push(base, base + 1, base + 2, base + 1, base + 3, base + 2);
         quads++;
       }
@@ -602,6 +620,7 @@ export function createRoadView(scene) {
     if (quads === 0) return [];
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
     geo.setIndex(indices);
     geo.computeVertexNormals();
     return [geo];
@@ -612,10 +631,12 @@ export function createRoadView(scene) {
     const length = endS - startS;
     if (length < 1 || spine.length < 2) return null;
     const positions = [], indices = [], uvs = [];
+    const invTile = 1 / ASPHALT_TILE_M;
     const count = Math.max(2, Math.ceil(length / 4) + 1);
     for (let i = 0; i < count; i++) {
       const t = i / (count - 1);
-      const c = sampleSpineAt(spine, cum, startS + length * t);
+      const s = startS + length * t;
+      const c = sampleSpineAt(spine, cum, s);
       const width = startWidth + (endWidth - startWidth) * t;
       const inner = side * edgeOffset;
       const outer = side * (edgeOffset + Math.max(0.03, width));
@@ -623,7 +644,7 @@ export function createRoadView(scene) {
         c.px + c.nx * inner, c.py + Y_ROAD + 0.002, c.pz + c.nz * inner,
         c.px + c.nx * outer, c.py + Y_ROAD + 0.002, c.pz + c.nz * outer,
       );
-      uvs.push(0, t, 1, t);
+      uvs.push(inner * invTile, s * invTile, outer * invTile, s * invTile);
     }
     for (let i = 0; i < count - 1; i++) {
       const base = i * 2;
@@ -707,18 +728,54 @@ export function createRoadView(scene) {
     return spine;
   }
 
-  /** 确定 edge 的采样密度 */
-  function edgeSampleCount(nodes, edgeType) {
-    if (edgeType === EDGE_TYPE.RAMP_CURVE) return SAMPLES_RAMP;
-    if (nodes.length > 2) return Math.max(SAMPLES_CURVE, adaptiveEdgeSampleCount(nodes));
-    return SAMPLES_STRAIGHT;
+  /** 计算原始折线 2D 弦长（米） */
+  function polylineLength2D(nodes) {
+    let len = 0;
+    for (let i = 1; i < nodes.length; i++) {
+      const a = nodes[i - 1], b = nodes[i];
+      len += Math.hypot((b[0] || 0) - (a[0] || 0), (b[1] || 0) - (a[1] || 0));
+    }
+    return len;
+  }
+
+  /** 计算折线到相机/自车焦点 (_focusX, _focusZ) 的最小近似距离（米） */
+  function edgeDistToFocus(nodes) {
+    if (!_hasFocus || !Array.isArray(nodes) || nodes.length === 0) return 0;
+    const indices = [0, nodes.length >> 1, nodes.length - 1];
+    let best = Infinity;
+    for (const idx of indices) {
+      const n = nodes[idx];
+      if (!n) continue;
+      const ex = Array.isArray(n) ? (Number(n[0]) || 0) : (Number(n.x) || 0);
+      const ey = Array.isArray(n) ? (Number(n[1]) || 0) : (Number(n.y) || 0);
+      const [tx, , tz] = worldToThree(ex, ey, 0);
+      const d = Math.hypot(tx - _focusX, tz - _focusZ);
+      if (d < best) best = d;
+    }
+    return best;
+  }
+
+  /** 确定 edge 的采样密度（polygonOffset 已根除地面穿模，直道与远景弯道按图幅自适应控预算） */
+  function edgeSampleCount(nodes, edgeType, isDistant = false) {
+    if (edgeType === EDGE_TYPE.RAMP_CURVE) return isDistant ? 10 : SAMPLES_RAMP;
+    if (nodes.length > 2) {
+      return isDistant
+        ? Math.max(4, Math.ceil(polylineLength2D(nodes) / 10))
+        : adaptiveEdgeSampleCount(nodes);
+    }
+    const chord = polylineLength2D(nodes);
+    if (_totalEdges > 400) {
+      return Math.min(16, Math.max(4, Math.ceil(chord / 40)));
+    }
+    return Math.min(64, Math.max(SAMPLES_STRAIGHT, Math.ceil(chord / 18)));
   }
 
   // ── 匝道渲染 ──
 
   /** 渲染匝道：窄路面、无黄色中心线、白虚线边线 */
   function buildRamp(edge, nodes) {
-    const points = sampleEdgeNodes(nodes, SAMPLES_RAMP);
+    const isDistant = _totalEdges > 800 && edgeDistToFocus(nodes) > 450;
+    const points = sampleCleanPolyline(nodes, isDistant ? 10 : SAMPLES_RAMP);
     const spine = buildSpine(points);
     if (spine.length < 2) return {
       roadGeos: [], shoulderGeos: [], curbGeos: [], sidewalkGeos: [],
@@ -904,8 +961,11 @@ export function createRoadView(scene) {
   /** 路面半宽/中心只认 RoadAxis。高密度采样仍在本函数，偏移量来自共享路轴。
    *  包络失败（fromLanes=false）则路面与标线一起降级，禁止 split-brain。 */
   function applySharedAxis(edge, spine, fallbackHw) {
-    const axis = computeEdgeAxis(edge, _laneData);
-    const rec = _laneData && (_laneData[edge.name] || _laneData[String(edge.id)]);
+    const eid = String(edge.id);
+    const axis = (_axisByEdgeId && _axisByEdgeId.get(eid))
+      || (_topo && _topo.edgeAxis ? _topo.edgeAxis(eid) : null)
+      || computeEdgeAxis(edge, _laneData);
+    const rec = _laneData && (_laneData[edge.name] || _laneData[eid]);
     const laneRec = Array.isArray(rec) && rec.length ? rec : null;
     if (!axis || !axis.ok) {
       return { roadSpine: spine, roadHw: fallbackHw, fromLanes: false, laneRec };
@@ -920,33 +980,131 @@ export function createRoadView(scene) {
     };
   }
 
+  const OCC_CELL = 16;
+  const MAX_OCC_CLEARANCE_M = 2.6;
+
+  /** 检测侧向点 (x,z) 是否未侵入其它同高程层道路的沥青路面。
+   *  构建时已按 hw + MAX_OCC_CLEARANCE_M 外扩写入网格，查询只需访问单格 + AABB 快筛（郑东 1.2 万路 < 50ms）。 */
+  function isClearOfOtherRoads(edgeId, py, x, z, clearanceM) {
+    if (!_roadOccGrid) return true;
+    const bucket = _roadOccGrid.get(`${Math.floor(x / OCC_CELL)},${Math.floor(z / OCC_CELL)}`);
+    if (!bucket) return true;
+    const selfId = String(edgeId);
+    for (let i = 0; i < bucket.length; i++) {
+      const seg = bucket[i];
+      if (seg.id === selfId) continue;
+      if (Math.abs((py || 0) - seg.py) > 2.5) continue;
+      const r = seg.hw + clearanceM;
+      if (x < seg.minX - clearanceM || x > seg.maxX + clearanceM ||
+          z < seg.minZ - clearanceM || z > seg.maxZ + clearanceM) continue;
+      const abx = seg.x1 - seg.x0, abz = seg.z1 - seg.z0;
+      const len2 = abx * abx + abz * abz;
+      if (len2 < 1e-6) continue;
+      const t = Math.max(0, Math.min(1, ((x - seg.x0) * abx + (z - seg.z0) * abz) / len2));
+      const dx = x - (seg.x0 + abx * t), dz = z - (seg.z0 + abz * t);
+      if (dx * dx + dz * dz < r * r) return false;
+    }
+    return true;
+  }
+
+  function splitSpineByClearance(seg, edgeId, lateralOffset, clearanceM) {
+    if (!_roadOccGrid) return [seg];
+    const runs = [];
+    let cur = [];
+    for (const c of seg) {
+      const tx = c.px + c.nx * lateralOffset;
+      const tz = c.pz + c.nz * lateralOffset;
+      if (isClearOfOtherRoads(edgeId, c.py || 0, tx, tz, clearanceM)) {
+        cur.push(c);
+      } else {
+        if (cur.length >= 2) runs.push(cur);
+        cur = [];
+      }
+    }
+    if (cur.length >= 2) runs.push(cur);
+    return runs;
+  }
+
   /** 车道级标线（2026-08-15 P2）：lane_data 的 lanes[]{centerline,width,markings}
    *  直接成图——标线 = 车道边界数据本身，不是启发式 offset。
    *  side 语义（osm_to_map 数据契约）：相对**道路参考线**（centerline 折线）
    *  坐标系，right = +法线，与 lane.direction 无关（双向路 dir=-1 车道的
    *  double_yellow 标 right = 几何中央，实测验证）。
-   *  相邻车道共享边界会被两侧各报一次 → 端点量化 key 去重；
+   *  相邻车道共享边界会被两侧各报一次 → 端点+中点规范化无向 key 去重；
    *  边界折线过路口圆裁剪（TopologyModel 段拆分，与启发式路径同源）。
    *  @returns 生成的 geo 数（0 = 数据不可用，调用方回退启发式） */
-  function buildLaneMarkingsInto(lanes, edgeId, whiteGeos, yellowGeos) {
+  /** 识别 OSM 断头掉头灯泡/微型环岛（首尾相距 <12m、总弧长 <75m 且累计转角 >137°）：
+   *  此类小半径死胡同回转盘在真实道路中为无标线铺装回转场，若强刷双向双黄线与路缘石会自相交打结。 */
+  function isTightTurnaroundBulb(pts) {
+    if (!Array.isArray(pts) || pts.length < 3) return false;
+    const p0 = pts[0], pN = pts[pts.length - 1];
+    const x0 = Array.isArray(p0) ? (p0[0] || 0) : (p0.x || 0);
+    const y0 = Array.isArray(p0) ? (p0[1] || 0) : (p0.y || 0);
+    const xN = Array.isArray(pN) ? (pN[0] || 0) : (pN.x || 0);
+    const yN = Array.isArray(pN) ? (pN[1] || 0) : (pN.y || 0);
+    if (Math.hypot(xN - x0, yN - y0) >= 12) return false;
+    const totalLen = polylineLength2D(pts);
+    if (totalLen >= 75) return false;
+    let totalTurn = 0;
+    for (let i = 1; i + 1 < pts.length; i++) {
+      const a = pts[i - 1], m = pts[i], b = pts[i + 1];
+      const ax = Array.isArray(a) ? (a[0] || 0) : (a.x || 0);
+      const ay = Array.isArray(a) ? (a[1] || 0) : (a.y || 0);
+      const mx = Array.isArray(m) ? (m[0] || 0) : (m.x || 0);
+      const my = Array.isArray(m) ? (m[1] || 0) : (m.y || 0);
+      const bx = Array.isArray(b) ? (b[0] || 0) : (b.x || 0);
+      const by = Array.isArray(b) ? (b[1] || 0) : (b.y || 0);
+      const ux = mx - ax, uy = my - ay;
+      const vx = bx - mx, vy = by - my;
+      const l1 = Math.hypot(ux, uy), l2 = Math.hypot(vx, vy);
+      if (l1 > 1e-3 && l2 > 1e-3) {
+        const dot = Math.max(-1, Math.min(1, (ux * vx + uy * vy) / (l1 * l2)));
+        totalTurn += Math.acos(dot);
+      }
+    }
+    return totalTurn > 2.4;
+  }
+
+  function buildLaneMarkingsInto(lanes, edgeId, whiteGeos, yellowGeos, isDistant = false) {
     let made = 0;
     const seen = new Set();
+    const q = (v) => Math.round(v * 2);
     for (const lane of lanes) {
       const cl = lane && lane.centerline;
       if (!Array.isArray(cl) || cl.length < 2) continue;
-      const pts = sampleEdgeNodes(cl, SAMPLES_STRAIGHT);
+      if (isTightTurnaroundBulb(cl)) continue;
+      const chord = polylineLength2D(cl);
+      let laneSamples;
+      if (cl.length > 2) {
+        laneSamples = isDistant
+          ? Math.max(4, Math.ceil(chord / 10))
+          : adaptiveEdgeSampleCount(cl);
+      } else if (_totalEdges > 400) {
+        laneSamples = Math.min(16, Math.max(4, Math.ceil(chord / 40)));
+      } else {
+        laneSamples = Math.min(64, Math.max(SAMPLES_STRAIGHT, Math.ceil(chord / 18)));
+      }
+      const pts = sampleCleanPolyline(cl, laneSamples);
       const spine = buildSpine(pts);
       if (spine.length < 2) continue;
       const hw = (Number(lane.width) || LANE_WIDTH) / 2;
       for (const mk of (lane.markings || [])) {
         if (!mk || !mk.type) continue;
         const d = (mk.side === 'right' ? 1 : -1) * hw;
-        const a = spine[0], b = spine[spine.length - 1];
-        const key = `${mk.type}|${Math.round(a.px + a.nx * d)},${Math.round(a.pz + a.nz * d)}|`
-          + `${Math.round(b.px + b.nx * d)},${Math.round(b.pz + b.nz * d)}`;
+        const boundary = offsetSpine(spine, d);
+        if (boundary.length < 2) continue;
+        const b0 = boundary[0];
+        const b1 = boundary[boundary.length - 1];
+        const m0 = boundary[boundary.length >> 1];
+        const m1 = boundary[(boundary.length - 1) >> 1];
+        const mx = (m0.px + m1.px) * 0.5;
+        const mz = (m0.pz + m1.pz) * 0.5;
+        const epA = `${q(b0.px)},${q(b0.pz)}`;
+        const epB = `${q(b1.px)},${q(b1.pz)}`;
+        const pair = epA <= epB ? `${epA}|${epB}` : `${epB}|${epA}`;
+        const key = `${mk.type}|${pair}|${q(mx)},${q(mz)}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        const boundary = offsetSpine(spine, d);
         for (const seg of filterSpineOutsideJunctions(boundary, edgeId)) {
           if (mk.type === 'dashed_white') {
             for (const g of dashedLine(seg, 0)) { whiteGeos.push(g); made++; }
@@ -978,8 +1136,13 @@ export function createRoadView(scene) {
 
   /** 从 edge nodes 构建主路路面 + 车道线 + 路肩 */
   function buildStandardRoad(edge, nodes) {
-    const sampleCount = edgeSampleCount(nodes, edge.type);
-    const points = sampleEdgeNodes(nodes, sampleCount);
+    const distToFocus = edgeDistToFocus(nodes);
+    const nearRadius = _totalEdges > 2500 ? 350 : 450;
+    const isNearFocus = !_hasFocus || _totalEdges <= 800 || distToFocus <= nearRadius;
+    const isDistant = !isNearFocus;
+    const turnaroundBulb = isTightTurnaroundBulb(nodes);
+    const sampleCount = edgeSampleCount(nodes, edge.type, isDistant);
+    const points = sampleCleanPolyline(nodes, sampleCount);
     /* 2026-08-14 路口一劳永逸：路面 ribbon 永不截断（贯穿路口，相邻路自然
      * 重叠覆盖，沥青色一致看不出缝）；标线/路肩/人行道/绿化带在路口边界停
      * （简单距离过滤：spine 点到最近 junction 中心 > radius 才画），不再依赖
@@ -1019,22 +1182,28 @@ export function createRoadView(scene) {
       };
     }
 
-    /* LOD 分级（阶段3）：走廊远区（detail='low'，corridor_map.py 标注）只铺
-     * 路面不画标线/路肩/人行道 → 降 draw call。high/缺省零回归。 */
-    if (edge.detail === 'low') {
+    /* LOD 分级（阶段3）：走廊远区（detail='low'，corridor_map.py 标注）或微型回转灯泡只铺
+     * 路面不画标线/路肩/人行道 → 降 draw call 且消除灯泡回转盘双黄线自交乱团。 */
+    if (edge.detail === 'low' || turnaroundBulb) {
+      if (turnaroundBulb) {
+        if (laneRec) stats.p2Edges++;
+        else stats.heuristicEdges++;
+      }
       return {
         roadGeos: [road], shoulderGeos: [], curbGeos: [], sidewalkGeos: [],
         vergeGeos: [], whiteGeos: [], yellowGeos: [], spine, cum: buildCumulative(spine),
       };
     }
 
-    // 路肩（路口边界停，逐段；随车道对齐后的路面走）
+    // 路肩（路口边界停；>800 边大图仅在焦点 450m 内铺设 3D 路肩，远景省三角面）
     const shoulderGeos = [];
-    for (const seg of roadMarkSpine) {
-      const sL = ribbonGeo(offsetSpine(seg, roadHw + SHOULDER_W * 0.5), SHOULDER_W * 0.5, Y_SHOULDER);
-      const sR = ribbonGeo(offsetSpine(seg, -(roadHw + SHOULDER_W * 0.5)), SHOULDER_W * 0.5, Y_SHOULDER);
-      if (sL) shoulderGeos.push(sL);
-      if (sR) shoulderGeos.push(sR);
+    if (isNearFocus) {
+      for (const seg of roadMarkSpine) {
+        const sL = ribbonGeo(offsetSpine(seg, roadHw + SHOULDER_W * 0.5), SHOULDER_W * 0.5, Y_SHOULDER);
+        const sR = ribbonGeo(offsetSpine(seg, -(roadHw + SHOULDER_W * 0.5)), SHOULDER_W * 0.5, Y_SHOULDER);
+        if (sL) shoulderGeos.push(sL);
+        if (sR) shoulderGeos.push(sR);
+      }
     }
 
     const whiteGeos = [];
@@ -1047,7 +1216,7 @@ export function createRoadView(scene) {
     //（空 markings / 全被路口裁掉）也禁止启发式，否则会按 lanes×width 再发明一套。
     // 无 lane_data：straight_road 等 demo 才走启发式，画在已对齐的 roadMarkSpine 上。
     if (laneRec) {
-      buildLaneMarkingsInto(laneRec, edge.id, whiteGeos, yellowGeos);
+      buildLaneMarkingsInto(laneRec, edge.id, whiteGeos, yellowGeos, isDistant);
       stats.p2Edges++;
     } else {
       stats.heuristicEdges++;
@@ -1090,17 +1259,21 @@ export function createRoadView(scene) {
     const isElevated = edge.bridge === true || maxZ >= 1.5;
     const isTunnel = edge.tunnel === true || isTunnelEdge(edge) || minZ <= -1.5;
 
-    if (isElevated) {
+    if (isElevated && (_totalEdges <= 800 || distToFocus <= 900)) {
       const deck = bridgeDeckGeo(roadSpine, roadHw);
       if (deck) curbGeos.push(deck);
-    } else if (isTunnel) {
+    } else if (isTunnel && (_totalEdges <= 800 || distToFocus <= 900)) {
       const tube = tunnelStructureGeo(roadSpine, roadHw);
       if (tube) curbGeos.push(tube);
-    } else {
-      const isUrban = edge.type === EDGE_TYPE.URBAN ||
+    } else if (!isElevated && !isTunnel && isNearFocus) {
+      const edgeType = String(edge.type || '').toLowerCase();
+      const isSyntheticUrban = edgeType === EDGE_TYPE.URBAN ||
         String(edge.name || '').toLowerCase().includes('urban');
+      const isOsmUrban = Boolean(laneRec) &&
+        !edgeType.endsWith('_link') &&
+        URBAN_OSM_TYPES.has(edgeType);
 
-      if (isUrban) {
+      if (isSyntheticUrban && !laneRec) {
         for (const seg of roadMarkSpine) {
           for (const side of [-1, 1]) {
             const curb = ribbonGeo(offsetSpine(seg, side * (roadHw + SHOULDER_W + CURB_W * 0.5)),
@@ -1114,6 +1287,21 @@ export function createRoadView(scene) {
             if (curb) curbGeos.push(curb);
             if (sidewalk) sidewalkGeos.push(sidewalk);
             if (verge) vergeGeos.push(verge);
+          }
+        }
+      } else if (isOsmUrban || isSyntheticUrban) {
+        for (const seg of roadMarkSpine) {
+          for (const side of [-1, 1]) {
+            const curbOff = side * (roadHw + SHOULDER_W + CURB_W * 0.5);
+            for (const cRun of splitSpineByClearance(seg, edge.id, curbOff, CURB_W * 0.5 + 0.25)) {
+              const curb = ribbonGeo(offsetSpine(cRun, curbOff), CURB_W * 0.5, Y_CURB);
+              if (curb) curbGeos.push(curb);
+            }
+            const swOff = side * (roadHw + SHOULDER_W + CURB_W + OSM_SIDEWALK_W * 0.5);
+            for (const sRun of splitSpineByClearance(seg, edge.id, swOff, OSM_SIDEWALK_W * 0.5 + 0.35)) {
+              const sidewalk = ribbonGeo(offsetSpine(sRun, swOff), OSM_SIDEWALK_W * 0.5, Y_SIDEWALK);
+              if (sidewalk) sidewalkGeos.push(sidewalk);
+            }
           }
         }
       }
@@ -1170,12 +1358,104 @@ export function createRoadView(scene) {
     built = false;
     stats = { rampTransitions: 0, doubleYellowCenterlines: 0, p2Edges: 0, heuristicEdges: 0 };
 
-    if (!roadNetwork || !roadNetwork.edges || roadNetwork.edges.length === 0) return;
+    if (!roadNetwork || !roadNetwork.edges || roadNetwork.edges.length === 0) {
+      setGroundAuthoritativeMode(false);
+      return;
+    }
+    setGroundAuthoritativeMode(isAuthoritativeMap(roadNetwork));
+
+    _totalEdges = roadNetwork.edges.length;
+    _hasFocus = false;
+    _focusX = 0;
+    _focusZ = 0;
+    if (Number.isFinite(roadNetwork.focus_x) && Number.isFinite(roadNetwork.focus_y)) {
+      const [fx, , fz] = worldToThree(roadNetwork.focus_x, roadNetwork.focus_y, 0);
+      _focusX = fx;
+      _focusZ = fz;
+      _hasFocus = true;
+    } else if (_totalEdges > 800) {
+      let sx = 0, sy = 0, cnt = 0;
+      const blds = Array.isArray(roadNetwork.buildings) ? roadNetwork.buildings : [];
+      if (blds.length > 0) {
+        for (const b of blds) {
+          const fp = Array.isArray(b.footprint) && b.footprint.length ? b.footprint[0] : null;
+          if (fp) { sx += Number(fp[0]) || 0; sy += Number(fp[1]) || 0; cnt++; }
+        }
+      } else {
+        const step = Math.max(1, Math.floor(_totalEdges / 256));
+        for (let i = 0; i < _totalEdges; i += step) {
+          const ns = roadNetwork.edges[i] && roadNetwork.edges[i].nodes;
+          if (Array.isArray(ns) && ns.length) {
+            const p = ns[ns.length >> 1];
+            const px = Array.isArray(p) ? p[0] : p.x;
+            const py = Array.isArray(p) ? p[1] : p.y;
+            sx += Number(px) || 0;
+            sy += Number(py) || 0;
+            cnt++;
+          }
+        }
+      }
+      if (cnt > 0) {
+        const [fx, , fz] = worldToThree(sx / cnt, sy / cnt, 0);
+        _focusX = fx;
+        _focusZ = fz;
+        _hasFocus = true;
+      }
+    }
 
     // 交叉口拓扑：TopologyModel 单一事实源（按 roadNetworkHash 缓存，
     // 与 ConnectorView/TreeView/StreetlightView/BarrierView 共享同一次计算）
     _topo = getTopology(roadNetwork);
     _laneData = roadNetwork.lane_data || null;
+    _axisByEdgeId = new Map();
+    _roadOccGrid = _laneData ? new Map() : null;
+    if (_roadOccGrid) {
+      for (const edge of roadNetwork.edges) {
+        if (!edge || isTunnelEdge(edge)) continue;
+        const eid = String(edge.id);
+        const axis = (_topo && _topo.edgeAxis ? _topo.edgeAxis(eid) : null)
+          || computeEdgeAxis(edge, _laneData);
+        _axisByEdgeId.set(eid, axis);
+        if (!axis || !axis.ok || axis.spine.length < 2) continue;
+        const sp = axis.spine;
+        if (_totalEdges > 800 && _hasFocus) {
+          const mid = sp[sp.length >> 1];
+          if (Math.hypot(mid.px - _focusX, mid.pz - _focusZ) > 520 &&
+              Math.hypot(sp[0].px - _focusX, sp[0].pz - _focusZ) > 520 &&
+              Math.hypot(sp[sp.length - 1].px - _focusX, sp[sp.length - 1].pz - _focusZ) > 520) {
+            continue;
+          }
+        }
+        const hw = axis.halfWidth || 3.5;
+        const pad = hw + MAX_OCC_CLEARANCE_M;
+        const stride = Math.max(1, Math.floor(sp.length / 16));
+        for (let i = 0; i < sp.length - 1; i += stride) {
+          const a = sp[i];
+          const b = sp[Math.min(sp.length - 1, i + stride)];
+          const minX = Math.min(a.px, b.px) - hw;
+          const maxX = Math.max(a.px, b.px) + hw;
+          const minZ = Math.min(a.pz, b.pz) - hw;
+          const maxZ = Math.max(a.pz, b.pz) + hw;
+          const seg = {
+            id: eid, x0: a.px, z0: a.pz, x1: b.px, z1: b.pz,
+            minX, maxX, minZ, maxZ,
+            hw, py: ((a.py || 0) + (b.py || 0)) * 0.5,
+          };
+          const minCx = Math.floor((Math.min(a.px, b.px) - pad) / OCC_CELL);
+          const maxCx = Math.floor((Math.max(a.px, b.px) + pad) / OCC_CELL);
+          const minCz = Math.floor((Math.min(a.pz, b.pz) - pad) / OCC_CELL);
+          const maxCz = Math.floor((Math.max(a.pz, b.pz) + pad) / OCC_CELL);
+          for (let cx = minCx; cx <= maxCx; cx++) {
+            for (let cz = minCz; cz <= maxCz; cz++) {
+              const k = `${cx},${cz}`;
+              let bucket = _roadOccGrid.get(k);
+              if (!bucket) { bucket = []; _roadOccGrid.set(k, bucket); }
+              bucket.push(seg);
+            }
+          }
+        }
+      }
+    }
 
     const roadGeos = [];
     const shoulderGeos = [];
@@ -1238,7 +1518,7 @@ export function createRoadView(scene) {
 
     // ── 合并 + 上材质 ──
 
-    // 主路路面：沥青 PBR
+    // 主路路面：沥青 PBR（单调递减 polygonOffset 层级：彻底压制 GroundView 20km 底面在大景深比下的深度穿模）
     if (roadGeos.length) {
       const mat = new THREE.MeshStandardMaterial({
         color: ASPHALT_COLOR,
@@ -1248,6 +1528,7 @@ export function createRoadView(scene) {
         roughness: 0.88,
         metalness: 0.02,
         side: THREE.DoubleSide,
+        polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -12,
       });
       _asphaltMat = mat;
       addMergedByTile(roadGeos, mat);
@@ -1263,6 +1544,7 @@ export function createRoadView(scene) {
         roughness: 0.85,
         metalness: 0.02,
         side: THREE.DoubleSide,
+        polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -12,
       });
       _rampMat = mat;
       addMergedByTile(rampGeos, mat);
@@ -1275,6 +1557,7 @@ export function createRoadView(scene) {
         roughness: 0.92,
         metalness: 0.0,
         side: THREE.DoubleSide,
+        polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -12,
       });
       addMergedByTile(tunnelGeos, mat);
     }
@@ -1286,19 +1569,21 @@ export function createRoadView(scene) {
         roughness: 0.85,
         metalness: 0.05,
         side: THREE.DoubleSide,
+        polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8,
       }));
     }
 
     // 城市路缘石、人行道和绿化带分别合批（瓦片化，见 addMergedByTile），静态路网不随帧更新。
-    const addSurface = function(geometries, color, roughness) {
+    const addSurface = function(geometries, color, roughness, poFactor = -4) {
       if (!geometries.length) return;
       addMergedByTile(geometries, new THREE.MeshStandardMaterial({
         color, roughness, metalness: 0, side: THREE.DoubleSide,
+        polygonOffset: true, polygonOffsetFactor: poFactor, polygonOffsetUnits: poFactor * 2,
       }));
     };
-    addSurface(curbGeos, CURB_COLOR, 0.78);
-    addSurface(sidewalkGeos, SIDEWALK_COLOR, 0.92);
-    addSurface(vergeGeos, VERGE_COLOR, 1.0);
+    addSurface(curbGeos, CURB_COLOR, 0.78, -6);
+    addSurface(sidewalkGeos, SIDEWALK_COLOR, 0.92, -4);
+    addSurface(vergeGeos, VERGE_COLOR, 1.0, -2);
 
     // 白色车道线（材质引用存 _whiteLineMat；emissive 由 setMarkingEmissive 控制，
     //   real 风默认 0 不发光，SR/BEV 风抬高配合 Bloom 出霓虹辉光）
@@ -1310,7 +1595,7 @@ export function createRoadView(scene) {
         emissive: MARKING.white.emissive,   // 冷白蓝自发光（色值不动 color，绕开测试锁定）
         emissiveIntensity: 0,               // real 风默认关闭，SR/BEV 风由 setter 打开
         side: THREE.DoubleSide,
-        polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+        polygonOffset: true, polygonOffsetFactor: -12, polygonOffsetUnits: -24,
       });
       _whiteLineMat = mat;
       addMergedByTile(whiteLineGeos, mat);
@@ -1325,7 +1610,7 @@ export function createRoadView(scene) {
         emissive: MARKING.yellow.emissive,   // 黄线自发光，辉光略弱于白线
         emissiveIntensity: 0,
         side: THREE.DoubleSide,
-        polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+        polygonOffset: true, polygonOffsetFactor: -12, polygonOffsetUnits: -24,
       });
       _yellowLineMat = mat;
       addMergedByTile(yellowLineGeos, mat);

@@ -17,6 +17,9 @@
  * heading 在归零前由 vx/vy 推出并显式写入，保证车头朝向正确。
  */
 
+import { worldToThree } from '../vis/math/Coord.js';
+import { isInternalRoad } from '../vis/model/MapData.js';
+
 /** 把 node 归一化为 [x, y, z] 三元组（缺 z 补 0），满足 FrameValidator arity=3。 */
 function normalizeNodes(nodes) {
   if (!Array.isArray(nodes)) return nodes;
@@ -31,25 +34,52 @@ function normalizeNodes(nodes) {
   });
 }
 
+function polylineLength(nodes) {
+  if (!Array.isArray(nodes) || nodes.length < 2) return 0;
+  let total = 0;
+  for (let i = 1; i < nodes.length; i++) {
+    const a = nodes[i - 1], b = nodes[i];
+    total += Math.hypot((b[0] || 0) - (a[0] || 0), (b[1] || 0) - (a[1] || 0));
+  }
+  return total;
+}
+
 /** road_network 透传 + 字段补全（length_m→length，nodes 归一化）。 */
 function adaptRoadNetwork(rn) {
   if (!rn || !Array.isArray(rn.edges)) {
     return { edges: [] };
   }
-  const edges = rn.edges.map((e, i) => ({
-    id: e.id != null ? e.id : i,
-    name: e.name != null ? e.name : (e.id != null ? String(e.id) : 'edge_' + i),
-    type: e.type || 'road',
-    lanes: e.lanes || 4,
-    lane_width: e.lane_width || 3.5,
-    // FrameValidator/roadNetworkHash 读 length；scenario 用 length_m 别名。
-    length: e.length != null ? e.length : (e.length_m != null ? e.length_m : 0),
-    length_m: e.length_m,
-    oneway: e.oneway === true,
-    nodes: normalizeNodes(e.nodes),
-    speed_limit: e.speed_limit,
-  }));
-  return { edges };
+  const edges = rn.edges.map((e, i) => {
+    const normNodes = normalizeNodes(e.nodes);
+    const rawLen = e.length != null ? Number(e.length) : (e.length_m != null ? Number(e.length_m) : 0);
+    const len = rawLen > 0 ? rawLen : polylineLength(normNodes);
+    return {
+      id: e.id != null ? e.id : i,
+      name: e.name != null ? e.name : (e.id != null ? String(e.id) : 'edge_' + i),
+      type: e.type || 'road',
+      lanes: e.lanes || 4,
+      lane_width: e.lane_width || 3.5,
+      // FrameValidator/roadNetworkHash 读 length；scenario 用 length_m 别名。
+      length: len,
+      length_m: e.length_m != null && Number(e.length_m) > 0 ? Number(e.length_m) : len,
+      oneway: e.oneway === true,
+      nodes: normNodes,
+      speed_limit: e.speed_limit,
+      bridge: e.bridge != null && e.bridge !== false,
+      tunnel: e.tunnel != null && e.tunnel !== false,
+      detail: e.detail || 'high',
+      ramp_role: e.ramp_role,
+      taper_length_m: e.taper_length_m,
+    };
+  });
+  const res = { edges };
+  if (Array.isArray(rn.junctions)) res.junctions = rn.junctions;
+  if (Array.isArray(rn.map_junctions)) res.map_junctions = rn.map_junctions;
+  if (rn.lane_data) res.lane_data = rn.lane_data;
+  if (Array.isArray(rn.landuse)) res.landuse = rn.landuse;
+  if (Number.isFinite(rn.focus_x)) res.focus_x = rn.focus_x;
+  if (Number.isFinite(rn.focus_y)) res.focus_y = rn.focus_y;
+  return res;
 }
 
 /**
@@ -57,12 +87,13 @@ function adaptRoadNetwork(rn) {
  * 可视化与仿真解耦：主仪表盘在独立地图模式下用它生成 road_network，
  * 替代从 metrics.scene 读取的仿真路网。纯函数，零 THREE 依赖。
  * @param {object} map  map.json（{roads:[{id,type,lanes[],centerline,...}]}）
- * @returns {{edges: Array, lane_data: Object, junctions: Array}}
+ * @returns {{edges: Array, lane_data: Object, map_junctions: Array}}
  */
 export function mapToRoadNetwork(map) {
   if (!map || !Array.isArray(map.roads)) return { edges: [] };
+  const visibleRoads = map.roads.filter((road) => road && !isInternalRoad(road));
   const res = adaptRoadNetwork({
-    edges: map.roads.map((road) => ({
+    edges: visibleRoads.map((road) => ({
       ...road,
       name: road.id || road.name,
       nodes: road.centerline || road.nodes,
@@ -70,17 +101,22 @@ export function mapToRoadNetwork(map) {
       lane_width: Array.isArray(road.lanes) && road.lanes[0]
         ? road.lanes[0].width : road.lane_width,
       length: road.length_m,
+      length_m: road.length_m,
+      bridge: road.bridge != null && road.bridge !== false,
+      tunnel: road.tunnel != null && road.tunnel !== false,
+      detail: road.detail || 'high',
     })),
   });
   const laneData = {};
   for (const road of map.roads) {
-    if (Array.isArray(road.lanes)) {
+    if (road && Array.isArray(road.lanes) && road.lanes.length) {
       if (road.id != null) laneData[String(road.id)] = road.lanes;
       if (road.name != null) laneData[String(road.name)] = road.lanes;
     }
   }
   res.lane_data = laneData;
-  res.junctions = map.junctions || [];
+  res.map_junctions = map.junctions || [];
+  if (Array.isArray(map.landuse)) res.landuse = map.landuse;
   return res;
 }
 
@@ -172,13 +208,34 @@ export function scenarioToScene(raw, staticMap) {
 
   const scene = {
     t_us: 0,
+    scenario_name: raw.name || '',
     lighting: raw.lighting || 'day',
+    weather: raw.weather,
+    visibility_m: raw.visibility_m,
     road_network: raw.road_network
       ? adaptRoadNetwork(raw.road_network)
       : mapToRoadNetwork(staticMap),
     ego: adaptEgo(raw.ego),
     entities,
   };
+
+  if (scene.road_network && scene.ego) {
+    scene.road_network.focus_x = scene.ego.x || 0;
+    scene.road_network.focus_y = scene.ego.y || 0;
+    if (!Array.isArray(scene.road_network.landuse)
+        && Array.isArray(scene.road_network.edges)
+        && scene.road_network.edges.length > 2500) {
+      const [fx, , fz] = worldToThree(scene.ego.x || 0, scene.ego.y || 0, 0);
+      const r = 650;
+      scene.road_network.landuse = [[[fx - r, fz - r], [fx + r, fz - r], [fx + r, fz + r], [fx - r, fz + r]]];
+    }
+  }
+
+  if (raw.parking_bay) scene.parking_bay = raw.parking_bay;
+  if (raw.parking_goal) scene.parking_goal = raw.parking_goal;
+  if (Array.isArray(raw.friction_zones) && raw.friction_zones.length > 0) {
+    scene.friction_zones = raw.friction_zones;
+  }
 
   // OSM 建筑（单源真相）：从静态 map.json 透传 buildings[] 给前端 BuildingView。
   if (staticMap && Array.isArray(staticMap.buildings)) {

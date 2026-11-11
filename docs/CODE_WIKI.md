@@ -26,14 +26,14 @@ KunAutoDrive 是一个从零搭建的自动驾驶中间件，灵感来自 Apollo
 
 | 维度 | 说明 |
 |------|------|
-| 内核语言 | C11（轻量、可嵌入） |
-| 外壳语言 | C++20（协程、类型安全） |
-| 插件机制 | `dlopen` 加载 `.so`，节点间仅通过 Message Bus 通信 |
-| 节点数 | 默认 pipeline 15 个插件节点 |
-| 默认场景 | `scenarios/straight_road.json`（3000m 双向 4 车道直路，路尾掉头） |
+| 内核语言 | C11（轻量、可嵌入、零第三方中间件依赖） |
+| 外壳语言 | C++20（FlowCoro 栈无关协程、类型安全） |
+| 插件机制 | `dlopen`（Windows `LoadLibrary`）加载动态库，节点间仅通过 Message Bus 通信 |
+| 节点数 | 默认 [pipeline.json](../config/pipeline.json) 20 个插件节点（`pipeline_sensor.json` / `pipeline_car.json` 19 节点） |
+| 默认场景 | `scenarios/straight_road.json`（全仓共 38 个场景 + 8 张高精地图） |
 | 许可证 | MIT |
 
-核心能力一览：Pub/Sub 消息总线（零拷贝）、IPC 共享内存、TCP/网络传输、C++20 协程调度器、反射式状态机、UDP 服务发现、Bag v2/MCAP 录制回放、EKF 传感器融合、行为 FSM、Frenet 最优轨迹规划、ST 图 + DP 速度规划、N 把方向掉头/泊车（ManeuverTracker）、Stanley 横向（可选 LTV MPC）+ PID 纵向、FlowCoro 安全包络、FlowBoard 3D 仪表盘、车端学习闭环（数据采集→训练/DAgger/PPO→影子推理→SGD 微调→OTA）。
+核心能力一览：Pub/Sub 消息总线（零拷贝）、IPC 共享内存、TCP/网络传输、C++20 协程调度器、反射式状态机、UDP 服务发现、Bag v2/MCAP 录制回放、16 线 3D OBB LiDAR + 6 通道 BEV 纯 C `CenterPoint-Lite` CNN 检测（M1）、64 槽匈牙利多目标跟踪 + Frenet 三模态轨迹预测（`LK` / `Cut-In` / `Yield`）（M2）、`ScenarioManager`（Frenet + ST 图 DP 速度规划 + Hybrid A* / Reeds-Shepp 代客泊车 64 点保尖点轨迹）+ `ManeuverTracker` D/R 闭环 + L3 ODD/TOR/MRM/EDR 安全链路（M3）、6-DOF 簧载悬架（俯仰/侧倾 + 纵向载荷转移 $\Delta F_z$ + 局部摩擦区 `friction_zones` + IDM/MOBIL 交通流）（M4）、FlowBoard Three.js r160 PBR + SR 世界模型 3D 数字孪生与 OSM 车道级城市大图（M5）、OpenDRIVE 1.4 / Lanelet2 / CARLA 6-DOF / Foxglove 生态桥接（M6）、以及车端学习闭环（数据采集→训练/DAgger/PPO→影子推理→SGD 微调→OTA）。
 
 ---
 
@@ -50,10 +50,12 @@ KunAutoDrive 是一个从零搭建的自动驾驶中间件，灵感来自 Apollo
 │                     KunAutoDrive Shell (C++20)                          │
 │  Coroutine Tasks │ Scheduler(Choreo) │ Fusion(EKF) │ Transport(TCP)  │
 ├──────────────────────────────────────────────────────────────────────┤
-│                     ADAS Pipeline (dlopen plugins)                     │
-│  flowsim → sensor_model → perception → fusion → planning → control   │
-│    → safety_control → inference → data_recorder → learner → model_ota│
-│    → monitor                                                         │
+│                  ADAS Pipeline (20 dlopen plugins)                   │
+│  flowsim → sensor_model → perception / bev_detection / lane_detection│
+│    → object_tracker → prediction → fusion → behavior_planner         │
+│    → navigation → planning → control → safety_control                │
+│    → odd_monitor → tor_manager → inference → data_recorder           │
+│    → learner → model_ota → monitor                                   │
 └──────────────────────────────────────────────────────────────────────┘
                           │
                           ▼
@@ -122,27 +124,32 @@ flowctl param set control.k_vy 0.5     # 下一帧生效，无需重启
 
 ## 4. ADAS Pipeline
 
-### 4.1 15 节点概览
+### 4.1 20 节点概览
 
-默认配置 [pipeline.json](../config/pipeline.json) 启动 15 个插件节点：
+默认配置 [pipeline.json](../config/pipeline.json) 启动 20 个插件节点：
 
 | 节点 | 插件 (.so) | 频率 | 功能 |
 |------|-----------|------|------|
-| `flowsim` | libflowsim_node.so | 50Hz | 车辆动力学 + NPC（IDM）+ 场景加载 + 真值发布 |
-| `sensor_model` | libsensor_model.so | 20Hz | LiDAR/GPS/Camera 传感器模型（FOV/遮挡/噪声） |
-| `perception` | libperception_node.so | 10Hz | DBSCAN 点云聚类 + 目标检测 |
-| `object_tracker` | libobject_tracker.so | 20Hz | 卡尔曼多目标跟踪 |
-| `fusion` | libfusion_node.so | 20Hz | EKF 传感器融合（定位 + 时间对齐） |
-| `behavior_planner` | libbehavior_planner.so | 10Hz | 8 状态 FSM 行为决策（跟车/变道/停车/让行/掉头） |
-| `navigation` | libnavigation_node.so | 10Hz | 路由步骤 + 行进方向（消费 `ref_path.reverse`） |
-| `planning` | libplanning_node.so | 20Hz | Frenet 轨迹 + ST 图 DP 速度规划 + N 把方向掉头 |
-| `control` | libcontrol_node.so | 20Hz | Stanley 横向（可选 LTV MPC）+ PID/ACC 纵向 + ManeuverTracker |
-| `safety_control` | libsafety_control_node.so | 协程 | FlowCoro 安全包络（TTC/横向交叉/行人/MRM） |
+| `flowsim` | libflowsim_node.so | 50Hz | 6-DOF 车辆动力学（簧载俯仰/侧倾 + 载荷转移 + 局部摩擦区）+ IDM/MOBIL NPC + 真值发布 |
+| `sensor_model` | libsensor_model.so | 20Hz | 16 线 3D OBB LiDAR / 毫米波雷达 / GPS / Camera 传感器观测模型 |
+| `perception` | libperception_node.so | 10Hz | DBSCAN 点云聚类 + OBB 目标检测 |
+| `bev_detection` | libbev_detection_node.so | 10Hz | 6 通道 BEV 栅格化 + 纯 C `CenterPoint-Lite` CNN 检测（`bev_cnn_native.c`） |
+| `lane_detection` | liblane_detection_node.so | 10Hz | 车道线检测与三次多项式拟合 |
+| `object_tracker` | libobject_tracker.so | 20Hz | 64 槽 Kuhn-Munkres 匈牙利全局最优关联 + EKF 多目标跟踪（`hungarian_tracker.h`） |
+| `prediction` | libprediction_node.so | 10Hz | Frenet 三模态意图与轨迹预测（`lane_keep` / `cut_in` / `yield_decel`） |
+| `fusion` | libfusion_node.so | 20Hz | EKF 传感器融合（定位 + GPS/航位推算冗余交叉校验） |
+| `behavior_planner` | libbehavior_planner.so | 10Hz | 8 状态 FSM 行为决策（跟车/变道/停车/让行/掉头/泊车） |
+| `navigation` | libnavigation_node.so | 10Hz | 路网路由步骤 + 行进方向（消费 `ref_path.reverse`） |
+| `planning` | libplanning_node.so | 20Hz | `ScenarioManager`：Frenet + ST 图 DP 速度规划（含切入预减速）+ Hybrid A*/Reeds-Shepp 泊车 + N 把掉头 |
+| `control` | libcontrol_node.so | 20Hz | Stanley 横向（可选 LTV MPC）+ PID/ACC 纵向 + `ManeuverTracker` D/R 换挡闭环 |
+| `safety_control` | libsafety_control_node.so | 协程 | FlowCoro 安全包络（TTC/横向交叉/行人/MRM 真停） |
+| `odd_monitor` | libodd_monitor_node.so | 10Hz | SAE L3 运行设计域（ODD）边界与天气/速度/定位完整性监控 |
+| `tor_manager` | libtor_manager_node.so | 10Hz | 接管请求（TOR）升级倒计时与最小风险机动（MRM）触发 + EDR 事件落盘 |
 | `inference` | libinference_node.so | 20Hz | tiny-MLP/ONNX 影子推理（shadow mode） |
 | `data_recorder` | libdata_recorder_node.so | 20Hz | 训练样本采集（模仿学习 JSONL） |
 | `learner` | liblearner_node.so | 0.5Hz | 车端增量 SGD 微调 |
 | `model_ota` | libmodel_ota_node.so | 1Hz | 模型 OTA + 版本管理 + A-B 对比 |
-| `monitor` | libmonitor_node.so | 10Hz | 系统监控 + 仪表盘 JSON 导出 |
+| `monitor` | libmonitor_node.so | 10Hz | 系统监控 + 拓扑/3D 场景快照导出 + PEM 基础设施遥测 |
 
 ### 4.2 节点插件接口
 
@@ -308,9 +315,10 @@ lc_state: 0=巡航  1=变道中  2=稳定巡航  3=回切中
 
 | 关键结构/函数 | 说明 |
 |----------------|------|
-| `PlanningContext` | 节点状态：双状态机（反射式 + 驾驶模式 NA/ACC/CP/NP/NOA）、Frenet 句柄、ego、障碍物 128 槽 |
+| `PlanningContext` / `ScenarioManager` | 节点状态与场景任务调度器（`LaneFollowScenario` 巡航/变道 + `ValetParkingScenario` 开放空间泊车）、双状态机（反射式 + 驾驶模式 NA/ACC/CP/NP/NOA） |
 | `frenet_plan()` | Frenet 最优轨迹（横向路径） |
-| `st_graph.c` `stg_plan()` | **ST 图 + DP 速度规划**：红灯墙 + 动态障碍占据 + 曲率限速，90×101 DP 表（142KB 静态）。1:1 移植自 `tools/speed_planner_sim.py`（11/11 场景 PASS 后冻结），替代旧线性斜坡 + 红灯 override 堆 |
+| `st_graph.c` `stg_plan()` | **ST 图 + DP 速度规划**：红灯墙 + 动态障碍占据 + 消费 `prediction/trajectories` 切入模态预减速 + 曲率限速，90×101 DP 表（142KB 静态） |
+| `ValetParkingScenario` (`hybrid_astar.h`) | **Hybrid A* + Reeds-Shepp 解析末端**：开放空间代客泊车，生成 64 点保换挡尖点（cusp-preserving）正/倒车轨迹，交 `ManeuverTracker` D/R 闭环跟踪 |
 | `generate_uturn_trajectory()` | N 把方向掉头：前进满舵弧 → 刹停换 R → 倒车反打 → 循环（≤5 把）；512 点细生成 + 段感知下采样 64；生成一次即缓存重放防重规划抖动 |
 | `project_to_reference_path()` | ego 投影到 map_ref 参考线 Frenet 弧长（右转/支路场景） |
 
@@ -374,7 +382,7 @@ lc_state: 0=巡航  1=变道中  2=稳定巡航  3=回切中
 速度: vx=v*cos(h), vy=v*sin(h)
 ```
 
-**`step_bicycle_dynamic()`**（[L67](../modules/adas_nodes/flowsim/physics.cpp#L67)）：线性轮胎二自由度动力学模型。积分车身侧向速度与横摆角速度，含滑移角饱和、摩擦加速度护栏和低速运动学退化；`entity.h` 的 `v_x_body/v_y_body/yaw_rate/F_yf/F_yr/tire_stiffness/yaw_inertia` 字段在 `physics_model=dynamic` 时生效。
+**`step_bicycle_dynamic()`**（[L67](../modules/adas_nodes/flowsim/physics.cpp#L67)）：线性轮胎二自由度 + M4 **6-DOF 簧载悬架扩展**动力学模型。积分车身侧向速度与横摆角速度，含纵向载荷转移 $\Delta F_z$、局部路面摩擦区 `friction_zones`（$\mu$ 湿滑/结冰缩放）、坡度重力分量补偿、二阶弹簧阻尼悬架俯仰 `pitch` / 侧倾 `roll`，以及低速运动学平滑退化（详见 [FLOWSIM_PHYSICS.md](FLOWSIM_PHYSICS.md)）。
 
 > **heading 重置逻辑 — 文档/代码漂移**：[CLAUDE.md L415](../CLAUDE.md) 与 flowsim_node.cpp:1185 注释声称"运动学模式每帧重置 heading 为道路切线"，但 [L1240](../modules/adas_nodes/flowsim_node.cpp#L1240) 实现已改为**保留 bicycle 自由积分 heading**（仅归一化），靠 `sin(heading - road_heading)` 驱动横向位移构成负反馈闭环。**以代码为准**。这一改动直接影响 control 的 v_lat_damp 是否生效——旧实现 heading 被道路切线拽回→heading_err≈0→横向 PD 退化为纯 P。
 
@@ -618,7 +626,7 @@ steer   = cte_term - heading_term - yaw_damp + ff + delta_ff
 
 ### 9.5 常见故障速查（摘自权威表 [FAILURE_MODES.md](FAILURE_MODES.md)，本章只留控制相关 6 行）
 
-> 完整 43 行「现象 → 根因 → 位置」见 [FAILURE_MODES.md](FAILURE_MODES.md)（仓库权威副本）。
+> 完整 96 行「现象 → 根因 → 位置」见 [FAILURE_MODES.md](FAILURE_MODES.md)（仓库权威副本）。
 > 下表仅为本章上下文摘录，**排到新故障请加到权威表，勿在此处扩写**。
 
 | 现象 | 根因 | 位置 |
@@ -641,4 +649,4 @@ steer   = cte_term - heading_term - yaw_damp + ff + delta_ff
 | [CALIBRATION_GUIDE.md](CALIBRATION_GUIDE.md) | 标定指南（含 k_vy 等） |
 | [LEARNING_LOOP.md](LEARNING_LOOP.md) | 车端学习闭环 |
 | [README.md](README.md) | 完整中文文档导航 |
-| `docs/book/` 目录 | 16 篇深度教程（OOP in C、插件、消息总线、IPC、协程、Fusion 等） |
+| [BOOK.md](BOOK.md) / `docs/book/` | 第零至第六部共 26 章深度技术专著（OOP in C、插件、消息总线、IPC、协程、M1–M6 算法与 3D 可视化等） |

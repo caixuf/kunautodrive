@@ -8,11 +8,15 @@
 
 | 文件 | 职责 |
 |------|------|
-| `js/vis/view/VehicleView.js` | 车辆 glTF 渲染 + 动画（车轮/贴地/车牌/方向盘） |
-| `js/vis/core/CameraRig.js` | chase/top/driver/front/map/orbit 相机跟随 |
-| `js/vis/core/PerfMonitor.js` | 独立 watchdog 性能自监控 / 降档 |
+| `js/vis/view/VehicleView.js` | 车辆 glTF 渲染 + 6-DOF 簧上/簧下分离姿态（`sprungGroup` pitch/roll）+ kingpin 车轮转向/贴地/GA 36-2018 新能源车牌 |
+| `js/vis/view/PerceptionView.js` | SR 3D 感知标注（8 角三轴角标框 + 0.12m 径向柔和精灵 LiDAR/受照轮廓点云 + 单 draw call 批量贴地多模态预测流光带） |
+| `js/vis/view/EffectView.js` | 车周安全与物理贴地特效（制动尾光 / 双闪告警 / 旁车切入贴地双 V 警示翼 / 雨天双后轮轮胎水雾尾迹） |
+| `js/vis/core/SkyEnv.js` | 天空穹顶 + 时段太阳高度 + 全局雨丝/地面涟漪/雪花粒子统一渲染（消除多视图天气粒子重复叠加） |
+| `js/vis/view/RoadView.js` + `ConnectorView.js` | 8m 世界米制无缝沥青 PBR 纹理 + 花岗岩路缘/人行道/绿化分层 + 无缝渠化路口铺装/斑马线/转向导流线 |
+| `js/vis/core/CameraRig.js` | chase/top/driver/front/map/orbit/bev 相机跟随 |
+| `js/vis/core/PerfMonitor.js` | 独立 watchdog 性能自监控 / 四档降级（high/medium/low/ultra） |
 | `js/vis/math/RoadHeight.js` | 贴地高度 `roadHeightAt` |
-| `js/mapPreview.js` + `map_preview.html` | 隔离 3D 地图预览 |
+| `js/mapPreview.js` + `map_preview.html` | 隔离 3D 大地图预览（建筑核心聚焦 `buildingFocus` + 路线走廊裁剪） |
 
 ## 2. 车辆动画（VehicleView.js）
 
@@ -138,9 +142,23 @@ index）。前端 `MapData.js` 提供 `fetchSegmentIndex`/`loadSegment` 按段�
 段加载为**未来整城级大图**（走廊本身超大时）流式加载预埋；段文件只含 roads，
 junctions/buildings 仍需走廊基线提供。
 
-## 9. 文档覆盖现状
+## 9. 新一代 SR 感知世界模型与天气去重（Boundary A + B 收口）
 
-- `docs/VISUALIZATION_ARCHITECTURE.md`：总体架构/数据流/SceneDirector/Layer 树/DeadReckon，VehicleView 的 SU7 模型/车漆/灯光有简略说明（L590-607）。**未覆盖**：车轮 kingpin 转向/滚动/modulo、车牌 GA36-2018、贴地 roadHeightAt、camera 跟随细节、PerfMonitor 降档、map preview、SR 科技风、地图规模化。
-- `docs/VIS_MODULE_GUIDE.md`："怎么写模块"规范，不含具体车辆/相机/性能经验；module 清单表格已更新（MapOverlayView → MinimapHUD）。
-- `docs/TROUBLESHOOTING_3D_DASHBOARD.md`：3D 加载失败根因（SSE 多行 JSON 被 EventSource 丢弃），与渲染层无关。
-- `docs/FLOWBOARD_CONTRACT.md`：纯数据层契约。
+### 9.1 SR 感知与多模态预测（`PerceptionView.js` + `EffectView.js`）
+- **3D 三轴角标框**：每个感知目标由 8 个顶/底三轴短臂 L 角标包围，全部合并为单个 `THREE.LineSegments` draw call。
+- **真实尺度柔和 LiDAR 点云**：使用径向渐变 Canvas 精灵纹理（世界尺度 ~0.12m），同时支持真实 `sensor/lidar_points` 高度着色与感知目标受照面轮廓扫描点生成。
+- **单批多模态预测贴地流光带**：消费 `prediction_node` 的 `lane_keep` / `cut_in_left` / `cut_in_right` / `yield_decel` 多模态轨迹，主模态宽 `0.21m→0.14m`、次模态 `0.14m→0.09m`，沿路面高度抬升 `0.15m` 并合批进单组索引缓冲网格。
+- **旁车切入贴地双 V 警示翼**：`EffectView.js` 在邻道车辆横向切入速度或 `cutin` 状态激活时，沿车体切入侧法线贴地绘制边条 + 双 V 导流翼标（移除早期头顶悬浮方块）。
+- **天气粒子去重与轮胎水雾**：全局降雨雨丝、地面涟漪和雪花统一归口至 `SkyEnv.js`；`EffectView.js` 仅负责 `rain/storm` 高速行驶时的双后轮贴地水雾尾迹。
+
+### 9.2 城市级 OSM 大地图细节与三角面预算（`RoadView.js` + `ConnectorView.js`）
+- **世界米制沥青 UV（`ASPHALT_TILE_M = 8.0`）**：路面与路口多边形均按世界米制尺度映射周期无缝 albedo + normal 贴图，彻底消除短路拉伸与长路摩尔纹。
+- **城市路缘与无缝渠化路口**：城市级 OSM 道路自动生成花岗岩路缘石与人行道；`ConnectorView` 复用同一沥青材质与分层 `polygonOffset` 绘制路口圆角铺装、GB 5768 斑马线、停止线及转向引导弧，低掠射追尾视角零闪烁。
+- **万级道路三角面收口**：`osm_zhengdong` 走廊（12,435 条道路、2,299 栋建筑）通过 `detail='high'|'low'` LOD 与自适应折线重采样将全场景控制在 **~1.3M 三角面**，兼顾近景车道级细节与流畅帧率。
+
+## 10. 关联文档
+
+- `docs/VISUALIZATION_ARCHITECTURE.md`：flowmond 后端桥接 + 前端 52 模块 `vis/` 架构、SceneDirector、Layer 树与 DeadReckon。
+- `docs/VIS_3D_LANE_PIPELINE.md`：权威车道级与城市大地图渲染管线。
+- `docs/VIS_MODULE_GUIDE.md`：View 模块编写契约与 `npm run vis:check:all` 六组前端门禁。
+- `docs/FLOWBOARD_SCENE_CONTRACT.md`：`metrics.scene` 数据层唯一契约。

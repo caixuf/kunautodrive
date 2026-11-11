@@ -225,6 +225,12 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
   const MAX_RIPPLES = 64;
   let rippleMesh = null;
   const ripplePool = []; // [{x, z, life, maxLife, scale}]
+  let _precipSeed = 1;
+
+  function _nextDet01() {
+    _precipSeed = (_precipSeed * 1664525 + 1013904223) >>> 0;
+    return _precipSeed / 4294967296;
+  }
 
   function _initRippleMesh() {
     if (rippleMesh) return;
@@ -246,7 +252,7 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
     dummy.updateMatrix();
     for (let i = 0; i < MAX_RIPPLES; i++) {
       rippleMesh.setMatrixAt(i, dummy.matrix);
-      ripplePool.push({ x: 0, z: 0, life: 1, maxLife: 0.4 + Math.random() * 0.3, scale: 0.1 });
+      ripplePool.push({ x: 0, z: 0, life: 1, maxLife: 0.4 + _nextDet01() * 0.3, scale: 0.1 });
     }
     rippleMesh.instanceMatrix.needsUpdate = true;
     scene.add(rippleMesh);
@@ -259,23 +265,27 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
       rainMesh.material.dispose();
       rainMesh = null;
     }
-    if (count <= 0) return;
+    if (count <= 0) {
+      if (rippleMesh) rippleMesh.visible = false;
+      return;
+    }
 
     _initRippleMesh();
+    if (rippleMesh) rippleMesh.visible = true;
 
     const geo = new THREE.BufferGeometry();
     const positions = new Float32Array(count * 6); // 2 顶点/段 = 6 float
     const velocities = new Float32Array(count);
     const windTiltX = 0.12, windTiltZ = 0.08;
-    const streakLen = 1.4;
+    const streakLen = 1.15;
     const cx = _camera ? _camera.position.x : 0;
     const cy = _camera ? _camera.position.y : 0;
     const cz = _camera ? _camera.position.z : 0;
 
     for (let i = 0; i < count; i++) {
-      const rx = cx + (Math.random() - 0.5) * PRECIP_AREA;
-      const ry = cy - 2.0 + Math.random() * PRECIP_HEIGHT;
-      const rz = cz + (Math.random() - 0.5) * PRECIP_AREA;
+      const rx = cx + (_nextDet01() - 0.5) * PRECIP_AREA;
+      const ry = cy - 2.0 + _nextDet01() * PRECIP_HEIGHT;
+      const rz = cz + (_nextDet01() - 0.5) * PRECIP_AREA;
 
       const idx = i * 6;
       positions[idx]     = rx;
@@ -285,14 +295,14 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
       positions[idx + 4] = ry - streakLen;
       positions[idx + 5] = rz - windTiltZ * streakLen;
 
-      velocities[i] = 22.0 + Math.random() * 8.0;
+      velocities[i] = 22.0 + _nextDet01() * 8.0;
     }
     geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
 
     const mat = new THREE.LineBasicMaterial({
       color: 0xb0d0ff,
       transparent: true,
-      opacity: 0.70,
+      opacity: 0.48,
       depthWrite: false,
       fog: false,
     });
@@ -352,20 +362,20 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
     const cz = _camera ? _camera.position.z : 0;
 
     for (let i = 0; i < count; i++) {
-      positions[i * 3]     = cx + (Math.random() - 0.5) * PRECIP_AREA;
-      positions[i * 3 + 1] = Math.max(0, cy - 4.0) + Math.random() * PRECIP_HEIGHT;
-      positions[i * 3 + 2] = cz + (Math.random() - 0.5) * PRECIP_AREA;
-      speeds[i] = 1.2 + Math.random() * 2.2;
-      seeds[i] = Math.random() * 100.0;
+      positions[i * 3]     = cx + (_nextDet01() - 0.5) * PRECIP_AREA;
+      positions[i * 3 + 1] = Math.max(0, cy - 4.0) + _nextDet01() * PRECIP_HEIGHT;
+      positions[i * 3 + 2] = cz + (_nextDet01() - 0.5) * PRECIP_AREA;
+      speeds[i] = 1.2 + _nextDet01() * 2.2;
+      seeds[i] = _nextDet01() * 100.0;
     }
     geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
 
     const mat = new THREE.PointsMaterial({
       color: 0xffffff,
-      size: 1.0,
+      size: 0.30,
       map: _getSnowTexture() || null,
       transparent: true,
-      opacity: 0.95,
+      opacity: 0.90,
       depthWrite: false,
       sizeAttenuation: true,
       fog: false,
@@ -518,7 +528,7 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
       _lightningTimer -= delta;
       if (_lightningTimer <= 0) {
         _lightningFlash = 1.0;
-        _lightningTimer = 3.5 + Math.random() * 5.0;
+        _lightningTimer = 3.5 + _nextDet01() * 5.0;
       }
       if (_lightningFlash > 0.001) {
         _lightningFlash = Math.max(0, _lightningFlash - delta * 5.5);
@@ -579,9 +589,9 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
 
         // 垂直循环：下落至地面下方或超出当前天顶高度时回收
         if (arr[idx + 4] < bottomY) {
-          const newX = cx + (Math.random() - 0.5) * PRECIP_AREA;
-          const newY = topY + Math.random() * 8.0;
-          const newZ = cz + (Math.random() - 0.5) * PRECIP_AREA;
+          const newX = cx + (_nextDet01() - 0.5) * PRECIP_AREA;
+          const newY = topY + _nextDet01() * 8.0;
+          const newZ = cz + (_nextDet01() - 0.5) * PRECIP_AREA;
 
           arr[idx]     = newX;
           arr[idx + 1] = newY;
@@ -590,9 +600,9 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
           arr[idx + 4] = newY - streakLen;
           arr[idx + 5] = newZ - windTiltZ * streakLen;
 
-          // 随机在地面激起涟漪
-          if (ripplePool.length > 0 && Math.random() < 0.08) {
-            const ripIdx = Math.floor(Math.random() * ripplePool.length);
+          // 在地面激起涟漪
+          if (ripplePool.length > 0 && _nextDet01() < 0.08) {
+            const ripIdx = Math.floor(_nextDet01() * ripplePool.length);
             const rip = ripplePool[ripIdx];
             if (rip.life >= 1.0) {
               rip.x = newX;
@@ -602,7 +612,7 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
             }
           }
         } else if (arr[idx + 4] > topY + 12.0) {
-          const newY = bottomY + Math.random() * (topY - bottomY);
+          const newY = bottomY + _nextDet01() * (topY - bottomY);
           arr[idx + 1] = newY;
           arr[idx + 4] = newY - streakLen;
         }
@@ -666,11 +676,11 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
 
         // 垂直循环：下落至地面下方后回到天顶
         if (arr[idx + 1] < bottomY) {
-          arr[idx + 1] = topY + Math.random() * 4.0;
-          arr[idx]     = cx + (Math.random() - 0.5) * PRECIP_AREA;
-          arr[idx + 2] = cz + (Math.random() - 0.5) * PRECIP_AREA;
+          arr[idx + 1] = topY + _nextDet01() * 4.0;
+          arr[idx]     = cx + (_nextDet01() - 0.5) * PRECIP_AREA;
+          arr[idx + 2] = cz + (_nextDet01() - 0.5) * PRECIP_AREA;
         } else if (arr[idx + 1] > topY + 10.0) {
-          arr[idx + 1] = bottomY + Math.random() * (topY - bottomY);
+          arr[idx + 1] = bottomY + _nextDet01() * (topY - bottomY);
         }
       }
       pos.needsUpdate = true;

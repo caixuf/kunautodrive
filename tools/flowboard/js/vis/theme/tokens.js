@@ -39,6 +39,18 @@ export const SCENE = {
   stopperStripe: 0xffcc00,    // 止轮器黄色反光警示带
   iceSurface: 0x80d8ff,       // 结冰路面贴花（冰蓝半透明）
   wetSurface: 0x1e2630,       // 湿滑路面贴花（深灰水膜）
+  /* 感知 SR / 多模态预测光带 / 动态车周特效配色 */
+  percBracket: 0x00e5b0,      // 3D 感知角标框（科技翡翠青）
+  percFov: 0x00d8b4,          // 传感器前视包络/地面波束（低透明度科技青）
+  predLaneKeep: 0x00e676,     // 预测模态：车道保持（翡翠绿）
+  predCutIn: 0xff9100,        // 预测模态：切入告警（琥珀橙）
+  predYield: 0x2979ff,        // 预测模态：减速让行（蔚蓝）
+  predDefault: 0x00e5ff,      // 预测模态：默认（科技发光青）
+  brakeGlow: 0xff2200,        // 紧急制动尾光（亮红）
+  hazardOrange: 0xff4400,     // 紧急双闪（橙红）
+  hazardYellow: 0xffcc00,     // 紧急双闪（警示黄）
+  cutinChevron: 0xff9100,     // 旁车切入贴地警示翼（琥珀橙）
+  sprayMist: 0x90b8d8,        // 雨天轮胎水雾尾迹（冷蓝白）
 };
 
 /* ── 车道诊断叠加层配色（诊断语义色，不参与 junction_markings 换肤锁定）──
