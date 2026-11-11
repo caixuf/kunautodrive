@@ -66,10 +66,17 @@ def _free_port() -> int:
         return int(s.getsockname()[1])
 
 
-def _env_without_ld_library_path() -> dict:
-    """IDE 终端注入的旧 libstdc++ 目录会让二进制启动即 `version not found`。"""
+def _env_without_ld_library_path(topology_file: Path | None = None) -> dict:
+    """IDE 终端注入的旧 libstdc++ 目录会让二进制启动即 `version not found`。
+
+    topology_file 非空时改指隔离路径：本用例只验证 stale-SHM 防护，不该被
+    上一次 demo/soak 留在默认 /tmp/flow_topology.json 的大快照污染
+    （>128KB 时文件桥接会截断，产生与本用例无关的 JSON 坏体）。"""
     env = dict(os.environ)
     env.pop("LD_LIBRARY_PATH", None)
+    if topology_file is not None:
+        env["FLOWENGINE_STATE_FILE"] = str(topology_file)
+        env["FLOW_TOPOLOGY_FILE"] = str(topology_file)
     return env
 
 
@@ -230,7 +237,8 @@ def main() -> int:
         html_path = _make_doc_root(tmp)
         proc = subprocess.Popen(
             [str(FLOWMOND), "--port", str(port), "--html-path", str(html_path)],
-            cwd=str(ROOT), env=_env_without_ld_library_path(),
+            cwd=str(ROOT),
+            env=_env_without_ld_library_path(tmp / "isolated_topology.json"),
             stdout=log.open("w"), stderr=subprocess.STDOUT,
         )
         try:
