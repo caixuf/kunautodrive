@@ -18,7 +18,7 @@ import {
   strokePolyline,
   worldToEgoCanvas,
 } from './math/MapProjection.js';
-import { selectCurrentMotionSegment } from './math/Trajectory.js';
+import { selectCurrentMotionSegment, clipTrajectoryFromAnchor } from './math/Trajectory.js';
 
 const W = 220;   // canvas 物理像素宽（px）
 const H = 160;   // canvas 物理像素高（px）
@@ -91,7 +91,11 @@ export function createMinimapHUD(container) {
         egoX: cx, egoY: cy, range: _range,
       });
 
-    const activePath = selectCurrentMotionSegment(store.trajectoryPath, ego);
+    const activePath = clipTrajectoryFromAnchor(
+      selectCurrentMotionSegment(store.trajectoryPath, ego),
+      ego,
+      0,
+    );
     strokePolyline(ctx, activePath,
       (x, y) => toCanvas(x, y, cx, cy, h), '#58a6ff', 1.5, [4, 3]);
 

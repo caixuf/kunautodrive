@@ -19,6 +19,7 @@ import {
 } from '../math/Coord.js';
 import { roadHeightAt } from '../math/RoadHeight.js';
 import { SCENE } from '../theme/tokens.js';
+import { VEHICLE_GROUND_Y } from './VehicleView.js';
 
 // ── 角标框几何常量（每实体 8 个三轴 L 角标：4 顶角 + 4 底角） ──
 const CORNER_LEN = 0.50;
@@ -36,20 +37,23 @@ const SWEEP_SEGMENTS = 32;
 const SWEEP_RADIUS = 36;
 const BOUNDARY_RAY_LEN = 18;
 const PULSE_CYCLE_FRAMES = 90;
+const SWEEP_ABOVE_ROAD_M = 0.055;  // 相对路面(VEHICLE_GROUND_Y=0.10m)抬高至 0.155m，防止埋入沥青下方
+const RAY_ABOVE_ROAD_M = 0.06;     // 贴地目标连线抬高至 0.16m
 
-// ── LiDAR 点云常量（真实世界尺度 ~0.12m 柔和圆点） ──
+// ── LiDAR 点云常量（真实世界尺度 ~0.14m 柔和圆点） ──
 const MAX_RADAR_POINTS = 2048;
-const LIDAR_POINT_SIZE = 0.12;
+const LIDAR_POINT_SIZE = 0.14;
 
 // ── 多模态预测贴地光带常量 ──
-const PRED_LIFT_M = 0.15;
-const PRIMARY_WIDTH_START = 0.21;
-const PRIMARY_WIDTH_END = 0.14;
-const SECONDARY_WIDTH_START = 0.14;
-const SECONDARY_WIDTH_END = 0.09;
+const PRED_LIFT_M = 0.175;         // 高于全部道路标线(<=0.17m)，杜绝掠射角深度遮挡
+const MIN_SECONDARY_PROB = 0.12;   // 过滤后端 5% 均匀底噪模态，仅在真实变道/切入/让行倾向时分叉显示次模态
+const PRIMARY_WIDTH_START = 0.28;
+const PRIMARY_WIDTH_END = 0.16;
+const SECONDARY_WIDTH_START = 0.18;
+const SECONDARY_WIDTH_END = 0.10;
 const BEV_PRED_WIDTH_SCALE = 1.8;
-const MAX_PRED_VERTS = 2048;
-const MAX_PRED_INDICES = 6144;
+const MAX_PRED_VERTS = 4096;
+const MAX_PRED_INDICES = 12288;
 
 const PREDICTION_COLORS = {
   lane_keep: SCENE.predLaneKeep,
@@ -123,7 +127,7 @@ export function createPerceptionView(scene) {
   const boxMat = new THREE.LineBasicMaterial({
     color: SCENE.percBracket,
     transparent: true,
-    opacity: 0.76,
+    opacity: 0.86,
     depthTest: true,
     depthWrite: false,
   });
@@ -142,7 +146,7 @@ export function createPerceptionView(scene) {
   const rayMat = new THREE.LineBasicMaterial({
     vertexColors: true,
     transparent: true,
-    opacity: 0.16,
+    opacity: 0.22,
     depthTest: true,
     depthWrite: false,
   });
@@ -168,11 +172,14 @@ export function createPerceptionView(scene) {
   const sweepMat = new THREE.MeshBasicMaterial({
     vertexColors: true,
     transparent: true,
-    opacity: 0.06,
+    opacity: 0.20,
     side: THREE.DoubleSide,
     depthTest: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
+    polygonOffset: true,
+    polygonOffsetFactor: -3,
+    polygonOffsetUnits: -6,
   });
   const sweepMesh = new THREE.Mesh(sweepGeo, sweepMat);
   sweepMesh.renderOrder = 20;
@@ -189,7 +196,7 @@ export function createPerceptionView(scene) {
   const sweepEdgeMat = new THREE.LineBasicMaterial({
     vertexColors: true,
     transparent: true,
-    opacity: 0.18,
+    opacity: 0.22,
     depthTest: true,
     depthWrite: false,
   });
@@ -214,7 +221,7 @@ export function createPerceptionView(scene) {
     alphaTest: 0.04,
     vertexColors: true,
     transparent: true,
-    opacity: 0.82,
+    opacity: 0.90,
     depthTest: true,
     depthWrite: false,
   });
@@ -243,6 +250,9 @@ export function createPerceptionView(scene) {
     depthTest: true,
     depthWrite: false,
     side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -4,
+    polygonOffsetUnits: -8,
   });
   const predMesh = new THREE.Mesh(predGeo, predMat);
   predMesh.renderOrder = 25;
@@ -253,7 +263,101 @@ export function createPerceptionView(scene) {
     predGeo.setDrawRange(0, 0);
   }
 
-  function _sampleBranchPoints(rawPts, store) {
+  function _findMatchedEntity(pred, store) {
+    const entities = store.entities || [];
+    const objId = pred.object_id ?? pred.id;
+    if (objId !== undefined && objId !== null) {
+      for (let i = 0; i < entities.length; i++) {
+        const cand = entities[i];
+        if (_isPerceivableObstacle(cand) && cand.id === objId) return cand;
+      }
+    }
+    const pwx = Number(pred.wx);
+    const pwy = Number(pred.wy);
+    if (Number.isFinite(pwx) && Number.isFinite(pwy)) {
+      let best = null;
+      let bestDist = 6.0;
+      for (let i = 0; i < entities.length; i++) {
+        const cand = entities[i];
+        if (!_isPerceivableObstacle(cand)) continue;
+        const d = distanceENU(pwx, pwy, cand.x || 0, cand.y || 0);
+        if (d <= bestDist) {
+          bestDist = d;
+          best = cand;
+        }
+      }
+      return best;
+    }
+    return null;
+  }
+
+  function _extractBranchWorldPoints(pred, br, ent, store) {
+    if (Array.isArray(br.points) && br.points.length >= 2) {
+      return { pts: br.points, hasElevation: true };
+    }
+    if (Array.isArray(br.world_waypoints) && br.world_waypoints.length >= 2) {
+      const wps = br.world_waypoints;
+      const firstWp0 = wps[0];
+      if (!Array.isArray(firstWp0) || firstWp0.length < 2) return { pts: null, hasElevation: false };
+
+      const pwx = Number(pred.wx);
+      const pwy = Number(pred.wy);
+      // 防御后端局部 Frenet 参考线截断夹紧幻影：若首预测点距目标真实坐标超过 16m，说明目标超出局部 Frenet 域被截断到自车附近，予以剔除
+      if (Number.isFinite(pwx) && Number.isFinite(pwy)) {
+        const jumpDist = distanceENU(pwx, pwy, Number(firstWp0[0]) || 0, Number(firstWp0[1]) || 0);
+        if (jumpDist > 16.0) return { pts: null, hasElevation: false };
+      }
+
+      const out = [];
+      let startIdx = 0;
+      if (ent && Number.isFinite(ent.x) && Number.isFinite(ent.y)) {
+        const [efx, efy] = forwardENU(ent.heading || 0);
+        const frontOff = (ent.length || 4.6) * 0.35;
+        const ax = ent.x + efx * frontOff;
+        const ay = ent.y + efy * frontOff;
+        while (startIdx < wps.length - 1) {
+          const wx0 = Number(wps[startIdx]?.[0]);
+          const wy0 = Number(wps[startIdx]?.[1]);
+          if (!Number.isFinite(wx0) || !Number.isFinite(wy0)) { startIdx++; continue; }
+          if ((wx0 - ax) * efx + (wy0 - ay) * efy >= 0.35) break;
+          startIdx++;
+        }
+        const firstWp = wps[startIdx];
+        if (firstWp && distanceENU(ax, ay, Number(firstWp[0]) || 0, Number(firstWp[1]) || 0) <= 12.0) {
+          out.push([ax, ay]);
+        }
+      } else if (Number.isFinite(pwx) && Number.isFinite(pwy)) {
+        if (distanceENU(pwx, pwy, Number(firstWp0[0]) || 0, Number(firstWp0[1]) || 0) <= 12.0) {
+          out.push([pwx, pwy]);
+        }
+      }
+
+      for (let k = startIdx; k < wps.length; k++) {
+        const wp = wps[k];
+        if (Array.isArray(wp) && wp.length >= 2) {
+          out.push([Number(wp[0]), Number(wp[1])]);
+        }
+      }
+      return { pts: out, hasElevation: false };
+    }
+    if (Array.isArray(br.waypoints) && br.waypoints.length >= 2 && store.ego) {
+      const ego = store.ego;
+      const [fx, fy] = forwardENU(ego.heading || 0);
+      const out = [];
+      for (let k = 0; k < br.waypoints.length; k++) {
+        const wp = br.waypoints[k];
+        if (!Array.isArray(wp) || wp.length < 2) continue;
+        const bx = Number(wp[0]);
+        const by = Number(wp[1]);
+        if (!Number.isFinite(bx) || !Number.isFinite(by)) continue;
+        out.push([ego.x + fx * bx - fy * by, ego.y + fy * bx + fx * by]);
+      }
+      return { pts: out, hasElevation: false };
+    }
+    return { pts: null, hasElevation: false };
+  }
+
+  function _sampleBranchPoints(rawPts, store, hasElevation = false) {
     const raw3d = [];
     for (let i = 0; i < rawPts.length; i++) {
       const pt = rawPts[i];
@@ -261,13 +365,14 @@ export function createPerceptionView(scene) {
       const px = Number(pt[0]);
       const py = Number(pt[1]);
       if (!Number.isFinite(px) || !Number.isFinite(py)) continue;
-      const baseZ = (pt.length >= 3 && Number.isFinite(Number(pt[2])))
+      const baseZ = (hasElevation && pt.length >= 3 && Number.isFinite(Number(pt[2])))
         ? Number(pt[2])
         : roadHeightAt(store, px, py);
       const [tx, ty, tz] = worldToThree(px, py, baseZ + PRED_LIFT_M);
       raw3d.push(new THREE.Vector3(tx, ty, tz));
     }
     if (raw3d.length < 2) return [];
+    if (raw3d[0].distanceTo(raw3d[raw3d.length - 1]) < 0.5) return [];
 
     if (raw3d.length === 2) {
       const a = raw3d[0], b = raw3d[1];
@@ -285,7 +390,7 @@ export function createPerceptionView(scene) {
     }
 
     const subdiv = Math.max(12, Math.min(28, (raw3d.length - 1) * 6));
-    const curve = new THREE.CatmullRomCurve3(raw3d, false);
+    const curve = new THREE.CatmullRomCurve3(raw3d, false, 'centripetal', 0.5);
     return curve.getPoints(subdiv);
   }
 
@@ -304,33 +409,58 @@ export function createPerceptionView(scene) {
 
     for (let p = 0; p < store.predictions.length; p++) {
       const pred = store.predictions[p];
-      if (!pred || !Array.isArray(pred.branches) || pred.branches.length === 0) continue;
+      if (!pred) continue;
+      const branches = Array.isArray(pred.branches)
+        ? pred.branches
+        : (Array.isArray(pred.trajectories) ? pred.trajectories : null);
+      if (!branches || branches.length === 0) continue;
 
       let maxProb = 0;
-      for (let b = 0; b < pred.branches.length; b++) {
-        const pr = Number(pred.branches[b]?.probability) || 0;
+      for (let b = 0; b < branches.length; b++) {
+        const pr = Number(branches[b]?.probability ?? branches[b]?.prob) || 0;
         if (pr > maxProb) maxProb = pr;
       }
 
-      for (let b = 0; b < pred.branches.length; b++) {
-        const br = pred.branches[b];
-        if (!br || !Array.isArray(br.points) || br.points.length < 2) continue;
+      const matchedEnt = _findMatchedEntity(pred, store);
+      if (!matchedEnt && store.ego && Number.isFinite(Number(pred.wx)) && Number.isFinite(Number(pred.wy))) {
+        if (distanceENU(Number(pred.wx), Number(pred.wy), store.ego.x || 0, store.ego.y || 0) < 3.5) {
+          continue;
+        }
+      }
+      let isOpposing = false;
+      if (matchedEnt && store.ego) {
+        const [efx, efy] = forwardENU(store.ego.heading || 0);
+        const [tfx, tfy] = forwardENU(matchedEnt.heading || 0);
+        isOpposing = (efx * tfx + efy * tfy) < -0.35;
+      }
 
-        const pts = _sampleBranchPoints(br.points, store);
+      for (let b = 0; b < branches.length; b++) {
+        const br = branches[b];
+        if (!br) continue;
+
+        const mode = br.mode || br.intent || 'lane_keep';
+        const rawProb = Number(br.probability ?? br.prob);
+        const probVal = Number.isFinite(rawProb) ? rawProb : 0.5;
+        const isPrimary = probVal >= maxProb - 1e-3;
+        if (!isPrimary && probVal < MIN_SECONDARY_PROB) continue;
+        if (!isPrimary && isOpposing && String(mode).startsWith('cut_in')) continue;
+
+        const { pts: rawPts, hasElevation } = _extractBranchWorldPoints(pred, br, matchedEnt, store);
+        if (!rawPts || rawPts.length < 2) continue;
+
+        const pts = _sampleBranchPoints(rawPts, store, hasElevation);
         const n = pts.length;
         if (n < 2) continue;
         if (vCursor + n * 2 > MAX_PRED_VERTS || iCursor + (n - 1) * 6 > MAX_PRED_INDICES) break;
 
-        const mode = br.mode || 'lane_keep';
-        const prob = Math.max(0.1, Math.min(1.0, Number(br.probability) || 0.5));
-        const isPrimary = prob >= maxProb - 1e-3;
+        const prob = Math.max(0.1, Math.min(1.0, probVal));
         const hex = PREDICTION_COLORS[mode] || PREDICTION_COLORS.default;
         const [baseR, baseG, baseB] = _hexToRgb01(hex);
 
         const wStart = (isPrimary ? PRIMARY_WIDTH_START : SECONDARY_WIDTH_START) * wScale;
         const wEnd = (isPrimary ? PRIMARY_WIDTH_END : SECONDARY_WIDTH_END) * wScale;
-        const alphaStart = isPrimary ? (0.54 + 0.34 * prob) : (0.30 + 0.28 * prob);
-        const alphaEnd = isPrimary ? 0.05 : 0.02;
+        const alphaStart = isPrimary ? (0.66 + 0.28 * prob) : (0.38 + 0.28 * prob);
+        const alphaEnd = isPrimary ? 0.08 : 0.03;
 
         const baseVert = vCursor;
         for (let i = 0; i < n; i++) {
@@ -463,7 +593,7 @@ export function createPerceptionView(scene) {
 
         const { halfL, halfW, vehH } = _entityDims(ent);
         const entGroundZ = (ent.z != null) ? ent.z : roadHeightAt(store, ent.x || 0, ent.y || 0);
-        const [cx, cy, cz] = worldToThree(ent.x || 0, ent.y || 0, entGroundZ);
+        const [cx, cy, cz] = worldToThree(ent.x || 0, ent.y || 0, entGroundZ + VEHICLE_GROUND_Y);
 
         const [efx, efy] = forwardENU(ent.heading || 0);
         const [fwdX, , fwdZ] = worldToThree(efx, efy, 0);
@@ -543,6 +673,9 @@ export function createPerceptionView(scene) {
     sweepMesh.visible = true;
     sweepEdgeMesh.visible = true;
     pointMesh.visible = true;
+
+    const isNight = !!(store.env && (store.env.isNight || store.env.lighting === 'night'));
+    sweepMat.opacity = isNight ? 0.14 : 0.22;
 
     const entities = store.entities || [];
     const count = Math.min(entities.length, MAX_ENTITIES);
@@ -633,7 +766,7 @@ function _updateBrackets(ego, entities, count, store, positions) {
     const cl = Math.max(0.10, Math.min(CORNER_LEN, minDim * 0.24));
 
     const entZ = (ent.z != null) ? ent.z : roadHeightAt(store, ent.x || 0, ent.y || 0);
-    const [cx, cyRaw, cz] = worldToThree(ent.x || 0, ent.y || 0, entZ);
+    const [cx, cyRaw, cz] = worldToThree(ent.x || 0, ent.y || 0, entZ + VEHICLE_GROUND_Y);
     const bottomY = cyRaw + 0.04;
     const roofY = cyRaw + vehH + 0.04;
 
@@ -683,7 +816,7 @@ function _updateBrackets(ego, entities, count, store, positions) {
 
 function _updateRays(ego, entities, count, store, positions, colors) {
   const egoGroundZ = (ego.z != null) ? ego.z : roadHeightAt(store, ego.x, ego.y);
-  const [ex, ey, ez] = worldToThree(ego.x, ego.y, egoGroundZ + 0.06);
+  const [ex, ey, ez] = worldToThree(ego.x, ego.y, egoGroundZ + VEHICLE_GROUND_Y + RAY_ABOVE_ROAD_M);
   const [efx, efy] = forwardENU(ego.heading || 0);
   const [egoFwdX, , egoFwdZ] = worldToThree(efx, efy, 0);
   const egoHalfL = (ego.length || 4.6) * 0.5;
@@ -700,7 +833,7 @@ function _updateRays(ego, entities, count, store, positions, colors) {
 
     const dist = distanceENU(ego.x, ego.y, ent.x || 0, ent.y || 0);
     const entGroundZ = (ent.z != null) ? ent.z : roadHeightAt(store, ent.x || 0, ent.y || 0);
-    const [tx, ty, tz] = worldToThree(ent.x || 0, ent.y || 0, entGroundZ + 0.06);
+    const [tx, ty, tz] = worldToThree(ent.x || 0, ent.y || 0, entGroundZ + VEHICLE_GROUND_Y + RAY_ABOVE_ROAD_M);
 
     const dirX = (tx - ex) / (dist || 1);
     const dirZ = (tz - ez) / (dist || 1);
@@ -715,14 +848,14 @@ function _updateRays(ego, entities, count, store, positions, colors) {
     const { halfL: targetHalfL } = _entityDims(ent);
     const startOff = egoHalfL + 0.55;
     const endOff = Math.max(startOff, dist - targetHalfL - 0.35);
-    const atten = Math.max(0.20, 1.0 - dist / 80);
+    const atten = Math.max(0.28, 1.0 - dist / 85);
 
     positions[baseIdx + 0] = ex + dirX * startOff;
     positions[baseIdx + 1] = ey;
     positions[baseIdx + 2] = ez + dirZ * startOff;
-    colors[baseIdx + 0] = fovR * 0.55 * atten;
-    colors[baseIdx + 1] = fovG * 0.55 * atten;
-    colors[baseIdx + 2] = fovB * 0.55 * atten;
+    colors[baseIdx + 0] = fovR * 0.82 * atten;
+    colors[baseIdx + 1] = fovG * 0.82 * atten;
+    colors[baseIdx + 2] = fovB * 0.82 * atten;
 
     positions[baseIdx + 3] = ex + dirX * endOff;
     positions[baseIdx + 4] = ty;
@@ -744,7 +877,8 @@ function _updateSweep(ego, store, frame, positions, colors, edgePositions, edgeC
   const bumperEnuX = ego.x + efx * egoHalfL;
   const bumperEnuY = ego.y + efy * egoHalfL;
   const egoGroundZ = (ego.z != null) ? ego.z : roadHeightAt(store, bumperEnuX, bumperEnuY);
-  const [bx, by, bz] = worldToThree(bumperEnuX, bumperEnuY, egoGroundZ + 0.05);
+  const sweepSurfaceZ = egoGroundZ + VEHICLE_GROUND_Y + SWEEP_ABOVE_ROAD_M;
+  const [bx, by, bz] = worldToThree(bumperEnuX, bumperEnuY, sweepSurfaceZ);
 
   const [fovR, fovG, fovB] = _hexToRgb01(SCENE.percFov);
 
@@ -762,7 +896,7 @@ function _updateSweep(ego, store, frame, positions, colors, edgePositions, edgeC
     const [px, py, pz] = worldToThree(
       bumperEnuX + fx * SWEEP_RADIUS,
       bumperEnuY + fy * SWEEP_RADIUS,
-      egoGroundZ + 0.05
+      sweepSurfaceZ
     );
     const vi = (i + 1) * 3;
     positions[vi + 0] = px;
@@ -775,9 +909,9 @@ function _updateSweep(ego, store, frame, positions, colors, edgePositions, edgeC
 
   // 左右短视场边界线（长 18m，远端顶点色衰减至 0）
   const [fxL, fyL] = forwardENU(sweepEnd);
-  const [lx, ly, lz] = worldToThree(bumperEnuX + fxL * BOUNDARY_RAY_LEN, bumperEnuY + fyL * BOUNDARY_RAY_LEN, egoGroundZ + 0.05);
+  const [lx, ly, lz] = worldToThree(bumperEnuX + fxL * BOUNDARY_RAY_LEN, bumperEnuY + fyL * BOUNDARY_RAY_LEN, sweepSurfaceZ);
   const [fxR, fyR] = forwardENU(sweepStart);
-  const [rx, ry, rz] = worldToThree(bumperEnuX + fxR * BOUNDARY_RAY_LEN, bumperEnuY + fyR * BOUNDARY_RAY_LEN, egoGroundZ + 0.05);
+  const [rx, ry, rz] = worldToThree(bumperEnuX + fxR * BOUNDARY_RAY_LEN, bumperEnuY + fyR * BOUNDARY_RAY_LEN, sweepSurfaceZ);
 
   edgePositions[0] = bx; edgePositions[1] = by; edgePositions[2] = bz;
   edgeColors[0] = fovR;  edgeColors[1] = fovG;  edgeColors[2] = fovB;
@@ -792,7 +926,7 @@ function _updateSweep(ego, store, frame, positions, colors, edgePositions, edgeC
   // 向前推进的柔和雷达距离脉冲弧（4m → 34m 循环扩散并自然淡出）
   const pulsePhase = (frame % PULSE_CYCLE_FRAMES) / PULSE_CYCLE_FRAMES;
   const pulseRadius = 4.0 + pulsePhase * 30.0;
-  const pulseFade = (1.0 - pulsePhase) * (0.35 + 0.65 * Math.min(1.0, pulsePhase * 4.0));
+  const pulseFade = (1.0 - pulsePhase * 0.88) * (0.50 + 0.50 * Math.min(1.0, pulsePhase * 4.0));
 
   for (let i = 0; i < SWEEP_SEGMENTS; i++) {
     const u0 = i / SWEEP_SEGMENTS;
@@ -801,8 +935,8 @@ function _updateSweep(ego, store, frame, positions, colors, edgePositions, edgeC
     const t1 = sweepStart + (sweepEnd - sweepStart) * u1;
     const [f0x, f0y] = forwardENU(t0);
     const [f1x, f1y] = forwardENU(t1);
-    const [p0x, p0y, p0z] = worldToThree(bumperEnuX + f0x * pulseRadius, bumperEnuY + f0y * pulseRadius, egoGroundZ + 0.05);
-    const [p1x, p1y, p1z] = worldToThree(bumperEnuX + f1x * pulseRadius, bumperEnuY + f1y * pulseRadius, egoGroundZ + 0.05);
+    const [p0x, p0y, p0z] = worldToThree(bumperEnuX + f0x * pulseRadius, bumperEnuY + f0y * pulseRadius, sweepSurfaceZ);
+    const [p1x, p1y, p1z] = worldToThree(bumperEnuX + f1x * pulseRadius, bumperEnuY + f1y * pulseRadius, sweepSurfaceZ);
 
     // 两侧边缘羽化，中间最清晰
     const edgeFeather0 = 1.0 - Math.abs(2.0 * u0 - 1.0) * 0.85;

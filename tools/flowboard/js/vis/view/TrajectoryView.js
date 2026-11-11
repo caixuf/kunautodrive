@@ -12,12 +12,12 @@
  *   - 按点速度染色：巡航蓝 / 制动橙 / 加速青绿
  */
 
-import { worldToThree, forwardENU } from '../math/Coord.js';
-import { selectCurrentMotionSegment, _anchorTrajectoryStart } from '../math/Trajectory.js';
+import { worldToThree } from '../math/Coord.js';
+import { selectCurrentMotionSegment, clipTrajectoryFromAnchor } from '../math/Trajectory.js';
 import { roadHeightAt } from '../math/RoadHeight.js';
 import { VEHICLE_GROUND_Y } from './VehicleView.js';
 
-const TRAJ_GROUND_OFFSET = 0.02;  // 光带相对车辆贴地高度的额外偏移（避免 z-fight）
+const TRAJ_GROUND_OFFSET = 0.08;  // 光带相对车辆贴地高度(0.10m)抬高至 0.18m，稳居路面与全部标线(<=0.17m)之上
 const MAX_PLAN_POINTS   = 64;             // 后端轨迹点上限
 const SPLINE_SUBDIV     = 4;              // 每个规划段细分数（64→~250 渲染点）
 const MAX_RENDER_POINTS = MAX_PLAN_POINTS * SPLINE_SUBDIV;
@@ -25,25 +25,25 @@ const MAX_RENDER_POINTS = MAX_PLAN_POINTS * SPLINE_SUBDIV;
 /* ── 三层光带参数 ── */
 // 外层辉光（加法混合，柔和蓝光）
 const OUTER_WIDTH_START = 2.2;
-const OUTER_WIDTH_END   = 0.15;
-const OUTER_ALPHA       = 0.10;
+const OUTER_WIDTH_END   = 0.18;
+const OUTER_ALPHA       = 0.16;
 // 主体光带（2026-08：远端不归零 —— 旧值 END=0.04/0.0 远端完全消失，
 // 轨迹只显示车头一段 + 流动亮点 → 观感"点点"。全程可见的连续轨迹线）
-const RIBBON_WIDTH_START = 0.55;
-const RIBBON_WIDTH_END   = 0.12;
-const RIBBON_ALPHA_START = 0.90;
-const RIBBON_ALPHA_END   = 0.30;
+const RIBBON_WIDTH_START = 0.62;
+const RIBBON_WIDTH_END   = 0.16;
+const RIBBON_ALPHA_START = 0.92;
+const RIBBON_ALPHA_END   = 0.38;
 // 内亮核心线（细线，车头最亮，远端保持可见）
-const CORE_WIDTH_START = 0.12;
-const CORE_WIDTH_END   = 0.04;
+const CORE_WIDTH_START = 0.14;
+const CORE_WIDTH_END   = 0.05;
 const CORE_ALPHA_START = 1.0;
-const CORE_ALPHA_END   = 0.35;
+const CORE_ALPHA_END   = 0.42;
 
 /* 流动高亮条 */
 const FLOW_SPEED       = 12;             // m/s，流动速度
 const FLOW_SEG_LEN     = 3.0;            // 高亮段长度
-const FLOW_WIDTH       = 0.65;           // 高亮段宽度（相对主光带放大约1.2x）
-const FLOW_ALPHA       = 0.45;
+const FLOW_WIDTH       = 0.68;           // 高亮段宽度（相对主光带放大约1.1x）
+const FLOW_ALPHA       = 0.56;
 
 /* BEV（正交俯视）下的视觉补偿。
  * 光流"发光感"本质是透视近大远小 + 加法混合叠加出的错觉；BEV 正交相机
@@ -102,8 +102,10 @@ export function createTrajectoryView(scene) {
     const outerMat = new THREE.MeshBasicMaterial({
       vertexColors: true, transparent: true, depthWrite: false,
       side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+      polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8,
     });
     outerMesh = new THREE.Mesh(outerGeo, outerMat);
+    outerMesh.renderOrder = 12;
     outerMesh.frustumCulled = false;
     group.add(outerMesh);
 
@@ -116,8 +118,10 @@ export function createTrajectoryView(scene) {
     const ribbonMat = new THREE.MeshBasicMaterial({
       vertexColors: true, transparent: true, depthWrite: false,
       side: THREE.DoubleSide,
+      polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8,
     });
     ribbonMesh = new THREE.Mesh(ribbonGeo, ribbonMat);
+    ribbonMesh.renderOrder = 13;
     ribbonMesh.frustumCulled = false;
     group.add(ribbonMesh);
 
@@ -130,8 +134,10 @@ export function createTrajectoryView(scene) {
     const coreMat = new THREE.MeshBasicMaterial({
       vertexColors: true, transparent: true, depthWrite: false,
       side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+      polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8,
     });
     coreMesh = new THREE.Mesh(coreGeo, coreMat);
+    coreMesh.renderOrder = 14;
     coreMesh.frustumCulled = false;
     group.add(coreMesh);
 
@@ -144,8 +150,10 @@ export function createTrajectoryView(scene) {
     flowMat = new THREE.MeshBasicMaterial({
       vertexColors: true, transparent: true, depthWrite: false,
       side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+      polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8,
     });
     flowMesh = new THREE.Mesh(flowGeo, flowMat);
+    flowMesh.renderOrder = 15;
     flowMesh.frustumCulled = false;
     group.add(flowMesh);
   }
@@ -164,16 +172,7 @@ export function createTrajectoryView(scene) {
     // 轨迹高度绑定车辆贴地高度：roadHeightAt + VEHICLE_GROUND_Y + 额外偏移
     const egoZ = roadHeightAt(store, ego.x, ego.y) + VEHICLE_GROUND_Y + TRAJ_GROUND_OFFSET;
 
-    /* 轨迹起点锚定到车头实时位置（ENU）：
-     * 规划 10Hz 快照，车每帧（60fps）实时运动。变道时车横向移动快，
-     * 轨迹起点停留在上一次规划时的车位置，而车头已前进/横移 → 轨迹与车脱节。
-     * 用速度方向把轨迹第0点前移到车头，其余真实规划点保留，CatmullRom
-     * 平滑衔接，全程贴合车头。 */
-    const [fx, fy] = forwardENU(ego.heading || 0);
-    const frontX = ego.x + fx * 1.5;
-    const frontY = ego.y + fy * 1.5;
-
-    /* 1. 先把原始点转 THREE 坐标，截断跳变 */
+    /* 1. 把已完成前向裁剪与车头连续锚定的 ENU 轨迹点转 THREE 坐标，截断异常跳变 */
     const raw3d = [];
     for (let i = 0; i < trajPath.length; i++) {
       const p = trajPath[i];
@@ -182,18 +181,10 @@ export function createTrajectoryView(scene) {
       if (i > 0) {
         const prev = raw3d[raw3d.length - 1];
         const dx = tx - prev.x, dz = tz - prev.z;
-        if (Math.sqrt(dx * dx + dz * dz) > 10) break;
+        if (Math.sqrt(dx * dx + dz * dz) > 25) break;
       }
       raw3d.push(new THREE.Vector3(tx, ty, tz));
       raw3d[raw3d.length - 1].v = v;
-    }
-    /* 用车头实时位置替换轨迹起点（防脱节）。
-     * 交由 Trajectory._anchorTrajectoryStart 做"连续锚定"：阈值内无条件吸附，
-     * 不做"距离太近/太远就跳过一次"的开关 —— 那会让起点在阈值附近逐帧弹跳
-     * （观感"一抽一抽"）。详见该函数注释。 */
-    if (raw3d.length >= 1) {
-      const [tx0, ty0, tz0] = worldToThree(frontX, frontY, egoZ);
-      _anchorTrajectoryStart(raw3d, tx0, ty0, tz0, trajPath[0][2] || 0);
     }
     if (raw3d.length < 2) return [];
 
@@ -359,10 +350,10 @@ export function createTrajectoryView(scene) {
     const ego = store.ego;
     const now = performance.now() / 1000;
 
-    /* 低/超低档（软件渲染）：跳过装饰性加法混合层（外层辉光 + 流动条），
-     * 只留主体光带 + 内亮核心。AdditiveBlending 在软件 WebGL（SwiftShader/
-     * llvmpipe）下按屏幕面积逐像素混合，是"后段卡成 PPT"的主因之一。 */
-    const lowTier = store.perfTier === 'low' || store.perfTier === 'ultra';
+    /* 低档仅跳过 2.2m 宽幅外层辉光（减少软件 WebGL 像素填充压力），保留主体光带 + 内亮核心 + 流动脉冲；
+     * 仅超低档（ultra）精简为单层主体光带。 */
+    const skipOuter = store.perfTier === 'low' || store.perfTier === 'ultra';
+    const skipCoreAndFlow = store.perfTier === 'ultra';
 
     if (!ego || !trajPath || trajPath.length < 2) {
       clear();
@@ -382,8 +373,9 @@ export function createTrajectoryView(scene) {
     const bev = !!store.isBev;
     const wScale = bev ? BEV_WIDTH_SCALE : 1;
 
-    /* 1. 构建平滑曲线点 */
-    const activePath = selectCurrentMotionSegment(trajPath, ego);
+    /* 1. 构建当前挡位的前向裁剪平滑曲线点（严禁落后点穿过车身伸出车尾） */
+    const activeSeg = selectCurrentMotionSegment(trajPath, ego);
+    const activePath = clipTrajectoryFromAnchor(activeSeg, ego);
     const points = _buildSmoothPoints(activePath, ego, store);
     if (points.length < 2) { clear(); return; }
 
@@ -391,32 +383,36 @@ export function createTrajectoryView(scene) {
     const firstRgb = points[0].rgb;
     const fixedColor = [firstRgb[0], firstRgb[1], firstRgb[2]];
 
-    /* 2. 外层辉光（固定色，加法混合）—— 低档跳过（装饰层，软件渲染最贵） */
-    if (!lowTier) {
+    /* 2. 外层辉光（固定色，加法混合） */
+    if (!skipOuter) {
       _fillRibbon(outerGeo, points, OUTER_WIDTH_START, OUTER_WIDTH_END, OUTER_ALPHA, 0, false, fixedColor, undefined, wScale);
+    } else {
+      outerGeo.setDrawRange(0, 0);
     }
 
     /* 3. 主体光带（逐点颜色，平滑色彩过渡） */
     _fillRibbon(ribbonGeo, points, RIBBON_WIDTH_START, RIBBON_WIDTH_END, RIBBON_ALPHA_START, RIBBON_ALPHA_END, true, fixedColor, undefined, wScale);
 
-    /* 4. 内亮核心（白色偏基础色，加法混合）—— 低档也跳过（只剩主体光带 1 层） */
+    /* 4. 内亮核心（白色偏基础色，加法混合） */
     const coreColor = [
       Math.min(1, fixedColor[0] * 0.4 + 0.6),
       Math.min(1, fixedColor[1] * 0.4 + 0.6),
       Math.min(1, fixedColor[2] * 0.4 + 0.6),
     ];
-    if (!lowTier) {
+    if (!skipCoreAndFlow) {
       _fillRibbon(coreGeo, points, CORE_WIDTH_START, CORE_WIDTH_END, CORE_ALPHA_START, CORE_ALPHA_END, false, coreColor, undefined, wScale);
+    } else {
+      coreGeo.setDrawRange(0, 0);
     }
 
-    /* 5. 流动高亮条（高亮主光带，略宽一点，用加法混合 + 时间偏移 sin 波）—— 低档跳过。
-     * BEV 下光带随 wScale 加宽，流动峰值 alpha 再放大，俯视也能看清"光流"。 */
-    const _totalLen = points[points.length - 1].dist || 1;
+    /* 5. 流动高亮条（高亮主光带，略宽一点，用加法混合 + 时间偏移脉冲） */
     const flowOff = _flowTime % (FLOW_SEG_LEN * 2);
-    if (!lowTier) {
+    if (!skipCoreAndFlow) {
       const flowW = FLOW_WIDTH * wScale;
       const flowA = FLOW_ALPHA * (bev ? BEV_FLOW_ALPHA_SCALE : 1);
       _fillRibbon(flowGeo, points, flowW, flowW * 0.3, flowA, 0, true, fixedColor, flowOff, wScale);
+    } else {
+      flowGeo.setDrawRange(0, 0);
     }
   }
 
@@ -429,5 +425,5 @@ export function createTrajectoryView(scene) {
     scene.remove(group);
   }
 
-  return { update, clear, dispose };
+  return { update, clear, dispose, getGroup: () => group };
 }

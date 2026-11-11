@@ -22,6 +22,7 @@ const REAL_THREE = new Set([
   'vis_viaduct_pier.test.mjs',  // 桥墩 position/scale/color 断言
   'vis_audit_route.test.mjs',   // A* 路线与路灯碰撞真实 Three 几何漫游
   'vis_marking_types.test.mjs', // 标线 type→mesh 颜色/位置 golden
+  'vis_trajectory_anchor.test.mjs', // TrajectoryView 真实 CatmullRom 样条与顶点前向锚定守卫
 ]);
 
 const tests = readdirSync(TESTS)

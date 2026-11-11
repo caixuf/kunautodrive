@@ -47,8 +47,8 @@ export function createConnectorView(scene) {
   scene.add(group);
   let built = false;
 
-  /** 创建与主路面无缝同质的沥青材质（带世界米制纹理/法线贴图 + DoubleSide + polygonOffset） */
-  function _makeAsphaltMat(colorHex, offsetFactor = -8) {
+  /** 创建与主路面无缝同质的沥青材质（带世界米制纹理/法线贴图 + DoubleSide + 紧凑 polygonOffset） */
+  function _makeAsphaltMat(colorHex, offsetFactor = -1) {
     const mat = new THREE.MeshStandardMaterial({
       color: colorHex,
       map: getAsphaltTexture(),
@@ -65,15 +65,15 @@ export function createConnectorView(scene) {
     return mat;
   }
 
-  /** 创建防 z-fight 路面标线材质（克隆/独立材质，避免在低掠射追尾角下闪烁） */
+  /** 创建防 z-fight 路面标线材质（紧凑负偏移，避免遮挡上方规划轨迹与感知层） */
   function _makeMarkMat(colorHex) {
     const mat = new THREE.MeshStandardMaterial({
       color: colorHex,
       roughness: 0.6,
       metalness: 0.0,
       polygonOffset: true,
-      polygonOffsetFactor: -14,
-      polygonOffsetUnits: -28,
+      polygonOffsetFactor: -2.5,
+      polygonOffsetUnits: -5,
     });
     mat.userData = { ownedByConnector: true };
     return mat;
@@ -202,7 +202,7 @@ export function createConnectorView(scene) {
     if (rampGeos.length > 0) {
       const mergedRampGeo = mergeGeometries(rampGeos);
       if (mergedRampGeo) {
-        const rampMat = _makeAsphaltMat(TAPER_COLOR, -8);
+        const rampMat = _makeAsphaltMat(TAPER_COLOR, -1);
         const rampMesh = new THREE.Mesh(mergedRampGeo, rampMat);
         rampMesh.receiveShadow = true;
         rampMesh.frustumCulled = true;
@@ -323,7 +323,7 @@ export function createConnectorView(scene) {
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
     geo.setIndex(indices);
     geo.computeVertexNormals();
-    const mat = _makeAsphaltMat(TAPER_COLOR, -8);
+    const mat = _makeAsphaltMat(TAPER_COLOR, -1);
     const mesh = new THREE.Mesh(geo, mat);
     mesh.receiveShadow = true;
     group.add(mesh);
@@ -663,7 +663,7 @@ export function createConnectorView(scene) {
     let sharedPatchMat = null;
     for (const bucket of patchBuckets.values()) {
       if (bucket.pos.length < 9) continue;
-      if (!sharedPatchMat) sharedPatchMat = _makeAsphaltMat(JUNCTION_COLOR, -8);
+      if (!sharedPatchMat) sharedPatchMat = _makeAsphaltMat(JUNCTION_COLOR, -1);
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.Float32BufferAttribute(bucket.pos, 3));
       geo.setAttribute('uv', new THREE.Float32BufferAttribute(bucket.uvs, 2));

@@ -627,7 +627,7 @@ export function createSkyEnv(scene, sunLight, hemiLight) {
           if (rip.life < 1.0) {
             rip.life += delta / rip.maxLife;
             rip.scale = 0.15 + (rip.life * 1.2);
-            dummy.position.set(rip.x, 0.04, rip.z);
+            dummy.position.set(rip.x, 0.145, rip.z);
             dummy.scale.set(rip.scale, 1, rip.scale);
             dummy.updateMatrix();
             rippleMesh.setMatrixAt(i, dummy.matrix);

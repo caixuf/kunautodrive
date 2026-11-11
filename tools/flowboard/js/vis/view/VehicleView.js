@@ -1221,11 +1221,14 @@ export function createVehicleView(scene, renderer, modelCache) {
               depthWrite: false,
               blending: THREE.AdditiveBlending,
               side: THREE.DoubleSide,
+              polygonOffset: true,
+              polygonOffsetFactor: -3,
+              polygonOffsetUnits: -6,
             });
             const carpetMesh = new THREE.Mesh(carpetGeo, carpetMat);
             carpetMesh.rotation.x = -Math.PI / 2;
             carpetMesh.rotation.z = -Math.PI / 2;
-            carpetMesh.position.set(26.0, 0.03, 0.0);
+            carpetMesh.position.set(26.0, 0.06, 0.0);
             carpetMesh.renderOrder = 8;
             entry.group.add(carpetMesh);
             entry.headlightCarpet = carpetMesh;
@@ -1239,11 +1242,14 @@ export function createVehicleView(scene, renderer, modelCache) {
               depthWrite: false,
               blending: THREE.AdditiveBlending,
               side: THREE.DoubleSide,
+              polygonOffset: true,
+              polygonOffsetFactor: -3,
+              polygonOffsetUnits: -6,
             });
             const brakeCarpetMesh = new THREE.Mesh(brakeCarpetGeo, brakeCarpetMat);
             brakeCarpetMesh.rotation.x = -Math.PI / 2;
             brakeCarpetMesh.rotation.z = -Math.PI / 2;
-            brakeCarpetMesh.position.set(-3.6, 0.03, 0.0);
+            brakeCarpetMesh.position.set(-3.6, 0.06, 0.0);
             brakeCarpetMesh.renderOrder = 8;
             entry.group.add(brakeCarpetMesh);
             entry.brakeCarpet = brakeCarpetMesh;

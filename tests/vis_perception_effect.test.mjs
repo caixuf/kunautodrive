@@ -72,7 +72,54 @@ console.log('=== PerceptionView & EffectView 车规级几何契约测试 ===\n')
     !!predMesh && predMesh.isMesh === true && predMesh.geometry.drawRange.count > 60);
 
   const predPos = predMesh.geometry.attributes.position.array;
-  ok('预测光带离地高度贴合 +0.15m', Math.abs(predPos[1] - 0.15) < 0.03);
+  ok('预测光带离地高度稳居路面标线之上 (y ≈ +0.175m)', Math.abs(predPos[1] - 0.175) < 0.03);
+
+  // 验证后端 prediction_node 真实 C++ 契约 (trajectories / intent / prob / world_waypoints[wx,wy,speed_mps])
+  store.predictions = [
+    {
+      object_id: 1,
+      confidence: 0.9,
+      wx: 45,
+      wy: -1.75,
+      trajectories: [
+        {
+          prob: 0.86,
+          intent: 'lane_keep',
+          world_waypoints: [
+            [50.5, -1.75, 12.0],
+            [56.5, -1.75, 12.0],
+            [62.5, -1.75, 12.0],
+          ],
+        },
+        {
+          prob: 0.05,
+          intent: 'cut_in_left',
+          world_waypoints: [
+            [50.5, -0.9, 12.0],
+            [56.5, 0.0, 12.0],
+          ],
+        },
+      ],
+    },
+  ];
+  perc.update(store, 1100);
+  ok('真实 C++ trajectories/world_waypoints 契约渲染非空光带', predMesh.geometry.drawRange.count > 30);
+  ok('world_waypoints 第 3 维 speed_mps(12.0) 未被误判为海拔高度 Z',
+    Math.abs(predMesh.geometry.attributes.position.array[1] - 0.175) < 0.03);
+
+  // 验证局部 Frenet 参考线域外截断幻影过滤（wx=-300m 但首点被截断至 x=20m 时必须剔除）
+  store.predictions = [
+    {
+      object_id: 999,
+      wx: -300,
+      wy: 25,
+      trajectories: [
+        { prob: 0.85, intent: 'cut_in_right', world_waypoints: [[20, -40, 10], [50, -1.75, 10]] },
+      ],
+    },
+  ];
+  perc.update(store, 1150);
+  eq('超出局部 Frenet 域的截断幻影预测光带被干净剔除', predMesh.geometry.drawRange.count, 0);
 
   perc.dispose();
   eq('PerceptionView dispose 干净移除全部子节点', scene.children.length, 0);
@@ -109,7 +156,7 @@ console.log('=== PerceptionView & EffectView 车规级几何契约测试 ===\n')
   const chevrons = effectGroup.children.filter(c => c.isMesh);
   eq('旁车切入触发 1 枚贴地警示翼', chevrons.length, 1);
   if (chevrons[0]) {
-    ok('切入警示翼贴地 (y ≈ 0.08m)', Math.abs(chevrons[0].position.y - 0.08) < 0.03);
+    ok('切入警示翼高于路面沥青层 (y ≈ 0.17m)', Math.abs(chevrons[0].position.y - 0.17) < 0.03);
     ok('切入警示翼偏移在车辆切入侧 (左侧 THREE z < 5.25)', chevrons[0].position.z < 5.25 - 0.8);
   }
 

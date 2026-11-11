@@ -27,15 +27,15 @@ import { SCENE } from '../theme/tokens.js';
 const BRAKE_THRESHOLD = 0.5;
 const CUTIN_LATERAL_SPEED = 1.8;   // 切入预警横向速度阈值 (m/s)
 const CUTIN_MAX_DIST_M = 28.0;     // 切入预警纵向/欧氏距离门限 (m)
-const CUTIN_LIFT_M = 0.08;         // 贴地警示翼离地高度 (m)
+const CUTIN_LIFT_M = 0.17;         // 贴地警示翼离地高度 (m，高于路面 0.10m 与车道线 0.14m)
 const BRAKE_REAR_OFFSET_M = 2.35;  // 制动光晕相对自车中心后移距离 (m)
-const BRAKE_LIFT_M = 0.06;
+const BRAKE_LIFT_M = 0.16;         // 制动地面光晕离地高度 (m)
 const HAZARD_HEIGHT_M = 1.62;
 const FLASH_INTERVAL_MS = 500;
 const LIGHT_HAZARD_MASK = 4;       // bit 2: LIGHT_HAZARD
 const WAKE_REAR_OFFSET_M = 2.15;
 const WAKE_TRACK_HALF_M = 0.78;
-const WAKE_LIFT_M = 0.07;
+const WAKE_LIFT_M = 0.16;          // 雨天双后轮水雾贴片离地高度 (m)
 
 function _createSoftMistTexture() {
   if (typeof document === 'undefined') return null;
@@ -116,6 +116,9 @@ export function createEffectView(scene) {
     depthTest: true,
     depthWrite: false,
     side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -3,
+    polygonOffsetUnits: -6,
   });
   const wakeLeft = new THREE.Mesh(wakeGeo, wakeMat);
   const wakeRight = new THREE.Mesh(wakeGeo, wakeMat);
@@ -191,6 +194,9 @@ export function createEffectView(scene) {
         depthTest: true,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
+        polygonOffset: true,
+        polygonOffsetFactor: -3,
+        polygonOffsetUnits: -6,
       });
       brakeGlow = new THREE.Mesh(geo, mat);
       brakeGlow.renderOrder = 19;
@@ -300,6 +306,9 @@ export function createEffectView(scene) {
           side: THREE.DoubleSide,
           depthTest: true,
           depthWrite: false,
+          polygonOffset: true,
+          polygonOffsetFactor: -3,
+          polygonOffsetUnits: -6,
         });
         chevron = new THREE.Mesh(geo, mat);
         chevron.renderOrder = 23;

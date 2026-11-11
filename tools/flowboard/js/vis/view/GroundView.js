@@ -249,6 +249,9 @@ export function createGroundView(scene) {
       color: texture ? 0xffffff : GROUND_BASE,
       map: texture,
       roughness: 1.0,
+      polygonOffset: true,
+      polygonOffsetFactor: 4,
+      polygonOffsetUnits: 8,
     });
     mesh = new THREE.Mesh(geo, mat);
     mesh.rotation.x = -Math.PI / 2;

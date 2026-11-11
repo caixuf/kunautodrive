@@ -300,14 +300,15 @@ class _CatmullRomCurve3 {
     const f = tt - i;
     const p0 = this._get(i - 1), p1 = this._get(i), p2 = this._get(i + 1), p3 = this._get(i + 2);
     const f2 = f * f, f3 = f2 * f;
-    return {
-      x: 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * f + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * f2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * f3),
-      y: 0.5 * ((2 * p1.y) + (-p0.y + p2.y) * f + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * f2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * f3),
-      z: 0.5 * ((2 * p1.z) + (-p0.z + p2.z) * f + (2 * p0.z - 5 * p1.z + 4 * p2.z - p3.z) * f2 + (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * f3),
-    };
+    return new _Vector3(
+      0.5 * ((2 * p1.x) + (-p0.x + p2.x) * f + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * f2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * f3),
+      0.5 * ((2 * p1.y) + (-p0.y + p2.y) * f + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * f2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * f3),
+      0.5 * ((2 * p1.z) + (-p0.z + p2.z) * f + (2 * p0.z - 5 * p1.z + 4 * p2.z - p3.z) * f2 + (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * f3),
+    );
   }
   getPointAt(t) { return this.getPoint(t); }
   getPoints(n) { const out = []; for (let i = 0; i <= n; i++) out.push(this.getPoint(i / n)); return out; }
+  getSpacedPoints(n) { return this.getPoints(n); }
 }
 export const CatmullRomCurve3 = _CatmullRomCurve3;
 export const CubicBezierCurve3 = THREE;

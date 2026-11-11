@@ -24,7 +24,7 @@
 import { worldToThree, tangentToNormal, offsetAlongNormal } from '../math/Coord.js';
 import { LANE_DIAG } from '../theme/tokens.js';
 
-const LINE_LIFT = 0.06;   // 抬离地面，避免与路面/标线 z-fight
+const LINE_LIFT = 0.19;   // 高于路面(0.10m)与全部标线(<=0.17m)，避免诊断线被道路遮挡
 const MAX_LINES  = 16;    // 单类最多画多少条（防止异常数据把场景刷爆）
 const DASH_SIZE  = 1.4;
 const DASH_GAP   = 1.0;
@@ -67,6 +67,7 @@ export function createLaneDiagView(scene) {
       : new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthWrite: false });
     const line = new THREE.Line(geometry, material);
     if (dashed) line.computeLineDistances();
+    line.renderOrder = 26;
     line.frustumCulled = false;
     group.add(line);
     pool.push(line);

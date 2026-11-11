@@ -1518,7 +1518,7 @@ export function createRoadView(scene) {
 
     // ── 合并 + 上材质 ──
 
-    // 主路路面：沥青 PBR（单调递减 polygonOffset 层级：彻底压制 GroundView 20km 底面在大景深比下的深度穿模）
+    // 主路路面：沥青 PBR（由 GroundView 正向 +4/+8 退让底面深度，路面仅用极小负偏移 -0.5/-1，绝不吞噬上方轨迹/感知层）
     if (roadGeos.length) {
       const mat = new THREE.MeshStandardMaterial({
         color: ASPHALT_COLOR,
@@ -1528,7 +1528,7 @@ export function createRoadView(scene) {
         roughness: 0.88,
         metalness: 0.02,
         side: THREE.DoubleSide,
-        polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -12,
+        polygonOffset: true, polygonOffsetFactor: -0.5, polygonOffsetUnits: -1,
       });
       _asphaltMat = mat;
       addMergedByTile(roadGeos, mat);
@@ -1544,7 +1544,7 @@ export function createRoadView(scene) {
         roughness: 0.85,
         metalness: 0.02,
         side: THREE.DoubleSide,
-        polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -12,
+        polygonOffset: true, polygonOffsetFactor: -0.5, polygonOffsetUnits: -1,
       });
       _rampMat = mat;
       addMergedByTile(rampGeos, mat);
@@ -1557,7 +1557,7 @@ export function createRoadView(scene) {
         roughness: 0.92,
         metalness: 0.0,
         side: THREE.DoubleSide,
-        polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -12,
+        polygonOffset: true, polygonOffsetFactor: -0.5, polygonOffsetUnits: -1,
       });
       addMergedByTile(tunnelGeos, mat);
     }
@@ -1569,21 +1569,21 @@ export function createRoadView(scene) {
         roughness: 0.85,
         metalness: 0.05,
         side: THREE.DoubleSide,
-        polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8,
+        polygonOffset: true, polygonOffsetFactor: 0.5, polygonOffsetUnits: 1,
       }));
     }
 
     // 城市路缘石、人行道和绿化带分别合批（瓦片化，见 addMergedByTile），静态路网不随帧更新。
-    const addSurface = function(geometries, color, roughness, poFactor = -4) {
+    const addSurface = function(geometries, color, roughness, poFactor = 0.5) {
       if (!geometries.length) return;
       addMergedByTile(geometries, new THREE.MeshStandardMaterial({
         color, roughness, metalness: 0, side: THREE.DoubleSide,
         polygonOffset: true, polygonOffsetFactor: poFactor, polygonOffsetUnits: poFactor * 2,
       }));
     };
-    addSurface(curbGeos, CURB_COLOR, 0.78, -6);
-    addSurface(sidewalkGeos, SIDEWALK_COLOR, 0.92, -4);
-    addSurface(vergeGeos, VERGE_COLOR, 1.0, -2);
+    addSurface(curbGeos, CURB_COLOR, 0.78, -1);
+    addSurface(sidewalkGeos, SIDEWALK_COLOR, 0.92, 0.5);
+    addSurface(vergeGeos, VERGE_COLOR, 1.0, 1);
 
     // 白色车道线（材质引用存 _whiteLineMat；emissive 由 setMarkingEmissive 控制，
     //   real 风默认 0 不发光，SR/BEV 风抬高配合 Bloom 出霓虹辉光）
@@ -1595,7 +1595,7 @@ export function createRoadView(scene) {
         emissive: MARKING.white.emissive,   // 冷白蓝自发光（色值不动 color，绕开测试锁定）
         emissiveIntensity: 0,               // real 风默认关闭，SR/BEV 风由 setter 打开
         side: THREE.DoubleSide,
-        polygonOffset: true, polygonOffsetFactor: -12, polygonOffsetUnits: -24,
+        polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
       });
       _whiteLineMat = mat;
       addMergedByTile(whiteLineGeos, mat);
@@ -1610,7 +1610,7 @@ export function createRoadView(scene) {
         emissive: MARKING.yellow.emissive,   // 黄线自发光，辉光略弱于白线
         emissiveIntensity: 0,
         side: THREE.DoubleSide,
-        polygonOffset: true, polygonOffsetFactor: -12, polygonOffsetUnits: -24,
+        polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
       });
       _yellowLineMat = mat;
       addMergedByTile(yellowLineGeos, mat);

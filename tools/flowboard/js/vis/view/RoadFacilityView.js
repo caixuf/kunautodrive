@@ -16,7 +16,7 @@ import {
 } from '../math/Coord.js';
 import { SCENE } from '../theme/tokens.js';
 
-const PAINT_Y = 0.155;
+const PAINT_Y = 0.162;
 const PAINT_H = 0.018;
 const LINE_W = 0.12;
 const BAY_LENGTH = 6.2;
@@ -340,6 +340,9 @@ export function createRoadFacilityView(scene) {
         color: SCENE.parkingBox,
         transparent: true,
         opacity: 0.9,
+        polygonOffset: true,
+        polygonOffsetFactor: -3,
+        polygonOffsetUnits: -6,
       });
       const sideGeom = new THREE.BoxGeometry(gLength, 0.01, LINE_W);
       const endGeom = new THREE.BoxGeometry(LINE_W, 0.01, gWidth);
@@ -396,6 +399,9 @@ export function createRoadFacilityView(scene) {
         transparent: true,
         opacity: 0.28,
         depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -3,
+        polygonOffsetUnits: -6,
       });
       parkingPulseMesh = new THREE.Mesh(pulseGeom, pulseMat);
       parkingPulseMesh.position.set(0, 0.002, 0);
@@ -442,10 +448,13 @@ export function createRoadFacilityView(scene) {
         opacity: isIce ? 0.65 : 0.55,
         roughness: isIce ? 0.10 : 0.16,
         metalness: isIce ? 0.20 : 0.08,
+        polygonOffset: true,
+        polygonOffsetFactor: -3,
+        polygonOffsetUnits: -6,
       });
       const geom = new THREE.BoxGeometry(lenX, 0.008, lenY);
       const mesh = new THREE.Mesh(geom, mat);
-      const [tx, ty, tz] = worldToThree(cx, cy, 0.12);
+      const [tx, ty, tz] = worldToThree(cx, cy, 0.145);
       mesh.position.set(tx, ty, tz); // Coord.worldToThree
       frictionZonesGroup.add(mesh);
     });
@@ -485,6 +494,7 @@ export function createRoadFacilityView(scene) {
       const geometry = new THREE.BoxGeometry(1, PAINT_H, 1);
       const material = new THREE.MeshStandardMaterial({
         color: 0xf5f5e8, roughness: 0.65, metalness: 0,
+        polygonOffset: true, polygonOffsetFactor: -2.5, polygonOffsetUnits: -5,
       });
       const mesh = new THREE.InstancedMesh(geometry, material, layout.marks.length);
       const dummy = new THREE.Object3D();
