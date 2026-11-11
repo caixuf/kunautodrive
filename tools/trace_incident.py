@@ -39,6 +39,46 @@ def lane_center_y(idx: int, lc: int, lw: float) -> float:
     return -(idx - (lc - 1) * 0.5) * lw
 
 
+def point_to_segment_distance(px: float, py: float, x1: float, y1: float, x2: float, y2: float) -> float:
+    dx = x2 - x1
+    dy = y2 - y1
+    l2 = dx * dx + dy * dy
+    if l2 == 0.0:
+        return math.hypot(px - x1, py - y1)
+    t = max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / l2))
+    proj_x = x1 + t * dx
+    proj_y = y1 + t * dy
+    return math.hypot(px - proj_x, py - proj_y)
+
+
+def point_to_edges_distance(px: float, py: float, edges: list[dict]) -> float | None:
+    if not edges:
+        return None
+    min_dist = float("inf")
+    found = False
+    for edge in edges:
+        nodes = edge.get("nodes", [])
+        if not nodes or len(nodes) < 2:
+            continue
+        found = True
+        for i in range(len(nodes) - 1):
+            n1 = nodes[i]
+            n2 = nodes[i + 1]
+            x1, y1 = float(n1[0]), float(n1[1])
+            x2, y2 = float(n2[0]), float(n2[1])
+            d = point_to_segment_distance(px, py, x1, y1, x2, y2)
+            if d < min_dist:
+                min_dist = d
+    return min_dist if found else None
+
+
+def is_off_road(px: float, py: float, edges: list[dict], half_road: float, margin: float = 0.5) -> bool:
+    dist = point_to_edges_distance(px, py, edges)
+    if dist is not None:
+        return dist > (half_road + margin)
+    return abs(py) > (half_road + margin)
+
+
 def find_incident(samples: list[dict], data: dict) -> dict | None:
     """从 samples 和 topology 中找最近一次事故。"""
     # Check collision in topic stats
@@ -52,19 +92,22 @@ def find_incident(samples: list[dict], data: dict) -> dict | None:
     lc = int(lane.get("count", 4))
     lw = float(lane.get("width", 3.5))
     half_road = lc * lw * 0.5
+    edges = scene.get("road_network", {}).get("edges", [])
 
     if len(samples) >= 5:
-        ys = [s.get("y", 0) for s in samples]
         ts = [s.get("t", 0) for s in samples]
 
         # Find when ego left the road
-        for i in range(len(ys)):
-            if abs(ys[i]) > half_road:
+        for i, s in enumerate(samples):
+            sx = float(s.get("x", 0))
+            sy = float(s.get("y", 0))
+            if is_off_road(sx, sy, edges, half_road):
                 return {
                     "type": "road_departure",
                     "at_s": ts[i] - ts[0] if ts else 0,
-                    "y": ys[i],
-                    "speed": samples[i].get("speed", 0),
+                    "x": sx,
+                    "y": sy,
+                    "speed": s.get("speed", 0),
                     "index": i,
                 }
     return None
@@ -147,7 +190,8 @@ def analyze_incident(data: dict, at_s: float | None = None, verbose: bool = Fals
 
     li = lane_idx_from_y(sy, lc, lw)
     lcy = lane_center_y(li, lc, lw)
-    off_road = abs(sy) > half_road
+    edges = scene.get("road_network", {}).get("edges", [])
+    off_road = is_off_road(sx, sy, edges, half_road)
 
     # Layer 2: Perception
     obstacles = scene.get("obstacles", [])

@@ -784,6 +784,12 @@ protected:
 
             int current_idx = g.committed_lane_idx;
             if (current_idx < 0) current_idx = 0;
+            const int legal_first =
+                planning_coord::first_legal_lane(lc, g.road_oneway != 0);
+            const int legal_last = lc - 1;
+            const bool current_legal = g.road_oneway ||
+                (current_idx >= legal_first && current_idx <= legal_last);
+
             double dist_to_target_lane = 1e9;
             if (g.target_lane_idx >= 0 && g.target_lane_idx < lc) {
                 dist_to_target_lane = fabs(
@@ -906,7 +912,7 @@ protected:
              * （目标车道 rear/front gap）去决定可不可行 —— 那是正确的守门人。
              * 运动前车仍走原判据，避免低速跟车时误触发无效变道。 */
             const bool lead_stopped = (lead_speed < g.min_overtake_lead_moving_mps);
-            bool worthwhile = blocked && (lead_stopped || (best_gap > min_gap));
+            bool worthwhile = (!current_legal) || (blocked && (lead_stopped || (best_gap > min_gap)));
 
             /* ── D: 行为决策 debug 日志（每 10 帧，复盘跟车/追尾过程） ── */
             if (g.seq % 10 == 0) {
@@ -951,12 +957,6 @@ protected:
              * 因此“右侧通行半幅”在行进方向坐标中始终是 lane [lc/2, lc-1]；
              * 再按 on_return 翻到 [0, lc/2-1] 会二次镜像，把返程车强制送回
              * 去程物理半幅，与迎面 NPC 共道。 */
-            const int legal_first =
-                planning_coord::first_legal_lane(lc, g.road_oneway != 0);
-            const int legal_last = lc - 1;
-            const bool current_legal = g.road_oneway ||
-                (current_idx >= legal_first && current_idx <= legal_last);
-
             /* 左：lane_idx 减小 → y 增大方向 */
             double left_gap = 1e9;
             double left_lead_v = g.target_speed;
@@ -970,35 +970,37 @@ protected:
 
                 if (left_same_side && has_ego_projection) {
                     double lat_tol = lw * 0.5 + g.same_lane_tol_offset;
-                    for (int i = 0; i < g.obs_count; i++) {
-                        planning_coord::Projection obs_projection;
-                        if (!project_to_ref(g.obs_x[i], g.obs_y[i], obs_projection) ||
-                            !projection_near_road(
-                                g.obs_x[i], g.obs_y[i], obs_projection, lc, lw) ||
-                            fabs(obs_projection.d - tl_y) > lat_tol) continue;
-                        const double along =
-                            target_lane_along(g.obs_x[i], g.obs_y[i]);
-                        if (along > 0.0 && along < left_gap) {
-                            left_gap = along;
-                            left_lead_v = g.obs_vx[i] * lc_fwd_x +
-                                          g.obs_vy[i] * lc_fwd_y;
-                        }
-                    }
                     left_rear_safe = true;
                     for (int i = 0; i < g.obs_count; i++) {
+                        const double along = target_lane_along(g.obs_x[i], g.obs_y[i]);
+                        double obs_d = 0.0;
                         planning_coord::Projection obs_projection;
-                        if (!project_to_ref(g.obs_x[i], g.obs_y[i], obs_projection) ||
-                            !projection_near_road(
-                                g.obs_x[i], g.obs_y[i], obs_projection, lc, lw) ||
-                            fabs(obs_projection.d - tl_y) > lat_tol) continue;
-                        const double along =
-                            obs_projection.s - ego_projection.s;
-                        if (along <= 0.0) {
+                        if (along > 0.0 && project_to_ref(g.obs_x[i], g.obs_y[i], obs_projection) &&
+                            projection_near_road(g.obs_x[i], g.obs_y[i], obs_projection, lc, lw)) {
+                            obs_d = obs_projection.d;
+                        } else {
+                            const double rx = g.obs_x[i] - g.ego_x;
+                            const double ry = g.obs_y[i] - g.ego_y;
+                            const double lat_left = -rx * lc_fwd_y + ry * lc_fwd_x;
+                            obs_d = ego_lane_d + lat_left;
+                        }
+                        if (fabs(obs_d - tl_y) > lat_tol) continue;
+
+                        if (along > 0.0) {
+                            if (along < left_gap) {
+                                left_gap = along;
+                                left_lead_v = g.obs_vx[i] * lc_fwd_x +
+                                              g.obs_vy[i] * lc_fwd_y;
+                            }
+                        } else {
                             double rd = -along;
                             double obs_along_v = g.obs_vx[i] * lc_fwd_x +
                                                  g.obs_vy[i] * lc_fwd_y;
                             double rrs = obs_along_v - g.ego_v;
-                            double min_rd = (rrs > 0.0) ? fmax(g.rear_safe_min_m, rrs * g.rear_safe_time_s) : g.rear_safe_min_m;
+                            double rear_min_gap = fmax(min_gap, g.rear_safe_min_m);
+                            double min_rd = (rrs > 0.0)
+                                ? fmax(rear_min_gap, rrs * g.rear_safe_time_s)
+                                : rear_min_gap;
                             if (rd < min_rd) left_rear_safe = false;
                         }
                     }
@@ -1018,40 +1020,33 @@ protected:
 
                 if (right_same_side && has_ego_projection) {
                     double lat_tol = lw * 0.5 + g.same_lane_tol_offset;
-                    for (int i = 0; i < g.obs_count; i++) {
-                        planning_coord::Projection obs_projection;
-                        if (!project_to_ref(g.obs_x[i], g.obs_y[i], obs_projection) ||
-                            !projection_near_road(
-                                g.obs_x[i], g.obs_y[i], obs_projection, lc, lw) ||
-                            fabs(obs_projection.d - tl_y) > lat_tol) continue;
-                        const double along =
-                            target_lane_along(g.obs_x[i], g.obs_y[i]);
-                        if (along > 0.0 && along < right_gap) {
-                            right_gap = along;
-                            right_lead_v = g.obs_vx[i] * lc_fwd_x +
-                                           g.obs_vy[i] * lc_fwd_y;
-                        }
-                    }
                     right_rear_safe = true;
                     for (int i = 0; i < g.obs_count; i++) {
+                        const double along = target_lane_along(g.obs_x[i], g.obs_y[i]);
+                        double obs_d = 0.0;
                         planning_coord::Projection obs_projection;
-                        if (!project_to_ref(g.obs_x[i], g.obs_y[i], obs_projection) ||
-                            !projection_near_road(
-                                g.obs_x[i], g.obs_y[i], obs_projection, lc, lw) ||
-                            fabs(obs_projection.d - tl_y) > lat_tol) continue;
-                        const double along =
-                            obs_projection.s - ego_projection.s;
-                        if (along <= 0.0) {
+                        if (along > 0.0 && project_to_ref(g.obs_x[i], g.obs_y[i], obs_projection) &&
+                            projection_near_road(g.obs_x[i], g.obs_y[i], obs_projection, lc, lw)) {
+                            obs_d = obs_projection.d;
+                        } else {
+                            const double rx = g.obs_x[i] - g.ego_x;
+                            const double ry = g.obs_y[i] - g.ego_y;
+                            const double lat_left = -rx * lc_fwd_y + ry * lc_fwd_x;
+                            obs_d = ego_lane_d + lat_left;
+                        }
+                        if (fabs(obs_d - tl_y) > lat_tol) continue;
+
+                        if (along > 0.0) {
+                            if (along < right_gap) {
+                                right_gap = along;
+                                right_lead_v = g.obs_vx[i] * lc_fwd_x +
+                                               g.obs_vy[i] * lc_fwd_y;
+                            }
+                        } else {
                             double rd = -along;
                             double obs_along_v = g.obs_vx[i] * lc_fwd_x +
                                                  g.obs_vy[i] * lc_fwd_y;
                             double rrs = obs_along_v - g.ego_v;
-                            /* 右侧后方安全距离增强（超车后切回场景）：
-                             * 左道超车后切回右道时，被超的车虽在后方且更慢，
-                             * 但 ego 切回后立即减速至车流速度，后车会追上来。
-                             * 后车减速安全距离：直接用 min_gap 做阈值
-                             * （与前向 min_gap*lc_gap_mult 对称），
-                             * 确保 merge-back 有足够的双向安全裕度。 */
                             double rear_min_gap = fmax(min_gap, g.rear_safe_min_m);
                             double min_rd = (rrs > 0.0)
                                 ? fmax(rear_min_gap, rrs * g.rear_safe_time_s)
@@ -1335,14 +1330,24 @@ protected:
                              * 进行，触发由 at_inner_lane 条件保证只在归位完成后
                              * 发生。2026-08-07：旧实现在 approach 区一律抑制
                              * 归位/变道 → 外侧道逼近施工触发掉头 → 角点越界 +
-                             * 前向空间不足 → 撞施工。 */
-                            ev = (inner_lane < current_idx)
-                                     ? BEH_EV_OVERTAKE_LEFT : BEH_EV_OVERTAKE_RIGHT;
-                            new_target_lane = inner_lane;
-                            new_target_speed = uturn_natural_target;
-                            snprintf(reason, sizeof(reason),
-                                     "uturn approach: merge lane%d -> lane%d while decel %.1f m/s (x=%.1f)",
-                                     current_idx, inner_lane, uturn_natural_target, g.ego_x);
+                             * 前向空间不足 → 撞施工。
+                             * 变道前必须确认目标车道安全（left_ok/right_ok），
+                             * 避免直接切入相邻车道慢车发生碰撞。 */
+                            const bool can_merge = (inner_lane < current_idx) ? left_ok : right_ok;
+                            if (can_merge) {
+                                ev = (inner_lane < current_idx)
+                                         ? BEH_EV_OVERTAKE_LEFT : BEH_EV_OVERTAKE_RIGHT;
+                                new_target_lane = inner_lane;
+                                new_target_speed = uturn_natural_target;
+                                snprintf(reason, sizeof(reason),
+                                         "uturn approach: merge lane%d -> lane%d while decel %.1f m/s (x=%.1f)",
+                                         current_idx, inner_lane, uturn_natural_target, g.ego_x);
+                            } else {
+                                new_target_speed = uturn_natural_target;
+                                snprintf(reason, sizeof(reason),
+                                         "uturn approach: wait safe gap to merge lane%d -> lane%d while decel %.1f m/s (x=%.1f)",
+                                         current_idx, inner_lane, uturn_natural_target, g.ego_x);
+                            }
                         } else {
                             /* 掉头减速区（已在内侧道）：抑制变道/超车/归位决策，
                              * 只保持自然减速目标（掉头在即，变道无意义） */
@@ -1440,13 +1445,19 @@ protected:
                              * 留足前向空间（≥12m 免倒车）。外侧道时先并回内侧道
                              * （2026-08-07，掉头必须从内侧道发起）。 */
                             if (!at_inner_lane) {
-                                ev = (inner_lane < current_idx)
-                                         ? BEH_EV_OVERTAKE_LEFT : BEH_EV_OVERTAKE_RIGHT;
-                                new_target_lane = inner_lane;
-                                new_target_speed = uturn_natural_target;
-                                snprintf(reason, sizeof(reason),
-                                         "uturn approach(follow): merge lane%d -> lane%d while decel %.1f (x=%.1f)",
-                                         current_idx, inner_lane, uturn_natural_target, g.ego_x);
+                                const bool can_merge = (inner_lane < current_idx) ? left_ok : right_ok;
+                                if (can_merge) {
+                                    ev = (inner_lane < current_idx)
+                                             ? BEH_EV_OVERTAKE_LEFT : BEH_EV_OVERTAKE_RIGHT;
+                                    new_target_lane = inner_lane;
+                                    new_target_speed = uturn_natural_target;
+                                    snprintf(reason, sizeof(reason),
+                                             "uturn approach(follow): merge lane%d -> lane%d while decel %.1f (x=%.1f)",
+                                             current_idx, inner_lane, uturn_natural_target, g.ego_x);
+                                } else {
+                                    new_target_speed = fmin(follow_speed, uturn_natural_target);
+                                    new_follow_id = lead_id;
+                                }
                             } else {
                                 new_target_speed = uturn_natural_target;
                                 new_follow_id = 0;

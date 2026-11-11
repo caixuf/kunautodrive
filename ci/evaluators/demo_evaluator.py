@@ -976,12 +976,14 @@ def lane_idx_from_y(y: float, lane_count: int, lane_width: float, road_c: float 
     return idx
 
 
-def nearest_lane_error(y: float, lane_width: float = 3.5, lane_count: int = 2, road_c: float = 0.0) -> float:
+def nearest_lane_error(y: float, lane_width: float = 3.5, lane_count: int = 2, road_c: float = 0.0,
+                       side_offset: float = 0.0) -> float:
     """ego 横向位置 y（相对道路中心 road_c）到最近车道中心的最小距离。
-    N 车道模型：lane_count=2 时退化为 [-lane_width*0.5, +lane_width*0.5]，与旧实现一致。"""
+    N 车道模型：lane_count=2 时退化为 [-lane_width*0.5, +lane_width*0.5]，与旧实现一致。
+    side_offset: 车道组整体偏移（单向路为 -N*w/2，双向路为 0）。"""
     if lane_count <= 1:
-        return abs(y - road_c)
-    lane_centers = [lane_center_y(i, lane_count, lane_width, road_c) for i in range(lane_count)]
+        return abs(y - road_c - side_offset)
+    lane_centers = [lane_center_y(i, lane_count, lane_width, road_c, side_offset) for i in range(lane_count)]
     return min(abs(y - c) for c in lane_centers)
 
 
@@ -1012,6 +1014,8 @@ def _road_network_projection(scene: dict, x: float, y: float) -> tuple[float, fl
         lane_count = int(edge.get("lanes", 2) or 2)
         if lane_width <= 0.0 or lane_count <= 0:
             continue
+        oneway = bool(edge.get("oneway", False))
+        side_offset = -lane_count * lane_width * 0.5 if (oneway and lane_count > 1) else 0.0
         local_s = 0.0
         for i in range(len(nodes) - 1):
             a = nodes[i]
@@ -1034,7 +1038,7 @@ def _road_network_projection(scene: dict, x: float, y: float) -> tuple[float, fl
             ny = dx / seg_len
             signed_offset = (px - cx) * nx + (py - cy) * ny
             dist = math.hypot(px - cx, py - cy)
-            margin = lane_width * lane_count * 0.5 - abs(signed_offset) - 1.0
+            margin = lane_width * lane_count * 0.5 - abs(signed_offset - side_offset) - 1.0
             seg_heading = math.atan2(dy, dx)
             candidate = (
                 dist, edge_s_base + local_s + t * seg_len, signed_offset,
@@ -1066,9 +1070,17 @@ def _road_network_cross_track(scene: dict, x: float, y: float) -> tuple[float, f
     projection = _road_network_projection(scene, x, y)
     if projection is None:
         return None
-    _, signed_offset, lane_count, lane_width, margin, road_heading, _ = projection
+    _, signed_offset, lane_count, lane_width, margin, road_heading, edge_index = projection
+    side_offset = 0.0
+    road_network = scene.get("road_network")
+    if isinstance(road_network, dict):
+        edges = road_network.get("edges")
+        if isinstance(edges, list) and 0 <= edge_index < len(edges) and isinstance(edges[edge_index], dict):
+            edge = edges[edge_index]
+            if edge.get("oneway", False) and lane_count > 1:
+                side_offset = -lane_count * lane_width * 0.5
     return (
-        nearest_lane_error(signed_offset, lane_width, lane_count, 0.0),
+        nearest_lane_error(signed_offset, lane_width, lane_count, 0.0, side_offset),
         margin,
         road_heading,
         signed_offset,
