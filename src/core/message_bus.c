@@ -30,6 +30,9 @@
  * 因此并发安全依赖这些既有互斥锁，改动风险低。 */
 #define MSG_BUS_DISPATCH_THREADS 4
 
+/* 发布热路径 topic 查找缓存的槽位数（直接映射；必须是 2 的幂）。 */
+#define BUS_TOPIC_CACHE_SLOTS 64
+
 /* ── QoS 决策位（打包进 topic_entries[].qos_flags，热路径免锁读） ──
  * 仅发布端做 depth 判断需要这几个位；lifespan 在 dispatch 侧读 qos 结构。
  * 默认（无任何位）= QOS_DROP_OLDEST + best_effort。 */
@@ -285,6 +288,14 @@ struct MessageBus {
     } topic_entries[BUS_MAX_TOPIC_ENTRIES];
     atomic_int topic_count;
     pthread_mutex_t topic_mutex;
+
+    /* ── 发布热路径 topic 查找缓存（直接映射）──
+     * topic_entries 只追加、条目不删除，故缓存的 index 永久有效。
+     * 槽位存 {hash, idx}：先写 idx 再 release 写 hash；读者 acquire 读 hash、
+     * relaxed 读 idx，最后必须 strcmp 校验（槽位可能被并发写者换掉/哈希碰撞），
+     * 校验失败退回全表扫描，正确性不依赖缓存命中。 */
+    atomic_uint topic_cache_hash[BUS_TOPIC_CACHE_SLOTS];
+    atomic_int  topic_cache_idx[BUS_TOPIC_CACHE_SLOTS];
     atomic_bool has_lifespan_topics;   /**< 是否任一 topic 启用 lifespan。为 false 时
                                         *   dispatch 热路径跳过 lifespan 检查，避免加锁。 */
 
@@ -310,6 +321,29 @@ static Message* msg_alloc(MessageBus* bus) {
 static bool topic_match(const char* pattern, const char* topic) {
     if (strcmp(pattern, "*") == 0) return true;
     return strcmp(pattern, topic) == 0;
+}
+
+/* FNV-1a 32-bit：topic 查找缓存的槽位键。0 保留为"空槽"，非 0 返回。
+ * 只哈希前 MSG_BUS_MAX_TOPIC_LEN-1 字节：topic_entries 里存的是**截断后**的
+ * 名字，超长 topic 在旧实现中同样先截断再比较；哈希也必须用同一截断视图，
+ * 否则两条前 63 字节相同的超长 topic 会得到不同槽位而反复退到全表扫描。 */
+static uint32_t topic_hash(const char* s) {
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < MSG_BUS_MAX_TOPIC_LEN - 1 && s[i]; ++i) {
+        h ^= (unsigned char)s[i];
+        h *= 16777619u;
+    }
+    return h ? h : 1u;
+}
+
+/* 有界字符串拷贝：语义同 snprintf(dst, cap, "%s", src)（截断 + NUL 结尾），
+ * 但省掉格式串解析。发布热路径每条消息都要拷 topic/sender。 */
+static inline void copy_cstr(char* dst, size_t cap, const char* src) {
+    if (cap == 0) return;
+    size_t n = strlen(src);
+    if (n >= cap) n = cap - 1;
+    memcpy(dst, src, n);
+    dst[n] = '\0';
 }
 
 /* 按 msg_id 选分片队列（round-robin），把并发生产者+分发线程分散到互不竞争的队列上 */
@@ -402,7 +436,9 @@ static bool rb_evict_oldest_topic(RingBuffer* rb, MsgPool* pool, const char* top
     /* Scan from oldest (tail) toward newest for the first topic match */
     for (uint32_t i = 0; i < rb->count; i++) {
         uint32_t idx = (rb->tail + i) % MSG_BUS_QUEUE_SIZE;
-        if (strcmp(rb->msgs[idx]->topic, topic) == 0) {
+        /* 队列里的 msg->topic 是截断存储的；入参可能是超长原名，按旧语义
+         * （截断后比较）用 strncmp 前 N-1 字节。 */
+        if (strncmp(rb->msgs[idx]->topic, topic, MSG_BUS_MAX_TOPIC_LEN - 1) == 0) {
             /* 被移除的是匹配元素（原 tail+i）。移位前先捕获其指针： */
             Message* to_free = rb->msgs[idx];
             /* 把更旧的元素 [0..i-1] 向上移一位（向 idx 处的空洞靠拢），
@@ -814,15 +850,17 @@ int message_bus_publish_typed(MessageBus* bus, const char* topic, const char* se
     }
 
     /* ── Remap: resolve topic to its routing target ──
-     * 无 remap 规则（remap_active==false，常见）时热路径零加锁直接路由。 */
-    char resolved_topic[MSG_BUS_MAX_TOPIC_LEN];
-    snprintf(resolved_topic, MSG_BUS_MAX_TOPIC_LEN, "%s", topic);
+     * 无 remap 规则（remap_active==false，常见）时热路径零加锁、零拷贝：
+     * 直接引用调用方 topic 字符串，仅命中 remap 时才复制到本地缓冲。 */
+    const char* resolved_topic = topic;
+    char remapped_topic[MSG_BUS_MAX_TOPIC_LEN];
     if (atomic_load(&bus->remap_active)) {
         pthread_mutex_lock(&bus->remap_mutex);
         for (int i = 0; i < bus->remap_count; i++) {
             if (bus->remaps[i].active &&
                 strcmp(bus->remaps[i].from, topic) == 0) {
-                snprintf(resolved_topic, MSG_BUS_MAX_TOPIC_LEN, "%s", bus->remaps[i].to);
+                snprintf(remapped_topic, MSG_BUS_MAX_TOPIC_LEN, "%s", bus->remaps[i].to);
+                resolved_topic = remapped_topic;
                 break;
             }
         }
@@ -833,12 +871,39 @@ int message_bus_publish_typed(MessageBus* bus, const char* topic, const char* se
      * topic_entries 只追加、不删除：条目一经创建其 topic 名不再变化，且注册
      * 线程在写满所有字段后才以 release 递增 topic_count。读侧用 acquire 读
      * topic_count，即可安全地无锁遍历 [0, count) 已完整初始化的条目。
-     * 热路径（topic 已注册）零加锁。 */
+     * 热路径（topic 已注册）先查直接映射缓存，未命中再全表扫描；
+     * 命中必须用 strncmp(..., MSG_BUS_MAX_TOPIC_LEN-1) 校验：条目名是截断存储的，
+     * 超长 topic 按旧语义比较前 63 字节。缓存只影响速度、不影响正确性。 */
     int ti = -1;
     {
         int tc = atomic_load_explicit(&bus->topic_count, memory_order_acquire);
-        for (int i = 0; i < tc && i < BUS_MAX_TOPIC_ENTRIES; i++) {
-            if (strcmp(bus->topic_entries[i].topic, resolved_topic) == 0) { ti = i; break; }
+        const uint32_t h = topic_hash(resolved_topic);
+        const unsigned slot = h & (BUS_TOPIC_CACHE_SLOTS - 1);
+        /* 先 acquire 读 hash，再 relaxed 读 idx：写者是 idx store → hash release
+         * store，读者按相反顺序读才能让 release/acquire 覆盖到 idx。 */
+        const uint32_t cache_h = atomic_load_explicit(&bus->topic_cache_hash[slot],
+                                                      memory_order_acquire);
+        const int cache_i = atomic_load_explicit(&bus->topic_cache_idx[slot],
+                                                 memory_order_relaxed);
+        if (cache_h == h && cache_i >= 0 && cache_i < tc &&
+            strncmp(bus->topic_entries[cache_i].topic, resolved_topic,
+                    MSG_BUS_MAX_TOPIC_LEN - 1) == 0) {
+            ti = cache_i;
+        }
+        if (ti < 0) {
+            for (int i = 0; i < tc && i < BUS_MAX_TOPIC_ENTRIES; i++) {
+                if (strncmp(bus->topic_entries[i].topic, resolved_topic,
+                            MSG_BUS_MAX_TOPIC_LEN - 1) == 0) {
+                    ti = i;
+                    break;
+                }
+            }
+            if (ti >= 0) {
+                atomic_store_explicit(&bus->topic_cache_idx[slot], ti,
+                                      memory_order_relaxed);
+                atomic_store_explicit(&bus->topic_cache_hash[slot], h,
+                                      memory_order_release);
+            }
         }
     }
     if (ti < 0) {
@@ -946,8 +1011,8 @@ int message_bus_publish_typed(MessageBus* bus, const char* topic, const char* se
     Message* msg = msg_alloc(bus);
     if (!msg) return ERR_NOMEM;
     uint64_t msg_ts = clock_now_monotonic_wall_us();  /* 入队前缓存，rb_push 后 msg 可能已被分发线程回收 */
-    snprintf(msg->topic, MSG_BUS_MAX_TOPIC_LEN, "%s", resolved_topic);
-    if (sender) snprintf(msg->sender, MSG_BUS_MAX_SENDER_LEN, "%s", sender);
+    copy_cstr(msg->topic, MSG_BUS_MAX_TOPIC_LEN, resolved_topic);
+    if (sender) copy_cstr(msg->sender, MSG_BUS_MAX_SENDER_LEN, sender);
     msg->msg_id       = atomic_fetch_add(&bus->msg_id_counter, 1);
     msg->type         = MSG_TYPE_PUBLISH;
     msg->timestamp_us = msg_ts;
