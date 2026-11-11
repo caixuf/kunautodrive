@@ -406,7 +406,7 @@ if(TARGET kun_lanelet2)
     target_compile_definitions(flowsim_node PRIVATE KUN_HAS_LANELET2=1)
     message(STATUS "flowsim_node: linked kun_lanelet2 (D2-03 Prefer A)")
 else()
-    message(WARNING "flowsim_node: kun_lanelet2 missing — real-ID path compile-disabled")
+    message(STATUS "flowsim_node: kun_lanelet2 missing — real-ID path compile-disabled")
 endif()
 
 

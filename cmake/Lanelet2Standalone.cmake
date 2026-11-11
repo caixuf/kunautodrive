@@ -57,7 +57,7 @@ function(kun_add_lanelet2)
   endif()
 
   if(NOT _LL2_SRC)
-    message(WARNING
+    message(STATUS
       "Lanelet2 source not found — flowsim real-ID path disabled at link time.\n"
       "  想启用：cmake -DFLOWENGINE_FETCH_LANELET2=ON ...（联网拉 master，需 libpugixml-dev + libgeographiclib-dev）\n"
       "  或把源码放到 third_party/lanelet2（须含 lanelet2_core/include/lanelet2_core/LaneletMap.h）")
