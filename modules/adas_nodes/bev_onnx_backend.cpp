@@ -78,7 +78,7 @@ extern "C" int bev_onnx_backend_load(BevOnnxBackend* b, const char* path) {
     memset(b, 0, sizeof(*b));
 
     try {
-        BevOrtHolder* h = new BevOrtHolder(path);
+        auto h = std::make_unique<BevOrtHolder>(path);
 
         size_t n_in  = h->session.GetInputCount();
         size_t n_out = h->session.GetOutputCount();
@@ -86,7 +86,6 @@ extern "C" int bev_onnx_backend_load(BevOnnxBackend* b, const char* path) {
             fprintf(stderr, "[bev-onnx] %s: 输入/输出路数超上限 "
                     "(in=%zu/%d out=%zu/%d)\n",
                     path, n_in, BEV_ONNX_MAX_IN, n_out, BEV_ONNX_MAX_OUT);
-            delete h;
             return -1;
         }
 
@@ -100,7 +99,6 @@ extern "C" int bev_onnx_backend_load(BevOnnxBackend* b, const char* path) {
             std::vector<int64_t> shape = ti.GetShape();
             if (capture_desc(&b->in_desc[i], shape,
                              (int)ti.GetElementType()) != 0) {
-                delete h;
                 return -1;
             }
         }
@@ -112,13 +110,13 @@ extern "C" int bev_onnx_backend_load(BevOnnxBackend* b, const char* path) {
             std::vector<int64_t> shape = ti.GetShape();
             if (capture_desc(&b->out_desc[i], shape,
                              (int)ti.GetElementType()) != 0) {
-                delete h;
                 return -1;
             }
         }
 
-        b->session = h;
-        b->env     = &h->env;
+        BevOrtHolder* raw = h.release();
+        b->session = raw;
+        b->env     = &raw->env;
         b->n_in    = (int)n_in;
         b->n_out   = (int)n_out;
         b->loaded  = 1;

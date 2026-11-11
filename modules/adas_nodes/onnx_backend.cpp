@@ -20,6 +20,7 @@
 #include <onnxruntime_cxx_api.h>
 #include <vector>
 #include <string>
+#include <memory>
 
 /* session/env 擦除为 void*，此处按类型还原。 */
 namespace {
@@ -44,12 +45,11 @@ extern "C" int onnx_backend_load(OnnxBackend* b, const char* path) {
     memset(b, 0, sizeof(*b));
 
     try {
-        OrtHolder* h = new OrtHolder(path);
+        auto h = std::make_unique<OrtHolder>(path);
 
         if (h->session.GetInputCount() != 1 || h->session.GetOutputCount() != 1) {
             fprintf(stderr, "[onnx] %s: 需单输入单输出（实际 in=%zu out=%zu）\n",
                     path, h->session.GetInputCount(), h->session.GetOutputCount());
-            delete h;
             return -1;
         }
 
@@ -78,7 +78,6 @@ extern "C" int onnx_backend_load(OnnxBackend* b, const char* path) {
             fprintf(stderr, "[onnx] %s: 仅支持 float32 输入/输出 "
                     "(in_type=%d out_type=%d)\n",
                     path, (int)in_ti.GetElementType(), (int)out_ti.GetElementType());
-            delete h;
             return -1;
         }
 
@@ -89,13 +88,11 @@ extern "C" int onnx_backend_load(OnnxBackend* b, const char* path) {
         if (!(in_rank == 1 || in_rank == 2) || !(out_rank == 1 || out_rank == 2)) {
             fprintf(stderr, "[onnx] %s: 输入/输出须 rank 1/2（实际 "
                     "in_rank=%zu out_rank=%zu）\n", path, in_rank, out_rank);
-            delete h;
             return -1;
         }
         if (in_rank == 2 && in_shape[0] != 1) {
             fprintf(stderr, "[onnx] %s: 输入首维须 1（batch），实际 %lld\n",
                     path, (long long)in_shape[0]);
-            delete h;
             return -1;
         }
 
@@ -105,12 +102,12 @@ extern "C" int onnx_backend_load(OnnxBackend* b, const char* path) {
         if (in_last <= 0 || out_last <= 0) {
             fprintf(stderr, "[onnx] %s: 输入/输出维度非静态（in=%lld out=%lld）\n",
                     path, (long long)in_last, (long long)out_last);
-            delete h;
             return -1;
         }
 
-        b->session = h;
-        b->env     = &h->env;   /* 仅作非空标记，生命周期归 OrtHolder */
+        OrtHolder* raw = h.release();
+        b->session = raw;
+        b->env     = &raw->env;   /* 仅作非空标记，生命周期归 OrtHolder */
         b->in_dim  = (int)in_last;
         b->out_dim = (int)out_last;
         b->loaded  = 1;

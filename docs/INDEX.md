@@ -87,7 +87,7 @@
 | [CALIBRATION_GUIDE.md](CALIBRATION_GUIDE.md) | 控制参数标定（仿真/真车双路径） |
 | [CODE_WIKI.md](CODE_WIKI.md) | 代码地图：默认 20 节点 pipeline、M1~M6 模块、控制子系统详解、构建运行 |
 | [DATA_CLOSED_LOOP.md](DATA_CLOSED_LOOP.md) | PEM 与车端数据采集链路 |
-| [FAILURE_MODES.md](FAILURE_MODES.md) | 运行期故障模式表（96 行「现象 → 根因 → 位置」，按 6 类分节；仓库权威副本） |
+| [FAILURE_MODES.md](FAILURE_MODES.md) | 运行期故障模式表（105 行「现象 → 根因 → 位置」，按 6 类分节；仓库权威副本） |
 | [FLOWBOARD_CONTRACT.md](FLOWBOARD_CONTRACT.md) | FlowBoard /api/topology 归一化数据契约 |
 | [FLOWBOARD_SCENE_CONTRACT.md](FLOWBOARD_SCENE_CONTRACT.md) | road_network schema + 6-DOF/SR 预测/湿滑区场景帧字段（唯一权威） |
 | [FLOWREC.md](FLOWREC.md) | flowrec 配置化留存节点 |

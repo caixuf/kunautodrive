@@ -344,9 +344,9 @@ FlowsimLaneletMap* flowsim_lm_map_load(const char* osm_path,
         return nullptr;
     }
     try {
-        auto* h = new FlowsimLaneletMap;
+        auto h = std::make_unique<FlowsimLaneletMap>();
         h->ptr = flowsim_lm::load_lanelet_map(osm_path);
-        return h;
+        return h.release();
     } catch (const std::exception& ex) {
         if (err && err_sz) std::snprintf(err, err_sz, "%s", ex.what());
         return nullptr;
