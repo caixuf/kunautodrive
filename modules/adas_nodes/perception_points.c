@@ -3,6 +3,8 @@
  */
 
 #include "perception_points.h"
+#include "cluster_class_map.h"
+#include "road_geometry.h"
 
 #include <math.h>
 #include <string.h>
@@ -38,17 +40,6 @@ uint32_t perception_points_from_cloud(const LidarPointCloud* cloud,
         n++;
     }
     return n;
-}
-
-/* 簇类型 → 障碍物类型。dbscan 的 fit_bounding_box() 只区分
- * 车/行人/骑行者（按包围盒尺寸），这里保持一一对应。 */
-static int8_t cluster_class_to_obj_type(ClusterClass cls) {
-    switch (cls) {
-        case CLS_VEHICLE:    return OBJ_TYPE_VEHICLE;
-        case CLS_PEDESTRIAN: return OBJ_TYPE_PEDESTRIAN;
-        case CLS_CYCLIST:    return OBJ_TYPE_CYCLIST;
-        default:             return OBJ_TYPE_UNKNOWN;
-    }
 }
 
 /* ── 碎片合并（2026-09-22）────────────────────────────────────────
@@ -172,17 +163,15 @@ uint32_t perception_clusters_to_obstacles(const ClusterBounds* clusters,
         ob->width  = cb->width;
         ob->length = cb->length;
         ob->confidence = cb->confidence;
-        ob->type  = cluster_class_to_obj_type(cb->cls);
+        ob->type  = cluster_class_to_obs_type(cb->cls);
         /* 速度由 object_tracker 的 KF 跨帧关联提供，这里恒 0 */
 
         /* lane_id：车体系簇中心 → 世界 y → 车道索引（最左 = 0，最右 = lc-1）。
-         * 车体→世界：dy = rx·sin(h) + ry·cos(h)。 */
+         * 车体→世界：dy = rx·sin(h) + ry·cos(h)。
+         * 反查统一走 road_geometry.h（含单向路 side_offset），与 planning/behavior 同源。 */
         const double wy = pose->ego_y + (double)cb->cx * sh + (double)cb->cy * ch;
-        double offset = (-wy) / lw + (double)(lc - 1) * 0.5;
-        int idx = (int)(offset >= 0.0 ? offset + 0.5 : offset - 0.5);
-        if (idx < 0)  idx = 0;
-        if (idx >= lc) idx = lc - 1;
-        ob->lane_id = (int8_t)idx;
+        ob->lane_id = (int8_t)lane_idx_from_y(
+            wy, lc, lw, 0.0, lane_group_side_offset(lc, lw, pose->road_oneway));
 
         n++;
     }

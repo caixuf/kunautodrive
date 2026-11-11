@@ -33,6 +33,7 @@
 #include "node_plugin.h"
 #include "dbscan_cluster.h"
 #include "perception_points.h"
+#include "road_geometry.h"
 #include "adas_msgs_gen.h"
 #include "transport.h"
 #include "discovery.h"
@@ -97,6 +98,7 @@ struct PerceptionContext {
     /* 道路几何缓存（从 road/geometry 订阅，用于 lane_id 赋值） */
     int    lane_count{2};
     double lane_width{3.5};
+    int    road_oneway{0};   /* 1=单向路（车道组整体偏 -N·w/2），来自 road/geometry */
     volatile int has_road_geometry{0};
 
     /* DBSCAN */
@@ -390,6 +392,8 @@ static void on_road_geometry(const Message* msg, void* user_data) {
         g.lane_count = (int)j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "lane_width")) && cJSON_IsNumber(j))
         g.lane_width = j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(root, "oneway")))
+        g.road_oneway = cJSON_IsTrue(j) ? 1 : (cJSON_IsNumber(j) ? j->valueint : 0);
     g.has_road_geometry = 1;
     cJSON_Delete(root);
 }
@@ -449,11 +453,10 @@ protected:
                     ob->width = (float)g.obs_width[i];
                     ob->length = (float)g.obs_length[i];
                     ob->confidence = 1.0f;
-                    /* lane_id：从世界系 y 计算 */
-                    double offset = (-g.obs_y[i]) / lw + (lc - 1) * 0.5;
-                    int idx = (int)(offset >= 0.0 ? offset + 0.5 : offset - 0.5);
-                    if (idx < 0) idx = 0;
-                    if (idx >= lc) idx = lc - 1;
+                    /* lane_id：从世界系 y 计算（含单向路 side_offset，与 planning/behavior 同源） */
+                    const int idx = lane_idx_from_y(
+                        g.obs_y[i], lc, lw, 0.0,
+                        lane_group_side_offset(lc, lw, g.road_oneway));
                     ob->lane_id = (int8_t)idx;
                 }
             } else {
@@ -562,6 +565,7 @@ protected:
                 pose.ego_heading = g.ego_heading;
                 pose.lane_count  = g.has_road_geometry ? g.lane_count : 2;
                 pose.lane_width  = g.has_road_geometry ? g.lane_width : 3.5;
+                pose.road_oneway = g.has_road_geometry ? g.road_oneway : 0;
                 /* 速度由 object_tracker 节点通过 KF 跟踪提供
                  * （ALGORITHM_REFACTOR_PLAN §4：移除 ground truth 速度匹配）。 */
                 perception_clusters_to_obstacles(clusters, n_clusters, &pose, &obs_list);

@@ -91,7 +91,7 @@ static void test_post_mapping(void) {
         { 10.0f, 0.0f, 5.0f, 0.0f, 2.0f, 4.6f, 0, 0.9f,  0.0f },  /* 车, 世界y=0 → lane index */
         { 5.0f, 2.0f, 1.0f, 0.0f, 0.5f, 0.4f, 1, 0.8f, -3.5f },    /* 行人, 世界y=-3.5 */
     };
-    int n = bev_post_to_obstacle_list(&ol, dets, 2, 42, 2, 3.5);
+    int n = bev_post_to_obstacle_list(&ol, dets, 2, 42, 2, 3.5, 0);
     assert(n == 2);
     assert(ol.count == 2);
     assert(ol.frame_id == 42);
@@ -108,6 +108,23 @@ static void test_post_mapping(void) {
     printf("PASS test_post_mapping (objs=%d lane0=%d lane1=%d)\n", n, ol.obstacles[0].lane_id, ol.obstacles[1].lane_id);
 }
 
+static void test_post_lane_oneway(void) {
+    /* 单向 4 车道：车道中心 -1.75/-5.25/-8.75/-12.25（最内侧 idx0）。
+     * 旧公式会把 -1.75 算成 lane 2、-5.25 算成 lane 3。 */
+    ObstacleList ol;
+    memset(&ol, 0, sizeof(ol));
+    BevPostDet dets[] = {
+        { 10.0f, 0.0f, 5.0f, 0.0f, 2.0f, 4.6f, 0, 0.9f, -1.75f },
+        { 10.0f, 0.0f, 5.0f, 0.0f, 2.0f, 4.6f, 0, 0.9f, -5.25f },
+    };
+    int n = bev_post_to_obstacle_list(&ol, dets, 2, 43, 4, 3.5, 1);
+    assert(n == 2);
+    assert(ol.obstacles[0].lane_id == 0);  /* y=-1.75，含 side_offset */
+    assert(ol.obstacles[1].lane_id == 1);  /* y=-5.25 */
+    printf("PASS test_post_lane_oneway (n=%d lane0=%d lane1=%d)\n", n,
+           ol.obstacles[0].lane_id, ol.obstacles[1].lane_id);
+}
+
 static void test_post_truncate(void) {
     ObstacleList ol;
     memset(&ol, 0, sizeof(ol));
@@ -117,7 +134,7 @@ static void test_post_truncate(void) {
         dets[i].width = 2; dets[i].length = 4.6; dets[i].type = 0;
         dets[i].confidence = 0.5f; dets[i].world_y = 0.0f;
     }
-    int n = bev_post_to_obstacle_list(&ol, dets, 200, 1, 2, 3.5);
+    int n = bev_post_to_obstacle_list(&ol, dets, 200, 1, 2, 3.5, 0);
     assert(n == BEV_POST_MAX_DET);   /* 截断到 128 */
     assert(ol.count == BEV_POST_MAX_DET);
     printf("PASS test_post_truncate (%d)\n", n);
@@ -330,6 +347,7 @@ int main(void) {
     test_pre_sensors();
     test_cnn_native_inference();
     test_post_mapping();
+    test_post_lane_oneway();
     test_post_truncate();
     printf("ALL PASS test_bev_pre_post\n");
     return 0;

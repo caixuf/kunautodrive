@@ -64,6 +64,7 @@ struct LaneGeometry {
     int num_lanes{2};
     double lane_width{3.5};
     int ego_lane_idx{0};
+    int road_oneway{0};   /**< 1=单向路（车道组整体偏 -N·w/2），0=双向 */
     // Optional polynomial coefficients: y(x) = c0 + c1*x + c2*x^2 + c3*x^3
     std::vector<std::vector<float>> lane_polynomials;
 };

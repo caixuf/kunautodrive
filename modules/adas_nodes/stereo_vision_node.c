@@ -54,6 +54,7 @@
 #include "node_plugin.h"
 #include "adas_msgs_gen.h"
 #include "dbscan_cluster.h"
+#include "cluster_class_map.h"
 #include "tiny_mlp.h"
 #include "transport.h"
 #include "discovery.h"
@@ -130,16 +131,6 @@ static struct {
 } g;
 
 /* ── 参数解析（cJSON，CLAUDE.md 唯一合法入口） ─────────────── */
-
-/* ── ClusterClass → ObstacleType 映射 ─────────────────────── */
-static int cluster_class_to_obs_type(ClusterClass cls) {
-    switch (cls) {
-        case CLS_VEHICLE:    return OBJ_TYPE_VEHICLE;
-        case CLS_PEDESTRIAN: return OBJ_TYPE_PEDESTRIAN;
-        case CLS_CYCLIST:    return OBJ_TYPE_CYCLIST;
-        default:             return OBJ_TYPE_UNKNOWN;
-    }
-}
 
 /* ── Phase 4: MLP 深度聚类分类器 ─────────────────────────────
  *

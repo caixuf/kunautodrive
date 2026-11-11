@@ -108,6 +108,7 @@ struct BevDetectionContext {
     /* 车道（来自 road/geometry） */
     int     lane_count{2};
     double  lane_width{3.5};
+    int     road_oneway{0};   /* 1=单向路（车道组整体偏 -N·w/2） */
     volatile int has_road_geometry{0};
 
     /* 前处理配置 + 特征缓冲 */
@@ -197,6 +198,8 @@ static void on_road_geometry(const Message* msg, void* user_data) {
     if (cJSON_IsNumber(j)) g.lane_count = (int)j->valuedouble;
     j = cJSON_GetObjectItemCaseSensitive(root, "lane_width");
     if (cJSON_IsNumber(j)) g.lane_width = j->valuedouble;
+    j = cJSON_GetObjectItemCaseSensitive(root, "oneway");
+    if (j) g.road_oneway = cJSON_IsTrue(j) ? 1 : (cJSON_IsNumber(j) ? j->valueint : 0);
     g.has_road_geometry = 1;
     cJSON_Delete(root);
 }
@@ -467,7 +470,7 @@ protected:
                 /* ── 3) 后处理：解码目标 → ObstacleList（复用 g.out_list 省栈）── */
                 memset(&g.out_list, 0, sizeof(g.out_list));
                 bev_post_to_obstacle_list(&g.out_list, g.dets, g.n_dets, g.frame_id,
-                                          g.lane_count, g.lane_width);
+                                          g.lane_count, g.lane_width, g.road_oneway);
                 g.out_list.timestamp_us = clock_now_realtime_us();
 
                 /* 影子发布（独立 topic，不覆盖 perception/obstacles） */

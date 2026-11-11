@@ -730,7 +730,7 @@ static void test_perception_points_max_out(void) {
 static void test_perception_clusters_null_and_noise(void) {
     TEST("clusters_to_obstacles: NULL 入参安全 + 小簇（噪声）丢弃");
     ObstacleList out;
-    PerceptionFramePose pose = {1, 0.0, 0.0, 4, 3.5};
+    PerceptionFramePose pose = {1, 0.0, 0.0, 4, 3.5, 0};
     ASSERT_EQ(perception_clusters_to_obstacles(NULL, 0, &pose, &out), 0,
               "NULL clusters → 0");
     ClusterBounds cb;
@@ -745,7 +745,7 @@ static void test_perception_clusters_null_and_noise(void) {
 static void test_perception_clusters_type_and_geometry(void) {
     TEST("clusters_to_obstacles: 尺寸启发式 → 车/行人/骑行者类型");
     ObstacleList out;
-    PerceptionFramePose pose = {7, 0.0, 0.0, 4, 3.5};
+    PerceptionFramePose pose = {7, 0.0, 0.0, 4, 3.5, 0};
     ClusterBounds cb[3];
     memset(cb, 0, sizeof(cb));
     /* 车：车头面 → 车体系纵向薄、横向 2m */
@@ -772,13 +772,35 @@ static void test_perception_clusters_type_and_geometry(void) {
     PASS();
 }
 
+static void test_perception_lane_id_oneway_side_offset(void) {
+    TEST("clusters_to_obstacles: 单向路 lane_id 使用 side_offset（-N·w/2）");
+    ObstacleList out;
+    /* 单向 4 车道：车道中心 -1.75 / -5.25 / -8.75 / -12.25（最内侧 idx0）。
+     * 旧公式 (-y)/w+(N-1)/2 会把 -1.75 算成 lane 2 / -5.25 算成 lane 3。 */
+    PerceptionFramePose pose = {9, 0.0, 0.0, 4, 3.5, 1};
+    ClusterBounds cb[2];
+    memset(cb, 0, sizeof(cb));
+    for (int i = 0; i < 2; ++i) {
+        cb[i].point_count = 10; cb[i].confidence = 0.8f; cb[i].cls = CLS_VEHICLE;
+        cb[i].cx = 10.0f; cb[i].width = 1.8f; cb[i].length = 4.0f;
+    }
+    cb[0].cy = -1.75f;  /* 最内侧车道中心 */
+    cb[1].cy = -5.25f;  /* 次内侧车道中心 */
+
+    ASSERT_EQ(perception_clusters_to_obstacles(cb, 2, &pose, &out), 2,
+              "2 clusters → 2 obstacles");
+    ASSERT_EQ(out.obstacles[0].lane_id, 0, "y=-1.75 → lane 0（含 side_offset）");
+    ASSERT_EQ(out.obstacles[1].lane_id, 1, "y=-5.25 → lane 1（含 side_offset）");
+    PASS();
+}
+
 /* ── 碎片合并（一个目标不应报成多个障碍物；E2E 收益未证实，
  *    也不是 straight_road 那条 FAIL 的成因 —— 见 perception_points.c 头注）── */
 
 static void test_cluster_fragments_merged_into_one(void) {
     TEST("clusters_to_obstacles: 同一目标的碎片（正面 + 近侧面）并成一个");
     ObstacleList out;
-    PerceptionFramePose pose = {1, 0.0, 0.0, 4, 3.5};
+    PerceptionFramePose pose = {1, 0.0, 0.0, 4, 3.5, 0};
     ClusterBounds cb[2];
     memset(cb, 0, sizeof(cb));
     /* 取自 8m/10° 的离线探针实测：正面主簇 2001 点 + 近侧面细长条（y 向仅 0.02m） */
@@ -798,7 +820,7 @@ static void test_cluster_fragments_merged_into_one(void) {
 static void test_cluster_fragments_do_not_cross_lanes(void) {
     TEST("clusters_to_obstacles: 相邻车道两辆车不并（间隙 1.5m > 1.0m 闸）");
     ObstacleList out;
-    PerceptionFramePose pose = {1, 0.0, 0.0, 4, 3.5};
+    PerceptionFramePose pose = {1, 0.0, 0.0, 4, 3.5, 0};
     ClusterBounds cb[2];
     memset(cb, 0, sizeof(cb));
     for (int i = 0; i < 2; i++) {
@@ -815,7 +837,7 @@ static void test_cluster_fragments_do_not_cross_lanes(void) {
 static void test_cluster_fragments_dimensional_guard(void) {
     TEST("clusters_to_obstacles: 并起来不像一辆车 → 拒绝（第二道闸）");
     ObstacleList out;
-    PerceptionFramePose pose = {1, 0.0, 0.0, 4, 3.5};
+    PerceptionFramePose pose = {1, 0.0, 0.0, 4, 3.5, 0};
     ClusterBounds cb[2];
     memset(cb, 0, sizeof(cb));
     for (int i = 0; i < 2; i++) {
@@ -835,7 +857,7 @@ static void test_perception_clusters_lane_id(void) {
     TEST("clusters_to_obstacles: lane_id 反算 + 越界夹取");
     ObstacleList out;
     /* ego 在 y=0、朝向 0；车道宽 3.5、4 条 → 最左 lane 0（y>0 侧） */
-    PerceptionFramePose pose = {1, 0.0, 0.0, 4, 3.5};
+    PerceptionFramePose pose = {1, 0.0, 0.0, 4, 3.5, 0};
     ClusterBounds cb[3];
     memset(cb, 0, sizeof(cb));
     for (int i = 0; i < 3; i++) {
@@ -2630,6 +2652,7 @@ int main(void) {
     test_perception_points_max_out();
     test_perception_clusters_null_and_noise();
     test_perception_clusters_type_and_geometry();
+    test_perception_lane_id_oneway_side_offset();
     test_perception_clusters_lane_id();
     test_perception_ground_remove_none_rationale();
     test_cluster_fragments_merged_into_one();

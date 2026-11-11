@@ -85,7 +85,7 @@
 
 | 文档 | 说明 |
 |------|------|
-| [FAILURE_MODES.md](FAILURE_MODES.md) | 运行期故障模式表（105 行「现象 → 根因 → 位置」，按 6 类分节，仓库权威副本） |
+| [FAILURE_MODES.md](FAILURE_MODES.md) | 运行期故障模式表（106 行「现象 → 根因 → 位置」，按 6 类分节，仓库权威副本） |
 | [TROUBLESHOOTING_3D_DASHBOARD.md](TROUBLESHOOTING_3D_DASHBOARD.md) | 3D 仪表盘"加载失败"排查与修复 |
 
 > 行为异常（转向灯反 / 该停不停 / 该走不走 / 刹停到 0 / 改代码现象不变）先按

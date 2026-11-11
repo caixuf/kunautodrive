@@ -435,14 +435,12 @@ static void on_tracked_objects(const Message* msg, void* user_data) {
                 if ((j = cJSON_GetObjectItemCaseSensitive(obj, "id")) && cJSON_IsNumber(j))
                     g.obs_id[i] = (uint32_t)j->valuedouble;
 
-                /* lane_id：从世界系 y 计算 */
+                /* lane_id：从世界系 y 计算（含单向路 side_offset，与 planning/perception 同源） */
                 {
-                    double wy = g.obs_y[i];
-                    double offset = (-wy) / lw + (lc - 1) * 0.5;
-                    int idx = (int)(offset >= 0.0 ? offset + 0.5 : offset - 0.5);
-                    if (idx < 0) idx = 0;
-                    if (idx >= lc) idx = lc - 1;
-                    g.obs_lane_id[i] = (int8_t)idx;
+                    const double wy = g.obs_y[i];
+                    g.obs_lane_id[i] = (int8_t)lane_idx_from_y(
+                        wy, lc, lw, 0.0,
+                        lane_group_side_offset(lc, lw, g.road_oneway));
                 }
                 g.obs_count++;
             }
@@ -521,14 +519,11 @@ static void on_raw_obstacles(const Message* msg, void* user_data) {
                      o->type, o->id, n);
         }
         g.obs_id[i] = o->id;
-        /* lane_id */
+        /* lane_id（含单向路 side_offset，与 planning/perception 同源） */
         {
-            double wy = g.obs_y[i];
-            double offset = (-wy) / lw + (lc - 1) * 0.5;
-            int idx = (int)(offset >= 0.0 ? offset + 0.5 : offset - 0.5);
-            if (idx < 0) idx = 0;
-            if (idx >= lc) idx = lc - 1;
-            g.obs_lane_id[i] = (int8_t)idx;
+            const double wy = g.obs_y[i];
+            g.obs_lane_id[i] = (int8_t)lane_idx_from_y(
+                wy, lc, lw, 0.0, lane_group_side_offset(lc, lw, g.road_oneway));
         }
         g.obs_count++;
     }

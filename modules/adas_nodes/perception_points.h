@@ -58,6 +58,7 @@ typedef struct {
     double   ego_heading;   /**< ego 世界朝向（弧度） */
     int      lane_count;    /**< 车道数（<=0 时按 2 处理） */
     double   lane_width;    /**< 车道宽（<=0 时按 3.5m 处理） */
+    int      road_oneway;   /**< 1=单向路（车道组整体偏 -N·w/2），0=双向 */
 } PerceptionFramePose;
 
 /**

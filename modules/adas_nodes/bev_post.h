@@ -33,8 +33,8 @@ typedef struct BevPostDet {
 /*
  * 把检测目标填进 ObstacleList：
  *  - 对每个 det：填充 Ob->x/y/vx/vy/width/length/type/confidence；
- *  - lane_id 由 det.world_y（世界系 y，解码时已算好）推导，公式与
- *    perception_node 一致（offset=(-wy)/lw+(lc-1)*0.5）。
+ *  - lane_id 由 det.world_y（世界系 y，解码时已算好）经
+ *    road_geometry.h::lane_idx_from_y 推导（含单向路 side_offset）。
  *
  * @param list        目标 ObstacleList（count 会被重写）
  * @param dets        检测目标数组（车体坐标）
@@ -42,12 +42,14 @@ typedef struct BevPostDet {
  * @param frame_id    ObstacleList.frame_id
  * @param n_lanes     车道数
  * @param lane_width  车道宽 m
+ * @param road_oneway 1=单向路（车道组整体偏 -N·w/2），0=双向
  * @return 填充的障碍物数量；list/dets 非法返回 -1
  */
 int bev_post_to_obstacle_list(void* list,
                               const BevPostDet* dets, int n_dets,
                               uint32_t frame_id,
-                              int n_lanes, double lane_width);
+                              int n_lanes, double lane_width,
+                              int road_oneway);
 
 #ifdef __cplusplus
 }

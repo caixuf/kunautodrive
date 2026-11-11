@@ -9,6 +9,7 @@
  *   故 out = int_type + 1（等价于感知里的 BEV_OBJ_* 语义互换表）。
  */
 #include "bev_post.h"
+#include "road_geometry.h"
 
 #include <stddef.h>
 
@@ -19,7 +20,8 @@
 int bev_post_to_obstacle_list(void* list,
                               const BevPostDet* dets, int n_dets,
                               uint32_t frame_id,
-                              int n_lanes, double lane_width) {
+                              int n_lanes, double lane_width,
+                              int road_oneway) {
     if (!list || !dets) return -1;
     if (n_dets < 0) n_dets = 0;
     if (n_dets > BEV_POST_MAX_DET) n_dets = BEV_POST_MAX_DET;
@@ -51,12 +53,10 @@ int bev_post_to_obstacle_list(void* list,
             default: ob->type = OBJ_TYPE_UNKNOWN;   break;
         }
 
-        /* lane_id：世界系 y → 车道索引（与 perception_node 相同公式） */
-        double offset = (-d->world_y) / lane_width + (n_lanes - 1) * 0.5;
-        int idx = (int)(offset >= 0.0 ? offset + 0.5 : offset - 0.5);
-        if (idx < 0) idx = 0;
-        if (idx >= n_lanes) idx = n_lanes - 1;
-        ob->lane_id = (int8_t)idx;
+        /* lane_id：世界系 y → 车道索引（含单向路 side_offset，与 perception/planning 同源） */
+        ob->lane_id = (int8_t)lane_idx_from_y(
+            d->world_y, n_lanes, lane_width, 0.0,
+            lane_group_side_offset(n_lanes, lane_width, road_oneway));
 
         cnt++;
     }

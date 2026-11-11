@@ -4,6 +4,7 @@
  */
 
 #include "obstacle_detection_postprocess.h"
+#include "road_geometry.h"
 
 #include <algorithm>
 #include <cmath>
@@ -350,20 +351,16 @@ void ObstacleDetectionPostprocess::AssignLaneAndHint(std::vector<BoundingBox3D>&
                                                     double ego_y) {
     int n_lanes = lane_geo.num_lanes > 0 ? lane_geo.num_lanes : 2;
     double lw = lane_geo.lane_width > 0.0 ? lane_geo.lane_width : 3.5;
+    const double side_offset = lane_group_side_offset(n_lanes, lw,
+                                                      lane_geo.road_oneway);
 
-    // Ego lane calculation from ego_y
-    double ego_offset = (-ego_y) / lw + (n_lanes - 1) * 0.5;
-    int ego_idx = static_cast<int>(ego_offset >= 0.0 ? ego_offset + 0.5 : ego_offset - 0.5);
-    if (ego_idx < 0) ego_idx = 0;
-    if (ego_idx >= n_lanes) ego_idx = n_lanes - 1;
+    // Ego lane calculation from ego_y（含单向路 side_offset，与规划/行为同源）
+    int ego_idx = lane_idx_from_y(ego_y, n_lanes, lw, 0.0, side_offset);
 
     for (auto& box : boxes) {
         // World lateral position = ego_y + box.y
         double world_y = ego_y + box.y;
-        double offset = (-world_y) / lw + (n_lanes - 1) * 0.5;
-        int idx = static_cast<int>(offset >= 0.0 ? offset + 0.5 : offset - 0.5);
-        if (idx < 0) idx = 0;
-        if (idx >= n_lanes) idx = n_lanes - 1;
+        int idx = lane_idx_from_y(world_y, n_lanes, lw, 0.0, side_offset);
 
         box.lane_id = static_cast<int8_t>(idx);
         box.obs_lane_match_hint = (std::abs(idx - ego_idx) <= 1);

@@ -53,6 +53,7 @@
 #include "adas_msgs_gen.h"
 #include "serial_port.h"
 #include "dbscan_cluster.h"
+#include "cluster_class_map.h"
 #include "transport.h"
 #include "discovery.h"
 #include "logger.h"
@@ -113,17 +114,6 @@ static struct {
 /* [lo, hi] 均匀随机浮点。 */
 static float frand(float lo, float hi) {
     return lo + (hi - lo) * ((float)rand() / (float)RAND_MAX);
-}
-
-/* ── ClusterClass → ObstacleType 映射 ─────────────────────── */
-
-static int cluster_class_to_obs_type(ClusterClass cls) {
-    switch (cls) {
-        case CLS_VEHICLE:    return OBJ_TYPE_VEHICLE;
-        case CLS_PEDESTRIAN: return OBJ_TYPE_PEDESTRIAN;
-        case CLS_CYCLIST:    return OBJ_TYPE_CYCLIST;
-        default:             return OBJ_TYPE_UNKNOWN;
-    }
 }
 
 /* ── dry-run 模拟点云生成 ───────────────────────────────────
