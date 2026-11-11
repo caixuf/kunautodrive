@@ -18,6 +18,7 @@
 #include "topic_registry.h"
 #include "scenario_loader.h"
 #include "scenario_router.h"
+#include "road_geometry.h"
 #include "clock_service.h"
 #include "logger.h"
 #include <cjson/cJSON.h>
@@ -125,21 +126,18 @@ static void publish_route_step_fields(RouteStepType type,
     cJSON_Delete(root);
 }
 
-/* 车道中心 y（相对道路参考线 y=0）。单向路车道组整体偏在 -y 侧
- * （见 planning_coordinates.h::lane_group_side_offset），idx0=最内侧。 */
-static double lane_center_y(int lane_idx) {
-    const double side_offset =
-        (g.road_oneway && g.lane_count > 1)
-            ? -(double)g.lane_count * g.lane_width * 0.5 : 0.0;
-    return side_offset + ((double)(g.lane_count - 1) * 0.5 - (double)lane_idx) * g.lane_width;
-}
-
-static int lane_idx_from_y(double y) {
+/* 车道中心/反查统一走 road_geometry.h 的共享实现（side_offset 公式只此一份）。
+ * 反查保留旧语义：最近中心、平分时取**较小**索引（lane_idx_from_y 的
+ * round-half-away 会在 y=0、2 车道时选到右侧车道，改变路由 hop 的触发点）。 */
+static int nav_lane_idx_from_y(double y) {
     if (g.lane_count <= 0 || g.lane_width <= 0.0) return -1;
+    const double so = lane_group_side_offset(g.lane_count, g.lane_width,
+                                             g.road_oneway);
     int best = 0;
-    double best_abs = fabs(y - lane_center_y(0));
+    double best_abs = fabs(y - lane_center_y(0, g.lane_count, g.lane_width, 0.0, so));
     for (int i = 1; i < g.lane_count; ++i) {
-        double d = fabs(y - lane_center_y(i));
+        const double d = fabs(y - lane_center_y(i, g.lane_count, g.lane_width,
+                                                0.0, so));
         if (d < best_abs) { best_abs = d; best = i; }
     }
     return best;
@@ -169,7 +167,7 @@ static double route_step_sort_key(const ScenarioRouteStep* step) {
 static void maybe_publish_next_lane_hop(double ego_x, double ego_y) {
     if (!g.graph_ready || g.active_goal_lane < 0) return;
 
-    int current_lane = lane_idx_from_y(ego_y);
+    int current_lane = nav_lane_idx_from_y(ego_y);
     if (current_lane < 0) return;
     if (current_lane == g.active_goal_lane) {
         g.active_goal_lane = -1;
@@ -293,7 +291,7 @@ static int navigation_execute(TaskBase* task) {
                 }
                 if (!trigger_hit) break;
 
-                int current_lane = lane_idx_from_y(ego_y);
+                int current_lane = nav_lane_idx_from_y(ego_y);
                 int target_lane = step->target_lane;
                 if (step->type == ROUTE_LANE_CHANGE && current_lane >= 0) {
                     int resolved = resolve_target_lane(step->target_lane, current_lane);

@@ -1,6 +1,8 @@
 #ifndef FLOWENGINE_PLANNING_COORDINATES_H
 #define FLOWENGINE_PLANNING_COORDINATES_H
 
+#include "road_geometry.h"
+
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -34,8 +36,7 @@ struct Projection {
  */
 inline double lane_group_side_offset(int lane_count, double lane_width,
                                      bool road_oneway) {
-    if (!road_oneway || lane_count <= 1) return 0.0;
-    return -lane_count * lane_width * 0.5;
+    return ::lane_group_side_offset(lane_count, lane_width, road_oneway ? 1 : 0);
 }
 
 /**
@@ -51,8 +52,10 @@ inline double lane_group_side_offset(int lane_count, double lane_width,
  */
 inline double lane_center_d(int lane_idx, int lane_count, double lane_width,
                             double side_offset = 0.0) {
+    /* 保留旧语义：单车道路段直接取车道组偏移（road_geometry 的
+     * lane_center_y 在 N<=1 时返回 road_c，会丢掉 side_offset）。 */
     if (lane_count <= 1) return side_offset;
-    return side_offset - (lane_idx - (lane_count - 1) * 0.5) * lane_width;
+    return ::lane_center_y(lane_idx, lane_count, lane_width, 0.0, side_offset);
 }
 
 inline int first_legal_lane(int lane_count, bool road_oneway) {

@@ -611,15 +611,6 @@ static bool frenet_to_cartesian(double s, double d,
     return true;
 }
 
-/* 计算车道中心的 y 坐标（相对道路参考线 y=road_c=0）。 */
-static double lane_center_y(int lane_idx, int n_lanes, double lane_w,
-                            int road_oneway) {
-    double road_c = 0.0;  /* 道路中心 y=0 */
-    const double side_offset = planning_coord::lane_group_side_offset(
-        n_lanes, lane_w, road_oneway != 0);
-    return road_c + side_offset - (lane_idx - (n_lanes - 1) / 2.0) * lane_w;
-}
-
 /* ═══════════════════════════════════════════════════════════════
  * 实车级三把方向掉头轨迹生成器（UTurnPlanner）
  *
@@ -889,18 +880,18 @@ static int generate_uturn_trajectory(TrajectoryPoint* points, int max_points,
     const double half_body_wid = 1.0;              /* 车身半宽 */
     /* 目标车道中心：去程 → 对向内侧车道 / 返程 → 前进内侧车道。
      * 2026-08-05 泛化：旧实现 ±lane_width*0.5 硬编码（只对 4 车道对称路成立）。
-     * 用 lane_center_y 从真实车道布局推导——4 车道时去程 lane1(y=+1.75)/
+     * 用 lane_center_offset 从真实车道布局推导——4 车道时去程 lane1(y=+1.75)/
      * 返程 lane2(y=-1.75)，2 车道时 ±1.75，任意车道数自洽。
      * 单向路（无对向半幅）：掉头后回到同一行车方向内侧道（idx0），不再区分去/返程。 */
     const int lc = (g.lane_count >= 2) ? g.lane_count : 2;
     double target_lane_center_y;
     if (g.road_oneway) {
-        target_lane_center_y = lane_center_y(0, lc, g.lane_width, 1);
+        target_lane_center_y = lane_center_offset(0, lc, g.lane_width, 1);
     } else {
         target_lane_center_y =
             (uturn_target_h < 0.5)
-                ? lane_center_y(lc / 2, lc, g.lane_width, 0)         /* 返程 → 前进车道（内道） */
-                : lane_center_y(lc / 2 - 1, lc, g.lane_width, 0);    /* 去程 → 对向车道（内道） */
+                ? lane_center_offset(lc / 2, lc, g.lane_width, 0)         /* 返程 → 前进车道（内道） */
+                : lane_center_offset(lc / 2 - 1, lc, g.lane_width, 0);    /* 去程 → 对向车道（内道） */
     }
     const double stroke_dir = (uturn_target_h < 0.5) ? -1.0 : 1.0;  /* 去程 +1 / 返程 -1 */
 

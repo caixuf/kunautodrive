@@ -1,4 +1,5 @@
 #include "hybrid_a_star.h"
+#include "angle_utils.h"
 #include <cmath>
 #include <algorithm>
 
@@ -21,10 +22,7 @@ void HybridAStar::SetConfig(const HybridAStarConfig& config) {
 }
 
 double HybridAStar::Mod2Pi(double angle) {
-    double v = std::fmod(angle, 2.0 * M_PI);
-    if (v < -M_PI) v += 2.0 * M_PI;
-    else if (v >= M_PI) v -= 2.0 * M_PI;
-    return v;
+    return NormalizeAnglePi(angle);
 }
 
 double HybridAStar::NormalizeAngle2Pi(double angle) {

@@ -90,6 +90,24 @@ static inline double road_center_curvature(double x,
 }
 
 /**
+ * 车道组整体横向偏移（相对道路参考线 y=road_c）。
+ *
+ * 双向路车道对称铺在参考线两侧，偏移 0；单向路（靠右行驶）全部车道都在
+ * 参考线 -y 侧，车道组整体偏移 -N·w/2。与
+ * modules/adas_nodes/planning_coordinates.h::lane_group_side_offset 同一语义，
+ * 本函数是 C 侧（navigation 等）的唯一实现。
+ *
+ * @param lane_count  车道数 N（≥1）
+ * @param lane_width  单车道宽度（m）
+ * @param road_oneway 1=单向，0=双向
+ */
+static inline double lane_group_side_offset(int lane_count, double lane_width,
+                                            int road_oneway) {
+    if (!road_oneway || lane_count <= 1) return 0.0;
+    return -(double)lane_count * lane_width * 0.5;
+}
+
+/**
  * 车道中心 y 坐标（多车道通用，靠右行驶 v2）。
  *
  * 靠右行驶（heading=0 时车头朝 +X 东，物理右侧 = -y）：

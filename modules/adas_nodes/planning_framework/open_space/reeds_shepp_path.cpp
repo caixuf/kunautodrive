@@ -1,4 +1,5 @@
 #include "reeds_shepp_path.h"
+#include "angle_utils.h"
 #include <cmath>
 #include <algorithm>
 
@@ -9,10 +10,7 @@ ReedsShepp::ReedsShepp(double min_radius, double max_steer)
     : min_radius_(min_radius), max_steer_(max_steer) {}
 
 double ReedsShepp::Mod2Pi(double x) {
-    double v = std::fmod(x, 2.0 * M_PI);
-    if (v < -M_PI) v += 2.0 * M_PI;
-    else if (v >= M_PI) v -= 2.0 * M_PI;
-    return v;
+    return NormalizeAnglePi(x);
 }
 
 void ReedsShepp::Polar(double x, double y, double& r, double& theta) {

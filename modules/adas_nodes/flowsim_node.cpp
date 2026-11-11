@@ -2109,7 +2109,7 @@ static void internal_cruise_control(flowsim::Entity& ego) {
     const int  fb_lane_count = g.scene_pub_cfg.lane_count;
     const bool fb_oneway = (g.scenario && g.scenario->road.oneway) ? true : false;
     const double fb_side_offset =
-        fb_oneway ? -(double)fb_lane_count * g.lane_width * 0.5 : 0.0;
+        lane_group_side_offset(fb_lane_count, g.lane_width, fb_oneway ? 1 : 0);
     int ego_lane_idx = lane_idx_from_y(ego.y, fb_lane_count, g.lane_width, rc_y, fb_side_offset);
     double target_y = lane_center_y(ego_lane_idx, fb_lane_count, g.lane_width, rc_y, fb_side_offset);
     double y_err = target_y - ego.y;
@@ -2123,28 +2123,6 @@ static void internal_cruise_control(flowsim::Entity& ego) {
               + y_err * IH_KP_LAT;
     if (ego.steer > 0.15) ego.steer = 0.15;
     if (ego.steer < -0.15) ego.steer = -0.15;
-}
-
-/* 返回 ego 当前 road 前方最近施工区前缘的 Frenet s（仅前进方向 lane_id<0 调用）；
- * 无施工区/不在前方返回 -1。掉头点据此落在施工区之前（front - clearance）。 */
-static double forward_construction_front_s(const flowsim::Entity& ego) {
-    if (!g.scenario || g.scenario->construction_zone_count <= 0) return -1.0;
-    double best = -1.0;
-    for (int z = 0; z < g.scenario->construction_zone_count; ++z) {
-        const ScenarioConstructionZone* cz = &g.scenario->construction_zones[z];
-        const double fx = cz->x - cz->length * 0.5;  /* 前缘世界 x（顺行接近侧） */
-        double fs;
-        if (g.roads_loaded) {
-            flowsim::FrenetPos fp;
-            if (!g.roads.world_to_frenet(fx, cz->y, fp) || fp.road_id != ego.road_id)
-                continue;
-            fs = fp.s;
-        } else {
-            fs = fx;  /* 无路网：直道近似 front_x ≈ s */
-        }
-        if (fs > ego.s && (best < 0.0 || fs < best)) best = fs;
-    }
-    return best;
 }
 
 /* ── 随机泊松动态交通流发生与超距淘汰 ────────────────────────────── */

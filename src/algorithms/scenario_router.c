@@ -107,15 +107,6 @@ static double heuristic(const RouterGraph* g, int from_id, int to_id) {
     return hypot(cx_to - cx_from, cy_to - cy_from);
 }
 
-/* ── Find edge cost from from_id to to_id ── */
-static double edge_cost(const RouterGraph* g, int from_id, int to_id) {
-    for (int i = 0; i < g->edge_count; i++) {
-        if (g->edges[i].from_id == from_id && g->edges[i].to_id == to_id)
-            return g->edges[i].cost;
-    }
-    return 1e10; /* very large if not found */
-}
-
 /* ══════════════════════════════════════════════════════════════ */
 /*  Public API                                                    */
 /* ══════════════════════════════════════════════════════════════ */
