@@ -286,10 +286,12 @@ function forksFromData(roadNetwork, dataJunctions) {
     let cx, cy, cz;
     const incoming = String(j.incoming_road || '');
     const inEdge = edgeMap.get(incoming);
+    let inLastX = null, inLastY = null;
     if (inEdge && Array.isArray(inEdge.nodes) && inEdge.nodes.length) {
       const last = inEdge.nodes[inEdge.nodes.length - 1];
       const arr = Array.isArray(last) ? last : [last.x || 0, last.y || 0, last.z || 0];
       cx = Number(arr[0]) || 0; cy = Number(arr[1]) || 0; cz = Number(arr[2]) || 0;
+      inLastX = cx; inLastY = cy;
     } else {
       let sx = 0, sy = 0, sz = 0, n = 0;
       for (const cl of cls) {
@@ -302,7 +304,8 @@ function forksFromData(roadNetwork, dataJunctions) {
       cx = sx / n; cy = sy / n; cz = sz / n;
     }
 
-    // radius：覆盖 connector 内部（半长 + 3），钳制避免超长 connector 巨型 patch
+    // radius：紧凑贴合 connector 内部（半长 + 1.5），同时确保覆盖 incoming 端点，
+    // 杜绝盲目设置 8m 导致短连接件在路口处产生巨大椭圆“黑洞”铺装。
     let maxHalf = 0;
     for (const cl of cls) {
       const a = cl[0], b = cl[cl.length - 1];
@@ -310,7 +313,9 @@ function forksFromData(roadNetwork, dataJunctions) {
         (Number(b[1]) || 0) - (Number(a[1]) || 0)) / 2;
       if (half > maxHalf) maxHalf = half;
     }
-    const radius = Math.max(8, Math.min(maxHalf + 3, 20));
+    const inDist = (inLastX !== null && inLastY !== null)
+      ? Math.hypot(inLastX - cx, inLastY - cy) : 0;
+    const radius = Math.max(3.5, inDist + 1.5, Math.min(maxHalf + 1.5, 20));
     const lv = levelOf(cz);
 
     const gx = Math.floor(cx / gCell), gy = Math.floor(cy / gCell);
