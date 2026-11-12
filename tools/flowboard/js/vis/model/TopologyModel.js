@@ -203,8 +203,9 @@ function _build(rn) {
     }
     const edge = edgeMap.get(id);
     let pts = null;
-    if (edge && Array.isArray(edge.nodes) && edge.nodes.length >= 2) {
-      pts = edge.nodes.map((n) => {
+    const rawNodes = edge && (edge.nodes || edge.centerline);
+    if (edge && Array.isArray(rawNodes) && rawNodes.length >= 2) {
+      pts = rawNodes.map((n) => {
         const arr = Array.isArray(n) ? n : [n.x || 0, n.y || 0, n.z || 0];
         const [x, , z] = worldToThree(Number(arr[0]) || 0, Number(arr[1]) || 0, Number(arr[2]) || 0);
         return { x, z };

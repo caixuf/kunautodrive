@@ -1,1 +1,18 @@
-{"map_id": "beijing_guomao", "routes": [{"id": "main", "name": "SUMO 主线（最长几何连接真实道路链，7 段）", "kind": "main", "road_chain": ["road_150550300", "road_1066854244", "road_150550347", "road_114917273s0", "road_150550349", "road_1292614124", "road_1055309141"], "lane_direction": 1}], "reserved_turns": []}
+{
+  "map_id": "beijing_guomao",
+  "routes": [
+    {
+      "id": "main",
+      "name": "京通快速高架主线（自西向东直通）",
+      "kind": "main",
+      "road_chain": [
+        "road_9745798",
+        "road_1066854244",
+        "road_150550347"
+      ],
+      "lane_direction": 1,
+      "generated_by": "astar_route.py"
+    }
+  ],
+  "reserved_turns": []
+}

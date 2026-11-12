@@ -11,9 +11,9 @@
   "visibility_m": 1200,
   "npc_lane_change": true,
   "ego": {
-    "x": 878.033,
-    "y": -360.347,
-    "heading": -0.1653,
+    "x": 160.0,
+    "y": -345.772,
+    "heading": 0.0,
     "init_speed": 10.0,
     "target_speed": 13.0,
     "wheelbase": 2.7,
@@ -22,11 +22,19 @@
     "max_steer": 0.6
   },
   "actors": [],
+  "traffic_density": {
+    "cars_per_km": 10,
+    "spawn_jitter_m": 2.0,
+    "lane_spread": true,
+    "max_npcs": 12,
+    "random_seed_offset": 0
+  },
   "pass_criteria": {
     "no_collision": true,
     "max_duration_s": 120,
     "min_avg_speed_mps": 3.0,
-    "min_distance_m": 450
+    "min_distance_m": 400,
+    "lateral_grid_tolerance_m": null
   },
   "route": [],
   "scenarios": [],

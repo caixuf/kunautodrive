@@ -268,8 +268,8 @@ export function createRoadView(scene) {
   }
 
   /** 从中心线样点 + 半宽构建高架桥 3D 斜腹板梯形箱梁、悬臂翼缘板与混凝土防撞侧墙。
-   *  centers: [{px,py,pz,nx,nz}], halfW: 道路半宽 (m) */
-  function bridgeDeckGeo(centers, halfW) {
+   *  centers: [{px,py,pz,nx,nz}], halfW: 道路半宽 (m), edgeId: 所属道路 ID（做路口与邻道路缘裁剪） */
+  function bridgeDeckGeo(centers, halfW, edgeId = null) {
     if (!centers || centers.length < 2) return null;
     const positions = [], indices = [], uvs = [];
     const totalW = halfW + SHOULDER_W + 0.35;
@@ -309,6 +309,8 @@ export function createRoadView(scene) {
     for (let k = 0; k < segs; k++) {
       const b0 = k * 8;
       const b1 = (k + 1) * 8;
+      const c0 = centers[k];
+      const c1 = centers[k + 1];
 
       // 底板 (0-1)
       indices.push(b0 + 0, b1 + 0, b0 + 1);
@@ -322,21 +324,49 @@ export function createRoadView(scene) {
       indices.push(b0 + 1, b1 + 1, b0 + 3);
       indices.push(b0 + 3, b1 + 1, b1 + 3);
 
-      // 左侧墙外立面 (2-4)
-      indices.push(b0 + 2, b0 + 4, b1 + 2);
-      indices.push(b1 + 2, b0 + 4, b1 + 4);
+      // 护栏侧墙生成判定：路口内或侵入邻道时坚决不画侧墙，防止匝道/立交并线穿路
+      let allowLeftWall = true;
+      let allowRightWall = true;
+      if (edgeId != null && _topo) {
+        const inJunc0 = _topo.pointInJunction(edgeId, c0.px, c0.pz) || _topo.nearJunction(c0.px, c0.pz, 1.0);
+        const inJunc1 = _topo.pointInJunction(edgeId, c1.px, c1.pz) || _topo.nearJunction(c1.px, c1.pz, 1.0);
+        if (inJunc0 || inJunc1) {
+          allowLeftWall = false;
+          allowRightWall = false;
+        }
+      }
+      if (allowLeftWall && edgeId != null) {
+        const lx0 = c0.px - c0.nx * totalW, lz0 = c0.pz - c0.nz * totalW;
+        const lx1 = c1.px - c1.nx * totalW, lz1 = c1.pz - c1.nz * totalW;
+        if (!isClearOfOtherRoads(edgeId, c0.py || 0, lx0, lz0, 0.5) ||
+            !isClearOfOtherRoads(edgeId, c1.py || 0, lx1, lz1, 0.5)) {
+          allowLeftWall = false;
+        }
+      }
+      if (allowRightWall && edgeId != null) {
+        const rx0 = c0.px + c0.nx * totalW, rz0 = c0.pz + c0.nz * totalW;
+        const rx1 = c1.px + c1.nx * totalW, rz1 = c1.pz + c1.nz * totalW;
+        if (!isClearOfOtherRoads(edgeId, c0.py || 0, rx0, rz0, 0.5) ||
+            !isClearOfOtherRoads(edgeId, c1.py || 0, rx1, rz1, 0.5)) {
+          allowRightWall = false;
+        }
+      }
 
-      // 左侧墙顶面 (4-5)
-      indices.push(b0 + 4, b0 + 5, b1 + 4);
-      indices.push(b1 + 4, b0 + 5, b1 + 5);
+      // 左侧墙外立面 (2-4) + 顶面 (4-5)
+      if (allowLeftWall) {
+        indices.push(b0 + 2, b0 + 4, b1 + 2);
+        indices.push(b1 + 2, b0 + 4, b1 + 4);
+        indices.push(b0 + 4, b0 + 5, b1 + 4);
+        indices.push(b1 + 4, b0 + 5, b1 + 5);
+      }
 
-      // 右侧墙外立面 (3-7)
-      indices.push(b0 + 3, b1 + 3, b0 + 7);
-      indices.push(b0 + 7, b1 + 3, b1 + 7);
-
-      // 右侧墙顶面 (6-7)
-      indices.push(b0 + 6, b1 + 6, b0 + 7);
-      indices.push(b0 + 7, b1 + 6, b1 + 7);
+      // 右侧墙外立面 (3-7) + 顶面 (6-7)
+      if (allowRightWall) {
+        indices.push(b0 + 3, b1 + 3, b0 + 7);
+        indices.push(b0 + 7, b1 + 3, b1 + 7);
+        indices.push(b0 + 6, b1 + 6, b0 + 7);
+        indices.push(b0 + 7, b1 + 6, b1 + 7);
+      }
     }
 
     const geo = new THREE.BufferGeometry();
@@ -813,7 +843,7 @@ export function createRoadView(scene) {
     const isRampElevated = edge.bridge === true || maxRampZ >= 1.5;
     const rampCurbGeos = [];
     if (isRampElevated) {
-      const deck = bridgeDeckGeo(rampSpine, rampHw);
+      const deck = bridgeDeckGeo(rampSpine, rampHw, edge.id);
       if (deck) rampCurbGeos.push(deck);
     }
 
@@ -1251,7 +1281,7 @@ export function createRoadView(scene) {
     const isTunnel = edge.tunnel === true || isTunnelEdge(edge) || minZ <= -1.5;
 
     if (isElevated && (_totalEdges <= 800 || distToFocus <= 900)) {
-      const deck = bridgeDeckGeo(roadSpine, roadHw);
+      const deck = bridgeDeckGeo(roadSpine, roadHw, edge.id);
       if (deck) curbGeos.push(deck);
     } else if (isTunnel && (_totalEdges <= 800 || distToFocus <= 900)) {
       const tube = tunnelStructureGeo(roadSpine, roadHw);
@@ -1399,7 +1429,7 @@ export function createRoadView(scene) {
     _topo = getTopology(roadNetwork);
     _laneData = roadNetwork.lane_data || null;
     _axisByEdgeId = new Map();
-    _roadOccGrid = _laneData ? new Map() : null;
+    _roadOccGrid = new Map();
     if (_roadOccGrid) {
       for (const edge of roadNetwork.edges) {
         if (!edge || isTunnelEdge(edge)) continue;

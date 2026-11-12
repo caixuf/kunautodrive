@@ -1131,19 +1131,44 @@ def load_scenario(path: Path) -> dict:
             # .xodr 是"整张路网"，ego 路由由 flowsim_node 的 A* 单独处理，
             # 不能被截断成只剩路由链的那几条（会导致整座城市不渲染、路口消失）。
             raise ValueError(f"{route_path}: route {route_id} references missing roads {missing}")
-        # 注意：不再按 route 链裁剪 roads。历史上这里 `roads = [by_id[rid] for rid
-        # in chain]` 只导出 ego 路径上的几十段，esmini 加载的 .xodr 因此缺了整张
-        # 网格 → 前端 build_road_network_json 只收到路由链那几条 road + 几乎 0 个
-        # 路口 → 十字路口根本不渲染。全量导出才能让 1300 段路 + 路口全部可见。
-        # route 链仅作数据完整性校验（上面 missing 检查），不用于裁剪。
+        # route 链仅作数据完整性校验（上面 missing 检查）。
+        # 对于特大城市级路网（如郑东新区 42,000+ 段道路，产生 85MB XML，esmini 解析需 30+ 秒导致超时），
+        # 在保证 route 链 + 2-hop 邻接道路（所有路口转向、交叉支路与汇入匝道，约 600 段）的前提下，
+        # 进行走廊拓扑提取，将 XODR 从 85MB 压至 2MB，RM_Init 从 30s 缩短至 0.7s。
+        # 中小地图（如国贸 2,900 段）仍保持 100% 全量导出。
+        if len(roads) > 3000 and chain:
+            corridor_ids = set(chain)
+            road_by_id_map = {str(rd.get("id")): rd for rd in roads}
+            for _hop in range(2):
+                pts = set()
+                for cid in corridor_ids:
+                    if cid in road_by_id_map:
+                        cl = road_by_id_map[cid].get("centerline", road_by_id_map[cid].get("nodes", []))
+                        if cl:
+                            pts.add((round(cl[0][0], 1), round(cl[0][1], 1)))
+                            pts.add((round(cl[-1][0], 1), round(cl[-1][1], 1)))
+                for rd in roads:
+                    cl = rd.get("centerline", rd.get("nodes", []))
+                    if cl:
+                        p0 = (round(cl[0][0], 1), round(cl[0][1], 1))
+                        p1 = (round(cl[-1][0], 1), round(cl[-1][1], 1))
+                        if p0 in pts or p1 in pts:
+                            corridor_ids.add(str(rd.get("id")))
+            # 保留原 map.json 中的 index 作为 legacy_id / edge.id，保证索引空间一致
+            roads = [(idx, rd) for idx, rd in enumerate(roads) if str(rd.get("id")) in corridor_ids]
+        else:
+            roads = [(idx, rd) for idx, rd in enumerate(roads)]
+    else:
+        roads = [(idx, rd) for idx, rd in enumerate(roads)]
+
     # road 字符串 id → 数字索引映射（map.json 用字符串 road/lane id，
     # json_to_xodr 内部用数字 edge id，junctions 引用需换算到同一套索引）。
     name_to_idx: dict = {}
     edges = []
-    for index, road in enumerate(roads):
-        edge = dict(road)
-        name_to_idx[str(edge.get("id"))] = index
-        edge["id"] = edge.get("legacy_id", index)
+    for orig_idx, road_data in roads:
+        edge = dict(road_data)
+        name_to_idx[str(edge.get("id"))] = orig_idx
+        edge["id"] = edge.get("legacy_id", orig_idx)
         if "nodes" not in edge and "centerline" in edge:
             edge["nodes"] = edge["centerline"]
         lane_data = edge.get("lanes")
@@ -1181,9 +1206,11 @@ def load_scenario(path: Path) -> dict:
                 cc["id"] = _map_id(cc["id"])
             if "target_road" in cc:
                 cc["target_road"] = _map_id(cc["target_road"])
-            conns.append(cc)
+            if cc.get("id") != -1:
+                conns.append(cc)
         jc["connecting_roads"] = conns
-        juncs.append(jc)
+        if jc.get("incoming_road", -1) != -1 or jc.get("target_road", -1) != -1 or conns:
+            juncs.append(jc)
 
     resolved = dict(scenario)
     resolved["road_network"] = {

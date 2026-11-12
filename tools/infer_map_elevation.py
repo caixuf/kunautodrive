@@ -62,9 +62,16 @@ def apply_height_to_road(road: dict, z_start: float, z_end: float, is_bridge: bo
     if not cl:
         return
     n = len(cl)
+    cum = [0.0]
+    for i in range(n - 1):
+        cum.append(cum[-1] + math.hypot(cl[i + 1][0] - cl[i][0], cl[i + 1][1] - cl[i][1]))
+    tot = cum[-1] if cum[-1] > 1e-6 else 1.0
+
     for i, p in enumerate(cl):
-        t = i / max(1, n - 1)
-        z = round(z_start + (z_end - z_start) * t, 3)
+        t = cum[i] / tot
+        # C^1 连续立方 Hermite 竖曲线平滑（端点导数为 0，消除折角与断崖）
+        s = 3.0 * (t ** 2) - 2.0 * (t ** 3)
+        z = round(z_start + (z_end - z_start) * s, 3)
         if len(p) < 3:
             p.append(z)
         else:
@@ -73,9 +80,16 @@ def apply_height_to_road(road: dict, z_start: float, z_end: float, is_bridge: bo
     for lane in road.get("lanes", []):
         lcl = lane.get("centerline", [])
         nl = len(lcl)
+        if nl < 2:
+            continue
+        lcum = [0.0]
+        for i in range(nl - 1):
+            lcum.append(lcum[-1] + math.hypot(lcl[i + 1][0] - lcl[i][0], lcl[i + 1][1] - lcl[i][1]))
+        ltot = lcum[-1] if lcum[-1] > 1e-6 else 1.0
         for i, p in enumerate(lcl):
-            t = i / max(1, nl - 1)
-            z = round(z_start + (z_end - z_start) * t, 3)
+            t = lcum[i] / ltot
+            s = 3.0 * (t ** 2) - 2.0 * (t ** 3)
+            z = round(z_start + (z_end - z_start) * s, 3)
             if len(p) < 3:
                 p.append(z)
             else:
@@ -102,8 +116,12 @@ def process_map(map_path: Path):
         if z is not None:
             road_states[i] = (z, is_bridge, is_tunnel, layer)
 
-    # 交叉口拓扑端点映射
+    # 交叉口拓扑端点映射与车道级邻接映射
     endpoint_to_roads = {}
+    road_by_id = {r.get("id"): i for i, r in enumerate(roads) if r.get("id")}
+    road_preds = {i: set() for i in range(len(roads))}
+    road_succs = {i: set() for i in range(len(roads))}
+
     for i, r in enumerate(roads):
         cl = r.get("centerline", [])
         if len(cl) >= 2:
@@ -111,6 +129,13 @@ def process_map(map_path: Path):
             p_end = (round(cl[-1][0], 1), round(cl[-1][1], 1))
             endpoint_to_roads.setdefault(p_start, []).append((i, False))
             endpoint_to_roads.setdefault(p_end, []).append((i, True))
+        for lane in r.get("lanes", []):
+            for succ in lane.get("successors") or []:
+                succ_rid = succ.split(".lane.")[0]
+                if succ_rid in road_by_id and road_by_id[succ_rid] != i:
+                    s_idx = road_by_id[succ_rid]
+                    road_succs[i].add(s_idx)
+                    road_preds[s_idx].add(i)
 
     elevated_count = 0
     tunnel_count = 0
@@ -121,6 +146,7 @@ def process_map(map_path: Path):
         if len(cl) < 2:
             continue
 
+        rid = r.get("id") or ""
         name = r.get("name") or ""
         is_ramp = any(k in name for k in RAMP_KEYWORDS)
 
@@ -129,7 +155,27 @@ def process_map(map_path: Path):
             apply_height_to_road(r, z, z, is_b, is_t, l)
             if is_b: elevated_count += 1
             if is_t: tunnel_count += 1
-        elif is_ramp:
+        elif rid.startswith("road_j"):
+            # 内部连接道路（SUMO junction internal connector）：沿拓扑邻接图继承前后道路高程
+            preds_elev = [road_states[p][0] for p in road_preds[i] if p in road_states and abs(road_states[p][0]) >= 1.5]
+            succs_elev = [road_states[s][0] for s in road_succs[i] if s in road_states and abs(road_states[s][0]) >= 1.5]
+
+            start_z = (sum(preds_elev) / len(preds_elev)) if preds_elev else 0.0
+            end_z = (sum(succs_elev) / len(succs_elev)) if succs_elev else 0.0
+
+            if start_z != 0.0 or end_z != 0.0:
+                is_b = (max(start_z, end_z) >= 1.5)
+                is_t = (min(start_z, end_z) <= -1.5)
+                apply_height_to_road(r, start_z, end_z, is_b, is_t, 1 if is_b else (-1 if is_t else 0))
+                if start_z != end_z:
+                    ramp_count += 1
+                elif is_b:
+                    elevated_count += 1
+                elif is_t:
+                    tunnel_count += 1
+            else:
+                apply_height_to_road(r, 0.0, 0.0, False, False, 0)
+        else:
             p_start = (round(cl[0][0], 1), round(cl[0][1], 1))
             p_end = (round(cl[-1][0], 1), round(cl[-1][1], 1))
             
@@ -151,12 +197,17 @@ def process_map(map_path: Path):
                     if road_states[nbr_idx][2]: is_t = True
 
             if start_z != 0.0 or end_z != 0.0:
-                apply_height_to_road(r, start_z, end_z, is_b, is_t, 1 if is_b else -1)
-                ramp_count += 1
+                is_b = is_b or (max(start_z, end_z) >= 1.5)
+                is_t = is_t or (min(start_z, end_z) <= -1.5)
+                apply_height_to_road(r, start_z, end_z, is_b, is_t, 1 if is_b else (-1 if is_t else 0))
+                if start_z != end_z:
+                    ramp_count += 1
+                elif is_b:
+                    elevated_count += 1
+                elif is_t:
+                    tunnel_count += 1
             else:
                 apply_height_to_road(r, 0.0, 0.0, False, False, 0)
-        else:
-            apply_height_to_road(r, 0.0, 0.0, False, False, 0)
 
     bak_path = map_path.with_suffix(".json.bak")
     if not bak_path.exists():

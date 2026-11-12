@@ -57,7 +57,14 @@ StaticDigest build_static_digest(FlowRoadNetwork& roads, const Route& route,
             road_lane_w = roads.lane_width((int)ri.id, lane_ids[0], 0.0);
             if (road_lane_w <= 0.0) road_lane_w = 3.5;
         }
-        double half_w = n_lanes * road_lane_w * 0.5;
+        // 若车道全部落在单侧（单向路，如 OpenDRIVE 右行全负 lane），横向范围达 n_lanes * road_lane_w
+        bool has_pos = false, has_neg = false;
+        for (int lid : lane_ids) {
+            if (lid > 0) has_pos = true;
+            if (lid < 0) has_neg = true;
+        }
+        const bool oneway = !(has_pos && has_neg);
+        double half_w = oneway ? (n_lanes * road_lane_w) : (n_lanes * road_lane_w * 0.5);
         if (half_w > max_half_width) max_half_width = half_w;
 
         // 为每个车道生成 digest（用探测到的真实 lane_id 采样各自中心线）
@@ -492,16 +499,22 @@ InvariantResult check_spatial_invariants(const DynamicDigest& d,
         for (size_t j = i + 1; j < d.actors.size(); ++j) {
             const auto& a = d.actors[i];
             const auto& b = d.actors[j];
-            double dx = std::fabs(a.pos[0] - b.pos[0]);
-            double dy = std::fabs(a.pos[1] - b.pos[1]);
-            double ox = (a.bbox[0] + b.bbox[0]) * 0.5;
-            double oy = (a.bbox[1] + b.bbox[1]) * 0.5;
-            if (dx < ox && dy < oy) {
+            // 投影到车辆 a 的局部航向坐标系（OBB 判定），避免斜向/南北向道路上
+            // 世界坐标 AABB 把沿车道同向行驶的正常前后车误判为穿模
+            double rel_x = b.pos[0] - a.pos[0];
+            double rel_y = b.pos[1] - a.pos[1];
+            double ca = std::cos(a.heading);
+            double sa = std::sin(a.heading);
+            double long_dist = std::fabs(rel_x * ca + rel_y * sa);
+            double lat_dist  = std::fabs(-rel_x * sa + rel_y * ca);
+            double req_long = (a.bbox[0] + b.bbox[0]) * 0.5;
+            double req_lat  = (a.bbox[1] + b.bbox[1]) * 0.5;
+            if (long_dist < req_long && lat_dist < req_lat) {
                 r.failed++;
                 char buf[256];
                 snprintf(buf, sizeof(buf),
-                    "  FAIL actor[%d]↔actor[%d]: bbox 重叠 dx=%.2f<%.2f dy=%.2f<%.2f (碰撞/穿模)\n",
-                    a.id, b.id, dx, ox, dy, oy);
+                    "  FAIL actor[%d]↔actor[%d]: bbox 重叠 d_long=%.2f<%.2f d_lat=%.2f<%.2f (碰撞/穿模)\n",
+                    a.id, b.id, long_dist, req_long, lat_dist, req_lat);
                 r.details += buf;
             }
         }

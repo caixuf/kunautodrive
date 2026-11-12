@@ -99,12 +99,12 @@ export function createBarrierView(scene) {
           if (j >= spine.length) j = spine.length - 1;
           const s = spine[j];
 
-          // 路口裁剪：spine 点在路口圆内 → 断链（护栏终止于路口边界，
-          // 横梁绝不跨路口——否则路口处多路护栏互相穿插成圈）
-          if (topo && topo.pointInJunction(edge.id, s.px, s.pz)) { prev = null; continue; }
-
           const x = s.px + s.nx * sideOffset;
           const z = s.pz + s.nz * sideOffset;
+
+          // 路口裁剪：spine 点或护栏桩落在路口圆内 → 断链（护栏终止于路口边界，
+          // 横梁绝不跨路口——否则路口处多路护栏互相穿插成圈或穿入沥青路面）
+          if (topo && (topo.pointInJunction(edge.id, s.px, s.pz) || topo.nearJunction(x, z, 0.5))) { prev = null; continue; }
 
           /* 弯道打结防护：相邻偏移点弦长 / 弧长（POST_SPACING）< 0.35 → 内侧
            * 偏移曲线在急弯处收缩打结（曲率半径 R < 偏移量时偏移曲线自交）。

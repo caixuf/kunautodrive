@@ -78,6 +78,7 @@
         "id": 3,
         "type": "viaduct_highway",
         "name": "elevated_ring_east",
+        "bridge": true,
         "lanes": 4,
         "lane_width": 3.5,
         "speed_limit": 20.0,

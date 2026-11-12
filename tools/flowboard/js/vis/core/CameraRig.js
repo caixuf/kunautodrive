@@ -38,6 +38,8 @@ export function createCameraRig(canvas) {
   let mode = 'chase';
   let needsControlSnap = false;
   let mapAutoFollow = false;
+  let _chasePos = null;
+  let _chaseLook = null;
 
   // D-2: OrbitControls — 初始 disabled，仅 orbit 模式启用
   // 只创建 orbitControls，在 map 模式下也复用它（禁用 rotate），
@@ -132,12 +134,28 @@ export function createCameraRig(canvas) {
         // Keep the road vanishing point above the vehicle without turning
         // chase mode into a top-down map view.
         const behind = 9, height = 3.0;
-        camera.position.set(
-          ex - Math.cos(eh) * behind,
-          eg + height,
-          ez - Math.sin(eh) * behind
-        );
-        camera.lookAt(ex + Math.cos(eh) * 4, eg + 1.05, ez + Math.sin(eh) * 4);
+        const targetX = ex - Math.cos(eh) * behind;
+        const targetY = eg + height;
+        const targetZ = ez - Math.sin(eh) * behind;
+        const lookX = ex + Math.cos(eh) * 4;
+        const lookY = eg + 1.05;
+        const lookZ = ez + Math.sin(eh) * 4;
+
+        if (!_chasePos) {
+          _chasePos = { x: targetX, y: targetY, z: targetZ };
+          _chaseLook = { x: lookX, y: lookY, z: lookZ };
+        } else {
+          // 指数平滑阻尼 (alpha=0.15)：消解微调方向盘/加减速时视口的高频微颤
+          const alpha = 0.15;
+          _chasePos.x += (targetX - _chasePos.x) * alpha;
+          _chasePos.y += (targetY - _chasePos.y) * alpha;
+          _chasePos.z += (targetZ - _chasePos.z) * alpha;
+          _chaseLook.x += (lookX - _chaseLook.x) * alpha;
+          _chaseLook.y += (lookY - _chaseLook.y) * alpha;
+          _chaseLook.z += (lookZ - _chaseLook.z) * alpha;
+        }
+        camera.position.set(_chasePos.x, _chasePos.y, _chasePos.z);
+        camera.lookAt(_chaseLook.x, _chaseLook.y, _chaseLook.z);
         break;
       }
       case 'top': {
@@ -186,7 +204,14 @@ export function createCameraRig(canvas) {
             // 预览页（mapPreview.js 注入 map_view_* 字段）：定位到地图上方倾角俯视，
             // 保持水平偏置，避免垂直俯视 (0, -1, 0) 与 up (0, 1, 0) 平行引发 OrbitControls 万向节死锁。
             const offset = Math.max(30, mapHeight * 0.55);
-            camera.position.set(mapTargetX - offset, mapTargetY + mapHeight, mapTargetZ - offset);
+            if (Number.isFinite(ego.mapViewDist)) {
+              // 验收/低角度侧视：显式水平距离 + 偏航角（度），默认行为不变
+              const yaw = (Number.isFinite(ego.mapViewYaw) ? ego.mapViewYaw : 45) * Math.PI / 180;
+              camera.position.set(mapTargetX - ego.mapViewDist * Math.cos(yaw), // exempt: 相机环绕
+                mapTargetY + mapHeight, mapTargetZ - ego.mapViewDist * Math.sin(yaw));
+            } else {
+              camera.position.set(mapTargetX - offset, mapTargetY + mapHeight, mapTargetZ - offset);
+            }
             orbitControls.target.set(mapTargetX, mapTargetY, mapTargetZ);
             camera.lookAt(mapTargetX, mapTargetY, mapTargetZ);
           } else {
@@ -218,6 +243,8 @@ export function createCameraRig(canvas) {
   function setMode(m) {
     if (['chase', 'top', 'driver', 'front', 'map', 'orbit', 'bev'].includes(m)) {
       mode = m;
+      _chasePos = null;
+      _chaseLook = null;
       needsControlSnap = (mode === 'map' || mode === 'orbit');
       mapAutoFollow = (mode === 'map');
       // map 和 orbit 都复用 orbitControls（map 模式下禁用旋转）
@@ -267,6 +294,8 @@ export function createCameraRig(canvas) {
 
   function reset(roadGroup) {
     // mapControls 已合并到 orbitControls，无需重复 reset
+    _chasePos = null;
+    _chaseLook = null;
     needsControlSnap = (mode === 'map' || mode === 'orbit');
     mapAutoFollow = (mode === 'map');
 

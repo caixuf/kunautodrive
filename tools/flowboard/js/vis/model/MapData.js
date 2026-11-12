@@ -97,8 +97,20 @@ export function selectBuildingsForPreview(buildings, roads) {
   });
 }
 
-/** 超大地图只取路线周边走廊，避免把整张城市路网当成一帧 3D 细节图。
- * 小地图保持全量；路线本身永远保留，走廊按中心线空间格保留约 250m 邻域。 */
+/** 判断是否为城市骨干路网（高速/快速路/主干道/立交/桥梁/隧道/三车道以上）
+ * 骨干道路在超大地图 LOD 视锥与走廊过滤中全局保留，防止城市主干路在远景中被腰斩截断。 */
+export function isArterialRoad(road) {
+  if (!road) return false;
+  if (road.bridge === true || road.tunnel === true || road.is_viaduct === true) return true;
+  const t = String(road.type || road.highway || '').toLowerCase();
+  if (t === 'motorway' || t === 'trunk' || t === 'primary' || t === 'secondary' ||
+      t === 'motorway_link' || t === 'trunk_link' || t === 'primary_link') return true;
+  if (Array.isArray(road.lanes) && road.lanes.length >= 3) return true;
+  return false;
+}
+
+/** 超大地图只取路线周边走廊与骨干路网，避免把整张城市路网当成一帧 3D 细节图。
+ * 小地图保持全量；骨干道路与路线本身永远保留，次要道路按中心线空间格保留约 800m 走廊。 */
 export function selectRoadsForPreview(roads, route) {
   if (!Array.isArray(roads) || roads.length <= LARGE_MAP_ROAD_LIMIT ||
       !Array.isArray(route?.road_chain) || route.road_chain.length === 0) return roads || [];
@@ -114,6 +126,7 @@ export function selectRoadsForPreview(roads, route) {
   if (!cells.size) return roads;
   return roads.filter((road) => {
     if (routeIds.has(road?.id)) return true;
+    if (isArterialRoad(road)) return true;
     return (road.centerline || road.nodes || []).some((p) => {
       if (!Array.isArray(p)) return false;
       const cx = Math.floor((p[0] || 0) / cell);

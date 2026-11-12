@@ -65,6 +65,29 @@ def make_handler():
             self.end_headers()
             self.wfile.write(body)
 
+        def do_GET(self):
+            parsed = urlparse(self.path)
+            if parsed.path.rstrip("/") == "/api/topology":
+                topo_path = os.environ.get("FLOW_TOPOLOGY_FILE", "/tmp/flow_topology.json")
+                if os.path.isfile(topo_path):
+                    try:
+                        with open(topo_path, "rb") as f:
+                            body = f.read()
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/json; charset=utf-8")
+                        self.send_header("Content-Length", str(len(body)))
+                        self.send_header("Cache-Control", "no-store")
+                        self.end_headers()
+                        self.wfile.write(body)
+                        return
+                    except Exception as e:  # noqa: BLE001
+                        self._send_json({"ok": False, "error": str(e)}, 500)
+                        return
+                else:
+                    self._send_json({"ok": False, "error": "topology not found"}, 404)
+                    return
+            super().do_GET()
+
         def do_POST(self):
             parsed = urlparse(self.path)
             if parsed.path.rstrip("/") != "/api/map/preview":

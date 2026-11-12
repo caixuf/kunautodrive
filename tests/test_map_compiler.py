@@ -206,6 +206,7 @@ class MapCompilerTest(unittest.TestCase):
                 self.assertNotIn("nodes", r)
                 self.assertIn("name", r)
             self.assertEqual(len(compiled["junctions"]), 1)
+            self.assertEqual(compiled["junctions"][0]["shape"], doc["junctions"][0]["shape"])
             self.assertEqual(len(compiled["landmarks"]["traffic_lights"]), 1)
             self.assertEqual(len(compiled["buildings"]), 1)
             self.assertEqual(compiled["buildings"][0]["footprint"],
@@ -215,6 +216,61 @@ class MapCompilerTest(unittest.TestCase):
             p2.write_text(serialize_kmap(compiled, compiled["map_id"], compiled["name"]),
                           encoding="utf-8")
             self.assertEqual(compile_map(p2), compiled)
+
+    def test_smooth_elevation_transitions_c1_hermite_spline(self):
+        """测试高架引桥纵坡 C^1 平滑解算：端点切线水平（导数=0），无折角与断崖。"""
+        from tools.osm2kmap import smooth_elevation_transitions
+        roads = [
+            # 地面路 z=0
+            {"id": "ground", "type": "urban", "centerline": [[0, 0, 0.0], [50, 0, 0.0]],
+             "lanes": [{"id": "ground.lane.1", "centerline": [[0, 0, 0.0], [50, 0, 0.0]], "successors": ["ramp.lane.1"]}]},
+            # 引桥从地面到高架
+            {"id": "ramp", "type": "highway_link", "centerline": [[50, 0, 0.0], [100, 0, 0.0], [150, 0, 0.0]],
+             "lanes": [{"id": "ramp.lane.1", "centerline": [[50, 0, 0.0], [100, 0, 0.0], [150, 0, 0.0]], "successors": ["bridge.lane.1"]}]},
+            # 高架路 z=6.0
+            {"id": "bridge", "type": "highway", "bridge": True, "centerline": [[150, 0, 6.0], [250, 0, 6.0]],
+             "lanes": [{"id": "bridge.lane.1", "centerline": [[150, 0, 6.0], [250, 0, 6.0]], "successors": []}]},
+        ]
+        count = smooth_elevation_transitions(roads)
+        self.assertEqual(count, 1)
+        ramp_cl = roads[1]["centerline"]
+        self.assertAlmostEqual(ramp_cl[0][2], 0.0, places=2)
+        # 中点 t=0.5: s(0.5) = 3*(0.25) - 2*(0.125) = 0.5 -> z=3.0
+        self.assertAlmostEqual(ramp_cl[1][2], 3.0, places=2)
+        self.assertAlmostEqual(ramp_cl[2][2], 6.0, places=2)
+        self.assertTrue(roads[1].get("bridge"))
+
+    def test_sumo_junction_shape_extracted(self):
+        """测试 SUMO net.xml 中的原生 junction shape 被 NetConverter 正确提取并保留。"""
+        import subprocess
+        import shutil
+        if not shutil.which("netconvert"):
+            self.skipTest("netconvert not installed")
+        from tools.osm2kmap import NetConverter
+        with tempfile.TemporaryDirectory() as td:
+            nod = Path(td) / "test.nod.xml"
+            edg = Path(td) / "test.edg.xml"
+            net = Path(td) / "test.net.xml"
+            nod.write_text("""<nodes>
+    <node id="J0" x="0.0" y="0.0" type="traffic_light"/>
+    <node id="J1" x="-50.0" y="0.0" type="priority"/>
+    <node id="J2" x="50.0" y="0.0" type="priority"/>
+</nodes>""")
+            edg.write_text("""<edges>
+    <edge id="1to0" from="J1" to="J0" priority="2" numLanes="2" speed="13.89"/>
+    <edge id="0to2" from="J0" to="J2" priority="2" numLanes="2" speed="13.89"/>
+</edges>""")
+            subprocess.run([
+                "netconvert", f"--node-files={nod}", f"--edge-files={edg}",
+                f"--output-file={net}", "--proj.utm=true"
+            ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            nc = NetConverter(str(net), ref_lat=39.9, ref_lon=116.4)
+            doc = nc.convert()
+            self.assertGreaterEqual(len(doc["junctions"]), 1)
+            # 校验 SUMO 原生 shape 被提取且非空
+            junc = doc["junctions"][0]
+            self.assertIn("shape", junc)
+            self.assertGreaterEqual(len(junc["shape"]), 3)
 
     def test_ramp_derives_deceleration_on_outer_lane(self):
         text = """Map {

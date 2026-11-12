@@ -91,9 +91,10 @@ function matchEdgesToCenters(edges, centers) {
   }
   const index = spatialGrid(centers, Math.max(CLUSTER_RADIUS_M, Math.ceil(maxSearchR)));
   for (const edge of edges) {
-    if (!edge || !Array.isArray(edge.nodes) || edge.nodes.length < 2) continue;
+    const rawNodes = edge && (edge.nodes || edge.centerline);
+    if (!edge || !Array.isArray(rawNodes) || rawNodes.length < 2) continue;
     const id = String(edge?.id ?? '');
-    const nodes = edge.nodes.map((n) =>
+    const nodes = rawNodes.map((n) =>
       Array.isArray(n) ? n : [n.x || 0, n.y || 0, n.z || 0]);
     const start = nodePoint(nodes[0]);
     const end = nodePoint(nodes[nodes.length - 1]);
@@ -218,8 +219,17 @@ function junctionsFromData(roadNetwork, dataJunctions) {
         }
       }
     }
-    return { x: tx, z: tz, py, level: levelOf(py),
-      radius: Number.isFinite(radius) ? Math.max(8, radius) : 8 };
+    const poly = Array.isArray(j.shape) && j.shape.length >= 3
+      ? j.shape.map((p) => {
+          const [wx, , wz] = worldToThree(Number(p[0]) || 0, Number(p[1]) || 0, 0);
+          return { x: wx, z: wz };
+        })
+      : null;
+    return {
+      x: tx, z: tz, py, level: levelOf(py),
+      radius: Number.isFinite(radius) ? Math.max(8, radius) : 8,
+      poly,
+    };
   });
   const edges = Array.isArray(roadNetwork?.edges) ? roadNetwork.edges : [];
   const byId = matchEdgesToCenters(edges, centers);
@@ -417,8 +427,9 @@ export function detectJunctions(roadNetwork) {
   const endpoints = [];   // {x, z, edgeId, isStart, reach}
   for (const edge of edges) {
     const id = String(edge?.id ?? '');
-    if (!edge || !Array.isArray(edge.nodes) || edge.nodes.length < 2) continue;
-    const nodes = edge.nodes.map((n) =>
+    const rawNodes = edge && (edge.nodes || edge.centerline);
+    if (!edge || !Array.isArray(rawNodes) || rawNodes.length < 2) continue;
+    const nodes = rawNodes.map((n) =>
       Array.isArray(n) ? n : [n.x || 0, n.y || 0, n.z || 0]);
     const lanes = Number(edge.lanes) || 2;
     const laneWidth = Number(edge.lane_width) || 3.5;

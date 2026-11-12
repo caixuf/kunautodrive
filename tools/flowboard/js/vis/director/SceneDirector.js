@@ -222,7 +222,7 @@ export function createSceneDirector(scene) {
       const hash = roadNetworkHash(rn);
       if (hash !== lastRoadHash) {
         const edgesArr = Array.isArray(rn.edges) ? rn.edges : [];
-        const isViaduct = edgesArr.some(e =>
+        const isViaduct = edgesArr.length === 1 && edgesArr.some(e =>
           e && (e.name === EDGE_TYPE.VIADUCT_HIGHWAY || e.type === EDGE_TYPE.VIADUCT_HIGHWAY)
         );
 
@@ -250,7 +250,7 @@ export function createSceneDirector(scene) {
           ViewRegistry.safeCall('building', 'build', rn, store);
           const edge0 = edgesArr[0] || {};
           const nodes = Array.isArray(edge0.nodes) ? edge0.nodes : [];
-          const isStraight = nodes.length >= 2 && nodes.every((node) => {
+          const isStraight = edgesArr.length === 1 && nodes.length >= 2 && nodes.every((node) => {
             const y = Array.isArray(node) ? node[1] : node.y;
             const y0 = Array.isArray(nodes[0]) ? nodes[0][1] : nodes[0].y;
             return Math.abs((y || 0) - (y0 || 0)) < 1;
@@ -303,6 +303,8 @@ export function createSceneDirector(scene) {
         width: e.width != null ? e.width : (e.wid || 2.0),
         height: e.height != null ? e.height : 1.5,
         mapViewHeight: e.map_view_height,
+        mapViewDist: e.map_view_dist,
+        mapViewYaw: e.map_view_yaw,
         mapViewTargetX: e.map_view_target_x,
         mapViewTargetY: e.map_view_target_y,
         mapViewTargetZ: e.map_view_target_z,

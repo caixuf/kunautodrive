@@ -718,8 +718,38 @@ def road_network_from_map_file(scenario: dict, scenario_path: Path) -> dict | No
     data = load_json(map_path)
     if not isinstance(data, dict):
         return None
+    roads = data.get("roads", [])
+    route_file = scenario.get("route_file")
+    route_id = scenario.get("route_id")
+    if route_file and route_id and len(roads) > 3000:
+        route_path = Path(route_file)
+        if not route_path.is_absolute():
+            route_path = scenario_path.parent / route_path
+        rdata = load_json(route_path)
+        if isinstance(rdata, dict):
+            sel = next((r for r in rdata.get("routes", []) if r.get("id") == route_id), None)
+            if sel and sel.get("road_chain"):
+                chain = set(sel["road_chain"])
+                by_id = {str(rd.get("id")): rd for rd in roads}
+                corridor_ids = set(chain)
+                for _hop in range(2):
+                    pts = set()
+                    for cid in corridor_ids:
+                        if cid in by_id:
+                            cl = by_id[cid].get("centerline", [])
+                            if cl:
+                                pts.add((round(cl[0][0], 1), round(cl[0][1], 1)))
+                                pts.add((round(cl[-1][0], 1), round(cl[-1][1], 1)))
+                    for rd in roads:
+                        cl = rd.get("centerline", [])
+                        if cl:
+                            p0 = (round(cl[0][0], 1), round(cl[0][1], 1))
+                            p1 = (round(cl[-1][0], 1), round(cl[-1][1], 1))
+                            if p0 in pts or p1 in pts:
+                                corridor_ids.add(str(rd.get("id")))
+                roads = [rd for rd in roads if str(rd.get("id")) in corridor_ids]
     edges: list[dict] = []
-    for road in data.get("roads", []):
+    for road in roads:
         if not isinstance(road, dict):
             continue
         centerline = road.get("centerline")
@@ -727,6 +757,7 @@ def road_network_from_map_file(scenario: dict, scenario_path: Path) -> dict | No
             continue
         lanes = road.get("lanes")
         lane_count = len(lanes) if isinstance(lanes, list) and lanes else 1
+        # OSM map.json 的 centerline 已经是车道组几何中线，无需额外 side_offset 偏移
         edges.append({
             "id": road.get("id", f"edge_{len(edges)}"),
             "nodes": centerline,

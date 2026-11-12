@@ -382,6 +382,17 @@ static std::string convert_scenario_to_xodr(const std::string& scenario_path) {
     if (flow_temp_path(xodr_buf, sizeof(xodr_buf), xodr_name.c_str()) != 0) return "";
     std::string xodr_path = xodr_buf;
 
+    /* OpenDRIVE 持久化缓存：若 .xodr 已存在且 mtime >= 场景文件 mtime，直接命中缓存（<1ms），
+     * 消除大地图（如郑东 85MB）启动每次执行 8 秒 python 子进程导致的 CI/启动超时。 */
+    struct stat scen_st, xodr_st;
+    if (stat(scenario_path.c_str(), &scen_st) == 0 &&
+        stat(xodr_path.c_str(), &xodr_st) == 0 && xodr_st.st_size > 0 &&
+        xodr_st.st_mtime >= scen_st.st_mtime) {
+        LOG_INFO("flowsim", "json_to_xodr: cache hit for %s → %s",
+                 scenario_path.c_str(), xodr_path.c_str());
+        return xodr_path;
+    }
+
     /* json_to_xodr.py 候选路径：场景目录上级的 tools/ + /workspace/tools/ */
     std::string scenario_dir;
     if (separator) scenario_dir.assign(scenario_path.c_str(), separator);

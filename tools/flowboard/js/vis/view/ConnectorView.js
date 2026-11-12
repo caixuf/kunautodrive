@@ -531,9 +531,32 @@ export function createConnectorView(scene) {
           bucket.pos.push(p.x, baseY + PATCH_Y, p.z);
           bucket.uvs.push(p.x * invTile, p.z * invTile);
         }
-        // 极角递增序在 THREE 右手系 XZ 平面为顺时针，扇形三角化必须取 (base, base+i+1, base+i) 法线才朝 +Y！
-        for (let i = 1; i < smooth.length - 1; i++) {
-          bucket.idx.push(base, base + i + 1, base + i);
+        let triangulated = false;
+        if (typeof THREE !== 'undefined' && THREE.ShapeUtils && typeof THREE.ShapeUtils.triangulateShape === 'function') {
+          try {
+            const v2List = smooth.map((p) => new THREE.Vector2(p.x, p.z));
+            const faces = THREE.ShapeUtils.triangulateShape(v2List, []);
+            if (Array.isArray(faces) && faces.length > 0) {
+              for (const [i0, i1, i2] of faces) {
+                const p0 = smooth[i0], p1 = smooth[i1], p2 = smooth[i2];
+                const ny = (p1.z - p0.z) * (p2.x - p0.x) - (p1.x - p0.x) * (p2.z - p0.z);
+                if (ny >= 0) {
+                  bucket.idx.push(base + i0, base + i1, base + i2);
+                } else {
+                  bucket.idx.push(base + i0, base + i2, base + i1);
+                }
+              }
+              triangulated = true;
+            }
+          } catch {
+            // 回退到扇形三角化
+          }
+        }
+        if (!triangulated) {
+          // 极角递增序在 THREE 右手系 XZ 平面为顺时针，扇形三角化必须取 (base, base+i+1, base+i) 法线才朝 +Y！
+          for (let i = 1; i < smooth.length - 1; i++) {
+            bucket.idx.push(base, base + i + 1, base + i);
+          }
         }
       }
 

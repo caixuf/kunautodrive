@@ -521,7 +521,9 @@ def smooth_elevation_transitions(roads: list[dict]) -> int:
                 tot = cum[-1] if cum[-1] > 1e-6 else 1.0
                 for i in range(n_pts):
                     t = cum[i] / tot
-                    z_val = round(z_start + t * (z_end - z_start), 3)
+                    # C^1 连续立方 Hermite 竖曲线平滑（端点导数为 0，消除折角与断崖）
+                    s = 3.0 * (t ** 2) - 2.0 * (t ** 3)
+                    z_val = round(z_start + s * (z_end - z_start), 3)
                     if len(cl[i]) < 3:
                         cl[i].append(z_val)
                     else:
@@ -537,11 +539,16 @@ def smooth_elevation_transitions(roads: list[dict]) -> int:
                     ltot = lcum[-1] if lcum[-1] > 1e-6 else 1.0
                     for i in range(ln_pts):
                         t = lcum[i] / ltot
-                        z_val = round(z_start + t * (z_end - z_start), 3)
+                        s = 3.0 * (t ** 2) - 2.0 * (t ** 3)
+                        z_val = round(z_start + s * (z_end - z_start), 3)
                         if len(lcl[i]) < 3:
                             lcl[i].append(z_val)
                         else:
                             lcl[i][2] = z_val
+            if max(z_start, z_end) >= 1.5:
+                r["bridge"] = True
+            if min(z_start, z_end) <= -1.5:
+                r["tunnel"] = True
             smoothed_count += 1
     return smoothed_count
 
@@ -974,8 +981,8 @@ class NetConverter:
                 if dst is not None:
                     succ.setdefault(mid, []).append(dst)
                 target_of_internal[ie] = te
-                # 归属 junction：internal edge id ":J_0" 的前缀 ":J"
-                jid_sumo = ie.rsplit("_", 1)[0]
+                # 归属 junction：internal edge id ":J_0" 的前缀 "J"（SUMO junction id 无冒号）
+                jid_sumo = ie.rsplit("_", 1)[0].lstrip(":")
                 junc_of_internal[ie] = jid_sumo
                 turn = DIR_TO_TURN.get(c.get("dir", "s"), "straight")
                 grp = junc_groups.setdefault((jid_sumo, fe), [])
@@ -1071,6 +1078,8 @@ class NetConverter:
         jid_seq = 100
         for (jid_sumo, fe), conns in sorted(junc_groups.items()):
             j = self.junctions.get(jid_sumo)
+            if j is None:
+                j = self.junctions.get(f":{jid_sumo}")
             shape = []
             if j is not None and j.get("shape"):
                 shape = [list(self.to_enu(x, y)) for x, y in parse_shape(j.get("shape"))]

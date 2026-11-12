@@ -189,6 +189,8 @@ function snapPointToEdges(edges, laneData, routeIds, cx, cy, cz, fallbackHeading
   return { x: cx, y: cy, z: cz, heading: fallbackHeading };
 }
 
+const _qs = new URLSearchParams(typeof location !== 'undefined' ? location.search : '');
+
 function toTopo(map, routes, routeId) {
   const route = routes.find((item) => item.id === routeId);
   /* 小地图保持全量；超大地图由 selectRoadsForPreview 保留路线及其 250m
@@ -237,7 +239,33 @@ function toTopo(map, routes, routeId) {
   const corridorBuildings = selectBuildingsForPreview(
     Array.isArray(map.buildings) ? map.buildings : [], roads);
   let focus;
-  if (corridorBuildings.length) {
+  const cxParam = _qs.get('cx') != null ? Number(_qs.get('cx')) : NaN;
+  const cyParam = _qs.get('cy') != null ? Number(_qs.get('cy')) : NaN;
+  const focusParam = _qs.get('focus');
+  if (Number.isFinite(cxParam) && Number.isFinite(cyParam)) {
+    const hParam = Number(_qs.get('h'));
+    focus = {
+      centerX: cxParam,
+      centerY: cyParam,
+      centerZ: 0,
+      heading: 0,
+      height: Number.isFinite(hParam) && hParam > 0 ? hParam : 35,
+    };
+  } else if (focusParam === 'viaduct') {
+    /* 立体结构验收取景：对准高架/匝道（bridge 或 z>=1.5 的路段）的外包盒，
+     * 低高度斜视，避免整图俯视时 9m 高架只剩几像素。 */
+    const elevated = edges.filter((e) => e.bridge || e.nodes.some((n) => (n[2] || 0) >= 1.5));
+    const pts = [];
+    for (const e of elevated) for (const n of e.nodes) pts.push([n[0], n[1], n[2] || 0]);
+    if (pts.length) {
+      const rf = routeFocus(pts);
+      const hParam = Number(_qs.get('h'));
+      focus = { ...rf, heading: 0, height: Number.isFinite(hParam) && hParam > 0 ? hParam : 90 };
+    }
+  }
+  if (focus) {
+    /* focus=viaduct 已确定取景 */
+  } else if (corridorBuildings.length) {
     focus = buildingFocus(corridorBuildings);
   } else if (routePath && routePath.length) {
     focus = routeFocus(routePath);
@@ -304,6 +332,8 @@ function toTopo(map, routes, routeId) {
     ego: {type: 'ego', id: 0, x: egoPose.x, y: egoPose.y, z: egoPose.z,
       heading: egoPose.heading, speed: 0, vx: 0, vy: 0, length: 4.6, width: 2,
       map_view_height: focus.height,
+      map_view_dist: Number(_qs.get('d')) > 0 ? Number(_qs.get('d')) : undefined,
+      map_view_yaw: _qs.get('yaw') != null ? Number(_qs.get('yaw')) : undefined,
       map_view_target_x: egoPose.x,
       map_view_target_y: egoPose.y,
       map_view_target_z: egoPose.z,
@@ -347,8 +377,53 @@ async function boot() {
     if (hint) {
       hint.textContent = (route ? route.name + ' · ' : '') + '左键旋转 · 滚轮缩放 · 按 P/Space 切换平移';
     }
-    update3D(toTopo(result.map, availableRoutes, activeRouteId));
-    setCameraMode('orbit');
+    const topo = toTopo(result.map, availableRoutes, activeRouteId);
+    if (params.get('topology') === '1') {
+      try {
+        const topoResp = await fetch('/api/topology', { cache: 'no-store' });
+        if (topoResp.ok) {
+          const topoData = await topoResp.json();
+          const simScene = topoData && topoData.metrics && topoData.metrics.scene;
+          if (simScene) {
+            if (simScene.ego) {
+              const egoZ = simScene.ego.z != null ? Number(simScene.ego.z) : 6.0;
+              const egoX = Number(simScene.ego.x) || 0;
+              const egoY = Number(simScene.ego.y) || 0;
+              const hVal = Number(params.get('h')) || topo.metrics.scene.ego.map_view_height || 35;
+              const dVal = Number(params.get('d')) || topo.metrics.scene.ego.map_view_dist;
+              const yawVal = params.get('yaw') != null ? Number(params.get('yaw')) : topo.metrics.scene.ego.map_view_yaw;
+              const targetX = Number(params.get('cx')) || egoX;
+              const targetY = Number(params.get('cy')) || egoY;
+              topo.metrics.scene.ego = {
+                ...topo.metrics.scene.ego,
+                ...simScene.ego,
+                z: egoZ,
+                map_view_height: hVal,
+                map_view_dist: dVal,
+                map_view_yaw: yawVal,
+                map_view_target_x: targetX,
+                map_view_target_y: targetY,
+                map_view_target_z: egoZ,
+              };
+            }
+            if (Array.isArray(simScene.entities) && simScene.entities.length > 0) {
+              topo.metrics.scene.entities = simScene.entities;
+            }
+            if (Array.isArray(simScene.trajectory_path) && simScene.trajectory_path.length > 0) {
+              topo.metrics.scene.trajectory_path = simScene.trajectory_path;
+            }
+            if (Array.isArray(simScene.perception_entities) && simScene.perception_entities.length > 0) {
+              topo.metrics.scene.perception_entities = simScene.perception_entities;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[map-preview] topology overlay load failed:', err);
+      }
+    }
+    update3D(topo);
+    const cameraMode = params.get('mode') || 'orbit';
+    setCameraMode(cameraMode);
     resetMapView();
     resize3D();
     initOrbitModeSwitch(hint);
