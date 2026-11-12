@@ -1095240,9 +1095240,9 @@
         "visibility_m": 4000,
         "npc_lane_change": true,
         "ego": {
-          "x": -4100.57,
-          "y": 4195.961,
-          "heading": 1.7056,
+          "x": -4099.162,
+          "y": 4196.721,
+          "heading": 2.061,
           "init_speed": 10.0,
           "target_speed": 13.0,
           "wheelbase": 2.7,
@@ -1095253,9 +1095253,9 @@
         "actors": [],
         "traffic_density": {
           "cars_per_km": 10,
-          "spawn_jitter_m": 2.0,
+          "spawn_jitter_m": 0.0,
           "lane_spread": true,
-          "max_npcs": 15,
+          "max_npcs": 10,
           "random_seed_offset": 0
         },
         "pass_criteria": {

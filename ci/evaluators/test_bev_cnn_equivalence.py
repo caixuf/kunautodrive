@@ -17,10 +17,11 @@ import random
 import struct
 from pathlib import Path
 
-import numpy as np
-import onnxruntime as ort
 import pytest
-import torch
+
+np = pytest.importorskip("numpy")
+ort = pytest.importorskip("onnxruntime")
+torch = pytest.importorskip("torch")
 
 from tools.bev_pipeline import H, RANGE_X, RANGE_Y_HALF, W, grid_res
 from tools.train_bev.train_bev_centernet import (
