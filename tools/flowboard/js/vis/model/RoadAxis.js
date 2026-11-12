@@ -200,12 +200,38 @@ export function offsetSpine(spine, d) {
   return out;
 }
 
+function projectSpinePointToLane(sp, cl) {
+  let bestAlong = Infinity, bestLat = null;
+  for (let i = 0; i < cl.length - 1; i++) {
+    const ax = cl[i][0] || 0, az = -(cl[i][1] || 0);
+    const bx = cl[i + 1][0] || 0, bz = -(cl[i + 1][1] || 0);
+    const segX = bx - ax, segZ = bz - az;
+    const len2 = segX * segX + segZ * segZ;
+    if (len2 < 1e-6) continue;
+    const t = ((sp.px - ax) * segX + (sp.pz - az) * segZ) / len2;
+    const clampedT = Math.max(0, Math.min(1, t));
+    const px = ax + clampedT * segX;
+    const pz = az + clampedT * segZ;
+    const dx = px - sp.px, dz = pz - sp.pz;
+    const along = Math.abs(dx * sp.nz - dz * sp.nx);
+    const lat = dx * sp.nx + dz * sp.nz;
+    if (along < bestAlong) {
+      bestAlong = along;
+      bestLat = lat;
+    }
+  }
+  return { along: bestAlong, lat: bestLat };
+}
+
 /**
  * 车道组几何包络：按 lane centerline 实测车道组相对 spine 的横向范围，
  * 返回 { center, halfW }（相对 spine 的偏移与半宽）。无数据/小偏差/非平行路返回 null。
  * lane.centerline 是 ENU(east,north,0)，spine 是 THREE 帧，需先转：THREE.x=p[0], THREE.z=-(p[1])。
- * 横向偏移取"沿路纵向最近点"的垂距（垂直投影），非欧氏最近点（曲线路退化）。
+ * 横向偏移取线段垂直投影（连续线段插值），通过 LANE_OVERRUN_MAX 门限过滤路口停止线截断引入的
+ * 纵向差（>7.5m）：典型截断场景 road cl 比 lane cl 长 11m；路口内部短路（≤10m 总长）最大 along≤3m。
  */
+/* 路口停止线截断最大允许纵向溢出（m）：11m 截断会被过滤，≤7m 路口内部路不受影响。 */
+const LANE_OVERRUN_MAX = 7.5;
 function laneGroupEnvelope(lanes, spine, laneWidth) {
   if (!Array.isArray(lanes) || !lanes.length || spine.length < 2) return null;
   const stations = [0, spine.length >> 1, spine.length - 1];
@@ -214,29 +240,56 @@ function laneGroupEnvelope(lanes, spine, laneWidth) {
   for (const si of stations) {
     const sp = spine[si];
     let latMin = Infinity, latMax = -Infinity;
+    let stationOk = true;
     for (const lane of lanes) {
       const cl = lane && lane.centerline;
       if (!Array.isArray(cl) || cl.length < 2) continue;
       const w = (Number(lane.width) || laneWidth) / 2;
-      let bestAlong = Infinity, bestLat = 0;
-      for (const p of cl) {
-        const lx = p[0] || 0, lz = -(p[1] || 0);
-        const dx = lx - sp.px, dz = lz - sp.pz;
-        const along = dx * sp.nz + dz * (-sp.nx);
-        const lat = dx * sp.nx + dz * sp.nz;
-        if (Math.abs(along) < bestAlong) { bestAlong = Math.abs(along); bestLat = lat; }
+      const proj = projectSpinePointToLane(sp, cl);
+      // 路口停止线截断守卫：若沿路纵向溢出 > LANE_OVERRUN_MAX，
+      // 说明该站位超出车道数据范围（road cl 延伸入路口中心而 lane cl 在停止线结束），
+      // 丢弃本站位，防止 11m 纵向差泄漏进横向投影导致路面整体横向漂移。
+      if (proj.along > LANE_OVERRUN_MAX || proj.lat === null) {
+        stationOk = false;
+        break;
       }
-      if (bestLat - w < latMin) latMin = bestLat - w;
-      if (bestLat + w > latMax) latMax = bestLat + w;
+      if (proj.lat - w < latMin) latMin = proj.lat - w;
+      if (proj.lat + w > latMax) latMax = proj.lat + w;
     }
-    if (!isFinite(latMin) || !isFinite(latMax)) continue;
-    stationCenters.push((latMin + latMax) / 2);
-    const sh = (latMax - latMin) / 2;
-    if (sh > halfW) halfW = sh;
+    if (stationOk && isFinite(latMin) && isFinite(latMax)) {
+      stationCenters.push((latMin + latMax) / 2);
+      const sh = (latMax - latMin) / 2;
+      if (sh > halfW) halfW = sh;
+    }
   }
+
+  // 极端边缘情况回退：若全部站位（包括中点）被截断守卫过滤，以中点无条件投影兜底
+  if (stationCenters.length === 0) {
+    const midSp = spine[spine.length >> 1];
+    let latMin = Infinity, latMax = -Infinity;
+    for (const lane of lanes) {
+      const cl = lane && lane.centerline;
+      if (!Array.isArray(cl) || cl.length < 2) continue;
+      const w = (Number(lane.width) || laneWidth) / 2;
+      const proj = projectSpinePointToLane(midSp, cl);
+      if (proj.lat !== null) {
+        if (proj.lat - w < latMin) latMin = proj.lat - w;
+        if (proj.lat + w > latMax) latMax = proj.lat + w;
+      }
+    }
+    if (isFinite(latMin) && isFinite(latMax)) {
+      stationCenters.push((latMin + latMax) / 2);
+      halfW = (latMax - latMin) / 2;
+    }
+  }
+
   if (stationCenters.length === 0) return null;
-  const cMin = Math.min(...stationCenters), cMax = Math.max(...stationCenters);
-  const center = (cMin + cMax) / 2;
+  stationCenters.sort((a, b) => a - b);
+  const mid = stationCenters.length >> 1;
+  const center = stationCenters.length % 2 === 1
+    ? stationCenters[mid]
+    : (stationCenters[mid - 1] + stationCenters[mid]) / 2;
+  const cMin = stationCenters[0], cMax = stationCenters[stationCenters.length - 1];
   if (cMax - cMin > CONSISTENCY_MAX) return null;   // 非平行/环道 → 回退居中
   if (Math.abs(center) < CENTER_EPS) {
     /* centerline 本就是车道组中心 → 不偏移（offset=0），但务必保留 envelope 算出的

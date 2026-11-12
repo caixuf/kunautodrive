@@ -4,8 +4,9 @@
  * 复现真实渲染路径：
  *   - 家具（TreeView/StreetlightView）用 REAL computeEdgeAxis（RoadAxis.js，已修复）
  *     推导 TRUE 中心 spine + 车道组半宽，按 halfWidth+offset 偏移落位。
- *   - 路面（RoadView）用其【私有副本】laneGroupEnvelope（含 CENTER_EPS 守卫，
- *     未随 RoadAxis.js 修复）推导路面 ribbon。
+ *   - 路面（RoadView）副本 laneGroupEnvelopeRV 已同步 RoadAxis.js 修复逻辑：
+ *     线段垂直投影 + LANE_OVERRUN_MAX 截断守卫 + 中位数聚合，确保 roadRibbon
+ *     与 computeEdgeAxis 使用同一套 spine 计算，家具与路面严格对齐。
  * 逐 edge 比对：家具点是否落入路面 ribbon 多边形（最近段垂距 < roadHw）。
  *
  * 若计数 > 0 → 路面半宽与家具半宽/中心不一致（家具压路），即用户报障根因。
@@ -23,9 +24,13 @@ import { dirname, join } from 'node:path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 
-// ── RoadView 私有副本（逐字复制，验证未修复分支的影响）──
+// ── RoadView 副本（已同步 RoadAxis.js 修复：线段投影 + LANE_OVERRUN_MAX 守卫）──
 const LANE_WIDTH = 3.5;
 const DEFAULT_LANES = 2;
+/* 路口停止线截断最大允许纵向溢出（与 RoadAxis.js 保持一致） */
+const LANE_OVERRUN_MAX_RV = 7.5;
+const CONSISTENCY_MAX_RV = 4.0;
+const CENTER_EPS_RV = 0.15;
 function buildSpine(points) {
   const spine = [];
   for (let i = 0; i < points.length; i += 3) {
@@ -62,7 +67,27 @@ function offsetSpine(spine, d) {
     return { px: opx, py: c.py, pz: opz, nx: c.nx, nz: c.nz };
   });
 }
-// RoadView 原样（CENTER_EPS 守卫仍在，未修复）
+/** 线段垂直投影（与 RoadAxis.js projectSpinePointToLane 完全一致） */
+function projectSpinePointToLaneRV(sp, cl) {
+  let bestAlong = Infinity, bestLat = null;
+  for (let i = 0; i < cl.length - 1; i++) {
+    const ax = cl[i][0] || 0, az = -(cl[i][1] || 0);
+    const bx = cl[i + 1][0] || 0, bz = -(cl[i + 1][1] || 0);
+    const segX = bx - ax, segZ = bz - az;
+    const len2 = segX * segX + segZ * segZ;
+    if (len2 < 1e-6) continue;
+    const t = ((sp.px - ax) * segX + (sp.pz - az) * segZ) / len2;
+    const clampedT = Math.max(0, Math.min(1, t));
+    const px = ax + clampedT * segX;
+    const pz = az + clampedT * segZ;
+    const dx = px - sp.px, dz = pz - sp.pz;
+    const along = Math.abs(dx * sp.nz - dz * sp.nx);
+    const lat = dx * sp.nx + dz * sp.nz;
+    if (along < bestAlong) { bestAlong = along; bestLat = lat; }
+  }
+  return { along: bestAlong, lat: bestLat };
+}
+/** 车道组几何包络（已同步 RoadAxis.js 修复逻辑：线段投影 + LANE_OVERRUN_MAX 守卫） */
 function laneGroupEnvelopeRV(lanes, spine) {
   if (!Array.isArray(lanes) || !lanes.length || spine.length < 2) return null;
   const stations = [0, spine.length >> 1, spine.length - 1];
@@ -71,31 +96,50 @@ function laneGroupEnvelopeRV(lanes, spine) {
   for (const si of stations) {
     const sp = spine[si];
     let latMin = Infinity, latMax = -Infinity;
+    let stationOk = true;
     for (const lane of lanes) {
       const cl = lane && lane.centerline;
       if (!Array.isArray(cl) || cl.length < 2) continue;
       const w = (Number(lane.width) || LANE_WIDTH) / 2;
-      let bestAlong = Infinity, bestLat = 0;
-      for (const p of cl) {
-        const lx = p[0] || 0, lz = -(p[1] || 0);
-        const dx = lx - sp.px, dz = lz - sp.pz;
-        const along = dx * sp.nz + dz * (-sp.nx);
-        const lat = dx * sp.nx + dz * sp.nz;
-        if (Math.abs(along) < bestAlong) { bestAlong = Math.abs(along); bestLat = lat; }
-      }
-      if (bestLat - w < latMin) latMin = bestLat - w;
-      if (bestLat + w > latMax) latMax = bestLat + w;
+      const proj = projectSpinePointToLaneRV(sp, cl);
+      if (proj.along > LANE_OVERRUN_MAX_RV || proj.lat === null) { stationOk = false; break; }
+      if (proj.lat - w < latMin) latMin = proj.lat - w;
+      if (proj.lat + w > latMax) latMax = proj.lat + w;
     }
-    if (!isFinite(latMin) || !isFinite(latMax)) continue;
-    stationCenters.push((latMin + latMax) / 2);
-    const sh = (latMax - latMin) / 2;
-    if (sh > halfW) halfW = sh;
+    if (stationOk && isFinite(latMin) && isFinite(latMax)) {
+      stationCenters.push((latMin + latMax) / 2);
+      const sh = (latMax - latMin) / 2;
+      if (sh > halfW) halfW = sh;
+    }
+  }
+  // 兜底：所有站位被截断守卫过滤时，以中点无条件投影
+  if (stationCenters.length === 0) {
+    const midSp = spine[spine.length >> 1];
+    let latMin = Infinity, latMax = -Infinity;
+    for (const lane of lanes) {
+      const cl = lane && lane.centerline;
+      if (!Array.isArray(cl) || cl.length < 2) continue;
+      const w = (Number(lane.width) || LANE_WIDTH) / 2;
+      const proj = projectSpinePointToLaneRV(midSp, cl);
+      if (proj.lat !== null) {
+        if (proj.lat - w < latMin) latMin = proj.lat - w;
+        if (proj.lat + w > latMax) latMax = proj.lat + w;
+      }
+    }
+    if (isFinite(latMin) && isFinite(latMax)) {
+      stationCenters.push((latMin + latMax) / 2);
+      halfW = (latMax - latMin) / 2;
+    }
   }
   if (stationCenters.length === 0) return null;
-  const cMin = Math.min(...stationCenters), cMax = Math.max(...stationCenters);
-  const center = (cMin + cMax) / 2;
-  if (cMax - cMin > 4.0) return null;
-  if (Math.abs(center) < 0.15) return null;   // ← 未修复守卫
+  stationCenters.sort((a, b) => a - b);
+  const mid = stationCenters.length >> 1;
+  const center = stationCenters.length % 2 === 1
+    ? stationCenters[mid]
+    : (stationCenters[mid - 1] + stationCenters[mid]) / 2;
+  const cMin = stationCenters[0], cMax = stationCenters[stationCenters.length - 1];
+  if (cMax - cMin > CONSISTENCY_MAX_RV) return null;
+  if (Math.abs(center) < CENTER_EPS_RV) return { center: 0, halfW };
   return { center, halfW };
 }
 function edgeSampleCountRV(nodes, edgeType) {
