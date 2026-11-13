@@ -73,7 +73,7 @@ function _syncSimClock(dataTs, wallNow) {
   } else if (cand < _simClock.offset) {
     _simClock.offset = cand;
   } else {
-    _simClock.offset += Math.min(cand - _simClock.offset, 0.005) * 0.02;
+    _simClock.offset += Math.min(cand - _simClock.offset, 0.05) * 0.1;
   }
 }
 
@@ -179,6 +179,8 @@ export function updateDeadReckon(x, z, speed, heading, vx, vy, yawRate, dataTs) 
     Math.abs(x - _dr.lastX) > 0.01 ||
     Math.abs(z - _dr.lastZ) > 0.01 ||
     Math.abs(speed - _dr.lastSpeed) > 0.1 ||
+    Math.abs(heading - _dr.lastHeading) > 0.002 ||
+    (hasYaw && Math.abs(yawRate - _dr.lastYawRate) > 0.01) ||
     (hasVel && (Math.abs(vx - _dr.lastVx) > 0.1 || Math.abs(vy - _dr.lastVy) > 0.1))
   ) {
     _dr.lastX = x;
@@ -332,7 +334,7 @@ function _advanceState(s, dt, now) {
     } else {
       elapsed = now - s.lastTime;
     }
-    if (elapsed > 2.0) elapsed = 2.0; // cap staleness
+    if (elapsed > 0.25) elapsed = 0.25; // cap staleness to 250ms to prevent overshoot & snap-back
     // 位置外推与 heading 外推必须**同构**（否则位置与朝向解耦 → 车身侧滑）。
     // 旧实现：位置用 lastVx/lastVy 沿**切线直线**外推，heading 用 lastYawRate
     // 做**旋转**外推。急弯/掉头（高 yaw_rate）时两块 SSE 包之间（~200ms）中心
@@ -378,6 +380,15 @@ function _advanceState(s, dt, now) {
       s.targetHeading = s.lastHeading + s.lastYawRate * elapsed;
     } else {
       s.targetHeading = s.lastHeading;
+    }
+    // 防倒退保护：前进挡位下若外推超前量因交付抖动回落，禁止把渲染位置往车尾方向拉回
+    if (s.lastSpeed > 0.5 && Math.abs(dHeading) < 0.5) {
+      var fx = Math.cos(s.smoothHeading), fz = Math.sin(s.smoothHeading);
+      var fwdDelta = (s.targetX - s.smoothX) * fx + (s.targetZ - s.smoothZ) * fz;
+      if (fwdDelta < 0 && fwdDelta > -3.0) {
+        s.targetX -= fwdDelta * fx;
+        s.targetZ -= fwdDelta * fz;
+      }
     }
   }
 
