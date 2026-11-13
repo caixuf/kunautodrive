@@ -1496,8 +1496,15 @@ function startSSE() {
   // multi-message burst JSON.parse + GC micro-stutters on the main thread.
   var _pendingUpdate = false;
   var _latestSseRaw = null;
+  var _lastSseAt = performance.now();
+  var _prevSimTus = null;
+  var _sseBurstDrops = 0;
   eventSource.onmessage = function(e) {
     if (paused) return;
+    var nowSse = performance.now();
+    var sseGapMs = nowSse - _lastSseAt;
+    _lastSseAt = nowSse;
+    if (_pendingUpdate) _sseBurstDrops += 1;
     _latestSseRaw = e.data;
     // 收到消息即刷新数据时间戳并重置退避
     _markDataFresh();
@@ -1510,6 +1517,7 @@ function startSSE() {
         var raw = _latestSseRaw;
         _latestSseRaw = null;
         if (!raw) return;
+        var t0 = performance.now();
         try { topoData = JSON.parse(raw); }
         catch(err) {
           console.warn('[SSE] JSON parse failed:', err.message, 'data length:', raw ? raw.length : 0, 'first 200 chars:', (raw || '').slice(0, 200));
@@ -1517,6 +1525,12 @@ function startSSE() {
         }
         updateAll();
         applyLiveStatus(topoData);
+        var rafMs = performance.now() - t0;
+        var sceneTus = topoData && topoData.metrics && topoData.metrics.scene ? topoData.metrics.scene.t_us : null;
+        var simGapMs = (typeof sceneTus === 'number' && typeof _prevSimTus === 'number' && sceneTus >= _prevSimTus)
+          ? (sceneTus - _prevSimTus) / 1000 : 0;
+        if (typeof sceneTus === 'number') _prevSimTus = sceneTus;
+        _updateDiagChip(simGapMs, sseGapMs, rafMs, _sseBurstDrops);
       });
     }
   };
@@ -1768,6 +1782,27 @@ function _dhChip(id, text, tone) {
   if (!el) return;
   el.textContent = text;
   el.className = 'dh-chip tone-' + (tone || 'idle');
+}
+
+function _updateDiagChip(simGapMs, sseGapMs, rafMs, burstDrops) {
+  var label = 'DIAG ' + rafMs.toFixed(0) + 'ms';
+  var tone = 'ok';
+  if (simGapMs > 200) {
+    label = '后端卡顿 ' + Math.round(simGapMs) + 'ms';
+    tone = 'crit';
+  } else if (rafMs > 33) {
+    label = '渲染掉帧 ' + Math.round(rafMs) + 'ms';
+    tone = 'warn';
+  } else if (sseGapMs > 250) {
+    label = 'SSE 延迟 ' + Math.round(sseGapMs) + 'ms';
+    tone = 'warn';
+  }
+  _dhChip('dh-diag', label, tone);
+  var el = document.getElementById('dh-diag');
+  if (el) {
+    el.title = '实时自诊断 | simGap=' + simGapMs.toFixed(1) + 'ms · sseGap=' + sseGapMs.toFixed(1)
+      + 'ms · rAF=' + rafMs.toFixed(1) + 'ms · burstSkip=' + burstDrops;
+  }
 }
 
 /* HUD 根节点只切外观类（tone-xxx / tor-xxx），其它类（hidden / active）必须保留。
