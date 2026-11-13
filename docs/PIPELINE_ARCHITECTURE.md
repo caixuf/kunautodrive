@@ -1,51 +1,31 @@
 # KunAutoDrive Pipeline 架构
 
-> **DEPRECATED（2026-09）** — 本文手写拓扑易与代码漂移，不再作为契约真相源。  
-> **请改看：** `CLAUDE.md`（职责铁律）+ `config/pipeline.json`（由 `ci/gates/topic_contract_check.py` 强制对齐 `NodePlugin` 的 `s_inputs`/`s_outputs`）。  
-> 下文仅作历史速览，内容可能过时。
+> **契约真相源说明** — 本文为架构速览；Topic 连线契约以 `config/pipeline*.json` 与 `NodePlugin` 的 `s_inputs`/`s_outputs` 为单一事实源（由 `ci/gates/topic_contract_check.py` 在 CI 强制校验）。更多细节见 [ALGORITHM_STACK.md](ALGORITHM_STACK.md) 与 [CODE_WIKI.md](CODE_WIKI.md)。
 
-KunAutoDrive 的 ADAS 演示 pipeline 由 15 个节点插件组成，通过 `flow_launcher config/pipeline.json` 配置驱动启动。
+KunAutoDrive 默认仿真管线（`config/pipeline.json`）由 **20 个节点插件**组成（传感器版 `config/pipeline_sensor.json` 与实车模板 `config/pipeline_car.json` 各 **19 个节点**），通过 `flow_launcher <pipeline.json>` 配置驱动加载。
 
-## 数据流
+## 20 节点数据流总览
 
-```
-flowsim ─── vehicle/state ──→ sensor_model ─── sensor/lidar ──→ perception ─── perception/obstacles ──→ fusion
-  │  │                             │         sensor/gps ──────────────┘                                       │
-  │  │  ├── road/geometry          └── sensor/camera                                                              │
-  │  │  ├── road/traffic_lights                                                                              fusion/localization
-  │  │  ├── scene/frame                                                                                             │
-  │  │  ├── sim/tick                       ┌─────────────────────────────────────────────────────────────────────┤
-  │  │  └── sim/collision                  ▼                                                                     │
-  │  └──────────── vehicle/state ────→ planning ─── planning/trajectory ──→ control ─── control/raw_cmd ──→ safety_control
-  │                                          │                                   │                              │
-  │                                          └── vehicle/state ─────────────────┘                      control/cmd
-  │                                                                                                                  │
-  │                                                                                                                  ▼
-  └─────────────────────────────────────────────────────────────────────────────────────────────────────────── flowsim
-                                                                                              (bicycle model + 碰撞)
-                                                ↑
-                                                └── inference (影子模式，仅对比监控，不接入控制)
+```text
+flowsim (6-DOF + IDM/MOBIL) -> sensor_model (16-beam LiDAR / Radar / GPS)
+  -> perception + bev_detection (CenterPoint-Lite) + lane_detection
+  -> object_tracker (Hungarian EKF) -> prediction (3-Modal Frenet) + fusion (EKF)
+  -> behavior_planner + navigation -> planning (ScenarioManager: Frenet+DP / Hybrid A*)
+  -> control (Stanley / LTV-MPC / ManeuverTracker) -> safety_control (FlowCoro TTC/MRM)
+  -> odd_monitor + tor_manager + monitor -> flowmond (:8800) -> FlowBoard 3D / PEM
+                                                |
+                                                +-> data_recorder -> learner -> inference -> model_ota
 ```
 
-## 节点清单
+## 20 节点清单（`config/pipeline.json`）
 
-| 节点 | .so | 输入 topics | 输出 topics | 算法 |
-|------|-----|------------|-------------|------|
-| `flowsim` | `libflowsim_node.so` | `control/cmd` | `vehicle/state`, `road/geometry`, `road/traffic_lights`, `scene/frame`, `sim/tick`, `sim/collision` | Bicycle model + esmini RoadManager + OBB SAT 碰撞 + NPC AI 状态机 |
-| `sensor_model` | `libsensor_model_node.so` | `vehicle/state` | `sensor/lidar`, `sensor/gps`, `sensor/camera` | 噪声注入 + FOV 裁剪 + NMEA GPS 回放 |
-| `perception` | `libperception_node.so` | `vehicle/state`, `sensor/lidar` | `perception/obstacles` | DBSCAN (eps=2m, min_pts=4) + RANSAC 地面去除 |
-| `object_tracker` | `libobject_tracker_node.so` | `perception/obstacles`, `vehicle/state` | `perception/tracked_objects` | 卡尔曼多目标跟踪 |
-| `fusion` | `libfusion_node.so` | `sensor/lidar`, `sensor/gps` | `fusion/localization`, `fusion/latency` | EKF 5D (x, y, v, heading, yaw_rate) |
-| `behavior_planner` | `libbehavior_planner_node.so` | `fusion/localization`, `perception/tracked_objects`, `road/traffic_lights` | `planning/behavior` | 8 状态 FSM 行为决策（跟车/变道/停车/让行/掉头） |
-| `navigation` | `libnavigation_node.so` | `fusion/localization` | `navigation/path` | 路由步骤 + 行进方向（消费 `ref_path.reverse`） |
-| `planning` | `libplanning_node.so` | `fusion/localization`, `vehicle/state` | `planning/trajectory` | Frenet 最优轨迹规划（依赖 Eigen3） |
-| `control` | `libcontrol_node.so` | `fusion/localization`, `planning/trajectory`, `vehicle/state` | `control/raw_cmd` | PID 纵向 + Stanley 横向 + ACC + 自适应变道 |
-| `safety_control` | `libsafety_control_node.so` | `control/raw_cmd`, `vehicle/state` | `control/cmd` | FlowCoro 安全包络：TTC/横向交叉/行人 |
-| `monitor` | `libmonitor_node.so` | `perception/obstacles`, `vehicle/state`, `fusion/latency` | — | 系统指标采集 + JSON 导出 + IPC 桥接 |
-| `data_recorder` | `libdata_recorder_node.so` | `fusion/localization`, `planning/trajectory` | — | 特征/标签 JSONL 采样（Stage 0） |
-| `inference` | `libinference_node.so` | `fusion/localization` | `inference/trajectory` | tiny-MLP 影子推理（Stage 2） |
-| `learner` | `liblearner_node.so` | `inference/trajectory` 等 | `learner/loss` | 在线训练节点（车端学习闭环 Stage 3） |
-| `model_ota` | `libmodel_ota_node.so` | `learner/loss` 等 | `model/ota_status` | 模型 OTA 升级协调 |
+| 类别 | 节点 | 说明 |
+|------|------|------|
+| **仿真与传感** | `flowsim`, `sensor_model` | 6-DOF 簧载悬架动力学 + IDM/MOBIL 交通流；16 线 3D OBB LiDAR / 雷达 / GPS 噪声与退化 |
+| **感知与跟踪** | `perception`, `bev_detection`, `lane_detection`, `object_tracker`, `prediction`, `fusion` | DBSCAN + 纯 C CenterPoint-Lite BEV CNN + 车道线多项式 + 64 槽位匈牙利 EKF + 3 模态 Frenet 预测 + EKF 定位融合 |
+| **决策与控制** | `behavior_planner`, `navigation`, `planning`, `control`, `safety_control` | 行为 FSM + 路由导航 + ScenarioManager（Frenet+ST DP / Hybrid A*）+ Stanley/LTV-MPC + FlowCoro 安全闸门 |
+| **L3 安全与监控** | `odd_monitor`, `tor_manager`, `monitor` | ODD 实时监控 + TOR 接管倒计时/MRM 触发 + 拓扑/3D 场景/PEM 采集 |
+| **端到端学习闭环** | `data_recorder`, `inference`, `learner`, `model_ota` | 样本录制 + 影子推理（仅对比监控/软建议，不绕过 `safety_control`）+ 在线训练 + OTA |
 
 > **Learning Loop:** `data_recorder` → `inference` → `learner` → `model_ota` 是车端学习闭环节点。
 > `inference` 运行在影子模式（shadow mode），只发布 `inference/trajectory` 供对比监控，

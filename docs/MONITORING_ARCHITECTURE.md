@@ -11,6 +11,8 @@
 > flowmond 的 `dashboard_file_watcher_fn` 线程轮询 monitor 节点写出的
 > `/tmp/flow_topology.json`，IPC 不可用时自动回退到此链路。
 > - `flowmond` 有独立的 `MessageBus`，不共享业务节点总线
+> - `flowmond` 统一使用 `cJSON` 解析参数/配置并在解析失败时输出告警；前端 FlowBoard 在 `requestAnimationFrame` 回调中延迟解析最新一条 SSE 消息（`_latestSseRaw`），避免高频 burst 解析导致的渲染微卡顿
+> - FlowBoard 前端已演进为 52 模块 Three.js r160 PBR 引擎（`tools/flowboard/js/vis/`），完整前端架构见 [VISUALIZATION_ARCHITECTURE.md](VISUALIZATION_ARCHITECTURE.md)
 > - flowmond 的 stats/dashboard 聚合目前仅支持同机 POSIX SHM；业务 topic 的
 >   跨机 TCP 转发由独立的 `Transport`/`NetworkTransport` 提供，不属于监控桥接
 >

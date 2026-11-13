@@ -78,7 +78,7 @@ KunAutoDrive 是**仿真优先、可复现、可度量**的自动驾驶实验与
 git clone https://github.com/caixuf/kunautodrive.git
 cd kunautodrive
 
-# 一键构建并启动 20 节点默认仿真；浏览器打开 http://localhost:8800
+# 一键构建并启动 20 节点默认仿真（默认加载 city_comprehensive.json）；浏览器打开 http://localhost:8800
 bash scripts/demo.sh
 
 # CI / 无头环境指定场景与时长运行
@@ -144,12 +144,12 @@ flowsim (6-DOF + IDM/MOBIL) -> sensor_model (16-beam LiDAR / Radar / GPS)
 | ODD / TOR / MRM | 运行设计域实时监控 → 接管请求倒计时 → 最小风险机动（MRM 真停；遥测缺失判 `INCONCLUSIVE` 而非伪 `PASS`） | `ctest -R tor_mrm_sim` + `l3_odd_exit_*` 场景 |
 | 6 类故障注入 | 定位丢失 / 感知丢失 / 规划丢失 / 原始指令超时 / GPS 单源退化 / 全源丢失，每类具备可观测降级证据 | `ci/gates/fault_inject_gate.py`（6/6） |
 | 降级阶梯 + 看门狗 | L1/L2/L3 单调降级、多节点心跳表与超时保护 | `ctest -R safety_fault_evidence` |
-| 定位冗余校验 | GPS 与航位推算交叉一致性检验，单源瞬断不误触发全链路瘫痪 | `tools/localization_integrity_sim.py --run-all` |
+| 定位冗余校验 | GPS 多径异常门控与航位推算交叉一致性检验（含 5s GPS 断流盲算验证），单源瞬断不误触发全链路瘫痪 | `tools/localization_integrity_sim.py --run-all` |
 | 传感器线格式契约 | 16 线 LiDAR 与毫米波雷达量程/FOV/径向速度模型，IDL 线格式与 C 结构体逐字节对齐 | `ctest -R "adas_nodes_logic\|new_module"` |
 | EDR 法规事件黑匣子 | L3 关键事件（激活/退出/TOR/MRM/ODD 退出/碰撞）带 CRC + `fsync` 落盘 PEM | `ci/gates/l3_edr_gate.py` |
 | UN R157 (ALKS) 场景集 | 旁车切入/切出/前车急刹/施工区收窄/传感器失效等法规场景矩阵 | `scenario_regression.py --baseline`（23 场景基线门禁） |
 
-历史疑难根因沉淀见 [故障模式表](docs/FAILURE_MODES.md)（96 行「现象 → 根因 → 代码位置」），安全论据见 [L3 Safety Case](docs/SAFETY_CASE_L3.md) 与 [L3 Roadmap](docs/ROADMAP_L3.md)。
+历史疑难根因沉淀见 [故障模式表](docs/FAILURE_MODES.md)（194 行「现象 → 根因 → 代码位置」），安全论据见 [L3 Safety Case](docs/SAFETY_CASE_L3.md) 与 [L3 Roadmap](docs/ROADMAP_L3.md)。
 
 ## 车辆部署
 
@@ -253,7 +253,7 @@ python3 tools/build_showcase.py --check
 | [FlowBoard Scene Contract](docs/FLOWBOARD_SCENE_CONTRACT.md) | `metrics.scene` v2.2 前后端 3D 场景数据契约 |
 | [Simulation Guide](docs/SIMULATION_GUIDE.md) | 38 场景仿真测试与生态桥接指南 |
 | [Safety Case L3](docs/SAFETY_CASE_L3.md) | SAE L3 安全保证论据（ODD / TOR / MRM / 故障注入 / EDR） |
-| [Failure Modes](docs/FAILURE_MODES.md) | 96 行历史疑难故障「现象 → 根因 → 位置」权威速查表 |
+| [Failure Modes](docs/FAILURE_MODES.md) | 历史疑难故障「现象 → 根因 → 位置」权威速查表（194 行） |
 | [API Quick Reference](docs/API_QUICK_REFERENCE.md) | C11 / C++20 核心 API 速查 |
 | [Hardware Deployment](docs/HARDWARE_DEPLOYMENT.md) | Linux / Windows / 交叉编译与硬件部署指南 |
 | [Learning Loop](docs/LEARNING_LOOP.md) | 车端数据采集、模仿学习/RL 训练、影子推理与 OTA 闭环 |

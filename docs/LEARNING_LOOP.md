@@ -21,10 +21,12 @@ bash scripts/deploy.sh --package
 bash share/kunautodrive/scripts/quickstart.sh 15
 ```
 
-常看目录：
+常看目录与近期增强：
 - `runs/loop_<timestamp>/`：每次闭环运行的评估与汇总
 - `models/<name>/`：训练产物（含 `manifest.json`、`model.txt`、
   `closed_loop_eval.json`、`shadow_eval.json`）
+- **难例挖掘与推理延迟守卫**：`tools/train_e2e/mine_hard_cases.py` 从评估/PEM 日志挖掘高风险难例，配合 `inference` 推理延迟预算守卫防止超时影响主链路
+- **BEV 影子精度门禁与接管边界门禁**：`ci/gates/bev_shadow_check.py`（`scenarios/bev_shadow.json` 覆盖率与真值对比）与 `ci/gates/model_takeover_boundary_check.py`（强制模型仅作为 shadow / planning 软建议，不绕过 `safety_control`）
 
 ## 为什么不内置大模型训练框架
 

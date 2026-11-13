@@ -6,14 +6,14 @@
 
 ## 三层仿真体系
 
-```
-Layer 1: Bag 回放 (零依赖, 现在就能跑)
-  → 录制数据 → 回放给算法 → 校验输出
+```text
+Layer 1: Bag / MCAP 回放（零外部依赖）
+  → 录制真实或仿真数据 → 回放给算法 → 校验输出与确定性
 
-Layer 2: 2D 运动学模拟 (轻量, 验证控制/规划)
-  → 单车模型 + 简单传感器 + 场景定义
+Layer 2: 6-DOF 闭环仿真 + 城市级高精地图（FlowSim 默认引擎）
+  → 6-DOF 簧载悬架动力学 + 载荷转移 + 局部摩擦区 + 16 线 3D OBB LiDAR + IDM/MOBIL 多车流 + 8 张 OSM/城市场景地图
 
-Layer 3: CARLA (可选外部后端, 适配边界已就绪)
+Layer 3: CARLA 6-DOF 双向桥（可选外部后端，适配边界与 capability gate 已就绪）
   → 时钟快照 + 传感器批次 + 控制映射；真实闭环需 CARLA SDK/服务器
 ```
 
@@ -31,17 +31,26 @@ Layer 3: CARLA (可选外部后端, 适配边界已就绪)
 ./build/bin/flowctl bag play recordings/scenario.bag --config config/pipeline.json
 ```
 
-## Layer 2: 2D 模拟器
+## Layer 2: FlowSim 6-DOF 闭环仿真
 
 ```bash
-# 内置场景: 直道 + 前车 + 行人横穿
+# 一键启动默认 20 节点全栈闭环仿真（默认加载 scenarios/city_comprehensive.json，240s 城市综合场景）
 bash scripts/demo.sh
 
-# 或使用配置驱动启动器指定场景
-./build/bin/flow_launcher config/pipeline.json
+# 无头/CI 指定场景与时长
+bash scripts/demo.sh --scenario scenarios/urban_challenge.json --no-browser 30
+
+# 或使用配置驱动启动器直接运行
+./build/bin/flow_launcher config/pipeline.json --duration 30
 ```
 
-内置场景定义见 `scenarios/straight_road.json`（4 车道直路：同向慢车 + 对向来车 + 行人 + 红绿灯）。
+默认场景 `scenarios/city_comprehensive.json` 覆盖城市高架匝道、多层立交、信号灯交叉口、雨雾天气退化与多车交互。物理模型与渲染细节分别见 [FLOWSIM_PHYSICS.md](FLOWSIM_PHYSICS.md) 与 [VIS_3D_RENDERING.md](VIS_3D_RENDERING.md)。
+
+### 生态标准桥接（OpenDRIVE / Lanelet2 / Foxglove）
+
+- **OpenDRIVE 1.4 导出与静态预检**：`tools/json_to_xodr.py` + `tools/xodr_compat_check.py --strict`
+- **Lanelet2 导出与几何一致性门禁**：`tools/json_to_lanelet.py` + `ci/gates/lanelet_consistency_check.py`
+- **Foxglove Studio WebSocket 桥接**：`tools/foxglove_bridge.py`（端口 `8765`）
 
 ### 可选 CARLA 后端
 
@@ -58,17 +67,18 @@ python3 tools/carla_bridge.py check
 复用 KunAutoDrive 的 planning/control/safety/evaluator 链路；`check` 在缺少
 CARLA Python API 时返回非零，CI 可据此选择性启用外部后端。
 
-## 场景库
+## 场景库（38 个场景 + 8 张高精地图）
 
-| 场景 | 难度 | 测试目标 |
-|------|------|---------|
-| 直道巡航 | ⭐ | ACC 纵向控制 |
-| 弯道保持 | ⭐ | 横向控制 + 车道线检测 |
-| 前车切入 | ⭐⭐ | 感知跟踪 + AEB |
-| 行人横穿 | ⭐⭐ | 检测 + 紧急制动 |
-| 高速变道 | ⭐⭐⭐ | 规划 + 预测 + 控制 |
-| 无保护左转 | ⭐⭐⭐⭐ | 完整决策链路 |
-| 鬼探头 | ⭐⭐⭐⭐⭐ | 感知极限测试 |
+`scenarios/` 下共包含 **38 个独立场景 JSON**（外加 `scenarios/suite.json` 回归矩阵清单），覆盖以下核心类别：
+
+| 类别 | 代表场景 | 测试目标 |
+|------|----------|----------|
+| 城市综合闭环 | `city_comprehensive.json`（默认）、`urban_challenge.json` | 高架匝道高程、立交、信号灯、雨雾、多车交互全要素 |
+| OSM 城市场景 | `osm_lujiazui_v2.json`、`osm_munich.json`、`beijing_guomao.json`、`osm_zhengdong.json` | 真实 OSM 车道级路网、多路线规划与城市路口穿行 |
+| 泊车与窄域 | `valet_parking.json`、`auto_parking.json`、`parallel_parking_exam.json` | Hybrid A* + Reeds-Shepp 正/倒车换挡闭环 |
+| UN R157 (ALKS) | `r157_cut_in.json`、`r157_cut_out.json`、`r157_hard_brake.json`、`r157_construction_zone.json`、`r157_sensor_failure.json` | 旁车切入/切出、前车急刹、施工区收窄、传感器失效 |
+| L3 安全闭环 | `l3_odd_exit_takeover.json`、`l3_odd_exit_timeout_mrm.json`、`wet_road_evasion.json` | ODD 退出 → TOR 倒计时 → MRM 真停、湿滑摩擦区避险 |
+| 极端博弈与感知 | `unprotected_left_turn.json`、`congestion_merge.json`、`bev_shadow.json`、`pedestrian_flow.json` | 无保护左转、拥堵汇入、BEV 影子精度对比、行人横穿 |
 
 ## 测试指标
 
@@ -97,24 +107,20 @@ bash scripts/demo.sh
 ./build/bin/flow_launcher config/pipeline.json
 ```
 
-## e2e 内置 3D 场景仿真
+## FlowSim 3D 场景仿真与三大前端入口
 
-`flow_launcher` 的 monitor 任务会导出真实 3D 场景到 `/tmp/flow_topology.json`
-的 `metrics.scene` 字段，FlowBoard 仪表盘据此渲染真实三维场景（自车、
-障碍物包围盒、LiDAR 点云），而非随机占位点。
+`flow_launcher` 的 `monitor` 节点会导出真实 3D 场景到 `/tmp/flow_topology.json`（及 `dashboard_bridge` POSIX SHM IPC）的 `metrics.scene` 字段，FlowBoard 仪表盘据此渲染真实三维场景，而非占位点。
 
 包含的真实仿真要素：
 
-- **运动学双轮自行车模型**：自车采用简化的运动学自行车模型（`step_bicycle`），
-  由 `heading += steer * v / L` 驱动横摆，`x += v * cos(heading), y += v * sin(heading)`。
-  适合公路巡航场景的轨迹追踪验证，EPS 转向执行器含一阶低通滤波模拟转向机惯性。
-  运动学 / 动力学模型选择、适用边界和标定方法见[标定指南](CALIBRATION_GUIDE.md)。
-- **ACC 纵向控制**：依据与同车道前车的间距动态限制目标速度，间距越近
-  目标速度越低，触发真实的减速/刹车行为。
-- **动态障碍物**：前车、对向来车、过街行人，具备运动学与循环边界，
-  使场景持续有内容。
-- **LiDAR 点云**：对障碍物表面 + 地面环带做光线投射后下采样，坐标位于
-  自车系。
+- **6-DOF 簧载悬架动力学**：`flowsim` 支持二阶弹簧阻尼悬架（`pitch` / `roll`）、纵向载荷转移 $\Delta F_z$、道路高程坡度补偿与局部路面摩擦系数区 `friction_zones`（如湿滑 $\mu=0.35$）。标定方法见[标定指南](CALIBRATION_GUIDE.md)与[物理文档](FLOWSIM_PHYSICS.md)。
+- **IDM + MOBIL 多 OD 智能交通流**：前车、对向来车、横穿行人及多路线交通流具备让行与变道交互状态机。
+- **16 线 3D OBB LiDAR 与雨雾退化**：对障碍物 3D 包围盒与地面环带做射线投射，支持雨雾天气下的点云噪声与有效测距退化。
+
+运行后可访问三大前端入口（复用同一 `tools/flowboard/js/vis/` 52 模块 Three.js r160 PBR 引擎）：
+- 实时全栈驾驶舱：`http://localhost:8800`
+- 38 场景离线展厅：`http://localhost:8800/tools/flowboard/showcase.html`
+- OSM 高精大图预览器：`http://localhost:8800/tools/flowboard/map_preview.html?map=osm_lujiazui_v2&route=main`
 
 一键运行（业务节点 + flowmond 仪表盘 + 浏览器）：
 
