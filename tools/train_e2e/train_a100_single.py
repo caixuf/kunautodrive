@@ -167,6 +167,97 @@ class ModelEMA:
 
 # ── 3. 数据集与合成流 ──────────────────────────────────────────────
 
+def _wrap_angle(rad: float) -> float:
+    return (rad + math.pi) % (2.0 * math.pi) - math.pi
+
+
+def load_real_trajectory_dataset(
+    dataset_path: Path,
+    state_dim: int = 59,
+    horizon: int = 30,
+    dt: float = 0.1,
+) -> tuple[list[list[float]], list[list[list[float]]]]:
+    """从真实 samples.jsonl / dataset.jsonl 提取 59 维状态与未来 3s 自车系轨迹。"""
+    jsonl_path = dataset_path / "samples.jsonl" if dataset_path.is_dir() else dataset_path
+    if not jsonl_path.is_file():
+        raise FileNotFoundError(f"dataset file not found: {jsonl_path}")
+
+    records: list[dict] = []
+    with jsonl_path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)
+            if isinstance(rec.get("ego"), dict) and isinstance(rec.get("t"), (int, float)):
+                records.append(rec)
+
+    if len(records) < 2:
+        raise ValueError(f"not enough real ego records in {jsonl_path}: {len(records)}")
+
+    # 按时间跳变或空间跳变切分独立轨迹段，避免跨场景拼接污染未来真值
+    segments: list[list[dict]] = [[records[0]]]
+    for rec in records[1:]:
+        prev = segments[-1][-1]
+        gap_s = (float(rec["t"]) - float(prev["t"])) / 1000.0
+        jump_m = math.hypot(
+            float(rec["ego"].get("x", 0.0)) - float(prev["ego"].get("x", 0.0)),
+            float(rec["ego"].get("y", 0.0)) - float(prev["ego"].get("y", 0.0)),
+        )
+        if gap_s <= 0.0 or gap_s > 0.5 or jump_m > 15.0:
+            segments.append([rec])
+        else:
+            segments[-1].append(rec)
+
+    states: list[list[float]] = []
+    trajectories: list[list[list[float]]] = []
+    for seg in segments:
+        t0_ms = float(seg[0]["t"])
+        times = [(float(r["t"]) - t0_ms) / 1000.0 for r in seg]
+        for i, rec in enumerate(seg):
+            if times[-1] - times[i] < horizon * dt:
+                break
+            fv3 = rec.get("features_v3") or rec.get("features_v2") or rec.get("features") or []
+            st = [0.0] * state_dim
+            for k, val in enumerate(fv3[:state_dim]):
+                st[k] = float(val)
+
+            ego0 = rec["ego"]
+            x0 = float(ego0.get("x", 0.0))
+            y0 = float(ego0.get("y", 0.0))
+            h0 = float(ego0.get("heading", 0.0))
+            ch, sh = math.cos(h0), math.sin(h0)
+
+            traj: list[list[float]] = []
+            j = i
+            for step in range(1, horizon + 1):
+                target_t = times[i] + step * dt
+                while j + 1 < len(seg) and times[j + 1] < target_t:
+                    j += 1
+                k = min(j + 1, len(seg) - 1)
+                span = times[k] - times[j]
+                alpha = (target_t - times[j]) / span if span > 1e-6 else 0.0
+                alpha = max(0.0, min(1.0, alpha))
+
+                ej, ek = seg[j]["ego"], seg[k]["ego"]
+                wx = float(ej.get("x", 0.0)) + alpha * (float(ek.get("x", 0.0)) - float(ej.get("x", 0.0)))
+                wy = float(ej.get("y", 0.0)) + alpha * (float(ek.get("y", 0.0)) - float(ej.get("y", 0.0)))
+                wv = float(ej.get("v", 0.0)) + alpha * (float(ek.get("v", 0.0)) - float(ej.get("v", 0.0)))
+                dh = _wrap_angle(float(ek.get("heading", 0.0)) - float(ej.get("heading", 0.0)))
+                wh = _wrap_angle(float(ej.get("heading", 0.0)) + alpha * dh)
+
+                dx, dy = wx - x0, wy - y0
+                lx = ch * dx + sh * dy
+                ly = -sh * dx + ch * dy
+                traj.append([lx, ly, wv, _wrap_angle(wh - h0)])
+
+            states.append(st)
+            trajectories.append(traj)
+
+    print(f"[Data] 已从 {jsonl_path} 加载真实轨迹窗口: {len(states)} 条 ({len(segments)} 段)")
+    return states, trajectories
+
+
 def create_synthetic_dataset(n_samples=50000, state_dim=59, horizon=30, traj_dim=4):
     """当无外部数据集时，自动合成物理自洽的高速巡航与避障轨迹数据集。"""
     print(f"[Data] 正在生成单卡 A100 压力测试合成数据集 ({n_samples} 帧样本)...")
@@ -258,20 +349,20 @@ def main():
 
     # 2. 准备数据
     if args.dataset and Path(args.dataset).exists():
-        # TODO: 从 samples.jsonl 读取
-        states, trajectories = create_synthetic_dataset(50000)
+        states, trajectories = load_real_trajectory_dataset(Path(args.dataset))
     else:
         states, trajectories = create_synthetic_dataset(50000)
 
+    eff_batch = min(args.batch_size, max(1, len(states)))
     dataset = TrajectoryDataset(states, trajectories, torch)
     loader = DataLoader(
         dataset,
-        batch_size=args.batch_size,
+        batch_size=eff_batch,
         shuffle=True,
         num_workers=args.num_workers if torch.cuda.is_available() else 0,
         pin_memory=torch.cuda.is_available(),
         persistent_workers=(args.num_workers > 0 and torch.cuda.is_available()),
-        drop_last=True,
+        drop_last=len(states) >= eff_batch and eff_batch > 1,
     )
 
     # 3. 初始化模型与优化器
