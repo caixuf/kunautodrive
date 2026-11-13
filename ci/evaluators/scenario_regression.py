@@ -362,7 +362,9 @@ def compare_summary(baseline: dict, current: dict, tolerances: dict) -> list[str
     """Return a list of regression messages (empty == no regression).
 
     Only keys present in ``tolerances`` are gated. Supported gate types:
-      * ``min_ratio``          — current >= baseline * ratio
+      * ``min_ratio``          — current >= baseline - |baseline| * (1 - ratio)
+                                   (equals baseline * ratio when baseline >= 0,
+                                    and avoids tightening negative baselines)
       * ``max_abs_increase``   — current <= baseline + delta
     Missing/non-numeric values are skipped (they cannot regress meaningfully).
     """
@@ -375,11 +377,12 @@ def compare_summary(baseline: dict, current: dict, tolerances: dict) -> list[str
         if not isinstance(base, (int, float)) or not isinstance(cur, (int, float)):
             continue
         if "min_ratio" in rule:
-            threshold = base * rule["min_ratio"]
+            ratio = rule["min_ratio"]
+            threshold = base * ratio if base >= 0 else base - abs(base) * (1.0 - ratio)
             if cur < threshold:
                 regressions.append(
                     f"{metric}: {cur:.3f} < {threshold:.3f} "
-                    f"(baseline {base:.3f} x {rule['min_ratio']})"
+                    f"(baseline {base:.3f}, min_ratio {ratio})"
                 )
         if "max_abs_increase" in rule:
             threshold = base + rule["max_abs_increase"]

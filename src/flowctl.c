@@ -27,6 +27,7 @@
 #include "config_manager.h"
 #include "error_codes.h"
 #include "adas_msgs_gen.h"
+#include <cjson/cJSON.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,6 +36,46 @@
 
 #define FLOWENGINE_VERSION "1.0.0"
 #define FLOWCTL_MAX_TOPICS 64
+
+static cJSON* read_state_json(void) {
+    FILE* f = fopen(flowengine_state_file(), "r");
+    if (!f) return NULL;
+    char buf[32768];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    return cJSON_Parse(buf);
+}
+
+static const cJSON* find_topics_array(const cJSON* root) {
+    const cJSON* topics = cJSON_GetObjectItemCaseSensitive(root, "topics");
+    if (cJSON_IsArray(topics)) return topics;
+    const cJSON* metrics = cJSON_GetObjectItemCaseSensitive(root, "metrics");
+    if (cJSON_IsObject(metrics)) {
+        topics = cJSON_GetObjectItemCaseSensitive(metrics, "topics");
+        if (cJSON_IsArray(topics)) return topics;
+    }
+    return NULL;
+}
+
+static void collect_json_strings_by_key(const cJSON* node, const char* key,
+                                        char out[][64], int* count, int max_count) {
+    if (!node || *count >= max_count) return;
+    if (cJSON_IsObject(node)) {
+        const cJSON* item = cJSON_GetObjectItemCaseSensitive(node, key);
+        if (cJSON_IsString(item) && item->valuestring && item->valuestring[0]) {
+            snprintf(out[*count], 64, "%s", item->valuestring);
+            (*count)++;
+        }
+        for (const cJSON* child = node->child; child && *count < max_count; child = child->next) {
+            collect_json_strings_by_key(child, key, out, count, max_count);
+        }
+    } else if (cJSON_IsArray(node)) {
+        for (const cJSON* child = node->child; child && *count < max_count; child = child->next) {
+            collect_json_strings_by_key(child, key, out, count, max_count);
+        }
+    }
+}
 
 /* ── 帮助 ────────────────────────────────────────────────── */
 
@@ -83,39 +124,27 @@ static int cmd_list_tasks(void) {
     printf("  %-20s %-30s %s\n", "────", "───────────", "───");
 
     /* Try JSON file first */
-    FILE* f = fopen(flowengine_state_file(), "r");
-    if (f) {
-        char buf[32768];
-        size_t n = fread(buf, 1, sizeof(buf)-1, f);
-        fclose(f);
-        buf[n] = '\0';
-        /* Parse registry tasks */
-        const char* r = strstr(buf, "\"registry\":");
-        if (r) {
-            const char* tp = strstr(r, "\"tasks\":[");
-            if (tp) {
-                const char* p = tp + 9;
-                int count = 0;
-                while (*p && *p != ']' && count < 20) {
-                    const char* nm = strstr(p, "\"name\":\"");
-                    const char* end = strstr(p, "}]");
-                    if (!nm) break;
-                    if (end && nm > end) break;
-                    nm += 8;
-                    char name[64] = {0}, desc[256] = {0};
-                    int i = 0; while (*nm && *nm != '"' && i < 63) name[i++] = *nm++;
-                    const char* ds = strstr(nm, "\"desc\":\"");
-                    if (ds) { ds += 8; i = 0; while (*ds && *ds != '"' && i < 255) desc[i++] = *ds++; }
-                    printf("  %-20s %-30s %s\n", name, desc, "—");
-                    p = strstr(nm, "},{");
-                    if (!p) break;
-                    p += 3;
-                    count++;
-                }
-                printf("\n  Total: %d tasks (from registry)\n", count);
-                return 0;
+    cJSON* root = read_state_json();
+    if (root) {
+        const cJSON* reg = cJSON_GetObjectItemCaseSensitive(root, "registry");
+        const cJSON* tasks = cJSON_IsObject(reg) ? cJSON_GetObjectItemCaseSensitive(reg, "tasks") : NULL;
+        if (cJSON_IsArray(tasks)) {
+            int count = 0;
+            const cJSON* item = NULL;
+            cJSON_ArrayForEach(item, tasks) {
+                if (count >= 20) break;
+                const cJSON* jname = cJSON_GetObjectItemCaseSensitive(item, "name");
+                if (!cJSON_IsString(jname) || !jname->valuestring) continue;
+                const cJSON* jdesc = cJSON_GetObjectItemCaseSensitive(item, "desc");
+                const char* desc = (cJSON_IsString(jdesc) && jdesc->valuestring) ? jdesc->valuestring : "";
+                printf("  %-20s %-30s %s\n", jname->valuestring, desc, "—");
+                count++;
             }
+            printf("\n  Total: %d tasks (from registry)\n", count);
+            cJSON_Delete(root);
+            return 0;
         }
+        cJSON_Delete(root);
     }
 
     /* Fallback: local registry */
@@ -150,37 +179,39 @@ static int cmd_list_topics(void) {
     }
 
     /* Fallback: parse state file for live stats */
-    FILE* f = fopen(flowengine_state_file(), "r");
-    if (!f) {
+    cJSON* root = read_state_json();
+    if (!root) {
         printf("  (no data — start flow_launcher first)\n");
         return 0;
     }
-    char buf[8192];
-    size_t sz = fread(buf, 1, sizeof(buf)-1, f);
-    fclose(f);
-    buf[sz] = '\0';
 
-    const char* p = buf;
     int tcount = 0;
     char seen[FLOWCTL_MAX_TOPICS][64];
-    while ((p = strstr(p, "\"topic\":\"")) && tcount < FLOWCTL_MAX_TOPICS) {
-        p += 9; char tname[64] = {0}; int i = 0;
-        while (*p && *p != '"' && i < 63) tname[i++] = *p++;
-        /* Deduplicate */
-        int dup = 0;
-        for (int j = 0; j < tcount; j++) {
-            if (strcmp(seen[j], tname) == 0) { dup = 1; break; }
-        }
-        if (!dup) {
-            snprintf(seen[tcount], 64, "%s", tname);
-            const char* fp2 = strstr(p, "\"freq\":");
-            double freq = (fp2 && fp2 < p + 100) ? atof(fp2 + 7) : 0.0;
-            printf("  %-30s %-8s %-10s %s%.1f Hz\n",
-                   tname, "—", "—",
-                   freq > 0 ? "" : "—", freq);
-            tcount++;
+    const cJSON* topics_arr = find_topics_array(root);
+    if (topics_arr) {
+        const cJSON* item = NULL;
+        cJSON_ArrayForEach(item, topics_arr) {
+            if (tcount >= FLOWCTL_MAX_TOPICS) break;
+            const cJSON* jtopic = cJSON_GetObjectItemCaseSensitive(item, "topic");
+            if (!cJSON_IsString(jtopic) || !jtopic->valuestring) continue;
+            const char* tname = jtopic->valuestring;
+            /* Deduplicate */
+            int dup = 0;
+            for (int j = 0; j < tcount; j++) {
+                if (strcmp(seen[j], tname) == 0) { dup = 1; break; }
+            }
+            if (!dup) {
+                snprintf(seen[tcount], 64, "%s", tname);
+                const cJSON* jfreq = cJSON_GetObjectItemCaseSensitive(item, "freq");
+                double freq = cJSON_IsNumber(jfreq) ? jfreq->valuedouble : 0.0;
+                printf("  %-30s %-8s %-10s %s%.1f Hz\n",
+                       tname, "—", "—",
+                       freq > 0 ? "" : "—", freq);
+                tcount++;
+            }
         }
     }
+    cJSON_Delete(root);
     printf("\n  Total: %d topics (from state file)\n", tcount);
     return 0;
 }
@@ -232,28 +263,16 @@ static int cmd_list_params(void) {
 static int cmd_graph(void) {
     printf("Topology:\n\n");
 
-    FILE* f = fopen(flowengine_state_file(), "r");
-    if (!f) {
+    cJSON* root = read_state_json();
+    if (!root) {
         printf("  (no data)\n");
         return 0;
     }
 
-    char buf[8192];
-    size_t n = fread(buf, 1, sizeof(buf)-1, f);
-    fclose(f);
-    buf[n] = '\0';
-
     /* Parse and build simple graph */
-    const char* p = buf;
     char nodes[32][64] = {{0}};
     int ncount = 0;
-
-    while ((p = strstr(p, "\"name\":\"")) && ncount < 32) {
-        p += 8;
-        int i = 0;
-        while (*p && *p != '"' && i < 63) nodes[ncount][i++] = *p++;
-        if (nodes[ncount][0]) ncount++;
-    }
+    collect_json_strings_by_key(root, "name", nodes, &ncount, 32);
 
     /* Simple ASCII rendering */
     for (int i = 0; i < ncount; i++) {
@@ -263,18 +282,17 @@ static int cmd_graph(void) {
     printf("\n\n");
 
     /* Topic edges */
-    p = buf;
+    char topics[FLOWCTL_MAX_TOPICS][64] = {{0}};
+    int tcount = 0;
+    collect_json_strings_by_key(root, "topic", topics, &tcount, FLOWCTL_MAX_TOPICS);
     char prev_topic[64] = "";
-    while ((p = strstr(p, "\"topic\":\""))) {
-        p += 9;
-        char tname[64] = {0};
-        int i = 0;
-        while (*p && *p != '"' && i < 63) tname[i++] = *p++;
-        if (tname[0] && strcmp(tname, prev_topic) != 0) {
-            printf("    ├─ %s\n", tname);
-            snprintf(prev_topic, 64, "%s", tname);
+    for (int i = 0; i < tcount; i++) {
+        if (topics[i][0] && strcmp(topics[i], prev_topic) != 0) {
+            printf("    ├─ %s\n", topics[i]);
+            snprintf(prev_topic, sizeof(prev_topic), "%.63s", topics[i]);
         }
     }
+    cJSON_Delete(root);
 
     printf("\n  Run 'flowctl dashboard' for interactive topology viewer\n");
     return 0;
@@ -330,43 +348,35 @@ static int cmd_topic_stats(const char* topic) {
     if (!bus) { fprintf(stderr, "Error: cannot create bus\n"); return 1; }
 
     /* Try to read stats from discovery JSON first */
-    FILE* f = fopen(flowengine_state_file(), "r");
-    if (f) {
-        char buf[8192];
-        size_t n = fread(buf, 1, sizeof(buf)-1, f);
-        fclose(f);
-        buf[n] = '\0';
-
+    cJSON* root = read_state_json();
+    if (root) {
         printf("Topic: %s\n\n", topic);
 
-        /* Search per-topic stats in "topics":[...] array */
-        const char* tp = strstr(buf, "\"topics\":[");
-        if (tp) {
-            const char* p = tp + 10;  /* skip past "topics":[ */
-            while ((p = strstr(p, "\"topic\":\""))) {
-                p += 9;
-                char tname[64] = {0};
-                int i = 0;
-                while (*p && *p != '"' && i < 63) tname[i++] = *p++;
+        const cJSON* topics_arr = find_topics_array(root);
+        if (topics_arr) {
+            const cJSON* item = NULL;
+            cJSON_ArrayForEach(item, topics_arr) {
+                const cJSON* jtopic = cJSON_GetObjectItemCaseSensitive(item, "topic");
+                if (!cJSON_IsString(jtopic) || !jtopic->valuestring) continue;
+                if (strcmp(jtopic->valuestring, topic) == 0) {
+                    const cJSON* jpub  = cJSON_GetObjectItemCaseSensitive(item, "pub");
+                    const cJSON* jdel  = cJSON_GetObjectItemCaseSensitive(item, "del");
+                    const cJSON* jdrop = cJSON_GetObjectItemCaseSensitive(item, "drop");
+                    const cJSON* jlat  = cJSON_GetObjectItemCaseSensitive(item, "lat_us");
+                    const cJSON* jp50  = cJSON_GetObjectItemCaseSensitive(item, "p50_us");
+                    const cJSON* jp99  = cJSON_GetObjectItemCaseSensitive(item, "p99_us");
+                    const cJSON* jfreq = cJSON_GetObjectItemCaseSensitive(item, "freq");
+                    const cJSON* jsubs = cJSON_GetObjectItemCaseSensitive(item, "subs");
 
-                if (strcmp(tname, topic) == 0) {
-                    /* Found matching entry — extract fields */
-                    unsigned long pub = 0, del = 0, drop = 0;
-                    unsigned long lat_avg = 0, p50 = 0, p99 = 0;
-                    double freq = 0.0;
-                    unsigned int subs = 0;
+                    unsigned long pub     = cJSON_IsNumber(jpub)  ? (unsigned long)jpub->valuedouble  : 0;
+                    unsigned long del     = cJSON_IsNumber(jdel)  ? (unsigned long)jdel->valuedouble  : 0;
+                    unsigned long drop    = cJSON_IsNumber(jdrop) ? (unsigned long)jdrop->valuedouble : 0;
+                    unsigned long lat_avg = cJSON_IsNumber(jlat)  ? (unsigned long)jlat->valuedouble  : 0;
+                    unsigned long p50     = cJSON_IsNumber(jp50)  ? (unsigned long)jp50->valuedouble  : 0;
+                    unsigned long p99     = cJSON_IsNumber(jp99)  ? (unsigned long)jp99->valuedouble  : 0;
+                    double        freq    = cJSON_IsNumber(jfreq) ? jfreq->valuedouble                : 0.0;
+                    unsigned int  subs    = cJSON_IsNumber(jsubs) ? (unsigned int)jsubs->valuedouble  : 0;
 
-                    const char* kp;
-                    if ((kp = strstr(p, "\"pub\":")))      pub      = strtoul(kp + 6,  NULL, 10);
-                    if ((kp = strstr(p, "\"del\":")))      del      = strtoul(kp + 6,  NULL, 10);
-                    if ((kp = strstr(p, "\"drop\":")))     drop     = strtoul(kp + 7,  NULL, 10);
-                    if ((kp = strstr(p, "\"lat_us\":")))   lat_avg  = strtoul(kp + 9,  NULL, 10);
-                    if ((kp = strstr(p, "\"p50_us\":")))   p50      = strtoul(kp + 9,  NULL, 10);
-                    if ((kp = strstr(p, "\"p99_us\":")))   p99      = strtoul(kp + 9,  NULL, 10);
-                    if ((kp = strstr(p, "\"freq\":")))     freq     = atof(kp + 7);
-                    if ((kp = strstr(p, "\"subs\":")))     subs     = (unsigned int)strtoul(kp + 7, NULL, 10);
-
-                    /* Limit field parsing to current object (stop at next '}') */
                     printf("  %-22s %lu\n",      "Published:",    pub);
                     printf("  %-22s %lu\n",      "Delivered:",    del);
                     printf("  %-22s %lu\n",      "Dropped:",      drop);
@@ -375,11 +385,13 @@ static int cmd_topic_stats(const char* topic) {
                     printf("  %-22s %lu µs\n",   "Avg latency:",  lat_avg);
                     printf("  %-22s %lu µs\n",   "P50 latency:",  p50);
                     printf("  %-22s %lu µs\n",   "P99 latency:",  p99);
+                    cJSON_Delete(root);
                     message_bus_destroy(bus);
                     return 0;
                 }
             }
         }
+        cJSON_Delete(root);
         printf("  (topic not found in state file)\n");
         message_bus_destroy(bus);
         return 0;
@@ -692,36 +704,37 @@ int main(int argc, char** argv) {
             printf("  node [shape=box, style=filled, fillcolor=\"#1a1a2e\","
                    " fontcolor=\"#58a6ff\", fontname=\"monospace\", fontsize=10];\n");
             printf("  edge [color=\"#30363d\", fontcolor=\"#8b949e\", fontsize=9];\n\n");
-            /* Parse registry JSON for tasks and topics */
-            const char* p = json;
-            /* Extract tasks */
-            const char* tp = strstr(p, "\"tasks\":[");
-            if (tp) {
-                tp = strchr(tp, '[') + 1;
-                while (*tp && *tp != ']') {
-                    const char* nm = strstr(tp, "\"name\":\"");
-                    const char* end = strstr(tp, "}]");
-                    if (!nm) break;
-                    if (end && nm > end) break;
-                    nm += 8; char name[64] = {0}; int i = 0;
-                    while (*nm && *nm != '"' && i < 63) name[i++] = *nm++;
-                    printf("  \"%s\" [fillcolor=\"#0d1117\", fontcolor=\"#c9d1d9\"];\n", name);
-                    tp = strstr(nm, "},{");
-                    if (!tp) break;
-                    tp += 3;
+            /* Parse registry JSON for tasks and topic edges */
+            cJSON* root = cJSON_Parse(json);
+            if (root) {
+                const cJSON* tasks = cJSON_GetObjectItemCaseSensitive(root, "tasks");
+                if (cJSON_IsArray(tasks)) {
+                    const cJSON* task = NULL;
+                    cJSON_ArrayForEach(task, tasks) {
+                        const cJSON* jname = cJSON_GetObjectItemCaseSensitive(task, "name");
+                        if (!cJSON_IsString(jname) || !jname->valuestring) continue;
+                        const char* tname = jname->valuestring;
+                        printf("  \"%s\" [fillcolor=\"#0d1117\", fontcolor=\"#c9d1d9\"];\n", tname);
+
+                        const cJSON* outputs = cJSON_GetObjectItemCaseSensitive(task, "outputs");
+                        const cJSON* out_t = NULL;
+                        cJSON_ArrayForEach(out_t, outputs) {
+                            if (cJSON_IsString(out_t) && out_t->valuestring) {
+                                printf("  \"%s\" -> \"%s\" [label=\"%s\"];\n",
+                                       tname, out_t->valuestring, out_t->valuestring);
+                            }
+                        }
+                        const cJSON* inputs = cJSON_GetObjectItemCaseSensitive(task, "inputs");
+                        const cJSON* in_t = NULL;
+                        cJSON_ArrayForEach(in_t, inputs) {
+                            if (cJSON_IsString(in_t) && in_t->valuestring) {
+                                printf("  \"%s\" -> \"%s\" [label=\"%s\"];\n",
+                                       in_t->valuestring, tname, in_t->valuestring);
+                            }
+                        }
+                    }
                 }
-            }
-            /* Extract topics as edges */
-            p = json;
-            while ((p = strstr(p, "\"topic\":\""))) {
-                p += 9; char tname[64] = {0}; int i = 0;
-                while (*p && *p != '"' && i < 63) tname[i++] = *p++;
-                const char* nm = strstr(p, "\"name\":\"");
-                if (nm && nm < p + 200) {
-                    nm += 8; char nname[64] = {0}; i = 0;
-                    while (*nm && *nm != '"' && i < 63) nname[i++] = *nm++;
-                    printf("  \"%s\" -> \"%s\" [label=\"%s\"];\n", nname, tname, tname);
-                }
+                cJSON_Delete(root);
             }
             printf("}\n");
             free(json);
@@ -818,28 +831,19 @@ int main(int argc, char** argv) {
     /* ── registry ── */
     if (strcmp(cmd, "registry") == 0) {
         /* Try JSON file first (live data from e2e) */
-        FILE* f = fopen(flowengine_state_file(), "r");
-        if (f) {
-            char buf[32768];
-            size_t n = fread(buf, 1, sizeof(buf)-1, f);
-            fclose(f);
-            buf[n] = '\0';
-            const char* r = strstr(buf, "\"registry\":");
-            if (r) {
-                /* extract just the registry JSON object */
-                const char* start = strchr(r, '{');
-                if (start) {
-                    int depth = 1;
-                    const char* end = start + 1;
-                    while (*end && depth > 0) {
-                        if (*end == '{') depth++;
-                        else if (*end == '}') depth--;
-                        end++;
-                    }
-                    printf("%.*s\n", (int)(end - start), start);
+        cJSON* root = read_state_json();
+        if (root) {
+            const cJSON* reg = cJSON_GetObjectItemCaseSensitive(root, "registry");
+            if (cJSON_IsObject(reg)) {
+                char* printed = cJSON_PrintUnformatted(reg);
+                if (printed) {
+                    printf("%s\n", printed);
+                    cJSON_free(printed);
+                    cJSON_Delete(root);
                     return 0;
                 }
             }
+            cJSON_Delete(root);
         }
         /* Fallback: local registry */
         char* json = flow_registry_export_json();
