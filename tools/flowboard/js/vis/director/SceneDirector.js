@@ -11,6 +11,7 @@
 import { createSceneStore, roadNetworkHash } from '../store/SceneStore.js';
 import { mapDataForScenario } from '../model/MapData.js';
 import { headingBetweenPoints } from '../math/Coord.js';
+import { roadHeightAt } from '../math/RoadHeight.js';
 import { createRoadView } from '../view/RoadView.js';
 import { createGroundView } from '../view/GroundView.js';
 import { createVehicleView } from '../view/VehicleView.js';
@@ -282,11 +283,16 @@ export function createSceneDirector(scene) {
     if (frame.ego !== undefined && !skipEgo) {
       const e = frame.ego;
       const newX = e.x || 0;
+      const newY = e.y || 0;
+      const prevZ = store.ego ? store.ego.z : undefined;
+      const resolvedZ = (typeof e.z === 'number' && isFinite(e.z) && e.z !== 0)
+        ? e.z
+        : (store.roadNetwork ? roadHeightAt(store, newX, newY, prevZ) : (e.z || 0));
 
       store.ego = {
         x: newX,
-        y: e.y || 0,
-        z: e.z || 0,
+        y: newY,
+        z: resolvedZ,
         pitch: (typeof e.pitch === 'number' && isFinite(e.pitch)) ? e.pitch : 0,
         roll: (typeof e.roll === 'number' && isFinite(e.roll)) ? e.roll : 0,
         mu_scale: (typeof e.mu_scale === 'number' && isFinite(e.mu_scale)) ? e.mu_scale : 1.0,
@@ -473,7 +479,9 @@ export function createSceneDirector(scene) {
       store.ego.y = _dr.smoothZ;
       store.ego.heading = _dr.smoothHeading;
       store.ego.speed = _dr.smoothSpeed;
-      store.ego.z = egoZ;
+      store.ego.z = store.roadNetwork
+        ? roadHeightAt(store, store.ego.x, store.ego.y, egoZ)
+        : egoZ;
       store.ego.smoothX = _dr.smoothX;
       store.ego.smoothZ = _dr.smoothZ;
       store.ego.smoothHeading = _dr.smoothHeading;

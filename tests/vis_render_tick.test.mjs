@@ -314,7 +314,10 @@ function makeM5UpgradeFrame() {
     ok('高架: ego 车辆实例存在', !!egoEntry && !!egoEntry.group);
     if (egoEntry?.group) {
       const [wx, wz] = [store.ego.x, -store.ego.y];
-      const expY = roadHeightAt(store, store.ego.x, store.ego.y) + VEHICLE_GROUND_Y;
+      const expRoadZ = roadHeightAt(store, store.ego.x, store.ego.y);
+      const expY = expRoadZ + VEHICLE_GROUND_Y;
+      ok('高架: store.ego.z 同步路面高程供相机跟随',
+        expRoadZ > 1.0 && Math.abs((store.ego.z || 0) - expRoadZ) < 1e-6);
       ok('高架: ego.position 贴地映射正确',
         Math.abs((egoEntry.group.position.x || 0) - wx) < 1e-6 &&
         Math.abs((egoEntry.group.position.y || 0) - expY) < 1e-6 &&
