@@ -23,6 +23,7 @@
 #include "traffic_light.h"
 #include "adas_msgs_gen.h"   /* ObstacleList_deserialize */
 #include "piecewise_jerk_qp.h"
+#include "planning_speed_smooth.h"
 
 #include "coroutine_task.h"
 #undef LOG_TRACE
@@ -2913,26 +2914,40 @@ protected:
 
                     StgResult stg_res;
                     if (st_graph_plan(&stg, &stg_res) == 0) {
-                        /* 反填 points[].v：取轨迹点 s 处剖面速度。
-                         * 前视对齐 control 0.5s 前视点：lookahead = 0.3·v0 */
+                        /* 反填 points[].v：线性插值 ST 剖面速度 + 曲率/加减速前向后向平滑，
+                         * 消除 1m 网格截断阶跃与弯心钳幅折角导致的 jerk 尖峰。 */
                         double lookahead = 0.3 * stg.v0;
-                        for (int i = 0; i < n_pts; i++) {
+                        double v_sm[256];
+                        double s_sm[256];
+                        double k_sm[256];
+                        double a_sm[256];
+                        double j_sm[256];
+                        int m = n_pts < 256 ? n_pts : 256;
+                        for (int i = 0; i < m; i++) {
                             double s_i = (double)points[i].s - (double)points[0].s + lookahead;
-                            int idx = (int)(s_i / STG_S_RES);
-                            if (idx < 0) idx = 0;
-                            if (idx >= stg_res.n) idx = stg_res.n - 1;
-                            points[i].v = (float)stg_res.v_out[idx];
+                            s_sm[i] = (double)points[i].s - (double)points[0].s;
+                            k_sm[i] = (double)points[i].kappa;
+                            v_sm[i] = planning_speed::sample_speed_linear(
+                                stg_res.v_out, stg_res.n, STG_S_RES, s_i);
                         }
-                        /* 自洽钳幅：前视位移会把"过弯后加速段"的 v 贴到弯心 κ 上
-                         * （实测 κ=0.099 配 v=7.2 → a_lat=5.1 → 整帧 invalid）。
-                         * 按本点 κ 逐点钳 v ≤ 0.9·sqrt(a_lat_max/|κ|)——发布轨迹
-                         * 永不违反自身可行性检查（不变量：检查通过构造即真）。 */
-                        for (int i = 0; i < n_pts; i++) {
+                        planning_speed::smooth_speed_profile(
+                            s_sm, k_sm, m, STG_A_LAT_MAX, 3.0, STG_A_MAX,
+                            environment_max_speed, v_sm, a_sm, j_sm);
+                        for (int i = 0; i < m; i++) {
+                            points[i].v = (float)v_sm[i];
+                            points[i].a = (float)a_sm[i];
+                            points[i].jerk = (float)j_sm[i];
+                        }
+                        for (int i = m; i < n_pts; i++) {
+                            double s_i = (double)points[i].s - (double)points[0].s + lookahead;
+                            double v_i = planning_speed::sample_speed_linear(
+                                stg_res.v_out, stg_res.n, STG_S_RES, s_i);
                             double k = fabs((double)points[i].kappa);
                             if (k > 1e-6) {
                                 double vmax = 0.9 * sqrt(5.0 / k);
-                                if ((double)points[i].v > vmax) points[i].v = (float)vmax;
+                                if (v_i > vmax) v_i = vmax;
                             }
+                            points[i].v = (float)v_i;
                         }
                     } else {
                         /* ST 图失败 → 保留 1961 线性斜坡（已在 spd_out） */

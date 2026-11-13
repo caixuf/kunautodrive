@@ -567,6 +567,14 @@ add_executable(test_planning_coordinates test_planning_coordinates.cpp)
 target_include_directories(test_planning_coordinates PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME planning_coordinates COMMAND test_planning_coordinates)
 
+add_executable(test_behavior_gap_eval test_behavior_gap_eval.cpp)
+target_include_directories(test_behavior_gap_eval PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME behavior_gap_eval COMMAND test_behavior_gap_eval)
+
+add_executable(test_planning_speed_smooth test_planning_speed_smooth.cpp)
+target_include_directories(test_planning_speed_smooth PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME planning_speed_smooth COMMAND test_planning_speed_smooth)
+
 add_executable(test_planning_fallback_when_match_invalid test_planning_fallback_when_match_invalid.cpp)
 target_include_directories(test_planning_fallback_when_match_invalid PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME test_planning_fallback_when_match_invalid COMMAND test_planning_fallback_when_match_invalid)

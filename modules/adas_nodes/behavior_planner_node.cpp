@@ -23,6 +23,7 @@
 #include "traffic_light.h"
 #include "state_machine.h"
 #include "param_registry.h"
+#include "behavior_gap_eval.h"
 #undef LOG_TRACE
 #undef LOG_DEBUG
 #undef LOG_INFO
@@ -931,129 +932,63 @@ protected:
              *
              * 之前只检查 current_idx>0 / current_idx<lc-1，导致 lane 2→lane 1
              * 被判定为合法变道，ego 冲入对向车道逆行。 */
+            /* ── 左右车道评估（委托 behavior_gap_eval.h 统一计算前后安全与前车 TTC） ── */
             int adj_idx = -1;
             double adj_speed = g.target_speed;
 
-            /* 变道纵向方向：沿车头投影（2026-08-04 返程修复）——旧实现
-             * dx>0/dx<0 硬编码前进向 +x，掉头返程（heading≈π 朝 -x）时
-             * 前/后判定全反：前方 95m 的车被当后方、后方被当前方 →
-             * 变道 gap 评估错乱 + on_return 抑制超车（掩盖此 bug）。
-             * 与主 lead 检测同款投影，前进/返程/任意 heading 正确。 */
-            const double lc_fwd_x = std::cos(g.ego_heading);
-            const double lc_fwd_y = std::sin(g.ego_heading);
-            /* ref_path 只覆盖 ego 前方；将目标车道后车投影到路径起点会
-             * 得到 along=0，漏掉后向安全检查。目标车道换道窗口只需局部
-             * 纵向关系，沿当前车头方向投影可同时覆盖前车、后车和并行车。 */
-            auto target_lane_along = [&](double obs_x, double obs_y) {
-                return (obs_x - g.ego_x) * lc_fwd_x +
-                       (obs_y - g.ego_y) * lc_fwd_y;
+            behavior_gap::GapEvalConfig gap_cfg;
+            gap_cfg.ego_x = g.ego_x;
+            gap_cfg.ego_y = g.ego_y;
+            gap_cfg.ego_v = g.ego_v;
+            gap_cfg.ego_heading = g.ego_heading;
+            gap_cfg.ego_lane_d = ego_lane_d;
+            gap_cfg.target_speed = g.target_speed;
+            gap_cfg.min_gap = min_gap;
+            gap_cfg.lc_gap_mult = g.lc_gap_mult;
+            gap_cfg.rear_safe_min_m = g.rear_safe_min_m;
+            gap_cfg.rear_safe_time_s = g.rear_safe_time_s;
+            gap_cfg.lat_tol = lw * 0.5 + g.same_lane_tol_offset;
+
+            auto project_obs_d = [&](double ox, double oy, double& out_d) -> bool {
+                planning_coord::Projection obs_projection;
+                if (project_to_ref(ox, oy, obs_projection) &&
+                    projection_near_road(ox, oy, obs_projection, lc, lw)) {
+                    out_d = obs_projection.d;
+                    return true;
+                }
+                return false;
             };
-            /* ref_path 在返程时按行进方向反序发布，Frenet d 也随切线翻转。
-             * 因此“右侧通行半幅”在行进方向坐标中始终是 lane [lc/2, lc-1]；
-             * 再按 on_return 翻到 [0, lc/2-1] 会二次镜像，把返程车强制送回
-             * 去程物理半幅，与迎面 NPC 共道。 */
-            /* 左：lane_idx 减小 → y 增大方向 */
-            double left_gap = 1e9;
-            double left_lead_v = g.target_speed;
-            bool left_rear_safe = false;
-            bool left_same_side = false;  /* 是否与 ego 在道路中心同侧 */
+
+            behavior_gap::LaneGapResult left_res;
             if (current_idx > 0) {
                 int tl = current_idx - 1;
                 double tl_y = planning_coord::lane_center_d(tl, lc, lw, side_offset);
-                left_same_side = g.road_oneway ||
-                    (tl >= legal_first && tl <= legal_last);
-
-                if (left_same_side && has_ego_projection) {
-                    double lat_tol = lw * 0.5 + g.same_lane_tol_offset;
-                    left_rear_safe = true;
-                    for (int i = 0; i < g.obs_count; i++) {
-                        const double along = target_lane_along(g.obs_x[i], g.obs_y[i]);
-                        double obs_d = 0.0;
-                        planning_coord::Projection obs_projection;
-                        if (along > 0.0 && project_to_ref(g.obs_x[i], g.obs_y[i], obs_projection) &&
-                            projection_near_road(g.obs_x[i], g.obs_y[i], obs_projection, lc, lw)) {
-                            obs_d = obs_projection.d;
-                        } else {
-                            const double rx = g.obs_x[i] - g.ego_x;
-                            const double ry = g.obs_y[i] - g.ego_y;
-                            const double lat_left = -rx * lc_fwd_y + ry * lc_fwd_x;
-                            obs_d = ego_lane_d + lat_left;
-                        }
-                        if (fabs(obs_d - tl_y) > lat_tol) continue;
-
-                        if (along > 0.0) {
-                            if (along < left_gap) {
-                                left_gap = along;
-                                left_lead_v = g.obs_vx[i] * lc_fwd_x +
-                                              g.obs_vy[i] * lc_fwd_y;
-                            }
-                        } else {
-                            double rd = -along;
-                            double obs_along_v = g.obs_vx[i] * lc_fwd_x +
-                                                 g.obs_vy[i] * lc_fwd_y;
-                            double rrs = obs_along_v - g.ego_v;
-                            double rear_min_gap = fmax(min_gap, g.rear_safe_min_m);
-                            double min_rd = (rrs > 0.0)
-                                ? fmax(rear_min_gap, rrs * g.rear_safe_time_s)
-                                : rear_min_gap;
-                            if (rd < min_rd) left_rear_safe = false;
-                        }
-                    }
-                }
+                bool same_side = g.road_oneway || (tl >= legal_first && tl <= legal_last);
+                left_res = behavior_gap::evaluate_target_lane_gap(
+                    gap_cfg, tl_y, same_side, has_ego_projection,
+                    g.obs_x, g.obs_y, g.obs_vx, g.obs_vy, g.obs_count, project_obs_d);
             }
 
-            /* 右：lane_idx 增大 → y 减小方向 */
-            double right_gap = 1e9;
-            double right_lead_v = g.target_speed;
-            bool right_rear_safe = false;
-            bool right_same_side = false;
+            behavior_gap::LaneGapResult right_res;
             if (current_idx < lc - 1) {
                 int tl = current_idx + 1;
                 double tl_y = planning_coord::lane_center_d(tl, lc, lw, side_offset);
-                right_same_side = g.road_oneway ||
-                    (tl >= legal_first && tl <= legal_last);
-
-                if (right_same_side && has_ego_projection) {
-                    double lat_tol = lw * 0.5 + g.same_lane_tol_offset;
-                    right_rear_safe = true;
-                    for (int i = 0; i < g.obs_count; i++) {
-                        const double along = target_lane_along(g.obs_x[i], g.obs_y[i]);
-                        double obs_d = 0.0;
-                        planning_coord::Projection obs_projection;
-                        if (along > 0.0 && project_to_ref(g.obs_x[i], g.obs_y[i], obs_projection) &&
-                            projection_near_road(g.obs_x[i], g.obs_y[i], obs_projection, lc, lw)) {
-                            obs_d = obs_projection.d;
-                        } else {
-                            const double rx = g.obs_x[i] - g.ego_x;
-                            const double ry = g.obs_y[i] - g.ego_y;
-                            const double lat_left = -rx * lc_fwd_y + ry * lc_fwd_x;
-                            obs_d = ego_lane_d + lat_left;
-                        }
-                        if (fabs(obs_d - tl_y) > lat_tol) continue;
-
-                        if (along > 0.0) {
-                            if (along < right_gap) {
-                                right_gap = along;
-                                right_lead_v = g.obs_vx[i] * lc_fwd_x +
-                                               g.obs_vy[i] * lc_fwd_y;
-                            }
-                        } else {
-                            double rd = -along;
-                            double obs_along_v = g.obs_vx[i] * lc_fwd_x +
-                                                 g.obs_vy[i] * lc_fwd_y;
-                            double rrs = obs_along_v - g.ego_v;
-                            double rear_min_gap = fmax(min_gap, g.rear_safe_min_m);
-                            double min_rd = (rrs > 0.0)
-                                ? fmax(rear_min_gap, rrs * g.rear_safe_time_s)
-                                : rear_min_gap;
-                            if (rd < min_rd) right_rear_safe = false;
-                        }
-                    }
-                }
+                bool same_side = g.road_oneway || (tl >= legal_first && tl <= legal_last);
+                right_res = behavior_gap::evaluate_target_lane_gap(
+                    gap_cfg, tl_y, same_side, has_ego_projection,
+                    g.obs_x, g.obs_y, g.obs_vx, g.obs_vy, g.obs_count, project_obs_d);
             }
 
-            bool left_ok  = left_same_side && left_rear_safe && (left_gap > min_gap * g.lc_gap_mult);
-            bool right_ok = right_same_side && right_rear_safe && (right_gap > min_gap * g.lc_gap_mult);
+            double left_gap = left_res.front_gap;
+            double left_lead_v = left_res.front_speed;
+            bool left_rear_safe = left_res.rear_safe;
+            bool left_same_side = left_res.same_side;
+            double right_gap = right_res.front_gap;
+            double right_lead_v = right_res.front_speed;
+            bool right_rear_safe = right_res.rear_safe;
+            bool right_same_side = right_res.same_side;
+            bool left_ok  = left_res.ok;
+            bool right_ok = right_res.ok;
             /* 双向路保护：合法半幅按行进方向 Frenet 坐标固定，绝不以世界 y
              * 或 on_return 再次翻转。掉头若短暂落在错误半幅，只允许恢复到
              * 最近合法车道，不参与常规 gap 竞选。 */

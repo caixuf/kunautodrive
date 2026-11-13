@@ -3972,6 +3972,12 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         warnings.append(
             f"comfort: accel RMS {accel_rms:.2f} m/s² (WARN > {COMFORT_ACCEL_RMS_MAX_WARN_MPS2:.1f})"
         )
+    jerk_p95_fail = float(criteria.get("jerk_p95_fail_mps3", max(jerk_warn, 12.0)))
+    if jerk_p95 is not None and jerk_p95 > jerk_p95_fail:
+        failures.append(
+            f"comfort: jerk p95 {jerk_p95:.2f} m/s³ exceeds {jerk_p95_fail:.1f} m/s³ "
+            f"(sustained longitudinal roughness)"
+        )
 
     # ── 感知降频检测 ──
     # 场景有 entities 但 obstacles 长期为空 → 感知链路降频/掉线。
