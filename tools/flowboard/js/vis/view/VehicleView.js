@@ -20,7 +20,7 @@ import {
 import { getStdMaterial } from '../core/AssetFactory.js';
 import { initModelCache, getModel, _setVehicleLights, _relinkWheelUserData } from '../../models.js';
 import { worldToThree, headingToRotationY, forwardENU } from '../math/Coord.js';
-import { roadHeightAt } from '../math/RoadHeight.js';
+import { roadHeightAt, roadPitchAt } from '../math/RoadHeight.js';
 
 // ═══════════════════════════════════════════════════════════
 // createVehicleLights — THREE 灯光网格工厂（原在 VehicleLights.js，
@@ -976,8 +976,10 @@ export function createVehicleView(scene, renderer, modelCache) {
       // 轮子不会陷入路面也不会悬空。
       const roadZ = store ? roadHeightAt(store, ex, ey, vehicleData.z) : (vehicleData.z || 0);
       const ty = roadZ + VEHICLE_GROUND_Y;
+      const heading = vehicleData.heading || vehicleData.yaw || 0;
+      const slopePitch = store ? roadPitchAt(store, ex, ey, heading, roadZ) : 0;
       entry.group.position.set(tx, ty, tz);
-      entry.group.rotation.set(0, headingToRotationY(vehicleData.heading || vehicleData.yaw || 0), 0);
+      entry.group.rotation.set(0, headingToRotationY(heading), slopePitch);
       entry.steerAngle = vehicleData.steer ?? vehicleData.steerAngle ?? 0;
 
       // M5: 6-DOF 悬架俯仰/侧倾驱动簧上质量 (sprungGroup)，车轮始终贴地不悬空/穿模

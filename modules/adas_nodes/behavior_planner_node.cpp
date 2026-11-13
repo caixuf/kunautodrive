@@ -799,8 +799,9 @@ protected:
              * 前车在抖动的一帧里整个消失，ACC 随之被踢出。真实 ACC 用的是
              * 横向距离阈值 —— 它对索引抖动天然免疫，也能正确处理"前车正在
              * 跨线切入本车道"这种索引尚未更新的情形。
-             * 阈值取半车道 + 0.6m 余量，略宽于车道以捕捉切入车。 */
-            double lead_lat_tol = lw * 0.5 + 0.6;
+             * 阈值取半车道 + 0.2m 余量（3.5m 车道 = 1.95m），足以捕捉跨线切入车，
+             * 同时避免邻道车辆因 DBSCAN 近面质心偏移（~2.1~2.5m）被误判为本车道前车。 */
+            double lead_lat_tol = lw * 0.5 + 0.2;
             double best_gap = 1e9;
             double lead_speed = g.target_speed;
             uint32_t lead_id = 0;

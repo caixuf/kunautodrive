@@ -21,7 +21,7 @@ import {
   offsetAlongNormal,
   distanceENU,
 } from '../math/Coord.js';
-import { roadHeightAt } from '../math/RoadHeight.js';
+import { roadHeightAt, roadPitchAt } from '../math/RoadHeight.js';
 import { SCENE } from '../theme/tokens.js';
 
 const BRAKE_THRESHOLD = 0.5;
@@ -208,10 +208,11 @@ export function createEffectView(scene) {
     const rearEnuX = ego.x - fx * BRAKE_REAR_OFFSET_M;
     const rearEnuY = ego.y - fy * BRAKE_REAR_OFFSET_M;
     const groundZ = (ego.z != null) ? ego.z : roadHeightAt(store, rearEnuX, rearEnuY);
+    const slopePitch = roadPitchAt(store, rearEnuX, rearEnuY, heading, groundZ);
     const [bx, by, bz] = worldToThree(rearEnuX, rearEnuY, groundZ + BRAKE_LIFT_M);
 
     brakeGlow.position.set(bx, by, bz);
-    brakeGlow.rotation.y = headingToRotationY(heading);
+    brakeGlow.rotation.set(0, headingToRotationY(heading), slopePitch);
 
     const intensity = Math.min(1.0, (ego.brake || 0) / 1.5);
     brakeGlow.material.opacity = 0.18 + intensity * 0.34;
@@ -324,12 +325,13 @@ export function createEffectView(scene) {
       const sideSign = (cutDirX * normX + cutDirZ * normZ) >= 0 ? 1 : -1;
 
       const entGroundZ = (ent.z != null) ? ent.z : roadHeightAt(store, ent.x || 0, ent.y || 0);
+      const slopePitch = roadPitchAt(store, ent.x || 0, ent.y || 0, entHeading, entGroundZ);
       const [cx, cy, cz] = worldToThree(ent.x || 0, ent.y || 0, entGroundZ + CUTIN_LIFT_M);
       const halfW = (ent.width || 2.0) * 0.5;
       const [px, , pz] = offsetAlongNormal(cx, cz, normX, normZ, sideSign * (halfW + 0.14));
 
       chevron.position.set(px, cy, pz);
-      chevron.rotation.y = headingToRotationY(entHeading);
+      chevron.rotation.set(0, headingToRotationY(entHeading), slopePitch);
       chevron.scale.set(1.0, 1.0, sideSign);
       chevron.material.opacity = 0.42 + 0.44 * smoothPulse;
     }
@@ -369,14 +371,15 @@ export function createEffectView(scene) {
     const [rtx, , rtz] = offsetAlongNormal(rx, rz, normX, normZ, WAKE_TRACK_HALF_M);
 
     const rotY = headingToRotationY(heading);
+    const slopePitch = roadPitchAt(store, rearEnuX, rearEnuY, heading, groundZ);
     const lenScale = Math.min(1.8, 0.7 + speed * 0.045);
 
     wakeLeft.position.set(lx, ry, lz);
-    wakeLeft.rotation.y = rotY;
+    wakeLeft.rotation.set(0, rotY, slopePitch);
     wakeLeft.scale.set(lenScale, 1.0, 1.0);
 
     wakeRight.position.set(rtx, ry, rtz);
-    wakeRight.rotation.y = rotY;
+    wakeRight.rotation.set(0, rotY, slopePitch);
     wakeRight.scale.set(lenScale, 1.0, 1.0);
 
     wakeMat.opacity = Math.min(0.28, 0.05 + speed * 0.012);

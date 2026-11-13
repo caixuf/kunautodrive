@@ -1929,13 +1929,16 @@ protected:
              * 车道"的邻道车误判为跟车目标（实测永久刹停，见下方详注）。 */
             if (g.has_vstate && g.lane_count >= 1) {
                 double lane_w = g.lane_width;
-                /* ego 当前车道：用 nearest_lane + 单向路 side_offset 反推（与 W1
-                 * target_lane_offset 同源）。旧式 (-ego_y)/lane_w 忽略单向路
-                 * 车道组整体偏到 -y 侧的 side_offset，单向 4 车道会算错车道。 */
+                /* ego 当前车道：先用 project_to_reference_path 求 Frenet 横向坐标 ego_d，
+                 * 再用 nearest_lane + 单向路 side_offset 反推。绝不能直接传世界坐标 g.ego_y，
+                 * 否则道路偏离 y=0（如 city_comprehensive y=-22）时 cur_lane 会被夹死在最右侧车道，
+                 * 导致 TTC follow 把右侧邻道车误当本车道前车而无端降速跟车。 */
+                double ego_s_ttc = 0.0, ego_d_ttc = g.ego_y;
+                project_to_reference_path(g.ego_x, g.ego_y, ego_s_ttc, ego_d_ttc);
                 const double cur_side_offset = planning_coord::lane_group_side_offset(
                     g.lane_count, lane_w, g.road_oneway != 0);
                 int cur_lane = planning_coord::nearest_lane(
-                    g.ego_y, g.lane_count, lane_w, !g.road_oneway, cur_side_offset);
+                    ego_d_ttc, g.lane_count, lane_w, !g.road_oneway, cur_side_offset);
                 if (cur_lane < 0) cur_lane = 0;
                 if (cur_lane >= g.lane_count) cur_lane = g.lane_count - 1;
                 double min_gap = 1e9;
@@ -2019,7 +2022,7 @@ protected:
                         lane_w,
                         /*along_min*/ 0.0, /*along_max*/ 80.0,
                         /*rel_v_min*/ -2.0,
-                        /*lat_max*/   lane_w * 0.5 + 0.6,
+                        /*lat_max*/   lane_w * 0.5 + 0.2,
                         /*require_hint*/ true);
                     if (idx >= 0) {
                         const double rx = g.obs_x[idx] - g.ego_x;
@@ -2069,7 +2072,7 @@ protected:
                         } else {
                             lat = std::fabs(-rx * fwd_y + ry * fwd_x);
                         }
-                        if (lat > lane_w * 0.5 + 0.6) continue;
+                        if (lat > lane_w * 0.5 + 0.2) continue;
                         if (along < min_gap) { min_gap = along; gap_src = 2; }
                     }
                 }
@@ -2103,7 +2106,7 @@ protected:
                  * 相邻对向车道（3.5m 外）也当迎头 → 掉头返程每次接近对向车
                  * 都 0.4× 让行 = 幽灵刹车（用户实测）。同车道头对头才是真风险，
                  * 分隔车道不是。 */
-                const double oncoming_lat_max = (g.lane_width > 1.0 ? g.lane_width : 3.5) * 0.65;
+                const double oncoming_lat_max = (g.lane_width > 1.0 ? g.lane_width : 3.5) * 0.55;
                 /* 方向感知（2026-08-04 返程修复 + 2026-08-05 移除世界 dx 预筛）：
                  * 旧世界 dx 窗口 (-10,80] 在返程朝 -x 时前方车 dx<−10 被跳过
                  * （方向盲，该侧无对向保护）。沿车头方向投影后前进/返程统一：

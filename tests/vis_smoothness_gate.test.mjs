@@ -13,6 +13,11 @@ import {
   getDeadReckonState,
 } from '../tools/flowboard/js/vis/core/DeadReckon.js';
 import { createCameraRig } from '../tools/flowboard/js/vis/core/CameraRig.js';
+import { roadHeightAt, roadPitchAt } from '../tools/flowboard/js/vis/math/RoadHeight.js';
+import { createVehicleView } from '../tools/flowboard/js/vis/view/VehicleView.js';
+import { createEffectView } from '../tools/flowboard/js/vis/view/EffectView.js';
+import { createTrajectoryView } from '../tools/flowboard/js/vis/view/TrajectoryView.js';
+import { createPerceptionView } from '../tools/flowboard/js/vis/view/PerceptionView.js';
 
 let pass = 0;
 let fail = 0;
@@ -129,6 +134,52 @@ for (let i = 0; i < 40; i++) {
 
 ok(`上匝道入弯零摆头反转 (headingReversals=${headingReversals})`, headingReversals === 0);
 ok(`上匝道入弯单帧航向角步长平滑 (maxDh=${maxDh.toFixed(4)}rad < 0.05)`, maxDh < 0.05);
+
+// ── 3. 坡道路面视觉效果俯仰/高程贴合门禁 ──────────────────────────────
+console.log('\n--- 3. 坡道路面视觉效果贴合门禁 ---');
+const rampStore = {
+  roadNetwork: {
+    edges: [{
+      id: 0, lanes: 2, lane_width: 3.5, oneway: true,
+      nodes: [[0, 0, 0], [100, 0, 5.0]], // 5% 上坡 (atan(0.05) ≈ 0.04996 rad)
+    }],
+  },
+  ego: {
+    x: 20, y: 0, z: 1.0, heading: 0, speed: 12, brake: 1.0, steer: 0,
+    lights: 0, length: 4.6, width: 2.0,
+  },
+  trajectory: [[20, 0, 12], [35, 0, 12], [50, 0, 12], [65, 0, 12]],
+  entities: [{ id: 'ego', type: 'ego', x: 20, y: 0, z: 1.0, heading: 0, speed: 12, brake: 1.0 }],
+  env: { weather: 'rain', timeOfDay: 'night' },
+};
+
+const pitchUp = roadPitchAt(rampStore, 20, 0, 0, 1.0);
+const pitchDown = roadPitchAt(rampStore, 20, 0, Math.PI, 1.0);
+ok(`roadPitchAt 上坡返回正俯仰角 (${pitchUp.toFixed(4)}rad ≈ 0.05)`, Math.abs(pitchUp - 0.05) < 0.005);
+ok(`roadPitchAt 下坡返回负俯仰角 (${pitchDown.toFixed(4)}rad ≈ -0.05)`, Math.abs(pitchDown + 0.05) < 0.005);
+
+const trajStartZ = roadHeightAt(rampStore, 20, 0, 1.0);
+const trajEndZ = roadHeightAt(rampStore, 65, 0, trajStartZ);
+ok(`坡道轨迹沿程高程抬升 (${trajStartZ.toFixed(2)}m → ${trajEndZ.toFixed(2)}m, Δ=${(trajEndZ - trajStartZ).toFixed(2)}m)`, (trajEndZ - trajStartZ) > 2.0);
+
+const mockScene = { children: [], add(o) { this.children.push(o); }, remove(o) { const i = this.children.indexOf(o); if (i >= 0) this.children.splice(i, 1); } };
+const vv = createVehicleView(mockScene);
+const vehEntry = vv.updateVehicle('ego', rampStore.ego, 'car', rampStore);
+ok(`VehicleView 车身及光毯随坡度俯仰 (rotZ=${vehEntry.group.rotation.z.toFixed(4)}rad)`, vehEntry.group.rotation.z > 0.04);
+
+let viewsOk = true;
+try {
+  const ev = createEffectView(mockScene);
+  ev.update(rampStore, 100);
+  const tv = createTrajectoryView(mockScene);
+  tv.update(rampStore, 100);
+  const pv = createPerceptionView(mockScene);
+  pv.update(rampStore, 100);
+} catch (err) {
+  viewsOk = false;
+  console.error(err);
+}
+ok('EffectView / TrajectoryView / PerceptionView 坡道帧更新无异常', viewsOk);
 
 console.log('\n--- summary: ' + pass + ' pass, ' + fail + ' fail ---');
 if (fail > 0) process.exit(1);

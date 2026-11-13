@@ -15,7 +15,7 @@ TaskStatus LaneFollowDeciderTask::Execute(FrameContext& context, Trajectory& /*t
 
     double cruise_speed = context.blackboard.GetOrDefault<double>("cfg_cruise_speed", default_cruise_speed);
     double lane_w = (road.lane_width > 0.0) ? road.lane_width : 3.5;
-    double half_lane_tol = lane_w * 0.5 + 0.6; // half-lane width + lateral tolerance
+    double half_lane_tol = lane_w * 0.5 + 0.2; // half-lane width + tight cut-in margin
 
     // Search for closest lead vehicle in ego lane
     double closest_along = max_follow_distance;

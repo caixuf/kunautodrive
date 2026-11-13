@@ -1909,18 +1909,28 @@ static void test_ttc_select_lane_relative_rejects_adjacent(void) {
     obs[1].x = 44.60; obs[1].y = -5.25; obs[1].vx = 0.0; obs[1].vy = 0.0;
     obs[1].lane_match_hint = true; obs[1].lat_m = 0.32;
 
-    /* lane_w=3.5 → 门限 = 0.5*3.5+0.6 = 2.35（与 behavior 的 lead_lat_tol 同值）*/
+    /* lane_w=3.5 → 门限 = 0.5*3.5+0.2 = 1.95（与 behavior 的 lead_lat_tol 同值）*/
     int idx = ttc_select_follow_lead(
         obs, 2,
         41.68, -4.58, -0.109,
         3.5, 0.0, 80.0, -2.0,
-        /*lat_max*/ 3.5 * 0.5 + 0.6,
+        /*lat_max*/ 3.5 * 0.5 + 0.2,
         /*require_hint*/ true);
 
-    /* 关键：obs[0] 横向 2.50 > 2.35 被拒，不能因为它"最近"就被收；
+    /* 关键：obs[0] 横向 2.50 > 1.95 被拒，不能因为它"最近"就被收；
      * obs[1] 才是真前车（横向 0.32 在门内）。旧实现会返回 0 → 刹停死锁。 */
     ASSERT(idx == 1,
-           "adjacent-lane obs (lat_m=2.50 > 2.35) must be rejected; target-lane lead (lat_m=0.32) selected");
+           "adjacent-lane obs (lat_m=2.50 > 1.95) must be rejected; target-lane lead (lat_m=0.32) selected");
+    /* 即使邻道车因 DBSCAN 质心偏 1.35m 到 lat_m=2.15，仍必须被拒（不跟邻道车）*/
+    obs[0].lat_m = 2.15;
+    int idx_strict = ttc_select_follow_lead(
+        obs, 1,
+        41.68, -4.58, -0.109,
+        3.5, 0.0, 80.0, -2.0,
+        /*lat_max*/ 3.5 * 0.5 + 0.2,
+        /*require_hint*/ true);
+    ASSERT(idx_strict == -1,
+           "adjacent-lane obs with DBSCAN inward shift (lat_m=2.15 > 1.95) must be rejected");
     PASS();
 }
 
@@ -1941,7 +1951,7 @@ static void test_ttc_select_lane_relative_keeps_far_lead(void) {
         obs, 1,
         41.68, -4.58, -0.109,
         3.5, 0.0, 80.0, -2.0,
-        /*lat_max*/ 3.5 * 0.5 + 0.6,
+        /*lat_max*/ 3.5 * 0.5 + 0.2,
         /*require_hint*/ true);
 
     ASSERT(idx == 0,

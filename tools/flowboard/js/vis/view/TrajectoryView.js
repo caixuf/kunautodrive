@@ -169,14 +169,17 @@ export function createTrajectoryView(scene) {
   function _buildSmoothPoints(trajPath, ego, store) {
     if (!trajPath || trajPath.length < 2) return [];
 
-    // 轨迹高度绑定车辆贴地高度：roadHeightAt + VEHICLE_GROUND_Y + 额外偏移
-    const egoZ = roadHeightAt(store, ego.x, ego.y) + VEHICLE_GROUND_Y + TRAJ_GROUND_OFFSET;
+    // 轨迹高度逐点绑定路面高度（roadHeightAt + VEHICLE_GROUND_Y + 额外偏移），确保坡道/匝道不穿地也不悬空
+    let prevGroundZ = roadHeightAt(store, ego.x, ego.y, ego.z);
+    const zOffset = VEHICLE_GROUND_Y + TRAJ_GROUND_OFFSET;
 
     /* 1. 把已完成前向裁剪与车头连续锚定的 ENU 轨迹点转 THREE 坐标，截断异常跳变 */
     const raw3d = [];
     for (let i = 0; i < trajPath.length; i++) {
       const p = trajPath[i];
-      const [tx, ty, tz] = worldToThree(p[0], p[1], egoZ);
+      const wpGroundZ = roadHeightAt(store, p[0], p[1], prevGroundZ);
+      prevGroundZ = wpGroundZ;
+      const [tx, ty, tz] = worldToThree(p[0], p[1], wpGroundZ + zOffset);
       const v = p[2] || 0;
       if (i > 0) {
         const prev = raw3d[raw3d.length - 1];

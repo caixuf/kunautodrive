@@ -319,7 +319,7 @@ double min_vehicle_ttc(const VehicleState& state, double* out_dx = nullptr, doub
         const double ey = state.obs_y[i] - state.y;
         const double along = ex * fwd_x + ey * fwd_y;      /* 沿车头前方距离 */
         const double lat = std::fabs(-ex * fwd_y + ey * fwd_x);  /* 横向偏移 */
-        if (along < 0.0 || along > 35.0 || lat > 2.3) continue;
+        if (along < 0.0 || along > 35.0 || lat > 1.9) continue;
 
         const double along_v = state.obs_v[i] * fwd_x + state.obs_vy[i] * fwd_y;
         const double closing = state.speed - along_v;
@@ -401,7 +401,7 @@ double nearest_vehicle_lateral_cross_risk(const VehicleState& state, double* out
         const double dy_signed = -ex * fwd_y + ey * fwd_x;
         const double dy = std::fabs(dy_signed);
         if (along < -5.0 || along > 12.0) continue;
-        if (dy > 2.2) continue;
+        if (dy > 1.9) continue;
         const double metric = std::fabs(along) + 2.0 * dy;
         if (metric < best) {
             best = metric;

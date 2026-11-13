@@ -1,4 +1,5 @@
 import { LANE_WIDTH, DEFAULT_LANES } from '../core/Constants.js';
+import { forwardENU } from './Coord.js';
 
 /**
  * RoadHeight.js — 路面高度单一事实源
@@ -118,4 +119,20 @@ export function roadHeightAtSimple(store, x) {
   
   const t = Math.max(0, Math.min(1, x / length));
   return _sampleEdgeZ(nodes, t);
+}
+
+/**
+ * 计算车辆所在位置沿航向的路面俯仰角 (rad, 上坡为正)
+ * 用于让车辆姿态、地面光毯、尾流、切入警示翼等贴地特效随匝道/高架坡度俯仰。
+ */
+export function roadPitchAt(store, x, y, heading, currentZ, sampleHalfM = 1.5) {
+  const rn = store && store.roadNetwork;
+  if (!rn || !rn.edges || !rn.edges.length) return 0;
+  const ds = Math.max(0.5, sampleHalfM);
+  const [fx, fy] = forwardENU(Number(heading) || 0);
+  const zCenter = Number.isFinite(currentZ) ? currentZ : roadHeightAt(store, x, y);
+  const zFwd = roadHeightAt(store, x + fx * ds, y + fy * ds, zCenter);
+  const zBack = roadHeightAt(store, x - fx * ds, y - fy * ds, zCenter);
+  const pitch = Math.atan((zFwd - zBack) / (2 * ds));
+  return Math.max(-0.35, Math.min(0.35, pitch));
 }

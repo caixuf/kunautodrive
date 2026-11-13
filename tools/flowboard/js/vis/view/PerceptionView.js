@@ -890,14 +890,14 @@ function _updateSweep(ego, store, frame, positions, colors, edgePositions, edgeC
   colors[1] = fovG;
   colors[2] = fovB;
 
+  const sweepZOffset = VEHICLE_GROUND_Y + SWEEP_ABOVE_ROAD_M;
   for (let i = 0; i <= SWEEP_SEGMENTS; i++) {
     const t = sweepStart + (sweepEnd - sweepStart) * (i / SWEEP_SEGMENTS);
     const [fx, fy] = forwardENU(t);
-    const [px, py, pz] = worldToThree(
-      bumperEnuX + fx * SWEEP_RADIUS,
-      bumperEnuY + fy * SWEEP_RADIUS,
-      sweepSurfaceZ
-    );
+    const tipX = bumperEnuX + fx * SWEEP_RADIUS;
+    const tipY = bumperEnuY + fy * SWEEP_RADIUS;
+    const tipZ = roadHeightAt(store, tipX, tipY, egoGroundZ) + sweepZOffset;
+    const [px, py, pz] = worldToThree(tipX, tipY, tipZ);
     const vi = (i + 1) * 3;
     positions[vi + 0] = px;
     positions[vi + 1] = py;
@@ -909,9 +909,13 @@ function _updateSweep(ego, store, frame, positions, colors, edgePositions, edgeC
 
   // 左右短视场边界线（长 18m，远端顶点色衰减至 0）
   const [fxL, fyL] = forwardENU(sweepEnd);
-  const [lx, ly, lz] = worldToThree(bumperEnuX + fxL * BOUNDARY_RAY_LEN, bumperEnuY + fyL * BOUNDARY_RAY_LEN, sweepSurfaceZ);
+  const bLx = bumperEnuX + fxL * BOUNDARY_RAY_LEN;
+  const bLy = bumperEnuY + fyL * BOUNDARY_RAY_LEN;
+  const [lx, ly, lz] = worldToThree(bLx, bLy, roadHeightAt(store, bLx, bLy, egoGroundZ) + sweepZOffset);
   const [fxR, fyR] = forwardENU(sweepStart);
-  const [rx, ry, rz] = worldToThree(bumperEnuX + fxR * BOUNDARY_RAY_LEN, bumperEnuY + fyR * BOUNDARY_RAY_LEN, sweepSurfaceZ);
+  const bRx = bumperEnuX + fxR * BOUNDARY_RAY_LEN;
+  const bRy = bumperEnuY + fyR * BOUNDARY_RAY_LEN;
+  const [rx, ry, rz] = worldToThree(bRx, bRy, roadHeightAt(store, bRx, bRy, egoGroundZ) + sweepZOffset);
 
   edgePositions[0] = bx; edgePositions[1] = by; edgePositions[2] = bz;
   edgeColors[0] = fovR;  edgeColors[1] = fovG;  edgeColors[2] = fovB;
@@ -935,8 +939,12 @@ function _updateSweep(ego, store, frame, positions, colors, edgePositions, edgeC
     const t1 = sweepStart + (sweepEnd - sweepStart) * u1;
     const [f0x, f0y] = forwardENU(t0);
     const [f1x, f1y] = forwardENU(t1);
-    const [p0x, p0y, p0z] = worldToThree(bumperEnuX + f0x * pulseRadius, bumperEnuY + f0y * pulseRadius, sweepSurfaceZ);
-    const [p1x, p1y, p1z] = worldToThree(bumperEnuX + f1x * pulseRadius, bumperEnuY + f1y * pulseRadius, sweepSurfaceZ);
+    const a0x = bumperEnuX + f0x * pulseRadius;
+    const a0y = bumperEnuY + f0y * pulseRadius;
+    const a1x = bumperEnuX + f1x * pulseRadius;
+    const a1y = bumperEnuY + f1y * pulseRadius;
+    const [p0x, p0y, p0z] = worldToThree(a0x, a0y, roadHeightAt(store, a0x, a0y, egoGroundZ) + sweepZOffset);
+    const [p1x, p1y, p1z] = worldToThree(a1x, a1y, roadHeightAt(store, a1x, a1y, egoGroundZ) + sweepZOffset);
 
     // 两侧边缘羽化，中间最清晰
     const edgeFeather0 = 1.0 - Math.abs(2.0 * u0 - 1.0) * 0.85;
