@@ -81,27 +81,44 @@ extern "C" int onnx_backend_load(OnnxBackend* b, const char* path) {
             return -1;
         }
 
-        /* 形状：接受 [N]（rank-1）或 [1, N]（rank-2）——本工具导出恒为 [1, N]。
-         * rank≥3（如 [1,2,5]）无法确定单样本向量语义，forward 会按末维错取
-         * 元素数；rank-2 首维须 1（单样本批）。一律拒绝而非静默错推理。 */
+        /* 形状：
+         *   - 输入：接受 [N]（rank-1）或 [1, N]（rank-2）
+         *   - 输出：接受 [M]（rank-1）、[1, M]（rank-2）或 [1, H, D]（rank-3，如 Flow-Matching 轨迹 [1, 15, 4]）
+         * 静态维度须 > 0；非单批或动态维度一律拒绝，避免静默错推理。 */
         size_t in_rank = in_shape.size(), out_rank = out_shape.size();
-        if (!(in_rank == 1 || in_rank == 2) || !(out_rank == 1 || out_rank == 2)) {
-            fprintf(stderr, "[onnx] %s: 输入/输出须 rank 1/2（实际 "
+        if (!(in_rank == 1 || in_rank == 2) ||
+            !(out_rank == 1 || out_rank == 2 || out_rank == 3)) {
+            fprintf(stderr, "[onnx] %s: 输入须 rank 1/2，输出须 rank 1/2/3（实际 "
                     "in_rank=%zu out_rank=%zu）\n", path, in_rank, out_rank);
             return -1;
         }
-        if (in_rank == 2 && in_shape[0] != 1) {
-            fprintf(stderr, "[onnx] %s: 输入首维须 1（batch），实际 %lld\n",
+        if (in_rank == 2 && in_shape[0] != 1 && in_shape[0] != -1) {
+            fprintf(stderr, "[onnx] %s: 输入首维须 1 或动态(-1)（batch），实际 %lld\n",
                     path, (long long)in_shape[0]);
             return -1;
         }
+        if (out_rank >= 2 && out_shape[0] != 1 && out_shape[0] != -1) {
+            fprintf(stderr, "[onnx] %s: 输出首维须 1 或动态(-1)（batch），实际 %lld\n",
+                    path, (long long)out_shape[0]);
+            return -1;
+        }
 
-        /* 末维即特征数，须静态且 > 0。 */
-        int64_t in_last  = in_shape.back();
-        int64_t out_last = out_shape.back();
-        if (in_last <= 0 || out_last <= 0) {
+        int64_t in_last = in_shape.back();
+        int64_t out_total = 1;
+        if (out_rank == 1) {
+            out_total = out_shape[0];
+        } else if (out_rank == 2) {
+            out_total = out_shape[1];
+        } else {
+            if (out_shape[1] <= 0 || out_shape[2] <= 0) {
+                out_total = -1;
+            } else {
+                out_total = out_shape[1] * out_shape[2];
+            }
+        }
+        if (in_last <= 0 || out_total <= 0) {
             fprintf(stderr, "[onnx] %s: 输入/输出维度非静态（in=%lld out=%lld）\n",
-                    path, (long long)in_last, (long long)out_last);
+                    path, (long long)in_last, (long long)out_total);
             return -1;
         }
 
@@ -109,7 +126,7 @@ extern "C" int onnx_backend_load(OnnxBackend* b, const char* path) {
         b->session = raw;
         b->env     = &raw->env;   /* 仅作非空标记，生命周期归 OrtHolder */
         b->in_dim  = (int)in_last;
-        b->out_dim = (int)out_last;
+        b->out_dim = (int)out_total;
         b->loaded  = 1;
         return 0;
     } catch (const Ort::Exception& e) {

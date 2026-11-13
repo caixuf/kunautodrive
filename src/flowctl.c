@@ -98,6 +98,7 @@ static void print_usage(void) {
     printf("  param get <name>        Read a param from the running process\n");
     printf("  param set <name> <val>  Change a param live (takes effect next frame)\n");
     printf("  launch <config>         Validate and show launch config\n");
+    printf("  doctor [args]           Run unified self-diagnosis (flow_doctor.py)\n");
     printf("  dashboard               Start real-time dashboard\n");
     printf("  version                 Show version\n");
     printf("  help                    This help\n");
@@ -651,6 +652,35 @@ static int cmd_dashboard(void) {
     return 0;
 }
 
+static int cmd_doctor(int argc, char** argv) {
+#ifdef _WIN32
+    char cmd_buf[1024] = "python3 tools/flow_doctor.py";
+    size_t used = strlen(cmd_buf);
+    for (int i = 2; i < argc && used + 2 < sizeof(cmd_buf); i++) {
+        size_t alen = strlen(argv[i]);
+        if (used + 1 + alen >= sizeof(cmd_buf)) break;
+        cmd_buf[used++] = ' ';
+        memcpy(cmd_buf + used, argv[i], alen);
+        used += alen;
+        cmd_buf[used] = '\0';
+    }
+    return system(cmd_buf);
+#else
+    char** py_argv = (char**)calloc((size_t)(argc + 2), sizeof(char*));
+    if (!py_argv) return 1;
+    py_argv[0] = (char*)"python3";
+    py_argv[1] = (char*)"tools/flow_doctor.py";
+    for (int i = 2; i < argc; i++) {
+        py_argv[i] = argv[i];
+    }
+    py_argv[argc] = NULL;
+    execvp("python3", py_argv);
+    perror("flowctl doctor: execvp python3");
+    free(py_argv);
+    return 127;
+#endif
+}
+
 /* ══════════════════════════════════════════════════════════ */
 /* Main                                                        */
 /* ══════════════════════════════════════════════════════════ */
@@ -870,6 +900,9 @@ int main(int argc, char** argv) {
         config_free(cfg);
         return 0;
     }
+
+    /* ── doctor ── */
+    if (strcmp(cmd, "doctor") == 0) return cmd_doctor(argc, argv);
 
     /* ── dashboard ── */
     if (strcmp(cmd, "dashboard") == 0) return cmd_dashboard();

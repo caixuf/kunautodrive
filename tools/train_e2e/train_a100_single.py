@@ -116,10 +116,14 @@ def build_flow_matching_model(nn, state_dim=59, traj_horizon=30, traj_dim=4, hid
             )
             self.ln2 = nn.LayerNorm(hidden_dim)
 
-            # 5. 速度场向量预测头
+            # 5. 速度场向量预测头 & 语义意图辅助头 (VLA 5 类驾驶意图)
             self.velocity_head = nn.Sequential(
                 nn.SiLU(),
                 nn.Linear(hidden_dim, self.out_dim),
+            )
+            self.intent_head = nn.Sequential(
+                nn.SiLU(),
+                nn.Linear(hidden_dim, 5),
             )
 
         def forward(self, state, x_t, t):
@@ -242,6 +246,110 @@ def build_state_vector_59(rec: dict, state_dim: int = 59) -> list[float]:
     return st
 
 
+def build_state_vector_123(rec: dict, state_dim: int = 123) -> list[float]:
+    """构建 123 维 BEV+路网拓扑+语义意图状态向量（前 59 维兼容 build_state_vector_59）。"""
+    st = [0.0] * state_dim
+    base59 = build_state_vector_59(rec, 59)
+    for i, val in enumerate(base59):
+        if i < state_dim:
+            st[i] = val
+
+    ego = rec.get("ego") or {}
+    ex = float(ego.get("x", 0.0))
+    ey = float(ego.get("y", 0.0))
+    ev = float(ego.get("v", 0.0))
+    eh = float(ego.get("heading", 0.0))
+    ch, sh = math.cos(eh), math.sin(eh)
+
+    # [59..90]: 4(横向带) × 8(纵向格) = 32 维 BEV 局部占据与接近风险栅格
+    # 纵向 [0..80m] 每 10m 一格；横向 [-14..14m] 每 7m 一格
+    for obs in rec.get("obstacles") or []:
+        if not isinstance(obs, dict):
+            continue
+        dx = float(obs.get("x", 0.0)) - ex
+        dy = float(obs.get("y", 0.0)) - ey
+        lx = dx * ch + dy * sh
+        ly = -dx * sh + dy * ch
+        if 0.0 <= lx < 80.0 and -14.0 <= ly < 14.0:
+            ix = min(7, max(0, int(lx / 10.0)))
+            iy = min(3, max(0, int((ly + 14.0) / 7.0)))
+            slot = 59 + iy * 8 + ix
+            if slot < state_dim:
+                conf = float(obs.get("confidence", 1.0))
+                ovx = float(obs.get("vx", 0.0))
+                ovy = float(obs.get("vy", 0.0))
+                lvx = ovx * ch + ovy * sh
+                rel_closing = max(0.0, ev - lvx)
+                risk = min(2.0, conf * (1.0 / (1.0 + lx / 20.0)) + 0.05 * rel_closing)
+                if risk > st[slot]:
+                    st[slot] = risk
+
+    # [91..106]: 16 维路网与路口拓扑特征
+    ctx = rec.get("scene_context") or {}
+    plan = rec.get("planning") or {}
+    ctrl = rec.get("control") or {}
+    tl_state = int(round(float(ctx.get("tl_state", -1))))
+    tl_dist = float(ctx.get("tl_distance", -1.0))
+    lane_cnt = float(ctx.get("lane_count", 2.0))
+    lane_w = float(ctx.get("lane_width", 3.5))
+    lane_off = float(ctx.get("ego_lane_offset", 0.0))
+    curv = float(ctx.get("curvature", 0.0))
+    slim = float(ctx.get("speed_limit", 15.0))
+    tgt_v = float(plan.get("target_speed", ev))
+
+    topo = [
+        1.0 if tl_state == 0 else 0.0,
+        1.0 if tl_state == 1 else 0.0,
+        1.0 if tl_state == 2 else 0.0,
+        1.0 if tl_state < 0 else 0.0,
+        min(1.0, max(0.0, tl_dist / 100.0)) if tl_dist >= 0.0 else 1.0,
+        curv,
+        abs(curv),
+        slim / 30.0,
+        ev / max(1.0, slim),
+        lane_cnt / 6.0,
+        lane_w / 4.0,
+        lane_off / max(0.5, lane_w),
+        1.0 if abs(curv) > 0.015 else 0.0,
+        tgt_v / 30.0,
+        (tgt_v - ev) / 10.0,
+        1.0 if (tl_state in (1, 2) and 0.0 <= tl_dist <= 50.0) else 0.0,
+    ]
+    for k, val in enumerate(topo):
+        if 91 + k < state_dim:
+            st[91 + k] = val
+
+    # [107..122]: 16 维行为意图与驾驶策略先验
+    thr = float(ctrl.get("throttle", 0.0))
+    brk = float(ctrl.get("brake", 0.0))
+    steer = float(ctrl.get("steering", 0.0))
+    yaw_r = float(ego.get("yaw_rate", 0.0))
+    intent = [
+        thr,
+        brk,
+        steer,
+        abs(steer),
+        yaw_r,
+        1.0 if brk > 0.1 else 0.0,
+        1.0 if abs(steer) > 0.08 else 0.0,
+        1.0 if steer > 0.08 else 0.0,
+        1.0 if steer < -0.08 else 0.0,
+        1.0 if ev < 0.5 else 0.0,
+        1.0 if tgt_v > ev + 1.0 else 0.0,
+        1.0 if tgt_v < ev - 1.0 else 0.0,
+    ]
+    for k, val in enumerate(intent):
+        if 107 + k < state_dim:
+            st[107 + k] = val
+    return st
+
+
+def build_state_vector(rec: dict, state_dim: int = 59) -> list[float]:
+    if state_dim >= 123:
+        return build_state_vector_123(rec, state_dim)
+    return build_state_vector_59(rec, state_dim)
+
+
 def load_real_trajectory_dataset(
     dataset_path: Path,
     state_dim: int = 59,
@@ -288,7 +396,7 @@ def load_real_trajectory_dataset(
         for i, rec in enumerate(seg):
             if times[-1] - times[i] < horizon * dt:
                 break
-            st = build_state_vector_59(rec, state_dim=state_dim)
+            st = build_state_vector(rec, state_dim=state_dim)
 
             ego0 = rec["ego"]
             x0 = float(ego0.get("x", 0.0))
@@ -386,6 +494,7 @@ def main():
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
     parser.add_argument("--hidden", type=int, default=512, help="Hidden dimension (A100 512~768)")
     parser.add_argument("--num-workers", type=int, default=8, help="DataLoader workers")
+    parser.add_argument("--arch", choices=["flow_matching", "bev_vla"], default="flow_matching", help="模型架构: flow_matching(59维) 或 bev_vla(123维BEV+路网拓扑)")
     parser.add_argument("--no-compile", action="store_true", help="禁用 torch.compile 计算图编译")
     parser.add_argument("--export-onnx", action="store_true", default=True, help="训练后自动导出 ONNX")
     args = parser.parse_args()
@@ -415,11 +524,13 @@ def main():
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    state_dim = 123 if args.arch == "bev_vla" else 59
+
     # 2. 准备数据
     if args.dataset and Path(args.dataset).exists():
-        states, trajectories = load_real_trajectory_dataset(Path(args.dataset))
+        states, trajectories = load_real_trajectory_dataset(Path(args.dataset), state_dim=state_dim)
     else:
-        states, trajectories = create_synthetic_dataset(50000)
+        states, trajectories = create_synthetic_dataset(50000, state_dim=state_dim)
 
     eff_batch = min(args.batch_size, max(1, len(states)))
     dataset = TrajectoryDataset(states, trajectories, torch)
@@ -434,7 +545,7 @@ def main():
     )
 
     # 3. 初始化模型与优化器
-    model = build_flow_matching_model(nn, state_dim=59, traj_horizon=30, traj_dim=4, hidden_dim=args.hidden).to(device)
+    model = build_flow_matching_model(nn, state_dim=state_dim, traj_horizon=30, traj_dim=4, hidden_dim=args.hidden).to(device)
     with torch.no_grad():
         s_mean = dataset.states.mean(dim=0, keepdim=True)
         s_std = dataset.states.std(dim=0, keepdim=True).clamp(min=1e-3)
@@ -532,7 +643,7 @@ def main():
                 return self.policy.sample(state, steps=11)
 
         export_model = ONNXExportWrapper(ema.ema_model).cpu()
-        dummy_state = torch.randn(1, 59, dtype=torch.float32)
+        dummy_state = torch.randn(1, state_dim, dtype=torch.float32)
 
         try:
             torch.onnx.export(

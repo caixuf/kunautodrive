@@ -89,6 +89,7 @@ manifest = {
 (root / "manifest.json").write_text(
     json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
+    mkdir -p "$(dirname "$DIST_DIR/$TARNAME")"
     tar czf "$DIST_DIR/$TARNAME" -C "$STAGE_DIR" "$RELEASE_NAME"
     cp "$ROOT/scripts/product_install.sh" "$DIST_DIR/${TARNAME%.tar.gz}.install.sh"
     chmod +x "$DIST_DIR/${TARNAME%.tar.gz}.install.sh"

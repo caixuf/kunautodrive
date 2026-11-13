@@ -12,7 +12,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tools.train_e2e.train_a100_single import build_state_vector_59, load_real_trajectory_dataset  # noqa: E402
+from tools.train_e2e.train_a100_single import (  # noqa: E402
+    build_state_vector_59,
+    build_state_vector_123,
+    load_real_trajectory_dataset,
+)
 
 
 def test_build_state_vector_59_encodes_ego_frame_obstacles() -> None:
@@ -70,3 +74,34 @@ def test_load_real_trajectory_dataset_ego_frame_and_segment_split(tmp_path: Path
     assert abs(trajs[0][0][0] - 1.0) < 1e-4
     assert abs(trajs[0][0][1]) < 1e-4
     assert abs(trajs[0][29][0] - 30.0) < 1e-3
+
+
+def test_build_state_vector_123_encodes_bev_and_topology() -> None:
+    rec = {
+        "features_v3": [10.0, 0.0, 0.0] + [0.0] * 20,
+        "ego": {"x": 0.0, "y": 0.0, "v": 10.0, "heading": 0.0, "yaw_rate": 0.0},
+        "control": {"throttle": 0.0, "brake": 0.3, "steering": 0.1},
+        "planning": {"target_speed": 6.0},
+        "scene_context": {
+            "tl_state": 2,
+            "tl_distance": 25.0,
+            "speed_limit": 15.0,
+            "curvature": 0.02,
+            "lane_count": 3,
+            "lane_width": 3.5,
+            "ego_lane_offset": 0.1,
+        },
+        "obstacles": [
+            {"x": 15.0, "y": 0.0, "vx": 4.0, "vy": 0.0, "type": 1, "confidence": 1.0},
+        ],
+    }
+    st = build_state_vector_123(rec)
+    assert len(st) == 123
+    # BEV cell (lx=15 -> ix=1, ly=0 -> iy=2) => 59 + 2*8 + 1 = 76
+    assert st[76] > 0.5
+    # Red light one-hot at index 93, red-light-ahead flag at 106
+    assert st[93] == 1.0
+    assert st[106] == 1.0
+    # Braking + steering intent flags
+    assert st[112] == 1.0
+    assert st[113] == 1.0

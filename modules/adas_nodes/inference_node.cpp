@@ -493,13 +493,115 @@ static bool path_has_suffix(const char* path, const char* suffix) {
  * 亦然，故 ONNX 门禁对齐为 out_dim>=1（旧版只收 {1,2,4,5,9}，与 onnx_backend.h
  * 声明的"可切换、语义一致"契约不符——同一 out_dim=3/6/7/8 模型 tiny 能跑 ONNX 被拒）。 */
 static bool dims_supported(int in_dim, int out_dim) {
-    /* 2026-08-05: 加 23（V3 特征）。V3 含场景上下文（前车/灯/曲率/限速），
-     * GPU 训练的多层模型用它（训练集 MAE 0.33 m/s，V2 单帧不可达）。
+    /* 2026-08-05: 加 23（V3 特征）；59 为 Flow-Matching 归一化单帧状态向量；
+     * 123 为 BEV+路网拓扑+语义意图扩展状态向量。
      * 80 = 5 帧 V2 时序窗口, 115 = 5 帧 V3 时序窗口。 */
     bool in_ok  = (in_dim == 4 || in_dim == 16 || in_dim == 23 ||
-                   in_dim == 80 || in_dim == 115);
+                   in_dim == 59 || in_dim == 80 || in_dim == 115 ||
+                   in_dim == 123);
     bool out_ok = (out_dim >= 1);
     return in_ok && out_ok;
+}
+
+static void build_state_59(float out59[59]) {
+    memset(out59, 0, 59 * sizeof(float));
+    build_frame(out59, V3_DIM);
+    /* 与 train_a100_single.py build_state_vector_59 对齐：st[1] 归一化为 ego_lane_offset */
+    out59[1] = (float)g.ego_lane_offset;
+
+    const double ch = cos(g.ego_heading);
+    const double sh = sin(g.ego_heading);
+    auto fill_obs_slot = [&](int slot, double ox, double oy, double ovx, double otype, double oconf) {
+        int base = 23 + slot * 6;
+        double dx = ox - g.ego_x;
+        double dy = oy - g.ego_y;
+        out59[base + 0] = (float)(dx * ch + dy * sh);
+        out59[base + 1] = (float)(-dx * sh + dy * ch);
+        out59[base + 2] = (float)(ovx * ch);
+        out59[base + 3] = (float)(-ovx * sh);
+        out59[base + 4] = (float)otype;
+        out59[base + 5] = (float)oconf;
+    };
+    int obs_cnt = 0;
+    if (g.has_obstacles) {
+        if (g.front0_confidence > 0.0 || g.front0_x != 0.0 || g.front0_y != 0.0) {
+            fill_obs_slot(obs_cnt++, g.front0_x, g.front0_y, g.front0_vx, g.front0_type, g.front0_confidence);
+        }
+        if (g.front1_confidence > 0.0 || g.front1_x != 0.0 || g.front1_y != 0.0) {
+            fill_obs_slot(obs_cnt++, g.front1_x, g.front1_y, g.front1_vx, g.front1_type, g.front1_confidence);
+        }
+    }
+
+    out59[47] = (float)g.ego_v;
+    out59[48] = (float)g.ego_yaw_rate;
+    out59[49] = (float)g.ctrl_throttle;
+    out59[50] = (float)g.ctrl_brake;
+    out59[51] = (float)g.ctrl_steer;
+    out59[52] = (float)(g.has_planning ? g.planning_target_speed : g.ego_v);
+    out59[53] = (float)g.road_speed_limit;
+    out59[54] = (float)g.road_curvature;
+    out59[55] = (float)g.lane_count;
+    out59[56] = (float)g.lane_width;
+    out59[57] = (float)g.ego_lane_offset;
+    out59[58] = (float)obs_cnt;
+}
+
+static void build_state_123(float out123[123]) {
+    memset(out123, 0, 123 * sizeof(float));
+    build_state_59(out123);
+
+    /* [59..90]: 4(横向) × 8(纵向) = 32 维 BEV 占据栅格，从已转自车系的 front0/1 填充 */
+    for (int slot = 0; slot < 2; ++slot) {
+        int b = 23 + slot * 6;
+        float lx = out123[b + 0];
+        float ly = out123[b + 1];
+        float lvx = out123[b + 2];
+        float conf = out123[b + 5];
+        if (conf > 0.0f && lx >= 0.0f && lx < 80.0f && ly >= -14.0f && ly < 14.0f) {
+            int ix = std::min(7, std::max(0, (int)(lx / 10.0f)));
+            int iy = std::min(3, std::max(0, (int)((ly + 14.0f) / 7.0f)));
+            int cell = 59 + iy * 8 + ix;
+            float rel_closing = std::max(0.0f, (float)g.ego_v - lvx);
+            float risk = std::min(2.0f, conf * (1.0f / (1.0f + lx / 20.0f)) + 0.05f * rel_closing);
+            if (risk > out123[cell]) out123[cell] = risk;
+        }
+    }
+
+    /* [91..106]: 16 维路网与路口拓扑特征 */
+    int tl_s = (int)round(g.tl_state);
+    double slim = g.road_speed_limit > 1.0 ? g.road_speed_limit : 15.0;
+    double lw = g.lane_width > 0.5 ? g.lane_width : 3.5;
+    double tgt_v = g.has_planning ? g.planning_target_speed : g.ego_v;
+    out123[91]  = (tl_s == 0) ? 1.0f : 0.0f;
+    out123[92]  = (tl_s == 1) ? 1.0f : 0.0f;
+    out123[93]  = (tl_s == 2) ? 1.0f : 0.0f;
+    out123[94]  = (tl_s < 0)  ? 1.0f : 0.0f;
+    out123[95]  = (g.tl_distance >= 0.0) ? (float)std::min(1.0, g.tl_distance / 100.0) : 1.0f;
+    out123[96]  = (float)g.road_curvature;
+    out123[97]  = (float)fabs(g.road_curvature);
+    out123[98]  = (float)(slim / 30.0);
+    out123[99]  = (float)(g.ego_v / slim);
+    out123[100] = (float)(g.lane_count / 6.0);
+    out123[101] = (float)(lw / 4.0);
+    out123[102] = (float)(g.ego_lane_offset / lw);
+    out123[103] = (fabs(g.road_curvature) > 0.015) ? 1.0f : 0.0f;
+    out123[104] = (float)(tgt_v / 30.0);
+    out123[105] = (float)((tgt_v - g.ego_v) / 10.0);
+    out123[106] = ((tl_s == 1 || tl_s == 2) && g.tl_distance >= 0.0 && g.tl_distance <= 50.0) ? 1.0f : 0.0f;
+
+    /* [107..122]: 16 维行为意图先验 */
+    out123[107] = (float)g.ctrl_throttle;
+    out123[108] = (float)g.ctrl_brake;
+    out123[109] = (float)g.ctrl_steer;
+    out123[110] = (float)fabs(g.ctrl_steer);
+    out123[111] = (float)g.ego_yaw_rate;
+    out123[112] = (g.ctrl_brake > 0.1) ? 1.0f : 0.0f;
+    out123[113] = (fabs(g.ctrl_steer) > 0.08) ? 1.0f : 0.0f;
+    out123[114] = (g.ctrl_steer > 0.08) ? 1.0f : 0.0f;
+    out123[115] = (g.ctrl_steer < -0.08) ? 1.0f : 0.0f;
+    out123[116] = (g.ego_v < 0.5) ? 1.0f : 0.0f;
+    out123[117] = (tgt_v > g.ego_v + 1.0) ? 1.0f : 0.0f;
+    out123[118] = (tgt_v < g.ego_v - 1.0) ? 1.0f : 0.0f;
 }
 
 /* ── 影子 sidecar 落盘 ───────────────────────────────────────── */
@@ -696,12 +798,16 @@ static void run_inference(double* out_speed, double* out_d,
                           double* out_throttle, double* out_brake,
                           double* out_steer, double* out_lc, double* out_conf,
                           double* out_kv, double* out_kp, double* out_kd, double* out_yd,
-                          bool* out_immune_lock = nullptr) {
-    float y[TINY_MLP_MAX_OUT];
+                          bool* out_immune_lock = nullptr,
+                          double* out_traj_x = nullptr, double* out_traj_y = nullptr,
+                          int* out_traj_n = nullptr) {
+    constexpr int kInferMaxOut = 128;
+    float y[kInferMaxOut] = {0};
     *out_lc = 0.0;
     *out_conf = 0.0;
     *out_kv = 0.0; *out_kp = 0.0; *out_kd = 0.0; *out_yd = 0.0;
     if (out_immune_lock) *out_immune_lock = false;
+    if (out_traj_n) *out_traj_n = 0;
 
     /* 后端 0: 细胞生命体 cortex（6 感受器 → steer/accel 双效应器） */
     if (g.use_cortex) {
@@ -753,6 +859,12 @@ static void run_inference(double* out_speed, double* out_d,
                     x[idx++] = g.frame_buf[fi][d];
                 }
             }
+        } else if (active_in_dim == 123) {
+            /* BEV + 路网拓扑 + 语义意图 123 维状态向量 */
+            build_state_123(x);
+        } else if (active_in_dim == 59) {
+            /* Flow-Matching 59 维归一化状态向量 */
+            build_state_59(x);
         } else if (active_in_dim >= 16) {
             /* v2: 单帧 16 维 */
             build_frame(x, V2_DIM);
@@ -766,7 +878,31 @@ static void run_inference(double* out_speed, double* out_d,
 
         int n = g.use_onnx ? onnx_backend_forward(&g.onnx, x, y)
                            : tiny_mlp_forward(&g.model, x, y);
-        if (n >= 9) {
+        if ((active_in_dim == 59 || active_in_dim == 123) && n >= 60) {
+            /* Flow-Matching 15~30 步 × [lx, ly, v, dh] 自车系 3s 轨迹输出（抽样成 15 步覆盖 3.0s） */
+            const int total_steps = std::min(30, n / 4);
+            const int stride = (total_steps >= 30) ? 2 : 1;
+            const int out_steps = std::min(15, (total_steps + stride - 1) / stride);
+            const double ch = cos(g.ego_heading);
+            const double sh = sin(g.ego_heading);
+            if (out_traj_x && out_traj_y && out_traj_n) {
+                for (int s = 0; s < out_steps; ++s) {
+                    int src = std::min(total_steps - 1, s * stride);
+                    double lx = (double)y[src * 4 + 0];
+                    double ly = (double)y[src * 4 + 1];
+                    out_traj_x[s] = g.ego_x + lx * ch - ly * sh;
+                    out_traj_y[s] = g.ego_y + lx * sh + ly * ch;
+                }
+                *out_traj_n = out_steps;
+            }
+            int ref_idx = std::min(5, total_steps - 1);
+            *out_speed = std::clamp((double)y[ref_idx * 4 + 2], 0.0, g.cfg_max_speed);
+            *out_d     = (double)y[ref_idx * 4 + 1];
+            *out_conf  = 1.0;
+            *out_steer = std::clamp((double)y[ref_idx * 4 + 3], -0.5, 0.5);
+            *out_throttle = (*out_speed > g.ego_v + 0.2) ? 0.3 : 0.0;
+            *out_brake    = (*out_speed < g.ego_v - 0.5) ? 0.3 : 0.0;
+        } else if (n >= 9) {
             /* direct_ctrl + 控制调参输出 */
             *out_throttle = y[0];
             *out_brake    = y[1];
@@ -952,12 +1088,16 @@ protected:
             double pred_lc = 0.0, pred_conf = 0.0;
             double pred_kv = 0.0, pred_kp = 0.0, pred_kd = 0.0, pred_yd = 0.0;
             bool   pred_immune_lock = false;
+            double pred_traj_x[15]{};
+            double pred_traj_y[15]{};
+            int pred_traj_n = 0;
             const uint64_t infer_t0_us = clock_now_us();
             run_inference(&pred_speed, &pred_d,
                           &pred_throttle, &pred_brake, &pred_steer,
                           &pred_lc, &pred_conf,
                           &pred_kv, &pred_kp, &pred_kd, &pred_yd,
-                          &pred_immune_lock);
+                          &pred_immune_lock,
+                          pred_traj_x, pred_traj_y, &pred_traj_n);
             const uint64_t infer_dt_us = clock_now_us() - infer_t0_us;
             latency_guard_.record(infer_dt_us);
             const bool latency_budget_exceeded = latency_guard_.p99_exceeds_budget(50000);
@@ -1001,25 +1141,32 @@ protected:
                 g.shadow_steer_n++;
             }
 
-            /* 基于运动学外推预测未来 3 秒轨迹 (10 步，dt=0.3s) 并计算 ADE/FDE */
-            constexpr int kRolloutSteps = 10;
+            /* 优先采用 Flow-Matching 15 步真实轨迹，否则回退运动学外推 (10 步，dt=0.3s) */
+            constexpr int kMaxRolloutSteps = 15;
+            const int rollout_steps = (pred_traj_n > 0) ? std::min(pred_traj_n, kMaxRolloutSteps) : 10;
             constexpr double kDt = 0.3;
             constexpr double kWheelbase = 2.8;
-            double sim_x = g.ego_x;
-            double sim_y = g.ego_y;
-            double sim_psi = g.ego_heading;
-            double sim_v = g.ego_v;
-            double rollout_x[kRolloutSteps];
-            double rollout_y[kRolloutSteps];
-
-            for (int step = 0; step < kRolloutSteps; ++step) {
-                sim_v += (pred_speed - sim_v) * 0.3;
-                double psi_dot = (sim_v / kWheelbase) * tan(pred_steer);
-                sim_psi += psi_dot * kDt;
-                sim_x += sim_v * cos(sim_psi) * kDt;
-                sim_y += sim_v * sin(sim_psi) * kDt;
-                rollout_x[step] = sim_x;
-                rollout_y[step] = sim_y;
+            double rollout_x[kMaxRolloutSteps]{};
+            double rollout_y[kMaxRolloutSteps]{};
+            if (pred_traj_n > 0) {
+                for (int step = 0; step < rollout_steps; ++step) {
+                    rollout_x[step] = pred_traj_x[step];
+                    rollout_y[step] = pred_traj_y[step];
+                }
+            } else {
+                double sim_x = g.ego_x;
+                double sim_y = g.ego_y;
+                double sim_psi = g.ego_heading;
+                double sim_v = g.ego_v;
+                for (int step = 0; step < rollout_steps; ++step) {
+                    sim_v += (pred_speed - sim_v) * 0.3;
+                    double psi_dot = (sim_v / kWheelbase) * tan(pred_steer);
+                    sim_psi += psi_dot * kDt;
+                    sim_x += sim_v * cos(sim_psi) * kDt;
+                    sim_y += sim_v * sin(sim_psi) * kDt;
+                    rollout_x[step] = sim_x;
+                    rollout_y[step] = sim_y;
+                }
             }
 
             if (g.has_traj) {
@@ -1027,7 +1174,7 @@ protected:
                 int plan_cnt = g.plan_traj.point_count;
                 if (plan_cnt > 0) {
                     double dist_sum = 0.0;
-                    for (int step = 0; step < kRolloutSteps; ++step) {
+                    for (int step = 0; step < rollout_steps; ++step) {
                         double min_d2 = 1e18;
                         for (int pi = 0; pi < plan_cnt; ++pi) {
                             double dx = (double)g.plan_traj.points[pi].x - rollout_x[step];
@@ -1037,11 +1184,11 @@ protected:
                         }
                         dist_sum += sqrt(min_d2);
                     }
-                    double ade = dist_sum / (double)kRolloutSteps;
+                    double ade = dist_sum / (double)rollout_steps;
                     double fde_min_d2 = 1e18;
                     for (int pi = 0; pi < plan_cnt; ++pi) {
-                        double dx = (double)g.plan_traj.points[pi].x - rollout_x[kRolloutSteps - 1];
-                        double dy = (double)g.plan_traj.points[pi].y - rollout_y[kRolloutSteps - 1];
+                        double dx = (double)g.plan_traj.points[pi].x - rollout_x[rollout_steps - 1];
+                        double dy = (double)g.plan_traj.points[pi].y - rollout_y[rollout_steps - 1];
                         double d2 = dx * dx + dy * dy;
                         if (d2 < fde_min_d2) fde_min_d2 = d2;
                     }
@@ -1066,7 +1213,7 @@ protected:
             {
                 cJSON* tj_root = cJSON_CreateObject();
                 cJSON* pts_arr = cJSON_CreateArray();
-                for (int step = 0; step < kRolloutSteps; ++step) {
+                for (int step = 0; step < rollout_steps; ++step) {
                     cJSON* pt = cJSON_CreateObject();
                     cJSON_AddNumberToObject(pt, "x", rollout_x[step]);
                     cJSON_AddNumberToObject(pt, "y", rollout_y[step]);

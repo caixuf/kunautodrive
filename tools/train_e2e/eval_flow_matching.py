@@ -89,6 +89,16 @@ def evaluate_onnx(
     return summary, predictions
 
 
+def detect_onnx_state_dim(onnx_path: Path, default: int = 59) -> int:
+    import onnxruntime as ort
+
+    sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+    shape = sess.get_inputs()[0].shape
+    if shape and isinstance(shape[-1], int) and shape[-1] > 0:
+        return int(shape[-1])
+    return default
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Evaluate Flow-Matching ONNX trajectory model.")
     ap.add_argument("--onnx", type=Path, required=True)
@@ -97,7 +107,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--predictions-out", type=Path, default=None)
     args = ap.parse_args(argv)
 
-    states, trajs = load_real_trajectory_dataset(args.dataset)
+    state_dim = detect_onnx_state_dim(args.onnx)
+    states, trajs = load_real_trajectory_dataset(args.dataset, state_dim=state_dim)
     summary, preds = evaluate_onnx(args.onnx, states, trajs, max_samples=args.max_samples)
     if args.predictions_out is not None:
         args.predictions_out.parent.mkdir(parents=True, exist_ok=True)
