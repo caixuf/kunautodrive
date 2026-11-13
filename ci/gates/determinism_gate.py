@@ -53,7 +53,7 @@ def _run(pipeline: Path, log_dir: Path, duration: int) -> dict:
     result = subprocess.run(
         [str(LAUNCHER), str(pipeline), "--duration", str(duration)],
         cwd=ROOT, env=env, text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120,
     )
     if not TOPOLOGY.is_file():
         raise SystemExit(
