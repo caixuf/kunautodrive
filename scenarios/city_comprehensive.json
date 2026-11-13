@@ -128,6 +128,13 @@
   "actors": [
     {"id": 1, "type": "car", "segment_id": 1, "s": 360, "l": -1.75, "vx": 14.0, "vy": 0.0, "len": 4.6, "wid": 2.0}
   ],
+  "traffic_density": {
+    "cars_per_km": 12,
+    "spawn_jitter_m": 3.0,
+    "lane_spread": true,
+    "max_npcs": 14,
+    "random_seed_offset": 0
+  },
   "traffic_lights": [],
   "stop_lines": [],
   "construction_zones": [],
