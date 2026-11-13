@@ -191,6 +191,7 @@ struct PlanningContext {
     double        map_ref_x[128]{};
     double        map_ref_y[128]{};
     double        map_ref_s[128]{};
+    double        map_ref_kappa[128]{};
     int           map_ref_count{0};
     uint64_t      last_map_ref_us{0};
     int           on_return{0};
@@ -208,6 +209,7 @@ struct PlanningContext {
     double        lane_ref_x[128]{};
     double        lane_ref_y[128]{};
     double        lane_ref_s[128]{};
+    double        lane_ref_kappa[128]{};
     int           lane_ref_count{0};
 
     double cfg_highway_speed_mps{13.0}; /* CP->NP 升级所需的持续速度阈值 (m/s) */
@@ -434,6 +436,43 @@ static bool project_to_reference_path(double x, double y,
  * Frenet 规划器使用 lane_ref，使 d=0 即目标车道中心；kd>0 时 FOT 自行权衡
  * "贴车道中心 vs 避障"，planning 不再硬覆盖 d_out。
  * 无新鲜 map_ref 时 lane_ref_count 置 0，调用方回退到 map_ref/直线参考线逻辑。 */
+static void compute_smoothed_ref_kappa(const double* rx, const double* ry,
+                                       const double* rs, int n,
+                                       double* out_kappa) {
+    if (!rx || !ry || !rs || !out_kappa || n <= 0) return;
+    for (int i = 0; i < n; i++) out_kappa[i] = 0.0;
+    if (n < 3) return;
+
+    double raw[128]{};
+    const int m = (n < 128) ? n : 128;
+    for (int i = 1; i < m - 1; i++) {
+        double h0 = atan2(ry[i] - ry[i - 1], rx[i] - rx[i - 1]);
+        double h1 = atan2(ry[i + 1] - ry[i], rx[i + 1] - rx[i]);
+        double dh = h1 - h0;
+        while (dh >  M_PI) dh -= 2.0 * M_PI;
+        while (dh < -M_PI) dh += 2.0 * M_PI;
+        double ds = 0.5 * (rs[i + 1] - rs[i - 1]);
+        if (ds < 1e-3) ds = 1e-3;
+        double k = dh / ds;
+        if (k >  0.25) k =  0.25;
+        if (k < -0.25) k = -0.25;
+        raw[i] = k;
+    }
+    raw[0] = raw[1];
+    raw[m - 1] = raw[m - 2];
+
+    for (int pass = 0; pass < 2; pass++) {
+        double tmp[128]{};
+        tmp[0] = 0.75 * raw[0] + 0.25 * raw[1];
+        for (int i = 1; i < m - 1; i++) {
+            tmp[i] = 0.25 * raw[i - 1] + 0.5 * raw[i] + 0.25 * raw[i + 1];
+        }
+        tmp[m - 1] = 0.25 * raw[m - 2] + 0.75 * raw[m - 1];
+        for (int i = 0; i < m; i++) raw[i] = tmp[i];
+    }
+    for (int i = 0; i < m; i++) out_kappa[i] = raw[i];
+}
+
 static void build_lane_reference(void) {
     g.lane_ref_count = 0;
     if (!has_fresh_map_ref() || g.map_ref_count < 2) return;
@@ -445,9 +484,17 @@ static void build_lane_reference(void) {
                                    g.map_ref_x[i1] - g.map_ref_x[i0]);
         g.lane_ref_x[i] = g.map_ref_x[i] - offset * sin(theta);
         g.lane_ref_y[i] = g.map_ref_y[i] + offset * cos(theta);
-        g.lane_ref_s[i] = g.map_ref_s[i];
+        if (i == 0) {
+            g.lane_ref_s[i] = 0.0;
+        } else {
+            g.lane_ref_s[i] = g.lane_ref_s[i - 1] +
+                hypot(g.lane_ref_x[i] - g.lane_ref_x[i - 1],
+                      g.lane_ref_y[i] - g.lane_ref_y[i - 1]);
+        }
     }
     g.lane_ref_count = g.map_ref_count;
+    compute_smoothed_ref_kappa(g.lane_ref_x, g.lane_ref_y, g.lane_ref_s,
+                               g.lane_ref_count, g.lane_ref_kappa);
 #ifdef HAVE_FRENET
     frenet_set_reference_path(g.frenet, g.lane_ref_x, g.lane_ref_y, g.lane_ref_count);
 #endif
@@ -525,6 +572,7 @@ static bool frenet_to_cartesian(double s, double d,
         const double* rx = use_lane ? g.lane_ref_x : g.map_ref_x;
         const double* ry = use_lane ? g.lane_ref_y : g.map_ref_y;
         const double* rs = use_lane ? g.lane_ref_s : g.map_ref_s;
+        const double* rk = use_lane ? g.lane_ref_kappa : g.map_ref_kappa;
         const int     rn = use_lane ? g.lane_ref_count : g.map_ref_count;
         double total_s = rs[rn - 1];
         if (total_s <= 1e-6) return false;
@@ -550,20 +598,7 @@ static bool frenet_to_cartesian(double s, double d,
         out_x = ref_x - d * sin(theta);
         out_y = ref_y + d * cos(theta);
         out_heading = theta;
-        /* kappa = 参考线切线转角差 / 段长（map_ref 是 ~5m 采样的 route centerline，
-         * 弯道处切线连续变化）。旧实现恒 0 → control 的 kappa 前馈 ff_term 丢失，
-         * 弯道全靠 heading 反馈追，横向误差大/抖动。 */
-        out_kappa = 0.0;
-        if (idx > 0) {
-            double h_prev = atan2(ry0 - ry[idx - 1],
-                                  rx0 - rx[idx - 1]);
-            double h_cur = atan2(ry1 - ry0, rx1 - rx0);
-            double dh = h_cur - h_prev;
-            while (dh >  M_PI) dh -= 2.0 * M_PI;
-            while (dh < -M_PI) dh += 2.0 * M_PI;
-            double ds = (s1 - s0) > 1e-6 ? (s1 - s0) : 1e-6;
-            out_kappa = dh / ds;
-        }
+        out_kappa = rk[idx] + frac * (rk[idx + 1] - rk[idx]);
         return true;
     }
     const int ref_n = 101;
@@ -1297,7 +1332,11 @@ static void on_road_ref_path(const Message* msg, void* user_data) {
         out_n++;
     }
     g.map_ref_count = out_n;
-    if (out_n >= 2) g.last_map_ref_us = clock_now_us();
+    if (out_n >= 2) {
+        g.last_map_ref_us = clock_now_us();
+        compute_smoothed_ref_kappa(g.map_ref_x, g.map_ref_y, g.map_ref_s,
+                                   out_n, g.map_ref_kappa);
+    }
     g.map_ref_rs0 = rs0;
     cJSON_Delete(root);
 }
@@ -2626,6 +2665,34 @@ protected:
                 }
             }
 
+            /* 最小空间视界保底：低速或匝道压速时 Frenet 固定时间域轨迹会缩成十余米，
+             * 沿有效参考线平滑延拓到 ≥30m（不超参考线总长），避免下游前视退化与画面短线抖动。 */
+            if (n_wp >= 2 && (g.lane_ref_count >= 2 || has_fresh_map_ref())) {
+                const bool use_lane = (g.lane_ref_count >= 2);
+                const double* rs = use_lane ? g.lane_ref_s : g.map_ref_s;
+                const int     rn = use_lane ? g.lane_ref_count : g.map_ref_count;
+                const double total_s = (rn >= 2) ? rs[rn - 1] : 0.0;
+                const double s_start = s_out[0];
+                const double s_end   = s_out[n_wp - 1];
+                const double min_horizon = 30.0;
+                double target_end = s_start + min_horizon;
+                if (target_end > total_s) target_end = total_s;
+                if (s_end - s_start < min_horizon - 2.0 && target_end > s_end + 1.0 && n_wp < 50) {
+                    const int room = 50 - n_wp;
+                    const double rem = target_end - s_end;
+                    const int ext_n = (room < 10) ? room : 10;
+                    const double d_last = d_out[n_wp - 1];
+                    const double v_last = spd_out[n_wp - 1];
+                    for (int k = 1; k <= ext_n; k++) {
+                        const double f = (double)k / (double)ext_n;
+                        s_out[n_wp]   = s_end + rem * f;
+                        d_out[n_wp]   = use_lane ? (d_last * (1.0 - f)) : d_last;
+                        spd_out[n_wp] = v_last;
+                        n_wp++;
+                    }
+                }
+            }
+
             /* §9 轨迹拼接 */
             g.stitch_total_count++;
             if (g.prev_traj.point_count > 0 && g.prev_traj_stamp_us > 0) {
@@ -2715,7 +2782,7 @@ protected:
                 for (int i = 0; i + 1 < n_pts; i++) {
                     double dx = (double)points[i + 1].x - (double)points[i].x;
                     double dy = (double)points[i + 1].y - (double)points[i].y;
-                    if (dx * dx + dy * dy > 1e-9) {
+                    if (dx * dx + dy * dy > 0.04) {
                         points[i].heading = (float)atan2(dy, dx);
                     }
                 }

@@ -53,8 +53,8 @@ namespace {
  * 旧值 0.8 (-3dB@2.8Hz) 高频抑制不足, Stanley 控制器在 cte_term 与 heading_term
  * 互相反向时产生 ~1.6Hz 极限环振荡（左摇右晃）。降到 0.5 增加阻尼, 让 steer
  * 平滑过渡, 牺牲少量相位裕度换取稳定性。yaw_damping 配合抑制高频。 */
-#define STEER_FILTER_NEW   0.5     /* 低通滤波新值权重 */
-#define STEER_FILTER_PREV  0.5     /* 低通滤波旧值权重 */
+#define STEER_FILTER_NEW   0.30    /* 低通滤波新值权重（抑制高频摆头） */
+#define STEER_FILTER_PREV  0.70    /* 低通滤波旧值权重 */
 /* 轴距 (m)：真车默认 2.7，RC 小车在 pipeline_car.json 里通过 params.wheelbase
  * 覆盖为 0.25-0.4。这个宏只作为 g.wheelbase 的初值，运行时由配置注入。 */
 #define CONTROL_WHEELBASE_DEFAULT_M 2.7
@@ -100,6 +100,7 @@ struct ControlContext {
     double ego_heading{0};     /* 从 fusion 获取的航向角 (rad) */
     double ego_yaw_rate{0};    /* 从 fusion 获取的偏航角速度 (rad/s) */
     double prev_steer{0};
+    double prev_ref_kappa{0};
 
     /* ── 真车级横向控制（替代 Stanley 极限环补偿）── */
     double lat_lookahead_gain{0.8};   /* 前视距离系数 (s) */
@@ -1075,7 +1076,8 @@ protected:
                         heading_term = g.lat_kd_heading * dh_t;
                     }
                     double yaw_damp_term = g.yaw_damping * g.ego_yaw_rate;
-                    double kappa = ref_kappa;
+                    double kappa = 0.25 * ref_kappa + 0.75 * g.prev_ref_kappa;
+                    g.prev_ref_kappa = kappa;
                     double ff_weight = 1.0;
                     if (fabs(kappa) > 1e-9) {
                         double R = 1.0 / fabs(kappa);
@@ -1097,6 +1099,12 @@ protected:
                     if (steer >  steer_limit) steer =  steer_limit;
                     if (steer < -steer_limit) steer = -steer_limit;
                     steer = STEER_FILTER_NEW * steer + (1.0 - STEER_FILTER_NEW) * g.prev_steer;
+                    if (!g.maneuver_mode) {
+                        const double max_dsteer = 0.035; /* 40Hz 下限制 ~1.4 rad/s，防摆头 */
+                        double ds = steer - g.prev_steer;
+                        if (ds >  max_dsteer) steer = g.prev_steer + max_dsteer;
+                        if (ds < -max_dsteer) steer = g.prev_steer - max_dsteer;
+                    }
                     if (fabs(steer) < 0.005) steer = 0.0;
                     g.prev_steer = steer;
                 }
