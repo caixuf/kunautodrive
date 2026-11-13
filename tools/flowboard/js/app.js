@@ -1492,16 +1492,13 @@ function startSSE() {
   // 启动数据新鲜度检测（每 1s 检查一次）
   _dataStaleTimer = setInterval(_checkDataStale, 1000);
 
-  // SSE: only update data model; rendering driven by rAF.
-  // Avoid synchronous updateAll() in SSE callback (blocks main thread).
+  // SSE: buffer latest raw payload; parse & render once per rAF to avoid
+  // multi-message burst JSON.parse + GC micro-stutters on the main thread.
   var _pendingUpdate = false;
+  var _latestSseRaw = null;
   eventSource.onmessage = function(e) {
     if (paused) return;
-    try { topoData = JSON.parse(e.data); }
-    catch(err) {
-      console.warn('[SSE] JSON parse failed:', err.message, 'data length:', e.data ? e.data.length : 0, 'first 200 chars:', (e.data || '').slice(0, 200));
-      return;
-    }
+    _latestSseRaw = e.data;
     // 收到消息即刷新数据时间戳并重置退避
     _markDataFresh();
     _reconnectDelay = 2000;
@@ -1510,6 +1507,14 @@ function startSSE() {
       _pendingUpdate = true;
       requestAnimationFrame(function() {
         _pendingUpdate = false;
+        var raw = _latestSseRaw;
+        _latestSseRaw = null;
+        if (!raw) return;
+        try { topoData = JSON.parse(raw); }
+        catch(err) {
+          console.warn('[SSE] JSON parse failed:', err.message, 'data length:', raw ? raw.length : 0, 'first 200 chars:', (raw || '').slice(0, 200));
+          return;
+        }
         updateAll();
         applyLiveStatus(topoData);
       });
