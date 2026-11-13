@@ -14,6 +14,7 @@
  */
 
 #include "ekf_fusion.h"
+#include "fusion_gps_gate.h"
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
@@ -173,6 +174,36 @@ static void test_covariance_floor(void) {
     TEST("Case 3: heading 已接近真值 (|h-0.5|<0.3)", fabs(ekf.x[3] - 0.5) < 0.3);
 }
 
+static void test_gps_outage_5s_and_multipath_gate(void) {
+    printf("\n=== Case 4: GPS 遮挡 5s 航位推算 + 多径野值门控 ===\n");
+    EkfFusion ekf;
+    ekf_fusion_init(&ekf, DT_S, NULL);
+
+    /* 5s 正常巡航 (v=12 m/s, heading=0) */
+    for (int s = 0; s < 5; s++) {
+        for (int tick = 0; tick < HZ; tick++)
+            ekf_fusion_predict(&ekf);
+        ekf_fusion_update_gps(&ekf, 12.0, 0.0, NULL);
+    }
+
+    /* 注入多径野值 70 m/s -> 前置门控必须拒绝 */
+    TEST("Case 4: 多径野值 70 m/s 被门控拒绝",
+         fusion_gps_observation_plausible(70.0, ekf.x[2], 1) == 0);
+    TEST("Case 4: 正常观测 12.5 m/s 允许喂入",
+         fusion_gps_observation_plausible(12.5, ekf.x[2], 1) == 1);
+
+    /* 模拟 5s GPS 拒止：仅 predict + 里程计/航位推算 */
+    double x_before = ekf.x[0];
+    double y_before = ekf.x[1];
+    for (int tick = 0; tick < 5 * HZ; tick++) {
+        ekf_fusion_predict(&ekf);
+    }
+    double dx = ekf.x[0] - x_before;
+    double dy = ekf.x[1] - y_before;
+    TEST("Case 4: GPS 遮挡 5s 纵向推进符合预期 (dx > 50m)", dx > 50.0);
+    TEST("Case 4: GPS 遮挡 5s 横向漂移满足车道安全包络 (|dy| < 0.85m)", fabs(dy) < 0.85);
+}
+
 int main(void) {
     printf("EKF 融合单元测试 (dt=%.3fs, hz=%d)\n", DT_S, HZ);
     printf("Layer 1: (v,ψ) 镜像归一化\n");
@@ -181,6 +212,7 @@ int main(void) {
     test_park_then_start();
     test_heading_wander_to_pi();
     test_covariance_floor();
+    test_gps_outage_5s_and_multipath_gate();
 
     printf("\n=== 汇总: %d PASS, %d FAIL ===\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;

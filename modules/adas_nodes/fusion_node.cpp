@@ -38,6 +38,7 @@
 #include "clock_service.h"
 #include "degrade_ladder.h"
 #include "localization_integrity.h"   /* L3-P2 定位交叉校验 */
+#include "fusion_gps_gate.h"
 #include "clock_service.h"
 #include <cjson/cJSON.h>
 #undef LOG_TRACE
@@ -394,10 +395,16 @@ protected:
                 ekf_fusion_update_lidar(ekf_, (double)lidar->x, (double)lidar->y, nullptr);
             }
 
-            /* ── GPS 速度/航向更新（高权速度源；heading 与 SLAM 互斥） ── */
+            /* ── GPS 速度/航向更新（高权速度源；heading 与 SLAM 互斥；多径野值前置门控） ── */
             if (gps) {
-                double heading_rad = (double)gps->heading_deg * M_PI / 180.0;
-                ekf_fusion_update_gps(ekf_, (double)gps->speed_mps, heading_rad, nullptr);
+                if (fusion_gps_observation_plausible(
+                        (double)gps->speed_mps, g.fused_v, g.fused_count >= 5 ? 1 : 0)) {
+                    double heading_rad = (double)gps->heading_deg * M_PI / 180.0;
+                    ekf_fusion_update_gps(ekf_, (double)gps->speed_mps, heading_rad, nullptr);
+                } else if (g.fused_count % 10 == 0) {
+                    LOG_WARN("fusion", "GPS outlier rejected: gps_v=%.2f fused_v=%.2f",
+                             (double)gps->speed_mps, g.fused_v);
+                }
             }
 
             /* 读取融合结果 */
