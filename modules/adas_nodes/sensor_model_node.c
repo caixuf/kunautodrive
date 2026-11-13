@@ -202,13 +202,14 @@ static uint32_t publish_raycast_points(uint32_t frame_id, uint64_t timestamp_us)
     plan.hfov_deg        = g.lidar_fov_deg;
     plan.vfov_min_deg    = g.lidar_vfov_min_deg;
     plan.vfov_max_deg    = g.lidar_vfov_max_deg;
-    plan.range_max_m     = g.lidar_max_range_m;
+    plan.range_max_m     = sensor_model_lidar_effective_range(
+        g.lidar_max_range_m, g.weather_attenuation);
     plan.mount_height_m  = g.lidar_height_m;
     /* 测距噪声：绝对项沿用 obs_noise_std_m（weather 放大 1.5×，与 mode=0 口径一致），
      * 相对项单独给 —— 绝不能回到 σ=0.08·range（33m 处 2.6m，会糊掉相邻目标）。 */
     plan.noise_std_m     = g.obs_noise_std_m * (1.0 + 1.5 * g.weather_attenuation);
     plan.noise_rel       = g.lidar_noise_rel;
-    plan.loss_rate       = 0.05;
+    plan.loss_rate       = sensor_model_lidar_loss_rate(0.05, g.weather_attenuation);
     /* intensity 衰减系数：30m 半衰期 ≈ exp(-1)≈0.37（接近真实 LiDAR） */
     plan.intensity_tau_m = 30.0;
     /* 扫描周期：time_offset_us 按方位角在 FOV 上的进度分布（旋转式 LiDAR sweep） */

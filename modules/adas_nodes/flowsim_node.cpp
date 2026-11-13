@@ -41,6 +41,7 @@
 #include "flowsim/npc_ai.h"
 #include "flowsim/collision.h"
 #include "flowsim/building.h"   /* OSM 建筑 OBB：碰撞 + 遮挡共用 */
+#include "flowsim/building_filter.h"
 #include "flowsim/scene_events.h"
 #include "flowsim/scene_pub.h"
 #include "flowsim/actor/VehicleActor.h"   /* 车灯信号派生（Phase 1 重构）*/
@@ -3483,102 +3484,15 @@ static bool build_route_via_astar(void) {
     return true;
 }
 
-/* ── 压路建筑过滤（2026-08-15 陆家嘴修复）────────────────────
- * OSM 建筑 footprint 与车行道 2D 相交只可能是两类：隧道上方建筑（真实
- * 存在，但 2D 仿真无法表达"路上楼"层级）或 OSM 数据瑕疵。两类在 2D 地面
- * 仿真里都不应参与碰撞——陆家嘴人民路隧道上方 b_10639412 footprint 南角
- * 伸进路面（隧道在地下），ego 正常行驶被判 COLLISION ego↔building1。
- * 规则：footprint 与任一 road 可行驶面（中心线 ± 半宽）相交 → 从碰撞列表
- * 剔除。仅影响 g.buildings 碰撞列表；前端渲染/感知遮挡的原始数据不受影响。 */
-static bool s_point_in_poly(double px, double py,
-                            const std::vector<std::pair<double,double>>& poly) {
-    bool inside = false;
-    const size_t n = poly.size();
-    for (size_t i = 0, j = n - 1; i < n; j = i++) {
-        double xi = poly[i].first,  yi = poly[i].second;
-        double xj = poly[j].first,  yj = poly[j].second;
-        if ((yi > py) != (yj > py)) {
-            double xint = (xj - xi) * (py - yi) / (yj - yi) + xi;
-            if (px < xint) inside = !inside;
-        }
-    }
-    return inside;
-}
-
-static double s_point_seg_dist(double px, double py,
-                               double ax, double ay, double bx, double by) {
-    double abx = bx - ax, aby = by - ay;
-    double L2 = abx * abx + aby * aby;
-    double t = (L2 > 1e-12) ? ((px - ax) * abx + (py - ay) * aby) / L2 : 0.0;
-    if (t < 0.0) t = 0.0;
-    if (t > 1.0) t = 1.0;
-    double cx = ax + abx * t, cy = ay + aby * t;
-    return std::hypot(px - cx, py - cy);
-}
-
+/* ── 压路建筑过滤（委托 flowsim/building_filter.h）──────────────────── */
 static void filter_buildings_over_roads(void) {
     if (!g.roads_loaded || g.buildings.empty()) return;
-    const size_t nb = g.buildings.size();
-    /* 预计算各建筑 AABB（粗筛） */
-    std::vector<double> bx0(nb), bx1(nb), by0(nb), by1(nb);
-    for (size_t bi = 0; bi < nb; ++bi) {
-        const auto& poly = g.buildings[bi].poly;
-        if (poly.empty()) { bx0[bi] = 1e18; bx1[bi] = -1e18;
-                            by0[bi] = 1e18; by1[bi] = -1e18; continue; }
-        double x0 = 1e18, x1 = -1e18, y0 = 1e18, y1 = -1e18;
-        for (const auto& p : poly) {
-            if (p.first  < x0) x0 = p.first;
-            if (p.first  > x1) x1 = p.first;
-            if (p.second < y0) y0 = p.second;
-            if (p.second > y1) y1 = p.second;
-        }
-        bx0[bi] = x0; bx1[bi] = x1; by0[bi] = y0; by1[bi] = y1;
-    }
-    std::vector<char> drop(nb, 0);
-    const int nroad = g.roads.road_count();
-    for (int ri = 0; ri < nroad; ++ri) {
-        flowsim::RoadInfo info;
-        if (!g.roads.road_info(ri, info) || info.length <= 0.0) continue;
-        for (double s = 0.0; s <= info.length + 1e-6; s += 5.0) {
-            flowsim::WorldPos wp;
-            if (!g.roads.frenet_to_world((int)info.id, 0, s, 0.0, wp)) continue;
-            double lw = g.roads.lane_width((int)info.id, 0, s);
-            if (lw < 1.0 || lw > 10.0) lw = 3.5;
-            int lanes = g.roads.drivable_lane_count((int)info.id, s);
-            if (lanes < 1) lanes = 1;
-            double half_w = lanes * 0.5 * lw + 1.0;  /* 可行驶半宽 + 1m 余量 */
-            for (size_t bi = 0; bi < nb; ++bi) {
-                if (drop[bi]) continue;
-                const auto& poly = g.buildings[bi].poly;
-                if (poly.size() < 3) continue;
-                if (wp.x < bx0[bi] - half_w || wp.x > bx1[bi] + half_w ||
-                    wp.y < by0[bi] - half_w || wp.y > by1[bi] + half_w) continue;
-                /* 精确：点在多边形内，或到任意边距离 < half_w */
-                bool hit = s_point_in_poly(wp.x, wp.y, poly);
-                if (!hit) {
-                    for (size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++) {
-                        if (s_point_seg_dist(wp.x, wp.y,
-                                             poly[j].first, poly[j].second,
-                                             poly[i].first, poly[i].second) < half_w) {
-                            hit = true; break;
-                        }
-                    }
-                }
-                if (hit) drop[bi] = 1;
-            }
-        }
-    }
-    size_t out = 0;
-    int ndrop = 0;
-    for (size_t bi = 0; bi < nb; ++bi) {
-        if (drop[bi]) { ++ndrop; continue; }
-        g.buildings[out++] = g.buildings[bi];
-    }
-    g.buildings.resize(out);
+    const int total = (int)g.buildings.size();
+    const int ndrop = flowsim::filter_buildings_overlapping_roads(g.roads, g.buildings);
     if (ndrop > 0) {
         LOG_INFO("flowsim",
                  "filtered %d/%d buildings overlapping carriageway (tunnel-overpass/data artifact) from collision list",
-                 ndrop, (int)nb);
+                 ndrop, total);
     }
 }
 

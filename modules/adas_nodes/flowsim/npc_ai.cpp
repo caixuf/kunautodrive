@@ -17,6 +17,7 @@
  */
 
 #include "npc_ai.h"
+#include "npc_yield.h"
 #include "physics.h"
 #include "road_network.h"
 #include "route.h"
@@ -767,6 +768,19 @@ mobil_done: ;
         } else {
             npc.state = NpcState::Cruise;
             v_desired = npc.target_vx;
+        }
+    }
+
+    // 2.5 交叉冲突区预测让行（非 Stop/StopForTL 时避免路口硬挤或侧碰）
+    if (!in_crash_cooldown &&
+        npc.state != NpcState::Stopped &&
+        npc.state != NpcState::StopForTL) {
+        auto yres = evaluate_crossing_conflict_yield(npc, pool);
+        if (yres.should_yield && yres.speed_cap < v_desired) {
+            v_desired = yres.speed_cap;
+            if (npc.state == NpcState::Cruise || npc.state == NpcState::Follow) {
+                npc.state = NpcState::Yield;
+            }
         }
     }
 

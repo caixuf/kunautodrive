@@ -54,6 +54,20 @@ typedef struct {
 SensorCameraDegradation sensor_model_camera_degradation(
     double visibility_m, const char* weather, const char* lighting);
 
+/**
+ * 雨雾天气对 LiDAR 有效探测距离的衰减：
+ *   att=0 (clear) → 100% base_range_m；
+ *   att=1 (dense fog) → 45% base_range_m（最小保留 15m）。
+ */
+double sensor_model_lidar_effective_range(double base_range_m, double weather_attenuation);
+
+/**
+ * 雨雾天气对 LiDAR 丢点率的影响：
+ *   att=0 (clear) → 保持 base_loss_rate；
+ *   att>0 (rain/fog/snow) → 线性叠加最多 +0.35 丢点率（上限 0.85）。
+ */
+double sensor_model_lidar_loss_rate(double base_loss_rate, double weather_attenuation);
+
 #ifdef __cplusplus
 }
 #endif

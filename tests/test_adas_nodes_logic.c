@@ -2559,6 +2559,20 @@ static void test_st_graph_cutin_t_enter_occupancy(void) {
     PASS();
 }
 
+static void test_sensor_model_lidar_weather_degradation(void) {
+    TEST("sensor_model_lidar_weather_degradation");
+    /* Clear weather (att=0): full range and base loss rate unchanged */
+    ASSERT_NEAR(sensor_model_lidar_effective_range(120.0, 0.0), 120.0, 1e-9, "clear range");
+    ASSERT_NEAR(sensor_model_lidar_loss_rate(0.05, 0.0), 0.05, 1e-9, "clear loss");
+
+    /* Dense fog (att=1): range attenuated to 45% (54m) and loss_rate rises to 0.40 */
+    double fog_range = sensor_model_lidar_effective_range(120.0, 1.0);
+    double fog_loss = sensor_model_lidar_loss_rate(0.05, 1.0);
+    ASSERT(fog_range < 60.0 && fog_range >= 15.0, "fog range=%.1f", fog_range);
+    ASSERT_NEAR(fog_loss, 0.40, 1e-9, "fog loss");
+    PASS();
+}
+
 int main(void) {
     printf("\n╔══════════════════════════════════════════╗\n");
     printf("║  FlowEngine ADAS Nodes Logic Tests        ║\n");
@@ -2709,6 +2723,7 @@ int main(void) {
     test_hungarian_competition_matrix();
     test_hungarian_64_targets_full_capacity();
     test_st_graph_cutin_t_enter_occupancy();
+    test_sensor_model_lidar_weather_degradation();
 
     printf("\n═══════════════════════════════════\n");
     printf("  Total: %d  ✅ Passed: %d  ❌ Failed: %d\n",

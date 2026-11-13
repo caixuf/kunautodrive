@@ -62,3 +62,24 @@ double sensor_model_weather_attenuation(double visibility_m, const char* weather
     if (att < 0.0) att = 0.0;
     return att;
 }
+
+double sensor_model_lidar_effective_range(double base_range_m, double weather_attenuation) {
+    if (!(base_range_m > 0.0)) return 0.0;
+    double att = weather_attenuation;
+    if (!(att >= 0.0)) att = 0.0;
+    if (att > 1.0) att = 1.0;
+    double eff = base_range_m * (1.0 - 0.55 * att);
+    double floor_m = base_range_m < 15.0 ? base_range_m : 15.0;
+    return eff < floor_m ? floor_m : eff;
+}
+
+double sensor_model_lidar_loss_rate(double base_loss_rate, double weather_attenuation) {
+    double base = base_loss_rate;
+    if (!(base >= 0.0)) base = 0.0;
+    double att = weather_attenuation;
+    if (!(att >= 0.0)) att = 0.0;
+    if (att > 1.0) att = 1.0;
+    double loss = base + 0.35 * att;
+    if (loss > 0.85) loss = 0.85;
+    return loss;
+}
