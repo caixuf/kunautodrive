@@ -602,3 +602,16 @@ Step 3: 加 steer → 变道/避障
 Step 4: 策略导出 → 闭环评估 → 与模仿模型 A/B
 ```
 每步统一验收：closed_loop 三场景 + demo_evaluator 评分。
+
+## Flow-Matching 轨迹策略与 ONNX 评测
+
+`tools/train_e2e/train_a100_single.py` 支持从真实录制样本（`features_v3` + 自车系 3s 未来轨迹 `[lx, ly, v, dh]`）训练 59 维归一化 Flow-Matching 轨迹策略（输入含 `features_v3` 与自车系近邻障碍物槽位，模型内嵌 `state_mean`/`state_scale` 与 `traj_mean`/`traj_scale` 并以确定性 Euler ODE 导出 ONNX）：
+
+```bash
+# 训练并导出 ONNX
+python3 tools/train_e2e/train_a100_single.py --data /tmp/e2e_multi_samples.jsonl --epochs 120 --out-dir models/flow_matching_v1
+
+# ONNX Runtime 离线评测（ADE / FDE / Speed MAE / P50-P99 延迟）并接入 eval_report.py
+python3 tools/train_e2e/eval_flow_matching.py --onnx models/flow_matching_v1/policy_flow_matching.onnx --data /tmp/e2e_multi_samples.jsonl --out-predictions /tmp/fm_predictions.json
+python3 tools/eval_report.py --input /tmp/flow_regression --predictions /tmp/fm_predictions.json --require-open-loop --json
+```

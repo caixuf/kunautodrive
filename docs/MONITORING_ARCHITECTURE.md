@@ -277,3 +277,8 @@ python3 ci/evaluators/demo_evaluator.py --no-run \
 
 `--require-safety-evidence` 会校验 v1 schema、注入/检测时间顺序、L3 和
 `emergency_stop(throttle=0, brake=1)`；任一字段缺失会使 CI 失败。
+
+## 自诊断 CLI (`flow_doctor.py`) 与 FlowBoard 实时诊断 HUD (`#dh-diag`)
+
+- **`tools/flow_doctor.py`**：一站式环境与链路体检 CLI，检查核心二进制、`node_plugins`、残留 PID/SHM（`--fix` 自动清理）、`pipeline_check.py` 指标、`/tmp/flow_logs/*.log`（`COLLISION`/`ERROR`/`WARN`/后端 `monitor.log` 抖动）以及 `models/registry.json` + `inference.log` 健康度（支持 `--bundle` 导出诊断包）。
+- **FlowBoard `#dh-diag`**：`tools/flowboard/index.html` 与 `tools/flowboard/js/app.js` 在底部 DriveHUD 内实时归因后端 `t_us` 停顿（`>200ms`）、SSE 到达间隔（`>250ms`）与前端 `rAF` 渲染掉帧（`>33ms`），便于快速区分仿真卡顿与浏览器渲染瓶颈。
