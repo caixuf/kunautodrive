@@ -164,10 +164,10 @@ class ModelEMA:
         self.ema_model.eval()
         self.decay = decay
 
-    @torch.no_grad()
     def update(self, model):
-        for ema_p, model_p in zip(self.ema_model.parameters(), model.parameters()):
-            ema_p.data.mul_(self.decay).add_(model_p.data, alpha=1 - self.decay)
+        with torch.no_grad():
+            for ema_p, model_p in zip(self.ema_model.parameters(), model.parameters()):
+                ema_p.data.mul_(self.decay).add_(model_p.data, alpha=1 - self.decay)
 
 
 # ── 3. 数据集与合成流 ──────────────────────────────────────────────
