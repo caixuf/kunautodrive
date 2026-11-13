@@ -36,3 +36,21 @@ def test_mine_hard_cases_cli_roundtrip(tmp_path: Path):
     assert len(lines) == 1
     assert lines[0]["seq"] == 2
     assert lines[0]["_hard_case_reasons"] == ["latency_budget_exceeded"]
+
+
+def test_mine_hard_cases_supports_e2e_sample_v2():
+    records = [
+        {"schema_version": "flowengine.e2e_sample.v2", "t": 1000, "ego": {"x": 0.0, "y": 0.0, "v": 10.0, "heading": 0.0}, "control": {"brake": 0.0}},
+        {"schema_version": "flowengine.e2e_sample.v2", "t": 1050, "ego": {"x": 0.5, "y": 0.0, "v": 10.0, "heading": 0.0}, "control": {"brake": 0.0}},
+        {
+            "schema_version": "flowengine.e2e_sample.v2",
+            "t": 1100,
+            "ego": {"x": 1.0, "y": 0.0, "v": 9.0, "heading": 0.0},
+            "control": {"brake": 0.8, "emergency_stop": True},
+            "obstacles": [{"x": 10.0, "y": 0.0, "vx": 0.0, "vy": 0.0}],
+        },
+    ]
+    mined = mine_hard_cases(records)
+    assert len(mined) == 1
+    assert set(mined[0]["_hard_case_reasons"]) >= {"high_jerk", "low_ttc", "safety_takeover"}
+
