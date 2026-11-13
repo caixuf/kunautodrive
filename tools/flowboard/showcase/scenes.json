@@ -3831,6 +3831,13 @@
             "wid": 2.0
           }
         ],
+        "traffic_density": {
+          "cars_per_km": 12,
+          "spawn_jitter_m": 3.0,
+          "lane_spread": true,
+          "max_npcs": 14,
+          "random_seed_offset": 0
+        },
         "traffic_lights": [],
         "stop_lines": [],
         "construction_zones": [],
