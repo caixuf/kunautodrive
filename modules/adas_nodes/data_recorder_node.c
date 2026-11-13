@@ -70,6 +70,9 @@ static struct {
     double lane_count;
     double lane_width;
     double ego_lane_offset;
+    double plan_ref_x;
+    double plan_ref_y;
+    volatile int has_plan_ref;
     volatile int has_scene;
 
     double cfg_frequency_hz;
@@ -122,6 +125,9 @@ static void on_planning(const Message* msg, void* user_data) {
     if (Trajectory_deserialize(&traj, (const uint8_t*)msg->data, msg->data_size) == 0
         && traj.point_count > 0) {
         g.planning_target_speed = (double)traj.points[0].v;
+        g.plan_ref_x = (double)traj.points[0].x;
+        g.plan_ref_y = (double)traj.points[0].y;
+        g.has_plan_ref = 1;
         g.has_planning = 1;
     }
 }
@@ -336,7 +342,13 @@ static int recorder_execute(TaskBase* task) {
          *   0-15: 同 features_v2
          *   16 tl_state, 17 tl_distance, 18 road_curvature,
          *   19 road_speed_limit, 20 lane_count, 21 lane_width, 22 ego_lane_offset */
-        g.ego_lane_offset = g.ego_y;
+        if (g.has_plan_ref) {
+            double dx = g.plan_ref_x - g.ego_x;
+            double dy = g.plan_ref_y - g.ego_y;
+            g.ego_lane_offset = sin(g.ego_heading) * dx - cos(g.ego_heading) * dy;
+        } else {
+            g.ego_lane_offset = g.ego_y;
+        }
         {   double v3[23] = {
                 g.ego_v, g.ego_y, g.ego_heading, g.ego_yaw_rate,
                 f0[0], f0[1], f0[2], f0[3], f0[4],

@@ -460,7 +460,13 @@ static void build_frame(float frame[V3_DIM], int dim) {
         frame[19] = (float)g.road_speed_limit;
         frame[20] = (float)g.lane_count;
         frame[21] = (float)g.lane_width;
-        g.ego_lane_offset = g.ego_y;  /* 默认道路参考线在 y=0 */
+        if (g.has_traj && g.plan_traj.point_count > 0) {
+            double dx = (double)g.plan_traj.points[0].x - g.ego_x;
+            double dy = (double)g.plan_traj.points[0].y - g.ego_y;
+            g.ego_lane_offset = sin(g.ego_heading) * dx - cos(g.ego_heading) * dy;
+        } else {
+            g.ego_lane_offset = g.ego_y;  /* 默认道路参考线在 y=0 */
+        }
         frame[22] = (float)g.ego_lane_offset;
     }
 }
