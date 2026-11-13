@@ -33,6 +33,7 @@
 #include "node_plugin.h"
 #include "fp_env.h"          /* FTZ/DAZ 防 denormal → strtod 断言崩溃 */
 #include "state_machine.h"
+#include "inference_latency_guard.h"
 #include "adas_msgs_gen.h"
 #include "coroutine_task.h"
 #undef LOG_TRACE
@@ -945,11 +946,28 @@ protected:
             double pred_lc = 0.0, pred_conf = 0.0;
             double pred_kv = 0.0, pred_kp = 0.0, pred_kd = 0.0, pred_yd = 0.0;
             bool   pred_immune_lock = false;
+            const uint64_t infer_t0_us = clock_now_us();
             run_inference(&pred_speed, &pred_d,
                           &pred_throttle, &pred_brake, &pred_steer,
                           &pred_lc, &pred_conf,
                           &pred_kv, &pred_kp, &pred_kd, &pred_yd,
                           &pred_immune_lock);
+            const uint64_t infer_dt_us = clock_now_us() - infer_t0_us;
+            latency_guard_.record(infer_dt_us);
+            const bool latency_budget_exceeded = latency_guard_.p99_exceeds_budget(50000);
+            if (latency_guard_.hard_timeout(100000)) {
+                pred_conf = 0.0;
+                if (g.infer_count % 20 == 0) {
+                    LOG_WARN("inference",
+                             "inference latency hard timeout: last=%llu us p99=%llu us (>100ms), forcing conf=0",
+                             (unsigned long long)infer_dt_us,
+                             (unsigned long long)latency_guard_.p99_us());
+                }
+            } else if (latency_budget_exceeded && g.infer_count % 50 == 0) {
+                LOG_WARN("inference",
+                         "inference P99 latency %llu us exceeds 50ms budget",
+                         (unsigned long long)latency_guard_.p99_us());
+            }
 
             /* 影子对比: 与 planning 输出的目标速度差 */
             double shadow_delta = g.has_planning
@@ -1069,6 +1087,9 @@ protected:
                 cJSON_AddNumberToObject(tj_root, "lane_change", pred_lc);
                 cJSON_AddNumberToObject(tj_root, "confidence", pred_conf);
                 cJSON_AddBoolToObject(tj_root, "immune_lock", pred_immune_lock);
+                cJSON_AddNumberToObject(tj_root, "latency_us", (double)infer_dt_us);
+                cJSON_AddNumberToObject(tj_root, "latency_p99_us", (double)latency_guard_.p99_us());
+                cJSON_AddBoolToObject(tj_root, "latency_budget_exceeded", latency_budget_exceeded);
                 cJSON* ego_obj = cJSON_CreateObject();
                 cJSON_AddNumberToObject(ego_obj, "x", g.ego_x);
                 cJSON_AddNumberToObject(ego_obj, "y", g.ego_y);
@@ -1159,6 +1180,7 @@ protected:
 private:
     Transport* transport_;
     long       period_us_;
+    adas_infer::InferenceLatencyGuard latency_guard_{};
 };
 
 /* ── TaskBase 包装器（宏生成） — 必须在 inference_init 前展开 ─────── */

@@ -579,6 +579,10 @@ add_executable(test_npc_yield test_npc_yield.cpp flowsim/road_position.cpp flows
 target_include_directories(test_npc_yield PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME npc_yield COMMAND test_npc_yield)
 
+add_executable(test_inference_latency_guard test_inference_latency_guard.cpp)
+target_include_directories(test_inference_latency_guard PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME inference_latency_guard COMMAND test_inference_latency_guard)
+
 add_executable(test_planning_fallback_when_match_invalid test_planning_fallback_when_match_invalid.cpp)
 target_include_directories(test_planning_fallback_when_match_invalid PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME test_planning_fallback_when_match_invalid COMMAND test_planning_fallback_when_match_invalid)
