@@ -77,6 +77,10 @@ def build_flow_matching_model(nn, state_dim=59, traj_horizon=30, traj_dim=4, hid
             self.traj_horizon = traj_horizon
             self.traj_dim = traj_dim
             self.out_dim = traj_horizon * traj_dim  # 30 * 4 = 120
+            self.register_buffer("state_mean", torch.zeros(1, state_dim))
+            self.register_buffer("state_scale", torch.ones(1, state_dim))
+            self.register_buffer("traj_mean", torch.zeros(1, self.out_dim))
+            self.register_buffer("traj_scale", torch.ones(1, self.out_dim))
 
             # 1. 状态编码器 (自车状态 + 感知特征 + 道路几何)
             self.state_enc = nn.Sequential(
@@ -121,10 +125,11 @@ def build_flow_matching_model(nn, state_dim=59, traj_horizon=30, traj_dim=4, hid
         def forward(self, state, x_t, t):
             """
             state: [B, state_dim]
-            x_t:   [B, 120]  t 时刻插值轨迹
+            x_t:   [B, 120]  t 时刻插值轨迹（归一化空间）
             t:     [B, 1]    时间步 in [0, 1]
             """
-            s_emb = self.state_enc(state)
+            state_norm = (state - self.state_mean) / self.state_scale
+            s_emb = self.state_enc(state_norm)
             t_emb = self.time_enc(t.squeeze(-1))
             x_emb = self.traj_proj(x_t)
 
@@ -136,16 +141,16 @@ def build_flow_matching_model(nn, state_dim=59, traj_horizon=30, traj_dim=4, hid
 
         @torch.no_grad()
         def sample(self, state, steps=11):
-            """11 步 Euler 积分采样，从标准高斯噪声生成平滑物理轨迹。"""
+            """11 步确定性 Euler ODE 积分采样，输出反归一化后的平滑物理轨迹。"""
             B = state.shape[0]
-            # x_0 ~ N(0, I)
-            x = torch.randn(B, self.out_dim, device=state.device)
+            x = torch.zeros(B, self.out_dim, device=state.device, dtype=state.dtype)
             dt = 1.0 / steps
             for step in range(steps):
-                t = torch.full((B, 1), step * dt, device=state.device)
+                t = torch.full((B, 1), step * dt, device=state.device, dtype=state.dtype)
                 v = self.forward(state, x, t)
                 x = x + v * dt
-            return x.view(B, self.traj_horizon, self.traj_dim)
+            x_phys = x * self.traj_scale + self.traj_mean
+            return x_phys.view(B, self.traj_horizon, self.traj_dim)
 
     return FlowMatchingTrajectoryPolicy()
 
@@ -169,6 +174,72 @@ class ModelEMA:
 
 def _wrap_angle(rad: float) -> float:
     return (rad + math.pi) % (2.0 * math.pi) - math.pi
+
+
+def build_state_vector_59(rec: dict, state_dim: int = 59) -> list[float]:
+    """将 e2e_sample 编码为 59 维自车局部状态向量（含 4 个最近障碍物自车系特征）。"""
+    st = [0.0] * state_dim
+    fv3 = rec.get("features_v3") or rec.get("features_v2") or rec.get("features") or []
+    for k, val in enumerate(fv3[:min(23, state_dim)]):
+        st[k] = float(val)
+
+    ego0 = rec.get("ego") if isinstance(rec.get("ego"), dict) else {}
+    ctx = rec.get("scene_context") if isinstance(rec.get("scene_context"), dict) else {}
+    ctrl = rec.get("control") if isinstance(rec.get("control"), dict) else {}
+    plan = rec.get("planning") if isinstance(rec.get("planning"), dict) else {}
+
+    x0 = float(ego0.get("x", 0.0))
+    y0 = float(ego0.get("y", 0.0))
+    h0 = float(ego0.get("heading", 0.0))
+    ch, sh = math.cos(h0), math.sin(h0)
+
+    # 覆盖全局 ego.y，统一使用局部车道横向偏移避免大地图坐标漂移
+    lane_off = float(ctx.get("ego_lane_offset", st[22] if state_dim > 22 else 0.0))
+    if abs(lane_off) < 50.0 and state_dim > 1:
+        st[1] = lane_off
+
+    # 槽位 23..46: 最近 4 个障碍物在自车局部坐标系下的 [rel_x, rel_y, rel_vx, rel_vy, type, conf]
+    obs_raw = rec.get("obstacles") if isinstance(rec.get("obstacles"), list) else []
+    obs_local: list[tuple[float, list[float]]] = []
+    for o in obs_raw:
+        if not isinstance(o, dict):
+            continue
+        dx = float(o.get("x", 0.0)) - x0
+        dy = float(o.get("y", 0.0)) - y0
+        dist = math.hypot(dx, dy)
+        if dist > 150.0:
+            continue
+        lx = ch * dx + sh * dy
+        ly = -sh * dx + ch * dy
+        ovx, ovy = float(o.get("vx", 0.0)), float(o.get("vy", 0.0))
+        lvx = ch * ovx + sh * ovy
+        lvy = -sh * ovx + ch * ovy
+        obs_local.append((dist, [lx, ly, lvx, lvy, float(o.get("type", 0.0)), float(o.get("confidence", 1.0))]))
+    obs_local.sort(key=lambda item: item[0])
+    for idx, (_, feat) in enumerate(obs_local[:4]):
+        base = 23 + idx * 6
+        if base + 6 <= state_dim:
+            st[base:base + 6] = feat
+
+    # 槽位 47..58: 运动学、控制与道路上下文摘要
+    tail = [
+        float(ego0.get("v", 0.0)),
+        float(ego0.get("yaw_rate", 0.0)),
+        float(ctrl.get("throttle", 0.0)),
+        float(ctrl.get("brake", 0.0)),
+        float(ctrl.get("steering", 0.0)),
+        float(plan.get("target_speed", rec.get("label", 0.0))),
+        float(ctx.get("speed_limit", 15.0)),
+        float(ctx.get("curvature", 0.0)),
+        float(ctx.get("lane_count", 2.0)),
+        float(ctx.get("lane_width", 3.5)),
+        lane_off,
+        float(len(obs_local)),
+    ]
+    for k, val in enumerate(tail):
+        if 47 + k < state_dim:
+            st[47 + k] = val
+    return st
 
 
 def load_real_trajectory_dataset(
@@ -217,10 +288,7 @@ def load_real_trajectory_dataset(
         for i, rec in enumerate(seg):
             if times[-1] - times[i] < horizon * dt:
                 break
-            fv3 = rec.get("features_v3") or rec.get("features_v2") or rec.get("features") or []
-            st = [0.0] * state_dim
-            for k, val in enumerate(fv3[:state_dim]):
-                st[k] = float(val)
+            st = build_state_vector_59(rec, state_dim=state_dim)
 
             ego0 = rec["ego"]
             x0 = float(ego0.get("x", 0.0))
@@ -367,7 +435,16 @@ def main():
 
     # 3. 初始化模型与优化器
     model = build_flow_matching_model(nn, state_dim=59, traj_horizon=30, traj_dim=4, hidden_dim=args.hidden).to(device)
-    ema = ModelEMA(model, decay=0.999)
+    with torch.no_grad():
+        s_mean = dataset.states.mean(dim=0, keepdim=True)
+        s_std = dataset.states.std(dim=0, keepdim=True).clamp(min=1e-3)
+        t_mean = dataset.trajectories.mean(dim=0, keepdim=True)
+        t_std = dataset.trajectories.std(dim=0, keepdim=True).clamp(min=1e-3)
+        model.state_mean.copy_(s_mean.to(device))
+        model.state_scale.copy_(s_std.to(device))
+        model.traj_mean.copy_(t_mean.to(device))
+        model.traj_scale.copy_(t_std.to(device))
+    ema = ModelEMA(model, decay=0.98)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs * len(loader))
@@ -389,10 +466,10 @@ def main():
     for epoch in range(1, args.epochs + 1):
         epoch_loss = 0.0
         t0 = time.time()
-        for batch_idx, (st, x_1) in enumerate(loader):
+        for batch_idx, (st, x_1_phys) in enumerate(loader):
             st = st.to(device, non_blocking=True)
-            x_1 = x_1.to(device, non_blocking=True)  # 真值未来轨迹目标 (Target Flow Endpoint)
-            x_0 = torch.randn_like(x_1)             # 初始高斯噪声 (Noise Flow Source)
+            x_1 = (x_1_phys.to(device, non_blocking=True) - model.traj_mean) / model.traj_scale
+            x_0 = torch.randn_like(x_1) * 0.25      # 归一化空间低方差初始流源
 
             # 最优传输路径 (Optimal Transport Probability Path): x_t = (1-t) x_0 + t x_1
             t = torch.rand(st.size(0), 1, device=device)
