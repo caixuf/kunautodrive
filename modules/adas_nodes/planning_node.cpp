@@ -1303,9 +1303,9 @@ static void on_road_ref_path(const Message* msg, void* user_data) {
     }
     int n = cJSON_GetArraySize(points);
     if (n > 128) n = 128;
-    int out_n = 0;
-    double accum_s = 0.0;
-    double prev_x = 0.0, prev_y = 0.0;
+    double raw_x[128]{};
+    double raw_y[128]{};
+    int raw_n = 0;
     double rs0 = -1.0;
     for (int i = 0; i < n; ++i) {
         cJSON* pt = cJSON_GetArrayItem(points, i);
@@ -1313,23 +1313,56 @@ static void on_road_ref_path(const Message* msg, void* user_data) {
         cJSON* jx = cJSON_GetObjectItemCaseSensitive(pt, "x");
         cJSON* jy = cJSON_GetObjectItemCaseSensitive(pt, "y");
         if (!cJSON_IsNumber(jx) || !cJSON_IsNumber(jy)) continue;
-        if (out_n == 0) {
+        if (raw_n == 0) {
             cJSON* jrs = cJSON_GetObjectItemCaseSensitive(pt, "rs");
             if (cJSON_IsNumber(jrs)) rs0 = jrs->valuedouble;
         }
-        double x = jx->valuedouble;
-        double y = jy->valuedouble;
-        if (out_n > 0) {
-            double dx = x - prev_x;
-            double dy = y - prev_y;
-            accum_s += sqrt(dx * dx + dy * dy);
+        raw_x[raw_n] = jx->valuedouble;
+        raw_y[raw_n] = jy->valuedouble;
+        raw_n++;
+    }
+    int out_n = 0;
+    if (raw_n >= 4 && raw_n <= 32) {
+        /* Catmull-Rom 4x 加密（~5m 采样 → ~1.25m 平滑曲线），消除急弯/匝道折线弦差 */
+        auto cr = [](double p0, double p1, double p2, double p3, double t) -> double {
+            double t2 = t * t;
+            double t3 = t2 * t;
+            return 0.5 * ((2.0 * p1) + (-p0 + p2) * t +
+                          (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2 +
+                          (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3);
+        };
+        const int sub = 4;
+        for (int i = 0; i < raw_n - 1 && out_n < 127; ++i) {
+            int i0 = (i > 0) ? (i - 1) : 0;
+            int i1 = i;
+            int i2 = i + 1;
+            int i3 = (i + 2 < raw_n) ? (i + 2) : (raw_n - 1);
+            for (int k = 0; k < sub && out_n < 127; ++k) {
+                double t = (double)k / (double)sub;
+                g.map_ref_x[out_n] = cr(raw_x[i0], raw_x[i1], raw_x[i2], raw_x[i3], t);
+                g.map_ref_y[out_n] = cr(raw_y[i0], raw_y[i1], raw_y[i2], raw_y[i3], t);
+                out_n++;
+            }
         }
-        g.map_ref_x[out_n] = x;
-        g.map_ref_y[out_n] = y;
-        g.map_ref_s[out_n] = accum_s;
-        prev_x = x;
-        prev_y = y;
-        out_n++;
+        if (out_n < 128) {
+            g.map_ref_x[out_n] = raw_x[raw_n - 1];
+            g.map_ref_y[out_n] = raw_y[raw_n - 1];
+            out_n++;
+        }
+    } else {
+        for (int i = 0; i < raw_n && i < 128; ++i) {
+            g.map_ref_x[i] = raw_x[i];
+            g.map_ref_y[i] = raw_y[i];
+        }
+        out_n = raw_n;
+    }
+    double accum_s = 0.0;
+    for (int i = 0; i < out_n; ++i) {
+        if (i > 0) {
+            accum_s += hypot(g.map_ref_x[i] - g.map_ref_x[i - 1],
+                             g.map_ref_y[i] - g.map_ref_y[i - 1]);
+        }
+        g.map_ref_s[i] = accum_s;
     }
     g.map_ref_count = out_n;
     if (out_n >= 2) {

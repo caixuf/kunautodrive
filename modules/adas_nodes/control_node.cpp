@@ -465,31 +465,57 @@ static bool query_ref_at(double ego_x, double ego_y,
         return false;
     }
     double best_d2 = 1e18;
-    const ControlContext::RefPt* best = nullptr;
-    for (const auto& p : g.ref_path) {
+    double best_px = 0.0, best_py = 0.0;
+    double best_h = 0.0, best_l = 0.0, best_kappa = 0.0;
+    const size_t rn = g.ref_path.size();
+    if (rn == 1) {
+        const auto& p = g.ref_path[0];
         double dx = p.x - ego_x;
         double dy = p.y - ego_y;
-        double d2 = dx * dx + dy * dy;
-        if (d2 < best_d2) { best_d2 = d2; best = &p; }
+        best_d2 = dx * dx + dy * dy;
+        best_px = p.x; best_py = p.y;
+        best_h = p.h; best_l = p.l; best_kappa = p.kappa;
+    } else {
+        for (size_t i = 0; i + 1 < rn; ++i) {
+            const auto& p0 = g.ref_path[i];
+            const auto& p1 = g.ref_path[i + 1];
+            double abx = p1.x - p0.x;
+            double aby = p1.y - p0.y;
+            double len2 = abx * abx + aby * aby;
+            double t = 0.0;
+            if (len2 > 1e-9) {
+                t = ((ego_x - p0.x) * abx + (ego_y - p0.y) * aby) / len2;
+                if (t < 0.0) t = 0.0;
+                if (t > 1.0) t = 1.0;
+            }
+            double px = p0.x + t * abx;
+            double py = p0.y + t * aby;
+            double dx = px - ego_x;
+            double dy = py - ego_y;
+            double d2 = dx * dx + dy * dy;
+            if (d2 < best_d2) {
+                best_d2 = d2;
+                best_px = px;
+                best_py = py;
+                double dh = p1.h - p0.h;
+                while (dh >  M_PI) dh -= 2.0 * M_PI;
+                while (dh < -M_PI) dh += 2.0 * M_PI;
+                best_h = p0.h + t * dh;
+                while (best_h >  M_PI) best_h -= 2.0 * M_PI;
+                while (best_h < -M_PI) best_h += 2.0 * M_PI;
+                best_l = p0.l + t * (p1.l - p0.l);
+                best_kappa = p0.kappa + t * (p1.kappa - p0.kappa);
+            }
+        }
     }
-    if (!best || best_d2 > 25.0 /* >5m, ego 偏离参考 */) {
+    if (best_d2 > 25.0 /* >5m, ego 偏离参考 */) {
         pthread_mutex_unlock(&g.ref_path_mtx);
         return false;
     }
-    /* 返回道路中心 (x,y)（= 轨迹点 - 横向偏移 d 沿法线投影）。
-     * 轨迹点 (x,y) = road_center + d * n̂，其中 n̂ = (-sinθ, cosθ)，
-     * 所以 road_center_x = x - d * (-sin h) = x + l * sin(h)，
-     *    road_center_y = y - d * cos(h)  = y - l * cos(h)。
-     *
-     * 旧实现只返回 road_center_y（世界 y 轴），N-S 路（θ=π/2）上横向
-     * 在 x 轴 → y 向横向完全失效（2026-08 网格地图实测 ego 横向失控）。
-     * 旧实现直接返回 best->y（含偏移），导致：
-     *   cruise_lane_y = (road_center_y + d) + lane_d = 双重计算偏移
-     *   → lat_error 随 ego 偏移正反馈发散 → 车飘到 y=-135m */
-    out_x     = best->x + best->l * sin(best->h);
-    out_y     = best->y - best->l * cos(best->h);
-    out_h     = best->h;
-    out_kappa = best->kappa;
+    out_x     = best_px + best_l * sin(best_h);
+    out_y     = best_py - best_l * cos(best_h);
+    out_h     = best_h;
+    out_kappa = best_kappa;
     pthread_mutex_unlock(&g.ref_path_mtx);
     return true;
 }
