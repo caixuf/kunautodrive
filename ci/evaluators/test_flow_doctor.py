@@ -26,7 +26,7 @@ def _make_fake_repo(tmp_path: Path) -> Path:
     (tmp_path / "models").mkdir(parents=True)
     (tmp_path / "models" / "m.txt").write_text("model", encoding="utf-8")
     (tmp_path / "models" / "registry.json").write_text(
-        json.dumps({"current_id": "v1", "models": [{"id": "v1", "path": "models/m.txt"}]}),
+        json.dumps({"current_id": "v1", "versions": [{"id": "v1", "path": "models/m.txt"}]}),
         encoding="utf-8",
     )
     return tmp_path

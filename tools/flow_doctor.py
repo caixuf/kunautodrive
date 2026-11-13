@@ -332,7 +332,8 @@ def check_e2e_health(
         try:
             reg = json.loads(reg_path.read_text(encoding="utf-8"))
             cur_id = reg.get("current_id", "")
-            models = {m.get("id"): m for m in reg.get("models", []) if isinstance(m, dict)}
+            entries = reg.get("versions") or reg.get("models") or []
+            models = {m.get("id"): m for m in entries if isinstance(m, dict)}
             cur = models.get(cur_id, {})
             mpath = str(cur.get("path", ""))
             resolved = Path(mpath) if Path(mpath).is_absolute() else (repo_root / mpath)
