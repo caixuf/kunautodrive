@@ -533,7 +533,7 @@
           "topic": "odd/state"
         }
       ],
-      "params": "{\"frequency_hz\":10.0,\"odd_min_visibility_m\":150.0,\"loc_max_age_ms\":500.0,\"route_max_age_ms\":1000.0,\"allowed_weather\":\"clear,overcast,cloudy\",\"scenario_file\":\"scenarios/straight_road.json\"}"
+      "params": "{\"frequency_hz\":10.0,\"odd_min_visibility_m\":150.0,\"loc_max_age_ms\":500.0,\"route_max_age_ms\":2500.0,\"allowed_weather\":\"clear,overcast,cloudy\",\"scenario_file\":\"scenarios/straight_road.json\"}"
     },
     {
       "name": "tor_manager",

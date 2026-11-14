@@ -1016,6 +1016,34 @@ class E2ETrainingToolsTest(unittest.TestCase):
             # 未通过评估，runtime 不得被覆盖
             self.assertEqual(runtime.read_text(encoding="utf-8"), "runtime-model\n")
 
+    def test_temporal_train_clamps_input_scale_and_zeroes_constant_weights(self):
+        """常数输入列不得出现 norm_scale=1e-6 放大噪声，且首层对应权重归零。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            dataset = self.export_sample_dataset(work)
+            model_path = work / "model.txt"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "tools/train_e2e/temporal_train.py"),
+                    "--input", str(dataset / "samples.jsonl"),
+                    "--output", str(model_path),
+                    "--epochs", "5",
+                    "--hidden", "8",
+                ],
+                cwd=ROOT,
+                check=True,
+            )
+            sys.path.insert(0, str(ROOT / "tools/train_e2e"))
+            from temporal_train import load_model
+
+            model, _x_mean, x_scale, _y_mean, _y_scale = load_model(str(model_path))
+            self.assertEqual(len(x_scale), 115)
+            self.assertGreaterEqual(min(x_scale), 0.05)
+            # feature 2 (ego_heading) in make_sample_source is constant 0.0
+            for j in range(model.hidden_dims[0]):
+                self.assertEqual(model.w[0][j][2], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

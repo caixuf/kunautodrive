@@ -51,31 +51,74 @@ def point_to_segment_distance(px: float, py: float, x1: float, y1: float, x2: fl
     return math.hypot(px - proj_x, py - proj_y)
 
 
+def edge_half_extent(edge: dict, default_lc: int = 4, default_lw: float = 3.5) -> float:
+    """单条边相对于其参考中心线的合法横向包络半径。
+
+    oneway=true 的边所有车道铺在同一侧（最大偏离可达 lanes * lane_width）；
+    双向路以中心线对称分布（半幅为 lanes * lane_width * 0.5）。
+    """
+    lanes = int(edge.get("lanes", default_lc))
+    lw = float(edge.get("lane_width", default_lw))
+    oneway = bool(edge.get("oneway", False))
+    return lanes * lw if oneway else lanes * lw * 0.5
+
+
+def point_to_edge_distance(px: float, py: float, edge: dict) -> float | None:
+    nodes = edge.get("nodes", [])
+    if not nodes or len(nodes) < 2:
+        return None
+    min_dist = float("inf")
+    for i in range(len(nodes) - 1):
+        n1 = nodes[i]
+        n2 = nodes[i + 1]
+        x1, y1 = float(n1[0]), float(n1[1])
+        x2, y2 = float(n2[0]), float(n2[1])
+        d = point_to_segment_distance(px, py, x1, y1, x2, y2)
+        if d < min_dist:
+            min_dist = d
+    return min_dist
+
+
 def point_to_edges_distance(px: float, py: float, edges: list[dict]) -> float | None:
     if not edges:
         return None
     min_dist = float("inf")
     found = False
     for edge in edges:
-        nodes = edge.get("nodes", [])
-        if not nodes or len(nodes) < 2:
-            continue
-        found = True
-        for i in range(len(nodes) - 1):
-            n1 = nodes[i]
-            n2 = nodes[i + 1]
-            x1, y1 = float(n1[0]), float(n1[1])
-            x2, y2 = float(n2[0]), float(n2[1])
-            d = point_to_segment_distance(px, py, x1, y1, x2, y2)
+        d = point_to_edge_distance(px, py, edge)
+        if d is not None:
+            found = True
             if d < min_dist:
                 min_dist = d
     return min_dist if found else None
 
 
-def is_off_road(px: float, py: float, edges: list[dict], half_road: float, margin: float = 0.5) -> bool:
-    dist = point_to_edges_distance(px, py, edges)
-    if dist is not None:
-        return dist > (half_road + margin)
+def is_off_road(
+    px: float,
+    py: float,
+    edges: list[dict],
+    half_road: float,
+    margin: float = 1.0,
+    default_lc: int = 4,
+    default_lw: float = 3.5,
+) -> bool:
+    """按每条边自身车道数与单/双向属性判定是否出路沿。
+
+    多边路网中（如 4 车道主路接入 2 车道单向匝道），不能用末帧 scene.lane
+    算单一标量 half_road 套用到全历史样本；只要样本落在任一条有效边的合法
+    包络内即视为在路内（margin=1.0 吸收弯道折线弦近似矢高）。
+    """
+    if edges:
+        found_valid_edge = False
+        for edge in edges:
+            d = point_to_edge_distance(px, py, edge)
+            if d is None:
+                continue
+            found_valid_edge = True
+            if d <= edge_half_extent(edge, default_lc, default_lw) + margin:
+                return False
+        if found_valid_edge:
+            return True
     return abs(py) > (half_road + margin)
 
 
@@ -101,7 +144,7 @@ def find_incident(samples: list[dict], data: dict) -> dict | None:
         for i, s in enumerate(samples):
             sx = float(s.get("x", 0))
             sy = float(s.get("y", 0))
-            if is_off_road(sx, sy, edges, half_road):
+            if is_off_road(sx, sy, edges, half_road, default_lc=lc, default_lw=lw):
                 return {
                     "type": "road_departure",
                     "at_s": ts[i] - ts[0] if ts else 0,
@@ -191,7 +234,7 @@ def analyze_incident(data: dict, at_s: float | None = None, verbose: bool = Fals
     li = lane_idx_from_y(sy, lc, lw)
     lcy = lane_center_y(li, lc, lw)
     edges = scene.get("road_network", {}).get("edges", [])
-    off_road = is_off_road(sx, sy, edges, half_road)
+    off_road = is_off_road(sx, sy, edges, half_road, default_lc=lc, default_lw=lw)
 
     # Layer 2: Perception
     obstacles = scene.get("obstacles", [])

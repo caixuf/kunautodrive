@@ -89,6 +89,10 @@ def build_windows(samples: list[dict], feat_dim: int = V2_DIM) -> tuple[list[lis
         if len(src) > 1:
             n_skip_src += 1
             continue
+        rids = {s.get("rollout_id") for s in window}
+        if len(rids) > 1:
+            n_skip_src += 1
+            continue
 
         # 构建输入向量
         x = []
@@ -140,14 +144,30 @@ def build_windows(samples: list[dict], feat_dim: int = V2_DIM) -> tuple[list[lis
 
 # ── 标准化 ──────────────────────────────────────────────────
 
-def column_stats(rows: list[list[float]]) -> tuple[list[float], list[float]]:
+def column_stats(rows: list[list[float]], is_input: bool = False) -> tuple[list[float], list[float]]:
     dim = len(rows[0])
     mean = [sum(row[i] for row in rows) / len(rows) for i in range(dim)]
     scale = []
     for i in range(dim):
         var = sum((row[i] - mean[i]) ** 2 for row in rows) / len(rows)
-        scale.append(max(var ** 0.5, 1e-6))
+        std = var ** 0.5
+        if is_input:
+            scale.append(1.0 if std < 1e-3 else max(std, 0.05))
+        else:
+            scale.append(max(std, 1e-6))
     return mean, scale
+
+
+def zero_constant_input_weights(model: "TinyMLP", rows: list[list[float]], eps: float = 1e-4) -> None:
+    if not rows or not model.w:
+        return
+    dim = len(rows[0])
+    mean = [sum(row[i] for row in rows) / len(rows) for i in range(dim)]
+    for i in range(min(dim, model.in_dim)):
+        var = sum((row[i] - mean[i]) ** 2 for row in rows) / len(rows)
+        if var ** 0.5 < eps:
+            for j in range(model.hidden_dims[0]):
+                model.w[0][j][i] = 0.0
 
 
 def normalize(rows: list[list[float]], mean: list[float], scale: list[float]) -> list[list[float]]:
@@ -361,6 +381,92 @@ def mse_loss(pred: list[float], target: list[float]) -> float:
     return sum((p - t) ** 2 for p, t in zip(pred, target)) / len(pred)
 
 
+def _train_numpy(model: TinyMLP, X: list[list[float]], Y: list[list[float]],
+                 epochs: int, lr: float, early_stop: int = 0) -> list[float]:
+    """NumPy vectorized mini-batch Adam trainer yielding TinyMLP weights."""
+    import numpy as np
+
+    n = len(X)
+    nl = model.hidden_count
+    X_arr = np.asarray(X, dtype=np.float64)
+    Y_arr = np.asarray(Y, dtype=np.float64)
+    Ws = [np.asarray(w, dtype=np.float64) for w in model.w] + [
+        np.asarray(model.w_out, dtype=np.float64)
+    ]
+    bs = [np.asarray(b, dtype=np.float64) for b in model.b] + [
+        np.asarray(model.b_out, dtype=np.float64)
+    ]
+    mW = [np.zeros_like(w) for w in Ws]
+    vW = [np.zeros_like(w) for w in Ws]
+    mb = [np.zeros_like(b) for b in bs]
+    vb = [np.zeros_like(b) for b in bs]
+
+    adam_lr = min(lr, 0.003)
+    batch_size = min(64, n)
+    beta1, beta2, eps = 0.9, 0.999, 1e-8
+    rng = np.random.default_rng(42)
+
+    losses: list[float] = []
+    best_loss = 1e18
+    best_epoch = 0
+    step_t = 0
+
+    for epoch in range(epochs):
+        perm = rng.permutation(n)
+        total_loss = 0.0
+        for start in range(0, n, batch_size):
+            idx = perm[start : start + batch_size]
+            xb = X_arr[idx]
+            yb = Y_arr[idx]
+            acts = [xb]
+            for li in range(nl):
+                acts.append(np.tanh(acts[-1] @ Ws[li].T + bs[li]))
+            yp = acts[-1] @ Ws[nl].T + bs[nl]
+            diff = yp - yb
+            total_loss += float(np.sum(diff * diff) / model.out_dim)
+
+            B = xb.shape[0]
+            dz = (2.0 / (B * model.out_dim)) * diff
+            step_t += 1
+            b1_corr = 1.0 - beta1 ** step_t
+            b2_corr = 1.0 - beta2 ** step_t
+            for li in range(nl, -1, -1):
+                gW = dz.T @ acts[li]
+                gb = dz.sum(axis=0)
+                if li > 0:
+                    dh = dz @ Ws[li]
+                    dz = dh * (1.0 - acts[li] * acts[li])
+                mW[li] = beta1 * mW[li] + (1.0 - beta1) * gW
+                vW[li] = beta2 * vW[li] + (1.0 - beta2) * (gW * gW)
+                mb[li] = beta1 * mb[li] + (1.0 - beta1) * gb
+                vb[li] = beta2 * vb[li] + (1.0 - beta2) * (gb * gb)
+                Ws[li] -= adam_lr * (mW[li] / b1_corr) / (np.sqrt(vW[li] / b2_corr) + eps)
+                bs[li] -= adam_lr * (mb[li] / b1_corr) / (np.sqrt(vb[li] / b2_corr) + eps)
+
+        avg_loss = total_loss / n
+        losses.append(avg_loss)
+        if epoch % 50 == 0 or epoch == epochs - 1:
+            print(f"  epoch {epoch:4d}  mse={avg_loss:.6f}", file=sys.stderr)
+
+        if early_stop > 0:
+            if avg_loss < best_loss * (1.0 - 0.005):
+                best_loss = avg_loss
+                best_epoch = epoch
+            elif epoch - best_epoch >= early_stop:
+                print(
+                    f"  early stop @epoch {epoch} (loss 连续 {early_stop} "
+                    f"epochs 无改善, best={best_loss:.6f} @{best_epoch})",
+                    file=sys.stderr,
+                )
+                break
+
+    model.w = [Ws[li].tolist() for li in range(nl)]
+    model.b = [bs[li].tolist() for li in range(nl)]
+    model.w_out = Ws[nl].tolist()
+    model.b_out = bs[nl].tolist()
+    return losses
+
+
 def train(model: TinyMLP, X: list[list[float]], Y: list[list[float]],
           epochs: int, lr: float, early_stop: int = 0) -> list[float]:
     """手写 BP 训练（支持多隐层）。
@@ -370,6 +476,11 @@ def train(model: TinyMLP, X: list[list[float]], Y: list[list[float]],
     超时杀掉 —— early_stop=30 让 loss 收敛后自动停，时间随数据自适应。
     """
     n = len(X)
+    if n > 0:
+        try:
+            return _train_numpy(model, X, Y, epochs, lr, early_stop)
+        except ImportError:
+            pass
     losses = []
     nl = model.hidden_count
     best_loss = 1e18
@@ -580,33 +691,28 @@ def main() -> int:
               file=sys.stderr)
         X_raw, Y_raw = X_aug, Y_aug
 
-    # 标准化
-    x_mean, x_scale = column_stats(X_raw)
-    y_mean, y_scale = column_stats(Y_raw)
-    X_norm = normalize(X_raw, x_mean, x_scale)
-    Y_norm = normalize(Y_raw, y_mean, y_scale)
-
-    # 初始化模型（从已有权重或随机初始化）
+    # 标准化与模型初始化（若从已有模型续训，沿用其归一化参数后再 normalize）
     if args.init_model:
         model, x_mean, x_scale, y_mean, y_scale = load_model(args.init_model)
         # 如果输入维度不匹配，重建最后一层
         if model.in_dim != in_dim:
             print(f"  输入维度 {model.in_dim}→{in_dim}，重建模型结构...", file=sys.stderr)
-            # 保留已加载的隐层权重，重建输入层
             old_w0 = model.w[0]
             model.in_dim = in_dim
-            # 重新初始化 w0（输入层大幅变化，不适合复用）
             prev = in_dim
             for li in range(model.hidden_count):
                 scale = math.sqrt(2.0 / prev)
                 model.w[li] = [[random.gauss(0, scale) for _ in range(prev)] for _ in range(model.hidden_dims[li])]
                 prev = model.hidden_dims[li]
-            # 复制已加载的隐层权重（层间）
             for li in range(1, min(len(old_w0) if li == 0 else 0, model.hidden_count)):
                 pass
         print(f"  从初始模型继续训练", file=sys.stderr)
     else:
+        x_mean, x_scale = column_stats(X_raw, is_input=True)
+        y_mean, y_scale = column_stats(Y_raw, is_input=False)
         model = TinyMLP(in_dim, hidden_dims, out_dim)
+    X_norm = normalize(X_raw, x_mean, x_scale)
+    Y_norm = normalize(Y_raw, y_mean, y_scale)
 
     if args.eval:
         model, x_mean, x_scale, y_mean, y_scale = load_model(args.output)
@@ -618,6 +724,7 @@ def main() -> int:
         losses = train(model, X_norm, Y_norm, args.epochs, args.lr)
         print(f"  最终 loss: {losses[-1]:.6f}", file=sys.stderr)
 
+        zero_constant_input_weights(model, X_raw)
         model.save(args.output, x_mean, x_scale, y_mean, y_scale)
 
     # 评估指标计算

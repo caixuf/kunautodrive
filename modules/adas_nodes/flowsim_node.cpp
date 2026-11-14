@@ -73,6 +73,8 @@
 #include <algorithm>
 #include <atomic>
 
+#include "flowsim/traffic_spawner.h"
+
 namespace {
 
 /* ── 仿真常量（与 sim_world_node.c 一致，保证下游节点兼容） ───── */
@@ -535,332 +537,34 @@ static void apply_scenario_scripts(double sim_time_s) {
 
 #include "traffic_density_spawn.h"   /* D3-2: spawn 算式 helper（可单测） */
 
-/* ── D3-2：traffic_density auto-spawn ─────────────────────────────── */
+static flowsim::TrafficSpawnerContext make_traffic_spawner_ctx(void) {
+    flowsim::TrafficSpawnerContext ctx;
+    ctx.scenario = g.scenario;
+    ctx.roads_loaded = g.roads_loaded;
+    ctx.roads = &g.roads;
+    ctx.route = &g.route;
+    ctx.npc_routes = &g.npc_routes;
+    ctx.pool = &g.pool;
+    ctx.ped_rng = &g.ped_rng;
+    ctx.sim_rng = &g.sim_rng;
+    ctx.npc_route_spawned = &g.npc_route_spawned;
+    ctx.enable_poisson_traffic = g.enable_poisson_traffic;
+    ctx.poisson_rate = g.poisson_rate;
+    ctx.poisson_max_vehicles = g.poisson_max_vehicles;
+    ctx.target_speed = g.target_speed;
+    ctx.cycle = g.cycle;
+    return ctx;
+}
 
-/**
- * 沿 ego route 按 cars_per_km 自动 spawn NPC 车辆，与手列 actors[] 共用 pool。
- *
- * 算法（最简单可工作版；D3-3 行人 roadside / D3-4 区域倍率待补）：
- *   1. 关闭开关判定：cars_per_km <= 0 或 esmini 未加载 或 route 未建 → return 0
- *   2. spawn_spacing_m = 1000 / cars_per_km（每辆车沿 route 间隔多少米）
- *   3. 对每条 RouteSeg：n = floor(length / spacing) 个 spawn 点
- *   4. 对每个 spawn 点：
- *        s     = i * spacing + uniform(-jitter, +jitter)
- *        lane  = dir_lanes[slot % N]，slot = lane_spread ? i%2 : 0
- *                （dir_lanes = 本段同向可行驶车道，负 lane id，**永不含 0**；
- *                  0 是参考线 type="none"，落上去的同向 NPC 车头会翻 180°）
- *        vx    = uniform(8, 14) m/s（中等巡航速度，IDM 跟车自己调整）
- *        world = roads.frenet_to_world(road_id, lane, s, 0, wp)
- *      失败（esmini 查询 miss）→ 跳过，不污染 pool
- *   5. pool 满或达到 max_npcs → 提前停止
- *
- * 返回实际 spawn 数量（含上层 spawn counter），0 = 没 spawn（disabled / 没路网）。
- *
- * @param pool_full_out 可选出参：因 entity pool 容量耗尽而提前停止时置 true。
- *                      调用方把它记进 scene_pub_cfg.traffic_density 暴露给门禁 ——
- *                      "够了所以停"（max_npcs）与"装不下了所以停"（pool 满）是
- *                      两种完全不同的结论，混成一个 spawned 数字排查时分不清。
- */
-/* 方向三：从注入的 road_network.npc_route_chains 建 NPC 多 OD Route。
- * chain 元素是 map.json 全量 legacy id（与 xodr/esmini road id 一致）。 */
 static void build_npc_routes_from_scenario(void) {
-    g.npc_routes.clear();
-    if (!g.scenario || !g.scenario->road_network_json || !g.roads_loaded) return;
-    cJSON* rn = cJSON_Parse(g.scenario->road_network_json);
-    if (!rn) return;
-    cJSON* chains = cJSON_GetObjectItemCaseSensitive(rn, "npc_route_chains");
-    if (cJSON_IsArray(chains)) {
-        cJSON* chain = NULL;
-        cJSON_ArrayForEach(chain, chains) {
-            if (!cJSON_IsArray(chain)) continue;
-            std::vector<int> ids;
-            cJSON* v = NULL;
-            cJSON_ArrayForEach(v, chain) {
-                if (cJSON_IsNumber(v)) ids.push_back((int)v->valuedouble);
-            }
-            if (ids.empty()) continue;
-            flowsim::Route r;
-            if (r.build_from_chain(g.roads, ids.data(), (int)ids.size()) && r.ok()) {
-                g.npc_routes.push_back(std::move(r));
-            } else {
-                LOG_WARN("flowsim", "npc_routes: chain build failed (%d road(s))",
-                         (int)ids.size());
-            }
-        }
-    }
-    cJSON_Delete(rn);
-    if (!g.npc_routes.empty()) {
-        LOG_INFO("flowsim", "npc multi-OD routes: %d chain(s), segs=%d",
-                 (int)g.npc_routes.size(),
-                 [&] { int n = 0; for (auto& r : g.npc_routes) n += r.count(); return n; }());
-    }
+    auto ctx = make_traffic_spawner_ctx();
+    flowsim::build_npc_routes_from_scenario(ctx);
 }
 
 static int flowsim_auto_populate_traffic_density(const ScenarioConfig* sc,
                                                  bool* pool_full_out) {
-    if (pool_full_out) *pool_full_out = false;
-    const ScenarioTrafficDensity* td = &sc->traffic_density;
-    if (td->cars_per_km <= 0) return 0;
-    if (!g.roads_loaded || !g.route.ok()) return 0;
-    /* pool 容量上限：ego (id=0) + 127 actors，留 1 个实体给流量摸顶
-     * （safety_control_node / monitor_node 可能动态 alloc）。 */
-    const int kPoolSoftLimit = flowsim::MAX_ENTITIES - 2;
-    const int kScenarioMaxNpc = (td->max_npcs > 0) ? td->max_npcs : 50;
-
-    /* spawn s 的 RNG：每个 spawn 一次 rand_r()（自持 seed），伴生 scenario_id 也连续生成。
-     * seed = scenario.random_seed + random_seed_offset，使同场景可复现。
-     * 用函数级 static seed：lambda 转函数指针时不能 capture，故放全局变量。
-     * 单线程（flowsim main 协程）独占，无并发问题。 */
-    static unsigned int seed = 1u;
-    seed = (unsigned int)(sc->random_seed ^ (uint32_t)td->random_seed_offset);
-    if (seed == 0) seed = 1;  /* rand_r(0) 行为未定义 */
-
-    /* 起始 scenario_id：手列 actors 之后的最大 id + 1，避免业务 id 冲突
-     * （前端用 (type, id) 复合键，type='npc_car' 时 id 全局唯一）。 */
-    int next_id = 1;
-    for (int i = 0; i < sc->actor_count; i++) {
-        if (sc->actors[i].id >= next_id) next_id = sc->actors[i].id + 1;
-    }
-
-    /* s-spacing：cars_per_km 越大间距越小。每米一辆 = 1000 cars_per_km。
-     * 但我们想"均匀分布"而非"绝对等距"，加均匀抖动打破规律性。
-     * 用 [-spawn_jitter_m, +spawn_jitter_m] 的均匀抖动，0 → 严格等距。
-     * 算式抽到 traffic_density_spawn.h，便于单测。 */
-    const double spacing_m = traffic_density_spacing_from_density(td->cars_per_km);
-    const double jitter     = (td->spawn_jitter_m > 0.0) ? td->spawn_jitter_m : 0.0;
-    const bool   do_spread  = (td->lane_spread != 0);
-    int spawned = 0;
-    g.npc_route_spawned = 0;
-    /* 方向三：spawn 骨架 = 中央 route + NPC 多 OD 链。中央链优先（保持既有
-     * 场景的顺序/密度语义不变）；额外链的 NPC 在 road_pos 分支行驶。 */
-    std::vector<std::pair<const flowsim::Route*, int>> spawn_segs;
-    /* 轮转交织中央链与多 OD 链：若先铺满中央链再轮到额外链，max_npcs 会在
-     * 中央链就耗尽，额外链永远分不到 NPC（实测 npc_route_spawned=0）。 */
-    {
-        size_t max_segs = (size_t)g.route.count();
-        for (const auto& r : g.npc_routes) {
-            if ((size_t)r.count() > max_segs) max_segs = (size_t)r.count();
-        }
-        for (size_t si = 0; si < max_segs; si++) {
-            if ((int)si < g.route.count()) spawn_segs.push_back({&g.route, (int)si});
-            for (const auto& r : g.npc_routes) {
-                if ((int)si < r.count()) spawn_segs.push_back({&r, (int)si});
-            }
-        }
-    }
-    for (size_t sp_i = 0; sp_i < spawn_segs.size() && spawned < kScenarioMaxNpc; sp_i++) {
-        const flowsim::Route* seg_route = spawn_segs[sp_i].first;
-        const int si = spawn_segs[sp_i].second;
-        const bool on_central = (seg_route == &g.route);
-        const flowsim::RouteSeg& seg = seg_route->seg(si);
-        /* D3-3：倍率 = 时段窗(t=0) × 区域窗(本段中点)。启动期与运行期共用
-         * traffic_density_combined_scale()，避免两条路径口径分叉。 */
-        const double seg_scale = traffic_density_combined_scale(
-            td->time_windows, td->time_window_count, 0.0,
-            td->zones, td->zone_count, seg.s_start + seg.length * 0.5);
-        /* 落点间距必须与计数用**同一个**等效间距：只改循环次数不改 i*spacing，
-         * 会在 scale>1 时把多出来的车全 clamp 到段尾、scale<1 时只占段前半段
-         * （2026-11-07 code-review 当场抓出：计数与落点两套间距）。 */
-        const double spacing_eff = traffic_density_effective_spacing(
-            spacing_m, seg_scale);
-        if (spacing_eff <= 0.0) continue;
-        const double raw_n = seg.length / spacing_eff;
-        const int remaining = kScenarioMaxNpc - spawned;
-        int n_in_seg = (raw_n > (double)remaining) ? remaining : (int)raw_n;
-        if (n_in_seg < 1) continue;
-
-        /* 本段的同向可行驶车道表（lane_spread 的落点池）。
-         *   - 负 lane id = 本仓右行地图的行进方向（正 id 在对向），故只留负 id；
-         *   - **永不使用 0**：0 是 OpenDRIVE 参考线（type="none"，不可行驶），
-         *     esmini 对它的 pd.h 恒为 π，落上去的同向 NPC（route_dir=+1）车头
-         *     会翻 180° → 逆向行驶 + Δs<0 → motion_direction invariant 爆炸，
-         *     并与相邻真实车道（间距 1.75m < 车宽 2.0m）侧刮成堆（npc_ai.cpp
-         *     P3 是同一族 bug）；
-         *   - 按 |id| 升序 = 由内到外，使交替铺开落在相邻两条真实车道上；
-         *   - 枚举失败（esmini miss / 地图只有对向车道）→ 回退 {-1}：frenet_to_world
-         *     若真不存在该车道会 miss 并 WARN，结论仍然可观测，不会静默乱放。 */
-        std::vector<int> dir_lanes = g.roads.drivable_lane_ids(seg.road_id, seg.s0);
-        dir_lanes.erase(std::remove_if(dir_lanes.begin(), dir_lanes.end(),
-                                       [](int lid) { return lid >= 0; }),
-                        dir_lanes.end());
-        std::sort(dir_lanes.begin(), dir_lanes.end(),
-                  [](int a, int b) { return std::abs(a) < std::abs(b); });
-        if (dir_lanes.empty()) dir_lanes.push_back(-1);
-
-        for (int i = 0; i < n_in_seg && spawned < kScenarioMaxNpc; i++) {
-            /* s 在本段内均匀分布 + 抖动（cap 到段边界）。
-             * 内联 rand_uniform 而不用 lambda 转函数指针（C++ capture lambda
-             * 不能 decay 成函数指针；D3-2 后续若需要可加 std::function 接口）。 */
-            double s_local = (double)i * spacing_eff;
-            if (jitter > 0.0) {
-                double r = (double)rand_r(&seed) / (double)RAND_MAX;
-                s_local += -jitter + r * (2.0 * jitter);
-            }
-            if (s_local < 0.0)        s_local = 0.0;
-            if (s_local > seg.length) s_local = seg.length;
-            /* lane：槽位 → 本段同向真实车道（spread=false 恒定落 dir_lanes[0]） */
-            const int slot = traffic_density_lane_slot(do_spread, i);
-            const int lane_id = dir_lanes[(size_t)slot % dir_lanes.size()];
-            /* s 语义统一到两个域（此前直接用 i*spacing 当 esmini s）：
-             *   s_esmini    = 段内 s + s0（fillet 段首修剪偏移）—— frenet_to_world 要 esmini s
-             *   route_s_cand= 段累计起点 + 段内 s —— 与手列 actors 的 route_s 同域（清距检查用）
-             * 忽略 s0 会在被路口 fillet 修剪过的段上把车放到段外。 */
-            const double s_esmini     = seg.s0 + s_local;
-            const double route_s_cand = seg.s_start + s_local;
-            /* esmini 投影 → 世界坐标 + 航向 */
-            flowsim::WorldPos wp;
-            if (!g.roads.frenet_to_world(seg.road_id, lane_id, s_esmini, 0.0, wp)) {
-                /* esmini miss（road_id 在 esmini 但 lane/s 不存在）→ skip */
-                if (spawned < 2) {
-                    LOG_WARN("flowsim",
-                             "traffic_density: road=%d lane=%d s=%.1f miss in esmini — skip",
-                             seg.road_id, lane_id, s_esmini);
-                }
-                continue;
-            }
-            /* 6. 间距防重叠检查（与 step_poisson_traffic 同一口径）：候选点与任意
-             *    活跃车辆的 route_s 差 < 25m 就放弃。
-             *    没有这条时第一个候选点落在 route_s≈0，正好压在 ego 出生点上：
-             *    碰撞分离把两车挤开 → 双方车头与所在车道方向相反 + bbox 重叠 +
-             *    瞬移，一连串 invariant 违规（dense_route_traffic 实测 total=121）。
-             *    ego 不走 npc_init_route（route_s 无记账），故对 ego 单用世界坐标距离。 */
-            {
-                const flowsim::Entity& ego = g.pool[0];
-                if (ego.active &&
-                    std::hypot(ego.x - wp.x, ego.y - wp.y) < 25.0) {
-                    continue;
-                }
-                bool too_close = false;
-                for (int k = 1; k < g.pool.size(); ++k) {
-                    const flowsim::Entity& o = g.pool[k];
-                    if (!o.active || !o.is_vehicle()) continue;
-                    /* 中央链用 route_s 比较（与旧行为一致）；多 OD 链的 route_s
-                     * 属于另一条 Route 的空间，改用世界坐标距离。 */
-                    if (on_central) {
-                        if (std::fabs(o.route_s - route_s_cand) < 25.0) {
-                            too_close = true; break;
-                        }
-                    } else if (std::hypot(o.x - wp.x, o.y - wp.y) < 25.0) {
-                        too_close = true; break;
-                    }
-                }
-                if (too_close) {
-                    if (spawned < 2) {
-                        LOG_WARN("flowsim",
-                                 "traffic_density: route_s=%.1f too close to an active vehicle "
-                                 "(<25m) — skip this candidate",
-                                 route_s_cand);
-                    }
-                    continue;
-                }
-            }
-            /* 方向三：按确定性哈希把部分槽位改为行人（默认 ratio=0 → 零行为变化）。
-             * 行人不横穿（避免 NPC 车流直接撞人）：沿最内侧车道边缘 0.8m/s 步行，
-             * 与车道中心留 1.5m，车辆半宽 1.0m 不重叠。 */
-            const bool spawn_ped =
-                td->pedestrian_ratio > 0.0 &&
-                sim_rng_uniform01(&g.ped_rng) < td->pedestrian_ratio;
-            if (spawn_ped) {
-                double lw = g.roads.lane_width(seg.road_id, lane_id, s_esmini);
-                if (!(lw > 1.0)) lw = 3.5;
-                flowsim::WorldPos wp_ped = wp;
-                (void)g.roads.frenet_to_world(seg.road_id, lane_id, s_esmini,
-                                              lw * 0.5 - 0.25, wp_ped);
-                flowsim::EntityId pid = g.pool.alloc(flowsim::EntityType::Pedestrian);
-                if (pid == flowsim::INVALID_ENTITY || pid >= kPoolSoftLimit) {
-                    if (pool_full_out) *pool_full_out = true;
-                    return spawned;
-                }
-                flowsim::Entity& p = g.pool[pid];
-                p.scenario_id = next_id++;
-                p.x = wp_ped.x; p.y = wp_ped.y; p.z = wp_ped.z;
-                p.heading = wp_ped.h;
-                p.length = 0.5; p.width = 0.5;
-                p.vx = 0.8; p.vy = 0.0; p.speed = 0.8;
-                p.target_vx = 0.8;
-                p.route_dir = 0;          /* 行人走 step_npc_pedestrian，不跟 route */
-                p.offset = wp_ped.y;      /* 调试初值（世界 y） */
-                {
-                    flowsim::FrenetPos fp;
-                    if (g.roads.world_to_frenet(wp_ped.x, wp_ped.y, fp)) {
-                        p.road_id = fp.road_id;
-                        p.lane_id = fp.lane_id;
-                        p.s       = fp.s;
-                        p.offset = flowsim::offset_from_lane_internal(
-                            g.roads, fp.road_id, fp.lane_id, fp.s, fp.offset);
-                    }
-                }
-                p.target_offset = p.offset;
-                spawned++;
-                continue;
-            }
-
-            /* pool 满 → 提前停止 */
-            flowsim::EntityId id = g.pool.alloc(flowsim::EntityType::Car);
-            if (id == flowsim::INVALID_ENTITY || id >= kPoolSoftLimit) {
-                if (pool_full_out) *pool_full_out = true;
-                if (spawned < 2) {
-                    LOG_WARN("flowsim",
-                             "traffic_density: pool full at %d NPCs — stop spawn",
-                             spawned);
-                }
-                return spawned;
-            }
-            flowsim::Entity& e = g.pool[id];
-            e.scenario_id = next_id++;
-            e.x = wp.x;
-            e.y = wp.y;
-            e.z = wp.z;
-            e.heading = wp.h;
-            /* 初始速度：均匀 [8, 14] m/s（城市道路中速巡航） */
-            double vx0;
-            {
-                double r_v = (double)rand_r(&seed) / (double)RAND_MAX;
-                vx0 = 8.0 + r_v * (14.0 - 8.0);
-            }
-            e.vx = vx0;
-            e.vy = 0.0;
-            e.speed = vx0;
-            e.target_vx = vx0;
-            /* NPC 默认车参 */
-            e.length = 4.6;
-            e.width = 2.0;
-            e.wheelbase = 2.7;
-            flowsim::apply_vehicle_defaults(e);
-            /* 路口行为：60% 直 / 20% 左 / 20% 右（与手列 NPC 同分布） */
-            int r;
-            {
-                double r_r = (double)rand_r(&seed) / (double)RAND_MAX;
-                r = (int)(r_r * 10.0);
-            }
-            e.turn_intent = (r < 6) ? 0 : ((r % 2) ? 1 : 2);
-            /* route init + road_pos init（与手列 NPC 同路径） */
-            if (g.roads_loaded && g.route.ok()) {
-                flowsim::FrenetPos fp;
-                if (g.roads.world_to_frenet(e.x, e.y, fp)) {
-                    e.road_id = fp.road_id;
-                    e.lane_id = fp.lane_id;
-                    e.s       = fp.s;
-                    e.offset  = flowsim::offset_from_lane_internal(
-                                    g.roads, fp.road_id, fp.lane_id, fp.s, fp.offset);
-                    e.target_offset = e.offset;
-                }
-                if (e.road_id >= 0) {
-                    flowsim::npc_init_route(e, g.route, 1);  /* 同向（dir_lanes 选出的行进方向车道） */
-                    if (!e.road_pos.init(g.roads, e.road_id, e.lane_id, e.s, 0.0)) {
-                        if (spawned < 2) {
-                            LOG_WARN("flowsim",
-                                     "traffic_density: NPC id=%d road_pos.init failed",
-                                     (int)e.scenario_id);
-                        }
-                    }
-                }
-            }
-            if (!on_central) g.npc_route_spawned++;
-            spawned++;
-        }
-    }
-    return spawned;
+    auto ctx = make_traffic_spawner_ctx();
+    return flowsim::auto_populate_traffic_density(ctx, sc, pool_full_out);
 }
 
 static void populate_entities_from_scenario(const ScenarioConfig* sc) {
@@ -999,6 +703,29 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
             /* 行人默认尺寸：0.5m × 0.5m（场景配置了 len/wid 时优先使用） */
             if (a->len <= 0) e.length = 0.5;
             if (a->wid <= 0) e.width = 0.5;
+            if (a->segment_id >= 0 && g.roads_loaded) {
+                flowsim::FrenetPos fp;
+                if (g.roads.world_to_frenet(e.x, e.y, fp)) {
+                    e.road_id = fp.road_id;
+                    e.lane_id = fp.lane_id;
+                    e.s       = fp.s;
+                    e.offset  = flowsim::offset_from_lane_internal(
+                        g.roads, fp.road_id, fp.lane_id, fp.s, fp.offset);
+                } else {
+                    e.road_id = a->segment_id;
+                    e.s       = a->s;
+                    e.offset  = a->l;
+                }
+                e.target_offset = e.offset;
+            } else {
+                /* 世界系行人（segment_id < 0）：置 road_id = -1 走世界坐标线性积分，
+                 * 避免默认 road_id=0 被 step_npc_pedestrian 投回 road 0 lane 0 原点重叠；
+                 * offset 同步为世界横向偏移供 sim_digest 记录。 */
+                e.road_id = -1;
+                e.lane_id = 0;
+                e.offset = e.y;
+                e.target_offset = e.y;
+            }
         }
         /* M3：NPC 路口转向意图（直行为主 + 部分左/右转），大地图交叉口不再
          * 全直行（原来 advance 硬编码 junc_angle=M_PI）。顺行 NPC 在 road_pos
@@ -2033,130 +1760,8 @@ static void internal_cruise_control(flowsim::Entity& ego) {
 
 /* ── 随机泊松动态交通流发生与超距淘汰 ────────────────────────────── */
 static void step_poisson_traffic(double dt, double ego_route_s, double sim_time_s) {
-    if (!g.enable_poisson_traffic || !g.roads_loaded || !g.route.ok()) return;
-
-    const flowsim::Entity& ego = g.pool[0];
-    if (!ego.active) return;
-
-    const double route_total = g.route.total_length();
-    if (route_total < 80.0) return;
-
-    /* 1. 超距动态车辆淘汰 (Cull out-of-range dynamic traffic) */
-    int active_dynamic_count = 0;
-    for (int i = 1; i < g.pool.size(); ++i) {
-        flowsim::Entity& e = g.pool[i];
-        if (!e.active || !e.is_dynamic_traffic) continue;
-        active_dynamic_count++;
-
-        double dx = e.x - ego.x;
-        double dy = e.y - ego.y;
-        double dist_sq = dx * dx + dy * dy;
-        /* 超过 220 米范围淘汰回收，腾出实体池配额 */
-        if (dist_sq > 220.0 * 220.0) {
-            g.pool.free(e.id);
-            active_dynamic_count--;
-        }
-    }
-
-    /* 2. 检查配额与实体池余量 */
-    if (active_dynamic_count >= g.poisson_max_vehicles) return;
-    if (g.pool.active_count() >= flowsim::MAX_ENTITIES - 10) return;
-
-    /* 3. 泊松到达抽样：时间微元 dt 内到达概率 P = lambda * dt
-     * D3-3：lambda 按时段窗（当前仿真时间）与区域窗（ego 所在 route s）
-     * 缩放；无窗口时倍率 1.0，行为与旧实现完全一致。 */
-    double density_scale = 1.0;
-    if (g.scenario) {
-        const ScenarioTrafficDensity* td = &g.scenario->traffic_density;
-        density_scale = traffic_density_combined_scale(
-            td->time_windows, td->time_window_count, sim_time_s,
-            td->zones, td->zone_count, ego_route_s);
-    }
-    double arrival_prob = g.poisson_rate * density_scale * dt;
-    if (arrival_prob > 1.0) arrival_prob = 1.0;
-    double sample = sim_rng_uniform01(&g.sim_rng);
-    if (sample >= arrival_prob) return;
-
-    /* 4. 候选生成位置：75% 在 ego 前方 65-120m，25% 在 ego 后方 50-80m */
-    double s_cand = 0.0;
-    bool ahead = (sim_rng_below(&g.sim_rng, 100) < 75);
-    if (ahead) {
-        double dist = 65.0 + (double)sim_rng_below(&g.sim_rng, 55);
-        s_cand = ego_route_s + dist;
-    } else {
-        double dist = 50.0 + (double)sim_rng_below(&g.sim_rng, 30);
-        s_cand = ego_route_s - dist;
-    }
-
-    if (s_cand < 15.0 || s_cand > route_total - 15.0) return;
-
-    /* 5. 间距防重叠检查：距离任意活跃车辆 > 25m */
-    for (int i = 0; i < g.pool.size(); ++i) {
-        const flowsim::Entity& o = g.pool[i];
-        if (!o.active || !o.is_vehicle()) continue;
-        if (std::fabs(o.route_s - s_cand) < 25.0) return;
-    }
-
-    /* 6. 从路线反算 road_id 与局部坐标 */
-    int rid = 0, ridx = -1;
-    double s_local = 0.0;
-    g.route.locate(s_cand, rid, s_local, ridx);
-    flowsim::WorldPos wp;
-    if (!g.roads.frenet_to_world(rid, 0, s_local, 0.0, wp)) return;
-
-    /* 7. 分配实体并初始化 */
-    flowsim::EntityType et = flowsim::EntityType::Car;
-    int rtype = sim_rng_below(&g.sim_rng, 10);
-    if (rtype == 0) et = flowsim::EntityType::Truck;
-    else if (rtype <= 2) et = flowsim::EntityType::SUV;
-
-    flowsim::EntityId id = g.pool.alloc(et);
-    if (id == flowsim::INVALID_ENTITY) return;
-
-    flowsim::Entity& e = g.pool[id];
-    e.is_dynamic_traffic = true;
-    e.scenario_id = -1000 - id;
-    e.x = wp.x;
-    e.y = wp.y;
-    e.z = wp.z;
-    e.heading = wp.h;
-    e.route_s = s_cand;
-    e.route_dir = 1;
-    e.last_teleport_cycle = g.cycle;
-
-    /* 反查精确 Frenet 车道 */
-    flowsim::FrenetPos fp;
-    if (g.roads.world_to_frenet(wp.x, wp.y, fp)) {
-        e.road_id = fp.road_id;
-        e.lane_id = fp.lane_id;
-        e.s = fp.s;
-        e.offset = flowsim::offset_from_lane_internal(
-            g.roads, fp.road_id, fp.lane_id, fp.s, fp.offset);
-        e.target_offset = e.offset;
-    } else {
-        e.road_id = rid;
-        e.lane_id = -1;
-        e.s = s_local;
-        e.offset = 0.0;
-        e.target_offset = 0.0;
-    }
-
-    /* 初始化 RoadPosition（若支持） */
-    if (e.road_id >= 0) {
-        e.road_pos.init(g.roads, e.road_id, e.lane_id, e.s, 0.0);
-    }
-
-    /* 速度与目标速度：参考场景目标速度带随机离散 */
-    double speed_var = 0.85 + 0.25 * sim_rng_uniform01(&g.sim_rng);
-    e.speed = g.target_speed * speed_var;
-    e.vx = e.speed * cos(e.heading);
-    e.vy = e.speed * sin(e.heading);
-    e.target_vx = e.speed;
-    e.state = flowsim::NpcState::Cruise;
-    e.turn_intent = (sim_rng_below(&g.sim_rng, 10) < 6)
-                    ? 0 : (sim_rng_below(&g.sim_rng, 2) ? 1 : 2);
-
-    flowsim::apply_vehicle_defaults(e);
+    auto ctx = make_traffic_spawner_ctx();
+    flowsim::step_poisson_traffic(ctx, dt, ego_route_s, sim_time_s);
 }
 
 /* ── 协程主循环 ───────────────────────────────────────────────── */

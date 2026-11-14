@@ -382,6 +382,7 @@ add_library(flowsim_node SHARED
     flowsim/route.cpp
     # D2-04 M3 lane_match 10 字段契约 helper（纯算法，flowsim_node.cpp 调用）
     flowsim/lane_match_helpers.cpp
+    flowsim/traffic_spawner.cpp
 )
 if(NOT ESMINI_RMLIB)
     target_sources(flowsim_node PRIVATE flowsim/esmini_stub.cpp)
@@ -536,7 +537,7 @@ target_include_directories(planning_framework PUBLIC
 target_link_libraries(planning_framework PUBLIC open_space_planner m)
 
 # traj_safety.c：W3 诊断用的轨迹扫掠碰撞检查，与 tests/test_adas_nodes_logic.c 共用
-add_library(planning_node SHARED planning_node.cpp st_graph.c traj_safety.c)
+add_library(planning_node SHARED planning_node.cpp planning_uturn.cpp st_graph.c traj_safety.c)
 target_compile_definitions(planning_node PRIVATE FLOWCORO_INTEGRATION)
 target_compile_options(planning_node PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fcoroutines>)
 if(FRENET_BRIDGE AND FRENET_PLANNER AND _EIGEN_INC)
@@ -582,6 +583,16 @@ add_test(NAME npc_yield COMMAND test_npc_yield)
 add_executable(test_inference_latency_guard test_inference_latency_guard.cpp)
 target_include_directories(test_inference_latency_guard PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME inference_latency_guard COMMAND test_inference_latency_guard)
+
+add_executable(test_planning_uturn test_planning_uturn.cpp planning_uturn.cpp)
+target_include_directories(test_planning_uturn PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(test_planning_uturn ${NODE_LINK_LIBS} ${NODE_CXX_RT} m)
+add_test(NAME planning_uturn COMMAND test_planning_uturn)
+
+add_executable(test_behavior_uturn_approach test_behavior_uturn_approach.cpp)
+target_include_directories(test_behavior_uturn_approach PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(test_behavior_uturn_approach m)
+add_test(NAME behavior_uturn_approach COMMAND test_behavior_uturn_approach)
 
 add_executable(test_planning_fallback_when_match_invalid test_planning_fallback_when_match_invalid.cpp)
 target_include_directories(test_planning_fallback_when_match_invalid PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

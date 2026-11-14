@@ -841,30 +841,61 @@ static void run_inference(double* out_speed, double* out_d,
     if (active_loaded) {
         float x[TINY_MLP_MAX_IN] = {0};
 
-        if (active_in_dim >= 115 && g.frame_count >= TEMPORAL_WINDOW) {
-            /* v3: 时序滑窗 5×23 = 115 维 */
-            int idx = 0;
-            for (int w = 0; w < TEMPORAL_WINDOW; w++) {
-                int fi = (g.frame_head + w) % TEMPORAL_WINDOW;
-                for (int d = 0; d < V3_DIM; d++) {
-                    x[idx++] = g.frame_buf[fi][d];
-                }
-            }
-        } else if (active_in_dim >= 80 && g.frame_count >= TEMPORAL_WINDOW) {
-            /* v2: 时序滑窗 5×16 = 80 维 */
-            int idx = 0;
-            for (int w = 0; w < TEMPORAL_WINDOW; w++) {
-                int fi = (g.frame_head + w) % TEMPORAL_WINDOW;
-                for (int d = 0; d < V2_DIM; d++) {
-                    x[idx++] = g.frame_buf[fi][d];
-                }
-            }
-        } else if (active_in_dim == 123) {
+        if (active_in_dim == 123) {
             /* BEV + 路网拓扑 + 语义意图 123 维状态向量 */
             build_state_123(x);
         } else if (active_in_dim == 59) {
             /* Flow-Matching 59 维归一化状态向量 */
             build_state_59(x);
+        } else if (active_in_dim == 115) {
+            /* v3: 时序滑窗 5×23 = 115 维（不足 5 帧时前向填充当前帧） */
+            float cur[V3_DIM] = {0};
+            build_frame(cur, V3_DIM);
+            if (g.frame_count >= TEMPORAL_WINDOW) {
+                int idx = 0;
+                for (int w = 0; w < TEMPORAL_WINDOW; w++) {
+                    int fi = (g.frame_head + w) % TEMPORAL_WINDOW;
+                    for (int d = 0; d < V3_DIM; d++) {
+                        x[idx++] = g.frame_buf[fi][d];
+                    }
+                }
+            } else {
+                int have = g.frame_count;
+                int pad = TEMPORAL_WINDOW - have;
+                int idx = 0;
+                for (int w = 0; w < pad; w++) {
+                    for (int d = 0; d < V3_DIM; d++) x[idx++] = cur[d];
+                }
+                for (int w = 0; w < have; w++) {
+                    for (int d = 0; d < V3_DIM; d++) x[idx++] = g.frame_buf[w][d];
+                }
+            }
+        } else if (active_in_dim == 80) {
+            /* v2: 时序滑窗 5×16 = 80 维（不足 5 帧时前向填充当前帧） */
+            float cur[V2_DIM] = {0};
+            build_frame(cur, V2_DIM);
+            if (g.frame_count >= TEMPORAL_WINDOW) {
+                int idx = 0;
+                for (int w = 0; w < TEMPORAL_WINDOW; w++) {
+                    int fi = (g.frame_head + w) % TEMPORAL_WINDOW;
+                    for (int d = 0; d < V2_DIM; d++) {
+                        x[idx++] = g.frame_buf[fi][d];
+                    }
+                }
+            } else {
+                int have = g.frame_count;
+                int pad = TEMPORAL_WINDOW - have;
+                int idx = 0;
+                for (int w = 0; w < pad; w++) {
+                    for (int d = 0; d < V2_DIM; d++) x[idx++] = cur[d];
+                }
+                for (int w = 0; w < have; w++) {
+                    for (int d = 0; d < V2_DIM; d++) x[idx++] = g.frame_buf[w][d];
+                }
+            }
+        } else if (active_in_dim == 23) {
+            /* v3: 单帧 23 维 */
+            build_frame(x, V3_DIM);
         } else if (active_in_dim >= 16) {
             /* v2: 单帧 16 维 */
             build_frame(x, V2_DIM);

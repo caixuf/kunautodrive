@@ -232,6 +232,9 @@ static void on_ref_path(const Message* msg, void* user_data) {
 
 static int navigation_execute(TaskBase* task) {
     const long period_us = (long)(1000000.0 / g.rate_hz);
+    /* 启动即发布首帧路线状态，避免 odd_monitor 在首秒内因未收到 navigation/path 误报 route_stale。 */
+    g.last_status_us = clock_now_us();
+    publish_route_status();
     while (!task->should_stop) {
         usleep((unsigned long)period_us);
         if (task->should_stop) break;
@@ -318,7 +321,7 @@ static int navigation_execute(TaskBase* task) {
         }
 
         uint64_t now_us = clock_now_us();
-        if (now_us - g.last_status_us >= 1000000ULL) {
+        if (now_us - g.last_status_us >= 500000ULL) {
             g.last_status_us = now_us;
             publish_route_status();
         }

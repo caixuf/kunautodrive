@@ -3829,6 +3829,36 @@
             "vy": 0.0,
             "len": 4.6,
             "wid": 2.0
+          },
+          {
+            "id": 2,
+            "type": "pedestrian",
+            "x": 85.0,
+            "y": -7.4,
+            "vx": 1.1,
+            "vy": 0.0,
+            "len": 0.5,
+            "wid": 0.5
+          },
+          {
+            "id": 3,
+            "type": "pedestrian",
+            "x": 180.0,
+            "y": -7.4,
+            "vx": 0.9,
+            "vy": 0.0,
+            "len": 0.5,
+            "wid": 0.5
+          },
+          {
+            "id": 4,
+            "type": "pedestrian",
+            "x": 245.0,
+            "y": 7.4,
+            "vx": -1.0,
+            "vy": 0.0,
+            "len": 0.5,
+            "wid": 0.5
           }
         ],
         "traffic_density": {
@@ -3838,7 +3868,17 @@
           "max_npcs": 14,
           "random_seed_offset": 0
         },
-        "traffic_lights": [],
+        "traffic_lights": [
+          {
+            "id": 0,
+            "x": 195.0,
+            "y_lane": -1.75,
+            "green_s": 30.0,
+            "yellow_s": 3.0,
+            "red_s": 7.0,
+            "phase_offset_s": 0.0
+          }
+        ],
         "stop_lines": [],
         "construction_zones": [],
         "route": [],

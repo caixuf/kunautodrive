@@ -103,6 +103,33 @@ class TestTraceIncident(unittest.TestCase):
         self.assertEqual(res["incident"]["type"], "collision")
         self.assertTrue(any(e["type"] == "l3_collision" for e in res["events"]))
 
+    def test_multi_edge_4lane_to_2lane_oneway_not_false_road_departure(self):
+        # 末帧自车已驶入 2 车道单向匝道，scene.lane.count=2；历史样本包括
+        # 4 车道双向主路外侧车道 (y=-5.25) 与匝道偏移段，不得误判出路沿。
+        topo = _topo(samples=[
+            {"t": 100.0, "x": 50.0,  "y": -5.25, "speed": 12.0, "heading": 0.0},
+            {"t": 101.0, "x": 150.0, "y": -5.25, "speed": 12.0, "heading": 0.0},
+            {"t": 102.0, "x": 380.0, "y": -5.16, "speed": 12.0, "heading": 0.1},
+            {"t": 103.0, "x": 720.0, "y": -5.16, "speed": 12.0, "heading": 0.0},
+            {"t": 104.0, "x": 994.84, "y": 68.90, "speed": 10.0, "heading": 1.1},
+        ])
+        topo["metrics"]["scene"]["lane"] = {"count": 2, "width": 3.5}
+        topo["metrics"]["scene"]["road_network"] = {
+            "edges": [
+                {"id": 0, "lanes": 4, "lane_width": 3.5, "oneway": False,
+                 "nodes": [[0, 0, 0], [350, 0, 0]]},
+                {"id": 1, "lanes": 4, "lane_width": 3.5, "oneway": False,
+                 "nodes": [[350, 0, 0], [950, 0, 0]]},
+                {"id": 2, "lanes": 2, "lane_width": 3.5, "oneway": True,
+                 "nodes": [[950, 0, 0], [1005, 70, 0]]},
+            ]
+        }
+        res = analyze_incident(topo)
+        self.assertIsNone(res["incident"])
+        self.assertEqual(res["events"], [])
+        self.assertFalse(res["layers"]["localization"]["off_road"])
+        self.assertEqual(res["summary"]["status"], "pass")
+
 
 if __name__ == "__main__":
     unittest.main()

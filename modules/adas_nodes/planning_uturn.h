@@ -43,5 +43,37 @@ static inline int downsample_uturn(const TrajectoryPoint* src, int sn,
     return n;
 }
 
+namespace planning_uturn {
+
+struct UturnEnv {
+    const double* cz_x{nullptr};
+    const double* cz_y{nullptr};
+    const double* cz_len{nullptr};
+    const double* cz_wid{nullptr};
+    int cz_count{0};
+    double curve_start_x{0.0};
+    double curve_length_m{0.0};
+    double curve_offset_m{0.0};
+    int lane_count{2};
+    double lane_width{3.5};
+    int road_oneway{0};
+    double cfg_target_speed{15.0};
+};
+
+bool body_hits_construction(const UturnEnv& env, double x, double y, double h,
+                            double half_body_len, double half_body_wid,
+                            double margin);
+
+/* 前方最近施工前缘相对 ego 的可用前向空间（顺行 heading≈0）；无则 1e9。 */
+double construction_forward_space(const UturnEnv& env, double ego_x, double ego_y,
+                                  double clearance);
+
+int generate_trajectory(const UturnEnv& env, TrajectoryPoint* points, int max_points,
+                        double ego_x, double ego_y, double ego_heading,
+                        double ego_speed, double wheelbase,
+                        double forward_space_m);
+
+}  // namespace planning_uturn
+
 #endif  // PLANNING_UTURN_H
 

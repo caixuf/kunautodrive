@@ -73,13 +73,17 @@ def load_dataset(dataset_dir: Path) -> tuple[list[list[float]], list[list[float]
     return features, labels, metadata
 
 
-def column_stats(rows: list[list[float]]) -> tuple[list[float], list[float]]:
+def column_stats(rows: list[list[float]], is_input: bool = False) -> tuple[list[float], list[float]]:
     dim = len(rows[0])
     mean = [sum(row[i] for row in rows) / len(rows) for i in range(dim)]
     scale = []
     for i in range(dim):
         var = sum((row[i] - mean[i]) ** 2 for row in rows) / len(rows)
-        scale.append(max(var ** 0.5, 1e-6))
+        std = var ** 0.5
+        if is_input:
+            scale.append(1.0 if std < 1e-3 else max(std, 0.05))
+        else:
+            scale.append(max(std, 1e-6))
     return mean, scale
 
 
@@ -204,8 +208,8 @@ def main() -> int:
         features, labels = build_temporal_windows(features, labels, args.window)
     in_dim = len(features[0])
 
-    x_mean, x_scale = column_stats(features)
-    y_mean, y_scale = column_stats(labels)
+    x_mean, x_scale = column_stats(features, is_input=True)
+    y_mean, y_scale = column_stats(labels, is_input=False)
     x_norm = normalize(features, x_mean, x_scale)
     y_norm = normalize(labels, y_mean, y_scale)
 

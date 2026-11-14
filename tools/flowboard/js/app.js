@@ -1497,13 +1497,28 @@ function startSSE() {
   var _pendingUpdate = false;
   var _latestSseRaw = null;
   var _lastSseAt = performance.now();
-  var _prevSimTus = null;
+  var _prevSseTus = null;
+  var _latestSseGapMs = 0;
   var _sseBurstDrops = 0;
   eventSource.onmessage = function(e) {
     if (paused) return;
     var nowSse = performance.now();
     var sseGapMs = nowSse - _lastSseAt;
     _lastSseAt = nowSse;
+    // 在 SSE 接收侧按逐包提取 scene.t_us 计算真实后端仿真步长，
+    // 避免 rAF 跳过中间包导致把前端渲染周期误算成「后端卡顿」。
+    if (e.data) {
+      var tusMatch = e.data.match(/"scene"\s*:\s*\{[^{}]*?"t_us"\s*:\s*(\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/);
+      if (tusMatch) {
+        var sseTus = Number(tusMatch[1]);
+        if (Number.isFinite(sseTus)) {
+          if (typeof _prevSseTus === 'number') {
+            _latestSseGapMs = sseTus >= _prevSseTus ? (sseTus - _prevSseTus) / 1000 : 0;
+          }
+          _prevSseTus = sseTus;
+        }
+      }
+    }
     if (_pendingUpdate) _sseBurstDrops += 1;
     _latestSseRaw = e.data;
     // 收到消息即刷新数据时间戳并重置退避
@@ -1526,11 +1541,7 @@ function startSSE() {
         updateAll();
         applyLiveStatus(topoData);
         var rafMs = performance.now() - t0;
-        var sceneTus = topoData && topoData.metrics && topoData.metrics.scene ? topoData.metrics.scene.t_us : null;
-        var simGapMs = (typeof sceneTus === 'number' && typeof _prevSimTus === 'number' && sceneTus >= _prevSimTus)
-          ? (sceneTus - _prevSimTus) / 1000 : 0;
-        if (typeof sceneTus === 'number') _prevSimTus = sceneTus;
-        _updateDiagChip(simGapMs, sseGapMs, rafMs, _sseBurstDrops);
+        _updateDiagChip(_latestSseGapMs, sseGapMs, rafMs, _sseBurstDrops);
       });
     }
   };

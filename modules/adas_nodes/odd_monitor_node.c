@@ -67,6 +67,7 @@ static struct {
     volatile int    has_evidence;
     int    degrade_level;
     double sim_t_us;               /* 仿真钟（vehicle/state.t_us）*/
+    uint64_t first_pub_us;         /* 首帧 odd_publish 时间戳（用于启动宽限）*/
     volatile uint64_t last_publish_us;
 
     TaskBase taskbase;             /* 托管模式：node_start_managed 派生线程 */
@@ -184,6 +185,8 @@ static int weather_allowed(const char* w) {
 
 static void odd_publish(void) {
     double now_us = (double)clock_now_us();
+    if (g.first_pub_us == 0) g.first_pub_us = (uint64_t)now_us;
+    const int in_startup_grace = ((now_us - (double)g.first_pub_us) / 1000.0) < 1500.0;
     double sim_s = g.sim_t_us / 1e6;
 
     /* 场景注入：到点后用降级能见度覆盖（模拟突起大雾）*/
@@ -197,9 +200,9 @@ static void odd_publish(void) {
     if (eff_visibility < g.odd_min_visibility_m)     viols[nv++] = "visibility";
     if (g.loc_diverged)                              viols[nv++] = "loc_diverged";
     if (g.loc_untrustworthy)                         viols[nv++] = "loc_untrustworthy";
-    double loc_age_ms = g.has_loc ? (now_us - g.loc_ts_us) / 1000.0 : 1e9;
+    double loc_age_ms = g.has_loc ? (now_us - g.loc_ts_us) / 1000.0 : (in_startup_grace ? 0.0 : 1e9);
     if (loc_age_ms > g.loc_max_age_ms)               viols[nv++] = "loc_stale";
-    double route_age_ms = g.has_route ? (now_us - g.route_ts_us) / 1000.0 : 1e9;
+    double route_age_ms = g.has_route ? (now_us - g.route_ts_us) / 1000.0 : (in_startup_grace ? 0.0 : 1e9);
     if (route_age_ms > g.route_max_age_ms)           viols[nv++] = "route_stale";
     if (g.degrade_level != 0)                        viols[nv++] = "degraded";
     int in_odd = (nv == 0);
@@ -258,7 +261,7 @@ static int odd_monitor_init(MessageBus* bus, Transport* transport,
     g.frequency_hz = 10.0;
     g.odd_min_visibility_m = 150.0;
     g.loc_max_age_ms = 500.0;
-    g.route_max_age_ms = 1000.0;
+    g.route_max_age_ms = 2500.0;
     snprintf(g.allowed_weather, sizeof(g.allowed_weather), "clear,overcast,cloudy");
     g.vis_drop_at_s = -1.0;
     g.degraded_visibility_m = 80.0;

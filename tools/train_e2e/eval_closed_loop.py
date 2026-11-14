@@ -142,31 +142,37 @@ class Recorder:
 
 
 def dagger_oracle(name: str, ego, lead) -> tuple[float, float, float]:
-    """DAgger oracle：IDM 规则安全动作（与 synth_data.py 一致）。
+    """DAgger oracle：IDM 规则安全动作 + PD 车道保持（与 synth_data.py 一致）。
 
     模型自己开时，oracle 给出「该状态下的安全动作」；模型输出与 oracle
     显著不同的帧（模型犯错处）回灌训练集 —— 让模型学会在自己开出的
     状态分布上给安全动作（超越 planning 轨迹分布的关键）。
     """
-    if name == "emergency":
-        return 0.0, 1.0, 0.0  # 障碍前全力刹
+    lane_ref = lane_center_y(SCENARIO_GATES[name]["start_lane"])
+    steer = max(-0.35, min(0.35, -0.15 * (ego.y - lane_ref) - 0.60 * ego.heading))
     if lead:
         gap = lead["x"] - ego.x - 2.25
-        dv = ego.v - lead["vx"]
-        safe = 5.0 + ego.v * 1.5
-        ttc = gap / max(dv, 0.1)
-        if gap < safe and dv > 0:
-            brake = min(1.0, 0.4 + (safe - gap) * 0.15 + dv * 0.08)
-            return 0.0, brake, 0.0
-        if gap < 8:
-            return 0.0, min(1.0, 0.6 + (8 - gap) * 0.1), 0.0
-        if ttc < 2.5:  # 提前减速（与 synth_data 一致）：TTC<2.5s 轻刹
-            return 0.0, min(1.0, 0.25 + (2.5 - ttc) * 0.15), 0.0
-        if ttc < 4.0:  # 收油不刹（预减速）
-            return min(0.5, max(0.0, 0.15 + (20 - ego.v) * 0.02)), 0.0, 0.0
+        lv = lead["vx"]
+        if lv < 0.5 and gap < 16.0:
+            return 0.0, 0.65, steer
+        dv = ego.v - lv
+        safe = 8.0 + ego.v * 1.8
+        ttc = gap / max(dv, 0.1) if dv > 0.05 else 999.0
+        if gap < 8.0:
+            return 0.0, min(1.0, 0.65 + (8.0 - gap) * 0.1), steer
+        if gap < safe and dv > 0.2:
+            brake = min(1.0, 0.45 + (safe - gap) * 0.08 + dv * 0.08)
+            return 0.0, brake, steer
+        if ttc < 3.5:
+            return 0.0, min(1.0, 0.40 + (3.5 - ttc) * 0.18), steer
+        if gap < safe * 1.6:
+            follow_v = max(0.0, min(20.0, lv + (gap - safe) * 0.25))
+            if ego.v > follow_v + 0.8:
+                return 0.0, min(1.0, 0.35 + (ego.v - follow_v) * 0.15), steer
+            return min(0.8, max(0.0, 0.08 + (follow_v - ego.v) * 0.12)), 0.0, steer
     # cruise / lead 安全距离外：巡航油门
     thr = min(1.0, max(0.0, 0.25 + (20 - ego.v) * 0.04))
-    return thr, 0.0, 0.0
+    return thr, 0.0, steer
 
 
 def run_scenario(model_path: str, name: str,
@@ -239,11 +245,14 @@ def run_scenario(model_path: str, name: str,
             model_brake = brake if brake > BRAKE_PRIORITY_THRESHOLD else 0.0
             model_thr = throttle if brake <= BRAKE_PRIORITY_THRESHOLD else 0.0
             if (abs(model_brake - o_brk) > 0.3 or
-                    abs(model_thr - o_thr) > 0.3):
+                    abs(model_thr - o_thr) > 0.3 or
+                    abs(steer - o_st) > 0.05):
                 control = {"throttle": o_thr, "brake": o_brk,
                            "steering": o_st, "emergency_stop": False}
                 sample = {"features_v3": list(features),
                           "control": control, "label": 0.0,
+                          "ego": {"x": ego.x, "y": ego.y, "v": ego.v,
+                                  "heading": ego.heading, "yaw_rate": ego.yaw_rate},
                           "dagger": True, "dagger_scene": name,
                           "dagger_step": step}
                 dagger_f.write(json.dumps(sample) + "\n")
