@@ -855,6 +855,74 @@ def pipeline_perception_spec() -> tuple[bool, float, float]:
     return is_sensor_mode, float(fov), range_m
 
 
+def pipeline_bev_sensor_spec() -> tuple[bool, float, float]:
+    """BEV observability spec from the running config.
+
+    Returns ``(use_sensor_input, hfov_deg, max_range_m)``.
+
+    When ``bev_detection.use_sensor_input`` is True, BEV rasterizes
+    ``sensor/lidar_points`` from ``sensor_model`` (forward ``lidar_fov_deg``
+    cone within ``lidar_max_range_m``) rather than 360-degree ground truth.
+    """
+    pipeline = load_json(runtime_pipeline_path()) or {}
+    bev = _node_params(pipeline, "bev_detection")
+    use_sensor_input = bool(bev.get("use_sensor_input", False))
+    sensor = _node_params(pipeline, "sensor_model")
+    fov = sensor.get("lidar_fov_deg", PERCEPTION_FOV_FALLBACK_DEG)
+    if not (isinstance(fov, (int, float)) and fov > 0):
+        fov = PERCEPTION_FOV_FALLBACK_DEG
+    rmax = sensor.get("lidar_max_range_m")
+    if not (isinstance(rmax, (int, float)) and rmax > 0):
+        rmax = 60.0
+    return use_sensor_input, float(fov), float(rmax)
+
+
+def _count_bev_observable_truth(
+    truth_obs: object,
+    ego_m: object,
+    *,
+    use_sensor_input: bool = False,
+    fov_deg: float = PERCEPTION_FOV_FALLBACK_DEG,
+    range_m: float = 60.0,
+) -> int:
+    """Count truth obstacles physically observable by ``bev_detection``.
+
+    Always clips to the BEV grid with 10% boundary margin (``|xb|<=54``,
+    ``|yb|<=18``). When ``use_sensor_input`` is True, additionally restricts
+    to ``sensor_model``'s forward LiDAR cone (``xb > 0``, range & half-FOV
+    with 10% boundary margin) because behind-ego / out-of-cone targets
+    receive zero LiDAR points.
+    """
+    if not isinstance(truth_obs, list) or not isinstance(ego_m, dict):
+        return 0
+    ex, ey = ego_m.get("x"), ego_m.get("y")
+    eh = ego_m.get("heading", 0.0)
+    if not isinstance(ex, (int, float)) or not isinstance(ey, (int, float)):
+        return 0
+    ch, sh = math.cos(float(eh)), math.sin(float(eh))
+    eff_range = min(54.0, float(range_m) * 0.9)
+    half_fov = math.radians(float(fov_deg)) * 0.5 * 0.9
+    covered = 0
+    for o in truth_obs:
+        if not isinstance(o, dict):
+            continue
+        ox, oy = o.get("x"), o.get("y")
+        if not isinstance(ox, (int, float)) or not isinstance(oy, (int, float)):
+            continue
+        dx, dy = float(ox) - float(ex), float(oy) - float(ey)
+        xb = dx * ch + dy * sh
+        yb = -dx * sh + dy * ch
+        if abs(xb) > 54.0 or abs(yb) > 18.0:
+            continue
+        if use_sensor_input:
+            if xb <= 0.0 or math.hypot(xb, yb) > eff_range:
+                continue
+            if abs(math.atan2(yb, xb)) > half_fov:
+                continue
+        covered += 1
+    return covered
+
+
 def load_scenario_for_duration(scenario_override: str | None = None) -> dict:
     """Load scenario JSON to read duration_s for auto-detection."""
     scenario_path = scenario_override
@@ -2745,29 +2813,15 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
             bev_shadow_count = 0
         scene_m = (last.get("metrics") or {}).get("scene") or {}
         truth_obs = scene_m.get("obstacles") or []
-        # BEV 只覆盖前/后 60m、横向 ±20m 的栅格（bev_pre 默认 range_x=60,
-        # range_y_half=20）。拿全场景障碍数比会误判"远处目标看不见"。
         ego_m = scene_m.get("ego") or {}
-        ex, ey = ego_m.get("x"), ego_m.get("y")
-        eh = ego_m.get("heading", 0.0)
-        bev_covered = 0
-        if isinstance(truth_obs, list) and isinstance(ex, (int, float)) \
-                and isinstance(ey, (int, float)):
-            ch, sh = math.cos(float(eh)), math.sin(float(eh))
-            for o in truth_obs:
-                if not isinstance(o, dict):
-                    continue
-                ox, oy = o.get("x"), o.get("y")
-                if not isinstance(ox, (int, float)) or not isinstance(oy, (int, float)):
-                    continue
-                dx, dy = float(ox) - float(ex), float(oy) - float(ey)
-                xb = dx * ch + dy * sh
-                yb = -dx * sh + dy * ch
-                # 留 10% 余量（54m/18m）：目标恰在 60/20 边界时，BEV 10Hz 与
-                # monitor 采样时差会让两侧覆盖判定不一致（dense_npc 实测）。
-                if abs(xb) <= 54.0 and abs(yb) <= 18.0:
-                    bev_covered += 1
-        bev_truth_count = bev_covered
+        bev_use_sensor, bev_fov_deg, bev_range_m = pipeline_bev_sensor_spec()
+        bev_truth_count = _count_bev_observable_truth(
+            truth_obs,
+            ego_m,
+            use_sensor_input=bev_use_sensor,
+            fov_deg=bev_fov_deg,
+            range_m=bev_range_m,
+        )
         # BEV 10Hz 与 monitor 采样/ego 位姿有 ≤100ms 时差；高速行驶时覆盖集合
         # 会差 1–3 个目标。容差取 max(3, 50%)；但**覆盖范围内有真值而 BEV 报 0**
         # 单独判 FAIL —— 否则小场景（truth≤3）里"停摆"会被容差吞掉。

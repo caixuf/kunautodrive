@@ -3,6 +3,7 @@
 
 import importlib.util
 import json
+import math
 import os
 import tempfile
 import unittest
@@ -1313,6 +1314,57 @@ class LateralTargetOffgridTest(unittest.TestCase):
                   for _ in range(50)]
         self.assertEqual(evaluator.lateral_target_offgrid(series)["verdict"],
                          "insufficient_data")
+
+
+class BevObservableTruthTest(unittest.TestCase):
+    def test_sensor_mode_excludes_behind_ego_and_out_of_fov_targets(self):
+        evaluator = load_evaluator()
+        ego_m = {"x": 550.0, "y": -1.75, "heading": 0.0}
+        truth_obs = [
+            {"x": 500.7, "y": -3.98},  # ~49m behind ego (passed pedestrian)
+            {"x": 498.0, "y": 1.75},   # ~52m behind ego (oncoming passed car)
+        ]
+        self.assertEqual(
+            evaluator._count_bev_observable_truth(
+                truth_obs, ego_m, use_sensor_input=True, fov_deg=120.0, range_m=60.0
+            ),
+            0,
+        )
+        self.assertEqual(
+            evaluator._count_bev_observable_truth(
+                truth_obs, ego_m, use_sensor_input=False, fov_deg=120.0, range_m=60.0
+            ),
+            2,
+        )
+
+    def test_sensor_mode_counts_forward_in_cone_targets(self):
+        evaluator = load_evaluator()
+        ego_m = {"x": 20.0, "y": -1.75, "heading": 0.0}
+        truth_obs = [
+            {"x": 52.0, "y": -1.75},
+            {"x": 60.0, "y": -5.25},
+            {"x": 70.0, "y": -1.75},
+        ]
+        self.assertEqual(
+            evaluator._count_bev_observable_truth(
+                truth_obs, ego_m, use_sensor_input=True, fov_deg=120.0, range_m=60.0
+            ),
+            3,
+        )
+
+    def test_sensor_mode_respects_heading_rotation(self):
+        evaluator = load_evaluator()
+        ego_m = {"x": 100.0, "y": 1.75, "heading": math.pi}
+        truth_obs = [
+            {"x": 65.0, "y": 1.75},   # 35m ahead in Westbound heading
+            {"x": 135.0, "y": 1.75},  # 35m behind ego
+        ]
+        self.assertEqual(
+            evaluator._count_bev_observable_truth(
+                truth_obs, ego_m, use_sensor_input=True, fov_deg=120.0, range_m=60.0
+            ),
+            1,
+        )
 
 
 if __name__ == "__main__":
