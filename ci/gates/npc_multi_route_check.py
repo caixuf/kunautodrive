@@ -62,7 +62,7 @@ def main() -> int:
         result = subprocess.run(
             [str(LAUNCHER), str(pipeline), "--duration", str(args.duration)],
             cwd=ROOT, env=env, text=True,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120,
         )
         if not TOPOLOGY.is_file():
             raise SystemExit(

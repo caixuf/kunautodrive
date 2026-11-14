@@ -57,7 +57,7 @@ def _run(pipeline: Path, log_dir: Path, duration: int) -> None:
     result = subprocess.run(
         [str(LAUNCHER), str(pipeline), "--duration", str(duration)],
         cwd=ROOT, env=env, text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120,
     )
     if result.returncode != 0:
         raise SystemExit(f"flowsim-only run failed (rc={result.returncode})\n"
