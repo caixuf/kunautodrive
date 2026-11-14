@@ -87,12 +87,16 @@ public:
 
     std::string_view CurrentStageName() const noexcept;
     bool IsActive() const noexcept { return is_active_; }
+    int SelectedSlotIndex() const noexcept { return locked_slot_index_; }
+    const ParkingGoal& ActiveGoal() const noexcept { return active_goal_; }
 
 private:
     ApproachStage approach_stage_{};
     OpenSpaceCruiseStage open_space_cruise_stage_{};
     PrecisionHoldStage precision_hold_stage_{};
     bool is_active_{false};
+    int locked_slot_index_{-1};
+    ParkingGoal active_goal_{};
 };
 
 } // namespace flowengine::planning

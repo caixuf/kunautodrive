@@ -233,6 +233,8 @@ export function scenarioToScene(raw, staticMap) {
 
   if (raw.parking_bay) scene.parking_bay = raw.parking_bay;
   if (raw.parking_goal) scene.parking_goal = raw.parking_goal;
+  if (raw.park_out) scene.park_out = raw.park_out;
+  if (Array.isArray(raw.parking_slots)) scene.parking_slots = raw.parking_slots;
   if (Array.isArray(raw.friction_zones) && raw.friction_zones.length > 0) {
     scene.friction_zones = raw.friction_zones;
   }

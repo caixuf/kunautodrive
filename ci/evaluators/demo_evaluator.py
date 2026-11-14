@@ -1215,6 +1215,23 @@ def sample_metrics(sample: dict, road: dict | None = None,
     scn_perceived = scene.get("perceived", [])
     behavior = metrics.get("behavior", {})
     behavior_state = str(behavior.get("state", "") or "").upper()
+    _pd_early = metrics.get("planning_debug", {})
+    active_scenario = (
+        str(_pd_early.get("active_scenario", "") or "")
+        if isinstance(_pd_early, dict) else ""
+    )
+    active_stage = (
+        str(_pd_early.get("active_stage", "") or "")
+        if isinstance(_pd_early, dict) else ""
+    )
+    _sel_raw = _pd_early.get("selected_slot_index") if isinstance(_pd_early, dict) else None
+    selected_slot_index = (
+        int(_sel_raw)
+        if isinstance(_sel_raw, (int, float)) and not isinstance(_sel_raw, bool)
+        else None
+    )
+    _fl = metrics.get("fusion_localization", {})
+    loc_mode = str(_fl.get("loc_mode", "") or "") if isinstance(_fl, dict) else ""
     # 归一化后再匹配：behavior_planner 的真实状态名带下划线（U_TURN /
     # LEFT_CHANGE / RIGHT_CHANGE），而 token 表用的是无下划线形式，直接子串
     # 匹配会让 "UTURN" 永远匹配不上 "U_TURN" → 掉头帧被当成巡航帧，横向偏差
@@ -1222,13 +1239,12 @@ def sample_metrics(sample: dict, road: dict | None = None,
     behavior_state_norm = behavior_state.replace("_", "")
     maneuver_active = any(token in behavior_state_norm for token in (
         "CHANGE", "OVERTAKE", "UTURN", "PARK",
-    ))
+    )) or ("PARK" in active_scenario.upper())
 
     # D2-10 Prefer: planning/debug lane_match_offset first; fallback
     # localization/lane_match offset (alias llt_offset). ok=false / missing →
     # invalid — do not count toward max_lane_offset_m (A11).
     lane_match = metrics.get("lane_match", {})
-    _pd_early = metrics.get("planning_debug", {})
     lm_valid = False
     lm_offset = None
     lm_lane_id = None
@@ -1279,6 +1295,7 @@ def sample_metrics(sample: dict, road: dict | None = None,
     speed = float(vehicle.get("speed", ego.get("speed", 0.0)) or 0.0)
     x = float(vehicle.get("x", ego.get("x", 0.0)) or 0.0)
     y = float(ego.get("y", 0.0) or 0.0)
+    z = float(ego.get("z", 0.0) or 0.0)
     heading = float(ego.get("heading", 0.0) or 0.0)
     steer = abs(float(ego.get("steer", 0.0) or 0.0))
     steer_signed = float(ego.get("steer", 0.0) or 0.0)
@@ -1411,6 +1428,7 @@ def sample_metrics(sample: dict, road: dict | None = None,
         "speed": speed,
         "x": x,
         "y": y,
+        "z": z,
         "heading": heading,
         "steer": steer,
         "steer_signed": steer_signed,
@@ -1437,6 +1455,10 @@ def sample_metrics(sample: dict, road: dict | None = None,
         "entities": scn_entities if isinstance(scn_entities, list) else [],
         "tp_cycle_by_id": tp_cycle_by_id,
         "behavior_state": behavior_state,
+        "active_scenario": active_scenario,
+        "active_stage": active_stage,
+        "selected_slot_index": selected_slot_index,
+        "loc_mode": loc_mode,
         "maneuver_active": maneuver_active,
         "lane_width": lane_width,
         "lane_match_valid": lm_valid,
@@ -1783,14 +1805,14 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
             tid = t["id"]
             if tid is None:
                 continue
-            along = (t["x"] - ego_x) * fwd_x + (t["y"] - ego_y_f) * fwd_y
-            if along <= 0:
-                continue  # 仅前方障碍纳入 TTC / 预警
             if any((p["x"] - t["x"]) ** 2 + (p["y"] - t["y"]) ** 2 <= match_d2
                    for p in perceived):
                 if tid not in first_detect_ts:
                     first_detect_ts[tid] = ts_i
-            if ego_speed > 0.5:
+            along = (t["x"] - ego_x) * fwd_x + (t["y"] - ego_y_f) * fwd_y
+            if along <= 0:
+                continue  # 仅前方障碍纳入 TTC / 预警
+            if ego_speed > 0.5 and not m.get("maneuver_active"):
                 ttc = along / ego_speed
                 if ttc < obs_min_ttc.get(tid, math.inf):
                     obs_min_ttc[tid] = ttc
@@ -2474,10 +2496,17 @@ def _evaluate_parking_goal_expectations(
     parking_goal: dict,
     parking_goal_expect: dict,
     collision_count: int = 0,
+    parking_slots: list | None = None,
 ) -> dict:
     """Evaluate open-space parking terminal accuracy and constraints (Milestone M3)."""
     failures: list[str] = []
     warnings: list[str] = []
+    observed_slot = None
+    for frame in series or ():
+        idx = frame.get("selected_slot_index")
+        if isinstance(idx, int) and not isinstance(idx, bool) and idx >= 0:
+            observed_slot = idx
+
     if not parking_goal_expect or not parking_goal or not series:
         return {
             "failures": failures,
@@ -2485,11 +2514,25 @@ def _evaluate_parking_goal_expectations(
             "pos_err": 0.0,
             "heading_err_deg": 0.0,
             "final_v": 0.0,
+            "selected_slot_index": observed_slot,
         }
 
     goal_x = float(parking_goal.get("x", 0.0))
     goal_y = float(parking_goal.get("y", 0.0))
     goal_h = float(parking_goal.get("heading", 0.0))
+
+    if "expected_slot_index" in parking_goal_expect:
+        exp_slot = int(parking_goal_expect["expected_slot_index"])
+        if observed_slot != exp_slot:
+            failures.append(
+                f"parking slot selection {observed_slot} != expected slot {exp_slot}"
+            )
+        if (isinstance(parking_slots, list) and 0 <= exp_slot < len(parking_slots)
+                and isinstance(parking_slots[exp_slot], dict)):
+            target_slot = parking_slots[exp_slot]
+            goal_x = float(target_slot.get("x", goal_x))
+            goal_y = float(target_slot.get("y", goal_y))
+            goal_h = float(target_slot.get("heading", goal_h))
 
     max_pos_err = float(parking_goal_expect.get("max_pos_err_m", 0.40))
     max_heading_err_deg = float(parking_goal_expect.get("max_heading_err_deg", 6.0))
@@ -2530,6 +2573,7 @@ def _evaluate_parking_goal_expectations(
         "pos_err": pos_err,
         "heading_err_deg": heading_err_deg,
         "final_v": final_v,
+        "selected_slot_index": observed_slot,
     }
 
 
@@ -2655,8 +2699,38 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     # 巡航向门禁只为巡航行为服务。
     heading_norm = [math.atan2(math.sin(h), math.cos(h)) for h in headings]
     has_parking_goal = bool(scenario.get("parking_goal", {}).get("enabled", False)) if isinstance(scenario, dict) else False
-    uturn_detected = any(abs(h) > math.pi / 2.0 for h in heading_norm) or has_parking_goal
-    maneuver_mask = [(abs(h) > math.pi / 2.0 or has_parking_goal) for h in heading_norm]
+    has_park_out = bool(scenario.get("park_out", {}).get("enabled", False)) if isinstance(scenario, dict) else False
+    if has_park_out:
+        po_cfg = scenario.get("park_out") if isinstance(scenario, dict) and isinstance(scenario.get("park_out"), dict) else {}
+        pg_cfg = scenario.get("parking_goal") if isinstance(scenario, dict) and isinstance(scenario.get("parking_goal"), dict) else {}
+        ps_cfg = scenario.get("parking_slots") if isinstance(scenario, dict) and isinstance(scenario.get("parking_slots"), list) else []
+        anchors: list[tuple[float, float]] = []
+        for src, kx, ky in (
+            (po_cfg, "slot_x", "slot_y"),
+            (po_cfg, "exit_x", "exit_y"),
+            (pg_cfg, "x", "y"),
+        ):
+            if src and isinstance(src.get(kx), (int, float)) and isinstance(src.get(ky), (int, float)):
+                anchors.append((float(src[kx]), float(src[ky])))
+        for slot in ps_cfg:
+            if isinstance(slot, dict) and isinstance(slot.get("x"), (int, float)) and isinstance(slot.get("y"), (int, float)):
+                anchors.append((float(slot["x"]), float(slot["y"])))
+        parking_window_mask = [
+            (
+                str(m.get("active_scenario", "")).upper() in ("PARK_OUT", "VALET_PARKING")
+                or float(m.get("z", 0.0) or 0.0) < -0.25
+                or any(math.hypot(float(m.get("x", 0.0) or 0.0) - ax, float(m.get("y", 0.0) or 0.0) - ay) < 65.0
+                       for ax, ay in anchors)
+            )
+            for m in series
+        ]
+    elif has_parking_goal:
+        parking_window_mask = [True] * len(series)
+    else:
+        parking_window_mask = [False] * len(series)
+
+    uturn_detected = any(abs(h) > math.pi / 2.0 for h in heading_norm) or (has_parking_goal and not has_park_out)
+    maneuver_mask = [(abs(heading_norm[i]) > math.pi / 2.0 or parking_window_mask[i]) for i in range(len(heading_norm))]
     # 掉头是连续机动：三把方向（倒车/停车回正/前进满舵）中 heading 已进入
     # ±90° 以内但仍未回正（实测 -88°→-11° 段满舵 0.60 是执行掉头弧的唯一
     # 方式）。从 |heading|>90° 帧向前后邻帧扩散掩码，直到 heading 回正
@@ -2922,18 +2996,24 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     #   2. 持续偏出：连续 ≥10 帧（0.5s @20Hz）margin < 0
     road_departure_consecutive = 0
     road_departure_max_consecutive = 0
-    for m in road_margins:
+    cruise_road_margins = [
+        road_margins[i] for i in range(len(road_margins)) if not parking_window_mask[i]
+    ]
+    for m in cruise_road_margins:
         if m < 0.0:
             road_departure_consecutive += 1
             if road_departure_consecutive > road_departure_max_consecutive:
                 road_departure_max_consecutive = road_departure_consecutive
         else:
             road_departure_consecutive = 0
-    if not has_parking_goal and (min_road_margin < -1.5 or road_departure_max_consecutive >= 10):
-        failures.append(f"road departure: ego body exceeded road edge by {-min_road_margin:.2f} m"
+    min_cruise_road_margin = min(cruise_road_margins) if cruise_road_margins else 0.0
+    if not (has_parking_goal and not has_park_out) and cruise_road_margins and (
+        min_cruise_road_margin < -1.5 or road_departure_max_consecutive >= 10
+    ):
+        failures.append(f"road departure: ego body exceeded road edge by {-min_cruise_road_margin:.2f} m"
                         f" (consecutive={road_departure_max_consecutive} frames)")
-    elif not has_parking_goal and min_road_margin < 0.0:
-        warnings.append(f"brief road edge excursion during lane-count transition: {-min_road_margin:.2f} m"
+    elif not (has_parking_goal and not has_park_out) and cruise_road_margins and min_cruise_road_margin < 0.0:
+        warnings.append(f"brief road edge excursion during lane-count transition: {-min_cruise_road_margin:.2f} m"
                         f" (consecutive={road_departure_max_consecutive} frames, < 10 threshold)")
     if max_lane_error > 2.0:
         warnings.append(f"large lane-center deviation during maneuver: {max_lane_error:.2f} m")
@@ -3129,7 +3209,7 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     )
     min_avg_speed = float(criteria.get("min_avg_speed_mps", 0.0) or 0.0)
     required_avg_speed = min_avg_speed if min_avg_speed > 0.0 else 1.0
-    if not has_parking_goal and avg_speed < required_avg_speed:
+    if (has_park_out or not has_parking_goal) and avg_speed < required_avg_speed:
         failures.append(f"average speed too low: {avg_speed:.1f} m/s < {required_avg_speed:.1f} m/s")
     if max(speeds) > 25.0:
         failures.append(f"unrealistic speed spike: max speed {max(speeds):.1f} m/s")
@@ -4064,23 +4144,43 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
 
     # ── 开放空间泊车终态门禁 (Milestone M3: parking_goal_expect) ──
     parking_goal = scenario.get("parking_goal") if isinstance(scenario, dict) and isinstance(scenario.get("parking_goal"), dict) else {}
+    parking_slots = scenario.get("parking_slots") if isinstance(scenario, dict) and isinstance(scenario.get("parking_slots"), list) else []
     parking_goal_expect = criteria.get("parking_goal_expect") if isinstance(criteria.get("parking_goal_expect"), dict) else {}
     pg_summary = None
     if parking_goal_expect and parking_goal:
         pg_summary = _evaluate_parking_goal_expectations(
-            series, parking_goal, parking_goal_expect, collision_count=collision_pub + collision_log_count
+            series,
+            parking_goal,
+            parking_goal_expect,
+            collision_count=collision_pub + collision_log_count,
+            parking_slots=parking_slots,
         )
         failures.extend(pg_summary["failures"])
         warnings.extend(pg_summary["warnings"])
+
+    time_axis = sim_timestamps if len(sim_timestamps) == len(series) else [
+        _sample_time_seconds(s) if "t_demo" in s else float(s.get("timestamp", 0.0) or 0.0)
+        for s in samples
+    ]
+    active_times = [
+        time_axis[i] for i in range(len(series))
+        if abs(float(series[i].get("speed", 0.0) or 0.0)) > 0.20
+    ]
+    active_duration_s = round(
+        max(0.0, active_times[-1] - active_times[0]) if len(active_times) >= 2 else 0.0,
+        2,
+    )
 
     summary = {
         "scenario": scenario_name or "(unknown)",
         "parking_goal_pos_err_m": pg_summary["pos_err"] if pg_summary else None,
         "parking_goal_heading_err_deg": pg_summary["heading_err_deg"] if pg_summary else None,
+        "selected_slot_index": pg_summary["selected_slot_index"] if pg_summary else None,
         "samples": len(samples),
         "duration_s": max(0.0, samples[-1].get("timestamp", 0) - samples[0].get("timestamp", 0)),
         # 仿真钟跨度（权威）；None = 样本里没有 metrics.scene.t_us（回退墙钟）
         "sim_duration_s": (sim_timestamps[-1] - sim_timestamps[0]) if sim_timestamps else None,
+        "active_duration_s": active_duration_s,
         "x_delta_m": progress,
         "avg_speed_mps": avg_speed,
         "max_speed_mps": max(speeds),
@@ -4230,6 +4330,12 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
             f"wall-clock span {wall_span:.1f}s exceeds declared {max_duration:.1f}s "
             f"but simulation time is {sim_span:.1f}s — startup/teardown or machine "
             f"load, not a hanging run"
+        )
+
+    min_active_duration = float(criteria.get("min_active_duration_s", 0.0) or 0.0)
+    if min_active_duration > 0.0 and active_duration_s < min_active_duration:
+        failures.append(
+            f"active driving duration too short: {active_duration_s:.1f}s < {min_active_duration:.1f}s"
         )
 
     # ── L3-P1（方向六）：ODD / TOR / MRM 观测事实 ──

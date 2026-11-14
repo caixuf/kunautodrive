@@ -31,7 +31,7 @@ export const LIGHT_FOG        = 0x80;
  *  @param {object} [env]  环境状态 { isNight, lighting, weather } 可选
  *  @returns {{brake:boolean, turnL:boolean, turnR:boolean, head:boolean, clearance:boolean, fog:boolean}} */
 export function deriveLightState(mask, brake, env) {
-  const envDark = !!(env && (env.isNight || env.lighting === 'night' || env.lighting === 'dusk' || env.lighting === 'dawn'));
+  const envDark = !!(env && (env.isNight || env.inGarage || env.lighting === 'night' || env.lighting === 'dusk' || env.lighting === 'dawn'));
   const envLowVis = !!(env && (env.weather === 'rain' || env.weather === 'storm' || env.weather === 'snow' || env.weather === 'fog' || env.weather === 'sandstorm' || (Number.isFinite(env.visibilityM) && env.visibilityM <= 500)));
   // 雾灯仅在浓雾、沙尘暴、雷暴大雨或能见度 <= 200m（GB 4785 交规标准）时开启，普通晴天夜间不开雾灯
   const envFoggy = !!(env && (env.weather === 'fog' || env.weather === 'sandstorm' || env.weather === 'storm' || (Number.isFinite(env.visibilityM) && env.visibilityM <= 200)));

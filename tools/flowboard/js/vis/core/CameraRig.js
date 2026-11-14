@@ -132,7 +132,9 @@ export function createCameraRig(canvas) {
         // Keep the road vanishing point above the vehicle without turning
         // chase mode into a top-down map view.
         // 位置刚性锁定 ego 显示位姿（不做二次平滑，避免与 DeadReckon 相位差引发画面前后蹿动/顿挫）。
-        const behind = 9, height = 3.0;
+        // 在 B1 地库下沉高度平滑压低尾随高度，防止穿过顶梁；驶出敞口坡道后立即抬升至地面以上。
+        const subBlend = Math.max(0, Math.min(1, (-3.2 - eg) / 1.0));
+        const behind = 9 - 1.6 * subBlend, height = 3.0 - 0.95 * subBlend;
         camera.position.set(
           ex - Math.cos(eh) * behind,
           eg + height,

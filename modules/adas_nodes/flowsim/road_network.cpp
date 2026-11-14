@@ -20,8 +20,39 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 
 namespace flowsim {
+
+namespace {
+
+std::string extract_xml_attr(const std::string& tag, const char* attr) {
+    std::string key = std::string(" ") + attr + "=\"";
+    size_t pos = tag.find(key);
+    if (pos == std::string::npos) return "";
+    size_t start = pos + key.size();
+    size_t end = tag.find('"', start);
+    if (end == std::string::npos) return "";
+    return tag.substr(start, end - start);
+}
+
+void parse_xodr_road_names(const std::string& xodr_path,
+                           std::unordered_map<std::string, std::string>& out) {
+    std::ifstream ifs(xodr_path);
+    if (!ifs.is_open()) return;
+    std::string line;
+    while (std::getline(ifs, line)) {
+        size_t pos = line.find("<road ");
+        if (pos == std::string::npos) continue;
+        std::string id = extract_xml_attr(line, "id");
+        std::string name = extract_xml_attr(line, "name");
+        if (!id.empty() && !name.empty()) {
+            out[id] = name;
+        }
+    }
+}
+
+}  // namespace
 
 FlowRoadNetwork::FlowRoadNetwork() {
     // Position handle 在 load() 后创建 —— RM_CreatePosition 要求路网已加载，
@@ -33,7 +64,7 @@ FlowRoadNetwork::~FlowRoadNetwork() {
 }
 
 FlowRoadNetwork::FlowRoadNetwork(FlowRoadNetwork&& o) noexcept
-    : loaded_(o.loaded_), pos_handle_(o.pos_handle_) {
+    : loaded_(o.loaded_), pos_handle_(o.pos_handle_), road_names_(std::move(o.road_names_)) {
     o.loaded_ = false;
     o.pos_handle_ = -1;
 }
@@ -43,6 +74,7 @@ FlowRoadNetwork& FlowRoadNetwork::operator=(FlowRoadNetwork&& o) noexcept {
         release();
         loaded_ = o.loaded_;
         pos_handle_ = o.pos_handle_;
+        road_names_ = std::move(o.road_names_);
         o.loaded_ = false;
         o.pos_handle_ = -1;
     }
@@ -63,10 +95,12 @@ bool FlowRoadNetwork::load(const std::string& xodr_path) {
         loaded_ = false;
         return false;
     }
+    parse_xodr_road_names(xodr_path, road_names_);
     return true;
 }
 
 void FlowRoadNetwork::release() {
+    road_names_.clear();
     if (pos_handle_ >= 0) {
         RM_DeletePosition(pos_handle_);
         pos_handle_ = -1;
@@ -88,6 +122,8 @@ bool FlowRoadNetwork::road_info(int index, RoadInfo& out) const {
     id_t rid = RM_GetIdOfRoadFromIndex((unsigned)index);
     out.id = (uint32_t)rid;
     out.str_id = RM_GetRoadIdString(rid) ? RM_GetRoadIdString(rid) : "";
+    auto it = road_names_.find(out.str_id);
+    out.name = (it != road_names_.end()) ? it->second : "";
     out.length = RM_GetRoadLength(rid);
     out.drivable_lanes = RM_GetRoadNumberOfDrivableLanes(rid, 0.0);
     return true;

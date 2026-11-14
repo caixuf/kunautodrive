@@ -1367,5 +1367,119 @@ class BevObservableTruthTest(unittest.TestCase):
         )
 
 
+class ParkToParkEvaluatorTest(unittest.TestCase):
+    @staticmethod
+    def _make_sample(t_s: float, x: float, y: float, speed: float, z: float = 0.0,
+                     active_scenario: str = "LANE_FOLLOW", selected_slot_index=None) -> dict:
+        topics = [
+            {"topic": "vehicle/state", "freq": 20.0},
+            {"topic": "sensor/lidar", "freq": 20.0},
+            {"topic": "sensor/gps", "freq": 10.0},
+            {"topic": "fusion/localization", "freq": 20.0},
+            {"topic": "planning/trajectory", "freq": 10.0},
+            {"topic": "control/raw_cmd", "freq": 10.0},
+            {"topic": "control/cmd", "freq": 10.0},
+        ]
+        return {
+            "timestamp": t_s,
+            "metrics": {
+                "topics": topics,
+                "vehicle": {"speed": speed, "x": x},
+                "scene": {
+                    "t_us": int(round(t_s * 1e6)),
+                    "ego": {"x": x, "y": y, "z": z, "heading": 0.0, "speed": speed},
+                    "obstacles": [],
+                },
+                "planning_debug": {
+                    "active_scenario": active_scenario,
+                    "selected_slot_index": selected_slot_index,
+                },
+            },
+            "nodes": [],
+        }
+
+    def test_min_active_duration_excludes_stationary_tail(self):
+        evaluator = load_evaluator()
+        samples = [self._make_sample(float(i), 260.0 + i * 10.0, -1.75, 10.0) for i in range(10)]
+        # Append 200 seconds parked at v=0; active duration stays 9s, NOT 209s.
+        for j in range(10, 21):
+            samples.append(self._make_sample(float(j * 20), 350.0, -1.75, 0.0))
+
+        failures, _, summary = evaluator.score(
+            samples,
+            ROOT / "does-not-exist.log",
+            criteria={"min_distance_m": 10.0, "min_avg_speed_mps": 0.0, "min_active_duration_s": 180.0},
+            expected_edges=[],
+        )
+        self.assertAlmostEqual(summary["active_duration_s"], 9.0, places=2)
+        self.assertTrue(any("active driving duration too short" in f for f in failures))
+
+        long_samples = [self._make_sample(float(i * 10), 260.0 + i * 100.0, -1.75, 10.0) for i in range(20)]
+        failures_ok, _, summary_ok = evaluator.score(
+            long_samples,
+            ROOT / "does-not-exist.log",
+            criteria={"min_distance_m": 10.0, "min_avg_speed_mps": 0.0, "min_active_duration_s": 180.0},
+            expected_edges=[],
+        )
+        self.assertAlmostEqual(summary_ok["active_duration_s"], 190.0, places=2)
+        self.assertFalse(any("active driving duration too short" in f for f in failures_ok))
+
+    def test_expected_slot_index_resolution_and_mismatch(self):
+        evaluator = load_evaluator()
+        slots = [
+            {"id": 0, "x": 3218.0, "y": -3.75, "heading": 1.20},
+            {"id": 1, "x": 3226.5, "y": -3.75, "heading": 1.20},
+            {"id": 2, "x": 3235.15, "y": -3.75, "heading": 1.20},
+        ]
+        series = [{"x": 3235.15, "y": -3.75, "heading": 1.20, "speed": 0.0, "selected_slot_index": 2}]
+        res_ok = evaluator._evaluate_parking_goal_expectations(
+            series,
+            {"enabled": True, "x": 0.0, "y": 0.0, "heading": 0.0},
+            {"expected_slot_index": 2, "max_pos_err_m": 0.2, "max_heading_err_deg": 2.0},
+            parking_slots=slots,
+        )
+        self.assertEqual(res_ok["selected_slot_index"], 2)
+        self.assertEqual(res_ok["failures"], [])
+
+        series_wrong = [{"x": 3235.15, "y": -3.75, "heading": 1.20, "speed": 0.0, "selected_slot_index": 1}]
+        res_bad = evaluator._evaluate_parking_goal_expectations(
+            series_wrong,
+            {"enabled": True, "x": 3235.15, "y": -3.75, "heading": 1.20},
+            {"expected_slot_index": 2},
+            parking_slots=slots,
+        )
+        self.assertTrue(any("parking slot selection" in f for f in res_bad["failures"]))
+
+    def test_park_out_window_exempts_bays_but_catches_midroute_road_departure(self):
+        evaluator = load_evaluator()
+        p2p_scenario = {
+            "park_out": {"enabled": True, "slot_x": 12.0, "slot_y": -6.8, "exit_x": 26.0, "exit_y": -1.75},
+            "parking_slots": [{"id": 2, "x": 600.0, "y": -3.75, "heading": 1.20}],
+            "parking_goal": {"enabled": True, "x": 600.0, "y": -3.75, "heading": 1.20},
+            "road_network": {
+                "edges": [
+                    {"id": 0, "lanes": 2, "lane_width": 3.5, "speed_limit": 15.0, "nodes": [[0.0, 0.0], [700.0, 0.0]]},
+                ]
+            },
+        }
+        # B1 excursion at x=12, y=-6.8 (z=-4.5) is exempted; mid-route x=300..350 at y=-9.0 fails road departure.
+        samples = [
+            self._make_sample(0.0, 12.0, -6.8, 1.5, z=-4.5, active_scenario="PARK_OUT"),
+            self._make_sample(1.0, 200.0, -1.75, 10.0),
+        ]
+        for k in range(12):
+            samples.append(self._make_sample(2.0 + k * 0.5, 250.0 + k * 10.0, -9.0, 10.0))
+        samples.append(self._make_sample(10.0, 600.0, -3.75, 0.0, active_scenario="VALET_PARKING", selected_slot_index=2))
+
+        failures, _, _ = evaluator.score(
+            samples,
+            ROOT / "does-not-exist.log",
+            criteria={"min_distance_m": 10.0, "min_avg_speed_mps": 0.0},
+            scenario=p2p_scenario,
+            expected_edges=[],
+        )
+        self.assertTrue(any("road departure" in f for f in failures), f"expected road departure, got {failures}")
+
+
 if __name__ == "__main__":
     unittest.main()

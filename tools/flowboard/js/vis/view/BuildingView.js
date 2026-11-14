@@ -7,7 +7,7 @@
 
 import { sampleEdgeNodes } from '../math/Curve.js';
 import { directionToRotationY, tangentToNormal } from '../math/Coord.js';
-import { EDGE_TYPE, LANE_WIDTH } from '../core/Constants.js';
+import { EDGE_TYPE, LANE_WIDTH, isGarageOrRampEdge } from '../core/Constants.js';
 import { getCityModel, initCityModelCache } from '../../models.js';
 import { mergeGeometries } from '../math/GeometryMerge.js';
 
@@ -264,10 +264,15 @@ export function createBuildingView(scene) {
         const steps = Math.max(1, Math.ceil(len / OCCUPANCY_CELL_M));
         for (let s = 0; s < steps; s++) {
           const t0 = s / steps, t1 = (s + 1) / steps;
-          occAddSegment(
-            a[0] + (b[0] - a[0]) * t0, a[1] + (b[1] - a[1]) * t0,
-            a[0] + (b[0] - a[0]) * t1, a[1] + (b[1] - a[1]) * t1,
-          );
+          const x0 = a[0] + (b[0] - a[0]) * t0, y0 = a[1] + (b[1] - a[1]) * t0;
+          const x1 = a[0] + (b[0] - a[0]) * t1, y1 = a[1] + (b[1] - a[1]) * t1;
+          occAddSegment(x0, y0, x1, y1);
+          if (edge.type === EDGE_TYPE.GARAGE_HALL) {
+            const [nx, nz] = tangentToNormal(b[0] - a[0], -(b[1] - a[1]));
+            const nyEnu = -nz;
+            occAddSegment(x0 + nx * 12.0, y0 + nyEnu * 12.0, x1 + nx * 12.0, y1 + nyEnu * 12.0);
+            occAddSegment(x0 - nx * 12.0, y0 - nyEnu * 12.0, x1 - nx * 12.0, y1 - nyEnu * 12.0);
+          }
         }
       }
     }
@@ -316,7 +321,8 @@ export function createBuildingView(scene) {
 
     for (const edge of roadNetwork.edges) {
       if (edge.type === EDGE_TYPE.VIADUCT_HIGHWAY ||
-          edge.name === EDGE_TYPE.VIADUCT_HIGHWAY) continue;
+          edge.name === EDGE_TYPE.VIADUCT_HIGHWAY ||
+          isGarageOrRampEdge(edge)) continue;
       const raw = Array.isArray(edge.nodes) ? edge.nodes : [];
       if (raw.length < 2) continue;
       const nodes = raw.map((n) => Array.isArray(n) ? n : [n.x || 0, n.y || 0, n.z || 0]);

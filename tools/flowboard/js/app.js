@@ -1700,7 +1700,9 @@ function _ldNum(v, digits) {
 
 function _ldSet(id, text) {
   var el = document.getElementById(id);
-  if (el) el.textContent = text;
+  if (!el || el._prevText === text) return;
+  el._prevText = text;
+  el.textContent = text;
 }
 
 function updateLaneDiagHud(force) {
@@ -1791,8 +1793,15 @@ function toggleDriveHud() { setDriveHud(!driveHudOn, null); }
 function _dhChip(id, text, tone) {
   var el = document.getElementById(id);
   if (!el) return;
-  el.textContent = text;
-  el.className = 'dh-chip tone-' + (tone || 'idle');
+  var cls = 'dh-chip tone-' + (tone || 'idle');
+  if (el._prevText !== text) {
+    el._prevText = text;
+    el.textContent = text;
+  }
+  if (el._prevCls !== cls) {
+    el._prevCls = cls;
+    el.className = cls;
+  }
 }
 
 function _updateDiagChip(simGapMs, sseGapMs, rafMs, burstDrops) {
@@ -1862,7 +1871,12 @@ function _initHudHeightObserver() {
 
 function _dhWidth(id, frac) {
   var el = document.getElementById(id);
-  if (el) el.style.width = (Math.max(0, Math.min(1, frac)) * 100).toFixed(1) + '%';
+  if (!el) return;
+  var w = (Math.max(0, Math.min(1, frac)) * 100).toFixed(1) + '%';
+  if (el._prevW !== w) {
+    el._prevW = w;
+    el.style.width = w;
+  }
 }
 
 function updateDriveHud(force) {
@@ -1944,15 +1958,45 @@ function updateDriveHud(force) {
   var muEl = document.getElementById('dh-mu');
   if (muEl && st.isSlippery) muEl.classList.add('dh-mu-alert');
 
-  /* M5 规划场景/阶段徽章与 BEV 感知目标数 */
+  /* M5 规划场景/阶段徽章 + 定位模态 + P2P 4阶段进度 + BEV 感知目标数 */
   _ldSet('dh-scenario-stage', st.scenarioStageText || 'LANE_FOLLOW · CRUISE');
+  var locEl = document.getElementById('dh-loc-mode');
+  if (locEl) {
+    if (st.p2p && st.p2p.locLabel) {
+      if (locEl._prevDisp !== '') { locEl.style.display = ''; locEl._prevDisp = ''; }
+      _dhChip('dh-loc-mode', st.p2p.locLabel, st.p2p.locTone);
+    } else if (locEl._prevDisp !== 'none') {
+      locEl.style.display = 'none';
+      locEl._prevDisp = 'none';
+    }
+  }
+  var p2pEl = document.getElementById('dh-p2p-stages');
+  if (p2pEl) {
+    if (st.p2p && st.p2p.isP2P) {
+      if (p2pEl._prevDisp !== '') { p2pEl.style.display = ''; p2pEl._prevDisp = ''; }
+      var stageSig = st.p2p.stageIndex + '|' + (st.p2p.slotText || '');
+      if (p2pEl._prevSig !== stageSig) {
+        p2pEl._prevSig = stageSig;
+        var pills = p2pEl.querySelectorAll('span[data-stage]');
+        for (var pi = 0; pi < pills.length; pi++) {
+          var sIdx = Number(pills[pi].getAttribute('data-stage'));
+          pills[pi].className = sIdx < st.p2p.stageIndex ? 'is-done' : (sIdx === st.p2p.stageIndex ? 'is-active' : '');
+        }
+        _ldSet('dh-p2p-slot', st.p2p.slotText || '');
+      }
+    } else if (p2pEl._prevDisp !== 'none') {
+      p2pEl.style.display = 'none';
+      p2pEl._prevDisp = 'none';
+    }
+  }
   var bevEl = document.getElementById('dh-bev-count');
   if (bevEl) {
     if (st.bevText) {
-      bevEl.style.display = '';
-      bevEl.textContent = st.bevText;
-    } else {
+      if (bevEl._prevDisp !== '') { bevEl.style.display = ''; bevEl._prevDisp = ''; }
+      if (bevEl._prevText !== st.bevText) { bevEl._prevText = st.bevText; bevEl.textContent = st.bevText; }
+    } else if (bevEl._prevDisp !== 'none') {
       bevEl.style.display = 'none';
+      bevEl._prevDisp = 'none';
     }
   }
 

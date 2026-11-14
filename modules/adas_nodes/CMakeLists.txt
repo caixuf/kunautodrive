@@ -525,6 +525,7 @@ add_library(planning_framework STATIC
     planning_framework/lane_follow_scenario.cpp
     planning_framework/emergency_stop_scenario.cpp
     planning_framework/valet_parking_scenario.cpp
+    planning_framework/park_out_scenario.cpp
 )
 set_target_properties(planning_framework PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(planning_framework PUBLIC

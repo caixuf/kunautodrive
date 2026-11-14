@@ -27,7 +27,10 @@ export class SceneStore {
     // ── M5: 预测、摩擦区、泊车目标与图层可见性 ──
     this.predictions = [];          // [{ id, x, y, vx, vy, branches: [...] }]
     this.frictionZones = [];        // [{ x_min, x_max, y_min, y_max, mu_scale, surface }]
-    this.parkingGoal = null;        // { enabled, x, y, heading, width, length }
+    this.parkingGoal = null;        // { enabled, x, y, z, heading, width, length }
+    this.parkOut = null;            // { enabled, slot_x, slot_y, slot_z, slot_heading, exit_x, exit_y, exit_z, exit_heading }
+    this.parkingSlots = [];         // [{ x, y, z, heading, width, length, occupied }]
+    this.locMode = '';              // 'SLAM_INDOOR' | 'GNSS_FUSION' | ''
     this.bev = null;                // { count, age_ms }
     this.layerVisibility = {
       predictions: true,
@@ -56,6 +59,9 @@ export class SceneStore {
     this.predictions = [];
     this.frictionZones = [];
     this.parkingGoal = null;
+    this.parkOut = null;
+    this.parkingSlots = [];
+    this.locMode = '';
     this.bev = null;
     this.layerVisibility = {
       predictions: true,

@@ -31,6 +31,7 @@ import { createTrajectoryView } from '../view/TrajectoryView.js';
 import { createRoadFacilityView } from '../view/RoadFacilityView.js';
 import { createStreetFurnitureView } from '../view/StreetFurnitureView.js';
 import { createLaneDiagView } from '../view/LaneDiagView.js';
+import { createGarageView } from '../view/GarageView.js';
 import {
   tickDeadReckon, _dr,
   updateEntityDeadReckon, tickEntityDeadReckon, getEntitySmooth,
@@ -61,6 +62,7 @@ function entityDrKey(ent) {
  * 对应"一个模块坏了整个 3D 就坏了"的痛点。 */
 ViewRegistry.register('road',         createRoadView);
 ViewRegistry.register('ground',       createGroundView);
+ViewRegistry.register('garage',       createGarageView);
 ViewRegistry.register('vehicle',      createVehicleView);
 ViewRegistry.register('connector',    createConnectorView);
 ViewRegistry.register('trafficLight', createTrafficLightView);
@@ -113,7 +115,7 @@ export function createSceneDirector(scene) {
   /* View 实例从 ViewRegistry 取（register 后 instantiateAll 已建好），
    * 不再保留 9 个顶层 const —— ViewRegistry 是单一事实来源，避免双份引用。 */
   for (const [layerName, viewNames] of [
-    ['env',   ['ground', 'viaduct']],
+    ['env',   ['ground', 'viaduct', 'garage']],
     ['road',  ['road', 'streetlight', 'barrier', 'connector', 'tree', 'construction', 'roadFacility', 'streetFurniture']],
     ['agent', ['vehicle', 'label', 'perception', 'effect', 'trajectory']],
     ['infra', ['trafficLight', 'etcGate', 'laneDiag']],
@@ -162,6 +164,8 @@ export function createSceneDirector(scene) {
     store.planningDebug  = diagMetrics.planning_debug || null;
     store.laneMatch      = diagMetrics.lane_match || null;
     store.perceivedLanes = diagMetrics.perceived_lanes || null;
+    store.locMode = (diagMetrics.fusion_localization && diagMetrics.fusion_localization.loc_mode)
+      || store.locMode || '';
 
     /* Step 5 重构：校验逻辑下沉到 validateFrame / validateSceneFrame 纯函数，
      * update() 只负责把校验结果 emit 到 _warnOnce + 实际构建。 */
@@ -229,7 +233,8 @@ export function createSceneDirector(scene) {
 
         ViewRegistry.safeCall('road', 'build', rn);
         ViewRegistry.safeCall('construction', 'build', rn, frame.construction_zones);
-        ViewRegistry.safeCall('ground', 'build', 20000);
+        ViewRegistry.safeCall('ground', 'build', 20000, rn);
+        ViewRegistry.safeCall('garage', 'build', rn, frame);
         ViewRegistry.safeCall('streetFurniture', 'build', rn);
 
         if (isViaduct) {
@@ -441,6 +446,8 @@ export function createSceneDirector(scene) {
       store.predictions = Array.isArray(clean.predictions) ? clean.predictions : [];
       store.frictionZones = Array.isArray(clean.friction_zones) ? clean.friction_zones : [];
       store.parkingGoal = clean.parking_goal || null;
+      store.parkOut = clean.park_out || null;
+      store.parkingSlots = Array.isArray(clean.parking_slots) ? clean.parking_slots : [];
     }
     if (raw && raw.metrics && raw.metrics.bev) {
       store.bev = raw.metrics.bev;

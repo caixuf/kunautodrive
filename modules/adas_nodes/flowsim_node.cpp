@@ -578,6 +578,7 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
     flowsim::Entity& ego = g.pool[ego_id];
     ego.x = sc->ego.x;
     ego.y = sc->ego.y;
+    ego.z = sc->ego.has_z ? sc->ego.z : 0.0;
     ego.heading = sc->ego.heading;
     ego.speed = 0.0;  /* 冷启动：初始速度恒为 0，等控制指令到达后再加速。
                        * 原 init_speed=10.0 在控制未就绪时让 ego 以 10m/s 无控行驶，
@@ -608,13 +609,18 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
         flowsim::FrenetPos fp;
         if (g.roads.world_to_frenet(sc->ego.x, sc->ego.y, fp)) {
             if (ego.road_pos.init(g.roads, fp.road_id, fp.lane_id, fp.s, fp.offset)) {
-                /* 用 esmini 算出的 WorldPos 覆盖 ego 初位置（消除"鬼影 ego"） */
+                /* 车位泊出场景（park_out）：保留车位内真实 (x, y, heading) 与显式 z，
+                 * 否则 esmini 会把垂直/斜列车位内的自车直接瞬移吸附到车道中心线并抹平朝向。 */
                 flowsim::WorldPos wp;
                 if (ego.road_pos.world(wp)) {
-                    ego.x = wp.x;
-                    ego.y = wp.y;
-                    ego.z = wp.z;
-                    ego.heading = wp.h;
+                    if (!sc->park_out.enabled) {
+                        ego.x = wp.x;
+                        ego.y = wp.y;
+                        ego.heading = wp.h;
+                    }
+                    if (!sc->ego.has_z) {
+                        ego.z = wp.z;
+                    }
                 }
             } else {
                 LOG_WARN("flowsim", "ego road_pos.init failed (road=%d lane=%d s=%.1f)",
@@ -624,6 +630,10 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
             LOG_WARN("flowsim", "ego world_to_frenet failed at (%.1f,%.1f) — road_pos off",
                      sc->ego.x, sc->ego.y);
         }
+    }
+    if (sc->park_out.enabled) {
+        g.off_rails = true;
+        ego.steer_override = true;
     }
 
     /* Actors → NPC 车辆 / 行人 */
@@ -682,16 +692,42 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
                 e.y = a->y;
             }
         }
-        e.vx = a->vx;
-        e.vy = a->vy;
-        e.speed = sqrt(a->vx * a->vx + a->vy * a->vy);
-        /* 对向来车 (vx<0)：叠加 π 到 esmini 报告的 heading，
-         * 而非覆盖为固定 M_PI。弯道路段 esmini heading 可能非零。 */
-        if (a->vx < 0.0 && a->vy == 0.0) {
-            e.heading = fmod(e.heading + M_PI, 2.0 * M_PI);
-            e.target_vx = -a->vx;
+        e.parked_fixed = a->parked_fixed;
+        if (a->has_z) {
+            e.z = a->z;
+        } else if (a->segment_id < 0 && g.roads_loaded) {
+            flowsim::FrenetPos zfp;
+            flowsim::WorldPos zwp;
+            if (g.roads.world_to_frenet(e.x, e.y, zfp) &&
+                g.roads.frenet_to_world(zfp.road_id, zfp.lane_id, zfp.s, zfp.offset, zwp)) {
+                e.z = zwp.z;
+            }
+        }
+        if (e.parked_fixed) {
+            e.vx = 0.0;
+            e.vy = 0.0;
+            e.speed = 0.0;
+            e.target_vx = 0.0;
+            e.state = flowsim::NpcState::Stopped;
         } else {
-            e.target_vx = a->vx;  /* NPC 初始目标速度 = 场景速度 */
+            e.vx = a->vx;
+            e.vy = a->vy;
+            e.speed = sqrt(a->vx * a->vx + a->vy * a->vy);
+        }
+        if (a->has_heading) {
+            e.heading = a->heading;
+            if (!e.parked_fixed) {
+                e.target_vx = (a->vx < 0.0 && a->vy == 0.0) ? -a->vx : a->vx;
+            }
+        } else {
+            /* 对向来车 (vx<0)：叠加 π 到 esmini 报告的 heading，
+             * 而非覆盖为固定 M_PI。弯道路段 esmini heading 可能非零。 */
+            if (a->vx < 0.0 && a->vy == 0.0) {
+                e.heading = fmod(e.heading + M_PI, 2.0 * M_PI);
+                e.target_vx = -a->vx;
+            } else {
+                e.target_vx = a->vx;  /* NPC 初始目标速度 = 场景速度 */
+            }
         }
         e.length = (a->len > 0) ? a->len : 4.6;
         e.width = (a->wid > 0) ? a->wid : 2.0;
@@ -727,25 +763,26 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
                 e.target_offset = e.y;
             }
         }
-        /* M3：NPC 路口转向意图（直行为主 + 部分左/右转），大地图交叉口不再
-         * 全直行（原来 advance 硬编码 junc_angle=M_PI）。顺行 NPC 在 road_pos
-         * 推进分支消费；对向/无 road_pos 走 route 分支不受影响。 */
-        if (e.is_npc_vehicle()) {
+        if (!e.parked_fixed && e.is_npc_vehicle()) {
             int r = sim_rng_below(&g.sim_rng, 10);
             e.turn_intent = (r < 6) ? 0 : ((r % 2) ? 1 : 2);  /* 60% 直, 20% 左, 20% 右 */
         }
-        /* 中央 route 初始化：所有 NPC 车辆（新旧格式）都通过 world_to_frenet
-         * 定位到路网后初始化 route_dir/route_s/offset，保证严格贴道路几何行驶。
-         *
-         * 旧格式（segment_id<0）NPC 以前走世界系直线积分兜底，在弯道/匝道上
-         * 会沿切线飞出路面；对向车（vx<0）更是 route_dir=0 导致 heading 翻转
-         * 缺失，在路网中朝错误方向行驶（逆行到对向车道）。
-         *
-         * 现在统一用 world_to_frenet 定位 → 填 road_id/s/offset → npc_init_route
-         * 设置 route_dir（顺行 +1 / 对向 -1），step_npc_vehicle 自动走正确的
-         * Frenet 车道跟随分支。新格式（segment_id≥0）优先用场景指定值，
-         * world_to_frenet 失败时回退到旧格式兜底。 */
-        if (g.roads_loaded && g.route.ok() && e.is_npc_vehicle()) {
+        if (e.parked_fixed && g.roads_loaded && e.is_npc_vehicle()) {
+            flowsim::FrenetPos fp;
+            if (g.roads.world_to_frenet(e.x, e.y, fp)) {
+                e.road_id = fp.road_id;
+                e.lane_id = fp.lane_id;
+                e.s = fp.s;
+                e.offset = flowsim::offset_from_lane_internal(
+                    g.roads, fp.road_id, fp.lane_id, fp.s, fp.offset);
+                e.target_offset = e.offset;
+            } else {
+                e.road_id = -1;
+            }
+        }
+        /* 中央 route 初始化：所有非静态占位 NPC 车辆都通过 world_to_frenet
+         * 定位到路网后初始化 route_dir/route_s/offset，保证严格贴道路几何行驶。 */
+        if (!e.parked_fixed && g.roads_loaded && g.route.ok() && e.is_npc_vehicle()) {
             if (a->segment_id >= 0) {
                 /* s/l 先被投成世界坐标；再反投得到真实 driving lane。不能把
                  * a->l 当 lane 0 的 offset：RoadPosition 以 lane 0 初始化会将
@@ -818,7 +855,7 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
          * 对向车 (route_dir<0) 虽然 road_pos.advance 不支持 -s 方向（step_npc_vehicle
          * 会走旧 route 分支），但 road_pos.init 后 set_offset 可正确更新横向位置，
          * 且 road_pos.frenet() 供 same_lane/find_lead 等用。 */
-        if (g.roads_loaded && e.is_npc_vehicle()) {
+        if (!e.parked_fixed && g.roads_loaded && e.is_npc_vehicle()) {
             int rid = e.road_id;
             int lid = e.lane_id;
             double sl = e.s;
@@ -1033,6 +1070,7 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
         e.phase_timer = 0.0;                 /* 抬杆进度 [0,1]，初始 closed */
         e.width = eg->open_range_m;          /* open_range_m 存到 width 字段 */
         e.state = flowsim::NpcState::Stopped; /* 初始 closed 状态 */
+        double road_z = 0.0;
         e.heading = eg->heading;
         /* esmini 校正坐标 */
         if (g.roads_loaded) {
@@ -1042,7 +1080,10 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
                 if (g.roads.frenet_to_world(fp.road_id, fp.lane_id, fp.s, fp.offset, wp)) {
                     e.x = wp.x;
                     e.y = wp.y;
-                    e.heading = wp.h;
+                    road_z = wp.z;
+                    if (std::fabs(eg->heading) <= 1e-4) {
+                        e.heading = wp.h;
+                    }
                 } else {
                     e.x = eg->x; e.y = eg->y;
                 }
@@ -1052,6 +1093,7 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
         } else {
             e.x = eg->x; e.y = eg->y;
         }
+        e.z = eg->has_z ? eg->z : road_z;
         if (e.heading == 0.0) {
             e.heading = compute_road_heading_at(e.x, e.y);
         }
@@ -1246,10 +1288,41 @@ static void publish_road_geometry(void) {
         cJSON_AddBoolToObject(jpg, "enabled", 1);
         cJSON_AddNumberToObject(jpg, "x", g.scenario->parking_goal.x);
         cJSON_AddNumberToObject(jpg, "y", g.scenario->parking_goal.y);
+        cJSON_AddNumberToObject(jpg, "z", g.scenario->parking_goal.z);
         cJSON_AddNumberToObject(jpg, "heading", g.scenario->parking_goal.heading);
         cJSON_AddNumberToObject(jpg, "width", g.scenario->parking_goal.width);
         cJSON_AddNumberToObject(jpg, "length", g.scenario->parking_goal.length);
         cJSON_AddItemToObject(root, "parking_goal", jpg);
+    }
+    if (g.scenario && g.scenario->park_out.enabled) {
+        cJSON* jpo = cJSON_CreateObject();
+        cJSON_AddBoolToObject(jpo, "enabled", 1);
+        cJSON_AddNumberToObject(jpo, "slot_x", g.scenario->park_out.slot_x);
+        cJSON_AddNumberToObject(jpo, "slot_y", g.scenario->park_out.slot_y);
+        cJSON_AddNumberToObject(jpo, "slot_z", g.scenario->park_out.slot_z);
+        cJSON_AddNumberToObject(jpo, "slot_heading", g.scenario->park_out.slot_heading);
+        cJSON_AddNumberToObject(jpo, "exit_x", g.scenario->park_out.exit_x);
+        cJSON_AddNumberToObject(jpo, "exit_y", g.scenario->park_out.exit_y);
+        cJSON_AddNumberToObject(jpo, "exit_z", g.scenario->park_out.exit_z);
+        cJSON_AddNumberToObject(jpo, "exit_heading", g.scenario->park_out.exit_heading);
+        cJSON_AddNumberToObject(jpo, "corridor_width", g.scenario->park_out.corridor_width);
+        cJSON_AddItemToObject(root, "park_out", jpo);
+    }
+    if (g.scenario && g.scenario->parking_slot_count > 0) {
+        cJSON* jslots = cJSON_CreateArray();
+        for (int si = 0; si < g.scenario->parking_slot_count; ++si) {
+            const auto& ps = g.scenario->parking_slots[si];
+            cJSON* item = cJSON_CreateObject();
+            cJSON_AddNumberToObject(item, "id", ps.id);
+            cJSON_AddNumberToObject(item, "x", ps.x);
+            cJSON_AddNumberToObject(item, "y", ps.y);
+            cJSON_AddNumberToObject(item, "z", ps.z);
+            cJSON_AddNumberToObject(item, "heading", ps.heading);
+            cJSON_AddNumberToObject(item, "width", ps.width);
+            cJSON_AddNumberToObject(item, "length", ps.length);
+            cJSON_AddItemToArray(jslots, item);
+        }
+        cJSON_AddItemToObject(root, "parking_slots", jslots);
     }
     /* 同步到 scene_pub_cfg，供 ego fallback 横向控制（lane_keep_ego_fallback）
      * 和 scene/frame 发布使用，否则它们仍用 init 默认值 2，导致 4 车道场景
@@ -2362,25 +2435,38 @@ protected:
                             }
                         }
                         exit_lat_m = fp.offset;
-                        double ref_off = flowsim::offset_from_lane_internal(
-                            g.roads, fp.road_id, fp.lane_id, fp.s, fp.offset);
-                        if (ego.road_pos.relocate(g.roads, fp.road_id, 0, fp.s, ref_off)) {
-                            flowsim::WorldPos wp;
-                            if (ego.road_pos.world(wp)) {
-                                double dh = ego.heading - wp.h;
-                                while (dh >  M_PI) dh -= 2.0 * M_PI;
-                                while (dh < -M_PI) dh += 2.0 * M_PI;
-                                /* 对折角：与车道方向或其反向的最小夹角
-                                 * （掉头终点在对向车道，heading ≈ 路切线 +π）。 */
-                                double fold = std::min(std::fabs(dh),
-                                                       M_PI - std::fabs(dh));
-                                exit_fold_deg = fold * 180.0 / M_PI;
-                                int8_t gear = g.ego_gear.load(std::memory_order_relaxed);
-                                exit_ok = (gear != GEAR_REVERSE) &&
-                                          (std::fabs(ego.steer) <= 0.28) &&
-                                          (fold < 20.0 * M_PI / 180.0);
+                            double ref_off = flowsim::offset_from_lane_internal(
+                                g.roads, fp.road_id, fp.lane_id, fp.s, fp.offset);
+                            if (ego.road_pos.relocate(g.roads, fp.road_id, 0, fp.s, ref_off)) {
+                                flowsim::WorldPos wp;
+                                if (ego.road_pos.world(wp)) {
+                                    flowsim::WorldPos zwp;
+                                    if (g.roads.frenet_to_world(fp.road_id, fp.lane_id, fp.s, fp.offset, zwp)) {
+                                        ego.z = zwp.z;
+                                    } else {
+                                        ego.z = wp.z;
+                                    }
+                                    double dh = ego.heading - wp.h;
+                                    while (dh >  M_PI) dh -= 2.0 * M_PI;
+                                    while (dh < -M_PI) dh += 2.0 * M_PI;
+                                    /* 对折角：与车道方向或其反向的最小夹角
+                                     * （掉头终点在对向车道，heading ≈ 路切线 +π）。 */
+                                    double fold = std::min(std::fabs(dh),
+                                                           M_PI - std::fabs(dh));
+                                    exit_fold_deg = fold * 180.0 / M_PI;
+                                    int8_t gear = g.ego_gear.load(std::memory_order_relaxed);
+                                    bool park_out_cleared = true;
+                                    if (g.scenario && g.scenario->park_out.enabled && g.cycle < 1200) {
+                                        double pdx = ego.x - g.scenario->park_out.slot_x;
+                                        double pdy = ego.y - g.scenario->park_out.slot_y;
+                                        park_out_cleared = (std::hypot(pdx, pdy) >= 3.5);
+                                    }
+                                    exit_ok = park_out_cleared &&
+                                              (gear != GEAR_REVERSE) &&
+                                              (std::fabs(ego.steer) <= 0.28) &&
+                                              (fold < 20.0 * M_PI / 180.0);
+                                }
                             }
-                        }
                     }
                 }
                 if (exit_ok) {
@@ -2619,11 +2705,37 @@ protected:
 
             /* ── Step 4.5: 护栏/路缘碰撞 ──
              * 车辆横向偏移超出道路可行驶边界（路缘）时被护栏阻挡：钳制到路缘、
-             * 削减速度。需路网已加载。 */
+             * 削减速度。需路网已加载。泊车区机动期（off_rails）与静态车位车辆豁免。 */
+            auto is_near_parking_zone = [&]() -> bool {
+                if (!g.scenario) return false;
+                if (g.scenario->park_out.enabled) {
+                    double dx = ego.x - g.scenario->park_out.slot_x;
+                    double dy = ego.y - g.scenario->park_out.slot_y;
+                    double dz = std::fabs(ego.z - g.scenario->park_out.slot_z);
+                    if (std::hypot(dx, dy) < 28.0 && dz < 2.5) return true;
+                }
+                if (g.scenario->parking_goal.enabled) {
+                    double dx = ego.x - g.scenario->parking_goal.x;
+                    double dy = ego.y - g.scenario->parking_goal.y;
+                    double dz = std::fabs(ego.z - g.scenario->parking_goal.z);
+                    if (std::hypot(dx, dy) < 50.0 && dz < 2.5) return true;
+                }
+                for (int si = 0; si < g.scenario->parking_slot_count; ++si) {
+                    const auto& ps = g.scenario->parking_slots[si];
+                    double dx = ego.x - ps.x;
+                    double dy = ego.y - ps.y;
+                    double dz = std::fabs(ego.z - ps.z);
+                    if (std::hypot(dx, dy) < 50.0 && dz < 2.5) return true;
+                }
+                return false;
+            };
+            const bool near_parking_zone = is_near_parking_zone();
             if (g.roads_loaded) {
+                const bool ego_in_parking = (g.off_rails && near_parking_zone);
                 for (int i = 0; i < g.pool.size(); ++i) {
                     flowsim::Entity& v = g.pool[i];
-                    if (!v.active || !v.is_vehicle()) continue;
+                    if (!v.active || !v.is_vehicle() || v.parked_fixed) continue;
+                    if (i == 0 && ego_in_parking) continue;
                     flowsim::apply_guardrail(v, g.roads, FLOWSIM_DT_SEC);
                 }
             }
@@ -2795,7 +2907,7 @@ protected:
                  *   掉头倒车是仿真里唯一的倒车场景（GEAR_REVERSE 只由掉头轨迹
                  *   触发），故 gear==REVERSE 并入豁免 = 覆盖整个掉头执行窗口。 */
                 const int8_t gear = g.ego_gear.load(std::memory_order_relaxed);
-                if (g.u_turn_active || g.off_rails || gear == GEAR_REVERSE || (g.scenario && g.scenario->parking_goal.enabled)) {
+                if (g.u_turn_active || g.off_rails || gear == GEAR_REVERSE || near_parking_zone) {
                     g.ego_maneuver_grace_until = g.cycle + 120;  // ~2s at 60Hz
                 }
                 bool ego_maneuver = (g.cycle <= g.ego_maneuver_grace_until);
@@ -3439,9 +3551,37 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
         g.scene_pub_cfg.parking_goal.enabled = true;
         g.scene_pub_cfg.parking_goal.x = g.scenario->parking_goal.x;
         g.scene_pub_cfg.parking_goal.y = g.scenario->parking_goal.y;
+        g.scene_pub_cfg.parking_goal.z = g.scenario->parking_goal.z;
         g.scene_pub_cfg.parking_goal.heading = g.scenario->parking_goal.heading;
         g.scene_pub_cfg.parking_goal.width = g.scenario->parking_goal.width;
         g.scene_pub_cfg.parking_goal.length = g.scenario->parking_goal.length;
+    }
+    if (g.scenario && g.scenario->park_out.enabled) {
+        g.scene_pub_cfg.park_out.enabled = true;
+        g.scene_pub_cfg.park_out.slot_x = g.scenario->park_out.slot_x;
+        g.scene_pub_cfg.park_out.slot_y = g.scenario->park_out.slot_y;
+        g.scene_pub_cfg.park_out.slot_z = g.scenario->park_out.slot_z;
+        g.scene_pub_cfg.park_out.slot_heading = g.scenario->park_out.slot_heading;
+        g.scene_pub_cfg.park_out.exit_x = g.scenario->park_out.exit_x;
+        g.scene_pub_cfg.park_out.exit_y = g.scenario->park_out.exit_y;
+        g.scene_pub_cfg.park_out.exit_z = g.scenario->park_out.exit_z;
+        g.scene_pub_cfg.park_out.exit_heading = g.scenario->park_out.exit_heading;
+        g.scene_pub_cfg.park_out.corridor_width = g.scenario->park_out.corridor_width;
+    }
+    if (g.scenario && g.scenario->parking_slot_count > 0) {
+        g.scene_pub_cfg.parking_slots.clear();
+        for (int si = 0; si < g.scenario->parking_slot_count; ++si) {
+            const auto& ps = g.scenario->parking_slots[si];
+            flowsim::ScenePubConfig::ScenePubParkingSlot out_ps;
+            out_ps.id = ps.id;
+            out_ps.x = ps.x;
+            out_ps.y = ps.y;
+            out_ps.z = ps.z;
+            out_ps.heading = ps.heading;
+            out_ps.width = ps.width;
+            out_ps.length = ps.length;
+            g.scene_pub_cfg.parking_slots.push_back(out_ps);
+        }
     }
 
     /* 构造协程任务（托管模式） */

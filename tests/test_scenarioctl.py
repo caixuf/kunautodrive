@@ -52,3 +52,16 @@ class ScenarioCtlTest(unittest.TestCase):
             ["ego"]["target_speed"] * 0.5,
         )
         self.assertEqual(validate_scenario(first, paths[0]), [])
+
+    def test_park_to_park_scenario_and_slot_validation(self):
+        root = Path(__file__).resolve().parents[1]
+        p2p_path = root / "scenarios" / "park_to_park_city.json"
+        data = json.loads(p2p_path.read_text())
+        self.assertEqual(validate_scenario(data, p2p_path), [])
+
+        bad = json.loads(json.dumps(data))
+        bad["park_out"] = {"enabled": True, "slot_x": 1.0}
+        bad["parking_slots"] = [{"x": 10.0}]
+        errors = validate_scenario(bad, Path("bad_p2p.json"))
+        self.assertTrue(any("park_out missing" in e for e in errors))
+        self.assertTrue(any("parking_slots[0] missing" in e for e in errors))

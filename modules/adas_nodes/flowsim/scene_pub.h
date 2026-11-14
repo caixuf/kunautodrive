@@ -149,10 +149,35 @@ struct ScenePubConfig {
         bool enabled{false};
         double x{0.0};
         double y{0.0};
+        double z{0.0};
         double heading{0.0};
         double width{2.8};
         double length{6.0};
     } parking_goal;
+
+    struct ScenePubParkOut {
+        bool enabled{false};
+        double slot_x{0.0};
+        double slot_y{0.0};
+        double slot_z{0.0};
+        double slot_heading{0.0};
+        double exit_x{0.0};
+        double exit_y{0.0};
+        double exit_z{0.0};
+        double exit_heading{0.0};
+        double corridor_width{6.0};
+    } park_out;
+
+    struct ScenePubParkingSlot {
+        int id{0};
+        double x{0.0};
+        double y{0.0};
+        double z{0.0};
+        double heading{0.0};
+        double width{2.8};
+        double length{6.0};
+    };
+    std::vector<ScenePubParkingSlot> parking_slots;
 
     /* ── 性能优化：road_network JSON 缓存 ──
      * 道路网络在仿真过程中不变（仅 init 阶段加载 xodr），但 build_road_network_json

@@ -13,7 +13,14 @@ export const EDGE_TYPE = {
   VIADUCT_HIGHWAY: 'viaduct_highway',
   RAMP_CURVE: 'ramp_curve',
   INTERSECTION: 'intersection',
+  GARAGE_HALL: 'garage_hall',
+  OPEN_RAMP: 'open_ramp',
 };
+
+export function isGarageOrRampEdge(edge) {
+  if (!edge) return false;
+  return edge.type === EDGE_TYPE.GARAGE_HALL || edge.type === EDGE_TYPE.OPEN_RAMP;
+}
 
 export const ENTITY_TYPE = {
   CAR: 'car',
@@ -33,7 +40,7 @@ export const VIADUCT_VIS_LENGTH = 500;  // 高架可视段长度 (m)，兜底 ed
  * edge.tunnel，优先于 name 正则匹配。 */
 export const TUNNEL_NAME_RE = /隧道|地道|tunnel/i;
 export function isTunnelEdge(edge) {
-  if (!edge) return false;
+  if (!edge || isGarageOrRampEdge(edge)) return false;
   if (edge.tunnel === true || edge.tunnel === 'yes') return true;
   return TUNNEL_NAME_RE.test(String((edge.name || edge.id) || ''));
 }

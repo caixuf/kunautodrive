@@ -39,9 +39,9 @@ sanitize_ld_path() {
 }
 sanitize_ld_path
 
-# 默认场景：城市综合连续路网（地面主路 + 连续弯道 + 上下匝道 + 高架）。
+# 默认场景：车位到车位城市全链路（B1 地下车库泊出 + 敞口坡道 + 城市高架 + 地面寻位倒库）。
 # 可用 --scenario 覆盖；不指定时 patch pipeline.json 指向此场景。
-DEFAULT_SCENARIO="${FLOWENGINE_SCENARIO:-scenarios/city_comprehensive.json}"
+DEFAULT_SCENARIO="${FLOWENGINE_SCENARIO:-scenarios/park_to_park_city.json}"
 
 LOG_DIR="${FLOW_LOG_DIR:-/tmp/flow_logs}"
 PID_FILE="${FLOWENGINE_DEMO_PID_FILE:-/tmp/kunautodrive_demo.pids}"

@@ -13,7 +13,7 @@
  */
 
 import { getBox, getCylinder, getStdMaterial } from '../core/AssetFactory.js';
-import { LANE_WIDTH, DEFAULT_LANES, isTunnelEdge } from '../core/Constants.js';
+import { LANE_WIDTH, DEFAULT_LANES, isTunnelEdge, isGarageOrRampEdge } from '../core/Constants.js';
 import { worldToThree, forwardENU, directionToRotationY, pointInPolygonXZ, tangentToNormal } from '../math/Coord.js';
 import { getTopology, walkFromJunction } from '../model/TopologyModel.js';
 import { mergeGeometries } from '../math/GeometryMerge.js';
@@ -194,6 +194,7 @@ export function createConnectorView(scene) {
     // ── 4b. BridgeRamp：桥隧端点坡道渐变过渡（消除 6m 悬崖） ──
     const rampGeos = [];
     for (const edge of edges) {
+      if (isGarageOrRampEdge(edge)) continue;
       const nodes = Array.isArray(edge.nodes) ? edge.nodes : [];
       const maxZ = nodes.reduce((m, n) => Math.max(m, Array.isArray(n) ? (n[2] || 0) : (n.z || 0)), 0);
       if (!edge.bridge && !isTunnelEdge(edge) && maxZ < 1.5) continue;
@@ -233,7 +234,7 @@ export function createConnectorView(scene) {
     }
     const barrelLocs = [];
     for (const edge of edges) {
-      if (edge.type === 'ramp_curve' || edge.type === 'intersection') continue;
+      if (edge.type === 'ramp_curve' || edge.type === 'intersection' || isGarageOrRampEdge(edge)) continue;
       _collectBarrierEndCaps(edge, byId, endpointLocs, endpointGrid, EP_CELL, barrelLocs);
     }
     if (barrelLocs.length > 0) {

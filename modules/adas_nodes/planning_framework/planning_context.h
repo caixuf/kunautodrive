@@ -293,9 +293,23 @@ struct ParkingGoal {
     bool enabled{false};
     double x{0.0};
     double y{0.0};
+    double z{0.0};
     double heading{0.0};
     double width{2.8};
     double length{6.0};
+};
+
+struct ParkOutGoal {
+    bool enabled{false};
+    double slot_x{0.0};
+    double slot_y{0.0};
+    double slot_z{0.0};
+    double slot_heading{0.0};
+    double exit_x{0.0};
+    double exit_y{0.0};
+    double exit_z{0.0};
+    double exit_heading{0.0};
+    double corridor_width{6.0};
 };
 
 /**
@@ -305,24 +319,36 @@ struct ParkingGoal {
  * and the inter-task shared Blackboard.
  */
 struct FrameContext {
+    static constexpr size_t kMaxParkingSlots = 8;
+
     uint32_t seq{0};
     uint64_t timestamp_us{0};
 
     VehicleState vehicle_state{};
     ObstacleList obstacles{};
+    std::array<float, 128> obstacle_headings{};
+    std::array<bool, 128> obstacle_has_heading{};
     RoadGeometryContext road_geometry{};
     L3SafetyState l3_state{};
     ParkingGoal parking_goal{};
+    ParkOutGoal park_out{};
+    std::array<ParkingGoal, kMaxParkingSlots> parking_slots{};
+    size_t parking_slot_count{0};
+    int selected_slot_index{-1};
     Blackboard blackboard{};
 
     void Reset() noexcept {
         seq = 0;
         timestamp_us = 0;
         vehicle_state = VehicleState{};
-        obstacles.count = 0;
+        ClearObstacles();
         road_geometry = RoadGeometryContext{};
         l3_state = L3SafetyState{};
         parking_goal = ParkingGoal{};
+        park_out = ParkOutGoal{};
+        parking_slots.fill(ParkingGoal{});
+        parking_slot_count = 0;
+        selected_slot_index = -1;
         blackboard.Clear();
     }
 
@@ -338,16 +364,31 @@ struct FrameContext {
         return obstacles.obstacles[index];
     }
 
-    bool AddObstacle(const Obstacle& obs) noexcept {
+    float GetObstacleHeading(size_t index, bool* out_has_heading = nullptr) const noexcept {
+        if (index >= obstacles.count || index >= 128) {
+            if (out_has_heading) *out_has_heading = false;
+            return 0.0f;
+        }
+        if (out_has_heading) *out_has_heading = obstacle_has_heading[index];
+        return obstacle_has_heading[index] ? obstacle_headings[index] : 0.0f;
+    }
+
+    bool AddObstacle(const Obstacle& obs, bool has_heading = false, float heading = 0.0f) noexcept {
         if (obstacles.count >= 128) {
             return false;
         }
-        obstacles.obstacles[obstacles.count++] = obs;
+        const size_t idx = obstacles.count;
+        obstacles.obstacles[idx] = obs;
+        obstacle_headings[idx] = heading;
+        obstacle_has_heading[idx] = has_heading;
+        obstacles.count++;
         return true;
     }
 
     void ClearObstacles() noexcept {
         obstacles.count = 0;
+        obstacle_headings.fill(0.0f);
+        obstacle_has_heading.fill(false);
     }
 };
 

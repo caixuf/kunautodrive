@@ -19,6 +19,8 @@ import { roadHeightAt } from '../tools/flowboard/js/vis/math/RoadHeight.js';
 import { VEHICLE_GROUND_Y } from '../tools/flowboard/js/vis/view/VehicleView.js';
 import { selectCurrentMotionSegment } from '../tools/flowboard/js/vis/math/Trajectory.js';
 import { computeDrivingStatus } from '../tools/flowboard/js/vis/hud/DrivingStatus.js';
+import { EDGE_TYPE, isGarageOrRampEdge, isTunnelEdge } from '../tools/flowboard/js/vis/core/Constants.js';
+import { computeSubsurfaceCutouts } from '../tools/flowboard/js/vis/view/GroundView.js';
 import { ok, eq, done } from './test-utils.mjs';
 
 console.log('=== vis/ 单帧 tick 冒烟 ===\n');
@@ -463,6 +465,65 @@ function makeM5UpgradeFrame() {
   eq('M5: HUD isSlippery 告警生效', hudStatus.isSlippery, true);
   eq('M5: HUD scenarioStageText 正确', hudStatus.scenarioStageText, 'VALET_PARKING · PRECISION_HOLD');
   eq('M5: HUD bevText 正确', hudStatus.bevText, 'BEV: 8');
+}
+
+// ── 测试 7: 车位到车位 (B1 地库 + 敞口坡道 + 多车位选位 + Cutaway) ──
+
+{
+  console.log('--- 7. Park-to-Park (地库/坡道/多车位) 验证 ---');
+  eq('EDGE_TYPE.GARAGE_HALL', EDGE_TYPE.GARAGE_HALL, 'garage_hall');
+  eq('EDGE_TYPE.OPEN_RAMP', EDGE_TYPE.OPEN_RAMP, 'open_ramp');
+  ok('isGarageOrRampEdge 识别 garage_hall & open_ramp',
+    isGarageOrRampEdge({ type: 'garage_hall' }) && isGarageOrRampEdge({ type: 'open_ramp' }) && !isGarageOrRampEdge({ type: 'tunnel' }));
+  ok('isTunnelEdge 排除 garage_hall & open_ramp',
+    isTunnelEdge({ tunnel: true, name: 'city_tunnel' }) && !isTunnelEdge({ type: 'garage_hall', tunnel: true, name: 'b1_tunnel' }) && !isTunnelEdge({ type: 'open_ramp', tunnel: true }));
+
+  const p2pRoadNetwork = {
+    edges: [
+      { id: 0, name: 'b1_hall', type: 'garage_hall', oneway: false, lanes: 2, lane_width: 3.5, length: 130, speed_limit: 5.5,
+        nodes: [[0, 0, -4.5], [130, 0, -4.5]] },
+      { id: 1, name: 'b1_exit_slope', type: 'open_ramp', oneway: false, lanes: 2, lane_width: 3.5, length: 120, speed_limit: 7.0,
+        nodes: [[130, 0, -4.5], [190, 0, -2.25], [250, 0, 0]] },
+      { id: 2, name: 'surface_lot_avenue', type: 'urban', oneway: false, lanes: 2, lane_width: 3.5, length: 100, speed_limit: 8.33,
+        nodes: [[250, 0, 0], [350, 0, 0]] },
+    ],
+  };
+
+  const cutouts = computeSubsurfaceCutouts(p2pRoadNetwork);
+  eq('computeSubsurfaceCutouts 输出地库+坡道 2 个挖空矩形', cutouts.length, 2);
+  ok('地库挖空 X 范围覆盖 B1 ([-12, 130.2])', cutouts[0][0] <= -11.9 && cutouts[0][2] >= 130.0);
+  ok('坡道挖空截止于 z=-0.10 (Three maxX < 250)', cutouts[1][0] >= 129.4 && cutouts[1][2] < 249.5);
+
+  ViewRegistry.clear();
+  const scene = globalThis.THREE.Scene();
+  const director = createSceneDirector(scene);
+  const p2pFrame = {
+    metrics: {
+      scene: {
+        road_network: p2pRoadNetwork,
+        ego: { x: 12.0, y: -6.8, z: -4.5, heading: 1.5708, speed: 1.2, steering: 0.1 },
+        park_out: { enabled: true, slot_x: 12.0, slot_y: -6.8, slot_z: -4.5, slot_heading: 1.5708, exit_x: 26.0, exit_y: -1.75, exit_z: -4.5, exit_heading: 0.0, corridor_width: 6.0 },
+        parking_slots: [
+          { x: 300.0, y: -3.75, z: 0, heading: 1.2, width: 2.8, length: 6.0, occupied: true },
+          { x: 308.5, y: -3.75, z: 0, heading: 1.2, width: 2.8, length: 6.0, occupied: true },
+          { x: 317.15, y: -3.75, z: 0, heading: 1.2, width: 2.8, length: 6.0, occupied: false },
+        ],
+        entities: [],
+        etc_gates: [{ id: 1, x: 243, y: -1.75, z: 0, heading: 0, pass_through: true }],
+      },
+      fusion_localization: { loc_mode: 'SLAM_INDOOR' },
+      planning_debug: { active_scenario: 'PARK_OUT', active_stage: 'REVERSE_PULL_OUT', selected_slot_index: 2 },
+    },
+  };
+
+  director.update(p2pFrame);
+  director.tickAnimation(6000);
+  const store = director.getStore();
+  ok('P2P: garageView 已注册', !!ViewRegistry.get('garage'));
+  ok('P2P: store.parkOut 已写入', !!store.parkOut && store.parkOut.enabled === true);
+  eq('P2P: store.parkingSlots 写入 3 席', store.parkingSlots.length, 3);
+  eq('P2P: store.locMode = SLAM_INDOOR', store.locMode, 'SLAM_INDOOR');
+  ok('P2P: roadFacilityView 已注册', !!ViewRegistry.get('roadFacility'));
 }
 
 done();

@@ -81,7 +81,11 @@ static bool same_lane(const Entity& a, const Entity& b, const NpcAiConfig& cfg) 
     // 的 world_to_frenet 也以 road_id >= 0 判定合法）。改为 `>= 0` 与
     // flowsim_node.cpp::spawn_npc / road_network.cpp::world_to_frenet 一致。
     if (a.road_id >= 0 && b.road_id >= 0 && a.lane_id != 0 && b.lane_id != 0) {
-        return a.road_id == b.road_id && a.lane_id == b.lane_id;
+        if (a.road_id != b.road_id || a.lane_id != b.lane_id) return false;
+        if (a.parked_fixed || b.parked_fixed) {
+            return std::fabs(a.offset - b.offset) < cfg.same_lane_tol;
+        }
+        return true;
     }
     // 更旧：横向距离 < 容差
     return std::fabs(a.y - b.y) < cfg.same_lane_tol;
@@ -457,6 +461,14 @@ void step_npc_vehicle(Entity& npc, const EntityPool& pool,
                       FlowRoadNetwork* roads, const Route* route,
                       double ego_route_s, uint32_t cycle,
                       bool ego_maneuvering) {
+    if (npc.parked_fixed) {
+        npc.vx = 0.0;
+        npc.vy = 0.0;
+        npc.speed = 0.0;
+        npc.throttle = 0.0;
+        npc.brake = 1.0;
+        return;
+    }
     bool in_crash_cooldown = (npc.crash_cooldown > 0.0);
     /* ── 对向车让行掉头中的 ego ──
      * 对向 NPC（route_dir<0）循环回收回 route 末端（掉头区）重新发车后，

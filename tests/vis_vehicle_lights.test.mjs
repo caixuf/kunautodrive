@@ -90,6 +90,9 @@ checkDeep('env isNight → head + clearance 自动点亮',
 checkDeep('env weather=fog → head + clearance + fog 自动点亮',
   deriveLightState(0, 0, { weather: 'fog' }),
   { brake: false, turnL: false, turnR: false, head: true, clearance: true, fog: true });
+checkDeep('env inGarage → head + clearance 自动点亮（无需雾灯）',
+  deriveLightState(0, 0, { inGarage: true, isNight: false, lighting: 'day', weather: 'clear' }),
+  { brake: false, turnL: false, turnR: false, head: true, clearance: true, fog: false });
 
 console.log('\n--- 组合位 & BCM 域控解耦测试 ---');
 checkDeep('TURN_LEFT | LOW_BEAM → turnL + head + clearance',

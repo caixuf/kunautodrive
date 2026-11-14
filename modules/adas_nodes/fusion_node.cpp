@@ -53,6 +53,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include <cmath>
 #include <time.h>
 #include <unistd.h>
 
@@ -237,6 +238,7 @@ protected:
                     cJSON_AddNumberToObject(nroot, "gated_count", (double)ekf_->gated_count);
                     if (loc.has_gated_ratio)
                         cJSON_AddNumberToObject(nroot, "gated_ratio", loc.gated_ratio);
+                    cJSON_AddStringToObject(nroot, "loc_mode", "SLAM_INDOOR");
                     cJSON* narr = cJSON_AddArrayToObject(nroot, "loc_reasons");
                     for (int i = 0; i < loc.reason_count; i++)
                         cJSON_AddItemToArray(narr, cJSON_CreateString(loc.reasons[i]));
@@ -331,6 +333,7 @@ protected:
                     cJSON_AddNumberToObject(proot, "gated_count", (double)ekf_->gated_count);
                     if (_loc.has_gated_ratio)
                         cJSON_AddNumberToObject(proot, "gated_ratio", _loc.gated_ratio);
+                    cJSON_AddStringToObject(proot, "loc_mode", gps_only ? "GNSS_FUSION" : "SLAM_INDOOR");
                     cJSON* _arr = cJSON_AddArrayToObject(proot, "loc_reasons");
                     for (int i = 0; i < _loc.reason_count; i++)
                         cJSON_AddItemToArray(_arr, cJSON_CreateString(_loc.reasons[i]));
@@ -369,6 +372,12 @@ protected:
                 _msg_cast_impl(pose_msg, POSE2D_TYPE_ID, sizeof(Pose2D), "Pose2D") : nullptr;
             if (!lidar) continue;
 
+            if (g.fused_count == 0 && !pose) {
+                /* 首帧用实际 LiDAR 位置锚定 EKF 初值（兼容 B1 车位等任意非零起点，零速起步） */
+                ekf_fusion_reset(ekf_, (double)lidar->x, (double)lidar->y);
+                ekf_->x[2] = 0.0;
+            }
+
             /* ── EKF 预测 ── */
             ekf_fusion_predict(ekf_);
 
@@ -395,7 +404,12 @@ protected:
                 ekf_fusion_update_lidar(ekf_, (double)lidar->x, (double)lidar->y, nullptr);
             }
 
-            /* ── GPS 速度/航向更新（高权速度源；heading 与 SLAM 互斥；多径野值前置门控） ── */
+            const uint64_t fusion_now_us = clock_now_us();
+            const bool gps_stale = (!g.has_gps_ts) ||
+                (fusion_now_us > g.gps_ts_us && (fusion_now_us - g.gps_ts_us) > 500000ULL);
+            const bool slam_indoor = (lidar->z < -1.5f) || (!gps && gps_stale);
+
+            /* ── GPS 速度/航向更新（室内 GNSS 拒止时退化为 LiDAR 扫描匹配里程计） ── */
             if (gps) {
                 if (fusion_gps_observation_plausible(
                         (double)gps->speed_mps, g.fused_v, g.fused_count >= 5 ? 1 : 0)) {
@@ -404,6 +418,29 @@ protected:
                 } else if (g.fused_count % 10 == 0) {
                     LOG_WARN("fusion", "GPS outlier rejected: gps_v=%.2f fused_v=%.2f",
                              (double)gps->speed_mps, g.fused_v);
+                }
+            } else if (slam_indoor && g.has_prev_lidar) {
+                const double this_t = (double)fusion_now_us / 1e6;
+                const double dt = this_t - g.prev_lidar_t;
+                if (dt > 0.01 && dt < 0.5) {
+                    const double dx = (double)lidar->x - g.prev_lidar_x;
+                    const double dy = (double)lidar->y - g.prev_lidar_y;
+                    const double dist = std::hypot(dx, dy);
+                    double slam_v = dist / dt;
+                    double slam_h = g.fused_heading;
+                    if (dist > 0.05) {
+                        double raw_h = std::atan2(dy, dx);
+                        double dh = raw_h - g.fused_heading;
+                        while (dh >  M_PI) dh -= 2.0 * M_PI;
+                        while (dh < -M_PI) dh += 2.0 * M_PI;
+                        if (std::fabs(dh) > M_PI * 0.5) {
+                            slam_h = std::atan2(-dy, -dx);
+                            slam_v = 0.0;
+                        } else {
+                            slam_h = raw_h;
+                        }
+                    }
+                    ekf_fusion_update_gps(ekf_, slam_v, slam_h, nullptr);
                 }
             }
 
@@ -521,6 +558,7 @@ protected:
              * trustworthy=false 表示定位结果不可用于驾驶（已去抖）。 */
             cJSON_AddBoolToObject(root, "loc_trustworthy", loc.trustworthy);
             cJSON_AddBoolToObject(root, "loc_critical", loc.critical);
+            cJSON_AddStringToObject(root, "loc_mode", slam_indoor ? "SLAM_INDOOR" : "GNSS_FUSION");
             cJSON_AddNumberToObject(root, "gated_count", (double)ekf_->gated_count);
             if (loc.has_gated_ratio)
                 cJSON_AddNumberToObject(root, "gated_ratio", loc.gated_ratio);

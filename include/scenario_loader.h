@@ -89,6 +89,7 @@ extern "C" {
 #define SCENARIO_SCRIPT_LABEL_LEN   48
 #define SCENARIO_MAX_CHOREO_BEATS   16  /* choreography beats 上限 */
 #define SCENARIO_CHOREO_ACTOR_LEN   16  /* choreography actor 字段长度 */
+#define SCENARIO_MAX_PARKING_SLOTS  8   /* 多候选泊车位上限 */
 
 /* ── Actor（NPC 车辆 / 行人） ─────────────────────────────── */
 
@@ -96,8 +97,13 @@ typedef struct {
     int    id;
     char   type[16];   /**< "car" | "pedestrian" | "truck" */
     double x, y;       /**< 初始位置（m，世界坐标系）— 旧格式 */
+    double z;          /**< 可选初始高程（m，默认 0；地库/高架静态车使用） */
+    double heading;    /**< 可选初始航向角（rad） */
     double vx, vy;     /**< 初始速度（m/s） */
     double len, wid;   /**< 碰撞包围盒尺寸（m） */
+    bool   has_heading; /**< JSON 是否显式指定 heading */
+    bool   has_z;       /**< JSON 是否显式指定 z */
+    bool   parked_fixed; /**< 静态停放车辆（固定占位不参与路网 NPC AI） */
     /* ── road_network 新格式：按 segment 放置 ── */
     int    segment_id; /**< 所属 road edge id（新格式，-1=旧格式用 x/y） */
     double s;          /**< 沿道路纵向位置 m（Frenet s，新格式） */
@@ -108,6 +114,8 @@ typedef struct {
 
 typedef struct {
     double x, y;           /**< 初始位置（m） */
+    double z;              /**< 可选初始高程（m，默认 0） */
+    bool   has_z;          /**< JSON 是否显式指定 z */
     double heading;        /**< 初始航向角（rad） */
     double init_speed;     /**< 初始速度（m/s） */
     double target_speed;   /**< 期望巡航速度（m/s） */
@@ -194,10 +202,22 @@ typedef struct {
     int    id;              /**< 门架 ID（可视化标识） */
     double x;               /**< 门架位置（ego 前向坐标, m） */
     double y;               /**< 横向坐标（m，默认 0 = 跨路面中心） */
+    double z;               /**< 可选门架高程（m，默认 0） */
+    bool   has_z;           /**< JSON 是否显式指定 z */
     double heading;         /**< 门架朝向（rad，默认 0 = 朝 +X；未配置时 flowsim 可按道路切线估算） */
     double approach_speed;  /**< 通过时目标速度（m/s，默认 5.0 = ETC 减速） */
     double open_range_m;    /**< ego 进入此距离时抬杆（m，默认 50） */
 } ScenarioETCGate;
+
+typedef struct {
+    int    id;
+    double x;
+    double y;
+    double z;
+    double heading;
+    double width;
+    double length;
+} ScenarioParkingSlot;
 
 /* ── 停止线（路口/ETC 停车位置标记，FlowSim v2 新增） ─────── */
 
@@ -423,10 +443,27 @@ typedef struct {
         bool   enabled;
         double x;
         double y;
+        double z;
         double heading;
         double width;
         double length;
     } parking_goal;
+    /* ── 车位泊出起点与通道汇出目标（Park-to-Park 新增）── */
+    struct {
+        bool   enabled;
+        double slot_x;
+        double slot_y;
+        double slot_z;
+        double slot_heading;
+        double exit_x;
+        double exit_y;
+        double exit_z;
+        double exit_heading;
+        double corridor_width;
+    } park_out;
+    /* ── 多候选目标车位（地面停车场寻位择优）── */
+    ScenarioParkingSlot parking_slots[SCENARIO_MAX_PARKING_SLOTS];
+    int                 parking_slot_count;
     /* ── 中凯路场景新增（Task 3 + Task 4）── */
     ScenarioLighting  lighting;        /**< 全局光照模式（day/night/dusk，默认 day） */
     char              weather[16];     /**< clear/rain/snow/overcast/fog */

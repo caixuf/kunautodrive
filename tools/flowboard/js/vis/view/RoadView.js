@@ -25,7 +25,7 @@
 
 import { edgeSampleCount as adaptiveEdgeSampleCount } from '../math/Curve.js';
 import { mergeGeometries } from '../math/GeometryMerge.js';
-import { LANE_WIDTH, DEFAULT_LANES, EDGE_TYPE, isTunnelEdge } from '../core/Constants.js';
+import { LANE_WIDTH, DEFAULT_LANES, EDGE_TYPE, isTunnelEdge, isGarageOrRampEdge } from '../core/Constants.js';
 import { tangentToNormal, forwardENU, worldToThree } from '../math/Coord.js';
 import { getTopology } from '../model/TopologyModel.js';
 import { computeEdgeAxis, sampleCleanPolyline, offsetSpine as axisOffsetSpine, buildCumulative } from '../model/RoadAxis.js';
@@ -1277,8 +1277,9 @@ export function createRoadView(scene) {
 
     const minZ = spine.reduce((m, p) => Math.min(m, p.py || 0), 0);
     const maxZ = spine.reduce((m, p) => Math.max(m, p.py || 0), 0);
+    const isGarageOrRamp = isGarageOrRampEdge(edge);
     const isElevated = edge.bridge === true || maxZ >= 1.5;
-    const isTunnel = edge.tunnel === true || isTunnelEdge(edge) || minZ <= -1.5;
+    const isTunnel = !isGarageOrRamp && (edge.tunnel === true || isTunnelEdge(edge) || minZ <= -1.5);
 
     if (isElevated && (_totalEdges <= 800 || distToFocus <= 900)) {
       const deck = bridgeDeckGeo(roadSpine, roadHw, edge.id);
@@ -1286,7 +1287,7 @@ export function createRoadView(scene) {
     } else if (isTunnel && (_totalEdges <= 800 || distToFocus <= 900)) {
       const tube = tunnelStructureGeo(roadSpine, roadHw);
       if (tube) curbGeos.push(tube);
-    } else if (!isElevated && !isTunnel && isNearFocus) {
+    } else if (!isElevated && !isTunnel && !isGarageOrRamp && isNearFocus) {
       const edgeType = String(edge.type || '').toLowerCase();
       const isSyntheticUrban = edgeType === EDGE_TYPE.URBAN ||
         String(edge.name || '').toLowerCase().includes('urban');
@@ -1364,6 +1365,7 @@ export function createRoadView(scene) {
    *  匝道循环 ramp×main 全组合跑 findRampConnection（330×161 次 O(n) 点扫）→
    *  RoadView.build ~3s 卡顿首帧。匝道只由 type=ramp_curve 或 name 含 ramp 判定。 */
   function isRampEdge(edge) {
+    if (isGarageOrRampEdge(edge)) return false;
     return edge.type === EDGE_TYPE.RAMP_CURVE
       || (edge.name && edge.name.indexOf('ramp') !== -1);
   }

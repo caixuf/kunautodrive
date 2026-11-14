@@ -51,6 +51,34 @@ export const SCENE = {
   hazardYellow: 0xffcc00,     // 紧急双闪（警示黄）
   cutinChevron: 0xff9100,     // 旁车切入贴地警示翼（琥珀橙）
   sprayMist: 0x90b8d8,        // 雨天轮胎水雾尾迹（冷蓝白）
+  /* P2P 地下车库 / 敞开坡道 / 地面寻位多车位 */
+  garageFloor: 0x26323c,      // B1 环氧地坪
+  garageWall: 0x454d56,       // B1 剖切结构混凝土侧墙
+  garageBeam: 0x39414a,       // B1 结构顶梁
+  garagePillar: 0xd0d5dc,     // B1 结构方柱
+  garageHazardBand: 0xf0b400, // B1 方柱下缘黄黑警示带
+  garageLedStrip: 0xe6f4ff,   // B1 顶棚 LED 灯带
+  rampWall: 0x565f68,         // 敞开坡道 U 型挡墙
+  rampCoping: 0x7c858e,       // 敞开坡道压顶石缘
+  lotPad: 0x2f343b,           // 地面停车场沥青广场垫层
+  slotCandidate: 0xffd166,    // 候选空闲车位框线（暖金）
+  slotOccupied: 0x6e7681,     // 已占用车位框线（哑灰）
+  slotSelected: 0x00e5ff,     // 选定目标车位框线（高亮青）
+  parkOutBox: 0x58a6ff,       // B1 泊出起始车位框线（智驾蓝）
+  /* 车库与地面停车场建筑/MEP/导视语义色 */
+  garageAisle: 0x1e2228,      // B1 行车道深色沥青/混凝土
+  garageEvZone: 0x1f4d3a,     // EV 充电车位绿色环氧分区
+  garageDuct: 0x8d96a0,       // 镀锌风管与桥架
+  garageSprinkler: 0xc93b3b,  // 消防喷淋管与消火栓箱红
+  garageGrate: 0x555d66,      // 截水沟金属格栅
+  garageGlass: 0x88c0d0,      // 电梯厅玻璃门
+  exitSignBg: 0x136f3a,       // 出口指示牌绿底
+  exitSignFg: 0xe6fff0,       // 出口指示牌亮字
+  evChargerBody: 0x2b313a,    // 充电桩机身
+  evChargerLed: 0x00e676,     // 充电桩状态灯带
+  signBlueBg: 0x155799,       // P 停车场导视蓝底
+  soilBed: 0x3b2f27,          // 树池种植土
+  poleSteel: 0x5a636e,        // 灯杆/立柱钢材
 };
 
 /* ── 车道诊断叠加层配色（诊断语义色，不参与 junction_markings 换肤锁定）──

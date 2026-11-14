@@ -1,0 +1,882 @@
+{
+  "name": "park_to_park_city",
+  "description": "车位到车位全链路默认展示：B1 地下车库泊出 → 敞口坡道抬杆出库(SLAM→GNSS) → 城市信控干道与高架巡航 → 地面停车场动态寻位倒库泊入",
+  "duration_s": 410,
+  "random_seed": 42,
+  "enable_poisson_traffic": true,
+  "npc_lane_change": true,
+  "lighting": "day",
+  "weather": "clear",
+  "visibility_m": 1500,
+  "ego": {
+    "x": 12.0,
+    "y": -6.8,
+    "z": -4.5,
+    "heading": 1.5708,
+    "init_speed": 0.0,
+    "target_speed": 15.0,
+    "wheelbase": 2.7,
+    "length": 4.6,
+    "width": 2.0,
+    "max_steer": 0.6
+  },
+  "park_out": {
+    "enabled": true,
+    "slot_x": 12.0,
+    "slot_y": -6.8,
+    "slot_z": -4.5,
+    "slot_heading": 1.5708,
+    "exit_x": 26.0,
+    "exit_y": -1.75,
+    "exit_z": -4.5,
+    "exit_heading": 0.0,
+    "corridor_width": 6.0
+  },
+  "parking_slots": [
+    {
+      "id": 0,
+      "x": 3217.5,
+      "y": -6.5,
+      "z": 0.0,
+      "heading": 1.5708,
+      "width": 2.7,
+      "length": 5.6
+    },
+    {
+      "id": 1,
+      "x": 3221.5,
+      "y": -6.5,
+      "z": 0.0,
+      "heading": 1.5708,
+      "width": 2.7,
+      "length": 5.6
+    },
+    {
+      "id": 2,
+      "x": 3225.5,
+      "y": -6.5,
+      "z": 0.0,
+      "heading": 1.5708,
+      "width": 2.8,
+      "length": 5.8
+    }
+  ],
+  "parking_goal": {
+    "enabled": true,
+    "x": 3225.5,
+    "y": -6.5,
+    "z": 0.0,
+    "heading": 1.5708,
+    "width": 2.8,
+    "length": 6.0
+  },
+  "road_network": {
+    "edges": [
+      {
+        "id": 0,
+        "type": "garage_hall",
+        "name": "b1_parking_hall",
+        "lanes": 2,
+        "lane_width": 3.5,
+        "speed_limit": 6.5,
+        "oneway": false,
+        "nodes": [
+          [
+            0,
+            0,
+            -4.5
+          ],
+          [
+            130,
+            0,
+            -4.5
+          ]
+        ]
+      },
+      {
+        "id": 1,
+        "type": "open_ramp",
+        "name": "b1_exit_slope",
+        "lanes": 2,
+        "lane_width": 3.5,
+        "speed_limit": 9.0,
+        "oneway": false,
+        "elevation_profile": [
+          {
+            "s": 0,
+            "h": -4.5
+          },
+          {
+            "s": 60,
+            "h": -2.25
+          },
+          {
+            "s": 120,
+            "h": 0.0
+          }
+        ],
+        "nodes": [
+          [
+            130,
+            0,
+            -4.5
+          ],
+          [
+            160,
+            0,
+            -3.375
+          ],
+          [
+            190,
+            0,
+            -2.25
+          ],
+          [
+            220,
+            0,
+            -1.125
+          ],
+          [
+            250,
+            0,
+            0.0
+          ]
+        ]
+      },
+      {
+        "id": 2,
+        "type": "urban",
+        "name": "ground_signal_avenue",
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 15.5,
+        "oneway": false,
+        "nodes": [
+          [
+            250,
+            0,
+            0
+          ],
+          [
+            430,
+            0,
+            0
+          ],
+          [
+            610,
+            0,
+            0
+          ],
+          [
+            750,
+            -22,
+            0
+          ],
+          [
+            870,
+            -22,
+            0
+          ]
+        ]
+      },
+      {
+        "id": 3,
+        "type": "urban",
+        "name": "curved_commercial_boulevard",
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 15.5,
+        "oneway": false,
+        "nodes": [
+          [
+            870,
+            -22,
+            0
+          ],
+          [
+            890.028,
+            -22.372,
+            0
+          ],
+          [
+            910.095,
+            -23.241,
+            0
+          ],
+          [
+            930.171,
+            -24.234,
+            0
+          ],
+          [
+            950.228,
+            -24.979,
+            0
+          ],
+          [
+            970.237,
+            -25.103,
+            0
+          ],
+          [
+            990.171,
+            -24.234,
+            0
+          ],
+          [
+            1010,
+            -22,
+            0
+          ],
+          [
+            1029.079,
+            -18.305,
+            0
+          ],
+          [
+            1047.874,
+            -13.317,
+            0
+          ],
+          [
+            1066.425,
+            -7.302,
+            0
+          ],
+          [
+            1084.771,
+            -0.525,
+            0
+          ],
+          [
+            1102.952,
+            6.746,
+            0
+          ],
+          [
+            1121.007,
+            14.247,
+            0
+          ],
+          [
+            1139.185,
+            21.928,
+            0
+          ],
+          [
+            1157.34,
+            30.259,
+            0
+          ],
+          [
+            1175.274,
+            39.071,
+            0
+          ],
+          [
+            1193.072,
+            48.187,
+            0
+          ],
+          [
+            1210.815,
+            57.425,
+            0
+          ],
+          [
+            1228.585,
+            66.607,
+            0
+          ],
+          [
+            1246.467,
+            75.553,
+            0
+          ],
+          [
+            1264.438,
+            84.04,
+            0
+          ],
+          [
+            1282.307,
+            91.935,
+            0
+          ],
+          [
+            1300.314,
+            99.521,
+            0
+          ],
+          [
+            1318.391,
+            106.946,
+            0
+          ],
+          [
+            1336.474,
+            114.359,
+            0
+          ],
+          [
+            1350,
+            120,
+            0
+          ]
+        ]
+      },
+      {
+        "id": 4,
+        "type": "ramp_curve",
+        "name": "eastbound_viaduct_entry",
+        "lanes": 2,
+        "lane_width": 3.5,
+        "speed_limit": 15.0,
+        "oneway": true,
+        "elevation_profile": [
+          {
+            "s": 0,
+            "h": 0
+          },
+          {
+            "s": 120,
+            "h": 4
+          },
+          {
+            "s": 250,
+            "h": 9
+          }
+        ],
+        "nodes": [
+          [
+            1350,
+            120,
+            0
+          ],
+          [
+            1369.161,
+            125.816,
+            0.67
+          ],
+          [
+            1388.521,
+            131.166,
+            1.33
+          ],
+          [
+            1407.739,
+            136.849,
+            2.0
+          ],
+          [
+            1426.472,
+            143.664,
+            2.67
+          ],
+          [
+            1444.226,
+            152.322,
+            3.33
+          ],
+          [
+            1460.394,
+            162.785,
+            4.0
+          ],
+          [
+            1475.747,
+            174.557,
+            4.77
+          ],
+          [
+            1490.765,
+            186.87,
+            5.54
+          ],
+          [
+            1505.929,
+            198.96,
+            6.31
+          ],
+          [
+            1521.72,
+            210.06,
+            7.08
+          ],
+          [
+            1538.548,
+            219.464,
+            7.85
+          ],
+          [
+            1556.179,
+            227.249,
+            8.62
+          ],
+          [
+            1574.302,
+            233.987,
+            9.0
+          ],
+          [
+            1592.648,
+            240.249,
+            9.0
+          ],
+          [
+            1610.95,
+            246.607,
+            9.0
+          ],
+          [
+            1620,
+            250,
+            9.0
+          ]
+        ]
+      },
+      {
+        "id": 5,
+        "type": "viaduct_highway",
+        "name": "elevated_ring_east",
+        "bridge": true,
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 15.5,
+        "oneway": false,
+        "elevation_profile": [
+          {
+            "s": 0,
+            "h": 9
+          },
+          {
+            "s": 520,
+            "h": 9
+          }
+        ],
+        "nodes": [
+          [
+            1620,
+            250,
+            9
+          ],
+          [
+            1850,
+            250,
+            9
+          ],
+          [
+            2100,
+            238,
+            9
+          ],
+          [
+            2350,
+            210,
+            9
+          ]
+        ]
+      },
+      {
+        "id": 6,
+        "type": "ramp_curve",
+        "name": "westbound_viaduct_exit",
+        "lanes": 2,
+        "lane_width": 3.5,
+        "speed_limit": 15.0,
+        "oneway": true,
+        "elevation_profile": [
+          {
+            "s": 0,
+            "h": 9
+          },
+          {
+            "s": 120,
+            "h": 5
+          },
+          {
+            "s": 250,
+            "h": 0
+          }
+        ],
+        "nodes": [
+          [
+            2350,
+            210,
+            9.0
+          ],
+          [
+            2368.271,
+            203.86,
+            8.39
+          ],
+          [
+            2386.64,
+            197.968,
+            7.78
+          ],
+          [
+            2404.99,
+            192.027,
+            7.17
+          ],
+          [
+            2423.202,
+            185.738,
+            6.56
+          ],
+          [
+            2441.156,
+            178.803,
+            5.94
+          ],
+          [
+            2458.833,
+            170.754,
+            5.33
+          ],
+          [
+            2475.947,
+            161.134,
+            4.72
+          ],
+          [
+            2492.67,
+            150.723,
+            4.11
+          ],
+          [
+            2509.413,
+            140.377,
+            3.5
+          ],
+          [
+            2526.587,
+            130.951,
+            2.89
+          ],
+          [
+            2544.544,
+            123.314,
+            2.28
+          ],
+          [
+            2563.102,
+            117.82,
+            1.67
+          ],
+          [
+            2582.097,
+            113.766,
+            1.06
+          ],
+          [
+            2601.301,
+            110.4,
+            0.45
+          ],
+          [
+            2620.486,
+            106.972,
+            0.0
+          ],
+          [
+            2630,
+            105,
+            0.0
+          ]
+        ]
+      },
+      {
+        "id": 7,
+        "type": "urban",
+        "name": "riverfront_return_road",
+        "lanes": 2,
+        "lane_width": 3.5,
+        "speed_limit": 15.0,
+        "oneway": false,
+        "nodes": [
+          [
+            2630,
+            105,
+            0
+          ],
+          [
+            2770,
+            105,
+            0
+          ],
+          [
+            2910,
+            72,
+            0
+          ],
+          [
+            3030,
+            20,
+            0
+          ],
+          [
+            3100,
+            0,
+            0
+          ]
+        ]
+      },
+      {
+        "id": 8,
+        "type": "urban",
+        "name": "surface_lot_avenue",
+        "lanes": 2,
+        "lane_width": 3.5,
+        "speed_limit": 8.5,
+        "oneway": false,
+        "nodes": [
+          [
+            3100,
+            0,
+            0
+          ],
+          [
+            3600,
+            0,
+            0
+          ]
+        ]
+      }
+    ],
+    "cross_roads": [
+      {
+        "name": "north_left_turn",
+        "at_s": 460,
+        "length_m": 180,
+        "lanes": 2,
+        "lane_width": 3.5,
+        "speed_limit": 8.0,
+        "direction": 1
+      },
+      {
+        "name": "south_right_turn",
+        "at_s": 640,
+        "length_m": 220,
+        "lanes": 2,
+        "lane_width": 3.5,
+        "speed_limit": 8.0,
+        "direction": -1
+      },
+      {
+        "name": "downtown_crossing",
+        "at_s": 970,
+        "length_m": 200,
+        "lanes": 2,
+        "lane_width": 3.5,
+        "speed_limit": 8.0,
+        "direction": 1
+      }
+    ],
+    "junctions": []
+  },
+  "actors": [
+    {
+      "id": 101,
+      "type": "car",
+      "x": 7.4,
+      "y": -6.8,
+      "z": -4.5,
+      "heading": 1.5708,
+      "parked_fixed": true,
+      "vx": 0.0,
+      "vy": 0.0,
+      "len": 4.6,
+      "wid": 1.9
+    },
+    {
+      "id": 102,
+      "type": "car",
+      "x": 16.8,
+      "y": -6.8,
+      "z": -4.5,
+      "heading": 1.5708,
+      "parked_fixed": true,
+      "vx": 0.0,
+      "vy": 0.0,
+      "len": 4.6,
+      "wid": 1.9
+    },
+    {
+      "id": 103,
+      "type": "car",
+      "x": 36.0,
+      "y": 6.8,
+      "z": -4.5,
+      "heading": -1.5708,
+      "parked_fixed": true,
+      "vx": 0.0,
+      "vy": 0.0,
+      "len": 4.6,
+      "wid": 1.9
+    },
+    {
+      "id": 104,
+      "type": "car",
+      "x": 44.0,
+      "y": 6.8,
+      "z": -4.5,
+      "heading": -1.5708,
+      "parked_fixed": true,
+      "vx": 0.0,
+      "vy": 0.0,
+      "len": 4.6,
+      "wid": 1.9
+    },
+    {
+      "id": 1,
+      "type": "car",
+      "segment_id": 3,
+      "s": 360,
+      "l": -1.75,
+      "vx": 14.0,
+      "vy": 0.0,
+      "len": 4.6,
+      "wid": 2.0
+    },
+    {
+      "id": 2,
+      "type": "pedestrian",
+      "x": 335.0,
+      "y": -7.4,
+      "vx": 1.1,
+      "vy": 0.0,
+      "len": 0.5,
+      "wid": 0.5
+    },
+    {
+      "id": 3,
+      "type": "pedestrian",
+      "x": 430.0,
+      "y": -7.4,
+      "vx": 0.9,
+      "vy": 0.0,
+      "len": 0.5,
+      "wid": 0.5
+    },
+    {
+      "id": 4,
+      "type": "pedestrian",
+      "x": 495.0,
+      "y": 7.4,
+      "vx": -1.0,
+      "vy": 0.0,
+      "len": 0.5,
+      "wid": 0.5
+    },
+    {
+      "id": 201,
+      "type": "car",
+      "x": 3217.5,
+      "y": -6.5,
+      "z": 0.0,
+      "heading": 1.5708,
+      "parked_fixed": true,
+      "vx": 0.0,
+      "vy": 0.0,
+      "len": 4.6,
+      "wid": 1.9
+    },
+    {
+      "id": 202,
+      "type": "car",
+      "x": 3221.5,
+      "y": -6.5,
+      "z": 0.0,
+      "heading": 1.5708,
+      "parked_fixed": true,
+      "vx": 0.0,
+      "vy": 0.0,
+      "len": 4.6,
+      "wid": 1.9
+    },
+    {
+      "id": 203,
+      "type": "car",
+      "x": 60.0,
+      "y": 6.8,
+      "z": -4.5,
+      "heading": -1.5708,
+      "parked_fixed": true,
+      "vx": 0.0,
+      "vy": 0.0,
+      "len": 4.6,
+      "wid": 1.9
+    },
+    {
+      "id": 204,
+      "type": "car",
+      "x": 3213.5,
+      "y": -6.5,
+      "z": 0.0,
+      "heading": 1.5708,
+      "parked_fixed": true,
+      "vx": 0.0,
+      "vy": 0.0,
+      "len": 4.6,
+      "wid": 1.9
+    }
+  ],
+  "etc_gates": [
+    {
+      "id": 1,
+      "x": 243.0,
+      "y": -1.75,
+      "z": 0.0,
+      "heading": 0.0,
+      "pass_through": true
+    },
+    {
+      "id": 2,
+      "x": 3182.0,
+      "y": -1.75,
+      "z": 0.0,
+      "heading": 0.0,
+      "pass_through": true
+    }
+  ],
+  "traffic_density": {
+    "cars_per_km": 8,
+    "spawn_jitter_m": 3.0,
+    "lane_spread": true,
+    "max_npcs": 10,
+    "random_seed_offset": 0
+  },
+  "traffic_lights": [
+    {
+      "id": 0,
+      "x": 445.0,
+      "y_lane": -1.75,
+      "green_s": 32.0,
+      "yellow_s": 3.0,
+      "red_s": 6.0,
+      "phase_offset_s": 0.0
+    }
+  ],
+  "stop_lines": [],
+  "construction_zones": [],
+  "route": [],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 430,
+    "min_active_duration_s": 180.0,
+    "min_avg_speed_mps": 6.0,
+    "min_distance_m": 2800,
+    "parking_goal_expect": {
+      "max_pos_err_m": 0.45,
+      "max_heading_err_deg": 6.5,
+      "expected_slot_index": 2
+    }
+  },
+  "scenarios": [],
+  "choreography": {
+    "loop_period_s": 999,
+    "beats": []
+  }
+}

@@ -14,6 +14,7 @@ import {
   distanceENU, forwardENU, headingBetweenPoints, headingToRotationY,
   tangentToNormal, worldToThree,
 } from '../math/Coord.js';
+import { isGarageOrRampEdge } from '../core/Constants.js';
 import { SCENE } from '../theme/tokens.js';
 
 const PAINT_Y = 0.162;
@@ -167,7 +168,7 @@ function addCrosswalk(layout, center, heading, width) {
   layout.crosswalks++;
 }
 
-export function inferRoadFacilities(roadNetwork, entities, scenarioName = '') {
+export function inferRoadFacilities(roadNetwork, entities, scenarioName = '', options = {}) {
   const layout = {
     marks: [], poles: [], parkingBays: 0, stopLines: 0, crosswalks: 0, arrows: 0,
   };
@@ -182,6 +183,7 @@ export function inferRoadFacilities(roadNetwork, entities, scenarioName = '') {
 
   if (!hasLaneData) {
     for (const edge of edges) {
+      if (isGarageOrRampEdge(edge)) continue;
       const slots = laneArrowSlots(edge);
       for (const point of samplePolyline(roadNodes(edge), ARROW_SPACING, MAX_ARROWS_PER_EDGE)) {
         for (const slot of slots) {
@@ -218,11 +220,11 @@ export function inferRoadFacilities(roadNetwork, entities, scenarioName = '') {
     }
   }
 
-  const parkingScene = String(scenarioName).toLowerCase().includes('parking');
-  const parkingFilter = edge => parkingScene ||
-    String(edge?.name || '').toLowerCase().includes('parking');
+  const parkingScene = !options.skipParkingBays && String(scenarioName).toLowerCase().includes('parking');
+  const parkingFilter = edge => !isGarageOrRampEdge(edge) && !options.skipParkingBays && (parkingScene ||
+    String(edge?.name || '').toLowerCase().includes('parking'));
   const parkingGroups = new Map();
-  for (const vehicle of allEntities) {
+  if (!options.skipParkingBays) for (const vehicle of allEntities) {
     if (!vehicle || !['car', 'suv', 'truck'].includes(vehicle.type) ||
         Math.abs(Number(vehicle.speed) || 0) >= 0.2) continue;
     const x = Number(vehicle.x) || 0, y = Number(vehicle.y) || 0;
@@ -311,62 +313,45 @@ export function createRoadFacilityView(scene) {
     parkingPulseMesh = null;
   }
 
-  function _syncParkingGoal(store, dt = 0.016) {
-    const goal = store.parkingGoal;
-    if (!goal || !goal.enabled) {
-      parkingGoalGroup.visible = false;
-      return;
-    }
-    parkingGoalGroup.visible = true;
+  function _drawBayAnchor(targetGroup, spec) {
+    const {
+      x, y, z = 0, heading = 0, width = 2.6, length = 5.6,
+      colorHex = SCENE.parkingBox, withStopper = true, withPulse = false,
+      openFrontOnly = false,
+    } = spec;
+    const anchor = new THREE.Group();
+    const [ax, ay, az] = worldToThree(x, y, z + PAINT_Y + 0.005);
+    anchor.position.set(ax, ay, az); // Coord.worldToThree
+    anchor.rotation.y = headingToRotationY(heading);
 
-    const gx = Number(goal.x) || 0;
-    const gy = Number(goal.y) || 0;
-    const gHeading = Number(goal.heading) || 0;
-    const gWidth = Number(goal.width) || 2.4;
-    const gLength = Number(goal.length) || 5.3;
+    const boxMat = new THREE.MeshBasicMaterial({
+      color: colorHex,
+      transparent: true,
+      opacity: withPulse ? 0.92 : 0.72,
+      polygonOffset: true,
+      polygonOffsetFactor: -3,
+      polygonOffsetUnits: -6,
+    });
+    const sideGeom = new THREE.BoxGeometry(length, 0.012, LINE_W);
+    const endGeom = new THREE.BoxGeometry(LINE_W, 0.012, width);
 
-    const sig = `${gx.toFixed(2)}:${gy.toFixed(2)}:${gHeading.toFixed(3)}:${gWidth.toFixed(2)}:${gLength.toFixed(2)}`;
-    if (sig !== lastParkingSig) {
-      lastParkingSig = sig;
-      disposeGroup(parkingGoalGroup);
+    const leftLine = new THREE.Mesh(sideGeom, boxMat);
+    leftLine.position.set(0, 0, width * 0.5);
+    anchor.add(leftLine);
 
-      const anchor = new THREE.Group();
-      const [ax, ay, az] = worldToThree(gx, gy, PAINT_Y + 0.005);
-      anchor.position.set(ax, ay, az); // Coord.worldToThree
-      anchor.rotation.y = headingToRotationY(gHeading);
+    const rightLine = new THREE.Mesh(sideGeom, boxMat);
+    rightLine.position.set(0, 0, -width * 0.5);
+    anchor.add(rightLine);
 
-      // 1. 发光车位框线（左右长边 + 后沿短边 + 前沿开口引导）
-      const boxMat = new THREE.MeshBasicMaterial({
-        color: SCENE.parkingBox,
-        transparent: true,
-        opacity: 0.9,
-        polygonOffset: true,
-        polygonOffsetFactor: -3,
-        polygonOffsetUnits: -6,
-      });
-      const sideGeom = new THREE.BoxGeometry(gLength, 0.01, LINE_W);
-      const endGeom = new THREE.BoxGeometry(LINE_W, 0.01, gWidth);
+    const rearLine = new THREE.Mesh(endGeom, boxMat);
+    rearLine.position.set(-length * 0.5, 0, 0);
+    anchor.add(rearLine);
 
-      // 左侧边线
-      const leftLine = new THREE.Mesh(sideGeom, boxMat);
-      leftLine.position.set(0, 0, gWidth * 0.5);
-      anchor.add(leftLine);
-
-      // 右侧边线
-      const rightLine = new THREE.Mesh(sideGeom, boxMat);
-      rightLine.position.set(0, 0, -gWidth * 0.5);
-      anchor.add(rightLine);
-
-      // 后沿限位线
-      const rearLine = new THREE.Mesh(endGeom, boxMat);
-      rearLine.position.set(-gLength * 0.5, 0, 0);
-      anchor.add(rearLine);
-
-      // 2. 橡胶止轮器（Wheel Stopper）位于车位后沿，黄黑相间
+    if (!openFrontOnly && withStopper) {
       const stopperGroup = new THREE.Group();
       const stopperLen = 0.16;
       const stopperH = 0.11;
-      const stopperW = gWidth * 0.72;
+      const stopperW = width * 0.72;
       const rubberMat = new THREE.MeshStandardMaterial({
         color: SCENE.stopperRubber,
         roughness: 0.85,
@@ -379,7 +364,6 @@ export function createRoadFacilityView(scene) {
       stopperBody.position.set(0, stopperH * 0.5, 0);
       stopperGroup.add(stopperBody);
 
-      // 两道反光警示黄带
       const stripeMat = new THREE.MeshBasicMaterial({ color: SCENE.stopperStripe });
       const stripeGeom = new THREE.BoxGeometry(stopperLen + 0.004, stopperH + 0.004, 0.18);
       const stripeL = new THREE.Mesh(stripeGeom, stripeMat);
@@ -389,13 +373,14 @@ export function createRoadFacilityView(scene) {
       stopperGroup.add(stripeL);
       stopperGroup.add(stripeR);
 
-      stopperGroup.position.set(-gLength * 0.5 + 0.65, 0, 0);
+      stopperGroup.position.set(-length * 0.5 + 0.65, 0, 0);
       anchor.add(stopperGroup);
+    }
 
-      // 3. 呼吸脉冲入库引导面
-      const pulseGeom = new THREE.BoxGeometry(gLength * 0.96, 0.004, gWidth * 0.94);
+    if (withPulse) {
+      const pulseGeom = new THREE.BoxGeometry(length * 0.96, 0.004, width * 0.94);
       const pulseMat = new THREE.MeshBasicMaterial({
-        color: SCENE.parkingBox,
+        color: colorHex,
         transparent: true,
         opacity: 0.28,
         depthWrite: false,
@@ -406,8 +391,105 @@ export function createRoadFacilityView(scene) {
       parkingPulseMesh = new THREE.Mesh(pulseGeom, pulseMat);
       parkingPulseMesh.position.set(0, 0.002, 0);
       anchor.add(parkingPulseMesh);
+    }
 
-      parkingGoalGroup.add(anchor);
+    targetGroup.add(anchor);
+  }
+
+  function _syncParkingGoal(store, dt = 0.016) {
+    const goal = store.parkingGoal;
+    const parkOut = store.parkOut;
+    const slots = Array.isArray(store.parkingSlots) ? store.parkingSlots : [];
+    const hasGoal = Boolean(goal && goal.enabled);
+    const hasParkOut = Boolean(parkOut && parkOut.enabled);
+
+    if (!hasGoal && !hasParkOut && !slots.length) {
+      parkingGoalGroup.visible = false;
+      return;
+    }
+    parkingGoalGroup.visible = true;
+
+    const staticCars = (Array.isArray(store.entities) ? store.entities : []).filter((e) =>
+      e && ['car', 'suv', 'truck'].includes(e.type) && Math.abs(Number(e.speed) || 0) < 0.45);
+    const pd = store.planningDebug || null;
+    let selectedIdx = (pd && Number.isFinite(pd.selected_slot_index)) ? Number(pd.selected_slot_index) : -1;
+
+    const slotStates = slots.map((s) => {
+      const sx = Number(s.x) || 0;
+      const sy = Number(s.y) || 0;
+      const sz = Number(s.z) || 0;
+      const occupied = Boolean(s.occupied) || staticCars.some((c) =>
+        Math.hypot((Number(c.x) || 0) - sx, (Number(c.y) || 0) - sy) < 2.2
+        && Math.abs((Number(c.z) || 0) - sz) < 2.0);
+      return {
+        x: sx,
+        y: sy,
+        z: sz,
+        heading: Number(s.heading) || 0,
+        width: Number(s.width) || 2.8,
+        length: Number(s.length) || 6.0,
+        occupied,
+      };
+    });
+
+    if (slotStates.length && (selectedIdx < 0 || selectedIdx >= slotStates.length || slotStates[selectedIdx].occupied)) {
+      const goalIdx = hasGoal ? slotStates.findIndex((s) =>
+        !s.occupied && Math.hypot(s.x - (Number(goal.x) || 0), s.y - (Number(goal.y) || 0)) < 1.5) : -1;
+      selectedIdx = goalIdx >= 0 ? goalIdx : slotStates.findIndex((s) => !s.occupied);
+    }
+
+    const goalSig = hasGoal
+      ? `${(Number(goal.x) || 0).toFixed(2)}:${(Number(goal.y) || 0).toFixed(2)}:${(Number(goal.z) || 0).toFixed(2)}:${(Number(goal.heading) || 0).toFixed(3)}`
+      : 'nog';
+    const poSig = hasParkOut
+      ? `${(Number(parkOut.slot_x) || 0).toFixed(2)}:${(Number(parkOut.slot_y) || 0).toFixed(2)}:${(Number(parkOut.slot_z) || 0).toFixed(2)}`
+      : 'nopo';
+    const slotsSig = slotStates.map((s) => `${s.x.toFixed(1)},${s.y.toFixed(1)},${s.z.toFixed(1)},${s.occupied ? 1 : 0}`).join('|');
+    const sig = `${goalSig}#${poSig}#${selectedIdx}#${slotsSig}`;
+
+    if (sig !== lastParkingSig) {
+      lastParkingSig = sig;
+      disposeGroup(parkingGoalGroup);
+      parkingPulseMesh = null;
+
+      if (hasParkOut) {
+        _drawBayAnchor(parkingGoalGroup, {
+          x: Number(parkOut.slot_x) || 0,
+          y: Number(parkOut.slot_y) || 0,
+          z: Number(parkOut.slot_z) || 0,
+          heading: Number(parkOut.slot_heading) || 0,
+          width: 2.8,
+          length: 5.8,
+          colorHex: SCENE.parkOutBox,
+          withStopper: false,
+          withPulse: false,
+          openFrontOnly: true,
+        });
+      }
+
+      if (slotStates.length) {
+        slotStates.forEach((s, idx) => {
+          const isSel = idx === selectedIdx;
+          _drawBayAnchor(parkingGoalGroup, {
+            ...s,
+            colorHex: isSel ? SCENE.slotSelected : (s.occupied ? SCENE.slotOccupied : SCENE.slotCandidate),
+            withStopper: true,
+            withPulse: isSel,
+          });
+        });
+      } else if (hasGoal) {
+        _drawBayAnchor(parkingGoalGroup, {
+          x: Number(goal.x) || 0,
+          y: Number(goal.y) || 0,
+          z: Number(goal.z) || 0,
+          heading: Number(goal.heading) || 0,
+          width: Number(goal.width) || 2.4,
+          length: Number(goal.length) || 5.3,
+          colorHex: SCENE.parkingBox,
+          withStopper: true,
+          withPulse: true,
+        });
+      }
     }
 
     parkingPulseTime += dt;
@@ -481,7 +563,11 @@ export function createRoadFacilityView(scene) {
     lastSignature = signature;
     disposeGroup(staticGroup);
 
-    const layout = inferRoadFacilities(store.roadNetwork, fixed, store.scenarioName);
+    const hasExplicitSlots = Boolean((store.parkOut && store.parkOut.enabled)
+      || (Array.isArray(store.parkingSlots) && store.parkingSlots.length > 0));
+    const layout = inferRoadFacilities(
+      store.roadNetwork, fixed, store.scenarioName, { skipParkingBays: hasExplicitSlots }
+    );
     stats = {
       marks: layout.marks.length,
       poles: layout.poles.length,

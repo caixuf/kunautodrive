@@ -19,7 +19,7 @@
  */
 
 import { getStdMaterial } from '../core/AssetFactory.js';
-import { EDGE_TYPE } from '../core/Constants.js';
+import { EDGE_TYPE, isGarageOrRampEdge } from '../core/Constants.js';
 import { directionToRotationY } from '../math/Coord.js';
 import { computeEdgeAxis } from '../model/RoadAxis.js';
 import { getTopology } from '../model/TopologyModel.js';
@@ -69,7 +69,7 @@ export function createBarrierView(scene) {
     const upperBeamSegs = [];
     const lowerBeamSegs = [];
     for (const edge of roadNetwork.edges) {
-      if (edge.type === EDGE_TYPE.VIADUCT_HIGHWAY || edge.name === EDGE_TYPE.VIADUCT_HIGHWAY) continue;
+      if (edge.type === EDGE_TYPE.VIADUCT_HIGHWAY || edge.name === EDGE_TYPE.VIADUCT_HIGHWAY || isGarageOrRampEdge(edge)) continue;
       /* 只有高速（highway）才需要金属护栏。城市道路（urban）有路缘石 +
        * 人行道隔离，加金属护栏既不符合真实城市（路口护栏会四向交叉重叠），
        * 也让十字路口视觉一团糟。 */

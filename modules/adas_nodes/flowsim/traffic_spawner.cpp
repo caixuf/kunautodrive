@@ -22,6 +22,48 @@
 
 namespace flowsim {
 
+namespace {
+
+bool is_in_protected_parking_zone(const ScenarioConfig* sc,
+                                    double wx, double wy, double wz) {
+    if (wz < -0.35) return true;
+    if (!sc) return false;
+    if (sc->park_out.enabled) {
+        if (std::hypot(wx - sc->park_out.slot_x, wy - sc->park_out.slot_y) < 160.0 ||
+            std::hypot(wx - sc->park_out.exit_x, wy - sc->park_out.exit_y) < 140.0) {
+            return true;
+        }
+    }
+    if (sc->parking_goal.enabled &&
+        std::hypot(wx - sc->parking_goal.x, wy - sc->parking_goal.y) < 95.0) {
+        return true;
+    }
+    for (int i = 0; i < sc->parking_slot_count; ++i) {
+        const auto& ps = sc->parking_slots[i];
+        if (std::hypot(wx - ps.x, wy - ps.y) < 95.0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool is_near_surface_lot_apron(const ScenarioConfig* sc, double wx, double wy) {
+    if (!sc) return false;
+    if (sc->parking_goal.enabled &&
+        std::hypot(wx - sc->parking_goal.x, wy - sc->parking_goal.y) < 70.0) {
+        return true;
+    }
+    for (int i = 0; i < sc->parking_slot_count; ++i) {
+        const auto& ps = sc->parking_slots[i];
+        if (std::hypot(wx - ps.x, wy - ps.y) < 70.0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
 void build_npc_routes_from_scenario(TrafficSpawnerContext& ctx) {
     if (!ctx.npc_routes) return;
     ctx.npc_routes->clear();
@@ -148,6 +190,9 @@ int auto_populate_traffic_density(TrafficSpawnerContext& ctx,
                              "traffic_density: road=%d lane=%d s=%.1f miss in esmini — skip",
                              seg.road_id, lane_id, s_esmini);
                 }
+                continue;
+            }
+            if (is_in_protected_parking_zone(sc, wp.x, wp.y, wp.z)) {
                 continue;
             }
 
@@ -294,12 +339,18 @@ void step_poisson_traffic(TrafficSpawnerContext& ctx,
     const double route_total = ctx.route->total_length();
     if (route_total < 80.0) return;
 
-    /* 1. 超距动态车辆淘汰 */
+    /* 1. 超距与进入泊车围栏的动态车辆淘汰 */
     int active_dynamic_count = 0;
     for (int i = 1; i < ctx.pool->size(); ++i) {
         Entity& e = (*ctx.pool)[i];
         if (!e.active || !e.is_dynamic_traffic) continue;
         active_dynamic_count++;
+
+        if (is_near_surface_lot_apron(ctx.scenario, e.x, e.y)) {
+            ctx.pool->free(e.id);
+            active_dynamic_count--;
+            continue;
+        }
 
         double dx = e.x - ego.x;
         double dy = e.y - ego.y;
@@ -309,6 +360,8 @@ void step_poisson_traffic(TrafficSpawnerContext& ctx,
             active_dynamic_count--;
         }
     }
+
+    if (is_in_protected_parking_zone(ctx.scenario, ego.x, ego.y, ego.z)) return;
 
     /* 2. 检查配额与实体池余量 */
     if (active_dynamic_count >= ctx.poisson_max_vehicles) return;
@@ -353,6 +406,7 @@ void step_poisson_traffic(TrafficSpawnerContext& ctx,
     ctx.route->locate(s_cand, rid, s_local, ridx);
     WorldPos wp;
     if (!ctx.roads->frenet_to_world(rid, 0, s_local, 0.0, wp)) return;
+    if (is_in_protected_parking_zone(ctx.scenario, wp.x, wp.y, wp.z)) return;
 
     /* 7. 分配实体并初始化 */
     EntityType et = EntityType::Car;

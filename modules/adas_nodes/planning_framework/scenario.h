@@ -17,6 +17,7 @@ enum class ScenarioType {
     INTERSECTION   = 3,
     PARKING        = 4,
     VALET_PARKING  = 5,
+    PARK_OUT       = 6,
 };
 
 /**

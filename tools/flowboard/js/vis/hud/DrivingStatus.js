@@ -270,6 +270,68 @@ export function l3EventsInfo(eventsRaw) {
   }).filter(Boolean);
 }
 
+export function deriveP2PStatus(metrics) {
+  const m = metrics || {};
+  const scene = m.scene || {};
+  const ego = scene.ego || {};
+  const pd = m.planning_debug || {};
+  const fl = m.fusion_localization || {};
+  const locMode = typeof fl.loc_mode === 'string' ? fl.loc_mode : '';
+  let locLabel = '';
+  let locTone = TONE.IDLE;
+  if (locMode === 'SLAM_INDOOR') {
+    locLabel = 'SLAM 室内定位';
+    locTone = TONE.WARN;
+  } else if (locMode === 'GNSS_FUSION') {
+    locLabel = 'GNSS 融合定位';
+    locTone = TONE.OK;
+  }
+
+  const parkOut = scene.park_out || {};
+  const slots = Array.isArray(scene.parking_slots) ? scene.parking_slots : [];
+  const activeScenario = String(pd.active_scenario || pd.scenario || 'LANE_FOLLOW');
+  const isP2P = Boolean(parkOut.enabled || slots.length > 0 || activeScenario === 'PARK_OUT');
+
+  let stageIndex = 2;
+  let stageLabel = '城市高架';
+  if (isP2P) {
+    const egoZ = num(ego.z, 0);
+    const egoX = num(ego.x, 0);
+    const exitX = num(parkOut.exit_x, 38);
+    if (activeScenario === 'PARK_OUT' || egoZ < -3.8) {
+      stageIndex = 0;
+      stageLabel = 'B1 泊出';
+    } else if (egoZ < -0.15 || (parkOut.enabled && egoX < exitX + 225)) {
+      stageIndex = 1;
+      stageLabel = '坡道出库';
+    } else if (activeScenario === 'VALET_PARKING' || (slots.length > 0 && egoX > Number(slots[0].x || 0) - 65)) {
+      stageIndex = 3;
+      stageLabel = '地面寻位泊入';
+    } else {
+      stageIndex = 2;
+      stageLabel = '城市高架';
+    }
+  }
+
+  const selIdx = num(pd.selected_slot_index, -1);
+  let slotText = '';
+  if (slots.length > 0) {
+    slotText = (selIdx >= 0 && selIdx < slots.length)
+      ? `车位 P${selIdx + 1}/${slots.length}`
+      : `寻位 ${slots.length} 席`;
+  }
+
+  return {
+    locMode,
+    locLabel,
+    locTone,
+    isP2P,
+    stageIndex,
+    stageLabel,
+    slotText,
+  };
+}
+
 /**
  * 顶层归约：metrics → HUD 视图模型。缺字段一律降级为 null / '—'，不抛错。
  */
@@ -314,6 +376,7 @@ export function computeDrivingStatus(metrics) {
 
   const bevCount = num(m.bev && m.bev.count, null);
   const bevText = bevCount !== null ? `BEV: ${bevCount}` : '';
+  const p2p = deriveP2PStatus(m);
 
   return {
     hasData: !!(ego || m.control_debug || m.behavior || m.tor || m.odd || m.l3_events || m.planning_debug),
@@ -345,5 +408,6 @@ export function computeDrivingStatus(metrics) {
     odd: oddInfo(scene, m.odd),
     tor: torInfo(m.tor),
     l3Events: l3EventsInfo(m.l3_events),
+    p2p,
   };
 }

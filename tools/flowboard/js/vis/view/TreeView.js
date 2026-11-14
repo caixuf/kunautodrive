@@ -10,7 +10,7 @@
  */
 
 import { getStdMaterial } from '../core/AssetFactory.js';
-import { EDGE_TYPE } from '../core/Constants.js';
+import { EDGE_TYPE, isGarageOrRampEdge } from '../core/Constants.js';
 import { computeEdgeAxis } from '../model/RoadAxis.js';
 import { getTopology } from '../model/TopologyModel.js';
 import { pointInPolygonXZ } from '../math/Coord.js';
@@ -101,12 +101,13 @@ export function inferTreeSlots(roadNetwork) {
   const bandGrid = buildRoadBandGrid(roadNetwork);
 
   for (const edge of roadNetwork.edges) {
-    if (edge.type === EDGE_TYPE.VIADUCT_HIGHWAY || edge.name === EDGE_TYPE.VIADUCT_HIGHWAY) continue;
+    if (edge.type === EDGE_TYPE.VIADUCT_HIGHWAY || edge.name === EDGE_TYPE.VIADUCT_HIGHWAY || isGarageOrRampEdge(edge)) continue;
 
     /* 共享路轴（单一事实源）：road.centerline 是最左车道左缘，须由 computeEdgeAxis
      * 推导 TRUE 中心 spine + 车道组半宽。家具相对 TRUE 中心偏移，才不会压路 /
      * 与 RoadView 错位（此前各视图各自从 edge.nodes 建 spine、按 lane count 估半宽，
      * 路整体左偏、树/灯落于沥青上）。lane_data 缺失时 fromLanes=false、居中回退。 */
+    if (edge.type === 11 || edge.type === 12 || edge.type === 'open_ramp' || edge.type === 'garage_hall') continue;
     const axis = computeEdgeAxis(edge, roadNetwork.lane_data);
     if (!axis.ok || axis.spine.length < 2) continue;
     const spine = axis.spine;
@@ -124,6 +125,7 @@ export function inferTreeSlots(roadNetwork) {
       if (j >= spine.length) j = spine.length - 1;
       const s = spine[j];
       for (const side of [-1, 1]) {
+        if (edge.name === 'surface_lot_avenue' && s.px >= 3200 && s.px <= 3250) continue; // 地面停车场泊位区段不种行道树
         const x = s.px + s.nx * (halfWidth + TREE_OFFSET) * side;
         const z = s.pz + s.nz * (halfWidth + TREE_OFFSET) * side;
         if (nearJunction(x, z)) continue;   // 路口避让

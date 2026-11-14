@@ -109,6 +109,7 @@ struct ActorDigest {
     int    route_dir;           // 行驶方向
     uint32_t last_teleport_cycle;  // 最近一次被显式传送的 cycle（choreography/recycle）
     double yaw_rate;               // 偏航角速度 (rad/s), 用于 yaw 阻尼项
+    bool   parked_fixed{false};    // 静态停放车位占位车辆
 };
 
 struct DynamicDigest {

@@ -14,7 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ok, eq, done } from './test-utils.mjs';
 import {
-  behaviorInfo, controlModeInfo, findLeadVehicle, ttcRisk, oddInfo, torInfo, computeDrivingStatus,
+  behaviorInfo, controlModeInfo, findLeadVehicle, ttcRisk, oddInfo, torInfo, deriveP2PStatus, computeDrivingStatus,
 } from '../tools/flowboard/js/vis/hud/DrivingStatus.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -251,5 +251,59 @@ ok('app.js binds shortcut I', app.includes("key === 'i'") && app.includes('toggl
 ok('app.js honors ?hud=0', app.includes("params.get('hud') === '0'"));
 ok('CSS hides HUD in manual game mode', css.includes('#game-hud.active~#drive-hud'));
 ok('module uses Coord.forwardENU (no raw Math.sin/cos)', mod.includes("from '../math/Coord.js'") && !/Math\.(sin|cos)\(/.test(mod));
+
+console.log('\n=== driving HUD: deriveP2PStatus & modern-web HUD ===\n');
+
+{
+  const nonP2p = deriveP2PStatus({ scene: { ego: egoEast }, planning_debug: { active_scenario: 'LANE_FOLLOW' } });
+  eq('non-P2P scene sets isP2P=false', nonP2p.isP2P, false);
+  eq('missing loc_mode yields empty label', nonP2p.locLabel, '');
+
+  const p2pB1 = deriveP2PStatus({
+    scene: {
+      ego: { x: 10, y: 0, z: -4.5 },
+      park_out: { enabled: true, exit_x: 38 },
+      parking_slots: [{ x: 3222, occupied: true }, { x: 3230.5, occupied: true }, { x: 3239.15, occupied: false }],
+    },
+    fusion_localization: { loc_mode: 'SLAM_INDOOR' },
+    planning_debug: { active_scenario: 'PARK_OUT', selected_slot_index: 2 },
+  });
+  eq('P2P enabled when park_out/parking_slots present', p2pB1.isP2P, true);
+  eq('SLAM_INDOOR locLabel', p2pB1.locLabel, 'SLAM 室内定位');
+  eq('B1 park-out stageIndex = 0', p2pB1.stageIndex, 0);
+  eq('selected slot text reflects P3/3', p2pB1.slotText, '车位 P3/3');
+
+  const p2pRamp = deriveP2PStatus({
+    scene: {
+      ego: { x: 180, y: 0, z: -2.0 },
+      park_out: { enabled: true, exit_x: 38 },
+      parking_slots: [{ x: 3222, occupied: false }],
+    },
+    fusion_localization: { loc_mode: 'GNSS_FUSION' },
+    planning_debug: { active_scenario: 'LANE_FOLLOW', selected_slot_index: -1 },
+  });
+  eq('GNSS_FUSION locLabel', p2pRamp.locLabel, 'GNSS 融合定位');
+  eq('open ramp stageIndex = 1', p2pRamp.stageIndex, 1);
+
+  const p2pValet = deriveP2PStatus({
+    scene: {
+      ego: { x: 3210, y: 0, z: 0 },
+      park_out: { enabled: true, exit_x: 38 },
+      parking_slots: [{ x: 3222, occupied: true }, { x: 3230.5, occupied: true }, { x: 3239.15, occupied: false }],
+    },
+    fusion_localization: { loc_mode: 'GNSS_FUSION' },
+    planning_debug: { active_scenario: 'VALET_PARKING', selected_slot_index: 2 },
+  });
+  eq('surface park-in stageIndex = 3', p2pValet.stageIndex, 3);
+  eq('surface park-in stageLabel', p2pValet.stageLabel, '地面寻位泊入');
+}
+
+for (const id of ['dh-loc-mode', 'dh-p2p-stages']) {
+  ok('index.html has P2P HUD #' + id, html.includes('id="' + id + '"'));
+}
+ok('CSS applies contain: layout style & tabular-nums to HUD',
+  /contain:\s*layout style/.test(css) && /font-variant-numeric:\s*tabular-nums/.test(css));
+ok('app.js dirty-checks HUD text/classes/widths',
+  app.includes('_ldSet') && app.includes('_dhChip') && app.includes('_dhWidth'));
 
 done();

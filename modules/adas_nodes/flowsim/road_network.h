@@ -26,6 +26,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace flowsim {
@@ -52,6 +53,7 @@ struct FrenetPos {
 struct RoadInfo {
     uint32_t id{0};          /**< 数值 id（RM 内部用） */
     std::string str_id;      /**< 字符串 id（xodr 里写的 id 属性） */
+    std::string name;        /**< 道路名称（xodr 里写的 name 属性，如 garage_hall/open_ramp/urban） */
     double length{0.0};      /**< 道路总长 (m) */
     int    drivable_lanes{0};/**< 可行驶车道数（在 s=0 处统计） */
 };
@@ -183,6 +185,7 @@ public:
 private:
     bool loaded_{false};
     int  pos_handle_{-1};  /**< RM position handle，构造时创建 */
+    std::unordered_map<std::string, std::string> road_names_;
 };
 
 }  // namespace flowsim

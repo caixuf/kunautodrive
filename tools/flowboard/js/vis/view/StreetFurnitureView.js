@@ -10,6 +10,7 @@
  */
 
 import { getStdMaterial, getCylinder, getBox } from '../core/AssetFactory.js';
+import { isGarageOrRampEdge } from '../core/Constants.js';
 import { getTopology } from '../model/TopologyModel.js';
 import { directionToRotationY, tangentToNormal, offsetAlongNormal } from '../math/Coord.js';
 
@@ -51,6 +52,7 @@ export function createStreetFurnitureView(scene) {
     const edges = Array.isArray(roadNetwork.edges) ? roadNetwork.edges : [];
     for (let ei = 0; ei < edges.length; ei++) {
       const edge = edges[ei];
+      if (isGarageOrRampEdge(edge)) continue;
       const nodes = Array.isArray(edge.nodes) ? edge.nodes : [];
       if (nodes.length < 2) continue;
       const lanes = edge.lanes || 2;

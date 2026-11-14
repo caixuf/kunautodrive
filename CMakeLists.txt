@@ -1332,6 +1332,7 @@ add_executable(test_scenario_pipeline
     modules/adas_nodes/planning_framework/lane_follow_scenario.cpp
     modules/adas_nodes/planning_framework/emergency_stop_scenario.cpp
     modules/adas_nodes/planning_framework/valet_parking_scenario.cpp
+    modules/adas_nodes/planning_framework/park_out_scenario.cpp
     modules/adas_nodes/planning_framework/open_space/box2d.cpp
     modules/adas_nodes/planning_framework/open_space/reeds_shepp_path.cpp
     modules/adas_nodes/planning_framework/open_space/grid_search.cpp
@@ -1348,6 +1349,28 @@ target_include_directories(test_scenario_pipeline PRIVATE
 target_link_libraries(test_scenario_pipeline m)
 add_test(NAME scenario_pipeline_tests COMMAND test_scenario_pipeline)
 set_tests_properties(scenario_pipeline_tests PROPERTIES TIMEOUT 10)
+
+add_executable(test_park_out_and_slot_search
+    tests/test_park_out_and_slot_search.cpp
+    modules/adas_nodes/planning_framework/scenario_manager.cpp
+    modules/adas_nodes/planning_framework/valet_parking_scenario.cpp
+    modules/adas_nodes/planning_framework/park_out_scenario.cpp
+    modules/adas_nodes/planning_framework/open_space/box2d.cpp
+    modules/adas_nodes/planning_framework/open_space/reeds_shepp_path.cpp
+    modules/adas_nodes/planning_framework/open_space/grid_search.cpp
+    modules/adas_nodes/planning_framework/open_space/hybrid_a_star.cpp
+)
+target_include_directories(test_park_out_and_slot_search PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/adas_nodes
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/adas_nodes/planning_framework
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/adas_nodes/planning_framework/open_space
+    ${CMAKE_BINARY_DIR}/gen
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(test_park_out_and_slot_search m)
+add_test(NAME park_out_and_slot_search_tests COMMAND test_park_out_and_slot_search)
+set_tests_properties(park_out_and_slot_search_tests PROPERTIES TIMEOUT 15)
 
 # ── Hybrid A* 与 Reeds-Shepp 自由空间规划器单元与性能测试 (Milestone 2) ──
 add_executable(test_hybrid_a_star

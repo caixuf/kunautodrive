@@ -195,7 +195,9 @@ export function createETCGateView(scene) {
         entry = _createETCGate();
         pool.set(ent.id, entry);
       }
-      const z = roadHeightAt(store, ent.x, ent.y);
+      const z = (typeof ent.z === 'number' && Number.isFinite(ent.z))
+        ? ent.z
+        : roadHeightAt(store, ent.x, ent.y);
       entry.group.position.set(...worldToThree(ent.x || 0, ent.y || 0, z));
       entry.group.rotation.y = headingToRotationY(ent.heading || 0);
       _setBoomState(entry, ent.state);

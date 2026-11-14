@@ -314,6 +314,8 @@ static struct {
     char   scene_construction_json[1024]; /* construction_zones（施工区几何，后端单一事实源，透传给前端） */
     char   scene_friction_json[2048];     /* friction_zones（局部湿滑摩擦区，透传给前端贴花） */
     char   scene_parking_goal_json[512];  /* parking_goal（开放空间泊车目标车位，透传给前端框线渲染） */
+    char   scene_park_out_json[512];      /* park_out（B1/起步泊出目标） */
+    char   scene_parking_slots_json[2048];/* parking_slots（地面停车场多候选车位数组） */
     char   scene_scenario_name[64]; /* 场景语义名，供前端选择专属设施 */
     char   scene_lighting[16];
     char   scene_weather[16];
@@ -887,6 +889,46 @@ static void on_scene_frame(const Message* msg, void* user_data) {
         pthread_mutex_unlock(&g.scene_frame_mutex);
     }
 
+    cJSON* po = cJSON_GetObjectItem(root, "park_out");
+    if (po && cJSON_IsObject(po)) {
+        char* po_str = cJSON_PrintUnformatted(po);
+        if (po_str) {
+            size_t len = strlen(po_str);
+            if (len >= sizeof(g.scene_park_out_json)) {
+                len = sizeof(g.scene_park_out_json) - 1;
+            }
+            pthread_mutex_lock(&g.scene_frame_mutex);
+            memcpy(g.scene_park_out_json, po_str, len);
+            g.scene_park_out_json[len] = '\0';
+            pthread_mutex_unlock(&g.scene_frame_mutex);
+            free(po_str);
+        }
+    } else {
+        pthread_mutex_lock(&g.scene_frame_mutex);
+        g.scene_park_out_json[0] = '\0';
+        pthread_mutex_unlock(&g.scene_frame_mutex);
+    }
+
+    cJSON* pslots = cJSON_GetObjectItem(root, "parking_slots");
+    if (pslots && cJSON_IsArray(pslots)) {
+        char* ps_str = cJSON_PrintUnformatted(pslots);
+        if (ps_str) {
+            size_t len = strlen(ps_str);
+            if (len >= sizeof(g.scene_parking_slots_json)) {
+                len = sizeof(g.scene_parking_slots_json) - 1;
+            }
+            pthread_mutex_lock(&g.scene_frame_mutex);
+            memcpy(g.scene_parking_slots_json, ps_str, len);
+            g.scene_parking_slots_json[len] = '\0';
+            pthread_mutex_unlock(&g.scene_frame_mutex);
+            free(ps_str);
+        }
+    } else {
+        pthread_mutex_lock(&g.scene_frame_mutex);
+        g.scene_parking_slots_json[0] = '\0';
+        pthread_mutex_unlock(&g.scene_frame_mutex);
+    }
+
     /* NOA Phase 2.2: 透传完整 entities 数组（不再过滤类型）。
      * 前端 vis/main.js 按 type 分发渲染：ego/NPC/pedestrian/tl/etc_gate/stop_line，
      * scn.obstacles (vehicle/state) 作为旧场景 fallback。
@@ -1098,7 +1140,7 @@ static void on_fusion_localization(const Message* msg, void* user_data) {
     if (!src) return;
     cJSON* out = cJSON_CreateObject();
     static const char* keys[] = {
-        "loc_trustworthy", "loc_critical", "loc_reasons",
+        "loc_trustworthy", "loc_critical", "loc_reasons", "loc_mode",
         "gated_count", "gated_ratio", "diverged", "innovation",
         "cov_xx", "cov_yy", "cov_vv", "cov_hh", "cov_yyaw",
     };
@@ -1876,6 +1918,36 @@ static void export_dashboard_json(void) {
         cJSON* pg = monitor_cJSON_Parse(pg_snap);
         if (pg) {
             cJSON_AddItemToObject(scene, "parking_goal", pg);
+        }
+    }
+
+    if (g.has_scene_frame && g.scene_park_out_json[0] != '\0') {
+        char po_snap[sizeof(g.scene_park_out_json)];
+        size_t po_snap_len;
+        pthread_mutex_lock(&g.scene_frame_mutex);
+        po_snap_len = strlen(g.scene_park_out_json);
+        if (po_snap_len >= sizeof(po_snap)) po_snap_len = sizeof(po_snap) - 1;
+        memcpy(po_snap, g.scene_park_out_json, po_snap_len);
+        po_snap[po_snap_len] = '\0';
+        pthread_mutex_unlock(&g.scene_frame_mutex);
+        cJSON* po = monitor_cJSON_Parse(po_snap);
+        if (po) {
+            cJSON_AddItemToObject(scene, "park_out", po);
+        }
+    }
+
+    if (g.has_scene_frame && g.scene_parking_slots_json[0] != '\0') {
+        char ps_snap[sizeof(g.scene_parking_slots_json)];
+        size_t ps_snap_len;
+        pthread_mutex_lock(&g.scene_frame_mutex);
+        ps_snap_len = strlen(g.scene_parking_slots_json);
+        if (ps_snap_len >= sizeof(ps_snap)) ps_snap_len = sizeof(ps_snap) - 1;
+        memcpy(ps_snap, g.scene_parking_slots_json, ps_snap_len);
+        ps_snap[ps_snap_len] = '\0';
+        pthread_mutex_unlock(&g.scene_frame_mutex);
+        cJSON* ps = monitor_cJSON_Parse(ps_snap);
+        if (ps) {
+            cJSON_AddItemToObject(scene, "parking_slots", ps);
         }
     }
 

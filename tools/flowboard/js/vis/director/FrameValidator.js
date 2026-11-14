@@ -216,6 +216,19 @@ export function validateFrame(topoData) {
       msg: 'frame.parking_goal 非对象: ' + _typeOf(frame.parking_goal),
     });
   }
+  if (frame.park_out !== undefined && frame.park_out !== null &&
+      (typeof frame.park_out !== 'object' || Array.isArray(frame.park_out))) {
+    warnings.push({
+      key: 'park_out.type',
+      msg: 'frame.park_out 非对象: ' + _typeOf(frame.park_out),
+    });
+  }
+  if (frame.parking_slots !== undefined && !Array.isArray(frame.parking_slots)) {
+    warnings.push({
+      key: 'parking_slots.type',
+      msg: 'frame.parking_slots 非数组: ' + _typeOf(frame.parking_slots),
+    });
+  }
 
   let skipEntities = false;
   if (frame.entities !== undefined) {
@@ -417,6 +430,30 @@ export function validateSceneFrame(raw) {
     }
   }
 
+  let park_out = null;
+  if (frame.park_out !== undefined) {
+    if (frame.park_out === null || (typeof frame.park_out === 'object' && !Array.isArray(frame.park_out))) {
+      park_out = frame.park_out;
+    } else {
+      warnings.push({
+        key: 'park_out.type',
+        msg: 'frame.park_out 非对象: ' + _typeOf(frame.park_out),
+      });
+    }
+  }
+
+  let parking_slots = [];
+  if (frame.parking_slots !== undefined) {
+    if (Array.isArray(frame.parking_slots)) {
+      parking_slots = frame.parking_slots;
+    } else {
+      warnings.push({
+        key: 'parking_slots.type',
+        msg: 'frame.parking_slots 非数组: ' + _typeOf(frame.parking_slots),
+      });
+    }
+  }
+
   let cleanEgo = null;
   if (frame.ego && typeof frame.ego === 'object') {
     cleanEgo = {
@@ -434,6 +471,8 @@ export function validateSceneFrame(raw) {
     predictions,
     friction_zones,
     parking_goal,
+    park_out,
+    parking_slots,
   };
 
   return {

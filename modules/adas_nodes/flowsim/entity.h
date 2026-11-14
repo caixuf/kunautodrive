@@ -191,6 +191,7 @@ struct Entity {
     /* ── 行人专用 ── */
     double ped_wait_timer{0};      /**< 行人等待计时器 (s) */
     int    ped_parked{0};          /**< 行人是否停在路边 */
+    bool   parked_fixed{false};    /**< 静态停放车辆（固定在车位/路边，不参与路网推进） */
 
     /* ── 场景事件触发器专用 ── */
     int    phase_state{0};         /**< 红绿灯当前相位：0=绿 1=黄 2=红 */

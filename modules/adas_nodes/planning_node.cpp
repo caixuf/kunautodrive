@@ -63,6 +63,7 @@
 #include "planning_framework/lane_follow_scenario.h"
 #include "planning_framework/emergency_stop_scenario.h"
 #include "planning_framework/valet_parking_scenario.h"
+#include "planning_framework/park_out_scenario.h"
 #include "planning_uturn.h"
 
 namespace {
@@ -131,7 +132,7 @@ struct PlanningContext {
     /* 从 fusion/localization 或 vehicle/state 解析的最新状态。
      * vehicle/state（flowsim 真值）优先于 fusion/localization（EKF 估计），
      * 当 vehicle/state 近期到达时 on_fusion 不覆盖，避免 EKF 发散污染 ego 状态。 */
-    double ego_x{0}, ego_y{0}, ego_v{0}, ego_heading{0};
+    double ego_x{0}, ego_y{0}, ego_z{0}, ego_v{0}, ego_heading{0};
     /* 车参单一事实源 = 场景 ego 块（flowsim 随 vehicle/state 广播，on_vehicle_state 同步）。
      * 旧硬编码 2.8 与 physics 2.7 差 3.7% 导致掉头轨迹漂移（2026-08 修复）。 */
     double wheelbase{2.7};
@@ -324,8 +325,19 @@ struct PlanningContext {
     flowengine::planning::ScenarioManager       scenario_manager;
     flowengine::planning::LaneFollowScenario    lane_follow_scenario;
     flowengine::planning::EmergencyStopScenario emergency_stop_scenario;
+    flowengine::planning::ParkOutScenario       park_out_scenario;
     flowengine::planning::ValetParkingScenario  valet_parking_scenario;
     flowengine::planning::ParkingGoal           parking_goal;
+    flowengine::planning::ParkOutGoal           park_out;
+    std::array<flowengine::planning::ParkingGoal, flowengine::planning::FrameContext::kMaxParkingSlots> parking_slots{};
+    size_t                                      parking_slot_count{0};
+    int                                         selected_slot_index{-1};
+    flowengine::planning::ParkingGoal           active_parking_goal{};
+    static constexpr int kMaxSceneVeh = 64;
+    double scene_veh_x[kMaxSceneVeh]{}, scene_veh_y[kMaxSceneVeh]{}, scene_veh_z[kMaxSceneVeh]{};
+    double scene_veh_h[kMaxSceneVeh]{}, scene_veh_vx[kMaxSceneVeh]{}, scene_veh_vy[kMaxSceneVeh]{};
+    double scene_veh_len[kMaxSceneVeh]{}, scene_veh_wid[kMaxSceneVeh]{};
+    int    scene_veh_count{0};
     std::string active_scenario_name{"LANE_FOLLOW"};
     std::string active_stage_name{"CRUISE"};
 };
@@ -753,6 +765,8 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
         g.ego_x = j->valuedouble;
     if ((j = cJSON_GetObjectItem(root, "y")) && cJSON_IsNumber(j))
         g.ego_y = j->valuedouble;
+    if ((j = cJSON_GetObjectItem(root, "z")) && cJSON_IsNumber(j))
+        g.ego_z = j->valuedouble;
     if ((j = cJSON_GetObjectItem(root, "spd")) && cJSON_IsNumber(j))
         g.ego_v = j->valuedouble;
     if ((j = cJSON_GetObjectItem(root, "hdg")) && cJSON_IsNumber(j))
@@ -839,6 +853,85 @@ static void on_perception_obstacles(const Message* msg, void* user_data) {
     g.has_vstate = 1;
 }
 
+static void sync_parking_metadata_from_json(const cJSON* root) {
+    if (!root) return;
+    cJSON* jpg = cJSON_GetObjectItem(root, "parking_goal");
+    if (jpg && cJSON_IsObject(jpg)) {
+        g.parking_goal.enabled = true;
+        cJSON* j = cJSON_GetObjectItem(jpg, "enabled");
+        if (j && cJSON_IsBool(j)) g.parking_goal.enabled = cJSON_IsTrue(j);
+        j = cJSON_GetObjectItem(jpg, "x");
+        if (j && cJSON_IsNumber(j)) g.parking_goal.x = j->valuedouble;
+        j = cJSON_GetObjectItem(jpg, "y");
+        if (j && cJSON_IsNumber(j)) g.parking_goal.y = j->valuedouble;
+        j = cJSON_GetObjectItem(jpg, "z");
+        if (j && cJSON_IsNumber(j)) g.parking_goal.z = j->valuedouble;
+        j = cJSON_GetObjectItem(jpg, "heading");
+        if (j && cJSON_IsNumber(j)) g.parking_goal.heading = j->valuedouble;
+        j = cJSON_GetObjectItem(jpg, "width");
+        g.parking_goal.width = (j && cJSON_IsNumber(j)) ? j->valuedouble : 2.8;
+        j = cJSON_GetObjectItem(jpg, "length");
+        g.parking_goal.length = (j && cJSON_IsNumber(j)) ? j->valuedouble : 6.0;
+    }
+
+    cJSON* jpo = cJSON_GetObjectItem(root, "park_out");
+    if (jpo && cJSON_IsObject(jpo)) {
+        g.park_out.enabled = true;
+        cJSON* j = cJSON_GetObjectItem(jpo, "enabled");
+        if (j && cJSON_IsBool(j)) g.park_out.enabled = cJSON_IsTrue(j);
+        j = cJSON_GetObjectItem(jpo, "slot_x");
+        if (j && cJSON_IsNumber(j)) g.park_out.slot_x = j->valuedouble;
+        j = cJSON_GetObjectItem(jpo, "slot_y");
+        if (j && cJSON_IsNumber(j)) g.park_out.slot_y = j->valuedouble;
+        j = cJSON_GetObjectItem(jpo, "slot_z");
+        if (j && cJSON_IsNumber(j)) g.park_out.slot_z = j->valuedouble;
+        j = cJSON_GetObjectItem(jpo, "slot_heading");
+        if (j && cJSON_IsNumber(j)) g.park_out.slot_heading = j->valuedouble;
+        j = cJSON_GetObjectItem(jpo, "exit_x");
+        if (j && cJSON_IsNumber(j)) g.park_out.exit_x = j->valuedouble;
+        j = cJSON_GetObjectItem(jpo, "exit_y");
+        if (j && cJSON_IsNumber(j)) g.park_out.exit_y = j->valuedouble;
+        j = cJSON_GetObjectItem(jpo, "exit_z");
+        if (j && cJSON_IsNumber(j)) g.park_out.exit_z = j->valuedouble;
+        j = cJSON_GetObjectItem(jpo, "exit_heading");
+        if (j && cJSON_IsNumber(j)) g.park_out.exit_heading = j->valuedouble;
+        j = cJSON_GetObjectItem(jpo, "corridor_width");
+        g.park_out.corridor_width = (j && cJSON_IsNumber(j)) ? j->valuedouble : 6.0;
+    }
+
+    cJSON* jslots = cJSON_GetObjectItem(root, "parking_slots");
+    if (jslots && cJSON_IsArray(jslots)) {
+        size_t idx = 0;
+        cJSON* slot_item = nullptr;
+        cJSON_ArrayForEach(slot_item, jslots) {
+            if (!cJSON_IsObject(slot_item) ||
+                idx >= flowengine::planning::FrameContext::kMaxParkingSlots) {
+                break;
+            }
+            flowengine::planning::ParkingGoal slot{};
+            slot.enabled = true;
+            cJSON* jf = cJSON_GetObjectItem(slot_item, "x");
+            if (jf && cJSON_IsNumber(jf)) slot.x = jf->valuedouble;
+            jf = cJSON_GetObjectItem(slot_item, "y");
+            if (jf && cJSON_IsNumber(jf)) slot.y = jf->valuedouble;
+            jf = cJSON_GetObjectItem(slot_item, "z");
+            if (jf && cJSON_IsNumber(jf)) slot.z = jf->valuedouble;
+            jf = cJSON_GetObjectItem(slot_item, "heading");
+            if (jf && cJSON_IsNumber(jf)) slot.heading = jf->valuedouble;
+            jf = cJSON_GetObjectItem(slot_item, "width");
+            slot.width = (jf && cJSON_IsNumber(jf)) ? jf->valuedouble : 2.8;
+            jf = cJSON_GetObjectItem(slot_item, "length");
+            slot.length = (jf && cJSON_IsNumber(jf)) ? jf->valuedouble : 6.0;
+            g.parking_slots[idx++] = slot;
+        }
+        g.parking_slot_count = idx;
+    }
+
+    if (g.park_out.enabled || g.parking_goal.enabled || g.parking_slot_count > 0) {
+        g.scenario_manager.SetDebounceThreshold(1);
+    }
+}
+
 /* ── road/geometry 订阅回调（Phase 2 统一道路几何） ─────────── */
 /* 从 flowsim_node 发布的 road/geometry topic 获取弯道参数，
  * 替代此前从 scenario_load() 读取弯道的冗余方式。
@@ -870,22 +963,7 @@ static void on_road_geometry(const Message* msg, void* user_data) {
         if ((item = cJSON_GetObjectItem(root, "oneway")) && cJSON_IsNumber(item)) {
             g.road_oneway = (item->valuedouble != 0.0) ? 1 : 0;
         }
-        cJSON* jpg = cJSON_GetObjectItem(root, "parking_goal");
-        if (jpg && cJSON_IsObject(jpg)) {
-            g.parking_goal.enabled = true;
-            cJSON* j = cJSON_GetObjectItem(jpg, "enabled");
-            if (j && cJSON_IsBool(j)) g.parking_goal.enabled = cJSON_IsTrue(j);
-            j = cJSON_GetObjectItem(jpg, "x");
-            if (j && cJSON_IsNumber(j)) g.parking_goal.x = j->valuedouble;
-            j = cJSON_GetObjectItem(jpg, "y");
-            if (j && cJSON_IsNumber(j)) g.parking_goal.y = j->valuedouble;
-            j = cJSON_GetObjectItem(jpg, "heading");
-            if (j && cJSON_IsNumber(j)) g.parking_goal.heading = j->valuedouble;
-            j = cJSON_GetObjectItem(jpg, "width");
-            g.parking_goal.width = (j && cJSON_IsNumber(j)) ? j->valuedouble : 2.8;
-            j = cJSON_GetObjectItem(jpg, "length");
-            g.parking_goal.length = (j && cJSON_IsNumber(j)) ? j->valuedouble : 6.0;
-        }
+        sync_parking_metadata_from_json(root);
         cJSON_Delete(root);
     } else {
         LOG_WARN("planning", "[RG] cJSON_Parse FAILED");
@@ -1177,9 +1255,12 @@ static void on_scene_frame(const Message* msg, void* user_data) {
     /* 施工区：始终解析（掉头可通行域不依赖 merge 状态 / 感知链路） */
     g.cz_count = construction_zones_parse_from_scene_root(
         root, g.cz_x, g.cz_y, g.cz_len, g.cz_wid, g.kMaxCz);
+    sync_parking_metadata_from_json(root);
 
-    if (g.route_type != ROUTE_MERGE) {
-        /* 非 merge：施工区已更新，跳过 entities 解析（省 CPU） */
+    const bool need_parking_entities =
+        (g.park_out.enabled || g.parking_goal.enabled || g.parking_slot_count > 0);
+    if (g.route_type != ROUTE_MERGE && !need_parking_entities) {
+        /* 非 merge 且非泊车：施工区已更新，跳过 entities 解析（省 CPU） */
         g.has_scene_frame = 1;
         cJSON_Delete(root);
         return;
@@ -1196,6 +1277,7 @@ static void on_scene_frame(const Message* msg, void* user_data) {
     double ego_x = g.ego_x, ego_y = g.ego_y;
     const double MAINLINE_Y_TOL = 6.0;   /* 主路 y 容差(m) */
     const double SAMEDIR_VX_MIN = 2.0;   /* 同向最低速度(m/s) */
+    int veh_idx = 0;
 
     cJSON* ent;
     cJSON_ArrayForEach(ent, entities) {
@@ -1210,6 +1292,24 @@ static void on_scene_frame(const Message* msg, void* user_data) {
         if (!cJSON_IsNumber(jx) || !cJSON_IsNumber(jy) || !cJSON_IsNumber(jvx)) continue;
 
         double ex = jx->valuedouble, ey = jy->valuedouble, evx = jvx->valuedouble;
+        if (need_parking_entities && veh_idx < g.kMaxSceneVeh) {
+            cJSON* jz = cJSON_GetObjectItem(ent, "z");
+            cJSON* jh = cJSON_GetObjectItem(ent, "heading");
+            cJSON* jvy = cJSON_GetObjectItem(ent, "vy");
+            cJSON* jlen = cJSON_GetObjectItem(ent, "length");
+            cJSON* jwid = cJSON_GetObjectItem(ent, "width");
+            g.scene_veh_x[veh_idx] = ex;
+            g.scene_veh_y[veh_idx] = ey;
+            g.scene_veh_z[veh_idx] = cJSON_IsNumber(jz) ? jz->valuedouble : 0.0;
+            g.scene_veh_h[veh_idx] = cJSON_IsNumber(jh) ? jh->valuedouble : 0.0;
+            g.scene_veh_vx[veh_idx] = evx;
+            g.scene_veh_vy[veh_idx] = cJSON_IsNumber(jvy) ? jvy->valuedouble : 0.0;
+            g.scene_veh_len[veh_idx] = cJSON_IsNumber(jlen) ? jlen->valuedouble : OBSTACLE_LENGTH_M;
+            g.scene_veh_wid[veh_idx] = cJSON_IsNumber(jwid) ? jwid->valuedouble : OBSTACLE_WIDTH_M;
+            veh_idx++;
+        }
+
+        if (g.route_type != ROUTE_MERGE) continue;
         if (evx < SAMEDIR_VX_MIN) continue;                 /* 仅同向来车 */
         if (fabs(ey - ego_y) > MAINLINE_Y_TOL) continue;    /* 仅主路 y 范围 */
 
@@ -1217,10 +1317,15 @@ static void on_scene_frame(const Message* msg, void* user_data) {
         if (dx > 0.0 && dx < gap_front) gap_front = dx;
         else if (dx < 0.0 && -dx < gap_rear) gap_rear = -dx;
     }
+    if (need_parking_entities) {
+        g.scene_veh_count = veh_idx;
+    }
     cJSON_Delete(root);
 
-    g.merge_gap_front = gap_front;
-    g.merge_gap_rear  = gap_rear;
+    if (g.route_type == ROUTE_MERGE) {
+        g.merge_gap_front = gap_front;
+        g.merge_gap_rear  = gap_rear;
+    }
     g.has_scene_frame = 1;
 }
 
@@ -1917,9 +2022,11 @@ protected:
                         (g.lane_match.last_us != 0) &&
                         (now_us - g.lane_match.last_us < 500000ULL) &&
                         (fabs(g.lane_match.llt_offset) <= max_lane_offset_m);
-                    if (lane_match_fresh) {
+                    const double max_road_d = n_lanes * 0.5 * lane_w - 0.5;
+                    const double llt_target_d = ego_lane_d - g.lane_match.llt_offset;
+                    if (lane_match_fresh && fabs(llt_target_d) <= max_road_d) {
                         /* 真消费：不再经 nearest_lane / lane_center_offset 取整 */
-                        g.target_lane_offset = ego_lane_d - g.lane_match.llt_offset;
+                        g.target_lane_offset = llt_target_d;
                         /* committed 仅作诊断/滞回；横向目标已是 lanelet 中心 */
                         const int cand_lane = planning_coord::nearest_lane(
                             g.target_lane_offset, n_lanes, lane_w,
@@ -1969,32 +2076,78 @@ protected:
                 (void)project_to_reference_path(g.ego_x, g.ego_y, ego_ref_s, ego_ref_d);
             }
 
-            /* ── Scenario-Stage-Task: 开放空间泊车场景 (ValetParkingScenario) ── */
-            if (g.parking_goal.enabled) {
+            /* ── Scenario-Stage-Task: 泊出 / 开放空间多车位泊车场景 ── */
+            if (g.park_out.enabled || g.parking_goal.enabled || g.parking_slot_count > 0) {
                 flowengine::planning::FrameContext fctx;
                 fctx.seq = g.plan_count;
                 fctx.timestamp_us = clock_now_us();
                 fctx.vehicle_state.x = g.ego_x;
                 fctx.vehicle_state.y = g.ego_y;
+                fctx.vehicle_state.z = g.ego_z;
                 fctx.vehicle_state.v = g.ego_v;
                 fctx.vehicle_state.heading = g.ego_heading;
                 fctx.vehicle_state.wheelbase = g.wheelbase;
                 fctx.parking_goal = g.parking_goal;
+                fctx.park_out = g.park_out;
+                fctx.parking_slot_count = g.parking_slot_count;
+                for (size_t si = 0; si < g.parking_slot_count && si < fctx.parking_slots.size(); ++si) {
+                    fctx.parking_slots[si] = g.parking_slots[si];
+                }
+
+                bool matched_scene_veh[PlanningContext::kMaxSceneVeh]{};
                 for (int i = 0; i < g.obs_count && i < 128; ++i) {
+                    int match_idx = -1;
+                    double best_d2 = 4.0;  /* 2m 匹配半径 */
+                    for (int s = 0; s < g.scene_veh_count; ++s) {
+                        double dx = g.obs_x[i] - g.scene_veh_x[s];
+                        double dy = g.obs_y[i] - g.scene_veh_y[s];
+                        double d2 = dx * dx + dy * dy;
+                        if (d2 < best_d2) {
+                            best_d2 = d2;
+                            match_idx = s;
+                        }
+                    }
+                    if (match_idx >= 0 && std::fabs(g.scene_veh_z[match_idx] - g.ego_z) > 2.5) {
+                        continue;  /* 过滤跨楼层幽灵障碍物（如地面车位对 B1 的投影） */
+                    }
+
                     Obstacle obs{};
                     obs.id = i;
                     obs.x = (float)g.obs_x[i];
                     obs.y = (float)g.obs_y[i];
                     obs.vx = (float)g.obs_vx[i];
                     obs.vy = (float)g.obs_vy[i];
-                    obs.length = 4.6f;
-                    obs.width = 2.0f;
-                    fctx.AddObstacle(obs);
+                    obs.length = (match_idx >= 0) ? (float)g.scene_veh_len[match_idx] : 4.6f;
+                    obs.width = (match_idx >= 0) ? (float)g.scene_veh_wid[match_idx] : 2.0f;
+                    if (match_idx >= 0) {
+                        matched_scene_veh[match_idx] = true;
+                        fctx.AddObstacle(obs, true, g.scene_veh_h[match_idx]);
+                    } else {
+                        fctx.AddObstacle(obs);
+                    }
+                }
+                for (int s = 0; s < g.scene_veh_count; ++s) {
+                    if (matched_scene_veh[s]) continue;
+                    if (std::fabs(g.scene_veh_z[s] - g.ego_z) > 2.5) continue;
+                    if (std::hypot(g.scene_veh_vx[s], g.scene_veh_vy[s]) > 0.3) continue;
+                    if (std::hypot(g.scene_veh_x[s] - g.ego_x, g.scene_veh_y[s] - g.ego_y) > 80.0) continue;
+                    Obstacle obs{};
+                    obs.id = 1000 + s;
+                    obs.x = (float)g.scene_veh_x[s];
+                    obs.y = (float)g.scene_veh_y[s];
+                    obs.vx = 0.0f;
+                    obs.vy = 0.0f;
+                    obs.length = (float)g.scene_veh_len[s];
+                    obs.width = (float)g.scene_veh_wid[s];
+                    fctx.AddObstacle(obs, true, g.scene_veh_h[s]);
                 }
 
                 Trajectory plan_traj{};
+                g.park_out_scenario.RearmIfAtStartSlot(fctx);
                 flowengine::planning::ScenarioStatus st = g.scenario_manager.Update(fctx, plan_traj);
                 (void)st;
+                g.selected_slot_index = g.valet_parking_scenario.SelectedSlotIndex();
+                g.active_parking_goal = g.valet_parking_scenario.ActiveGoal();
 
                 flowengine::planning::Scenario* cur_sc = g.scenario_manager.CurrentScenario();
                 if (cur_sc) {
@@ -2003,10 +2156,12 @@ protected:
                     g.active_stage_name = cur_st ? std::string(cur_st->Name()) : "UNKNOWN";
                 }
 
-                // 在所有泊车阶段直接消费规划框架输出的带符号轨迹
-                if (g.valet_parking_scenario.IsActive()) {
-                    n_pts = 64;
-                    std::memcpy(points, plan_traj.points, sizeof(TrajectoryPoint) * 64);
+                // 在泊出 / 泊车阶段直接消费规划框架输出的带符号轨迹
+                if (g.park_out_scenario.IsActive() || g.valet_parking_scenario.IsActive()) {
+                    n_pts = (plan_traj.point_count > 0 && plan_traj.point_count <= 64)
+                                ? (int)plan_traj.point_count
+                                : 64;
+                    std::memcpy(points, plan_traj.points, sizeof(TrajectoryPoint) * (size_t)n_pts);
                     use_stitch = false;
                     goto publish_trajectory;
                 }
@@ -2765,8 +2920,11 @@ publish_trajectory:
                          g.has_behavior ? (int)g.current_behavior.command : -1);
             }
 
-            /* 发布 planning/debug（全链路横向调试，每10帧≈2Hz；泊车场景全帧发布） */
-            if (g.plan_count % 10 == 0 || g.parking_goal.enabled) {
+            /* 发布 planning/debug（全链路横向调试，每10帧≈2Hz；泊车/泊出机动期全帧发布） */
+            if (g.plan_count % 10 == 0 ||
+                g.park_out_scenario.IsActive() ||
+                g.valet_parking_scenario.IsActive() ||
+                (g.parking_goal.enabled && !g.park_out.enabled && g.parking_slot_count == 0)) {
                 double dbg_rc_y = road_center_y(g.ego_x, g.curve_start_x, g.curve_length_m, g.curve_offset_m);
                 double dbg_ref_s = g.ego_x;
                 double dbg_ego_d = g.ego_y - dbg_rc_y;
@@ -2786,6 +2944,17 @@ publish_trajectory:
                 cJSON_AddStringToObject(dbg, "driver_mode", mode_buf[0] ? mode_buf : "NA:READY");
                 cJSON_AddStringToObject(dbg, "active_scenario", g.active_scenario_name.c_str());
                 cJSON_AddStringToObject(dbg, "active_stage", g.active_stage_name.c_str());
+                cJSON_AddNumberToObject(dbg, "selected_slot_index", g.selected_slot_index);
+                if (g.active_parking_goal.enabled) {
+                    cJSON* apg = cJSON_CreateObject();
+                    cJSON_AddNumberToObject(apg, "x", g.active_parking_goal.x);
+                    cJSON_AddNumberToObject(apg, "y", g.active_parking_goal.y);
+                    cJSON_AddNumberToObject(apg, "z", g.active_parking_goal.z);
+                    cJSON_AddNumberToObject(apg, "heading", g.active_parking_goal.heading);
+                    cJSON_AddNumberToObject(apg, "width", g.active_parking_goal.width);
+                    cJSON_AddNumberToObject(apg, "length", g.active_parking_goal.length);
+                    cJSON_AddItemToObject(dbg, "active_parking_goal", apg);
+                }
                 cJSON_AddNumberToObject(dbg, "route_lane", g.route_target_lane);
                 cJSON_AddNumberToObject(dbg, "route_count", g.route_count);
                 cJSON_AddNumberToObject(dbg, "route_next_idx", g.route_next_idx);
@@ -3246,7 +3415,9 @@ static int planning_init(MessageBus* bus, Transport* transport,
 
     /* Milestone M3: 注册 Scenario-Stage-Task 决策规划框架场景 */
     g.scenario_manager.Reset();
+    g.park_out_scenario.ClearCompleted();
     g.scenario_manager.RegisterScenario(&g.emergency_stop_scenario);
+    g.scenario_manager.RegisterScenario(&g.park_out_scenario);
     g.scenario_manager.RegisterScenario(&g.valet_parking_scenario);
     g.scenario_manager.RegisterScenario(&g.lane_follow_scenario);
 

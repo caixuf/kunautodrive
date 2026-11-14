@@ -495,7 +495,7 @@ static int sensor_model_execute(TaskBase* task) {
         LidarFrame lidar = {
             .x = (float)(g.ego_x + noise_x),
             .y = (float)(g.ego_y + noise_y),
-            .z = 0.0f,
+            .z = (float)g.ego_z,
             .intensity = lidar_intensity,
             /* mode=1：真实命中数；mode=0：保留旧的可见点数估计（含 weather 衰减） */
             .point_count = (g.lidar_mode == 1)
@@ -509,7 +509,8 @@ static int sensor_model_execute(TaskBase* task) {
                        &lidar, sizeof(lidar));
         transport_publish(g.transport, "sensor/lidar", lmsg.data, lmsg.data_size);
 
-        if (g.frame_id % 2 == 0) {
+        /* B1 地下车库及出口斜坡下段（ego_z < -1.5m）屏蔽 GNSS，由室内 LiDAR SLAM 接管定位 */
+        if (g.frame_id % 2 == 0 && g.ego_z >= -1.5) {
             GpsData gps;
             if (g.nmea_count > 0) {
                 /* 真实 NMEA 0183 日志回放：循环播放解析出的 GPS 帧 */

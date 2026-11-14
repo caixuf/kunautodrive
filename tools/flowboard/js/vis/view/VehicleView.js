@@ -1124,7 +1124,9 @@ export function createVehicleView(scene, renderer, modelCache) {
       const userOverride = (id === 'ego' && store.userLightOverride !== undefined && store.userLightOverride !== null)
         ? store.userLightOverride : null;
       const effectiveLights = (userOverride !== null) ? userOverride : (v.lights || 0);
-      const ls = deriveLightState(effectiveLights, v.brake || 0, store.env);
+      const inGarage = Number.isFinite(v.z) && v.z < -1.2;
+      const lightEnv = inGarage ? { ...(store.env || {}), inGarage: true } : store.env;
+      const ls = deriveLightState(effectiveLights, v.brake || 0, lightEnv);
       if (isEmergencyBrake(v.brake)) {
         const hazardBlink = (((now || 0) / 1000 * 4.0) % 1) < 0.5;
         ls.turnL = hazardBlink;
@@ -1292,7 +1294,7 @@ export function createVehicleView(scene, renderer, modelCache) {
 
         // 环境感知与昼夜判定
         const isNight = !!(store.env && (store.env.isNight || store.env.lighting === 'night'));
-        const isDim = isNight || !!(store.env && (store.env.lighting === 'dusk' || store.env.lighting === 'dawn')) || !!ls.fog;
+        const isDim = isNight || inGarage || !!(store.env && (store.env.lighting === 'dusk' || store.env.lighting === 'dawn')) || !!ls.fog;
 
         // 1. 物理 SpotLight 光源：白天关闭，仅在夜间/黄昏/浓雾且大灯开启时柔和照亮前方道路
         const spotIntensity = ls.head

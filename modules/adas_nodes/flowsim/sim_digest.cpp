@@ -210,6 +210,7 @@ DynamicDigest build_dynamic_digest(const EntityPool& pool, double sim_time,
         ad.route_dir = e.route_dir;
         ad.last_teleport_cycle = e.last_teleport_cycle;
         ad.yaw_rate = e.yaw_rate;
+        ad.parked_fixed = e.parked_fixed;
         dd.actors.push_back(ad);
     }
 
@@ -436,6 +437,7 @@ InvariantResult check_spatial_invariants(const DynamicDigest& d,
             lateral_eps = EPS_LATERAL_PARKED;
         }
         if (std::fabs(a.lateral_offset) > half_w + lateral_eps &&
+            !a.parked_fixed &&
             !(a.type == 0 && d.maneuver)) {
             r.failed++;
             char buf[256];
@@ -537,6 +539,7 @@ InvariantResult check_motion_direction(const DynamicDigest& d,
     for (size_t i = 0; i < d.actors.size(); ++i) {
         const auto& a = d.actors[i];
         if (a.speed < SPEED_THRESH) continue;
+        if (a.parked_fixed) continue;
         if (a.type == 4) continue;  // 行人不检查
 
         char tag[32];

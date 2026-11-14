@@ -116,6 +116,7 @@ struct ControlContext {
     int    has_target_speed{0};  /* trajectory 回调是否已设置 target_speed */
     volatile int mrm_active{0};  /* L3-P1：safety/mrm_request.active → 纵向目标 0（车道内停）*/
     double ego_x{0}, ego_y{0};
+    double road_grade{0.0};
     double lane_d{0};          /* 从 trajectory 解析的横向偏移（Frenet d） */
     double target_path_y{0};   /* 同一前视点的全局 y，避免最近点 rc_y + 前视点 lane_d 混拼 */
     double target_path_x{0};   /* 前视点全局 x（机动控制律横向误差投影用） */
@@ -220,7 +221,7 @@ static void on_fusion(const Message* msg, void* user_data) {
                     /* 速度异常值过滤：EKF 偶尔输出速度尖峰（>50 m/s），
                      * 直接使用会触发 ROAD_GUARD 刹车。丢弃明显异常值，
                      * 保持上一帧速度（control 20Hz，丢失一帧速度无影响）。 */
-                    if (fv >= 0.0 && fv <= 50.0)
+                    if (fv >= -10.0 && fv <= 50.0)
                         g.current_speed = fv;
                 }
                 j = cJSON_GetObjectItemCaseSensitive(root, "x");
@@ -254,6 +255,8 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
     if (cJSON_IsNumber(j)) g.current_speed = j->valuedouble;
     j = cJSON_GetObjectItemCaseSensitive(root, "hdg");
     if (cJSON_IsNumber(j)) g.ego_heading = j->valuedouble;
+    j = cJSON_GetObjectItemCaseSensitive(root, "road_grade");
+    if (cJSON_IsNumber(j)) g.road_grade = j->valuedouble;
     /* 车参同步：场景 ego 块（单一事实源）→ flowsim 广播 → 此处覆盖。
      * 广播优先于 pipeline params（params.wheelbase 仅在没有广播时生效，
      * 兼容旧 pipeline_car.json RC 小车配置；新配置应写场景 ego 块）。 */
@@ -348,7 +351,7 @@ static void on_trajectory(const Message* msg, void* user_data) {
     for (uint32_t i = 0; i < n_pts; i++) {
         double k = fabs((double)traj.points[i].kappa);
         if (k > max_kappa) max_kappa = k;
-        if ((double)traj.points[i].v < -0.1) has_reverse = true;
+        if ((double)traj.points[i].v < -0.05) has_reverse = true;
     }
     bool mv = has_reverse || (max_kappa > 0.12);
     if (mv != g.maneuver_mode) {
@@ -962,6 +965,22 @@ protected:
                 brake = 1.0;
                 mode = "SHIFT_STOP";
                 g.integral = 0;  /* 全刹时清积分，防换挡后残余积分反向推车 */
+            } else if (fabs(acc_target) <= 0.02 && fabs(g.current_speed) < 0.15) {
+                /* 精确驻车保持（PRECISION_HOLD）或坡道驻停：制动力锁止零溜车 */
+                throttle = 0.0;
+                brake = 0.65;
+                mode = "HOLD";
+                g.integral = 0.0;
+            } else if (g.gear == GEAR_DRIVE && g.road_grade > 0.01) {
+                /* 上坡坡度前馈补偿重力分量 + 抑制防溜车 */
+                double grade_ff = std::min(0.28, std::max(0.0, 0.55 * std::sin(g.road_grade)));
+                if (g.current_speed < 0.0 && acc_target > 0.02) {
+                    brake = 0.0;
+                    throttle = std::max(throttle, std::max(0.22, grade_ff));
+                    g.integral = std::max(g.integral, 0.0);
+                } else if (acc_target > 0.05 && throttle > 0.0) {
+                    throttle = std::min(1.0, throttle + grade_ff);
+                }
             }
 
             /* Anti-windup：error 从正翻负时（加速→减速切换），积分饱和是追尾主因。
@@ -1061,6 +1080,9 @@ protected:
                  * 几何跟踪（kappa 前馈 + 车体系 e_lat/dh 反馈，倒挡反号）
                  * 与 ±0.60 限幅都在 tracker 内部。这里只取结果跳过巡航 Stanley。 */
                 steer = mv_res.steer;
+                if (!g.gear_pending && strcmp(mode, "HOLD") != 0) {
+                    mode = "MANEUVER";
+                }
                 mpc_used = true;
             }
             if (!mpc_used) {
@@ -1261,7 +1283,8 @@ protected:
              * safety 无法从 steer/gear 推断机动 → 施工区被当前车全刹 →
              * v=0 掉头死锁）。mode 是 control→safety 的唯一带外信号通道。 */
             snprintf(raw.mode, sizeof(raw.mode) - 1, "%s%s",
-                     mode, g.maneuver_mode ? "+MANEUVER" : "");
+                     mode,
+                     (g.maneuver_mode && strcmp(mode, "MANEUVER") != 0) ? "+MANEUVER" : "");
 
             uint8_t raw_buf[64];
             size_t  raw_len = sizeof(raw_buf);

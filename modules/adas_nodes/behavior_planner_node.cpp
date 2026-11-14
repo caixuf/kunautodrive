@@ -153,6 +153,7 @@ struct BehaviorContext {
     static constexpr int kMaxCz = 8;
     double cz_x[kMaxCz]{}, cz_y[kMaxCz]{}, cz_len[kMaxCz]{}, cz_wid[kMaxCz]{};
     int cz_count{0};
+    volatile int has_parking_destination{0}; /* scene/frame 含启用态 parking_goal 或非空 parking_slots 时置 1，抑制路端掉头 */
 
     /* 道路几何（从 road/geometry JSON 解析） */
     int    lane_count{2};
@@ -638,6 +639,15 @@ static void on_scene_frame(const Message* msg, void* user_data) {
     if (!root) return;
     g.cz_count = construction_zones_parse_from_scene_root(
         root, g.cz_x, g.cz_y, g.cz_len, g.cz_wid, g.kMaxCz);
+    bool pg_enabled = false;
+    cJSON* jpg = cJSON_GetObjectItemCaseSensitive(root, "parking_goal");
+    if (jpg && cJSON_IsObject(jpg)) {
+        cJSON* je = cJSON_GetObjectItemCaseSensitive(jpg, "enabled");
+        pg_enabled = (!je || !cJSON_IsBool(je) || cJSON_IsTrue(je));
+    }
+    cJSON* jslots = cJSON_GetObjectItemCaseSensitive(root, "parking_slots");
+    const bool has_slots = cJSON_IsArray(jslots) && (cJSON_GetArraySize(jslots) > 0);
+    g.has_parking_destination = (pg_enabled || has_slots) ? 1 : 0;
     cJSON_Delete(root);
 }
 
@@ -1067,7 +1077,7 @@ protected:
                 const bool route_ew = (g.ref_count >= 2) &&
                     std::fabs(g.ref_x[g.ref_count - 1] - g.ref_x[0]) >
                     std::fabs(g.ref_y[g.ref_count - 1] - g.ref_y[0]);
-                if (cur != BEH_ST_U_TURN && route_ew) {
+                if (cur != BEH_ST_U_TURN && route_ew && !g.has_parking_destination) {
                     behavior_uturn::UturnApproachInput in;
                     in.ego_x = g.ego_x;
                     in.ego_y = g.ego_y;

@@ -207,28 +207,30 @@ bool OpenSpaceCruiseStage::PlanTrajectory(FrameContext& context) {
     env.max_y = std::max(ego.y, goal.y) + 12.0;
 
     // 注入感知障碍物（停放车/护栏）：路侧平行停放车辆沿道路方向 (heading=0)
-    double obs_heading = 0.0;
     for (size_t i = 0; i < context.ObstacleCount(); ++i) {
         const auto& obs = context.GetObstacle(i);
         if (std::hypot(obs.vx, obs.vy) < 0.6) {
             double len = obs.length > 0 ? obs.length : 4.6;
             double wid = obs.width > 0 ? obs.width : 2.0;
+            bool has_h = false;
+            double obs_heading = static_cast<double>(context.GetObstacleHeading(i, &has_h));
+            if (!has_h) obs_heading = 0.0;
             env.obstacle_boxes.emplace_back(Vec2d(obs.x, obs.y), obs_heading, len, wid);
         }
     }
 
     if (env.obstacle_boxes.empty()) {
-        env.obstacle_boxes.emplace_back(Vec2d(goal.x - 6.0, goal.y), obs_heading, 4.6, 2.0);
-        env.obstacle_boxes.emplace_back(Vec2d(goal.x + 6.0, goal.y), obs_heading, 4.6, 2.0);
+        env.obstacle_boxes.emplace_back(Vec2d(goal.x - 6.0, goal.y), 0.0, 4.6, 2.0);
+        env.obstacle_boxes.emplace_back(Vec2d(goal.x + 6.0, goal.y), 0.0, 4.6, 2.0);
     }
 
     double half_wb = veh.wheelbase * 0.5;
     double start_xr = ego.x - half_wb * std::cos(ego.heading);
     double start_yr = ego.y - half_wb * std::sin(ego.heading);
-    // 泊车低速跟踪补偿：后退圆弧内切导致实车弧长提前饱满约 0.10m，航向提早收敛约 10°
-    double plan_goal_x = goal.x;
+    // 泊车低速跟踪补偿：后退圆弧内切导致实车弧长提前饱满约 0.10m，垂直入库外侧偏移约 0.45m，航向提早收敛约 7°
+    double plan_goal_x = goal.x - 0.45 * std::sin(goal.heading);
     double plan_goal_y = goal.y - 0.10 * std::sin(goal.heading);
-    double plan_goal_h = goal.heading + 0.18;
+    double plan_goal_h = goal.heading + 0.12;
     double goal_xr = plan_goal_x - half_wb * std::cos(plan_goal_h);
     double goal_yr = plan_goal_y - half_wb * std::sin(plan_goal_h);
 
@@ -342,14 +344,86 @@ ValetParkingScenario::ValetParkingScenario() {
     AddStage(&precision_hold_stage_);
 }
 
+namespace {
+
+bool IsSlotOccupiedByStaticObstacle(const ParkingGoal& slot, const FrameContext& context) {
+    const double check_len = std::max(1.2, slot.length - 0.7);
+    const double check_wid = std::max(1.0, slot.width - 0.4);
+    Box2d slot_box(Vec2d(slot.x, slot.y), slot.heading, check_len, check_wid);
+
+    for (size_t i = 0; i < context.ObstacleCount(); ++i) {
+        const auto& obs = context.GetObstacle(i);
+        if (std::hypot(obs.vx, obs.vy) >= 0.8) continue;
+        const double len = obs.length > 0.0 ? obs.length : 4.6;
+        const double wid = obs.width > 0.0 ? obs.width : 2.0;
+        bool has_h = false;
+        double obs_heading = static_cast<double>(context.GetObstacleHeading(i, &has_h));
+        if (!has_h) obs_heading = 0.0;
+        Box2d obs_box(Vec2d(obs.x, obs.y), obs_heading, len, wid);
+        if (slot_box.HasOverlap(obs_box)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+ParkingGoal ResolveParkingTarget(const FrameContext& context, int& out_slot_index) {
+    out_slot_index = -1;
+    if (context.parking_slot_count > 0) {
+        if (context.selected_slot_index >= 0 &&
+            static_cast<size_t>(context.selected_slot_index) < context.parking_slot_count) {
+            ParkingGoal locked = context.parking_slots[context.selected_slot_index];
+            locked.enabled = true;
+            out_slot_index = context.selected_slot_index;
+            return locked;
+        }
+        for (size_t i = 0; i < context.parking_slot_count; ++i) {
+            if (!IsSlotOccupiedByStaticObstacle(context.parking_slots[i], context)) {
+                ParkingGoal free_goal = context.parking_slots[i];
+                free_goal.enabled = true;
+                out_slot_index = static_cast<int>(i);
+                return free_goal;
+            }
+        }
+        if (context.parking_goal.enabled) {
+            return context.parking_goal;
+        }
+        ParkingGoal fallback = context.parking_slots[0];
+        fallback.enabled = true;
+        return fallback;
+    }
+    return context.parking_goal;
+}
+
+} // namespace
+
 bool ValetParkingScenario::IsApplicable(const FrameContext& context) const {
-    return context.parking_goal.enabled;
+    if (!context.parking_goal.enabled && context.parking_slot_count == 0) {
+        return false;
+    }
+    if (finished_ || current_stage_idx_ > 0) {
+        return true;
+    }
+
+    int slot_idx = -1;
+    ParkingGoal target = ResolveParkingTarget(context, slot_idx);
+    if (!target.enabled) return false;
+
+    const double dz = std::fabs(context.vehicle_state.z - target.z);
+    if (dz > 2.5) return false;
+
+    const double dx = target.x - context.vehicle_state.x;
+    const double dy = target.y - context.vehicle_state.y;
+    const double dist = std::hypot(dx, dy);
+    return dist <= 48.0;
 }
 
 void ValetParkingScenario::Reset() {
     current_stage_idx_ = 0;
     finished_ = false;
     is_active_ = false;
+    locked_slot_index_ = -1;
+    active_goal_ = ParkingGoal{};
     approach_stage_.Reset();
     open_space_cruise_stage_.Reset();
     precision_hold_stage_.Reset();
@@ -362,6 +436,15 @@ std::string_view ValetParkingScenario::CurrentStageName() const noexcept {
 
 ScenarioStatus ValetParkingScenario::Run(FrameContext& context, Trajectory& trajectory) {
     is_active_ = true;
+    if (current_stage_idx_ >= 1 && locked_slot_index_ >= 0 && context.selected_slot_index < 0) {
+        context.selected_slot_index = locked_slot_index_;
+    }
+    int slot_idx = -1;
+    context.parking_goal = ResolveParkingTarget(context, slot_idx);
+    context.selected_slot_index = slot_idx;
+    locked_slot_index_ = slot_idx;
+    active_goal_ = context.parking_goal;
+
     Stage* stage = CurrentStage();
     if (!stage) {
         return ScenarioStatus::ERROR;

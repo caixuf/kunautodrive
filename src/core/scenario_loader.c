@@ -396,6 +396,35 @@ static void add_density_windows(cJSON* parent, const char* key,
     cJSON_AddItemToObject(parent, key, arr);
 }
 
+static void parse_parking_box(const cJSON* obj,
+                              double* x, double* y, double* z,
+                              double* heading, double* width, double* length,
+                              double default_w, double default_l) {
+    if (!cJSON_IsObject(obj)) return;
+    cJSON* j = cJSON_GetObjectItemCaseSensitive(obj, "x");
+    if (cJSON_IsNumber(j)) *x = j->valuedouble;
+    j = cJSON_GetObjectItemCaseSensitive(obj, "y");
+    if (cJSON_IsNumber(j)) *y = j->valuedouble;
+    j = cJSON_GetObjectItemCaseSensitive(obj, "z");
+    if (cJSON_IsNumber(j)) *z = j->valuedouble;
+    j = cJSON_GetObjectItemCaseSensitive(obj, "heading");
+    if (cJSON_IsNumber(j)) *heading = j->valuedouble;
+    j = cJSON_GetObjectItemCaseSensitive(obj, "width");
+    *width = (cJSON_IsNumber(j) && j->valuedouble > 0.0) ? j->valuedouble : default_w;
+    j = cJSON_GetObjectItemCaseSensitive(obj, "length");
+    *length = (cJSON_IsNumber(j) && j->valuedouble > 0.0) ? j->valuedouble : default_l;
+}
+
+static void add_parking_box_fields(cJSON* obj, double x, double y, double z,
+                                   double heading, double width, double length) {
+    cJSON_AddNumberToObject(obj, "x", x);
+    cJSON_AddNumberToObject(obj, "y", y);
+    if (z != 0.0) cJSON_AddNumberToObject(obj, "z", z);
+    cJSON_AddNumberToObject(obj, "heading", heading);
+    cJSON_AddNumberToObject(obj, "width", width);
+    cJSON_AddNumberToObject(obj, "length", length);
+}
+
 ScenarioConfig* scenario_load(const char* path) {
     if (!path) return NULL;
 
@@ -448,6 +477,11 @@ ScenarioConfig* scenario_load(const char* path) {
         if (cJSON_IsNumber(j)) sc->ego.x = j->valuedouble;
         j = cJSON_GetObjectItemCaseSensitive(jego, "y");
         if (cJSON_IsNumber(j)) sc->ego.y = j->valuedouble;
+        j = cJSON_GetObjectItemCaseSensitive(jego, "z");
+        if (cJSON_IsNumber(j)) {
+            sc->ego.z = j->valuedouble;
+            sc->ego.has_z = true;
+        }
         j = cJSON_GetObjectItemCaseSensitive(jego, "heading");
         if (cJSON_IsNumber(j)) sc->ego.heading = j->valuedouble;
         j = cJSON_GetObjectItemCaseSensitive(jego, "init_speed");
@@ -496,6 +530,18 @@ ScenarioConfig* scenario_load(const char* path) {
             if (cJSON_IsNumber(j)) a->x = j->valuedouble;
             j = cJSON_GetObjectItemCaseSensitive(ja, "y");
             if (cJSON_IsNumber(j)) a->y = j->valuedouble;
+            j = cJSON_GetObjectItemCaseSensitive(ja, "z");
+            if (cJSON_IsNumber(j)) {
+                a->z = j->valuedouble;
+                a->has_z = true;
+            }
+            j = cJSON_GetObjectItemCaseSensitive(ja, "heading");
+            if (cJSON_IsNumber(j)) {
+                a->heading = j->valuedouble;
+                a->has_heading = true;
+            }
+            j = cJSON_GetObjectItemCaseSensitive(ja, "parked_fixed");
+            if (cJSON_IsBool(j)) a->parked_fixed = cJSON_IsTrue(j);
             j = cJSON_GetObjectItemCaseSensitive(ja, "vx");
             if (cJSON_IsNumber(j)) a->vx = j->valuedouble;
             j = cJSON_GetObjectItemCaseSensitive(ja, "vy");
@@ -677,6 +723,8 @@ ScenarioConfig* scenario_load(const char* path) {
         "viaduct_highway",/* 高架快速路（触发前端高架渲染分支） */
         "ramp_curve",     /* 匝道/弯道 */
         "cross_road",     /* 十字路口 */
+        "garage_hall",    /* 地下车库通道 */
+        "open_ramp",      /* 开放出入坡道 */
         "",               /* 空 = 向后兼容，不触发任何特殊分支 */
         NULL
     };
@@ -771,6 +819,11 @@ ScenarioConfig* scenario_load(const char* path) {
             j = cJSON_GetObjectItemCaseSensitive(jg, "y");
             if (cJSON_IsNumber(j)) g->y = j->valuedouble;
             else g->y = 0.0;  /* 默认跨路面中心 */
+            j = cJSON_GetObjectItemCaseSensitive(jg, "z");
+            if (cJSON_IsNumber(j)) {
+                g->z = j->valuedouble;
+                g->has_z = true;
+            }
             j = cJSON_GetObjectItemCaseSensitive(jg, "heading");
             if (cJSON_IsNumber(j)) g->heading = j->valuedouble;
             j = cJSON_GetObjectItemCaseSensitive(jg, "approach_speed");
@@ -886,16 +939,56 @@ ScenarioConfig* scenario_load(const char* path) {
         sc->parking_goal.enabled = true;
         cJSON* j = cJSON_GetObjectItemCaseSensitive(jpg, "enabled");
         if (cJSON_IsBool(j)) sc->parking_goal.enabled = cJSON_IsTrue(j);
-        j = cJSON_GetObjectItemCaseSensitive(jpg, "x");
-        if (cJSON_IsNumber(j)) sc->parking_goal.x = j->valuedouble;
-        j = cJSON_GetObjectItemCaseSensitive(jpg, "y");
-        if (cJSON_IsNumber(j)) sc->parking_goal.y = j->valuedouble;
-        j = cJSON_GetObjectItemCaseSensitive(jpg, "heading");
-        if (cJSON_IsNumber(j)) sc->parking_goal.heading = j->valuedouble;
-        j = cJSON_GetObjectItemCaseSensitive(jpg, "width");
-        sc->parking_goal.width = (cJSON_IsNumber(j) && j->valuedouble > 0) ? j->valuedouble : 2.8;
-        j = cJSON_GetObjectItemCaseSensitive(jpg, "length");
-        sc->parking_goal.length = (cJSON_IsNumber(j) && j->valuedouble > 0) ? j->valuedouble : 6.0;
+        parse_parking_box(jpg,
+                          &sc->parking_goal.x, &sc->parking_goal.y, &sc->parking_goal.z,
+                          &sc->parking_goal.heading,
+                          &sc->parking_goal.width, &sc->parking_goal.length,
+                          2.8, 6.0);
+    }
+
+    /* park_out（可选，Park-to-Park 车位泊出起点与通道汇出目标） */
+    cJSON* jpo = cJSON_GetObjectItemCaseSensitive(root, "park_out");
+    if (cJSON_IsObject(jpo)) {
+        sc->park_out.enabled = true;
+        cJSON* j = cJSON_GetObjectItemCaseSensitive(jpo, "enabled");
+        if (cJSON_IsBool(j)) sc->park_out.enabled = cJSON_IsTrue(j);
+        j = cJSON_GetObjectItemCaseSensitive(jpo, "slot_x");
+        sc->park_out.slot_x = cJSON_IsNumber(j) ? j->valuedouble : sc->ego.x;
+        j = cJSON_GetObjectItemCaseSensitive(jpo, "slot_y");
+        sc->park_out.slot_y = cJSON_IsNumber(j) ? j->valuedouble : sc->ego.y;
+        j = cJSON_GetObjectItemCaseSensitive(jpo, "slot_z");
+        sc->park_out.slot_z = cJSON_IsNumber(j) ? j->valuedouble : sc->ego.z;
+        j = cJSON_GetObjectItemCaseSensitive(jpo, "slot_heading");
+        sc->park_out.slot_heading = cJSON_IsNumber(j) ? j->valuedouble : sc->ego.heading;
+        j = cJSON_GetObjectItemCaseSensitive(jpo, "exit_x");
+        if (cJSON_IsNumber(j)) sc->park_out.exit_x = j->valuedouble;
+        j = cJSON_GetObjectItemCaseSensitive(jpo, "exit_y");
+        if (cJSON_IsNumber(j)) sc->park_out.exit_y = j->valuedouble;
+        j = cJSON_GetObjectItemCaseSensitive(jpo, "exit_z");
+        sc->park_out.exit_z = cJSON_IsNumber(j) ? j->valuedouble : sc->park_out.slot_z;
+        j = cJSON_GetObjectItemCaseSensitive(jpo, "exit_heading");
+        if (cJSON_IsNumber(j)) sc->park_out.exit_heading = j->valuedouble;
+        j = cJSON_GetObjectItemCaseSensitive(jpo, "corridor_width");
+        sc->park_out.corridor_width = (cJSON_IsNumber(j) && j->valuedouble > 0.0) ? j->valuedouble : 6.0;
+    }
+
+    /* parking_slots[]（可选，地面停车场多候选车位数组） */
+    cJSON* jps = cJSON_GetObjectItemCaseSensitive(root, "parking_slots");
+    if (cJSON_IsArray(jps)) {
+        int n = cJSON_GetArraySize(jps);
+        if (n > SCENARIO_MAX_PARKING_SLOTS) n = SCENARIO_MAX_PARKING_SLOTS;
+        sc->parking_slot_count = n;
+        for (int i = 0; i < n; i++) {
+            cJSON* js = cJSON_GetArrayItem(jps, i);
+            if (!cJSON_IsObject(js)) continue;
+            ScenarioParkingSlot* slot = &sc->parking_slots[i];
+            cJSON* jid = cJSON_GetObjectItemCaseSensitive(js, "id");
+            slot->id = cJSON_IsNumber(jid) ? (int)jid->valuedouble : i;
+            parse_parking_box(js,
+                              &slot->x, &slot->y, &slot->z,
+                              &slot->heading, &slot->width, &slot->length,
+                              2.8, 6.0);
+        }
     }
 
     /* lighting（可选，Task 4）：场景全局光照模式。
@@ -1087,6 +1180,8 @@ char* scenario_to_json(const ScenarioConfig* scenario) {
     cJSON* jego = cJSON_CreateObject();
     cJSON_AddNumberToObject(jego, "x",            scenario->ego.x);
     cJSON_AddNumberToObject(jego, "y",            scenario->ego.y);
+    if (scenario->ego.has_z)
+        cJSON_AddNumberToObject(jego, "z",        scenario->ego.z);
     cJSON_AddNumberToObject(jego, "heading",      scenario->ego.heading);
     cJSON_AddNumberToObject(jego, "init_speed",   scenario->ego.init_speed);
     cJSON_AddNumberToObject(jego, "target_speed", scenario->ego.target_speed);
@@ -1101,6 +1196,9 @@ char* scenario_to_json(const ScenarioConfig* scenario) {
         cJSON_AddStringToObject(ja, "type", a->type);
         cJSON_AddNumberToObject(ja, "x",   a->x);
         cJSON_AddNumberToObject(ja, "y",   a->y);
+        if (a->has_z)       cJSON_AddNumberToObject(ja, "z",       a->z);
+        if (a->has_heading) cJSON_AddNumberToObject(ja, "heading", a->heading);
+        if (a->parked_fixed) cJSON_AddBoolToObject(ja, "parked_fixed", true);
         cJSON_AddNumberToObject(ja, "vx",  a->vx);
         cJSON_AddNumberToObject(ja, "vy",  a->vy);
         cJSON_AddNumberToObject(ja, "len", a->len);
@@ -1269,12 +1367,41 @@ char* scenario_to_json(const ScenarioConfig* scenario) {
     if (scenario->parking_goal.enabled) {
         cJSON* jpg = cJSON_CreateObject();
         cJSON_AddBoolToObject(jpg, "enabled", true);
-        cJSON_AddNumberToObject(jpg, "x", scenario->parking_goal.x);
-        cJSON_AddNumberToObject(jpg, "y", scenario->parking_goal.y);
-        cJSON_AddNumberToObject(jpg, "heading", scenario->parking_goal.heading);
-        cJSON_AddNumberToObject(jpg, "width", scenario->parking_goal.width);
-        cJSON_AddNumberToObject(jpg, "length", scenario->parking_goal.length);
+        add_parking_box_fields(jpg,
+                               scenario->parking_goal.x, scenario->parking_goal.y,
+                               scenario->parking_goal.z, scenario->parking_goal.heading,
+                               scenario->parking_goal.width, scenario->parking_goal.length);
         cJSON_AddItemToObject(root, "parking_goal", jpg);
+    }
+
+    if (scenario->park_out.enabled) {
+        cJSON* jpo = cJSON_CreateObject();
+        cJSON_AddBoolToObject(jpo, "enabled", true);
+        cJSON_AddNumberToObject(jpo, "slot_x", scenario->park_out.slot_x);
+        cJSON_AddNumberToObject(jpo, "slot_y", scenario->park_out.slot_y);
+        if (scenario->park_out.slot_z != 0.0)
+            cJSON_AddNumberToObject(jpo, "slot_z", scenario->park_out.slot_z);
+        cJSON_AddNumberToObject(jpo, "slot_heading", scenario->park_out.slot_heading);
+        cJSON_AddNumberToObject(jpo, "exit_x", scenario->park_out.exit_x);
+        cJSON_AddNumberToObject(jpo, "exit_y", scenario->park_out.exit_y);
+        if (scenario->park_out.exit_z != 0.0)
+            cJSON_AddNumberToObject(jpo, "exit_z", scenario->park_out.exit_z);
+        cJSON_AddNumberToObject(jpo, "exit_heading", scenario->park_out.exit_heading);
+        cJSON_AddNumberToObject(jpo, "corridor_width", scenario->park_out.corridor_width);
+        cJSON_AddItemToObject(root, "park_out", jpo);
+    }
+
+    if (scenario->parking_slot_count > 0) {
+        cJSON* jps = cJSON_CreateArray();
+        for (int i = 0; i < scenario->parking_slot_count; i++) {
+            const ScenarioParkingSlot* slot = &scenario->parking_slots[i];
+            cJSON* js = cJSON_CreateObject();
+            cJSON_AddNumberToObject(js, "id", slot->id);
+            add_parking_box_fields(js, slot->x, slot->y, slot->z,
+                                   slot->heading, slot->width, slot->length);
+            cJSON_AddItemToArray(jps, js);
+        }
+        cJSON_AddItemToObject(root, "parking_slots", jps);
     }
 
     char* out = cJSON_Print(root);

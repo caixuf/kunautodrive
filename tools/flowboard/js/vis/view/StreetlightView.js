@@ -19,7 +19,7 @@
  */
 
 import { getStdMaterial, createEmissiveMaterial } from '../core/AssetFactory.js';
-import { EDGE_TYPE } from '../core/Constants.js';
+import { EDGE_TYPE, isGarageOrRampEdge } from '../core/Constants.js';
 import { directionToRotationY } from '../math/Coord.js';
 import { computeEdgeAxis } from '../model/RoadAxis.js';
 import { getTopology } from '../model/TopologyModel.js';
@@ -65,7 +65,7 @@ export function createStreetlightView(scene) {
     // ── 第一遍：收集所有有效路轴供碰撞检测 ──
     const allAxes = [];
     for (const edge of roadNetwork.edges) {
-      if (edge.type === EDGE_TYPE.VIADUCT_HIGHWAY || edge.name === EDGE_TYPE.VIADUCT_HIGHWAY) continue;
+      if (edge.type === EDGE_TYPE.VIADUCT_HIGHWAY || edge.name === EDGE_TYPE.VIADUCT_HIGHWAY || isGarageOrRampEdge(edge)) continue;
       const axis = computeEdgeAxis(edge, roadNetwork.lane_data);
       if (axis.ok && axis.spine.length >= 2) {
         for (let i = 0; i < axis.spine.length; i++) axis.spine[i].cum = axis.cum[i];

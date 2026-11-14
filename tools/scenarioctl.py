@@ -164,6 +164,41 @@ def validate_scenario(data: object, path: Path) -> list[str]:
                 if key in parking_goal:
                     _number(parking_goal[key], f"{path}: parking_goal.{key}", errors)
 
+    park_out = data.get("park_out")
+    if park_out is not None:
+        if not isinstance(park_out, dict):
+            errors.append(f"{path}: park_out must be an object")
+        elif park_out.get("enabled", True):
+            for key in ("slot_x", "slot_y", "slot_heading", "exit_x", "exit_y", "exit_heading"):
+                if key in park_out:
+                    _number(park_out[key], f"{path}: park_out.{key}", errors)
+                else:
+                    errors.append(f"{path}: park_out missing '{key}'")
+            for key in ("slot_z", "exit_z", "corridor_width"):
+                if key in park_out:
+                    _number(park_out[key], f"{path}: park_out.{key}", errors)
+
+    parking_slots = data.get("parking_slots")
+    if parking_slots is not None:
+        if not isinstance(parking_slots, list) or not (1 <= len(parking_slots) <= 16):
+            errors.append(f"{path}: parking_slots must be an array of 1..16 slots")
+        else:
+            for index, slot in enumerate(parking_slots):
+                label = f"{path}: parking_slots[{index}]"
+                if not isinstance(slot, dict):
+                    errors.append(f"{label} must be an object")
+                    continue
+                for key in ("x", "y", "heading"):
+                    if key in slot:
+                        _number(slot[key], f"{label}.{key}", errors)
+                    else:
+                        errors.append(f"{label} missing '{key}'")
+                for key in ("z", "width", "length", "id"):
+                    if key in slot:
+                        _number(slot[key], f"{label}.{key}", errors)
+                if "occupied" in slot and not isinstance(slot["occupied"], bool):
+                    errors.append(f"{label}.occupied must be a boolean")
+
     if not isinstance(data.get("pass_criteria"), dict):
         errors.append(f"{path}: pass_criteria must be an object")
     return errors

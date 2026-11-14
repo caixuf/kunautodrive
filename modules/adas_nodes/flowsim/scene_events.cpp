@@ -121,8 +121,20 @@ void tick_etc_gates(EntityPool& pool, const Entity& ego, double dt) {
         Entity& gate = pool[i];
         if (!gate.active || gate.type != EntityType::ETCGate) continue;
 
-        // 用 x 差作为距离（闸门沿 x 轴布置）
-        double dist = gate.x - ego.x;
+        /* 沿闸门朝向投影纵向/横向/高程距离：支持斜坡匝道、地面停车场入口等任意朝向与分层高程 */
+        const double dx = gate.x - ego.x;
+        const double dy = gate.y - ego.y;
+        const double ch = std::cos(gate.heading);
+        const double sh = std::sin(gate.heading);
+        const double dist = dx * ch + dy * sh;
+        const double lat = -dx * sh + dy * ch;
+        const double dz = std::fabs(ego.z - gate.z);
+
+        if (std::fabs(lat) >= 8.0 || dz >= 2.5) {
+            gate.phase_state = 0;
+            gate.phase_timer = 0.0;
+            continue;
+        }
 
         /* ETC 闸门状态用 phase_state：0=关闭 1=抬杆中 2=全开。
          * 原复用 ai_state（Stop/Yield/Cruise），改为独立字段避免 NPC 状态语义冲突。 */
@@ -132,7 +144,7 @@ void tick_etc_gates(EntityPool& pool, const Entity& ego, double dt) {
         } else if (dist > 10.0) {
             gate.phase_state = 1;   /* opening */
             gate.phase_timer = std::min(1.0, gate.phase_timer + dt * 0.5);
-        } else if (dist > 0) {
+        } else if (dist > -4.0) {
             gate.phase_state = 2;   /* open */
             gate.phase_timer = 1.0;
         } else {

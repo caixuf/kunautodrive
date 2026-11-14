@@ -9,6 +9,94 @@
  */
 
 import { SCENE } from '../theme/tokens.js';
+import { EDGE_TYPE } from '../core/Constants.js';
+import { worldToThree } from '../math/Coord.js';
+
+const MAX_CUTOUTS = 4;
+
+/** Derive XZ cutaway rectangles [minX, minZ, maxX, maxZ] in THREE coords for B1 garage & open ramp trenches. */
+export function computeSubsurfaceCutouts(roadNetwork) {
+  const edges = Array.isArray(roadNetwork && roadNetwork.edges) ? roadNetwork.edges : [];
+  if (!edges.length) return [];
+
+  const toXY = (n) => (Array.isArray(n)
+    ? [Number(n[0]) || 0, Number(n[1]) || 0, Number(n[2]) || 0]
+    : [Number(n && n.x) || 0, Number(n && n.y) || 0, Number(n && n.z) || 0]);
+
+  const rampEndpoints = [];
+  for (const edge of edges) {
+    if (!edge || edge.type !== EDGE_TYPE.OPEN_RAMP || !Array.isArray(edge.nodes) || edge.nodes.length < 2) continue;
+    rampEndpoints.push(toXY(edge.nodes[0]), toXY(edge.nodes[edge.nodes.length - 1]));
+  }
+  const nearRampEndpoint = (x, y) => rampEndpoints.some((p) => Math.hypot(p[0] - x, p[1] - y) < 6.0);
+
+  const boxes = [];
+  const pushEnuRect = (ex0, ey0, ex1, ey1) => {
+    const [tx0, , tz0] = worldToThree(ex0, ey0, 0);
+    const [tx1, , tz1] = worldToThree(ex1, ey1, 0);
+    boxes.push([
+      Math.min(tx0, tx1),
+      Math.min(tz0, tz1),
+      Math.max(tx0, tx1),
+      Math.max(tz0, tz1),
+    ]);
+  };
+
+  for (const edge of edges) {
+    if (!edge || !Array.isArray(edge.nodes) || edge.nodes.length < 2) continue;
+    const pts = edge.nodes.map(toXY);
+    const lanes = Number(edge.lanes) || 2;
+    const laneW = Number(edge.lane_width) || 3.5;
+    const halfW = lanes * laneW * 0.5;
+
+    if (edge.type === EDGE_TYPE.GARAGE_HALL) {
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (const p of pts) {
+        if (p[0] < minX) minX = p[0];
+        if (p[0] > maxX) maxX = p[0];
+        if (p[1] < minY) minY = p[1];
+        if (p[1] > maxY) maxY = p[1];
+      }
+      const p0 = pts[0], p1 = pts[pts.length - 1];
+      const padLeft = (Math.abs(p0[0] - minX) < 0.5 && nearRampEndpoint(p0[0], p0[1]))
+        || (Math.abs(p1[0] - minX) < 0.5 && nearRampEndpoint(p1[0], p1[1])) ? 0.2 : 12.0;
+      const padRight = (Math.abs(p0[0] - maxX) < 0.5 && nearRampEndpoint(p0[0], p0[1]))
+        || (Math.abs(p1[0] - maxX) < 0.5 && nearRampEndpoint(p1[0], p1[1])) ? 0.2 : 12.0;
+      pushEnuRect(minX - padLeft, minY - 11.8, maxX + padRight, maxY + 11.8);
+    } else if (edge.type === EDGE_TYPE.OPEN_RAMP) {
+      const subPts = [];
+      for (let i = 0; i < pts.length; i++) {
+        const cur = pts[i];
+        if (cur[2] <= -0.10) subPts.push(cur);
+        if (i + 1 < pts.length) {
+          const nxt = pts[i + 1];
+          if ((cur[2] < -0.10) !== (nxt[2] < -0.10)) {
+            const dz = nxt[2] - cur[2];
+            const t = Math.abs(dz) > 1e-5 ? (-0.10 - cur[2]) / dz : 0.5;
+            subPts.push([
+              cur[0] + (nxt[0] - cur[0]) * t,
+              cur[1] + (nxt[1] - cur[1]) * t,
+              -0.10,
+            ]);
+          }
+        }
+      }
+      if (subPts.length >= 2) {
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (const p of subPts) {
+          if (p[0] < minX) minX = p[0];
+          if (p[0] > maxX) maxX = p[0];
+          if (p[1] < minY) minY = p[1];
+          if (p[1] > maxY) maxY = p[1];
+        }
+        const latPad = halfW + 0.14;
+        pushEnuRect(minX - 0.5, minY - latPad, maxX, maxY + latPad);
+      }
+    }
+    if (boxes.length >= MAX_CUTOUTS) break;
+  }
+  return boxes;
+}
 
 const GROUND_BASE = SCENE.groundBase;  // 城市地块基底（偏土绿，比纯草更中性）
 const SR_GROUND_TINT = SCENE.srGroundTint;  // SR/BEV 深色冷底 tint
@@ -213,9 +301,93 @@ function buildCityBlockTexture() {
   return _cityBlockTexture;
 }
 
+function _buildGroundGeometry(size, cutouts) {
+  if (!cutouts || cutouts.length === 0 || typeof THREE.Shape !== 'function' || typeof THREE.Path !== 'function' || typeof THREE.ShapeGeometry !== 'function') {
+    return new THREE.PlaneGeometry(size, size);
+  }
+
+  const half = size * 0.5;
+  const groundShape = new THREE.Shape();
+  groundShape.moveTo(-half, -half);
+  groundShape.lineTo(half, -half);
+  groundShape.lineTo(half, half);
+  groundShape.lineTo(-half, half);
+  groundShape.closePath();
+
+  // Convert Three.js XZ boxes [minX, minZ, maxX, maxZ] to Shape XY [minX, -maxZ, maxX, -minZ]
+  const rects = cutouts.map((b) => ({
+    x0: b[0],
+    y0: -b[3],
+    x1: b[2],
+    y1: -b[1],
+    used: false,
+  }));
+
+  for (let i = 0; i < rects.length; i++) {
+    if (rects[i].used) continue;
+    const a = rects[i];
+    let merged = false;
+
+    // Merge touching/overlapping T-junction (e.g. B1 hall + open ramp) into one clean polygon hole
+    for (let j = i + 1; j < rects.length; j++) {
+      if (rects[j].used) continue;
+      const b = rects[j];
+      const xOverlap = a.x1 >= b.x0 - 0.05 && b.x1 >= a.x0 - 0.05;
+      const yOverlap = a.y1 >= b.y0 - 0.05 && b.y1 >= a.y0 - 0.05;
+      if (xOverlap && yOverlap) {
+        const wide = (a.y1 - a.y0) >= (b.y1 - b.y0) ? a : b;
+        const narrow = wide === a ? b : a;
+        if (wide.y0 <= narrow.y0 && wide.y1 >= narrow.y1 && narrow.x1 >= wide.x1 && narrow.x0 >= wide.x0) {
+          const hole = new THREE.Path();
+          hole.moveTo(wide.x0, wide.y0);
+          hole.lineTo(wide.x0, wide.y1);
+          hole.lineTo(wide.x1, wide.y1);
+          hole.lineTo(wide.x1, narrow.y1);
+          hole.lineTo(narrow.x1, narrow.y1);
+          hole.lineTo(narrow.x1, narrow.y0);
+          hole.lineTo(wide.x1, narrow.y0);
+          hole.lineTo(wide.x1, wide.y0);
+          hole.closePath();
+          groundShape.holes.push(hole);
+          a.used = true;
+          b.used = true;
+          merged = true;
+          break;
+        }
+      }
+    }
+
+    if (!merged) {
+      const hole = new THREE.Path();
+      hole.moveTo(a.x0, a.y0);
+      hole.lineTo(a.x0, a.y1);
+      hole.lineTo(a.x1, a.y1);
+      hole.lineTo(a.x1, a.y0);
+      hole.closePath();
+      groundShape.holes.push(hole);
+      a.used = true;
+    }
+  }
+
+  const geo = new THREE.ShapeGeometry(groundShape);
+  const posAttr = geo.attributes && geo.attributes.position;
+  const uvAttr = geo.attributes && geo.attributes.uv;
+  if (posAttr && uvAttr && typeof posAttr.getX === 'function' && typeof uvAttr.setXY === 'function') {
+    for (let i = 0; i < posAttr.count; i++) {
+      const px = posAttr.getX(i);
+      const py = posAttr.getY(i);
+      uvAttr.setXY(i, (px + half) / size, (py + half) / size);
+    }
+    uvAttr.needsUpdate = true;
+  }
+  return geo;
+}
+
 export function createGroundView(scene) {
   let mesh = null;
   let currentAuthMode = null;
+  let currentSize = 20000;
+  let lastCutoutSig = '';
 
   function selectTexture(authMode) {
     return authMode ? buildNaturalGroundTexture() : buildCityBlockTexture();
@@ -232,6 +404,7 @@ export function createGroundView(scene) {
   }
 
   function build(size = 20000, roadNetwork = null) {
+    currentSize = size;
     if (roadNetwork && typeof roadNetwork === 'object') {
       _authoritativeMapMode = isAuthoritativeMap(roadNetwork);
     }
@@ -242,7 +415,9 @@ export function createGroundView(scene) {
       mesh = null;
     }
     if (size <= 0) return;
-    const geo = new THREE.PlaneGeometry(size, size);
+    const cutouts = computeSubsurfaceCutouts(roadNetwork);
+    lastCutoutSig = cutouts.map((c) => c.map((v) => v.toFixed(1)).join(',')).join('|');
+    const geo = _buildGroundGeometry(size, cutouts);
     const authMode = _authoritativeMapMode;
     const texture = selectTexture(authMode);
     const mat = new THREE.MeshStandardMaterial({
@@ -264,6 +439,12 @@ export function createGroundView(scene) {
 
   function update(store) {
     if (!store || !store.roadNetwork) return;
+    const cutouts = computeSubsurfaceCutouts(store.roadNetwork);
+    const sig = cutouts.map((c) => c.map((v) => v.toFixed(1)).join(',')).join('|');
+    if (sig !== lastCutoutSig) {
+      build(currentSize, store.roadNetwork);
+      return;
+    }
     const authMode = isAuthoritativeMap(store.roadNetwork);
     _authoritativeMapMode = authMode;
     applyTextureForMode(authMode);

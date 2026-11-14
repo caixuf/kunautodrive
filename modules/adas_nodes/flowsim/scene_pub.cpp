@@ -204,24 +204,29 @@ cJSON* build_road_network_json(ScenePubConfig& cfg) {
                 cJSON_AddNumberToObject(edge, "lane_width",
                                         (road_lw > 0.0) ? road_lw : cfg.lane_width);
             }
-            /* oneway: 匝道(ramp)为单向道路，其余默认双向对称 */
-            bool is_oneway = (info.str_id.find("ramp") != std::string::npos);
+            /* oneway: 匝道(ramp)为单向道路，其余（含双向地库坡道 open_ramp）默认双向对称 */
+            const std::string& tag = !info.name.empty() ? info.name : info.str_id;
+            bool is_oneway = (tag.find("ramp") != std::string::npos) &&
+                             (tag.find("open_ramp") == std::string::npos);
             cJSON_AddBoolToObject(edge, "oneway", is_oneway);
             cJSON_AddNumberToObject(edge, "length", info.length);
-            /* 道路类型：从 cfg.road_type 继承。第一条 edge 携带完整类型信息，
-             * 后续 edge 可根据 name 推断（ramp→ramp_curve，viaduct→viaduct_highway）。 */
-            if (i == 0 && !cfg.road_type.empty()) {
+            /* 道路类型：优先使用 xodr <road name="..."> 推断；若无 name 再由 edge 0 继承 cfg.road_type */
+            if (i == 0 && !cfg.road_type.empty() && info.name.empty()) {
                 cJSON_AddStringToObject(edge, "type", cfg.road_type.c_str());
             } else {
-                /* 根据 name 推断类型，与 json_to_xodr.py 的命名约定一致 */
+                /* 根据 name/str_id 推断类型，与 json_to_xodr.py 的命名约定一致 */
                 const char* etype = "road";
-                if (info.str_id.find("ramp") != std::string::npos) {
+                if (tag.find("garage") != std::string::npos) {
+                    etype = "garage_hall";
+                } else if (tag.find("open_ramp") != std::string::npos) {
+                    etype = "open_ramp";
+                } else if (tag.find("ramp") != std::string::npos) {
                     etype = "ramp_curve";
-                } else if (info.str_id.find("viaduct") != std::string::npos) {
+                } else if (tag.find("viaduct") != std::string::npos) {
                     etype = "viaduct_highway";
-                } else if (info.str_id.find("urban") != std::string::npos) {
+                } else if (tag.find("urban") != std::string::npos) {
                     etype = "urban";
-                } else if (info.str_id.find("cross") != std::string::npos) {
+                } else if (tag.find("cross") != std::string::npos) {
                     etype = "cross_road";
                 }
                 cJSON_AddStringToObject(edge, "type", etype);
@@ -333,6 +338,9 @@ cJSON* build_ego_json(const Entity& e) {
     cJSON_AddNumberToObject(j, "roll", e.roll);
     cJSON_AddNumberToObject(j, "mu_scale", e.surface_mu_scale);
     cJSON_AddNumberToObject(j, "road_grade", e.road_grade);
+    if (e.parked_fixed) {
+        cJSON_AddBoolToObject(j, "parked_fixed", true);
+    }
     return j;
 }
 
@@ -369,6 +377,9 @@ cJSON* build_npc_vehicle_json(const Entity& e) {
     cJSON_AddNumberToObject(j, "roll", e.roll);
     cJSON_AddNumberToObject(j, "mu_scale", e.surface_mu_scale);
     cJSON_AddNumberToObject(j, "road_grade", e.road_grade);
+    if (e.parked_fixed) {
+        cJSON_AddBoolToObject(j, "parked_fixed", true);
+    }
     return j;
 }
 
@@ -421,6 +432,7 @@ cJSON* build_etc_gate_json(const Entity& e) {
     cJSON_AddNumberToObject(j, "id", (double)e.id);
     cJSON_AddNumberToObject(j, "x", e.x);
     cJSON_AddNumberToObject(j, "y", e.y);
+    cJSON_AddNumberToObject(j, "z", e.z);
     cJSON_AddNumberToObject(j, "heading", e.heading);
     cJSON_AddStringToObject(j, "state", etc_gate_state_by_phase(e.phase_state));
     /* phase_timer ∈ [0,1] 表示抬杆进度（scene_events.cpp 约定） */
@@ -566,10 +578,42 @@ char* build_scene_frame_json(const EntityPool& pool,
         cJSON_AddBoolToObject(jpg, "enabled", true);
         cJSON_AddNumberToObject(jpg, "x", cfg.parking_goal.x);
         cJSON_AddNumberToObject(jpg, "y", cfg.parking_goal.y);
+        if (cfg.parking_goal.z != 0.0)
+            cJSON_AddNumberToObject(jpg, "z", cfg.parking_goal.z);
         cJSON_AddNumberToObject(jpg, "heading", cfg.parking_goal.heading);
         cJSON_AddNumberToObject(jpg, "width", cfg.parking_goal.width);
         cJSON_AddNumberToObject(jpg, "length", cfg.parking_goal.length);
         cJSON_AddItemToObject(root, "parking_goal", jpg);
+    }
+
+    if (cfg.park_out.enabled) {
+        cJSON* jpo = cJSON_CreateObject();
+        cJSON_AddBoolToObject(jpo, "enabled", true);
+        cJSON_AddNumberToObject(jpo, "slot_x", cfg.park_out.slot_x);
+        cJSON_AddNumberToObject(jpo, "slot_y", cfg.park_out.slot_y);
+        cJSON_AddNumberToObject(jpo, "slot_z", cfg.park_out.slot_z);
+        cJSON_AddNumberToObject(jpo, "slot_heading", cfg.park_out.slot_heading);
+        cJSON_AddNumberToObject(jpo, "exit_x", cfg.park_out.exit_x);
+        cJSON_AddNumberToObject(jpo, "exit_y", cfg.park_out.exit_y);
+        cJSON_AddNumberToObject(jpo, "exit_z", cfg.park_out.exit_z);
+        cJSON_AddNumberToObject(jpo, "exit_heading", cfg.park_out.exit_heading);
+        cJSON_AddNumberToObject(jpo, "corridor_width", cfg.park_out.corridor_width);
+        cJSON_AddItemToObject(root, "park_out", jpo);
+    }
+
+    if (!cfg.parking_slots.empty()) {
+        cJSON* jps = cJSON_AddArrayToObject(root, "parking_slots");
+        for (const auto& s : cfg.parking_slots) {
+            cJSON* js = cJSON_CreateObject();
+            cJSON_AddNumberToObject(js, "id", (double)s.id);
+            cJSON_AddNumberToObject(js, "x", s.x);
+            cJSON_AddNumberToObject(js, "y", s.y);
+            cJSON_AddNumberToObject(js, "z", s.z);
+            cJSON_AddNumberToObject(js, "heading", s.heading);
+            cJSON_AddNumberToObject(js, "width", s.width);
+            cJSON_AddNumberToObject(js, "length", s.length);
+            cJSON_AddItemToArray(jps, js);
+        }
     }
 
     /* traffic_density 自动补给结果（D3-2 可观测性）：spawn 结论此前只有一条

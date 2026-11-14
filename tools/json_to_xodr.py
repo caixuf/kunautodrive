@@ -543,8 +543,10 @@ def roads_from_road_network(rn_cfg: dict) -> tuple[list[Road], list[Junction]]:
         else:
             r, state = build_straight_road(eid, etype, length, lanes, lw, sp, state)
         r.oneway = oneway
-        # 匝道(ramp)类道路默认单向
-        if "ramp" in etype.lower():
+        # 匝道(ramp)类道路默认单向；显式声明 oneway 或 open_ramp（双向地库坡道）除外
+        if "oneway" in e and isinstance(e["oneway"], bool):
+            r.oneway = e["oneway"]
+        elif "ramp" in etype.lower() and etype.lower() != "open_ramp":
             r.oneway = True
         # 高架 elevation_profile 透传（ [{"s":0,"h":0},{"s":250,"h":8}] ）
         if e.get("elevation_profile"):
