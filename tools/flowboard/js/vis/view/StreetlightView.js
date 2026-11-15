@@ -20,7 +20,7 @@
 
 import { getStdMaterial, createEmissiveMaterial } from '../core/AssetFactory.js';
 import { EDGE_TYPE, isGarageOrRampEdge } from '../core/Constants.js';
-import { directionToRotationY } from '../math/Coord.js';
+import { directionToRotationY, worldToThree } from '../math/Coord.js';
 import { computeEdgeAxis } from '../model/RoadAxis.js';
 import { getTopology } from '../model/TopologyModel.js';
 
@@ -54,40 +54,80 @@ export function createStreetlightView(scene) {
     poleMesh = armMesh = headMesh = glowMesh = null;
   }
 
-  function build(roadNetwork) {
+  function build(roadNetwork, worldLayout = null) {
     clear();
-    if (!roadNetwork || !roadNetwork.edges || roadNetwork.edges.length === 0) return;
+    const hasAuthPoles = !!(worldLayout && Array.isArray(worldLayout.poles));
+    if (!hasAuthPoles && (!roadNetwork || !roadNetwork.edges || roadNetwork.edges.length === 0)) return;
 
+    const slots = [];  // [{x, z, nx, nz, side: +1|-1, py}]
+    if (hasAuthPoles) {
+      for (const p of worldLayout.poles) {
+        const [tx, ty, tz] = worldToThree(p.x || 0, p.y || 0, p.z || 0);
+        const [nxT, , nzT] = worldToThree(p.nx || 0, p.ny || 0, 0);
+        // p.nx, p.ny 为 ENU 向外单位法线 → worldToThree 转成 THREE 向外向量，悬臂 dir = -nx*1 指向路中心
+        slots.push({
+          x: tx,
+          z: tz,
+          nx: nxT,
+          nz: nzT,
+          side: 1,
+          py: ty,
+        });
+      }
+    } else {
     /* P0 路口避让（TopologyModel 单一事实源）：路灯立在路口内/边缘会挡道且
      * 视觉上与路口渠化冲突。距路口中心 < radius + 2m 的槽位丢弃（与 TreeView 同 margin）。 */
     const topo = getTopology(roadNetwork);
 
-    // ── 第一遍：收集所有有效路轴供碰撞检测 ──
+    // ── 第一遍：收集所有有效路轴（含地下/敞口坡道净空带）供碰撞检测 ──
     const allAxes = [];
+    const rampClearanceZones = [];
     for (const edge of roadNetwork.edges) {
-      if (edge.type === EDGE_TYPE.VIADUCT_HIGHWAY || edge.name === EDGE_TYPE.VIADUCT_HIGHWAY || isGarageOrRampEdge(edge)) continue;
       const axis = computeEdgeAxis(edge, roadNetwork.lane_data);
-      if (axis.ok && axis.spine.length >= 2) {
-        for (let i = 0; i < axis.spine.length; i++) axis.spine[i].cum = axis.cum[i];
-        let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-        for (const p of axis.spine) {
-          if (p.px < minX) minX = p.px;
-          if (p.px > maxX) maxX = p.px;
-          if (p.pz < minZ) minZ = p.pz;
-          if (p.pz > maxZ) maxZ = p.pz;
-        }
-        allAxes.push({
-          edge,
-          axis,
-          halfW: axis.halfWidth,
-          isOneWay: edge.oneway === true,
-          minX, maxX, minZ, maxZ,
+      if (!axis.ok || axis.spine.length < 2) continue;
+      if (isGarageOrRampEdge(edge)) {
+        rampClearanceZones.push({
+          spine: axis.spine,
+          hw: axis.halfWidth + 2.2,
         });
+        continue;
       }
+      if (edge.type === EDGE_TYPE.VIADUCT_HIGHWAY || edge.name === EDGE_TYPE.VIADUCT_HIGHWAY) continue;
+      for (let i = 0; i < axis.spine.length; i++) axis.spine[i].cum = axis.cum[i];
+      let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+      for (const p of axis.spine) {
+        if (p.px < minX) minX = p.px;
+        if (p.px > maxX) maxX = p.px;
+        if (p.pz < minZ) minZ = p.pz;
+        if (p.pz > maxZ) maxZ = p.pz;
+      }
+      allAxes.push({
+        edge,
+        axis,
+        halfW: axis.halfWidth,
+        isOneWay: edge.oneway === true,
+        minX, maxX, minZ, maxZ,
+      });
     }
 
-    /** 空间几何碰撞检测：判断点 (x, z, py) 是否落在任何同层路段（或本体弯道内侧）的沥青车道或安全外缘内 */
+    /** 空间几何碰撞检测：判断点 (x, z, py) 是否落在任何同层路段或地库敞口坡道净空上方 */
     function isInsideAnyRoad(x, z, py) {
+      if (py <= 1.0) {
+        for (const rz of rampClearanceZones) {
+          const sp = rz.spine;
+          for (let k = 0; k < sp.length - 1; k++) {
+            const p1 = sp[k], p2 = sp[k + 1];
+            const segPy = ((p1.py || 0) + (p2.py || 0)) * 0.5;
+            if (segPy > 0.5) continue;
+            const dx = p2.px - p1.px, dz = p2.pz - p1.pz;
+            const len2 = dx * dx + dz * dz;
+            if (len2 < 1e-4) continue;
+            const t = Math.max(0, Math.min(1, ((x - p1.px) * dx + (z - p1.pz) * dz) / len2));
+            const projX = p1.px + dx * t, projZ = p1.pz + dz * t;
+            if ((x - projX) * (x - projX) + (z - projZ) * (z - projZ) < rz.hw * rz.hw) return true;
+          }
+        }
+      }
       for (const item of allAxes) {
         const hw = item.halfW + 0.15; // 道路边缘 0.15m 安全红线
         // AABB 粗筛：1 个指令跳过 99.9% 远端不相交道路，瞬时完成万级大图碰撞计算
@@ -115,7 +155,6 @@ export function createStreetlightView(scene) {
     }
 
     // ── 第二遍：收集所有合法路灯放置点 ──
-    const slots = [];  // [{x, z, nx, nz, side: +1|-1, py}]
     for (const item of allAxes) {
       const { edge, axis, halfW, isOneWay } = item;
       const spine = axis.spine;
@@ -132,23 +171,33 @@ export function createStreetlightView(scene) {
         let j = 1;
         while (j < spine.length && spine[j].cum < targetArc) j++;
         if (j >= spine.length) j = spine.length - 1;
-        const s = spine[j];
-        const py = s.py || 0;
+        const prev = spine[j - 1] || spine[j];
+        const curr = spine[j];
+        const segLen = (curr.cum || 0) - (prev.cum || 0);
+        const u = segLen > 1e-6 ? Math.max(0, Math.min(1, (targetArc - prev.cum) / segLen)) : 0;
+        const spx = prev.px + (curr.px - prev.px) * u;
+        const spy = (prev.py || 0) + ((curr.py || 0) - (prev.py || 0)) * u;
+        const spz = prev.pz + (curr.pz - prev.pz) * u;
+        const rawNx = prev.nx + (curr.nx - prev.nx) * u;
+        const rawNz = prev.nz + (curr.nz - prev.nz) * u;
+        const nLen = Math.hypot(rawNx, rawNz) || 1;
+        const snx = rawNx / nLen;
+        const snz = rawNz / nLen;
 
         // 单行道/分幅道路：始终布设在右侧路肩（side = -1），严禁插在左侧车道隔离带与对向车道之间
         // 双向道路：优先交替，但若左侧与其他车道重叠，自动回退到右侧
         let side = isOneWay ? -1 : (i % 2 === 0 ? 1 : -1);
-        let x = s.px + s.nx * (halfW + LAMP_OFFSET) * side;
-        let z = s.pz + s.nz * (halfW + LAMP_OFFSET) * side;
+        let x = spx + snx * (halfW + LAMP_OFFSET) * side;
+        let z = spz + snz * (halfW + LAMP_OFFSET) * side;
 
         // 若选定的位置侵入了相邻其他道路或弯道内侧路面
-        if (isInsideAnyRoad(x, z, py)) {
+        if (isInsideAnyRoad(x, z, spy)) {
           if (!isOneWay && side === 1) {
             // 尝试换到右侧
             side = -1;
-            x = s.px + s.nx * (halfW + LAMP_OFFSET) * side;
-            z = s.pz + s.nz * (halfW + LAMP_OFFSET) * side;
-            if (isInsideAnyRoad(x, z, py)) continue; // 两侧均受阻则放弃
+            x = spx + snx * (halfW + LAMP_OFFSET) * side;
+            z = spz + snz * (halfW + LAMP_OFFSET) * side;
+            if (isInsideAnyRoad(x, z, spy)) continue; // 两侧均受阻则放弃
           } else {
             continue; // 单行道右侧仍受阻则丢弃
           }
@@ -157,8 +206,9 @@ export function createStreetlightView(scene) {
         // 路口红线避让（距路口边界 < 3.0m 丢弃）
         if (topo && topo.nearJunction(x, z, 3.0)) continue;
 
-        slots.push({ x, z, nx: s.nx, nz: s.nz, side, py });
+        slots.push({ x, z, nx: snx, nz: snz, side, py: spy });
       }
+    }
     }
 
     if (slots.length === 0) return;

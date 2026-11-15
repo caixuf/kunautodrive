@@ -150,7 +150,7 @@ static int find_or_add_name_slot(char* names, size_t stride, int count,
 #define EGO_POSE_HIST 64
 typedef struct {
     uint64_t ts_us;
-    double   x, y, hdg;
+    double   x, y, z, hdg;
 } EgoPoseSample;
 
 static struct {
@@ -334,6 +334,7 @@ static struct {
     /* 方向三：NPC MOBIL/加塞完成次数（flowsim 每帧发，0 也要可读）。 */
     int    scene_npc_lc_completed;
     char   scene_init_fingerprint[32];  /* 方向五：启动期初始化指纹（hex） */
+    char   scene_world_layout_hash[32]; /* WorldEngine 权威世界编译清单哈希 */
 
 #define MAX_SAMPLES 200  /* samples 环形缓冲长度：50ms 采样 × 200 = 10s 窗口 */
     /* ── samples 环形缓冲：最近 ~10s 的 ego 快照 ── */
@@ -444,7 +445,7 @@ static void monitor_try_reopen_ipc_bridges(void) {
 }
 
 /* 取时间戳最接近 ts_us 的历史位姿。命中返回 1；无历史或偏差 > 500ms 返回 0。 */
-static int ego_pose_at(uint64_t ts_us, double* x, double* y, double* hdg) {
+static int ego_pose_at(uint64_t ts_us, double* x, double* y, double* z, double* hdg) {
     int best = -1;
     uint64_t best_dt = UINT64_MAX;
     pthread_mutex_lock(&g.ego_pose_mutex);
@@ -456,6 +457,7 @@ static int ego_pose_at(uint64_t ts_us, double* x, double* y, double* hdg) {
     if (best >= 0 && best_dt <= 500000ULL) {
         if (x) *x = g.ego_pose_hist[best].x;
         if (y) *y = g.ego_pose_hist[best].y;
+        if (z) *z = g.ego_pose_hist[best].z;
         if (hdg) *hdg = g.ego_pose_hist[best].hdg;
     }
     pthread_mutex_unlock(&g.ego_pose_mutex);
@@ -538,11 +540,13 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
     {
         double px = json_extract_double(g.latest_vehicle_state, "x");
         double py = json_extract_double(g.latest_vehicle_state, "y");
+        double pz = json_extract_double(g.latest_vehicle_state, "z");
         double ph = json_extract_double(g.latest_vehicle_state, "hdg");
+        if (isnan(pz)) pz = 0.0;
         pthread_mutex_lock(&g.ego_pose_mutex);
         EgoPoseSample* slot = &g.ego_pose_hist[g.ego_pose_hist_head];
         slot->ts_us = clock_now_us();
-        slot->x = px; slot->y = py; slot->hdg = ph;
+        slot->x = px; slot->y = py; slot->z = pz; slot->hdg = ph;
         g.ego_pose_hist_head = (g.ego_pose_hist_head + 1) % EGO_POSE_HIST;
         if (g.ego_pose_hist_n < EGO_POSE_HIST) g.ego_pose_hist_n++;
         pthread_mutex_unlock(&g.ego_pose_mutex);
@@ -801,6 +805,13 @@ static void on_scene_frame(const Message* msg, void* user_data) {
                  "%s", j_fp->valuestring);
     } else {
         g.scene_init_fingerprint[0] = '\0';
+    }
+    cJSON* j_wlh = cJSON_GetObjectItemCaseSensitive(root, "world_layout_hash");
+    if (cJSON_IsString(j_wlh) && j_wlh->valuestring) {
+        snprintf(g.scene_world_layout_hash, sizeof(g.scene_world_layout_hash),
+                 "%s", j_wlh->valuestring);
+    } else {
+        g.scene_world_layout_hash[0] = '\0';
     }
     pthread_mutex_unlock(&g.scene_frame_mutex);
 
@@ -1888,10 +1899,13 @@ static void export_dashboard_json(void) {
     /* 初始化指纹（方向五）：确定性门禁的唯一数据来源。 */
     if (g.has_scene_frame) {
         char fp[32];
+        char wlh[32];
         pthread_mutex_lock(&g.scene_frame_mutex);
         snprintf(fp, sizeof(fp), "%s", g.scene_init_fingerprint);
+        snprintf(wlh, sizeof(wlh), "%s", g.scene_world_layout_hash);
         pthread_mutex_unlock(&g.scene_frame_mutex);
         if (fp[0]) cJSON_AddStringToObject(scene, "init_fingerprint", fp);
+        if (wlh[0]) cJSON_AddStringToObject(scene, "world_layout_hash", wlh);
     }
 
     /* 施工区（后端单一事实源）：从 scene/frame 缓存透传给前端。
@@ -2105,8 +2119,9 @@ static void export_dashboard_json(void) {
         if (perceived_snap.count > 128) perceived_snap.count = 128;
         /* 时刻对齐：优先用与障碍物时间戳同时刻的 ego 位姿（消掉一个感知周期的滞后），
          * 历史缺失/过期则退回当前位姿并把次数记进诊断计数。 */
-        double pe_x = ego_x, pe_y = ego_y, pe_h = hdg;
-        if (!ego_pose_at(perceived_snap.timestamp_us, &pe_x, &pe_y, &pe_h)) {
+        double ego_z_now = json_extract_double(g.latest_vehicle_state, "z");
+        double pe_x = ego_x, pe_y = ego_y, pe_z = isnan(ego_z_now) ? 0.0 : ego_z_now, pe_h = hdg;
+        if (!ego_pose_at(perceived_snap.timestamp_us, &pe_x, &pe_y, &pe_z, &pe_h)) {
             g.perceived_pose_fallback++;
         }
         double chp = cos(pe_h), shp = sin(pe_h);
@@ -2129,8 +2144,13 @@ static void export_dashboard_json(void) {
             cJSON_AddStringToObject(pv, "type", tname);
             cJSON_AddNumberToObject(pv, "x", wx);
             cJSON_AddNumberToObject(pv, "y", wy);
+            cJSON_AddNumberToObject(pv, "z", pe_z + (double)ob->z);
+            cJSON_AddNumberToObject(pv, "heading", (double)ob->heading + pe_h);
             cJSON_AddNumberToObject(pv, "length", (double)ob->length);
             cJSON_AddNumberToObject(pv, "width", (double)ob->width);
+            if (ob->height > 0.05f) {
+                cJSON_AddNumberToObject(pv, "height", (double)ob->height);
+            }
             cJSON_AddNumberToObject(pv, "confidence", (double)ob->confidence);
             cJSON_AddItemToArray(pv_arr, pv);
         }

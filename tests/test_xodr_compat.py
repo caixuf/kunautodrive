@@ -236,6 +236,34 @@ class XodrCompatibilityTest(unittest.TestCase):
         self.assertEqual(report_bad_friction["status"], "FAIL")
         self.assertTrue(any(issue["code"] == "invalid_lane_friction" for issue in report_bad_friction["issues"]))
 
+    def test_open_ramp_symmetric_and_road_lane_links(self):
+        import xml.etree.ElementTree as ET
+        r_open = json_to_xodr.Road(
+            id=1, name="open_ramp", length=50.0, lane_count=2, lane_width=3.5,
+            speed_limit=7.0, geoms=[json_to_xodr.GeometrySeg(0.0, 0.0, 0.0, 0.0, 50.0, 0.0)],
+            oneway=False, predecessor=0, successor=2,
+        )
+        r_prev = json_to_xodr.Road(
+            id=0, name="garage_hall", length=50.0, lane_count=2, lane_width=3.5,
+            speed_limit=5.5, geoms=[json_to_xodr.GeometrySeg(0.0, -50.0, 0.0, 0.0, 50.0, 0.0)],
+            oneway=False, successor=1,
+        )
+        r_next = json_to_xodr.Road(
+            id=2, name="urban", length=50.0, lane_count=4, lane_width=3.5,
+            speed_limit=11.0, geoms=[json_to_xodr.GeometrySeg(0.0, 50.0, 0.0, 0.0, 50.0, 0.0)],
+            oneway=False, predecessor=1,
+        )
+        root = json_to_xodr.build_xodr([r_prev, r_open, r_next])
+        xml = ET.tostring(root, encoding="unicode")
+        report = check_xodr_text(xml)
+        self.assertEqual(report["status"], "PASS")
+        road1 = [r for r in root.findall("road") if r.get("id") == "1"][0]
+        # open_ramp must stay symmetric (both right -1 and left +1), not forced oneway
+        self.assertIsNotNone(road1.find("./lanes/laneSection/left/lane[@id='1']"))
+        right_l1 = road1.find("./lanes/laneSection/right/lane[@id='-1']")
+        self.assertIsNotNone(right_l1.find("./link/predecessor[@id='-1']"))
+        self.assertIsNotNone(right_l1.find("./link/successor[@id='-1']"))
+
 
 if __name__ == "__main__":
     unittest.main()

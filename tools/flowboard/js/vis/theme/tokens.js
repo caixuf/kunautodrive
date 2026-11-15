@@ -79,6 +79,28 @@ export const SCENE = {
   signBlueBg: 0x155799,       // P 停车场导视蓝底
   soilBed: 0x3b2f27,          // 树池种植土
   poleSteel: 0x5a636e,        // 灯杆/立柱钢材
+  /* 交通信号灯龙门架与矢向信号灯 */
+  tlHousing: 0x181c22,        // 信号灯箱深灰铝合金壳体
+  tlBackplate: 0x0d1014,      // 信号灯防眩黑底背板
+  tlBackplateBorder: 0xe2e8f0,// 国标 GB 14886 背板反光白边
+  tlRed: 0xff3030,            // 信号红
+  tlYellow: 0xffbb00,         // 信号黄
+  tlGreen: 0x10e860,          // 信号绿
+  percFacility: 0xffb347,     // 道路设施/树木/灯杆 3D 感知角标框（琥珀金）
+  /* 程序化世界引擎构件语义色（交通标志 / 街道设施 / 场景精修地标） */
+  signRed: 0xd62828,          // 禁令/停车标志交通红
+  signYellow: 0xf4b400,       // 警告/注意标志交通黄
+  signWhite: 0xf2f4f8,        // 白底反光交通标志面板
+  signGreen: 0x167844,        // 高速/城市快速路绿底指路牌
+  hydrantRed: 0xd93829,       // 室外地上消火栓红
+  gantrySteel: 0x626c78,      // 门架/拱门桁架镀锌钢
+  gantryBlue: 0x154d8a,       // 欢迎门架横幅蓝底
+  shelterGlass: 0x8cb8d0,     // 公交候车亭半透玻璃
+  shelterRoof: 0x353c45,      // 公交站雨棚深灰顶
+  foliagePine: 0x265938,      // 常绿针叶乔木深绿
+  landmarkStone: 0xb7bcc4,    // 雕塑/地标花岗岩浅灰
+  benchWood: 0x8b5a2b,        // 休闲长椅防腐木棕
+  plazaTile: 0x8a8f96,        // 广场石材铺装灰
 };
 
 /* ── 车道诊断叠加层配色（诊断语义色，不参与 junction_markings 换肤锁定）──

@@ -37,9 +37,11 @@ export function createStreetFurnitureView(scene) {
     }
   }
 
-  function build(roadNetwork) {
+  function build(roadNetwork, opts = null) {
     clear();
     if (!roadNetwork || !roadNetwork.edges) return;
+    // Authoritative WorldEngine / WorldCompiler layouts render signs & furniture via WorldPropsView.
+    if (opts && opts.worldLayout) return;
 
     /* 与其它静态 View 共享已缓存的拓扑，避免大地图重复做路口检测。 */
     const topology = getTopology(roadNetwork);

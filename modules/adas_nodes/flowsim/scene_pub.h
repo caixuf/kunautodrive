@@ -205,11 +205,17 @@ struct ScenePubConfig {
      * BuildingView 渲染真实建筑轮廓。建筑在仿真中不变，故缓存为字符串。 */
     std::string buildings_json;
 
+    /* ── WorldEngine 编译产物指纹（单一权威 3D/Physics/Sensor 清单哈希）── */
+    std::string world_layout_hash;
+
     /* ── traffic_density 自动补给结果（D3-2）──
      * flowsim_node init 阶段填充一次（spawn 是启动期行为）。enabled=false 时不
      * emit，保持"没声明就一个字段都不多"的兼容性。 */
     ScenePubTrafficDensity traffic_density;
 };
+
+/** Ensure cfg.cached_road_network_json is populated once and return reference. */
+const std::string& ensure_road_network_json(ScenePubConfig& cfg);
 
 /**
  * 构造 scene/frame JSON 字符串（调用方负责 free）。

@@ -28,9 +28,27 @@ static inline std::string convert_scenario_to_xodr(const std::string& scenario_p
     std::string xodr_path = xodr_buf;
 
     struct stat scen_st, xodr_st;
+    bool tool_newer = false;
+    {
+        struct stat tool_st;
+        std::string sc_dir = scenario_path.substr(0, scenario_path.find_last_of('/'));
+        std::string tools[] = {
+            sc_dir + "/../tools/json_to_xodr.py",
+            "/workspace/tools/json_to_xodr.py",
+            "tools/json_to_xodr.py"
+        };
+        for (const auto& t : tools) {
+            if (stat(t.c_str(), &tool_st) == 0 &&
+                stat(xodr_path.c_str(), &xodr_st) == 0 &&
+                tool_st.st_mtime > xodr_st.st_mtime) {
+                tool_newer = true;
+                break;
+            }
+        }
+    }
     if (stat(scenario_path.c_str(), &scen_st) == 0 &&
         stat(xodr_path.c_str(), &xodr_st) == 0 && xodr_st.st_size > 0 &&
-        xodr_st.st_mtime >= scen_st.st_mtime) {
+        xodr_st.st_mtime >= scen_st.st_mtime && !tool_newer) {
         LOG_INFO("flowsim", "json_to_xodr: cache hit for %s → %s",
                  scenario_path.c_str(), xodr_path.c_str());
         return xodr_path;

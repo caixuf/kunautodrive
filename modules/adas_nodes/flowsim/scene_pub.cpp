@@ -659,7 +659,7 @@ char* build_scene_frame_json(const EntityPool& pool,
         std::sort(near_facs.begin(), near_facs.end());
         if (!near_facs.empty()) {
             cJSON* jfacs = cJSON_AddArrayToObject(root, "facilities");
-            const size_t limit = std::min<size_t>(near_facs.size(), 40);
+            const size_t limit = std::min<size_t>(near_facs.size(), 64);
             for (size_t k = 0; k < limit; ++k) {
                 const auto& f = cfg.facilities[near_facs[k].second];
                 cJSON* jf = cJSON_CreateObject();
@@ -708,9 +708,28 @@ char* build_scene_frame_json(const EntityPool& pool,
         cJSON_AddStringToObject(root, "init_fingerprint", fp);
     }
 
+    if (!cfg.world_layout_hash.empty()) {
+        cJSON_AddStringToObject(root, "world_layout_hash", cfg.world_layout_hash.c_str());
+    }
+
     char* s = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     return s;
+}
+
+const std::string& ensure_road_network_json(ScenePubConfig& cfg) {
+    if (cfg.cached_road_network_json.empty()) {
+        cJSON* rn = build_road_network_json(cfg);
+        if (rn) {
+            char* s = cJSON_PrintUnformatted(rn);
+            if (s) {
+                cfg.cached_road_network_json = s;
+                free(s);
+            }
+            cJSON_Delete(rn);
+        }
+    }
+    return cfg.cached_road_network_json;
 }
 
 void publish_scene_frame(Transport* transport,

@@ -220,4 +220,45 @@ if (facilityGroup) {
 ok('P0-7: 全部道路设施标线贴地误差 <= 0.05m', markViolations.length === 0);
 if (markViolations.length) console.log('  markViolations:', markViolations.slice(0, 8));
 
+// P0-8: oneway=true 匝道/高架（无 lane_data）全车道（lane -1 / lane -2）均有桥面沥青托底，严禁 NPC 悬空
+{
+  const { createRoadView } = await import('../tools/flowboard/js/vis/view/RoadView.js');
+  const { createConnectorView } = await import('../tools/flowboard/js/vis/view/ConnectorView.js');
+  const { computeEdgeAxis } = await import('../tools/flowboard/js/vis/model/RoadAxis.js');
+  const p2pPath = pathResolve(dirname(fileURLToPath(import.meta.url)), '../scenarios/park_to_park_city.json');
+  const p2p = JSON.parse(readFileSync(p2pPath, 'utf-8'));
+  const rn = p2p.road_network;
+  const checkScene = new THREE.Scene();
+  createRoadView(checkScene).build(rn, { scenarioName: 'park_to_park_city' });
+  createConnectorView(checkScene).build(rn, rn.lane_data);
+  checkScene.updateMatrixWorld(true);
+  const rc = new THREE.Raycaster();
+  const down = new THREE.Vector3(0, -1, 0);
+  const missingDeck = [];
+  for (const edgeName of ['eastbound_viaduct_entry', 'westbound_viaduct_exit']) {
+    const edge = rn.edges.find((e) => e && e.name === edgeName);
+    ok(`P0-8: park_to_park_city 存在单向匝道 ${edgeName}`, Boolean(edge));
+    const ax = computeEdgeAxis(edge, rn.lane_data);
+    ok(`P0-8: ${edgeName} RoadAxis centerOffset ≈ +halfWidth`, Math.abs(ax.centerOffset - ax.halfWidth) < 0.25);
+    const mid = Math.floor(edge.nodes.length / 2);
+    const a = edge.nodes[mid];
+    const b = edge.nodes[mid + 1];
+    const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy) || 1;
+    const lx = -dy / len, ly = dx / len;
+    for (const laneOff of [-1.75, -5.25]) {
+      const wx = a[0] + lx * laneOff;
+      const wy = a[1] + ly * laneOff;
+      const tp = worldToThree(wx, wy, (a[2] || 0) + 5.0);
+      rc.set(new THREE.Vector3(tp[0], tp[1], tp[2]), down);
+      const hits = rc.intersectObjects(checkScene.children, true);
+      const deckHit = hits.find((h) => Math.abs(h.point.y - (a[2] || 0)) <= 0.35);
+      if (!deckHit) missingDeck.push({ edgeName, laneOff, expectedZ: a[2], hits: hits.map((h) => h.point.y) });
+      const rh = roadHeightAt({ roadNetwork: rn }, wx, wy, a[2] || 0);
+      ok(`P0-8: ${edgeName} lane=${laneOff} roadHeightAt≈${a[2]}`, Math.abs(rh - (a[2] || 0)) <= 0.25);
+    }
+  }
+  ok('P0-8: 单向高架匝道 lane -1/-2 射线均命中桥面沥青（无悬空）', missingDeck.length === 0);
+  if (missingDeck.length) console.log('  missingDeck:', missingDeck);
+}
+
 done();

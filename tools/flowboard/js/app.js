@@ -1912,6 +1912,15 @@ function updateDriveHud(force) {
   /* 决策 / 控制 / 驾驶模式 chip */
   _dhChip('dh-beh', st.behavior.label, st.behavior.tone);
   _dhChip('dh-ctl', st.control.label, st.control.tone);
+  var tlEl = document.getElementById('dh-tl');
+  if (tlEl) {
+    if (st.trafficLight && st.trafficLight.visible) {
+      tlEl.style.display = '';
+      _dhChip('dh-tl', st.trafficLight.label, st.trafficLight.tone);
+    } else {
+      tlEl.style.display = 'none';
+    }
+  }
   var drv = document.getElementById('dh-drv');
   if (drv) drv.textContent = st.driverMode || '—';
 

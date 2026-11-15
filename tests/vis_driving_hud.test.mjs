@@ -305,5 +305,32 @@ ok('CSS applies contain: layout style & tabular-nums to HUD',
   /contain:\s*layout style/.test(css) && /font-variant-numeric:\s*tabular-nums/.test(css));
 ok('app.js dirty-checks HUD text/classes/widths',
   app.includes('_ldSet') && app.includes('_dhChip') && app.includes('_dhWidth'));
+ok('index.html has traffic-light HUD #dh-tl', html.includes('id="dh-tl"'));
+
+{
+  const tlStatus = computeDrivingStatus({
+    scene: {
+      ego: { x: 520, y: -1.75, heading: 0, speed: 0 },
+      traffic_lights: [
+        { id: 0, x: 538.5, y: -1.75, approach_heading: 0, state: 'red', remain_s: 4.2, has_left_arrow: true, left_state: 'green', left_remain_s: 9.1 },
+        { id: 2, x: 561.75, y: -21.5, approach_heading: Math.PI / 2, state: 'red', remain_s: 12.0, has_left_arrow: false },
+      ],
+    },
+  }).trafficLight;
+  ok('trafficLight detects same-direction ahead TL', Boolean(tlStatus && tlStatus.visible));
+  ok('left-turn GREEN while straight RED reports ok tone + dual phases',
+    tlStatus.tone === 'ok' && tlStatus.label.includes('↑红') && tlStatus.label.includes('←绿'));
+
+  const liveEntityTl = computeDrivingStatus({
+    scene: {
+      ego: { x: 510, y: -1.75, heading: 0, speed: 5 },
+      entities: [
+        { id: 52, type: 'tl', x: 545, y: -8.5, stop_x: 538.5, stop_y: -1.75, approach_heading: 0, state: 'red', remain_s: 3.1, has_left_arrow: true, left_state: 'green', left_remain_s: 7.4 },
+      ],
+    },
+  }).trafficLight;
+  ok('trafficLight falls back to live scene.entities type=tl',
+    Boolean(liveEntityTl && liveEntityTl.visible && liveEntityTl.has_left_arrow && liveEntityTl.label.includes('←绿')));
+}
 
 done();

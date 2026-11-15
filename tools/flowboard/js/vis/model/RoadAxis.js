@@ -368,9 +368,14 @@ export function computeRoadAxis(road) {
   // 2) 有车道数据或可由车道数与中心线合成虚拟车道 → 垂直投影 envelope 求 TRUE 中心
   let lanes = Array.isArray(road.lanes) ? road.lanes : [];
   if (lanes.length === 0 && laneCount > 0 && cl.length >= 2) {
+    const isOneway = road && road.oneway === true;
     lanes = [];
     for (let k = 0; k < laneCount; k++) {
-      const d = (k - (laneCount - 1) / 2.0) * laneWidth;
+      // OpenDRIVE 约定：无独立 lane_data 的单向路（oneway=true）所有车道都在参考线右侧
+      // (id=-1,-2,... → ENU 右法向 -(k+0.5)*w)；双向路沿中心线对称分布。
+      const d = isOneway
+        ? -(k + 0.5) * laneWidth
+        : (k - (laneCount - 1) / 2.0) * laneWidth;
       const laneCl = [];
       for (let i = 0; i < cl.length; i++) {
         let tx = 1, ty = 0;
@@ -416,9 +421,20 @@ export function computeRoadAxis(road) {
       console.warn('[RoadAxis] road 无 lanes，以 centerline 居中（不偏移、零回归）', road && road.id);
     }
   }
-  const cum = buildCumulative(spine);
-  const { left, right } = edgesFromSpine(spine, fallbackHw);
-  return { ok: true, fromLanes: false, spine: applyElevation(spine), cum, halfWidth: fallbackHw, centerOffset: 0, leftEdge: left, rightEdge: right };
+  const oneWayOffset = (road && road.oneway === true) ? fallbackHw : 0;
+  const fallbackSpine = oneWayOffset !== 0 ? offsetSpine(spine, oneWayOffset) : spine;
+  const cum = buildCumulative(fallbackSpine);
+  const { left, right } = edgesFromSpine(fallbackSpine, fallbackHw);
+  return {
+    ok: true,
+    fromLanes: false,
+    spine: applyElevation(fallbackSpine),
+    cum,
+    halfWidth: fallbackHw,
+    centerOffset: oneWayOffset,
+    leftEdge: left,
+    rightEdge: right,
+  };
 }
 
 /**
@@ -448,6 +464,7 @@ export function computeEdgeAxis(edge, laneData) {
     lanes,
     lane_width: edge.lane_width,
     lanes_count: edge.lanes,
+    oneway: edge.oneway === true,
     id: key,
   });
 }

@@ -6,7 +6,7 @@
  */
 
 import { sampleEdgeNodes } from '../math/Curve.js';
-import { directionToRotationY, tangentToNormal } from '../math/Coord.js';
+import { directionToRotationY, tangentToNormal, worldToThree, headingToRotationY } from '../math/Coord.js';
 import { EDGE_TYPE, LANE_WIDTH, isGarageOrRampEdge } from '../core/Constants.js';
 import { getCityModel, initCityModelCache } from '../../models.js';
 import { mergeGeometries } from '../math/GeometryMerge.js';
@@ -223,9 +223,27 @@ export function createBuildingView(scene) {
       }
     }
 
+    /* 若 WorldEngine 提供程序化天际线且当前路网无 OSM 建筑 → 消费权威编译槽位 */
+    const wl = store && store.worldLayout;
+    const slots = [];
+    if (wl && wl.buildings_source === 'world_engine' && Array.isArray(wl.buildings)) {
+      for (const b of wl.buildings) {
+        const [tx, ty, tz] = worldToThree(b.x || 0, b.y || 0, b.z || 0);
+        slots.push({
+          x: tx,
+          y: ty,
+          z: tz,
+          rotation: headingToRotationY(Number(b.heading) || 0),
+          height: Number(b.height) || 20,
+          width: Number(b.width) || 14,
+          depth: Number(b.depth) || 12,
+          seed: Number(b.seed) || 0.5,
+          layer: Number(b.layer) || 0,
+        });
+      }
+    } else {
     /* 无 OSM 建筑数据（旧地图/非 OSM 场景）→ 程序化道路两侧天际线（原实现）。 */
     const spacing = SPACING[tier] || SPACING.high;
-    const slots = [];
 
     // ── 道路占用空间哈希（线段粒度）：把每条路的中心线折线切成小段，
     //  每段按所在格子索引。建筑候选点到最近路段的垂距 < ROAD_OCCUPANCY_M
@@ -367,6 +385,7 @@ export function createBuildingView(scene) {
           }
         }
       }
+    }
     }
     if (!slots.length) return;
 

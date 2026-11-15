@@ -247,61 +247,74 @@ int bev_cnn_decode(const BevCnnModel* model,
     const float conf_thresh = 0.33f;
     int n_dets = 0;
 
-    for (int cls = 0; cls < 4; ++cls) {
-        const float* hm = out_feat + (size_t)cls * H * W;
-        for (int r = 0; r < H && n_dets < max_dets; ++r) {
-            for (int c = 0; c < W && n_dets < max_dets; ++c) {
-                float v = hm[r * W + c];
-                if (v < conf_thresh) continue;
+    for (int r = 0; r < H && n_dets < max_dets; ++r) {
+        for (int c = 0; c < W && n_dets < max_dets; ++c) {
+            /* Cross-class argmax per cell so one object never duplicates across classes */
+            int best_cls = -1;
+            float best_v = conf_thresh;
+            for (int cls = 0; cls < 4; ++cls) {
+                float v = out_feat[((size_t)cls * H + r) * W + c];
+                if (v >= best_v) {
+                    best_v = v;
+                    best_cls = cls;
+                }
+            }
+            if (best_cls < 0) continue;
 
-                /* 3x3 局部极大值抑制 */
-                int is_max = 1;
-                for (int dr = -1; dr <= 1; ++dr) {
-                    int nr = r + dr;
-                    if (nr < 0 || nr >= H) continue;
-                    for (int dc = -1; dc <= 1; ++dc) {
-                        if (dr == 0 && dc == 0) continue;
-                        int nc = c + dc;
-                        if (nc < 0 || nc >= W) continue;
-                        if (hm[nr * W + nc] > v) {
+            /* 3x3 cross-class local maximum NMS with deterministic tie-breaking */
+            int is_max = 1;
+            for (int dr = -1; dr <= 1 && is_max; ++dr) {
+                int nr = r + dr;
+                if (nr < 0 || nr >= H) continue;
+                for (int dc = -1; dc <= 1; ++dc) {
+                    if (dr == 0 && dc == 0) continue;
+                    int nc = c + dc;
+                    if (nc < 0 || nc >= W) continue;
+                    for (int ncls = 0; ncls < 4; ++ncls) {
+                        float nv = out_feat[((size_t)ncls * H + nr) * W + nc];
+                        if (nv > best_v ||
+                            (nv == best_v && (nr < r || (nr == r && nc < c)))) {
                             is_max = 0;
                             break;
                         }
                     }
                     if (!is_max) break;
                 }
-                if (!is_max) continue;
-
-                /* 亚像素偏移 (ch4: dx, ch5: dy) */
-                float dx = out_feat[(4 * H + r) * W + c];
-                float dy = out_feat[(5 * H + r) * W + c];
-                if (dx < -0.5f) dx = -0.5f; else if (dx > 0.5f) dx = 0.5f;
-                if (dy < -0.5f) dy = -0.5f; else if (dy > 0.5f) dy = 0.5f;
-
-                double xb = -precfg->range_x + ((double)c + 0.5 + (double)dx) * res_x;
-                double yb =  precfg->range_y_half - ((double)r + 0.5 + (double)dy) * res_y;
-
-                /* 尺寸 (ch6: width, ch7: length) */
-                float w = out_feat[(6 * H + r) * W + c];
-                float l = out_feat[(7 * H + r) * W + c];
-                if (w < 0.2f) w = 0.2f; else if (w > 8.0f) w = 8.0f;
-                if (l < 0.2f) l = 0.2f; else if (l > 15.0f) l = 15.0f;
-
-                /* 车体系速度 (ch8: vx, ch9: vy) */
-                float vx = out_feat[(8 * H + r) * W + c];
-                float vy = out_feat[(9 * H + r) * W + c];
-
-                BevPostDet* d = &dets[n_dets++];
-                d->x = (float)xb;
-                d->y = (float)yb;
-                d->vx = vx;
-                d->vy = vy;
-                d->width = w;
-                d->length = l;
-                d->type = cls;
-                d->confidence = v;
-                d->world_y = (float)(ego_y + xb * sh + yb * ch);
             }
+            if (!is_max) continue;
+
+            /* Sub-pixel offset (ch4: dx, ch5: dy) */
+            float dx = out_feat[(4 * H + r) * W + c];
+            float dy = out_feat[(5 * H + r) * W + c];
+            if (dx < -0.5f) dx = -0.5f; else if (dx > 0.5f) dx = 0.5f;
+            if (dy < -0.5f) dy = -0.5f; else if (dy > 0.5f) dy = 0.5f;
+
+            double xb = -precfg->range_x + ((double)c + 0.5 + (double)dx) * res_x;
+            double yb =  precfg->range_y_half - ((double)r + 0.5 + (double)dy) * res_y;
+
+            /* Dimensions (ch6: width, ch7: length) */
+            float w = out_feat[(6 * H + r) * W + c];
+            float l = out_feat[(7 * H + r) * W + c];
+            if (w < 0.2f) w = 0.2f; else if (w > 8.0f) w = 8.0f;
+            if (l < 0.2f) l = 0.2f; else if (l > 15.0f) l = 15.0f;
+
+            /* Ego-frame velocity (ch8: vx, ch9: vy) */
+            float vx = out_feat[(8 * H + r) * W + c];
+            float vy = out_feat[(9 * H + r) * W + c];
+
+            BevPostDet* d = &dets[n_dets++];
+            d->x = (float)xb;
+            d->y = (float)yb;
+            d->vx = vx;
+            d->vy = vy;
+            d->width = w;
+            d->length = l;
+            d->type = best_cls;
+            d->confidence = best_v;
+            d->world_y = (float)(ego_y + xb * sh + yb * ch);
+            d->z = 0.0f;
+            d->height = (best_cls == 1) ? 1.7f : 1.5f;
+            d->heading = 0.0f;
         }
     }
     return n_dets;

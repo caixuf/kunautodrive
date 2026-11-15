@@ -20,7 +20,7 @@
 
 import { getStdMaterial } from '../core/AssetFactory.js';
 import { EDGE_TYPE, isGarageOrRampEdge } from '../core/Constants.js';
-import { directionToRotationY } from '../math/Coord.js';
+import { directionToRotationY, worldToThree, headingToRotationY } from '../math/Coord.js';
 import { computeEdgeAxis } from '../model/RoadAxis.js';
 import { getTopology } from '../model/TopologyModel.js';
 
@@ -56,18 +56,31 @@ export function createBarrierView(scene) {
     postMesh = upperBeamMesh = lowerBeamMesh = null;
   }
 
-  function build(roadNetwork) {
+  function build(roadNetwork, worldLayout = null) {
     clear();
-    if (!roadNetwork || !roadNetwork.edges || roadNetwork.edges.length === 0) return;
+    const hasAuthBarriers = !!(worldLayout && worldLayout.barriers && Array.isArray(worldLayout.barriers.posts));
+    if (!hasAuthBarriers && (!roadNetwork || !roadNetwork.edges || roadNetwork.edges.length === 0)) return;
 
+    const posts = [];
+    const upperBeamSegs = [];
+    const lowerBeamSegs = [];
+    if (hasAuthBarriers) {
+      for (const p of worldLayout.barriers.posts) {
+        const [tx, ty, tz] = worldToThree(p.x || 0, p.y || 0, p.z || 0);
+        posts.push({ x: tx, y: ty + POST_H / 2, z: tz, rotY: headingToRotationY(p.heading || 0) });
+      }
+      for (const s of (worldLayout.barriers.spans || [])) {
+        const [sx, sy, sz] = worldToThree(s.x || 0, s.y || 0, s.z || 0);
+        const rotY = headingToRotationY(s.heading || 0);
+        upperBeamSegs.push({ x: sx, z: sz, len: s.len || SEGMENT_LEN, rotY, py: sy });
+        lowerBeamSegs.push({ x: sx, z: sz, len: s.len || SEGMENT_LEN, rotY, py: sy });
+      }
+    } else {
     /* P0（2026-08-14）：拓扑单一事实源。旧版护栏从 edge 首通铺到尾、毫无路口
      * 感知——路口/弯道接缝处多条 edge 的护栏互相穿插成圈（用户报障"栏杆在弯道
      * 地方交叉圆圈"）。现在 spine 点落在路口圆内即断链，护栏在路口边界终止。 */
     const topo = getTopology(roadNetwork);
 
-    const posts = [];
-    const upperBeamSegs = [];
-    const lowerBeamSegs = [];
     for (const edge of roadNetwork.edges) {
       if (edge.type === EDGE_TYPE.VIADUCT_HIGHWAY || edge.name === EDGE_TYPE.VIADUCT_HIGHWAY || isGarageOrRampEdge(edge)) continue;
       /* 只有高速（highway）才需要金属护栏。城市道路（urban）有路缘石 +
@@ -136,6 +149,7 @@ export function createBarrierView(scene) {
           prev = { x, z };
         }
       }
+    }
     }
 
     if (posts.length === 0) return;

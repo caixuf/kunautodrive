@@ -38,28 +38,33 @@ function _sampleEdgeZ(nodes, t) {
   return a.z + (b.z - a.z) * localT;
 }
 
-/** 计算点 (x,y) 到 edge 中心线的最近距离和投影参数 t */
-function _closestOnEdge(nodes, px, py) {
+/** 计算点 (x,y) 到 edge 中心线的最近距离和投影参数 t（oneway 右偏半幅时沿右法向对齐） */
+function _closestOnEdge(nodes, px, py, shiftRightM = 0) {
   if (!nodes || nodes.length < 2) return { dist: Infinity, t: 0, z: 0 };
-  
+
   let minDist = Infinity;
   let minT = 0;
   let minZ = 0;
-  
+
   for (let i = 0; i < nodes.length - 1; i++) {
     const a = nodes[i], b = nodes[i + 1];
-    const ax = a[0], ay = a[1], bx = b[0], by = b[1];
-    const dx = bx - ax, dy = by - ay;
+    const ax0 = a[0], ay0 = a[1], bx0 = b[0], by0 = b[1];
+    const dx = bx0 - ax0, dy = by0 - ay0;
     const len2 = dx * dx + dy * dy;
     if (len2 < 1e-6) continue;
-    
+    const len = Math.sqrt(len2);
+    // ENU 左法向为 (-dy/len, dx/len)，故右偏 shiftRightM 为 (+dy/len, -dx/len)*shiftRightM
+    const ox = shiftRightM !== 0 ? (dy / len) * shiftRightM : 0;
+    const oy = shiftRightM !== 0 ? (-dx / len) * shiftRightM : 0;
+    const ax = ax0 + ox, ay = ay0 + oy;
+
     let t = ((px - ax) * dx + (py - ay) * dy) / len2;
     t = Math.max(0, Math.min(1, t));
-    
+
     const projX = ax + dx * t;
     const projY = ay + dy * t;
     const dist2 = (px - projX) * (px - projX) + (py - projY) * (py - projY);
-    
+
     if (dist2 < minDist) {
       minDist = dist2;
       const edgeT = (i + t) / (nodes.length - 1);
@@ -67,7 +72,7 @@ function _closestOnEdge(nodes, px, py) {
       minZ = _sampleEdgeZ(nodes, edgeT);
     }
   }
-  
+
   return { dist: Math.sqrt(minDist), t: minT, z: minZ };
 }
 
@@ -75,20 +80,26 @@ function _closestOnEdge(nodes, px, py) {
 export function roadHeightAt(store, x, y, currentZ) {
   const rn = store && store.roadNetwork;
   if (!rn || !rn.edges || !rn.edges.length) return 0;
-  
+
   let minScore = Infinity;
   let resultZ = 0;
   const hasCurrentZ = Number.isFinite(currentZ);
-  
+
   for (const edge of rn.edges) {
     const nodes = edge.nodes;
     if (!nodes || nodes.length < 2) continue;
-    
+
     const laneWidth = edge.lane_width || LANE_WIDTH;
     const lanes = edge.lanes || 2;
     const halfWidth = (lanes * laneWidth) / 2;
-    
-    const { dist, z } = _closestOnEdge(nodes, x, y);
+    const key = edge.name != null ? String(edge.name) : String(edge.id);
+    const hasLaneData = Boolean(
+      rn.lane_data && ((rn.lane_data[key] && rn.lane_data[key].length) ||
+        (rn.lane_data[String(edge.id)] && rn.lane_data[String(edge.id)].length))
+    );
+    const shiftRightM = (edge.oneway === true && !hasLaneData) ? halfWidth : 0;
+
+    const { dist, z } = _closestOnEdge(nodes, x, y, shiftRightM);
     
     if (dist <= halfWidth + 4.0) {
       // 3D 竖向分层匹配：若传入当前车辆高程，优先吸附到同高度层的道路，

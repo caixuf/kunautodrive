@@ -185,8 +185,9 @@ function laneArrowSlots(edge) {
   const lanes = Math.max(1, Number(edge.lanes) || 2);
   const laneW = Number(edge.lane_width) || 3.5;
   if (edge.oneway === true) {
+    // 无 lane_data 时与 OpenDRIVE / RoadAxis 一致：单向车道分布在 spine 右侧 [-1..-lanes]
     return Array.from({ length: lanes }, (_, k) => ({
-      lateral: (k + 0.5 - lanes * 0.5) * laneW,
+      lateral: -(k + 0.5) * laneW,
       headingFlip: 0,
     }));
   }
@@ -256,23 +257,33 @@ export function inferRoadFacilities(roadNetwork, entities, scenarioName = '', op
     const isOneWay = edge.oneway === true;
     const laneDirection = isOneWay ? 0 : (projection?.lateral || -1) < 0 ? -1 : 1;
     const stopLineWidth = isOneWay ? lanes * laneWidth : lanes * laneWidth * 0.5;
+    const stopLateral = isOneWay
+      ? (hasLaneData ? 0 : -stopLineWidth * 0.5)
+      : laneDirection * stopLineWidth * 0.5;
     const stopCenter = offsetPoint(
       projection?.refX ?? x,
       projection?.refY ?? y,
       heading,
       0,
-      isOneWay ? 0 : laneDirection * stopLineWidth * 0.5,
+      stopLateral,
     );
     addMark(layout, stopCenter.x, stopCenter.y, heading + Math.PI * 0.5, stopLineWidth, 0.38, markZ, 0);
     layout.stopLines++;
     if (light.crosswalk !== false) {
       addCrosswalk(layout, stopCenter, heading, stopLineWidth, markZ, markPitch);
     }
-    if (light.has_left_arrow && !junctionHubs.some(h => distanceENU(stopCenter.x, stopCenter.y, h.x, h.y) < 35.0)) {
+    // 左转待转区独立箭头：只要箭头落点（stopCenter 后方约 12m）不在交叉口核心铺装内，
+    // 即便 stopCenter 距路口几何中心 < 35m 也应绘出左转导流箭头与直行↑组合标线。
+    if (light.has_left_arrow) {
       const apprHeading = laneDirection > 0 ? heading + Math.PI : heading;
-      const innerLat = isOneWay ? (lanes * 0.5 - 0.5) * laneWidth : -0.5 * laneWidth;
+      const innerLat = (isOneWay && hasLaneData) ? (lanes * 0.5 - 0.5) * laneWidth : -0.5 * laneWidth;
       const arrowPt = offsetPoint(projection?.refX ?? x, projection?.refY ?? y, apprHeading, -12.0, innerLat);
-      addLeftArrow(layout, arrowPt.x, arrowPt.y, apprHeading, markZ, laneDirection > 0 ? -markPitch : markPitch);
+      const insideHub = junctionHubs.some(
+        (h) => distanceENU(arrowPt.x, arrowPt.y, h.x, h.y) < ((h.radius || 14.0) + 3.0)
+      );
+      if (!insideHub) {
+        addLeftArrow(layout, arrowPt.x, arrowPt.y, apprHeading, markZ, laneDirection > 0 ? -markPitch : markPitch);
+      }
     }
   }
 

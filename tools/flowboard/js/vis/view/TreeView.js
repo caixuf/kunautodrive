@@ -13,7 +13,7 @@ import { getStdMaterial } from '../core/AssetFactory.js';
 import { EDGE_TYPE, isGarageOrRampEdge } from '../core/Constants.js';
 import { computeEdgeAxis } from '../model/RoadAxis.js';
 import { getTopology } from '../model/TopologyModel.js';
-import { pointInPolygonXZ } from '../math/Coord.js';
+import { pointInPolygonXZ, worldToThree } from '../math/Coord.js';
 
 const TREE_SPACING = 30;
 const TREE_PHASE   = 5;
@@ -131,17 +131,28 @@ export function inferTreeSlots(roadNetwork) {
       let j = 1;
       while (j < spine.length && spine[j].cum < targetArc) j++;
       if (j >= spine.length) j = spine.length - 1;
-      const s = spine[j];
+      const prev = spine[j - 1] || spine[j];
+      const curr = spine[j];
+      const segLen = (curr.cum || 0) - (prev.cum || 0);
+      const u = segLen > 1e-6 ? Math.max(0, Math.min(1, (targetArc - prev.cum) / segLen)) : 0;
+      const spx = prev.px + (curr.px - prev.px) * u;
+      const spy = (prev.py || 0) + ((curr.py || 0) - (prev.py || 0)) * u;
+      const spz = prev.pz + (curr.pz - prev.pz) * u;
+      const rawNx = prev.nx + (curr.nx - prev.nx) * u;
+      const rawNz = prev.nz + (curr.nz - prev.nz) * u;
+      const nLen = Math.hypot(rawNx, rawNz) || 1;
+      const snx = rawNx / nLen;
+      const snz = rawNz / nLen;
       for (const side of [-1, 1]) {
-        if (edge.name === 'surface_lot_avenue' && s.px >= 3200 && s.px <= 3250) continue; // 地面停车场泊位区段不种行道树
-        const x = s.px + s.nx * (halfWidth + TREE_OFFSET) * side;
-        const z = s.pz + s.nz * (halfWidth + TREE_OFFSET) * side;
+        if (edge.name === 'surface_lot_avenue' && spx >= 3200 && spx <= 3250) continue; // 地面停车场泊位区段不种行道树
+        const x = spx + snx * (halfWidth + TREE_OFFSET) * side;
+        const z = spz + snz * (halfWidth + TREE_OFFSET) * side;
         if (nearParkingZone(x, z)) continue; // 泊位与倒车包络避让
         if (nearJunction(x, z)) continue;   // 路口避让
         if (onAnyRoadBand(x, z, bandGrid)) continue;   // 2026-08-16 路面避让：树不上沥青
         if (!inLanduse(x, z)) continue;      // 阶段6：仅绿地内种树
         const variant = ((i * 17 + (side > 0 ? 7 : 3)) % 11) / 10;
-        slots.push({ x, z, py: s.py, side, arc: targetArc, variant });
+        slots.push({ x, z, py: spy, side, arc: targetArc, variant });
       }
     }
   }
@@ -169,9 +180,22 @@ export function createTreeView(scene) {
     stats = { trees: 0, drawCalls: 0 };
   }
 
-  function build(roadNetwork) {
+  function build(roadNetwork, worldLayout = null) {
     clear();
-    const slots = inferTreeSlots(roadNetwork);
+    const hasAuthTrees = !!(worldLayout && Array.isArray(worldLayout.trees));
+    const slots = hasAuthTrees
+      ? worldLayout.trees.map((t) => {
+          const [tx, ty, tz] = worldToThree(t.x || 0, t.y || 0, t.z || 0);
+          return {
+            x: tx,
+            py: ty,
+            z: tz,
+            variant: t.variant != null ? t.variant : 0.5,
+            heightScale: t.height_scale,
+            crownScale: t.crown_scale,
+          };
+        })
+      : inferTreeSlots(roadNetwork);
 
     if (slots.length === 0) return;
 
@@ -192,8 +216,8 @@ export function createTreeView(scene) {
     const dummy = new THREE.Object3D();
     for (let i = 0; i < N; i++) {
       const s = slots[i];
-      const heightScale = 0.88 + s.variant * 0.24;
-      const crownScale = 0.90 + s.variant * 0.18;
+      const heightScale = s.heightScale != null ? s.heightScale : (0.88 + s.variant * 0.24);
+      const crownScale = s.crownScale != null ? s.crownScale : (0.90 + s.variant * 0.18);
       const trunkH = TRUNK_H * heightScale;
       dummy.position.set(s.x, s.py + trunkH / 2, s.z); // Coord: sampled THREE coordinates
       dummy.rotation.set(0, s.variant * Math.PI * 2, 0);

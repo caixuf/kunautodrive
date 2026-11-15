@@ -34,6 +34,10 @@ message(STATUS "FlowEngine build: ${FLOWENGINE_BUILD}")
 include(${FLOW_ROOT}/cmake/Lanelet2Standalone.cmake)
 kun_add_lanelet2()
 
+# Phase 6: Jolt Physics standalone 3D rigid-body backend
+include(${FLOW_ROOT}/cmake/JoltPhysics.cmake)
+flow_add_jolt()
+
 if(WIN32 AND NOT TARGET m)
     add_library(m INTERFACE)
 endif()
@@ -370,6 +374,7 @@ endif()
 add_library(flowsim_node SHARED
     flowsim_node.cpp
     flowsim/building.cpp
+    flowsim/world_engine.cpp
     flowsim/road_network.cpp
     flowsim/road_position.cpp
     flowsim/physics.cpp
@@ -408,6 +413,16 @@ if(TARGET kun_lanelet2)
     message(STATUS "flowsim_node: linked kun_lanelet2 (D2-03 Prefer A)")
 else()
     message(STATUS "flowsim_node: kun_lanelet2 missing — real-ID path compile-disabled")
+endif()
+
+# Phase 6: Jolt Physics 3D rigid-body vehicle & terrain engine
+if(TARGET Jolt)
+    target_sources(flowsim_node PRIVATE flowsim/physics_world.cpp)
+    target_link_libraries(flowsim_node Jolt)
+    target_compile_definitions(flowsim_node PRIVATE FLOW_HAS_JOLT=1)
+    message(STATUS "flowsim_node: linked Jolt Physics 3D (physics_model=jolt3d)")
+else()
+    message(STATUS "flowsim_node: Jolt target missing — jolt3d physics disabled")
 endif()
 
 

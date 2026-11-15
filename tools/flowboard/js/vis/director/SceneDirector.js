@@ -30,8 +30,10 @@ import { createEffectView } from '../view/EffectView.js';
 import { createTrajectoryView } from '../view/TrajectoryView.js';
 import { createRoadFacilityView } from '../view/RoadFacilityView.js';
 import { createStreetFurnitureView } from '../view/StreetFurnitureView.js';
+import { createWorldPropsView } from '../view/WorldPropsView.js';
 import { createLaneDiagView } from '../view/LaneDiagView.js';
 import { createGarageView } from '../view/GarageView.js';
+import { resolveWorldLayout, fetchWorldLayout } from '../model/WorldLayoutClient.js';
 import {
   tickDeadReckon, _dr,
   updateEntityDeadReckon, tickEntityDeadReckon, getEntitySmooth,
@@ -79,6 +81,7 @@ ViewRegistry.register('effect',       createEffectView);
 ViewRegistry.register('trajectory',   createTrajectoryView);
 ViewRegistry.register('roadFacility', createRoadFacilityView);
 ViewRegistry.register('streetFurniture', createStreetFurnitureView);
+ViewRegistry.register('worldProps',   createWorldPropsView);
 /* 车道诊断叠加层（观测用）：默认关闭，由 app.js 的 K 键 / 场景视图开关 /
  * ?lanediag=1 打开，避免影响常规观感。 */
 ViewRegistry.register('laneDiag',    createLaneDiagView);
@@ -90,6 +93,10 @@ export function createSceneDirector(scene) {
    * 工厂本身抛错不会炸整个 director。 */
   ViewRegistry.instantiateAll(scene);
   let lastRoadHash = '';
+  let lastWorldKey = '';
+  let lastStaticRN = null;
+  let requestedLayoutHash = '';
+  let disposed = false;
 
   /* ── Layer 树（Qt 对象树 + 单向依赖）──────────────────────────
    * 4 个语义层，构成完整对象树。所有 View（静态 + 动态）都挂到 Layer，
@@ -116,7 +123,7 @@ export function createSceneDirector(scene) {
    * 不再保留 9 个顶层 const —— ViewRegistry 是单一事实来源，避免双份引用。 */
   for (const [layerName, viewNames] of [
     ['env',   ['ground', 'viaduct', 'garage']],
-    ['road',  ['road', 'streetlight', 'barrier', 'connector', 'tree', 'construction', 'roadFacility', 'streetFurniture']],
+    ['road',  ['road', 'streetlight', 'barrier', 'connector', 'tree', 'construction', 'roadFacility', 'streetFurniture', 'worldProps']],
     ['agent', ['vehicle', 'label', 'perception', 'effect', 'trajectory']],
     ['infra', ['trafficLight', 'etcGate', 'laneDiag']],
   ]) {
@@ -225,17 +232,34 @@ export function createSceneDirector(scene) {
         if (!rn.lane_data && Object.keys(md.laneData).length) rn.lane_data = md.laneData;
       }
       const hash = roadNetworkHash(rn);
-      if (hash !== lastRoadHash) {
-        const edgesArr = Array.isArray(rn.edges) ? rn.edges : [];
-        const isViaduct = edgesArr.length === 1 && edgesArr.some(e =>
-          e && (e.name === EDGE_TYPE.VIADUCT_HIGHWAY || e.type === EDGE_TYPE.VIADUCT_HIGHWAY)
-        );
+      const frameLayoutHash = (clean && typeof clean.world_layout_hash === 'string')
+        ? clean.world_layout_hash
+        : (frame && typeof frame.world_layout_hash === 'string' ? frame.world_layout_hash : '');
+      const edgesArr = Array.isArray(rn.edges) ? rn.edges : [];
+      const isViaduct = edgesArr.length === 1 && edgesArr.some(e =>
+        e && (e.name === EDGE_TYPE.VIADUCT_HIGHWAY || e.type === EDGE_TYPE.VIADUCT_HIGHWAY)
+      );
 
-        ViewRegistry.safeCall('road', 'build', rn);
-        ViewRegistry.safeCall('construction', 'build', rn, frame.construction_zones);
-        ViewRegistry.safeCall('ground', 'build', 20000, rn);
-        ViewRegistry.safeCall('garage', 'build', rn, frame);
-        ViewRegistry.safeCall('streetFurniture', 'build', rn);
+      const rebuildStaticWorld = (layoutHash) => {
+        if (disposed) return;
+        const resolvedLayout = isViaduct
+          ? null
+          : resolveWorldLayout({ worldLayoutHash: layoutHash, roadNetwork: rn, mapData: md });
+        const authTag = resolvedLayout ? `${resolvedLayout.authoritative || 'fb'}:${resolvedLayout.world_hash || ''}` : 'none';
+        const nextWorldKey = `${hash}|${layoutHash}|${authTag}`;
+        const roadChanged = hash !== lastRoadHash;
+        if (!roadChanged && nextWorldKey === lastWorldKey) return;
+
+        store.worldLayout = resolvedLayout;
+        store.worldLayoutHash = resolvedLayout ? (resolvedLayout.world_hash || '') : '';
+
+        if (roadChanged) {
+          ViewRegistry.safeCall('road', 'build', rn);
+          ViewRegistry.safeCall('construction', 'build', rn, frame.construction_zones);
+          ViewRegistry.safeCall('ground', 'build', 20000, rn);
+          ViewRegistry.safeCall('garage', 'build', rn, frame);
+        }
+        ViewRegistry.safeCall('streetFurniture', 'build', rn, { worldLayout: resolvedLayout });
 
         if (isViaduct) {
           const edge0 = edgesArr[0] || {};
@@ -247,6 +271,7 @@ export function createSceneDirector(scene) {
           ViewRegistry.safeCall('barrier', 'build', { edges: [] });
           ViewRegistry.safeCall('tree', 'build', { edges: [] });
           ViewRegistry.safeCall('building', 'build', { edges: [] }, store);
+          ViewRegistry.safeCall('worldProps', 'build', { edges: [] });
           store.isViaduct = true;
           store.viaductVisLength = actualLength;
         } else {
@@ -260,10 +285,11 @@ export function createSceneDirector(scene) {
             pZones.push({ x: frame.parking_goal.x, y: frame.parking_goal.y });
           }
           const treeRn = pZones.length ? { ...rn, parking_zones: pZones } : rn;
-          ViewRegistry.safeCall('streetlight', 'build', rn);
-          ViewRegistry.safeCall('barrier', 'build', rn);
-          ViewRegistry.safeCall('tree', 'build', treeRn);
+          ViewRegistry.safeCall('streetlight', 'build', rn, resolvedLayout);
+          ViewRegistry.safeCall('barrier', 'build', rn, resolvedLayout);
+          ViewRegistry.safeCall('tree', 'build', treeRn, resolvedLayout);
           ViewRegistry.safeCall('building', 'build', rn, store);
+          ViewRegistry.safeCall('worldProps', 'build', rn, { worldLayout: resolvedLayout });
           const edge0 = edgesArr[0] || {};
           const nodes = Array.isArray(edge0.nodes) ? edge0.nodes : [];
           const isStraight = edgesArr.length === 1 && nodes.length >= 2 && nodes.every((node) => {
@@ -271,27 +297,42 @@ export function createSceneDirector(scene) {
             const y0 = Array.isArray(nodes[0]) ? nodes[0][1] : nodes[0].y;
             return Math.abs((y || 0) - (y0 || 0)) < 1;
           });
-          if (isStraight) {
-            ViewRegistry.safeCall('viaduct', 'build', {
-              laneCount: 4,
-              laneWidth: edge0.lane_width || LANE_WIDTH,
-              length: Math.min(edge0.length || edge0.length_m || 1000, 1600),
-              lateralOffset: 70,
-              withNationalHighway: false,
-              withEnvironment: false,
-            });
-          } else {
-            ViewRegistry.safeCall('viaduct', 'build', { enabled: false });
+          if (roadChanged) {
+            if (isStraight) {
+              ViewRegistry.safeCall('viaduct', 'build', {
+                laneCount: 4,
+                laneWidth: edge0.lane_width || LANE_WIDTH,
+                length: Math.min(edge0.length || edge0.length_m || 1000, 1600),
+                lateralOffset: 70,
+                withNationalHighway: false,
+                withEnvironment: false,
+              });
+            } else {
+              ViewRegistry.safeCall('viaduct', 'build', { enabled: false });
+            }
           }
           store.isViaduct = false;
           store.viaductVisLength = VIADUCT_VIS_LENGTH;
         }
 
-        ViewRegistry.safeCall('connector', 'build', rn);
+        ViewRegistry.safeCall('connector', 'build', rn, { worldLayout: resolvedLayout });
         lastRoadHash = hash;
+        lastWorldKey = nextWorldKey;
         store.roadNetwork = rn;
         store.roadHash = hash;
-        resetEntities();
+        if (roadChanged) resetEntities();
+      };
+
+      lastStaticRN = rn;
+      rebuildStaticWorld(frameLayoutHash);
+
+      if (frameLayoutHash && frameLayoutHash !== requestedLayoutHash && !isViaduct) {
+        requestedLayoutHash = frameLayoutHash;
+        fetchWorldLayout(frameLayoutHash, () => {
+          if (!disposed && lastStaticRN === rn) {
+            rebuildStaticWorld(frameLayoutHash);
+          }
+        });
       }
     }
 
@@ -581,6 +622,7 @@ export function createSceneDirector(scene) {
    * 当前 main.js 没用到（页面生命周期内不卸载），但留出口便于
    * 未来动态切场景、HMR、单测隔离用。 */
   function dispose() {
+    disposed = true;
     rootLayer.dispose();
   }
 

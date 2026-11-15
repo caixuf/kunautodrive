@@ -1161,6 +1161,12 @@ static bool dispatch_request(int fd, MonitorServer* ms,
                             } else {
                                 cJSON_AddItemToObject(map_obj, "roads", cJSON_CreateArray());
                             }
+                            {
+                                cJSON* jwg = cJSON_GetObjectItemCaseSensitive(sc_root, "world_gen");
+                                cJSON* js = cJSON_GetObjectItemCaseSensitive(sc_root, "random_seed");
+                                if (jwg) cJSON_AddItemToObject(map_obj, "world_gen", cJSON_Duplicate(jwg, 1));
+                                if (js && cJSON_IsNumber(js)) cJSON_AddNumberToObject(map_obj, "random_seed", js->valuedouble);
+                            }
                             map_json = cJSON_PrintUnformatted(map_obj);
                             if (map_json) {
                                 map_len = strlen(map_json);
@@ -1620,6 +1626,24 @@ static bool dispatch_request(int fd, MonitorServer* ms,
         handle_sse(fd, ms);
         close(fd);
         return false;
+    }
+
+    /* Route: /api/world/layout → WorldEngine compiled 3D/Physics/Sensor manifest (gzipped) */
+    if (strcmp(path, "/api/world/layout") == 0) {
+        const char* wpath = getenv("FLOW_WORLD_LAYOUT_FILE");
+        if (!wpath || !wpath[0]) wpath = "/tmp/flow_world_layout.json";
+        size_t wlen = 0;
+        char* wjson = read_file(wpath, &wlen);
+        if (!wjson || wlen == 0) {
+            free(wjson);
+            send_response(fd, "404 Not Found", "application/json",
+                          "{\"ok\":false,\"fallback\":\"client_compiler\"}");
+        } else {
+            send_response_full_bytes(fd, "200 OK", "application/json",
+                                     wjson, wlen, false, "no-cache", true, accept_encoding);
+            free(wjson);
+        }
+        return finish_response(fd, client_keep_alive);
     }
 
     /* Route: /api/topology → JSON (prefer cached dashboard JSON) */

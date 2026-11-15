@@ -378,6 +378,12 @@ export function cleanEntity(e) {
     stop_x: e.stop_x,
     stop_y: e.stop_y,
     lane_offset: e.lane_offset,
+    scenario_id: e.scenario_id,
+    approach_heading: (typeof e.approach_heading === 'number' && isFinite(e.approach_heading)) ? e.approach_heading : undefined,
+    has_left_arrow: Boolean(e.has_left_arrow),
+    left_state: e.left_state || undefined,
+    left_remain_s: (typeof e.left_remain_s === 'number' && isFinite(e.left_remain_s)) ? e.left_remain_s : undefined,
+    kind: e.kind,
   };
 }
 
@@ -470,6 +476,7 @@ export function validateSceneFrame(raw) {
 
   const clean = {
     ...frame,
+    world_layout_hash: (typeof frame.world_layout_hash === 'string') ? frame.world_layout_hash : '',
     ego: cleanEgo,
     predictions,
     friction_zones,

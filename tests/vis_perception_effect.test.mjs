@@ -121,6 +121,27 @@ console.log('=== PerceptionView & EffectView 车规级几何契约测试 ===\n')
   perc.update(store, 1150);
   eq('超出局部 Frenet 域的截断幻影预测光带被干净剔除', predMesh.geometry.drawRange.count, 0);
 
+  // 验证路灯杆 (pole, h=6.5) 与行道树 (tree, h=4.6) 即使经 perception/obstacles 标为 unknown，
+  // 也能按 height / facilities kind 渲染出完整高度 3D 角标框（而非 1m 矮方框）
+  store.entities = [];
+  store.predictions = [];
+  store.perceived = [
+    { id: 8110, type: 'unknown', x: 35, y: -8.5, length: 0.45, width: 0.45, height: 6.5 },
+  ];
+  store.facilities = [
+    { kind: 'tree', x: 42, y: -10.0, z: 0, length: 0.9, width: 0.9, height: 4.6, heading: 0 },
+  ];
+  perc.update(store, 1200);
+  const boxMesh = scene.children.find(c => c.isLineSegments && c.material.vertexColors === false);
+  const bPos = boxMesh.geometry.attributes.position.array;
+  const bCnt = boxMesh.geometry.drawRange.count;
+  let maxBoxY = -Infinity;
+  for (let i = 0; i < bCnt; i++) {
+    const yy = bPos[i * 3 + 1];
+    if (yy > maxBoxY) maxBoxY = yy;
+  }
+  ok('感知路灯/树木角标框渲染完整高度 (maxBoxY >= 6.0m)', maxBoxY >= 6.0);
+
   perc.dispose();
   eq('PerceptionView dispose 干净移除全部子节点', scene.children.length, 0);
 }

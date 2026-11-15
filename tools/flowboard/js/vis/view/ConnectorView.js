@@ -14,7 +14,8 @@
 
 import { getBox, getCylinder, getStdMaterial } from '../core/AssetFactory.js';
 import { LANE_WIDTH, DEFAULT_LANES, isTunnelEdge, isGarageOrRampEdge } from '../core/Constants.js';
-import { worldToThree, forwardENU, directionToRotationY, pointInPolygonXZ, tangentToNormal } from '../math/Coord.js';
+import { worldToThree, threeToWorld, forwardENU, directionToRotationY, pointInPolygonXZ, tangentToNormal } from '../math/Coord.js';
+import { computeEdgeAxis } from '../model/RoadAxis.js';
 import { getTopology, walkFromJunction } from '../model/TopologyModel.js';
 import { mergeGeometries } from '../math/GeometryMerge.js';
 import { SCENE } from '../theme/tokens.js';
@@ -93,7 +94,7 @@ export function createConnectorView(scene) {
   }
 
   /** 主构建入口：扫描 edges，自动派生连接件 */
-  function build(roadNetwork) {
+  function build(roadNetwork, opts = null) {
     clear();
     if (!roadNetwork || !roadNetwork.edges) return;
 
@@ -153,11 +154,44 @@ export function createConnectorView(scene) {
     // ── 4. ViaductPier：高架（bridge/z>=1.5）edge 自适应多柱桥墩与盖梁收集 ──
     const pierInstances = [];
     const capInstances = [];
-    for (const edge of edges) {
-      const nodes = Array.isArray(edge.nodes) ? edge.nodes : [];
-      const maxZ = nodes.reduce((m, n) => Math.max(m, Array.isArray(n) ? (n[2] || 0) : (n.z || 0)), 0);
-      if (!edge.bridge && maxZ < 1.5) continue;
-      _collectViaductPiers(edge, pierInstances, capInstances);
+    const authPiers = (opts && opts.worldLayout && Array.isArray(opts.worldLayout.piers))
+      ? opts.worldLayout.piers
+      : null;
+    if (authPiers) {
+      for (const pr of authPiers) {
+        const zGround = pr.z_ground || 0;
+        const h = Math.max(0.5, (pr.z_top || 6.5) - zGround);
+        const radius = (pr.radius || 0.55) / 0.675;
+        const heading = pr.heading || 0;
+        const [fx, fy] = forwardENU(heading);
+        const lx = -fy, ly = fx;
+        const [cx, , cz] = worldToThree(pr.x || 0, pr.y || 0, zGround);
+        if ((pr.columns || 1) >= 2) {
+          const off = pr.col_offset || 5.0;
+          for (const side of [-1, 1]) {
+            const [px, , pz] = worldToThree((pr.x || 0) + lx * side * off, (pr.y || 0) + ly * side * off, zGround);
+            pierInstances.push({ tx: px, tz: pz, baseY: zGround, h, radius });
+          }
+        } else {
+          pierInstances.push({ tx: cx, tz: cz, baseY: zGround, h, radius });
+        }
+        capInstances.push({
+          tx: cx,
+          ty: (pr.z_top || 6.5) - 0.1,
+          tz: cz,
+          len: pr.cap_len || 6.0,
+          h: pr.cap_h || 0.85,
+          w: pr.cap_w || 1.5,
+          rotY: directionToRotationY(lx, -ly),
+        });
+      }
+    } else {
+      for (const edge of edges) {
+        const nodes = Array.isArray(edge.nodes) ? edge.nodes : [];
+        const maxZ = nodes.reduce((m, n) => Math.max(m, Array.isArray(n) ? (n[2] || 0) : (n.z || 0)), 0);
+        if (!edge.bridge && maxZ < 1.5) continue;
+        _collectViaductPiers(edge, pierInstances, capInstances, roadNetwork.lane_data);
+      }
     }
     if (pierInstances.length > 0) {
       const pierGeo = getCylinder(0.6, 0.75, 1);
@@ -165,7 +199,7 @@ export function createConnectorView(scene) {
       const pierMesh = new THREE.InstancedMesh(pierGeo, pierMat, pierInstances.length);
       const dummy = new THREE.Object3D();
       pierInstances.forEach((p, i) => {
-        dummy.position.set(p.tx, p.h / 2, p.tz);
+        dummy.position.set(p.tx, (p.baseY || 0) + p.h / 2, p.tz);
         dummy.scale.set(p.radius || 1, p.h, p.radius || 1);
         dummy.updateMatrix();
         pierMesh.setMatrixAt(i, dummy.matrix);
@@ -198,7 +232,7 @@ export function createConnectorView(scene) {
       const nodes = Array.isArray(edge.nodes) ? edge.nodes : [];
       const maxZ = nodes.reduce((m, n) => Math.max(m, Array.isArray(n) ? (n[2] || 0) : (n.z || 0)), 0);
       if (!edge.bridge && !isTunnelEdge(edge) && maxZ < 1.5) continue;
-      _collectBridgeRamps(edge, rampGeos);
+      _collectBridgeRamps(edge, rampGeos, roadNetwork.lane_data);
     }
     if (rampGeos.length > 0) {
       const mergedRampGeo = mergeGeometries(rampGeos);
@@ -1244,15 +1278,18 @@ export function createConnectorView(scene) {
   }
 
   /** 4. ViaductPier：高架桥墩与盖梁收集（支持单柱/双柱自适应与真实盖梁） */
-  function _collectViaductPiers(edge, pierInstances, capInstances) {
-    const nodes = (edge.nodes || []).map((n) =>
-      Array.isArray(n) ? [n[0] || 0, n[1] || 0, n[2] || 0]
-        : [n.x || 0, n.y || 0, n.z || 0]);
+  function _collectViaductPiers(edge, pierInstances, capInstances, laneData = null) {
+    const axis = computeEdgeAxis(edge, laneData);
+    const nodes = (axis && axis.ok && axis.spine.length >= 2)
+      ? axis.spine.map(c => threeToWorld(c.px, c.py, c.pz))
+      : (edge.nodes || []).map((n) =>
+        Array.isArray(n) ? [n[0] || 0, n[1] || 0, n[2] || 0]
+          : [n.x || 0, n.y || 0, n.z || 0]);
     if (nodes.length < 2) return;
 
     const laneW = Number(edge.lane_width) || 3.5;
     const lanes = Math.max(1, Number(edge.lanes) || 2);
-    const halfW = (lanes * laneW) / 2 + 0.6;
+    const halfW = (axis && axis.ok && axis.halfWidth > 0 ? axis.halfWidth : (lanes * laneW) / 2) + 0.6;
 
     const cum = [0];
     for (let i = 1; i < nodes.length; i++) {
@@ -1326,15 +1363,18 @@ export function createConnectorView(scene) {
   }
 
   /** 4b. BridgeRamp：桥隧端点坡道渐变过渡（消除 6m 悬崖）几何收集 */
-  function _collectBridgeRamps(edge, rampGeos) {
-    const nodes = (edge.nodes || []).map((n) =>
-      Array.isArray(n) ? [n[0] || 0, n[1] || 0, n[2] || 0]
-        : [n.x || 0, n.y || 0, n.z || 0]);
+  function _collectBridgeRamps(edge, rampGeos, laneData = null) {
+    const axis = computeEdgeAxis(edge, laneData);
+    const nodes = (axis && axis.ok && axis.spine.length >= 2)
+      ? axis.spine.map(c => threeToWorld(c.px, c.py, c.pz))
+      : (edge.nodes || []).map((n) =>
+        Array.isArray(n) ? [n[0] || 0, n[1] || 0, n[2] || 0]
+          : [n.x || 0, n.y || 0, n.z || 0]);
     if (nodes.length < 2) return;
 
     const laneW = Number(edge.lane_width) || 3.5;
     const lanes = Number(edge.lanes) || 2;
-    const halfW = (lanes * laneW) / 2 + 0.6;
+    const halfW = (axis && axis.ok && axis.halfWidth > 0 ? axis.halfWidth : (lanes * laneW) / 2) + 0.6;
     const RAMP_LEN = 30;
     const THRESHOLD = 2.0;
 

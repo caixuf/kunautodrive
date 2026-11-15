@@ -1,5 +1,6 @@
 import { inferRoadFacilities } from '../tools/flowboard/js/vis/view/RoadFacilityView.js';
 import { createTrafficLightView } from '../tools/flowboard/js/vis/view/TrafficLightView.js';
+import { cleanEntity } from '../tools/flowboard/js/vis/director/FrameValidator.js';
 import { eq, ok, done } from './test-utils.mjs';
 
 console.log('=== road facility layout ===\n');
@@ -121,5 +122,28 @@ eq('左转放行时左转绿箭头亮起=2.0',
   tlGroup.userData.leftMaterials[2].emissiveIntensity, 2.0);
 eq('直行红灯时直行红灯亮起=2.0',
   tlGroup.userData.lamps[0].material.emissiveIntensity, 2.0);
+
+const onewayLayout = inferRoadFacilities({
+  edges: [{
+    id: 5, type: 'bridge', name: 'oneway_viaduct', oneway: true,
+    lanes: 2, lane_width: 3.5, nodes: [[0, 0, 5], [300, 0, 5]],
+  }],
+}, []);
+const onewayStems = onewayLayout.marks.filter(m => m.width === 0.28 && Math.abs(m.length - 2.8) < 1e-6);
+ok('无 lane_data 单向两车道箭头全部落在右侧 [-1.75, -5.25] 不悬空',
+  onewayStems.length >= 2 &&
+  onewayStems.every(m => Math.abs(m.y - (-1.75)) < 0.05 || Math.abs(m.y - (-5.25)) < 0.05));
+
+const cleanedTl = cleanEntity({
+  id: 52, scenario_id: 0, type: 'tl', x: 538.5, y: -8.5,
+  stop_x: 538.5, stop_y: -1.75, heading: 1.5708, approach_heading: 0,
+  state: 'red', remain_s: 11.2, has_left_arrow: true, left_state: 'green', left_remain_s: 8.4,
+});
+ok('cleanEntity 保留实时信号灯左转相位与倒计时字段（不被剥离）',
+  cleanedTl.has_left_arrow === true &&
+  cleanedTl.left_state === 'green' &&
+  Math.abs(cleanedTl.left_remain_s - 8.4) < 1e-6 &&
+  cleanedTl.approach_heading === 0 &&
+  cleanedTl.scenario_id === 0);
 
 done();

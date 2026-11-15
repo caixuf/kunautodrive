@@ -841,7 +841,23 @@ def _lane_roadmark(li: int, n_per_side: int) -> tuple[str, str]:
     return "white", "broken"
 
 
-def road_to_xml(road: Road) -> ET.Element:
+def _effective_oneway(road: Road) -> bool:
+    """仅非 open_ramp 的匝道、单车道或显式 oneway=True 视为全 right 侧单行道。"""
+    lname = road.name.lower()
+    return (("ramp" in lname and "open_ramp" not in lname) or
+            road.lane_count == 1 or
+            bool(getattr(road, "oneway", False)))
+
+
+def _road_side_counts(road: Road) -> tuple[int, int]:
+    """返回 (right_lanes, left_lanes)。"""
+    if _effective_oneway(road):
+        return road.lane_count, 0
+    n = max(1, road.lane_count // 2)
+    return n, n
+
+
+def road_to_xml(road: Road, road_by_id: dict[int, Road] | None = None) -> ET.Element:
     r = ET.Element("road", {
         "name": road.name,
         "length": f"{road.length:.6f}",
@@ -948,9 +964,7 @@ def road_to_xml(road: Road) -> ET.Element:
             })
 
     # 判断是否单向道路：匝道(ramp)、加速车道等名称包含 ramp/oneway 或显式 oneway=True
-    is_oneway = ("ramp" in road.name.lower() or
-                 road.lane_count == 1 or
-                 getattr(road, "oneway", False))
+    is_oneway = _effective_oneway(road)
     # 车道：center(参考线 width=0) + right N 条顺向 + left N 条对向(双向道路)
     # 场景 JSON 的 "lanes" 是**双向合计**车道数（如 4 = 2 顺行 + 2 对向）。
     # 单向道路（ramp/oneway）时 lanes 全部在 right 侧。
@@ -964,8 +978,18 @@ def road_to_xml(road: Road) -> ET.Element:
     ET.SubElement(cl, "width", {"a": "0", "b": "0", "c": "0", "d": "0"})
     # right 侧：顺向车道（id=-1,-2,...,-n_per_side）
     right = ET.SubElement(ls, "right")
+    pred_road = road_by_id.get(road.predecessor) if (road_by_id and road.predecessor >= 0 and road.predecessor_junction < 0) else None
+    succ_road = road_by_id.get(road.successor) if (road_by_id and road.successor >= 0 and road.successor_junction < 0) else None
+    pred_n_right, pred_n_left = _road_side_counts(pred_road) if pred_road else (0, 0)
+    succ_n_right, succ_n_left = _road_side_counts(succ_road) if succ_road else (0, 0)
     for li in range(1, n_per_side + 1):
         ln = ET.SubElement(right, "lane", {"id": f"-{li}", "type": "driving"})
+        if (pred_road and li <= pred_n_right) or (succ_road and li <= succ_n_right):
+            l_link = ET.SubElement(ln, "link")
+            if pred_road and li <= pred_n_right:
+                ET.SubElement(l_link, "predecessor", {"id": f"-{li}"})
+            if succ_road and li <= succ_n_right:
+                ET.SubElement(l_link, "successor", {"id": f"-{li}"})
         ET.SubElement(ln, "width", {
             "s": "0.0",
             "a": f"{road.lane_width:.4f}", "b": "0", "c": "0", "d": "0"
@@ -991,6 +1015,12 @@ def road_to_xml(road: Road) -> ET.Element:
         left = ET.SubElement(ls, "left")
         for li in range(1, n_per_side + 1):
             ln = ET.SubElement(left, "lane", {"id": f"{li}", "type": "driving"})
+            if (pred_road and li <= pred_n_left) or (succ_road and li <= succ_n_left):
+                l_link = ET.SubElement(ln, "link")
+                if pred_road and li <= pred_n_left:
+                    ET.SubElement(l_link, "predecessor", {"id": f"{li}"})
+                if succ_road and li <= succ_n_left:
+                    ET.SubElement(l_link, "successor", {"id": f"{li}"})
             ET.SubElement(ln, "width", {
                 "s": "0.0",
                 "a": f"{road.lane_width:.4f}", "b": "0", "c": "0", "d": "0"
@@ -1024,8 +1054,9 @@ def build_xodr(roads: list[Road], junctions: list[Junction] | None = None) -> ET
         "version": "1.4", "date": "",
         "north": "0", "south": "0", "east": "0", "west": "0",
     })
+    road_by_id = {rd.id: rd for rd in roads}
     for rd in roads:
-        root.append(road_to_xml(rd))
+        root.append(road_to_xml(rd, road_by_id=road_by_id))
     # NOA Phase 1: <junction> 元素声明分叉/汇入拓扑。esmini 用其解析 connecting
     # road 与 incoming road 的连接关系，是表达匝道分叉/加速车道汇入的关键。
     for j in (junctions or []):

@@ -94,7 +94,7 @@ function _createLidarSpriteTexture() {
 }
 
 function _entityDims(ent) {
-  const etype = ent.type || 'car';
+  const etype = ent.type || ent.kind || 'car';
   let defLen, defWid, defH;
   switch (etype) {
     case 'pedestrian':
@@ -111,6 +111,14 @@ function _entityDims(ent) {
       defLen = 0.18; defWid = 0.18; defH = 0.78; break;
     case 'charger':
       defLen = 0.42; defWid = 0.34; defH = 1.55; break;
+    case 'pole':
+      defLen = 0.45; defWid = 0.45; defH = 6.5; break;
+    case 'tree':
+      defLen = 1.2; defWid = 1.2; defH = 4.5; break;
+    case 'planter':
+      defLen = 4.6; defWid = 5.1; defH = 0.7; break;
+    case 'gate':
+      defLen = 2.0; defWid = 0.35; defH = 1.2; break;
     case 'unknown_static': case 'unknown': case 'construction':
       defLen = 0.8; defWid = 0.8; defH = 1.0; break;
     case 'car': default:
@@ -129,6 +137,7 @@ function _isPerceivableObstacle(ent) {
 
 function _gatherPerceptionTargets(ego, store) {
   const egoZ = Number.isFinite(Number(ego.z)) ? Number(ego.z) : 0;
+  const hasRoadNet = Boolean(store?.roadNetwork?.edges?.length);
   const out = [];
   const pushDedup = (item, dedupDistM) => {
     if (!_isPerceivableObstacle(item)) return;
@@ -144,6 +153,10 @@ function _gatherPerceptionTargets(ego, store) {
         const o = out[i];
         const oz = (o.z != null && Number.isFinite(Number(o.z))) ? Number(o.z) : egoZ;
         if (Math.hypot((o.x || 0) - x, (o.y || 0) - y) < dedupDistM && Math.abs(oz - iz) < 2.2) {
+          if (o.type === 'unknown') {
+            if (!o.kind && (item.kind || item.type)) o.kind = item.kind || item.type;
+            if (!(Number(o.height) > 0) && Number(item.height) > 0) o.height = Number(item.height);
+          }
           return;
         }
       }
@@ -155,14 +168,17 @@ function _gatherPerceptionTargets(ego, store) {
   for (const p of (store.perceived || [])) {
     if (!p) continue;
     const sp = Math.hypot(Number(p.vx) || 0, Number(p.vy) || 0);
+    const pz = (p.z != null && Number.isFinite(Number(p.z)))
+      ? Number(p.z)
+      : (hasRoadNet ? roadHeightAt(store, p.x || 0, p.y || 0, egoZ) : egoZ);
     pushDedup({
       ...p,
-      z: p.z ?? egoZ,
+      z: pz,
       heading: p.heading ?? (sp > 0.25 ? headingBetweenPoints(0, 0, p.vx || 0, p.vy || 0) : (ego.heading || 0)),
     }, 0.85);
   }
   for (const f of (store.facilities || [])) {
-    pushDedup(f, 0.55);
+    pushDedup(f, 0.85);
   }
   out.sort((a, b) => a._dist - b._dist);
   return out.slice(0, MAX_ENTITIES);
@@ -655,6 +671,25 @@ export function createPerceptionView(scene) {
         const faceLat = (toEgoX * normX + toEgoZ * normZ) >= 0 ? 1 : -1;
 
         const fade = Math.max(0.42, 1.0 - dist / 90);
+        const etype = ent.kind || ent.type || 'car';
+        const isSlenderStatic = etype === 'pole' || etype === 'tree' || etype === 'bollard' ||
+          etype === 'wheel_stop' || (Math.max(halfL, halfW) <= 0.65 && vehH >= 2.0);
+        if (isSlenderStatic) {
+          // 细长静态设施（路灯杆/行道树/防撞柱）：仅在柱面实际直径内沿垂向采样紧凑回波点，避免渲染水平车头宽点阵
+          const colHeights = [0.12, 0.28, 0.48, 0.68, 0.86];
+          const surfX = cx + faceLong * (halfL * 0.72) * fwdX;
+          const surfZ = cz + faceLong * (halfL * 0.72) * fwdZ;
+          const arcRatios = [-0.55, 0.0, 0.55];
+          for (let h = 0; h < colHeights.length; h++) {
+            const yy = cy + vehH * colHeights[h];
+            for (let k = 0; k < arcRatios.length; k++) {
+              const [px, , pz] = offsetAlongNormal(surfX, surfZ, normX, normZ, arcRatios[k] * halfW * 0.75);
+              pushThreePt(px, yy, pz, 0.05 * fade, 0.88 * fade, 0.82 * fade);
+            }
+          }
+          continue;
+        }
+
         const yBand1 = cy + vehH * 0.28;
         const yBand2 = cy + vehH * 0.54;
         const yBand3 = cy + vehH * 0.78;

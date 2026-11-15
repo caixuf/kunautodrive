@@ -934,6 +934,67 @@ def _count_bev_observable_truth(
     return covered
 
 
+def count_bev_scene_observable_truth(
+    scene_m: object,
+    *,
+    use_sensor_input: bool = False,
+    fov_deg: float = PERCEPTION_FOV_FALLBACK_DEG,
+    range_m: float = 60.0,
+) -> int:
+    """Count observable BEV ground truth from a `metrics.scene` snapshot.
+
+    `monitor_node` publishes `scene.obstacles` in ego-relative ENU
+    (`rx = ox - ego_x, ry = oy - ego_y`), whereas `scene.facilities` uses
+    world ENU and overlaps `oid >= 8000` facilities already in `obstacles`.
+    Convert obstacles back to world ENU and deduplicate same-layer facilities
+    within 0.5m before applying BEV / LiDAR-cone visibility checks.
+    """
+    if not isinstance(scene_m, dict):
+        return 0
+    ego_m = scene_m.get("ego") or {}
+    if not isinstance(ego_m, dict):
+        return 0
+    ex, ey = ego_m.get("x"), ego_m.get("y")
+    if not isinstance(ex, (int, float)) or not isinstance(ey, (int, float)):
+        return 0
+    ex_f, ey_f = float(ex), float(ey)
+    ez_raw = ego_m.get("z")
+    ez_f = float(ez_raw) if isinstance(ez_raw, (int, float)) else None
+
+    world_obs: list[dict] = []
+    for o in (scene_m.get("obstacles") or []):
+        if not isinstance(o, dict):
+            continue
+        rx, ry = o.get("x"), o.get("y")
+        if not isinstance(rx, (int, float)) or not isinstance(ry, (int, float)):
+            continue
+        world_obs.append({"x": ex_f + float(rx), "y": ey_f + float(ry)})
+
+    for f in (scene_m.get("facilities") or []):
+        if not isinstance(f, dict):
+            continue
+        if float(f.get("height", 0.0) or 0.0) < 0.4:
+            continue
+        if ez_f is not None and isinstance(f.get("z"), (int, float)):
+            if abs(float(f["z"]) - ez_f) > 2.5:
+                continue
+        fx, fy = f.get("x"), f.get("y")
+        if not isinstance(fx, (int, float)) or not isinstance(fy, (int, float)):
+            continue
+        fx_f, fy_f = float(fx), float(fy)
+        if any((wo["x"] - fx_f) ** 2 + (wo["y"] - fy_f) ** 2 < 0.25 for wo in world_obs):
+            continue
+        world_obs.append({"x": fx_f, "y": fy_f})
+
+    return _count_bev_observable_truth(
+        world_obs,
+        ego_m,
+        use_sensor_input=use_sensor_input,
+        fov_deg=fov_deg,
+        range_m=range_m,
+    )
+
+
 def load_scenario_for_duration(scenario_override: str | None = None) -> dict:
     """Load scenario JSON to read duration_s for auto-detection."""
     scenario_path = scenario_override
@@ -2904,16 +2965,9 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         except (TypeError, ValueError):
             bev_shadow_count = 0
         scene_m = (last.get("metrics") or {}).get("scene") or {}
-        truth_obs = list(scene_m.get("obstacles") or [])
-        ego_m = scene_m.get("ego") or {}
         bev_use_sensor, bev_fov_deg, bev_range_m = pipeline_bev_sensor_spec()
-        truth_obs.extend(
-            f for f in (scene_m.get("facilities") or [])
-            if isinstance(f, dict) and float(f.get("height", 0.0) or 0.0) >= 0.4
-        )
-        bev_truth_count = _count_bev_observable_truth(
-            truth_obs,
-            ego_m,
+        bev_truth_count = count_bev_scene_observable_truth(
+            scene_m,
             use_sensor_input=bev_use_sensor,
             fov_deg=bev_fov_deg,
             range_m=bev_range_m,

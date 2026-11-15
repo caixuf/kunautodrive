@@ -229,6 +229,269 @@ export function makeStripeTexture(color1, color2, opts = {}) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// 4. GB 14886-2016 交通信号灯光学透镜与倒计时纹理
+// ═══════════════════════════════════════════════════════════
+
+const SIGNAL_COLOR_CSS = {
+  red:    { core: '#ff4242', glow: '#ff1a1a', dim: '#2d0808' },
+  yellow: { core: '#ffc633', glow: '#ff9d00', dim: '#2e1d05' },
+  green:  { core: '#2eff8a', glow: '#00d966', dim: '#062b16' },
+};
+
+function _putCachedTex(key, tex) {
+  if (_cache.size >= _CACHE_MAX) {
+    const oldest = _cache.keys().next().value;
+    _cache.delete(oldest);
+  }
+  _cache.set(key, tex);
+  return tex;
+}
+
+/**
+ * 创建 GB 14886-2016 400mm 信号灯透镜纹理（满盘圆灯 / 左转箭头 / 直行箭头）。
+ * 配合 MeshStandardMaterial 的 map + emissiveMap：亮灯时仅图形区域高亮度发光，
+ * 熄灯时呈深邃暗色光学孔径，清晰区分黑底面罩与箭头轮廓。
+ * @param {'circle'|'left'|'straight'} kind
+ * @param {'red'|'yellow'|'green'} colorKey
+ * @param {boolean} [active=true]  true=高对比亮态轮廓，false=暗态微弱余晖底纹
+ */
+export function makeSignalLensTexture(kind, colorKey, active = true) {
+  if (typeof document === 'undefined') return null;
+  const key = _cacheKey('sigLens', kind, colorKey, active ? 1 : 0);
+  if (_cache.has(key)) return _cache.get(key);
+
+  const size = 128;
+  const c = _createCanvas(size, size);
+  const ctx = c.getContext('2d');
+  const pal = SIGNAL_COLOR_CSS[colorKey] || SIGNAL_COLOR_CSS.red;
+
+  ctx.fillStyle = '#080b10';
+  ctx.fillRect(0, 0, size, size);
+
+  // 400mm 圆形光学面罩底孔
+  ctx.beginPath();
+  ctx.arc(64, 64, 56, 0, Math.PI * 2);
+  ctx.fillStyle = '#11161f';
+  ctx.fill();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = '#1f2836';
+  ctx.stroke();
+
+  const drawShape = () => {
+    if (kind === 'left') {
+      ctx.beginPath();
+      ctx.moveTo(20, 64);
+      ctx.lineTo(54, 30);
+      ctx.lineTo(66, 42);
+      ctx.lineTo(48, 57);
+      ctx.lineTo(106, 57);
+      ctx.lineTo(106, 71);
+      ctx.lineTo(48, 71);
+      ctx.lineTo(66, 86);
+      ctx.lineTo(54, 98);
+      ctx.closePath();
+      ctx.fill();
+    } else if (kind === 'straight') {
+      ctx.beginPath();
+      ctx.moveTo(64, 20);
+      ctx.lineTo(98, 54);
+      ctx.lineTo(86, 66);
+      ctx.lineTo(71, 48);
+      ctx.lineTo(71, 106);
+      ctx.lineTo(57, 106);
+      ctx.lineTo(57, 48);
+      ctx.lineTo(42, 66);
+      ctx.lineTo(30, 54);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      ctx.beginPath();
+      ctx.arc(64, 64, 46, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  };
+
+  if (active) {
+    const grad = ctx.createRadialGradient(64, 64, 6, 64, 64, 52);
+    grad.addColorStop(0.0, '#ffffff');
+    grad.addColorStop(0.28, pal.core);
+    grad.addColorStop(1.0, pal.glow);
+    ctx.fillStyle = grad;
+    drawShape();
+
+    // 细微 LED 像素点阵纹理（增强近景工程质感）
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.16)';
+    for (let y = 16; y < size - 12; y += 8) {
+      for (let x = 16; x < size - 12; x += 8) {
+        ctx.fillRect(x, y, 2, 2);
+      }
+    }
+  } else {
+    ctx.fillStyle = pal.dim;
+    drawShape();
+  }
+
+  return _putCachedTex(key, _toTexture(c));
+}
+
+/**
+ * 创建 GA/T 508 信号灯数字倒计时牌纹理（支持单相或 ←左 / ↑直 双排显示）。
+ * 仅在整数秒或相位变化时刷新 key，复用有界缓存。
+ */
+export function makeSignalCountdownTexture(rows) {
+  if (typeof document === 'undefined') return null;
+  const sig = rows.map(r => `${r.prefix}:${r.sec}:${r.color}`).join(';');
+  const key = _cacheKey('sigCd', sig);
+  if (_cache.has(key)) return _cache.get(key);
+
+  const w = 128, h = rows.length > 1 ? 160 : 96;
+  const c = _createCanvas(w, h);
+  const ctx = c.getContext('2d');
+
+  ctx.fillStyle = '#070a0f';
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = '#d8e0eb';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(3, 3, w - 6, h - 6);
+
+  const colorCss = (st) => (st === 'green' ? '#36ff94' : st === 'yellow' ? '#ffca3a' : '#ff4747');
+  const rowH = h / Math.max(1, rows.length);
+  rows.forEach((row, idx) => {
+    const cy = rowH * (idx + 0.5);
+    const col = colorCss(row.color);
+    if (idx > 0) {
+      ctx.fillStyle = '#243040';
+      ctx.fillRect(10, rowH * idx - 1, w - 20, 2);
+    }
+    ctx.fillStyle = '#9aa8ba';
+    ctx.font = `bold 24px ${FONT_SIGN}`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(row.prefix || '', 12, cy);
+
+    const secTxt = row.sec >= 0 ? String(row.sec).padStart(2, '0') : '--';
+    ctx.fillStyle = col;
+    ctx.font = `bold 48px ${FONT_MONO}`;
+    ctx.textAlign = 'right';
+    ctx.fillText(secTxt, w - 12, cy + 1);
+  });
+
+  return _putCachedTex(key, _toTexture(c));
+}
+
+// ═══════════════════════════════════════════════════════════
+// 5. GB 5768 交通标志与门架横幅程序化纹理
+// ═══════════════════════════════════════════════════════════
+
+/** 创建圆形白底红圈限速标志纹理 (e.g. 60 / 80)。 */
+export function makeSpeedSignTexture(speedKph = 60) {
+  if (typeof document === 'undefined') return null;
+  const val = Math.round(Number(speedKph) || 60);
+  const key = _cacheKey('speedSign', val);
+  if (_cache.has(key)) return _cache.get(key);
+
+  const size = 128;
+  const c = _createCanvas(size, size);
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, size, size);
+
+  ctx.beginPath();
+  ctx.arc(64, 64, 58, 0, Math.PI * 2);
+  ctx.fillStyle = '#f5f7fa';
+  ctx.fill();
+  ctx.lineWidth = 12;
+  ctx.strokeStyle = '#d62828';
+  ctx.stroke();
+
+  ctx.fillStyle = '#11161d';
+  ctx.font = `bold 52px ${FONT_SIGN}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(val), 64, 66);
+
+  return _putCachedTex(key, _toTexture(c));
+}
+
+/** 创建八角形 STOP 停车让行标志纹理。 */
+export function makeStopSignTexture(label = 'STOP') {
+  if (typeof document === 'undefined') return null;
+  const key = _cacheKey('stopSign', label);
+  if (_cache.has(key)) return _cache.get(key);
+
+  const size = 128;
+  const c = _createCanvas(size, size);
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#d62828';
+  ctx.fillRect(0, 0, size, size);
+  ctx.strokeStyle = '#f5f7fa';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(5, 5, size - 10, size - 10);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `bold 36px ${FONT_SIGN}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(label || 'STOP'), 64, 66);
+
+  return _putCachedTex(key, _toTexture(c));
+}
+
+/** 创建黄底黑框警告标志纹理。 */
+export function makeWarningSignTexture(symbol = '!') {
+  if (typeof document === 'undefined') return null;
+  const key = _cacheKey('warnSign', symbol);
+  if (_cache.has(key)) return _cache.get(key);
+
+  const size = 128;
+  const c = _createCanvas(size, size);
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#f4b400';
+  ctx.fillRect(0, 0, size, size);
+  ctx.strokeStyle = '#181c22';
+  ctx.lineWidth = 8;
+  ctx.strokeRect(6, 6, size - 12, size - 12);
+
+  ctx.fillStyle = '#181c22';
+  ctx.font = `bold 58px ${FONT_SIGN}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(symbol || '!'), 64, 68);
+
+  return _putCachedTex(key, _toTexture(c));
+}
+
+/** 创建门架/入口地标横幅纹理。 */
+export function makeGantryBannerTexture(title = 'FLOWENGINE CITY', subtitle = 'PROCEDURAL WORLD ENGINE', bg = '#154d8a') {
+  if (typeof document === 'undefined') return null;
+  const key = _cacheKey('gantryBanner', title, subtitle, bg);
+  if (_cache.has(key)) return _cache.get(key);
+
+  const w = 512, h = 128;
+  const c = _createCanvas(w, h);
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = '#e8eef5';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(6, 6, w - 12, h - 12);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `bold 40px ${FONT_SANS}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(title), w / 2, subtitle ? 48 : 64);
+
+  if (subtitle) {
+    ctx.fillStyle = '#cfe4ff';
+    ctx.font = `bold 20px ${FONT_SANS}`;
+    ctx.fillText(String(subtitle), w / 2, 92);
+  }
+
+  return _putCachedTex(key, _toTexture(c));
+}
+
+// ═══════════════════════════════════════════════════════════
 // 工具函数
 // ═══════════════════════════════════════════════════════════
 

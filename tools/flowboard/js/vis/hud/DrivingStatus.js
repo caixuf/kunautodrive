@@ -333,6 +333,74 @@ export function deriveP2PStatus(metrics) {
 }
 
 /**
+ * 前方信号灯状态归约：按 ego 航向挑选前方最近同向信号灯（[-4, 120]m），
+ * 带左转箭头相位时同时输出直行↑与左转←的独立倒计时与状态。
+ */
+export function trafficLightInfo(scene) {
+  const s = scene || {};
+  const ego = s.ego;
+  const rawLights = Array.isArray(s.traffic_lights) && s.traffic_lights.length
+    ? s.traffic_lights
+    : (Array.isArray(s.entities) ? s.entities.filter((e) => e && (e.type === 'tl' || e.type === 'traffic_light')) : []);
+  if (!ego || !rawLights.length) return null;
+  const ex = num(ego.x, NaN), ey = num(ego.y, NaN);
+  if (!Number.isFinite(ex) || !Number.isFinite(ey)) return null;
+  const [fx, fy] = forwardENU(num(ego.heading, 0));
+
+  let best = null;
+  for (const tl of rawLights) {
+    if (!tl) continue;
+    const lx = num(tl.stop_x, num(tl.x, NaN));
+    const ly = num(tl.stop_y, num(tl.y, NaN));
+    if (!Number.isFinite(lx) || !Number.isFinite(ly)) continue;
+    if (Number.isFinite(Number(tl.approach_heading))) {
+      const [ax, ay] = forwardENU(Number(tl.approach_heading));
+      if (ax * fx + ay * fy < 0.45) continue;
+    }
+    const dx = lx - ex, dy = ly - ey;
+    const ahead = dx * fx + dy * fy;
+    const lat = Math.abs(-dx * fy + dy * fx);
+    if (ahead < -4.0 || ahead > 120.0 || lat > 14.0) continue;
+    if (!best || ahead < best.ahead) best = { tl, ahead };
+  }
+  if (!best) return null;
+
+  const tl = best.tl;
+  const phaseLabel = (st) => (st === 'green' ? '绿' : st === 'yellow' ? '黄' : '红');
+  const remStr = (v) => (Number.isFinite(Number(v)) ? `${Math.ceil(Math.max(0, Number(v)))}s` : '');
+  const mainSt = String(tl.state || 'red').toLowerCase();
+  const mainRem = remStr(tl.remain_s);
+  if (tl.has_left_arrow || tl.left_state != null) {
+    const leftSt = String(tl.left_state || 'red').toLowerCase();
+    const leftRem = remStr(tl.left_remain_s);
+    const label = `↑${phaseLabel(mainSt)}${mainRem ? ` ${mainRem}` : ''} · ←${phaseLabel(leftSt)}${leftRem ? ` ${leftRem}` : ''}`;
+    let tone = TONE.BAD;
+    if (leftSt === 'green' || mainSt === 'green') tone = TONE.OK;
+    else if (leftSt === 'yellow' || mainSt === 'yellow') tone = TONE.WARN;
+    return {
+      visible: true,
+      label,
+      tone,
+      state: mainSt,
+      left_state: leftSt,
+      ahead_m: best.ahead,
+      has_left_arrow: true,
+    };
+  }
+  const label = `信号 ${phaseLabel(mainSt)}${mainRem ? ` ${mainRem}` : ''}`;
+  const tone = mainSt === 'green' ? TONE.OK : (mainSt === 'yellow' ? TONE.WARN : TONE.BAD);
+  return {
+    visible: true,
+    label,
+    tone,
+    state: mainSt,
+    left_state: null,
+    ahead_m: best.ahead,
+    has_left_arrow: false,
+  };
+}
+
+/**
  * 顶层归约：metrics → HUD 视图模型。缺字段一律降级为 null / '—'，不抛错。
  */
 export function computeDrivingStatus(metrics) {
@@ -405,6 +473,7 @@ export function computeDrivingStatus(metrics) {
     lead,
     risk: ttcRisk(lead),
     perceptionSource: perceived ? '感知' : '真值',
+    trafficLight: trafficLightInfo(scene),
     odd: oddInfo(scene, m.odd),
     tor: torInfo(m.tor),
     l3Events: l3EventsInfo(m.l3_events),

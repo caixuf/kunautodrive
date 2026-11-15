@@ -26,6 +26,12 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+from ci.evaluators.demo_evaluator import (  # noqa: E402
+    count_bev_scene_observable_truth,
+    pipeline_bev_sensor_spec,
+)
+
 LAUNCHER = ROOT / "build" / "bin" / "flow_launcher"
 SCENARIO = ROOT / "scenarios" / "bev_shadow.json"
 TOPOLOGY = Path("/tmp/flow_topology.json")
@@ -73,8 +79,13 @@ def _measure(doc: dict) -> tuple[int, int, float]:
         count = int(bev.get("count", 0) or 0)
     except (TypeError, ValueError):
         count = 0
-    obs = scene.get("obstacles") or []
-    truth = len(obs) if isinstance(obs, list) else 0
+    use_sensor, fov_deg, range_m = pipeline_bev_sensor_spec()
+    truth = count_bev_scene_observable_truth(
+        scene,
+        use_sensor_input=use_sensor,
+        fov_deg=fov_deg,
+        range_m=range_m,
+    )
     tol = max(2, int(0.2 * truth))
     return count, truth, tol
 

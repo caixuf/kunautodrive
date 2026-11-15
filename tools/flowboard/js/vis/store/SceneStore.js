@@ -11,6 +11,8 @@ export class SceneStore {
     // ── 道路网络 ──
     this.roadNetwork = null;        // { edges: [...], hash: string }
     this.roadHash = '';             // 用于 diff 检测
+    this.worldLayout = null;        // Authoritative WorldEngine layout or compiler fallback
+    this.worldLayoutHash = '';      // Active world_layout_hash
     this.isViaduct = false;         // 是否高架模式
     this.viaductVisLength = 0;      // 高架段实际建造长度（米），用于 wrap 周期；0 = 未建
     this.scenarioName = '';

@@ -44,6 +44,7 @@
 #include "flowsim/building_filter.h"
 #include "flowsim/scene_events.h"
 #include "flowsim/scene_pub.h"
+#include "flowsim/world_engine.h"
 #include "flowsim/actor/VehicleActor.h"   /* 车灯信号派生（Phase 1 重构）*/
 #include "flowsim/route.h"
 #include "flowsim/sim_digest.h"
@@ -56,6 +57,9 @@
 #include <lanelet2_core/LaneletMap.h>
 #include <stdexcept>
 #include <fstream>
+#endif
+#if defined(FLOW_HAS_JOLT) && FLOW_HAS_JOLT
+#include "flowsim/physics_world.h"
 #endif
    /* D2-04 M3: lane_match 纯算法 helper（曲率/synthesize/邻车道查找/失败归零） */
 #include "flowsim/flowsim_time.h"
@@ -135,8 +139,9 @@ struct FlowSimContext {
     std::vector<flowsim::BuildingOBB> buildings;
     struct FacilityCollider {
         double x, y, z, len, wid, heading;
-        const char* kind;
+        std::string kind;
         double height{1.5};
+        bool is_cylinder{false};
     };
     std::vector<FacilityCollider> facility_obstacles;
 
@@ -168,8 +173,13 @@ struct FlowSimContext {
     double            curve_length_m{0};
     double            curve_offset_m{0};
 
-    /* 物理模型选择："kinematic"（默认）| "dynamic"（线性轮胎二自由度） */
+    /* 物理模型选择："kinematic"（默认）| "dynamic"（线性轮胎二自由度）| "pacejka" | "jolt3d" */
     char              physics_model[32]{"kinematic"};
+#if defined(FLOW_HAS_JOLT) && FLOW_HAS_JOLT
+    flowsim::PhysicsWorld physics_world;
+    std::vector<int>  gate_physics_handles;
+    std::vector<int>  gate_entity_indices;
+#endif
 
     /* 随机泊松动态交通流发生器 */
     bool              enable_poisson_traffic{false};
@@ -317,6 +327,11 @@ static void reset_runtime_state() {
 
     g.scenario_file[0] = '\0';
     std::snprintf(g.physics_model, sizeof(g.physics_model), "%s", "kinematic");
+#if defined(FLOW_HAS_JOLT) && FLOW_HAS_JOLT
+    g.physics_world.reset();
+    g.gate_physics_handles.clear();
+    g.gate_entity_indices.clear();
+#endif
     g.init_speed = 5.0;
     g.target_speed = 12.0;
     g.lane_width = 3.5;
@@ -1016,14 +1031,34 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
                 if (g.roads.world_to_frenet(tl->x, probe_y, fp)) {
                     flowsim::WorldPos rc_wp;
                     bool have_rc = g.roads.frenet_to_world(fp.road_id, 0, fp.s, 0.0, rc_wp);
+                    auto lane_ids = g.roads.drivable_lane_ids(fp.road_id, fp.s);
+                    bool has_left = false, has_right = false;
+                    for (int lid : lane_ids) {
+                        if (lid > 0) has_left = true;
+                        else if (lid < 0) has_right = true;
+                    }
+                    const bool is_oneway_right = (has_right && !has_left);
                     if (cached_half_width < 0.0 || fp.road_id != e.road_id) {
                         int n_drivable = g.roads.drivable_lane_count(fp.road_id, fp.s);
                         cached_half_width = (n_drivable * g.lane_width) / 2.0;
                         e.road_id = fp.road_id;
                     }
-                    const double lat_off = (std::fabs(fp.offset) <= cached_half_width + 6.0)
-                                               ? fp.offset : tl->y_lane;
-                    const double lat_sign = (lat_off >= 0.0) ? 1.0 : -1.0;
+                    /* fp.offset 是所在车道内相对偏移（≈0），不能作道路中心 t；
+                     * 用道路参考线左法向 (-sin h, cos h) 投影反算真实道路横向 t。 */
+                    double proj_t = tl->y_lane;
+                    if (have_rc) {
+                        const double dx = tl->x - rc_wp.x;
+                        const double dy = probe_y - rc_wp.y;
+                        proj_t = -dx * std::sin(rc_wp.h) + dy * std::cos(rc_wp.h);
+                    }
+                    const double min_t = is_oneway_right
+                        ? -(2.0 * cached_half_width + 6.0) : -(cached_half_width + 6.0);
+                    const double max_t = is_oneway_right ? 6.0 : (cached_half_width + 6.0);
+                    const double lat_off = (proj_t >= min_t && proj_t <= max_t)
+                                               ? proj_t : tl->y_lane;
+                    const double lat_sign = is_oneway_right
+                        ? -1.0
+                        : ((lat_off >= 0.0) ? 1.0 : -1.0);
                     e.offset = lat_off;
                     flowsim::WorldPos stop_wp;
                     const bool have_stop = g.roads.frenet_to_world(
@@ -1033,22 +1068,24 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
                     const double lane_center_y = have_stop ? stop_wp.y
                                                            : (have_rc ? rc_wp.y + lat_off
                                                                       : lat_off);
-                    /* 灯杆 3D 位置：车道侧路缘外 +1.5m 退让 */
+                    /* 灯杆 3D 位置：双向路在 ±(half_width+1.5)；单向 right 路缘在 -(2*half_width+1.5) */
+                    const double pole_t = is_oneway_right
+                        ? -(2.0 * cached_half_width + 1.5)
+                        : lat_sign * (cached_half_width + 1.5);
                     flowsim::WorldPos pole_wp;
                     const bool have_pole = g.roads.frenet_to_world(
-                        fp.road_id, 0, fp.s,
-                        lat_sign * (cached_half_width + 1.5), pole_wp);
+                        fp.road_id, 0, fp.s, pole_t, pole_wp);
                     e.x = have_pole ? pole_wp.x : (have_rc ? rc_wp.x : tl->x);
                     e.y = have_pole ? pole_wp.y
-                                    : (have_rc ? rc_wp.y + lat_sign * (cached_half_width + 1.5)
-                                               : lat_sign * (cached_half_width + 1.5));
+                                    : (have_rc ? rc_wp.y + pole_t : pole_t);
                     e.signal_stop_x = lane_center_x;
                     e.signal_stop_y = lane_center_y;
                     e.width = lane_center_y;
                     const double tan_h = have_rc ? rc_wp.h
                                                  : compute_road_heading_at(tl->x, tl->y_lane);
                     const bool opp_dir = (fp.lane_id > 0) ||
-                                         (fp.lane_id == 0 && lat_off > 0.0 && !sc->road.oneway);
+                                         (fp.lane_id == 0 && lat_off > 0.0 &&
+                                          !sc->road.oneway && !is_oneway_right);
                     e.approach_heading = tan_h + (opp_dir ? M_PI : 0.0);
                     if (tl->heading != 0.0) {
                         e.heading = tl->heading;
@@ -1303,7 +1340,7 @@ static void publish_vehicle_state(uint64_t sim_time_us) {
             snprintf(key, sizeof(key), "ovy%d", n_obs);
             cJSON_AddNumberToObject(vstate, key, 0.0);
             snprintf(key, sizeof(key), "ot%d", n_obs);
-            cJSON_AddStringToObject(vstate, key, f.kind);
+            cJSON_AddStringToObject(vstate, key, f.kind.empty() ? "facility" : f.kind.c_str());
             snprintf(key, sizeof(key), "ol%d", n_obs);
             cJSON_AddNumberToObject(vstate, key, f.len);
             snprintf(key, sizeof(key), "ow%d", n_obs);
@@ -2313,7 +2350,13 @@ protected:
                         ego.road_pos.relocate(g.roads, fp.road_id, fp.lane_id, fp.s, 0.0)) {
                         ego.x = wp.x;
                         ego.y = wp.y;
+                        ego.z = wp.z;
                         ego.heading = wp.h;
+#if defined(FLOW_HAS_JOLT) && FLOW_HAS_JOLT
+                        if (strcmp(g.physics_model, "jolt3d") == 0 && g.physics_world.ready()) {
+                            g.physics_world.set_vehicle_pose(0, ego.x, ego.y, ego.z, ego.heading, 0.0);
+                        }
+#endif
                         ego.road_id = fp.road_id;
                         ego.lane_id = fp.lane_id;
                         ego.s = fp.s;
@@ -2455,7 +2498,35 @@ protected:
                 ego.road_grade = grade;
             }
 
-            if (strcmp(g.physics_model, "dynamic") == 0) {
+#if defined(FLOW_HAS_JOLT) && FLOW_HAS_JOLT
+            const bool use_jolt3d =
+                (strcmp(g.physics_model, "jolt3d") == 0) && g.physics_world.ready();
+#else
+            const bool use_jolt3d = false;
+#endif
+            if (use_jolt3d) {
+#if defined(FLOW_HAS_JOLT) && FLOW_HAS_JOLT
+                for (size_t gi = 0; gi < g.gate_physics_handles.size(); ++gi) {
+                    int pool_idx = g.gate_entity_indices[gi];
+                    if (pool_idx >= 0 && pool_idx < g.pool.size()) {
+                        const flowsim::Entity& ge = g.pool[pool_idx];
+                        bool open = (!ge.active || ge.phase_state == 2 || ge.phase_timer >= 0.75);
+                        g.physics_world.set_gate_open(g.gate_physics_handles[gi], open);
+                    }
+                }
+                const double steer_limit = ego.steer_override ? 0.60 : 0.25;
+                const double steer_cmd = std::clamp(ego.steer, -steer_limit, steer_limit);
+                const int raw_gear = g.ego_gear.load(std::memory_order_relaxed);
+                const bool reversing = (raw_gear == GEAR_REVERSE) || (ego.throttle < -0.01);
+                const int gear_sign = reversing ? -1 : 1;
+                const double throttle_mag =
+                    reversing ? std::fabs(ego.throttle) : std::max(0.0, ego.throttle);
+                g.physics_world.set_vehicle_input(
+                    0, throttle_mag, ego.brake, steer_cmd, gear_sign, ego.surface_mu_scale);
+                g.physics_world.step(FLOWSIM_DT_SEC);
+                g.physics_world.sync_entity_from_vehicle(0, ego);
+#endif
+            } else if (strcmp(g.physics_model, "dynamic") == 0) {
                 flowsim::step_bicycle_dynamic(ego, FLOWSIM_DT_SEC,
                                               ego.throttle, ego.brake, ego.steer);
             } else if (strcmp(g.physics_model, "pacejka") == 0) {
@@ -2586,11 +2657,13 @@ protected:
                             if (ego.road_pos.relocate(g.roads, fp.road_id, 0, fp.s, ref_off)) {
                                 flowsim::WorldPos wp;
                                 if (ego.road_pos.world(wp)) {
-                                    flowsim::WorldPos zwp;
-                                    if (g.roads.frenet_to_world(fp.road_id, fp.lane_id, fp.s, fp.offset, zwp)) {
-                                        ego.z = zwp.z;
-                                    } else {
-                                        ego.z = wp.z;
+                                    if (!use_jolt3d) {
+                                        flowsim::WorldPos zwp;
+                                        if (g.roads.frenet_to_world(fp.road_id, fp.lane_id, fp.s, fp.offset, zwp)) {
+                                            ego.z = zwp.z;
+                                        } else {
+                                            ego.z = wp.z;
+                                        }
                                     }
                                     double dh = ego.heading - wp.h;
                                     while (dh >  M_PI) dh -= 2.0 * M_PI;
@@ -2715,10 +2788,12 @@ protected:
                             ego.lane_id = fp.lane_id;
                             ego.s = fp.s;
                             ego.offset = fp.offset;
-                            flowsim::WorldPos wp;
-                            if (g.roads.frenet_to_world(
-                                    fp.road_id, fp.lane_id, fp.s, fp.offset, wp)) {
-                                ego.z = wp.z;
+                            if (!use_jolt3d) {
+                                flowsim::WorldPos wp;
+                                if (g.roads.frenet_to_world(
+                                        fp.road_id, fp.lane_id, fp.s, fp.offset, wp)) {
+                                    ego.z = wp.z;
+                                }
                             }
                             double ref_off = flowsim::offset_from_lane_internal(
                                 g.roads, fp.road_id, fp.lane_id, fp.s, fp.offset);
@@ -2785,7 +2860,61 @@ protected:
                 }
             }
 
+            auto is_near_parking_zone = [&]() -> bool {
+                if (!g.scenario) return false;
+                if (g.scenario->park_out.enabled) {
+                    double dx = ego.x - g.scenario->park_out.slot_x;
+                    double dy = ego.y - g.scenario->park_out.slot_y;
+                    double dz = std::fabs(ego.z - g.scenario->park_out.slot_z);
+                    if (std::hypot(dx, dy) < 28.0 && dz < 2.5) return true;
+                }
+                if (g.scenario->parking_goal.enabled) {
+                    double dx = ego.x - g.scenario->parking_goal.x;
+                    double dy = ego.y - g.scenario->parking_goal.y;
+                    double dz = std::fabs(ego.z - g.scenario->parking_goal.z);
+                    if (std::hypot(dx, dy) < 50.0 && dz < 2.5) return true;
+                }
+                for (int si = 0; si < g.scenario->parking_slot_count; ++si) {
+                    const auto& ps = g.scenario->parking_slots[si];
+                    double dx = ego.x - ps.x;
+                    double dy = ego.y - ps.y;
+                    double dz = std::fabs(ego.z - ps.z);
+                    if (std::hypot(dx, dy) < 50.0 && dz < 2.5) return true;
+                }
+                return false;
+            };
+
             /* ── Step 4: 碰撞检测 ── */
+            if (use_jolt3d) {
+#if defined(FLOW_HAS_JOLT) && FLOW_HAS_JOLT
+                g.physics_world.sync_npcs_from_pool(g.pool, FLOWSIM_DT_SEC);
+                auto jolt_contacts = g.physics_world.consume_contacts();
+                for (const auto& ev : jolt_contacts) {
+                    if (ev.entity_a != 0 && ev.entity_b != 0) continue;
+                    if (ego.crash_cooldown > 0.0) continue;
+                    if (ev.kind_b == "ground_impact" && ev.impact_speed < 4.5) continue;
+                    ego.crash_cooldown = 0.5;
+                    if (ev.entity_b >= 0 && ev.entity_b < g.pool.size()) {
+                        LOG_ERROR("flowsim", "COLLISION ego↔entity%d (jolt3d v=%.2f)",
+                                  ev.entity_b, ev.impact_speed);
+                        publish_sim_collision(ego, g.pool[ev.entity_b]);
+                    } else {
+                        LOG_ERROR("flowsim", "COLLISION ego↔%s%d (jolt3d v=%.2f)",
+                                  ev.kind_b.c_str(), ev.obstacle_index, ev.impact_speed);
+                        publish_sim_collision(ego, ego);
+                    }
+                }
+                for (int i = 1; i < g.pool.size(); ++i) {
+                    flowsim::Entity& ped = g.pool[i];
+                    if (!ped.active || ped.type != flowsim::EntityType::Pedestrian) continue;
+                    double gz = ped.z, nx = 0.0, ny = 0.0, nz = 1.0;
+                    if (g.physics_world.raycast_ground(ped.x, ped.y, ped.z + 1.5, 4.0,
+                                                       gz, nx, ny, nz)) {
+                        ped.z = gz;
+                    }
+                }
+#endif
+            } else {
             std::vector<flowsim::CollisionPair> pairs;
             int n_col = flowsim::detect_collisions(g.pool, pairs);
             if (n_col > 0) {
@@ -2907,7 +3036,7 @@ protected:
                     e.last_teleport_cycle = g.cycle;
                     e.crash_cooldown = 0.5;
                     if (i == 0) {
-                        LOG_ERROR("flowsim", "COLLISION ego↔facility%d (%s)", (int)fi, f.kind);
+                        LOG_ERROR("flowsim", "COLLISION ego↔facility%d (%s)", (int)fi, f.kind.c_str());
                         publish_sim_collision(e, e);
                     }
                     hit = true;
@@ -2973,32 +3102,8 @@ protected:
             /* ── Step 4.5: 护栏/路缘碰撞 ──
              * 车辆横向偏移超出道路可行驶边界（路缘）时被护栏阻挡：钳制到路缘、
              * 削减速度。需路网已加载。泊车区机动期（off_rails）与静态车位车辆豁免。 */
-            auto is_near_parking_zone = [&]() -> bool {
-                if (!g.scenario) return false;
-                if (g.scenario->park_out.enabled) {
-                    double dx = ego.x - g.scenario->park_out.slot_x;
-                    double dy = ego.y - g.scenario->park_out.slot_y;
-                    double dz = std::fabs(ego.z - g.scenario->park_out.slot_z);
-                    if (std::hypot(dx, dy) < 28.0 && dz < 2.5) return true;
-                }
-                if (g.scenario->parking_goal.enabled) {
-                    double dx = ego.x - g.scenario->parking_goal.x;
-                    double dy = ego.y - g.scenario->parking_goal.y;
-                    double dz = std::fabs(ego.z - g.scenario->parking_goal.z);
-                    if (std::hypot(dx, dy) < 50.0 && dz < 2.5) return true;
-                }
-                for (int si = 0; si < g.scenario->parking_slot_count; ++si) {
-                    const auto& ps = g.scenario->parking_slots[si];
-                    double dx = ego.x - ps.x;
-                    double dy = ego.y - ps.y;
-                    double dz = std::fabs(ego.z - ps.z);
-                    if (std::hypot(dx, dy) < 50.0 && dz < 2.5) return true;
-                }
-                return false;
-            };
-            const bool near_parking_zone = is_near_parking_zone();
             if (g.roads_loaded) {
-                const bool ego_in_parking = (g.off_rails && near_parking_zone);
+                const bool ego_in_parking = (g.off_rails && is_near_parking_zone());
                 for (int i = 0; i < g.pool.size(); ++i) {
                     flowsim::Entity& v = g.pool[i];
                     if (!v.active || !v.is_vehicle() || v.parked_fixed) continue;
@@ -3016,6 +3121,8 @@ protected:
                     flowsim::apply_gravity(v, g.roads, FLOWSIM_DT_SEC);
                 }
             }
+            }  /* end if (!use_jolt3d) legacy collisions & gravity */
+            const bool near_parking_zone = is_near_parking_zone();
 
             /* ── Step 5: 场景事件推进 ── */
             double sim_time_s = (double)(clock_now_us() - g.sim_start_us) / 1e6;
@@ -3452,6 +3559,7 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
                 strncpy(g.scenario_file, j->valuestring, sizeof(g.scenario_file) - 1);
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "physics_model")) && cJSON_IsString(j)) {
                 strncpy(g.physics_model, j->valuestring, sizeof(g.physics_model) - 1);
+                g.physics_model[sizeof(g.physics_model) - 1] = '\0';
                 if (strcmp(g.physics_model, "dynamic") == 0) {
                     LOG_INFO("flowsim", "physics_model=dynamic selected "
                              "(线性轮胎二自由度；<5m/s 退化运动学，见 CALIBRATION_GUIDE.md)");
@@ -3459,6 +3567,14 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
                     LOG_INFO("flowsim", "physics_model=pacejka selected "
                              "(Pacejka 魔术公式轮胎；峰值受 μ·Fz 限制，可模拟湿滑路面，"
                              "见 CALIBRATION_GUIDE.md)");
+                } else if (strcmp(g.physics_model, "jolt3d") == 0) {
+#if defined(FLOW_HAS_JOLT) && FLOW_HAS_JOLT
+                    LOG_INFO("flowsim", "physics_model=jolt3d selected "
+                             "(Jolt 3D 6-DOF 刚体 + 四轮独立悬架 + Pacejka 联合滑移)");
+#else
+                    LOG_WARN("flowsim", "physics_model=jolt3d requested without FLOW_HAS_JOLT; falling back to kinematic");
+                    std::snprintf(g.physics_model, sizeof(g.physics_model), "%s", "kinematic");
+#endif
                 }
             }
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "enable_poisson_traffic")) && cJSON_IsBool(j))
@@ -3534,313 +3650,7 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
                     free(bsp);
                 }
             }
-            /* 提取 B1 地下车库立柱/外墙、坡道挡墙及路侧灯杆作为静态碰撞与感知障碍体 */
-            cJSON* earr = cJSON_GetObjectItemCaseSensitive(rn, "edges");
-            if (cJSON_IsArray(earr)) {
-                cJSON* edge = nullptr;
-                cJSON_ArrayForEach(edge, earr) {
-                    cJSON* jtype = cJSON_GetObjectItemCaseSensitive(edge, "type");
-                    if (!jtype || !cJSON_IsString(jtype)) continue;
-                    const char* etype = jtype->valuestring;
-                    cJSON* jnodes = cJSON_GetObjectItemCaseSensitive(edge, "nodes");
-                    if (!cJSON_IsArray(jnodes) || cJSON_GetArraySize(jnodes) < 2) continue;
-                    int npts = cJSON_GetArraySize(jnodes);
-                    cJSON* n0 = cJSON_GetArrayItem(jnodes, 0);
-                    cJSON* n1 = cJSON_GetArrayItem(jnodes, npts - 1);
-                    double x0 = cJSON_GetArrayItem(n0, 0)->valuedouble;
-                    double y0 = cJSON_GetArrayItem(n0, 1)->valuedouble;
-                    double z0 = cJSON_GetArraySize(n0) > 2 ? cJSON_GetArrayItem(n0, 2)->valuedouble : 0.0;
-                    double x1 = cJSON_GetArrayItem(n1, 0)->valuedouble;
-                    double y1 = cJSON_GetArrayItem(n1, 1)->valuedouble;
-                    double len = std::hypot(x1 - x0, y1 - y0);
-                    double hdg = std::atan2(y1 - y0, x1 - x0);
-                    double ch = std::cos(hdg), sh = std::sin(hdg);
-
-                    if (strcmp(etype, "garage_hall") == 0) {
-                        const double hall_half_w = 11.6;
-                        const double pillar_s[] = {2.0, 19.1, 31.5, 48.0, 64.0, 82.0, 96.0, 110.0, 124.0};
-                        for (double ps : pillar_s) {
-                            if (ps >= len - 2.0) continue;
-                            for (double side : {-1.0, 1.0}) {
-                                double lat = side * (hall_half_w - 0.85);
-                                g.facility_obstacles.push_back({
-                                    x0 + ch * ps - sh * lat,
-                                    y0 + sh * ps + ch * lat,
-                                    z0, 0.60, 0.60, hdg, "pillar"
-                                });
-                            }
-                        }
-                        /* 车库南北外墙（分段 10m 便于局部感知与碰撞推回） + 西端封堵墙 */
-                        for (double s = 0.0; s < len; s += 10.0) {
-                            double seg_len = std::min(10.0, len - s);
-                            double sm = s + seg_len * 0.5;
-                            for (double side : {-1.0, 1.0}) {
-                                double lat = side * (hall_half_w + 0.15);
-                                g.facility_obstacles.push_back({
-                                    x0 + ch * sm - sh * lat,
-                                    y0 + sh * sm + ch * lat,
-                                    z0, seg_len, 0.40, hdg, "wall"
-                                });
-                            }
-                        }
-                        for (double lat = -8.0; lat <= 8.0; lat += 8.0) {
-                            g.facility_obstacles.push_back({
-                                x0 - sh * lat, y0 + ch * lat,
-                                z0, 0.40, 8.0, hdg, "wall"
-                            });
-                        }
-                    } else if (strcmp(etype, "open_ramp") == 0) {
-                        cJSON* jlanes = cJSON_GetObjectItemCaseSensitive(edge, "lanes");
-                        cJSON* jlw    = cJSON_GetObjectItemCaseSensitive(edge, "lane_width");
-                        int lanes = (jlanes && cJSON_IsNumber(jlanes)) ? (int)jlanes->valuedouble : 2;
-                        double lw = (jlw && cJSON_IsNumber(jlw)) ? jlw->valuedouble : 3.5;
-                        double lat_w = lanes * lw * 0.5 + 0.45;
-                        for (int k = 1; k < npts; ++k) {
-                            cJSON* pa = cJSON_GetArrayItem(jnodes, k - 1);
-                            cJSON* pb = cJSON_GetArrayItem(jnodes, k);
-                            double ax = cJSON_GetArrayItem(pa, 0)->valuedouble;
-                            double ay = cJSON_GetArrayItem(pa, 1)->valuedouble;
-                            double az = cJSON_GetArraySize(pa) > 2 ? cJSON_GetArrayItem(pa, 2)->valuedouble : 0.0;
-                            double bx = cJSON_GetArrayItem(pb, 0)->valuedouble;
-                            double by = cJSON_GetArrayItem(pb, 1)->valuedouble;
-                            double bz = cJSON_GetArraySize(pb) > 2 ? cJSON_GetArrayItem(pb, 2)->valuedouble : 0.0;
-                            double slen = std::hypot(bx - ax, by - ay);
-                            if (slen < 1.0) continue;
-                            double shdg = std::atan2(by - ay, bx - ax);
-                            double sc = std::cos(shdg), ss = std::sin(shdg);
-                            for (double s = 0.0; s < slen; s += 10.0) {
-                                double seg = std::min(10.0, slen - s);
-                                double sm = s + seg * 0.5;
-                                double t = sm / slen;
-                                double mz = az + (bz - az) * t;
-                                for (double side : {-1.0, 1.0}) {
-                                    double lat = side * lat_w;
-                                    g.facility_obstacles.push_back({
-                                        ax + sc * sm - ss * lat,
-                                        ay + ss * sm + sc * lat,
-                                        mz, seg, 0.35, shdg, "wall"
-                                    });
-                                }
-                            }
-                        }
-                    } else if (strcmp(etype, "urban") == 0) {
-                        cJSON* jlanes = cJSON_GetObjectItemCaseSensitive(edge, "lanes");
-                        cJSON* jlw    = cJSON_GetObjectItemCaseSensitive(edge, "lane_width");
-                        int lanes = (jlanes && cJSON_IsNumber(jlanes)) ? (int)jlanes->valuedouble : 2;
-                        double lw = (jlw && cJSON_IsNumber(jlw)) ? jlw->valuedouble : 3.5;
-                        double lat_p = lanes * lw * 0.5 + 0.85;
-                        for (int k = 1; k < npts; ++k) {
-                            cJSON* pa = cJSON_GetArrayItem(jnodes, k - 1);
-                            cJSON* pb = cJSON_GetArrayItem(jnodes, k);
-                            double ax = cJSON_GetArrayItem(pa, 0)->valuedouble;
-                            double ay = cJSON_GetArrayItem(pa, 1)->valuedouble;
-                            double az = cJSON_GetArraySize(pa) > 2 ? cJSON_GetArrayItem(pa, 2)->valuedouble : 0.0;
-                            double bx = cJSON_GetArrayItem(pb, 0)->valuedouble;
-                            double by = cJSON_GetArrayItem(pb, 1)->valuedouble;
-                            double slen = std::hypot(bx - ax, by - ay);
-                            if (slen < 30.0) continue;
-                            double shdg = std::atan2(by - ay, bx - ax);
-                            double sc = std::cos(shdg), ss = std::sin(shdg);
-                            for (double s = 20.0; s < slen - 20.0; s += 40.0) {
-                                for (double side : {-1.0, 1.0}) {
-                                    double lat = side * lat_p;
-                                    g.facility_obstacles.push_back({
-                                        ax + sc * s - ss * lat,
-                                        ay + ss * s + sc * lat,
-                                        az, 0.45, 0.45, shdg, "pole"
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-                /* 剔除落入任何交叉/汇入/并行路面的灯杆 */
-                struct RoadSegBand { double ax, ay, az, bx, by, bz, hw; };
-                std::vector<RoadSegBand> segs;
-                cJSON_ArrayForEach(edge, earr) {
-                    cJSON* jnodes = cJSON_GetObjectItemCaseSensitive(edge, "nodes");
-                    if (!cJSON_IsArray(jnodes) || cJSON_GetArraySize(jnodes) < 2) continue;
-                    cJSON* jlanes = cJSON_GetObjectItemCaseSensitive(edge, "lanes");
-                    cJSON* jlw    = cJSON_GetObjectItemCaseSensitive(edge, "lane_width");
-                    int lanes = (jlanes && cJSON_IsNumber(jlanes)) ? (int)jlanes->valuedouble : 2;
-                    double lw = (jlw && cJSON_IsNumber(jlw)) ? jlw->valuedouble : 3.5;
-                    double hw = lanes * lw * 0.5 + 0.55;
-                    int npts = cJSON_GetArraySize(jnodes);
-                    for (int k = 1; k < npts; ++k) {
-                        cJSON* pa = cJSON_GetArrayItem(jnodes, k - 1);
-                        cJSON* pb = cJSON_GetArrayItem(jnodes, k);
-                        segs.push_back({
-                            cJSON_GetArrayItem(pa, 0)->valuedouble,
-                            cJSON_GetArrayItem(pa, 1)->valuedouble,
-                            cJSON_GetArraySize(pa) > 2 ? cJSON_GetArrayItem(pa, 2)->valuedouble : 0.0,
-                            cJSON_GetArrayItem(pb, 0)->valuedouble,
-                            cJSON_GetArrayItem(pb, 1)->valuedouble,
-                            cJSON_GetArraySize(pb) > 2 ? cJSON_GetArrayItem(pb, 2)->valuedouble : 0.0,
-                            hw
-                        });
-                    }
-                }
-                g.facility_obstacles.erase(
-                    std::remove_if(g.facility_obstacles.begin(), g.facility_obstacles.end(),
-                        [&](const FlowSimContext::FacilityCollider& f) {
-                            if (strcmp(f.kind, "pole") != 0) return false;
-                            for (const auto& s : segs) {
-                                double dx = s.bx - s.ax, dy = s.by - s.ay;
-                                double l2 = dx * dx + dy * dy;
-                                if (l2 < 1e-6) continue;
-                                double t = std::max(0.0, std::min(1.0, ((f.x - s.ax) * dx + (f.y - s.ay) * dy) / l2));
-                                double px = s.ax + t * dx, py = s.ay + t * dy, pz = s.az + t * (s.bz - s.az);
-                                if (std::fabs(f.z - pz) <= 2.5 && std::hypot(f.x - px, f.y - py) < s.hw) {
-                                    return true;
-                                }
-                            }
-                            for (int si = 0; si < g.scenario->parking_slot_count; ++si) {
-                                const auto& ps = g.scenario->parking_slots[si];
-                                if (std::fabs(f.z - ps.z) <= 2.5 && std::hypot(f.x - ps.x, f.y - ps.y) < 12.0) {
-                                    return true;
-                                }
-                            }
-                            return false;
-                        }),
-                    g.facility_obstacles.end());
-            }
             cJSON_Delete(rn);
-        }
-        /* 道闸/ETC 路侧机箱与安全岛（即使抬杆后也保持物理碰撞） */
-        for (int gi = 0; gi < g.scenario->etc_gate_count; ++gi) {
-            const auto& eg = g.scenario->etc_gates[gi];
-            double cg = std::cos(eg.heading), sg = std::sin(eg.heading);
-            double lat = -2.25;
-            g.facility_obstacles.push_back({
-                eg.x - sg * lat, eg.y + cg * lat,
-                eg.z, 1.6, 0.7, eg.heading, "gate"
-            });
-        }
-        /* 地面停车场东西树池隔离带（与 GarageView.js 对齐） */
-        if (g.scenario->parking_slot_count > 0) {
-            double min_sx = 1e9, max_sx = -1e9;
-            for (int si = 0; si < g.scenario->parking_slot_count; ++si) {
-                if (std::fabs(g.scenario->parking_slots[si].z) < 1.2) {
-                    min_sx = std::min(min_sx, g.scenario->parking_slots[si].x);
-                    max_sx = std::max(max_sx, g.scenario->parking_slots[si].x);
-                }
-            }
-            if (min_sx < max_sx) {
-                double west_x = (min_sx - 4.0) - 5.65;
-                double east_x = (max_sx + 4.0) + 8.5;
-                g.facility_obstacles.push_back({west_x, -6.5, 0.0, 4.6, 5.1, 0.0, "planter", 0.70});
-                g.facility_obstacles.push_back({east_x, -6.5, 0.0, 4.6, 5.1, 0.0, "planter", 0.70});
-
-                const double bayY = g.scenario->parking_slots[0].y;
-                const double bayZ = g.scenario->parking_slots[0].z;
-                const double bayH = g.scenario->parking_slots[0].heading != 0.0
-                                  ? g.scenario->parking_slots[0].heading : 1.5708;
-                const double slotLen = g.scenario->parking_slots[0].length > 0.0
-                                     ? g.scenario->parking_slots[0].length : 5.6;
-                const double slotWid = g.scenario->parking_slots[0].width > 0.0
-                                     ? g.scenario->parking_slots[0].width : 2.7;
-
-                std::vector<double> bayXs = {
-                    min_sx - 4.0, min_sx, (min_sx + max_sx) * 0.5, max_sx, max_sx + 4.0
-                };
-                std::vector<double> uniqueBayXs;
-                for (double bx : bayXs) {
-                    bool dup = false;
-                    for (double u : uniqueBayXs) if (std::fabs(u - bx) < 1.2) { dup = true; break; }
-                    if (!dup) uniqueBayXs.push_back(bx);
-                }
-                for (int si = 0; si < g.scenario->parking_slot_count; ++si) {
-                    const auto& ps = g.scenario->parking_slots[si];
-                    if (std::fabs(ps.z) >= 1.2) continue;
-                    bool dup = false;
-                    for (double u : uniqueBayXs) if (std::fabs(u - ps.x) < 1.2) { dup = true; break; }
-                    if (!dup) uniqueBayXs.push_back(ps.x);
-                }
-                std::sort(uniqueBayXs.begin(), uniqueBayXs.end());
-
-                if (!uniqueBayXs.empty()) {
-                    const double cb = std::cos(bayH), sb = std::sin(bayH);
-                    const double stopOff = -slotLen * 0.5 + 0.65;
-                    for (double bx : uniqueBayXs) {
-                        g.facility_obstacles.push_back({
-                            bx + cb * stopOff, bayY + sb * stopOff, bayZ,
-                            0.16, std::max(0.8, slotWid * 0.72), bayH, "wheel_stop", 0.18
-                        });
-                        g.facility_obstacles.push_back({
-                            bx - 1.95, bayY - 3.05, bayZ,
-                            0.18, 0.18, bayH, "bollard", 0.78
-                        });
-                    }
-                    g.facility_obstacles.push_back({
-                        uniqueBayXs.back() + 1.95, bayY - 3.05, bayZ,
-                        0.18, 0.18, bayH, "bollard", 0.78
-                    });
-                    size_t chStart = uniqueBayXs.size() > 3 ? uniqueBayXs.size() - 3 : 0;
-                    for (size_t ci = chStart; ci < uniqueBayXs.size(); ++ci) {
-                        g.facility_obstacles.push_back({
-                            uniqueBayXs[ci], bayY - 3.55, bayZ,
-                            0.42, 0.34, bayH, "charger", 1.55
-                        });
-                    }
-                    const double westPlanterX = uniqueBayXs.front() - 5.65;
-                    const double padMinX = westPlanterX - 3.6;
-                    const double gateIslandX = std::min(3198.0, padMinX - 6.0);
-                    g.facility_obstacles.push_back({
-                        gateIslandX, -4.5, 0.0, 6.2, 1.25, 0.0, "barrier", 1.50
-                    });
-                }
-            }
-            for (int si = 0; si < g.scenario->parking_slot_count; ++si) {
-                const auto& ps = g.scenario->parking_slots[si];
-                if (std::fabs(ps.z) < 1.2) continue;
-                const double sh = ps.heading != 0.0 ? ps.heading : 1.5708;
-                const double len = ps.length > 0.0 ? ps.length : 5.6;
-                const double wid = ps.width > 0.0 ? ps.width : 2.7;
-                const double stopOff = -len * 0.5 + 0.65;
-                g.facility_obstacles.push_back({
-                    ps.x + std::cos(sh) * stopOff, ps.y + std::sin(sh) * stopOff, ps.z,
-                    0.16, std::max(0.8, wid * 0.72), sh, "wheel_stop", 0.18
-                });
-            }
-        }
-    }
-    if (g.scenario && g.scenario->parking_goal.enabled) {
-        const auto& pg = g.scenario->parking_goal;
-        bool covered = false;
-        for (int si = 0; si < g.scenario->parking_slot_count; ++si) {
-            const auto& ps = g.scenario->parking_slots[si];
-            if (std::hypot(ps.x - pg.x, ps.y - pg.y) < 1.5 &&
-                std::fabs(ps.z - pg.z) < 1.5) {
-                covered = true;
-                break;
-            }
-        }
-        if (!covered) {
-            const double gh = pg.heading;
-            const double glen = pg.length > 0.0 ? pg.length : 6.0;
-            const double gwid = pg.width > 0.0 ? pg.width : 2.8;
-            const double cg = std::cos(gh), sg = std::sin(gh);
-            const double stopOff = -glen * 0.5 + 0.65;
-            g.facility_obstacles.push_back({
-                pg.x + cg * stopOff, pg.y + sg * stopOff, pg.z,
-                0.16, std::max(0.8, gwid * 0.72), gh, "wheel_stop", 0.18
-            });
-            if (std::fabs(pg.z) < 1.2) {
-                const double chargerOff = -glen * 0.5 - 0.55;
-                g.facility_obstacles.push_back({
-                    pg.x + cg * chargerOff, pg.y + sg * chargerOff, pg.z,
-                    0.42, 0.34, gh, "charger", 1.55
-                });
-                const double bolBack = -glen * 0.5 - 0.05;
-                const double bolLat = gwid * 0.5 + 0.30;
-                for (double side : {-1.0, 1.0}) {
-                    g.facility_obstacles.push_back({
-                        pg.x + cg * bolBack - sg * (side * bolLat),
-                        pg.y + sg * bolBack + cg * (side * bolLat),
-                        pg.z, 0.18, 0.18, gh, "bollard", 0.78
-                    });
-                }
-            }
         }
     }
 
@@ -3916,23 +3726,6 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
                 }
                 /* 压路建筑剔除（隧道上方建筑/数据瑕疵不参与碰撞） */
                 filter_buildings_over_roads();
-                /* 剔除落入交叉/汇入路面的路侧灯杆 */
-                g.facility_obstacles.erase(
-                    std::remove_if(g.facility_obstacles.begin(), g.facility_obstacles.end(),
-                        [&](const FlowSimContext::FacilityCollider& f) {
-                            if (strcmp(f.kind, "pole") != 0) return false;
-                            flowsim::FrenetPos fp{};
-                            if (!g.roads.world_to_frenet(f.x, f.y, fp, f.z)) return false;
-                            flowsim::WorldPos wp{};
-                            if (!g.roads.frenet_to_world(fp.road_id, 0, fp.s, 0.0, wp)) return false;
-                            if (std::fabs(f.z - wp.z) > 2.5) return false;
-                            int nlanes = g.roads.drivable_lane_count(fp.road_id, fp.s);
-                            double lw = g.roads.lane_width(fp.road_id, 0, fp.s);
-                            if (lw < 1.0) lw = 3.5;
-                            double half_w = std::max(1, nlanes) * lw * 0.5 + 0.4;
-                            return std::hypot(f.x - wp.x, f.y - wp.y) < half_w;
-                        }),
-                    g.facility_obstacles.end());
             } else {
                 LOG_WARN("flowsim", "esmini load failed for %s — NPC AI falls back to lateral distance",
                          xodr.c_str());
@@ -3996,10 +3789,12 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
         if (g.roads.frenet_to_world(road_id, 0, local_s, g.start_d, wp)) {
             g.scenario->ego.x = wp.x;
             g.scenario->ego.y = wp.y;
+            g.scenario->ego.z = wp.z;
+            g.scenario->ego.has_z = true;
             g.scenario->ego.heading = wp.h;
             LOG_INFO("flowsim",
-                     "start override: route_s=%.1f d=%.2f -> road=%d local_s=%.1f world=(%.1f,%.1f h=%.2f)",
-                     g.start_s, g.start_d, road_id, local_s, wp.x, wp.y, wp.h);
+                     "start override: route_s=%.1f d=%.2f -> road=%d local_s=%.1f world=(%.1f,%.1f,%.1f h=%.2f)",
+                     g.start_s, g.start_d, road_id, local_s, wp.x, wp.y, wp.z, wp.h);
         } else {
             LOG_ERROR("flowsim", "start override failed: route_s=%.1f d=%.2f",
                       g.start_s, g.start_d);
@@ -4185,21 +3980,188 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
             g.scene_pub_cfg.parking_slots.push_back(out_ps);
         }
     }
-    if (!g.facility_obstacles.empty()) {
+    /* ── WorldEngine: 单一权威程序化 3D/物理/感知世界编译器 ── */
+    std::vector<flowsim::StaticBoxObstacle> jolt_obs;
+    {
+        flowsim::WorldEngineInput wg_in;
+        const char* rn_ptr = (g.scenario && g.scenario->road_network_json)
+            ? g.scenario->road_network_json
+            : flowsim::ensure_road_network_json(g.scene_pub_cfg).c_str();
+        wg_in.road_network_json = (rn_ptr && rn_ptr[0]) ? rn_ptr : nullptr;
+        wg_in.scenario_file_path = g.scenario_file[0] ? g.scenario_file : nullptr;
+        wg_in.random_seed = g.random_seed;
+        wg_in.manual_buildings = g.buildings;
+
+        if (g.scenario) {
+            for (int gi = 0; gi < g.scenario->etc_gate_count; ++gi) {
+                const auto& eg = g.scenario->etc_gates[gi];
+                wg_in.etc_gates.push_back({eg.x, eg.y, eg.z, eg.heading});
+            }
+            for (int si = 0; si < g.scenario->parking_slot_count; ++si) {
+                const auto& ps = g.scenario->parking_slots[si];
+                wg_in.parking_slots.push_back({ps.id, ps.x, ps.y, ps.z, ps.heading, ps.width, ps.length});
+            }
+            if (g.scenario->parking_goal.enabled) {
+                wg_in.has_parking_goal = true;
+                wg_in.parking_goal = {
+                    -1, g.scenario->parking_goal.x, g.scenario->parking_goal.y,
+                    g.scenario->parking_goal.z, g.scenario->parking_goal.heading,
+                    g.scenario->parking_goal.width, g.scenario->parking_goal.length
+                };
+            }
+            if (g.scenario->park_out.enabled) {
+                wg_in.park_out.enabled = true;
+                wg_in.park_out.slot_x = g.scenario->park_out.slot_x;
+                wg_in.park_out.slot_y = g.scenario->park_out.slot_y;
+                wg_in.park_out.slot_z = g.scenario->park_out.slot_z;
+                wg_in.park_out.slot_heading = g.scenario->park_out.slot_heading;
+                wg_in.park_out.exit_x = g.scenario->park_out.exit_x;
+                wg_in.park_out.exit_y = g.scenario->park_out.exit_y;
+                wg_in.park_out.exit_z = g.scenario->park_out.exit_z;
+                wg_in.park_out.exit_heading = g.scenario->park_out.exit_heading;
+                wg_in.park_out.corridor_width = g.scenario->park_out.corridor_width;
+            }
+        }
+        for (int ei = 1; ei < g.pool.size(); ++ei) {
+            const auto& ent = g.pool[ei];
+            if (ent.active && ent.type == flowsim::EntityType::TrafficLight) {
+                wg_in.traffic_lights.push_back({ent.id, ent.x, ent.y, ent.z, ent.heading});
+            }
+        }
+
+        flowsim::WorldLayout world_layout = flowsim::compile_world(wg_in);
+
+        /* 二次 esmini Frenet 精裁（防止复杂拓扑重叠处伸入行车道） */
+        if (g.roads_loaded) {
+            auto hits_esmini_road = [&](double fx, double fy, double fz, double margin) -> bool {
+                flowsim::FrenetPos fp{};
+                if (!g.roads.world_to_frenet(fx, fy, fp, fz)) return false;
+                flowsim::WorldPos wp{};
+                if (!g.roads.frenet_to_world(fp.road_id, 0, fp.s, 0.0, wp)) return false;
+                if (std::fabs(fz - wp.z) > 2.5) return false;
+                int nlanes = g.roads.drivable_lane_count(fp.road_id, fp.s);
+                double lw = g.roads.lane_width(fp.road_id, 0, fp.s);
+                if (lw < 1.0) lw = 3.5;
+                double half_w = std::max(1, nlanes) * lw * 0.5 + margin;
+                return std::hypot(fx - wp.x, fy - wp.y) < half_w;
+            };
+            world_layout.poles.erase(
+                std::remove_if(world_layout.poles.begin(), world_layout.poles.end(),
+                    [&](const flowsim::WorldPole& p) { return hits_esmini_road(p.x, p.y, p.z, 0.4); }),
+                world_layout.poles.end());
+            world_layout.trees.erase(
+                std::remove_if(world_layout.trees.begin(), world_layout.trees.end(),
+                    [&](const flowsim::WorldTree& t) { return hits_esmini_road(t.x, t.y, t.z, 1.0); }),
+                world_layout.trees.end());
+            world_layout.signs.erase(
+                std::remove_if(world_layout.signs.begin(), world_layout.signs.end(),
+                    [&](const flowsim::WorldSign& s) { return hits_esmini_road(s.x, s.y, s.z, 0.4); }),
+                world_layout.signs.end());
+            world_layout.colliders.erase(
+                std::remove_if(world_layout.colliders.begin(), world_layout.colliders.end(),
+                    [&](const flowsim::WorldCollider& c) {
+                        if (c.kind != "pole" && c.kind != "tree" && c.kind != "sign") return false;
+                        double margin = (c.kind == "tree") ? 1.0 : 0.4;
+                        return hits_esmini_road(c.x, c.y, c.z, margin);
+                    }),
+                world_layout.colliders.end());
+            world_layout.sanity.poles = static_cast<int>(world_layout.poles.size());
+            world_layout.sanity.trees = static_cast<int>(world_layout.trees.size());
+            world_layout.sanity.signs = static_cast<int>(world_layout.signs.size());
+            world_layout.sanity.colliders = static_cast<int>(world_layout.colliders.size());
+        }
+
+        const char* wl_path = std::getenv("FLOW_WORLD_LAYOUT_FILE");
+        if (!wl_path || !wl_path[0]) wl_path = "/tmp/flow_world_layout.json";
+        if (flowsim::write_world_layout_json(world_layout, wl_path)) {
+            g.scene_pub_cfg.world_layout_hash = world_layout.world_hash;
+        } else {
+            LOG_WARN("flowsim", "failed to write world layout JSON to %s", wl_path);
+        }
+
+        g.facility_obstacles.clear();
         g.scene_pub_cfg.facilities.clear();
-        for (const auto& f : g.facility_obstacles) {
-            flowsim::ScenePubConfig::ScenePubFacility pf;
-            pf.kind = f.kind ? f.kind : "facility";
-            pf.x = f.x;
-            pf.y = f.y;
-            pf.z = f.z;
-            pf.length = f.len;
-            pf.width = f.wid;
-            pf.height = f.height;
-            pf.heading = f.heading;
-            g.scene_pub_cfg.facilities.push_back(std::move(pf));
+        jolt_obs.reserve(world_layout.colliders.size());
+        for (const auto& c : world_layout.colliders) {
+            if (c.sensor_visible) {
+                g.facility_obstacles.push_back({
+                    c.x, c.y, c.z, c.len, c.wid, c.heading, c.kind, c.height, c.is_cylinder
+                });
+                flowsim::ScenePubConfig::ScenePubFacility pf;
+                pf.kind = c.kind;
+                pf.x = c.x;
+                pf.y = c.y;
+                pf.z = c.z;
+                pf.length = c.len;
+                pf.width = c.wid;
+                pf.height = c.height;
+                pf.heading = c.heading;
+                g.scene_pub_cfg.facilities.push_back(std::move(pf));
+            }
+            flowsim::StaticBoxObstacle o;
+            o.x = c.x;
+            o.y = c.y;
+            o.z = c.z;
+            o.len = c.len;
+            o.wid = c.wid;
+            o.height = c.height;
+            o.heading = c.heading;
+            o.kind = c.kind;
+            o.is_cylinder = c.is_cylinder;
+            jolt_obs.push_back(std::move(o));
+        }
+
+        LOG_INFO("flowsim",
+                 "[world_engine] preset=%s hash=%s poles=%d trees=%d barriers=%d piers=%d signs=%d furniture=%d bldgs=%d props=%d colliders=%d (%.2fms)",
+                 world_layout.preset.c_str(), world_layout.world_hash.c_str(),
+                 world_layout.sanity.poles, world_layout.sanity.trees,
+                 world_layout.sanity.barrier_posts, world_layout.sanity.piers,
+                 world_layout.sanity.signs, world_layout.sanity.furniture,
+                 world_layout.sanity.buildings, world_layout.sanity.props,
+                 world_layout.sanity.colliders, world_layout.sanity.compile_ms);
+    }
+
+    if (const char* env_pm = std::getenv("FLOWSIM_PHYSICS_MODEL")) {
+        if (env_pm[0] != '\0') {
+            std::snprintf(g.physics_model, sizeof(g.physics_model), "%s", env_pm);
         }
     }
+#if defined(FLOW_HAS_JOLT) && FLOW_HAS_JOLT
+    if (strcmp(g.physics_model, "jolt3d") == 0) {
+        g.physics_world.build_static_world(
+            g.roads_loaded ? &g.roads : nullptr,
+            g.scenario,
+            g.buildings,
+            jolt_obs);
+        g.gate_physics_handles.clear();
+        g.gate_entity_indices.clear();
+        for (int gi = 0; gi < g.pool.size(); ++gi) {
+            const flowsim::Entity& ge = g.pool[gi];
+            if (!ge.active || ge.type != flowsim::EntityType::ETCGate) continue;
+            bool open = (ge.phase_state == 2 || ge.phase_timer >= 0.75);
+            int gh = g.physics_world.add_gate_barrier(
+                ge.x, ge.y, ge.z, 0.5, 3.6, 1.3, ge.heading, gi);
+            if (gh >= 0 && open) {
+                g.physics_world.set_gate_open(gh, true);
+            }
+            g.gate_physics_handles.push_back(gh);
+            g.gate_entity_indices.push_back(gi);
+        }
+        if (g.pool.size() > 0 && g.pool[0].active) {
+            g.physics_world.register_ego(g.pool[0], /*abs_enabled=*/true);
+        }
+        g.physics_world.sync_npcs_from_pool(g.pool, 0.0);
+        LOG_INFO("flowsim",
+                 "Jolt 3D physics world initialized: bodies=%d, gates=%zu, obstacles=%zu, buildings=%zu",
+                 g.physics_world.body_count(), g.gate_physics_handles.size(),
+                 jolt_obs.size(), g.buildings.size());
+    }
+#else
+    if (strcmp(g.physics_model, "jolt3d") == 0) {
+        LOG_WARN("flowsim", "physics_model=jolt3d unavailable without FLOW_HAS_JOLT; using kinematic");
+        std::snprintf(g.physics_model, sizeof(g.physics_model), "%s", "kinematic");
+    }
+#endif
 
     /* 构造协程任务（托管模式） */
     TaskConfig tcfg = {};
@@ -4268,6 +4230,11 @@ static void flowsim_cleanup(void) {
     for (int i = 0; i < flowsim::MAX_ENTITIES; ++i) {
         g.pool[i].road_pos = flowsim::RoadPosition{};
     }
+#if defined(FLOW_HAS_JOLT) && FLOW_HAS_JOLT
+    g.physics_world.reset();
+    g.gate_physics_handles.clear();
+    g.gate_entity_indices.clear();
+#endif
     g.roads.release();
     g.roads_loaded = false;
     if (g.scenario) {

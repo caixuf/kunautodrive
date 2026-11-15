@@ -1173,6 +1173,10 @@ set_tests_properties(fusion_degraded_tests PROPERTIES TIMEOUT 20)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Lanelet2Standalone.cmake)
 kun_add_lanelet2()
 
+# Phase 6: Jolt Physics standalone 3D rigid-body backend
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/JoltPhysics.cmake)
+flow_add_jolt()
+
 add_executable(test_adas_nodes_logic tests/test_adas_nodes_logic.c
                                 modules/adas_nodes/imu_protocol.c
                                 modules/adas_nodes/perception_points.c
@@ -1323,6 +1327,43 @@ if(ESMINI_RMLIB_TEST)
     target_link_libraries(test_entity_physics m ${ESMINI_RMLIB_TEST} ${CJSON_LIBRARIES})
     add_test(NAME entity_physics_tests COMMAND test_entity_physics)
     set_tests_properties(entity_physics_tests PROPERTIES TIMEOUT 10)
+
+    if(TARGET Jolt)
+        add_executable(test_jolt_physics
+            modules/adas_nodes/flowsim/test_jolt_physics.cpp
+            modules/adas_nodes/flowsim/physics_world.cpp
+            modules/adas_nodes/flowsim/physics.cpp
+            modules/adas_nodes/flowsim/building.cpp
+            modules/adas_nodes/flowsim/road_network.cpp
+            modules/adas_nodes/flowsim/road_position.cpp)
+        target_include_directories(test_jolt_physics PRIVATE
+            modules/adas_nodes
+            ${CJSON_INCLUDE_DIRS}
+            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/esmini/EnvironmentSimulator/Libraries/esminiRMLib
+            ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        target_link_libraries(test_jolt_physics m Jolt ${ESMINI_RMLIB_TEST} ${CJSON_LIBRARIES})
+        target_compile_definitions(test_jolt_physics PRIVATE FLOW_HAS_JOLT=1)
+        add_test(NAME jolt_physics_tests COMMAND test_jolt_physics)
+        set_tests_properties(jolt_physics_tests PROPERTIES TIMEOUT 30)
+
+        add_executable(test_world_engine
+            modules/adas_nodes/flowsim/test_world_engine.cpp
+            modules/adas_nodes/flowsim/world_engine.cpp
+            modules/adas_nodes/flowsim/physics_world.cpp
+            modules/adas_nodes/flowsim/physics.cpp
+            modules/adas_nodes/flowsim/building.cpp
+            modules/adas_nodes/flowsim/road_network.cpp
+            modules/adas_nodes/flowsim/road_position.cpp)
+        target_include_directories(test_world_engine PRIVATE
+            modules/adas_nodes
+            ${CJSON_INCLUDE_DIRS}
+            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/esmini/EnvironmentSimulator/Libraries/esminiRMLib
+            ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        target_link_libraries(test_world_engine m Jolt ${ESMINI_RMLIB_TEST} ${CJSON_LIBRARIES})
+        target_compile_definitions(test_world_engine PRIVATE FLOW_HAS_JOLT=1)
+        add_test(NAME world_engine_tests COMMAND test_world_engine)
+        set_tests_properties(world_engine_tests PROPERTIES TIMEOUT 30)
+    endif()
 else()
     message(WARNING "test_entity_physics: esminiRMLib NOT found — physics unit test not registered")
 endif()
