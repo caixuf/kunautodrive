@@ -1511,7 +1511,7 @@ void PhysicsWorld::sync_npcs_from_pool(EntityPool& pool, double dt) {
 void PhysicsWorld::step(double dt) {
     if (!ready() || dt <= 0.0) return;
 
-    const auto t0 = std::chrono::steady_clock::now();
+    const auto t0 = std::chrono::steady_clock::now(); /* wall-clock-prof */
     JPH::BodyInterface& bi = impl_->physics_system->GetBodyInterface();
 
     int n_sub = std::max(1, (int)std::ceil(dt / kMaxSubstepSec));
@@ -1581,7 +1581,7 @@ void PhysicsWorld::step(double dt) {
         }
     }
 
-    const auto t1 = std::chrono::steady_clock::now();
+    const auto t1 = std::chrono::steady_clock::now(); /* wall-clock-prof */
     impl_->last_step_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 }
 

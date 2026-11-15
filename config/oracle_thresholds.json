@@ -1,0 +1,23 @@
+{
+  "schema": "flowengine.oracle_thresholds.v1",
+  "safety": {
+    "ttc_fail_s": 1.0,
+    "ttc_marginal_s": 2.0,
+    "pet_fail_s": 0.8,
+    "pet_marginal_s": 1.5,
+    "drac_fail_mps2": 6.0,
+    "drac_marginal_mps2": 3.5,
+    "rss_min_lon_margin_m": 1.5,
+    "rss_min_lat_margin_m": 0.5
+  },
+  "rules": {
+    "solid_line_cross_tol_m": 0.05,
+    "overspeed_margin_mps": 1.5,
+    "red_light_stop_line_tol_m": 0.3
+  },
+  "comfort": {
+    "max_lon_jerk_mps3": 4.0,
+    "max_lat_accel_mps2": 3.5,
+    "max_steer_rate_radps": 0.8
+  }
+}

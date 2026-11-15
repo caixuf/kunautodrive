@@ -307,7 +307,7 @@ bool OnnxRuntimeBackend::Forward(const TensorInput& input, TensorOutput& output)
         return false;
     }
 
-    auto start_time = std::chrono::high_resolution_clock::now();
+    auto start_time = std::chrono::high_resolution_clock::now(); /* wall-clock-prof */
 
     bool success = false;
     if (is_simulated_) {
@@ -316,7 +316,7 @@ bool OnnxRuntimeBackend::Forward(const TensorInput& input, TensorOutput& output)
         success = ForwardOrt(input, output);
     }
 
-    auto end_time = std::chrono::high_resolution_clock::now();
+    auto end_time = std::chrono::high_resolution_clock::now(); /* wall-clock-prof */
     latency_ms_ = std::chrono::duration<double, std::milli>(end_time - start_time).count();
     return success;
 }
@@ -438,7 +438,7 @@ bool MockInferenceBackend::Forward(const TensorInput& input, TensorOutput& outpu
         return false;
     }
 
-    auto start_time = std::chrono::high_resolution_clock::now();
+    auto start_time = std::chrono::high_resolution_clock::now(); /* wall-clock-prof */
     output.Clear();
 
     // 1. Generate 3D obstacle boxes
@@ -483,7 +483,7 @@ bool MockInferenceBackend::Forward(const TensorInput& input, TensorOutput& outpu
     }
 
     call_count_++;
-    auto end_time = std::chrono::high_resolution_clock::now();
+    auto end_time = std::chrono::high_resolution_clock::now(); /* wall-clock-prof */
     latency_ms_ = std::chrono::duration<double, std::milli>(end_time - start_time).count();
     // Guarantee non-zero latency measurement for statistical profiling
     if (latency_ms_ <= 0.0) {

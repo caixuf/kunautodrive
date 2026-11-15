@@ -493,7 +493,7 @@ bool ObstacleDetectionPostprocess::Process(const inference::TensorOutput& model_
                                           ObstacleList& out_list,
                                           uint32_t frame_id,
                                           uint64_t timestamp_us) {
-    auto start_time = std::chrono::high_resolution_clock::now();
+    auto start_time = std::chrono::high_resolution_clock::now(); /* wall-clock-prof */
 
     // 1. Extract candidates and lane geometry
     std::vector<BoundingBox3D> candidates;
@@ -518,7 +518,7 @@ bool ObstacleDetectionPostprocess::Process(const inference::TensorOutput& model_
     // 7. Fill ObstacleList struct
     PopulateObstacleList(candidates, out_list, frame_id, timestamp_us);
 
-    auto end_time = std::chrono::high_resolution_clock::now();
+    auto end_time = std::chrono::high_resolution_clock::now(); /* wall-clock-prof */
     latency_ms_ = std::chrono::duration<double, std::milli>(end_time - start_time).count();
     if (latency_ms_ <= 0.0) {
         latency_ms_ = 0.01;

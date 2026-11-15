@@ -709,10 +709,29 @@ int main(int argc, char** argv) {
     };
     int duration = 0;
     int multi_mode = 0;
+    ClockMode clock_mode = CLOCK_MODE_SOFT_RT;
+    uint64_t step_us = 50000ULL;
+    uint64_t sim_seed = 0ULL;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--duration") == 0 && i + 1 < argc) duration = atoi(argv[++i]);
         else if (strcmp(argv[i], "--bag") == 0 && i + 1 < argc) bag_path = argv[++i];
+        else if (strcmp(argv[i], "--clock-mode") == 0 && i + 1 < argc) {
+            const char* m = argv[++i];
+            if (strcmp(m, "soft-rt") == 0) clock_mode = CLOCK_MODE_SOFT_RT;
+            else if (strcmp(m, "fast-time") == 0) clock_mode = CLOCK_MODE_FAST_TIME;
+            else if (strcmp(m, "lock-step") == 0) clock_mode = CLOCK_MODE_LOCK_STEP;
+            else {
+                fprintf(stderr, "invalid --clock-mode: %s (expected soft-rt|fast-time|lock-step)\n", m);
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "--step-us") == 0 && i + 1 < argc) {
+            step_us = strtoull(argv[++i], NULL, 10);
+        }
+        else if (strcmp(argv[i], "--seed") == 0 && i + 1 < argc) {
+            sim_seed = strtoull(argv[++i], NULL, 10);
+        }
         else if (strcmp(argv[i], "--replay-bag") == 0 && i + 1 < argc) {
             replay.bag_path = argv[++i];
             replay.enabled = true;
@@ -804,6 +823,29 @@ int main(int argc, char** argv) {
     }
 
     signal(SIGINT, sig_handler); signal(SIGTERM, sig_handler);
+
+    if (clock_mode != CLOCK_MODE_SOFT_RT || sim_seed != 0ULL) {
+        char shm_name[64];
+        snprintf(shm_name, sizeof(shm_name), "/flowengine_clock_%d", (int)getpid());
+        if (clock_attach_shm(shm_name, true) == 0) {
+#if !defined(_WIN32)
+            setenv("FLOW_CLOCK_SHM", shm_name, 1);
+#endif
+        }
+        clock_set_step_us(step_us);
+        clock_set_seed(sim_seed);
+        clock_set_sim_time(0);
+        clock_set_mode(clock_mode);
+        LOG_INFO("launcher", "clock_mode=%s step_us=%llu seed=%llu rt_latency_valid=%s",
+                 clock_mode_name(clock_mode),
+                 (unsigned long long)step_us,
+                 (unsigned long long)sim_seed,
+                 clock_rt_latency_valid() ? "true" : "false");
+        if (!clock_rt_latency_valid()) {
+            LOG_WARN("launcher", "non-realtime clock mode (%s): response latency metrics are NOT valid for RT claims",
+                     clock_mode_name(clock_mode));
+        }
+    }
 
     int nodes_rc = 0;
     if (multi_mode) {
@@ -967,6 +1009,7 @@ int main(int argc, char** argv) {
         LOG_INFO("launcher", "shutdown complete");
     }
 
+    clock_detach_shm();
     log_shutdown();
     return nodes_rc == 0 ? 0 : 1;
 }

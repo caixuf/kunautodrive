@@ -1890,7 +1890,7 @@ WorldGenConfig parse_world_gen_config(const char* scenario_or_wg_json, uint32_t 
 }
 
 WorldLayout compile_world(const WorldEngineInput& input) {
-    const auto t0 = std::chrono::steady_clock::now();
+    const auto t0 = std::chrono::steady_clock::now(); /* wall-clock-prof */
 
     std::string raw_wg;
     if (input.world_gen_json && input.world_gen_json[0]) {
@@ -1925,7 +1925,7 @@ WorldLayout compile_world(const WorldEngineInput& input) {
     prune_and_audit(field, layout);
     build_colliders_from_layout(layout);
 
-    const auto t1 = std::chrono::steady_clock::now();
+    const auto t1 = std::chrono::steady_clock::now(); /* wall-clock-prof */
     layout.sanity.compile_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
     char hash_buf[32];

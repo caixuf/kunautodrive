@@ -154,7 +154,7 @@ bool HybridAStar::Plan(double start_x, double start_y, double start_phi,
     result->expanded_nodes = 0;
     result->search_time_ms = 0.0;
 
-    auto start_time = std::chrono::high_resolution_clock::now();
+    auto start_time = std::chrono::high_resolution_clock::now(); /* wall-clock-prof */
 
     start_phi = Mod2Pi(start_phi);
     goal_phi = Mod2Pi(goal_phi);
@@ -202,7 +202,7 @@ bool HybridAStar::Plan(double start_x, double start_y, double start_phi,
         result->total_length = len;
         result->gear_switches = gears;
         result->expanded_nodes = 1;
-        auto end_time = std::chrono::high_resolution_clock::now();
+        auto end_time = std::chrono::high_resolution_clock::now(); /* wall-clock-prof */ /* wall-clock-prof */
         result->search_time_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
         return true;
     }
@@ -251,7 +251,7 @@ bool HybridAStar::Plan(double start_x, double start_y, double start_phi,
 
         // Periodic timeout check
         if ((result->expanded_nodes & 0x7F) == 0) {
-            auto now = std::chrono::high_resolution_clock::now();
+            auto now = std::chrono::high_resolution_clock::now(); /* wall-clock-prof: real-time budget */
             double elapsed = std::chrono::duration<double, std::milli>(now - start_time).count();
             if (elapsed > config_.time_limit_ms) {
                 break;
@@ -346,7 +346,7 @@ bool HybridAStar::Plan(double start_x, double start_y, double start_phi,
     }
 
     if (best_node_index < 0) {
-        auto end_time = std::chrono::high_resolution_clock::now();
+        auto end_time = std::chrono::high_resolution_clock::now(); /* wall-clock-prof */ /* wall-clock-prof */
         result->search_time_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
         return false;
     }
@@ -394,7 +394,7 @@ bool HybridAStar::Plan(double start_x, double start_y, double start_phi,
     result->total_length = total_s;
     result->gear_switches = gears;
 
-    auto end_time = std::chrono::high_resolution_clock::now();
+    auto end_time = std::chrono::high_resolution_clock::now(); /* wall-clock-prof */
     result->search_time_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
 
     return true;

@@ -1218,6 +1218,10 @@ target_include_directories(test_shm_arena PRIVATE ${GEN_DIR})
 target_link_libraries(test_shm_arena flowengine_core scheduler_cpp flowcoro_net)
 add_test(NAME shm_arena_tests COMMAND test_shm_arena)
 
+add_executable(test_clock_service tests/test_clock_service.c)
+target_link_libraries(test_clock_service flowengine_core scheduler_cpp flowcoro_net)
+add_test(NAME clock_service_tests COMMAND test_clock_service)
+
 # D2-07 Prefer A: whole-publish hint fixtures (A3/A4)
 add_executable(test_obs_lane_match_hint_prefer_a tests/test_obs_lane_match_hint_prefer_a.c)
 add_dependencies(test_obs_lane_match_hint_prefer_a msg_codegen)

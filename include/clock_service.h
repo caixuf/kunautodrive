@@ -96,6 +96,46 @@ uint64_t clock_get_step_us(void);
  */
 void clock_set_step_us(uint64_t step_us);
 
+/* ── v2: 三模式时间语义 + 跨进程共享内存虚拟时钟 ─────────────────── */
+
+typedef enum {
+    CLOCK_MODE_SOFT_RT   = 0,  /* 跟随墙钟（加速比 <= 1），可测实时性 */
+    CLOCK_MODE_FAST_TIME = 1,  /* 加速模式（10~100x），响应延迟不具实时有效性 */
+    CLOCK_MODE_LOCK_STEP = 2,  /* 锁步模式：最高确定性，抹平实时性 */
+} ClockMode;
+
+/** 设置/查询当前时钟模式（与 clock_set_sim_mode 保持兼容）。 */
+void clock_set_mode(ClockMode mode);
+ClockMode clock_get_mode(void);
+const char* clock_mode_name(ClockMode mode);
+
+/**
+ * 仅在 CLOCK_MODE_SOFT_RT 下返回 true。
+ * 在 FAST_TIME / LOCK_STEP 下返回 false，防止将仿真响应延迟误用于实时性论证。
+ */
+bool clock_rt_latency_valid(void);
+
+/** 查询当前仿真 tick 序号（每次 clock_advance_us 递增 1）。 */
+uint64_t clock_get_tick_seq(void);
+
+/** 设置/查询统一仿真随机种子（跨进程共享）。 */
+void clock_set_seed(uint64_t seed);
+uint64_t clock_get_seed(void);
+
+/**
+ * 挂载/创建跨进程共享内存虚拟时钟页（POSIX shm）。
+ * @param shm_name  共享内存名称（如 "/flowengine_clock_1234"）
+ * @param create    true=launcher 创建并初始化；false=子节点只读/读写挂载
+ * @return 0 成功，-1 失败
+ */
+int clock_attach_shm(const char* shm_name, bool create);
+
+/** 若环境变量 FLOW_CLOCK_SHM 非空，则自动挂载（create=false）。 */
+int clock_attach_env_shm(void);
+
+/** 解除共享内存虚拟时钟挂载（若本进程 create，则同时 shm_unlink）。 */
+void clock_detach_shm(void);
+
 #ifdef __cplusplus
 }
 #endif

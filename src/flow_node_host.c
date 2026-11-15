@@ -96,6 +96,7 @@ static void* load_plugin_lib(const char* library) {
 
 int main(int argc, char** argv) {
     fp_env_init();  /* FTZ/DAZ：防 denormal 进 JSON 触发 glibc strtod 断言 */
+    clock_attach_env_shm();
 
     /* ── L3-P2 故障注入（env 驱动，默认关闭）────────────────────────
      * 多进程模式（flow_launcher --multi fork+exec 本 host）下每个节点是独立
@@ -254,6 +255,7 @@ teardown:
     discovery_stop(discovery);  discovery_destroy(discovery);
     message_bus_destroy(bus);
     config_free(cfg);
+    clock_detach_shm();
     log_shutdown();
     return 0;
 }
