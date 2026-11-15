@@ -45,13 +45,17 @@ def _patch_pipeline(work: Path, scenario: Path, name: str) -> Path:
     return out
 
 
-def _run(pipeline: Path, log_dir: Path, duration: int) -> dict:
+def _run(pipeline: Path, log_dir: Path, duration: int,
+         full_trajectory: bool = False, seed: int = 42) -> dict:
     TOPOLOGY.unlink(missing_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env["FLOW_LOG_DIR"] = str(log_dir)
+    cmd = [str(LAUNCHER), str(pipeline), "--duration", str(duration)]
+    if full_trajectory:
+        cmd.extend(["--clock-mode", "lock-step", "--step-us", "16666", "--seed", str(seed)])
     result = subprocess.run(
-        [str(LAUNCHER), str(pipeline), "--duration", str(duration)],
+        cmd,
         cwd=ROOT, env=env, text=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120,
     )
@@ -76,6 +80,8 @@ def main() -> int:
     ap.add_argument("--scenario",
                     default=str(ROOT / "scenarios" / "dense_route_traffic.json"))
     ap.add_argument("--duration", type=int, default=3)
+    ap.add_argument("--full-trajectory", action="store_true",
+                    help="Run in lock-step virtual-clock mode and verify closed-loop trajectory determinism")
     args = ap.parse_args()
 
     if not LAUNCHER.is_file():
@@ -100,9 +106,10 @@ def main() -> int:
         pipe_b = _patch_pipeline(work, sc_b, "b")
         pipe_seed = _patch_pipeline(work, sc_seed, "seed")
 
-        first = _run(pipe_a, work / "logs_a", args.duration)
-        second = _run(pipe_b, work / "logs_b", args.duration)
-        diff_seed = _run(pipe_seed, work / "logs_seed", args.duration)
+        base_seed = int(base.get("random_seed", 42))
+        first = _run(pipe_a, work / "logs_a", args.duration, args.full_trajectory, base_seed)
+        second = _run(pipe_b, work / "logs_b", args.duration, args.full_trajectory, base_seed)
+        diff_seed = _run(pipe_seed, work / "logs_seed", args.duration, args.full_trajectory, base_seed + 1)
 
         fp1, fp2, fp3 = _fingerprint(first), _fingerprint(second), _fingerprint(diff_seed)
         if not fp1:

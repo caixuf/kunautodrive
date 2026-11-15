@@ -1,6 +1,10 @@
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include "clock_service.h"
 
 #include <assert.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -64,9 +68,58 @@ static void test_clock_shm_and_seed(void) {
     clock_set_mode(CLOCK_MODE_SOFT_RT);
 }
 
+typedef struct {
+    int slot_id;
+    int ticks_target;
+    uint64_t sum_times;
+} LockStepWorkerArg;
+
+static void* lockstep_worker(void* p) {
+    LockStepWorkerArg* arg = (LockStepWorkerArg*)p;
+    for (int i = 1; i <= arg->ticks_target; i++) {
+        assert(clock_barrier_wait_tick((uint64_t)i, 2000));
+        arg->sum_times += clock_now_us();
+        clock_barrier_done_tick(arg->slot_id, (uint64_t)i);
+    }
+    return NULL;
+}
+
+static void test_lockstep_barrier(void) {
+    char name[64];
+    snprintf(name, sizeof(name), "/flowengine_clock_barrier_%d", (int)getpid());
+    assert(clock_attach_shm(name, true) == 0);
+    clock_set_sim_time(0);
+    clock_set_step_us(10000ULL);
+    clock_set_mode(CLOCK_MODE_LOCK_STEP);
+
+    LockStepWorkerArg a = { .slot_id = clock_barrier_register(), .ticks_target = 5, .sum_times = 0 };
+    LockStepWorkerArg b = { .slot_id = clock_barrier_register(), .ticks_target = 5, .sum_times = 0 };
+    assert(a.slot_id >= 0 && b.slot_id >= 0 && a.slot_id != b.slot_id);
+
+    pthread_t ta, tb;
+    assert(pthread_create(&ta, NULL, lockstep_worker, &a) == 0);
+    assert(pthread_create(&tb, NULL, lockstep_worker, &b) == 0);
+
+    for (int i = 0; i < 5; i++) {
+        int ready = clock_barrier_step_all(10000ULL, 2000);
+        assert(ready == 2);
+    }
+    /* Final wait so workers finish tick 5 before cleanup */
+    pthread_join(ta, NULL);
+    pthread_join(tb, NULL);
+
+    /* Ticks 1..5 -> 10000+20000+30000+40000+50000 = 150000 */
+    assert(a.sum_times == 150000ULL);
+    assert(b.sum_times == 150000ULL);
+
+    clock_detach_shm();
+    clock_set_mode(CLOCK_MODE_SOFT_RT);
+}
+
 int main(void) {
     test_clock_modes();
     test_clock_shm_and_seed();
+    test_lockstep_barrier();
     printf("test_clock_service: ALL PASSED\n");
     return 0;
 }

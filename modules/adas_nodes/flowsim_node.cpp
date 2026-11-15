@@ -3166,7 +3166,11 @@ protected:
                 g.pool, dark || weather_lights, foggy, manual_ego_low);
 
             /* ── Step 6: 推进逻辑时钟 ── */
-            clock_advance_us(FLOWSIM_DT_US);
+            if (clock_get_mode() == CLOCK_MODE_LOCK_STEP) {
+                clock_barrier_step_all(FLOWSIM_DT_US, 100);
+            } else {
+                clock_advance_us(FLOWSIM_DT_US);
+            }
             uint64_t sim_time_us = clock_now_us();
 
             /* ── Step 7: 发布 ── */
@@ -3218,7 +3222,9 @@ protected:
              * 场景跑到一半 T_work 从 5ms 涨到 55ms 时 FPS 从 18 跌到 9.5。 */
             uint64_t t_frame_us = clock_now_monotonic_wall_us() - t_start;
             uint64_t sleep_us_val = FLOWSIM_DT_US;
-            if (t_frame_us < sleep_us_val) {
+            if (clock_get_mode() == CLOCK_MODE_FAST_TIME || clock_get_mode() == CLOCK_MODE_LOCK_STEP) {
+                sleep_us_val = 100;  /* 加速/锁步模式：不按墙钟 60Hz 限速，仅让出调度 */
+            } else if (t_frame_us < sleep_us_val) {
                 sleep_us_val = FLOWSIM_DT_US - t_frame_us;
             } else {
                 sleep_us_val = 0;  /* 帧超时：不休眠，下一帧立即开始追 */

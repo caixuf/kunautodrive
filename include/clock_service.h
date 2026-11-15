@@ -136,6 +136,21 @@ int clock_attach_env_shm(void);
 /** 解除共享内存虚拟时钟挂载（若本进程 create，则同时 shm_unlink）。 */
 void clock_detach_shm(void);
 
+/* ── Lock-step 步进同步屏障（单进程线程 / 跨进程 shm 共用） ──────── */
+#define CLOCK_BARRIER_MAX_SLOTS 32
+
+/** 注册一个 lock-step 参与方，返回槽位 [0..31]；槽位已满返回 -1。 */
+int clock_barrier_register(void);
+
+/** 标记 slot_id 已完成 tick_seq 的计算。 */
+void clock_barrier_done_tick(int slot_id, uint64_t tick_seq);
+
+/** 等待 tick_seq 推进到 >= expected_tick（超时返回 false）。 */
+bool clock_barrier_wait_tick(uint64_t expected_tick, uint32_t timeout_ms);
+
+/** 协调器等待所有已注册参与方完成当前 tick，再推进 delta_us。返回就绪方数量。 */
+int clock_barrier_step_all(uint64_t delta_us, uint32_t timeout_ms);
+
 #ifdef __cplusplus
 }
 #endif

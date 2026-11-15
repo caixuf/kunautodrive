@@ -13,17 +13,18 @@
 #endif
 
 #define FLOW_CLOCK_SHM_MAGIC   0x46434C4BU /* "FCLK" */
-#define FLOW_CLOCK_SHM_VERSION 1U
+#define FLOW_CLOCK_SHM_VERSION 2U
 
 typedef struct {
     uint32_t magic;
     uint32_t version;
     uint32_t mode;
-    uint32_t reserved;
+    uint32_t barrier_slots;
     uint64_t sim_time_us;
     uint64_t step_us;
     uint64_t tick_seq;
     uint64_t random_seed;
+    uint64_t slot_done_tick[CLOCK_BARRIER_MAX_SLOTS];
 } FlowSimClockShm;
 
 static pthread_mutex_t  g_clock_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -32,6 +33,8 @@ static uint64_t         g_sim_time    = 0;
 static uint64_t         g_step_us     = 0;
 static uint64_t         g_tick_seq    = 0;
 static uint64_t         g_seed        = 0;
+static uint32_t         g_local_slots = 0;
+static uint64_t         g_local_done[CLOCK_BARRIER_MAX_SLOTS] = {0};
 
 static FlowSimClockShm* g_shm         = NULL;
 static bool             g_shm_owner   = false;
@@ -123,8 +126,14 @@ void clock_set_sim_mode(bool enable) {
 void clock_set_sim_time(uint64_t timestamp_us) {
     pthread_mutex_lock(&g_clock_mutex);
     g_sim_time = timestamp_us;
+    if (timestamp_us == 0) {
+        g_tick_seq = 0;
+    }
     if (g_shm) {
         shm_store64(&g_shm->sim_time_us, timestamp_us);
+        if (timestamp_us == 0) {
+            shm_store64(&g_shm->tick_seq, 0);
+        }
     }
     pthread_mutex_unlock(&g_clock_mutex);
 }
@@ -279,4 +288,83 @@ void clock_detach_shm(void) {
         shm_unlink(name);
     }
 #endif
+}
+
+int clock_barrier_register(void) {
+    FlowSimClockShm* shm = __atomic_load_n(&g_shm, __ATOMIC_ACQUIRE);
+    if (shm && shm_load32(&shm->magic) == FLOW_CLOCK_SHM_MAGIC) {
+        uint32_t slot = __atomic_fetch_add(&shm->barrier_slots, 1U, __ATOMIC_ACQ_REL);
+        if (slot >= CLOCK_BARRIER_MAX_SLOTS) {
+            return -1;
+        }
+        shm_store64(&shm->slot_done_tick[slot], shm_load64(&shm->tick_seq));
+        return (int)slot;
+    }
+
+    pthread_mutex_lock(&g_clock_mutex);
+    if (g_local_slots >= CLOCK_BARRIER_MAX_SLOTS) {
+        pthread_mutex_unlock(&g_clock_mutex);
+        return -1;
+    }
+    int slot = (int)g_local_slots++;
+    g_local_done[slot] = g_tick_seq;
+    pthread_mutex_unlock(&g_clock_mutex);
+    return slot;
+}
+
+void clock_barrier_done_tick(int slot_id, uint64_t tick_seq) {
+    if (slot_id < 0 || slot_id >= CLOCK_BARRIER_MAX_SLOTS) return;
+    FlowSimClockShm* shm = __atomic_load_n(&g_shm, __ATOMIC_ACQUIRE);
+    if (shm && shm_load32(&shm->magic) == FLOW_CLOCK_SHM_MAGIC) {
+        shm_store64(&shm->slot_done_tick[slot_id], tick_seq);
+        return;
+    }
+    __atomic_store_n(&g_local_done[slot_id], tick_seq, __ATOMIC_RELEASE);
+}
+
+bool clock_barrier_wait_tick(uint64_t expected_tick, uint32_t timeout_ms) {
+    uint64_t deadline = clock_now_monotonic_wall_us() + (uint64_t)timeout_ms * 1000ULL;
+    for (;;) {
+        if (clock_get_mode() != CLOCK_MODE_LOCK_STEP) return false;
+        if (clock_get_tick_seq() >= expected_tick) return true;
+        if (timeout_ms > 0 && clock_now_monotonic_wall_us() >= deadline) return false;
+        flow_pal_sleep_us(50);
+    }
+}
+
+int clock_barrier_step_all(uint64_t delta_us, uint32_t timeout_ms) {
+    FlowSimClockShm* shm = __atomic_load_n(&g_shm, __ATOMIC_ACQUIRE);
+    uint64_t cur_tick = clock_get_tick_seq();
+    uint64_t deadline = clock_now_monotonic_wall_us() + (uint64_t)timeout_ms * 1000ULL;
+    int ready = 0;
+
+    for (;;) {
+        uint32_t total = 0;
+        ready = 0;
+        if (shm && shm_load32(&shm->magic) == FLOW_CLOCK_SHM_MAGIC) {
+            total = shm_load32(&shm->barrier_slots);
+            if (total > CLOCK_BARRIER_MAX_SLOTS) total = CLOCK_BARRIER_MAX_SLOTS;
+            for (uint32_t i = 0; i < total; i++) {
+                if (shm_load64(&shm->slot_done_tick[i]) >= cur_tick) {
+                    ready++;
+                }
+            }
+        } else {
+            pthread_mutex_lock(&g_clock_mutex);
+            total = g_local_slots;
+            pthread_mutex_unlock(&g_clock_mutex);
+            if (total > CLOCK_BARRIER_MAX_SLOTS) total = CLOCK_BARRIER_MAX_SLOTS;
+            for (uint32_t i = 0; i < total; i++) {
+                if (__atomic_load_n(&g_local_done[i], __ATOMIC_ACQUIRE) >= cur_tick) {
+                    ready++;
+                }
+            }
+        }
+        if ((uint32_t)ready >= total) break;
+        if (timeout_ms > 0 && clock_now_monotonic_wall_us() >= deadline) break;
+        flow_pal_sleep_us(50);
+    }
+
+    clock_advance_us(delta_us);
+    return ready;
 }

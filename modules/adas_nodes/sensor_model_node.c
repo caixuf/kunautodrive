@@ -100,6 +100,13 @@ static struct {
     GpsData* nmea_frames;   /* 从 NMEA 日志解析出的 GPS 帧序列 */
     int      nmea_count;    /* 帧数量 */
     int      nmea_idx;      /* 回放游标 */
+
+    /* Phase C: 确定性传感器退化/偏移注入（默认全 0，零行为变化） */
+    int64_t  camera_phase_offset_us;
+    double   extrinsic_x_bias_m;
+    double   extrinsic_y_bias_m;
+    double   extrinsic_yaw_bias_rad;
+    double   drop_frame_prob;
 } g;
 
 #define SENSOR_NMEA_MAX_FRAMES 8192
@@ -548,14 +555,25 @@ static int sensor_model_execute(TaskBase* task) {
 
         /* camera channel is reserved for future richer payloads; keep heartbeat-style frame. */
         if (g.frame_id % 3 == 0) {
-            LidarFrame cam = lidar;
-            cam.intensity = (float)(0.5 * g.camera_visibility_factor);
-            cam.point_count = (uint32_t)(cam.point_count * g.camera_visibility_factor);
-            Message cmsg;
-            msg_init_typed(&cmsg, "sensor/camera", "sensor_model",
-                           LIDARFRAME_TYPE_ID, LIDARFRAME_SCHEMA_VERSION,
-                           &cam, sizeof(cam));
-            transport_publish(g.transport, "sensor/camera", cmsg.data, cmsg.data_size);
+            bool drop_cam = false;
+            if (g.drop_frame_prob > 0.0) {
+                uint64_t r = g.scan_rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                g.scan_rng = r;
+                double u = (double)(r >> 11) / (double)(1ULL << 53);
+                if (u < g.drop_frame_prob) drop_cam = true;
+            }
+            if (!drop_cam) {
+                LidarFrame cam = lidar;
+                cam.x += (float)g.extrinsic_x_bias_m;
+                cam.y += (float)g.extrinsic_y_bias_m;
+                cam.intensity = (float)(0.5 * g.camera_visibility_factor);
+                cam.point_count = (uint32_t)(cam.point_count * g.camera_visibility_factor);
+                Message cmsg;
+                msg_init_typed(&cmsg, "sensor/camera", "sensor_model",
+                               LIDARFRAME_TYPE_ID, LIDARFRAME_SCHEMA_VERSION,
+                               &cam, sizeof(cam));
+                transport_publish(g.transport, "sensor/camera", cmsg.data, cmsg.data_size);
+            }
         }
 
         /* L3-P2：毫米波雷达（默认关闭；开启后按 radar_rate_hz 限频发布） */
@@ -671,8 +689,22 @@ static int sensor_model_init(MessageBus* bus, Transport* transport,
                 g.radar_range_noise_m = j->valuedouble;
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "radar_azimuth_noise_deg")) && cJSON_IsNumber(j))
                 g.radar_azimuth_noise_deg = j->valuedouble;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "camera_phase_offset_us")) && cJSON_IsNumber(j))
+                g.camera_phase_offset_us = (int64_t)j->valuedouble;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "extrinsic_x_bias_m")) && cJSON_IsNumber(j))
+                g.extrinsic_x_bias_m = j->valuedouble;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "extrinsic_y_bias_m")) && cJSON_IsNumber(j))
+                g.extrinsic_y_bias_m = j->valuedouble;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "extrinsic_yaw_bias_rad")) && cJSON_IsNumber(j))
+                g.extrinsic_yaw_bias_rad = j->valuedouble;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "drop_frame_prob")) && cJSON_IsNumber(j))
+                g.drop_frame_prob = j->valuedouble;
             cJSON_Delete(p);
         }
+    }
+    if (clock_get_seed() != 0ULL) {
+        g.scan_rng = clock_get_seed() ^ 0x9E3779B97F4A7C15ULL;
+        g.radar_rng = clock_get_seed() ^ 0xBF58476D1CE4E5B9ULL;
     }
 
     /* 可选：接入真实 GPS 传感器格式 (NMEA 0183 日志回放) */

@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import random
 import sys
 from typing import Any
 
@@ -71,6 +72,58 @@ def verify_coordinate_transform() -> None:
         assert math.isclose(u, v, abs_tol=1e-9)
 
 
+def apply_degradation_chain(
+    image: list[list[tuple[float, float, float]]],
+    stage: dict[str, Any],
+    seed: int = 42,
+) -> list[list[tuple[float, float, float]]]:
+    """Deterministically apply L0->L4 camera degradation chain to an HxW RGB [0,1] image."""
+    h = len(image)
+    w = len(image[0]) if h else 0
+    rng = random.Random(seed)
+    noise_std = float(stage["noise_std"])
+    rs_ms = float(stage["rolling_shutter_ms"])
+    isp = bool(stage["isp"])
+    codec_q = int(stage["codec_q"])
+
+    out: list[list[tuple[float, float, float]]] = []
+    q_step = max(1, (100 - codec_q) // 4) / 255.0 if codec_q < 100 else 0.0
+    for y in range(h):
+        # L2: Rolling shutter horizontal skew proportional to row index
+        shift = int(round((rs_ms / 33.3) * (y / max(1, h - 1)) * 2.0)) if rs_ms > 0.0 else 0
+        row_out: list[tuple[float, float, float]] = []
+        for x in range(w):
+            sx = min(w - 1, max(0, x - shift))
+            r, g, b = image[y][sx]
+            # L1: Shot + readout noise
+            if noise_std > 0.0:
+                r += rng.gauss(0.0, noise_std)
+                g += rng.gauss(0.0, noise_std)
+                b += rng.gauss(0.0, noise_std)
+            # L3: ISP white balance + gamma + radial vignette
+            if isp:
+                r *= 1.04
+                b *= 0.95
+                nx = (x / max(1, w - 1)) * 2.0 - 1.0
+                ny = (y / max(1, h - 1)) * 2.0 - 1.0
+                vig = max(0.65, 1.0 - 0.18 * (nx * nx + ny * ny))
+                r = pow(max(0.0, min(1.0, r * vig)), 1.0 / 2.2)
+                g = pow(max(0.0, min(1.0, g * vig)), 1.0 / 2.2)
+                b = pow(max(0.0, min(1.0, b * vig)), 1.0 / 2.2)
+            # L4: Codec quantization
+            if q_step > 0.0:
+                r = round(r / q_step) * q_step
+                g = round(g / q_step) * q_step
+                b = round(b / q_step) * q_step
+            row_out.append((
+                max(0.0, min(1.0, r)),
+                max(0.0, min(1.0, g)),
+                max(0.0, min(1.0, b)),
+            ))
+        out.append(row_out)
+    return out
+
+
 def run_dry_ablation() -> dict[str, Any]:
     """Generate a baseline ablation table structure for downstream task consistency."""
     rows = []
@@ -107,9 +160,14 @@ def main() -> int:
 
     if args.self_test:
         verify_coordinate_transform()
+        sample = [[(0.5, 0.5, 0.5) for _ in range(8)] for _ in range(8)]
+        l4_a = apply_degradation_chain(sample, DEGRADATION_STAGES[-1], seed=123)
+        l4_b = apply_degradation_chain(sample, DEGRADATION_STAGES[-1], seed=123)
+        assert l4_a == l4_b, "Degradation chain must be deterministic for same seed"
+        assert l4_a != sample, "L4 degradation should modify clean image"
         res = run_dry_ablation()
         assert len(res["stages"]) == 5
-        print("✓ render_ablation_eval --self-test PASSED (ISO8855<->GL det=+1 & 5 ablation stages)")
+        print("✓ render_ablation_eval --self-test PASSED (ISO8855<->GL det=+1, L0->L4 deterministic degradation & 5 ablation stages)")
         return 0
     if args.dry_run:
         print(json.dumps(run_dry_ablation(), indent=2))
