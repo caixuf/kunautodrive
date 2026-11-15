@@ -194,6 +194,28 @@ function _pointToSegDistSq(px, py, ax, ay, bx, by) {
   return ex * ex + ey * ey;
 }
 
+function _buildingClearsRoads(cx, cy, w, d, heading, height, compiledEdges, sidewalkMargin = 3.2) {
+  const podiumMul = height > 28 ? 1.35 : 1.0;
+  const hwAlong = 0.5 * w * podiumMul;
+  const hdAcross = 0.5 * d * podiumMul;
+  const [ch, sh] = forwardENU(heading);
+  const pts = [
+    [0, 0],
+    [hwAlong, hdAcross], [hwAlong, -hdAcross],
+    [-hwAlong, hdAcross], [-hwAlong, -hdAcross],
+    [hwAlong, 0], [-hwAlong, 0],
+    [0, hdAcross], [0, -hdAcross],
+  ];
+  for (const [lx, ly] of pts) {
+    const px = cx + lx * ch - ly * sh;
+    const py = cy + lx * sh + ly * ch;
+    if (_pointNearAnyRoadBand(px, py, 0.0, compiledEdges, sidewalkMargin)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function _pointNearAnyRoadBand(x, y, z, compiledEdges, margin) {
   for (const ce of compiledEdges) {
     const isCutout = isGarageOrRampEdge(ce.edge);
@@ -520,12 +542,13 @@ export function compileWorld(roadNetwork, worldGen = null, seedOverride = null) 
           const w = 16 + rW * 16;
           const d = 14 + rD * 14;
           const h = (16 + rH * 38) * profile.buildingHeightScale;
-          const setback = halfWidth + d * 0.5 + 10.5;
+          const podiumMul = h > 28 ? 1.35 : 1.0;
+          const setback = halfWidth + d * podiumMul * 0.5 + 8.5;
           const bx = sp.x + lx * side * setback;
           const by = sp.y + ly * side * setback;
           seq++;
           if (_isExcluded(bx, by, cfg.excludeZones, 'building')) continue;
-          if (_pointNearAnyRoadBand(bx, by, 0.0, compiledEdges, Math.max(w, d) * 0.55 + 2.0)) continue;
+          if (!_buildingClearsRoads(bx, by, w, d, sp.heading, h, compiledEdges, 3.2)) continue;
           const [tx, , tz] = worldToThree(bx, by, 0);
           if (nearJunctionXZ(tx, tz)) continue;
           buildings.push({

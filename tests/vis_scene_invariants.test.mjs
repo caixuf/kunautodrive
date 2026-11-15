@@ -261,4 +261,105 @@ if (markViolations.length) console.log('  markViolations:', markViolations.slice
   if (missingDeck.length) console.log('  missingDeck:', missingDeck);
 }
 
+// P0-9: park_to_park_city 出地下车库后及高架落地点建筑/1.35x塔基零侵占路面（WorldCompiler + BuildingView fallback）
+{
+  const { createBuildingView } = await import('../tools/flowboard/js/vis/view/BuildingView.js');
+  const { compileWorld } = await import('../tools/flowboard/js/vis/world/WorldCompiler.js');
+  const { sampleEdgeNodes } = await import('../tools/flowboard/js/vis/math/Curve.js');
+  const { tangentToNormal } = await import('../tools/flowboard/js/vis/math/Coord.js');
+  const { computeEdgeAxis } = await import('../tools/flowboard/js/vis/model/RoadAxis.js');
+  const p2pPath = pathResolve(dirname(fileURLToPath(import.meta.url)), '../scenarios/park_to_park_city.json');
+  const p2p = JSON.parse(readFileSync(p2pPath, 'utf-8'));
+  const rn = p2p.road_network;
+
+  const segs = [];
+  for (const edge of rn.edges || []) {
+    const ax = computeEdgeAxis(edge, rn.lane_data);
+    const hw = ax.halfWidth || ((edge.lanes || 2) * (edge.lane_width || 3.5) * 0.5);
+    const off = ax.centerOffset || 0;
+    const pts = sampleEdgeNodes(edge.nodes || [], (edge.nodes || []).length * 4);
+    const cpts = [];
+    for (let i = 0; i < pts.length; i += 3) {
+      const px = pts[i], py = pts[i + 1], pz = pts[i + 2];
+      let tx = 1, tz = 0;
+      if (i + 3 < pts.length) { tx = pts[i + 3] - px; tz = pts[i + 5] - pz; }
+      else if (i >= 3) { tx = px - pts[i - 3]; tz = pz - pts[i - 1]; }
+      const [nx, nz] = tangentToNormal(tx, tz);
+      cpts.push([px + nx * off, -(pz + nz * off), py]);
+    }
+    for (let i = 0; i < cpts.length - 1; i++) {
+      const [ax0, ay0, az0] = cpts[i];
+      const [bx0, by0, bz0] = cpts[i + 1];
+      segs.push({ name: edge.name, bridge: Boolean(edge.bridge), ax: ax0, ay: ay0, az: az0, bx: bx0, by: by0, bz: bz0, hw });
+    }
+  }
+
+  const distSeg = (px, py, s) => {
+    const dx = s.bx - s.ax, dy = s.by - s.ay;
+    const l2 = dx * dx + dy * dy;
+    if (l2 < 1e-9) return { d: Math.hypot(px - s.ax, py - s.ay), z: s.az };
+    const t = Math.max(0, Math.min(1, ((px - s.ax) * dx + (py - s.ay) * dy) / l2));
+    return { d: Math.hypot(px - (s.ax + t * dx), py - (s.ay + t * dy)), z: s.az + t * (s.bz - s.az) };
+  };
+
+  const scanGroup = (group, tag) => {
+    group.updateMatrixWorld(true);
+    const hits = [];
+    const mat = new THREE.Matrix4();
+    const pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3();
+    const v = new THREE.Vector3();
+    const ptsLocal = [
+      [-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5],
+      [0, -0.5], [0, 0.5], [-0.5, 0], [0.5, 0], [0, 0],
+    ];
+    let totalInst = 0;
+    group.traverse((obj) => {
+      if (!obj.isInstancedMesh || obj.count <= 0) return;
+      const gp = obj.geometry?.parameters || {};
+      const gx = gp.width || 1, gy = gp.height || 1, gz = gp.depth || 1;
+      totalInst += obj.count;
+      for (let i = 0; i < obj.count; i++) {
+        obj.getMatrixAt(i, mat);
+        mat.decompose(pos, quat, scl);
+        const sy = Math.abs(scl.y) * gy;
+        const minZ = pos.y - sy * 0.5, maxZ = pos.y + sy * 0.5;
+        for (const [cx, cz] of ptsLocal) {
+          v.set(cx * gx, 0, cz * gz).applyMatrix4(mat);
+          const wx = v.x, wy = -v.z;
+          for (const s of segs) {
+            const { d, z } = distSeg(wx, wy, s);
+            if (s.bridge && Math.min(s.az, s.bz) >= 2.8) {
+              if (d < s.hw + 0.5 && maxZ >= z - 0.3 && minZ <= z + 3.0) {
+                hits.push({ tag, edge: s.name, wx: +wx.toFixed(1), wy: +wy.toFixed(1), d: +d.toFixed(2) });
+              }
+              continue;
+            }
+            if (d < s.hw + 1.0) {
+              hits.push({ tag, edge: s.name, wx: +wx.toFixed(1), wy: +wy.toFixed(1), d: +d.toFixed(2), hw: s.hw });
+            }
+          }
+        }
+      }
+    });
+    return { totalInst, hits };
+  };
+
+  const wl = compileWorld(rn, p2p.world_gen, 42);
+  const sComp = new THREE.Scene();
+  const bvComp = createBuildingView(sComp);
+  bvComp.build(rn, { worldLayout: wl, scenarioName: 'park_to_park_city', perfTier: 'low' });
+  const rComp = scanGroup(bvComp.getGroup(), 'WorldCompiler+BuildingView');
+  ok(`P0-9a: WorldCompiler 路径 park_to_park_city 建筑零侵占路面 (${rComp.totalInst} inst)`,
+    rComp.totalInst > 0 && rComp.hits.length === 0);
+  if (rComp.hits.length) console.log('  rComp.hits:', rComp.hits.slice(0, 8));
+
+  const sFb = new THREE.Scene();
+  const bvFb = createBuildingView(sFb);
+  bvFb.build(rn, { scenarioName: 'park_to_park_city', perfTier: 'low' });
+  const rFb = scanGroup(bvFb.getGroup(), 'BuildingViewFallback');
+  ok(`P0-9b: BuildingView fallback 路径 park_to_park_city 建筑零侵占路面 (${rFb.totalInst} inst)`,
+    rFb.totalInst > 0 && rFb.hits.length === 0);
+  if (rFb.hits.length) console.log('  rFb.hits:', rFb.hits.slice(0, 8));
+}
+
 done();

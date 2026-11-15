@@ -14,9 +14,9 @@ import { mergeGeometries } from '../math/GeometryMerge.js';
 const SPACING = { high: 55, medium: 80, low: 120 };
 // 楼体完整落在路肩外的草地上，并给行道树/人行空间留出视觉缓冲。
 const SETBACK = 32;
-// 楼体到道路中心线的最短安全距离 = 路肩 + 人行道 + 绿化带 + 缓冲。
-// 任何建筑 slot 若落进该范围内一律丢弃，防止楼直接盖在路面上。
-const ROAD_OCCUPANCY_M = 24;
+// 楼体及裙楼到路面边线的最短净距（含路肩、人行道、绿化带安全余量）。
+// 任何建筑四角或中心若落进该范围内一律丢弃，防止楼直接盖在路面上。
+const MIN_ROAD_SIDEWALK_CLEARANCE_M = 3.2;
 // 道路占用空间哈希的格子尺寸：比路宽大，保证只查附近格子。
 const OCCUPANCY_CELL_M = 80;
 // 建筑间去重的格子尺寸：建筑间距 ~55m、足迹 ~15m，用 15m 细格区分。
@@ -134,30 +134,47 @@ export function createBuildingView(scene) {
     }
   }
 
-  /** 把一个城市建筑 glTF 克隆按目标高度归一化后放到指定位置。
+  /** 把一个城市建筑 glTF 克隆按目标高度与用地包络居中归一化后放到指定位置。
    *  返回 true 表示已用真实模型，false 表示该资产缺失（调用方回退 Box）。 */
   function placeCityModel(name, slot, tier) {
     const model = getCityModel(name);
     if (!model) return false;
-    // 归一化：按源模型包围盒高度缩放到目标高度，底部对齐地面。
+    model.position.set(0, 0, 0);
+    model.rotation.set(0, 0, 0);
+    model.scale.set(1, 1, 1);
+    model.updateMatrixWorld(true);
+    // 归一化：先在局部空间按目标尺寸缩放并把 XZ 包围盒中心对齐原点、底部贴地，
+    // 再通过 pivot 旋转落位，彻底消除离线 glTF 原点偏心导致的“楼探上路面”。
     const box = new THREE.Box3().setFromObject(model);
+    const srcX = Math.max(box.max.x - box.min.x, 1e-3);
     const srcH = Math.max(box.max.y - box.min.y, 1e-6);
-    const scale = slot.height / srcH;
-    model.scale.set(scale, scale, scale);
-    // Box3 含模型原点偏移：重新计算缩放后底部，确保落在地面（y=0）。
+    const srcZ = Math.max(box.max.z - box.min.z, 1e-3);
+    const targetH = Number(slot.height) > 0 ? Number(slot.height) : 20;
+    const maxDepth = Math.max(Number(slot.depth) || 12, 4);
+    const maxWidth = Math.max(Number(slot.width) || 14, 4);
+    const scaleY = targetH / srcH;
+    const scaleXZ = Math.min(scaleY, maxDepth / srcX, maxWidth / srcZ);
+    model.scale.set(scaleXZ, Math.min(scaleY, scaleXZ * 2.4), scaleXZ);
+    model.updateMatrixWorld(true);
     const scaledBox = new THREE.Box3().setFromObject(model);
-    model.position.set(slot.x, slot.y - scaledBox.min.y, slot.z);
-    model.rotation.y = slot.rotation;
-    model.traverse((child) => {
+    const centerX = (scaledBox.min.x + scaledBox.max.x) * 0.5;
+    const centerZ = (scaledBox.min.z + scaledBox.max.z) * 0.5;
+    model.position.set(-centerX, -scaledBox.min.y, -centerZ);
+
+    const pivot = new THREE.Group();
+    pivot.position.set(slot.x, slot.y, slot.z);
+    pivot.rotation.y = slot.rotation;
+    pivot.add(model);
+    pivot.traverse((child) => {
       if (!child.isMesh) return;
       child.castShadow = tier === 'high';
       child.receiveShadow = false;
       child.frustumCulled = true;
     });
-    model.updateMatrixWorld(true);
-    model.matrixAutoUpdate = false;
-    model.userData.cityAsset = true;
-    group.add(model);
+    pivot.updateMatrixWorld(true);
+    pivot.matrixAutoUpdate = false;
+    pivot.userData.cityAsset = true;
+    group.add(pivot);
     return true;
   }
 
@@ -233,7 +250,9 @@ export function createBuildingView(scene) {
           x: tx,
           y: ty,
           z: tz,
-          rotation: headingToRotationY(Number(b.heading) || 0),
+          // 下方盒体与裙楼约定局部 X 为垂直道路的 depth、局部 Z 为顺路 width；
+          // 旋转 (heading + π/2) 使顺路方向对齐局部 Z，避免横宽竖窄反插侵占路面。
+          rotation: headingToRotationY((Number(b.heading) || 0) + Math.PI * 0.5),
           height: Number(b.height) || 20,
           width: Number(b.width) || 14,
           depth: Number(b.depth) || 12,
@@ -255,8 +274,8 @@ export function createBuildingView(scene) {
       const row = Math.floor(y / OCCUPANCY_CELL_M);
       return col + ',' + row;
     }
-    function occAddSegment(x0, y0, x1, y1) {
-      const seg = { x0, y0, x1, y1 };
+    function occAddSegment(x0, y0, x1, y1, hw) {
+      const seg = { x0, y0, x1, y1, hw };
       const key0 = occCell(x0, y0);
       const key1 = occCell(x1, y1);
       if (!occGrid.has(key0)) occGrid.set(key0, []);
@@ -267,16 +286,18 @@ export function createBuildingView(scene) {
       }
     }
     for (const edge of roadNetwork.edges) {
-      if (edge.type === EDGE_TYPE.VIADUCT_HIGHWAY ||
-          edge.name === EDGE_TYPE.VIADUCT_HIGHWAY) continue;
       const raw = Array.isArray(edge.nodes) ? edge.nodes : [];
       if (raw.length < 2) continue;
+      const edgeHw = ((edge.lanes || 2) * (edge.lane_width || LANE_WIDTH)) * 0.5;
+      const isViaductOnly = edge.type === EDGE_TYPE.VIADUCT_HIGHWAY ||
+        edge.name === EDGE_TYPE.VIADUCT_HIGHWAY;
       // ENU 坐标下切分中心线折线
       const pts = raw.map(n => Array.isArray(n)
-        ? [n[0] || 0, n[1] || 0]
-        : [n.x || 0, n.y || 0]);
+        ? [n[0] || 0, n[1] || 0, n[2] || 0]
+        : [n.x || 0, n.y || 0, n.z || 0]);
       for (let i = 1; i < pts.length; i++) {
         const a = pts[i - 1], b = pts[i];
+        if ((isViaductOnly || edge.bridge) && Math.min(a[2], b[2]) >= 2.8) continue;
         // 长段按 OCCUPANCY_CELL_M 分段，保证落在所有经过的格子
         const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
         const steps = Math.max(1, Math.ceil(len / OCCUPANCY_CELL_M));
@@ -284,18 +305,18 @@ export function createBuildingView(scene) {
           const t0 = s / steps, t1 = (s + 1) / steps;
           const x0 = a[0] + (b[0] - a[0]) * t0, y0 = a[1] + (b[1] - a[1]) * t0;
           const x1 = a[0] + (b[0] - a[0]) * t1, y1 = a[1] + (b[1] - a[1]) * t1;
-          occAddSegment(x0, y0, x1, y1);
+          occAddSegment(x0, y0, x1, y1, edgeHw);
           if (edge.type === EDGE_TYPE.GARAGE_HALL) {
             const [nx, nz] = tangentToNormal(b[0] - a[0], -(b[1] - a[1]));
             const nyEnu = -nz;
-            occAddSegment(x0 + nx * 12.0, y0 + nyEnu * 12.0, x1 + nx * 12.0, y1 + nyEnu * 12.0);
-            occAddSegment(x0 - nx * 12.0, y0 - nyEnu * 12.0, x1 - nx * 12.0, y1 - nyEnu * 12.0);
+            occAddSegment(x0 + nx * 12.0, y0 + nyEnu * 12.0, x1 + nx * 12.0, y1 + nyEnu * 12.0, edgeHw);
+            occAddSegment(x0 - nx * 12.0, y0 - nyEnu * 12.0, x1 - nx * 12.0, y1 - nyEnu * 12.0, edgeHw);
           }
         }
       }
     }
-    /** 点到最近道路中心线折线的垂距（ENU 坐标）。 */
-    function roadDistance(px, py) {
+    /** 点到最近路面边线净距（<0 表示侵入车道/路侧净空）。 */
+    function roadEdgeClearance(px, py) {
       const key = occCell(px, py);
       const [c0, r0] = key.split(',').map(Number);
       let best = Infinity;
@@ -308,12 +329,31 @@ export function createBuildingView(scene) {
             const len2 = dx * dx + dy * dy || 1e-9;
             const t = Math.max(0, Math.min(1, ((px - s.x0) * dx + (py - s.y0) * dy) / len2));
             const cx = s.x0 + dx * t, cy = s.y0 + dy * t;
-            const d = Math.hypot(px - cx, py - cy);
+            const d = Math.hypot(px - cx, py - cy) - (s.hw || 3.5);
             if (d < best) best = d;
           }
         }
       }
       return best;
+    }
+    function footprintClearsRoad(enuX, enuY, nx, nz, w, d, h) {
+      const podiumMul = h > 28 ? 1.35 : 1.0;
+      const hwAcross = 0.5 * d * podiumMul;
+      const hwAlong = 0.5 * w * podiumMul;
+      // Three normal (nx, nz) -> ENU across (nx, -nz), ENU along (nz, nx)
+      const ax = nx, ay = -nz;
+      const tx = nz, ty = nx;
+      const samples = [
+        [0, 0],
+        [hwAcross, hwAlong], [hwAcross, -hwAlong],
+        [-hwAcross, hwAlong], [-hwAcross, -hwAlong],
+      ];
+      for (const [da, dt] of samples) {
+        const sx = enuX + ax * da + tx * dt;
+        const sy = enuY + ay * da + ty * dt;
+        if (roadEdgeClearance(sx, sy) < MIN_ROAD_SIDEWALK_CLEARANCE_M) return false;
+      }
+      return true;
     }
 
     // ── 建筑间去重：同一格内已有建筑则跳过，防止相邻道路的纵深排
@@ -370,11 +410,11 @@ export function createBuildingView(scene) {
           const depth = (10 + (1 - seed) * 8) * (li === 0 ? 1 : 0.8);
           for (const side of [-1, 1]) {
             const pose = cityBuildingPose(px, py, pz, nx, nz, offset, side);
-            // 建筑落点（THREE 坐标）→ ENU 坐标，查最近道路中心线垂距，
-            // 落进路面/路侧设施范围内则丢弃，防止楼直接盖在路上。
+            // 建筑落点（THREE 坐标）→ ENU 坐标，按旋转角检查 1.35x 裙楼四角与路面边线净距，
+            // 防止楼体或裙楼角探出盖在路面上。
             const enuX = pose.x;                 // THREE.x = ENU.x
             const enuY = -pose.z;                // THREE.z = -ENU.y(north)
-            if (roadDistance(enuX, enuY) < ROAD_OCCUPANCY_M) continue;
+            if (!footprintClearsRoad(enuX, enuY, nx, nz, width, depth, height)) continue;
             // 与已放建筑去重（按足迹半对角占一格），避免街区中间叠楼
             if (!tryPlace(enuX, enuY, Math.hypot(width, depth) * 0.5)) continue;
             slots.push({

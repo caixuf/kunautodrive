@@ -467,7 +467,7 @@ public:
                 if (it == grid_.end()) continue;
                 for (int sid : it->second) {
                     const auto& s = segs_[sid];
-                    if (s.is_bridge) continue;
+                    if (s.is_bridge && std::min(s.az, s.bz) >= 2.8) continue;
                     double dx = s.bx - s.ax, dy = s.by - s.ay;
                     double l2 = dx * dx + dy * dy;
                     if (l2 < 1e-6) continue;
@@ -478,6 +478,44 @@ public:
             }
         }
         return best;
+    }
+
+    bool building_clears_roads(double cx, double cy, double width, double depth,
+                               double heading, double height,
+                               double sidewalk_margin = 3.2) const {
+        const double podium_mul = (height > 28.0) ? 1.35 : 1.0;
+        const double hw_along = 0.5 * width * podium_mul;
+        const double hd_across = 0.5 * depth * podium_mul;
+        const double ch = std::cos(heading), sh = std::sin(heading);
+        const double lx[9] = {0.0,  hw_along,  hw_along, -hw_along, -hw_along,
+                              hw_along, -hw_along, 0.0, 0.0};
+        const double ly[9] = {0.0,  hd_across, -hd_across, hd_across, -hd_across,
+                              0.0, 0.0, hd_across, -hd_across};
+        for (int k = 0; k < 9; ++k) {
+            double px = cx + lx[k] * ch - ly[k] * sh;
+            double py = cy + lx[k] * sh + ly[k] * ch;
+            int c0 = cell_coord(px), r0 = cell_coord(py);
+            for (int dc = -2; dc <= 2; ++dc) {
+                for (int dr = -2; dr <= 2; ++dr) {
+                    auto it = grid_.find(pack_cell(c0 + dc, r0 + dr));
+                    if (it == grid_.end()) continue;
+                    for (int sid : it->second) {
+                        const auto& s = segs_[sid];
+                        if (s.is_bridge && std::min(s.az, s.bz) >= 2.8) continue;
+                        double dx = s.bx - s.ax, dy = s.by - s.ay;
+                        double l2 = dx * dx + dy * dy;
+                        if (l2 < 1e-6) continue;
+                        double t = clamp_d(((px - s.ax) * dx + (py - s.ay) * dy) / l2, 0.0, 1.0);
+                        double qx = s.ax + t * dx, qy = s.ay + t * dy;
+                        double req_hw = (s.is_subsurface ? std::max(s.road_hw, s.hw) : s.road_hw) + sidewalk_margin;
+                        if (std::hypot(px - qx, py - qy) < req_hw) {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     bool hits_lower_asphalt(double x, double y, double z_top, double margin = 1.2) const {
@@ -1493,8 +1531,7 @@ void pass_buildings(const std::vector<CompiledEdge>& edges,
         {4.6,  1.8,  is_suburb ? 18.0 : (is_cbd ? 48.0 : 32.0), is_suburb ? 34.0 : (is_cbd ? 115.0 : 90.0)},
     };
     const double base_spacing = is_suburb ? 44.0 : (is_cbd ? 32.0 : 36.0);
-    constexpr double kSetback = 16.0;
-    constexpr double kRoadOccupancyM = 17.5;
+    constexpr double kSetback = 18.0;
     constexpr size_t kMaxProceduralBuildings = 900;
 
     for (size_t ei = 0; ei < edges.size(); ++ei) {
@@ -1518,16 +1555,17 @@ void pass_buildings(const std::vector<CompiledEdge>& edges,
                 double h = L.h_min + seed_u * (L.h_max - L.h_min);
                 double w = (12.0 + seed_u * 8.0) * (li == 0 ? 1.0 : 0.85);
                 double d = (10.0 + (1.0 - seed_u) * 8.0) * (li == 0 ? 1.0 : 0.85);
+                double extent_r = 0.5 * std::max(w, d) * (h > 28.0 ? 1.35 : 1.0);
 
                 for (double side : {-1.0, 1.0}) {
                     double bx = cx - ss * (side * offset);
                     double by = cy + sc * (side * offset);
-                    if (field.min_road_dist_2d(bx, by) < kRoadOccupancyM) continue;
-                    if (field.in_junction(bx, by, 8.0, 3)) {
+                    if (!field.building_clears_roads(bx, by, w, d, hdg, h, 3.2)) continue;
+                    if (field.in_junction(bx, by, extent_r + 2.0, 3)) {
                         layout.sanity.pruned_junction++;
                         continue;
                     }
-                    if (field.near_parking_cutout(bx, by, 0.0, 8.0)) {
+                    if (field.near_parking_cutout(bx, by, 0.0, extent_r + 2.0)) {
                         layout.sanity.pruned_cutout++;
                         continue;
                     }

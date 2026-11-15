@@ -127,6 +127,9 @@ export function createCameraRig(canvas) {
     }
 
     const eh = sEH;
+    // ENU (cos h, sin h) -> THREE (cos h, 0, -sin h); -forward points behind the rear bumper.
+    const fwdX = Math.cos(eh);
+    const fwdZ = -Math.sin(eh);
     switch (mode) {
       case 'chase': {
         // Keep the road vanishing point above the vehicle without turning
@@ -136,11 +139,11 @@ export function createCameraRig(canvas) {
         const subBlend = Math.max(0, Math.min(1, (-3.2 - eg) / 1.0));
         const behind = 9 - 1.6 * subBlend, height = 3.0 - 0.95 * subBlend;
         camera.position.set(
-          ex - Math.cos(eh) * behind,
+          ex - fwdX * behind,
           eg + height,
-          ez - Math.sin(eh) * behind
+          ez - fwdZ * behind
         );
-        camera.lookAt(ex + Math.cos(eh) * 4, eg + 1.05, ez + Math.sin(eh) * 4);
+        camera.lookAt(ex + fwdX * 4, eg + 1.05, ez + fwdZ * 4);
         break;
       }
       case 'top': {
@@ -153,22 +156,22 @@ export function createCameraRig(canvas) {
         // 使车头朝屏幕上方（heading-up）。高度 H 只影响 near/far，不改变投影比例。
         const H = 100;
         bevCamera.position.set(ex, eg + H, ez);
-        bevCamera.up.set(Math.cos(eh), 0, -Math.sin(eh));
+        bevCamera.up.set(fwdX, 0, fwdZ);
         bevCamera.lookAt(ex, eg, ez);
         break;
       }
       case 'driver': {
         camera.position.set(
-          ex + Math.cos(eh) * 1.0, eg + 1.5,
-          ez + Math.sin(eh) * 1.0
+          ex + fwdX * 1.0, eg + 1.5,
+          ez + fwdZ * 1.0
         );
-        camera.lookAt(ex + Math.cos(eh) * 20, eg + 1.4, ez + Math.sin(eh) * 20);
+        camera.lookAt(ex + fwdX * 20, eg + 1.4, ez + fwdZ * 20);
         break;
       }
       case 'front': {
         camera.position.set(
-          ex + Math.cos(eh) * 8, eg + 2.0,
-          ez + Math.sin(eh) * 8
+          ex + fwdX * 8, eg + 2.0,
+          ez + fwdZ * 8
         );
         camera.lookAt(ex, eg + 1.0, ez);
         break;

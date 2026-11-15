@@ -248,9 +248,74 @@ static void test_jolt_physics_collider_sync() {
 }
 #endif
 
+static void test_ramp_touchdown_and_podium_clearance() {
+    std::printf("\n=== [Test 4] Ramp Touchdown & 1.35x Podium Building Clearance ===\n");
+    const char* rn = R"({
+      "edges": [
+        { "id": 0, "name": "garage_exit_merge", "type": "urban", "lanes": 2, "lane_width": 3.5,
+          "oneway": false, "nodes": [[100, 0, -2.0], [180, 12, 0.0], [260, 26, 0.0]] },
+        { "id": 1, "name": "ground_signal_avenue", "type": "urban", "lanes": 4, "lane_width": 3.5,
+          "oneway": false, "nodes": [[260, 26, 0.0], [520, 26, 0.0]] },
+        { "id": 2, "name": "viaduct_ramp_entry", "type": "ramp_curve", "lanes": 2, "lane_width": 3.5,
+          "oneway": true, "bridge": true, "nodes": [[520, 26, 0.0], [600, 50, 1.5], [700, 90, 7.5]] }
+      ]
+    })";
+    const char* wg = R"({ "world_gen": { "preset": "modern_cbd", "seed": 42 } })";
+    flowsim::WorldEngineInput in;
+    in.road_network_json = rn;
+    in.world_gen_json = wg;
+    in.random_seed = 42;
+    auto layout = flowsim::compile_world(in);
+
+    struct Seg { double ax, ay, az, bx, by, bz, hw; bool bridge; };
+    const std::vector<Seg> segs = {
+        {100, 0, -2.0, 180, 12, 0.0, 3.5, false},
+        {180, 12, 0.0, 260, 26, 0.0, 3.5, false},
+        {260, 26, 0.0, 520, 26, 0.0, 7.0, false},
+        {520, 26, 0.0, 600, 50, 1.5, 3.5, true},
+        {600, 50, 1.5, 700, 90, 7.5, 3.5, true},
+    };
+    auto dist_to_seg = [](double px, double py, const Seg& s) {
+        const double dx = s.bx - s.ax, dy = s.by - s.ay;
+        const double l2 = dx * dx + dy * dy;
+        if (l2 < 1e-9) return std::hypot(px - s.ax, py - s.ay);
+        const double t = std::max(0.0, std::min(1.0, ((px - s.ax) * dx + (py - s.ay) * dy) / l2));
+        return std::hypot(px - (s.ax + t * dx), py - (s.ay + t * dy));
+    };
+
+    int footprint_intrusions = 0;
+    for (const auto& b : layout.buildings) {
+        const double mul = b.height > 28.0 ? 1.35 : 1.0;
+        const double hd = b.depth * mul * 0.5;
+        const double hw = b.width * mul * 0.5;
+        const double fx = std::cos(b.heading), fy = std::sin(b.heading);
+        const double rx = fy, ry = -fx;
+        const double samples[9][2] = {
+            {0, 0}, {-hd, -hw}, {hd, -hw}, {hd, hw}, {-hd, hw},
+            {0, -hw}, {0, hw}, {-hd, 0}, {hd, 0}
+        };
+        for (const auto& sp : samples) {
+            const double px = b.x + fx * sp[0] + rx * sp[1];
+            const double py = b.y + fy * sp[0] + ry * sp[1];
+            for (const auto& s : segs) {
+                if (s.bridge && std::min(s.az, s.bz) >= 2.8) continue;
+                if (dist_to_seg(px, py, s) < s.hw + 2.5) {
+                    footprint_intrusions++;
+                }
+            }
+        }
+    }
+    CHECK(layout.buildings.size() > 10, "Generated buildings along corridor+ramp (%zu > 10)",
+          layout.buildings.size());
+    CHECK(footprint_intrusions == 0,
+          "Zero 1.35x podium corner intrusions on corridor or ramp touchdown (%d)",
+          footprint_intrusions);
+}
+
 int main() {
     test_procedural_corridor_and_overpass();
     test_declarative_world_gen_refinements();
+    test_ramp_touchdown_and_podium_clearance();
 #if defined(FLOW_HAS_JOLT) && FLOW_HAS_JOLT
     test_jolt_physics_collider_sync();
 #endif
