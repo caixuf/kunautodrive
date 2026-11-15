@@ -86,7 +86,9 @@ int serializer_normalize_endian(Message* msg) {
     if (!msg || msg->type_id == 0) return 0;  /* raw 类型无需处理 */
     const TypeRegistryEntry* entry = serializer_lookup_type(msg->type_id);
     if (!entry) return ERR_INVALID_PARAM;
-    serializer_ensure_endian(msg->data, msg->data_size,
+    void* payload = (void*)message_bus_message_data(msg);
+    if (!payload) return ERR_INVALID_PARAM;
+    serializer_ensure_endian(payload, msg->data_size,
                              msg->endian_marker, entry->endian_swap);
     msg->endian_marker = serializer_endian_marker();  /* 标记为已转换 */
     return 0;
@@ -219,7 +221,7 @@ const void* _msg_cast_impl(const Message* msg, uint32_t expected_type_id,
     /* 新格式：按 type_id 精确匹配 */
     if (msg->type_id != 0 && expected_type_id != 0) {
         if (msg->type_id == expected_type_id) {
-            return msg->data;
+            return message_bus_message_data(msg);
         }
         /* type_id 不匹配 — 查找名称用于诊断 */
         const TypeRegistryEntry* expected = serializer_lookup_type(expected_type_id);
@@ -243,7 +245,7 @@ const void* _msg_cast_impl(const Message* msg, uint32_t expected_type_id,
         return NULL;
     }
 
-    return msg->data;
+    return message_bus_message_data(msg);
 }
 
 /* ── 类型安全消息构造 ────────────────────────────────────── */
@@ -260,7 +262,13 @@ void msg_init_typed(Message* msg, const char* topic, const char* sender,
     msg->type_id        = type_id;
     msg->schema_version = schema_version;
     msg->endian_marker  = serializer_endian_marker();
-    if (data && data_size > 0 && data_size <= MSG_BUS_MAX_DATA_SIZE) {
-        memcpy(msg->data, data, data_size);
+    if (data && data_size > 0) {
+        if (data_size <= MSG_INLINE_MAX_SIZE) {
+            msg->payload_kind = MSG_PAYLOAD_INLINE;
+            memcpy(msg->data, data, data_size);
+        } else {
+            msg->payload_kind = MSG_PAYLOAD_LOANED;
+            msg->_loaned_data = (const uint8_t*)data;
+        }
     }
 }

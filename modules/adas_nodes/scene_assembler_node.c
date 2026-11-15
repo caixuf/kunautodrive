@@ -99,7 +99,7 @@ static struct {
 static void on_localization(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
 
     cJSON* j;
@@ -130,9 +130,9 @@ static void on_localization(const Message* msg, void* user_data) {
 static void on_tracked_objects(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    size_t len = strlen((const char*)msg->data);
+    size_t len = strlen((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (len >= sizeof(g.tracked_json)) len = sizeof(g.tracked_json) - 1;
-    memcpy(g.tracked_json, msg->data, len);
+    memcpy(g.tracked_json, ((const uint8_t*)message_bus_message_data(msg)), len);
     g.tracked_json[len] = '\0';
     g.tracked_ts_us = clock_now_us();
     g.has_tracked = 1;
@@ -141,9 +141,9 @@ static void on_tracked_objects(const Message* msg, void* user_data) {
 static void on_lanes(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    size_t len = strlen((const char*)msg->data);
+    size_t len = strlen((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (len >= sizeof(g.lanes_json)) len = sizeof(g.lanes_json) - 1;
-    memcpy(g.lanes_json, msg->data, len);
+    memcpy(g.lanes_json, ((const uint8_t*)message_bus_message_data(msg)), len);
     g.lanes_json[len] = '\0';
     g.lanes_ts_us = clock_now_us();
     g.has_lanes = 1;
@@ -152,9 +152,9 @@ static void on_lanes(const Message* msg, void* user_data) {
 static void on_traffic_lights(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    size_t len = strlen((const char*)msg->data);
+    size_t len = strlen((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (len >= sizeof(g.traffic_lights_json)) len = sizeof(g.traffic_lights_json) - 1;
-    memcpy(g.traffic_lights_json, msg->data, len);
+    memcpy(g.traffic_lights_json, ((const uint8_t*)message_bus_message_data(msg)), len);
     g.traffic_lights_json[len] = '\0';
     g.traffic_lights_ts_us = clock_now_us();
     g.has_traffic_lights = 1;
@@ -163,9 +163,9 @@ static void on_traffic_lights(const Message* msg, void* user_data) {
 static void on_traversability(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    size_t len = strlen((const char*)msg->data);
+    size_t len = strlen((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (len >= sizeof(g.traversability_json)) len = sizeof(g.traversability_json) - 1;
-    memcpy(g.traversability_json, msg->data, len);
+    memcpy(g.traversability_json, ((const uint8_t*)message_bus_message_data(msg)), len);
     g.traversability_json[len] = '\0';
     g.traversability_ts_us = clock_now_us();
     g.has_traversability = 1;
@@ -174,9 +174,9 @@ static void on_traversability(const Message* msg, void* user_data) {
 static void on_prediction(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    size_t len = strlen((const char*)msg->data);
+    size_t len = strlen((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (len >= sizeof(g.prediction_json)) len = sizeof(g.prediction_json) - 1;
-    memcpy(g.prediction_json, msg->data, len);
+    memcpy(g.prediction_json, ((const uint8_t*)message_bus_message_data(msg)), len);
     g.prediction_json[len] = '\0';
     g.prediction_ts_us = clock_now_us();
     g.has_prediction = 1;
@@ -185,7 +185,7 @@ static void on_prediction(const Message* msg, void* user_data) {
 static void on_road_geometry(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
 
     cJSON* j;

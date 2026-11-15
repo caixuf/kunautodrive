@@ -306,8 +306,11 @@ struct MessageBus {
     atomic_bool remap_active;    /**< 是否已有 remap 规则。为 false（常见）时发布
                                   *   热路径跳过 remap_mutex，直接按原 topic 路由。 */
 
-    /* Message 池（复用 64KB Message 块，免每消息 malloc/free） */
+    /* Message 池（复用 Message 块，免每消息 malloc/free） */
     MsgPool pool;
+
+    /* >4KB 大消息零拷贝共享内存 Arena */
+    ShmArena* arena;
 };
 
 /* 分配一块 Message：优先复用池块，池空才 malloc（避免每条 64KB 分配） */
@@ -764,6 +767,7 @@ MessageBus* message_bus_create(const char* bus_name) {
     pthread_mutex_init(&bus->pool.mutex, NULL);
     bus->pool.head = NULL;
     bus->pool.count = 0;
+    bus->arena = shm_arena_create_auto(1u, SHM_ARENA_DEFAULT_CAPACITY);
 
     atomic_store(&bus->running, true);
     for (int i = 0; i < MSG_BUS_DISPATCH_THREADS; i++) {
@@ -822,6 +826,10 @@ void message_bus_destroy(MessageBus* bus) {
         pm = next;
     }
     pthread_mutex_destroy(&bus->pool.mutex);
+    if (bus->arena) {
+        shm_arena_destroy(bus->arena, true);
+        bus->arena = NULL;
+    }
     free(bus);
 }
 
@@ -836,7 +844,7 @@ int message_bus_publish_typed(MessageBus* bus, const char* topic, const char* se
                             const char* type_name,
                             const void* data, uint32_t size) {
     if (!bus || !topic) return ERR_INVALID_PARAM;
-    if (size > MSG_BUS_MAX_DATA_SIZE) return ERR_OVERFLOW;
+    if (size > MSG_ARENA_MAX_PAYLOAD_SIZE) return ERR_OVERFLOW;
 
     /* ── 查 type registry：type_id + schema_hash + schema_version ── */
     uint32_t msg_type_id      = 0;
@@ -1027,10 +1035,27 @@ int message_bus_publish_typed(MessageBus* bus, const char* topic, const char* se
     msg->schema_hash  = msg_schema_hash;
     msg->schema_version = msg_schema_ver;
     msg->endian_marker  = serializer_endian_marker();
+    msg->_shm_ptr = NULL;
     msg->_loaned_data = NULL;
     msg->_loaned_release = NULL;
     msg->_loaned_release_ctx = NULL;
-    if (data && size > 0) memcpy(msg->data, data, size);
+    if (!data || size == 0) {
+        msg->payload_kind = MSG_PAYLOAD_INLINE;
+    } else if (size <= MSG_INLINE_MAX_SIZE) {
+        msg->payload_kind = MSG_PAYLOAD_INLINE;
+        memcpy(msg->data, data, size);
+    } else {
+        void* arena_ptr = NULL;
+        ShmPayloadRef ref;
+        if (!bus->arena || shm_arena_alloc(bus->arena, size, 8u, &ref, &arena_ptr) != 0) {
+            msg_pool_push(&bus->pool, msg);
+            return ERR_OVERFLOW;
+        }
+        memcpy(arena_ptr, data, size);
+        msg->payload_kind = MSG_PAYLOAD_SHM_REF;
+        msg->shm_ref = ref;
+        msg->_shm_ptr = (const uint8_t*)arena_ptr;
+    }
 
     int ret = rb_push(shard_for(bus->shards, msg->msg_id), msg);
     if (ret != 0) msg_pool_push(&bus->pool, msg);   /* 入队失败归还池 */
@@ -1081,7 +1106,7 @@ int message_bus_publish_loaned(MessageBus* bus, const char* topic,
                                void* release_user_data) {
     if (!bus || !topic || !data || size == 0 || !release_fn)
         return ERR_INVALID_PARAM;
-    if (size > MSG_BUS_MAX_DATA_SIZE) return ERR_OVERFLOW;
+    if (size > MSG_ARENA_MAX_PAYLOAD_SIZE) return ERR_OVERFLOW;
 
     char resolved_topic[MSG_BUS_MAX_TOPIC_LEN];
     snprintf(resolved_topic, sizeof(resolved_topic), "%s", topic);
@@ -1180,8 +1205,11 @@ int message_bus_publish_loaned(MessageBus* bus, const char* topic,
     msg->topic_idx = ti;
     msg->data_size = size;
     msg->type_id = 0;
+    msg->schema_hash = 0;
     msg->schema_version = 0;
     msg->endian_marker = 0;
+    msg->payload_kind = MSG_PAYLOAD_LOANED;
+    msg->_shm_ptr = NULL;
     msg->_loaned_data = (const uint8_t*)data;
     msg->_loaned_release = release_fn;
     msg->_loaned_release_ctx = release_user_data;
@@ -1333,7 +1361,7 @@ int message_bus_request(MessageBus* bus, const char* topic, const char* sender,
                         const void* data, uint32_t size,
                         Message* reply, uint32_t timeout_ms) {
     if (!bus || !topic || !reply) return ERR_OVERFLOW;
-    if (size > MSG_BUS_MAX_DATA_SIZE) return ERR_OVERFLOW;
+    if (size > MSG_INLINE_MAX_SIZE) return ERR_OVERFLOW;
 
     uint32_t req_id = atomic_fetch_add(&bus->msg_id_counter, 1);
 
@@ -1365,8 +1393,11 @@ int message_bus_request(MessageBus* bus, const char* topic, const char* sender,
     req->timestamp_us = clock_now_monotonic_wall_us();
     req->data_size    = size;
     req->type_id      = 0;
+    req->schema_hash  = 0;
     req->schema_version = 0;
     req->endian_marker  = 0;
+    req->payload_kind = MSG_PAYLOAD_INLINE;
+    req->_shm_ptr = NULL;
     req->_loaned_data = NULL;
     req->_loaned_release = NULL;
     req->_loaned_release_ctx = NULL;
@@ -1802,4 +1833,74 @@ void message_bus_resolve_topic(MessageBus* bus, const char* topic, char* out_top
     }
     pthread_mutex_unlock(&bus->remap_mutex);
     snprintf(out_topic, MSG_BUS_MAX_TOPIC_LEN, "%s", topic);
+}
+
+ShmArena* message_bus_arena(MessageBus* bus) {
+    return bus ? bus->arena : NULL;
+}
+
+int message_bus_loan_begin(MessageBus* bus, uint32_t size,
+                           ShmPayloadRef* out_ref, void** out_ptr) {
+    if (!bus || !bus->arena || !out_ref || !out_ptr || size == 0 ||
+        size > MSG_ARENA_MAX_PAYLOAD_SIZE) {
+        return ERR_INVALID_PARAM;
+    }
+    if (shm_arena_alloc(bus->arena, size, 8u, out_ref, out_ptr) != 0) {
+        return ERR_OVERFLOW;
+    }
+    return 0;
+}
+
+int message_bus_loan_commit(MessageBus* bus, const char* topic,
+                            const char* sender, const char* type_name,
+                            const ShmPayloadRef* ref, const void* ptr,
+                            uint32_t actual_size) {
+    if (!bus || !topic || !ref || !ptr || actual_size == 0 || actual_size > ref->size) {
+        return ERR_INVALID_PARAM;
+    }
+    Message* msg = msg_alloc(bus);
+    if (!msg) return ERR_NOMEM;
+
+    uint32_t msg_type_id = 0, msg_schema_hash = 0;
+    uint8_t msg_schema_ver = 0;
+    if (type_name) {
+        const TypeRegistryEntry* te = serializer_lookup_by_name(type_name);
+        if (te) {
+            msg_type_id = te->type_id;
+            msg_schema_hash = te->schema_hash;
+            msg_schema_ver = te->schema_version;
+        }
+    }
+
+    char resolved[MSG_BUS_MAX_TOPIC_LEN];
+    message_bus_resolve_topic(bus, topic, resolved);
+    copy_cstr(msg->topic, MSG_BUS_MAX_TOPIC_LEN, resolved);
+    if (sender) copy_cstr(msg->sender, MSG_BUS_MAX_SENDER_LEN, sender);
+    else msg->sender[0] = '\0';
+
+    msg->msg_id = atomic_fetch_add(&bus->msg_id_counter, 1);
+    msg->type = MSG_TYPE_PUBLISH;
+    msg->timestamp_us = clock_now_monotonic_wall_us();
+    msg->topic_idx = -1;
+    msg->data_size = actual_size;
+    msg->type_id = msg_type_id;
+    msg->schema_hash = msg_schema_hash;
+    msg->schema_version = msg_schema_ver;
+    msg->endian_marker = serializer_endian_marker();
+    msg->payload_kind = MSG_PAYLOAD_SHM_REF;
+    msg->shm_ref = *ref;
+    msg->shm_ref.size = actual_size;
+    msg->_shm_ptr = (const uint8_t*)ptr;
+    msg->_loaned_data = NULL;
+    msg->_loaned_release = NULL;
+    msg->_loaned_release_ctx = NULL;
+
+    int ret = rb_push(shard_for(bus->shards, msg->msg_id), msg);
+    if (ret != 0) {
+        msg_pool_push(&bus->pool, msg);
+        atomic_fetch_add(&bus->stat_dropped, 1);
+        return ret;
+    }
+    atomic_fetch_add(&bus->stat_published, 1);
+    return 0;
 }

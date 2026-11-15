@@ -83,23 +83,28 @@ def is_float_type(t: str) -> bool:
 @dataclass
 class Field:
     name: str
-    c_type: str       # C type name (e.g., "float", "Obstacle")
-    idl_type: str     # original IDL type (e.g., "float", "Obstacle")
-    array_size: int   # 0 = not array, >0 = fixed array
+    c_type: str       # C type name (e.g., "float", "Obstacle", "FlowSeqRef")
+    idl_type: str     # original IDL type (e.g., "float", "Obstacle", "char")
+    array_size: int   # 0 = not fixed array, >0 = fixed array
     is_enum: bool = False
     is_nested: bool = False
     nested_typename: str = ""  # original struct typename if nested
+    is_varlen: bool = False    # T[] or string
+    is_string: bool = False    # string
 
 @dataclass
 class EnumDef:
     name: str
     values: list  # list of (name, value)
+    domain: str = ""
 
 @dataclass
 class StructDef:
     name: str
     fields: list  # list of Field
     depends_on: list = field(default_factory=list)  # names of structs/enums this depends on
+    domain: str = ""
+    has_varlen: bool = False
 
 # =============================================================================
 # Parser
@@ -111,11 +116,36 @@ class ParseError(Exception):
         super().__init__(f"Parse error{loc}: {msg}")
 
 class IDLParser:
-    def __init__(self, text: str):
+    def __init__(self, text: str = "", base_dir: Optional[str] = None,
+                 source_file: Optional[str] = None,
+                 shared_enums: Optional[dict] = None,
+                 shared_structs: Optional[dict] = None,
+                 visited_files: Optional[set] = None,
+                 active_stack: Optional[set] = None):
         self.lines = text.split('\n')
         self.pos = 0
-        self.enums: dict[str, EnumDef] = {}
-        self.structs: dict[str, StructDef] = {}
+        self.base_dir = base_dir or (os.path.dirname(os.path.abspath(source_file)) if source_file else ".")
+        self.source_file = source_file
+        self.domain = os.path.splitext(os.path.basename(source_file))[0] if source_file else ""
+        self.enums: dict[str, EnumDef] = shared_enums if shared_enums is not None else {}
+        self.structs: dict[str, StructDef] = shared_structs if shared_structs is not None else {}
+        self.visited_files: set[str] = visited_files if visited_files is not None else set()
+        self.active_stack: set[str] = active_stack if active_stack is not None else set()
+
+    @classmethod
+    def from_file(cls, path: str) -> 'IDLParser':
+        abs_path = os.path.abspath(path)
+        with open(abs_path, 'r', encoding='utf-8') as f:
+            text = f.read()
+        parser = cls(
+            text=text,
+            base_dir=os.path.dirname(abs_path),
+            source_file=abs_path,
+            visited_files={abs_path},
+            active_stack={abs_path},
+        )
+        parser.parse()
+        return parser
 
     def peek(self) -> Optional[str]:
         while self.pos < len(self.lines):
@@ -139,13 +169,46 @@ class IDLParser:
     def parse(self):
         while self.peek() is not None:
             line = self.peek()
-            if line.startswith('enum '):
+            if line.startswith('import '):
+                self._parse_import()
+            elif line.startswith('enum '):
                 self._parse_enum()
             elif line.startswith('struct '):
                 self._parse_struct()
             else:
                 raise ParseError(f"Unexpected token: {line}", self.pos + 1, self.lines[self.pos])
         return self
+
+    def _parse_import(self):
+        line = self.next_line()
+        m = re.match(r'^import\s+"([^"]+)"\s*;?\s*$', line)
+        if not m:
+            raise ParseError("Invalid import syntax (expected: import \"file.msg\")", self.pos, line)
+        rel_path = m.group(1)
+        abs_path = os.path.abspath(os.path.join(self.base_dir, rel_path))
+        if abs_path in self.active_stack:
+            raise ParseError(f"Cyclic import detected: {rel_path}", self.pos, line)
+        if abs_path in self.visited_files:
+            return
+        if not os.path.isfile(abs_path):
+            raise ParseError(f"Imported file not found: {abs_path}", self.pos, line)
+        self.visited_files.add(abs_path)
+        self.active_stack.add(abs_path)
+        try:
+            with open(abs_path, 'r', encoding='utf-8') as f:
+                sub_text = f.read()
+            sub = IDLParser(
+                text=sub_text,
+                base_dir=os.path.dirname(abs_path),
+                source_file=abs_path,
+                shared_enums=self.enums,
+                shared_structs=self.structs,
+                visited_files=self.visited_files,
+                active_stack=self.active_stack,
+            )
+            sub.parse()
+        finally:
+            self.active_stack.discard(abs_path)
 
     def _parse_enum(self):
         line = self.next_line()
@@ -162,7 +225,7 @@ class IDLParser:
             if not m2:
                 raise ParseError(f"Invalid enum value", self.pos, inner)
             values.append((m2.group(1), int(m2.group(2))))
-        self.enums[name] = EnumDef(name, values)
+        self.enums[name] = EnumDef(name, values, domain=self.domain)
 
     def _parse_struct(self):
         line = self.next_line()
@@ -187,27 +250,37 @@ class IDLParser:
             elif base_type in self.enums:
                 deps.append(base_type)
 
-        self.structs[name] = StructDef(name, fields, deps)
+        has_varlen = any(f.is_varlen or (f.is_nested and self.structs.get(f.nested_typename, StructDef("", [])).has_varlen) for f in fields)
+        self.structs[name] = StructDef(name, fields, deps, domain=self.domain, has_varlen=has_varlen)
 
     def _parse_field(self, line: str) -> Field:
         line = line.strip()
-        # Pattern: type name  OR  type name[N]  OR  type name = default
-        m = re.match(r'(\w+)\s+(\w+)(?:\[(\d+)\])?\s*(?:=\s*(.+))?$', line)
+        # Pattern: type name  OR  type name[N]  OR  type name[]  OR  string name
+        m = re.match(r'(\w+)\s+(\w+)(?:\[(\d*)\])?\s*(?:=\s*(.+))?$', line)
         if not m:
             raise ParseError(f"Invalid field: {line}")
         idl_type = m.group(1)
         field_name = m.group(2)
-        array_size = int(m.group(3)) if m.group(3) else 0
-        # default_val = m.group(4)  # reserved for future
+        bracket = m.group(3)
+        is_string = (idl_type == 'string')
+        is_varlen = is_string or (bracket == '')
+        if is_varlen and bracket is not None and bracket != '':
+            raise ParseError(f"Invalid array syntax: {line}")
+        array_size = int(bracket) if (bracket is not None and bracket != '') else 0
+        if is_string:
+            idl_type = 'char'
 
         # Determine C type
         is_enum = idl_type in self.enums
         is_nested = idl_type in self.structs
-        c_type = idl_type
-        if idl_type in PRIMITIVE_C_TYPES:
+        if is_varlen:
+            c_type = 'FlowSeqRef'
+        elif idl_type in PRIMITIVE_C_TYPES:
             c_type = PRIMITIVE_C_TYPES[idl_type]
         elif is_enum:
             c_type = 'int8_t'  # enums are serialized as int8
+        else:
+            c_type = idl_type
 
         return Field(
             name=field_name,
@@ -216,7 +289,9 @@ class IDLParser:
             array_size=array_size,
             is_enum=is_enum,
             is_nested=is_nested,
-            nested_typename=idl_type if is_nested else ""
+            nested_typename=idl_type if is_nested else "",
+            is_varlen=is_varlen,
+            is_string=is_string,
         )
 
 # =============================================================================
@@ -303,7 +378,7 @@ class CodeGenerator:
         """Field-level layout signature for schema_hash (name+type+array)."""
         parts = []
         for f in s.fields:
-            arr = f.array_size if f.array_size > 0 else 1
+            arr = "varlen" if f.is_varlen else (f.array_size if f.array_size > 0 else 1)
             parts.append(f"{f.name}:{f.idl_type}:{arr}")
         return f"{s.name}#" + ";".join(parts)
 
@@ -312,6 +387,10 @@ class CodeGenerator:
 
     def _field_kind(self, f: Field) -> str:
         """Map an IDL field to a FieldKind enum constant name."""
+        if f.is_string:
+            return "FIELD_KIND_STRING"
+        if f.is_varlen:
+            return "FIELD_KIND_SEQ"
         if f.is_nested:
             return "FIELD_KIND_NESTED"
         if f.is_enum:
@@ -326,25 +405,67 @@ class CodeGenerator:
             return "FIELD_KIND_UINT"
         return "FIELD_KIND_UNKNOWN"
 
-    def _field_size(self, f: Field) -> int:
-        """Get the serialized size of a single field element."""
+    def _elem_size_and_align(self, f: Field) -> tuple[int, int]:
+        """Get (size, align) of a single field element in the C struct & wire."""
+        if f.is_varlen:
+            return (8, 4)  # FlowSeqRef { uint32_t offset; uint32_t count; }
         if f.idl_type in PRIMITIVE_SIZES:
-            return PRIMITIVE_SIZES[f.idl_type]
+            sz = PRIMITIVE_SIZES[f.idl_type]
+            return (sz, sz)
         if f.is_enum:
-            return 1  # enum = int8
+            return (1, 1)  # enum = int8_t
         if f.is_nested:
             nested = self.structs.get(f.nested_typename)
             if nested:
-                return self._struct_size(nested)
-        return 0  # unknown
+                _, n_sz, n_align = self._struct_layout(nested)
+                return (n_sz, n_align)
+        return (0, 1)
+
+    def _varlen_elem_type_and_align(self, f: Field) -> tuple[str, int]:
+        """Get (C element type, element alignment) for a T[] or string field."""
+        if f.is_string or f.idl_type == 'char':
+            return ('char', 1)
+        if f.idl_type in PRIMITIVE_C_TYPES:
+            return (PRIMITIVE_C_TYPES[f.idl_type], PRIMITIVE_SIZES[f.idl_type])
+        if f.is_enum:
+            return ('int8_t', 1)
+        if f.is_nested:
+            nested = self.structs.get(f.nested_typename)
+            if nested:
+                _, _, n_align = self._struct_layout(nested)
+                return (f.nested_typename, n_align)
+        return (f.idl_type, 1)
+
+    def _field_size(self, f: Field) -> int:
+        """Get the serialized size of a single field element."""
+        return self._elem_size_and_align(f)[0]
+
+    def _struct_layout(self, s: StructDef) -> tuple[list, int, int]:
+        """Compute naturally-aligned C & wire layout: (slots, total_size, max_align)."""
+        slots = []
+        offset = 0
+        max_align = 1
+        pad_idx = 0
+        for f in s.fields:
+            elem_size, elem_align = self._elem_size_and_align(f)
+            count = 1 if f.is_varlen else (f.array_size if f.array_size > 0 else 1)
+            aligned = (offset + elem_align - 1) // elem_align * elem_align
+            if aligned > offset:
+                pad_bytes = aligned - offset
+                slots.append(("pad", f"_pad_{pad_idx}", offset, pad_bytes))
+                pad_idx += 1
+                offset = aligned
+            slots.append(("field", f, offset, elem_size, elem_align, count))
+            offset += elem_size * count
+            if elem_align > max_align:
+                max_align = elem_align
+        total = (offset + max_align - 1) // max_align * max_align
+        if total > offset:
+            slots.append(("pad", "_tail_pad", offset, total - offset))
+        return slots, total, max_align
 
     def _struct_size(self, s: StructDef) -> int:
-        total = 0
-        for f in s.fields:
-            elem_size = self._field_size(f)
-            count = f.array_size if f.array_size > 0 else 1
-            total += elem_size * count
-        return total
+        return self._struct_layout(s)[1]
 
     def _struct_deps(self, s: StructDef) -> tuple[list[str], list[str]]:
         """Return (enum_deps, struct_deps) for a given struct."""
@@ -432,12 +553,43 @@ class CodeGenerator:
         self._write_file(reg_path, self._gen_split_register_all_header())
         generated.append("gen/adas_msgs_register_all.h")
 
-        # 4. Umbrella header (backward compat)
+        # 4. Domain umbrella headers (e.g. gen/sensor.h, gen/map.h)
+        domains: dict[str, list[str]] = {}
+        for name in self._struct_order:
+            dom = self.structs[name].domain
+            if dom and dom != msg_basename:
+                domains.setdefault(dom, []).append(name)
+        for dom, names in sorted(domains.items()):
+            dom_path = os.path.join(gen_dir, f"{dom}.h")
+            self._write_file(dom_path, self._gen_split_domain_header(dom, names))
+            generated.append(f"gen/{dom}.h")
+
+        # 5. Umbrella header (backward compat)
         umbrella_path = os.path.join(gen_dir, f"{msg_basename}_gen.h")
         self._write_file(umbrella_path, self._gen_split_umbrella_header(msg_basename))
         generated.append(f"gen/{msg_basename}_gen.h")
 
         return generated
+
+    def _gen_split_domain_header(self, domain: str, struct_names: list[str]) -> str:
+        guard = f"FLOW_DOMAIN_{domain.upper()}_GEN_H"
+        lines = [
+            "/*",
+            " * AUTO-GENERATED by FlowEngine msg_codegen.py — DO NOT EDIT",
+            f" * Domain header: msg/{domain}.msg",
+            " */",
+            "",
+            f"#ifndef {guard}",
+            f"#define {guard}",
+            "",
+            "#include \"adas_enums.h\"",
+        ]
+        for name in struct_names:
+            lines.append(f"#include \"{name}.h\"")
+        lines.append("")
+        lines.append(f"#endif /* {guard} */")
+        lines.append("")
+        return '\n'.join(lines)
 
     def _write_file(self, path: str, content: str):
         with open(path, 'w', encoding='utf-8') as f:
@@ -579,7 +731,7 @@ class CodeGenerator:
 
     def _gen_struct(self, s: StructDef) -> list[str]:
         type_id = self._type_id(s)
-        struct_size = self._struct_size(s)
+        slots, struct_size, _ = self._struct_layout(s)
         sig = self._sig_string(s)
 
         lines = []
@@ -588,21 +740,32 @@ class CodeGenerator:
         lines.append(f"/* Sig: {sig[:80]}... */")
         lines.append("")
 
-        # Type ID and schema version
+        # Type ID, wire size and schema version
         lines.append(f"#define {s.name.upper()}_TYPE_ID         0x{type_id:08x}u")
+        lines.append(f"#define {s.name.upper()}_WIRE_SIZE       {struct_size}u")
+        lines.append(f"#define {s.name.upper()}_HAS_VARLEN      {1 if s.has_varlen else 0}")
         lines.append(f"#define {s.name.upper()}_SCHEMA_VERSION  {self._compute_schema_version(s)}")
         lines.append(f"#define {s.name.upper()}_SCHEMA_HASH     0x{self._schema_hash(s):08x}u")
         lines.append(f"#define {s.name.upper()}_TYPE_NAME        \"{s.name}\"")
         lines.append("")
 
-        # C struct definition
+        # C struct definition with explicit alignment padding (guarantees wire == sizeof(struct))
         lines.append(f"typedef struct {{")
-        for f in s.fields:
-            array_suffix = f"[{f.array_size}]" if f.array_size > 0 else ""
-            comment = f"  /**< {f.idl_type} */"
-            lines.append(f"    {f.c_type}    {f.name}{array_suffix};{comment}")
+        for slot in slots:
+            if slot[0] == "pad":
+                _, pad_name, _, pad_bytes = slot
+                lines.append(f"    uint8_t    {pad_name}[{pad_bytes}];  /**< explicit alignment padding */")
+            else:
+                _, f, _, _, _, _ = slot
+                array_suffix = f"[{f.array_size}]" if (f.array_size > 0 and not f.is_varlen) else ""
+                tag = f"{f.idl_type}[]" if f.is_varlen and not f.is_string else ("string" if f.is_string else f.idl_type)
+                lines.append(f"    {f.c_type}    {f.name}{array_suffix};  /**< {tag} */")
         lines.append(f"}} {s.name};")
         lines.append("")
+
+        # Variable-length zero-copy slice readers & linear builder
+        if s.has_varlen:
+            lines.extend(self._gen_varlen_helpers(s, struct_size))
 
         # C++ type traits
         lines.append("#ifdef __cplusplus")
@@ -637,13 +800,94 @@ class CodeGenerator:
 
         return lines
 
+    def _gen_varlen_helpers(self, s: StructDef, struct_size: int) -> list[str]:
+        """Generate zero-copy slice readers and linear builder for varlen structs."""
+        lines = []
+        lines.append(f"/* Variable-length zero-copy builder & readers for {s.name} */")
+        lines.append(f"static inline int {s.name}_init_builder(")
+        lines.append(f"        FlowMsgBuilder* b, void* buf, uint32_t cap) {{")
+        lines.append(f"    if (!b || !buf || cap < {struct_size}u) return -1;")
+        lines.append(f"    memset(buf, 0, {struct_size});")
+        lines.append(f"    b->base = (uint8_t*)buf;")
+        lines.append(f"    b->capacity = cap;")
+        lines.append(f"    b->write_pos = {struct_size}u;")
+        lines.append(f"    return 0;")
+        lines.append(f"}}")
+        lines.append("")
+        lines.append(f"static inline uint32_t {s.name}_finish(const FlowMsgBuilder* b) {{")
+        lines.append(f"    return b ? b->write_pos : 0u;")
+        lines.append(f"}}")
+        lines.append("")
+
+        for f in s.fields:
+            if not f.is_varlen:
+                continue
+            elem_ctype, elem_align = self._varlen_elem_type_and_align(f)
+            lines.append(f"static inline const {elem_ctype}* {s.name}_{f.name}(")
+            lines.append(f"        const {s.name}* msg, uint32_t* out_count) {{")
+            lines.append(f"    if (out_count) *out_count = msg ? msg->{f.name}.count : 0u;")
+            lines.append(f"    if (!msg || msg->{f.name}.count == 0u || msg->{f.name}.offset == 0u) return NULL;")
+            lines.append(f"    return (const {elem_ctype}*)((const uint8_t*)msg + msg->{f.name}.offset);")
+            lines.append(f"}}")
+            lines.append("")
+            lines.append(f"static inline const {elem_ctype}* {s.name}_{f.name}_checked(")
+            lines.append(f"        const {s.name}* msg, size_t total_bytes, uint32_t* out_count) {{")
+            lines.append(f"    if (out_count) *out_count = 0u;")
+            lines.append(f"    if (!msg || total_bytes < sizeof({s.name})) return NULL;")
+            lines.append(f"    if (msg->{f.name}.count == 0u) return NULL;")
+            lines.append(f"    if (msg->{f.name}.offset < sizeof({s.name}) || msg->{f.name}.offset > total_bytes) return NULL;")
+            lines.append(f"    size_t need = (size_t)msg->{f.name}.count * sizeof({elem_ctype});")
+            lines.append(f"    if (need > total_bytes - msg->{f.name}.offset) return NULL;")
+            lines.append(f"    if (out_count) *out_count = msg->{f.name}.count;")
+            lines.append(f"    return (const {elem_ctype}*)((const uint8_t*)msg + msg->{f.name}.offset);")
+            lines.append(f"}}")
+            lines.append("")
+            lines.append(f"static inline {elem_ctype}* {s.name}_alloc_{f.name}(")
+            lines.append(f"        FlowMsgBuilder* b, uint32_t count) {{")
+            lines.append(f"    if (!b || !b->base || count == 0u) return NULL;")
+            lines.append(f"    uint32_t align = {elem_align}u;")
+            lines.append(f"    uint32_t pos = (b->write_pos + align - 1u) & ~(align - 1u);")
+            lines.append(f"    uint64_t bytes = (uint64_t)count * (uint64_t)sizeof({elem_ctype});")
+            lines.append(f"    if ((uint64_t)pos + bytes > (uint64_t)b->capacity) return NULL;")
+            lines.append(f"    {s.name}* hdr = ({s.name}*)b->base;")
+            lines.append(f"    hdr->{f.name}.offset = pos;")
+            lines.append(f"    hdr->{f.name}.count = count;")
+            lines.append(f"    {elem_ctype}* ptr = ({elem_ctype}*)(b->base + pos);")
+            lines.append(f"    memset(ptr, 0, (size_t)bytes);")
+            lines.append(f"    b->write_pos = (uint32_t)((uint64_t)pos + bytes);")
+            lines.append(f"    return ptr;")
+            lines.append(f"}}")
+            lines.append("")
+            if f.is_string:
+                lines.append(f"static inline int {s.name}_set_{f.name}(")
+                lines.append(f"        FlowMsgBuilder* b, const char* str) {{")
+                lines.append(f"    if (!b || !b->base) return -1;")
+                lines.append(f"    if (!str) {{")
+                lines.append(f"        {s.name}* hdr = ({s.name}*)b->base;")
+                lines.append(f"        hdr->{f.name}.offset = 0u;")
+                lines.append(f"        hdr->{f.name}.count = 0u;")
+                lines.append(f"        return 0;")
+                lines.append(f"    }}")
+                lines.append(f"    uint32_t len = (uint32_t)strlen(str) + 1u;")
+                lines.append(f"    char* dst = {s.name}_alloc_{f.name}(b, len);")
+                lines.append(f"    if (!dst) return -1;")
+                lines.append(f"    memcpy(dst, str, len);")
+                lines.append(f"    return 0;")
+                lines.append(f"}}")
+                lines.append("")
+        return lines
+
     def _gen_field_table(self, s: StructDef) -> list[str]:
+        slots, _, _ = self._struct_layout(s)
         lines = []
         lines.append(f"/** Field-level schema descriptor table for {s.name}. */")
         lines.append(f"static const FieldDesc {s.name}_fields[] = {{")
-        for f in s.fields:
+        for slot in slots:
+            if slot[0] == "pad":
+                continue
+            _, f, _, _, _, _ = slot
             elem_size = self._field_size(f)
-            arr = f.array_size if f.array_size > 0 else 1
+            arr = 1 if f.is_varlen else (f.array_size if f.array_size > 0 else 1)
             lines.append(
                 f"    {{ \"{f.name}\", {self._field_kind(f)}, "
                 f"(uint16_t)offsetof({s.name}, {f.name}), "
@@ -655,27 +899,36 @@ class CodeGenerator:
         return lines
 
     def _gen_serialize(self, s: StructDef, type_id: int) -> list[str]:
+        slots, total_size, _ = self._struct_layout(s)
         lines = []
         lines.append(f"/** Serialize {s.name} to buffer (endian-aware). */")
         lines.append(f"static inline int {s.name}_serialize(const {s.name}* src,")
         lines.append(f"        uint8_t* buf, size_t* out_size) {{")
         lines.append(f"    if (!src) return -1;")
-        lines.append(f"    size_t total = {self._struct_size(s)};")
+        lines.append(f"    size_t total = {total_size};")
         lines.append(f"    if (out_size) *out_size = total;")
         lines.append(f"    if (!buf) return 0;  /* size query only */")
         lines.append(f"")
 
-        offset = 0
-        for f in s.fields:
-            elem_size = self._field_size(f)
-            count = f.array_size if f.array_size > 0 else 1
+        for slot in slots:
+            if slot[0] == "pad":
+                _, _, off, pad_bytes = slot
+                lines.append(f"    if (buf) memset(buf + {off}, 0, {pad_bytes});")
+                continue
+            _, f, off, elem_size, _, count = slot
+            if f.is_varlen:
+                lines.append(f"    if (buf) {{")
+                lines.append(f"        serializer_store_le(buf + {off}, &src->{f.name}.offset, 4);")
+                lines.append(f"        serializer_store_le(buf + {off + 4}, &src->{f.name}.count, 4);")
+                lines.append(f"    }}")
+                continue
             if f.array_size > 0:
                 lines.append(f"    for (size_t i = 0; i < {count}; i++) {{")
                 access = f"{f.name}[i]"
-                field_offset = f"{offset} + i * {elem_size}"
+                field_offset = f"{off} + i * {elem_size}"
             else:
                 access = f.name
-                field_offset = str(offset)
+                field_offset = str(off)
             if f.is_nested:
                 lines.append(f"    {{ /* {access} */")
                 lines.append(f"        size_t sz = 0;")
@@ -697,7 +950,6 @@ class CodeGenerator:
                 lines.append(f"    if (buf) buf[{field_offset}] = (uint8_t)src->{access};")
             if f.array_size > 0:
                 lines.append("    }")
-            offset += elem_size * count
 
         lines.append(f"    return 0;")
         lines.append(f"}}")
@@ -705,26 +957,31 @@ class CodeGenerator:
         return lines
 
     def _gen_deserialize(self, s: StructDef, type_id: int) -> list[str]:
+        slots, total_size, _ = self._struct_layout(s)
         lines = []
         lines.append(f"/** Deserialize {s.name} from buffer (endian-aware). */")
         lines.append(f"static inline int {s.name}_deserialize({s.name}* dst,")
         lines.append(f"        const uint8_t* buf, size_t size) {{")
         lines.append(f"    if (!dst || !buf) return -1;")
-        lines.append(f"    if (size < {self._struct_size(s)}) return -1;")
+        lines.append(f"    if (size < {total_size}) return -1;")
         lines.append(f"    memset(dst, 0, sizeof(*dst));")
         lines.append(f"")
 
-        offset = 0
-        for f in s.fields:
-            elem_size = self._field_size(f)
-            count = f.array_size if f.array_size > 0 else 1
+        for slot in slots:
+            if slot[0] == "pad":
+                continue
+            _, f, off, elem_size, _, count = slot
+            if f.is_varlen:
+                lines.append(f"    serializer_load_le(&dst->{f.name}.offset, buf + {off}, 4);")
+                lines.append(f"    serializer_load_le(&dst->{f.name}.count, buf + {off + 4}, 4);")
+                continue
             if f.array_size > 0:
                 lines.append(f"    for (size_t i = 0; i < {count}; i++) {{")
                 access = f"{f.name}[i]"
-                field_offset = f"{offset} + i * {elem_size}"
+                field_offset = f"{off} + i * {elem_size}"
             else:
                 access = f.name
-                field_offset = str(offset)
+                field_offset = str(off)
             if f.is_nested:
                 nested_size = self._struct_size(self.structs[f.nested_typename])
                 lines.append(f"    {{ /* {access} */")
@@ -746,7 +1003,6 @@ class CodeGenerator:
                 lines.append(f"    dst->{access} = ({f.c_type})buf[{field_offset}];")
             if f.array_size > 0:
                 lines.append("    }")
-            offset += elem_size * count
 
         lines.append(f"    return 0;")
         lines.append(f"}}")
@@ -754,6 +1010,7 @@ class CodeGenerator:
         return lines
 
     def _gen_endian_swap(self, s: StructDef) -> list[str]:
+        slots, _, _ = self._struct_layout(s)
         lines = []
         lines.append(f"/** In-place endian swap for {s.name}. */")
         lines.append(f"static inline void {s.name}_endian_swap(void* data) {{")
@@ -761,15 +1018,19 @@ class CodeGenerator:
         lines.append(f"    uint8_t* p = (uint8_t*)data;")
         lines.append("")
 
-        offset = 0
-        for f in s.fields:
-            elem_size = self._field_size(f)
-            count = f.array_size if f.array_size > 0 else 1
+        for slot in slots:
+            if slot[0] == "pad":
+                continue
+            _, f, off, elem_size, _, count = slot
+            if f.is_varlen:
+                lines.append(f"    serializer_swap32(p + {off});")
+                lines.append(f"    serializer_swap32(p + {off + 4});")
+                continue
             if f.array_size > 0:
                 lines.append(f"    for (size_t i = 0; i < {count}; i++) {{")
-                field_offset = f"{offset} + i * {elem_size}"
+                field_offset = f"{off} + i * {elem_size}"
             else:
-                field_offset = str(offset)
+                field_offset = str(off)
             if f.is_nested:
                 lines.append(f"    {f.idl_type}_endian_swap(p + {field_offset});")
             elif elem_size == 2:
@@ -781,7 +1042,6 @@ class CodeGenerator:
             # 1-byte types need no swap
             if f.array_size > 0:
                 lines.append("    }")
-            offset += elem_size * count
 
         lines.append("}")
         lines.append("")
@@ -846,11 +1106,7 @@ def main():
                          "auto-bump). The file is created on first run if missing.")
     args = ap.parse_args()
 
-    with open(args.input, 'r', encoding='utf-8') as f:
-        text = f.read()
-
-    parser = IDLParser(text)
-    parser.parse()
+    parser = IDLParser.from_file(args.input)
 
     # Load or initialize schema_version state
     schema_state = {}

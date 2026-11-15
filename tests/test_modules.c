@@ -259,10 +259,11 @@ static void test_gen_serialize_roundtrip(void) {
     ASSERT(fabsf(restored.heading_deg - orig.heading_deg) < 1e-6f, "heading mismatch");
     ASSERT(restored.timestamp_us == orig.timestamp_us, "timestamp mismatch");
 
-    /* 线格式规范 = 小端：timestamp_us 打包在 offset 28，LSB 必在低地址。
+    /* 线格式规范 = 小端：timestamp_us 对齐到自然偏移，LSB 必在低地址。
      * 这个断言在小端与大端主机上都必须成立（大端主机序列化时已交换）。 */
-    ASSERT(buf[28] == 0x08, "wire not little-endian (LSB)");
-    ASSERT(buf[35] == 0x01, "wire not little-endian (MSB)");
+    size_t ts_off = offsetof(GpsData, timestamp_us);
+    ASSERT(buf[ts_off] == 0x08, "wire not little-endian (LSB)");
+    ASSERT(buf[ts_off + 7] == 0x01, "wire not little-endian (MSB)");
 
     PASS();
 }

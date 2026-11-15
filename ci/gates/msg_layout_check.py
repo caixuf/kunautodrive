@@ -57,21 +57,7 @@ IDL_FILE = ROOT / "msg" / "adas_msgs.msg"
 # *known* state as of 2026-09-21 — 12 of 20 messages.  Keep it accurate: the
 # gate fails if a listed entry stops mismatching (then delete it) or if the
 # numbers move.
-KNOWN_MISMATCHES: dict[str, tuple[int, int]] = {
-    # name: (wire_size, struct_size)
-    "Behavior":             (22, 32),
-    "ControlRaw":           (63, 64),   # +confidence float（方向四仲裁置信度）
-    "GpsData":              (36, 40),
-    "ImuData":              (36, 40),
-    "LidarPointCloud":      (40980, 40984),
-    "Localization":         (65, 68),
-    "Obstacle":             (47, 52),  # D2-07 Prefer A + P3-1 3D: obs_lane_match_hint + float z, height, heading
-    "ObstacleList":         (6032, 6680),
-    "Pose2D":               (29, 32),
-    "PredictionHypothesis": (1217, 1220),
-    "PredictionSet":        (3668, 3688),
-    "Trajectory":           (3093, 3104),
-}
+KNOWN_MISMATCHES: dict[str, tuple[int, int]] = {}
 
 # C alignment of each primitive (== its size on this project's targets).
 _ALIGN = dict(PRIMITIVE_SIZES)
@@ -90,18 +76,24 @@ def struct_layout(name: str, structs: dict[str, StructDef],
     offset = 0
     max_align = 1
     for f in s.fields:
-        if f.idl_type in _ALIGN:
+        if f.is_varlen:
+            elem_size, elem_align = 8, 4
+            count = 1
+        elif f.idl_type in _ALIGN:
             elem_size = elem_align = _ALIGN[f.idl_type]
+            count = f.array_size if f.array_size > 0 else 1
         elif f.is_enum:
             elem_size = elem_align = 1          # generated as int8_t
+            count = f.array_size if f.array_size > 0 else 1
         elif f.is_nested:
             elem_size, elem_align = struct_layout(f.nested_typename, structs,
                                                   seen + (name,))
+            count = f.array_size if f.array_size > 0 else 1
         elif f.idl_type == "char":
             elem_size = elem_align = 1
+            count = f.array_size if f.array_size > 0 else 1
         else:
             raise ValueError(f"{name}.{f.name}: unknown type '{f.idl_type}'")
-        count = f.array_size if f.array_size > 0 else 1
         offset = _align_up(offset, elem_align)
         offset += elem_size * count
         max_align = max(max_align, elem_align)
@@ -114,8 +106,7 @@ def main() -> int:
                     help="print the full size table (informational)")
     args = ap.parse_args()
 
-    parser = IDLParser(IDL_FILE.read_text())
-    parser.parse()
+    parser = IDLParser.from_file(str(IDL_FILE))
     # Reuse the generator's own wire-size computation so this gate can never
     # drift from what the generated serializer actually emits.
     gen = CodeGenerator(parser)

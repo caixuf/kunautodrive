@@ -53,7 +53,7 @@ static void test_obstacle_serialize_with_hint_true(void) {
     size_t out_size = 0;
     int rc = Obstacle_serialize(&src, buf, &out_size);
     TEST(rc == 0, "serialize hint=true returns 0");
-    TEST(out_size == 47, "serialize hint=true reports size=47");
+    TEST(out_size == OBSTACLE_WIRE_SIZE, "serialize hint=true reports OBSTACLE_WIRE_SIZE");
 
     Obstacle dst = {0};
     rc = Obstacle_deserialize(&dst, buf, out_size);
@@ -98,7 +98,7 @@ static void test_obstacle_serialize_with_hint_false(void) {
     size_t out_size = 0;
     int rc = Obstacle_serialize(&src, buf, &out_size);
     TEST(rc == 0, "serialize hint=false returns 0");
-    TEST(out_size == 47, "serialize hint=false reports size=47");
+    TEST(out_size == OBSTACLE_WIRE_SIZE, "serialize hint=false reports OBSTACLE_WIRE_SIZE");
 
     Obstacle dst = {0};
     rc = Obstacle_deserialize(&dst, buf, out_size);
@@ -150,14 +150,15 @@ static void test_obstacle_hint_byte_position(void) {
 
     uint8_t buf[64] = {0};
     size_t out_size = 0;
+    size_t hint_off = offsetof(Obstacle, obs_lane_match_hint);
     Obstacle_serialize(&src, buf, &out_size);
-    TEST(out_size == 47, "wire size stays 47");
-    TEST(buf[34] == 1, "wire[34] == 1 when hint=1");
+    TEST(out_size == OBSTACLE_WIRE_SIZE, "wire size matches OBSTACLE_WIRE_SIZE");
+    TEST(buf[hint_off] == 1, "wire[hint_off] == 1 when hint=1");
 
     src.obs_lane_match_hint = 0;
     memset(buf, 0, sizeof(buf));
     Obstacle_serialize(&src, buf, &out_size);
-    TEST(buf[34] == 0, "wire[34] == 0 when hint=0");
+    TEST(buf[hint_off] == 0, "wire[hint_off] == 0 when hint=0");
     /* 前 34B 在序列化时不应被 hint 字段污染(serialize 顺序固定) */
     TEST(buf[0] == 0x01 && buf[1] == 0x00 && buf[2] == 0x00 && buf[3] == 0x00,
          "wire[0..3] == id=1 little-endian (前 34B 未受 hint 影响)");
@@ -202,22 +203,22 @@ static void test_obstacle_field_desc_present(void) {
  *  这与 CLAUDE.md 的"显式契约"铁律一致:不暗中做静默 fallback。
  * ────────────────────────────────────────────────────────────── */
 static void test_obstacle_wire_size_contract(void) {
-    uint8_t full[47] = {0};
-    uint8_t short46[46] = {0};
+    uint8_t full[OBSTACLE_WIRE_SIZE] = {0};
+    uint8_t short_pkg[OBSTACLE_WIRE_SIZE - 1] = {0};
     Obstacle dst = {0};
 
     int rc_full = Obstacle_deserialize(&dst, full, sizeof(full));
-    TEST(rc_full == 0, "deserialize 47B 完整包成功");
+    TEST(rc_full == 0, "deserialize full package succeeds");
 
-    /* 46B 老格式被严格拒绝(SPEC 要求 producer 必须升级) */
-    int rc_short = Obstacle_deserialize(&dst, short46, sizeof(short46));
+    /* 老格式被严格拒绝(SPEC 要求 producer 必须升级) */
+    int rc_short = Obstacle_deserialize(&dst, short_pkg, sizeof(short_pkg));
     TEST(rc_short == -1,
-         "deserialize 46B 老包被拒绝(rc == -1)— producer 升级是 hard requirement");
+         "deserialize short package rejected (rc == -1)");
 
-    /* 48B / 64B(任意更大)应当正常接受,只读前 47B */
+    /* 任意更大应当正常接受 */
     uint8_t padded[64] = {0};
     int rc_padded = Obstacle_deserialize(&dst, padded, sizeof(padded));
-    TEST(rc_padded == 0, "deserialize 超过 47B 的 padded 包成功(只读前 47B)");
+    TEST(rc_padded == 0, "deserialize padded package succeeds");
 
     /* NULL/0 dst 或 buf 仍需拒绝 */
     int rc_null = Obstacle_deserialize(NULL, full, sizeof(full));
@@ -235,7 +236,7 @@ static void test_localization_and_trajectory_z_grade_roundtrip(void) {
     size_t lsize = 0;
     TEST(Localization_serialize(&lsrc, lbuf, &lsize) == 0,
          "Localization_serialize returns 0");
-    TEST(lsize == 65, "Localization wire size == 65");
+    TEST(lsize == LOCALIZATION_WIRE_SIZE, "Localization wire size == LOCALIZATION_WIRE_SIZE");
     Localization ldst = {0};
     TEST(Localization_deserialize(&ldst, lbuf, lsize) == 0,
          "Localization_deserialize returns 0");

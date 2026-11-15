@@ -464,14 +464,14 @@ static void handle_cmd(const char* json) {
 static void on_ota_cmd(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    handle_cmd((const char*)msg->data);
+    handle_cmd((const char*)((const uint8_t*)message_bus_message_data(msg)));
 }
 
 static void on_fusion(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
     /* fusion/localization now publishes cJSON */
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (root) {
         cJSON* j;
         j = cJSON_GetObjectItemCaseSensitive(root, "v");

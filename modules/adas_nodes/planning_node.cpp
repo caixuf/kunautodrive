@@ -866,7 +866,7 @@ static void on_fusion(const Message* msg, void* user_data) {
     if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
 
     /* cJSON parsing (fusion/localization now publishes cJSON) */
-    const char* d = (const char*)msg->data;
+    const char* d = (const char*)((const uint8_t*)message_bus_message_data(msg));
     cJSON* root = cJSON_Parse(d);
     if (root) {
         /* vehicle/state 近期到达时不覆盖（同 behavior_planner 的修复） */
@@ -897,7 +897,7 @@ static void on_fusion(const Message* msg, void* user_data) {
 static void on_vehicle_state(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* j;
     if ((j = cJSON_GetObjectItem(root, "x")) && cJSON_IsNumber(j))
@@ -997,7 +997,7 @@ static void on_perception_obstacles(const Message* msg, void* user_data) {
     if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
 
     ObstacleList list;
-    if (ObstacleList_deserialize(&list, (const uint8_t*)msg->data, msg->data_size) != 0)
+    if (ObstacleList_deserialize(&list, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size) != 0)
         return;
 
     double ch = cos(g.ego_heading), sh = sin(g.ego_heading);
@@ -1118,7 +1118,7 @@ static void sync_parking_metadata_from_json(const cJSON* root) {
 static void on_road_geometry(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
-    const char* d = (const char*)msg->data;
+    const char* d = (const char*)((const uint8_t*)message_bus_message_data(msg));
     static int rg_count = 0;
     if (rg_count++ < 5 || rg_count % 50 == 0)
         LOG_INFO("planning", "[RG] recv road/geometry #%d size=%zu: %.80s", rg_count, (size_t)msg->data_size, d);
@@ -1155,7 +1155,7 @@ static void on_road_geometry(const Message* msg, void* user_data) {
 static void on_road_ref_path(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* reverse = cJSON_GetObjectItemCaseSensitive(root, "reverse");
     if (cJSON_IsBool(reverse)) g.on_return = cJSON_IsTrue(reverse) ? 1 : 0;
@@ -1244,7 +1244,7 @@ static void on_planning_behavior(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
     Behavior beh;
-    if (Behavior_deserialize(&beh, (const uint8_t*)msg->data, msg->data_size) != 0) {
+    if (Behavior_deserialize(&beh, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size) != 0) {
         static int desfail_count = 0;
         if (desfail_count++ < 3)
             LOG_WARN("planning", "[DBG_BEH] deserialize FAILED size=%zu", (size_t)msg->data_size);
@@ -1277,7 +1277,7 @@ static void on_navigation_path(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
 
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
 
     cJSON* jtype = cJSON_GetObjectItemCaseSensitive(root, "type");
@@ -1382,7 +1382,7 @@ static void on_navigation_path(const Message* msg, void* user_data) {
 static void on_lane_match(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg || msg->data_size == 0) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
 
     cJSON* j_val = cJSON_GetObjectItemCaseSensitive(root, "valid");
@@ -1431,7 +1431,7 @@ static void on_scene_frame(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg || msg->data_size == 0) return;
 
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
 
     /* 施工区：始终解析（掉头可通行域不依赖 merge 状态 / 感知链路） */
@@ -1521,7 +1521,7 @@ static void on_traffic_lights(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
     TrafficLightCache c;
-    traffic_lights_parse((const char*)msg->data, &c);
+    traffic_lights_parse((const char*)((const uint8_t*)message_bus_message_data(msg)), &c);
     g.tl_count = c.count;
     g.has_traffic_lights = c.valid;
     for (int i = 0; i < c.count; i++) {
@@ -1540,7 +1540,7 @@ static void on_traffic_lights(const Message* msg, void* user_data) {
 static void on_environment_state(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* visibility = cJSON_GetObjectItemCaseSensitive(root, "visibility_m");
     cJSON* weather = cJSON_GetObjectItemCaseSensitive(root, "weather");
@@ -3377,7 +3377,7 @@ EXPORT_COROUTINE_TASK(PlanningTask, planning)
 static void on_model_assist(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg || msg->data_size == 0) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* j = cJSON_GetObjectItemCaseSensitive(root, "speed");
     if (cJSON_IsNumber(j)) g.assist_speed = j->valuedouble;
@@ -3391,7 +3391,7 @@ static void on_model_assist(const Message* msg, void* user_data) {
 static void on_prediction_tracks(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg || msg->data_size == 0) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
 
     cJSON* j_tracks = cJSON_GetObjectItemCaseSensitive(root, "tracks");

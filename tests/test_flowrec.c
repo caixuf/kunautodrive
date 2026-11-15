@@ -48,7 +48,15 @@ static void make_message(Message* message, const char* topic,
     message->schema_version = 1;
     message->endian_marker = 0x12;
     message->data_size = payload_size;
-    if (payload_size > 0) memcpy(message->data, payload, payload_size);
+    if (payload_size > 0) {
+        if (payload_size <= MSG_INLINE_MAX_SIZE) {
+            message->payload_kind = MSG_PAYLOAD_INLINE;
+            memcpy(message->data, payload, payload_size);
+        } else {
+            message->payload_kind = MSG_PAYLOAD_LOANED;
+            message->_loaned_data = (const uint8_t*)payload;
+        }
+    }
 }
 
 static void process_bool_message(FlowrecEngine* engine, int collector,

@@ -195,7 +195,7 @@ static void on_fusion(const Message* msg, void* user_data) {
     if (!msg) return;
 
     /* fusion/localization now publishes cJSON */
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (root) {
         cJSON* j;
         j = cJSON_GetObjectItemCaseSensitive(root, "x");
@@ -216,7 +216,7 @@ static void on_planning(const Message* msg, void* user_data) {
     if (!msg) return;
     /* 二进制 Trajectory 反序列化（已从 JSON 迁移到二进制） */
     Trajectory traj;
-    if (Trajectory_deserialize(&traj, (const uint8_t*)msg->data, msg->data_size) == 0) {
+    if (Trajectory_deserialize(&traj, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size) == 0) {
         if (traj.point_count > 0 && traj.valid) {
             g.planning_target_speed = (double)traj.points[0].v;
             pthread_mutex_lock(&g.traj_mutex);
@@ -237,7 +237,7 @@ static void on_obstacles(const Message* msg, void* user_data) {
     /* 尝试二进制反序列化 */
     {
         ObstacleList list;
-        if (ObstacleList_deserialize(&list, (const uint8_t*)msg->data, msg->data_size) == 0) {
+        if (ObstacleList_deserialize(&list, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size) == 0) {
             /* 取前 2 个障碍物作为 front0/front1 */
             int n = list.count > 2 ? 2 : list.count;
             int fi = 0;
@@ -276,13 +276,13 @@ static void on_obstacles(const Message* msg, void* user_data) {
      * 异常的二进制），直接 strstr+sscanf 会在随机字节上解析 → sscanf
      * 内部 strtod 断言崩溃（glibc 必现，CI integration smoke 偶发）。
      * 先用 cJSON_Parse 验证合法 JSON，失败则安全跳过（占位保持远处无车）。 */
-    cJSON* jroot = cJSON_Parse((const char*)msg->data);
+    cJSON* jroot = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!jroot) {
         g.has_obstacles = 1;  /* 保持远处占位 */
         return;
     }
     cJSON_Delete(jroot);
-    const char* d = (const char*)msg->data;
+    const char* d = (const char*)((const uint8_t*)message_bus_message_data(msg));
     /* 默认"远处无车"占位（type=1, conf=1），避免未知障碍物 type/conf=0 归一化爆炸 */
     g.front0_x = g.ego_x + 500.0; g.front0_y = 0; g.front0_vx = 0; g.front0_type = 1; g.front0_confidence = 1;
     g.front1_x = g.ego_x + 520.0; g.front1_y = 0; g.front1_vx = 0; g.front1_type = 1; g.front1_confidence = 1;
@@ -311,7 +311,7 @@ static void on_control_cmd(const Message* msg, void* user_data) {
     /* 二进制反序列化 */
     {
         ControlCmd cmd;
-        if (ControlCmd_deserialize(&cmd, (const uint8_t*)msg->data, msg->data_size) == 0) {
+        if (ControlCmd_deserialize(&cmd, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size) == 0) {
             g.ctrl_brake = cmd.brake;
             g.ctrl_throttle = cmd.throttle;
             g.ctrl_steer = cmd.steering;
@@ -322,7 +322,7 @@ static void on_control_cmd(const Message* msg, void* user_data) {
     }
 
     /* 文本回退 */
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (root) {
         cJSON* j = cJSON_GetObjectItemCaseSensitive(root, "brake");
         if (cJSON_IsNumber(j)) g.ctrl_brake = j->valuedouble;
@@ -349,7 +349,7 @@ static void on_control_cmd(const Message* msg, void* user_data) {
 static void on_model_ota_active(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (root) {
         cJSON* j = cJSON_GetObjectItemCaseSensitive(root, "reload");
         if (cJSON_IsBool(j) && cJSON_IsTrue(j))
@@ -365,7 +365,7 @@ static void on_traffic_lights(const Message* msg, void* user_data) {
     if (!msg) return;
     /* JSON 解析统一走 traffic_light.h 的共享 traffic_lights_parse() */
     TrafficLightCache c;
-    traffic_lights_parse((const char*)msg->data, &c);
+    traffic_lights_parse((const char*)((const uint8_t*)message_bus_message_data(msg)), &c);
 
     /* 找最近的红灯（语义与旧实现一致：红>黄>绿，忽略后方灯） */
     double nearest_red = 1e9;
@@ -405,7 +405,7 @@ static void on_traffic_lights(const Message* msg, void* user_data) {
 static void on_road_geometry(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* j;
     j = cJSON_GetObjectItem(root, "lane_width");

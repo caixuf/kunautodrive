@@ -50,12 +50,14 @@ JSON_PAYLOAD_PAIRS = frozenset({
 
 
 def idl_struct_names() -> set[str]:
-    """msg/adas_msgs.msg 里的 struct 名（msg_codegen 会生成同名头文件）。"""
+    """msg/adas_msgs.msg（含 import 的域文件）里的 struct 名。"""
     src = ROOT / "msg" / "adas_msgs.msg"
     if not src.is_file():
         return set()
-    return set(re.findall(r"^struct\s+(\w+)", src.read_text(encoding="utf-8"),
-                          re.MULTILINE))
+    sys.path.insert(0, str(ROOT / "tools"))
+    from msg_codegen import IDLParser
+    parser = IDLParser.from_file(str(src))
+    return set(parser.structs.keys())
 
 # System topics always published by the runtime/launcher, not by any
 # NodePlugin's s_outputs. These need to be considered "published" without

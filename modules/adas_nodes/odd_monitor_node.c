@@ -106,7 +106,7 @@ static void load_scenario_odd(const char* path) {
 static void on_environment_state(const Message* msg, void* ud) {
     (void)ud;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* w = cJSON_GetObjectItemCaseSensitive(root, "weather");
     if (cJSON_IsString(w)) {
@@ -121,7 +121,7 @@ static void on_environment_state(const Message* msg, void* ud) {
 static void on_vehicle_state(const Message* msg, void* ud) {
     (void)ud;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* j = cJSON_GetObjectItemCaseSensitive(root, "t_us");
     if (cJSON_IsNumber(j)) g.sim_t_us = j->valuedouble;
@@ -131,7 +131,7 @@ static void on_vehicle_state(const Message* msg, void* ud) {
 static void on_localization(const Message* msg, void* ud) {
     (void)ud;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* d = cJSON_GetObjectItemCaseSensitive(root, "diverged");
     if (cJSON_IsBool(d)) g.loc_diverged = cJSON_IsTrue(d) ? 1 : 0;
@@ -157,7 +157,7 @@ static void on_navigation_path(const Message* msg, void* ud) {
 static void on_safety_evidence(const Message* msg, void* ud) {
     (void)ud;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* deg = cJSON_GetObjectItemCaseSensitive(root, "degrade");
     if (cJSON_IsObject(deg)) {

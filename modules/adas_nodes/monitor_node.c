@@ -508,7 +508,7 @@ static void on_tracked_objects(const Message* msg, void* user_data) {
     size_t copy = msg->data_size < sizeof(g.latest_tracked_objects) - 1
                   ? msg->data_size : sizeof(g.latest_tracked_objects) - 1;
     char sanitized[sizeof(g.latest_tracked_objects)];
-    memcpy(sanitized, msg->data, copy);
+    memcpy(sanitized, ((const uint8_t*)message_bus_message_data(msg)), copy);
     sanitized[copy] = '\0';
     sanitize_subnormal_literals(sanitized);
     pthread_mutex_lock(&g.tracked_mutex);
@@ -523,7 +523,7 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
     char sanitized[sizeof(g.latest_vehicle_state)];
     size_t copy = msg->data_size < sizeof(g.latest_vehicle_state) - 1
                   ? msg->data_size : sizeof(g.latest_vehicle_state) - 1;
-    memcpy(sanitized, msg->data, copy);
+    memcpy(sanitized, ((const uint8_t*)message_bus_message_data(msg)), copy);
     sanitized[copy] = '\0';
     sanitize_subnormal_literals(sanitized);
     /* 先在栈上清洗，再发布到共享缓存。旧实现先写 g.latest_vehicle_state 再原地
@@ -571,7 +571,7 @@ static void on_node_info(const Message* msg, void* user_data) {
     }
     size_t copy = msg->data_size < sizeof(g.node_info_json[0]) - 3
                   ? msg->data_size : sizeof(g.node_info_json[0]) - 3;
-    memcpy(g.node_info_json[g.node_info_count], msg->data, copy);
+    memcpy(g.node_info_json[g.node_info_count], ((const uint8_t*)message_bus_message_data(msg)), copy);
     /* 截断保护: 若原始 JSON 被截断（msg->data_size > 缓冲区容量）, 确保闭括号完整,
      * 避免生成非法 JSON 导致整个 state file 解析失败（scene 等数据丢失）。 */
     if (msg->data_size >= sizeof(g.node_info_json[0]) - 3) {
@@ -602,7 +602,7 @@ static void on_node_info(const Message* msg, void* user_data) {
 static void on_remote_stats(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg || msg->data_size < sizeof(StatsPacket)) return;
-    const StatsPacket* pkt = (const StatsPacket*)msg->data;
+    const StatsPacket* pkt = (const StatsPacket*)((const uint8_t*)message_bus_message_data(msg));
     if (strcmp(pkt->source_name, "monitor_node") == 0) return;  /* 跳过自己 */
 
     pthread_mutex_lock(&g.remote_stats_mutex);
@@ -646,7 +646,7 @@ static void on_planning_trajectory(const Message* msg, void* user_data) {
 
     /* ── 二进制 Trajectory 反序列化（主路径） ── */
     Trajectory traj;
-    if (Trajectory_deserialize(&traj, (const uint8_t*)msg->data, msg->data_size) == 0) {
+    if (Trajectory_deserialize(&traj, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size) == 0) {
         if (traj.valid && traj.point_count > 0) {
             /* 构建 path JSON: [[x0,y0,v0], [x1,y1,v1], ...] */
             cJSON* path_arr = cJSON_CreateArray();
@@ -674,7 +674,7 @@ static void on_planning_trajectory(const Message* msg, void* user_data) {
     }
 
     /* ── 回退：旧版 JSON 路径（trajectory 消息仍是 JSON 格式时） ── */
-    cJSON* root = monitor_cJSON_Parse((const char*)msg->data);
+    cJSON* root = monitor_cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (root) {
         cJSON* path = cJSON_GetObjectItem(root, "path");
         if (path && cJSON_IsArray(path)) {
@@ -699,7 +699,7 @@ static void on_planning_trajectory(const Message* msg, void* user_data) {
 static void on_road_geometry(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
-    const char* d = (const char*)msg->data;
+    const char* d = (const char*)((const uint8_t*)message_bus_message_data(msg));
     cJSON* root = monitor_cJSON_Parse(d);
     if (root) {
         cJSON* item;
@@ -717,10 +717,10 @@ static void on_road_geometry(const Message* msg, void* user_data) {
 static void on_prediction_tracks(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg || msg->data_size == 0) return;
-    size_t len = strlen((const char*)msg->data);
+    size_t len = strlen((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (len >= sizeof(g.prediction_tracks_json)) len = sizeof(g.prediction_tracks_json) - 1;
     pthread_mutex_lock(&g.prediction_mutex);
-    memcpy(g.prediction_tracks_json, msg->data, len);
+    memcpy(g.prediction_tracks_json, ((const uint8_t*)message_bus_message_data(msg)), len);
     g.prediction_tracks_json[len] = '\0';
     g.has_prediction_tracks = 1;
     pthread_mutex_unlock(&g.prediction_mutex);
@@ -735,7 +735,7 @@ static void on_prediction_tracks(const Message* msg, void* user_data) {
 static void on_scene_frame(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
-    const char* d = (const char*)msg->data;
+    const char* d = (const char*)((const uint8_t*)message_bus_message_data(msg));
     cJSON* root = monitor_cJSON_ParseLength(d, msg->data_size);
     if (!root) {
         static int parse_warn_count = 0;
@@ -1062,14 +1062,14 @@ static void on_fusion_latency(const Message* msg, void* user_data) {
     /* Try binary deserialization (serializer path) */
     {
         LatencyReport lr;
-        if (LatencyReport_deserialize(&lr, (const uint8_t*)msg->data, msg->data_size) == 0) {
+        if (LatencyReport_deserialize(&lr, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size) == 0) {
             cache_fusion_latency(lr.avg_us, lr.p50_us, lr.p99_us);
             return;
         }
     }
 
     /* Fallback: text JSON parsing */
-    const char* d = (const char*)msg->data;
+    const char* d = (const char*)((const uint8_t*)message_bus_message_data(msg));
     cJSON* root = monitor_cJSON_Parse(d);
     if (root) {
         cJSON* item;
@@ -1092,7 +1092,7 @@ static void on_control_cte(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
 
-    cJSON* root = monitor_cJSON_Parse((const char*)msg->data);
+    cJSON* root = monitor_cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (root) {
         cJSON* item = cJSON_GetObjectItem(root, "cte");
         if (cJSON_IsNumber(item)) g.latest_cte = item->valuedouble;
@@ -1106,7 +1106,7 @@ static void on_behavior_state(const Message* msg, void* user_data) {
     if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
     size_t copy = msg->data_size;
     if (copy >= sizeof(g.behavior_state_json)) copy = sizeof(g.behavior_state_json) - 1;
-    memcpy(g.behavior_state_json, msg->data, copy);
+    memcpy(g.behavior_state_json, ((const uint8_t*)message_bus_message_data(msg)), copy);
     g.behavior_state_json[copy] = '\0';
 }
 
@@ -1116,7 +1116,7 @@ static void on_odd_state(const Message* msg, void* user_data) {
     if (!msg) return;
     size_t copy = msg->data_size;
     if (copy >= sizeof(g.odd_state_json)) copy = sizeof(g.odd_state_json) - 1;
-    memcpy(g.odd_state_json, msg->data, copy);
+    memcpy(g.odd_state_json, ((const uint8_t*)message_bus_message_data(msg)), copy);
     g.odd_state_json[copy] = '\0';
 }
 
@@ -1125,7 +1125,7 @@ static void on_tor_state(const Message* msg, void* user_data) {
     if (!msg) return;
     size_t copy = msg->data_size;
     if (copy >= sizeof(g.tor_state_json)) copy = sizeof(g.tor_state_json) - 1;
-    memcpy(g.tor_state_json, msg->data, copy);
+    memcpy(g.tor_state_json, ((const uint8_t*)message_bus_message_data(msg)), copy);
     g.tor_state_json[copy] = '\0';
 }
 
@@ -1135,7 +1135,7 @@ static void on_control_debug(const Message* msg, void* user_data) {
     if (!msg) return;
     size_t copy = msg->data_size;
     if (copy >= sizeof(g.control_debug_json)) copy = sizeof(g.control_debug_json) - 1;
-    memcpy(g.control_debug_json, msg->data, copy);
+    memcpy(g.control_debug_json, ((const uint8_t*)message_bus_message_data(msg)), copy);
     g.control_debug_json[copy] = '\0';
 }
 
@@ -1145,7 +1145,7 @@ static void on_planning_debug(const Message* msg, void* user_data) {
     if (!msg) return;
     size_t copy = msg->data_size;
     if (copy >= sizeof(g.planning_debug_json)) copy = sizeof(g.planning_debug_json) - 1;
-    memcpy(g.planning_debug_json, msg->data, copy);
+    memcpy(g.planning_debug_json, ((const uint8_t*)message_bus_message_data(msg)), copy);
     g.planning_debug_json[copy] = '\0';
 
     cJSON* pd = monitor_cJSON_Parse(g.planning_debug_json);
@@ -1168,7 +1168,7 @@ static void on_planning_debug(const Message* msg, void* user_data) {
 static void on_fusion_localization(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    cJSON* src = monitor_cJSON_Parse((const char*)msg->data);
+    cJSON* src = monitor_cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!src) return;
     cJSON* out = cJSON_CreateObject();
     static const char* keys[] = {
@@ -1195,7 +1195,7 @@ static void on_lane_match(const Message* msg, void* user_data) {
     if (!msg) return;
     size_t copy = msg->data_size;
     if (copy >= sizeof(g.lane_match_json)) copy = sizeof(g.lane_match_json) - 1;
-    memcpy(g.lane_match_json, msg->data, copy);
+    memcpy(g.lane_match_json, ((const uint8_t*)message_bus_message_data(msg)), copy);
     g.lane_match_json[copy] = '\0';
 }
 
@@ -1205,7 +1205,7 @@ static void on_perceived_lanes(const Message* msg, void* user_data) {
     if (!msg) return;
     size_t copy = msg->data_size;
     if (copy >= sizeof(g.perceived_lanes_json)) copy = sizeof(g.perceived_lanes_json) - 1;
-    memcpy(g.perceived_lanes_json, msg->data, copy);
+    memcpy(g.perceived_lanes_json, ((const uint8_t*)message_bus_message_data(msg)), copy);
     g.perceived_lanes_json[copy] = '\0';
 }
 
@@ -1215,7 +1215,7 @@ static void on_safety_evidence(const Message* msg, void* user_data) {
 
     /* 只接受合法 JSON；缓存压缩后的完整对象，避免任何未验证 topic payload
      * 混入 dashboard/evaluator 证据链。 */
-    cJSON* evidence = monitor_cJSON_ParseLength((const char*)msg->data, msg->data_size);
+    cJSON* evidence = monitor_cJSON_ParseLength((const char*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size);
     if (!evidence) return;
     char* compact = cJSON_PrintUnformatted(evidence);
     cJSON_Delete(evidence);

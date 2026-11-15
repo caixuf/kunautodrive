@@ -142,7 +142,7 @@ static void load_scenario_driver(const char* path) {
 static void on_odd_state(const Message* msg, void* ud) {
     (void)ud;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* in = cJSON_GetObjectItemCaseSensitive(root, "in_odd");
     if (cJSON_IsBool(in)) { g.odd_in = cJSON_IsTrue(in) ? 1 : 0; g.has_odd = 1; }
@@ -161,7 +161,7 @@ static void on_odd_state(const Message* msg, void* ud) {
 static void on_vehicle_state(const Message* msg, void* ud) {
     (void)ud;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* j = cJSON_GetObjectItemCaseSensitive(root, "t_us");
     if (cJSON_IsNumber(j)) g.sim_t_us = j->valuedouble;
@@ -179,7 +179,7 @@ static void on_vehicle_state(const Message* msg, void* ud) {
 static void on_safety_evidence(const Message* msg, void* ud) {
     (void)ud;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* deg = cJSON_GetObjectItemCaseSensitive(root, "degrade");
     if (cJSON_IsObject(deg)) {

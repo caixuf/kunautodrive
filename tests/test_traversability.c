@@ -143,7 +143,7 @@ int main(void) {
             for (int i = 0; i < 80; i++) f.depth_data[j * 80 + i] = 2.0f;
         f.depth_count = 4800;
         f.fov_deg = 65.0f;
-        uint8_t buf[44832]; size_t len = 0;
+        uint8_t buf[STEREOFRAME_WIRE_SIZE]; size_t len = 0;
         CHECK(StereoFrame_serialize(&f, buf, &len) == 0, "T5 serialize synthetic frame");
         StereoFrame out;
         CHECK(StereoFrame_deserialize(&out, buf, len) == 0, "T5 deserialize synthetic frame");

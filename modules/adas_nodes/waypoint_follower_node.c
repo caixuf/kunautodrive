@@ -213,7 +213,7 @@ static void on_fusion(const Message* msg, void* user_data) {
     if (!msg) return;
 
     /* cJSON parsing (fusion/localization now publishes cJSON) */
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     double x = 0, y = 0, v = 0, h = 0;
     if (root) {
         cJSON* j;
@@ -242,7 +242,7 @@ static void on_obstacles(const Message* msg, void* user_data) {
     if (!msg) return;
 
     ObstacleList list;
-    if (ObstacleList_deserialize(&list, (const uint8_t*)msg->data, msg->data_size) != 0) {
+    if (ObstacleList_deserialize(&list, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size) != 0) {
         return;
     }
 
@@ -271,7 +271,7 @@ static void on_traversability(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
 
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     double near_obs = -1.0, cor_w = 0.0;
     int blocked = 0;
     if (root) {

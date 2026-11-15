@@ -92,7 +92,7 @@ static inline double road_center_y_at(double x) {
 static void on_vehicle_state(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* j;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "x")) && cJSON_IsNumber(j)) {
@@ -110,7 +110,7 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
 static void on_road_geometry(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* j;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "curve_start_x")) && cJSON_IsNumber(j))

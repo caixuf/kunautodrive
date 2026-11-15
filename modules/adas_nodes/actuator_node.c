@@ -250,7 +250,7 @@ static void on_control_cmd(const Message* msg, void* user_data) {
 
     /* 二进制路径：ControlCmd 反序列化（safety_control_node 发布） */
     ControlCmd cmd;
-    if (ControlCmd_deserialize(&cmd, (const uint8_t*)msg->data, msg->data_size) != 0) {
+    if (ControlCmd_deserialize(&cmd, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size) != 0) {
         LOG_WARN("actuator", "ControlCmd deserialize failed (size=%u)", msg->data_size);
         return;
     }

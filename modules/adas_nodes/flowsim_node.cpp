@@ -362,7 +362,7 @@ static void on_control_cmd(const Message* msg, void* user_data) {
     /* 二进制 ControlCmd 路径 */
     {
         ControlCmd bin;
-        if (ControlCmd_deserialize(&bin, (const uint8_t*)msg->data, msg->data_size) == 0) {
+        if (ControlCmd_deserialize(&bin, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size) == 0) {
             g.ego_throttle.store(bin.throttle, std::memory_order_relaxed);
             g.ego_brake.store(bin.brake, std::memory_order_relaxed);
             g.ego_steer.store(bin.steering, std::memory_order_relaxed);
@@ -376,7 +376,7 @@ static void on_control_cmd(const Message* msg, void* user_data) {
     }
 
     /* JSON fallback */
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (root) {
         cJSON* j;
         if ((j = cJSON_GetObjectItemCaseSensitive(root, "throttle")) && cJSON_IsNumber(j))

@@ -76,6 +76,20 @@ include_directories(
     ${FLOWENGINE_BUILD}/gen                # 生成的 adas_msgs_gen.h
 )
 
+# Phase 3: Ensure adas_nodes rebuilds IDL headers whenever msg/*.msg or msg_codegen.py changes
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+file(GLOB ADAS_MSG_IDL_FILES "${FLOW_ROOT}/msg/*.msg")
+set(ADAS_GEN_HEADER "${FLOWENGINE_BUILD}/gen/adas_msgs_gen.h")
+add_custom_command(
+    OUTPUT "${ADAS_GEN_HEADER}"
+    COMMAND ${Python3_EXECUTABLE} "${FLOW_ROOT}/tools/msg_codegen.py"
+            "${FLOW_ROOT}/msg/adas_msgs.msg"
+            --split --output-dir "${FLOWENGINE_BUILD}"
+    DEPENDS "${FLOW_ROOT}/tools/msg_codegen.py" ${ADAS_MSG_IDL_FILES}
+    COMMENT "Regenerating FlowEngine IDL headers into ${FLOWENGINE_BUILD}/gen"
+)
+add_custom_target(adas_nodes_msg_codegen ALL DEPENDS "${ADAS_GEN_HEADER}")
+
 # ── 链接主框架库 ──────────────────────────────────────────────
 find_library(FLOWENGINE_CORE
     NAMES flowengine_core

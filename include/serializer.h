@@ -96,7 +96,27 @@ typedef enum {
     FIELD_KIND_FLOAT,    /**< 浮点（float/double） */
     FIELD_KIND_ENUM,     /**< 枚举（序列化为 int8） */
     FIELD_KIND_NESTED,   /**< 嵌套结构体 */
+    FIELD_KIND_SEQ,      /**< 变长序列 FlowSeqRef (T[]) */
+    FIELD_KIND_STRING,   /**< 变长字符串 FlowSeqRef (string) */
 } FieldKind;
+
+/**
+ * 变长序列 / 字符串的跨进程可重定位切片描述符（8 字节，4 字节对齐）。
+ * offset 为相对消息起始地址的字节偏移，count 为元素个数（string 含末尾 '\0' 或纯字符数）。
+ */
+typedef struct {
+    uint32_t offset;
+    uint32_t count;
+} FlowSeqRef;
+
+/**
+ * 线性零拷贝消息构建器：直接向连续缓冲区（如 ShmArena 块）写入固定头 + 变长序列。
+ */
+typedef struct {
+    uint8_t* base;
+    uint32_t capacity;
+    uint32_t write_pos;
+} FlowMsgBuilder;
 
 /**
  * 字段描述（由 codegen 生成的静态表），实现字段级 schema。

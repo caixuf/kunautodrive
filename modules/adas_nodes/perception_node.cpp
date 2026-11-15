@@ -178,7 +178,7 @@ PerceptionContext g;
 static void on_world_buildings(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    flowsim::load_buildings((const char*)msg->data, g.buildings);
+    flowsim::load_buildings((const char*)((const uint8_t*)message_bus_message_data(msg)), g.buildings);
     if (!g.buildings.empty()) {
         LOG_INFO("perception", "received %d OSM buildings for LOS occlusion",
                  (int)g.buildings.size());
@@ -192,7 +192,7 @@ static void on_lane_match(const Message* msg, void* user_data) {
     (void)user_data;
     int valid = 0;
     if (msg && msg->data_size > 0) {
-        cJSON* root = cJSON_Parse((const char*)msg->data);
+        cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
         if (root) {
             cJSON* j = cJSON_GetObjectItem(root, "valid");
             if (j && cJSON_IsNumber(j) && j->valueint == 1)
@@ -209,7 +209,7 @@ static void on_lane_match(const Message* msg, void* user_data) {
 static void on_vehicle_state(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* j;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "x")) && cJSON_IsNumber(j))
@@ -432,7 +432,7 @@ static void publish_obstacles(ObstacleList* obs_list) {
 static void on_road_geometry(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* j;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "lane_count")) && cJSON_IsNumber(j))

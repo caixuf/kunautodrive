@@ -94,7 +94,7 @@ static void on_fusion(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
     /* fusion/localization now publishes cJSON */
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (root) {
         cJSON* j;
         j = cJSON_GetObjectItemCaseSensitive(root, "x");
@@ -122,7 +122,7 @@ static void on_planning(const Message* msg, void* user_data) {
      * 取轨迹首点速度作模仿学习目标（与 inference_node on_planning 一致）。 */
     Trajectory traj;
     memset(&traj, 0, sizeof(traj));
-    if (Trajectory_deserialize(&traj, (const uint8_t*)msg->data, msg->data_size) == 0
+    if (Trajectory_deserialize(&traj, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size) == 0
         && traj.point_count > 0) {
         g.planning_target_speed = (double)traj.points[0].v;
         g.plan_ref_x = (double)traj.points[0].x;
@@ -136,7 +136,7 @@ static void on_obstacles(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
     ObstacleList obs;
-    if (ObstacleList_deserialize(&obs, (const uint8_t*)msg->data, msg->data_size) == 0) {
+    if (ObstacleList_deserialize(&obs, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size) == 0) {
         g.obstacles = obs;
         if (g.obstacles.count > RECORDER_MAX_OBSTACLES) g.obstacles.count = RECORDER_MAX_OBSTACLES;
         g.has_obstacles = 1;
@@ -147,7 +147,7 @@ static void on_control(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
     ControlCmd cmd;
-    if (ControlCmd_deserialize(&cmd, (const uint8_t*)msg->data, msg->data_size) == 0) {
+    if (ControlCmd_deserialize(&cmd, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size) == 0) {
         g.control = cmd;
         g.has_control = 1;
     }
@@ -159,7 +159,7 @@ static void on_traffic_lights(const Message* msg, void* user_data) {
     if (!msg) return;
     /* JSON 解析统一走 traffic_light.h 的共享 traffic_lights_parse() */
     TrafficLightCache c;
-    traffic_lights_parse((const char*)msg->data, &c);
+    traffic_lights_parse((const char*)((const uint8_t*)message_bus_message_data(msg)), &c);
 
     double nearest_red = 1e9;
     int has_red = 0;
@@ -185,7 +185,7 @@ static void on_traffic_lights(const Message* msg, void* user_data) {
 static void on_road_geometry(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* j;
     j = cJSON_GetObjectItem(root, "lane_width");

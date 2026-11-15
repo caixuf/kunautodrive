@@ -181,7 +181,7 @@ bool Route::build_from_chain(FlowRoadNetwork& roads, const int* road_ids, int co
                          * R=10m (κ=0.10) 正落死带（陆家嘴实测：弯中 lat_err
                          * 漂到 15m → ROAD_GUARD 卡死）。R=20 留 16% 余量，
                          * ST 弯速 v_lim=0.85·sqrt(5/0.05)=8.5m/s。 */
-                        const double R_TARGET = 20.0;
+                        const double R_TARGET = (gap < 2.0 && dh > 1.2) ? 12.0 : 20.0;
                         double dh_signed = std::atan2(cross01, u0x * u1x + u0y * u1y);
                         double t_need = R_TARGET * std::tan(dh * 0.5);
                         double tmax_prev = prev.is_virtual ? 0.0 : prev.length * 0.4;

@@ -186,7 +186,7 @@ ControlCmd parse_control_cmd(const Message& msg) {
 
 void on_fusion(const Message* msg, void*) {
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     pthread_mutex_lock(&g.state_mutex);
     cJSON* j;
@@ -208,7 +208,7 @@ void on_fusion(const Message* msg, void*) {
 /* L3-P1：tor_manager 的最小风险停车请求（active=true → 制动下限 + 双闪）。 */
 void on_mrm_request(const Message* msg, void*) {
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* a = cJSON_GetObjectItemCaseSensitive(root, "active");
     if (cJSON_IsBool(a)) g.mrm_active.store(cJSON_IsTrue(a));
@@ -218,7 +218,7 @@ void on_mrm_request(const Message* msg, void*) {
 void on_perception_obstacles(const Message* msg, void*) {
     if (!msg) return;
     ObstacleList list;
-    if (ObstacleList_deserialize(&list, (const uint8_t*)msg->data, msg->data_size) != 0)
+    if (ObstacleList_deserialize(&list, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size) != 0)
         return;
 
     pthread_mutex_lock(&g.state_mutex);

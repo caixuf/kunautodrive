@@ -348,7 +348,7 @@ static void beh_debug_hook(void* task, StateId from, EventId event,
 static void on_fusion(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     /* vehicle/state 近期到达时不覆盖：它是 flowsim 真值，优先于 EKF 估计。
      * EKF 发散时会发布错误的 ego_y/v（如 y=0.01 v=20.94），若覆盖 vehicle/state
@@ -377,7 +377,7 @@ static void on_fusion(const Message* msg, void* user_data) {
 static void on_vehicle_state(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* j;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "x")) && cJSON_IsNumber(j))
@@ -402,7 +402,7 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
 static void on_tracked_objects(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
 
     cJSON* objects = cJSON_GetObjectItemCaseSensitive(root, "objects");
@@ -486,7 +486,7 @@ static void on_raw_obstacles(const Message* msg, void* user_data) {
     if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
 
     ObstacleList obs_list;
-    if (ObstacleList_deserialize(&obs_list, (const uint8_t*)msg->data, msg->data_size) != 0)
+    if (ObstacleList_deserialize(&obs_list, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size) != 0)
         return;
     if (obs_list.count == 0) {
         /* 空列表是**合法的感知结果**（视野内无目标），不是"感知还没就绪"。
@@ -560,7 +560,7 @@ static void on_raw_obstacles(const Message* msg, void* user_data) {
 static void on_road_geometry(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* item;
     if ((item = cJSON_GetObjectItem(root, "lane_count"))) g.lane_count = item->valueint;
@@ -581,7 +581,7 @@ static void on_traffic_lights(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
     TrafficLightCache c;
-    traffic_lights_parse((const char*)msg->data, &c);
+    traffic_lights_parse((const char*)((const uint8_t*)message_bus_message_data(msg)), &c);
     g.tl_count = c.count;
     g.has_traffic_lights = c.valid;
     for (int i = 0; i < c.count; i++) {
@@ -602,7 +602,7 @@ static void on_traffic_lights(const Message* msg, void* user_data) {
 static void on_ref_path(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* jr = cJSON_GetObjectItemCaseSensitive(root, "reverse");
     if (cJSON_IsBool(jr)) g.on_return = cJSON_IsTrue(jr) ? 1 : 0;
@@ -665,7 +665,7 @@ static bool projection_near_road(double x, double y,
 static void on_scene_frame(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg || msg->data_size == 0) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     g.cz_count = construction_zones_parse_from_scene_root(
         root, g.cz_x, g.cz_y, g.cz_len, g.cz_wid, g.kMaxCz);

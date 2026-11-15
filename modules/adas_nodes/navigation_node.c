@@ -198,7 +198,7 @@ static void maybe_publish_next_lane_hop(double ego_x, double ego_y) {
 static void on_fusion(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* jx = cJSON_GetObjectItemCaseSensitive(root, "x");
     cJSON* jy = cJSON_GetObjectItemCaseSensitive(root, "y");
@@ -218,7 +218,7 @@ static void on_fusion(const Message* msg, void* user_data) {
 static void on_ref_path(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* jr = cJSON_GetObjectItemCaseSensitive(root, "reverse");
     if (cJSON_IsBool(jr)) {

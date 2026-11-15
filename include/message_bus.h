@@ -24,6 +24,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
+#include "shm_arena.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -31,17 +32,14 @@ extern "C" {
 
 /* ── 常量 ───────────────────────────────────────────────── */
 
-#define MSG_BUS_MAX_TOPIC_LEN    64
-#define MSG_BUS_MAX_SENDER_LEN   64
-/* 必须容纳 StereoFrame 序列化后的固定 44828 字节（depth_data[4800] float
- * + left_jpeg[25600] + 标定参数头）。原值 4096 会导致 transport_publish 调用
- * message_bus_publish 时返回 ERR_OVERFLOW，sensor/stereo 永远收不到帧。
- * 调到 65536 (64KB) 留 ~20KB 余量；副作用：Message 队列 1024×~64KB ≈ 64MB，
- * bag.c 中两处栈缓冲也变成 64KB —— 系统 3.8GB RAM / 8MB 默认线程栈均能承受。 */
-#define MSG_BUS_MAX_DATA_SIZE    65536
-#define MSG_BUS_MAX_TOPICS       64
-#define MSG_BUS_MAX_SUBSCRIBERS  256  /* 全总线扁平表；26 节点 pipeline 实测 >128，见 SUB_OVERFLOW */
-#define MSG_BUS_QUEUE_SIZE       1024
+#define MSG_BUS_MAX_TOPIC_LEN       64
+#define MSG_BUS_MAX_SENDER_LEN      64
+#define MSG_INLINE_MAX_SIZE         4096
+#define MSG_BUS_MAX_DATA_SIZE       65536
+#define MSG_ARENA_MAX_PAYLOAD_SIZE  (16u * 1024u * 1024u)
+#define MSG_BUS_MAX_TOPICS          64
+#define MSG_BUS_MAX_SUBSCRIBERS     256  /* 全总线扁平表；26 节点 pipeline 实测 >128，见 SUB_OVERFLOW */
+#define MSG_BUS_QUEUE_SIZE          1024
 
 /* ── 消息结构 ────────────────────────────────────────────── */
 
@@ -50,6 +48,12 @@ typedef enum {
     MSG_TYPE_REQUEST,       /**< 请求消息（同步） */
     MSG_TYPE_REPLY          /**< 回复消息（内部使用） */
 } MessageType;
+
+typedef enum {
+    MSG_PAYLOAD_INLINE  = 0, /**< 负载内联在 data[MSG_INLINE_MAX_SIZE] */
+    MSG_PAYLOAD_SHM_REF = 1, /**< 大负载存储在 ShmArena，shm_ref 指向位置 */
+    MSG_PAYLOAD_LOANED  = 2  /**< 异步借用外部 buffer */
+} MsgPayloadKind;
 
 typedef struct Message {
     char        topic[MSG_BUS_MAX_TOPIC_LEN];    /**< 主题 */
@@ -67,9 +71,13 @@ typedef struct Message {
     uint32_t    schema_hash;      /**< 字段级布局哈希（0 = 未提供/旧消费者），用于 type_id+version+hash 三判别 */
     uint8_t     schema_version;   /**< schema 版本号 (0=unknown, 1=initial) */
     uint8_t     endian_marker;    /**< 字节序标记: 0x12=LE, 0x21=BE, 0=unknown */
-    uint8_t     _reserved[2];     /**< 对齐保留，便于后续扩展 */
+    uint8_t     payload_kind;     /**< MsgPayloadKind: 0=INLINE, 1=SHM_REF, 2=LOANED */
+    uint8_t     _reserved[1];     /**< 对齐保留，便于后续扩展 */
 
-    uint8_t     data[MSG_BUS_MAX_DATA_SIZE];      /**< 负载数据 */
+    ShmPayloadRef shm_ref;                        /**< 大消息 SHM 描述符 (32B) */
+    uint8_t     data[MSG_INLINE_MAX_SIZE];        /**< 小消息内联负载 (<= 4KB) */
+
+    const uint8_t* _shm_ptr;                      /**< 进程内缓存的 SHM 映射指针 */
 
     /* 异步 loaned payload：非 NULL 时 payload 由外部 buffer 提供，data[] 未填充。
      * 订阅者必须通过 message_bus_message_data() 读取。仅总线内部管理生命周期。 */
@@ -78,21 +86,24 @@ typedef struct Message {
     void* _loaned_release_ctx;
 
     /* ── 内部使用：空闲 Message 池链指针 ─────────────────────
-     * 仅当消息处于空闲池中时有意义；入队/分发/序列化期间不使用。
-     * 复用已消费的 64KB Message 块，避免每消息 malloc/free 一次 64KB。*/
+     * 仅当消息处于空闲池中时有意义；入队/分发/序列化期间不使用。 */
     struct Message* _pool_next;
 } Message;
 
 static inline const void* message_bus_message_data(const Message* msg) {
-    return msg && msg->_loaned_data ? msg->_loaned_data : (msg ? msg->data : NULL);
+    if (!msg) return NULL;
+    if (msg->_loaned_data) return msg->_loaned_data;
+    if (msg->payload_kind == MSG_PAYLOAD_SHM_REF && msg->_shm_ptr) return msg->_shm_ptr;
+    return msg->data;
 }
 
 /** Materialize a Message for storage beyond the current callback. */
 static inline void message_bus_copy_message(Message* dst, const Message* src) {
     if (!dst || !src) return;
     *dst = *src;
-    if (src->_loaned_data && src->data_size <= MSG_BUS_MAX_DATA_SIZE) {
+    if (src->_loaned_data && src->data_size <= MSG_INLINE_MAX_SIZE) {
         memcpy(dst->data, src->_loaned_data, src->data_size);
+        dst->payload_kind = MSG_PAYLOAD_INLINE;
     }
     dst->_loaned_data = NULL;
     dst->_loaned_release = NULL;
@@ -165,6 +176,19 @@ int message_bus_publish_loaned(MessageBus* bus, const char* topic,
                                const char* sender, void* data, uint32_t size,
                                void (*release_fn)(void*, void*),
                                void* release_user_data);
+
+/** Return the bus's ShmArena (for >4KB zero-copy payloads). */
+ShmArena* message_bus_arena(MessageBus* bus);
+
+/** Loan a writable buffer from the bus's ShmArena (for >4KB zero-copy publish). */
+int message_bus_loan_begin(MessageBus* bus, uint32_t size,
+                           ShmPayloadRef* out_ref, void** out_ptr);
+
+/** Commit a buffer loaned via message_bus_loan_begin() onto the bus. */
+int message_bus_loan_commit(MessageBus* bus, const char* topic,
+                            const char* sender, const char* type_name,
+                            const ShmPayloadRef* ref, const void* ptr,
+                            uint32_t actual_size);
 
 /**
  * 订阅主题

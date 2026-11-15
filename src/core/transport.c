@@ -331,6 +331,54 @@ int transport_publish_loaned(Transport* t, const char* topic,
     return ret;
 }
 
+int transport_loan_begin(Transport* t, uint32_t size, TransportLoan* out_loan) {
+    if (!t || !t->bus || !out_loan || size == 0) return ERR_INVALID_PARAM;
+    memset(out_loan, 0, sizeof(*out_loan));
+    int rc = message_bus_loan_begin(t->bus, size, &out_loan->ref, &out_loan->ptr);
+    if (rc != 0) return rc;
+    out_loan->capacity = size;
+    out_loan->valid = true;
+    return 0;
+}
+
+int transport_loan_commit(Transport* t, const char* topic, const char* type_name,
+                          TransportLoan* loan, uint32_t actual_size) {
+    if (!t || !t->bus || !topic || !loan || !loan->valid ||
+        actual_size == 0 || actual_size > loan->capacity) {
+        return ERR_INVALID_PARAM;
+    }
+    if (fault_inject_should_drop(topic, clock_now_us())) {
+        loan->valid = false;
+        return ERR_OK;
+    }
+    int ret = message_bus_loan_commit(t->bus, topic, "transport", type_name,
+                                      &loan->ref, loan->ptr, actual_size);
+    int route_ret = 0;
+    pthread_mutex_lock(&t->mutex);
+    for (int i = 0; i < t->route_count; i++) {
+        if (strcmp(t->routes[i].topic, topic) == 0) {
+            if (t->routes[i].ipc_channel && t->routes[i].is_publisher) {
+                route_ret = ipc_channel_publish(t->routes[i].ipc_channel, topic,
+                                                "transport", loan->ptr, actual_size);
+                if (route_ret == 0)
+                    atomic_fetch_add(&t->ipc_published, 1);
+            }
+            break;
+        }
+    }
+    pthread_mutex_unlock(&t->mutex);
+    loan->valid = false;
+    return ret != 0 ? ret : route_ret;
+}
+
+void transport_loan_abort(Transport* t, TransportLoan* loan) {
+    (void)t;
+    if (loan) {
+        loan->valid = false;
+        loan->ptr = NULL;
+    }
+}
+
 /* ── IPC → 本地 bus 中继（relay）──────────────────────── */
 /* IPC 订阅者方收到消息后，重新发布到本地 bus，这样:
  * 1) choreo 调度触发器正常运作（它监听的是本地 bus）
@@ -371,7 +419,9 @@ static void ipc_to_bus_relay(const Message* msg, void* user_data) {
     }
 
     atomic_fetch_add(&ctx->transport->ipc_delivered, 1);
-    message_bus_publish(ctx->bus, msg->topic, msg->sender, msg->data, msg->data_size);
+    const void* payload = message_bus_message_data(msg);
+    if (!payload && msg->data_size > 0) return;
+    message_bus_publish(ctx->bus, msg->topic, msg->sender, payload, msg->data_size);
 }
 
 int transport_subscribe(Transport* t, const char* topic,

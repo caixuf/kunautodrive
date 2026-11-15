@@ -137,10 +137,11 @@ endif()
 set(MSG_CODEGEN "${CMAKE_SOURCE_DIR}/tools/msg_codegen.py")
 set(GEN_DIR     "${CMAKE_BINARY_DIR}/gen")
 
-# 主 IDL 文件
+# 主 IDL 文件（及被 import 的域 .msg 文件）
 set(MSG_FILES
     msg/adas_msgs.msg
 )
+file(GLOB MSG_IDL_FILES "${CMAKE_SOURCE_DIR}/msg/*.msg")
 
 set(PRODUCT_CONFIG_FILE "${CMAKE_CURRENT_SOURCE_DIR}/config/product.json"
     CACHE FILEPATH "Product deployment metadata JSON")
@@ -157,7 +158,7 @@ foreach(MSG_FILE ${MSG_FILES})
         OUTPUT ${GEN_HEADER}
         COMMAND ${Python3_EXECUTABLE} ${MSG_CODEGEN} "${CMAKE_SOURCE_DIR}/${MSG_FILE}"
                 --split --output-dir ${CMAKE_BINARY_DIR}
-        DEPENDS ${MSG_CODEGEN} ${CMAKE_SOURCE_DIR}/${MSG_FILE}
+        DEPENDS ${MSG_CODEGEN} ${CMAKE_SOURCE_DIR}/${MSG_FILE} ${MSG_IDL_FILES}
         COMMENT "Generating split serialization headers from ${MSG_FILE}"
     )
     list(APPEND GEN_HEADERS ${GEN_HEADER})
@@ -445,6 +446,7 @@ set(CORE_SOURCES
     src/core/task_manager.c
     src/core/message_bus.c
     src/core/ipc_channel.c
+    src/core/shm_arena.c
     src/core/clock_service.c
     src/core/bag.c
     src/core/flowrec.c
@@ -1209,6 +1211,12 @@ target_include_directories(test_obstacle_hint_field PRIVATE ${GEN_DIR}
                                                        modules/adas_nodes)
 target_link_libraries(test_obstacle_hint_field flowengine_core)
 add_test(NAME obstacle_hint_field_tests COMMAND test_obstacle_hint_field)
+
+add_executable(test_shm_arena tests/test_shm_arena.c)
+add_dependencies(test_shm_arena msg_codegen)
+target_include_directories(test_shm_arena PRIVATE ${GEN_DIR})
+target_link_libraries(test_shm_arena flowengine_core scheduler_cpp flowcoro_net)
+add_test(NAME shm_arena_tests COMMAND test_shm_arena)
 
 # D2-07 Prefer A: whole-publish hint fixtures (A3/A4)
 add_executable(test_obs_lane_match_hint_prefer_a tests/test_obs_lane_match_hint_prefer_a.c)

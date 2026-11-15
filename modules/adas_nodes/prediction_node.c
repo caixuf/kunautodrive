@@ -96,7 +96,7 @@ static void on_tracked_objects(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg || msg->data_size == 0) return;
 
-    char* copy = strdup((const char*)msg->data);
+    char* copy = strdup((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!copy) return;
 
     pthread_mutex_lock(&g.mutex);
@@ -110,7 +110,7 @@ static void on_localization(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg || msg->data_size == 0) return;
 
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
 
     cJSON* j;
@@ -138,7 +138,7 @@ static void on_road_geometry(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg || msg->data_size == 0) return;
 
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
 
     cJSON* j;
@@ -166,7 +166,7 @@ static void on_ref_path(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg || msg->data_size == 0) return;
 
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
 
     cJSON* pts_arr = cJSON_GetObjectItemCaseSensitive(root, "points");

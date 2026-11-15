@@ -197,7 +197,11 @@ static double steer_limit_for_speed(double speed_mps, double max_lateral_accel_m
     if (speed < 2.0) speed = 2.0;
     double limit = atan(max_lateral_accel_mps2 * g.wheelbase / (speed * speed));
     if (limit < 0.016) limit = 0.016;
-    if (limit > 0.16) limit = 0.16;
+    /* Low-speed urban intersection turns (R~12m -> steer~0.23rad) need up to 0.32rad;
+     * highway speeds (>=10m/s) stay capped at 0.16rad. */
+    double cap = (speed <= 6.0) ? 0.32 : (speed >= 10.0) ? 0.16
+                 : (0.32 - (speed - 6.0) * (0.16 / 4.0));
+    if (limit > cap) limit = cap;
     return limit;
 }
 
@@ -209,7 +213,7 @@ static void on_fusion(const Message* msg, void* user_data) {
 
     /* cJSON parsing (fusion/localization now publishes cJSON) */
     {
-        cJSON* root = cJSON_Parse((const char*)msg->data);
+        cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
         if (root) {
             /* vehicle/state 近期到达时不覆盖（同 behavior/planning 的修复） */
             uint64_t now = clock_now_us();
@@ -249,7 +253,7 @@ static void on_fusion(const Message* msg, void* user_data) {
 static void on_vehicle_state(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* j;
     j = cJSON_GetObjectItemCaseSensitive(root, "x");
@@ -285,7 +289,7 @@ static void on_planning_behavior(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg || msg->data_size == 0) return;
     Behavior beh;
-    if (Behavior_deserialize(&beh, (const uint8_t*)msg->data, msg->data_size) != 0) return;
+    if (Behavior_deserialize(&beh, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size) != 0) return;
     g.beh_command = beh.command;
 }
 
@@ -295,7 +299,7 @@ static void on_trajectory(const Message* msg, void* user_data) {
 
     Trajectory traj;
     memset(&traj, 0, sizeof(traj));
-    if (Trajectory_deserialize(&traj, (const uint8_t*)msg->data, msg->data_size) != 0) {
+    if (Trajectory_deserialize(&traj, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size) != 0) {
         return;
     }
 
@@ -1428,7 +1432,7 @@ EXPORT_COROUTINE_TASK(ControlTask, control)
 static void on_mrm_request(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* a = cJSON_GetObjectItemCaseSensitive(root, "active");
     if (cJSON_IsBool(a)) g.mrm_active = cJSON_IsTrue(a) ? 1 : 0;

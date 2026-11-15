@@ -276,7 +276,8 @@ static uint32_t publish_raycast_points(uint32_t frame_id, uint64_t timestamp_us)
     msg_init_typed(&msg, TOPIC_SENSOR_LIDAR_POINTS, "sensor_model",
                    LIDARPOINTCLOUD_TYPE_ID, LIDARPOINTCLOUD_SCHEMA_VERSION,
                    wire, wire_len);
-    transport_publish(g.transport, TOPIC_SENSOR_LIDAR_POINTS, msg.data, msg.data_size);
+    transport_publish(g.transport, TOPIC_SENSOR_LIDAR_POINTS,
+                      message_bus_message_data(&msg), msg.data_size);
     return cloud.count;
 }
 
@@ -284,7 +285,7 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
 
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* j;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "x")) && cJSON_IsNumber(j))
@@ -361,7 +362,7 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
 static void on_environment_state(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     double visibility_m = 200.0;
     cJSON* visibility = cJSON_GetObjectItemCaseSensitive(root, "visibility_m");

@@ -102,6 +102,24 @@ int transport_publish_loaned(Transport* t, const char* topic,
                              void (*release_fn)(void*, void*),
                              void* release_user_data);
 
+/** Zero-copy SHM arena loan handle for >4KB variable-length messages. */
+typedef struct {
+    ShmPayloadRef ref;
+    void*         ptr;
+    uint32_t      capacity;
+    bool          valid;
+} TransportLoan;
+
+/** Begin a zero-copy loan in the transport's SHM arena. */
+int transport_loan_begin(Transport* t, uint32_t size, TransportLoan* out_loan);
+
+/** Commit and publish a loaned buffer (zero-copy on local bus, relayed to IPC if active). */
+int transport_loan_commit(Transport* t, const char* topic, const char* type_name,
+                          TransportLoan* loan, uint32_t actual_size);
+
+/** Abort an uncommitted loan. */
+void transport_loan_abort(Transport* t, TransportLoan* loan);
+
 /**
  * 订阅 topic（自动发现发布者并建立最优通道）。
  * 回调签名与 message_bus 一致。

@@ -105,7 +105,7 @@ static void sub_on_ipc(const Message* msg, void* user_data) {
 
     int rc = message_bus_publish(bridge->bus,
                                   msg->topic, sender,
-                                  msg->data, msg->data_size);
+                                  message_bus_message_data(msg), msg->data_size);
     if (rc == 0) {
         entry->stats.forwarded++;
         entry->stats.bytes        += msg->data_size;

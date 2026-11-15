@@ -66,7 +66,7 @@ static void on_road_traffic_lights(const Message* msg, void* user_data) {
     if (!msg) return;
     size_t copy = msg->data_size < sizeof(g.cached_json) - 1
                   ? msg->data_size : sizeof(g.cached_json) - 1;
-    memcpy(g.cached_json, msg->data, copy);
+    memcpy(g.cached_json, ((const uint8_t*)message_bus_message_data(msg)), copy);
     g.cached_json[copy] = '\0';
     g.has_cached = 1;
 }

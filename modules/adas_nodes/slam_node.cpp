@@ -150,7 +150,7 @@ static void on_lidar(const Message* msg, void* user_data) {
     if (msg->data_size == 0) return;
 
     LidarFrame frame;
-    if (LidarFrame_deserialize(&frame, (const uint8_t*)msg->data, msg->data_size) != 0) {
+    if (LidarFrame_deserialize(&frame, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size) != 0) {
         LOG_WARN("slam", "LidarFrame deserialize failed (size=%u)", msg->data_size);
         return;
     }
@@ -204,7 +204,7 @@ static void on_imu(const Message* msg, void* user_data) {
     if (msg->data_size == 0) return;
 
     ImuData imu;
-    if (ImuData_deserialize(&imu, (const uint8_t*)msg->data, msg->data_size) != 0) {
+    if (ImuData_deserialize(&imu, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size) != 0) {
         LOG_WARN("slam", "ImuData deserialize failed (size=%u)", msg->data_size);
         return;
     }

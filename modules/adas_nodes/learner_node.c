@@ -110,7 +110,7 @@ static void on_fusion(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
     /* fusion/localization now publishes cJSON */
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (root) {
         cJSON* j;
         j = cJSON_GetObjectItemCaseSensitive(root, "v");
@@ -134,7 +134,7 @@ static void on_planning(const Message* msg, void* user_data) {
      * 改为 Trajectory_deserialize，与 inference_node / data_recorder_node 一致。 */
     Trajectory traj;
     memset(&traj, 0, sizeof(traj));
-    if (Trajectory_deserialize(&traj, (const uint8_t*)msg->data, msg->data_size) == 0
+    if (Trajectory_deserialize(&traj, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size) == 0
         && traj.point_count > 0) {
         g.planning_target_speed = (double)traj.points[0].v;
         g.has_planning = 1;
@@ -145,7 +145,7 @@ static void on_obstacles(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
     ObstacleList list;
-    if (ObstacleList_deserialize(&list, (const uint8_t*)msg->data, msg->data_size) == 0) {
+    if (ObstacleList_deserialize(&list, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size) == 0) {
         int n = list.count > 2 ? 2 : list.count;
         int fi = 0;
         for (int i = 0; i < n && fi < 2; i++) {
@@ -185,13 +185,13 @@ static void on_control_cmd(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
     ControlCmd cmd;
-    if (ControlCmd_deserialize(&cmd, (const uint8_t*)msg->data, msg->data_size) == 0) {
+    if (ControlCmd_deserialize(&cmd, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size) == 0) {
         g.ctrl_brake = cmd.brake;
         g.ctrl_emergency_stop = cmd.emergency_stop ? 1 : 0;
         g.has_control = 1;
         return;
     }
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (root) {
         cJSON* j = cJSON_GetObjectItemCaseSensitive(root, "brake");
         if (cJSON_IsNumber(j)) g.ctrl_brake = j->valuedouble;

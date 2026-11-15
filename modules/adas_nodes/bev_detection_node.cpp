@@ -145,7 +145,7 @@ BevDetectionContext g;
 static void on_vehicle_state(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* j;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "x")) && cJSON_IsNumber(j))
@@ -235,7 +235,7 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
 static void on_road_geometry(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* j = cJSON_GetObjectItemCaseSensitive(root, "lane_count");
     if (cJSON_IsNumber(j)) g.lane_count = (int)j->valuedouble;
@@ -250,7 +250,7 @@ static void on_road_geometry(const Message* msg, void* user_data) {
 static void on_model_ota_active(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (root) {
         cJSON* j = cJSON_GetObjectItemCaseSensitive(root, "reload");
         if (cJSON_IsBool(j) && cJSON_IsTrue(j))

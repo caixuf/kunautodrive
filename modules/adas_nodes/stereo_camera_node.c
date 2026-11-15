@@ -310,7 +310,7 @@ static int stereo_execute(TaskBase* task) {
         g.frames_captured++;
 
         /* 序列化 + 发布到 sensor/stereo */
-        uint8_t* buf = (uint8_t*)malloc(44828);
+        uint8_t* buf = (uint8_t*)malloc(STEREOFRAME_WIRE_SIZE);
         if (!buf) {
             g.frames_failed++;
             LOG_ERROR("stereo_camera", "loaned frame allocation failed");

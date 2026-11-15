@@ -439,6 +439,9 @@ struct IpcChannel {
 
     pthread_t recv_thread;
     volatile bool recv_running;   /* read by recv thread + writer; volatile for visibility */
+
+    ShmArena* arena;              /* >4KB payload SHM arena */
+    char      arena_name[SHM_ARENA_NAME_MAX];
 };
 
 /* ── Helpers ─────────────────────────────────────────── */
@@ -473,10 +476,12 @@ IpcChannel* ipc_channel_open(const char* channel_name, IpcRole role,
 
     /* Build resource names */
     snprintf(ch->shm_name, sizeof(ch->shm_name), "/%s_shm", channel_name);
+    snprintf(ch->arena_name, sizeof(ch->arena_name), "flow_ipc_arena_%s", channel_name);
 
     ch->shm_size = shm_total_size(queue_depth);
 
     if (role == IPC_ROLE_PUBLISHER) {
+        ch->arena = shm_arena_create(ch->arena_name, 2u, SHM_ARENA_DEFAULT_CAPACITY);
         /* Create shared memory */
         flow_pal_shared_memory_unlink(ch->shm_name); /* clean up stale */
         ch->shm_fd = flow_pal_shared_memory_open(ch->shm_name, O_CREAT | O_RDWR, 0600);
@@ -577,6 +582,10 @@ void ipc_channel_close(IpcChannel* ch) {
         flow_pal_shared_memory_unmap(ch->shm_ptr, ch->shm_size);
     if (ch->shm_fd >= 0)
         close(ch->shm_fd);
+    if (ch->arena) {
+        shm_arena_destroy(ch->arena, false);
+        ch->arena = NULL;
+    }
 
     if (ch->role == IPC_ROLE_PUBLISHER) {
         /* Do NOT unlink the shared memory here, and do NOT destroy the
@@ -597,7 +606,19 @@ void ipc_channel_close(IpcChannel* ch) {
 int ipc_channel_publish(IpcChannel* ch, const char* topic, const char* sender,
                         const void* data, uint32_t size) {
     if (!ch || ch->role != IPC_ROLE_PUBLISHER) return ERR_IO;
-    if (!topic || size > MSG_BUS_MAX_DATA_SIZE) return ERR_IO;
+    if (!topic || size > MSG_ARENA_MAX_PAYLOAD_SIZE) return ERR_IO;
+
+    /* Prepare SHM arena payload outside the channel mutex if > MSG_INLINE_MAX_SIZE */
+    ShmPayloadRef arena_ref;
+    bool use_arena = false;
+    if (data && size > MSG_INLINE_MAX_SIZE) {
+        void* arena_ptr = NULL;
+        if (!ch->arena || shm_arena_alloc(ch->arena, size, 8u, &arena_ref, &arena_ptr) != 0) {
+            return ERR_OVERFLOW;
+        }
+        memcpy(arena_ptr, data, size);
+        use_arena = true;
+    }
 
     /* Broadcast ring: never block. Overwrite the oldest slot (drop_oldest for
      * any subscriber that has fallen behind). This avoids publisher stalls that
@@ -617,7 +638,15 @@ int ipc_channel_publish(IpcChannel* ch, const char* topic, const char* sender,
 
     slot->msg.timestamp_us = clock_now_monotonic_wall_us();
 
-    if (data && size > 0) memcpy(slot->msg.data, data, size);
+    if (use_arena) {
+        slot->msg.payload_kind = MSG_PAYLOAD_SHM_REF;
+        slot->msg.shm_ref = arena_ref;
+    } else if (data && size > 0) {
+        slot->msg.payload_kind = MSG_PAYLOAD_INLINE;
+        memcpy(slot->msg.data, data, size);
+    } else {
+        slot->msg.payload_kind = MSG_PAYLOAD_INLINE;
+    }
 
     slot->seq = idx + 1;      /* stamp before advancing head */
     hdr->head = idx + 1;
@@ -678,6 +707,16 @@ static int try_read_one(IpcChannel* ch, Message* out) {
     *out = slot->msg;           /* copy payload under the mutex (no torn read) */
     ch->read_cursor++;
     pthread_mutex_unlock(&hdr->mutex);
+
+    out->_shm_ptr = NULL;
+    if (out->payload_kind == MSG_PAYLOAD_SHM_REF) {
+        if (!ch->arena) {
+            ch->arena = shm_arena_open(ch->arena_name);
+        }
+        out->_shm_ptr = ch->arena
+            ? (const uint8_t*)shm_arena_resolve(ch->arena, &out->shm_ref)
+            : NULL;
+    }
     return 0;
 }
 

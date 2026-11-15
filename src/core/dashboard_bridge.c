@@ -107,7 +107,8 @@ static void on_raw_chunk(const Message* msg, void* user_data) {
     if (!msg || msg->data_size < sizeof(DashboardChunk)) return;
 
     BridgeSubState* st = (BridgeSubState*)user_data;
-    const DashboardChunk* chunk = (const DashboardChunk*)msg->data;
+    const DashboardChunk* chunk = (const DashboardChunk*)message_bus_message_data(msg);
+    if (!chunk) return;
 
     uint32_t seq   = chunk->seq;
     uint16_t count = chunk->count;

@@ -91,7 +91,7 @@ static struct {
 static void on_ego_state(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) return;
     cJSON* j;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "x")) && cJSON_IsNumber(j))   g.ego_x = j->valuedouble;
@@ -115,7 +115,7 @@ static void on_obstacles(const Message* msg, void* user_data) {
     if (!msg) return;
 
     ObstacleList obs_list;
-    int deser_rc = ObstacleList_deserialize(&obs_list, (const uint8_t*)msg->data, msg->data_size);
+    int deser_rc = ObstacleList_deserialize(&obs_list, (const uint8_t*)((const uint8_t*)message_bus_message_data(msg)), msg->data_size);
     if (deser_rc != 0) {
         LOG_WARN("tracker", "ObstacleList deserialize failed rc=%d size=%u", deser_rc, msg->data_size);
         return;

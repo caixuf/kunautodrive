@@ -180,7 +180,7 @@ static void on_lane_match(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg || msg->data_size == 0 || !g.enabled) return;
 
-    cJSON* root = cJSON_Parse((const char*)msg->data);
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
     if (!root) {
         /* payload 不是合法 JSON → 静默忽略（spec §6.1 兼容旧/异常 payload） */
         return;
@@ -474,13 +474,13 @@ protected:
 
             const Message* a_msg = message_buffer_latest(a_buf_);
             if (a_msg && (now - a_msg->timestamp_us) < max_age_us &&
-                ObstacleList_deserialize(&a_copy, a_msg->data, a_msg->data_size) == 0) {
+                ObstacleList_deserialize(&a_copy, ((const uint8_t*)message_bus_message_data(a_msg)), a_msg->data_size) == 0) {
                 has_a = 1;
             }
 
             const Message* b_msg = message_buffer_latest(b_buf_);
             if (b_msg && (now - b_msg->timestamp_us) < max_age_us &&
-                ObstacleList_deserialize(&b_copy, b_msg->data, b_msg->data_size) == 0) {
+                ObstacleList_deserialize(&b_copy, ((const uint8_t*)message_bus_message_data(b_msg)), b_msg->data_size) == 0) {
                 has_b = 1;
             }
 
