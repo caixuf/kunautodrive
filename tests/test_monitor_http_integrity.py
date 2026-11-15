@@ -192,6 +192,117 @@ def _check_api_body(path: str, declared: int, body: bytes, failures: list[str]) 
                 failures.append(f"{path}: 走缓存路径但缺少信封字段 '{key}'")
 
 
+def _check_large_snapshot_no_truncation(port: int, topo_file: Path, failures: list[str]) -> None:
+    """大于 128KB 的实时快照经文件桥接注入后，/api/topology、/api/topics 与 /api/stream 均不得截断。"""
+    large_payload = {
+        "self": "flow_launcher",
+        "timestamp": 1794711500.0,
+        "nodes": [],
+        "metrics": {
+            "scene": {
+                "predictions": [
+                    {"id": i, "pts": [{"x": float(i), "y": -1.75, "z": 0.0}]}
+                    for i in range(5600)
+                ],
+            },
+        },
+        "tail_sentinel": "ok_after_250kb",
+    }
+    raw = json.dumps(large_payload, separators=(",", ":")).encode("utf-8")
+    if len(raw) <= 250_000:
+        failures.append(f"large_snapshot: 测试载荷构造过小 ({len(raw)} <= 250000)")
+        return
+
+    tmp_file = topo_file.with_suffix(".tmp")
+    tmp_file.write_bytes(raw)
+    os.replace(tmp_file, topo_file)
+
+    deadline = time.time() + 5.0
+    observed_live = False
+    while time.time() < deadline:
+        try:
+            declared, body = _get(port, "/api/topology", timeout=5.0)
+        except Exception as exc:  # noqa: BLE001
+            failures.append(f"large_snapshot /api/topology: 请求失败: {exc}")
+            return
+        if len(body) != declared:
+            failures.append(
+                f"large_snapshot /api/topology: 实收 {len(body)} != Content-Length {declared}"
+            )
+            return
+        try:
+            parsed = json.loads(body)
+        except Exception as exc:  # noqa: BLE001
+            failures.append(
+                f"large_snapshot /api/topology: >128KB 快照 JSON 解析失败 ({len(body)} 字节): {exc}"
+            )
+            return
+        if parsed.get("tail_sentinel") == "ok_after_250kb":
+            observed_live = True
+            if len(body) <= 250_000:
+                failures.append(
+                    f"large_snapshot /api/topology: 长度异常 {len(body)} <= 250000"
+                )
+            break
+        time.sleep(0.15)
+
+    if not observed_live:
+        failures.append("large_snapshot /api/topology: 5s 内未收到文件桥接注入的 >250KB 快照")
+        return
+
+    declared, topics_body = _get(port, "/api/topics", timeout=5.0)
+    if len(topics_body) != declared:
+        failures.append(
+            f"large_snapshot /api/topics: 实收 {len(topics_body)} != Content-Length {declared}"
+        )
+    else:
+        try:
+            topics_obj = json.loads(topics_body)
+            if topics_obj.get("tail_sentinel") != "ok_after_250kb":
+                failures.append("large_snapshot /api/topics: 丢失尾部 sentinel 字段")
+        except Exception as exc:  # noqa: BLE001
+            failures.append(f"large_snapshot /api/topics: JSON 解析失败: {exc}")
+
+    # SSE (/api/stream) 同样不得在 128KB 处截断
+    with socket.create_connection(("127.0.0.1", port), timeout=5.0) as sock:
+        sock.settimeout(5.0)
+        sock.sendall(
+            b"GET /api/stream HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        )
+        buf = b""
+        sse_line = None
+        sse_deadline = time.time() + 5.0
+        while time.time() < sse_deadline:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            buf += chunk
+            while b"\n" in buf:
+                line, _, buf = buf.partition(b"\n")
+                line = line.rstrip(b"\r")
+                if line.startswith(b"data:"):
+                    sse_line = line[5:].strip()
+                    break
+            if sse_line is not None:
+                break
+        if sse_line is None:
+            failures.append("large_snapshot /api/stream: 5s 内未收到 SSE data 帧")
+            return
+        if len(sse_line) <= 250_000:
+            failures.append(
+                f"large_snapshot /api/stream: SSE 帧疑被截断 ({len(sse_line)} <= 250000 字节)"
+            )
+            return
+        try:
+            sse_obj = json.loads(sse_line)
+            if sse_obj.get("tail_sentinel") != "ok_after_250kb":
+                failures.append("large_snapshot /api/stream: SSE 帧丢失尾部 sentinel 字段")
+        except Exception as exc:  # noqa: BLE001
+            failures.append(
+                f"large_snapshot /api/stream: SSE JSON 解析失败 ({len(sse_line)} 字节): {exc}"
+            )
+
+
 def _wait_ready(port: int, timeout: float = 20.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -234,11 +345,12 @@ def main() -> int:
         planted = _plant_stale_dashboard_shm()
         print(f"  陈旧 SHM 前提：{'已播下（test_bridges 发布端不清理段）' if planted else '未播下（test_bridges 未构建，跳过毒负载覆盖）'}")
 
+        topo_file = tmp / "isolated_topology.json"
         html_path = _make_doc_root(tmp)
         proc = subprocess.Popen(
             [str(FLOWMOND), "--port", str(port), "--html-path", str(html_path)],
             cwd=str(ROOT),
-            env=_env_without_ld_library_path(tmp / "isolated_topology.json"),
+            env=_env_without_ld_library_path(topo_file),
             stdout=log.open("w"), stderr=subprocess.STDOUT,
         )
         try:
@@ -282,6 +394,9 @@ def main() -> int:
                     _check_api_body(f"keep-alive 第 {i} 次", declared, body, failures)
                     if any(f"第 {i} 次" in f for f in failures):
                         break
+
+            # 5) >128KB 大快照经文件桥接注入：/api/topology、/api/topics、/api/stream 不截断
+            _check_large_snapshot_no_truncation(port, topo_file, failures)
         finally:
             proc.terminate()
             try:

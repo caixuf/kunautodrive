@@ -39,6 +39,8 @@
 static pthread_mutex_t g_route_demo_mu = PTHREAD_MUTEX_INITIALIZER;
 static pid_t g_route_demo_pid = 0;
 #include <limits.h>
+#include <stdarg.h>
+#include <stdint.h>
 
 #include "health.h"
 #include "auto_tuner.h"
@@ -49,7 +51,7 @@ static pid_t g_route_demo_pid = 0;
 #endif
 
 #define MONITOR_MAX_CLIENTS       64
-#define MONITOR_HTTP_BUF_SIZE     131072  /* 128 KB: 含 samples ~200 帧 (67916 bytes), 留余量给 scene.entities + obstacles */
+#define MONITOR_FALLBACK_INIT_CAP 16384   /* 兜底无缓存 JSON 的初始堆容量，按需倍增 */
 #define MONITOR_MAX_REMOTE_SRCS   8
 #define DASHBOARD_CACHE_STALE_SEC 15  /* tolerate short IPC jitter before marking stale */
 #define DASHBOARD_CACHE_DROP_SEC  300 /* keep last snapshot longer to avoid topology flicker */
@@ -120,16 +122,54 @@ static char* path_last_sep(char* path) {
 
 /* ── SSE 数据生成 (flowboard 兼容格式) ────────────────── */
 
+/* Grow heap buffer *buf to hold at least `needed` bytes without shrinking on reuse. */
+static bool ensure_heap_buf(char** buf, size_t* cap, size_t needed) {
+    if (*buf && *cap >= needed) return true;
+    size_t new_cap = *cap ? *cap : 4096;
+    while (new_cap < needed) {
+        if (new_cap > SIZE_MAX / 2) {
+            new_cap = needed;
+            break;
+        }
+        new_cap *= 2;
+    }
+    char* grown = (char*)realloc(*buf, new_cap);
+    if (!grown) return false;
+    *buf = grown;
+    *cap = new_cap;
+    return true;
+}
+
+static bool appendf_dyn(char** buf, size_t* cap, size_t* off, const char* fmt, ...) {
+    va_list ap, ap2;
+    va_start(ap, fmt);
+    va_copy(ap2, ap);
+    int need = vsnprintf(NULL, 0, fmt, ap);
+    va_end(ap);
+    if (need < 0) {
+        va_end(ap2);
+        return false;
+    }
+    if (!ensure_heap_buf(buf, cap, *off + (size_t)need + 1)) {
+        va_end(ap2);
+        return false;
+    }
+    vsnprintf(*buf + *off, *cap - *off, fmt, ap2);
+    va_end(ap2);
+    *off += (size_t)need;
+    return true;
+}
+
 /**
- * Build dashboard JSON from cached data (from monitor_node).
- * Wraps the cached JSON with source/stale/age_sec fields.
- * @return Length written to buf, or 0 if no cache available.
+ * Build dashboard JSON from cached data (from monitor_node) into heap buffer (*buf).
+ * Wraps cached JSON objects with source/stale/age_sec fields without size truncation.
+ * @return Length written to *buf (> 0), or 0 if no cache available / OOM.
  */
-static int build_cached_dashboard_json(MonitorServer* ms, char* buf, size_t sz) {
-    if (!ms || !buf || sz == 0) return 0;
+static size_t build_cached_dashboard_json_dyn(MonitorServer* ms, char** buf, size_t* cap) {
+    if (!ms || !buf || !cap) return 0;
 
     pthread_mutex_lock(&ms->cached_mutex);
-    int ret = 0;
+    size_t ret = 0;
     if (ms->cached_json && ms->cached_json_len > 1) {
         uint64_t now_us = clock_now_us();
         uint64_t age_us = (now_us > ms->cached_json_time_us)
@@ -145,27 +185,39 @@ static int build_cached_dashboard_json(MonitorServer* ms, char* buf, size_t sz) 
          * "flicker" in multi-process mode. Instead we keep serving the last
          * known-good frame, flagged stale, so the topology stays stable and the
          * front-end shows a "● stale" badge rather than blanking out. */
-        if (age_sec > (double)DASHBOARD_CACHE_DROP_SEC) {
-            pthread_mutex_unlock(&ms->cached_mutex);
-            return 0;
-        }
-
-        /* Inject source/stale/age_sec right after the opening '{' */
-        const char* src = stale ? "stale" : "live";
-        int off = snprintf(buf, sz,
-            "{\"source\":\"%s\",\"stale\":%s,\"age_sec\":%.1f,",
-            src, stale ? "true" : "false", age_sec);
-
-        size_t remain = sz - (size_t)off;
-        if (off > 0 && remain > 1) {
-            /* Skip the leading '{' of cached JSON */
-            const char* body = ms->cached_json + 1;
-            size_t body_len = ms->cached_json_len - 1;
-            size_t copy = body_len < remain - 1 ? body_len : remain - 1;
-            memcpy(buf + off, body, copy);
-            off += (int)copy;
-            buf[off] = '\0';
-            ret = off;
+        if (age_sec <= (double)DASHBOARD_CACHE_DROP_SEC) {
+            const char* start = ms->cached_json;
+            const char* end = ms->cached_json + ms->cached_json_len;
+            while (start < end &&
+                   (*start == ' ' || *start == '\n' || *start == '\r' || *start == '\t')) {
+                start++;
+            }
+            if (start < end && *start == '{') {
+                /* Inject source/stale/age_sec right after the opening '{' */
+                const char* src = stale ? "stale" : "live";
+                char prefix[96];
+                int plen = snprintf(prefix, sizeof(prefix),
+                    "{\"source\":\"%s\",\"stale\":%s,\"age_sec\":%.1f,",
+                    src, stale ? "true" : "false", age_sec);
+                const char* body = start + 1;
+                size_t body_len = (size_t)(end - body);
+                if (plen > 0 && (size_t)plen < sizeof(prefix)) {
+                    size_t total_len = (size_t)plen + body_len;
+                    if (ensure_heap_buf(buf, cap, total_len + 1)) {
+                        memcpy(*buf, prefix, (size_t)plen);
+                        memcpy(*buf + plen, body, body_len);
+                        (*buf)[total_len] = '\0';
+                        ret = total_len;
+                    }
+                }
+            } else {
+                size_t copy_len = ms->cached_json_len;
+                if (ensure_heap_buf(buf, cap, copy_len + 1)) {
+                    memcpy(*buf, ms->cached_json, copy_len);
+                    (*buf)[copy_len] = '\0';
+                    ret = copy_len;
+                }
+            }
         }
     }
     pthread_mutex_unlock(&ms->cached_mutex);
@@ -187,11 +239,13 @@ static int json_safe_str(char* dst, size_t dst_sz, const char* src) {
     return (int)j;
 }
 
-static void build_sse_json(MonitorServer* ms, char* buf, size_t sz) {
+static size_t build_sse_json_dyn(MonitorServer* ms, char** buf, size_t* cap) {
     /* Only serve cached dashboard JSON when it's fresh.
      * Stale cache means the pipeline stopped → fall through to local bus data. */
-    int cached_len = build_cached_dashboard_json(ms, buf, sz);
-    if (cached_len > 0) return;
+    size_t cached_len = build_cached_dashboard_json_dyn(ms, buf, cap);
+    if (cached_len > 0) return cached_len;
+
+    if (!ensure_heap_buf(buf, cap, MONITOR_FALLBACK_INIT_CAP)) return 0;
 
     /* Fallback: build from local bus + discovery */
     MessageBus* bus = ms->bus;
@@ -213,16 +267,9 @@ static void build_sse_json(MonitorServer* ms, char* buf, size_t sz) {
         }
     }
 
-    /* Safe append helper */
-#define SSE_APPEND(fmt, ...) \
-    do { \
-        if (off >= 0 && (size_t)off < sz) \
-            off += snprintf(buf + off, sz - (size_t)off, fmt, ##__VA_ARGS__); \
-    } while (0)
-
     char safe[128], safe2[128];
-    int off = snprintf(buf, sz,
-        "{\"self\":\"flowmond\",");
+    size_t off = 0;
+    if (!appendf_dyn(buf, cap, &off, "{\"self\":\"flowmond\",")) return 0;
 
     /* Nodes + endpoints from discovery topology */
     TopologyGraph topo;
@@ -231,27 +278,27 @@ static void build_sse_json(MonitorServer* ms, char* buf, size_t sz) {
         g = &topo;
     }
     if (g && g->node_count > 0) {
-        SSE_APPEND("\"nodes\":[");
+        appendf_dyn(buf, cap, &off, "\"nodes\":[");
         for (uint32_t ni = 0; ni < g->node_count; ni++) {
             const NodeInfo* n = &g->nodes[ni];
             json_safe_str(safe, sizeof(safe), n->name);
-            SSE_APPEND(
+            appendf_dyn(buf, cap, &off,
                 "%s{\"name\":\"%s\",\"pid\":%u,\"alive\":%s,\"topics\":[",
                 ni > 0 ? "," : "", safe, n->pid,
                 n->alive ? "true" : "false");
             for (uint32_t tj = 0; tj < n->topic_count; tj++) {
                 json_safe_str(safe, sizeof(safe), n->topics[tj].topic);
-                SSE_APPEND(
+                appendf_dyn(buf, cap, &off,
                     "%s{\"topic\":\"%s\",\"freq\":%.1f}",
                     tj > 0 ? "," : "", safe,
                     n->topics[tj].frequency_hz);
             }
-            SSE_APPEND("]}");
+            appendf_dyn(buf, cap, &off, "]}");
         }
-        SSE_APPEND("],");
+        appendf_dyn(buf, cap, &off, "],");
 
         /* endpoints */
-        SSE_APPEND("\"endpoints\":[");
+        appendf_dyn(buf, cap, &off, "\"endpoints\":[");
         int ep_count = 0;
         for (uint32_t ni = 0; ni < g->node_count; ni++) {
             const NodeInfo* n = &g->nodes[ni];
@@ -259,7 +306,7 @@ static void build_sse_json(MonitorServer* ms, char* buf, size_t sz) {
                 const char* role = (n->topics[tj].capabilities & 0x01) ? "pub" : "sub";
                 json_safe_str(safe, sizeof(safe), n->name);
                 json_safe_str(safe2, sizeof(safe2), n->topics[tj].topic);
-                SSE_APPEND(
+                appendf_dyn(buf, cap, &off,
                     "%s{\"node\":\"%s\",\"topic\":\"%s\","
                     "\"role\":\"%s\",\"type_id\":\"0x00000000\",\"freq\":%.1f}",
                     ep_count > 0 ? "," : "",
@@ -268,16 +315,16 @@ static void build_sse_json(MonitorServer* ms, char* buf, size_t sz) {
                 ep_count++;
             }
         }
-        SSE_APPEND("],");
+        appendf_dyn(buf, cap, &off, "],");
     } else {
-        SSE_APPEND("\"nodes\":[],\"endpoints\":[],");
+        appendf_dyn(buf, cap, &off, "\"nodes\":[],\"endpoints\":[],");
     }
 
     /* metrics wrapper */
-    SSE_APPEND("\"metrics\":{");
+    appendf_dyn(buf, cap, &off, "\"metrics\":{");
 
     /* bus */
-    SSE_APPEND("\"bus\":{\"published\":%lu,\"delivered\":%lu,\"dropped\":%lu},",
+    appendf_dyn(buf, cap, &off, "\"bus\":{\"published\":%lu,\"delivered\":%lu,\"dropped\":%lu},",
         (unsigned long)pub, (unsigned long)del, (unsigned long)drop);
 
     /* transport / scheduler / latency
@@ -285,21 +332,22 @@ static void build_sse_json(MonitorServer* ms, char* buf, size_t sz) {
      * 也不聚合分位延迟。只报真实可得的量（local_pub、avg 延迟），
      * 其余不编造：scheduler.mode 报 "unknown"（而非写死 CHOREO——现在
      * mode 可配置，写死即撒谎），分位延迟省略字段。 */
-    SSE_APPEND("\"transport\":{\"local_pub\":%lu,\"remote_pub\":0},",
+    appendf_dyn(buf, cap, &off, "\"transport\":{\"local_pub\":%lu,\"remote_pub\":0},",
         (unsigned long)pub);
     uint64_t avg_latency = lat_count > 0 ? lat_total / lat_count : 0;
-    SSE_APPEND("\"scheduler\":{\"tasks\":0,\"mode\":\"unknown\"},"
+    appendf_dyn(buf, cap, &off,
+        "\"scheduler\":{\"tasks\":0,\"mode\":\"unknown\"},"
         "\"latency\":{\"avg_us\":%lu},",
         (unsigned long)avg_latency);
 
     /* topics (local + remote) */
-    SSE_APPEND("\"topics\":[");
+    appendf_dyn(buf, cap, &off, "\"topics\":[");
     int total = 0;
     for (int i = 0; i < nt; i++) {
         uint64_t lat = tstats[i].deliver_count > 0
             ? tstats[i].total_latency_us / tstats[i].deliver_count : 0;
         json_safe_str(safe, sizeof(safe), tstats[i].topic);
-        SSE_APPEND(
+        appendf_dyn(buf, cap, &off,
             "%s{\"topic\":\"%s\",\"source\":\"local\","
             "\"pub\":%lu,\"del\":%lu,\"drop\":%lu,"
             "\"lat_us\":%lu,\"p50_us\":%lu,\"p99_us\":%lu,"
@@ -333,7 +381,7 @@ static void build_sse_json(MonitorServer* ms, char* buf, size_t sz) {
                 ? t->total_latency_us / t->deliver_count : 0;
             json_safe_str(safe, sizeof(safe), t->topic);
             json_safe_str(safe2, sizeof(safe2), src->source_name);
-            SSE_APPEND(
+            appendf_dyn(buf, cap, &off,
                 "%s{\"topic\":\"%s\",\"source\":\"%s\","
                 "\"pub\":%lu,\"del\":%lu,\"drop\":%lu,"
                 "\"lat_us\":%lu,\"p50_us\":%lu,\"p99_us\":%lu,"
@@ -361,13 +409,15 @@ static void build_sse_json(MonitorServer* ms, char* buf, size_t sz) {
      * 同一个函数，管线停时同样吐非法 JSON）。判据见 tests/test_monitor_http_integrity.py。
      * pipeline 停止时无真实场景数据 —— 发空场景（前端显示"无数据"），
      * 而不是编造一条 2000m 高架路网（会渲染成一条根本不存在的路）。 */
-    SSE_APPEND("],"
+    if (!appendf_dyn(buf, cap, &off, "],"
         "\"sysmon\":{},"
         "\"vehicle\":{},"
         "\"scene\":{\"entities\":[],"
         "\"ego\":{\"x\":0,\"y\":0,\"heading\":0,\"speed\":0},"
-        "\"road_network\":{\"edges\":[]}}}}");
-#undef SSE_APPEND
+        "\"road_network\":{\"edges\":[]}}}}")) {
+        return 0;
+    }
+    return off;
 }
 
 /* ── HTTP 响应 ──────────────────────────────────────────── */
@@ -564,12 +614,29 @@ static int safe_write(int fd, const void* buf, size_t len) {
  * are always structural whitespace (cJSON escapes them inside strings), so
  * stripping them is lossless.
  */
-static void sse_flatten_payload(char* s) {
+static size_t sse_flatten_payload(char* s) {
     char* wr = s;
     for (char* rd = s; *rd; rd++) {
         if (*rd != '\n' && *rd != '\r' && *rd != '\t') *wr++ = *rd;
     }
     *wr = '\0';
+    return (size_t)(wr - s);
+}
+
+static void serve_json_snapshot(int fd, MonitorServer* ms,
+                                bool keep_alive, const char* accept_encoding) {
+    char* buf = NULL;
+    size_t cap = 0;
+    size_t len = build_sse_json_dyn(ms, &buf, &cap);
+    if (buf && len > 0) {
+        send_response_full_bytes(fd, "200 OK", "application/json", buf, len,
+                                 keep_alive, "no-cache", true, accept_encoding);
+    } else {
+        send_response_full(fd, "500 Internal Server Error", "application/json",
+                           "{\"error\":\"out of memory\"}",
+                           keep_alive, "no-cache", false, accept_encoding);
+    }
+    free(buf);
 }
 
 static void handle_sse(int fd, MonitorServer* ms) {
@@ -582,13 +649,17 @@ static void handle_sse(int fd, MonitorServer* ms) {
         "\r\n";
     if (safe_write(fd, sse_header, strlen(sse_header)) != 0) return;
 
-    char buf[MONITOR_HTTP_BUF_SIZE];
+    char* payload = NULL;
+    size_t payload_cap = 0;
+    char* frame = NULL;
+    size_t frame_cap = 0;
     /* ── 事件驱动 SSE 推送 (条件变量) ──────────────────────────
      * 旧代码用 usleep(500000) 轮询，即使 monitor_node 以 10Hz 产出数据，
      * 浏览器也只能以 2Hz 收到——这是节点界面 "一卡一卡" 的首要根因。
      *
      * 新方案：dashboard_bridge 收到新 JSON 时通过 cached_cond 唤醒 SSE 线程，
-     * 数据到达后 50ms 内即可推送到浏览器。空闲时 50ms 超时用于心跳检测。 */
+     * 数据到达后 50ms 内即可推送到浏览器。空闲时 50ms 超时用于心跳检测。
+     * 堆缓冲按 payload 实际长度倍增并跨帧复用，避免 >128KB 截断及大栈帧溢出。 */
     uint64_t last_version  = 0;
     uint64_t last_send_us  = clock_now_us();
 
@@ -600,13 +671,24 @@ static void handle_sse(int fd, MonitorServer* ms) {
             /* 新数据到达：立即构建并推送 */
             pthread_mutex_unlock(&ms->cached_mutex);
 
-            build_sse_json(ms, buf, sizeof(buf));
-            sse_flatten_payload(buf);
-            char frame[MONITOR_HTTP_BUF_SIZE + 32];
-            int fl = snprintf(frame, sizeof(frame), "data: %s\n\n", buf);
-            if (safe_write(fd, frame, (size_t)fl) != 0) break;
-            last_version = version;
-            last_send_us  = clock_now_us();
+            size_t plen = build_sse_json_dyn(ms, &payload, &payload_cap);
+            if (plen > 0) {
+                plen = sse_flatten_payload(payload);
+                size_t flen = 6 + plen + 2;
+                if (ensure_heap_buf(&frame, &frame_cap, flen + 1)) {
+                    memcpy(frame, "data: ", 6);
+                    memcpy(frame + 6, payload, plen);
+                    memcpy(frame + 6 + plen, "\n\n", 2);
+                    frame[flen] = '\0';
+                    if (safe_write(fd, frame, flen) != 0) break;
+                    last_version = version;
+                    last_send_us  = clock_now_us();
+                } else {
+                    usleep(50000);
+                }
+            } else {
+                usleep(50000);
+            }
         } else {
             /* 无新数据：等待条件变量信号，50ms 超时用于心跳 */
             struct timespec ts;
@@ -630,6 +712,9 @@ static void handle_sse(int fd, MonitorServer* ms) {
             pthread_mutex_unlock(&ms->cached_mutex);
         }
     }
+
+    free(payload);
+    free(frame);
 }
 
 /* ── POST 请求体读取 ────────────────────────────────────── */
@@ -1539,27 +1624,13 @@ static bool dispatch_request(int fd, MonitorServer* ms,
 
     /* Route: /api/topology → JSON (prefer cached dashboard JSON) */
     if (strcmp(path, "/api/topology") == 0) {
-        char buf[MONITOR_HTTP_BUF_SIZE];
-        int cached_len = build_cached_dashboard_json(ms, buf, sizeof(buf));
-        if (cached_len <= 0) {
-            build_sse_json(ms, buf, sizeof(buf));
-        }
-        send_response_full(fd, "200 OK", "application/json", buf,
-                           client_keep_alive, "no-cache",
-                           true, accept_encoding);
+        serve_json_snapshot(fd, ms, client_keep_alive, accept_encoding);
         return finish_response(fd, client_keep_alive);
     }
 
     /* Route: /api/topics → per-topic stats (local + remote) */
     if (strcmp(path, "/api/topics") == 0) {
-        char buf[MONITOR_HTTP_BUF_SIZE];
-        int cached_len = build_cached_dashboard_json(ms, buf, sizeof(buf));
-        if (cached_len <= 0) {
-            build_sse_json(ms, buf, sizeof(buf));
-        }
-        send_response_full(fd, "200 OK", "application/json", buf,
-                           client_keep_alive, "no-cache",
-                           true, accept_encoding);
+        serve_json_snapshot(fd, ms, client_keep_alive, accept_encoding);
         return finish_response(fd, client_keep_alive);
     }
 
@@ -1631,11 +1702,7 @@ static bool dispatch_request(int fd, MonitorServer* ms,
 
     /* GET /api/debug/params → 所有注册参数及当前值 */
     if (strcmp(path, "/api/debug/params") == 0) {
-        char buf[MONITOR_HTTP_BUF_SIZE];
-        build_sse_json(ms, buf, sizeof(buf));
-        send_response_full(fd, "200 OK", "application/json", buf,
-                           client_keep_alive, "no-cache",
-                           true, accept_encoding);
+        serve_json_snapshot(fd, ms, client_keep_alive, accept_encoding);
         return finish_response(fd, client_keep_alive);
     }
 
