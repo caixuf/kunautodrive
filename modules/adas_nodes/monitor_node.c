@@ -316,6 +316,7 @@ static struct {
     char   scene_parking_goal_json[512];  /* parking_goal（开放空间泊车目标车位，透传给前端框线渲染） */
     char   scene_park_out_json[512];      /* park_out（B1/起步泊出目标） */
     char   scene_parking_slots_json[2048];/* parking_slots（地面停车场多候选车位数组） */
+    char   scene_facilities_json[16384];  /* 附近设施真值 OBB 数组（充电桩/防撞柱/轮挡/花坛等） */
     char   scene_scenario_name[64]; /* 场景语义名，供前端选择专属设施 */
     char   scene_lighting[16];
     char   scene_weather[16];
@@ -926,6 +927,26 @@ static void on_scene_frame(const Message* msg, void* user_data) {
     } else {
         pthread_mutex_lock(&g.scene_frame_mutex);
         g.scene_parking_slots_json[0] = '\0';
+        pthread_mutex_unlock(&g.scene_frame_mutex);
+    }
+
+    cJSON* jfacs = cJSON_GetObjectItem(root, "facilities");
+    if (jfacs && cJSON_IsArray(jfacs)) {
+        char* f_str = cJSON_PrintUnformatted(jfacs);
+        if (f_str) {
+            size_t len = strlen(f_str);
+            if (len >= sizeof(g.scene_facilities_json)) {
+                len = sizeof(g.scene_facilities_json) - 1;
+            }
+            pthread_mutex_lock(&g.scene_frame_mutex);
+            memcpy(g.scene_facilities_json, f_str, len);
+            g.scene_facilities_json[len] = '\0';
+            pthread_mutex_unlock(&g.scene_frame_mutex);
+            free(f_str);
+        }
+    } else {
+        pthread_mutex_lock(&g.scene_frame_mutex);
+        g.scene_facilities_json[0] = '\0';
         pthread_mutex_unlock(&g.scene_frame_mutex);
     }
 
@@ -1951,6 +1972,21 @@ static void export_dashboard_json(void) {
         }
     }
 
+    if (g.has_scene_frame && g.scene_facilities_json[0] != '\0') {
+        char fac_snap[sizeof(g.scene_facilities_json)];
+        size_t fac_snap_len;
+        pthread_mutex_lock(&g.scene_frame_mutex);
+        fac_snap_len = strlen(g.scene_facilities_json);
+        if (fac_snap_len >= sizeof(fac_snap)) fac_snap_len = sizeof(fac_snap) - 1;
+        memcpy(fac_snap, g.scene_facilities_json, fac_snap_len);
+        fac_snap[fac_snap_len] = '\0';
+        pthread_mutex_unlock(&g.scene_frame_mutex);
+        cJSON* facs = monitor_cJSON_Parse(fac_snap);
+        if (facs) {
+            cJSON_AddItemToObject(scene, "facilities", facs);
+        }
+    }
+
     /* NOA Phase 2.2: 完整 entities 从 scene/frame 透传。
      * 含全部 NPC（最多 24）+ ego + 红绿灯 + ETC 门架 + 停止线。前端 vis/main.js
      * 优先消费 scn.entities 渲染障碍物池（扩到 24），scn.obstacles 作为旧场景
@@ -2151,8 +2187,9 @@ static void export_dashboard_json(void) {
 #define OBS_FALLBACK_PED_SIZE  0.6
     double ox[MAX_OBS_SCENE], oy[MAX_OBS_SCENE], ovx[MAX_OBS_SCENE], ovy[MAX_OBS_SCENE];
     double olen[MAX_OBS_SCENE], owid[MAX_OBS_SCENE];
+    double oz[MAX_OBS_SCENE], ohgt[MAX_OBS_SCENE], ohdg[MAX_OBS_SCENE];
     int    oid[MAX_OBS_SCENE];
-    char   otype[MAX_OBS_SCENE][16];
+    char   otype[MAX_OBS_SCENE][24];
     char kn[20];
     for (int i = 0; i < n_obs; i++) {
         snprintf(kn, sizeof(kn), "oid%d", i);
@@ -2177,6 +2214,13 @@ static void export_dashboard_json(void) {
         snprintf(kn, sizeof(kn), "ow%d", i);
         owid[i] = json_extract_double(vehicle_state_snap, kn);
         if (owid[i] < 0.1) owid[i] = is_ped ? OBS_FALLBACK_PED_SIZE : OBS_FALLBACK_CAR_WID;
+        snprintf(kn, sizeof(kn), "oz%d", i);
+        oz[i] = json_extract_double(vehicle_state_snap, kn);
+        snprintf(kn, sizeof(kn), "oh%d", i);
+        ohgt[i] = json_extract_double(vehicle_state_snap, kn);
+        if (ohgt[i] < 0.05) ohgt[i] = is_ped ? 1.75 : 1.5;
+        snprintf(kn, sizeof(kn), "ohdg%d", i);
+        ohdg[i] = json_extract_double(vehicle_state_snap, kn);
     }
     cJSON* obs_arr = cJSON_AddArrayToObject(scene, "obstacles");
     for (int i = 0; i < n_obs; i++) {
@@ -2187,10 +2231,13 @@ static void export_dashboard_json(void) {
         cJSON_AddStringToObject(ob, "type", otype[i]);
         cJSON_AddNumberToObject(ob, "x", rx);
         cJSON_AddNumberToObject(ob, "y", ry);
+        cJSON_AddNumberToObject(ob, "z", oz[i]);
         cJSON_AddNumberToObject(ob, "vx", ovx[i]);
         cJSON_AddNumberToObject(ob, "vy", ovy[i]);
         cJSON_AddNumberToObject(ob, "len", olen[i]);
         cJSON_AddNumberToObject(ob, "wid", owid[i]);
+        cJSON_AddNumberToObject(ob, "height", ohgt[i]);
+        cJSON_AddNumberToObject(ob, "heading", ohdg[i]);
         cJSON_AddItemToArray(obs_arr, ob);
     }
 

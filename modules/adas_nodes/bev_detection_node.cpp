@@ -97,12 +97,17 @@ struct BevDetectionContext {
     /* OTA 热重载：model_ota/active 收到 "reload" 信号时置 1 */
     volatile int reload_flag{0};
 
-    /* ego（来自 vehicle/state：x/y/hdg/spd） */
-    double  ego_x{0}, ego_y{0}, ego_heading{0}, ego_speed{0};
+    /* ego（来自 vehicle/state：x/y/z/hdg/spd） */
+    double  ego_x{0}, ego_y{0}, ego_z{0}, ego_heading{0}, ego_speed{0};
     volatile int has_ego{0};
 
-    /* 阱物真值（来自 vehicle/state：oxN/oyN/ovN/ovyN/otN/olN/owN） */
+    /* 阱物真值（来自 vehicle/state：oxN/oyN/ozN/ovN/ovyN/otN/olN/owN/ohN/ohdgN） */
     BevPreObs obs[128]{};
+    double    obs_len[128]{};
+    double    obs_wid[128]{};
+    double    obs_h[128]{};
+    double    obs_z[128]{};
+    double    obs_heading[128]{};
     int     n_obs{0};
 
     /* 车道（来自 road/geometry） */
@@ -149,6 +154,10 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
         g.ego_y = j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "hdg")) && cJSON_IsNumber(j))
         g.ego_heading = j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(root, "z")) && cJSON_IsNumber(j))
+        g.ego_z = j->valuedouble;
+    else
+        g.ego_z = 0.0;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "spd")) && cJSON_IsNumber(j))
         g.ego_speed = j->valuedouble;
 
@@ -168,20 +177,54 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
         cJSON* jvy = cJSON_GetObjectItemCaseSensitive(root, key);
         snprintf(key, sizeof(key), "ot%d", i);
         cJSON* jt = cJSON_GetObjectItemCaseSensitive(root, key);
+        snprintf(key, sizeof(key), "ol%d", i);
+        cJSON* jl = cJSON_GetObjectItemCaseSensitive(root, key);
+        snprintf(key, sizeof(key), "ow%d", i);
+        cJSON* jw = cJSON_GetObjectItemCaseSensitive(root, key);
+        snprintf(key, sizeof(key), "oh%d", i);
+        cJSON* jh = cJSON_GetObjectItemCaseSensitive(root, key);
+        snprintf(key, sizeof(key), "oz%d", i);
+        cJSON* jz = cJSON_GetObjectItemCaseSensitive(root, key);
+        snprintf(key, sizeof(key), "ohdg%d", i);
+        cJSON* jhdg = cJSON_GetObjectItemCaseSensitive(root, key);
         if (cJSON_IsNumber(jx) && cJSON_IsNumber(jy)) {
             g.obs[i].x  = jx->valuedouble;
             g.obs[i].y  = jy->valuedouble;
             g.obs[i].vx = cJSON_IsNumber(jvx) ? jvx->valuedouble : 0.0;
             g.obs[i].vy = cJSON_IsNumber(jvy) ? jvy->valuedouble : 0.0;
-            g.obs[i].type = BEV_OBJ_VEHICLE;  /* 默认按车 */
+            g.obs[i].type = BEV_OBJ_VEHICLE;  /* 仅当无 ot 字段时兼容默认按车 */
+            g.obs_len[i] = 4.6;
+            g.obs_wid[i] = 2.0;
+            g.obs_h[i]   = 1.5;
+            g.obs_z[i]   = cJSON_IsNumber(jz) ? jz->valuedouble : 0.0;
+            g.obs_heading[i] = cJSON_IsNumber(jhdg) ? jhdg->valuedouble : 0.0;
             if (cJSON_IsString(jt) && jt->valuestring) {
                 const char* t = jt->valuestring;
-                if (strcmp(t, "pedestrian") == 0)   g.obs[i].type = BEV_OBJ_PEDESTRIAN;
-                else if (strcmp(t, "cyclist") == 0) g.obs[i].type = BEV_OBJ_CYCLIST;
-                else if (strcmp(t, "construction") == 0) g.obs[i].type = BEV_OBJ_CONSTRUCTION;
+                if (strcmp(t, "car") == 0 || strcmp(t, "vehicle") == 0 ||
+                    strcmp(t, "suv") == 0 || strcmp(t, "truck") == 0 ||
+                    strcmp(t, "bus") == 0 || strcmp(t, "van") == 0) {
+                    g.obs[i].type = BEV_OBJ_VEHICLE;
+                } else if (strcmp(t, "pedestrian") == 0) {
+                    g.obs[i].type = BEV_OBJ_PEDESTRIAN;
+                    g.obs_len[i] = 0.6;
+                    g.obs_wid[i] = 0.6;
+                } else if (strcmp(t, "cyclist") == 0 || strcmp(t, "bicycle") == 0) {
+                    g.obs[i].type = BEV_OBJ_CYCLIST;
+                    g.obs_len[i] = 1.8;
+                    g.obs_wid[i] = 0.8;
+                } else {
+                    /* All unrecognized static / unknown obstacles map generically to static box, not vehicle */
+                    g.obs[i].type = BEV_OBJ_CONSTRUCTION;
+                    g.obs_len[i] = 0.8;
+                    g.obs_wid[i] = 0.8;
+                }
             }
+            if (cJSON_IsNumber(jl) && jl->valuedouble >= 0.08) g.obs_len[i] = jl->valuedouble;
+            if (cJSON_IsNumber(jw) && jw->valuedouble >= 0.08) g.obs_wid[i] = jw->valuedouble;
+            if (cJSON_IsNumber(jh) && jh->valuedouble >= 0.08) g.obs_h[i]   = jh->valuedouble;
         } else {
             g.obs[i].x = g.obs[i].y = 0.0;
+            g.obs_len[i] = g.obs_wid[i] = g.obs_h[i] = 0.0;
         }
     }
     g.n_obs = no;
@@ -282,11 +325,19 @@ static void decode_passthrough(void) {
         d->y = (float)yb;
         d->vx = (float)(o->vx * ch + o->vy * sh);
         d->vy = (float)(-o->vx * sh + o->vy * ch);
-        d->width  = (o->type == BEV_OBJ_VEHICLE) ? 2.0f : 0.8f;
-        d->length = (o->type == BEV_OBJ_VEHICLE) ? 4.6f : 1.8f;
+        d->width  = (g.obs_wid[i] >= 0.08) ? (float)g.obs_wid[i] : ((o->type == BEV_OBJ_VEHICLE) ? 2.0f : 0.8f);
+        d->length = (g.obs_len[i] >= 0.08) ? (float)g.obs_len[i] : ((o->type == BEV_OBJ_VEHICLE) ? 4.6f : 1.8f);
         d->type = o->type;
         d->confidence = 0.99f;
         d->world_y = (float)(g.ego_y + xb * sh + yb * ch);
+        d->z = (float)(g.obs_z[i] - g.ego_z);
+        d->height = (float)g.obs_h[i];
+        {
+            double dh = g.obs_heading[i] - g.ego_heading;
+            while (dh >  M_PI) dh -= 2.0 * M_PI;
+            while (dh < -M_PI) dh += 2.0 * M_PI;
+            d->heading = (float)dh;
+        }
         n++;
     }
     g.n_dets = n;
@@ -331,11 +382,20 @@ static void decode_heatmap(const BevOnnxBackend* b, float** out_seq) {
                 d->vx = (float)(o->vx * ch + o->vy * sh);
                 d->vy = (float)(-o->vx * sh + o->vy * ch);
                 d->type = o->type;
-                d->width  = (o->type == BEV_OBJ_VEHICLE) ? 2.0f : 0.8f;
-                d->length = (o->type == BEV_OBJ_VEHICLE) ? 4.6f : 1.8f;
+                d->width  = (g.obs_wid[bi] >= 0.08) ? (float)g.obs_wid[bi] : ((o->type == BEV_OBJ_VEHICLE) ? 2.0f : 0.8f);
+                d->length = (g.obs_len[bi] >= 0.08) ? (float)g.obs_len[bi] : ((o->type == BEV_OBJ_VEHICLE) ? 4.6f : 1.8f);
+                d->z = (float)(g.obs_z[bi] - g.ego_z);
+                d->height = (float)g.obs_h[bi];
+                {
+                    double dh = g.obs_heading[bi] - g.ego_heading;
+                    while (dh >  M_PI) dh -= 2.0 * M_PI;
+                    while (dh < -M_PI) dh += 2.0 * M_PI;
+                    d->heading = (float)dh;
+                }
             } else {
                 d->vx = 0.f; d->vy = 0.f; d->type = BEV_OBJ_VEHICLE;
                 d->width = 2.0f; d->length = 4.6f;
+                d->z = 0.0f; d->height = 1.5f; d->heading = 0.0f;
             }
             d->confidence = v;
             d->world_y = (float)(g.ego_y + xb * sh + yb * ch);

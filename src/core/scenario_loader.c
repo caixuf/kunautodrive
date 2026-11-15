@@ -550,6 +550,9 @@ ScenarioConfig* scenario_load(const char* path) {
             if (cJSON_IsNumber(j)) a->len = j->valuedouble;
             j = cJSON_GetObjectItemCaseSensitive(ja, "wid");
             if (cJSON_IsNumber(j)) a->wid = j->valuedouble;
+            j = cJSON_GetObjectItemCaseSensitive(ja, "height");
+            if (!j) j = cJSON_GetObjectItemCaseSensitive(ja, "hgt");
+            if (cJSON_IsNumber(j)) a->height = j->valuedouble;
             /* road_network 新格式：s/l/segment_id → 流速仿真用 Frenet 坐标放置 NPC */
             j = cJSON_GetObjectItemCaseSensitive(ja, "segment_id");
             if (cJSON_IsNumber(j)) a->segment_id = (int)j->valuedouble;
@@ -797,6 +800,30 @@ ScenarioConfig* scenario_load(const char* path) {
             if (cJSON_IsNumber(j)) tl->green_s = j->valuedouble;
             j = cJSON_GetObjectItemCaseSensitive(jl, "phase_offset_s");
             if (cJSON_IsNumber(j)) tl->phase_offset_s = j->valuedouble;
+            j = cJSON_GetObjectItemCaseSensitive(jl, "has_left_arrow");
+            if (cJSON_IsBool(j)) tl->has_left_arrow = cJSON_IsTrue(j);
+            j = cJSON_GetObjectItemCaseSensitive(jl, "left_green_s");
+            if (cJSON_IsNumber(j)) {
+                tl->left_green_s = j->valuedouble;
+                if (tl->left_green_s > 0.0 &&
+                    !cJSON_GetObjectItemCaseSensitive(jl, "has_left_arrow")) {
+                    tl->has_left_arrow = true;
+                }
+            }
+            j = cJSON_GetObjectItemCaseSensitive(jl, "left_yellow_s");
+            if (cJSON_IsNumber(j)) tl->left_yellow_s = j->valuedouble;
+            j = cJSON_GetObjectItemCaseSensitive(jl, "left_red_s");
+            if (cJSON_IsNumber(j)) tl->left_red_s = j->valuedouble;
+            j = cJSON_GetObjectItemCaseSensitive(jl, "left_phase_offset_s");
+            if (cJSON_IsNumber(j)) tl->left_phase_offset_s = j->valuedouble;
+            if (tl->has_left_arrow && tl->left_green_s > 0.0) {
+                if (tl->left_yellow_s <= 0.0) tl->left_yellow_s = 3.0;
+                if (tl->left_red_s <= 0.0) {
+                    double cycle = tl->green_s + tl->yellow_s + tl->red_s;
+                    double derived = cycle - tl->left_green_s - tl->left_yellow_s;
+                    tl->left_red_s = (derived >= 4.0) ? derived : 18.0;
+                }
+            }
         }
     }
 
@@ -1203,6 +1230,7 @@ char* scenario_to_json(const ScenarioConfig* scenario) {
         cJSON_AddNumberToObject(ja, "vy",  a->vy);
         cJSON_AddNumberToObject(ja, "len", a->len);
         cJSON_AddNumberToObject(ja, "wid", a->wid);
+        if (a->height > 0.0) cJSON_AddNumberToObject(ja, "height", a->height);
         cJSON_AddItemToArray(jarr, ja);
     }
     cJSON_AddItemToObject(root, "actors", jarr);

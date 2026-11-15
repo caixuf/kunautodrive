@@ -29,7 +29,7 @@ import { LANE_WIDTH, DEFAULT_LANES, EDGE_TYPE, isTunnelEdge, isGarageOrRampEdge 
 import { tangentToNormal, forwardENU, worldToThree } from '../math/Coord.js';
 import { getTopology } from '../model/TopologyModel.js';
 import { computeEdgeAxis, sampleCleanPolyline, offsetSpine as axisOffsetSpine, buildCumulative } from '../model/RoadAxis.js';
-import { isAuthoritativeMap, setGroundAuthoritativeMode } from './GroundView.js';
+import { computeSubsurfaceCutouts, isAuthoritativeMap, setGroundAuthoritativeMode } from './GroundView.js';
 import { SCENE } from '../theme/tokens.js';
 import { MARKING } from '../theme/roadStyle.js';
 
@@ -218,6 +218,7 @@ export function createRoadView(scene) {
   let _laneData = null; // P2 车道级 lane_data（MapData/预览注入，无则启发式兜底）
   let _axisByEdgeId = null; // build 周期内 computeEdgeAxis 缓存
   let _roadOccGrid = null;  // 同层相邻机动车道空间占用网格（防分幅路中央路缘石切入邻道）
+  let _subsurfaceCutouts = []; // 地库/敞口斜坡挖空包围盒（防止路侧绿篱/人行道凌空封顶）
   let _totalEdges = 0;      // 当前路网总边数（大图细分与侧向几何预算分级）
   let _hasFocus = false;
   let _focusX = 0;
@@ -1007,6 +1008,15 @@ export function createRoadView(scene) {
   /** 检测侧向点 (x,z) 是否未侵入其它同高程层道路的沥青路面。
    *  构建时已按 hw + MAX_OCC_CLEARANCE_M 外扩写入网格，查询只需访问单格 + AABB 快筛（郑东 1.2 万路 < 50ms）。 */
   function isClearOfOtherRoads(edgeId, py, x, z, clearanceM) {
+    if ((py || 0) >= -0.6 && _subsurfaceCutouts.length > 0) {
+      for (let i = 0; i < _subsurfaceCutouts.length; i++) {
+        const [minX, minZ, maxX, maxZ] = _subsurfaceCutouts[i];
+        if (x >= minX - clearanceM && x <= maxX + clearanceM
+            && z >= minZ - clearanceM && z <= maxZ + clearanceM) {
+          return false;
+        }
+      }
+    }
     if (!_roadOccGrid) return true;
     const bucket = _roadOccGrid.get(`${Math.floor(x / OCC_CELL)},${Math.floor(z / OCC_CELL)}`);
     if (!bucket) return true;
@@ -1296,19 +1306,20 @@ export function createRoadView(scene) {
         URBAN_OSM_TYPES.has(edgeType);
 
       if (isSyntheticUrban && !laneRec) {
+        const strips = [
+          { off: roadHw + SHOULDER_W + CURB_W * 0.5, hw: CURB_W * 0.5, y: Y_CURB, pad: 0.25, out: curbGeos },
+          { off: roadHw + SHOULDER_W + CURB_W + SIDEWALK_W * 0.5, hw: SIDEWALK_W * 0.5, y: Y_SIDEWALK, pad: 0.35, out: sidewalkGeos },
+          { off: roadHw + SHOULDER_W + CURB_W + SIDEWALK_W + VERGE_W * 0.5, hw: VERGE_W * 0.5, y: Y_VERGE, pad: 0.35, out: vergeGeos },
+        ];
         for (const seg of roadMarkSpine) {
           for (const side of [-1, 1]) {
-            const curb = ribbonGeo(offsetSpine(seg, side * (roadHw + SHOULDER_W + CURB_W * 0.5)),
-              CURB_W * 0.5, Y_CURB);
-            const sidewalk = ribbonGeo(offsetSpine(seg,
-              side * (roadHw + SHOULDER_W + CURB_W + SIDEWALK_W * 0.5)),
-              SIDEWALK_W * 0.5, Y_SIDEWALK);
-            const verge = ribbonGeo(offsetSpine(seg,
-              side * (roadHw + SHOULDER_W + CURB_W + SIDEWALK_W + VERGE_W * 0.5)),
-              VERGE_W * 0.5, Y_VERGE);
-            if (curb) curbGeos.push(curb);
-            if (sidewalk) sidewalkGeos.push(sidewalk);
-            if (verge) vergeGeos.push(verge);
+            for (const st of strips) {
+              const latOff = side * st.off;
+              for (const run of splitSpineByClearance(seg, edge.id, latOff, st.hw + st.pad)) {
+                const geo = ribbonGeo(offsetSpine(run, latOff), st.hw, st.y);
+                if (geo) st.out.push(geo);
+              }
+            }
           }
         }
       } else if (isOsmUrban || isSyntheticUrban) {
@@ -1430,6 +1441,7 @@ export function createRoadView(scene) {
     // 与 ConnectorView/TreeView/StreetlightView/BarrierView 共享同一次计算）
     _topo = getTopology(roadNetwork);
     _laneData = roadNetwork.lane_data || null;
+    _subsurfaceCutouts = computeSubsurfaceCutouts(roadNetwork);
     _axisByEdgeId = new Map();
     _roadOccGrid = new Map();
     if (_roadOccGrid) {

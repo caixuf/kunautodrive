@@ -250,9 +250,19 @@ export function createSceneDirector(scene) {
           store.isViaduct = true;
           store.viaductVisLength = actualLength;
         } else {
+          const pZones = [];
+          if (Array.isArray(frame.parking_slots)) {
+            for (const ps of frame.parking_slots) {
+              if (ps && Math.abs(Number(ps.z) || 0) < 1.5) pZones.push({ x: ps.x, y: ps.y });
+            }
+          }
+          if (frame.parking_goal && frame.parking_goal.enabled && Math.abs(Number(frame.parking_goal.z) || 0) < 1.5) {
+            pZones.push({ x: frame.parking_goal.x, y: frame.parking_goal.y });
+          }
+          const treeRn = pZones.length ? { ...rn, parking_zones: pZones } : rn;
           ViewRegistry.safeCall('streetlight', 'build', rn);
           ViewRegistry.safeCall('barrier', 'build', rn);
-          ViewRegistry.safeCall('tree', 'build', rn);
+          ViewRegistry.safeCall('tree', 'build', treeRn);
           ViewRegistry.safeCall('building', 'build', rn, store);
           const edge0 = edgesArr[0] || {};
           const nodes = Array.isArray(edge0.nodes) ? edge0.nodes : [];
@@ -448,6 +458,8 @@ export function createSceneDirector(scene) {
       store.parkingGoal = clean.parking_goal || null;
       store.parkOut = clean.park_out || null;
       store.parkingSlots = Array.isArray(clean.parking_slots) ? clean.parking_slots : [];
+      store.facilities = Array.isArray(clean.facilities) ? clean.facilities : [];
+      store.perceived = Array.isArray(clean.perceived) ? clean.perceived : [];
     }
     if (raw && raw.metrics && raw.metrics.bev) {
       store.bev = raw.metrics.bev;

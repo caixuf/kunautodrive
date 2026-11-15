@@ -15,7 +15,7 @@
 import { createSceneDirector } from '../tools/flowboard/js/vis/director/SceneDirector.js';
 import * as ViewRegistry from '../tools/flowboard/js/vis/core/ViewRegistry.js';
 import { worldToThree, headingToRotationY } from '../tools/flowboard/js/vis/math/Coord.js';
-import { roadHeightAt } from '../tools/flowboard/js/vis/math/RoadHeight.js';
+import { roadHeightAt, roadPitchAt } from '../tools/flowboard/js/vis/math/RoadHeight.js';
 import { VEHICLE_GROUND_Y } from '../tools/flowboard/js/vis/view/VehicleView.js';
 import { selectCurrentMotionSegment } from '../tools/flowboard/js/vis/math/Trajectory.js';
 import { computeDrivingStatus } from '../tools/flowboard/js/vis/hud/DrivingStatus.js';
@@ -492,7 +492,7 @@ function makeM5UpgradeFrame() {
   const cutouts = computeSubsurfaceCutouts(p2pRoadNetwork);
   eq('computeSubsurfaceCutouts 输出地库+坡道 2 个挖空矩形', cutouts.length, 2);
   ok('地库挖空 X 范围覆盖 B1 ([-12, 130.2])', cutouts[0][0] <= -11.9 && cutouts[0][2] >= 130.0);
-  ok('坡道挖空截止于 z=-0.10 (Three maxX < 250)', cutouts[1][0] >= 129.4 && cutouts[1][2] < 249.5);
+  ok('坡道挖空截止于 z=-0.02 (Three maxX < 250)', cutouts[1][0] >= 129.4 && cutouts[1][2] < 249.6);
 
   ViewRegistry.clear();
   const scene = globalThis.THREE.Scene();
@@ -524,6 +524,10 @@ function makeM5UpgradeFrame() {
   eq('P2P: store.parkingSlots 写入 3 席', store.parkingSlots.length, 3);
   eq('P2P: store.locMode = SLAM_INDOOR', store.locMode, 'SLAM_INDOOR');
   ok('P2P: roadFacilityView 已注册', !!ViewRegistry.get('roadFacility'));
+
+  // Phase 0: 坡度突变保护（停放车辆跨 B1 边界不出现 ±20° 翘头）
+  const pitchAtB1Edge = roadPitchAt(store, 100.0, -7.2, 1.5708, -4.5);
+  ok('Phase0: B1 边缘 off-edge roadPitchAt 不突变 (< 0.05 rad)', Math.abs(pitchAtB1Edge) < 0.05);
 }
 
 done();

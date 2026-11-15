@@ -74,18 +74,18 @@ struct PerceptionContext {
     Scheduler*        scheduler{nullptr};
 
     /* 仿真状态 (通过 vehicle/state topic 更新) */
-    double  ego_x{0}, ego_y{0}, ego_heading{0};
+    double  ego_x{0}, ego_y{0}, ego_z{0}, ego_heading{0};
     double  ego_speed{0};
     int     n_obs{0};
-    /* 障碍物世界系位置/速度，从 flowsim vehicle/state 的 ox/oy/ov/ovy 字段接收。
+    /* 障碍物世界系位置/速度，从 flowsim vehicle/state 的 ox/oy/oz/ov/ovy 字段接收。
      * 下游 planning/control/safety 经 ego_heading 旋回车体系做几何判断；
      * 速度方向直接用世界系（对向迎面 obs_vx<0 即可识别）。 */
-    double  obs_x[128]{}, obs_y[128]{}, obs_vx[128]{}, obs_vy[128]{};
-    /* 障碍物类型与尺寸（来自 vehicle/state 的 ot/ol/ow 字段）。
+    double  obs_x[128]{}, obs_y[128]{}, obs_z[128]{}, obs_vx[128]{}, obs_vy[128]{};
+    /* 障碍物类型与尺寸（来自 vehicle/state 的 ot/ol/ow/oh/ohdg 字段）。
      * 类型必须逐个透传，不能硬编码 —— 行人与车的尺寸差 9 倍，
      * 下游的让行逻辑、碰撞判定、识别率分层全依赖它。 */
     uint8_t obs_type[128]{};
-    double  obs_length[128]{}, obs_width[128]{};
+    double  obs_length[128]{}, obs_width[128]{}, obs_height[128]{}, obs_heading[128]{};
     /* 障碍物稳定 id（vehicle/state 的 oid%d = flowsim 实体 id）。
      * 旧实现用 frame_id*100+i 当 id → 每帧都变，下游/评测无法跨帧跟踪同一个目标
      * （demo_evaluator 的"预警提前量"就是按 id 跨帧算的，id 不稳 → 提前量恒 0）。
@@ -129,7 +129,8 @@ struct PerceptionContext {
      *           sensor/lidar（LidarFrame，带噪定位估计），缺失时退回真值。
      *           点云本身不含任何位姿信息，因此障碍物位置不泄漏定位真值。 */
     int mode{0};  /* 0 = ground_truth (default) — obstacles from vehicle/state JSON */
-    double lid_x{0}, lid_y{0};
+    double lid_x{0}, lid_y{0}, lid_z{0};
+    double lidar_height_m{1.8};
     volatile int has_lidar{0};
 
     /* ── 方向一：雷达冗余接入（默认关闭；enable_radar_fusion=1 才生效）──
@@ -215,6 +216,10 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
         g.ego_x = j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "y")) && cJSON_IsNumber(j))
         g.ego_y = j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(root, "z")) && cJSON_IsNumber(j))
+        g.ego_z = j->valuedouble;
+    else
+        g.ego_z = 0.0;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "hdg")) && cJSON_IsNumber(j))
         g.ego_heading = j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "spd")) && cJSON_IsNumber(j))
@@ -250,23 +255,56 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
             cJSON* jl = cJSON_GetObjectItemCaseSensitive(root, key);
             snprintf(key, sizeof(key), "ow%d", i);
             cJSON* jw = cJSON_GetObjectItemCaseSensitive(root, key);
+            snprintf(key, sizeof(key), "oh%d", i);
+            cJSON* joh = cJSON_GetObjectItemCaseSensitive(root, key);
+            snprintf(key, sizeof(key), "oz%d", i);
+            cJSON* jz = cJSON_GetObjectItemCaseSensitive(root, key);
+            snprintf(key, sizeof(key), "ohdg%d", i);
+            cJSON* jhdg = cJSON_GetObjectItemCaseSensitive(root, key);
             if (cJSON_IsNumber(jx) && cJSON_IsNumber(jy)) {
                 g.obs_x[i] = jx->valuedouble;
                 g.obs_y[i] = jy->valuedouble;
                 g.obs_vx[i]= cJSON_IsNumber(jvx) ? jvx->valuedouble : 0.0;
                 g.obs_vy[i]= cJSON_IsNumber(jvy) ? jvy->valuedouble : 0.0;
-                /* 默认按车处理（尺寸也用车的默认值），仅在明确标注时改写 */
+                g.obs_z[i] = cJSON_IsNumber(jz) ? jz->valuedouble : 0.0;
+                g.obs_heading[i] = cJSON_IsNumber(jhdg) ? jhdg->valuedouble : 0.0;
+                /* Unrecognized static tags map generically to OBJ_TYPE_UNKNOWN while keeping measured OBB size */
                 g.obs_type[i]   = OBJ_TYPE_VEHICLE;
                 g.obs_length[i] = 4.6;
                 g.obs_width[i]  = 2.0;
+                g.obs_height[i] = 1.5;
                 if (cJSON_IsString(jt) && jt->valuestring) {
                     const char* t = jt->valuestring;
-                    if (strcmp(t, "pedestrian") == 0)   g.obs_type[i] = OBJ_TYPE_PEDESTRIAN;
-                    else if (strcmp(t, "cyclist") == 0) g.obs_type[i] = OBJ_TYPE_CYCLIST;
-                    else if (strcmp(t, "construction") == 0) g.obs_type[i] = OBJ_TYPE_CONSTRUCTION;
+                    if (strcmp(t, "car") == 0 || strcmp(t, "vehicle") == 0 ||
+                        strcmp(t, "suv") == 0 || strcmp(t, "truck") == 0 ||
+                        strcmp(t, "bus") == 0 || strcmp(t, "van") == 0) {
+                        g.obs_type[i] = OBJ_TYPE_VEHICLE;
+                        if (strcmp(t, "truck") == 0) g.obs_height[i] = 4.0;
+                    } else if (strcmp(t, "pedestrian") == 0) {
+                        g.obs_type[i]   = OBJ_TYPE_PEDESTRIAN;
+                        g.obs_length[i] = 0.6;
+                        g.obs_width[i]  = 0.6;
+                        g.obs_height[i] = 1.75;
+                    } else if (strcmp(t, "cyclist") == 0 || strcmp(t, "bicycle") == 0) {
+                        g.obs_type[i]   = OBJ_TYPE_CYCLIST;
+                        g.obs_length[i] = 1.8;
+                        g.obs_width[i]  = 0.8;
+                        g.obs_height[i] = 1.7;
+                    } else if (strcmp(t, "construction") == 0 || strcmp(t, "cone") == 0) {
+                        g.obs_type[i]   = OBJ_TYPE_CONSTRUCTION;
+                        g.obs_length[i] = 1.0;
+                        g.obs_width[i]  = 1.0;
+                        g.obs_height[i] = 1.0;
+                    } else {
+                        g.obs_type[i]   = OBJ_TYPE_UNKNOWN;
+                        g.obs_length[i] = 0.8;
+                        g.obs_width[i]  = 0.8;
+                        g.obs_height[i] = 1.0;
+                    }
                 }
-                if (cJSON_IsNumber(jl)) g.obs_length[i] = jl->valuedouble;
-                if (cJSON_IsNumber(jw)) g.obs_width[i]  = jw->valuedouble;
+                if (cJSON_IsNumber(jl) && jl->valuedouble >= 0.08) g.obs_length[i] = jl->valuedouble;
+                if (cJSON_IsNumber(jw) && jw->valuedouble >= 0.08) g.obs_width[i]  = jw->valuedouble;
+                if (cJSON_IsNumber(joh) && joh->valuedouble >= 0.05) g.obs_height[i] = joh->valuedouble;
             }
         }
         g.n_obs = no;
@@ -289,6 +327,7 @@ static void on_sensor_lidar(const Message* msg, void* user_data) {
     if (!f) return;
     g.lid_x = (double)f->x;
     g.lid_y = (double)f->y;
+    g.lid_z = (double)f->z;
     g.has_lidar = 1;
 }
 
@@ -452,6 +491,14 @@ protected:
                     ob->type = (ObstacleType)g.obs_type[i];
                     ob->width = (float)g.obs_width[i];
                     ob->length = (float)g.obs_length[i];
+                    ob->height = (float)g.obs_height[i];
+                    ob->z = (float)(g.obs_z[i] - g.ego_z);
+                    {
+                        double dh = g.obs_heading[i] - g.ego_heading;
+                        while (dh >  M_PI) dh -= 2.0 * M_PI;
+                        while (dh < -M_PI) dh += 2.0 * M_PI;
+                        ob->heading = (float)dh;
+                    }
                     ob->confidence = 1.0f;
                     /* lane_id：从世界系 y 计算（含单向路 side_offset，与 planning/behavior 同源） */
                     const int idx = lane_idx_from_y(
@@ -566,6 +613,8 @@ protected:
                 pose.lane_count  = g.has_road_geometry ? g.lane_count : 2;
                 pose.lane_width  = g.has_road_geometry ? g.lane_width : 3.5;
                 pose.road_oneway = g.has_road_geometry ? g.road_oneway : 0;
+                pose.ego_z       = g.has_lidar ? g.lid_z : g.ego_z;
+                pose.lidar_mount_height_m = g.lidar_height_m;
                 /* 速度由 object_tracker 节点通过 KF 跟踪提供
                  * （ALGORITHM_REFACTOR_PLAN §4：移除 ground truth 速度匹配）。 */
                 perception_clusters_to_obstacles(clusters, n_clusters, &pose, &obs_list);
@@ -622,7 +671,7 @@ static int perception_init(MessageBus* bus, Transport* transport,
                            DiscoveryManager* discovery, Scheduler* scheduler,
                            const char* params_json) {
     /* 清零并重新初始化 */
-    g.ego_x = g.ego_y = g.ego_heading = g.ego_speed = 0.0;
+    g.ego_x = g.ego_y = g.ego_z = g.ego_heading = g.ego_speed = 0.0;
     g.n_obs = 0;
     g.frame_id = 0;
     g.has_last_obs = 0;
@@ -643,7 +692,8 @@ static int perception_init(MessageBus* bus, Transport* transport,
     g.radar_bad = 0;
     g.radar_merged_total = 0;
     g.has_lidar    = 0;
-    g.lid_x = g.lid_y = 0.0;
+    g.lid_x = g.lid_y = g.lid_z = 0.0;
+    g.lidar_height_m = 1.8;
     g.cloud_seq = 0;
     g.last_cloud_seq = 0;
     g.cloud_bad = 0;
@@ -667,6 +717,8 @@ static int perception_init(MessageBus* bus, Transport* transport,
                 g.lidar_max_range_m = j->valuedouble;
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "obs_noise_std_m")) && cJSON_IsNumber(j))
                 g.obs_noise_std_m = j->valuedouble;
+            if ((j = cJSON_GetObjectItemCaseSensitive(p, "lidar_height_m")) && cJSON_IsNumber(j))
+                g.lidar_height_m = j->valuedouble;
             if ((j = cJSON_GetObjectItemCaseSensitive(p, "enable_simple_occlusion")) && cJSON_IsNumber(j))
                 g.enable_simple_occlusion = (int)j->valuedouble;
             /* NOA Phase 2.1: mode = "sensor" | "ground_truth" (默认) */

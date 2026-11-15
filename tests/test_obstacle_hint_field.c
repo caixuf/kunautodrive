@@ -45,12 +45,15 @@ static void test_obstacle_serialize_with_hint_true(void) {
     src.type         = OBJ_TYPE_VEHICLE;
     src.confidence   = 0.95f;
     src.obs_lane_match_hint = 1;  /* Prefer A: lane_match.valid==1 */
+    src.z            = -9.0f;     /* viaduct layer offset test */
+    src.height       = 1.65f;
+    src.heading      = 1.57f;
 
     uint8_t buf[64] = {0};
     size_t out_size = 0;
     int rc = Obstacle_serialize(&src, buf, &out_size);
     TEST(rc == 0, "serialize hint=true returns 0");
-    TEST(out_size == 35, "serialize hint=true reports size=35");
+    TEST(out_size == 47, "serialize hint=true reports size=47");
 
     Obstacle dst = {0};
     rc = Obstacle_deserialize(&dst, buf, out_size);
@@ -67,6 +70,9 @@ static void test_obstacle_serialize_with_hint_true(void) {
     TEST(dst.confidence == src.confidence, "round-trip confidence preserved");
     TEST(dst.obs_lane_match_hint == 1,
          "round-trip obs_lane_match_hint == 1 (valid→hint=1)");
+    TEST(dst.z == src.z, "round-trip z preserved");
+    TEST(dst.height == src.height, "round-trip height preserved");
+    TEST(dst.heading == src.heading, "round-trip heading preserved");
 }
 
 /* ──────────────────────────────────────────────────────────────
@@ -92,7 +98,7 @@ static void test_obstacle_serialize_with_hint_false(void) {
     size_t out_size = 0;
     int rc = Obstacle_serialize(&src, buf, &out_size);
     TEST(rc == 0, "serialize hint=false returns 0");
-    TEST(out_size == 35, "serialize hint=false reports size=35");
+    TEST(out_size == 47, "serialize hint=false reports size=47");
 
     Obstacle dst = {0};
     rc = Obstacle_deserialize(&dst, buf, out_size);
@@ -145,7 +151,7 @@ static void test_obstacle_hint_byte_position(void) {
     uint8_t buf[64] = {0};
     size_t out_size = 0;
     Obstacle_serialize(&src, buf, &out_size);
-    TEST(out_size == 35, "wire size stays 35");
+    TEST(out_size == 47, "wire size stays 47");
     TEST(buf[34] == 1, "wire[34] == 1 when hint=1");
 
     src.obs_lane_match_hint = 0;
@@ -180,8 +186,8 @@ static void test_obstacle_field_desc_present(void) {
          "Obstacle_fields[] 包含 obs_lane_match_hint(运行时 schema 自描述可见)");
     TEST(found_type == 1,
          "Obstacle_fields[] 仍包含 type(确保 codegen 没破坏既有字段表)");
-    TEST(OBSTACLE_FIELD_COUNT == 11,
-         "OBSTACLE_FIELD_COUNT == 11(D2-07 phase 1 后应为 11 个字段,原有 10 + hint)");
+    TEST(OBSTACLE_FIELD_COUNT == 14,
+         "OBSTACLE_FIELD_COUNT == 14(D2-07 + P3-1 3D: 原有 11 + z/height/heading)");
 }
 
 /* ──────────────────────────────────────────────────────────────
@@ -196,36 +202,73 @@ static void test_obstacle_field_desc_present(void) {
  *  这与 CLAUDE.md 的"显式契约"铁律一致:不暗中做静默 fallback。
  * ────────────────────────────────────────────────────────────── */
 static void test_obstacle_wire_size_contract(void) {
-    uint8_t full[35] = {0};
-    uint8_t short34[34] = {0};
+    uint8_t full[47] = {0};
+    uint8_t short46[46] = {0};
     Obstacle dst = {0};
 
     int rc_full = Obstacle_deserialize(&dst, full, sizeof(full));
-    TEST(rc_full == 0, "deserialize 35B 完整包成功");
+    TEST(rc_full == 0, "deserialize 47B 完整包成功");
 
-    /* 34B 老格式被严格拒绝(SPEC 要求 producer 必须升级) */
-    int rc_short = Obstacle_deserialize(&dst, short34, sizeof(short34));
+    /* 46B 老格式被严格拒绝(SPEC 要求 producer 必须升级) */
+    int rc_short = Obstacle_deserialize(&dst, short46, sizeof(short46));
     TEST(rc_short == -1,
-         "deserialize 34B 老包被拒绝(rc == -1)— producer 升级是 hard requirement");
+         "deserialize 46B 老包被拒绝(rc == -1)— producer 升级是 hard requirement");
 
-    /* 36B / 63B(任意更大)应当正常接受,只读前 35B */
+    /* 48B / 64B(任意更大)应当正常接受,只读前 47B */
     uint8_t padded[64] = {0};
     int rc_padded = Obstacle_deserialize(&dst, padded, sizeof(padded));
-    TEST(rc_padded == 0, "deserialize 超过 35B 的 padded 包成功(只读前 35B)");
+    TEST(rc_padded == 0, "deserialize 超过 47B 的 padded 包成功(只读前 47B)");
 
     /* NULL/0 dst 或 buf 仍需拒绝 */
     int rc_null = Obstacle_deserialize(NULL, full, sizeof(full));
     TEST(rc_null == -1, "deserialize NULL dst 拒绝");
 }
 
+static void test_localization_and_trajectory_z_grade_roundtrip(void) {
+    Localization lsrc = {0};
+    lsrc.x = 123.5;
+    lsrc.y = -4.25;
+    lsrc.heading = 0.78f;
+    lsrc.z = 9.15f;
+    lsrc.grade = 0.045f;
+    uint8_t lbuf[128] = {0};
+    size_t lsize = 0;
+    TEST(Localization_serialize(&lsrc, lbuf, &lsize) == 0,
+         "Localization_serialize returns 0");
+    TEST(lsize == 65, "Localization wire size == 65");
+    Localization ldst = {0};
+    TEST(Localization_deserialize(&ldst, lbuf, lsize) == 0,
+         "Localization_deserialize returns 0");
+    TEST(ldst.z == lsrc.z, "Localization round-trip z preserved");
+    TEST(ldst.grade == lsrc.grade, "Localization round-trip grade preserved");
+
+    TrajectoryPoint tsrc = {0};
+    tsrc.x = 50.0f;
+    tsrc.y = -1.75f;
+    tsrc.v = 11.0f;
+    tsrc.z = -3.2f;
+    tsrc.grade = -0.06f;
+    uint8_t tbuf[128] = {0};
+    size_t tsize = 0;
+    TEST(TrajectoryPoint_serialize(&tsrc, tbuf, &tsize) == 0,
+         "TrajectoryPoint_serialize returns 0");
+    TEST(tsize == 48, "TrajectoryPoint wire size == 48");
+    TrajectoryPoint tdst = {0};
+    TEST(TrajectoryPoint_deserialize(&tdst, tbuf, tsize) == 0,
+         "TrajectoryPoint_deserialize returns 0");
+    TEST(tdst.z == tsrc.z, "TrajectoryPoint round-trip z preserved");
+    TEST(tdst.grade == tsrc.grade, "TrajectoryPoint round-trip grade preserved");
+}
+
 int main(void) {
-    printf("Running D2-07 phase 1 Obstacle.obs_lane_match_hint tests...\n");
+    printf("Running D2-07 + P3-1 3D wire contract tests...\n");
     test_obstacle_serialize_with_hint_true();
     test_obstacle_serialize_with_hint_false();
     test_obstacle_schema_version_is_2();
     test_obstacle_hint_byte_position();
     test_obstacle_field_desc_present();
     test_obstacle_wire_size_contract();
+    test_localization_and_trajectory_z_grade_roundtrip();
     printf("Results: %d passed, %d failed\n", g_passed, g_failed);
     return g_failed > 0 ? 1 : 0;
 }

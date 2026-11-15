@@ -334,6 +334,9 @@ static int stereo_execute(TaskBase* task) {
             o->type       = (mlp_type >= 0) ? (int8_t)mlp_type
                             : (int8_t)cluster_class_to_obs_type(cb->cls);
             o->confidence = cb->confidence;
+            o->z          = cb->min_z;
+            o->height     = (cb->max_z - cb->min_z > 0.08f) ? (cb->max_z - cb->min_z) : 1.5f;
+            o->heading    = 0.0f;
             cnt++;
         }
         obs_list.count = (uint32_t)cnt;

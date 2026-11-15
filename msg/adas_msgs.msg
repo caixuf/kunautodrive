@@ -168,6 +168,9 @@ struct Obstacle {
     ObstacleType type       # 目标类型（引用枚举）
     float    confidence     # 置信度 [0, 1]
     int8     obs_lane_match_hint   # 0 = no usable lane_match; 1 = lane_match.valid
+    float    z              # 目标高程/Z 坐标（米，世界/车体参考高度差）
+    float    height         # 目标高度（米）
+    float    heading        # 目标航向角（弧度）
 }
 
 struct ObstacleList {
@@ -204,6 +207,8 @@ struct Localization {
     float    raw_pos_x      # 原始 GPS 位置 X
     float    raw_pos_y      # 原始 GPS 位置 Y
     float    raw_speed      # 原始 GPS 速度
+    float    z              # 车辆高程 Z 坐标（米）
+    float    grade          # 当前道路坡度（dz/ds，弧度/无量纲）
 }
 
 struct LatencyReport {
@@ -277,6 +282,8 @@ struct TrajectoryPoint {
     float    v              # 期望速度（m/s）
     float    a              # 期望加速度（m/s²）
     float    jerk           # 加加速度（m/s³）
+    float    z              # 期望高程 Z 坐标（米）
+    float    grade          # 期望道路坡度（rad）
 }
 
 struct Trajectory {

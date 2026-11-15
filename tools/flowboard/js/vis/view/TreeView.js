@@ -100,6 +100,14 @@ export function inferTreeSlots(roadNetwork) {
   /* 路面避让（2026-08-16）：全路网路面带索引，槽位压到任何沥青即丢弃。 */
   const bandGrid = buildRoadBandGrid(roadNetwork);
 
+  /* 泊位区避让：地面停车场车位/目标车位周边禁止种行道树，防止树穿模入车位。 */
+  const parkingZones = Array.isArray(roadNetwork.parking_zones) ? roadNetwork.parking_zones : [];
+  const nearParkingZone = (x, z) => parkingZones.some((pz) => {
+    const px = Number(pz.x) || 0;
+    const pzThree = -(Number(pz.y) || 0);
+    return Math.abs(x - px) < 14.0 && Math.abs(z - pzThree) < 10.0;
+  });
+
   for (const edge of roadNetwork.edges) {
     if (edge.type === EDGE_TYPE.VIADUCT_HIGHWAY || edge.name === EDGE_TYPE.VIADUCT_HIGHWAY || isGarageOrRampEdge(edge)) continue;
 
@@ -128,6 +136,7 @@ export function inferTreeSlots(roadNetwork) {
         if (edge.name === 'surface_lot_avenue' && s.px >= 3200 && s.px <= 3250) continue; // 地面停车场泊位区段不种行道树
         const x = s.px + s.nx * (halfWidth + TREE_OFFSET) * side;
         const z = s.pz + s.nz * (halfWidth + TREE_OFFSET) * side;
+        if (nearParkingZone(x, z)) continue; // 泊位与倒车包络避让
         if (nearJunction(x, z)) continue;   // 路口避让
         if (onAnyRoadBand(x, z, bandGrid)) continue;   // 2026-08-16 路面避让：树不上沥青
         if (!inLanduse(x, z)) continue;      // 阶段6：仅绿地内种树

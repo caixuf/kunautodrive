@@ -116,6 +116,9 @@ static inline uint32_t radar_frame_to_obstacles(const RadarFrame* frame,
                                                   (float)range_max_m,
                                                   t->rcs_dbsm);
         o->obs_lane_match_hint = 0;   /* 雷达目标不打判定性 hint */
+        o->z = 0.0f;                  /* 2D 雷达无高程测量：默认同层 */
+        o->height = 1.5f;
+        o->heading = 0.0f;
         n++;
     }
     out->count = n;

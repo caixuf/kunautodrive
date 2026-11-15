@@ -43,6 +43,9 @@ int bev_post_to_obstacle_list(void* list,
         ob->width  = d->width;
         ob->length = d->length;
         ob->confidence = d->confidence;
+        ob->z       = d->z;
+        ob->height  = (d->height > 0.05f) ? d->height : ((d->type == 1) ? 1.7f : 1.5f);
+        ob->heading = d->heading;
 
         /* 类型：内部 0..3 → ObstacleType 1..4 */
         switch (d->type) {

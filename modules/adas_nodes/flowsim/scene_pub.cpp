@@ -23,9 +23,11 @@
 
 #include <cjson/cJSON.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 namespace flowsim {
@@ -44,6 +46,7 @@ const char* entity_type_str(EntityType t) {
         case EntityType::TrafficLight:return "tl";
         case EntityType::ETCGate:     return "etc_gate";
         case EntityType::StopLine:    return "stop_line";
+        case EntityType::UnknownStatic:return "unknown_static";
         default:                      return "unknown";
     }
 }
@@ -421,8 +424,14 @@ cJSON* build_traffic_light_json(const Entity& e) {
     cJSON_AddNumberToObject(j, "stop_y", e.signal_stop_y);
     cJSON_AddNumberToObject(j, "lane_offset", e.offset);
     cJSON_AddNumberToObject(j, "heading", e.heading);
+    cJSON_AddNumberToObject(j, "approach_heading", e.approach_heading);
     cJSON_AddStringToObject(j, "state", tl_phase_str(e.phase_state));
     cJSON_AddNumberToObject(j, "remain_s", e.phase_timer);
+    cJSON_AddBoolToObject(j, "has_left_arrow", e.has_left_arrow ? 1 : 0);
+    if (e.has_left_arrow) {
+        cJSON_AddStringToObject(j, "left_state", tl_phase_str(e.left_phase_state));
+        cJSON_AddNumberToObject(j, "left_remain_s", e.left_phase_timer);
+    }
     return j;
 }
 
@@ -437,6 +446,24 @@ cJSON* build_etc_gate_json(const Entity& e) {
     cJSON_AddStringToObject(j, "state", etc_gate_state_by_phase(e.phase_state));
     /* phase_timer ∈ [0,1] 表示抬杆进度（scene_events.cpp 约定） */
     cJSON_AddNumberToObject(j, "progress", e.phase_timer);
+    return j;
+}
+
+cJSON* build_unknown_static_json(const Entity& e) {
+    cJSON* j = cJSON_CreateObject();
+    cJSON_AddStringToObject(j, "type", "unknown_static");
+    cJSON_AddNumberToObject(j, "id", (double)e.id);
+    cJSON_AddNumberToObject(j, "x", e.x);
+    cJSON_AddNumberToObject(j, "y", e.y);
+    cJSON_AddNumberToObject(j, "z", e.z);
+    cJSON_AddNumberToObject(j, "heading", e.heading);
+    cJSON_AddNumberToObject(j, "speed", 0.0);
+    cJSON_AddNumberToObject(j, "vx", 0.0);
+    cJSON_AddNumberToObject(j, "vy", 0.0);
+    cJSON_AddNumberToObject(j, "length", e.length > 0.0 ? e.length : 1.0);
+    cJSON_AddNumberToObject(j, "width", e.width > 0.0 ? e.width : 1.0);
+    cJSON_AddNumberToObject(j, "height", e.height > 0.0 ? e.height : 1.0);
+    cJSON_AddBoolToObject(j, "parked_fixed", true);
     return j;
 }
 
@@ -455,6 +482,7 @@ cJSON* build_entities_json(const EntityPool& pool) {
             case EntityType::Pedestrian:   j = build_pedestrian_json(e); break;
             case EntityType::TrafficLight: j = build_traffic_light_json(e); break;
             case EntityType::ETCGate:      j = build_etc_gate_json(e); break;
+            case EntityType::UnknownStatic:j = build_unknown_static_json(e); break;
             default: continue;
         }
         if (j) cJSON_AddItemToArray(arr, j);
@@ -613,6 +641,38 @@ char* build_scene_frame_json(const EntityPool& pool,
             cJSON_AddNumberToObject(js, "width", s.width);
             cJSON_AddNumberToObject(js, "length", s.length);
             cJSON_AddItemToArray(jps, js);
+        }
+    }
+
+    if (!cfg.facilities.empty() && pool.size() > 0 && pool[0].active) {
+        const Entity& ego_e = pool[0];
+        std::vector<std::pair<double, size_t>> near_facs;
+        for (size_t fi = 0; fi < cfg.facilities.size(); ++fi) {
+            const auto& f = cfg.facilities[fi];
+            if (std::fabs(f.z - ego_e.z) > 12.0) continue;
+            const double d2 = (f.x - ego_e.x) * (f.x - ego_e.x)
+                            + (f.y - ego_e.y) * (f.y - ego_e.y);
+            if (d2 <= 85.0 * 85.0) {
+                near_facs.emplace_back(d2, fi);
+            }
+        }
+        std::sort(near_facs.begin(), near_facs.end());
+        if (!near_facs.empty()) {
+            cJSON* jfacs = cJSON_AddArrayToObject(root, "facilities");
+            const size_t limit = std::min<size_t>(near_facs.size(), 40);
+            for (size_t k = 0; k < limit; ++k) {
+                const auto& f = cfg.facilities[near_facs[k].second];
+                cJSON* jf = cJSON_CreateObject();
+                cJSON_AddStringToObject(jf, "kind", f.kind.c_str());
+                cJSON_AddNumberToObject(jf, "x", f.x);
+                cJSON_AddNumberToObject(jf, "y", f.y);
+                cJSON_AddNumberToObject(jf, "z", f.z);
+                cJSON_AddNumberToObject(jf, "length", f.length);
+                cJSON_AddNumberToObject(jf, "width", f.width);
+                cJSON_AddNumberToObject(jf, "height", f.height);
+                cJSON_AddNumberToObject(jf, "heading", f.heading);
+                cJSON_AddItemToArray(jfacs, jf);
+            }
         }
     }
 

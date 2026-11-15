@@ -465,6 +465,9 @@ export function validateSceneFrame(raw) {
     };
   }
 
+  const facilities = Array.isArray(frame.facilities) ? frame.facilities : [];
+  const perceived = Array.isArray(frame.perceived) ? frame.perceived : [];
+
   const clean = {
     ...frame,
     ego: cleanEgo,
@@ -473,6 +476,8 @@ export function validateSceneFrame(raw) {
     parking_goal,
     park_out,
     parking_slots,
+    facilities,
+    perceived,
   };
 
   return {

@@ -49,6 +49,7 @@
 #include "flowsim/sim_digest.h"
 #include "flowsim/lane_frenet.h"          /* C-2: 共享车道中心横向偏移公式 */
 #include "flowsim/lane_match_helpers.h"
+#include "planning_coordinates.h"         /* 共享单双向判定与本向车道统计 */
 #include "flowsim/sim_rng.h"              /* 方向五：自持 RNG（须在 Context 前） */
 
 #if defined(KUN_HAS_LANELET2) && KUN_HAS_LANELET2
@@ -132,6 +133,12 @@ struct FlowSimContext {
     /* OSM 建筑：单源真相（footprint→OBB）解析出的静态碰撞/遮挡体。
      * 由 road_network_json 中的 buildings[] 加载（scenario_loader 已随 road_network 注入）。 */
     std::vector<flowsim::BuildingOBB> buildings;
+    struct FacilityCollider {
+        double x, y, z, len, wid, heading;
+        const char* kind;
+        double height{1.5};
+    };
+    std::vector<FacilityCollider> facility_obstacles;
 
     /* Phase 2.2: scene/frame 发布配置（init 阶段填充，主循环每帧传入） */
     flowsim::ScenePubConfig   scene_pub_cfg;
@@ -203,6 +210,8 @@ struct FlowSimContext {
     bool              roads_loaded{false};
     int               last_road_geom_road_id{-9999};
     int               last_road_geom_lane_count{-1};
+    int               last_road_geom_oneway{-1};
+    int               last_road_geom_upcoming_own_lanes{-1};
 
     /* 仿真基础层：静态 digest（几何变更时建一次）+ 上一帧动态 digest（时序 invariant） */
     flowsim::StaticDigest  static_digest;
@@ -288,6 +297,8 @@ static void reset_runtime_state() {
 
     g.last_road_geom_road_id = -9999;
     g.last_road_geom_lane_count = -1;
+    g.last_road_geom_oneway = -1;
+    g.last_road_geom_upcoming_own_lanes = -1;
     g.ego_route_s_hint = -1.0;
     g.static_digest = flowsim::StaticDigest();
     g.prev_dynamic_digest = flowsim::DynamicDigest();
@@ -388,11 +399,13 @@ static double compute_road_heading_at(double x, double y) {
 }
 
 static flowsim::EntityType actor_type_to_entity(const char* type) {
-    if (!type) return flowsim::EntityType::Car;
+    if (!type || !type[0]) return flowsim::EntityType::Car;
     if (strcmp(type, "pedestrian") == 0) return flowsim::EntityType::Pedestrian;
     if (strcmp(type, "truck") == 0)      return flowsim::EntityType::Truck;
     if (strcmp(type, "suv") == 0)        return flowsim::EntityType::SUV;
-    return flowsim::EntityType::Car;
+    if (strcmp(type, "car") == 0 || strcmp(type, "vehicle") == 0)
+        return flowsim::EntityType::Car;
+    return flowsim::EntityType::UnknownStatic;
 }
 
 /* ── 工况脚本（Task 3）：触发器评估 + actor_overrides 应用 ──
@@ -607,7 +620,8 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
      * 不覆盖会出现在路网外的"鬼影 ego"）。 */
     if (g.roads_loaded) {
         flowsim::FrenetPos fp;
-        if (g.roads.world_to_frenet(sc->ego.x, sc->ego.y, fp)) {
+        const double z_hint = sc->ego.has_z ? sc->ego.z : std::nan("");
+        if (g.roads.world_to_frenet(sc->ego.x, sc->ego.y, fp, z_hint)) {
             if (ego.road_pos.init(g.roads, fp.road_id, fp.lane_id, fp.s, fp.offset)) {
                 /* 车位泊出场景（park_out）：保留车位内真实 (x, y, heading) 与显式 z，
                  * 否则 esmini 会把垂直/斜列车位内的自车直接瞬移吸附到车道中心线并抹平朝向。 */
@@ -729,8 +743,16 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
                 e.target_vx = a->vx;  /* NPC 初始目标速度 = 场景速度 */
             }
         }
-        e.length = (a->len > 0) ? a->len : 4.6;
-        e.width = (a->wid > 0) ? a->wid : 2.0;
+        e.length = (a->len > 0) ? a->len : (e.type == flowsim::EntityType::UnknownStatic ? 1.0 : 4.6);
+        e.width = (a->wid > 0) ? a->wid : (e.type == flowsim::EntityType::UnknownStatic ? 1.0 : 2.0);
+        e.height = (a->height > 0.0) ? a->height : 0.0;
+        if (e.type == flowsim::EntityType::UnknownStatic &&
+            std::hypot(e.vx, e.vy) < 0.05) {
+            e.parked_fixed = true;
+            e.state = flowsim::NpcState::Stopped;
+            e.target_vx = 0.0;
+            if (e.height <= 0.0) e.height = 1.0;
+        }
         if (e.is_vehicle()) {
             flowsim::apply_vehicle_defaults(e);
             e.length = (a->len > 0) ? a->len : e.length;
@@ -741,7 +763,7 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
             if (a->wid <= 0) e.width = 0.5;
             if (a->segment_id >= 0 && g.roads_loaded) {
                 flowsim::FrenetPos fp;
-                if (g.roads.world_to_frenet(e.x, e.y, fp)) {
+                if (g.roads.world_to_frenet(e.x, e.y, fp, a->has_z ? a->z : std::nan(""))) {
                     e.road_id = fp.road_id;
                     e.lane_id = fp.lane_id;
                     e.s       = fp.s;
@@ -769,7 +791,7 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
         }
         if (e.parked_fixed && g.roads_loaded && e.is_npc_vehicle()) {
             flowsim::FrenetPos fp;
-            if (g.roads.world_to_frenet(e.x, e.y, fp)) {
+            if (g.roads.world_to_frenet(e.x, e.y, fp, e.z)) {
                 e.road_id = fp.road_id;
                 e.lane_id = fp.lane_id;
                 e.s = fp.s;
@@ -788,7 +810,7 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
                  * a->l 当 lane 0 的 offset：RoadPosition 以 lane 0 初始化会将
                  * 同向 NPC 翻到中心参考线的反向朝向。 */
                 flowsim::FrenetPos fp;
-                if (g.roads.world_to_frenet(e.x, e.y, fp)) {
+                if (g.roads.world_to_frenet(e.x, e.y, fp, e.z)) {
                     e.road_id = fp.road_id;
                     e.lane_id = fp.lane_id;
                     e.s = fp.s;
@@ -804,7 +826,7 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
             } else {
                 /* 旧格式：用 world_to_frenet 反算路网位置 */
                 flowsim::FrenetPos fp;
-                if (g.roads.world_to_frenet(e.x, e.y, fp)) {
+                if (g.roads.world_to_frenet(e.x, e.y, fp, a->has_z ? a->z : std::nan(""))) {
                     e.road_id = fp.road_id;
                     e.lane_id = fp.lane_id;   /* P1 修复：保存 lane_id，
                                               * 供 road_pos.init 用真实车道而非 lane_id=0
@@ -974,22 +996,24 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
             e.brake    = tl->yellow_s;
             e.steer    = tl->red_s;
             e.target_vx = tl->phase_offset_s;
+            e.has_left_arrow      = tl->has_left_arrow;
+            e.left_green_s        = tl->left_green_s;
+            e.left_yellow_s       = tl->left_yellow_s;
+            e.left_red_s          = tl->left_red_s;
+            e.left_phase_offset_s = tl->left_phase_offset_s;
             e.heading = tl->heading;
             e.offset = tl->y_lane;
             e.signal_stop_x = tl->x;
             e.signal_stop_y = tl->y_lane;
             double sign = (tl->y_lane >= 0.0) ? 1.0 : -1.0;
             /* esmini 接管世界坐标：world_to_frenet → 反算真值。
-             * 两层语义：
-             *   1) e.x/e.y = 灯杆 3D 位置（路缘外侧 +1.5m 退让，避免杆立在路中间）
-             *   2) e.target_vx 存相位偏移，用 e.width 存 lane_y（车道中心 y），
-             *      供 NPC 红绿灯响应（check_npc_scene_events）判断同侧车流。 */
+             * 兼容两条约定：(a) 水平主干道 y_lane=-1.75 相对/世界一致；
+             * (b) 正交十字路口或曲线路段传入世界 (x, y_lane) 时直接取 fp.offset
+             * 作为 Frenet 横向偏移，避免把世界 Y=-25 当成 25m 横向偏置。 */
             if (g.roads_loaded) {
                 flowsim::FrenetPos fp;
-                /* 用 y_lane 作横向偏移（与 x 一起试探路网最近点） */
                 double probe_y = tl->y_lane;
                 if (g.roads.world_to_frenet(tl->x, probe_y, fp)) {
-                    /* 先拿道路中心线世界坐标（offset=0 的 reference line） */
                     flowsim::WorldPos rc_wp;
                     bool have_rc = g.roads.frenet_to_world(fp.road_id, 0, fp.s, 0.0, rc_wp);
                     if (cached_half_width < 0.0 || fp.road_id != e.road_id) {
@@ -997,45 +1021,47 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
                         cached_half_width = (n_drivable * g.lane_width) / 2.0;
                         e.road_id = fp.road_id;
                     }
+                    const double lat_off = (std::fabs(fp.offset) <= cached_half_width + 6.0)
+                                               ? fp.offset : tl->y_lane;
+                    const double lat_sign = (lat_off >= 0.0) ? 1.0 : -1.0;
+                    e.offset = lat_off;
                     flowsim::WorldPos stop_wp;
                     const bool have_stop = g.roads.frenet_to_world(
-                        fp.road_id, 0, fp.s, tl->y_lane, stop_wp);
+                        fp.road_id, 0, fp.s, lat_off, stop_wp);
                     const double lane_center_x = have_stop ? stop_wp.x
                                                            : (have_rc ? rc_wp.x : tl->x);
                     const double lane_center_y = have_stop ? stop_wp.y
-                                                           : (have_rc ? rc_wp.y + tl->y_lane
-                                                                      : tl->y_lane);
+                                                           : (have_rc ? rc_wp.y + lat_off
+                                                                      : lat_off);
                     /* 灯杆 3D 位置：车道侧路缘外 +1.5m 退让 */
                     flowsim::WorldPos pole_wp;
                     const bool have_pole = g.roads.frenet_to_world(
                         fp.road_id, 0, fp.s,
-                        sign * (cached_half_width + 1.5), pole_wp);
+                        lat_sign * (cached_half_width + 1.5), pole_wp);
                     e.x = have_pole ? pole_wp.x : (have_rc ? rc_wp.x : tl->x);
                     e.y = have_pole ? pole_wp.y
-                                    : (have_rc ? rc_wp.y + sign * (cached_half_width + 1.5)
-                                               : sign * (cached_half_width + 1.5));
+                                    : (have_rc ? rc_wp.y + lat_sign * (cached_half_width + 1.5)
+                                               : lat_sign * (cached_half_width + 1.5));
                     e.signal_stop_x = lane_center_x;
                     e.signal_stop_y = lane_center_y;
-                    /* e.width 存车道中心 y，供 NPC 红绿灯响应判断同侧车流 */
                     e.width = lane_center_y;
-                    /* heading：灯杆臂垂直于道路切线方向（指向道路中心）。
-                     * 场景显式配置 tl->heading 时优先用配置值；否则从道路切线推算。
-                     * 用 have_rc 标志判断是否成功取到道路切线，不再用
-                     * `e.heading == 0.0` 检查（会在垂直计算恰好得 0 时误覆盖）。 */
+                    const double tan_h = have_rc ? rc_wp.h
+                                                 : compute_road_heading_at(tl->x, tl->y_lane);
+                    const bool opp_dir = (fp.lane_id > 0) ||
+                                         (fp.lane_id == 0 && lat_off > 0.0 && !sc->road.oneway);
+                    e.approach_heading = tan_h + (opp_dir ? M_PI : 0.0);
                     if (tl->heading != 0.0) {
                         e.heading = tl->heading;
-                    } else if (have_rc) {
-                        e.heading = rc_wp.h + (sign > 0.0 ? -M_PI_2 : M_PI_2);
                     } else {
-                        double tan_h = compute_road_heading_at(tl->x, tl->y_lane);
-                        e.heading = tan_h + (sign > 0.0 ? -M_PI_2 : M_PI_2);
+                        e.heading = tan_h + (lat_sign > 0.0 ? -M_PI_2 : M_PI_2);
                     }
                 } else {
                     /* world_to_frenet 失败：场景坐标不在路网附近，fallback */
                     e.x = tl->x;
                     e.y = sign * (fallback_half_width + 1.5);
-                    e.width = tl->y_lane;  /* 存原始 lane_y */
+                    e.width = tl->y_lane;
                     double tan_h = compute_road_heading_at(tl->x, tl->y_lane);
+                    e.approach_heading = tan_h + ((sign > 0.0 && !sc->road.oneway) ? M_PI : 0.0);
                     e.heading = (tl->heading != 0.0) ? tl->heading
                                 : (tan_h + (sign > 0.0 ? -M_PI_2 : M_PI_2));
                 }
@@ -1043,8 +1069,9 @@ static void populate_entities_from_scenario(const ScenarioConfig* sc) {
                 /* esmini 不可用：从场景配置算 road_half_width + 垂直朝向 */
                 e.x = tl->x;
                 e.y = sign * (fallback_half_width + 1.5);
-                e.width = tl->y_lane;  /* 存原始 lane_y */
+                e.width = tl->y_lane;
                 double tan_h = compute_road_heading_at(tl->x, tl->y_lane);
+                e.approach_heading = tan_h + ((sign > 0.0 && !sc->road.oneway) ? M_PI : 0.0);
                 e.heading = (tl->heading != 0.0) ? tl->heading
                             : (tan_h + (sign > 0.0 ? -M_PI_2 : M_PI_2));
             }
@@ -1198,14 +1225,15 @@ static void publish_vehicle_state(uint64_t sim_time_us) {
                                     ? g.scenario->ego.max_steer : 0.60);
     }
 
-    /* 收集非 ego 的活跃实体作为障碍物（车辆 + 行人） */
+    /* 收集非 ego 的活跃实体作为障碍物（车辆 + 行人 + 未全开道闸） */
     int n_obs = 0;
     for (int i = 1; i < g.pool.size(); i++) {
         const flowsim::Entity& e = g.pool[i];
         if (!e.active) continue;
         if (e.type == flowsim::EntityType::TrafficLight ||
-            e.type == flowsim::EntityType::ETCGate ||
             e.type == flowsim::EntityType::StopLine) continue;
+        if (e.type == flowsim::EntityType::ETCGate &&
+            (e.phase_state == 2 || e.phase_timer >= 0.75)) continue;
         if (n_obs >= 128) break;
 
         char key[20];
@@ -1221,22 +1249,73 @@ static void publish_vehicle_state(uint64_t sim_time_us) {
         cJSON_AddNumberToObject(vstate, key, e.vy);
         snprintf(key, sizeof(key), "ot%d", n_obs);
         const char* tname = "car";
+        double ol = e.length;
+        double ow = e.width;
+        double oh = 1.5;
         switch (e.type) {
-            case flowsim::EntityType::Pedestrian: tname = "pedestrian"; break;
-            case flowsim::EntityType::Truck:      tname = "truck"; break;
-            case flowsim::EntityType::SUV:        tname = "suv"; break;
+            case flowsim::EntityType::Pedestrian:    tname = "pedestrian"; oh = 1.75; break;
+            case flowsim::EntityType::Truck:         tname = "truck";      oh = 4.0;  break;
+            case flowsim::EntityType::SUV:           tname = "suv";        oh = 1.85; break;
+            case flowsim::EntityType::ETCGate:       tname = "barrier"; ol = 0.6; ow = 3.5; oh = 1.2; break;
+            case flowsim::EntityType::UnknownStatic:
+                tname = "unknown_static";
+                oh = (e.height > 0.0) ? e.height : 1.0;
+                break;
             default: break;
         }
         cJSON_AddStringToObject(vstate, key, tname);
         snprintf(key, sizeof(key), "ol%d", n_obs);
-        cJSON_AddNumberToObject(vstate, key, e.length);
+        cJSON_AddNumberToObject(vstate, key, ol);
         snprintf(key, sizeof(key), "ow%d", n_obs);
-        cJSON_AddNumberToObject(vstate, key, e.width);
+        cJSON_AddNumberToObject(vstate, key, ow);
+        snprintf(key, sizeof(key), "oh%d", n_obs);
+        cJSON_AddNumberToObject(vstate, key, oh);
         snprintf(key, sizeof(key), "oz%d", n_obs);
         cJSON_AddNumberToObject(vstate, key, e.z);
         snprintf(key, sizeof(key), "ohdg%d", n_obs);
         cJSON_AddNumberToObject(vstate, key, e.heading);
         n_obs++;
+    }
+    /* 静态设施障碍物（按距离排序，同层 80m 内注入感知，确保泊车区近邻设施不被远距路灯杆截断） */
+    {
+        std::vector<std::pair<double, size_t>> near_facs;
+        for (size_t fi = 0; fi < g.facility_obstacles.size(); ++fi) {
+            const auto& f = g.facility_obstacles[fi];
+            if (std::fabs(f.z - ego.z) > 2.5) continue;
+            const double dx = f.x - ego.x, dy = f.y - ego.y;
+            const double d2 = dx * dx + dy * dy;
+            if (d2 > 80.0 * 80.0) continue;
+            near_facs.emplace_back(d2, fi);
+        }
+        std::sort(near_facs.begin(), near_facs.end());
+        for (size_t k = 0; k < near_facs.size() && n_obs < 128; ++k) {
+            const size_t fi = near_facs[k].second;
+            const auto& f = g.facility_obstacles[fi];
+            char key[20];
+            snprintf(key, sizeof(key), "oid%d", n_obs);
+            cJSON_AddNumberToObject(vstate, key, (double)(8000 + (int)fi));
+            snprintf(key, sizeof(key), "ox%d", n_obs);
+            cJSON_AddNumberToObject(vstate, key, f.x);
+            snprintf(key, sizeof(key), "oy%d", n_obs);
+            cJSON_AddNumberToObject(vstate, key, f.y);
+            snprintf(key, sizeof(key), "ov%d", n_obs);
+            cJSON_AddNumberToObject(vstate, key, 0.0);
+            snprintf(key, sizeof(key), "ovy%d", n_obs);
+            cJSON_AddNumberToObject(vstate, key, 0.0);
+            snprintf(key, sizeof(key), "ot%d", n_obs);
+            cJSON_AddStringToObject(vstate, key, f.kind);
+            snprintf(key, sizeof(key), "ol%d", n_obs);
+            cJSON_AddNumberToObject(vstate, key, f.len);
+            snprintf(key, sizeof(key), "ow%d", n_obs);
+            cJSON_AddNumberToObject(vstate, key, f.wid);
+            snprintf(key, sizeof(key), "oh%d", n_obs);
+            cJSON_AddNumberToObject(vstate, key, f.height);
+            snprintf(key, sizeof(key), "oz%d", n_obs);
+            cJSON_AddNumberToObject(vstate, key, f.z);
+            snprintf(key, sizeof(key), "ohdg%d", n_obs);
+            cJSON_AddNumberToObject(vstate, key, f.heading);
+            n_obs++;
+        }
     }
     /* 施工区域障碍物（前方封路）：追加到障碍物列表供感知识别 */
     n_obs = append_construction_obstacles(vstate, n_obs);
@@ -1252,6 +1331,76 @@ static void publish_vehicle_state(uint64_t sim_time_us) {
     cJSON_Delete(vstate);
 }
 
+struct RoadGeometrySnapshot {
+    int    road_id{-1};
+    int    lane_count{2};
+    int    oneway{0};
+    double speed_limit{20.0};
+    int    upcoming_own_lanes{-1};
+    double dist_to_lane_drop_m{-1.0};
+};
+
+/**
+ * 查询 ego 当前路段几何与前方 120m 内首个车道缩减提示（含 per-road 单双向判定）。
+ */
+static RoadGeometrySnapshot infer_road_geometry_snapshot(void) {
+    RoadGeometrySnapshot snap;
+    const bool fallback_oneway = (g.scenario && g.scenario->road.oneway);
+    snap.oneway = fallback_oneway ? 1 : 0;
+    if (!g.roads_loaded) return snap;
+
+    const flowsim::Entity& ego = g.pool[0];
+    flowsim::FrenetPos ef;
+    if (g.roads.world_to_frenet(ego.x, ego.y, ef, ego.z)) {
+        snap.road_id = ef.road_id;
+        const int n = g.roads.drivable_lane_count(ef.road_id, ef.s);
+        if (n > 0) snap.lane_count = n;
+        const std::vector<int> ids = g.roads.drivable_lane_ids(ef.road_id, ef.s);
+        snap.oneway = planning_coord::infer_oneway_from_lane_ids(
+                          ids.data(), (int)ids.size(), fallback_oneway) ? 1 : 0;
+        snap.speed_limit = g.roads.speed_limit(
+            ef.road_id, ef.lane_id, ef.s, snap.speed_limit);
+    }
+
+    if (g.route.ok()) {
+        const double ego_rs = (g.ego_route_s_hint >= 0.0)
+                                  ? g.ego_route_s_hint
+                                  : compute_ego_route_s();
+        if (ego_rs >= 0.0) {
+            int cur_rid = -1;
+            double cur_sl = 0.0;
+            int cur_idx = -1;
+            g.route.locate(ego_rs, cur_rid, cur_sl, cur_idx);
+            if (cur_idx >= 0) {
+                const int cur_own = planning_coord::own_direction_lane_count(
+                    snap.lane_count, snap.oneway != 0);
+                constexpr double kLookaheadM = 120.0;
+                for (int j = cur_idx + 1; j < g.route.count(); ++j) {
+                    const flowsim::RouteSeg& seg = g.route.seg(j);
+                    const double dist = seg.s_start - ego_rs;
+                    if (dist > kLookaheadM) break;
+                    if (seg.is_virtual) continue;
+                    const double s_probe = seg.s0 + std::min(5.0, seg.length * 0.5);
+                    const int seg_n = g.roads.drivable_lane_count(seg.road_id, s_probe);
+                    if (seg_n <= 0) continue;
+                    const std::vector<int> seg_ids =
+                        g.roads.drivable_lane_ids(seg.road_id, s_probe);
+                    const bool seg_ow = planning_coord::infer_oneway_from_lane_ids(
+                        seg_ids.data(), (int)seg_ids.size(), fallback_oneway);
+                    const int seg_own = planning_coord::own_direction_lane_count(
+                        seg_n, seg_ow);
+                    if (seg_own > 0 && seg_own < cur_own) {
+                        snap.upcoming_own_lanes = seg_own;
+                        snap.dist_to_lane_drop_m = std::max(0.0, dist);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    return snap;
+}
+
 static void publish_road_geometry(void) {
     cJSON* root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "curve_start_x", g.curve_start_x);
@@ -1263,25 +1412,16 @@ static void publish_road_geometry(void) {
      * control_node 的 cruise_lane_y 算式只能算出 ±half_lane（中间两车道），
      * ego 永远到不了 +5.25 / -5.25 外侧车道，看起来像"逆行"。
      * 这里查询失败时回退 2（向后兼容 2 车道场景）。 */
-    int lane_count = 2;
-    int road_id = -1;
-    double speed_limit = 20.0;
-    if (g.roads_loaded) {
-        const flowsim::Entity& ego = g.pool[0];
-        flowsim::FrenetPos ef;
-        if (g.roads.world_to_frenet(ego.x, ego.y, ef)) {
-            road_id = ef.road_id;
-            int n = g.roads.drivable_lane_count(ef.road_id, ef.s);
-            if (n > 0) lane_count = n;
-            speed_limit = g.roads.speed_limit(
-                ef.road_id, ef.lane_id, ef.s, speed_limit);
-        }
-    }
+    const RoadGeometrySnapshot snap = infer_road_geometry_snapshot();
+    const int lane_count = snap.lane_count;
+    const int road_id = snap.road_id;
+    const double speed_limit = snap.speed_limit;
     cJSON_AddNumberToObject(root, "lane_count", lane_count);
     cJSON_AddNumberToObject(root, "speed_limit", speed_limit);
-    /* 单双向：behavior 变道候选限制用（双向路禁止越线变道到对向） */
-    cJSON_AddNumberToObject(root, "oneway",
-                            (g.scenario && g.scenario->road.oneway) ? 1 : 0);
+    /* 单双向：per-road OpenDRIVE lane_id 推导，确保单向匝道与双向主干道无缝衔接 */
+    cJSON_AddNumberToObject(root, "oneway", snap.oneway);
+    cJSON_AddNumberToObject(root, "upcoming_own_lanes", snap.upcoming_own_lanes);
+    cJSON_AddNumberToObject(root, "dist_to_lane_drop_m", snap.dist_to_lane_drop_m);
     /* 泊车目标（Milestone M3 开放空间泊车）：透传给 planning_node */
     if (g.scenario && g.scenario->parking_goal.enabled) {
         cJSON* jpg = cJSON_CreateObject();
@@ -1335,6 +1475,8 @@ static void publish_road_geometry(void) {
     cJSON_Delete(root);
     g.last_road_geom_road_id = road_id;
     g.last_road_geom_lane_count = lane_count;
+    g.last_road_geom_oneway = snap.oneway;
+    g.last_road_geom_upcoming_own_lanes = snap.upcoming_own_lanes;
 }
 
 /* D2-05 lane_match 计算（M2 baseline） ────────────────────────
@@ -1397,7 +1539,7 @@ static bool lane_offset_to_lane(int road_id, int lane_id, double s,
     return true;
 }
 
-static void compute_lane_match(double x, double y, double ego_heading,
+static void compute_lane_match(double x, double y, double z, double ego_heading,
                                uint64_t* out_llt_id, double* out_llt_s,
                                double* out_llt_offset, double* out_heading_err,
                                int* out_valid,
@@ -1408,7 +1550,7 @@ static void compute_lane_match(double x, double y, double ego_heading,
                                uint64_t* out_right_lanelet_id,
                                uint32_t* out_flags) {
     flowsim::FrenetPos fp;
-    const bool ok = g.roads_loaded && g.roads.world_to_frenet(x, y, fp);
+    const bool ok = g.roads_loaded && g.roads.world_to_frenet(x, y, fp, z);
     if (!ok || fp.road_id < 0) {
         /* 丢失匹配：清掉锁存，下次重新采纳硬判据（防止跨 road/掉头后粘在旧 lane） */
         g.lm_held_lane = 0;
@@ -1538,7 +1680,7 @@ static void compute_lane_match(double x, double y, double ego_heading,
 static void publish_lane_match(void) {
     flowsim::Entity& ego = g.pool[0];
     flowsim::FrenetPos fp;
-    const bool ok = g.roads_loaded && g.roads.world_to_frenet(ego.x, ego.y, fp);
+    const bool ok = g.roads_loaded && g.roads.world_to_frenet(ego.x, ego.y, fp, ego.z);
     if (ok) {
         g.lane_match_frames++;
         if (fp.lane_id != ego.lane_id || fp.road_id != ego.road_id) {
@@ -1578,7 +1720,7 @@ static void publish_lane_match(void) {
     double curvature = 0.0, lane_width = 0.0;
     uint64_t left_lanelet_id = 0, right_lanelet_id = 0;
     uint32_t flags = 0U;
-    compute_lane_match(ego.x, ego.y, ego.heading,
+    compute_lane_match(ego.x, ego.y, ego.z, ego.heading,
                        &llt_id, &llt_s, &llt_offset,
                        &llt_heading_err_rad, &valid,
                        &curvature, &lane_width,
@@ -1606,14 +1748,11 @@ static void publish_lane_match(void) {
 static bool should_publish_road_geometry_now(void) {
     if (g.cycle % ROAD_GEOMETRY_REPUBLISH_CYCLES == 0) return true;
     if (!g.roads_loaded) return false;
-    const flowsim::Entity& ego = g.pool[0];
-    flowsim::FrenetPos ef;
-    if (!g.roads.world_to_frenet(ego.x, ego.y, ef)) return false;
-    int lane_count = g.last_road_geom_lane_count;
-    int n = g.roads.drivable_lane_count(ef.road_id, ef.s);
-    if (n > 0) lane_count = n;
-    return ef.road_id != g.last_road_geom_road_id ||
-           lane_count != g.last_road_geom_lane_count;
+    const RoadGeometrySnapshot snap = infer_road_geometry_snapshot();
+    return snap.road_id != g.last_road_geom_road_id ||
+           snap.lane_count != g.last_road_geom_lane_count ||
+           snap.oneway != g.last_road_geom_oneway ||
+           snap.upcoming_own_lanes != g.last_road_geom_upcoming_own_lanes;
 }
 
 /**
@@ -1732,9 +1871,16 @@ static void publish_traffic_lights() {
         cJSON_AddNumberToObject(light, "y", e.signal_stop_y);
         cJSON_AddNumberToObject(light, "y_lane", e.signal_stop_y);
         cJSON_AddNumberToObject(light, "lane_offset", e.offset);
+        cJSON_AddNumberToObject(light, "approach_heading", e.approach_heading);
         flowsim::TLPhase ph = static_cast<flowsim::TLPhase>(e.phase_state);
         cJSON_AddStringToObject(light, "state", tl_phase_str(ph));
         cJSON_AddNumberToObject(light, "remain_s", e.phase_timer);
+        cJSON_AddBoolToObject(light, "has_left_arrow", e.has_left_arrow ? 1 : 0);
+        if (e.has_left_arrow) {
+            flowsim::TLPhase lph = static_cast<flowsim::TLPhase>(e.left_phase_state);
+            cJSON_AddStringToObject(light, "left_state", tl_phase_str(lph));
+            cJSON_AddNumberToObject(light, "left_remain_s", e.left_phase_timer);
+        }
         cJSON_AddItemToArray(lights, light);
     }
     cJSON_AddItemToObject(root, "lights", lights);
@@ -1813,7 +1959,7 @@ static void internal_cruise_control(flowsim::Entity& ego) {
      * 车道保持目标与 flowsim 物理车道、planning 目标一致（否则单向路 fallback
      * 会把 ego 保到对称（错误）的车道中心）。 */
     const int  fb_lane_count = g.scene_pub_cfg.lane_count;
-    const bool fb_oneway = (g.scenario && g.scenario->road.oneway) ? true : false;
+    const bool fb_oneway = infer_road_geometry_snapshot().oneway != 0;
     const double fb_side_offset =
         lane_group_side_offset(fb_lane_count, g.lane_width, fb_oneway ? 1 : 0);
     int ego_lane_idx = lane_idx_from_y(ego.y, fb_lane_count, g.lane_width, rc_y, fb_side_offset);
@@ -2161,7 +2307,7 @@ protected:
             }
             if (game_control_active && remove(game_rescue_path) == 0) {
                 flowsim::FrenetPos fp;
-                if (g.roads_loaded && g.roads.world_to_frenet(ego.x, ego.y, fp)) {
+                if (g.roads_loaded && g.roads.world_to_frenet(ego.x, ego.y, fp, ego.z)) {
                     flowsim::WorldPos wp;
                     if (g.roads.frenet_to_world(fp.road_id, fp.lane_id, fp.s, 0.0, wp) &&
                         ego.road_pos.relocate(g.roads, fp.road_id, fp.lane_id, fp.s, 0.0)) {
@@ -2417,7 +2563,7 @@ protected:
                 double exit_lat_m    = 1e9;
                 if (g.roads_loaded) {
                     flowsim::FrenetPos fp;
-                    if (g.roads.world_to_frenet(ego.x, ego.y, fp)) {
+                    if (g.roads.world_to_frenet(ego.x, ego.y, fp, ego.z)) {
                         ego.road_id = fp.road_id;
                         ego.lane_id = fp.lane_id;
                         ego.s = fp.s;
@@ -2520,7 +2666,7 @@ protected:
                      * 模型的世界坐标同步 esmini position。 */
                     if (g.u_turn_active && g.roads_loaded) {
                         flowsim::FrenetPos fp;
-                        if (g.roads.world_to_frenet(ego.x, ego.y, fp)) {
+                        if (g.roads.world_to_frenet(ego.x, ego.y, fp, ego.z)) {
                             /* 掉头返程段（2026-08 架构收口）：
                              * 位置 = step_bicycle 积分（物理真值，与 HTML 车辆
                              * 实验室一致）。旧实现 relocate 读回 ego.x/y 把位置
@@ -2564,7 +2710,7 @@ protected:
                          * 位置的 world_to_frenet 投影（比 handle 的轨道位置准，
                          * 车在物理位置而非轨道上）。 */
                         flowsim::FrenetPos fp;
-                        if (g.roads_loaded && g.roads.world_to_frenet(ego.x, ego.y, fp)) {
+                        if (g.roads_loaded && g.roads.world_to_frenet(ego.x, ego.y, fp, ego.z)) {
                             ego.road_id = fp.road_id;
                             ego.lane_id = fp.lane_id;
                             ego.s = fp.s;
@@ -2634,7 +2780,8 @@ protected:
                                               g.cycle, g.off_rails);
                 } else if (e.type == flowsim::EntityType::Pedestrian) {
                     flowsim::step_npc_pedestrian(e, FLOWSIM_DT_SEC, g.ai_cfg,
-                                                 g.roads_loaded ? &g.roads : nullptr);
+                                                 g.roads_loaded ? &g.roads : nullptr,
+                                                 &g.pool);
                 }
             }
 
@@ -2700,6 +2847,126 @@ protected:
                         }
                         break;  // 一辆车一帧只处理一次建筑碰撞
                     }
+                }
+            }
+
+            /* ── Step 4.2b: 车辆↔未全开道闸 / 静态设施（车库立柱墙体、树池岛、灯杆、施工区）碰撞 ── */
+            for (int i = 0; i < g.pool.size(); ++i) {
+                flowsim::Entity& e = g.pool[i];
+                if (!e.active || !e.is_vehicle() || e.parked_fixed || e.crash_cooldown > 0.0) continue;
+                bool hit = false;
+                for (int gi = 0; gi < g.pool.size(); ++gi) {
+                    const flowsim::Entity& gate = g.pool[gi];
+                    if (!gate.active || gate.type != flowsim::EntityType::ETCGate) continue;
+                    if (gate.phase_state == 2 || gate.phase_timer >= 0.75) continue;
+                    if (std::fabs(e.z - gate.z) > 2.0) continue;
+                    if (std::hypot(e.x - gate.x, e.y - gate.y) > 8.0) continue;
+                    flowsim::BuildingOBB gate_obb{gate.x, gate.y, 0.5, 3.6, gate.heading};
+                    if (!flowsim::obb_hits_building(e.x, e.y, e.length, e.width, e.heading, gate_obb)) continue;
+                    e.speed = 0; e.vx = 0; e.vy = 0;
+                    e.brake = 1.0; e.throttle = 0.0;
+                    e.x -= std::cos(gate.heading) * (e.length * 0.5 + 0.4);
+                    e.y -= std::sin(gate.heading) * (e.length * 0.5 + 0.4);
+                    e.last_teleport_cycle = g.cycle;
+                    e.crash_cooldown = 0.5;
+                    if (i == 0) {
+                        LOG_ERROR("flowsim", "COLLISION ego↔gate%d (closed barrier)", gate.scenario_id);
+                        publish_sim_collision(e, gate);
+                    }
+                    hit = true;
+                    break;
+                }
+                if (hit) continue;
+                for (size_t fi = 0; fi < g.facility_obstacles.size(); ++fi) {
+                    const auto& f = g.facility_obstacles[fi];
+                    if (std::fabs(e.z - f.z) > 2.5) continue;
+                    if (std::fabs(e.x - f.x) > e.length * 0.5 + std::max(f.len, f.wid) + 1.0) continue;
+                    if (std::fabs(e.y - f.y) > e.length * 0.5 + std::max(f.len, f.wid) + 1.0) continue;
+                    const double col_len = (f.height <= 0.25)
+                        ? std::min(e.length, ((e.wheelbase > 0.5) ? e.wheelbase : 2.7) + 0.55)
+                        : e.length;
+                    flowsim::BuildingOBB f_obb{f.x, f.y, f.len, f.wid, f.heading};
+                    if (!flowsim::obb_hits_building(e.x, e.y, col_len, e.width, e.heading, f_obb)) continue;
+                    e.speed = 0; e.vx = 0; e.vy = 0;
+                    e.brake = 1.0; e.throttle = 0.0;
+                    double cf = std::cos(f.heading), sf = std::sin(f.heading);
+                    double rel_x = e.x - f.x, rel_y = e.y - f.y;
+                    double loc_x = rel_x * cf + rel_y * sf;
+                    double loc_y = -rel_x * sf + rel_y * cf;
+                    double pen_x = (f.len * 0.5 + e.width * 0.5 + 0.1) - std::fabs(loc_x);
+                    double pen_y = (f.wid * 0.5 + e.width * 0.5 + 0.1) - std::fabs(loc_y);
+                    if (pen_x < pen_y) {
+                        double sgn = (loc_x >= 0.0) ? 1.0 : -1.0;
+                        loc_x = sgn * (f.len * 0.5 + e.width * 0.5 + 0.15);
+                    } else {
+                        double sgn = (loc_y >= 0.0) ? 1.0 : -1.0;
+                        loc_y = sgn * (f.wid * 0.5 + e.width * 0.5 + 0.15);
+                    }
+                    e.x = f.x + loc_x * cf - loc_y * sf;
+                    e.y = f.y + loc_x * sf + loc_y * cf;
+                    e.last_teleport_cycle = g.cycle;
+                    e.crash_cooldown = 0.5;
+                    if (i == 0) {
+                        LOG_ERROR("flowsim", "COLLISION ego↔facility%d (%s)", (int)fi, f.kind);
+                        publish_sim_collision(e, e);
+                    }
+                    hit = true;
+                    break;
+                }
+                if (hit) continue;
+                for (int ui = 0; ui < g.pool.size(); ++ui) {
+                    const flowsim::Entity& u = g.pool[ui];
+                    if (!u.active || u.type != flowsim::EntityType::UnknownStatic) continue;
+                    if (std::fabs(e.z - u.z) > 2.2) continue;
+                    if (std::hypot(e.x - u.x, e.y - u.y) > e.length * 0.5 + std::max(u.length, u.width) + 1.0) continue;
+                    flowsim::BuildingOBB u_obb{u.x, u.y, u.length, u.width, u.heading};
+                    if (!flowsim::obb_hits_building(e.x, e.y, e.length, e.width, e.heading, u_obb)) continue;
+                    e.speed = 0; e.vx = 0; e.vy = 0;
+                    e.brake = 1.0; e.throttle = 0.0;
+                    double cu = std::cos(u.heading), su = std::sin(u.heading);
+                    double rel_x = e.x - u.x, rel_y = e.y - u.y;
+                    double loc_x = rel_x * cu + rel_y * su;
+                    double loc_y = -rel_x * su + rel_y * cu;
+                    double pen_x = (u.length * 0.5 + e.width * 0.5 + 0.1) - std::fabs(loc_x);
+                    double pen_y = (u.width * 0.5 + e.width * 0.5 + 0.1) - std::fabs(loc_y);
+                    if (pen_x < pen_y) {
+                        loc_x = ((loc_x >= 0.0) ? 1.0 : -1.0) * (u.length * 0.5 + e.width * 0.5 + 0.15);
+                    } else {
+                        loc_y = ((loc_y >= 0.0) ? 1.0 : -1.0) * (u.width * 0.5 + e.width * 0.5 + 0.15);
+                    }
+                    e.x = u.x + loc_x * cu - loc_y * su;
+                    e.y = u.y + loc_x * su + loc_y * cu;
+                    e.last_teleport_cycle = g.cycle;
+                    e.crash_cooldown = 0.5;
+                    if (i == 0) {
+                        LOG_ERROR("flowsim", "COLLISION ego↔unknown_static%d", u.scenario_id);
+                        publish_sim_collision(e, u);
+                    }
+                    hit = true;
+                    break;
+                }
+                if (hit || !g.scenario) continue;
+                for (int cz_i = 0; cz_i < g.scenario->construction_zone_count; ++cz_i) {
+                    const ScenarioConstructionZone& cz = g.scenario->construction_zones[cz_i];
+                    if (std::fabs(e.z) > 2.5) continue;
+                    if (std::hypot(e.x - cz.x, e.y - cz.y) > e.length + std::max(cz.length, cz.width) + 2.0) continue;
+                    flowsim::BuildingOBB cz_obb{cz.x, cz.y, cz.length, cz.width, 0.0, {}};
+                    if (!flowsim::obb_hits_building(e.x, e.y, e.length, e.width, e.heading, cz_obb)) continue;
+                    e.speed = 0; e.vx = 0; e.vy = 0;
+                    e.brake = 1.0; e.throttle = 0.0;
+                    double dx = e.x - cz.x, dy = e.y - cz.y;
+                    double d = std::hypot(dx, dy);
+                    if (d < 1e-6) { dx = -1.0; dy = 0.0; d = 1.0; }
+                    double back = cz.length * 0.5 + e.length * 0.5 + 0.2;
+                    e.x = cz.x + (dx / d) * back;
+                    e.y = cz.y + (dy / d) * back;
+                    e.last_teleport_cycle = g.cycle;
+                    e.crash_cooldown = 0.5;
+                    if (i == 0) {
+                        LOG_ERROR("flowsim", "COLLISION ego↔construction%d", cz_i);
+                        publish_sim_collision(e, e);
+                    }
+                    break;
                 }
             }
 
@@ -3014,13 +3281,24 @@ static bool build_route_via_astar(void) {
     int chain_ids[ROUTER_MAX_PATH];
     int chain_n = 0;
     cJSON* rn = cJSON_Parse(g.scenario->road_network_json);
-    cJSON* jedges = rn ? cJSON_GetObjectItemCaseSensitive(rn, "edges") : NULL;
-    if (cJSON_IsArray(jedges)) {
-        int ne = cJSON_GetArraySize(jedges);
-        for (int i = 0; i < ne && chain_n < ROUTER_MAX_PATH; i++) {
-            cJSON* e = cJSON_GetArrayItem(jedges, i);
-            cJSON* jid = e ? cJSON_GetObjectItemCaseSensitive(e, "id") : NULL;
-            if (cJSON_IsNumber(jid)) chain_ids[chain_n++] = (int)jid->valuedouble;
+    /* 四向十字/分支路网场景可用 road_network.route_chain 显式指定 ego 主线边序，
+     * 避免跨路口的南北横交支路被盲目串进 ego 主路线。未配置时沿用全量 edges[] 顺序。 */
+    cJSON* jchain = rn ? cJSON_GetObjectItemCaseSensitive(rn, "route_chain") : NULL;
+    if (cJSON_IsArray(jchain) && cJSON_GetArraySize(jchain) >= 2) {
+        int nc = cJSON_GetArraySize(jchain);
+        for (int i = 0; i < nc && chain_n < ROUTER_MAX_PATH; i++) {
+            cJSON* elem = cJSON_GetArrayItem(jchain, i);
+            if (cJSON_IsNumber(elem)) chain_ids[chain_n++] = (int)elem->valuedouble;
+        }
+    } else {
+        cJSON* jedges = rn ? cJSON_GetObjectItemCaseSensitive(rn, "edges") : NULL;
+        if (cJSON_IsArray(jedges)) {
+            int ne = cJSON_GetArraySize(jedges);
+            for (int i = 0; i < ne && chain_n < ROUTER_MAX_PATH; i++) {
+                cJSON* e = cJSON_GetArrayItem(jedges, i);
+                cJSON* jid = e ? cJSON_GetObjectItemCaseSensitive(e, "id") : NULL;
+                if (cJSON_IsNumber(jid)) chain_ids[chain_n++] = (int)jid->valuedouble;
+            }
         }
     }
     if (rn) cJSON_Delete(rn);
@@ -3240,6 +3518,7 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
         }
         /* 前端渲染用原始 buildings[]（含 footprint/height，非 OBB）：从同一 JSON 提取
          * 为 raw 字符串缓存进 scene_pub_cfg，每帧 emit 给 BuildingView。 */
+        g.facility_obstacles.clear();
         cJSON* rn = cJSON_Parse(g.scenario->road_network_json);
         if (rn) {
             cJSON* barr = cJSON_GetObjectItemCaseSensitive(rn, "buildings");
@@ -3255,7 +3534,313 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
                     free(bsp);
                 }
             }
+            /* 提取 B1 地下车库立柱/外墙、坡道挡墙及路侧灯杆作为静态碰撞与感知障碍体 */
+            cJSON* earr = cJSON_GetObjectItemCaseSensitive(rn, "edges");
+            if (cJSON_IsArray(earr)) {
+                cJSON* edge = nullptr;
+                cJSON_ArrayForEach(edge, earr) {
+                    cJSON* jtype = cJSON_GetObjectItemCaseSensitive(edge, "type");
+                    if (!jtype || !cJSON_IsString(jtype)) continue;
+                    const char* etype = jtype->valuestring;
+                    cJSON* jnodes = cJSON_GetObjectItemCaseSensitive(edge, "nodes");
+                    if (!cJSON_IsArray(jnodes) || cJSON_GetArraySize(jnodes) < 2) continue;
+                    int npts = cJSON_GetArraySize(jnodes);
+                    cJSON* n0 = cJSON_GetArrayItem(jnodes, 0);
+                    cJSON* n1 = cJSON_GetArrayItem(jnodes, npts - 1);
+                    double x0 = cJSON_GetArrayItem(n0, 0)->valuedouble;
+                    double y0 = cJSON_GetArrayItem(n0, 1)->valuedouble;
+                    double z0 = cJSON_GetArraySize(n0) > 2 ? cJSON_GetArrayItem(n0, 2)->valuedouble : 0.0;
+                    double x1 = cJSON_GetArrayItem(n1, 0)->valuedouble;
+                    double y1 = cJSON_GetArrayItem(n1, 1)->valuedouble;
+                    double len = std::hypot(x1 - x0, y1 - y0);
+                    double hdg = std::atan2(y1 - y0, x1 - x0);
+                    double ch = std::cos(hdg), sh = std::sin(hdg);
+
+                    if (strcmp(etype, "garage_hall") == 0) {
+                        const double hall_half_w = 11.6;
+                        const double pillar_s[] = {2.0, 19.1, 31.5, 48.0, 64.0, 82.0, 96.0, 110.0, 124.0};
+                        for (double ps : pillar_s) {
+                            if (ps >= len - 2.0) continue;
+                            for (double side : {-1.0, 1.0}) {
+                                double lat = side * (hall_half_w - 0.85);
+                                g.facility_obstacles.push_back({
+                                    x0 + ch * ps - sh * lat,
+                                    y0 + sh * ps + ch * lat,
+                                    z0, 0.60, 0.60, hdg, "pillar"
+                                });
+                            }
+                        }
+                        /* 车库南北外墙（分段 10m 便于局部感知与碰撞推回） + 西端封堵墙 */
+                        for (double s = 0.0; s < len; s += 10.0) {
+                            double seg_len = std::min(10.0, len - s);
+                            double sm = s + seg_len * 0.5;
+                            for (double side : {-1.0, 1.0}) {
+                                double lat = side * (hall_half_w + 0.15);
+                                g.facility_obstacles.push_back({
+                                    x0 + ch * sm - sh * lat,
+                                    y0 + sh * sm + ch * lat,
+                                    z0, seg_len, 0.40, hdg, "wall"
+                                });
+                            }
+                        }
+                        for (double lat = -8.0; lat <= 8.0; lat += 8.0) {
+                            g.facility_obstacles.push_back({
+                                x0 - sh * lat, y0 + ch * lat,
+                                z0, 0.40, 8.0, hdg, "wall"
+                            });
+                        }
+                    } else if (strcmp(etype, "open_ramp") == 0) {
+                        cJSON* jlanes = cJSON_GetObjectItemCaseSensitive(edge, "lanes");
+                        cJSON* jlw    = cJSON_GetObjectItemCaseSensitive(edge, "lane_width");
+                        int lanes = (jlanes && cJSON_IsNumber(jlanes)) ? (int)jlanes->valuedouble : 2;
+                        double lw = (jlw && cJSON_IsNumber(jlw)) ? jlw->valuedouble : 3.5;
+                        double lat_w = lanes * lw * 0.5 + 0.45;
+                        for (int k = 1; k < npts; ++k) {
+                            cJSON* pa = cJSON_GetArrayItem(jnodes, k - 1);
+                            cJSON* pb = cJSON_GetArrayItem(jnodes, k);
+                            double ax = cJSON_GetArrayItem(pa, 0)->valuedouble;
+                            double ay = cJSON_GetArrayItem(pa, 1)->valuedouble;
+                            double az = cJSON_GetArraySize(pa) > 2 ? cJSON_GetArrayItem(pa, 2)->valuedouble : 0.0;
+                            double bx = cJSON_GetArrayItem(pb, 0)->valuedouble;
+                            double by = cJSON_GetArrayItem(pb, 1)->valuedouble;
+                            double bz = cJSON_GetArraySize(pb) > 2 ? cJSON_GetArrayItem(pb, 2)->valuedouble : 0.0;
+                            double slen = std::hypot(bx - ax, by - ay);
+                            if (slen < 1.0) continue;
+                            double shdg = std::atan2(by - ay, bx - ax);
+                            double sc = std::cos(shdg), ss = std::sin(shdg);
+                            for (double s = 0.0; s < slen; s += 10.0) {
+                                double seg = std::min(10.0, slen - s);
+                                double sm = s + seg * 0.5;
+                                double t = sm / slen;
+                                double mz = az + (bz - az) * t;
+                                for (double side : {-1.0, 1.0}) {
+                                    double lat = side * lat_w;
+                                    g.facility_obstacles.push_back({
+                                        ax + sc * sm - ss * lat,
+                                        ay + ss * sm + sc * lat,
+                                        mz, seg, 0.35, shdg, "wall"
+                                    });
+                                }
+                            }
+                        }
+                    } else if (strcmp(etype, "urban") == 0) {
+                        cJSON* jlanes = cJSON_GetObjectItemCaseSensitive(edge, "lanes");
+                        cJSON* jlw    = cJSON_GetObjectItemCaseSensitive(edge, "lane_width");
+                        int lanes = (jlanes && cJSON_IsNumber(jlanes)) ? (int)jlanes->valuedouble : 2;
+                        double lw = (jlw && cJSON_IsNumber(jlw)) ? jlw->valuedouble : 3.5;
+                        double lat_p = lanes * lw * 0.5 + 0.85;
+                        for (int k = 1; k < npts; ++k) {
+                            cJSON* pa = cJSON_GetArrayItem(jnodes, k - 1);
+                            cJSON* pb = cJSON_GetArrayItem(jnodes, k);
+                            double ax = cJSON_GetArrayItem(pa, 0)->valuedouble;
+                            double ay = cJSON_GetArrayItem(pa, 1)->valuedouble;
+                            double az = cJSON_GetArraySize(pa) > 2 ? cJSON_GetArrayItem(pa, 2)->valuedouble : 0.0;
+                            double bx = cJSON_GetArrayItem(pb, 0)->valuedouble;
+                            double by = cJSON_GetArrayItem(pb, 1)->valuedouble;
+                            double slen = std::hypot(bx - ax, by - ay);
+                            if (slen < 30.0) continue;
+                            double shdg = std::atan2(by - ay, bx - ax);
+                            double sc = std::cos(shdg), ss = std::sin(shdg);
+                            for (double s = 20.0; s < slen - 20.0; s += 40.0) {
+                                for (double side : {-1.0, 1.0}) {
+                                    double lat = side * lat_p;
+                                    g.facility_obstacles.push_back({
+                                        ax + sc * s - ss * lat,
+                                        ay + ss * s + sc * lat,
+                                        az, 0.45, 0.45, shdg, "pole"
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                /* 剔除落入任何交叉/汇入/并行路面的灯杆 */
+                struct RoadSegBand { double ax, ay, az, bx, by, bz, hw; };
+                std::vector<RoadSegBand> segs;
+                cJSON_ArrayForEach(edge, earr) {
+                    cJSON* jnodes = cJSON_GetObjectItemCaseSensitive(edge, "nodes");
+                    if (!cJSON_IsArray(jnodes) || cJSON_GetArraySize(jnodes) < 2) continue;
+                    cJSON* jlanes = cJSON_GetObjectItemCaseSensitive(edge, "lanes");
+                    cJSON* jlw    = cJSON_GetObjectItemCaseSensitive(edge, "lane_width");
+                    int lanes = (jlanes && cJSON_IsNumber(jlanes)) ? (int)jlanes->valuedouble : 2;
+                    double lw = (jlw && cJSON_IsNumber(jlw)) ? jlw->valuedouble : 3.5;
+                    double hw = lanes * lw * 0.5 + 0.55;
+                    int npts = cJSON_GetArraySize(jnodes);
+                    for (int k = 1; k < npts; ++k) {
+                        cJSON* pa = cJSON_GetArrayItem(jnodes, k - 1);
+                        cJSON* pb = cJSON_GetArrayItem(jnodes, k);
+                        segs.push_back({
+                            cJSON_GetArrayItem(pa, 0)->valuedouble,
+                            cJSON_GetArrayItem(pa, 1)->valuedouble,
+                            cJSON_GetArraySize(pa) > 2 ? cJSON_GetArrayItem(pa, 2)->valuedouble : 0.0,
+                            cJSON_GetArrayItem(pb, 0)->valuedouble,
+                            cJSON_GetArrayItem(pb, 1)->valuedouble,
+                            cJSON_GetArraySize(pb) > 2 ? cJSON_GetArrayItem(pb, 2)->valuedouble : 0.0,
+                            hw
+                        });
+                    }
+                }
+                g.facility_obstacles.erase(
+                    std::remove_if(g.facility_obstacles.begin(), g.facility_obstacles.end(),
+                        [&](const FlowSimContext::FacilityCollider& f) {
+                            if (strcmp(f.kind, "pole") != 0) return false;
+                            for (const auto& s : segs) {
+                                double dx = s.bx - s.ax, dy = s.by - s.ay;
+                                double l2 = dx * dx + dy * dy;
+                                if (l2 < 1e-6) continue;
+                                double t = std::max(0.0, std::min(1.0, ((f.x - s.ax) * dx + (f.y - s.ay) * dy) / l2));
+                                double px = s.ax + t * dx, py = s.ay + t * dy, pz = s.az + t * (s.bz - s.az);
+                                if (std::fabs(f.z - pz) <= 2.5 && std::hypot(f.x - px, f.y - py) < s.hw) {
+                                    return true;
+                                }
+                            }
+                            for (int si = 0; si < g.scenario->parking_slot_count; ++si) {
+                                const auto& ps = g.scenario->parking_slots[si];
+                                if (std::fabs(f.z - ps.z) <= 2.5 && std::hypot(f.x - ps.x, f.y - ps.y) < 12.0) {
+                                    return true;
+                                }
+                            }
+                            return false;
+                        }),
+                    g.facility_obstacles.end());
+            }
             cJSON_Delete(rn);
+        }
+        /* 道闸/ETC 路侧机箱与安全岛（即使抬杆后也保持物理碰撞） */
+        for (int gi = 0; gi < g.scenario->etc_gate_count; ++gi) {
+            const auto& eg = g.scenario->etc_gates[gi];
+            double cg = std::cos(eg.heading), sg = std::sin(eg.heading);
+            double lat = -2.25;
+            g.facility_obstacles.push_back({
+                eg.x - sg * lat, eg.y + cg * lat,
+                eg.z, 1.6, 0.7, eg.heading, "gate"
+            });
+        }
+        /* 地面停车场东西树池隔离带（与 GarageView.js 对齐） */
+        if (g.scenario->parking_slot_count > 0) {
+            double min_sx = 1e9, max_sx = -1e9;
+            for (int si = 0; si < g.scenario->parking_slot_count; ++si) {
+                if (std::fabs(g.scenario->parking_slots[si].z) < 1.2) {
+                    min_sx = std::min(min_sx, g.scenario->parking_slots[si].x);
+                    max_sx = std::max(max_sx, g.scenario->parking_slots[si].x);
+                }
+            }
+            if (min_sx < max_sx) {
+                double west_x = (min_sx - 4.0) - 5.65;
+                double east_x = (max_sx + 4.0) + 8.5;
+                g.facility_obstacles.push_back({west_x, -6.5, 0.0, 4.6, 5.1, 0.0, "planter", 0.70});
+                g.facility_obstacles.push_back({east_x, -6.5, 0.0, 4.6, 5.1, 0.0, "planter", 0.70});
+
+                const double bayY = g.scenario->parking_slots[0].y;
+                const double bayZ = g.scenario->parking_slots[0].z;
+                const double bayH = g.scenario->parking_slots[0].heading != 0.0
+                                  ? g.scenario->parking_slots[0].heading : 1.5708;
+                const double slotLen = g.scenario->parking_slots[0].length > 0.0
+                                     ? g.scenario->parking_slots[0].length : 5.6;
+                const double slotWid = g.scenario->parking_slots[0].width > 0.0
+                                     ? g.scenario->parking_slots[0].width : 2.7;
+
+                std::vector<double> bayXs = {
+                    min_sx - 4.0, min_sx, (min_sx + max_sx) * 0.5, max_sx, max_sx + 4.0
+                };
+                std::vector<double> uniqueBayXs;
+                for (double bx : bayXs) {
+                    bool dup = false;
+                    for (double u : uniqueBayXs) if (std::fabs(u - bx) < 1.2) { dup = true; break; }
+                    if (!dup) uniqueBayXs.push_back(bx);
+                }
+                for (int si = 0; si < g.scenario->parking_slot_count; ++si) {
+                    const auto& ps = g.scenario->parking_slots[si];
+                    if (std::fabs(ps.z) >= 1.2) continue;
+                    bool dup = false;
+                    for (double u : uniqueBayXs) if (std::fabs(u - ps.x) < 1.2) { dup = true; break; }
+                    if (!dup) uniqueBayXs.push_back(ps.x);
+                }
+                std::sort(uniqueBayXs.begin(), uniqueBayXs.end());
+
+                if (!uniqueBayXs.empty()) {
+                    const double cb = std::cos(bayH), sb = std::sin(bayH);
+                    const double stopOff = -slotLen * 0.5 + 0.65;
+                    for (double bx : uniqueBayXs) {
+                        g.facility_obstacles.push_back({
+                            bx + cb * stopOff, bayY + sb * stopOff, bayZ,
+                            0.16, std::max(0.8, slotWid * 0.72), bayH, "wheel_stop", 0.18
+                        });
+                        g.facility_obstacles.push_back({
+                            bx - 1.95, bayY - 3.05, bayZ,
+                            0.18, 0.18, bayH, "bollard", 0.78
+                        });
+                    }
+                    g.facility_obstacles.push_back({
+                        uniqueBayXs.back() + 1.95, bayY - 3.05, bayZ,
+                        0.18, 0.18, bayH, "bollard", 0.78
+                    });
+                    size_t chStart = uniqueBayXs.size() > 3 ? uniqueBayXs.size() - 3 : 0;
+                    for (size_t ci = chStart; ci < uniqueBayXs.size(); ++ci) {
+                        g.facility_obstacles.push_back({
+                            uniqueBayXs[ci], bayY - 3.55, bayZ,
+                            0.42, 0.34, bayH, "charger", 1.55
+                        });
+                    }
+                    const double westPlanterX = uniqueBayXs.front() - 5.65;
+                    const double padMinX = westPlanterX - 3.6;
+                    const double gateIslandX = std::min(3198.0, padMinX - 6.0);
+                    g.facility_obstacles.push_back({
+                        gateIslandX, -4.5, 0.0, 6.2, 1.25, 0.0, "barrier", 1.50
+                    });
+                }
+            }
+            for (int si = 0; si < g.scenario->parking_slot_count; ++si) {
+                const auto& ps = g.scenario->parking_slots[si];
+                if (std::fabs(ps.z) < 1.2) continue;
+                const double sh = ps.heading != 0.0 ? ps.heading : 1.5708;
+                const double len = ps.length > 0.0 ? ps.length : 5.6;
+                const double wid = ps.width > 0.0 ? ps.width : 2.7;
+                const double stopOff = -len * 0.5 + 0.65;
+                g.facility_obstacles.push_back({
+                    ps.x + std::cos(sh) * stopOff, ps.y + std::sin(sh) * stopOff, ps.z,
+                    0.16, std::max(0.8, wid * 0.72), sh, "wheel_stop", 0.18
+                });
+            }
+        }
+    }
+    if (g.scenario && g.scenario->parking_goal.enabled) {
+        const auto& pg = g.scenario->parking_goal;
+        bool covered = false;
+        for (int si = 0; si < g.scenario->parking_slot_count; ++si) {
+            const auto& ps = g.scenario->parking_slots[si];
+            if (std::hypot(ps.x - pg.x, ps.y - pg.y) < 1.5 &&
+                std::fabs(ps.z - pg.z) < 1.5) {
+                covered = true;
+                break;
+            }
+        }
+        if (!covered) {
+            const double gh = pg.heading;
+            const double glen = pg.length > 0.0 ? pg.length : 6.0;
+            const double gwid = pg.width > 0.0 ? pg.width : 2.8;
+            const double cg = std::cos(gh), sg = std::sin(gh);
+            const double stopOff = -glen * 0.5 + 0.65;
+            g.facility_obstacles.push_back({
+                pg.x + cg * stopOff, pg.y + sg * stopOff, pg.z,
+                0.16, std::max(0.8, gwid * 0.72), gh, "wheel_stop", 0.18
+            });
+            if (std::fabs(pg.z) < 1.2) {
+                const double chargerOff = -glen * 0.5 - 0.55;
+                g.facility_obstacles.push_back({
+                    pg.x + cg * chargerOff, pg.y + sg * chargerOff, pg.z,
+                    0.42, 0.34, gh, "charger", 1.55
+                });
+                const double bolBack = -glen * 0.5 - 0.05;
+                const double bolLat = gwid * 0.5 + 0.30;
+                for (double side : {-1.0, 1.0}) {
+                    g.facility_obstacles.push_back({
+                        pg.x + cg * bolBack - sg * (side * bolLat),
+                        pg.y + sg * bolBack + cg * (side * bolLat),
+                        pg.z, 0.18, 0.18, gh, "bollard", 0.78
+                    });
+                }
+            }
         }
     }
 
@@ -3331,6 +3916,23 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
                 }
                 /* 压路建筑剔除（隧道上方建筑/数据瑕疵不参与碰撞） */
                 filter_buildings_over_roads();
+                /* 剔除落入交叉/汇入路面的路侧灯杆 */
+                g.facility_obstacles.erase(
+                    std::remove_if(g.facility_obstacles.begin(), g.facility_obstacles.end(),
+                        [&](const FlowSimContext::FacilityCollider& f) {
+                            if (strcmp(f.kind, "pole") != 0) return false;
+                            flowsim::FrenetPos fp{};
+                            if (!g.roads.world_to_frenet(f.x, f.y, fp, f.z)) return false;
+                            flowsim::WorldPos wp{};
+                            if (!g.roads.frenet_to_world(fp.road_id, 0, fp.s, 0.0, wp)) return false;
+                            if (std::fabs(f.z - wp.z) > 2.5) return false;
+                            int nlanes = g.roads.drivable_lane_count(fp.road_id, fp.s);
+                            double lw = g.roads.lane_width(fp.road_id, 0, fp.s);
+                            if (lw < 1.0) lw = 3.5;
+                            double half_w = std::max(1, nlanes) * lw * 0.5 + 0.4;
+                            return std::hypot(f.x - wp.x, f.y - wp.y) < half_w;
+                        }),
+                    g.facility_obstacles.end());
             } else {
                 LOG_WARN("flowsim", "esmini load failed for %s — NPC AI falls back to lateral distance",
                          xodr.c_str());
@@ -3581,6 +4183,21 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
             out_ps.width = ps.width;
             out_ps.length = ps.length;
             g.scene_pub_cfg.parking_slots.push_back(out_ps);
+        }
+    }
+    if (!g.facility_obstacles.empty()) {
+        g.scene_pub_cfg.facilities.clear();
+        for (const auto& f : g.facility_obstacles) {
+            flowsim::ScenePubConfig::ScenePubFacility pf;
+            pf.kind = f.kind ? f.kind : "facility";
+            pf.x = f.x;
+            pf.y = f.y;
+            pf.z = f.z;
+            pf.length = f.len;
+            pf.width = f.wid;
+            pf.height = f.height;
+            pf.heading = f.heading;
+            g.scene_pub_cfg.facilities.push_back(std::move(pf));
         }
     }
 

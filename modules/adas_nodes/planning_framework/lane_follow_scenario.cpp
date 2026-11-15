@@ -125,6 +125,8 @@ TaskStatus LaneFollowTrajectoryTask::Execute(FrameContext& context, Trajectory& 
         p.v = static_cast<float>(pt_v);
         p.a = static_cast<float>(a_target);
         p.jerk = 0.0f;
+        p.z = static_cast<float>(ego.z);
+        p.grade = 0.0f;
     }
 
     return TaskStatus::SUCCESS;

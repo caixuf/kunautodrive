@@ -93,6 +93,76 @@ def point_to_edges_distance(px: float, py: float, edges: list[dict]) -> float | 
     return min_dist if found else None
 
 
+def _point_in_obb(
+    px: float,
+    py: float,
+    cx: float,
+    cy: float,
+    heading: float,
+    length: float,
+    width: float,
+    margin: float = 2.0,
+) -> bool:
+    dx = px - cx
+    dy = py - cy
+    c = math.cos(heading)
+    s = math.sin(heading)
+    along = c * dx + s * dy
+    across = -s * dx + c * dy
+    return abs(along) <= (length * 0.5 + margin) and abs(across) <= (width * 0.5 + margin)
+
+
+def is_in_parking_bay(px: float, py: float, scene: dict | None) -> bool:
+    """判断点是否处于合法车位、泊车目标或地下泊出通道包络内，避免车位内机动误报出路沿。"""
+    if not isinstance(scene, dict):
+        return False
+
+    po = scene.get("park_out")
+    if isinstance(po, dict) and po.get("enabled", True) and "slot_x" in po and "slot_y" in po:
+        sx = float(po["slot_x"])
+        sy = float(po["slot_y"])
+        sh = float(po.get("slot_heading", math.pi * 0.5))
+        if _point_in_obb(px, py, sx, sy, sh, 6.0, 3.0, margin=1.5):
+            return True
+        if "exit_x" in po and "exit_y" in po:
+            ex = float(po["exit_x"])
+            ey = float(po["exit_y"])
+            cw = float(po.get("corridor_width", 6.0))
+            if point_to_segment_distance(px, py, sx, sy, ex, ey) <= max(cw * 0.5, 3.5) + 1.5:
+                return True
+
+    pg = scene.get("parking_goal")
+    if isinstance(pg, dict) and pg.get("enabled", True) and "x" in pg and "y" in pg:
+        if _point_in_obb(
+            px,
+            py,
+            float(pg["x"]),
+            float(pg["y"]),
+            float(pg.get("heading", math.pi * 0.5)),
+            float(pg.get("length", 6.0)),
+            float(pg.get("width", 2.8)),
+            margin=2.0,
+        ):
+            return True
+
+    for ps in scene.get("parking_slots") or []:
+        if not isinstance(ps, dict) or "x" not in ps or "y" not in ps:
+            continue
+        if _point_in_obb(
+            px,
+            py,
+            float(ps["x"]),
+            float(ps["y"]),
+            float(ps.get("heading", math.pi * 0.5)),
+            float(ps.get("length", 5.6)),
+            float(ps.get("width", 2.7)),
+            margin=2.0,
+        ):
+            return True
+
+    return False
+
+
 def is_off_road(
     px: float,
     py: float,
@@ -101,13 +171,16 @@ def is_off_road(
     margin: float = 1.0,
     default_lc: int = 4,
     default_lw: float = 3.5,
+    scene: dict | None = None,
 ) -> bool:
     """按每条边自身车道数与单/双向属性判定是否出路沿。
 
     多边路网中（如 4 车道主路接入 2 车道单向匝道），不能用末帧 scene.lane
     算单一标量 half_road 套用到全历史样本；只要样本落在任一条有效边的合法
-    包络内即视为在路内（margin=1.0 吸收弯道折线弦近似矢高）。
+    包络内或合法泊车车位/泊出通道包络内，即视为在合法可行驶区域。
     """
+    if is_in_parking_bay(px, py, scene):
+        return False
     if edges:
         found_valid_edge = False
         for edge in edges:
@@ -144,7 +217,7 @@ def find_incident(samples: list[dict], data: dict) -> dict | None:
         for i, s in enumerate(samples):
             sx = float(s.get("x", 0))
             sy = float(s.get("y", 0))
-            if is_off_road(sx, sy, edges, half_road, default_lc=lc, default_lw=lw):
+            if is_off_road(sx, sy, edges, half_road, default_lc=lc, default_lw=lw, scene=scene):
                 return {
                     "type": "road_departure",
                     "at_s": ts[i] - ts[0] if ts else 0,
@@ -234,7 +307,7 @@ def analyze_incident(data: dict, at_s: float | None = None, verbose: bool = Fals
     li = lane_idx_from_y(sy, lc, lw)
     lcy = lane_center_y(li, lc, lw)
     edges = scene.get("road_network", {}).get("edges", [])
-    off_road = is_off_road(sx, sy, edges, half_road, default_lc=lc, default_lw=lw)
+    off_road = is_off_road(sx, sy, edges, half_road, default_lc=lc, default_lw=lw, scene=scene)
 
     # Layer 2: Perception
     obstacles = scene.get("obstacles", [])

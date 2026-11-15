@@ -43,6 +43,34 @@ void reset_choreography_state() {
     g_choreo_init_done = false;
 }
 
+static bool eval_tl_phase_cycle(double sim_time_s, double green_s, double yellow_s,
+                                double red_s, double offset,
+                                int& state_out, double& timer_out) {
+    if (green_s <= 0 && yellow_s <= 0 && red_s <= 0) return false;
+    double T = green_s + yellow_s + red_s;
+    if (T <= 0) return false;
+
+    double tp = std::fmod(sim_time_s + offset, T);
+    if (tp < 0) tp += T;
+
+    const double flashing_s = std::min(TL_FLASHING_GREEN_SECONDS, green_s);
+    const double steady_green_s = green_s - flashing_s;
+    if (tp < steady_green_s) {
+        state_out = (int)TLPhase::Green;
+        timer_out = steady_green_s - tp;
+    } else if (tp < green_s) {
+        state_out = (int)TLPhase::FlashingGreen;
+        timer_out = green_s - tp;
+    } else if (tp < green_s + yellow_s) {
+        state_out = (int)TLPhase::Yellow;
+        timer_out = green_s + yellow_s - tp;
+    } else {
+        state_out = (int)TLPhase::Red;
+        timer_out = T - tp;
+    }
+    return true;
+}
+
 void tick_traffic_lights(EntityPool& pool, double sim_time_s) {
     for (int i = 0; i < pool.size(); ++i) {
         Entity& tl = pool[i];
@@ -55,47 +83,25 @@ void tick_traffic_lights(EntityPool& pool, double sim_time_s) {
             tl.phase_override_frames--;
             tl.phase_timer -= FLOWSIM_DT_SEC;
             if (tl.phase_timer < 0.0) tl.phase_timer = 0.0;
+            tl.left_phase_timer -= FLOWSIM_DT_SEC;
+            if (tl.left_phase_timer < 0.0) tl.left_phase_timer = 0.0;
             continue;
         }
 
         // 相位时长复用 throttle/brake/steer 字段
-        double green_s  = tl.throttle;
-        double yellow_s = tl.brake;
-        double red_s    = tl.steer;
-        double offset   = tl.target_vx;  // 相位偏移
-
-        if (green_s <= 0 && yellow_s <= 0 && red_s <= 0) {
-            // 未配置相位时长，跳过
-            continue;
-        }
-
-        double T = green_s + yellow_s + red_s;
-        if (T <= 0) continue;
-
-        double tp = std::fmod(sim_time_s + offset, T);
-        if (tp < 0) tp += T;  // fmod 可能返回负
-
-        const double flashing_s = std::min(TL_FLASHING_GREEN_SECONDS, green_s);
-        const double steady_green_s = green_s - flashing_s;
-        if (tp < steady_green_s) {
-            tl.phase_state = (int)TLPhase::Green;
-            tl.phase_timer = steady_green_s - tp;
-        } else if (tp < green_s) {
-            tl.phase_state = (int)TLPhase::FlashingGreen;
-            tl.phase_timer = green_s - tp;
-        } else if (tp < green_s + yellow_s) {
-            tl.phase_state = (int)TLPhase::Yellow;
-            tl.phase_timer = green_s + yellow_s - tp;
-        } else {
-            tl.phase_state = (int)TLPhase::Red;
-            tl.phase_timer = T - tp;
+        eval_tl_phase_cycle(sim_time_s, tl.throttle, tl.brake, tl.steer,
+                            tl.target_vx, tl.phase_state, tl.phase_timer);
+        if (tl.has_left_arrow) {
+            if (!eval_tl_phase_cycle(sim_time_s, tl.left_green_s, tl.left_yellow_s,
+                                     tl.left_red_s, tl.left_phase_offset_s,
+                                     tl.left_phase_state, tl.left_phase_timer)) {
+                tl.left_phase_state = tl.phase_state;
+                tl.left_phase_timer = tl.phase_timer;
+            }
         }
     }
 
-    // 单路口多信号灯相位互斥校验（潜在设计缺口检测）。
-    // 当前场景只有 1 盏灯未触发，但任何新场景在同一路口加第二盏灯就可能
-    // 两个方向同时绿灯。此处只做检测+告警，不实现完整互斥机制。
-    // 路口分组：Entity 上无 junction_id 字段，用相同 x 位置（±1m 容差）近似。
+    // 单路口正交方向多信号灯相位互斥校验（放行对向同步绿灯，拦截交叉方向同时绿灯）
     for (int i = 0; i < pool.size(); ++i) {
         const Entity& tl_i = pool[i];
         if (!tl_i.active || tl_i.type != EntityType::TrafficLight) continue;
@@ -106,11 +112,14 @@ void tick_traffic_lights(EntityPool& pool, double sim_time_s) {
             if (!tl_j.active || tl_j.type != EntityType::TrafficLight) continue;
             if (tl_j.phase_state != (int)TLPhase::Green &&
                 tl_j.phase_state != (int)TLPhase::FlashingGreen) continue;
-            if (std::fabs(tl_i.x - tl_j.x) <= 1.0) {
+            const double dist = std::hypot(tl_i.signal_stop_x - tl_j.signal_stop_x,
+                                           tl_i.signal_stop_y - tl_j.signal_stop_y);
+            if (dist <= 45.0 &&
+                std::fabs(std::cos(tl_i.approach_heading - tl_j.approach_heading)) < 0.5) {
                 LOG_WARN("flowsim",
-                         "tick_traffic_lights: two traffic lights at same junction "
-                         "(x=%.2f) both Green - phase mutex violated",
-                         tl_i.x);
+                         "tick_traffic_lights: crossing traffic lights at same junction "
+                         "(x=%.2f, y=%.2f) both Green - phase mutex violated",
+                         tl_i.signal_stop_x, tl_i.signal_stop_y);
             }
         }
     }
@@ -121,35 +130,41 @@ void tick_etc_gates(EntityPool& pool, const Entity& ego, double dt) {
         Entity& gate = pool[i];
         if (!gate.active || gate.type != EntityType::ETCGate) continue;
 
-        /* 沿闸门朝向投影纵向/横向/高程距离：支持斜坡匝道、地面停车场入口等任意朝向与分层高程 */
-        const double dx = gate.x - ego.x;
-        const double dy = gate.y - ego.y;
+        /* 沿闸门朝向投影纵向/横向/高程距离：支持斜坡匝道、地面停车场入口等任意朝向与分层高程。
+         * 对 ego 与所有活跃 NPC 车辆生效，避免 NPC 在闸门前永久死锁并堵塞后方车流。 */
         const double ch = std::cos(gate.heading);
         const double sh = std::sin(gate.heading);
-        const double dist = dx * ch + dy * sh;
-        const double lat = -dx * sh + dy * ch;
-        const double dz = std::fabs(ego.z - gate.z);
+        bool any_approaching = false;
 
-        if (std::fabs(lat) >= 8.0 || dz >= 2.5) {
-            gate.phase_state = 0;
-            gate.phase_timer = 0.0;
-            continue;
+        auto check_vehicle = [&](const Entity& v, double lat_limit) {
+            const double dx = gate.x - v.x;
+            const double dy = gate.y - v.y;
+            const double dist = dx * ch + dy * sh;
+            const double lat = -dx * sh + dy * ch;
+            const double dz = std::fabs(v.z - gate.z);
+            if (dz < 2.5 && std::fabs(lat) < lat_limit && dist > -4.0 && dist <= 28.0) {
+                any_approaching = true;
+            }
+        };
+
+        check_vehicle(ego, 8.0);
+        if (!any_approaching) {
+            for (int j = 0; j < pool.size(); ++j) {
+                const Entity& npc = pool[j];
+                if (!npc.active || !npc.is_npc_vehicle()) continue;
+                check_vehicle(npc, 4.5);
+                if (any_approaching) break;
+            }
         }
 
-        /* ETC 闸门状态用 phase_state：0=关闭 1=抬杆中 2=全开。
-         * 原复用 ai_state（Stop/Yield/Cruise），改为独立字段避免 NPC 状态语义冲突。 */
-        if (dist > 50.0) {
-            gate.phase_state = 0;   /* closed */
-            gate.phase_timer = 0.0;
-        } else if (dist > 10.0) {
-            gate.phase_state = 1;   /* opening */
-            gate.phase_timer = std::min(1.0, gate.phase_timer + dt * 0.5);
-        } else if (dist > -4.0) {
-            gate.phase_state = 2;   /* open */
-            gate.phase_timer = 1.0;
+        /* ETC/道闸状态用 phase_state：0=关闭 1=抬杆中 2=全开。
+         * 车辆接近 28m 内开始抬杆（约 0.8s 升起），未全开前保持物理障碍判定。 */
+        if (any_approaching) {
+            gate.phase_timer = std::min(1.0, gate.phase_timer + dt * 1.2);
+            gate.phase_state = (gate.phase_timer >= 0.85) ? 2 : 1;
         } else {
-            gate.phase_state = 0;   /* closed (passed) */
-            gate.phase_timer = std::max(0.0, gate.phase_timer - dt * 0.5);
+            gate.phase_state = 0;
+            gate.phase_timer = std::max(0.0, gate.phase_timer - dt * 1.0);
         }
     }
 }
@@ -164,31 +179,46 @@ void check_npc_scene_events(EntityPool& pool, double look_ahead,
         double nearest_block_s = 1e9;
         bool  should_stop = false;
 
+        const double npc_ch = std::cos(npc.heading);
+        const double npc_sh = std::sin(npc.heading);
+
         for (int j = 0; j < pool.size(); ++j) {
             const Entity& ev = pool[j];
             if (!ev.active) continue;
             if (ev.type != EntityType::TrafficLight && ev.type != EntityType::ETCGate) continue;
+            if (std::fabs(ev.z - npc.z) > 2.5) continue;
 
-            // 只看前方
-            double dx = ev.x - npc.x;
-            if (dx <= 0 || dx > look_ahead) continue;
+            const bool is_tl = (ev.type == EntityType::TrafficLight);
+            const double ev_x = (is_tl && (ev.signal_stop_x != 0.0 || ev.signal_stop_y != 0.0))
+                                    ? ev.signal_stop_x : ev.x;
+            const double ev_y = (is_tl && (ev.signal_stop_x != 0.0 || ev.signal_stop_y != 0.0))
+                                    ? ev.signal_stop_y : ev.y;
+            const double d_x = ev_x - npc.x;
+            const double d_y = ev_y - npc.y;
+            const double along = d_x * npc_ch + d_y * npc_sh;
+            const double lat = std::fabs(-d_x * npc_sh + d_y * npc_ch);
+            if (along <= 0.0 || along > look_ahead) continue;
 
-            double tl_lane_y = ev.width;  /* e.width = 车道中心 y */
-            if (tl_lane_y * npc.y < 0.0) continue;
-            if (std::fabs(ev.y - npc.y) > 10.0) continue;
-
-            // 红灯/黄灯：需要减速
-            if (ev.type == EntityType::TrafficLight) {
-                if (ev.phase_state == (int)TLPhase::Red ||
-                    ev.phase_state == (int)TLPhase::Yellow) {
-                    if (dx < nearest_block_s) {
-                        nearest_block_s = dx;
-                        should_stop = (ev.phase_state == (int)TLPhase::Red ||
-                                       ev.phase_state == (int)TLPhase::Yellow);
+            // 红灯/黄灯：按朝向投影匹配本方向来车（支持 E/W/N/S 任意四向路口与独立左转箭头）
+            if (is_tl) {
+                if (std::cos(ev.approach_heading - npc.heading) <= 0.5) continue;
+                if (lat > 7.5) continue;
+                const int eff_phase = (ev.has_left_arrow && npc.turn_intent == 1)
+                                          ? ev.left_phase_state : ev.phase_state;
+                if (eff_phase == (int)TLPhase::Red ||
+                    eff_phase == (int)TLPhase::Yellow) {
+                    if (along < nearest_block_s) {
+                        nearest_block_s = along;
+                        should_stop = true;
                     }
                 }
+            } else if (ev.type == EntityType::ETCGate) {
+                // 未全开的道闸/ETC 闸门：NPC 进入 26m 传感区后停车等待抬杆，避免在 60m 外提前死锁
+                if (lat <= 8.0 && ev.phase_state != 2 && along < 26.0 && along < nearest_block_s) {
+                    nearest_block_s = along;
+                    should_stop = true;
+                }
             }
-            // ETC 闸门：NPC 不响应闸栏杆
         }
 
         if (should_stop) {
@@ -265,6 +295,8 @@ void tick_choreography(EntityPool& pool, const Entity& ego,
                 if (!tl.active || tl.type != EntityType::TrafficLight) continue;
                 tl.phase_state = new_phase;
                 tl.phase_timer = override_duration;
+                tl.left_phase_state = new_phase;
+                tl.left_phase_timer = override_duration;
                 /* 锁定帧数 = duration / dt，让 tick_traffic_lights 跳过重算 */
                 tl.phase_override_frames = (int)(override_duration / FLOWSIM_DT_SEC + 0.5);
             }
@@ -421,7 +453,7 @@ void tick_choreography(EntityPool& pool, const Entity& ego,
                 double cutin_target = ego.y;
                 if (roads && roads->loaded()) {
                     FrenetPos fp_ego;
-                    if (roads->world_to_frenet(ego.x, ego.y, fp_ego)) {
+                    if (roads->world_to_frenet(ego.x, ego.y, fp_ego, ego.z)) {
                         cutin_target = offset_from_lane_internal(
                             *roads, fp_ego.road_id, fp_ego.lane_id,
                             fp_ego.s, fp_ego.offset);

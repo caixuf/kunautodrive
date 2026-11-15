@@ -21,6 +21,15 @@ int RM_SetWorldXYHPosition(int handle, double x, double y, double h) {
     (void)handle; (void)x; (void)y; (void)h;
     return -1;
 }
+
+int RM_SetWorldXYZHPosition(int handle, double x, double y, double z, double h) {
+    (void)handle; (void)x; (void)y; (void)z; (void)h;
+    return -1;
+}
+int RM_SetWorldPositionMode(int handle, double x, double y, double z, double h, double p, double r, int mode) {
+    (void)handle; (void)x; (void)y; (void)z; (void)h; (void)p; (void)r; (void)mode;
+    return -1;
+}
 int RM_PositionMoveForward(int handle, double dist, double junctionSelectorAngle) {
     (void)handle; (void)dist; (void)junctionSelectorAngle;
     return -1;

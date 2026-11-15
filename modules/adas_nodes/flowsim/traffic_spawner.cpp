@@ -300,7 +300,7 @@ int auto_populate_traffic_density(TrafficSpawnerContext& ctx,
             e.turn_intent = (r < 6) ? 0 : ((r % 2) ? 1 : 2);
             if (ctx.roads_loaded && ctx.route->ok()) {
                 FrenetPos fp;
-                if (ctx.roads->world_to_frenet(e.x, e.y, fp)) {
+                if (ctx.roads->world_to_frenet(e.x, e.y, fp, e.z)) {
                     e.road_id = fp.road_id;
                     e.lane_id = fp.lane_id;
                     e.s       = fp.s;

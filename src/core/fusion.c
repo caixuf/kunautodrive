@@ -43,8 +43,10 @@ int message_buffer_push(MessageBuffer* mb, const Message* msg) {
     mb->head = (mb->head + 1) % mb->capacity;
     if (mb->count < mb->capacity) mb->count++;
 
-    /* Evict messages older than window_us */
-    uint64_t cutoff = clock_now_us() - mb->window_us;
+    /* Evict messages older than window_us using monotonic wall clock
+     * (message_bus stamps msg->timestamp_us with clock_now_monotonic_wall_us()). */
+    uint64_t now_us = clock_now_monotonic_wall_us();
+    uint64_t cutoff = (now_us > mb->window_us) ? (now_us - mb->window_us) : 0;
     for (uint32_t i = 0; i < mb->count; i++) {
         uint32_t idx = (mb->head + mb->capacity - mb->count + i) % mb->capacity;
         if (mb->buffer[idx].timestamp_us < cutoff) {
@@ -70,9 +72,9 @@ const Message* message_buffer_find_nearest(MessageBuffer* mb, uint64_t target_us
         uint32_t idx = (mb->head + mb->capacity - mb->count + i) % mb->capacity;
         const Message* m = &mb->buffer[idx];
 
-        /* Check window */
-        uint64_t now = clock_now_us();
-        if (now - m->timestamp_us > mb->window_us) continue;
+        /* Check window against monotonic wall clock to match message_bus timestamps */
+        uint64_t now = clock_now_monotonic_wall_us();
+        if (now >= m->timestamp_us && (now - m->timestamp_us) > mb->window_us) continue;
 
         /* Find closest */
         uint64_t delta = (target_us > m->timestamp_us)

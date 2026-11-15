@@ -90,6 +90,11 @@ struct FusionContext {
      * disagree_s 是"连续不一致"的累计时长，用于去抖（单帧不一致不升级）。 */
     bool     has_prev_lidar{false};
     double   prev_lidar_x{0}, prev_lidar_y{0}, prev_lidar_t{0};
+    bool     has_slam_anchor{false};
+    double   slam_anchor_x{0}, slam_anchor_y{0}, slam_anchor_t{0};
+    bool     has_prev_lidar_z{false};
+    double   prev_lidar_z{0};
+    double   fused_z{0}, fused_grade{0};
     double   disagree_s{0};
     uint32_t loc_assess_count{0};
     /* 各源**到达**时刻（不是消息内时间戳）：用于判"该源是否还在送数据"，
@@ -98,6 +103,10 @@ struct FusionContext {
     bool     has_lidar_ts{false};
     uint64_t gps_ts_us{0};
     uint64_t lidar_ts_us{0};
+    bool     has_last_lidar_ref_ts{false};
+    bool     has_last_gps_applied_ts{false};
+    uint64_t last_lidar_ref_ts_us{0};
+    uint64_t last_gps_applied_ts_us{0};
 
     /* 延迟统计 — 环形缓冲，128 个样本 */
     LatencyTracker  lat_tracker{};
@@ -113,14 +122,14 @@ FusionContext g;
 
 static void on_lidar(const Message* msg, void* user_data) {
     (void)user_data;
-    g.lidar_ts_us = clock_now_us();
+    g.lidar_ts_us = clock_now_monotonic_wall_us();
     g.has_lidar_ts = true;
     message_buffer_push(g.lidar_buf, msg);
 }
 
 static void on_gps(const Message* msg, void* user_data) {
     (void)user_data;
-    g.gps_ts_us = clock_now_us();
+    g.gps_ts_us = clock_now_monotonic_wall_us();
     g.has_gps_ts = true;
     message_buffer_push(g.gps_buf, msg);
 }
@@ -189,7 +198,7 @@ protected:
                     ekf_fusion_predict(ekf_);
                     LocalizationIntegrity loc;
                     memset(&loc, 0, sizeof(loc));
-                    const uint64_t now_us = clock_now_us();
+                    const uint64_t now_us = clock_now_monotonic_wall_us();
                     /* 用"到达时刻"判陈旧：源停了就是停了 */
                     loc.gps_age_ms   = g.has_gps_ts
                         ? (double)(now_us - g.gps_ts_us) / 1000.0 : -1.0;
@@ -225,6 +234,8 @@ protected:
                     cJSON_AddNumberToObject(nroot, "v", v0);
                     cJSON_AddNumberToObject(nroot, "heading", h0);
                     cJSON_AddNumberToObject(nroot, "yaw_rate", yr0);
+                    cJSON_AddNumberToObject(nroot, "z", g.fused_z);
+                    cJSON_AddNumberToObject(nroot, "grade", g.fused_grade);
                     cJSON_AddNumberToObject(nroot, "cov_xx", d0[0]);
                     cJSON_AddNumberToObject(nroot, "cov_yy", d0[1]);
                     cJSON_AddNumberToObject(nroot, "cov_vv", d0[2]);
@@ -296,6 +307,8 @@ protected:
                 cJSON_AddNumberToObject(proot, "v", v);
                 cJSON_AddNumberToObject(proot, "heading", h);
                 cJSON_AddNumberToObject(proot, "yaw_rate", yr);
+                cJSON_AddNumberToObject(proot, "z", g.fused_z);
+                cJSON_AddNumberToObject(proot, "grade", g.fused_grade);
                 cJSON_AddNumberToObject(proot, "cov_xx", diag[0]);
                 cJSON_AddNumberToObject(proot, "cov_yy", diag[1]);
                 cJSON_AddNumberToObject(proot, "cov_vv", diag[2]);
@@ -311,13 +324,13 @@ protected:
                  * 使能"这类场景的完整性在遥测里缺席 —— 与上一轮 control 的
                  * DATA_TIMEOUT fallback 漏发 debug 是同一类缺陷。 */
                 {
-                    const uint64_t _now = clock_now_us();
+                    const uint64_t _now = clock_now_monotonic_wall_us();
                     LocalizationIntegrity _loc;
                     memset(&_loc, 0, sizeof(_loc));
                     _loc.gps_age_ms   = g.has_gps_ts
-                        ? (double)(_now - g.gps_ts_us) / 1000.0 : -1.0;
+                        ? (_now >= g.gps_ts_us ? (double)(_now - g.gps_ts_us) / 1000.0 : 0.0) : -1.0;
                     _loc.lidar_age_ms = g.has_lidar_ts
-                        ? (double)(_now - g.lidar_ts_us) / 1000.0 : -1.0;
+                        ? (_now >= g.lidar_ts_us ? (double)(_now - g.lidar_ts_us) / 1000.0 : 0.0) : -1.0;
                     if (ekf_->update_count + ekf_->gated_count > 0) {
                         _loc.has_gated_ratio = true;
                         _loc.gated_ratio = (double)ekf_->gated_count /
@@ -359,8 +372,8 @@ protected:
 
             uint64_t ref_ts = lidar_msg->timestamp_us;
 
-            /* 时间对齐: 找最近 GPS (50ms 窗口) + 最近 Pose2D (100ms 窗口) */
-            const Message* gps_msg  = message_buffer_find_nearest(gps_buf_,  ref_ts, 50000);
+            /* 时间对齐: 找最近 GPS (120ms 窗口，覆盖 10Hz GPS) + 最近 Pose2D (100ms 窗口) */
+            const Message* gps_msg  = message_buffer_find_nearest(gps_buf_,  ref_ts, 120000);
             const Message* pose_msg = pose_buf_ ? message_buffer_find_nearest(pose_buf_, ref_ts, 100000) : nullptr;
 
             /* 类型安全访问 (C 宏版 msg_cast，与原 fusion_node.c 一致) */
@@ -372,45 +385,59 @@ protected:
                 _msg_cast_impl(pose_msg, POSE2D_TYPE_ID, sizeof(Pose2D), "Pose2D") : nullptr;
             if (!lidar) continue;
 
+            const bool new_lidar = !g.has_last_lidar_ref_ts || (ref_ts != g.last_lidar_ref_ts_us);
+            const bool new_gps   = (gps != nullptr) &&
+                (!g.has_last_gps_applied_ts || (gps_msg->timestamp_us != g.last_gps_applied_ts_us));
+            /* 同一 lidar 帧已被 gps/pose 唤醒重入且无新 gps 时，跳过重复 predict/update */
+            if (!new_lidar && !new_gps) continue;
+
             if (g.fused_count == 0 && !pose) {
                 /* 首帧用实际 LiDAR 位置锚定 EKF 初值（兼容 B1 车位等任意非零起点，零速起步） */
                 ekf_fusion_reset(ekf_, (double)lidar->x, (double)lidar->y);
                 ekf_->x[2] = 0.0;
             }
 
-            /* ── EKF 预测 ── */
-            ekf_fusion_predict(ekf_);
-
-            /* ── 位置更新 ──
-             * 真车模式: lidar->x/y 是障碍物点云的某个点（非自车），跳过；
-             *   此时优先用 SLAM Pose2D 的位置（cov 收敛时）。
-             * 仿真模式: lidar->x/y 是自车真值，照常用。
-             * 简化判定: 若有 Pose2D 且 converged，用 Pose2D 覆盖 LiDAR 位置。
-             *
-             * A4 修复：不要把状态估计当观测喂回；全维 pose 与 GPS heading
-             * 更新互斥（同周期二选一），避免 heading 被更新两次导致 cov_hh
-             * 塌太快、滤波器过自信。 */
             double pos_used_x = g.fused_x, pos_used_y = g.fused_y;  /* 重置种子默认：最后融合位置 */
-            if (pose && pose->converged) {
-                double pose_cov = (double)pose->cov_xx + (double)pose->cov_yy;
-                if (pose_cov < 100.0) {
-                    /* 只用 SLAM 位置；速度/航向交给 GPS（如有）或 predict 传播 */
-                    pos_used_x = pose->x; pos_used_y = pose->y;
-                    ekf_fusion_update_lidar(ekf_, (double)pose->x, (double)pose->y, nullptr);
+            if (new_lidar) {
+                g.has_last_lidar_ref_ts = true;
+                g.last_lidar_ref_ts_us = ref_ts;
+
+                /* ── EKF 预测 ── */
+                ekf_fusion_predict(ekf_);
+
+                /* ── 位置更新 ──
+                 * 真车模式: lidar->x/y 是障碍物点云的某个点（非自车），跳过；
+                 *   此时优先用 SLAM Pose2D 的位置（cov 收敛时）。
+                 * 仿真模式: lidar->x/y 是自车真值，照常用。
+                 * 简化判定: 若有 Pose2D 且 converged，用 Pose2D 覆盖 LiDAR 位置。
+                 *
+                 * A4 修复：不要把状态估计当观测喂回；全维 pose 与 GPS heading
+                 * 更新互斥（同周期二选一），避免 heading 被更新两次导致 cov_hh
+                 * 塌太快、滤波器过自信。 */
+                if (pose && pose->converged) {
+                    double pose_cov = (double)pose->cov_xx + (double)pose->cov_yy;
+                    if (pose_cov < 100.0) {
+                        /* 只用 SLAM 位置；速度/航向交给 GPS（如有）或 predict 传播 */
+                        pos_used_x = pose->x; pos_used_y = pose->y;
+                        ekf_fusion_update_lidar(ekf_, (double)pose->x, (double)pose->y, nullptr);
+                    }
+                } else {
+                    /* 仿真路径：LiDAR 位置真值 + GPS 速度/航向 */
+                    pos_used_x = lidar->x; pos_used_y = lidar->y;
+                    ekf_fusion_update_lidar(ekf_, (double)lidar->x, (double)lidar->y, nullptr);
                 }
-            } else {
-                /* 仿真路径：LiDAR 位置真值 + GPS 速度/航向 */
-                pos_used_x = lidar->x; pos_used_y = lidar->y;
-                ekf_fusion_update_lidar(ekf_, (double)lidar->x, (double)lidar->y, nullptr);
             }
 
-            const uint64_t fusion_now_us = clock_now_us();
+            const uint64_t fusion_now_us = clock_now_monotonic_wall_us();
             const bool gps_stale = (!g.has_gps_ts) ||
                 (fusion_now_us > g.gps_ts_us && (fusion_now_us - g.gps_ts_us) > 500000ULL);
             const bool slam_indoor = (lidar->z < -1.5f) || (!gps && gps_stale);
 
             /* ── GPS 速度/航向更新（室内 GNSS 拒止时退化为 LiDAR 扫描匹配里程计） ── */
-            if (gps) {
+            if (new_gps) {
+                g.has_last_gps_applied_ts = true;
+                g.last_gps_applied_ts_us = gps_msg->timestamp_us;
+                g.has_slam_anchor = false;
                 if (fusion_gps_observation_plausible(
                         (double)gps->speed_mps, g.fused_v, g.fused_count >= 5 ? 1 : 0)) {
                     double heading_rad = (double)gps->heading_deg * M_PI / 180.0;
@@ -419,28 +446,32 @@ protected:
                     LOG_WARN("fusion", "GPS outlier rejected: gps_v=%.2f fused_v=%.2f",
                              (double)gps->speed_mps, g.fused_v);
                 }
-            } else if (slam_indoor && g.has_prev_lidar) {
+            } else if (new_lidar && !gps && slam_indoor) {
                 const double this_t = (double)fusion_now_us / 1e6;
-                const double dt = this_t - g.prev_lidar_t;
-                if (dt > 0.01 && dt < 0.5) {
-                    const double dx = (double)lidar->x - g.prev_lidar_x;
-                    const double dy = (double)lidar->y - g.prev_lidar_y;
+                if (!g.has_slam_anchor || (this_t - g.slam_anchor_t) >= 1.5) {
+                    g.slam_anchor_x = (double)lidar->x;
+                    g.slam_anchor_y = (double)lidar->y;
+                    g.slam_anchor_t = this_t;
+                    g.has_slam_anchor = true;
+                } else {
+                    const double dt = this_t - g.slam_anchor_t;
+                    const double dx = (double)lidar->x - g.slam_anchor_x;
+                    const double dy = (double)lidar->y - g.slam_anchor_y;
                     const double dist = std::hypot(dx, dy);
-                    double slam_v = dist / dt;
-                    double slam_h = g.fused_heading;
-                    if (dist > 0.05) {
+                    /* 使用 >=1.5m 长基线差分估算航向与速度，抑制低速 50ms 激光噪声引发 ±30° 航向毛刺 */
+                    if (dt >= 0.15 && dist >= 1.5) {
                         double raw_h = std::atan2(dy, dx);
                         double dh = raw_h - g.fused_heading;
                         while (dh >  M_PI) dh -= 2.0 * M_PI;
                         while (dh < -M_PI) dh += 2.0 * M_PI;
-                        if (std::fabs(dh) > M_PI * 0.5) {
-                            slam_h = std::atan2(-dy, -dx);
-                            slam_v = 0.0;
-                        } else {
-                            slam_h = raw_h;
+                        if (std::fabs(dh) <= 0.35) {
+                            double slam_v = std::min(dist / dt, 15.0);
+                            ekf_fusion_update_gps(ekf_, slam_v, raw_h, nullptr);
                         }
+                        g.slam_anchor_x = (double)lidar->x;
+                        g.slam_anchor_y = (double)lidar->y;
+                        g.slam_anchor_t = this_t;
                     }
-                    ekf_fusion_update_gps(ekf_, slam_v, slam_h, nullptr);
                 }
             }
 
@@ -458,18 +489,21 @@ protected:
              * 实际速度仅 2-3 m/s）。下游 control 收到尖峰后触发 ROAD_GUARD 刹车。
              * 限幅到合理范围 [0, 50] m/s（180 km/h，远超场景限速 22 m/s）。 */
             if (v < 0.0 || v > 50.0) {
-                LOG_WARN("fusion", "EKF speed outlier: v=%.1f clamped (was %.1f)",
-                         v, g.fused_v);
+                /* 驻停期间零均值 GPS 速度噪声引起的微小负值静默归零，仅真正异常尖峰告警 */
+                if (v < -0.5 || v > 50.0) {
+                    LOG_WARN("fusion", "EKF speed outlier: v=%.1f clamped (was %.1f)",
+                             v, g.fused_v);
+                }
                 v = (v < 0.0) ? 0.0 : 50.0;
                 ekf_->x[2] = v;  /* 同步修正 EKF 状态 */
             }
 
-            /* EKF 发散恢复 */
-            if (ekf_->diverged && g.fused_count % 10 == 0) {
-                LOG_WARN("fusion", "EKF diverged (trace=%.0f) — resetting to (%.1f,%.1f)",
-                         diag[0]+diag[1], pos_used_x, pos_used_y);
-                /* 用刚处理的位置量测做种子：归零会让 χ² 门拒绝后续真测量、
-                 * EKF 永远无法重新收敛（2026-07-31 死循环：fusion 卡 x≈0 真车 x≈530） */
+            /* EKF 发散恢复：一旦置位立即重锚定，避免 diverged=1 持续多帧触发 ODD 降级 */
+            if (ekf_->diverged) {
+                if (g.fused_count % 10 == 0) {
+                    LOG_WARN("fusion", "EKF diverged (trace=%.0f) — resetting to (%.1f,%.1f)",
+                             diag[0]+diag[1], pos_used_x, pos_used_y);
+                }
                 ekf_fusion_reset(ekf_, pos_used_x, pos_used_y);
             }
 
@@ -482,7 +516,7 @@ protected:
             LocalizationIntegrity loc;
             memset(&loc, 0, sizeof(loc));
             {
-                const uint64_t now_us = clock_now_us();
+                const uint64_t now_us = clock_now_monotonic_wall_us();
                 /* 龄期：monitor 需要绝对时基，这里用最近一次到达时间推算 */
                 loc.gps_age_ms   = g.has_gps_ts   ? (double)(now_us - g.gps_ts_us) / 1000.0 : -1.0;
                 loc.lidar_age_ms = g.has_lidar_ts ? (double)(now_us - g.lidar_ts_us) / 1000.0 : -1.0;
@@ -507,10 +541,23 @@ protected:
                             loc.heading_ok = hok;
                         }
                     }
+                    /* M4/P3-1: propagate Z and estimate smoothed road grade from LiDAR dz/ds */
+                    g.fused_z = (double)lidar->z;
+                    if (g.has_prev_lidar && g.has_prev_lidar_z) {
+                        const double ds = hypot((double)lidar->x - g.prev_lidar_x,
+                                                (double)lidar->y - g.prev_lidar_y);
+                        if (ds > 0.25) {
+                            const double raw_grade = atan2((double)lidar->z - g.prev_lidar_z, ds);
+                            const double clamped = fmax(-0.35, fmin(0.35, raw_grade));
+                            g.fused_grade = 0.7 * g.fused_grade + 0.3 * clamped;
+                        }
+                    }
                     g.prev_lidar_x = (double)lidar->x;
                     g.prev_lidar_y = (double)lidar->y;
+                    g.prev_lidar_z = (double)lidar->z;
                     g.prev_lidar_t = this_t;
                     g.has_prev_lidar = true;
+                    g.has_prev_lidar_z = true;
                 }
 
                 /* 滤波器健康度：gated_count 是 EKF 早已算好却从未发布的诊断量
@@ -530,14 +577,23 @@ protected:
                 localization_assess(&loc);
             }
 
-            /* 去抖后升级：连续 critical 累计 >= 1s 才置降级，避免单帧噪声打降级 */
-            if (loc.critical) {
+            /* 去抖后升级：连续 critical 累计 >= 1s 才置降级，避免单帧噪声打降级；
+             * 地下/隧道 SLAM_INDOOR 模式且 LiDAR 正常时，GPS 拒止属正常工况，不触发定位降级。 */
+            const bool indoor_slam_healthy =
+                slam_indoor && lidar && !ekf_->diverged &&
+                loc.lidar_age_ms >= 0.0 && loc.lidar_age_ms <= 500.0;
+            if (loc.critical && !indoor_slam_healthy) {
                 g.disagree_s += (lidar ? 1.0 : 0.0) / 20.0;   /* 融合节拍 20Hz */
                 if (localization_should_escalate(g.disagree_s)) {
                     degrade_set_level(DEGRADE_L2, DEGRADE_REASON_LOCALIZATION);
                 }
             } else {
                 g.disagree_s = 0.0;
+                const DegradeState* ds = degrade_global_state();
+                if (ds && ds->degrade_level > DEGRADE_L0 &&
+                    ds->degrade_reason == DEGRADE_REASON_LOCALIZATION) {
+                    degrade_clear();
+                }
             }
 
             /* ── 发布融合结果 (cJSON + 世界坐标) ── */
@@ -547,6 +603,8 @@ protected:
             cJSON_AddNumberToObject(root, "v", v);
             cJSON_AddNumberToObject(root, "heading", h);
             cJSON_AddNumberToObject(root, "yaw_rate", yr);
+            cJSON_AddNumberToObject(root, "z", g.fused_z);
+            cJSON_AddNumberToObject(root, "grade", g.fused_grade);
             cJSON_AddNumberToObject(root, "cov_xx", diag[0]);
             cJSON_AddNumberToObject(root, "cov_yy", diag[1]);
             cJSON_AddNumberToObject(root, "cov_vv", diag[2]);
@@ -587,13 +645,14 @@ protected:
             cJSON_Delete(root);
 
             if (g.fused_count % 50 == 0) {
-                LOG_INFO("fusion", "#%u EKF:(%.1f,%.1f) v=%.1f hdg=%.1f° innov=%.2f",
-                         g.fused_count, x, y, v, h * 180.0 / M_PI, ekf_->last_innovation);
+                LOG_INFO("fusion", "#%u EKF:(%.1f,%.1f) v=%.1f hdg=%.1f° innov=%.2f gated=%llu gps=%d cov_h=%.4f cov_yh=%.4f",
+                         g.fused_count, x, y, v, h * 180.0 / M_PI, ekf_->last_innovation,
+                         (unsigned long long)ekf_->gated_count, gps ? 1 : 0, diag[3], ekf_->P[1*5 + 3]);
             }
 
             /* ── 延迟跟踪 + 上报 (每 20 帧) ── */
             if (gps_msg && gps_msg->timestamp_us > 0) {
-                uint64_t wall = clock_now_us();
+                uint64_t wall = clock_now_monotonic_wall_us();
                 if (wall > gps_msg->timestamp_us)
                     latency_tracker_record(lat_tracker_, wall - gps_msg->timestamp_us);
             }

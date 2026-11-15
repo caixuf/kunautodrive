@@ -54,11 +54,12 @@ typedef enum {
 
 /* ── 检测 (来自感知) ──────────────────────────────────────────── */
 typedef struct {
-    float x, y;           /**< 位置 (m, 自车坐标系) */
+    float x, y;           /**< 位置 (m, 自车/世界坐标系) */
     float vx, vy;         /**< 速度 (m/s), 或 0 表示未知 */
     float width, length;  /**< 包围盒 */
     int   cls;            /**< 类型: 0=unknown, 1=vehicle, 2=pedestrian, 3=cyclist */
     float confidence;     /**< 检测置信度 [0, 1] */
+    float z, height, heading; /**< 世界 Z(m)、高度(m)、航向(rad) */
 } KTrackDetection;
 
 /* ── 单条跟踪轨迹 ────────────────────────────────────────────── */
@@ -76,6 +77,7 @@ typedef struct {
     float   width, length;      /**< 包围盒 (从最近一次检测复制) */
     int     cls;                /**< 类型 */
     float   confidence;         /**< 平均置信度 */
+    float   z, height, heading; /**< 3D 高程/高度/航向 */
 } KTrack;
 
 /* ── 跟踪器实例 ──────────────────────────────────────────────── */

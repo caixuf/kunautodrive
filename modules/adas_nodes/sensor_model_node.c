@@ -59,6 +59,7 @@ static struct {
      * （0.5×0.5）会被当成车聚出来，下游类型判定必然错。 */
     double obs_length[128];
     double obs_width[128];
+    double obs_height[128];
 
     uint32_t frame_id;
 
@@ -239,7 +240,9 @@ static uint32_t publish_raycast_points(uint32_t frame_id, uint64_t timestamp_us)
         targets[i].has_heading = 1;
         targets[i].length      = g.obs_length[i];
         targets[i].width       = g.obs_width[i];
-        targets[i].height      = lidar_scan_height_from_width(g.obs_width[i]);
+        targets[i].height      = (g.obs_height[i] >= 0.08)
+            ? g.obs_height[i]
+            : lidar_scan_height_from_width(g.obs_width[i]);
     }
 
     /* 40KB → 静态缓冲，不能放栈上 */
@@ -340,9 +343,15 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
         snprintf(key, sizeof(key), "ow%d", i);
         if ((j = cJSON_GetObjectItemCaseSensitive(root, key)) && cJSON_IsNumber(j))
             g.obs_width[i] = j->valuedouble;
-        /* clamp：退化（0 或 NaN）盒子会让 ray_aabb_t 全命中/全不命中 */
-        if (!(g.obs_length[i] >= 0.2 && g.obs_length[i] <= 40.0)) g.obs_length[i] = 4.6;
-        if (!(g.obs_width[i]  >= 0.2 && g.obs_width[i]  <= 40.0)) g.obs_width[i]  = 2.0;
+        /* Compact street/bay objects (wheel stops ~0.16m, bollards ~0.18m) must keep true OBB sizes */
+        if (!(g.obs_length[i] >= 0.08 && g.obs_length[i] <= 40.0)) g.obs_length[i] = 4.6;
+        if (!(g.obs_width[i]  >= 0.08 && g.obs_width[i]  <= 40.0)) g.obs_width[i]  = 2.0;
+        g.obs_height[i] = lidar_scan_height_from_width(g.obs_width[i]);
+        snprintf(key, sizeof(key), "oh%d", i);
+        if ((j = cJSON_GetObjectItemCaseSensitive(root, key)) && cJSON_IsNumber(j))
+            g.obs_height[i] = j->valuedouble;
+        if (!(g.obs_height[i] >= 0.08 && g.obs_height[i] <= 12.0))
+            g.obs_height[i] = lidar_scan_height_from_width(g.obs_width[i]);
     }
 
     cJSON_Delete(root);

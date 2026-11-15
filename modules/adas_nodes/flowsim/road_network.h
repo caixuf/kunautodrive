@@ -24,6 +24,7 @@
 #ifndef FLOWSIM_ROAD_NETWORK_H
 #define FLOWSIM_ROAD_NETWORK_H
 
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -127,7 +128,9 @@ public:
      * @param out  输出 Frenet 坐标（含 road_id/lane_id/s/offset）
      * @return true 成功；false 表示坐标不在任何道路上
      */
-    bool world_to_frenet(double x, double y, FrenetPos& out);
+    /** World (x,y[,z]) -> Frenet (road_id, lane_id, s, offset). Pass z when multi-level decks overlap in XY. */
+    bool world_to_frenet(double x, double y, FrenetPos& out,
+                         double z = std::nan(""));
 
     /**
      * 查询指定道路/车道在 s 处的限速 (m/s)。
@@ -184,7 +187,9 @@ public:
 
 private:
     bool loaded_{false};
-    int  pos_handle_{-1};  /**< RM position handle，构造时创建 */
+    int  pos_handle_{-1};   /**< RM position handle (Frenet/road queries only) */
+    int  w2f_handle_{-1};   /**< RM handle for XY-only world_to_frenet (unpolluted by Z) */
+    int  w2f_z_handle_{-1}; /**< RM handle for 3D XYZ world_to_frenet (viaduct decks) */
     std::unordered_map<std::string, std::string> road_names_;
 };
 

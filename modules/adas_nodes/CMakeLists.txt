@@ -579,6 +579,7 @@ add_test(NAME planning_speed_smooth COMMAND test_planning_speed_smooth)
 
 add_executable(test_npc_yield test_npc_yield.cpp flowsim/road_position.cpp flowsim/esmini_stub.cpp)
 target_include_directories(test_npc_yield PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(test_npc_yield PRIVATE ${CJSON_LIBRARIES} m)
 add_test(NAME npc_yield COMMAND test_npc_yield)
 
 add_executable(test_inference_latency_guard test_inference_latency_guard.cpp)

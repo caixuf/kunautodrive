@@ -63,10 +63,13 @@ static struct {
     /* ── Incoming detection buffer (body-frame raw, written by callback, read by thread) ── */
     double obs_bx[KTRACKER_MAX_DETS];      /* body-frame x (forward) */
     double obs_by[KTRACKER_MAX_DETS];      /* body-frame y (left) */
+    double obs_bz[KTRACKER_MAX_DETS];      /* relative z (obs_z - ego_z) */
     double obs_bvx[KTRACKER_MAX_DETS];     /* body-frame vx (absolute, projected) */
     double obs_bvy[KTRACKER_MAX_DETS];     /* body-frame vy (absolute, projected) */
     double obs_width[KTRACKER_MAX_DETS];
     double obs_length[KTRACKER_MAX_DETS];
+    double obs_height[KTRACKER_MAX_DETS];
+    double obs_bheading[KTRACKER_MAX_DETS];
     double obs_confidence[KTRACKER_MAX_DETS];
     int    obs_cls[KTRACKER_MAX_DETS];
     int    obs_lane_id[KTRACKER_MAX_DETS];
@@ -80,7 +83,7 @@ static struct {
     int              n_static_cache;
 
     /* ── Ego pose (world frame, for coordinate transform) ── */
-    double ego_x, ego_y, ego_heading, ego_v;
+    double ego_x, ego_y, ego_z, ego_heading, ego_v;
     volatile int has_ego;
 } g;
 
@@ -93,6 +96,7 @@ static void on_ego_state(const Message* msg, void* user_data) {
     cJSON* j;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "x")) && cJSON_IsNumber(j))   g.ego_x = j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "y")) && cJSON_IsNumber(j))   g.ego_y = j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(root, "z")) && cJSON_IsNumber(j))   g.ego_z = j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "hdg")) && cJSON_IsNumber(j)) g.ego_heading = j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "spd")) && cJSON_IsNumber(j)) g.ego_v = j->valuedouble;
     if (!g.has_ego) {
@@ -127,10 +131,13 @@ static void on_obstacles(const Message* msg, void* user_data) {
         const Obstacle* o = &obs_list.obstacles[i];
         g.obs_bx[i]        = (double)o->x;
         g.obs_by[i]        = (double)o->y;
+        g.obs_bz[i]        = (double)o->z;
         g.obs_bvx[i]       = (double)o->vx;
         g.obs_bvy[i]       = (double)o->vy;
         g.obs_width[i]     = (double)o->width;
         g.obs_length[i]    = (double)o->length;
+        g.obs_height[i]    = (o->height > 0.05f) ? (double)o->height : 1.5;
+        g.obs_bheading[i]  = (double)o->heading;
         g.obs_cls[i]       = (int)o->type;
         g.obs_confidence[i]= (double)o->confidence;
         g.obs_lane_id[i]   = (int)o->lane_id;
@@ -224,6 +231,9 @@ static int tracker_execute(TaskBase* task) {
                 dets[i].length     = (float)g.obs_length[i];
                 dets[i].cls        = g.obs_cls[i];
                 dets[i].confidence = (float)g.obs_confidence[i];
+                dets[i].z          = (float)(g.ego_z + g.obs_bz[i]);
+                dets[i].height     = (float)g.obs_height[i];
+                dets[i].heading    = (float)(g.ego_heading + g.obs_bheading[i]);
             }
         }
         g.has_new_data = 0;
@@ -271,6 +281,7 @@ static int tracker_execute(TaskBase* task) {
         const double ego_h = g.ego_heading;
         const double ego_xx = g.ego_x;
         const double ego_yy = g.ego_y;
+        const double ego_zz = g.ego_z;
         const double ch_out = cos(ego_h);
         const double sh_out = sin(ego_h);
 
@@ -313,22 +324,26 @@ static int tracker_execute(TaskBase* task) {
             const double bvx = wvx * ch_out + wvy * sh_out;
             const double bvy = -wvx * sh_out + wvy * ch_out;
 
+            double bheading = (double)trk->heading - ego_h;
+            while (bheading >  M_PI) bheading -= 2.0 * M_PI;
+            while (bheading < -M_PI) bheading += 2.0 * M_PI;
+
             cJSON* obj = cJSON_CreateObject();
             cJSON_AddNumberToObject(obj, "id",         (double)trk->id);
             cJSON_AddNumberToObject(obj, "track_age",  (double)trk->age);
             cJSON_AddStringToObject(obj, "type",       type_to_string(trk->cls));
             cJSON_AddNumberToObject(obj, "x",          bx);
             cJSON_AddNumberToObject(obj, "y",          by);
-            cJSON_AddNumberToObject(obj, "z",          0.0);
+            cJSON_AddNumberToObject(obj, "z",          (double)trk->z - ego_zz);
             cJSON_AddNumberToObject(obj, "vx",         bvx);
             cJSON_AddNumberToObject(obj, "vy",         bvy);
             cJSON_AddNumberToObject(obj, "vz",         0.0);
             cJSON_AddNumberToObject(obj, "ax",         0.0);
             cJSON_AddNumberToObject(obj, "ay",         0.0);
-            cJSON_AddNumberToObject(obj, "heading",    0.0);
+            cJSON_AddNumberToObject(obj, "heading",    bheading);
             cJSON_AddNumberToObject(obj, "width",      (double)trk->width);
             cJSON_AddNumberToObject(obj, "length",     (double)trk->length);
-            cJSON_AddNumberToObject(obj, "height",     1.5);
+            cJSON_AddNumberToObject(obj, "height",     (trk->height > 0.05f) ? (double)trk->height : 1.5);
             cJSON_AddNumberToObject(obj, "confidence", (double)trk->confidence);
             cJSON_AddNumberToObject(obj, "lane_id",    -1);
             cJSON_AddBoolToObject(obj,  "is_static",   is_static);

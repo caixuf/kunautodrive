@@ -28,6 +28,7 @@
 
 #include "node_plugin.h"
 #include "adas_msgs_gen.h"
+#include "perception_fusion_core.h"
 #include "topic_registry.h"   /* TOPIC_LOCALIZATION_LANE_MATCH（lane_match topic 契约名）*/
 #include "transport.h"
 #include "discovery.h"
@@ -63,9 +64,10 @@ namespace {
 typedef struct {
     int      id;              /* 持久 track ID（单调递增） */
     int      active;          /* 此槽位是否在使用 */
-    double   x, y;            /* 当前位置（车体坐标系） */
+    double   x, y, z;         /* 当前位置（车体坐标系） */
     double   vx, vy;          /* EMA 平滑速度 (m/s) */
-    double   width, length;   /* 尺寸 */
+    double   width, length, height; /* 尺寸 */
+    float    heading;         /* 相对航向角 (rad) */
     int8_t   type;            /* ObstacleType */
     float    confidence;
     uint64_t last_update_us;  /* 上次关联时间戳 */
@@ -229,87 +231,9 @@ static void on_lane_match(const Message* msg, void* user_data) {
  *      - 否 → 加入已选集合（最多 8 个）
  *   4. id 重新编号 0..n-1
  */
-typedef struct { Obstacle obs; } ObsEntry;
-
-static int cmp_obs_by_x(const void* a, const void* b) {
-    const ObsEntry* ea = (const ObsEntry*)a;
-    const ObsEntry* eb = (const ObsEntry*)b;
-    if (ea->obs.x < eb->obs.x) return -1;
-    if (ea->obs.x > eb->obs.x) return  1;
-    return 0;
-}
-
 static void fuse_obstacles(const ObstacleList* a, const ObstacleList* b,
                            double merge_dist, ObstacleList* out) {
-    ObsEntry pool[64];
-    int n = 0;
-
-    if (a) {
-        for (uint32_t i = 0; i < a->count && n < 64; i++) {
-            pool[n++].obs = a->obstacles[i];
-        }
-    }
-    if (b) {
-        for (uint32_t i = 0; i < b->count && n < 64; i++) {
-            pool[n++].obs = b->obstacles[i];
-        }
-    }
-
-    if (n == 0) {
-        memset(out, 0, sizeof(*out));
-        return;
-    }
-
-    /* 按前向距离排序 */
-    qsort(pool, (size_t)n, sizeof(ObsEntry), cmp_obs_by_x);
-
-    /* 去重合并 */
-    Obstacle selected[64];
-    int sel_n = 0;
-    int merges = 0;
-
-    for (int i = 0; i < n; i++) {
-        const Obstacle* cand = &pool[i].obs;
-        int merged = 0;
-        for (int j = 0; j < sel_n; j++) {
-            double dx = (double)cand->x - (double)selected[j].x;
-            double dy = (double)cand->y - (double)selected[j].y;
-            double dist = sqrt(dx * dx + dy * dy);
-            if (dist < merge_dist) {
-                /* 合并：位置取置信度高的 */
-                if (cand->confidence > selected[j].confidence) {
-                    selected[j].x = cand->x;
-                    selected[j].y = cand->y;
-                    selected[j].confidence = cand->confidence;
-                    /* 速度也跟随高置信度源 */
-                    selected[j].vx = cand->vx;
-                    selected[j].vy = cand->vy;
-                }
-                /* 尺寸取大的（更保守的安全包络） */
-                if (cand->width  > selected[j].width)  selected[j].width  = cand->width;
-                if (cand->length > selected[j].length) selected[j].length = cand->length;
-                /* 类型取置信度高的（已在上面条件里换了位置，这里同步类型） */
-                if (cand->confidence > selected[j].confidence) {
-                    selected[j].type = cand->type;
-                }
-                merges++;
-                merged = 1;
-                break;
-            }
-        }
-        if (!merged && sel_n < 64) {
-            selected[sel_n++] = *cand;
-        }
-    }
-
-    /* 输出：id 重新编号 */
-    memset(out, 0, sizeof(*out));
-    out->count = (uint32_t)sel_n;
-    for (int i = 0; i < sel_n; i++) {
-        selected[i].id = (uint32_t)i;
-        out->obstacles[i] = selected[i];
-    }
-    g.merges_done += (uint64_t)merges;
+    g.merges_done += (uint64_t)pf_fuse_obstacles(a, b, merge_dist, out);
 }
 
 /* ── 跨帧时序追踪（原样保留，操作 g.tracks/g.track_*） ──────
@@ -345,6 +269,10 @@ static void associate_and_track(const ObstacleList* detections,
             int j = active_trks[r];
             for (int c = 0; c < nd; c++) {
                 const Obstacle* d = &detections->obstacles[c];
+                if (fabs((double)d->z - g.tracks[j].z) > 2.2) {
+                    cost[r][c] = 1e6;  /* 高程隔离：|dz| > 2.2m 不允许关联 */
+                    continue;
+                }
                 double dx = (double)d->x - g.tracks[j].x;
                 double dy = (double)d->y - g.tracks[j].y;
                 cost[r][c] = sqrt(dx * dx + dy * dy);
@@ -356,7 +284,7 @@ static void associate_and_track(const ObstacleList* detections,
 
         for (int r = 0; r < n_active; r++) {
             int c = row_match[r];
-            if (c >= 0 && c < nd) {
+            if (c >= 0 && c < nd && cost[r][c] < 1e5) {
                 int best_j = active_trks[r];
                 const Obstacle* d = &detections->obstacles[c];
                 Track* t = &g.tracks[best_j];
@@ -374,9 +302,12 @@ static void associate_and_track(const ObstacleList* detections,
 
                 t->x = (double)d->x;
                 t->y = (double)d->y;
-                t->width  = (double)d->width;
-                t->length = (double)d->length;
-                t->type   = d->type;
+                t->z = (double)d->z;
+                t->width   = (double)d->width;
+                t->length  = (double)d->length;
+                t->height  = (d->height > 0.05f) ? (double)d->height : t->height;
+                t->heading = d->heading;
+                t->type    = d->type;
                 t->confidence    = d->confidence;
                 t->last_update_us = now_us;
                 t->age++;
@@ -407,11 +338,14 @@ static void associate_and_track(const ObstacleList* detections,
         t->active = 1;
         t->x = (double)d->x;
         t->y = (double)d->y;
+        t->z = (double)d->z;
         t->vx = 0.0;  /* 首帧无速度估计 */
         t->vy = 0.0;
-        t->width  = (double)d->width;
-        t->length = (double)d->length;
-        t->type   = d->type;
+        t->width   = (double)d->width;
+        t->length  = (double)d->length;
+        t->height  = (d->height > 0.05f) ? (double)d->height : 1.5;
+        t->heading = d->heading;
+        t->type    = d->type;
         t->confidence    = d->confidence;
         t->last_update_us = now_us;
         t->age    = 1;
@@ -472,10 +406,13 @@ static void associate_and_track(const ObstacleList* detections,
         o.id         = (uint32_t)g.tracks[j].id;
         o.x          = (float)g.tracks[j].x;
         o.y          = (float)g.tracks[j].y;
+        o.z          = (float)g.tracks[j].z;
         o.vx         = (float)g.tracks[j].vx;
         o.vy         = (float)g.tracks[j].vy;
         o.width      = (float)g.tracks[j].width;
         o.length     = (float)g.tracks[j].length;
+        o.height     = (float)((g.tracks[j].height > 0.05) ? g.tracks[j].height : 1.5);
+        o.heading    = g.tracks[j].heading;
         o.type       = g.tracks[j].extrapolated ? OBJ_TYPE_UNKNOWN
                                                 : (ObstacleType)g.tracks[j].type;
         o.confidence = g.tracks[j].confidence;  /* 外推时已逐帧衰减 */

@@ -59,6 +59,8 @@ typedef struct {
     int      lane_count;    /**< 车道数（<=0 时按 2 处理） */
     double   lane_width;    /**< 车道宽（<=0 时按 3.5m 处理） */
     int      road_oneway;   /**< 1=单向路（车道组整体偏 -N·w/2），0=双向 */
+    double   ego_z;         /**< ego 世界 z（m，默认 0 向后兼容） */
+    double   lidar_mount_height_m; /**< 传感器安装高度（m，min_z + mount → obs_bottom_z - ego_z） */
 } PerceptionFramePose;
 
 /**

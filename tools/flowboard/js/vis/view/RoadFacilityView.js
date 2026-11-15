@@ -31,8 +31,8 @@ const CROSSWALK_LENGTH = 2.5;    // 条纹沿道路长度（交叉口 ≥2m，�
 function roadNodes(edge) {
   if (!Array.isArray(edge?.nodes)) return [];
   return edge.nodes.map((node) => Array.isArray(node)
-    ? { x: Number(node[0]) || 0, y: Number(node[1]) || 0 }
-    : { x: Number(node?.x) || 0, y: Number(node?.y) || 0 });
+    ? { x: Number(node[0]) || 0, y: Number(node[1]) || 0, z: Number(node[2]) || 0 }
+    : { x: Number(node?.x) || 0, y: Number(node?.y) || 0, z: Number(node?.z) || 0 });
 }
 
 function samplePolyline(nodes, spacing, limit) {
@@ -44,11 +44,14 @@ function samplePolyline(nodes, spacing, limit) {
     const a = nodes[i - 1], b = nodes[i];
     const segment = distanceENU(a.x, a.y, b.x, b.y);
     if (segment < 1e-6) continue;
+    const slope = Math.atan((b.z - a.z) / segment);
     while (next <= accumulated + segment && out.length < limit) {
       const t = (next - accumulated) / segment;
       out.push({
         x: a.x + (b.x - a.x) * t,
         y: a.y + (b.y - a.y) * t,
+        z: a.z + (b.z - a.z) * t,
+        pitch: slope,
         heading: headingBetweenPoints(a.x, a.y, b.x, b.y),
       });
       next += spacing;
@@ -72,6 +75,7 @@ function nearestRoadPoint(edges, x, y, edgeFilter = () => true) {
       const segmentLength = Math.sqrt(length2);
       const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / length2));
       const refX = a.x + dx * t, refY = a.y + dy * t;
+      const refZ = a.z + (b.z - a.z) * t;
       const distance = distanceENU(x, y, refX, refY);
       const heading = headingBetweenPoints(a.x, a.y, b.x, b.y);
       const [fx, fy] = forwardENU(heading);
@@ -79,7 +83,8 @@ function nearestRoadPoint(edges, x, y, edgeFilter = () => true) {
       if (!best || distance < best.distance) {
         best = {
           edge, edgeIndex, distance, heading,
-          refX, refY,
+          refX, refY, refZ,
+          pitch: Math.atan((b.z - a.z) / segmentLength),
           s: edgeS + segmentLength * t,
           lateral: (x - refX) * nx + (y - refY) * ny,
         };
@@ -90,8 +95,8 @@ function nearestRoadPoint(edges, x, y, edgeFilter = () => true) {
   return best;
 }
 
-function addMark(layout, x, y, heading, length, width = LINE_W) {
-  layout.marks.push({ x, y, heading, length, width });
+function addMark(layout, x, y, heading, length, width = LINE_W, z = 0, pitch = 0) {
+  layout.marks.push({ x, y, z, heading, pitch, length, width });
 }
 
 function offsetPoint(x, y, heading, along, lateral) {
@@ -119,15 +124,55 @@ function addParkingBay(layout, x, y, heading, empty) {
   }
 }
 
-function addStraightArrow(layout, x, y, heading) {
+function addStraightArrow(layout, x, y, heading, z = 0, pitch = 0) {
+  const tanP = Math.tan(pitch);
   const stem = offsetPoint(x, y, heading, -0.2, 0);
-  addMark(layout, stem.x, stem.y, heading, 2.8, 0.28);
+  addMark(layout, stem.x, stem.y, heading, 2.8, 0.28, z - 0.2 * tanP, pitch);
   for (const side of [-1, 1]) {
     const head = offsetPoint(x, y, heading, 0.85, side * 0.25);
+    const barbRel = Math.PI - side * Math.PI * 0.20;
+    const [barbCos] = forwardENU(barbRel);
     addMark(layout, head.x, head.y,
-      heading + Math.PI - side * Math.PI * 0.20, 1.1, 0.26);
+      heading + barbRel, 1.1, 0.26, z + 0.85 * tanP, pitch * barbCos);
   }
   layout.arrows++;
+}
+
+function addLeftArrow(layout, x, y, heading, z = 0, pitch = 0) {
+  const tanP = Math.tan(pitch);
+  const stem = offsetPoint(x, y, heading, -0.65, 0);
+  addMark(layout, stem.x, stem.y, heading, 1.5, 0.26, z - 0.65 * tanP, pitch);
+  const diag = offsetPoint(x, y, heading, 0.35, 0.35);
+  addMark(layout, diag.x, diag.y, heading + Math.PI * 0.25, 1.0, 0.26, z + 0.35 * tanP, pitch * 0.707);
+  const horiz = offsetPoint(x, y, heading, 0.70, 0.95);
+  addMark(layout, horiz.x, horiz.y, heading + Math.PI * 0.5, 0.85, 0.26, z + 0.70 * tanP, 0);
+  const tip = offsetPoint(x, y, heading, 0.70, 1.40);
+  for (const side of [-1, 1]) {
+    const barbHeading = heading + Math.PI * 0.5 + Math.PI - side * Math.PI * 0.20;
+    const barb = offsetPoint(tip.x, tip.y, barbHeading, 0.42, 0);
+    addMark(layout, barb.x, barb.y, barbHeading, 0.85, 0.24, z + 0.70 * tanP, 0);
+  }
+  layout.arrows++;
+}
+
+function collectJunctionHubs(edges) {
+  const clusters = [];
+  for (const edge of edges) {
+    if (isGarageOrRampEdge(edge)) continue;
+    const nodes = roadNodes(edge);
+    if (nodes.length < 2) continue;
+    for (const end of [nodes[0], nodes[nodes.length - 1]]) {
+      const hit = clusters.find(c => distanceENU(c.x, c.y, end.x, end.y) < 4.0);
+      if (hit) {
+        hit.x = (hit.x * hit.count + end.x) / (hit.count + 1);
+        hit.y = (hit.y * hit.count + end.y) / (hit.count + 1);
+        hit.count++;
+      } else {
+        clusters.push({ x: end.x, y: end.y, count: 1 });
+      }
+    }
+  }
+  return clusters.filter(c => c.count >= 3);
 }
 
 /**
@@ -154,7 +199,7 @@ function laneArrowSlots(edge) {
   return slots;
 }
 
-function addCrosswalk(layout, center, heading, width) {
+function addCrosswalk(layout, center, heading, width, z = 0, pitch = 0) {
   /* GB 5768.3 5.8：斑马线条纹平行于道路中心线（与车同向），沿道路长度短
    * （交叉口 ≥2m / 路段 ≥3m）；跨道路方向铺多条条带。旧实现条纹长轴垂直
    * 道路（横跨半幅路面）→ 方向反了。 */
@@ -163,7 +208,7 @@ function addCrosswalk(layout, center, heading, width) {
   for (let i = 0; i < count; i++) {
     const across = (i - (count - 1) / 2) * step;
     const p = offsetPoint(center.x, center.y, heading + Math.PI * 0.5, across, 0);
-    addMark(layout, p.x, p.y, heading, CROSSWALK_LENGTH, CROSSWALK_STRIPE_W);
+    addMark(layout, p.x, p.y, heading, CROSSWALK_LENGTH, CROSSWALK_STRIPE_W, z, pitch);
   }
   layout.crosswalks++;
 }
@@ -174,6 +219,7 @@ export function inferRoadFacilities(roadNetwork, entities, scenarioName = '', op
   };
   const edges = Array.isArray(roadNetwork?.edges) ? roadNetwork.edges : [];
   const allEntities = Array.isArray(entities) ? entities : [];
+  const junctionHubs = collectJunctionHubs(edges);
 
   /* 大地图注入 lane_data 后，路口箭头由 ConnectorView 按 fork 画。
    * 这里再沿路每 120m 铺一轮会与路口标线叠成白网。 */
@@ -186,9 +232,11 @@ export function inferRoadFacilities(roadNetwork, entities, scenarioName = '', op
       if (isGarageOrRampEdge(edge)) continue;
       const slots = laneArrowSlots(edge);
       for (const point of samplePolyline(roadNodes(edge), ARROW_SPACING, MAX_ARROWS_PER_EDGE)) {
+        if (junctionHubs.some(h => distanceENU(point.x, point.y, h.x, h.y) < 26.0)) continue;
         for (const slot of slots) {
           const p = offsetPoint(point.x, point.y, point.heading, 0, slot.lateral);
-          addStraightArrow(layout, p.x, p.y, point.heading + slot.headingFlip);
+          const arrowPitch = (slot.headingFlip ? -1 : 1) * (point.pitch || 0);
+          addStraightArrow(layout, p.x, p.y, point.heading + slot.headingFlip, point.z || 0, arrowPitch);
         }
       }
     }
@@ -201,6 +249,8 @@ export function inferRoadFacilities(roadNetwork, entities, scenarioName = '', op
     const projection = nearestRoadPoint(edges, x, y);
     const edge = projection?.edge || edges[0] || {};
     const heading = projection?.heading || 0;
+    const markZ = projection?.refZ || 0;
+    const markPitch = projection?.pitch || 0;
     const lanes = Math.max(1, Number(edge.lanes) || 4);
     const laneWidth = Number(edge.lane_width) || 3.5;
     const isOneWay = edge.oneway === true;
@@ -213,10 +263,16 @@ export function inferRoadFacilities(roadNetwork, entities, scenarioName = '', op
       0,
       isOneWay ? 0 : laneDirection * stopLineWidth * 0.5,
     );
-    addMark(layout, stopCenter.x, stopCenter.y, heading + Math.PI * 0.5, stopLineWidth, 0.38);
+    addMark(layout, stopCenter.x, stopCenter.y, heading + Math.PI * 0.5, stopLineWidth, 0.38, markZ, 0);
     layout.stopLines++;
     if (light.crosswalk !== false) {
-      addCrosswalk(layout, stopCenter, heading, stopLineWidth);
+      addCrosswalk(layout, stopCenter, heading, stopLineWidth, markZ, markPitch);
+    }
+    if (light.has_left_arrow && !junctionHubs.some(h => distanceENU(stopCenter.x, stopCenter.y, h.x, h.y) < 35.0)) {
+      const apprHeading = laneDirection > 0 ? heading + Math.PI : heading;
+      const innerLat = isOneWay ? (lanes * 0.5 - 0.5) * laneWidth : -0.5 * laneWidth;
+      const arrowPt = offsetPoint(projection?.refX ?? x, projection?.refY ?? y, apprHeading, -12.0, innerLat);
+      addLeftArrow(layout, arrowPt.x, arrowPt.y, apprHeading, markZ, laneDirection > 0 ? -markPitch : markPitch);
     }
   }
 
@@ -279,9 +335,14 @@ export function createRoadFacilityView(scene) {
   frictionZonesGroup.name = 'frictionZones';
   group.add(frictionZonesGroup);
 
+  const unknownStaticGroup = new THREE.Group();
+  unknownStaticGroup.name = 'unknownStatics';
+  group.add(unknownStaticGroup);
+
   let lastSignature = '';
   let lastParkingSig = '';
   let lastFrictionSig = '';
+  let lastUnknownSig = '';
   let parkingPulseTime = 0;
   let parkingPulseMesh = null;
   let lastNow = 0;
@@ -307,9 +368,11 @@ export function createRoadFacilityView(scene) {
     disposeGroup(staticGroup);
     disposeGroup(parkingGoalGroup);
     disposeGroup(frictionZonesGroup);
+    disposeGroup(unknownStaticGroup);
     lastSignature = '';
     lastParkingSig = '';
     lastFrictionSig = '';
+    lastUnknownSig = '';
     parkingPulseMesh = null;
   }
 
@@ -317,7 +380,7 @@ export function createRoadFacilityView(scene) {
     const {
       x, y, z = 0, heading = 0, width = 2.6, length = 5.6,
       colorHex = SCENE.parkingBox, withStopper = true, withPulse = false,
-      openFrontOnly = false,
+      openFrontOnly = false, withBayFixtures = false,
     } = spec;
     const anchor = new THREE.Group();
     const [ax, ay, az] = worldToThree(x, y, z + PAINT_Y + 0.005);
@@ -375,6 +438,42 @@ export function createRoadFacilityView(scene) {
 
       stopperGroup.position.set(-length * 0.5 + 0.65, 0, 0);
       anchor.add(stopperGroup);
+
+      if (withBayFixtures) {
+        // Rear EV charger + corner protective bollards matching flowsim collider offsets
+        const charger = new THREE.Group();
+        const chMat = new THREE.MeshStandardMaterial({
+          color: SCENE.evChargerBody ?? 0x26323e, roughness: 0.42, metalness: 0.35,
+        });
+        const ledMat = new THREE.MeshBasicMaterial({ color: SCENE.evChargerLed ?? 0x22e39a });
+        const plinth = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.12, 0.44), rubberMat);
+        plinth.position.set(0, 0.06, 0);
+        charger.add(plinth);
+        const tower = new THREE.Mesh(new THREE.BoxGeometry(0.42, 1.43, 0.34), chMat);
+        tower.position.set(0, 0.12 + 0.715, 0);
+        charger.add(tower);
+        const led = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.24, 0.22), ledMat);
+        led.position.set(0.20, 1.18, 0);
+        charger.add(led);
+        charger.position.set(-length * 0.5 - 0.55, 0, 0);
+        anchor.add(charger);
+
+        const bolBack = -length * 0.5 - 0.05;
+        const bolLat = width * 0.5 + 0.30;
+        const bolGeo = new THREE.CylinderGeometry(0.075, 0.085, 0.78, 10);
+        const capGeo = new THREE.CylinderGeometry(0.088, 0.088, 0.10, 10);
+        for (const side of [-1, 1]) {
+          const bolGroup = new THREE.Group();
+          const post = new THREE.Mesh(bolGeo, stripeMat);
+          post.position.set(0, 0.39, 0);
+          bolGroup.add(post);
+          const cap = new THREE.Mesh(capGeo, rubberMat);
+          cap.position.set(0, 0.73, 0);
+          bolGroup.add(cap);
+          bolGroup.position.set(bolBack, 0, side * bolLat);
+          anchor.add(bolGroup);
+        }
+      }
     }
 
     if (withPulse) {
@@ -488,6 +587,7 @@ export function createRoadFacilityView(scene) {
           colorHex: SCENE.parkingBox,
           withStopper: true,
           withPulse: true,
+          withBayFixtures: Math.abs(Number(goal.z) || 0) < 1.2,
         });
       }
     }
@@ -542,6 +642,44 @@ export function createRoadFacilityView(scene) {
     });
   }
 
+  function _syncUnknownStatics(store) {
+    const KNOWN_DYNAMIC_OR_INFRA = new Set([
+      'ego', 'car', 'suv', 'truck', 'bus', 'van', 'pedestrian',
+      'cyclist', 'bicycle', 'tl', 'traffic_light', 'etc_gate',
+    ]);
+    const list = (Array.isArray(store.entities) ? store.entities : []).filter(
+      (e) => e && e.type && !KNOWN_DYNAMIC_OR_INFRA.has(e.type),
+    );
+    const sig = list.map((e) =>
+      `${e.id ?? ''}:${e.type}:${Number(e.x || 0).toFixed(2)},${Number(e.y || 0).toFixed(2)},${Number(e.z || 0).toFixed(2)}`,
+    ).join('|');
+    if (sig === lastUnknownSig) return;
+    lastUnknownSig = sig;
+    disposeGroup(unknownStaticGroup);
+    if (!list.length) return;
+    const bodyMat = new THREE.MeshStandardMaterial({
+      color: 0x3b4252, roughness: 0.6, metalness: 0.2,
+    });
+    const hazardMat = new THREE.MeshBasicMaterial({ color: 0xff8c1a });
+    for (const ent of list) {
+      const len = Math.max(0.15, Number(ent.length) || 0.8);
+      const wid = Math.max(0.15, Number(ent.width) || 0.8);
+      const hgt = Math.max(0.15, Number(ent.height) || 1.0);
+      const gz = Number.isFinite(Number(ent.z)) ? Number(ent.z) : 0;
+      const [px, py, pz] = worldToThree(Number(ent.x) || 0, Number(ent.y) || 0, gz);
+      const crate = new THREE.Group();
+      crate.position.set(px, py, pz); // Coord.worldToThree
+      crate.rotation.y = headingToRotationY(Number(ent.heading) || 0);
+      const box = new THREE.Mesh(new THREE.BoxGeometry(len, hgt * 0.82, wid), bodyMat);
+      box.position.set(0, hgt * 0.41, 0);
+      crate.add(box);
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(len * 1.02, hgt * 0.18, wid * 1.02), hazardMat);
+      cap.position.set(0, hgt * 0.91, 0);
+      crate.add(cap);
+      unknownStaticGroup.add(crate);
+    }
+  }
+
   function update(store, now = 0) {
     const dt = lastNow ? Math.min(0.1, Math.max(0.001, (now - lastNow) / 1000)) : 0.016;
     lastNow = now;
@@ -549,6 +687,7 @@ export function createRoadFacilityView(scene) {
     // 1. 同步泊车目标与路面摩擦系数区域
     _syncParkingGoal(store, dt);
     _syncFrictionZones(store);
+    _syncUnknownStatics(store);
 
     // 2. 静态标线与设施
     const entities = store.entities || [];
@@ -585,9 +724,10 @@ export function createRoadFacilityView(scene) {
       const mesh = new THREE.InstancedMesh(geometry, material, layout.marks.length);
       const dummy = new THREE.Object3D();
       layout.marks.forEach((mark, index) => {
-        const [x, y, z] = worldToThree(mark.x, mark.y, PAINT_Y);
+        const [x, y, z] = worldToThree(mark.x, mark.y, (mark.z || 0) + PAINT_Y);
         dummy.position.set(x, y, z); // Coord.worldToThree
-        dummy.rotation.y = headingToRotationY(mark.heading);
+        dummy.rotation.order = 'YXZ';
+        dummy.rotation.set(0, headingToRotationY(mark.heading), mark.pitch || 0);
         dummy.scale.set(mark.length, 1, mark.width);
         dummy.updateMatrix();
         mesh.setMatrixAt(index, dummy.matrix);
@@ -605,7 +745,7 @@ export function createRoadFacilityView(scene) {
       const mesh = new THREE.InstancedMesh(geometry, material, layout.poles.length);
       const dummy = new THREE.Object3D();
       layout.poles.forEach((pole, index) => {
-        const [x, y, z] = worldToThree(pole.x, pole.y, 0.4);
+        const [x, y, z] = worldToThree(pole.x, pole.y, (pole.z || 0) + 0.4);
         dummy.position.set(x, y, z); // Coord.worldToThree
         dummy.updateMatrix();
         mesh.setMatrixAt(index, dummy.matrix);

@@ -59,6 +59,8 @@ void BuildForwardCruiseLine(double start_x, double start_y, double heading,
         pt.v = static_cast<float>(v_i);
         pt.a = 0.0f;
         pt.jerk = 0.0f;
+        pt.z = 0.0f;
+        pt.grade = 0.0f;
         elapsed_us += (ds / std::max(0.5, v_i)) * 1e6;
     }
 }

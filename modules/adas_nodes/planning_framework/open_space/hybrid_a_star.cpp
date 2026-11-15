@@ -47,6 +47,16 @@ Box2d HybridAStar::GetEgoVehicleBox(double x, double y, double phi, double safet
     return Box2d(Vec2d(cx, cy), phi, l, w);
 }
 
+Box2d HybridAStar::GetEgoWheelBox(double x, double y, double phi, double safety_margin) const {
+    double rear_to_center = veh_param_.rear_axle_to_center();
+    double cx = x + rear_to_center * std::cos(phi);
+    double cy = y + rear_to_center * std::sin(phi);
+    double base_l = std::min(veh_param_.length, veh_param_.wheelbase + 0.55);
+    double l = base_l + 2.0 * safety_margin;
+    double w = veh_param_.width + 2.0 * safety_margin;
+    return Box2d(Vec2d(cx, cy), phi, l, w);
+}
+
 bool HybridAStar::CheckVehicleCollision(double x, double y, double phi, const Environment& env) const {
     Box2d ego_box = GetEgoVehicleBox(x, y, phi, config_.vehicle_safety_margin);
 
@@ -58,10 +68,20 @@ bool HybridAStar::CheckVehicleCollision(double x, double y, double phi, const En
         }
     }
 
-    // 2. Obstacle boxes
+    // 2. Obstacle boxes (full 3D body height > 0.25m)
     for (const auto& box : env.obstacle_boxes) {
         if (ego_box.HasOverlap(box)) {
             return true;
+        }
+    }
+
+    // 2b. Low ground obstacles (curbs / wheel stops <= 0.25m): check against tire/axle span
+    if (!env.low_obstacle_boxes.empty()) {
+        Box2d ego_wheel_box = GetEgoWheelBox(x, y, phi, std::min(0.05, config_.vehicle_safety_margin * 0.5));
+        for (const auto& box : env.low_obstacle_boxes) {
+            if (ego_wheel_box.HasOverlap(box)) {
+                return true;
+            }
         }
     }
 

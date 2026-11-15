@@ -64,13 +64,13 @@ KNOWN_MISMATCHES: dict[str, tuple[int, int]] = {
     "GpsData":              (36, 40),
     "ImuData":              (36, 40),
     "LidarPointCloud":      (40980, 40984),
-    "Localization":         (57, 60),
-    "Obstacle":             (35, 40),  # D2-07 Prefer A: int8 obs_lane_match_hint (wire 35, struct 40; +4B trailing pad)
-    "ObstacleList":         (4496, 5144),
+    "Localization":         (65, 68),
+    "Obstacle":             (47, 52),  # D2-07 Prefer A + P3-1 3D: obs_lane_match_hint + float z, height, heading
+    "ObstacleList":         (6032, 6680),
     "Pose2D":               (29, 32),
-    "PredictionHypothesis": (1017, 1020),
-    "PredictionSet":        (3068, 3088),
-    "Trajectory":           (2581, 2592),
+    "PredictionHypothesis": (1217, 1220),
+    "PredictionSet":        (3668, 3688),
+    "Trajectory":           (3093, 3104),
 }
 
 # C alignment of each primitive (== its size on this project's targets).

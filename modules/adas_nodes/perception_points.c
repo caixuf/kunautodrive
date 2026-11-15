@@ -66,7 +66,7 @@ uint32_t perception_points_from_cloud(const LidarPointCloud* cloud,
 #define FRAGMENT_MERGE_MAX_X_M 8.0
 #define FRAGMENT_MERGE_MAX_Y_M 3.5
 
-/* 两包围盒之间的最小间隙（重叠时为 0）。 */
+/* 两包围盒之间的最小 3D 间隙（重叠时为 0；z 轴隔离高架上下层碎片不误并）。 */
 static double fragment_box_gap(const ClusterBounds* a, const ClusterBounds* b) {
     const double dx = fabs((double)a->cx - (double)b->cx) -
                       0.5 * ((double)a->width + (double)b->width);
@@ -74,7 +74,10 @@ static double fragment_box_gap(const ClusterBounds* a, const ClusterBounds* b) {
                       0.5 * ((double)a->length + (double)b->length);
     const double gx = (dx > 0.0) ? dx : 0.0;
     const double gy = (dy > 0.0) ? dy : 0.0;
-    return sqrt(gx * gx + gy * gy);
+    const double az0 = (double)a->min_z, az1 = (double)a->max_z;
+    const double bz0 = (double)b->min_z, bz1 = (double)b->max_z;
+    const double gz = (az1 < bz0) ? (bz0 - az1) : ((bz1 < az0) ? (az0 - bz1) : 0.0);
+    return sqrt(gx * gx + gy * gy + gz * gz);
 }
 
 /* 并集：包围盒取并、点数为和、z 取并、类型取点数多的那半（正面主簇才是"车"）。 */
@@ -160,10 +163,18 @@ uint32_t perception_clusters_to_obstacles(const ClusterBounds* clusters,
         ob->id    = (uint32_t)(pose->frame_id * 100u + (uint32_t)ci);
         ob->x     = cb->cx;   /* 车体系：x 前 */
         ob->y     = cb->cy;   /* 车体系：y 左 */
+        ob->z     = cb->min_z + (float)pose->lidar_mount_height_m;
         ob->width  = cb->width;
         ob->length = cb->length;
         ob->confidence = cb->confidence;
         ob->type  = cluster_class_to_obs_type(cb->cls);
+        {
+            const float dz_span = cb->max_z - cb->min_z;
+            ob->height = (dz_span > 0.08f) ? dz_span
+                       : ((ob->type == OBJ_TYPE_PEDESTRIAN) ? 1.7f :
+                          (ob->type == OBJ_TYPE_VEHICLE)    ? 1.5f : 1.0f);
+        }
+        ob->heading = 0.0f;
         /* 速度由 object_tracker 的 KF 跨帧关联提供，这里恒 0 */
 
         /* lane_id：车体系簇中心 → 世界 y → 车道索引（最左 = 0，最右 = lc-1）。

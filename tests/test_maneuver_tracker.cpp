@@ -391,6 +391,62 @@ static void test_end_stop() {
     CHECK(r.gear == 1, "end: gear not DRIVE at end");
 }
 
+// ── 测试 6: done 后起终点跳变的重规划必须重置 s_ / gear_ ──
+static void test_replan_resets_s_on_start_shift() {
+    auto make_line = [](double x0, double x1, double v) {
+        std::vector<TrajectoryPoint> pts;
+        for (int i = 0; i <= 20; i++) {
+            double f = (double)i / 20.0;
+            TrajectoryPoint p{};
+            p.x = (float)(x0 + (x1 - x0) * f);
+            p.y = 0.0f;
+            p.heading = 0.0f;
+            p.v = (i == 20) ? 0.0f : (float)v;
+            pts.push_back(p);
+        }
+        return pts;
+    };
+    auto t1 = make_line(0.0, 10.0, 2.0);
+    ManeuverTracker mt;
+    mt.init(t1.data(), (int)t1.size(), WHEELBASE);
+    for (int t = 0; t < 200 && !mt.done(); t++) {
+        mt.tick(0.0, 0.0, 0.0, 2.0, DT);
+    }
+    CHECK(mt.done(), "replan: setup did not reach done");
+
+    auto t2 = make_line(10.0, 18.0, 2.0);
+    mt.setTrajectory(t2.data(), (int)t2.size(), WHEELBASE);
+    CHECK(!mt.done(), "replan: done stayed true after shifted setTrajectory");
+    CHECK(mt.arcLengthS() < 0.01, "replan: s_ did not reset on shifted setTrajectory");
+    ManeuverResult r = mt.tick(10.0, 0.0, 0.0, 0.0, DT);
+    CHECK(r.target_speed > 0.1, "replan: target_speed stayed 0 after replan reset");
+}
+
+// ── 测试 7: 倒车横向偏差 e_lat 闭环收敛（防止符号反了引发正反馈发散） ──
+static void test_reverse_lat_error_convergence() {
+    std::vector<TrajectoryPoint> traj;
+    for (int i = 0; i <= 32; i++) {
+        TrajectoryPoint p{};
+        p.x = (float)(16.0 - 0.5 * i);
+        p.y = 0.0f;
+        p.heading = 0.0f;
+        p.kappa = 0.0f;
+        p.v = (i == 32) ? 0.0f : -1.5f;
+        traj.push_back(p);
+    }
+    ManeuverTracker mt;
+    mt.init(traj.data(), (int)traj.size(), WHEELBASE);
+    double x = 16.0, y = 0.45, h = 0.0, v = 0.0;
+    for (int t = 0; t < 300; t++) {
+        ManeuverResult r = mt.tick(x, y, h, v, DT);
+        drive_speed(v, r.target_speed, DT);
+        step_bicycle(x, y, h, v, r.steer, DT);
+    }
+    std::printf("[rev_lat] final x=%.2f y=%.3f h=%.3f v=%.2f\n", x, y, h, v);
+    CHECK(std::fabs(y) < 0.08, "rev_lat: lateral error did not converge toward 0");
+    CHECK(std::fabs(norm_angle(h)) < 0.04, "rev_lat: heading error did not converge toward 0");
+}
+
 int main() {
     test_uturn_closed_loop();
     test_parking_closed_loop();
@@ -398,6 +454,8 @@ int main() {
     test_segment_boundary_gate();
     test_target_speed();
     test_end_stop();
+    test_replan_resets_s_on_start_shift();
+    test_reverse_lat_error_convergence();
     if (failures == 0) {
         std::printf("ALL PASS\n");
         return 0;

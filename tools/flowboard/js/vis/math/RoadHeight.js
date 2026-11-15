@@ -102,7 +102,7 @@ export function roadHeightAt(store, x, y, currentZ) {
     }
   }
   
-  return minScore < Infinity ? resultZ : 0;
+  return minScore < Infinity ? resultZ : (hasCurrentZ ? currentZ : 0);
 }
 
 /** 简单版本：按 edge 起点到终点的距离比例插值，不做投影 */
@@ -133,6 +133,8 @@ export function roadPitchAt(store, x, y, heading, currentZ, sampleHalfM = 1.5) {
   const zCenter = Number.isFinite(currentZ) ? currentZ : roadHeightAt(store, x, y);
   const zFwd = roadHeightAt(store, x + fx * ds, y + fy * ds, zCenter);
   const zBack = roadHeightAt(store, x - fx * ds, y - fy * ds, zCenter);
+  // 防止跨出路缘/地下车库边界时高程跳变导致停放车辆俯仰异常
+  if (Math.abs(zFwd - zCenter) > 0.6 || Math.abs(zBack - zCenter) > 0.6) return 0;
   const pitch = Math.atan((zFwd - zBack) / (2 * ds));
   return Math.max(-0.35, Math.min(0.35, pitch));
 }

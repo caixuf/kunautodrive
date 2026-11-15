@@ -41,8 +41,8 @@ struct ManeuverTrackerParams {
                                         // 旧 1.5 会覆盖 v=0 让车停不住）
     double gear_v_threshold    = 0.3;   // 向前扫第一个 |v|>此值 => gear 意图
     double gear_pending_speed  = 0.8;   // |speed|>此值 => 换挡前刹停
-    double lat_gain_dh         = 0.8;   // heading 误差反馈增益
-    double lat_gain_elat       = 0.25;  // 车体系横向误差增益
+    double lat_gain_dh         = 1.6;   // heading 误差反馈增益
+    double lat_gain_elat       = 0.70;  // 车体系横向误差增益
     double max_steer           = 0.60;  // rad 满舵
 };
 
@@ -67,15 +67,32 @@ public:
     void init(const TrajectoryPoint* pts, int n, double wheelbase) {
         s_ = 0.0;
         gear_ = 1;
+        has_prev_ego_ = false;
+        travel_dist_ = 0.0;
         setTrajectory(pts, n, wheelbase);
     }
 
-    /// 每机动帧：刷新点 + cum_s（planning 可能 >40m cache miss 重生成），保留 s/gear。
+    /// 每机动帧：刷新点 + cum_s（planning 可能 >40m cache miss 重生成）。
+    /// 若起终点发生实质性跳变（如停滞重规划）则复位 s/gear，避免沿用旧轨迹末段 s 导致新规划立即 done。
     void setTrajectory(const TrajectoryPoint* pts, int n, double wheelbase) {
-        n_ = std::min(n, (int)kMaxPts);
+        const bool was_done = done();
+        const int new_n = std::min(n, (int)kMaxPts);
+        const bool start_shifted = (n_ > 0 && new_n > 0 &&
+            std::hypot((double)pts[0].x - (double)pts_[0].x,
+                       (double)pts[0].y - (double)pts_[0].y) > (was_done ? 0.10 : 0.35));
+        const bool end_shifted = (n_ > 0 && new_n > 0 &&
+            std::hypot((double)pts[new_n - 1].x - (double)pts_[n_ - 1].x,
+                       (double)pts[new_n - 1].y - (double)pts_[n_ - 1].y) > 0.35);
+        n_ = new_n;
         if (n_ > 0) std::memcpy(pts_, pts, sizeof(TrajectoryPoint) * (size_t)n_);
         wheelbase_ = wheelbase;
         rebuildCumS();
+        if (start_shifted || (was_done && end_shifted)) {
+            s_ = 0.0;
+            gear_ = 1;
+            has_prev_ego_ = false;
+            travel_dist_ = 0.0;
+        }
         int i = 0;
         exec(&i);           // 刷新缓存参考几何（on_trajectory init 后可读）
         lookahead(i);
@@ -104,6 +121,9 @@ private:
     int    gear_ = 1;
     ManeuverTrackerParams p_;
     TrackPoint last_exec_, last_lookahead_;
+    double prev_ego_x_ = 0.0, prev_ego_y_ = 0.0;
+    bool   has_prev_ego_ = false;
+    double travel_dist_ = 0.0;
 
     void rebuildCumS() {
         cum_s_[0] = 0.0;
@@ -127,22 +147,67 @@ private:
         return t;
     }
 
-    /// 弧长推进：s 按车实际行驶距离单调推进（Python _advance_s）。
-    void advanceS(double ego_heading, double current_speed, double dt) {
-        TrackPoint ex = exec(nullptr);
+    /// 弧长推进：s 按车实际行驶距离单调推进，并在运动态做局部同挡段几何投影纠偏。
+    void advanceS(double ego_x, double ego_y, double ego_heading, double current_speed, double dt) {
+        int exec_i = 0;
+        TrackPoint ex = exec(&exec_i);
         double dh = normAngle(ex.heading - ego_heading);
-        if (std::fabs(dh) > p_.diverge_guard_rad) return;   // 车脱离执行方向，暂停推进
+        if (std::fabs(dh) > p_.diverge_guard_rad) {
+            prev_ego_x_ = ego_x; prev_ego_y_ = ego_y; has_prev_ego_ = true;
+            return;   // 车脱离执行方向，暂停推进
+        }
         double new_s = s_ + std::fabs(current_speed) * dt;
         // 段边界 guard：跨 v 符号变化点，若车头还没转到接近下一段起点，停在边界
+        double boundary_cap = cum_s_[n_ - 1];
         for (int i = 0; i < n_ - 1; i++) {
             bool a = (double)pts_[i + 1].v < -p_.segment_v_threshold;
             bool b = (double)pts_[i].v     < -p_.segment_v_threshold;
-            if (a != b && s_ < cum_s_[i] && cum_s_[i] < new_s) {
+            if (a != b && s_ < cum_s_[i]) {
                 double next_h = pts_[i + 1].heading;
-                if (std::fabs(normAngle(next_h - ego_heading)) > p_.heading_gate_rad)
-                    new_s = cum_s_[i];
+                if (std::fabs(normAngle(next_h - ego_heading)) > p_.heading_gate_rad) {
+                    boundary_cap = std::min(boundary_cap, cum_s_[i]);
+                    if (cum_s_[i] < new_s) new_s = cum_s_[i];
+                }
             }
         }
+        double step_ego = has_prev_ego_ ? std::hypot(ego_x - prev_ego_x_, ego_y - prev_ego_y_) : 0.0;
+        travel_dist_ += step_ego;
+        bool moved = has_prev_ego_ && (step_ego > 0.005);
+        if (moved && n_ >= 2) {
+            bool cur_rev = (double)pts_[exec_i].v < -p_.segment_v_threshold;
+            double best_d2 = 1.0;
+            double best_s = new_s;
+            bool found_proj = false;
+            for (int i = 0; i < n_ - 1; i++) {
+                bool seg_rev = (double)pts_[i].v < -p_.segment_v_threshold;
+                if (seg_rev != cur_rev) continue;
+                if (cum_s_[i + 1] < new_s - 1.2 || cum_s_[i] > new_s + 1.2) continue;
+                double sx = (double)pts_[i + 1].x - (double)pts_[i].x;
+                double sy = (double)pts_[i + 1].y - (double)pts_[i].y;
+                double seg_l2 = sx * sx + sy * sy;
+                if (seg_l2 < 1e-9) continue;
+                double t = ((ego_x - (double)pts_[i].x) * sx +
+                            (ego_y - (double)pts_[i].y) * sy) / seg_l2;
+                t = std::max(0.0, std::min(1.0, t));
+                double px = (double)pts_[i].x + t * sx;
+                double py = (double)pts_[i].y + t * sy;
+                double d2 = (ego_x - px) * (ego_x - px) + (ego_y - py) * (ego_y - py);
+                if (d2 < best_d2) {
+                    best_d2 = d2;
+                    best_s = cum_s_[i] + t * (cum_s_[i + 1] - cum_s_[i]);
+                    found_proj = true;
+                }
+            }
+            if (found_proj && std::fabs(best_s - new_s) < 0.75) {
+                double delta = best_s - new_s;
+                // 有界局部纠偏：前进与后退纠偏幅度均受控，防止 s_ 在终点前被大步拉回而倒挂在车后
+                double corr = (delta > 0.0)
+                    ? (best_d2 < 0.09 ? std::min(0.025, 0.25 * delta) : 0.0)
+                    : (best_d2 < 0.25 ? std::max(-0.025, 0.25 * delta) : 0.0);
+                new_s = std::min(boundary_cap, std::max(0.0, new_s + corr));
+            }
+        }
+        prev_ego_x_ = ego_x; prev_ego_y_ = ego_y; has_prev_ego_ = true;
         s_ = std::min(new_s, cum_s_[n_ - 1]);
     }
 
@@ -174,21 +239,41 @@ private:
         return pt;
     }
 
-    /// 前视点：执行点前视 ~2m 弧长，同一挡段内（跨 D/R 边界就停）（Python _lookahead）。
+    /// 前视点：在同挡段内沿精确弧长 s_ + la_limit 线性插值，消除离散点间距带来的前视阶跃与冻结。
     TrackPoint lookahead(int base_i) {
         bool rev = (gear_ == -1);
-        TrackPoint target = toTrack(pts_[base_i]);
-        int j = base_i;
-        double arc = 0.0;
-        // 泊车低速弯弧紧凑，前视弧长适配低速避免提早切角
-        const double la_limit = std::min(p_.lookahead_m, 0.8);
-        while (j + 1 < n_ && arc < la_limit) {
+        const double la_limit = std::min(p_.lookahead_m, rev ? 0.65 : 0.8);
+        if (n_ <= 0) return TrackPoint{};
+        if (n_ == 1 || base_i >= n_ - 1) {
+            last_lookahead_ = toTrack(pts_[n_ - 1]);
+            return last_lookahead_;
+        }
+        double max_same_gear_s = std::max(s_, cum_s_[base_i]);
+        int end_j = base_i;
+        for (int j = base_i; j + 1 < n_; j++) {
             double next_v = (double)pts_[j + 1].v;
             if (std::fabs(next_v) > p_.segment_v_threshold && (next_v < -p_.segment_v_threshold) != rev) break;
-            arc += std::hypot((double)pts_[j + 1].x - (double)pts_[j].x,
-                              (double)pts_[j + 1].y - (double)pts_[j].y);
-            j++;
-            target = toTrack(pts_[j]);
+            end_j = j + 1;
+            max_same_gear_s = cum_s_[end_j];
+            if (max_same_gear_s >= s_ + la_limit) break;
+        }
+        double target_s = std::min(s_ + la_limit, max_same_gear_s);
+        int k = base_i;
+        while (k + 1 < end_j && cum_s_[k + 1] < target_s) k++;
+        TrackPoint target;
+        if (k + 1 >= n_ || k >= end_j) {
+            target = toTrack(pts_[end_j]);
+        } else {
+            double span = cum_s_[k + 1] - cum_s_[k];
+            double frac = (span > 1e-9) ? std::max(0.0, std::min(1.0, (target_s - cum_s_[k]) / span)) : 0.0;
+            const TrajectoryPoint& a = pts_[k];
+            const TrajectoryPoint& b = pts_[k + 1];
+            target.x = a.x + (b.x - a.x) * frac;
+            target.y = a.y + (b.y - a.y) * frac;
+            target.heading = normAngle(a.heading + normAngle(b.heading - a.heading) * frac);
+            target.kappa = a.kappa + (b.kappa - a.kappa) * frac;
+            target.v = a.v + (b.v - a.v) * frac;
+            target.l = a.l + (b.l - a.l) * frac;
         }
         last_lookahead_ = target;
         return target;
@@ -223,7 +308,7 @@ private:
 inline ManeuverResult ManeuverTracker::tick(double ego_x, double ego_y,
                                             double ego_heading,
                                             double current_speed, double dt) {
-    advanceS(ego_heading, current_speed, dt);
+    advanceS(ego_x, ego_y, ego_heading, current_speed, dt);
     int exec_i = 0;
     TrackPoint exec_pt = exec(&exec_i);
     bool gear_pending = updateGear(exec_i, current_speed);
@@ -234,9 +319,12 @@ inline ManeuverResult ManeuverTracker::tick(double ego_x, double ego_y,
     // 反 → yaw_rate 反向、heading 一路减 → advanceS 的 diverge_guard 永久冻结 s。
     // 这里把 s_ 直接跳到下一倒车段边界并重取执行点，让前馈/反馈方向与挡位一致，
     // 车头才能正确转升向 π，dh 收敛后 advanceS 恢复推进，后续点自然衔接。
-    if (gear_ == -1 && (double)pts_[exec_i].v > p_.segment_v_threshold) {
+    if (gear_ == -1 && (double)pts_[exec_i].v >= -p_.segment_v_threshold) {
         for (int i = exec_i; i < n_ - 1; i++) {
-            if ((double)pts_[i + 1].v < -p_.segment_v_threshold) { s_ = cum_s_[i]; break; }
+            if ((double)pts_[i + 1].v < -p_.segment_v_threshold) {
+                s_ = cum_s_[i + 1];
+                break;
+            }
         }
         exec_pt = exec(&exec_i);   // 重取执行点 → ff 取倒车段 kappa，方向正确
     }
@@ -261,23 +349,65 @@ inline ManeuverResult ManeuverTracker::tick(double ego_x, double ego_y,
         if (std::fabs((double)pts_[i + 1].v) > p_.gear_v_threshold)
             mag = std::min(mag, std::fabs((double)pts_[i + 1].v));
     }
-    mag = std::max(mag, p_.speed_floor_mps);
+    bool final_stop_leg = (n_ >= 2 && std::fabs((double)pts_[n_ - 1].v) < 0.05);
+    if (final_stop_leg) {
+        for (int i = exec_i; i < n_ - 1; i++) {
+            bool nr = (double)pts_[i + 1].v < -p_.segment_v_threshold;
+            if (nr != exec_rev && std::fabs((double)pts_[i + 1].v) > p_.gear_v_threshold) {
+                final_stop_leg = false;
+                break;
+            }
+        }
+    }
+    const double rem_end = std::max(0.0, cum_s_[n_ - 1] - s_);
+    if (final_stop_leg && rem_end < 1.2 && cum_s_[n_ - 1] > 1.5) {
+        double stop_v = std::max(0.12, 0.14 + 0.72 * std::sqrt(rem_end));
+        mag = std::min(std::max(mag, std::min(p_.speed_floor_mps, stop_v)), stop_v);
+    } else {
+        mag = std::max(mag, p_.speed_floor_mps);
+    }
     double target_speed = exec_rev ? -mag : mag;
 
     // 轨迹终点 = 机动完成 → 目标 0，车刹停（不继续反向冲）
+    // 闭环真实行驶车辆：按车体沿末点朝向的物理残余纵深 rem_along 判停，避免弧长微差导致提前 0.1~0.2m 刹停
+    bool end_aligned = true;
+    if (final_stop_leg && n_ >= 2 && travel_dist_ > 0.5) {
+        const TrajectoryPoint& gp = pts_[n_ - 1];
+        const double rev_sgn = ((double)pts_[n_ - 2].v < -p_.segment_v_threshold) ? -1.0 : 1.0;
+        const double rem_along = rev_sgn * (std::cos((double)gp.heading) * ((double)gp.x - ego_x) +
+                                            std::sin((double)gp.heading) * ((double)gp.y - ego_y));
+        if (rem_end <= 0.03 && rem_along > 0.03) {
+            end_aligned = false;
+            s_ = std::max(0.0, cum_s_[n_ - 1] - std::min(0.40, std::max(0.04, rem_along)));
+        }
+    }
+    if (final_stop_leg && end_aligned && rem_end <= 0.03) {
+        s_ = cum_s_[n_ - 1];
+    }
     if (s_ >= cum_s_[n_ - 1]) { target_speed = 0.0; gear_ = 1; }
     if (gear_pending) target_speed = 0.0;
 
-    // 横向：kappa 前馈 + 车体系 e_lat/dh 反馈，倒挡反馈反号
-    TrackPoint tgt = lookahead(exec_i);
+    // 横向：exec_pt 处精确曲线前馈 ff + 瞬时参考位姿偏差 dh/e_lat 反馈（避免弯道前视点自带 Δθ=κ·L 叠加 ff 造成内切饱和）
+    // 倒挡航向反馈需反号（v<0 时 yaw_rate 与 steer 反号）；而 e_lat 为到参考点的左法向偏差，
+    // 向左偏靶（e_lat>0）需正 steer 使车尾向左摆入（正方向同前挡）。
+    (void)lookahead(exec_i);
+    TrackPoint ref = end_aligned ? exec_pt : toTrack(pts_[n_ - 1]);
     bool rev = (gear_ == -1);
-    double dh = normAngle(tgt.heading - ego_heading);
-    double e_lat = -std::sin(tgt.heading) * (tgt.x - ego_x)
-                   + std::cos(tgt.heading) * (tgt.y - ego_y);
-    double ff = std::atan(wheelbase_ * tgt.kappa);
-    double fb = p_.lat_gain_dh * dh + p_.lat_gain_elat * e_lat;
-    if (rev) fb = -fb;
+    double dh = normAngle(ref.heading - ego_heading);
+    double e_lat = -std::sin(ref.heading) * (ref.x - ego_x)
+                   + std::cos(ref.heading) * (ref.y - ego_y);
+    double ff = std::atan(wheelbase_ * ref.kappa);
+    double fb = rev
+        ? (-p_.lat_gain_dh * dh + p_.lat_gain_elat * e_lat)
+        : (p_.lat_gain_dh * dh + p_.lat_gain_elat * e_lat);
     double steer = std::max(-p_.max_steer, std::min(p_.max_steer, ff + fb));
+    if (done()) {
+        steer = 0.0;
+    } else if (final_stop_leg && rem_end < 0.28 &&
+               std::fabs(ref.kappa) < 0.01 && std::fabs(dh) < 0.03) {
+        double cap = (rem_end < 0.12 && std::fabs(dh) < 0.025) ? 0.04 : 0.18;
+        steer = std::max(-cap, std::min(cap, ff + 0.45 * fb));
+    }
 
     ManeuverResult r{ steer, target_speed, gear_, gear_pending };
     return r;

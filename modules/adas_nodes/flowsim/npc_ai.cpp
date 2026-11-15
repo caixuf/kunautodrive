@@ -22,6 +22,7 @@
 #include "road_network.h"
 #include "route.h"
 #include "lane_frenet.h"   /* C-2: 共享车道中心横向偏移公式 */
+#include "offroute_continue.h"
 #include "logger.h"        /* M3 临时诊断 */
 
 #include <algorithm>
@@ -45,31 +46,13 @@ void npc_ai_seed_rng(uint64_t seed) {
  * 用中心线两点差分的几何切线，再按 route_dir 取 ±s 方向，与 lane 驾驶方向解耦。 */
 static bool road_tangent_heading(FlowRoadNetwork& roads, int rid, double s,
                                  double offset, int route_dir, double& out_h) {
-    WorldPos w0, w1;
-    const double ds = 0.5;
-    if (!roads.frenet_to_world(rid, 0, s, offset, w0)) return false;
-    double hx = 0.0, hy = 0.0;
-    if (roads.frenet_to_world(rid, 0, s + ds, offset, w1)) {
-        hx = w1.x - w0.x;
-        hy = w1.y - w0.y;
-    } else if (roads.frenet_to_world(rid, 0, std::max(0.0, s - ds), offset, w1)) {
-        /* 末端：用后向采样，仍表示 +s 切线 */
-        hx = w0.x - w1.x;
-        hy = w0.y - w1.y;
-    } else {
-        return false;
-    }
-    if (hx * hx + hy * hy < 1e-10) return false;
-    double h = std::atan2(hy, hx);
-    if (route_dir < 0) h += M_PI;
-    while (h >  M_PI) h -= 2.0 * M_PI;
-    while (h < -M_PI) h += 2.0 * M_PI;
-    out_h = h;
-    return true;
+    return compute_road_tangent_heading(roads, rid, s, offset, route_dir, out_h);
 }
 
 /* ── 判断两车是否同车道 ── */
 static bool same_lane(const Entity& a, const Entity& b, const NpcAiConfig& cfg) {
+    // 高程隔离：不同层（地面/高架/地下）永不算同车道
+    if (std::fabs(a.z - b.z) > 2.2) return false;
     // route 模式：同方向 + 横向偏移接近（沿车道行驶，offset 就是车道横向位置）
     if (a.route_dir != 0 && b.route_dir != 0) {
         return a.route_dir == b.route_dir &&
@@ -91,42 +74,37 @@ static bool same_lane(const Entity& a, const Entity& b, const NpcAiConfig& cfg) 
     return std::fabs(a.y - b.y) < cfg.same_lane_tol;
 }
 
-/* ── 找同车道最近前车 ── */
+/* ── 找同车道/入侵走廊最近前车（并输出统一计算的纵向间距 out_gap） ── */
 static EntityId find_lead(const Entity& npc, const EntityPool& pool,
-                          const NpcAiConfig& cfg) {
+                          const NpcAiConfig& cfg, bool ego_maneuvering,
+                          double* out_gap) {
     EntityId   best     = INVALID_ENTITY;
     double     best_gap = 1e9;
-    const bool on_route = (npc.route_dir != 0);
     for (int i = 0; i < pool.size(); ++i) {
         const Entity& o = pool[i];
         if (!o.active || &o == &npc) continue;
-        if (!o.is_vehicle()) continue;
-        if (!same_lane(npc, o, cfg)) continue;
+        if (!o.is_vehicle() && o.type != EntityType::Pedestrian) continue;
 
-        // 前车相对本车的纵向前方距离（>0 表示在前）
-        double ahead;
-        if (on_route && o.route_dir != 0) {
-            // 沿 route 纵向：顺行看 route_s 更大者，对向(dir=-1)看更小者
-            ahead = (o.route_s - npc.route_s) * (double)npc.route_dir;
-        } else {
-            /* 非 route 实体（如 ego，route_dir==0）沿本车车头方向投影。
-             * 旧实现 o.x - npc.x 只对顺行（车头朝 +x）正确——返程对向车
-             * （route_dir=-1，车头朝 -x）会把"身后 4.9m 的 ego"判成前方
-             * lead → IDM 追着本车道后车刹车 → 永久停住堵死 ego 返程
-             * （2026-08-04 实测 car14 @x=2870）。 */
-            const double fx = std::cos(npc.heading);
-            const double fy = std::sin(npc.heading);
-            ahead = (o.x - npc.x) * fx + (o.y - npc.y) * fy;
+        bool is_same_lane = false;
+        if (o.type != EntityType::Pedestrian) {
+            const bool in_target_corridor =
+                (npc.state == NpcState::LaneChange || npc.state == NpcState::CutIn) &&
+                npc.route_dir != 0 && o.route_dir == npc.route_dir &&
+                std::fabs(o.offset - npc.target_offset) < cfg.same_lane_tol;
+            is_same_lane = same_lane(npc, o, cfg) || in_target_corridor;
         }
-        if (ahead <= 0) continue;
-        if (ahead > cfg.look_ahead) continue;
 
-        double gap = ahead - (o.length * 0.5 + npc.length * 0.5);
+        double gap = 1e9;
+        if (!compute_corridor_lead_gap(npc, o, is_same_lane, ego_maneuvering,
+                                       cfg.look_ahead, gap)) {
+            continue;
+        }
         if (gap < best_gap) {
             best_gap = gap;
             best = i;
         }
     }
+    if (out_gap) *out_gap = best_gap;
     return best;
 }
 
@@ -156,6 +134,7 @@ static EntityId find_leader_in_lane(const Entity& npc, double lane_offset,
         const Entity& o = pool[i];
         if (!o.active || &o == &npc) continue;
         if (!o.is_vehicle()) continue;
+        if (std::fabs(o.z - npc.z) > 2.2) continue;
         if (o.route_dir != npc.route_dir) continue;
         if (std::fabs(o.offset - lane_offset) >= cfg.same_lane_tol) continue;
         double ahead = (o.route_s - npc.route_s) * (double)npc.route_dir;
@@ -182,6 +161,7 @@ static EntityId find_follower_in_lane(const Entity& npc, double lane_offset,
         const Entity& o = pool[i];
         if (!o.active || &o == &npc) continue;
         if (!o.is_vehicle()) continue;
+        if (std::fabs(o.z - npc.z) > 2.2) continue;
         if (o.route_dir != npc.route_dir) continue;
         if (std::fabs(o.offset - lane_offset) >= cfg.same_lane_tol) continue;
         double behind = (npc.route_s - o.route_s) * (double)npc.route_dir;
@@ -287,6 +267,11 @@ static double mobil_gain(const Entity& npc, double target_offset,
         a_o_prime = mobil_idm_accel(of, of_new_gap, of.target_vx, of_new_ptr, cfg);
     }
 
+    // ── 安全约束：目标车道前后及并行车辆间隙充足（含同步变道/不同路线来车）──
+    if (!is_target_lane_safe_for_change(npc, target_offset, pool, cfg.same_lane_tol)) {
+        out_safety = false;
+    }
+
     double gain = (a_c_prime - a_c)
                 + cfg.mobil_politeness * ((a_n_prime - a_n) + (a_o_prime - a_o));
     return gain;
@@ -309,24 +294,21 @@ static bool boundary_permissive(const Entity& npc, double target_offset,
     if (npc.route_dir > 0 && target_offset >= -0.5) return false;
     if (npc.route_dir < 0 && target_offset <=  0.5) return false;
 
-    int total_lanes = roads->drivable_lane_count(npc.road_id, npc.s);
-    if (total_lanes <= 0) return true;  // 无法查询 → 保守放行
+    const int same_dir_lanes = count_same_dir_lanes(
+        roads->drivable_lane_ids(npc.road_id, npc.s), npc.route_dir);
+    if (same_dir_lanes <= 0) return true;  // 无法查询 → 保守放行
 
-    // 同向半宽估算：双向道路同向车道数 ≈ total_lanes/2；
-    // total_lanes 为奇数（单向道路）时同向车道数 = total_lanes。
-    // 车道宽从路网查询（非标准路宽如 3.0/4.0m 场景不再算错）：
-    // 旧硬编码 3.5m 在窄路场景把合法车道判成越界（2026-08 修复）。
-    int same_dir_lanes = total_lanes / 2;
-    if (same_dir_lanes < 1) same_dir_lanes = total_lanes;
     double lw = roads->lane_width(npc.road_id, 0, npc.s);
     if (lw < 1.0) lw = 3.5;  /* 查询失败兜底 */
-    double same_dir_half = same_dir_lanes * lw;
+    // 最外侧机动车道中心线 = (same_dir_lanes - 0.5) * lw，留 0.25m 数值容差；
+    // 旧实现 `- same_dir_half - 1.0` 允许车道中心落到路缘/非机动车道外 1m。
+    double max_center = std::max(0.5 * lw, (same_dir_lanes - 0.5) * lw) + 0.25;
 
-    // 目标 offset 必须在同向路面范围内（+1m 余量）
+    // 目标 offset 必须在同向机动车道中心范围内
     if (npc.route_dir > 0) {
-        if (target_offset < -same_dir_half - 1.0) return false;
+        if (target_offset < -max_center) return false;
     } else if (npc.route_dir < 0) {
-        if (target_offset >  same_dir_half + 1.0) return false;
+        if (target_offset >  max_center) return false;
     }
 
     // 单次变道最多跨 2 车道
@@ -344,6 +326,8 @@ static void recycle_npc(Entity& npc, const Route& route, double ego_route_s,
                         const EntityPool& pool, FlowRoadNetwork* roads,
                         uint32_t cycle, const NpcAiConfig& cfg) {
     const double total = route.total_length();
+    const double surface_start_s =
+        (roads && roads->loaded()) ? find_surface_route_s(route, roads) : 0.0;
     // 按 id 错开回收距离（50..230m），避免所有车叠在同一点。
     // 用 id%10 产生 10 个不同位置（每类最多 4 个 NPC），20m 间距够 IDM 跟车安全。
     // 旧 id%5 只有 5 个位置（每类 8 个 NPC），B4 防叠车 5 次重试不够，第 6-8 个叠车。
@@ -362,8 +346,13 @@ static void recycle_npc(Entity& npc, const Route& route, double ego_route_s,
         target = total - back;
         if (target < 0.0) target = 0.0;
     }
-    // B4: 防叠车 — 目标点 8m 内若已有同方向 NPC，再后退 15m，最多重试 8 次。
-    // id%10 每类最多 4 个 NPC，3 次重试即够；8 次留充足余量应对边界情况。
+    target = adjust_recycle_target_for_surface(
+        target, npc.route_dir, ego_route_s, total, surface_start_s, npc.id);
+    // B4: 防叠车 — 目标点 8m 内若已有同方向 NPC，再错开 15m，最多重试 8 次。
+    // 当目标位于 ego 前方（例如 ego 仍在地下车库未出坡道）时，顺向步进 +15m 避免退回地库/靠近 ego。
+    const double occupancy_step =
+        (npc.route_dir > 0 && target > ego_route_s) ? 15.0
+                                                    : ((npc.route_dir > 0) ? -15.0 : 15.0);
     for (int attempt = 0; attempt < 8; ++attempt) {
         bool occupied = false;
         for (int i = 0; i < pool.size(); ++i) {
@@ -374,8 +363,14 @@ static void recycle_npc(Entity& npc, const Route& route, double ego_route_s,
             if (std::fabs(o.route_s - target) < 8.0) { occupied = true; break; }
         }
         if (!occupied) break;
-        target += (npc.route_dir > 0) ? -15.0 : 15.0;
+        const double next_t = target + occupancy_step;
+        if (npc.route_dir > 0 && surface_start_s > 0.5 && next_t < surface_start_s) {
+            break;
+        }
+        target = next_t;
     }
+    target = adjust_recycle_target_for_surface(
+        target, npc.route_dir, ego_route_s, total, surface_start_s, npc.id);
     if (target < 0.0)   target = 0.0;
     if (target > total) target = total;
     npc.route_s = target;
@@ -426,22 +421,36 @@ static void recycle_npc(Entity& npc, const Route& route, double ego_route_s,
         int rid = 0, ridx = -1;
         double s_local = 0.0;
         route.locate(npc.route_s, rid, s_local, ridx);
-        if (npc.road_pos.relocate(*roads, rid, npc.lane_id, s_local, 0.0)) {
-            /* 立即同步世界坐标 — 旧实现只 init road_pos 不更新 npc.x/y，
-             * 下一帧 road_pos.world() 才把 npc.x/y 跳到新位置，evaluator
-             * 在两次采样间反算出 45 m/s 的"伪速度"触发 respawn jump 告警。
-             * 这里在 recycle 当帧立即用 road_pos.world() 同步 x/y/heading，
-             * 让 NPC 在新位置以 speed=0 出现，dx/dy 跨帧无跳变。 */
+        if (rid < 0 && ridx >= 0) {
+            if (ridx + 1 < route.count() && route.seg(ridx + 1).road_id >= 0) {
+                ridx = ridx + 1;
+                rid = route.seg(ridx).road_id;
+                s_local = route.seg(ridx).s0;
+            } else if (ridx > 0 && route.seg(ridx - 1).road_id >= 0) {
+                ridx = ridx - 1;
+                rid = route.seg(ridx).road_id;
+                s_local = route.seg(ridx).s0 + route.seg(ridx).length;
+            }
+        }
+        if (rid >= 0) {
+            double lane_off = lane_internal_from_offset(
+                *roads, rid, npc.lane_id, s_local, npc.offset);
+            if (!npc.road_pos.relocate(*roads, rid, npc.lane_id, s_local, lane_off)) {
+                int fb_lane = (npc.route_dir >= 0) ? -1 : 1;
+                double fb_off = lane_internal_from_offset(
+                    *roads, rid, fb_lane, s_local, npc.offset);
+                npc.road_pos.relocate(*roads, rid, fb_lane, s_local, fb_off);
+            }
+        }
+        if (npc.road_pos.ok()) {
             WorldPos wp;
             if (npc.road_pos.world(wp)) {
                 npc.x = wp.x;
                 npc.y = wp.y;
+                npc.z = wp.z;
                 double h = wp.h + (npc.route_dir < 0 ? M_PI : 0.0);
                 /* 对向：lane/参考线 h 不稳，改用几何切线；失败则回退 wp.h+π */
-                if (npc.route_dir < 0) {
-                    int rid = 0, ridx = -1;
-                    double s_local = 0.0;
-                    route.locate(npc.route_s, rid, s_local, ridx);
+                if (npc.route_dir < 0 && rid >= 0) {
                     if (!road_tangent_heading(*roads, rid, s_local, npc.offset,
                                               npc.route_dir, h)) {
                         h = wp.h + M_PI;
@@ -451,6 +460,12 @@ static void recycle_npc(Entity& npc, const Route& route, double ego_route_s,
                 while (h < -M_PI) h += 2.0 * M_PI;
                 npc.heading = h;
                 /* vx/vy 已在上面清零，保持 0 即可（speed=0） */
+            }
+            FrenetPos fp;
+            if (npc.road_pos.frenet(fp)) {
+                npc.road_id = fp.road_id;
+                npc.lane_id = fp.lane_id;
+                npc.s = fp.s;
             }
         }
     }
@@ -589,7 +604,8 @@ void step_npc_vehicle(Entity& npc, const EntityPool& pool,
         double remain = std::fabs(npc.target_offset - npc.offset);
         if (remain > 0.01) {
             double dir = (npc.target_offset > npc.offset) ? 1.0 : -1.0;
-            double step = 2.3 * dt;  // ≈2.3 m/s 横移速率
+            double lat_scale = std::min(1.0, std::max(0.0, npc.speed) / 3.0);
+            double step = 2.3 * lat_scale * dt;
             if (step > remain) step = remain;
             npc.offset += dir * step;
         } else {
@@ -615,28 +631,89 @@ void step_npc_vehicle(Entity& npc, const EntityPool& pool,
      * 此处兜底：非 CutIn 且非 LaneChange 状态下，强制 target_offset = offset，
      * 彻底断绝"target_offset 残留导致 NPC 漂移"的可能。
      * 不影响 CutIn PID（PID 分支在上面已执行完毕）和 LaneChange E2（上面已执行）。 */
+    bool lane_drop_yield = false;
+    double dist_to_seg_end = 1e9;
+    int next_real_same_dir = -1;
+    if (roads && roads->loaded() && npc.road_id >= 0 && npc.route_dir != 0 &&
+        route && route->ok()) {
+        int cur_rid = 0, ridx = -1;
+        double s_loc = 0.0;
+        route->locate(npc.route_s, cur_rid, s_loc, ridx);
+        if (ridx >= 0) {
+            const int step = (npc.route_dir > 0) ? 1 : -1;
+            for (int hop = 1; hop <= 2; ++hop) {
+                const int nxt_idx = ridx + step * hop;
+                if (nxt_idx < 0 || nxt_idx >= route->count()) break;
+                const auto& nxt_seg = route->seg(nxt_idx);
+                if (nxt_seg.is_virtual || nxt_seg.road_id < 0) continue;
+                dist_to_seg_end = (npc.route_dir > 0)
+                    ? std::max(0.0, nxt_seg.s_start - npc.route_s)
+                    : std::max(0.0, npc.route_s - (nxt_seg.s_start + nxt_seg.length));
+                const double nxt_probe_s = (npc.route_dir > 0)
+                    ? nxt_seg.s0 + 0.5
+                    : nxt_seg.s0 + std::max(0.0, nxt_seg.length - 0.5);
+                next_real_same_dir = count_same_dir_lanes(
+                    roads->drivable_lane_ids(nxt_seg.road_id, nxt_probe_s),
+                    npc.route_dir);
+                break;
+            }
+        }
+    }
+    auto step_offset_toward = [&](double tgt, double base_rate, double min_scale) {
+        const double diff = tgt - npc.offset;
+        const double lat_scale = std::min(1.0, std::max(min_scale, std::fabs(npc.speed) / 3.0));
+        const double step = base_rate * lat_scale * dt;
+        npc.offset = (std::fabs(diff) <= step) ? tgt : (npc.offset + (diff > 0.0 ? step : -step));
+    };
     if (npc.state != NpcState::CutIn && npc.state != NpcState::LaneChange) {
-        npc.target_offset = npc.offset;
+        bool handled_lane_drop = false;
+        if (!in_crash_cooldown && roads && roads->loaded() &&
+            npc.road_id >= 0 && npc.route_dir != 0) {
+            const int curr_same_dir = count_same_dir_lanes(
+                roads->drivable_lane_ids(npc.road_id, npc.s), npc.route_dir);
+            const int eff_same_dir = compute_eff_lane_drop_same_dir_lanes(
+                curr_same_dir, next_real_same_dir, dist_to_seg_end, 65.0);
+            const bool approaching_narrower = (eff_same_dir < curr_same_dir);
+            if (eff_same_dir > 0) {
+                double lw = roads->lane_width(npc.road_id, 0, npc.s);
+                if (lw < 1.0) lw = 3.5;
+                double max_center = std::max(0.5 * lw, (eff_same_dir - 0.5) * lw);
+                double clamped_off = npc.offset;
+                if (npc.route_dir > 0 && npc.offset < -max_center - 0.1) {
+                    clamped_off = -max_center;
+                } else if (npc.route_dir < 0 && npc.offset > max_center + 0.1) {
+                    clamped_off = max_center;
+                }
+                if (clamped_off != npc.offset) {
+                    handled_lane_drop = true;
+                    if (is_target_lane_safe_for_change(
+                            npc, clamped_off, pool, cfg.same_lane_tol, 6.0, 6.0)) {
+                        step_offset_toward(clamped_off, 2.3, 0.0);
+                    } else if (!approaching_narrower || dist_to_seg_end < 35.0) {
+                        lane_drop_yield = true;
+                    }
+                    npc.target_offset = npc.offset;
+                }
+            }
+        }
+        if (!handled_lane_drop) {
+            if (npc.state == NpcState::StopForTL && !in_crash_cooldown &&
+                std::fabs(npc.target_offset - npc.offset) > 0.01) {
+                // 红灯中断变道后平滑归位到较近车道中心，不瞬移不骑线
+                step_offset_toward(npc.target_offset, 2.0, 0.25);
+            } else {
+                npc.target_offset = npc.offset;
+            }
+        }
     }
 
     // 1. 找前车（碰撞冷却期间跳过，保持 speed=0）
     EntityId lead = INVALID_ENTITY;
     double gap = 1e9;
     if (!in_crash_cooldown) {
-        lead = find_lead(npc, pool, cfg);
+        lead = find_lead(npc, pool, cfg, ego_maneuvering, &gap);
         npc.lead_id = lead;
-        if (lead != INVALID_ENTITY) {
-            const Entity& lead_e = pool[lead];
-            if (npc.route_dir != 0 && lead_e.route_dir != 0) {
-                gap = (lead_e.route_s - npc.route_s) * (double)npc.route_dir
-                      - (lead_e.length * 0.5 + npc.length * 0.5);
-            } else {
-                gap = (lead_e.x - npc.x) - (lead_e.length * 0.5 + npc.length * 0.5);
-            }
-            npc.follow_gap = gap;
-        } else {
-            npc.follow_gap = 1e9;
-        }
+        npc.follow_gap = (lead != INVALID_ENTITY) ? gap : 1e9;
     }
 
     // 1.5 MOBIL 变道决策：用代价函数评估变道收益 + 边界权限门 + 安全约束
@@ -660,9 +737,13 @@ void step_npc_vehicle(Entity& npc, const EntityPool& pool,
      * 注：mobil_idm_accel 的自由流加速项已修为标准 IDM (1−(v/v0)^4)。
      * ────────────────────────────────────────────────────────────── */
     if (cfg.enable_mobil) {
-        // 仲裁门禁：存在更高优先级的横向控制时跳过
+        // 仲裁门禁：存在更高优先级横向控制、处于路口让行/红灯或临近段末/路口 (<40m) 时跳过
         if (npc.state == NpcState::CutIn ||
-            npc.state == NpcState::LaneChange) { goto mobil_done; }
+            npc.state == NpcState::LaneChange ||
+            npc.state == NpcState::StopForTL ||
+            npc.state == NpcState::Yield ||
+            npc.state == NpcState::Stopped ||
+            dist_to_seg_end < 40.0) { goto mobil_done; }
         if (npc.lane_change_timer > 0.0) {
             npc.lane_change_timer -= dt;
             if (npc.lane_change_timer < 0.0) npc.lane_change_timer = 0.0;
@@ -714,19 +795,11 @@ void step_npc_vehicle(Entity& npc, const EntityPool& pool,
                     if (cand < -900) continue;
                     if (std::fabs(cand) > 20.0) continue;
                     if (!boundary_permissive(npc, cand, roads)) continue;
-                    // 基础安全：检查目标车道前后 30m/8m 无车
-                    bool base_safe = true;
-                    for (int i = 0; i < pool.size(); ++i) {
-                        const Entity& o = pool[i];
-                        if (!o.active || &o == &npc) continue;
-                        if (!o.is_vehicle()) continue;
-                        if (o.route_dir != npc.route_dir) continue;
-                        if (std::fabs(o.offset - cand) >= cfg.same_lane_tol) continue;
-                        double ahead = (o.route_s - npc.route_s) * (double)npc.route_dir;
-                        if (ahead > 0.0 && ahead < 30.0 + npc.length) { base_safe = false; break; }
-                        if (ahead < 0.0 && -ahead < 8.0 + npc.length)  { base_safe = false; break; }
+                    if (is_target_lane_safe_for_change(
+                            npc, cand, pool, cfg.same_lane_tol, 22.0, 14.0)) {
+                        chosen = cand;
+                        break;
                     }
-                    if (base_safe) { chosen = cand; break; }
                 }
             }
 
@@ -742,6 +815,25 @@ mobil_done: ;
     // 2. 计算 v_desired（碰撞冷却期间 v_desired=0）
     double v = npc.speed;
     double v_desired = 0.0;
+    double eff_target_vx = npc.target_vx;
+    if (roads && roads->loaded() && npc.road_id >= 0) {
+        double r_lim = roads->speed_limit(npc.road_id, npc.lane_id, npc.s, 33.3);
+        if (r_lim > 0.5 && r_lim < eff_target_vx) {
+            eff_target_vx = r_lim;
+        }
+        if (route && route->ok() && npc.route_dir > 0) {
+            double look_s = std::min(route->total_length(), npc.route_s + 20.0);
+            int rid_ahead = -1, ridx_ahead = -1;
+            double s_ahead = 0.0;
+            route->locate(look_s, rid_ahead, s_ahead, ridx_ahead);
+            if (rid_ahead >= 0) {
+                double a_lim = roads->speed_limit(rid_ahead, npc.lane_id, s_ahead, 33.3);
+                if (a_lim > 0.5 && a_lim < eff_target_vx) {
+                    eff_target_vx = a_lim;
+                }
+            }
+        }
+    }
     if (uturn_yield) {
         /* 对向车让行掉头中的 ego：压制一切纵向目标（保持刹车），
          * 掉头完成（ego_maneuvering=false）后恢复。 */
@@ -751,8 +843,8 @@ mobil_done: ;
             v_desired = 0.0;
         } else if (npc.state == NpcState::CutIn) {
             // CutIn 期间：纵向减速 cfg.cutin_longitudinal_decel m/s（避免变道时冲撞侧后车），
-            // 仍按 IDM 跟前车（gap 不足时进一步减速），但上限为 target_vx - decel。
-            double cap = std::max(0.0, npc.target_vx - cfg.cutin_longitudinal_decel);
+            // 仍按 IDM 跟前车（gap 不足时进一步减速），但上限为 eff_target_vx - decel。
+            double cap = std::max(0.0, eff_target_vx - cfg.cutin_longitudinal_decel);
             if (lead != INVALID_ENTITY) {
                 v_desired = idm_desired_speed(v, gap, cap, cfg, dt);
             } else {
@@ -765,21 +857,26 @@ mobil_done: ;
              * 纵向只按 IDM/目标速度推进，不得把状态改回 Follow/Cruise ——
              * 旧实现无条件覆盖，导致变道只横移一帧即中止（2026-11 修复）。 */
             v_desired = (lead != INVALID_ENTITY)
-                ? idm_desired_speed(v, gap, npc.target_vx, cfg, dt)
-                : npc.target_vx;
+                ? idm_desired_speed(v, gap, eff_target_vx, cfg, dt)
+                : eff_target_vx;
         } else if (lead != INVALID_ENTITY) {
             npc.state = NpcState::Follow;
             /* E4: 碰撞死锁恢复 — 碰撞分离后两车间距过小（gap < 2m），
              * IDM 计算 gap_error 极负 → v_desired=0 → 两车都停住不动。
-             * 临时给一个较大的 gap 值让 NPC 起步加速，拉开足够间距后
-             * 下一帧重新评估 lead 并恢复正常跟车。 */
-            if (gap < 2.0 && npc.speed < 0.5) {
+             * 仅当前车已开始拉远（speed > 0.5）时临时放宽 gap 起步，避免追尾静止前车。 */
+            if (gap < 2.0 && npc.speed < 0.5 && pool[lead].speed > 0.5) {
                 gap = 10.0;
             }
-            v_desired = idm_desired_speed(v, gap, npc.target_vx, cfg, dt);
+            v_desired = idm_desired_speed(v, gap, eff_target_vx, cfg, dt);
         } else {
             npc.state = NpcState::Cruise;
-            v_desired = npc.target_vx;
+            v_desired = eff_target_vx;
+        }
+        if (lane_drop_yield) {
+            v_desired = std::min(v_desired, std::max(0.0, v - cfg.brake_rate * dt));
+            if (npc.state == NpcState::Cruise || npc.state == NpcState::Follow) {
+                npc.state = NpcState::Yield;
+            }
         }
     }
 
@@ -848,11 +945,14 @@ mobil_done: ;
             adv_ok = npc.road_pos.advance(dist, junc_angle);
         }
         if (!adv_ok) {
-            // 推进失败（路网边界）→ recycle 到 ego 附近。
-            // 无 route 可 recycle 时（route.build 失败但 roads 加载成功）停车防飞出：
-            // advance 失败时 esmini position 停在最后有效点，speed=0 让 NPC 不再尝试推进。
+            // 推进失败（路网边界）→ route NPC recycles；无 route 标记的支路 NPC 优先续接 route、
+            // 其次扫描回绕本段空位；若临时全占则原地停车等待，严禁强行 180° 翻转跳回主路线。
             if (route && route->ok() && npc.route_dir != 0) {
                 recycle_npc(npc, *route, ego_route_s, pool, roads, cycle, cfg);
+            } else if (try_continue_offroute_npc(npc, pool, roads, route, cycle)) {
+                NpcTransitionRequest reset_req;
+                reset_req.event = NpcEvent::Recycle;
+                (void)npc_request_state(npc, reset_req, cfg);
             } else {
                 npc.speed = 0.0;
                 npc.vx = 0.0; npc.vy = 0.0;
@@ -923,16 +1023,56 @@ mobil_done: ;
                         int rid = 0, ridx = -1;
                         double s_local = 0.0;
                         route->locate(npc.route_s, rid, s_local, ridx);
-                        npc.road_pos.relocate(*roads, rid, npc.lane_id, s_local, 0.0);
-                        WorldPos wp_sep;
-                        if (npc.road_pos.world(wp_sep)) {
-                            npc.x = wp_sep.x;
-                            npc.y = wp_sep.y;
-                            npc.z = wp_sep.z;
-                            double h = wp_sep.h + (npc.route_dir < 0 ? M_PI : 0.0);
-                            while (h >  M_PI) h -= 2.0 * M_PI;
-                            while (h < -M_PI) h += 2.0 * M_PI;
-                            npc.heading = h;
+                        if (rid < 0 && ridx >= 0) {
+                            if (ridx + 1 < route->count() && route->seg(ridx + 1).road_id >= 0) {
+                                ridx = ridx + 1;
+                                rid = route->seg(ridx).road_id;
+                                s_local = route->seg(ridx).s0;
+                            } else if (ridx > 0 && route->seg(ridx - 1).road_id >= 0) {
+                                ridx = ridx - 1;
+                                rid = route->seg(ridx).road_id;
+                                s_local = route->seg(ridx).s0 + route->seg(ridx).length;
+                            }
+                        }
+                        if (rid >= 0) {
+                            double lane_off = lane_internal_from_offset(
+                                *roads, rid, npc.lane_id, s_local, npc.offset);
+                            if (!npc.road_pos.relocate(*roads, rid, npc.lane_id, s_local, lane_off)) {
+                                int fb_lane = (npc.route_dir >= 0) ? -1 : 1;
+                                double fb_off = lane_internal_from_offset(
+                                    *roads, rid, fb_lane, s_local, npc.offset);
+                                npc.road_pos.relocate(*roads, rid, fb_lane, s_local, fb_off);
+                            }
+                            WorldPos wp_sep;
+                            if (npc.road_pos.world(wp_sep)) {
+                                npc.x = wp_sep.x;
+                                npc.y = wp_sep.y;
+                                npc.z = wp_sep.z;
+                                double h = wp_sep.h + (npc.route_dir < 0 ? M_PI : 0.0);
+                                while (h >  M_PI) h -= 2.0 * M_PI;
+                                while (h < -M_PI) h += 2.0 * M_PI;
+                                npc.heading = h;
+                            }
+                        }
+                    } else if (npc.road_id >= 0 && roads && roads->loaded()) {
+                        // Off-route road_pos vehicles (cross streets / side branches): keep road_pos
+                        // synchronized on current road_id after collision separation so cooldown expiry
+                        // does not snap back to the pre-collision pose.
+                        WorldPos own_wp{};
+                        if (roads->frenet_to_world(npc.road_id, 0, std::max(0.0, npc.s), 0.0, own_wp)) {
+                            const OwnRoadProjection proj = project_onto_road_tangent(
+                                npc.x, npc.y, npc.z, own_wp.x, own_wp.y, own_wp.z, own_wp.h);
+                            if (proj.valid) {
+                                const double s_sep = std::max(0.0, npc.s + proj.along);
+                                const int sync_lane = (npc.lane_id != 0) ? npc.lane_id : -1;
+                                const double lane_off = lane_internal_from_offset(
+                                    *roads, npc.road_id, sync_lane, s_sep, proj.lat);
+                                if (npc.road_pos.relocate(*roads, npc.road_id, sync_lane, s_sep, lane_off)) {
+                                    npc.s = s_sep;
+                                    npc.offset = proj.lat;
+                                    npc.target_offset = proj.lat;
+                                }
+                            }
                         }
                     }
                 }
@@ -1042,7 +1182,7 @@ mobil_done: ;
     } else if (roads && roads->loaded()) {
         // ── 兜底（route/esmini 缺失或该 NPC 不在主 route 上）──
         FrenetPos f;
-        if (roads->world_to_frenet(npc.x, npc.y, f)) {
+        if (roads->world_to_frenet(npc.x, npc.y, f, npc.z)) {
             npc.road_id = f.road_id;
             npc.lane_id = f.lane_id;
             npc.s = f.s;
@@ -1105,7 +1245,7 @@ void npc_init_route(Entity& npc, const Route& route, int dir) {
 }
 
 void step_npc_pedestrian(Entity& ped, double dt, const NpcAiConfig& cfg,
-                         FlowRoadNetwork* roads) {
+                         FlowRoadNetwork* roads, const EntityPool* pool) {
     // 完全静止的行人（vx=0 && vy=0）保持原地
     if (ped.vx == 0.0 && ped.vy == 0.0) {
         ped.speed = 0.0;
@@ -1118,20 +1258,26 @@ void step_npc_pedestrian(Entity& ped, double dt, const NpcAiConfig& cfg,
         if (ped.ped_wait_timer >= cfg.ped_wait_time) {
             ped.ped_wait_timer = 0.0;
             ped.ped_parked = 0;
-            ped.vy = -ped.vy;  // 反向横穿
+            ped.vx = -ped.vx;
+            ped.vy = -ped.vy;
         }
         return;
     }
 
     // 沿路网步行（有 road_id 的路边行人）：推进 s 并按车道几何取世界坐标，
-    // 弯道/OSM 路上不会沿世界直线走出路面。横穿行人（vy!=0）仍走世界系。
+    // 弯道/OSM 路上不会沿世界直线走出路面。横穿行人（vy!=0 或 road_id<0）走世界系。
     if (roads && roads->loaded() && ped.road_id >= 0 &&
         std::fabs(ped.vy) < 0.01 && std::fabs(ped.vx) > 0.01) {
-        ped.s += std::fabs(ped.vx) * dt;
+        const double cand_s = ped.s + std::fabs(ped.vx) * dt;
         const double lane_off = lane_internal_from_offset(
-            *roads, ped.road_id, ped.lane_id, ped.s, ped.offset);
+            *roads, ped.road_id, ped.lane_id, cand_s, ped.offset);
         WorldPos wp;
-        if (roads->frenet_to_world(ped.road_id, ped.lane_id, ped.s, lane_off, wp)) {
+        if (roads->frenet_to_world(ped.road_id, ped.lane_id, cand_s, lane_off, wp)) {
+            if (pool && is_pedestrian_step_blocked_by_vehicle(ped, wp.x, wp.y, *pool)) {
+                ped.speed = 0.0;
+                return;
+            }
+            ped.s = cand_s;
             ped.x = wp.x;
             ped.y = wp.y;
             ped.z = wp.z;
@@ -1141,11 +1287,49 @@ void step_npc_pedestrian(Entity& ped, double dt, const NpcAiConfig& cfg,
         }
     }
 
+    if (!ped.ped_home_init) {
+        ped.ped_home_init = true;
+        ped.ped_home_x = ped.x;
+        ped.ped_home_y = ped.y;
+        const double spd0 = std::hypot(ped.vx, ped.vy);
+        if (spd0 > 0.01) {
+            ped.ped_axis_x = ped.vx / spd0;
+            ped.ped_axis_y = ped.vy / spd0;
+            // 非 y=0 中心横穿行人（如十字路口斑马线）：自动按 2*ped_boundary (≈16m) 做斑马线两端往返
+            const bool is_legacy_y0 = (std::fabs(ped.vx) < 0.01 &&
+                                       std::fabs(ped.y) <= cfg.ped_boundary + 0.5);
+            if (!is_legacy_y0 && ped.road_id < 0 && ped.ped_cross_span <= 0.0) {
+                ped.ped_cross_span = cfg.ped_boundary * 2.0;
+            }
+        }
+    }
+
+    // 斑马线前/中遇到占道或正在通过的车辆时让行停候，不走入静止或行驶车辆体内
+    if (pool && is_pedestrian_step_blocked_by_vehicle(
+            ped, ped.x + ped.vx * dt, ped.y + ped.vy * dt, *pool)) {
+        ped.speed = 0.0;
+        return;
+    }
+
     // 移动
     step_pedestrian(ped, dt);
 
-    // 横穿行人（vy != 0）：到达边界后停车等待
-    if (std::fabs(ped.vy) > 0.01) {
+    // 斑马线往返（兼容任意位置/任意方向的 E/W/N/S 十字路口斑马线）
+    if (ped.ped_cross_span > 0.0) {
+        const double proj = (ped.x - ped.ped_home_x) * ped.ped_axis_x +
+                            (ped.y - ped.ped_home_y) * ped.ped_axis_y;
+        const double dir_dot = ped.vx * ped.ped_axis_x + ped.vy * ped.ped_axis_y;
+        if (dir_dot > 0.0 && proj >= ped.ped_cross_span) {
+            ped.x = ped.ped_home_x + ped.ped_axis_x * ped.ped_cross_span;
+            ped.y = ped.ped_home_y + ped.ped_axis_y * ped.ped_cross_span;
+            ped.ped_parked = 1;
+        } else if (dir_dot < 0.0 && proj <= 0.0) {
+            ped.x = ped.ped_home_x;
+            ped.y = ped.ped_home_y;
+            ped.ped_parked = 1;
+        }
+    } else if (std::fabs(ped.vy) > 0.01) {
+        // 旧有 y=0 横穿行人：到达 ±ped_boundary 后停车等待
         if (ped.vy > 0 && ped.y >= cfg.ped_boundary) {
             ped.y = cfg.ped_boundary;
             ped.ped_parked = 1;
@@ -1203,10 +1387,19 @@ bool npc_request_state(Entity& npc, const NpcTransitionRequest& req,
         /* 离开 LaneChange 但**未完成**（外部事件锁死：红灯/脚本 override 等）→
          * 回到源车道。否则 target_offset=offset 的兜底会把半途的跨线 offset
          * 当成新车道中心，车永久骑线。 */
+        /* 离开 LaneChange 但未完成时，不再瞬移回源车道（会造成 50m/s+ 横向跳变与穿模）；
+         * 碰撞时就地锁停，红灯/其他中止则选较近车道作为 target_offset 平滑归位。 */
         if (old == NpcState::LaneChange && target != NpcState::LaneChange &&
             std::fabs(npc.offset - npc.target_offset) > 0.01) {
-            npc.offset = npc.lane_change_from_offset;
-            npc.target_offset = npc.lane_change_from_offset;
+            if (target == NpcState::Stopped) {
+                npc.target_offset = npc.offset;
+            } else {
+                const double d_tgt = std::fabs(npc.offset - npc.target_offset);
+                const double d_src = std::fabs(npc.offset - npc.lane_change_from_offset);
+                if (d_src < d_tgt) {
+                    npc.target_offset = npc.lane_change_from_offset;
+                }
+            }
         }
         /* 进入 StopForTL/Stopped → 立即减速 */
         if (target == NpcState::StopForTL || target == NpcState::Stopped) {

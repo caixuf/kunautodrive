@@ -328,6 +328,7 @@ struct FrameContext {
     ObstacleList obstacles{};
     std::array<float, 128> obstacle_headings{};
     std::array<bool, 128> obstacle_has_heading{};
+    std::array<float, 128> obstacle_heights{};
     RoadGeometryContext road_geometry{};
     L3SafetyState l3_state{};
     ParkingGoal parking_goal{};
@@ -373,7 +374,7 @@ struct FrameContext {
         return obstacle_has_heading[index] ? obstacle_headings[index] : 0.0f;
     }
 
-    bool AddObstacle(const Obstacle& obs, bool has_heading = false, float heading = 0.0f) noexcept {
+    bool AddObstacle(const Obstacle& obs, bool has_heading = false, float heading = 0.0f, float height = 1.5f) noexcept {
         if (obstacles.count >= 128) {
             return false;
         }
@@ -381,14 +382,23 @@ struct FrameContext {
         obstacles.obstacles[idx] = obs;
         obstacle_headings[idx] = heading;
         obstacle_has_heading[idx] = has_heading;
+        obstacle_heights[idx] = (height > 0.05f) ? height : 1.5f;
         obstacles.count++;
         return true;
+    }
+
+    float GetObstacleHeight(size_t index) const noexcept {
+        if (index >= obstacles.count || index >= obstacle_heights.size()) {
+            return 1.5f;
+        }
+        return (obstacle_heights[index] > 0.05f) ? obstacle_heights[index] : 1.5f;
     }
 
     void ClearObstacles() noexcept {
         obstacles.count = 0;
         obstacle_headings.fill(0.0f);
         obstacle_has_heading.fill(false);
+        obstacle_heights.fill(1.5f);
     }
 };
 

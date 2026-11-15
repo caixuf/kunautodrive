@@ -26,7 +26,8 @@
   },
   "actors": [
     {"id": 101, "type": "car", "x": 27.0, "y": -4.0, "vx": 0.0, "vy": 0.0, "len": 4.6, "wid": 2.0},
-    {"id": 102, "type": "car", "x": 41.5, "y": -4.0, "vx": 0.0, "vy": 0.0, "len": 4.6, "wid": 2.0}
+    {"id": 102, "type": "car", "x": 41.5, "y": -4.0, "vx": 0.0, "vy": 0.0, "len": 4.6, "wid": 2.0},
+    {"id": 103, "type": "unknown_static", "x": 31.8, "y": -5.5, "vx": 0.0, "vy": 0.0, "len": 0.7, "wid": 0.7, "height": 0.85, "heading": 0.4, "parked_fixed": true}
   ],
   "traffic_lights": [],
   "parking_goal": {
@@ -43,8 +44,8 @@
     "min_avg_speed_mps": 0.2,
     "lateral_grid_tolerance_m": null,
     "parking_goal_expect": {
-      "max_pos_err_m": 0.40,
-      "max_heading_err_deg": 6.0
+      "max_pos_err_m": 0.20,
+      "max_heading_err_deg": 2.0
     }
   },
   "route": [],

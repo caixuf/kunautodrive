@@ -130,6 +130,46 @@ class TestTraceIncident(unittest.TestCase):
         self.assertFalse(res["layers"]["localization"]["off_road"])
         self.assertEqual(res["summary"]["status"], "pass")
 
+    def test_parking_bay_and_park_out_exempt_from_false_road_departure(self):
+        # B1 车位 (12.0, -17.3) 与地面车位 (3225.5, -6.5) 均不在主路中心线，不得在 t=0s 误报出路沿；
+        # 若中途在主路上真正冲出路外，仍必须准确捕捉。
+        samples = [
+            {"t": 0.0, "x": 12.0, "y": -17.3, "speed": 0.0, "heading": 1.5708},
+            {"t": 1.0, "x": 18.0, "y": -15.0, "speed": 1.5, "heading": 0.4},
+            {"t": 2.0, "x": 26.0, "y": -12.25, "speed": 3.0, "heading": 0.0},
+            {"t": 5.0, "x": 100.0, "y": -10.5, "speed": 8.0, "heading": 0.0},
+            {"t": 15.0, "x": 3225.5, "y": -6.5, "speed": 0.0, "heading": 1.5708},
+        ]
+        topo = _topo(samples=samples)
+        topo["metrics"]["scene"]["lane"] = {"count": 2, "width": 3.5}
+        topo["metrics"]["scene"]["ego"] = {"x": 3225.5, "y": -6.5, "heading": 1.5708, "speed": 0.0}
+        topo["metrics"]["scene"]["road_network"] = {
+            "edges": [
+                {"id": 0, "lanes": 2, "lane_width": 3.5, "oneway": False,
+                 "nodes": [[0, -10.5, -4.5], [130, -10.5, -4.5]]},
+                {"id": 1, "lanes": 2, "lane_width": 3.5, "oneway": False,
+                 "nodes": [[3200, -1.75, 0], [3260, -1.75, 0]]},
+            ]
+        }
+        topo["metrics"]["scene"]["park_out"] = {
+            "enabled": True, "slot_x": 12.0, "slot_y": -17.3, "slot_heading": 1.5708,
+            "exit_x": 26.0, "exit_y": -12.25, "exit_heading": 0.0, "corridor_width": 6.0,
+        }
+        topo["metrics"]["scene"]["parking_goal"] = {
+            "enabled": True, "x": 3225.5, "y": -6.5, "heading": 1.5708, "width": 2.8, "length": 6.0,
+        }
+        res = analyze_incident(topo)
+        self.assertIsNone(res["incident"])
+        self.assertEqual(res["events"], [])
+        self.assertFalse(res["layers"]["localization"]["off_road"])
+
+        # 中途主路真正偏出路外必须仍被捕到
+        topo["samples"].insert(3, {"t": 3.0, "x": 80.0, "y": 5.0, "speed": 8.0, "heading": 0.0})
+        res_bad = analyze_incident(topo)
+        self.assertIsNotNone(res_bad["incident"])
+        self.assertEqual(res_bad["incident"]["type"], "road_departure")
+        self.assertAlmostEqual(res_bad["incident"]["at_s"], 3.0)
+
 
 if __name__ == "__main__":
     unittest.main()

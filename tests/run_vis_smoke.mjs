@@ -23,6 +23,8 @@ const REAL_THREE = new Set([
   'vis_audit_route.test.mjs',   // A* 路线与路灯碰撞真实 Three 几何漫游
   'vis_marking_types.test.mjs', // 标线 type→mesh 颜色/位置 golden
   'vis_trajectory_anchor.test.mjs', // TrajectoryView 真实 CatmullRom 样条与顶点前向锚定守卫
+  'vis_scene_invariants.test.mjs', // 3D 场景几何不变量（Raycaster + 俯仰 + 标线贴地）
+  'vis_road_facility.test.mjs',    // 路口设施 + 独立左转箭头信号头真实 Three 材质校验
 ]);
 
 const tests = readdirSync(TESTS)

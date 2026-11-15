@@ -2,6 +2,7 @@
 
 #include "flowsim/entity.h"
 #include "flowsim/physics.h"
+#include "flowsim/building.h"
 
 #include <cassert>
 #include <cmath>
@@ -530,6 +531,41 @@ static void test_wet_road_slip_increase() {
           "wet road lateral acceleration bounded by mu_scale * mu * g");
 }
 
+static void test_facility_and_gate_obb_collision() {
+    // Closed barrier gate OBB (same dimensions as Step 4.2b: 0.5m x 3.6m)
+    flowsim::BuildingOBB gate_obb{243.0, -12.25, 0.5, 3.6, 0.0, {}};
+    CHECK(flowsim::obb_hits_building(241.0, -12.25, 4.8, 1.9, 0.0, gate_obb),
+          "closed barrier gate OBB detects vehicle nose collision");
+    CHECK(!flowsim::obb_hits_building(238.0, -12.25, 4.8, 1.9, 0.0, gate_obb),
+          "closed barrier gate OBB clear when stopped before gate");
+
+    // B1 garage pillar (0.6m x 0.6m) & segmented wall (10m x 0.4m)
+    flowsim::BuildingOBB pillar_obb{19.1, -21.25, 0.60, 0.60, 0.0, {}};
+    CHECK(flowsim::obb_hits_building(18.5, -20.5, 4.8, 1.9, 0.0, pillar_obb),
+          "garage pillar OBB detects lateral vehicle clip");
+    CHECK(!flowsim::obb_hits_building(19.1, -17.3, 4.8, 1.9, 0.0, pillar_obb),
+          "garage pillar OBB clear in parking bay");
+
+    flowsim::BuildingOBB wall_obb{5.0, -22.25, 10.0, 0.40, 0.0, {}};
+    CHECK(flowsim::obb_hits_building(5.0, -21.5, 4.8, 1.9, 0.0, wall_obb),
+          "garage wall OBB detects vehicle contact");
+    CHECK(!flowsim::obb_hits_building(5.0, -17.3, 4.8, 1.9, 0.0, wall_obb),
+          "garage wall OBB clear in lane/slot");
+
+    // Surface lot planter (4.6m x 5.1m) & roadside streetlight pole (0.45m x 0.45m)
+    flowsim::BuildingOBB planter_obb{3238.0, -6.5, 4.6, 5.1, 0.0, {}};
+    CHECK(flowsim::obb_hits_building(3234.0, -6.5, 4.8, 1.9, 0.0, planter_obb),
+          "surface lot planter OBB detects vehicle clip");
+    CHECK(!flowsim::obb_hits_building(3225.5, -6.5, 4.8, 1.9, 1.5708, planter_obb),
+          "surface lot planter OBB clear in parking slot 2");
+
+    flowsim::BuildingOBB pole_obb{350.0, -7.85, 0.45, 0.45, 0.0, {}};
+    CHECK(flowsim::obb_hits_building(350.0, -7.2, 4.8, 1.9, 0.0, pole_obb),
+          "roadside streetlight pole OBB detects off-road vehicle clip");
+    CHECK(!flowsim::obb_hits_building(350.0, -5.25, 4.8, 1.9, 0.0, pole_obb),
+          "roadside streetlight pole OBB clear in outer lane");
+}
+
 int main() {
     test_pool();
     test_vehicle_defaults();
@@ -553,6 +589,7 @@ int main() {
     test_load_transfer_conservation();
     test_road_grade_gravity();
     test_wet_road_slip_increase();
+    test_facility_and_gate_obb_collision();
     std::printf("=== %d failures ===\n", failures);
     return failures == 0 ? 0 : 1;
 }

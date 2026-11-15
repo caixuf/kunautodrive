@@ -91,6 +91,24 @@ void test_wrong_side_rejected() {
     CHECK(!res.ok);
 }
 
+void test_behind_ego_curve_lead_rejected() {
+    // Ego at (544.5, -1.2), heading 0.14 rad; ped behind on inner corner at (542.5, +1.5).
+    const double ego_x = 544.5;
+    const double ego_y = -1.2;
+    const double ego_h = 0.14;
+    const double ped_x = 542.5;
+    const double ped_y = 1.5;
+    const double phys_along = (ped_x - ego_x) * std::cos(ego_h) +
+                              (ped_y - ego_y) * std::sin(ego_h);
+    CHECK(phys_along < 0.0);
+    // Curve projection near corner can still report small non-negative delta-s.
+    CHECK(!behavior_gap::is_valid_forward_lead(0.2, phys_along));
+    CHECK(!behavior_gap::is_valid_forward_lead(-0.5, 5.0));
+    // Genuine vehicle ahead on turn is accepted, including long lookahead (>12m).
+    CHECK(behavior_gap::is_valid_forward_lead(6.0, 5.8));
+    CHECK(behavior_gap::is_valid_forward_lead(25.0, -2.0));
+}
+
 }  // namespace
 
 int main() {
@@ -99,6 +117,7 @@ int main() {
     test_slow_front_car_ttc_rejected();
     test_safe_front_and_rear_accepted();
     test_wrong_side_rejected();
-    std::printf("test_behavior_gap_eval: all 5 tests passed\n");
+    test_behind_ego_curve_lead_rejected();
+    std::printf("test_behavior_gap_eval: all 6 tests passed\n");
     return 0;
 }

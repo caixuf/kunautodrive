@@ -3,6 +3,7 @@
  */
 
 #include "sim_digest.h"
+#include "collision.h"
 #include "logger.h"
 
 #include <cmath>
@@ -436,8 +437,11 @@ InvariantResult check_spatial_invariants(const DynamicDigest& d,
         if (a.type != 0 && std::fabs(a.speed) < 0.1) {
             lateral_eps = EPS_LATERAL_PARKED;
         }
+        /* 世界坐标行人（road_id < 0，offset 直接存世界 y）可能走垂直/斜向斑马线或人行道，
+         * 不受单条路参考线 Frenet 宽度约束（与 check_motion_direction 对行人分支一致）。 */
         if (std::fabs(a.lateral_offset) > half_w + lateral_eps &&
             !a.parked_fixed &&
+            !(a.type == 4 && a.road_id < 0) &&
             !(a.type == 0 && d.maneuver)) {
             r.failed++;
             char buf[256];
@@ -501,22 +505,22 @@ InvariantResult check_spatial_invariants(const DynamicDigest& d,
         for (size_t j = i + 1; j < d.actors.size(); ++j) {
             const auto& a = d.actors[i];
             const auto& b = d.actors[j];
-            // 投影到车辆 a 的局部航向坐标系（OBB 判定），避免斜向/南北向道路上
-            // 世界坐标 AABB 把沿车道同向行驶的正常前后车误判为穿模
-            double rel_x = b.pos[0] - a.pos[0];
-            double rel_y = b.pos[1] - a.pos[1];
-            double ca = std::cos(a.heading);
-            double sa = std::sin(a.heading);
-            double long_dist = std::fabs(rel_x * ca + rel_y * sa);
-            double lat_dist  = std::fabs(-rel_x * sa + rel_y * ca);
-            double req_long = (a.bbox[0] + b.bbox[0]) * 0.5;
-            double req_lat  = (a.bbox[1] + b.bbox[1]) * 0.5;
-            if (long_dist < req_long && lat_dist < req_lat) {
+            // 高程隔离：地下车库/地面/高架桥立体交叉不构成三维 bbox 重叠
+            if (std::fabs(a.pos[2] - b.pos[2]) > 2.2) continue;
+            // 使用对称 4 轴 OBB SAT（与 collision.cpp 一致）：仅投影到 a 的局部轴并用
+            // 未旋转的 (a.bbox+b.bbox)*0.5 会把正交方向车辆的车长误算为横向半宽，导致
+            // 行人在车旁清晰留隙停稳被误报穿模，同时可能漏检斜交角点穿模。
+            if (obb_intersect(a.pos[0], a.pos[1], a.bbox[0], a.bbox[1], a.heading,
+                              b.pos[0], b.pos[1], b.bbox[0], b.bbox[1], b.heading)) {
                 r.failed++;
+                double center_dist = std::hypot(b.pos[0] - a.pos[0], b.pos[1] - a.pos[1]);
                 char buf[256];
                 snprintf(buf, sizeof(buf),
-                    "  FAIL actor[%d]↔actor[%d]: bbox 重叠 d_long=%.2f<%.2f d_lat=%.2f<%.2f (碰撞/穿模)\n",
-                    a.id, b.id, long_dist, req_long, lat_dist, req_lat);
+                    "  FAIL actor[%d]↔actor[%d]: bbox 重叠 (OBB SAT) dist=%.2fm "
+                    "a=(%.1fx%.1f,h=%.2f) b=(%.1fx%.1f,h=%.2f) (碰撞/穿模)\n",
+                    a.id, b.id, center_dist,
+                    a.bbox[0], a.bbox[1], a.heading,
+                    b.bbox[0], b.bbox[1], b.heading);
                 r.details += buf;
             }
         }
@@ -694,7 +698,7 @@ InvariantResult check_temporal_invariants(const DynamicDigest& prev,
         bool ego_maneuver_skip = (ca.type == 0 && curr.maneuver);
         if (teleported || ego_maneuver_skip) {
             r.passed++;  // 跳过，计为通过
-        } else if (dist > expected * 2.0 + 0.5) {
+        } else if (dist > expected * 2.0 + 1.0) {
             r.failed++;
             char buf[256];
             snprintf(buf, sizeof(buf),

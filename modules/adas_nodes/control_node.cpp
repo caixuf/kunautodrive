@@ -29,6 +29,7 @@
 #include "logger.h"
 #include "clock_service.h"
 #include "maneuver_tracker.h"      /* 通用机动跟踪器（header-only，替代掉头 5 层 gate） */
+#include "trajectory_speed_window.h"
 #include <cjson/cJSON.h>
 
 #include <stdlib.h>
@@ -115,7 +116,7 @@ struct ControlContext {
     double target_speed{0};
     int    has_target_speed{0};  /* trajectory 回调是否已设置 target_speed */
     volatile int mrm_active{0};  /* L3-P1：safety/mrm_request.active → 纵向目标 0（车道内停）*/
-    double ego_x{0}, ego_y{0};
+    double ego_x{0}, ego_y{0}, ego_z{0};
     double road_grade{0.0};
     double lane_d{0};          /* 从 trajectory 解析的横向偏移（Frenet d） */
     double target_path_y{0};   /* 同一前视点的全局 y，避免最近点 rc_y + 前视点 lane_d 混拼 */
@@ -228,6 +229,10 @@ static void on_fusion(const Message* msg, void* user_data) {
                 if (cJSON_IsNumber(j)) g.ego_x = j->valuedouble;
                 j = cJSON_GetObjectItemCaseSensitive(root, "y");
                 if (cJSON_IsNumber(j)) g.ego_y = j->valuedouble;
+                j = cJSON_GetObjectItemCaseSensitive(root, "z");
+                if (cJSON_IsNumber(j)) g.ego_z = j->valuedouble;
+                j = cJSON_GetObjectItemCaseSensitive(root, "grade");
+                if (cJSON_IsNumber(j)) g.road_grade = j->valuedouble;
                 j = cJSON_GetObjectItemCaseSensitive(root, "heading");
                 if (cJSON_IsNumber(j)) g.ego_heading = j->valuedouble;
                 j = cJSON_GetObjectItemCaseSensitive(root, "yaw_rate");
@@ -251,6 +256,8 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
     if (cJSON_IsNumber(j)) g.ego_x = j->valuedouble;
     j = cJSON_GetObjectItemCaseSensitive(root, "y");
     if (cJSON_IsNumber(j)) g.ego_y = j->valuedouble;
+    j = cJSON_GetObjectItemCaseSensitive(root, "z");
+    if (cJSON_IsNumber(j)) g.ego_z = j->valuedouble;
     j = cJSON_GetObjectItemCaseSensitive(root, "spd");
     if (cJSON_IsNumber(j)) g.current_speed = j->valuedouble;
     j = cJSON_GetObjectItemCaseSensitive(root, "hdg");
@@ -319,6 +326,8 @@ static void on_trajectory(const Message* msg, void* user_data) {
         traj.points[0].v = 0.0f;
         traj.points[0].a = 0.0f;
         traj.points[0].jerk = 0.0f;
+        traj.points[0].z = (float)g.ego_z;
+        traj.points[0].grade = (float)g.road_grade;
         traj.points[0].s = 0.0f;
         traj.points[0].l = 0.0f;
         n_pts = 1;
@@ -377,12 +386,8 @@ static void on_trajectory(const Message* msg, void* user_data) {
      * 限幅到 0.034 ≪ 所需 0.135 → 转向被锁、车直冲路口 → ROAD_GUARD）。
      * 近窗最小 v 把 ST 剖面的弯前减速提前透传到纵向 PID。 */
     if (!mv) {
-        double tv = (double)traj.points[n_pts - 1].v;
-        for (uint32_t i = 0; i < n_pts; i++) {
-            if ((double)traj.points[i].t_rel_us > 1500000.0) break;
-            if ((double)traj.points[i].v < tv) tv = (double)traj.points[i].v;
-        }
-        g.target_speed = tv;
+        g.target_speed = adas_control::cruise_target_speed_in_horizon(
+            traj.points, n_pts, g.current_speed);
     }
     g.has_target_speed = 1;
 
@@ -409,6 +414,9 @@ static void on_trajectory(const Message* msg, void* user_data) {
         g.target_path_x = (double)traj.points[d_idx].x;
         g.target_path_heading = (double)traj.points[d_idx].heading;
         g.target_path_kappa = (double)traj.points[d_idx].kappa;
+        if (g.last_vstate_us == 0 || (clock_now_us() - g.last_vstate_us) > 500000ULL) {
+            g.road_grade = (double)traj.points[d_idx].grade;
+        }
     }
     g.target_road_center_y = g.target_path_y - g.lane_d * cos(g.target_path_heading);
     /* N-S 路（h=π/2）道路中心横向在 x 轴：target_path_x + l·sin(h)（2026-08 网格/OSM 兼容） */
@@ -944,7 +952,8 @@ protected:
                 throttle = output / 5000.0;
                 if (throttle > 1.0) throttle = 1.0;
                 brake = 0;
-                mode = (pid_error < 1.0) ? "HOLD" : (is_reverse ? "REV_ACCEL" : "ACCEL");
+                mode = (fabs(acc_target) <= 0.05 && fabs(g.current_speed) < 0.15)
+                    ? "HOLD" : (is_reverse ? "REV_ACCEL" : "ACCEL");
             } else {
                 throttle = 0;
                 brake = (-output) / 8000.0;
@@ -1080,9 +1089,21 @@ protected:
                  * 几何跟踪（kappa 前馈 + 车体系 e_lat/dh 反馈，倒挡反号）
                  * 与 ±0.60 限幅都在 tracker 内部。这里只取结果跳过巡航 Stanley。 */
                 steer = mv_res.steer;
+                g.prev_steer = steer;
                 if (!g.gear_pending && strcmp(mode, "HOLD") != 0) {
                     mode = "MANEUVER";
                 }
+                mpc_used = true;
+            }
+            if (!mpc_used && fabs(acc_target) <= 0.02 && fabs(g.current_speed) < 0.12 &&
+                fabs(ref_kappa) < 0.02) {
+                /* 静止精确驻车保持（PRECISION_HOLD 等）：回正方向盘至 0° */
+                double ds = -g.prev_steer;
+                if (ds >  0.06) ds =  0.06;
+                if (ds < -0.06) ds = -0.06;
+                steer = g.prev_steer + ds;
+                if (fabs(steer) < 0.005) steer = 0.0;
+                g.prev_steer = steer;
                 mpc_used = true;
             }
             if (!mpc_used) {

@@ -245,7 +245,7 @@ export function createGarageView(scene) {
     const westBayX = uniqueBayXs[0];
     const eastBayX = uniqueBayXs[uniqueBayXs.length - 1];
     const westPlanterX = westBayX - 5.65;
-    const eastPlanterX = eastBayX + 5.85;
+    const eastPlanterX = eastBayX + 8.5;
     const padMinX = westPlanterX - 3.6;
     const padMaxX = eastPlanterX + 3.6;
     const bayMinY = Math.min(-11.4, minY - 4.9);
@@ -661,16 +661,20 @@ export function createGarageView(scene) {
       hallGroup.add(skirtYInst);
       hallGroup.add(skirtBInst);
 
-      // 北侧（z = -hallHalfW，即 ENU y > 0）保留 0.65m 剖切矮墙，保障 p2p_preview_2 全览无遮挡
-      const cutawayH = 0.65;
-      const northWall = new THREE.Mesh(new THREE.BoxGeometry(totalLen, cutawayH, wallThick), wallMat);
-      northWall.position.set(centerS, cutawayH * 0.5 - 0.05, -hallHalfW);
+      // 北侧（z = -hallHalfW，即 ENU y > 0）全高挡土墙
+      const northWall = new THREE.Mesh(new THREE.BoxGeometry(totalLen, wallH, wallThick), wallMat);
+      northWall.position.set(centerS, wallH * 0.5 - 0.05, -hallHalfW);
+      northWall.castShadow = true;
       northWall.receiveShadow = true;
       hallGroup.add(northWall);
 
-      const northCoping = new THREE.Mesh(new THREE.BoxGeometry(totalLen + 0.3, 0.12, wallThick + 0.2), copingMat);
-      northCoping.position.set(centerS, cutawayH - 0.02, -hallHalfW);
+      const northCoping = new THREE.Mesh(new THREE.BoxGeometry(totalLen + 0.3, 0.14, wallThick + 0.24), copingMat);
+      northCoping.position.set(centerS, wallH - 0.04, -hallHalfW);
       hallGroup.add(northCoping);
+
+      const northBand = new THREE.Mesh(new THREE.BoxGeometry(totalLen - 0.2, 0.38, 0.03), wallZoneMat);
+      northBand.position.set(centerS, 1.35, -hallHalfW + wallThick * 0.5 + 0.015);
+      hallGroup.add(northBand);
 
       if (!nearRampEnd(p0)) {
         const backWall = new THREE.Mesh(new THREE.BoxGeometry(wallThick, wallH, hallHalfW * 2), wallMat);
@@ -705,9 +709,12 @@ export function createGarageView(scene) {
         const southWing = new THREE.Mesh(new THREE.BoxGeometry(wallThick, wallH, wingW), wallMat);
         southWing.position.set(length, wallH * 0.5 - 0.05, halfPortal + wingW * 0.5);
         hallGroup.add(southWing);
-        const northWing = new THREE.Mesh(new THREE.BoxGeometry(wallThick, cutawayH, wingW), wallMat);
-        northWing.position.set(length, cutawayH * 0.5 - 0.05, -(halfPortal + wingW * 0.5));
+        const northWing = new THREE.Mesh(new THREE.BoxGeometry(wallThick, wallH, wingW), wallMat);
+        northWing.position.set(length, wallH * 0.5 - 0.05, -(halfPortal + wingW * 0.5));
         hallGroup.add(northWing);
+        const portalLintel = new THREE.Mesh(new THREE.BoxGeometry(wallThick + 0.35, 0.9, halfPortal * 2 + 0.4), copingMat);
+        portalLintel.position.set(length, wallH - 0.45, 0);
+        hallGroup.add(portalLintel);
       } else {
         const frontWall = new THREE.Mesh(new THREE.BoxGeometry(wallThick, wallH, hallHalfW * 2), wallMat);
         frontWall.position.set(length + endPad, wallH * 0.5 - 0.05, 0);
@@ -796,14 +803,13 @@ export function createGarageView(scene) {
         let idx = 0;
         for (const s of pillarSList) {
           for (const side of [-1, 1]) {
-            const pH = side === -1 ? Math.min(2.2, wallH - 0.2) : wallH - 0.18;
+            const pH = wallH - 0.18;
             const zPos = side * (hallHalfW - 0.85);
             pObj.position.set(s, pH * 0.5 - 0.02, zPos);
-            pObj.scale.set(1, side === -1 ? pH / (wallH - 0.18) : 1, 1);
+            pObj.scale.set(1, 1, 1);
             pObj.updateMatrix();
             colInst.setMatrixAt(idx, pObj.matrix);
 
-            pObj.scale.set(1, 1, 1);
             pObj.position.set(s, 0.5, zPos);
             pObj.updateMatrix();
             bandInst.setMatrixAt(idx, pObj.matrix);
@@ -876,25 +882,79 @@ export function createGarageView(scene) {
         hallGroup.add(barInst);
       }
 
-      // 1f. 顶部横梁与南侧机电管线（仅置于南侧结构跨 y < -3.5 即 z_three > 3.5，保证剖视相机无遮挡）
+      // 1f. 完整 B1 混凝土顶板 + 地面广场铺装屋面 + 全幅顶部横梁与双侧机电管线
       const beamMat = getStdMaterial(SCENE.garageBeam, 0.78, 0.1);
       const ledMat = createEmissiveMaterial(SCENE.garageLedStrip, 0.9);
       const ductMat = getStdMaterial(SCENE.garageDuct, 0.46, 0.42);
       const pipeMat = getStdMaterial(SCENE.garageSprinkler, 0.48, 0.28);
       const beamY = Math.max(3.55, wallH - 0.35);
 
+      // 顶板结构层（底面封闭车库顶，顶面承接地面广场铺装，消除俯视/环绕空白透视洞）
+      const ceilingMat = getStdMaterial(SCENE.garageWall, 0.88, 0.04);
+      const roofSlab = new THREE.Mesh(
+        new THREE.BoxGeometry(totalLen + 0.4, 0.32, hallHalfW * 2 + wallThick + 0.2),
+        ceilingMat
+      );
+      roofSlab.position.set(centerS, wallH + 0.10, 0);
+      roofSlab.receiveShadow = true;
+      roofSlab.castShadow = true;
+      hallGroup.add(roofSlab);
+
+      // 地面层屋面广场铺装 + 绿化花坛 + 采光通风百叶（贴地 y ≈ wallH + 0.28）
+      const plazaMat = getStdMaterial(SCENE.sidewalk, 0.86, 0.02);
+      const plazaDeck = new THREE.Mesh(
+        new THREE.BoxGeometry(totalLen - 0.4, 0.06, hallHalfW * 2 - 0.4),
+        plazaMat
+      );
+      plazaDeck.position.set(centerS, wallH + 0.29, 0);
+      plazaDeck.receiveShadow = true;
+      hallGroup.add(plazaDeck);
+
+      const roofGrassMat = getStdMaterial(SCENE.verge, 0.85, 0.02);
+      const skylightMat = new THREE.MeshStandardMaterial({
+        color: SCENE.garageGlass,
+        roughness: 0.2,
+        metalness: 0.15,
+        transparent: true,
+        opacity: 0.72,
+      });
+      for (const side of [-1, 1]) {
+        const planterStrip = new THREE.Mesh(
+          new THREE.BoxGeometry(totalLen - 12, 0.22, 3.2),
+          copingMat
+        );
+        planterStrip.position.set(centerS, wallH + 0.42, side * (hallHalfW - 3.0));
+        hallGroup.add(planterStrip);
+        const grassStrip = new THREE.Mesh(
+          new THREE.BoxGeometry(totalLen - 12.6, 0.24, 2.7),
+          roofGrassMat
+        );
+        grassStrip.position.set(centerS, wallH + 0.43, side * (hallHalfW - 3.0));
+        hallGroup.add(grassStrip);
+      }
+      for (let sx = 18; sx <= length - 18; sx += 28) {
+        const ventFrame = new THREE.Mesh(new THREE.BoxGeometry(6.4, 0.28, 3.2), copingMat);
+        ventFrame.position.set(sx, wallH + 0.45, 0);
+        hallGroup.add(ventFrame);
+        const ventGlass = new THREE.Mesh(new THREE.BoxGeometry(5.8, 0.30, 2.6), skylightMat);
+        ventGlass.position.set(sx, wallH + 0.46, 0);
+        hallGroup.add(ventGlass);
+      }
+
       for (let s = 8; s <= length - 6; s += 20) {
-        const beam = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.28, hallHalfW - 1.2), beamMat);
-        beam.position.set(s, beamY, (hallHalfW - 0.6) * 0.5);
+        const beam = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.28, hallHalfW * 2 - 0.8), beamMat);
+        beam.position.set(s, beamY, 0);
         hallGroup.add(beam);
       }
 
-      // 线性 LED 灯带、镀锌风管、电缆桥架与红色消防喷淋管（全部位于南侧 z_three = +4.6 .. +9.2）
+      // 双侧线性 LED 灯带（南北各一条）、镀锌风管、电缆桥架与红色消防喷淋管
       const mepLen = Math.max(10, length - 10);
       const mepCenterS = length * 0.5;
-      const ledStrip = new THREE.Mesh(new THREE.BoxGeometry(mepLen, 0.06, 0.14), ledMat);
-      ledStrip.position.set(mepCenterS, beamY - 0.18, 4.8);
-      hallGroup.add(ledStrip);
+      for (const lz of [-4.8, 4.8]) {
+        const ledStrip = new THREE.Mesh(new THREE.BoxGeometry(mepLen, 0.06, 0.14), ledMat);
+        ledStrip.position.set(mepCenterS, beamY - 0.18, lz);
+        hallGroup.add(ledStrip);
+      }
 
       const hvacDuct = new THREE.Mesh(new THREE.BoxGeometry(mepLen, 0.34, 0.62), ductMat);
       hvacDuct.position.set(mepCenterS, beamY - 0.26, 6.6);
@@ -1031,6 +1091,7 @@ export function createGarageView(scene) {
       const louverCount = 11;
       const louverGeo = new THREE.BoxGeometry(0.24, 0.22, wallOffset * 2 + 0.4);
       const louverInst = new THREE.InstancedMesh(louverGeo, outerMat, louverCount);
+      louverInst.name = 'rampLouvers';
       const lObj = new THREE.Object3D();
       const [cosH, sinH] = forwardENU(rHdg);
       for (let i = 0; i < louverCount; i++) {
@@ -1054,6 +1115,87 @@ export function createGarageView(scene) {
         edgeBeam.rotation.y = headingToRotationY(rHdg);
         group.add(edgeBeam);
       }
+
+      // 2a. B1 洞口门头横梁 + 限高 2.2m 警示杆 + EXIT 发光牌
+      const z0 = Number(p0[2]) || -4.2;
+      const zEnd = Number(pEnd[2]) || 0.0;
+      const portalGroup = new THREE.Group();
+      const [px0, py0, pz0] = worldToThree(p0[0], p0[1], z0);
+      portalGroup.position.set(px0, py0, pz0);
+      portalGroup.rotation.y = headingToRotationY(rHdg);
+
+      const portalH = Math.max(3.2, -z0 - 0.1);
+      const portalHeader = new THREE.Mesh(
+        new THREE.BoxGeometry(0.55, 0.72, wallOffset * 2 + 0.6),
+        innerMat
+      );
+      portalHeader.position.set(0.25, portalH - 0.15, 0);
+      portalHeader.castShadow = true;
+      portalGroup.add(portalHeader);
+
+      const portalSignMat = _safeSignMaterial('限高 2.2m   EXIT ↑', SCENE.signBlueBg, SCENE.guideLine, SCENE.guideLine, {
+        width: 448,
+        height: 96,
+        fontSize: 38,
+        emissiveIntensity: 0.6,
+      });
+      const portalSign = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.52, 3.6), portalSignMat);
+      portalSign.position.set(-0.06, portalH - 0.15, 0);
+      portalGroup.add(portalSign);
+
+      // 悬吊式黄黑限高杆（距地面 2.35m）
+      const hBarMat = _safeStripeMaterial(SCENE.garageHazardBand, SCENE.stopperRubber, { stripeCount: 10 });
+      const hBar = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.16, wallOffset * 2 - 0.4), hBarMat);
+      hBar.position.set(0.55, 2.35, 0);
+      portalGroup.add(hBar);
+      for (const hz of [-wallOffset + 0.6, wallOffset - 0.6]) {
+        const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, Math.max(0.2, portalH - 2.6), 6), frameMat);
+        chain.position.set(0.55, 2.35 + (portalH - 2.6) * 0.5, hz);
+        portalGroup.add(chain);
+      }
+      group.add(portalGroup);
+
+      // 2b. 坡道内墙沿坡反光警示轮廓标（按坡道实际 z 高程插值）
+      const delinCount = Math.max(2, Math.floor((rampLen - 8) / 8));
+      const delinMat = createEmissiveMaterial(SCENE.garageHazardBand, 0.75);
+      const delinGeo = new THREE.BoxGeometry(0.38, 0.14, 0.04);
+      const delinInst = new THREE.InstancedMesh(delinGeo, delinMat, delinCount * 2);
+      const dObj = new THREE.Object3D();
+      const rampSlope = rampLen > 1e-6 ? Math.atan((zEnd - z0) / rampLen) : 0;
+      let di = 0;
+      for (let i = 0; i < delinCount; i++) {
+        const sDist = 4.0 + i * 8.0;
+        const frac = sDist / rampLen;
+        const zCur = z0 + (zEnd - z0) * frac;
+        for (const side of [-1, 1]) {
+          const [dx, dy, dz] = worldToThree(
+            p0[0] + cosH * sDist + (-sinH) * side * (wallOffset - 0.04),
+            p0[1] + sinH * sDist + cosH * side * (wallOffset - 0.04),
+            zCur + 0.85
+          );
+          dObj.position.set(dx, dy, dz);
+          dObj.rotation.order = 'YXZ';
+          dObj.rotation.set(0, headingToRotationY(rHdg), rampSlope);
+          dObj.updateMatrix();
+          delinInst.setMatrixAt(di++, dObj.matrix);
+        }
+      }
+      group.add(delinInst);
+
+      // 2c. 坡顶截水沟格栅（ramp 出口端）
+      const grateMat = getStdMaterial(SCENE.garageGrate, 0.45, 0.45);
+      const topGrate = new THREE.Mesh(
+        new THREE.BoxGeometry(0.46, 0.025, wallOffset * 2 - 0.4),
+        grateMat
+      );
+      const [gxTop, gyTop, gzTop] = worldToThree(
+        pEnd[0] - cosH * 1.4,
+        pEnd[1] - sinH * 1.4,
+        zEnd + 0.015
+      );
+      topGrate.position.set(gxTop, gyTop, gzTop);
+      topGrate.rotation.y = headingToRotationY(rHdg);
+      group.add(topGrate);
     }
 
     // ── 3. 地面停车场沥青铺装垫层 ──

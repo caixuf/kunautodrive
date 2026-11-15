@@ -28,6 +28,7 @@ typedef struct BevPostDet {
     int   type;          /* 0=车 1=行人 2=自行车 3=施工（对齐 ObstacleType 数值） */
     float confidence;    /* [0,1] */
     float world_y;       /* det 在世界系的 y（调用方解码时由 ego_y+旋转算好，供 lane_id 推导） */
+    float z, height, heading; /* 相对 ego 高程(m)、物体高度(m)、车体系航向(rad) */
 } BevPostDet;
 
 /*

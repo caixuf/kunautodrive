@@ -30,6 +30,8 @@ export class SceneStore {
     this.parkingGoal = null;        // { enabled, x, y, z, heading, width, length }
     this.parkOut = null;            // { enabled, slot_x, slot_y, slot_z, slot_heading, exit_x, exit_y, exit_z, exit_heading }
     this.parkingSlots = [];         // [{ x, y, z, heading, width, length, occupied }]
+    this.facilities = [];           // [{ type, x, y, z, length, width, height, heading }]
+    this.perceived = [];            // [{ id, type, x, y, vx, vy, length, width, confidence }]
     this.locMode = '';              // 'SLAM_INDOOR' | 'GNSS_FUSION' | ''
     this.bev = null;                // { count, age_ms }
     this.layerVisibility = {
@@ -61,6 +63,8 @@ export class SceneStore {
     this.parkingGoal = null;
     this.parkOut = null;
     this.parkingSlots = [];
+    this.facilities = [];
+    this.perceived = [];
     this.locMode = '';
     this.bev = null;
     this.layerVisibility = {

@@ -88,8 +88,8 @@ static void test_post_mapping(void) {
     ObstacleList ol;
     memset(&ol, 0, sizeof(ol));
     BevPostDet dets[] = {
-        { 10.0f, 0.0f, 5.0f, 0.0f, 2.0f, 4.6f, 0, 0.9f,  0.0f },  /* 车, 世界y=0 → lane index */
-        { 5.0f, 2.0f, 1.0f, 0.0f, 0.5f, 0.4f, 1, 0.8f, -3.5f },    /* 行人, 世界y=-3.5 */
+        { 10.0f, 0.0f, 5.0f, 0.0f, 2.0f, 4.6f, 0, 0.9f,  0.0f, 0.2f, 1.6f, 0.35f },  /* 车, 世界y=0 → lane index */
+        { 5.0f, 2.0f, 1.0f, 0.0f, 0.5f, 0.4f, 1, 0.8f, -3.5f, -9.0f, 1.7f, -0.5f }, /* 行人, 下层z=-9, 世界y=-3.5 */
     };
     int n = bev_post_to_obstacle_list(&ol, dets, 2, 42, 2, 3.5, 0);
     assert(n == 2);
@@ -97,10 +97,16 @@ static void test_post_mapping(void) {
     assert(ol.frame_id == 42);
     assert(fabsf(ol.obstacles[0].x - 10.0f) < 1e-4);
     assert(fabsf(ol.obstacles[0].y - 0.0f) < 1e-4);
+    assert(fabsf(ol.obstacles[0].z - 0.2f) < 1e-4);
+    assert(fabsf(ol.obstacles[0].height - 1.6f) < 1e-4);
+    assert(fabsf(ol.obstacles[0].heading - 0.35f) < 1e-4);
     assert(ol.obstacles[0].type == OBJ_TYPE_VEHICLE);
     assert(ol.obstacles[0].confidence == 0.9f);
     assert(fabsf(ol.obstacles[0].length - 4.6f) < 1e-4);
     assert(ol.obstacles[1].type == OBJ_TYPE_PEDESTRIAN);
+    assert(fabsf(ol.obstacles[1].z - (-9.0f)) < 1e-4);
+    assert(fabsf(ol.obstacles[1].height - 1.7f) < 1e-4);
+    assert(fabsf(ol.obstacles[1].heading - (-0.5f)) < 1e-4);
     /* lane_id: world_y=0, 2 车道宽3.5 → offset=0+(1)*0.5=0.5 → idx=1 */
     assert(ol.obstacles[0].lane_id == 1);
     /* world_y=-3.5 → offset=(3.5)/3.5+0.5=1.5 → idx=1 */
@@ -114,8 +120,8 @@ static void test_post_lane_oneway(void) {
     ObstacleList ol;
     memset(&ol, 0, sizeof(ol));
     BevPostDet dets[] = {
-        { 10.0f, 0.0f, 5.0f, 0.0f, 2.0f, 4.6f, 0, 0.9f, -1.75f },
-        { 10.0f, 0.0f, 5.0f, 0.0f, 2.0f, 4.6f, 0, 0.9f, -5.25f },
+        { 10.0f, 0.0f, 5.0f, 0.0f, 2.0f, 4.6f, 0, 0.9f, -1.75f, 0.0f, 1.5f, 0.0f },
+        { 10.0f, 0.0f, 5.0f, 0.0f, 2.0f, 4.6f, 0, 0.9f, -5.25f, 0.0f, 1.5f, 0.0f },
     };
     int n = bev_post_to_obstacle_list(&ol, dets, 2, 43, 4, 3.5, 1);
     assert(n == 2);
@@ -129,6 +135,7 @@ static void test_post_truncate(void) {
     ObstacleList ol;
     memset(&ol, 0, sizeof(ol));
     BevPostDet dets[200];
+    memset(dets, 0, sizeof(dets));
     for (int i = 0; i < 200; ++i) {
         dets[i].x = (float)i; dets[i].y = 0; dets[i].vx = 0; dets[i].vy = 0;
         dets[i].width = 2; dets[i].length = 4.6; dets[i].type = 0;

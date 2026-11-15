@@ -140,10 +140,69 @@ typedef struct {
     double x[TL_CACHE_MAX];           /* 停止线世界 x（m） */
     double y[TL_CACHE_MAX];           /* 停止线世界 y（m） */
     double lane_offset[TL_CACHE_MAX]; /* 前向参考系管辖半幅偏移（m） */
-    int    state[TL_CACHE_MAX];    /* TrafficLightState */
-    int    count;                  /* 灯数量 */
-    int    valid;                  /* 收到过非空 lights 数组 */
+    int    state[TL_CACHE_MAX];       /* 直行/主信号 TrafficLightState */
+    int    has_left_arrow[TL_CACHE_MAX]; /* 1=带独立左转箭头信号头 */
+    int    left_state[TL_CACHE_MAX];  /* 左转箭头 TrafficLightState（缺省跟随 state） */
+    double approach_heading[TL_CACHE_MAX]; /* 来车进入方向朝向 (rad, ENU) */
+    int    has_approach_heading[TL_CACHE_MAX]; /* 1=JSON 提供了 approach_heading */
+    int    count;                     /* 灯数量 */
+    int    valid;                     /* 收到过非空 lights 数组 */
 } TrafficLightCache;
+
+static inline int traffic_light_parse_state_str(const char* s) {
+    if (!s) return TL_GREEN;
+    if (strcmp(s, "red") == 0)            return TL_RED;
+    if (strcmp(s, "yellow") == 0)         return TL_YELLOW;
+    if (strcmp(s, "flashing_green") == 0) return TL_FLASHING_GREEN;
+    return TL_GREEN;
+}
+
+static inline int traffic_light_matches_route_tangent(
+    double tl_approach_h, int tl_has_approach_h,
+    double tl_lane_offset, int on_return,
+    double path_h, double lat_dist_m, double road_half_width_m) {
+    if (tl_has_approach_h) {
+        if (cos(tl_approach_h - path_h) <= 0.5) return 0;
+        double max_lat = (road_half_width_m > 1.0 ? road_half_width_m : 3.5) + 5.5;
+        return lat_dist_m <= max_lat ? 1 : 0;
+    }
+    return traffic_light_controls_direction(tl_lane_offset, on_return);
+}
+
+static inline int traffic_light_detect_left_turn_ahead(
+    const double* rx, const double* ry, const double* rs, int n,
+    double ref_s, double look_before_m, double look_after_m) {
+    if (!rx || !ry || !rs || n < 3) return 0;
+    double h0 = 0.0;
+    int have_h0 = 0;
+    for (int i = 0; i + 1 < n; i++) {
+        double ds = rs[i + 1] - rs[i];
+        if (ds < 0.2) continue;
+        double mid_s = 0.5 * (rs[i] + rs[i + 1]);
+        if (rs[i + 1] >= ref_s - look_before_m && rs[i] <= ref_s + 2.0) {
+            h0 = atan2(ry[i + 1] - ry[i], rx[i + 1] - rx[i]);
+            have_h0 = 1;
+            if (rs[i + 1] >= ref_s && mid_s >= ref_s - 2.0) break;
+        }
+    }
+    if (!have_h0) return 0;
+    for (int i = 0; i + 1 < n; i++) {
+        double ds = rs[i + 1] - rs[i];
+        if (ds < 0.2) continue;
+        double mid_s = 0.5 * (rs[i] + rs[i + 1]);
+        if (mid_s < ref_s + 5.0 || mid_s > ref_s + look_after_m) continue;
+        double hk = atan2(ry[i + 1] - ry[i], rx[i + 1] - rx[i]);
+        double dh = atan2(sin(hk - h0), cos(hk - h0));
+        if (dh > 0.35 && dh < 2.65) return 1;
+    }
+    return 0;
+}
+
+static inline int traffic_light_effective_state(
+    int main_state, int has_left_arrow, int left_state, int is_left_turn) {
+    if (has_left_arrow && is_left_turn) return left_state;
+    return main_state;
+}
 
 static inline void traffic_lights_parse(const char* json, TrafficLightCache* c) {
     if (!c) return;
@@ -158,10 +217,14 @@ static inline void traffic_lights_parse(const char* json, TrafficLightCache* c) 
         cJSON_ArrayForEach(light, lights) {
             if (c->count >= TL_CACHE_MAX) break;
             cJSON* item;
-            c->x[c->count]           = 0.0;
-            c->y[c->count]           = 0.0;
-            c->lane_offset[c->count] = -1.75;
-            c->state[c->count]       = TL_GREEN;
+            c->x[c->count]                    = 0.0;
+            c->y[c->count]                    = 0.0;
+            c->lane_offset[c->count]          = -1.75;
+            c->state[c->count]                = TL_GREEN;
+            c->has_left_arrow[c->count]       = 0;
+            c->left_state[c->count]           = TL_GREEN;
+            c->approach_heading[c->count]     = 0.0;
+            c->has_approach_heading[c->count] = 0;
             if ((item = cJSON_GetObjectItemCaseSensitive(light, "x")) &&
                 cJSON_IsNumber(item)) c->x[c->count] = item->valuedouble;
             if ((item = cJSON_GetObjectItemCaseSensitive(light, "y")) &&
@@ -172,11 +235,23 @@ static inline void traffic_lights_parse(const char* json, TrafficLightCache* c) 
                 cJSON_IsNumber(item)) {
                 c->lane_offset[c->count] = item->valuedouble;
             }
+            if ((item = cJSON_GetObjectItemCaseSensitive(light, "approach_heading")) &&
+                cJSON_IsNumber(item)) {
+                c->approach_heading[c->count] = item->valuedouble;
+                c->has_approach_heading[c->count] = 1;
+            }
             if ((item = cJSON_GetObjectItemCaseSensitive(light, "state")) && cJSON_IsString(item)) {
-                if (strcmp(item->valuestring, "red") == 0)       c->state[c->count] = TL_RED;
-                else if (strcmp(item->valuestring, "yellow") == 0) c->state[c->count] = TL_YELLOW;
-                else if (strcmp(item->valuestring, "flashing_green") == 0)
-                    c->state[c->count] = TL_FLASHING_GREEN;
+                c->state[c->count] = traffic_light_parse_state_str(item->valuestring);
+            }
+            c->left_state[c->count] = c->state[c->count];
+            if ((item = cJSON_GetObjectItemCaseSensitive(light, "has_left_arrow")) &&
+                cJSON_IsBool(item)) {
+                c->has_left_arrow[c->count] = cJSON_IsTrue(item) ? 1 : 0;
+            }
+            if ((item = cJSON_GetObjectItemCaseSensitive(light, "left_state")) &&
+                cJSON_IsString(item)) {
+                c->left_state[c->count] = traffic_light_parse_state_str(item->valuestring);
+                c->has_left_arrow[c->count] = 1;
             }
             c->count++;
         }

@@ -16,6 +16,7 @@ import {
   tangentToNormal,
   offsetAlongNormal,
   distanceENU,
+  headingBetweenPoints,
 } from '../math/Coord.js';
 import { roadHeightAt } from '../math/RoadHeight.js';
 import { SCENE } from '../theme/tokens.js';
@@ -30,7 +31,7 @@ const FLOATS_PER_CORNER = SEGMENTS_PER_CORNER * VERTS_PER_SEGMENT * COMPS_PER_VE
 const CORNERS = 8;
 const FLOATS_PER_BOX = CORNERS * FLOATS_PER_CORNER; // 144
 const VERTICES_PER_BOX = CORNERS * SEGMENTS_PER_CORNER * VERTS_PER_SEGMENT; // 48
-const MAX_ENTITIES = 32;
+const MAX_ENTITIES = 96;
 
 // ── 传感器前视包络常量 ──
 const SWEEP_SEGMENTS = 32;
@@ -41,7 +42,7 @@ const SWEEP_ABOVE_ROAD_M = 0.055;  // 相对路面(VEHICLE_GROUND_Y=0.10m)抬高
 const RAY_ABOVE_ROAD_M = 0.06;     // 贴地目标连线抬高至 0.16m
 
 // ── LiDAR 点云常量（真实世界尺度 ~0.14m 柔和圆点） ──
-const MAX_RADAR_POINTS = 2048;
+const MAX_RADAR_POINTS = 4096;
 const LIDAR_POINT_SIZE = 0.14;
 
 // ── 多模态预测贴地光带常量 ──
@@ -104,6 +105,14 @@ function _entityDims(ent) {
       defLen = 8.0; defWid = 2.5; defH = 3.6; break;
     case 'suv':
       defLen = 4.7; defWid = 2.0; defH = 1.82; break;
+    case 'wheel_stop':
+      defLen = 0.16; defWid = 1.85; defH = 0.18; break;
+    case 'bollard':
+      defLen = 0.18; defWid = 0.18; defH = 0.78; break;
+    case 'charger':
+      defLen = 0.42; defWid = 0.34; defH = 1.55; break;
+    case 'unknown_static': case 'unknown': case 'construction':
+      defLen = 0.8; defWid = 0.8; defH = 1.0; break;
     case 'car': default:
       defLen = 4.6; defWid = 2.0; defH = 1.5; break;
   }
@@ -116,6 +125,47 @@ function _entityDims(ent) {
 
 function _isPerceivableObstacle(ent) {
   return !!ent && ent.type !== 'ego' && ent.type !== 'tl';
+}
+
+function _gatherPerceptionTargets(ego, store) {
+  const egoZ = Number.isFinite(Number(ego.z)) ? Number(ego.z) : 0;
+  const out = [];
+  const pushDedup = (item, dedupDistM) => {
+    if (!_isPerceivableObstacle(item)) return;
+    const x = Number(item.x);
+    const y = Number(item.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    const iz = (item.z != null && Number.isFinite(Number(item.z))) ? Number(item.z) : egoZ;
+    if (Math.abs(iz - egoZ) > 3.5) return;
+    const dist = distanceENU(ego.x || 0, ego.y || 0, x, y);
+    if (dist > 95) return;
+    if (dedupDistM > 0) {
+      for (let i = 0; i < out.length; i++) {
+        const o = out[i];
+        const oz = (o.z != null && Number.isFinite(Number(o.z))) ? Number(o.z) : egoZ;
+        if (Math.hypot((o.x || 0) - x, (o.y || 0) - y) < dedupDistM && Math.abs(oz - iz) < 2.2) {
+          return;
+        }
+      }
+    }
+    out.push({ ...item, _dist: dist });
+  };
+
+  for (const e of (store.entities || [])) pushDedup(e, 0);
+  for (const p of (store.perceived || [])) {
+    if (!p) continue;
+    const sp = Math.hypot(Number(p.vx) || 0, Number(p.vy) || 0);
+    pushDedup({
+      ...p,
+      z: p.z ?? egoZ,
+      heading: p.heading ?? (sp > 0.25 ? headingBetweenPoints(0, 0, p.vx || 0, p.vy || 0) : (ego.heading || 0)),
+    }, 0.85);
+  }
+  for (const f of (store.facilities || [])) {
+    pushDedup(f, 0.55);
+  }
+  out.sort((a, b) => a._dist - b._dist);
+  return out.slice(0, MAX_ENTITIES);
 }
 
 export function createPerceptionView(scene) {
@@ -584,12 +634,12 @@ export function createPerceptionView(scene) {
       const flankRatios = [-0.72, -0.36, 0.0, 0.36, 0.72];
       const cabinRatios = [-0.54, -0.18, 0.18, 0.54];
 
-      const maxScanEntities = Math.min(entities.length, 24);
+      const maxScanEntities = Math.min(entities.length, MAX_ENTITIES);
       for (let i = 0; i < maxScanEntities; i++) {
         const ent = entities[i];
         if (!_isPerceivableObstacle(ent)) continue;
         const dist = distanceENU(ego.x, ego.y, ent.x || 0, ent.y || 0);
-        if (dist > 75 || dist < 1.8) continue;
+        if (dist > 75 || dist < 0.3) continue;
 
         const { halfL, halfW, vehH } = _entityDims(ent);
         const entGroundZ = (ent.z != null) ? ent.z : roadHeightAt(store, ent.x || 0, ent.y || 0);
@@ -677,7 +727,7 @@ export function createPerceptionView(scene) {
     const isNight = !!(store.env && (store.env.isNight || store.env.lighting === 'night'));
     sweepMat.opacity = isNight ? 0.14 : 0.22;
 
-    const entities = store.entities || [];
+    const entities = _gatherPerceptionTargets(ego, store);
     const count = Math.min(entities.length, MAX_ENTITIES);
 
     // 2. 更新 3D 感知角标框
@@ -753,7 +803,7 @@ function _updateBrackets(ego, entities, count, store, positions) {
     }
 
     const dist = distanceENU(ego.x, ego.y, ent.x || 0, ent.y || 0);
-    if (dist > 95 || dist < 1.8) {
+    if (dist > 95 || dist < 0.3) {
       for (let j = 0; j < FLOATS_PER_BOX; j++) positions[bi + j] = 0;
       continue;
     }
@@ -763,7 +813,8 @@ function _updateBrackets(ego, entities, count, store, positions) {
     const halfW = rawHalfW + 0.06;
 
     const minDim = Math.min(halfL * 2, halfW * 2);
-    const cl = Math.max(0.10, Math.min(CORNER_LEN, minDim * 0.24));
+    const cl = Math.max(0.06, Math.min(CORNER_LEN, minDim * 0.24));
+    const clV = Math.max(0.04, Math.min(cl, vehH * 0.45));
 
     const entZ = (ent.z != null) ? ent.z : roadHeightAt(store, ent.x || 0, ent.y || 0);
     const [cx, cyRaw, cz] = worldToThree(ent.x || 0, ent.y || 0, entZ + VEHICLE_GROUND_Y);
@@ -795,9 +846,9 @@ function _updateBrackets(ego, entities, count, store, positions) {
         const inNorm = -Math.sign(roff);
         const [latEndX, , latEndZ] = offsetAlongNormal(cx3, cz3, normX, normZ, inNorm * cl);
 
-        // 1) 垂直短臂
-        positions[bi + idx++] = cx3; positions[bi + idx++] = planeY;            positions[bi + idx++] = cz3;
-        positions[bi + idx++] = cx3; positions[bi + idx++] = planeY + vDir * cl; positions[bi + idx++] = cz3;
+        // 1) 垂直短臂（按实体高度缩放，防止矮物体角标倒置穿插）
+        positions[bi + idx++] = cx3; positions[bi + idx++] = planeY;             positions[bi + idx++] = cz3;
+        positions[bi + idx++] = cx3; positions[bi + idx++] = planeY + vDir * clV; positions[bi + idx++] = cz3;
 
         // 2) 纵向向内短臂
         positions[bi + idx++] = cx3;                   positions[bi + idx++] = planeY; positions[bi + idx++] = cz3;
@@ -840,7 +891,7 @@ function _updateRays(ego, entities, count, store, positions, colors) {
     const forwardDot = dirX * egoFwdX + dirZ * egoFwdZ;
 
     // 仅对自车前向/侧前方视场内 (forwardDot >= -0.10) 且距离适中的目标绘制贴地弱连线
-    if (dist > 75 || dist < 4.5 || forwardDot < -0.10) {
+    if (dist > 75 || dist < 1.2 || forwardDot < -0.10) {
       for (let j = 0; j < 6; j++) { positions[baseIdx + j] = 0; colors[baseIdx + j] = 0; }
       continue;
     }

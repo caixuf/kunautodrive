@@ -3518,20 +3518,34 @@ document.addEventListener('keydown', function(ev) {
     return;
   }
 
-  // f — 全屏
+  // f — 3D 独占整页切换（Shift+F 触发浏览器全屏）
   if (key === 'f') {
     ev.preventDefault();
-    const el = document.getElementById('scene3d-card') || document.getElementById('scene3d');
-    if (el) {
-      if (document.fullscreenElement) {
-        document.exitFullscreen();
-      } else {
-        el.requestFullscreen();
+    if (ev.shiftKey) {
+      const el = document.getElementById('scene3d-card') || document.getElementById('scene3d');
+      if (el) {
+        if (document.fullscreenElement) document.exitFullscreen();
+        else el.requestFullscreen();
       }
+    } else {
+      toggleSceneFullpage();
     }
     return;
   }
+  if (ev.key === 'Escape' && document.body.classList.contains('scene3d-fullpage')) {
+    ev.preventDefault();
+    toggleSceneFullpage(false);
+    return;
+  }
 });
+
+function toggleSceneFullpage(force) {
+  var next = typeof force === 'boolean' ? force : !document.body.classList.contains('scene3d-fullpage');
+  document.body.classList.toggle('scene3d-fullpage', next);
+  var btn = document.getElementById('scene3d-fullpage-btn');
+  if (btn) btn.classList.toggle('active', next);
+  setTimeout(resize3D, 30);
+}
 
 // ═══════════════════════════════════════════════════════════════
 // Single namespace export — only `window.flowboard` is added to the
@@ -3550,6 +3564,7 @@ window.flowboard = {
   exitMapPreview: exitMapPreview,
   closeMapPreview: closeMapPreview,
   doPause: doPause,
+  toggleSceneFullpage: toggleSceneFullpage,
   toggleLaneDiag: toggleLaneDiag,
   toggleDriveHud: toggleDriveHud,
   toggleVisLayer: function(layer, btn) {

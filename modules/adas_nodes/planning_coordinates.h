@@ -63,6 +63,43 @@ inline int first_legal_lane(int lane_count, bool road_oneway) {
 }
 
 /**
+ * 从 OpenDRIVE 可行驶 lane_id 集合推导道路单双向标志。
+ * 右行道 id<0 为顺向、id>0 为对向：若同含正负 id 则为双向（false），
+ * 仅含单侧非零 id（如单向双车道 [-1, -2]）则为单向（true），空数组回退 fallback_oneway。
+ */
+inline bool infer_oneway_from_lane_ids(const int* lane_ids, int count,
+                                       bool fallback_oneway) {
+    if (!lane_ids || count <= 0) return fallback_oneway;
+    bool has_pos = false;
+    bool has_neg = false;
+    for (int i = 0; i < count; ++i) {
+        if (lane_ids[i] > 0) has_pos = true;
+        else if (lane_ids[i] < 0) has_neg = true;
+    }
+    if (has_neg && has_pos) return false;
+    if (has_neg || has_pos) return true;
+    return fallback_oneway;
+}
+
+/** 本向可用车道数（单向路为全部 N，双向路为右侧半幅 N - N/2）。 */
+inline int own_direction_lane_count(int lane_count, bool road_oneway) {
+    if (lane_count <= 0) return 0;
+    return road_oneway ? lane_count
+                       : (lane_count - first_legal_lane(lane_count, false));
+}
+
+/**
+ * 判断车道中心偏移 target_d 是否落在当前路段（含单向 side_offset 偏置）合法宽度内。
+ */
+inline bool is_lane_d_in_legal_band(double target_d, int lane_count,
+                                    double lane_width, double side_offset,
+                                    double edge_margin_m = 0.5) {
+    const double half_band = lane_count * 0.5 * lane_width - edge_margin_m;
+    if (half_band < 0.0) return false;
+    return std::fabs(target_d - side_offset) <= half_band;
+}
+
+/**
  * 由横向偏移 d 反推最近车道索引 [0, lane_count-1]。
  *
  * 为 lane_center_d 的严格逆（round-trip 必须成立），同样接受 side_offset：
@@ -176,6 +213,96 @@ inline bool quintic_lane_change(double start_d, double target_d,
     const double blend = u * u * u * (10.0 + u * (-15.0 + 6.0 * u));
     out_d = start_d + delta * blend;
     return true;
+}
+
+/**
+ * 车道保持轨迹横向剖面去偏滞（抑制 Frenet-Control 闭环稳态误差放大）。
+ *
+ * `frenet_plan` 每周期以当前横向偏移 `ic.c_d = ego_ref_d` 为起点规划五次多项式；
+ * 若末端目标仍落在无障碍干扰的车道中心（`|d_out[n_wp - 1]| <= 0.25m`），0.5s
+ * 前瞻点仍保留约 90% 的 `ego_ref_d`，将弯道微小稳态偏差放大 ~10 倍并反复触发
+ * `[LANE_EDGE]` 阶跃跳变。此时将整条车道保持剖面归零到车道中心，由下游控制器
+ * 平稳收敛；仅在规划主动偏出中心（如车内避让）时保留 `safe_band` 边界裁剪。
+ */
+inline void resolve_lane_keep_d_profile(double* d_out, int n_wp,
+                                        double safe_band,
+                                        int* out_forced_count = nullptr) {
+    if (out_forced_count) *out_forced_count = 0;
+    if (!d_out || n_wp <= 0) return;
+
+    constexpr double kUnobstructedTerminalTol = 0.25;
+    if (std::fabs(d_out[n_wp - 1]) <= kUnobstructedTerminalTol) {
+        for (int i = 0; i < n_wp; ++i) d_out[i] = 0.0;
+        return;
+    }
+
+    const double clamped_band = safe_band > 0.0 ? safe_band : 0.0;
+    int forced = 0;
+    for (int i = 0; i < n_wp; ++i) {
+        if (std::fabs(d_out[i]) > clamped_band) {
+            d_out[i] = 0.0;
+            forced++;
+        }
+    }
+    if (out_forced_count) *out_forced_count = forced;
+}
+
+/**
+ * 轨迹点航向角重构（消除弯道前向弦偏置，保留变道/避让 `dl/ds` 切向倾角）。
+ *
+ * 前向差分 `atan2(p[i+1] - p[i])` 在半径 R 弯道上产生 `-ds/(2R)` 的系统性内偏；
+ * 改用：
+ * - 内点 `1 <= i < n_pts - 1`：对称中心差分 `p[i+1] - p[i-1]`（圆弧切线零偏置，
+ *   同时包含变道横向梯度）；
+ * - 端点 `0` / `n_pts - 1`：当 `ref_valid[i]` 为真时以参考线切线 `ref_h[i]` 叠加
+ *   邻点横向斜率 `atan2(dl, max(ds, 0.2))`；否则回退相邻弦方向。
+ * 调用方应先将 `out_heading[i]` 初始化为回退航向（如 `points[i].heading`）。
+ */
+inline void refine_trajectory_headings(const double* x, const double* y,
+                                       const double* s, const double* l,
+                                       const double* ref_h,
+                                       const bool* ref_valid,
+                                       int n_pts,
+                                       double* out_heading) {
+    if (!x || !y || !s || !l || !out_heading || n_pts <= 0) return;
+    if (n_pts == 1) {
+        if (ref_h && ref_valid && ref_valid[0]) out_heading[0] = ref_h[0];
+        return;
+    }
+
+    constexpr double kMinChordLen2 = 0.04;
+    constexpr double kMinDs = 0.2;
+
+    if (ref_h && ref_valid && ref_valid[0]) {
+        const double ds01 = s[1] - s[0];
+        const double dl01 = l[1] - l[0];
+        out_heading[0] = ref_h[0] + (ds01 > kMinDs ? std::atan2(dl01, ds01) : 0.0);
+    } else {
+        const double dx = x[1] - x[0];
+        const double dy = y[1] - y[0];
+        if (dx * dx + dy * dy > kMinChordLen2) {
+            out_heading[0] = std::atan2(dy, dx);
+        }
+    }
+
+    for (int i = 1; i + 1 < n_pts; ++i) {
+        const double dx = x[i + 1] - x[i - 1];
+        const double dy = y[i + 1] - y[i - 1];
+        if (dx * dx + dy * dy > kMinChordLen2) {
+            out_heading[i] = std::atan2(dy, dx);
+        } else if (ref_h && ref_valid && ref_valid[i]) {
+            out_heading[i] = ref_h[i];
+        }
+    }
+
+    const int last = n_pts - 1;
+    if (ref_h && ref_valid && ref_valid[last]) {
+        const double dsn = s[last] - s[last - 1];
+        const double dln = l[last] - l[last - 1];
+        out_heading[last] = ref_h[last] + (dsn > kMinDs ? std::atan2(dln, dsn) : 0.0);
+    } else {
+        out_heading[last] = out_heading[last - 1];
+    }
 }
 
 }  // namespace planning_coord

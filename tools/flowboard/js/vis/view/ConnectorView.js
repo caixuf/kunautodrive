@@ -388,6 +388,20 @@ export function createConnectorView(scene) {
     return true;
   }
 
+  function armHasExitingTraffic(a, laneData) {
+    if (!a || !a.edge) return true;
+    const isOneWay = a.edge.oneway === true;
+    const eName = a.edge.name != null ? String(a.edge.name) : '';
+    const lanes = laneData && ((eName && laneData[eName]) || laneData[a.edgeId]);
+    if (Array.isArray(lanes) && lanes.length > 0) {
+      const hasFwd = lanes.some((l) => Number(l.direction || 0) >= 0);
+      const hasRev = lanes.some((l) => Number(l.direction || 0) < 0);
+      return (!a.fromEnd && hasFwd) || (a.fromEnd && hasRev);
+    }
+    if (isOneWay) return !a.fromEnd;
+    return true;
+  }
+
   function armPolylineLength(pts) {
     if (!Array.isArray(pts) || pts.length < 2) return 0;
     let total = 0;
@@ -657,7 +671,7 @@ export function createConnectorView(scene) {
           const wa = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, exitR + 2.0 + CROSSWALK_LENGTH + dist);
           if (inOtherJunction(wa.x, wa.z)) continue;
           const ux = -wa.ux, uz = -wa.uz;
-          const rx = uz, rz = -ux;
+          const [rx, rz] = tangentToNormal(ux, uz);
           for (let k = 0; k < apprLanes; k++) {
             const lOffset = isOneWay
               ? (k + 0.5 - apprLanes * 0.5) * laneW
@@ -669,6 +683,20 @@ export function createConnectorView(scene) {
               ux, uz, turnType, arrowInstances);
           }
         }
+
+        // 无 fork 数据的合成四向交叉口：为内侧左转道增加左转待转区（虚线框 + 前端停止线）
+        if (!hasForkAuthority && arms.length >= 4 && apprLanes >= 2 && !tooComplex) {
+          const pWait = walkFromJunction(a.pts, a.fromEnd, c.x, c.z, exitR + 0.6);
+          const wx = -pWait.ux, wz = -pWait.uz;
+          const [wrx, wrz] = tangentToNormal(wx, wz);
+          const lLeft = isOneWay ? (0.5 - apprLanes * 0.5) * laneW : 0.5 * laneW;
+          const bx = pWait.x + wrx * lLeft;
+          const bz = pWait.z + wrz * lLeft;
+          if (!inOtherJunction(bx, bz)) {
+            _drawLeftWaitingZone(bx, baseY + STOP_Y, bz, wx, wz, wrx, wrz,
+              laneW, Math.hypot(bx - c.x, bz - c.z), exitR, guideInstances);
+          }
+        }
       }
       if (!tooComplex) {
         for (const conn of conns) {
@@ -677,6 +705,43 @@ export function createConnectorView(scene) {
           const p0 = walkFromJunction(fa.pts, fa.fromEnd, c.x, c.z, exitR + 2.5);
           const p1 = walkFromJunction(ta.pts, ta.fromEnd, c.x, c.z, exitR + 2.5);
           _drawTurnGuide(p0, p1, conn.turn, baseY + STOP_Y, guideInstances, smoothPoly, c, exitR, fa, ta);
+        }
+        // 无 fork 的合成四向交叉口：自动补充左转引导虚线弧
+        if (!hasForkAuthority && conns.length === 0 && arms.length >= 4) {
+          for (let fi = 0; fi < arms.length; fi++) {
+            const fa = arms[fi];
+            if (isTunnelEdge(fa.edge) || !armHasApproachingTraffic(fa, laneData)) continue;
+            const faLen = Number(fa.edge && (fa.edge.length_m || fa.edge.length)) || armPolylineLength(fa.pts) || 50;
+            if (faLen < 12) continue;
+            const p0Raw = walkFromJunction(fa.pts, fa.fromEnd, c.x, c.z, exitR + 2.5);
+            const d0x = -p0Raw.ux, d0z = -p0Raw.uz;
+            const [r0x, r0z] = tangentToNormal(d0x, d0z);
+            const faOneWay = fa.edge && fa.edge.oneway === true;
+            const faTotal = Math.max(1, Number(fa.edge && fa.edge.lanes) || 2);
+            const faAppr = faOneWay ? faTotal : Math.max(1, Math.floor(faTotal / 2));
+            const faLaneW = Number(fa.edge && fa.edge.lane_width) || (fa.roadW / faTotal);
+            const l0 = faOneWay ? (0.5 - faAppr * 0.5) * faLaneW : 0.5 * faLaneW;
+            const p0 = { x: p0Raw.x + r0x * l0, z: p0Raw.z + r0z * l0, ux: p0Raw.ux, uz: p0Raw.uz };
+
+            for (let ti = 0; ti < arms.length; ti++) {
+              if (ti === fi) continue;
+              const ta = arms[ti];
+              if (isTunnelEdge(ta.edge) || !armHasExitingTraffic(ta, laneData)) continue;
+              const p1Raw = walkFromJunction(ta.pts, ta.fromEnd, c.x, c.z, exitR + 2.5);
+              const d1x = p1Raw.ux, d1z = p1Raw.uz;
+              const cross = d0x * d1z - d0z * d1x;
+              const dot = d0x * d1x + d0z * d1z;
+              if (cross >= -0.5 || Math.abs(dot) > 0.72) continue;
+              const [r1x, r1z] = tangentToNormal(d1x, d1z);
+              const taOneWay = ta.edge && ta.edge.oneway === true;
+              const taTotal = Math.max(1, Number(ta.edge && ta.edge.lanes) || 2);
+              const taExit = taOneWay ? taTotal : Math.max(1, Math.floor(taTotal / 2));
+              const taLaneW = Number(ta.edge && ta.edge.lane_width) || (ta.roadW / taTotal);
+              const l1 = taOneWay ? (0.5 - taExit * 0.5) * taLaneW : 0.5 * taLaneW;
+              const p1 = { x: p1Raw.x + r1x * l1, z: p1Raw.z + r1z * l1, ux: p1Raw.ux, uz: p1Raw.uz };
+              _drawTurnGuide(p0, p1, 'left', baseY + STOP_Y, guideInstances, smoothPoly, c, exitR, fa, ta);
+            }
+          }
         }
       }
       }
@@ -970,6 +1035,43 @@ export function createConnectorView(scene) {
     }
   }
 
+  /** 左转待转区虚线框（GB 5768.3 5.18）：沿左转车道从斑马线内缘向路口前探，预留中心冲突净空 */
+  function _drawLeftWaitingZone(bx, y, bz, ux, uz, rx, rz, laneW, distFromCenter, exitR, out) {
+    const coreClear = Math.max(4.5, exitR * 0.42);
+    const boxLen = Math.min(5.2, distFromCenter - coreClear);
+    if (boxLen < 2.2) return;
+    const halfBoxW = Math.min(laneW * 0.42, 1.55);
+    const rotFwd = directionToRotationY(ux, uz);
+    const rotStop = rotFwd + Math.PI / 2;
+    const dash = 0.65;
+    const step = 1.2;
+    for (const side of [-1, 1]) {
+      const lat = side * halfBoxW;
+      for (let s = 0; s < boxLen - 0.35; s += step) {
+        const s1 = Math.min(s + dash, boxLen - 0.12);
+        if (s1 - s < 0.2) break;
+        const sm = (s + s1) * 0.5;
+        out.push({
+          x: bx + ux * sm + rx * lat,
+          z: bz + uz * sm + rz * lat,
+          y,
+          rotY: rotFwd,
+          len: s1 - s,
+          w: 0.13,
+        });
+      }
+    }
+    // 前端左转待转停止线
+    out.push({
+      x: bx + ux * boxLen,
+      z: bz + uz * boxLen,
+      y,
+      rotY: rotStop,
+      len: halfBoxW * 2,
+      w: 0.18,
+    });
+  }
+
   /** 无 fork 时的旧猜测（合成图零回归）：按车道序号发明左右转。 */
   function _arrowTypeGuessed(k, apprLanes) {
     if (apprLanes === 1) return 'straight_left';
@@ -997,8 +1099,8 @@ export function createConnectorView(scene) {
   /** 地面导向箭头生成（GB 5768.3 5.14）：直行、左转、右转、直行+左转、直行+右转 */
   function _drawGroundArrow(x, y, z, ux, uz, turnType, out) {
     // ux, uz: 车道来车前向单位向量 (THREE x, z)
-    // nx, nz: 车道左侧法向单位向量 (THREE x, z)
-    const nx = -uz, nz = ux;
+    // nx, nz: 车道左侧法向单位向量 (THREE x, z) = -tangentToNormal(ux, uz)
+    const nx = uz, nz = -ux;
     const rotForward = directionToRotationY(ux, uz);
 
     // 1. 直行主干与箭头 (Straight stem + head chevron meeting perfectly at tip)
@@ -1025,11 +1127,13 @@ export function createConnectorView(scene) {
     // 2. 左转弯曲主干与箭头 (Left hook + head)
     if (turnType === 'left' || turnType === 'straight_left' || turnType === 'turn') {
       const isCombo = turnType === 'straight_left';
-      const ox = isCombo ? x + nx * 0.45 : x;
-      const oz = isCombo ? z + nz * 0.45 : z;
+      const ox = x;
+      const oz = z;
 
-      // 纵向直干段 (从 ox - ux*1.5 到 ox)
-      out.push({ x: ox - ux * 0.75, y, z: oz - uz * 0.75, rotY: rotForward, len: 1.5, w: 0.24 });
+      // 纵向直干段 (从 ox - ux*1.5 到 ox；组合箭头复用直行主干下半段)
+      if (!isCombo) {
+        out.push({ x: ox - ux * 0.75, y, z: oz - uz * 0.75, rotY: rotForward, len: 1.5, w: 0.24 });
+      }
 
       // 左转圆弧过渡段 (45度折角)
       const lux = ux * 0.707 + nx * 0.707, luz = uz * 0.707 + nz * 0.707;
@@ -1062,11 +1166,13 @@ export function createConnectorView(scene) {
     // 3. 右转弯曲主干与箭头 (Right hook + head)
     if (turnType === 'right' || turnType === 'straight_right') {
       const isCombo = turnType === 'straight_right';
-      const ox = isCombo ? x - nx * 0.45 : x;
-      const oz = isCombo ? z - nz * 0.45 : z;
+      const ox = x;
+      const oz = z;
 
-      // 纵向直干段 (从 ox - ux*1.5 到 ox)
-      out.push({ x: ox - ux * 0.75, y, z: oz - uz * 0.75, rotY: rotForward, len: 1.5, w: 0.24 });
+      // 纵向直干段 (从 ox - ux*1.5 到 ox；组合箭头复用直行主干下半段)
+      if (!isCombo) {
+        out.push({ x: ox - ux * 0.75, y, z: oz - uz * 0.75, rotY: rotForward, len: 1.5, w: 0.24 });
+      }
 
       // 右转圆弧过渡段 (45度折角)
       const rux = ux * 0.707 - nx * 0.707, ruz = uz * 0.707 - nz * 0.707;

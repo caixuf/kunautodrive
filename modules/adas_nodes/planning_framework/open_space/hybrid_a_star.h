@@ -76,6 +76,7 @@ struct HybridAStarResult {
  */
 struct Environment {
     std::vector<Box2d> obstacle_boxes;
+    std::vector<Box2d> low_obstacle_boxes;  ///< Low ground curbs/wheel-stops (height <= 0.25m): checked vs wheel span
     std::vector<LineSegment2d> obstacle_lines;
     std::vector<Vec2d> obstacle_points;
     double min_x{-50.0};
@@ -115,6 +116,11 @@ public:
      * @brief Build Ego vehicle Box2d at given rear axle pose (x, y, phi).
      */
     Box2d GetEgoVehicleBox(double x, double y, double phi, double safety_margin = 0.0) const;
+
+    /**
+     * @brief Build Ego wheel/axle footprint Box2d for low ground obstacles (height <= 0.25m).
+     */
+    Box2d GetEgoWheelBox(double x, double y, double phi, double safety_margin = 0.0) const;
 
 private:
     struct SearchNode {

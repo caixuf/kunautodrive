@@ -212,6 +212,9 @@ void ktracker_associate_and_update(KalmanTracker* kt,
             t->length = dets[d].length;
             t->cls    = dets[d].cls;
             t->confidence = dets[d].confidence;
+            t->z      = dets[d].z;
+            t->height = (dets[d].height > 0.05f) ? dets[d].height : 1.5f;
+            t->heading= dets[d].heading;
             t->hits = 1;
             t->hits_streak = 1;
         }
@@ -242,6 +245,10 @@ void ktracker_associate_and_update(KalmanTracker* kt,
         double max_d = (kt->tracks[t].state == TRACK_TENTATIVE)
                         ? kt->max_assoc_dist_init : kt->max_assoc_dist;
         for (int d = 0; d < n_dets; d++) {
+            if (fabsf(kt->tracks[t].z - dets[d].z) > 2.2f) {
+                cost[t][d] = 1e9;  /* 高程隔离：跨层（高架/地道）禁止匹配 */
+                continue;
+            }
             double mdist = mahalanobis_dist(&kt->tracks[t], &dets[d], kt->r_pos);
             if (mdist > max_d) {
                 cost[t][d] = 1e9;  /* 不可匹配 */
@@ -265,6 +272,9 @@ void ktracker_associate_and_update(KalmanTracker* kt,
             kf_update(&kt->tracks[t], dets[d].x, dets[d].y, kt->r_pos);
             kt->tracks[t].width  = 0.7f * kt->tracks[t].width  + 0.3f * dets[d].width;
             kt->tracks[t].length = 0.7f * kt->tracks[t].length + 0.3f * dets[d].length;
+            kt->tracks[t].z      = 0.7f * kt->tracks[t].z      + 0.3f * dets[d].z;
+            kt->tracks[t].height = (dets[d].height > 0.05f) ? dets[d].height : kt->tracks[t].height;
+            kt->tracks[t].heading= dets[d].heading;
             kt->tracks[t].confidence = 0.8f * kt->tracks[t].confidence
                                        + 0.2f * dets[d].confidence;
             kt->tracks[t].misses = 0;
@@ -311,6 +321,9 @@ void ktracker_associate_and_update(KalmanTracker* kt,
         t->length = dets[d].length;
         t->cls    = dets[d].cls;
         t->confidence = dets[d].confidence;
+        t->z      = dets[d].z;
+        t->height = (dets[d].height > 0.05f) ? dets[d].height : 1.5f;
+        t->heading= dets[d].heading;
         t->hits   = 1;
         t->hits_streak = 1;
     }

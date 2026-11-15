@@ -64,19 +64,20 @@ export function computeSubsurfaceCutouts(roadNetwork) {
         || (Math.abs(p1[0] - maxX) < 0.5 && nearRampEndpoint(p1[0], p1[1])) ? 0.2 : 12.0;
       pushEnuRect(minX - padLeft, minY - 11.8, maxX + padRight, maxY + 11.8);
     } else if (edge.type === EDGE_TYPE.OPEN_RAMP) {
+      const OPEN_RAMP_CUTOFF_Z = -0.02;
       const subPts = [];
       for (let i = 0; i < pts.length; i++) {
         const cur = pts[i];
-        if (cur[2] <= -0.10) subPts.push(cur);
+        if (cur[2] <= OPEN_RAMP_CUTOFF_Z) subPts.push(cur);
         if (i + 1 < pts.length) {
           const nxt = pts[i + 1];
-          if ((cur[2] < -0.10) !== (nxt[2] < -0.10)) {
+          if ((cur[2] < OPEN_RAMP_CUTOFF_Z) !== (nxt[2] < OPEN_RAMP_CUTOFF_Z)) {
             const dz = nxt[2] - cur[2];
-            const t = Math.abs(dz) > 1e-5 ? (-0.10 - cur[2]) / dz : 0.5;
+            const t = Math.abs(dz) > 1e-5 ? (OPEN_RAMP_CUTOFF_Z - cur[2]) / dz : 0.5;
             subPts.push([
               cur[0] + (nxt[0] - cur[0]) * t,
               cur[1] + (nxt[1] - cur[1]) * t,
-              -0.10,
+              OPEN_RAMP_CUTOFF_Z,
             ]);
           }
         }

@@ -315,8 +315,15 @@ void ekf_fusion_predict(EkfFusion* ekf) {
     x_pred[0] = ekf->x[0] + v * cos(psi) * dt;
     x_pred[1] = ekf->x[1] + v * sin(psi) * dt;
     x_pred[2] = v;                        /* v 恒定 (加速度通过 Q 注入) */
-    x_pred[3] = psi + yr * dt;
-    x_pred[4] = yr;                       /* yaw_rate 恒定 */
+    if (fabs(v) < 0.25) {
+        /* 静止约束：非完整约束车辆驻停时不会自发偏航，防止 LiDAR 位置噪声通过
+         * 残余协方差耦合在驻车/等红灯期间累积虚假 yaw_rate 导致航向持续漂移。 */
+        x_pred[3] = psi;
+        x_pred[4] = 0.0;
+    } else {
+        x_pred[3] = psi + yr * dt;
+        x_pred[4] = yr;                   /* yaw_rate 恒定 */
+    }
 
     /* Jacobian F = ∂f/∂x */
     double F[25];

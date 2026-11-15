@@ -177,7 +177,8 @@ function adaptActor(a) {
 
 /** 单个红绿灯定义 → scene entity（type='tl'）。 */
 function adaptTrafficLight(t) {
-  return {
+  const hasLeft = Boolean(t.has_left_arrow || (t.left_green_s > 0));
+  const out = {
     type: 'tl',
     id: t.id,
     x: t.x || 0,
@@ -189,6 +190,11 @@ function adaptTrafficLight(t) {
     state: t.state || 'green',
     remain_s: 0,
   };
+  if (hasLeft) {
+    out.has_left_arrow = true;
+    out.left_state = t.left_state || out.state;
+  }
+  return out;
 }
 
 /**
@@ -205,6 +211,20 @@ export function scenarioToScene(raw, staticMap) {
 
   const tls = Array.isArray(raw.traffic_lights) ? raw.traffic_lights : [];
   for (const t of tls) entities.push(adaptTrafficLight(t));
+
+  const gates = Array.isArray(raw.etc_gates) ? raw.etc_gates : [];
+  for (const g of gates) {
+    entities.push({
+      type: 'etc_gate',
+      id: 5000 + (Number(g.id) || 0),
+      x: g.x || 0,
+      y: g.y || 0,
+      z: g.z || 0,
+      heading: g.heading != null ? g.heading : 0,
+      state: g.state || 'closed',
+      gate_style: g.gate_style,
+    });
+  }
 
   const scene = {
     t_us: 0,

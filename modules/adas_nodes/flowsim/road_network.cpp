@@ -64,9 +64,12 @@ FlowRoadNetwork::~FlowRoadNetwork() {
 }
 
 FlowRoadNetwork::FlowRoadNetwork(FlowRoadNetwork&& o) noexcept
-    : loaded_(o.loaded_), pos_handle_(o.pos_handle_), road_names_(std::move(o.road_names_)) {
+    : loaded_(o.loaded_), pos_handle_(o.pos_handle_), w2f_handle_(o.w2f_handle_),
+      w2f_z_handle_(o.w2f_z_handle_), road_names_(std::move(o.road_names_)) {
     o.loaded_ = false;
     o.pos_handle_ = -1;
+    o.w2f_handle_ = -1;
+    o.w2f_z_handle_ = -1;
 }
 
 FlowRoadNetwork& FlowRoadNetwork::operator=(FlowRoadNetwork&& o) noexcept {
@@ -74,9 +77,13 @@ FlowRoadNetwork& FlowRoadNetwork::operator=(FlowRoadNetwork&& o) noexcept {
         release();
         loaded_ = o.loaded_;
         pos_handle_ = o.pos_handle_;
+        w2f_handle_ = o.w2f_handle_;
+        w2f_z_handle_ = o.w2f_z_handle_;
         road_names_ = std::move(o.road_names_);
         o.loaded_ = false;
         o.pos_handle_ = -1;
+        o.w2f_handle_ = -1;
+        o.w2f_z_handle_ = -1;
     }
     return *this;
 }
@@ -89,10 +96,11 @@ bool FlowRoadNetwork::load(const std::string& xodr_path) {
     }
     loaded_ = true;
     pos_handle_ = RM_CreatePosition();
-    if (pos_handle_ < 0) {
+    w2f_handle_ = RM_CreatePosition();
+    w2f_z_handle_ = RM_CreatePosition();
+    if (pos_handle_ < 0 || w2f_handle_ < 0 || w2f_z_handle_ < 0) {
         std::fprintf(stderr, "FlowRoadNetwork::load: RM_CreatePosition failed\n");
-        RM_Close();
-        loaded_ = false;
+        release();
         return false;
     }
     parse_xodr_road_names(xodr_path, road_names_);
@@ -101,6 +109,14 @@ bool FlowRoadNetwork::load(const std::string& xodr_path) {
 
 void FlowRoadNetwork::release() {
     road_names_.clear();
+    if (w2f_z_handle_ >= 0) {
+        RM_DeletePosition(w2f_z_handle_);
+        w2f_z_handle_ = -1;
+    }
+    if (w2f_handle_ >= 0) {
+        RM_DeletePosition(w2f_handle_);
+        w2f_handle_ = -1;
+    }
     if (pos_handle_ >= 0) {
         RM_DeletePosition(pos_handle_);
         pos_handle_ = -1;
@@ -172,13 +188,20 @@ bool FlowRoadNetwork::frenet_to_world(int road_id, int lane_id, double s, double
     return true;
 }
 
-bool FlowRoadNetwork::world_to_frenet(double x, double y, FrenetPos& out) {
-    if (!loaded_ || pos_handle_ < 0) return false;
-    // RM_SetWorldXYHPosition：z/pitch 由路网反算，h 传 NaN 表示由路网决定
-    int rc = RM_SetWorldXYHPosition(pos_handle_, x, y, std::nanf(""));
+bool FlowRoadNetwork::world_to_frenet(double x, double y, FrenetPos& out, double z) {
+    if (!loaded_) return false;
+    const bool use_z = std::isfinite(z);
+    const int handle = use_z ? w2f_z_handle_ : w2f_handle_;
+    if (handle < 0) return false;
+    // Keep Z-capable and XY-only queries on dedicated handles separate from pos_handle_
+    // so sticky Z state never corrupts frenet_to_world(). RM_SetWorldPositionMode(..., RM_Z_ABS)
+    // avoids RM_SetWorldXYZHPosition's relative-Z bug that gets stuck on viaduct decks.
+    int rc = use_z
+        ? RM_SetWorldPositionMode(handle, x, y, z, std::nan(""), std::nan(""), std::nan(""), RM_Z_ABS)
+        : RM_SetWorldXYHPosition(handle, x, y, std::nanf(""));
     if (rc < 0) return false;
     RM_PositionData pd;
-    if (RM_GetPositionData(pos_handle_, &pd) < 0) return false;
+    if (RM_GetPositionData(handle, &pd) < 0) return false;
     out.road_id = (int)pd.roadId;
     out.lane_id = pd.laneId;
     out.s = pd.s;

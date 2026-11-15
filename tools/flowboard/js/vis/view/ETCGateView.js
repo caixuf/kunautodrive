@@ -168,10 +168,172 @@ export function createETCGateView(scene) {
     return { group: g, booms };
   }
 
-  /** boom 抬起角度：state='open'/1 → 60° 抬起；'closed'/0 → 0° 落下 */
+  /** 判断闸门是停车场/匝道单车道道闸，还是高速公路 4 车道 ETC 收费广场 */
+  function _isParkingBarrier(store, ent) {
+    if (ent && ent.gate_style === 'etc_plaza') return false;
+    if (ent && ent.gate_style === 'parking_barrier') return true;
+    const edges = (store && store.roadNetwork && Array.isArray(store.roadNetwork.edges))
+      ? store.roadNetwork.edges
+      : [];
+    let bestDist = Infinity;
+    let bestEdge = null;
+    const ex = Number(ent && ent.x) || 0;
+    const ey = Number(ent && ent.y) || 0;
+    for (const edge of edges) {
+      const nodes = Array.isArray(edge && edge.nodes) ? edge.nodes : [];
+      for (let i = 1; i < nodes.length; i++) {
+        const a = nodes[i - 1], b = nodes[i];
+        const ax = Array.isArray(a) ? a[0] : a.x;
+        const ay = Array.isArray(a) ? a[1] : a.y;
+        const bx = Array.isArray(b) ? b[0] : b.x;
+        const by = Array.isArray(b) ? b[1] : b.y;
+        const dx = bx - ax, dy = by - ay;
+        const len2 = dx * dx + dy * dy || 1e-9;
+        const t = Math.max(0, Math.min(1, ((ex - ax) * dx + (ey - ay) * dy) / len2));
+        const d = Math.hypot(ex - (ax + t * dx), ey - (ay + t * dy));
+        if (d < bestDist) {
+          bestDist = d;
+          bestEdge = edge;
+        }
+      }
+    }
+    if (!bestEdge) return true;
+    const t = String(bestEdge.type || '').toLowerCase();
+    const n = String(bestEdge.name || '').toLowerCase();
+    if (t === 'open_ramp' || t === 'garage_hall' || t === 'ramp' || t === 'parking') return true;
+    if (n.includes('ramp') || n.includes('lot') || n.includes('park') || n.includes('garage')) return true;
+    return (Number(bestEdge.lanes) || 2) <= 2;
+  }
+
+  /** 停车场/坡道出口标准道闸（安全岛 + 黄色道闸机箱 + 红白条纹起落杆 + 车牌识别一体机 + LED 屏） */
+  function _createParkingBarrierGate() {
+    const g = new THREE.Group();
+
+    const islandMat = getStdMaterial(0x3a4048, 0.8, 0.08);
+    const hazardMat = createEmissiveMaterial(0xf5b800, 0.22);
+    const cabinetMat = createEmissiveMaterial(0xf59e0b, 0.20);
+    const darkMetalMat = getStdMaterial(0x1f2937, 0.45, 0.4);
+    const poleMat = getStdMaterial(0x64748b, 0.38, 0.45);
+    const ledRedMat = createEmissiveMaterial(0xef4444, 0.9);
+    const ledGreenMat = createEmissiveMaterial(0x22c55e, 0.9);
+    const whiteBarMat = getStdMaterial(0xf8fafc, 0.35, 0.05);
+    const redBarMat = createEmissiveMaterial(0xdc2626, 0.28);
+    const lensMat = createEmissiveMaterial(0x38bdf8, 0.65);
+
+    // 1. 右侧安全岛（z = +1.85m，沿道路方向 2.8m × 0.58m × 0.16m）
+    const island = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.16, 0.58), islandMat);
+    island.position.set(0, 0.08, 1.88);
+    island.castShadow = true;
+    island.receiveShadow = true;
+    g.add(island);
+
+    for (const sx of [-1.0, -0.33, 0.33, 1.0]) {
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.165, 0.60), hazardMat);
+      stripe.position.set(sx, 0.08, 1.88);
+      g.add(stripe);
+    }
+
+    // 2. 道闸机箱（黄色主机箱 + 顶部红/绿状态灯）
+    const cabinet = new THREE.Mesh(new THREE.BoxGeometry(0.42, 1.08, 0.36), cabinetMat);
+    cabinet.position.set(0.0, 0.70, 1.88);
+    cabinet.castShadow = true;
+    g.add(cabinet);
+
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.10, 0.40), darkMetalMat);
+    cap.position.set(0.0, 1.28, 1.88);
+    g.add(cap);
+
+    const statusLed = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.06, 0.41), ledRedMat);
+    statusLed.position.set(0.0, 1.22, 1.88);
+    g.add(statusLed);
+
+    // 3. 红白相间起落杆（pivot 在机箱左侧 z=+1.68, y=0.92，向 -z 横跨车道 3.45m）
+    const boomPivot = new THREE.Group();
+    boomPivot.position.set(0.0, 0.92, 1.68);
+    const boomLen = 3.45;
+    const segCount = 8;
+    const segLen = boomLen / segCount;
+    for (let i = 0; i < segCount; i++) {
+      const seg = new THREE.Mesh(
+        new THREE.BoxGeometry(0.06, 0.085, segLen),
+        i % 2 === 0 ? redBarMat : whiteBarMat
+      );
+      seg.position.set(0, 0, -(i + 0.5) * segLen);
+      seg.castShadow = true;
+      boomPivot.add(seg);
+    }
+    const rubberEdge = new THREE.Mesh(
+      new THREE.BoxGeometry(0.05, 0.03, boomLen),
+      darkMetalMat
+    );
+    rubberEdge.position.set(0, -0.055, -boomLen * 0.5);
+    boomPivot.add(rubberEdge);
+    const tipLight = new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 6), ledRedMat);
+    tipLight.position.set(0, 0, -boomLen);
+    boomPivot.add(tipLight);
+    g.add(boomPivot);
+
+    // 4. 车牌识别一体机（位于道闸前方 1.0m 安全岛上）
+    const kioskPole = new THREE.Mesh(new THREE.BoxGeometry(0.20, 1.52, 0.18), darkMetalMat);
+    kioskPole.position.set(-1.0, 0.92, 1.88);
+    kioskPole.castShadow = true;
+    g.add(kioskPole);
+
+    const ledPanel = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.42, 0.34), ledGreenMat);
+    ledPanel.position.set(-1.11, 1.38, 1.88);
+    g.add(ledPanel);
+
+    const camHousing = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.16, 0.16), poleMat);
+    camHousing.position.set(-1.02, 1.68, 1.78);
+    camHousing.rotation.y = 0.25;
+    g.add(camHousing);
+
+    const camLens = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.06, 8), lensMat);
+    camLens.rotation.z = Math.PI / 2;
+    camLens.position.set(-1.14, 1.68, 1.75);
+    g.add(camLens);
+
+    // 5. 限高/出入口龙门架（单跨 4.2m 窄钢架，清晰区分于高速 ETC 广场）
+    const gantryPoleGeo = new THREE.CylinderGeometry(0.07, 0.085, 3.2, 10);
+    for (const gz of [-1.95, 1.95]) {
+      const gp = new THREE.Mesh(gantryPoleGeo, poleMat);
+      gp.position.set(-0.6, 1.6, gz);
+      gp.castShadow = true;
+      g.add(gp);
+    }
+    const gantryBeam = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.18, 4.1), poleMat);
+    gantryBeam.position.set(-0.6, 3.15, 0);
+    g.add(gantryBeam);
+    const gantrySign = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.36, 2.4), hazardMat);
+    gantrySign.position.set(-0.56, 3.15, 0);
+    g.add(gantrySign);
+
+    scene.add(g);
+    return {
+      group: g,
+      booms: [boomPivot],
+      isParkingBarrier: true,
+      statusLed,
+      ledRedMat,
+      ledGreenMat,
+    };
+  }
+
+  /** boom 抬起角度：state='open'/1 → 抬起；'opening' → 半抬；'closed'/0 → 0° 落下 */
   function _setBoomState(entry, state) {
-    const open = state === 'open' || state === 1 || state === true;
-    const targetAngle = open ? -Math.PI / 3 : 0;  // 抬起 60°（绕 X 轴）
+    const isOpen = state === 'open' || state === 1 || state === true;
+    const isOpening = state === 'opening';
+    if (entry.isParkingBarrier) {
+      const targetAngle = isOpen ? Math.PI * 0.46 : (isOpening ? Math.PI * 0.22 : 0);
+      for (const boom of entry.booms) {
+        boom.rotation.x = targetAngle;
+      }
+      if (entry.statusLed) {
+        entry.statusLed.material = isOpen ? entry.ledGreenMat : entry.ledRedMat;
+      }
+      return;
+    }
+    const targetAngle = isOpen ? -Math.PI / 3 : (isOpening ? -Math.PI / 6 : 0);
     for (const boom of entry.booms) {
       boom.rotation.x = targetAngle;
     }
@@ -190,9 +352,15 @@ export function createETCGateView(scene) {
     }
 
     for (const ent of all) {
+      const wantParking = _isParkingBarrier(store, ent);
       let entry = pool.get(ent.id);
+      if (entry && Boolean(entry.isParkingBarrier) !== wantParking) {
+        scene.remove(entry.group);
+        pool.delete(ent.id);
+        entry = null;
+      }
       if (!entry) {
-        entry = _createETCGate();
+        entry = wantParking ? _createParkingBarrierGate() : _createETCGate();
         pool.set(ent.id, entry);
       }
       const z = (typeof ent.z === 'number' && Number.isFinite(ent.z))

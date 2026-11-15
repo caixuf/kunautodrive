@@ -39,6 +39,7 @@ enum class EntityType : uint8_t {
     TrafficLight,
     ETCGate,
     StopLine,
+    UnknownStatic,
 };
 
 /**
@@ -91,8 +92,8 @@ struct Entity {
     double throttle{0}, brake{0};  /**< 油门/刹车 [0,1] */
     VehicleLights lights;          /**< 车灯状态（位掩码），由 control/actor 写入，scene_pub 发布 */
 
-    /* ── Vehicle 参数（Car/SUV/Truck）── */
-    double length{4.6}, width{2.0};
+    /* ── Vehicle 参数（Car/SUV/Truck/UnknownStatic）── */
+    double length{4.6}, width{2.0}, height{0.0};
     double wheelbase{2.7};
     double mass{1500.0};           /**< kg */
     double drag_coeff{0.4};        /**< 空气阻力系数 */
@@ -191,12 +192,26 @@ struct Entity {
     /* ── 行人专用 ── */
     double ped_wait_timer{0};      /**< 行人等待计时器 (s) */
     int    ped_parked{0};          /**< 行人是否停在路边 */
+    double ped_home_x{0};          /**< 斑马线往返锚点起点 x */
+    double ped_home_y{0};          /**< 斑马线往返锚点起点 y */
+    double ped_axis_x{0};          /**< 斑马线往返单位方向 x */
+    double ped_axis_y{1};          /**< 斑马线往返单位方向 y */
+    double ped_cross_span{0};      /**< >0 时沿 ped_axis 往返总跨度 (m) */
+    bool   ped_home_init{false};   /**< 是否已初始化斑马线锚点 */
     bool   parked_fixed{false};    /**< 静态停放车辆（固定在车位/路边，不参与路网推进） */
 
     /* ── 场景事件触发器专用 ── */
     int    phase_state{0};         /**< 红绿灯当前相位：0=绿 1=黄 2=红 */
     double phase_timer{0};         /**< 当前相位剩余时间 (s) */
     int    phase_override_frames{0}; /**< 相位锁定帧数（>0 时 tick_traffic_lights 跳过重算，由 choreography 设置用于覆盖锁定） */
+    bool   has_left_arrow{false};  /**< 是否带独立左转箭头信号头 */
+    int    left_phase_state{0};    /**< 左转箭头当前相位：0=绿 1=闪绿 2=黄 3=红 */
+    double left_phase_timer{0};    /**< 左转箭头剩余时间 (s) */
+    double left_green_s{0};        /**< 左转绿灯时长 (s) */
+    double left_yellow_s{0};       /**< 左转黄灯时长 (s) */
+    double left_red_s{0};          /**< 左转红灯时长 (s) */
+    double left_phase_offset_s{0}; /**< 左转初始相位偏移 (s) */
+    double approach_heading{0};    /**< 受控来车朝向 (rad, ENU) */
 
     /* ── RoadPosition（Task: 地图路由重构）──
      * 每车持久的 esmini position handle，替代 route_s/route_dir 的单链路由。

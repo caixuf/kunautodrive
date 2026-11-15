@@ -320,6 +320,58 @@ void TestPerformanceTypicalParking() {
                "Average planning time MUST be under budget (Release <50ms; ASan <150ms)");
 }
 
+void TestValetParkingApproachPositions() {
+    std::cout << "\n=== 5. Valet Parking Approach Positions With Facilities ===" << std::endl;
+
+    VehicleParam veh;
+    veh.wheelbase = 2.7;
+    veh.length = 4.6;
+    veh.width = 2.0;
+    veh.back_edge_to_center = 0.95;
+    veh.max_steer = 0.50;
+    veh.step_size = 0.80;
+
+    HybridAStarConfig cfg;
+    cfg.xy_grid_resolution = 0.25;
+    cfg.phi_grid_resolution = 0.0872665;
+    cfg.weight_reverse = 2.0;
+    cfg.weight_gear_switch = 4.0;
+    cfg.vehicle_safety_margin = 0.15;
+    cfg.analytic_expansion_max_dist = 35.0;
+    cfg.max_iterations = 40000;
+    cfg.time_limit_ms = 80.0;
+
+    HybridAStar planner(veh, cfg);
+
+    Environment env;
+    env.min_x = 4.0; env.max_x = 55.0;
+    env.min_y = -16.0; env.max_y = 10.5;
+    env.obstacle_boxes.emplace_back(Vec2d(27.0, -4.0), 0.0, 4.6, 2.0);
+    env.obstacle_boxes.emplace_back(Vec2d(41.5, -4.0), 0.0, 4.6, 2.0);
+    env.obstacle_boxes.emplace_back(Vec2d(31.8, -5.5), 0.4, 0.7, 0.7);
+    env.obstacle_boxes.emplace_back(Vec2d(36.13, -7.21), 1.2, 0.18, 0.18);
+    env.obstacle_boxes.emplace_back(Vec2d(32.96, -5.98), 1.2, 0.18, 0.18);
+    env.obstacle_boxes.emplace_back(Vec2d(34.36, -7.06), 1.2, 0.42, 0.34);
+    env.low_obstacle_boxes.emplace_back(Vec2d(34.80, -5.94), 1.2, 0.16, 2.016);
+
+    double goal_h = 1.20;
+    double half_wb = veh.wheelbase * 0.5;
+    double goal_xr = 35.65 - half_wb * std::cos(goal_h);
+    double goal_yr = -3.75 - half_wb * std::sin(goal_h);
+    double pre_xr = goal_xr + 1.5 * std::cos(goal_h);
+    double pre_yr = goal_yr + 1.5 * std::sin(goal_h);
+
+    for (double start_cx : {22.8, 25.4, 28.0}) {
+        HybridAStarResult res;
+        double start_xr = start_cx - half_wb;
+        bool ok = planner.Plan(start_xr, -1.75, 0.0, pre_xr, pre_yr, goal_h, env, &res);
+        std::cout << "  start_x=" << start_cx << " -> ok=" << ok
+                  << " pts=" << res.path.size()
+                  << " ms=" << res.search_time_ms << std::endl;
+        TEST_CHECK(ok && !res.path.empty(), "Valet parking plan must succeed from approach x");
+    }
+}
+
 int main() {
     std::cout << "==========================================================" << std::endl;
     std::cout << "   RUNNING HYBRID A* & REEDS-SHEPP UNIT & PERF TESTS     " << std::endl;
@@ -329,6 +381,7 @@ int main() {
     TestForwardObstacleAvoidance();
     TestReverseParkingAndUTurn();
     TestPerformanceTypicalParking();
+    TestValetParkingApproachPositions();
 
     std::cout << "\n==========================================================" << std::endl;
     std::cout << "   ALL HYBRID A* UNIT & BENCHMARK TESTS PASSED (100%)    " << std::endl;

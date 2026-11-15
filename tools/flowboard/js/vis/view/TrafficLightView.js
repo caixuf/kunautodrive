@@ -18,9 +18,42 @@ import { roadHeightAt } from '../math/RoadHeight.js';
 const RED = 0xff0000, YELLOW = 0xffaa00, GREEN = 0x00ff00;
 const LAMP_Y = [4.6, 4.3, 4.0];  // 红/黄/绿的 Y 坐标
 
+function _stateIndex(state) {
+  return typeof state === 'number' ? state
+    : state === 'red' ? 0
+    : state === 'yellow' ? 1
+    : state === 'green' || state === 'flashing_green' ? 2
+    : -1;
+}
+
+function _applySignalMaterials(materials, state) {
+  const idx = _stateIndex(state);
+  const flashingOff = state === 'flashing_green' &&
+    Math.floor(performance.now() / 250) % 2 === 0;
+  materials.forEach((mat, i) => {
+    mat.emissiveIntensity = (i === idx && !flashingOff) ? 2.0 : 0.05;
+  });
+}
+
 export function createTrafficLightView(scene) {
-  // entity id → { group, lamps: [red, yellow, green] }
+  // entity id → { group, lamps, leftGroup, leftMaterials }
   const pool = new Map();
+
+  function _createArrowLens(leftGroup, y, color, zCenter) {
+    const mat = createEmissiveMaterial(color, 0.05);
+    // 水平箭杆（朝 -z 左向）
+    const shaft = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.036, 0.14), mat);
+    shaft.position.set(-0.16, y, zCenter);
+    leftGroup.add(shaft);
+    // 上下箭头倒刺（组成清晰的 ← 符号）
+    for (const sign of [-1, 1]) {
+      const barb = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.032, 0.085), mat);
+      barb.position.set(-0.16, y + sign * 0.028, zCenter - 0.035);
+      barb.rotation.x = sign * (Math.PI / 4);
+      leftGroup.add(barb);
+    }
+    return mat;
+  }
 
   function _createTrafficLight() {
     const g = new THREE.Group();
@@ -63,25 +96,40 @@ export function createTrafficLightView(scene) {
       lamps.push(lamp);
     }
 
+    // 独立左转箭头信号头：沿臂架向内（-z = 来车左侧）悬于左转车道上方
+    const leftGroup = new THREE.Group();
+    const leftArm = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.85), poleMat);
+    leftArm.position.set(0, 4.8, -4.42);
+    leftGroup.add(leftArm);
+
+    const leftHousing = new THREE.Mesh(
+      new THREE.BoxGeometry(0.3, 0.9, 0.35),
+      housingMat
+    );
+    leftHousing.position.set(0, 4.3, -4.65);
+    leftHousing.castShadow = true;
+    leftGroup.add(leftHousing);
+
+    const leftMaterials = colors.map((c, i) => _createArrowLens(leftGroup, LAMP_Y[i], c, -4.65));
+    leftGroup.visible = false;
+    g.add(leftGroup);
+
     g.userData.lamps = lamps;
     g.userData.lampColors = colors;
+    g.userData.leftGroup = leftGroup;
+    g.userData.leftMaterials = leftMaterials;
     scene.add(g);
-    return { group: g, lamps };
+    return { group: g, lamps, leftGroup, leftMaterials };
   }
 
-  /** 切换灯状态；闪绿由仿真时间驱动，2Hz 闪烁。 */
-  function _setLight(entry, state) {
-    const idx = typeof state === 'number' ? state
-              : state === 'red' ? 0
-              : state === 'yellow' ? 1
-              : state === 'green' || state === 'flashing_green' ? 2
-              : -1;
-    const flashingOff = state === 'flashing_green' &&
-      Math.floor(performance.now() / 250) % 2 === 0;
-    entry.lamps.forEach((lamp, i) => {
-      lamp.material.emissiveIntensity =
-        (i === idx && !flashingOff) ? 2.0 : 0.05;
-    });
+  /** 切换灯状态（含独立左转箭头头）；闪绿由仿真时间驱动，2Hz 闪烁。 */
+  function _setLight(entry, state, leftState, hasLeft) {
+    _applySignalMaterials(entry.lamps.map(l => l.material), state);
+    entry.leftGroup.visible = Boolean(hasLeft);
+    if (hasLeft) {
+      const lState = leftState != null ? leftState : state;
+      _applySignalMaterials(entry.leftMaterials, lState);
+    }
   }
 
   /** 主更新入口：只认 scene/frame entities 里的 type='tl' */
@@ -109,7 +157,8 @@ export function createTrafficLightView(scene) {
       // 后端 heading 是臂指向；本地臂默认沿 -z。
       // 用 headingToRotationY(h - PI/2) = PI/2 - h 对齐。
       entry.group.rotation.y = headingToRotationY((ent.heading || 0) - Math.PI / 2);
-      _setLight(entry, ent.state);
+      const hasLeft = Boolean(ent.has_left_arrow || ent.left_state != null);
+      _setLight(entry, ent.state, ent.left_state, hasLeft);
     }
   }
 

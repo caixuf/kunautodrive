@@ -101,6 +101,7 @@ typedef struct {
     double heading;    /**< 可选初始航向角（rad） */
     double vx, vy;     /**< 初始速度（m/s） */
     double len, wid;   /**< 碰撞包围盒尺寸（m） */
+    double height;     /**< 可选包围盒高度（m，<=0 表示按类型默认） */
     bool   has_heading; /**< JSON 是否显式指定 heading */
     bool   has_z;       /**< JSON 是否显式指定 z */
     bool   parked_fixed; /**< 静态停放车辆（固定占位不参与路网 NPC AI） */
@@ -186,14 +187,19 @@ typedef struct {
 /* ── 红绿灯（可选, 见 traffic_light.h） ────────────────────── */
 
 typedef struct {
-    int    id;              /**< 灯 ID（topic/可视化标识） */
-    double x;               /**< 停止线位置（ego 前向坐标, m） */
-    double y_lane;          /**< 灯所在车道横向坐标（m，默认 -1.75） */
-    double heading;         /**< 灯朝向（rad，默认 0 = 朝 +X；未配置时 flowsim 可按道路切线估算） */
-    double red_s;           /**< 红灯时长（s），<=0 视为无灯 */
-    double yellow_s;        /**< 黄灯时长（s） */
-    double green_s;         /**< 绿灯时长（s） */
-    double phase_offset_s;  /**< 初始相位偏移（s，默认 0） */
+    int    id;                  /**< 灯 ID（topic/可视化标识） */
+    double x;                   /**< 停止线位置（ego 前向坐标, m） */
+    double y_lane;              /**< 灯所在车道横向坐标（m，默认 -1.75） */
+    double heading;             /**< 灯朝向（rad，默认 0 = 朝 +X；未配置时 flowsim 可按道路切线估算） */
+    double red_s;               /**< 红灯时长（s），<=0 视为无灯 */
+    double yellow_s;            /**< 黄灯时长（s） */
+    double green_s;             /**< 绿灯时长（s） */
+    double phase_offset_s;      /**< 初始相位偏移（s，默认 0） */
+    bool   has_left_arrow;      /**< 是否启用独立左转箭头信号头 */
+    double left_green_s;        /**< 左转箭头绿灯时长（s） */
+    double left_yellow_s;       /**< 左转箭头黄灯时长（s） */
+    double left_red_s;          /**< 左转箭头红灯时长（s） */
+    double left_phase_offset_s; /**< 左转箭头初始相位偏移（s） */
 } ScenarioTrafficLight;
 
 /* ── ETC 门架（高速收费站抬杆，FlowSim v2 新增） ─────────── */

@@ -179,6 +179,18 @@ struct ScenePubConfig {
     };
     std::vector<ScenePubParkingSlot> parking_slots;
 
+    struct ScenePubFacility {
+        std::string kind;
+        double x{0.0};
+        double y{0.0};
+        double z{0.0};
+        double length{1.0};
+        double width{1.0};
+        double height{1.5};
+        double heading{0.0};
+    };
+    std::vector<ScenePubFacility> facilities;
+
     /* ── 性能优化：road_network JSON 缓存 ──
      * 道路网络在仿真过程中不变（仅 init 阶段加载 xodr），但 build_road_network_json
      * 每帧调用 sample_road_nodes → roads->frenet_to_world 做全网采样，20Hz 下

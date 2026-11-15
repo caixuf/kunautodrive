@@ -474,6 +474,9 @@ void ObstacleDetectionPostprocess::PopulateObstacleList(const std::vector<Boundi
 
         dst.confidence = src.score;
         dst.obs_lane_match_hint = src.obs_lane_match_hint;
+        dst.z = src.z;
+        dst.height = src.height;
+        dst.heading = src.heading;
     }
 }
 

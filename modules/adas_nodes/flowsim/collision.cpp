@@ -13,6 +13,8 @@
 
 #include "collision.h"
 #include "road_network.h"
+#include "lane_frenet.h"
+#include "npc_yield.h"
 
 #include <cmath>
 #include <algorithm>
@@ -82,11 +84,19 @@ int detect_collisions(const EntityPool& pool, std::vector<CollisionPair>& pairs)
             // 又把 crash_cooldown 重置为 0.5s → 冷却永远归零不了 → 两车永久卡死重叠。
             if (a.crash_cooldown > 0.0 || b.crash_cooldown > 0.0) continue;
 
-            // Broad-phase: AABB 快速排除
+            // Broad-phase: 旋转安全 3D AABB 快速排除（含 Z 高程隔离，防止高架与地面车误判）。
+            // 车辆大幅偏转（掉头/垂直泊车 swing-out）时，世界系 Y 投影半长可达 length/2，
+            // 若沿用未旋转的 width*0.5 会错误过滤掉真实的 OBB 相交。
+            double dz = std::fabs(a.z - b.z);
+            if (dz > 2.2) continue;
+            const double ca = std::fabs(std::cos(a.heading));
+            const double sa = std::fabs(std::sin(a.heading));
+            const double cb = std::fabs(std::cos(b.heading));
+            const double sb = std::fabs(std::sin(b.heading));
             double dx = std::fabs(a.x - b.x);
             double dy = std::fabs(a.y - b.y);
-            double aabb_x = (a.length + b.length) * 0.5;
-            double aabb_y = (a.width + b.width) * 0.5;
+            double aabb_x = 0.5 * (a.length * ca + a.width * sa + b.length * cb + b.width * sb);
+            double aabb_y = 0.5 * (a.length * sa + a.width * ca + b.length * sb + b.width * cb);
             if (dx > aabb_x || dy > aabb_y) continue;
 
             // Narrow-phase: OBB SAT
@@ -117,15 +127,18 @@ void apply_collision_response(EntityPool& pool, const std::vector<CollisionPair>
         // 改为只沿 route 纵向拉开 route_s，横向 offset 和 heading 不动，
         // 下一帧 frenet_to_world 自然把车放回车道正确位置。
         if (a.route_dir != 0 && b.route_dir != 0) {
-            double sep = 2.0;  // 纵向拉开 2m（约半辆车长）
-            // route_s 大的往前推，小的往后推
-            if (a.route_s > b.route_s) {
-                a.route_s += sep * (double)a.route_dir;
-                b.route_s -= sep * (double)b.route_dir;
-            } else {
-                b.route_s += sep * (double)b.route_dir;
-                a.route_s -= sep * (double)a.route_dir;
-            }
+            double sep = 0.25 * (a.length + b.length) + 0.6;  // 双侧拉开 >= 车长+1.2m，彻底脱开 OBB
+            double ds_a = (a.route_s >= b.route_s) ? sep : -sep;
+            double ds_b = -ds_a;
+            a.route_s += ds_a;
+            b.route_s += ds_b;
+            // world heading 与 route_dir * (+s) 一致，乘以 route_dir 使 (x,y) 与 route_s 同向分离
+            double step_a = ds_a * (double)a.route_dir;
+            double step_b = ds_b * (double)b.route_dir;
+            a.x += step_a * std::cos(a.heading);
+            a.y += step_a * std::sin(a.heading);
+            b.x += step_b * std::cos(b.heading);
+            b.y += step_b * std::sin(b.heading);
         } else {
             // 非 route 模式：世界系沿碰撞法线分离。
             // ego.route_dir 全代码库未被初始化（始终 0）；esmini/Route::build()
@@ -168,37 +181,64 @@ void apply_collision_response(EntityPool& pool, const std::vector<CollisionPair>
     }
 }
 
-void apply_guardrail(Entity& e, FlowRoadNetwork& roads, double /*dt*/) {
+void apply_guardrail(Entity& e, FlowRoadNetwork& roads, double dt) {
     if (!e.active || !e.is_vehicle()) return;
-    // 用车辆世界坐标反查所在道路的 Frenet（含横向偏移 offset）
-    FrenetPos f;
-    if (!roads.world_to_frenet(e.x, e.y, f)) return;
+
+    // 优先在车辆自身当前 road_id 上投影判定，防止交叉路口被 world_to_frenet 误吸到垂直道路。
+    const bool has_road_track = is_road_tracked_vehicle(
+        e.road_id, e.route_dir, e.road_pos.ok());
+    FrenetPos f{};
+    double ref_t = 0.0;
+    bool have_road = false;
+    bool from_own_road = false;
+    if (has_road_track) {
+        WorldPos own_wp{};
+        if (roads.frenet_to_world(e.road_id, 0, std::max(0.0, e.s), 0.0, own_wp)) {
+            const OwnRoadProjection proj = project_onto_road_tangent(
+                e.x, e.y, e.z, own_wp.x, own_wp.y, own_wp.z, own_wp.h);
+            if (proj.valid) {
+                f.road_id = e.road_id;
+                f.lane_id = 0;
+                f.s = std::max(0.0, e.s);
+                ref_t = proj.lat;
+                have_road = true;
+                from_own_road = true;
+            }
+        }
+    }
+    if (!have_road) {
+        if (!roads.world_to_frenet(e.x, e.y, f, e.z)) return;
+        // 已跟踪 road_id 的车辆在路口若 world_to_frenet 命中另一条相交 road，不做跨路护栏钳制
+        if (has_road_track && f.road_id != e.road_id) return;
+        ref_t = offset_from_lane_internal(roads, f.road_id, f.lane_id, f.s, f.offset);
+    }
 
     double lw = roads.lane_width(f.road_id, 0, f.s);
     if (lw < 1.0 || lw > 10.0) lw = 3.5;
-    int lanes = roads.drivable_lane_count(f.road_id, f.s);
-    if (lanes < 2) return;                     // 单车道/未知，不做护栏约束
+    std::vector<int> lane_ids = roads.drivable_lane_ids(f.road_id, f.s);
+    if ((int)lane_ids.size() < 2) return;       // 单车道/未知，不做护栏约束
 
-    /* 路缘 = 单侧车道数 × 车道宽 + 0.6m 路肩余量（最外侧车道外沿外一点）。
-     * drivable_lane_count 是双向合计，单侧取一半。offset 语义为相对道路参考线
-     * （lane_id=0 中心线）的横向偏移，故路缘边界 = ±(side*lw + shoulder)。 */
-    double side = lanes * 0.5;
-    double guardrail = side * lw + 0.6;
-    if (std::fabs(f.offset) <= guardrail) return;
+    double min_t = 0.0, max_t = 0.0;
+    compute_guardrail_bounds(lane_ids, lw, 0.6, min_t, max_t);
+    const GuardrailClampAction act = compute_guardrail_clamp_action(ref_t, min_t, max_t);
+    if (!act.triggered) return;
 
-    // 越界 → 护栏阻挡：钳制 offset 到路缘，回投世界坐标（车贴护栏，不冲出）
-    double clamped = (f.offset > 0.0) ? guardrail : -guardrail;
     WorldPos wp;
-    if (!roads.frenet_to_world(f.road_id, 0, f.s, clamped, wp)) return;
+    if (!roads.frenet_to_world(f.road_id, 0, f.s, act.clamped_t, wp)) return;
     e.x = wp.x;
     e.y = wp.y;
-    e.offset = clamped;
-    /* 护栏碰撞反馈：速度削减（撞护栏停下 / 沿护栏滑行），进入碰撞冷却。
-     * 不置 last_teleport_cycle（位置连续，非瞬移），冷却防每 tick 反复减速叠加。 */
-    e.speed *= 0.3;
-    e.vx *= 0.3;
-    e.vy *= 0.3;
-    if (e.crash_cooldown < 0.3) e.crash_cooldown = 0.3;
+    if (from_own_road || f.road_id == e.road_id || e.road_id < 0) {
+        e.offset = act.clamped_t;
+    }
+
+    // 有界减速（已由 road_pos/route 跟踪的车不设 cooldown，避免 cooldown 结束与 road_pos 回弹）
+    const double step_dt = (dt > 1e-4) ? dt : (1.0 / 60.0);
+    e.speed = std::max(0.0, e.speed - 8.5 * step_dt);
+    e.vx = e.speed * std::cos(e.heading);
+    e.vy = e.speed * std::sin(e.heading);
+    if (!has_road_track && act.intrusion_m >= 0.8 && e.crash_cooldown < 0.3) {
+        e.crash_cooldown = 0.3;
+    }
 }
 
 void apply_gravity(Entity& e, FlowRoadNetwork& roads, double dt) {
@@ -208,7 +248,7 @@ void apply_gravity(Entity& e, FlowRoadNetwork& roads, double dt) {
 
     // 查询所在位置的道路高度作为支撑面
     FrenetPos f;
-    bool on_road = roads.world_to_frenet(e.x, e.y, f);
+    bool on_road = roads.world_to_frenet(e.x, e.y, f, e.z);
     double ground_z = 0.0;
     if (on_road) {
         WorldPos wp;

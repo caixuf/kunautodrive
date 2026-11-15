@@ -169,5 +169,103 @@ int main() {
         (void)bad_target;
     }
 
+    /* Per-road oneway inference & side_offset-aware legal band checks */
+    {
+        const int oneway_2[] = {-1, -2};
+        const int twoway_2[] = {-1, 1};
+        const int twoway_4[] = {-2, -1, 1, 2};
+        expect(planning_coord::infer_oneway_from_lane_ids(oneway_2, 2, false),
+               "negative-only drivable lanes infer oneway=true");
+        expect(!planning_coord::infer_oneway_from_lane_ids(twoway_2, 2, true),
+               "mixed-sign drivable lanes infer oneway=false");
+        expect(!planning_coord::infer_oneway_from_lane_ids(twoway_4, 4, true),
+               "4-lane mixed-sign drivable lanes infer oneway=false");
+        expect(planning_coord::infer_oneway_from_lane_ids(nullptr, 0, true),
+               "empty lane id list falls back cleanly");
+
+        expect(planning_coord::own_direction_lane_count(2, true) == 2,
+               "oneway 2-lane road has 2 own-direction lanes");
+        expect(planning_coord::own_direction_lane_count(2, false) == 1,
+               "twoway 2-lane road has 1 own-direction lane");
+        expect(planning_coord::own_direction_lane_count(4, false) == 2,
+               "twoway 4-lane road has 2 own-direction lanes");
+
+        const double ow2_side = planning_coord::lane_group_side_offset(2, 3.5, true);
+        expect(planning_coord::is_lane_d_in_legal_band(-1.75, 2, 3.5, ow2_side),
+               "oneway 2-lane inner lane -1.75 inside legal band");
+        expect(planning_coord::is_lane_d_in_legal_band(-5.25, 2, 3.5, ow2_side),
+               "oneway 2-lane outer lane -5.25 inside legal band");
+        expect(!planning_coord::is_lane_d_in_legal_band(1.75, 2, 3.5, ow2_side),
+               "oncoming +1.75 rejected on oneway 2-lane road");
+        expect(!planning_coord::is_lane_d_in_legal_band(-5.25, 2, 3.5, 0.0),
+               "-5.25 rejected on twoway 2-lane road without side_offset");
+    }
+
+    /* Curved-road lane-keeping regression: eliminate quintic 0.5s lag amplification
+     * and forward-chord heading bias while preserving lane-change & nudge tilt. */
+    {
+        /* Unobstructed Frenet plan starting at residual d=-0.51m and ending at 0m */
+        double d_unobstructed[6] = {-0.51, -0.49, -0.46, -0.30, -0.10, 0.0};
+        int forced = -1;
+        planning_coord::resolve_lane_keep_d_profile(d_unobstructed, 6, 0.55, &forced);
+        expect(forced == 0, "unobstructed lane-keep does not trigger lane-edge force");
+        for (int i = 0; i < 6; ++i) {
+            expect(nearly_equal(d_unobstructed[i], 0.0),
+                   "unobstructed lane-keep resets residual quintic lag to 0");
+        }
+
+        /* Active obstacle nudge (terminal d=-1.5m) retains safe_band guard */
+        double d_nudge[5] = {-0.1, -0.3, -0.5, -0.9, -1.5};
+        int nudge_forced = 0;
+        planning_coord::resolve_lane_keep_d_profile(d_nudge, 5, 0.55, &nudge_forced);
+        expect(nudge_forced == 2, "obstacle nudge clamps points outside safe_band");
+        expect(nearly_equal(d_nudge[2], -0.5), "inside-band nudge preserved");
+        expect(nearly_equal(d_nudge[3], 0.0) && nearly_equal(d_nudge[4], 0.0),
+               "outside-band nudge reset to lane center");
+
+        /* R=120m clockwise arc lane-keeping: refine_trajectory_headings has zero
+         * forward-chord bias across all waypoints (including i=0 and i=N-1). */
+        constexpr int kN = 10;
+        constexpr double kR = 118.25;
+        constexpr double kDs = 3.925; /* 15.7 m/s * 0.25 s */
+        constexpr double kPi = 3.14159265358979323846;
+        double x[kN], y[kN], s[kN], l[kN], ref_h[kN], out_h[kN], exact_h[kN];
+        bool ref_valid[kN];
+        for (int i = 0; i < kN; ++i) {
+            s[i] = i * kDs;
+            const double phi = kPi - s[i] / kR;
+            x[i] = 680.0 + kR * std::cos(phi);
+            y[i] = 140.0 + kR * std::sin(phi);
+            l[i] = -1.75; /* constant lane offset */
+            double tangent = phi - kPi * 0.5;
+            ref_h[i] = tangent;
+            exact_h[i] = tangent;
+            ref_valid[i] = true;
+            out_h[i] = 0.0;
+        }
+        planning_coord::refine_trajectory_headings(
+            x, y, s, l, ref_h, ref_valid, kN, out_h);
+        for (int i = 0; i < kN; ++i) {
+            double diff = out_h[i] - exact_h[i];
+            while (diff > kPi) diff -= 2.0 * kPi;
+            while (diff < -kPi) diff += 2.0 * kPi;
+            expect(std::fabs(diff) < 1e-6,
+                   "R=118.25m clockwise arc headings match exact tangent");
+        }
+
+        /* Lane-change on straight road tilts waypoints dynamically via central diff */
+        double lx[5] = {0.0, 4.0, 8.0, 12.0, 16.0};
+        double ls[5] = {0.0, 4.0, 8.0, 12.0, 16.0};
+        double ll[5] = {0.0, 0.2, 0.8, 1.4, 1.6};
+        double ly[5] = {0.0, 0.2, 0.8, 1.4, 1.6};
+        double lref_h[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
+        bool lvalid[5] = {true, true, true, true, true};
+        double lout_h[5] = {};
+        planning_coord::refine_trajectory_headings(
+            lx, ly, ls, ll, lref_h, lvalid, 5, lout_h);
+        expect(lout_h[0] > 0.04 && lout_h[2] > 0.14,
+               "lane change tilts both start and interior trajectory headings");
+    }
+
     return g_fails == 0 ? 0 : 1;
 }

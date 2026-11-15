@@ -731,4 +731,63 @@ console.log('--- 16. ≥6 臂口无斑马白网 ---');
   eq('≥6 臂口斑马条数 = 0', stripes.length, 0);
 }
 
+// ── 17. 四向十字路口：双向来车箭头在右侧 + 左转箭朝北 + 待转区与导流弧 ──
+console.log('--- 17. 四向十字路口标线与左右转向方向 ---');
+{
+  const rn17 = {
+    edges: [
+      { id: 'w', name: 'west', type: 'urban', lanes: 4, lane_width: 3.5, oneway: false, nodes: [[-80, 0, 0], [0, 0, 0]] },
+      { id: 'e', name: 'east', type: 'urban', lanes: 4, lane_width: 3.5, oneway: false, nodes: [[0, 0, 0], [80, 0, 0]] },
+      { id: 's', name: 'south', type: 'urban', lanes: 4, lane_width: 3.5, oneway: false, nodes: [[0, -80, 0], [0, 0, 0]] },
+      { id: 'n', name: 'north', type: 'urban', lanes: 4, lane_width: 3.5, oneway: false, nodes: [[0, 0, 0], [0, 80, 0]] },
+    ],
+  };
+  const scene = new THREE.Group();
+  createConnectorView(scene).build(rn17);
+  const instMeshes = [];
+  scene.traverse((c) => { if (c.isInstancedMesh) instMeshes.push(c); });
+  const m = new THREE.Matrix4();
+  const pos = new THREE.Vector3();
+  const quat = new THREE.Quaternion();
+  const scl = new THREE.Vector3();
+
+  // guideInstances (color SCENE.guideLine) 包含 w=0.13 左转待转区 + w=0.15 左转导流虚线
+  const guideMesh = instMeshes.find((im) => {
+    im.getMatrixAt(0, m);
+    m.decompose(pos, quat, scl);
+    return Math.abs(scl.z - 0.13) < 0.02 || Math.abs(scl.z - 0.15) < 0.02 || Math.abs(scl.z - 0.18) < 0.02;
+  });
+  ok('四向合成路口生成左转待转区与导流虚线', Boolean(guideMesh && guideMesh.count >= 20));
+  let waitDashes = 0;
+  let guideDashes = 0;
+  if (guideMesh) {
+    for (let i = 0; i < guideMesh.count; i++) {
+      guideMesh.getMatrixAt(i, m);
+      m.decompose(pos, quat, scl);
+      if (Math.abs(scl.z - 0.13) < 0.02 || Math.abs(scl.z - 0.18) < 0.02) waitDashes++;
+      if (Math.abs(scl.z - 0.15) < 0.02) guideDashes++;
+    }
+  }
+  ok('4 条来车左转道均有左转待转区虚线段', waitDashes >= 16);
+  ok('四向路口合成左转引导虚线弧 (>10 段)', guideDashes >= 10);
+
+  // arrowInstances 上的西侧东向来车（x < -22）必须在南侧右半幅（THREE z > 0.5）
+  const westArrowZ = [];
+  for (const im of instMeshes) {
+    for (let i = 0; i < im.count; i++) {
+      im.getMatrixAt(i, m);
+      m.decompose(pos, quat, scl);
+      if (pos.x < -22 && (Math.abs(scl.z - 0.24) < 0.02 || Math.abs(scl.z - 0.22) < 0.02)) {
+        westArrowZ.push(pos.z);
+      }
+    }
+  }
+  ok('西臂东向来车箭头全部落在右侧行车道 (THREE z > 0.5)',
+    westArrowZ.length > 0 && westArrowZ.every((z) => z > 0.5));
+  // 最内侧车道（z ≈ 1.75）含直+左转箭头，其左侧斜分支向北（THREE z < 1.5）探出，而非向右（z > 2.5）
+  const innerParts = westArrowZ.filter((z) => z < 2.5);
+  ok('西臂内侧直+左转箭头向左/北(THREE z 减小)弯曲',
+    innerParts.some((z) => z < 1.3));
+}
+
 done();

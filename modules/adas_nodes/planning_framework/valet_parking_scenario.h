@@ -23,8 +23,8 @@ public:
     void Reset() override;
 
 private:
-    double approach_distance_threshold_{18.0}; // m
-    double approach_speed_threshold_{3.5};    // m/s
+    double approach_distance_threshold_{13.0}; // m
+    double approach_speed_threshold_{2.5};    // m/s
 };
 
 /**
@@ -49,6 +49,9 @@ public:
 
 private:
     bool trajectory_latched_{false};
+    int stopped_ticks_{0};
+    int replan_cooldown_{0};
+    int replan_count_{0};
     Trajectory latched_trajectory_{};
     HybridAStar planner_{};
 

@@ -154,7 +154,8 @@ void npc_init_route(Entity& npc, const Route& route, int dir);
  * 沿车道行走的行人（vy=0）保持直线运动。
  */
 void step_npc_pedestrian(Entity& ped, double dt, const NpcAiConfig& cfg,
-                         FlowRoadNetwork* roads = nullptr);
+                         FlowRoadNetwork* roads = nullptr,
+                         const EntityPool* pool = nullptr);
 
 }  // namespace flowsim
 

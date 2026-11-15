@@ -90,6 +90,16 @@ static void test_slot_occupancy_search_and_oriented_obstacles() {
     occ1.width = 1.9f;
     ctx.AddObstacle(occ1, true, static_cast<float>(M_PI * 0.5));
 
+    // Slot 2 has a 0.18m rear wheel-stop curb inside the bay; it must still be considered free
+    Obstacle wheel_stop{};
+    wheel_stop.id = 2001;
+    wheel_stop.x = 103.6f;
+    wheel_stop.y = -7.65f;
+    wheel_stop.length = 0.16f;
+    wheel_stop.width = 2.0f;
+    wheel_stop.height = 0.18f;
+    ctx.AddObstacle(wheel_stop, true, static_cast<float>(M_PI * 0.5), 0.18f);
+
     // Approach within activation gate (<18m to enter OPEN_SPACE_CRUISE and lock slot 2)
     ctx.vehicle_state.x = 90.0;
     ctx.vehicle_state.y = 0.0;

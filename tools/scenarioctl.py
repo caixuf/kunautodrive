@@ -19,7 +19,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCENARIO_DIR = ROOT / "scenarios"
-SCENARIO_TYPES = {"car", "truck", "suv", "pedestrian", "bicycle", "ego"}
+SCENARIO_TYPES = {
+    "car", "truck", "suv", "bus", "van",
+    "pedestrian", "bicycle", "cyclist", "ego",
+    "unknown_static", "static", "construction", "cone",
+    "barrier", "charger", "bollard", "wheel_stop",
+    "pillar", "planter", "wall", "pole", "tree",
+}
 
 
 def load_json(path: Path) -> object:
@@ -126,8 +132,8 @@ def validate_scenario(data: object, path: Path) -> list[str]:
             if not isinstance(actor, dict):
                 errors.append(f"{label} must be an object")
                 continue
-            actor_type = str(actor.get("type", "")).lower()
-            if actor_type not in SCENARIO_TYPES:
+            actor_type = str(actor.get("type", "")).strip().lower()
+            if not actor_type or not (actor_type in SCENARIO_TYPES or actor_type.replace("_", "").isalnum()):
                 errors.append(f"{label}.type '{actor.get('type')}' is unsupported")
             if "x" in actor:
                 _number(actor["x"], f"{label}.x", errors)

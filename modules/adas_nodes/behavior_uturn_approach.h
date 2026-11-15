@@ -1,6 +1,7 @@
 #pragma once
 
 #include "construction_zones.h"
+#include "perception_fusion_core.h"
 
 #include <cmath>
 #include <cstdio>
@@ -35,6 +36,11 @@ struct UturnApproachInput {
     const double* cz_len{nullptr};
     const double* cz_wid{nullptr};
     int           cz_count{0};
+
+    double        ego_z{0.0};
+    const double* obs_z{nullptr};
+    const double* raw_obs_z{nullptr};
+    double        layer_tol_m{kSameElevationLayerTolM};
 };
 
 struct UturnApproachDecision {
@@ -70,6 +76,9 @@ inline UturnApproachDecision evaluate_uturn_approach(const UturnApproachInput& i
     if (at_road_end) {
         if (in.obs_x && in.obs_vx && in.obs_vy) {
             for (int i = 0; i < in.obs_count; ++i) {
+                if (in.obs_z && !pf_same_elevation_layer(in.obs_z[i], in.ego_z, in.layer_tol_m)) {
+                    continue;
+                }
                 if (std::fabs(in.obs_vx[i]) < 0.5 &&
                     std::fabs(in.obs_vy[i]) < 0.5 &&
                     in.obs_x[i] > in.ego_x && in.obs_x[i] < uturn_ref_x) {
@@ -79,6 +88,9 @@ inline UturnApproachDecision evaluate_uturn_approach(const UturnApproachInput& i
         }
         if (in.raw_obs_x && in.raw_obs_vx && in.raw_obs_vy) {
             for (int i = 0; i < in.raw_obs_count; ++i) {
+                if (in.raw_obs_z && !pf_same_elevation_layer(in.raw_obs_z[i], in.ego_z, in.layer_tol_m)) {
+                    continue;
+                }
                 if (std::fabs(in.raw_obs_vx[i]) < 0.5 &&
                     std::fabs(in.raw_obs_vy[i]) < 0.5 &&
                     in.raw_obs_x[i] > in.ego_x && in.raw_obs_x[i] < uturn_ref_x) {

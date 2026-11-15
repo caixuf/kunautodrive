@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include "perception_fusion_core.h"
 
 namespace behavior_gap {
 
@@ -18,6 +19,9 @@ struct GapEvalConfig {
     double rear_safe_time_s{2.0};
     double lat_tol{2.0};
     double front_ttc_min_s{3.0};
+    double ego_z{0.0};
+    const double* obs_z{nullptr};
+    double layer_tol_m{kSameElevationLayerTolM};
 };
 
 struct LaneGapResult {
@@ -61,6 +65,9 @@ inline LaneGapResult evaluate_target_lane_gap(
 
     res.rear_safe = true;
     for (int i = 0; i < obs_count; i++) {
+        if (cfg.obs_z && !pf_same_elevation_layer(cfg.obs_z[i], cfg.ego_z, cfg.layer_tol_m)) {
+            continue;
+        }
         const double rx = obs_x[i] - cfg.ego_x;
         const double ry = obs_y[i] - cfg.ego_y;
         const double along = rx * fwd_x + ry * fwd_y;
@@ -103,6 +110,19 @@ inline LaneGapResult evaluate_target_lane_gap(
     res.ok = res.same_side && res.rear_safe && res.front_ttc_safe &&
              (res.front_gap > cfg.min_gap * cfg.lc_gap_mult);
     return res;
+}
+
+/// Returns true when a forward-lane candidate is genuinely ahead along the
+/// route. Within the near curve window (<12m), also requires positive physical
+/// forward projection in ego's frame to reject behind-ego inner-corner hits.
+inline bool is_valid_forward_lead(double along_s, double phys_along) {
+    if (along_s < 0.0) {
+        return false;
+    }
+    if (along_s < 12.0 && phys_along <= 0.0) {
+        return false;
+    }
+    return true;
 }
 
 }  // namespace behavior_gap

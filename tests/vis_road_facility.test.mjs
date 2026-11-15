@@ -1,4 +1,5 @@
 import { inferRoadFacilities } from '../tools/flowboard/js/vis/view/RoadFacilityView.js';
+import { createTrafficLightView } from '../tools/flowboard/js/vis/view/TrafficLightView.js';
 import { eq, ok, done } from './test-utils.mjs';
 
 console.log('=== road facility layout ===\n');
@@ -70,5 +71,55 @@ eq('大地图有 lane_data 时沿路箭头交给路口层，不再沿路铺', os
 const numericRoad = { edges: [{ ...road.edges[0], name: '0' }] };
 const runtimeLayout = inferRoadFacilities(numericRoad, entities, 'auto_parking');
 eq('运行时道路名丢失时由场景名保持泊车建模', runtimeLayout.parkingBays, 3);
+
+// 四向交叉口：路口枢纽 26m 内跳过路段直行箭头 + 独立左转箭头信号头渲染与双相位切换
+const crossRoad = {
+  edges: [
+    { id: 'w', type: 'urban', lanes: 4, lane_width: 3.5, nodes: [[-80, 0, 0], [0, 0, 0]] },
+    { id: 'e', type: 'urban', lanes: 4, lane_width: 3.5, nodes: [[0, 0, 0], [80, 0, 0]] },
+    { id: 's', type: 'urban', lanes: 4, lane_width: 3.5, nodes: [[0, -80, 0], [0, 0, 0]] },
+    { id: 'n', type: 'urban', lanes: 4, lane_width: 3.5, nodes: [[0, 0, 0], [0, 80, 0]] },
+  ],
+};
+const crossLayout = inferRoadFacilities(crossRoad, [], 'cross');
+const nearHubStems = crossLayout.marks.filter(
+  m => m.width === 0.28 && Math.abs(m.length - 2.8) < 1e-6 && Math.hypot(m.x, m.y) < 25.9,
+);
+eq('交叉口枢纽 26m 内不再重复画路段直行箭头', nearHubStems.length, 0);
+
+const leftSignalLayout = inferRoadFacilities(road, [
+  { id: 10, type: 'tl', x: 250, y: -8.5, stop_x: 248, stop_y: -1.75, has_left_arrow: true },
+]);
+const leftMarks = leftSignalLayout.marks.filter(m => m.width === 0.26 && Math.abs(m.x - 236) < 3.0);
+ok('带左转箭头信号的引道生成左转地面箭头标记', leftMarks.length >= 3);
+
+const tlScene = new THREE.Group();
+const tlView = createTrafficLightView(tlScene);
+tlView.update({
+  entities: [{
+    id: 42, type: 'tl', x: 250, y: -8.5, heading: Math.PI / 2,
+    state: 'green', has_left_arrow: true, left_state: 'red',
+  }],
+});
+const tlGroup = tlScene.children[0];
+ok('TrafficLightView 创建带左转箭头头的双信号组',
+  Boolean(tlGroup?.userData?.leftGroup && tlGroup.userData.leftGroup.visible));
+eq('直行绿灯亮起时左转红箭头可独立保持红灯',
+  tlGroup.userData.lamps[2].material.emissiveIntensity, 2.0);
+eq('独立左转箭头红灯亮度=2.0 / 绿箭头熄灭=0.05',
+  tlGroup.userData.leftMaterials[0].emissiveIntensity, 2.0);
+eq('独立左转箭头绿灯未亮时为 0.05',
+  tlGroup.userData.leftMaterials[2].emissiveIntensity, 0.05);
+
+tlView.update({
+  entities: [{
+    id: 42, type: 'tl', x: 250, y: -8.5, heading: Math.PI / 2,
+    state: 'red', has_left_arrow: true, left_state: 'green',
+  }],
+});
+eq('左转放行时左转绿箭头亮起=2.0',
+  tlGroup.userData.leftMaterials[2].emissiveIntensity, 2.0);
+eq('直行红灯时直行红灯亮起=2.0',
+  tlGroup.userData.lamps[0].material.emissiveIntensity, 2.0);
 
 done();

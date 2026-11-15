@@ -1313,12 +1313,14 @@ if(ESMINI_RMLIB_TEST)
     add_executable(test_entity_physics
         modules/adas_nodes/flowsim/test_entity_physics.cpp
         modules/adas_nodes/flowsim/physics.cpp
+        modules/adas_nodes/flowsim/building.cpp
         modules/adas_nodes/flowsim/road_position.cpp)
     target_include_directories(test_entity_physics PRIVATE
         modules/adas_nodes
+        ${CJSON_INCLUDE_DIRS}
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/esmini/EnvironmentSimulator/Libraries/esminiRMLib
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
-    target_link_libraries(test_entity_physics m ${ESMINI_RMLIB_TEST})
+    target_link_libraries(test_entity_physics m ${ESMINI_RMLIB_TEST} ${CJSON_LIBRARIES})
     add_test(NAME entity_physics_tests COMMAND test_entity_physics)
     set_tests_properties(entity_physics_tests PROPERTIES TIMEOUT 10)
 else()
@@ -1347,6 +1349,7 @@ target_include_directories(test_scenario_pipeline PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 target_link_libraries(test_scenario_pipeline m)
+add_dependencies(test_scenario_pipeline msg_codegen)
 add_test(NAME scenario_pipeline_tests COMMAND test_scenario_pipeline)
 set_tests_properties(scenario_pipeline_tests PROPERTIES TIMEOUT 10)
 
@@ -1369,6 +1372,7 @@ target_include_directories(test_park_out_and_slot_search PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 target_link_libraries(test_park_out_and_slot_search m)
+add_dependencies(test_park_out_and_slot_search msg_codegen)
 add_test(NAME park_out_and_slot_search_tests COMMAND test_park_out_and_slot_search)
 set_tests_properties(park_out_and_slot_search_tests PROPERTIES TIMEOUT 15)
 
@@ -1388,6 +1392,32 @@ target_include_directories(test_hybrid_a_star PRIVATE
 target_link_libraries(test_hybrid_a_star m)
 add_test(NAME hybrid_a_star_tests COMMAND test_hybrid_a_star)
 set_tests_properties(hybrid_a_star_tests PROPERTIES TIMEOUT 20)
+
+# ── Phase 3 (P3-4): Elevation Z-layer isolation + generic rotated 3D OBB checks ──
+add_executable(test_elevation_isolation_and_obb
+    tests/test_elevation_isolation_and_obb.cpp
+    modules/adas_nodes/perception_points.c
+    $<$<BOOL:${ESMINI_RMLIB_TEST}>:modules/adas_nodes/flowsim/road_network.cpp>
+    $<$<BOOL:${ESMINI_RMLIB_TEST}>:modules/adas_nodes/flowsim/road_position.cpp>
+)
+target_include_directories(test_elevation_isolation_and_obb PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/adas_nodes
+    ${GEN_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+if(ESMINI_RMLIB_TEST)
+    target_compile_definitions(test_elevation_isolation_and_obb PRIVATE HAS_ESMINI_RMLIB=1)
+    target_include_directories(test_elevation_isolation_and_obb PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/esmini/EnvironmentSimulator/Libraries/esminiRMLib
+    )
+    target_link_libraries(test_elevation_isolation_and_obb flowengine_core m ${ESMINI_RMLIB_TEST})
+else()
+    target_link_libraries(test_elevation_isolation_and_obb flowengine_core m)
+endif()
+add_dependencies(test_elevation_isolation_and_obb msg_codegen)
+add_test(NAME elevation_isolation_and_obb_tests COMMAND test_elevation_isolation_and_obb)
+set_tests_properties(elevation_isolation_and_obb_tests PROPERTIES TIMEOUT 15)
 
 # ── 3D 目标与车道线端侧模型推理包装器单元测试 (Milestone 3) ──
 add_executable(test_model_inference_pipeline

@@ -16,6 +16,8 @@
 #include "node_plugin.h"
 #include "topic_registry.h"
 #include "adas_msgs_gen.h"
+#include "perception_fusion_core.h"
+#include "safety_pedestrian_guard.h"
 #include "degrade_ladder.h"
 #include "clock_service.h"
 #include "safety_arbiter.h"
@@ -66,15 +68,21 @@ struct ControlCmd {
 struct VehicleState {
     double x{0.0};
     double y{0.0};
+    double z{0.0};
     double speed{0.0};
     double heading{0.0};
     double obs_x[kMaxObs]{};
     double obs_y[kMaxObs]{};
+    double obs_z[kMaxObs]{};
     double obs_v[kMaxObs]{};
     double obs_vy[kMaxObs]{};
     bool obs_valid[kMaxObs]{};
-    char obs_type[kMaxObs][16]{};   /* "car", "pedestrian", ... */
-    int  ped_index{-1};             /* index of first pedestrian obs, -1 if none */
+    double obs_len[kMaxObs]{};
+    double obs_wid[kMaxObs]{};
+    double obs_height[kMaxObs]{};
+    double obs_heading[kMaxObs]{};
+    char obs_type[kMaxObs][16]{};   /* "car", "pedestrian", "unknown", ... */
+    int  ped_index{-1};             /* index of closest same-layer pedestrian obs, -1 if none */
 };
 
 struct SafetyParams {
@@ -188,6 +196,8 @@ void on_fusion(const Message* msg, void*) {
         g.latest_state.x = j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "y")) && cJSON_IsNumber(j))
         g.latest_state.y = j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(root, "z")) && cJSON_IsNumber(j))
+        g.latest_state.z = j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "heading")) && cJSON_IsNumber(j))
         g.latest_state.heading = j->valuedouble;
     g.has_state = true;
@@ -214,26 +224,42 @@ void on_perception_obstacles(const Message* msg, void*) {
     pthread_mutex_lock(&g.state_mutex);
     VehicleState* state = &g.latest_state;
     state->ped_index = -1;
+    double best_ped_d2 = 1e18;
     double ch = cos(state->heading), sh = sin(state->heading);
     for (int i = 0; i < kMaxObs; i++) {
         if (i < (int)list.count) {
             const Obstacle* o = &list.obstacles[i];
             state->obs_x[i] = state->x + o->x * ch - o->y * sh;
             state->obs_y[i] = state->y + o->x * sh + o->y * ch;
+            state->obs_z[i] = state->z + (double)o->z;
             state->obs_v[i]  = o->vx * ch - o->vy * sh;
             state->obs_vy[i] = o->vx * sh + o->vy * ch;
             state->obs_valid[i] = true;
+            const double def_len = (o->type == OBJ_TYPE_VEHICLE) ? 4.6
+                : (o->type == OBJ_TYPE_CYCLIST) ? 1.8 : 0.8;
+            const double def_wid = (o->type == OBJ_TYPE_VEHICLE) ? 2.0 : 0.8;
+            state->obs_len[i] = (o->length > 0.05f) ? (double)o->length : def_len;
+            state->obs_wid[i] = (o->width  > 0.05f) ? (double)o->width  : def_wid;
+            state->obs_height[i] = (double)o->height;
+            state->obs_heading[i] = state->heading + (double)o->heading;
             switch (o->type) {
-                case OBJ_TYPE_PEDESTRIAN: strncpy(state->obs_type[i], "pedestrian", sizeof(state->obs_type[i])-1); break;
-                case OBJ_TYPE_CYCLIST:    strncpy(state->obs_type[i], "cyclist", sizeof(state->obs_type[i])-1); break;
+                case OBJ_TYPE_VEHICLE:      strncpy(state->obs_type[i], "car", sizeof(state->obs_type[i])-1); break;
+                case OBJ_TYPE_PEDESTRIAN:   strncpy(state->obs_type[i], "pedestrian", sizeof(state->obs_type[i])-1); break;
+                case OBJ_TYPE_CYCLIST:      strncpy(state->obs_type[i], "cyclist", sizeof(state->obs_type[i])-1); break;
                 case OBJ_TYPE_CONSTRUCTION: strncpy(state->obs_type[i], "construction", sizeof(state->obs_type[i])-1); break;
-                default:                  strncpy(state->obs_type[i], "car", sizeof(state->obs_type[i])-1); break;
+                default:                    strncpy(state->obs_type[i], "unknown", sizeof(state->obs_type[i])-1); break;
             }
-            if (o->type == OBJ_TYPE_PEDESTRIAN && state->ped_index < 0)
-                state->ped_index = i;
+            if (o->type == OBJ_TYPE_PEDESTRIAN && pf_same_elevation_layer((double)o->z, 0.0)) {
+                const double d2 = (double)o->x * (double)o->x + (double)o->y * (double)o->y;
+                if (state->ped_index < 0 || d2 < best_ped_d2) {
+                    best_ped_d2 = d2;
+                    state->ped_index = i;
+                }
+            }
         } else {
             state->obs_valid[i] = false;
-            state->obs_x[i] = state->obs_y[i] = state->obs_v[i] = state->obs_vy[i] = 0.0;
+            state->obs_x[i] = state->obs_y[i] = state->obs_z[i] = state->obs_v[i] = state->obs_vy[i] = 0.0;
+            state->obs_len[i] = state->obs_wid[i] = state->obs_height[i] = state->obs_heading[i] = 0.0;
             state->obs_type[i][0] = '\0';
         }
     }
@@ -249,59 +275,41 @@ double nearest_same_lane_gap(const VehicleState& state, const SafetyParams& para
     const double fwd_y = std::sin(state.heading);
     for (int i = 0; i < kMaxObs; ++i) {
         if (!state.obs_valid[i]) continue;
+        if (!pf_same_elevation_layer(state.obs_z[i], state.z)) continue;
+        if (std::strcmp(state.obs_type[i], "pedestrian") == 0 ||
+            std::strcmp(state.obs_type[i], "construction") == 0) continue;
+        const bool is_unknown = (std::strcmp(state.obs_type[i], "unknown") == 0);
+        if (is_unknown) {
+            if (pf_is_low_ground_curb(state.obs_len[i], state.obs_wid[i], state.obs_height[i])) {
+                continue;
+            }
+            const double obb_gap = pf_obb_forward_space_m(
+                state.x, state.y, state.z, state.heading,
+                state.obs_x[i], state.obs_y[i], state.obs_z[i],
+                state.obs_len[i], state.obs_wid[i], state.obs_height[i], state.obs_heading[i],
+                1.15, 2.3);
+            if (obb_gap < 1e8 && obb_gap < best_gap) best_gap = obb_gap;
+            continue;
+        }
         const double ex = state.obs_x[i] - state.x;
         const double ey = state.obs_y[i] - state.y;
         const double lat = std::fabs(-ex * fwd_y + ey * fwd_x);
         if (lat > params.same_lane_tol) continue;
         const double along = ex * fwd_x + ey * fwd_y;
-        const double gap = along - 4.6;
+        const double gap = along - (2.3 + 0.5 * std::max(0.2, state.obs_len[i]));
         if (along > 0.0 && gap < best_gap) best_gap = gap;
     }
     return best_gap;
 }
 
 double pedestrian_collision_gap(const VehicleState& state) {
-    int pi = state.ped_index;
-    if (pi < 0 || !state.obs_valid[pi]) return 1e9;
-    /* 方向感知（2026-08-05）：旧实现用世界 dx = obs_x-ego_x，掉头返程（heading≈π
-     * 朝西）时前方行人 dx<0 被当"后方"、后方行人被当"前方" → 方向反。沿车头方向
-     * 投影 along 后前进/返程统一。行人在 ego 后方（along ≤ 0）无前向碰撞风险。 */
-    const double fwd_x = std::cos(state.heading);
-    const double fwd_y = std::sin(state.heading);
-    const double ex = state.obs_x[pi] - state.x;
-    const double ey = state.obs_y[pi] - state.y;
-    const double along = ex * fwd_x + ey * fwd_y;            /* 沿车头前方距离 */
-    const double lat = std::fabs(-ex * fwd_y + ey * fwd_x);  /* 横向（车体系） */
-    if (along <= 0.0 || along > 70.0 || lat > 4.5) return 1e9;
-    return along - 2.8;
+    return adas_safety::pedestrian_collision_gap<VehicleState, kMaxObs>(
+        state, kSameElevationLayerTolM);
 }
 
 double pedestrian_crossing_hold_gap(const VehicleState& state) {
-    int pi = state.ped_index;
-    if (pi < 0 || !state.obs_valid[pi]) return 1e9;
-
-    /* 方向感知（2026-08-05）：同 pedestrian_collision_gap，沿车头投影，返程自适应 */
-    const double fwd_x = std::cos(state.heading);
-    const double fwd_y = std::sin(state.heading);
-    const double ex = state.obs_x[pi] - state.x;
-    const double ey = state.obs_y[pi] - state.y;
-    const double along = ex * fwd_x + ey * fwd_y;
-    const double dy = std::fabs(-ex * fwd_y + ey * fwd_x);
-    const double vyy = std::fabs(state.obs_vy[pi]);
-
-    /* Guard zone: if pedestrian is crossing (or very close to lane center),
-     * keep ego at least this distance behind the crossing line.
-     *
-     * Two-tier detection:
-     *   dy < 3.0m     → always active (pedestrian ON the road, even if stopped)
-     *   vyy > 0.05    → pedestrian is actively moving near the road (crossing intent)
-     * Otherwise        → pedestrian is parked at curb → NOT crossing, release hold */
-    const bool crossing_active = (dy < 3.0) || (vyy > 0.05 && dy < 6.5);
-    if (!crossing_active) return 1e9;
-    if (along < -2.0 || along > 35.0) return 1e9;
-
-    constexpr double kCrossingBufferM = 6.0;
-    return along - kCrossingBufferM;
+    return adas_safety::pedestrian_crossing_hold_gap<VehicleState, kMaxObs>(
+        state, kSameElevationLayerTolM);
 }
 
 double min_vehicle_ttc(const VehicleState& state, double* out_dx = nullptr, double* out_dy = nullptr) {
@@ -315,17 +323,37 @@ double min_vehicle_ttc(const VehicleState& state, double* out_dx = nullptr, doub
     const double fwd_y = std::sin(state.heading);
     for (int i = 0; i < kMaxObs; ++i) {
         if (!state.obs_valid[i]) continue;
+        if (!pf_same_elevation_layer(state.obs_z[i], state.z)) continue;
+        if (std::strcmp(state.obs_type[i], "pedestrian") == 0 ||
+            std::strcmp(state.obs_type[i], "construction") == 0) continue;
+        const bool is_unknown = (std::strcmp(state.obs_type[i], "unknown") == 0);
         const double ex = state.obs_x[i] - state.x;
         const double ey = state.obs_y[i] - state.y;
         const double along = ex * fwd_x + ey * fwd_y;      /* 沿车头前方距离 */
         const double lat = std::fabs(-ex * fwd_y + ey * fwd_x);  /* 横向偏移 */
-        if (along < 0.0 || along > 35.0 || lat > 1.9) continue;
+        if (along < 0.0 || along > 35.0) continue;
+
+        double clearance = 0.0;
+        if (is_unknown) {
+            if (pf_is_low_ground_curb(state.obs_len[i], state.obs_wid[i], state.obs_height[i])) {
+                continue;
+            }
+            const double obb_gap = pf_obb_forward_space_m(
+                state.x, state.y, state.z, state.heading,
+                state.obs_x[i], state.obs_y[i], state.obs_z[i],
+                state.obs_len[i], state.obs_wid[i], state.obs_height[i], state.obs_heading[i],
+                1.15, 2.5);
+            if (obb_gap >= 1e8) continue;
+            clearance = obb_gap;
+        } else {
+            if (lat > 1.65) continue;
+            clearance = along - (2.5 + 0.5 * std::max(0.2, state.obs_len[i]));
+        }
 
         const double along_v = state.obs_v[i] * fwd_x + state.obs_vy[i] * fwd_y;
         const double closing = state.speed - along_v;
         if (closing <= 0.4) continue;
 
-        const double clearance = along - 4.8;
         const double ttc = clearance / std::max(0.1, closing);
         if (ttc < best_ttc) {
             best_ttc = ttc;
@@ -360,6 +388,7 @@ double min_oncoming_ttc(const VehicleState& state, double* out_dx = nullptr) {
     const double fwd_y = std::sin(state.heading);
     for (int i = 0; i < kMaxObs; ++i) {
         if (!state.obs_valid[i]) continue;
+        if (!pf_same_elevation_layer(state.obs_z[i], state.z)) continue;
         const double dx = state.obs_x[i] - state.x;
         const double dy = state.obs_y[i] - state.y;
         /* 2026-08-05 同车道头对头修复：只把**同一条车道**、迎面驶来的车当迎头威胁。
@@ -395,6 +424,7 @@ double nearest_vehicle_lateral_cross_risk(const VehicleState& state, double* out
     const double fwd_y = std::sin(state.heading);
     for (int i = 0; i < kMaxObs; ++i) {
         if (!state.obs_valid[i]) continue;
+        if (!pf_same_elevation_layer(state.obs_z[i], state.z)) continue;
         const double ex = state.obs_x[i] - state.x;
         const double ey = state.obs_y[i] - state.y;
         const double along = ex * fwd_x + ey * fwd_y;
@@ -657,7 +687,6 @@ private:
              * 方向性：前进只看前方障碍，倒车只看后方——倒车逃离前方
              * 障碍是 Phase 0 腾挪的合法动作，不得拦截。 */
             const bool backing = (cmd.gear == GEAR_REVERSE);
-            const double ch = std::cos(state.heading), sh = std::sin(state.heading);
             for (int i = 0; i < kMaxObs; ++i) {
                 if (!state.obs_valid[i]) continue;
                 /* 施工区是 planning 生成机动轨迹的边界约束，不是动态碰撞体。
@@ -665,14 +694,12 @@ private:
                  * 倒车硬门，墙在车后 4.8m 内时会永久 brake=1，机动直到 40s
                  * TIMEOUT。真实车辆/行人仍保留双向硬碰撞保护。 */
                 if (std::strcmp(state.obs_type[i], "construction") == 0) continue;
-                const double dx = state.obs_x[i] - state.x;
-                const double dy = state.obs_y[i] - state.y;
-                /* 车体系投影：掉头转过 90°/180° 后世界系 +x 早已不是"前方" */
-                const double lon = dx * ch + dy * sh;
-                const double lat = -dx * sh + dy * ch;
-                const double ahead = backing ? -lon : lon;
-                /* 1.2m 净距 + 3.6m 偏置（半车长 2.4 + 半障碍 1.2，中心距） */
-                if (ahead > 0.0 && ahead < 3.6 + 1.2 && std::fabs(lat) < 1.4) {
+                if (pf_3d_obb_safety_hit(
+                        state.x, state.y, state.z, state.heading,
+                        state.obs_x[i], state.obs_y[i], state.obs_z[i],
+                        state.obs_len[i], state.obs_wid[i],
+                        state.obs_height[i], state.obs_heading[i],
+                        backing)) {
                     set_changed(cmd.throttle, 0.0);
                     set_changed(cmd.brake, 1.0);
                     break;
@@ -742,8 +769,8 @@ private:
                     if (ttc < 1.0 || (risk_dx < 6.5 && risk_dy < 1.9)) {
                         set_changed(cmd.brake, 1.0);
                     }
-                    /* §11.2 TTC 过低 → L2 MRM 降级 */
-                    if (ttc < 1.5) {
+                    /* §11.2 仅极端高速碰撞风险触发 L2 MRM 降级（低速 cut-in 仅由全刹处理，避免 3s 锁死） */
+                    if (ttc < 0.75 && state.speed > 6.0 && risk_dx < 10.0) {
                         degrade_set_level(DEGRADE_L2, DEGRADE_REASON_COLLISION);
                     }
                 } else {
@@ -796,7 +823,7 @@ private:
             }
 
             double ped_gap = pedestrian_collision_gap(state);
-            double ped_stop_gap = std::max(24.0, state.speed * 5.0);
+            double ped_stop_gap = adas_safety::pedestrian_stop_gap(state.speed);
             if (ped_gap < ped_stop_gap) {
                 double ratio = clamp(ped_gap / ped_stop_gap, 0.0, 1.0);
                 set_changed(cmd.throttle, 0.0);
@@ -808,11 +835,12 @@ private:
 
             /* Crossing-line hold: do not stop on/near the pedestrian crossing line. */
             double hold_gap = pedestrian_crossing_hold_gap(state);
-            if (hold_gap < 10.0) {
-                double ratio = clamp(hold_gap / 10.0, 0.0, 1.0);
+            double hold_activate = adas_safety::pedestrian_hold_activate_gap(state.speed);
+            if (hold_gap < hold_activate) {
+                double ratio = clamp(hold_gap / hold_activate, 0.0, 1.0);
                 set_changed(cmd.throttle, 0.0);
                 set_changed(cmd.brake, std::max(cmd.brake, 1.0 - ratio));
-                if (hold_gap < 1.5) {
+                if (hold_gap < 1.0) {
                     set_changed(cmd.brake, 1.0);
                 }
             }

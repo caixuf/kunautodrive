@@ -977,7 +977,8 @@ export function createVehicleView(scene, renderer, modelCache) {
       const roadZ = store ? roadHeightAt(store, ex, ey, vehicleData.z) : (vehicleData.z || 0);
       const ty = roadZ + VEHICLE_GROUND_Y;
       const heading = vehicleData.heading || vehicleData.yaw || 0;
-      const slopePitch = store ? roadPitchAt(store, ex, ey, heading, roadZ) : 0;
+      const isParked = Boolean(vehicleData.parked_fixed || vehicleData.is_parked);
+      const slopePitch = (!isParked && store) ? roadPitchAt(store, ex, ey, heading, roadZ) : 0;
       entry.group.position.set(tx, ty, tz);
       entry.group.rotation.set(0, headingToRotationY(heading), slopePitch);
       entry.steerAngle = vehicleData.steer ?? vehicleData.steerAngle ?? 0;

@@ -25,6 +25,7 @@
 #include "param_registry.h"
 #include "behavior_gap_eval.h"
 #include "behavior_uturn_approach.h"
+#include "perception_fusion_core.h"
 #undef LOG_TRACE
 #undef LOG_DEBUG
 #undef LOG_INFO
@@ -124,14 +125,15 @@ struct BehaviorContext {
      * vehicle/state 是 flowsim 真值，优先级高于 fusion/localization（EKF 估计）。
      * 当 vehicle/state 近期到达（<200ms）时，on_fusion 不覆盖 ego 状态，
      * 避免 EKF 发散时用错误值覆盖真值。 */
-    double ego_x{0}, ego_y{0}, ego_v{0}, ego_heading{0};
+    double ego_x{0}, ego_y{0}, ego_z{0}, ego_v{0}, ego_heading{0};
     volatile int has_fusion{0};
     uint64_t last_fusion_us{0};
     uint64_t last_vstate_us{0};
 
     /* 障碍物缓存（从 perception/obstacles 反序列化，世界坐标） */
-    double obs_x[BEH_MAX_OBS]{}, obs_y[BEH_MAX_OBS]{};
+    double obs_x[BEH_MAX_OBS]{}, obs_y[BEH_MAX_OBS]{}, obs_z[BEH_MAX_OBS]{};
     double obs_vx[BEH_MAX_OBS]{}, obs_vy[BEH_MAX_OBS]{};
+    double obs_height[BEH_MAX_OBS]{}, obs_heading[BEH_MAX_OBS]{};
     int8_t obs_lane_id[BEH_MAX_OBS]{};
     uint8_t obs_type[BEH_MAX_OBS]{};
     uint32_t obs_id[BEH_MAX_OBS]{};
@@ -144,7 +146,7 @@ struct BehaviorContext {
      * 覆盖丢失），施工区就从 obs_* 消失 → uturn_ref_x 不再缩短 → 撞施工。
      * raw 是 perception/obstacles 直连、每帧无条件刷新，施工区恒在，故缩短点
      * 必须把 raw 静止障碍也纳入。 */
-    double raw_obs_x[BEH_MAX_OBS]{}, raw_obs_y[BEH_MAX_OBS]{};
+    double raw_obs_x[BEH_MAX_OBS]{}, raw_obs_y[BEH_MAX_OBS]{}, raw_obs_z[BEH_MAX_OBS]{};
     double raw_obs_vx[BEH_MAX_OBS]{}, raw_obs_vy[BEH_MAX_OBS]{};
     int raw_obs_count{0};
 
@@ -159,6 +161,8 @@ struct BehaviorContext {
     int    lane_count{2};
     double lane_width{3.5};
     int    road_oneway{0};  /* 1=单向（全部车道同向），0=双向（跨中心线=对向） */
+    int    upcoming_own_lanes{-1};      /* 前方缩减后的本向车道数（-1=无缩减） */
+    double dist_to_lane_drop_m{-1.0};   /* 距前方车道缩减起点的距离 (m) */
     volatile int has_road_geometry{0};
 
     /* 红绿灯缓存（road/traffic_lights 解析走 traffic_light.h 的共享
@@ -168,7 +172,11 @@ struct BehaviorContext {
      * CRUISE 归位回 lane2，距 x=350 红灯仅 ~15m，当场刹停。 */
     double tl_x[TL_CACHE_MAX]{}, tl_y[TL_CACHE_MAX]{};
     double tl_lane_offset[TL_CACHE_MAX]{};
-    int    tl_state[TL_CACHE_MAX]{};  /* 0=green 1=yellow 2=red */
+    int    tl_state[TL_CACHE_MAX]{};  /* 0=green 1=flashing 2=yellow 3=red */
+    int    tl_has_left_arrow[TL_CACHE_MAX]{};
+    int    tl_left_state[TL_CACHE_MAX]{};
+    double tl_approach_heading[TL_CACHE_MAX]{};
+    int    tl_has_approach_heading[TL_CACHE_MAX]{};
     int    tl_count{0};
     volatile int has_traffic_lights{0};
 
@@ -354,6 +362,8 @@ static void on_fusion(const Message* msg, void* user_data) {
             g.ego_x = j->valuedouble;
         if ((j = cJSON_GetObjectItemCaseSensitive(root, "y")) && cJSON_IsNumber(j))
             g.ego_y = j->valuedouble;
+        if ((j = cJSON_GetObjectItemCaseSensitive(root, "z")) && cJSON_IsNumber(j))
+            g.ego_z = j->valuedouble;
         if ((j = cJSON_GetObjectItemCaseSensitive(root, "v")) && cJSON_IsNumber(j))
             g.ego_v = j->valuedouble;
         if ((j = cJSON_GetObjectItemCaseSensitive(root, "heading")) && cJSON_IsNumber(j))
@@ -374,6 +384,8 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
         g.ego_x = j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "y")) && cJSON_IsNumber(j))
         g.ego_y = j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(root, "z")) && cJSON_IsNumber(j))
+        g.ego_z = j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "spd")) && cJSON_IsNumber(j))
         g.ego_v = j->valuedouble;
     if ((j = cJSON_GetObjectItemCaseSensitive(root, "hdg")) && cJSON_IsNumber(j))
@@ -409,13 +421,19 @@ static void on_tracked_objects(const Message* msg, void* user_data) {
                 cJSON* j;
 
                 /* 车体系坐标 */
-                double ox = 0.0, oy = 0.0;
+                double ox = 0.0, oy = 0.0, oz = 0.0, oh = 0.0, ohdg = 0.0;
                 if ((j = cJSON_GetObjectItemCaseSensitive(obj, "x")) && cJSON_IsNumber(j)) ox = j->valuedouble;
                 if ((j = cJSON_GetObjectItemCaseSensitive(obj, "y")) && cJSON_IsNumber(j)) oy = j->valuedouble;
+                if ((j = cJSON_GetObjectItemCaseSensitive(obj, "z")) && cJSON_IsNumber(j)) oz = j->valuedouble;
+                if ((j = cJSON_GetObjectItemCaseSensitive(obj, "height")) && cJSON_IsNumber(j)) oh = j->valuedouble;
+                if ((j = cJSON_GetObjectItemCaseSensitive(obj, "heading")) && cJSON_IsNumber(j)) ohdg = j->valuedouble;
 
                 /* 车体 → 世界 */
                 g.obs_x[i] = g.ego_x + ox * ch - oy * sh;
                 g.obs_y[i] = g.ego_y + ox * sh + oy * ch;
+                g.obs_z[i] = g.ego_z + oz;
+                g.obs_height[i] = oh;
+                g.obs_heading[i] = g.ego_heading + ohdg;
 
                 /* 速度（车体 → 世界） */
                 double vx = 0.0, vy = 0.0;
@@ -500,6 +518,9 @@ static void on_raw_obstacles(const Message* msg, void* user_data) {
         /* 车体系 → 世界系（位置和速度都需要旋转） */
         g.obs_x[i] = g.ego_x + (double)o->x * ch - (double)o->y * sh;
         g.obs_y[i] = g.ego_y + (double)o->x * sh + (double)o->y * ch;
+        g.obs_z[i] = g.ego_z + (double)o->z;
+        g.obs_height[i] = (double)o->height;
+        g.obs_heading[i] = g.ego_heading + (double)o->heading;
         g.obs_vx[i] = (double)o->vx * ch - (double)o->vy * sh;
         g.obs_vy[i] = (double)o->vx * sh + (double)o->vy * ch;
         g.obs_type[i] = (uint8_t)o->type;
@@ -507,6 +528,7 @@ static void on_raw_obstacles(const Message* msg, void* user_data) {
         /* 同步维护 raw 缓存（世界系）——掉头缩短点合并用，独立于 tracked */
         g.raw_obs_x[i] = g.obs_x[i];
         g.raw_obs_y[i] = g.obs_y[i];
+        g.raw_obs_z[i] = g.obs_z[i];
         g.raw_obs_vx[i] = g.obs_vx[i];
         g.raw_obs_vy[i] = g.obs_vy[i];
         g.raw_obs_count++;
@@ -544,6 +566,10 @@ static void on_road_geometry(const Message* msg, void* user_data) {
     if ((item = cJSON_GetObjectItem(root, "lane_count"))) g.lane_count = item->valueint;
     if ((item = cJSON_GetObjectItem(root, "lane_width"))) g.lane_width = item->valuedouble;
     if ((item = cJSON_GetObjectItem(root, "oneway")))     g.road_oneway = item->valueint;
+    item = cJSON_GetObjectItem(root, "upcoming_own_lanes");
+    g.upcoming_own_lanes = (item && cJSON_IsNumber(item)) ? item->valueint : -1;
+    item = cJSON_GetObjectItem(root, "dist_to_lane_drop_m");
+    g.dist_to_lane_drop_m = (item && cJSON_IsNumber(item)) ? item->valuedouble : -1.0;
     g.has_road_geometry = 1;
     cJSON_Delete(root);
 }
@@ -559,10 +585,14 @@ static void on_traffic_lights(const Message* msg, void* user_data) {
     g.tl_count = c.count;
     g.has_traffic_lights = c.valid;
     for (int i = 0; i < c.count; i++) {
-        g.tl_x[i]           = c.x[i];
-        g.tl_y[i]           = c.y[i];
-        g.tl_lane_offset[i] = c.lane_offset[i];
-        g.tl_state[i]       = c.state[i];
+        g.tl_x[i]                    = c.x[i];
+        g.tl_y[i]                    = c.y[i];
+        g.tl_lane_offset[i]          = c.lane_offset[i];
+        g.tl_state[i]                = c.state[i];
+        g.tl_has_left_arrow[i]       = c.has_left_arrow[i];
+        g.tl_left_state[i]           = c.left_state[i];
+        g.tl_approach_heading[i]     = c.approach_heading[i];
+        g.tl_has_approach_heading[i] = c.has_approach_heading[i];
     }
 }
 
@@ -661,21 +691,35 @@ static bool carriageway_ahead_stop_light(void) {
      * 若改 base 公式，planning_node.cpp 的红灯 override 需同步。 */
     double stop_range = v * v / 8.0 + 3.0 + 20.0;
     if (stop_range < 60.0) stop_range = 60.0;
+    const double road_half_w = std::max(1, g.lane_count) * g.lane_width * 0.5;
     for (int i = 0; i < g.tl_count; i++) {
-        if (g.tl_state[i] == TL_GREEN ||
-            g.tl_state[i] == TL_FLASHING_GREEN) continue;
-        if (!traffic_light_controls_direction(
-                g.tl_lane_offset[i], g.on_return)) continue;
         double dx = 0.0;
+        double lat_dist = 0.0;
+        double path_h = g.ego_heading;
+        int is_left = 0;
         planning_coord::Projection ego_projection, light_projection;
         if (project_to_ref(g.ego_x, g.ego_y, ego_projection) &&
             project_to_ref(g.tl_x[i], g.tl_y[i], light_projection)) {
             dx = light_projection.s - ego_projection.s;
+            lat_dist = std::hypot(g.tl_x[i] - light_projection.ref_x,
+                                  g.tl_y[i] - light_projection.ref_y);
+            path_h = light_projection.heading;
+            is_left = traffic_light_detect_left_turn_ahead(
+                g.ref_x, g.ref_y, g.ref_s, g.ref_count, light_projection.s, 8.0, 48.0);
         } else {
             const double wx = g.tl_x[i] - g.ego_x;
             const double wy = g.tl_y[i] - g.ego_y;
             dx = wx * std::cos(g.ego_heading) + wy * std::sin(g.ego_heading);
+            lat_dist = std::fabs(-wx * std::sin(g.ego_heading) + wy * std::cos(g.ego_heading));
         }
+        if (!traffic_light_matches_route_tangent(
+                g.tl_approach_heading[i], g.tl_has_approach_heading[i],
+                g.tl_lane_offset[i], g.on_return, path_h, lat_dist, road_half_w)) {
+            continue;
+        }
+        const int eff_state = traffic_light_effective_state(
+            g.tl_state[i], g.tl_has_left_arrow[i], g.tl_left_state[i], is_left);
+        if (eff_state == TL_GREEN || eff_state == TL_FLASHING_GREEN) continue;
         if (dx <= 0.0 || dx > stop_range) continue;
         return true;
     }
@@ -825,6 +869,10 @@ protected:
                 const double current_lane_d =
                     planning_coord::lane_center_d(current_idx, lc, lw, side_offset);
                 for (int i = 0; i < g.obs_count; i++) {
+                    if (!pf_same_elevation_layer(g.obs_z[i], g.ego_z)) continue;
+                    const double rx = g.obs_x[i] - g.ego_x;
+                    const double ry = g.obs_y[i] - g.ego_y;
+                    const double phys_along = rx * fwd_x + ry * fwd_y;
                     planning_coord::Projection obs_projection;
                     double along;
                     double lat;
@@ -838,13 +886,13 @@ protected:
                         along = obs_projection.s - ego_projection.s;
                         lat = std::fabs(obs_projection.d - current_lane_d);
                     } else {
-                        const double rx = g.obs_x[i] - g.ego_x;
-                        const double ry = g.obs_y[i] - g.ego_y;
-                        along = rx * fwd_x + ry * fwd_y;
+                        along = phys_along;
                         lat = std::fabs(-rx * fwd_y + ry * fwd_x);
                     }
                     if (lat > lead_lat_tol) continue;
-                    if (along < 0.0) continue;
+                    if (!behavior_gap::is_valid_forward_lead(along, phys_along)) {
+                        continue;
+                    }
                     if (along < best_gap) {
                         best_gap = along;
                         /* 沿车头方向的投影速度（2026-08-04 返程撞车修复）：
@@ -960,6 +1008,8 @@ protected:
             gap_cfg.rear_safe_min_m = g.rear_safe_min_m;
             gap_cfg.rear_safe_time_s = g.rear_safe_time_s;
             gap_cfg.lat_tol = lw * 0.5 + g.same_lane_tol_offset;
+            gap_cfg.ego_z = g.ego_z;
+            gap_cfg.obs_z = g.obs_z;
 
             auto project_obs_d = [&](double ox, double oy, double& out_d) -> bool {
                 planning_coord::Projection obs_projection;
@@ -1018,6 +1068,28 @@ protected:
                     left_gap = right_gap = 1e9;
                     left_rear_safe = right_rear_safe = true;
                 }
+            }
+            {
+                planning_coord::Projection ep;
+                if (current_legal && project_to_ref(g.ego_x, g.ego_y, ep) &&
+                    traffic_light_detect_left_turn_ahead(
+                        g.ref_x, g.ref_y, g.ref_s, g.ref_count, ep.s, 6.0, 90.0)) {
+                    /* 接近左转路口时禁止向右变道驶离左转车道 */
+                    right_ok = false;
+                }
+            }
+
+            const int max_legal_after_drop = (g.upcoming_own_lanes > 0)
+                ? std::min(legal_last, legal_first + g.upcoming_own_lanes - 1)
+                : legal_last;
+            const bool lane_drop_ahead = (g.upcoming_own_lanes > 0) &&
+                (g.dist_to_lane_drop_m >= 0.0) &&
+                (g.dist_to_lane_drop_m <= 120.0);
+            const bool lane_drop_merge_needed =
+                current_legal && lane_drop_ahead && (current_idx > max_legal_after_drop);
+            if (lane_drop_ahead && (current_idx + 1) > max_legal_after_drop) {
+                /* 接近前方本向车道缩减区时禁止向右变道驶入即将消失的外侧车道 */
+                right_ok = false;
             }
 
             if (left_ok && right_ok) {
@@ -1103,6 +1175,9 @@ protected:
                     in.cz_len = g.cz_len;
                     in.cz_wid = g.cz_wid;
                     in.cz_count = g.cz_count;
+                    in.ego_z = g.ego_z;
+                    in.obs_z = g.obs_z;
+                    in.raw_obs_z = g.raw_obs_z;
 
                     const auto dec = behavior_uturn::evaluate_uturn_approach(in);
                     uturn_trigger = dec.trigger;
@@ -1137,6 +1212,20 @@ protected:
                     snprintf(reason, sizeof(reason),
                              "wrong carriageway lane%d on_return=%d → recover lane%d",
                              current_idx, g.on_return, recovery_lane);
+                } else if (lane_drop_merge_needed && !uturn_approach_active && left_ok &&
+                           (cur == BEH_ST_CRUISE || cur == BEH_ST_FOLLOW)) {
+                    /* 前方路段发生本向车道缩减：在进入窄路前尽早向内侧车道有序并线，
+                     * 避免跨越道路接缝时发生整车宽级的横向阶跃与持续骑线。 */
+                    ev = BEH_EV_OVERTAKE_LEFT;
+                    new_target_lane = current_idx - 1;
+                    new_target_speed = (left_gap >= 1e8)
+                        ? g.cfg_cruise_speed
+                        : std::min(g.cfg_cruise_speed, std::max(left_lead_v, g.ego_v));
+                    new_follow_id = 0;
+                    snprintf(reason, sizeof(reason),
+                             "lane drop ahead (%.1fm, own=%d): merge lane%d -> lane%d",
+                             g.dist_to_lane_drop_m, g.upcoming_own_lanes,
+                             current_idx, current_idx - 1);
                 } else if (cur == BEH_ST_CRUISE) {
                     if (uturn_approach_active) {
                         if (!at_inner_lane) {
@@ -1220,11 +1309,14 @@ protected:
                                  "merge back: outer lane%d -> lane%d (left_gap=%.1f) → LEFT_CHANGE",
                                  current_idx, current_idx - 1, left_gap);
                     } else {
-                        /* 正常巡航：恢复到巡航速度基准。
+                        /* 正常巡航：恢复到巡航速度基准；若前方即将发生车道缩减但左道暂不可并，
+                         * 适当减速留出并线窗口。
                          * 如果从 FOLLOW 退回 CRUISE，target_speed 可能被降低到
                          * 3.8 等，不恢复就会一直低速行驶 + planning 不消费
                          * behavior 的 target_speed（只在 FOLLOW 时消费）。 */
-                        new_target_speed = g.cfg_cruise_speed;
+                        new_target_speed = (lane_drop_merge_needed && g.dist_to_lane_drop_m < 65.0)
+                            ? std::min(g.cfg_cruise_speed, std::max(3.0, g.ego_v * 0.75))
+                            : g.cfg_cruise_speed;
                     }
                 } else if (cur == BEH_ST_FOLLOW) {
                     if (!blocked) {
@@ -1278,7 +1370,9 @@ protected:
                                 new_follow_id = 0;
                             }
                         } else {
-                            new_target_speed = follow_speed;
+                            new_target_speed = (lane_drop_merge_needed && g.dist_to_lane_drop_m < 65.0)
+                                ? std::min(follow_speed, std::max(3.0, g.ego_v * 0.75))
+                                : follow_speed;
                             new_follow_id = lead_id;
                         }
                     }
@@ -1635,7 +1729,7 @@ static int behavior_init(MessageBus* bus, Transport* transport,
                           const char* params_json) {
     g.scheduler = scheduler;
 
-    g.ego_x = g.ego_y = g.ego_v = g.ego_heading = 0.0;
+    g.ego_x = g.ego_y = g.ego_z = g.ego_v = g.ego_heading = 0.0;
     g.has_fusion = 0;
     g.has_obs = 0;
     g.has_road_geometry = 0;
@@ -1653,6 +1747,9 @@ static int behavior_init(MessageBus* bus, Transport* transport,
     g.follow_obs_id = 0;
     g.lane_count = 2;
     g.lane_width = 3.5;
+    g.road_oneway = 0;
+    g.upcoming_own_lanes = -1;
+    g.dist_to_lane_drop_m = -1.0;
 
     /* 初始化框架状态机 */
     statem_init(&g.sm, BEH_TRANSITIONS, BEH_ST_CRUISE, "behavior");

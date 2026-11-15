@@ -417,7 +417,18 @@ TRUTH_LAYER_FOR_TYPE = {
     "car": "vehicle",
     "truck": "vehicle",
     "suv": "vehicle",
+    "bus": "vehicle",
+    "van": "vehicle",
     "pedestrian": "vru",
+    "cyclist": "vru",
+    "unknown_static": "static",
+    "unknown": "static",
+    "construction": "static",
+    "cone": "static",
+    "bollard": "static",
+    "charger": "static",
+    "pole": "static",
+    "wheel_stop": "static",
 }
 
 # ── 感知可观测性：识别率分母的锥内化（2026-09-22）────────────────────
@@ -1679,6 +1690,7 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
     layer_counts: dict[str, list[int]] = {
         "vehicle": [0, 0],
         "vru": [0, 0],
+        "static": [0, 0],
         "overall": [0, 0],
     }
     # 同时按细粒度 type 累积（car/truck/suv/pedestrian），用于诊断输出
@@ -1761,7 +1773,7 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
 
         # 1) 分层识别率
         for t in truth:
-            layer = TRUTH_LAYER_FOR_TYPE.get(t["type"], "vehicle")
+            layer = TRUTH_LAYER_FOR_TYPE.get(t["type"], "static")
             layer_counts[layer][1] += 1
             layer_counts["overall"][1] += 1
             type_counts[t["type"]][1] += 1
@@ -1826,6 +1838,7 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
 
     rate_vehicle = _rate(layer_counts["vehicle"])
     rate_vru = _rate(layer_counts["vru"])
+    rate_static = _rate(layer_counts["static"])
     rate_overall = _rate(layer_counts["overall"])
     rate_by_type = {t: _rate(c) for t, c in type_counts.items()}
 
@@ -1877,10 +1890,12 @@ def _compute_perception_metrics(series: list[dict], timestamps: list[float]) -> 
     return {
         "recognition_rate_vehicle": rate_vehicle,
         "recognition_rate_vru": rate_vru,
+        "recognition_rate_static": rate_static,
         "recognition_rate_overall": rate_overall,
         "recognition_rate_by_type": {t: round(r, 3) for t, r in rate_by_type.items()},
         "truth_count_vehicle": layer_counts["vehicle"][1],
         "truth_count_vru": layer_counts["vru"][1],
+        "truth_count_static": layer_counts["static"][1],
         "truth_count_overall": layer_counts["overall"][1],
         "warning_lead_avg_s": avg_lead,
         "warning_lead_min_s": min_lead,
@@ -2584,13 +2599,16 @@ def scenario_actor_layer_counts(scenario: dict | None) -> dict[str, int]:
     行人却没有 vru 真值样本 = 感知链路漏了整个类别，而不是"该层没数据、
     跳过判定"。旧实现缺这个对照，所以 truth_count_vru=0 被当成正常。
     """
-    counts: dict[str, int] = {"vehicle": 0, "vru": 0}
+    counts: dict[str, int] = {"vehicle": 0, "vru": 0, "static": 0}
     if not isinstance(scenario, dict):
         return counts
     for actor in scenario.get("actors", []) or []:
         if not isinstance(actor, dict):
             continue
-        layer = TRUTH_LAYER_FOR_TYPE.get(str(actor.get("type", "")).lower())
+        atype = str(actor.get("type", "")).lower()
+        if not atype:
+            continue
+        layer = TRUTH_LAYER_FOR_TYPE.get(atype, "static")
         if layer in counts:
             counts[layer] += 1
     return counts
@@ -2886,9 +2904,13 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         except (TypeError, ValueError):
             bev_shadow_count = 0
         scene_m = (last.get("metrics") or {}).get("scene") or {}
-        truth_obs = scene_m.get("obstacles") or []
+        truth_obs = list(scene_m.get("obstacles") or [])
         ego_m = scene_m.get("ego") or {}
         bev_use_sensor, bev_fov_deg, bev_range_m = pipeline_bev_sensor_spec()
+        truth_obs.extend(
+            f for f in (scene_m.get("facilities") or [])
+            if isinstance(f, dict) and float(f.get("height", 0.0) or 0.0) >= 0.4
+        )
         bev_truth_count = _count_bev_observable_truth(
             truth_obs,
             ego_m,
@@ -3314,16 +3336,34 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
             prev_ego_x = None
             prev_ego_y = None
             prev_state = "unknown"
+            prev_approach_h = None
             prev_travel_sign = None
             green_stop_start_ts = None
+
+            # Determine once whether ego makes a left turn downstream of this signal.
+            ego_turns_left_at_sig = False
+            for j, m_j in enumerate(series):
+                if math.hypot(m_j["x"] - stop_x, m_j["y"] - signal_lane_y) > 30.0:
+                    continue
+                base_h = m_j["heading"]
+                for k in range(j + 1, min(len(series), j + 80)):
+                    m_k = series[k]
+                    if math.hypot(m_k["x"] - m_j["x"], m_k["y"] - m_j["y"]) < 12.0:
+                        continue
+                    if math.sin(m_k["heading"] - base_h) > 0.45:
+                        ego_turns_left_at_sig = True
+                        break
+                if ego_turns_left_at_sig:
+                    break
 
             for i, m in enumerate(series):
                 ego_x_i = m["x"]
                 ego_y_i = m["y"]
                 ts_i = timestamps[i] if i < len(timestamps) else 0.0
 
-                # 从样本中查找对应红绿灯的当前状态（按 x 匹配同一盏灯）
+                # 从样本中查找对应红绿灯的当前状态（按 id 或坐标匹配同一盏灯）
                 curr_state = None
+                curr_approach_h = prev_approach_h
                 for s_tl in m.get("entities", []):
                     if isinstance(s_tl, dict) and s_tl.get("type") == "tl":
                         same_id = (
@@ -3332,8 +3372,21 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
                             and int(s_tl["scenario_id"]) == int(signal_id)
                         )
                         s_x = float(s_tl.get("stop_x", s_tl.get("x", stop_x)) or stop_x)
-                        if same_id or abs(s_x - stop_x) < 2.0:
-                            curr_state = str(s_tl.get("state", "") or "")
+                        s_y = s_tl.get("stop_y", s_tl.get("y"))
+                        same_pos = (
+                            abs(s_x - stop_x) < 2.0
+                            and (s_y is None or abs(float(s_y) - signal_lane_y) < 3.5)
+                        )
+                        if same_id or same_pos:
+                            if s_tl.get("approach_heading") is not None:
+                                curr_approach_h = float(s_tl["approach_heading"])
+                                prev_approach_h = curr_approach_h
+                            has_left = bool(tl_def.get("has_left_arrow") or s_tl.get("has_left_arrow"))
+                            left_state = str(s_tl.get("left_state", "") or "")
+                            if has_left and left_state and ego_turns_left_at_sig:
+                                curr_state = left_state
+                            else:
+                                curr_state = str(s_tl.get("state", "") or "")
                             stop_world_y = s_tl.get("stop_y")
                             signal_world_x = s_x
                             if stop_world_y is not None and isinstance(scenario, dict):
@@ -3349,6 +3402,18 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
                 if curr_state is None:
                     curr_state = prev_state
 
+                if curr_approach_h is not None and math.cos(m["heading"] - curr_approach_h) < 0.5:
+                    if green_stop_start_ts is not None:
+                        stop_dur = ts_i - green_stop_start_ts
+                        if stop_dur > green_phase_max_stop_s:
+                            green_phase_max_stop_s = stop_dur
+                        green_stop_start_ts = None
+                    prev_ego_x = ego_x_i
+                    prev_ego_y = ego_y_i
+                    prev_state = curr_state
+                    prev_travel_sign = None
+                    continue
+
                 road_offset = m.get("road_signed_offset")
                 if road_offset is None:
                     road_offset = m.get("y_rel")
@@ -3357,6 +3422,7 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
                     and (
                         abs(signal_lane_y) < 0.25
                         or road_offset * signal_lane_y > 0.0
+                        or curr_approach_h is not None
                     )
                 )
 
@@ -3815,6 +3881,7 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     for layer_name, rate_key, count_key in [
         ("vehicle", "recognition_rate_vehicle", "truth_count_vehicle"),
         ("vru", "recognition_rate_vru", "truth_count_vru"),
+        ("static", "recognition_rate_static", "truth_count_static"),
     ]:
         rate = perception[rate_key]
         n = perception[count_key]
@@ -4236,10 +4303,12 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         # Task 5：分层识别率 + 预警提前量
         "recognition_rate_vehicle": round(perception["recognition_rate_vehicle"], 3),
         "recognition_rate_vru": round(perception["recognition_rate_vru"], 3),
+        "recognition_rate_static": round(perception.get("recognition_rate_static", 1.0), 3),
         "recognition_rate_overall": round(perception["recognition_rate_overall"], 3),
         "recognition_rate_by_type": perception["recognition_rate_by_type"],
         "truth_count_vehicle": perception["truth_count_vehicle"],
         "truth_count_vru": perception["truth_count_vru"],
+        "truth_count_static": perception.get("truth_count_static", 0),
         "truth_count_overall": perception["truth_count_overall"],
         "warning_lead_avg_s": round(perception["warning_lead_avg_s"], 3),
         "warning_lead_min_s": round(perception["warning_lead_min_s"], 3),

@@ -685,6 +685,37 @@ static void test_fusion_node(void) {
     PASS();
 }
 
+static void test_message_buffer_sim_clock(void) {
+    TEST("message_buffer sim_mode monotonic wall align");
+    MessageBuffer* mb = message_buffer_create("test/sim_wall", 0x1234, 16, 5000000);
+    ASSERT(mb != NULL, "create failed");
+
+    /* Sim clock frozen at 0 (or running behind wall uptime) must NOT cause
+     * message_buffer_push eviction or message_buffer_find_nearest miss on
+     * messages stamped with clock_now_monotonic_wall_us(). */
+    clock_set_sim_mode(true);
+    clock_set_sim_time(0);
+
+    uint64_t wall_now = clock_now_monotonic_wall_us();
+    uint32_t payload = 42;
+    Message msg;
+    memset(&msg, 0, sizeof(msg));
+    snprintf(msg.topic, sizeof(msg.topic), "test/sim_wall");
+    msg.type = MSG_TYPE_PUBLISH;
+    msg.type_id = 0x1234;
+    msg.timestamp_us = wall_now - 5000;
+    msg.data_size = sizeof(payload);
+    memcpy(msg.data, &payload, sizeof(payload));
+    ASSERT(message_buffer_push(mb, &msg) == 0, "push failed");
+
+    const Message* found = message_buffer_find_nearest(mb, wall_now - 4000, 120000);
+    clock_set_sim_mode(false);
+    ASSERT(found != NULL, "nearest returned NULL under sim_mode=true");
+
+    message_buffer_destroy(mb);
+    PASS();
+}
+
 /* ══════════════════════════════════════════════════════════ */
 /* Message Bus — QoS & Per-Topic Statistics                   */
 /* ══════════════════════════════════════════════════════════ */
@@ -1400,6 +1431,7 @@ int main(void) {
     printf("\n═══ Fusion ═══\n");
     test_message_buffer();
     test_fusion_node();
+    test_message_buffer_sim_clock();
 
     /* ── Message Bus (QoS) ──────────────────── */
     printf("\n═══ Message Bus / QoS ═══\n");
