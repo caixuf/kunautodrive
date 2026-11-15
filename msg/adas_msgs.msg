@@ -27,6 +27,7 @@ enum ObstacleType {
     OBJ_TYPE_PEDESTRIAN = 2
     OBJ_TYPE_CYCLIST   = 3
     OBJ_TYPE_CONSTRUCTION = 4
+    OBJ_TYPE_SIGN      = 5
 }
 
 enum Gear {
@@ -89,7 +90,7 @@ struct RadarFrame {
     uint32   count          # 有效目标数
     uint32   sensor_id      # 传感器编号（多雷达时区分）
     uint32   reserved       # 对齐填充 + 扩展位（见上方注释）
-    RadarTarget targets[64]
+    RadarTarget targets[64]  
 }
 
 struct GpsData {

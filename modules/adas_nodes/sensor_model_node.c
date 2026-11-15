@@ -314,7 +314,8 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
     /* 0 就是 0：旧代码把 n<1 兜底成 3，在 ego 原点伪造 3 个障碍物。旧的点数
      * 估计靠 obstacle_in_fov 的 range<0.05 把它们滤掉所以没暴露；真点云的
      * ray_aabb_t 在射线原点位于盒内时返回 tmax>0 → 幻影会变成真实命中。 */
-    if (n < 0 || n > 128) n = 0;
+    if (n < 0) n = 0;
+    if (n > 128) n = 128;
     g.n_obs = n;
 
     for (int i = 0; i < n; i++) {

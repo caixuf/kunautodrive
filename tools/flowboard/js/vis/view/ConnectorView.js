@@ -175,12 +175,14 @@ export function createConnectorView(scene) {
         } else {
           pierInstances.push({ tx: cx, tz: cz, baseY: zGround, h, radius });
         }
+        const capH = pr.cap_h || 0.85;
+        const zTop = pr.z_top != null ? pr.z_top : 6.5;
         capInstances.push({
           tx: cx,
-          ty: (pr.z_top || 6.5) - 0.1,
+          ty: zTop - 0.5 * capH,
           tz: cz,
           len: pr.cap_len || 6.0,
-          h: pr.cap_h || 0.85,
+          h: capH,
           w: pr.cap_w || 1.5,
           rotY: directionToRotationY(lx, -ly),
         });
@@ -1336,11 +1338,11 @@ export function createConnectorView(scene) {
       const rotY = directionToRotationY(ux, uz);
 
       if (halfW < 6.0) {
-        // 窄路面/单向匝道：单圆柱墩 + 顶部梯形盖梁
-        pierInstances.push({ tx, tz, h: h - 0.3, radius: 0.75 });
+        // 窄路面/单向匝道：单圆柱墩 + 顶部梯形盖梁（中心下移半高 + 0.45m 梁底间隙，严禁凸出桥面）
+        pierInstances.push({ tx, tz, h: h - 0.45, radius: 0.75 });
         if (capInstances) {
           capInstances.push({
-            tx, ty: h - 0.35, tz,
+            tx, ty: h - 0.45 - 0.325, tz,
             len: Math.max(1.8, halfW * 1.4), h: 0.65, w: 1.5,
             rotY,
           });
@@ -1348,11 +1350,11 @@ export function createConnectorView(scene) {
       } else {
         // 宽幅主线高架：双柱门式墩 + 跨线连续重型盖梁
         const colOffset = halfW * 0.48;
-        pierInstances.push({ tx: tx - nx * colOffset, tz: tz - nz * colOffset, h: h - 0.4, radius: 0.75 });
-        pierInstances.push({ tx: tx + nx * colOffset, tz: tz + nz * colOffset, h: h - 0.4, radius: 0.75 });
+        pierInstances.push({ tx: tx - nx * colOffset, tz: tz - nz * colOffset, h: h - 0.45, radius: 0.75 });
+        pierInstances.push({ tx: tx + nx * colOffset, tz: tz + nz * colOffset, h: h - 0.45, radius: 0.75 });
         if (capInstances) {
           capInstances.push({
-            tx, ty: h - 0.45, tz,
+            tx, ty: h - 0.45 - 0.425, tz,
             len: halfW * 1.95, h: 0.85, w: 1.9,
             rotY,
           });

@@ -2583,6 +2583,40 @@ static void test_sensor_model_lidar_weather_degradation(void) {
     PASS();
 }
 
+static void test_dbscan_96_clusters_and_sign_enum(void) {
+    TEST("dbscan_cluster 支持 96 簇容量 (50 簇不被 32 截断) + OBJ_TYPE_SIGN 枚举契约");
+    ASSERT_EQ(DBSCAN_MAX_CLUSTERS, 96, "DBSCAN_MAX_CLUSTERS == 96");
+    ASSERT_EQ(PERCEPTION_MAX_OBSTACLES, 128u, "PERCEPTION_MAX_OBSTACLES == 128");
+    ASSERT_EQ(OBJ_TYPE_SIGN, 5, "OBJ_TYPE_SIGN == 5");
+
+    enum { kClusters = 50, kPtsPerCluster = 4, kTotal = kClusters * kPtsPerCluster };
+    Point3D pts[kTotal];
+    for (int c = 0; c < kClusters; ++c) {
+        const float cx = 10.0f + (float)c * 4.0f;
+        for (int k = 0; k < kPtsPerCluster; ++k) {
+            Point3D* p = &pts[c * kPtsPerCluster + k];
+            p->x = cx + (k & 1 ? 0.25f : 0.0f);
+            p->y = (k & 2 ? 0.25f : 0.0f);
+            p->z = 1.0f;
+            p->intensity = 0.8f;
+        }
+    }
+
+    DbscanCluster db;
+    dbscan_init(&db, 1.0f, 3);
+    dbscan_set_ground_mode(&db, GROUND_REMOVE_NONE);
+    int n_clusters = dbscan_run(&db, pts, kTotal);
+    ASSERT_EQ(n_clusters, kClusters, "50 isolated clusters preserved (not truncated at 32)");
+
+    const ClusterBounds* first = dbscan_get_cluster(&db, 0);
+    ASSERT(first != NULL, "first cluster non-null");
+    ObstacleList out;
+    PerceptionFramePose pose = {11, 0.0, 0.0, 2, 3.5, 0, 0.0, 1.8};
+    uint32_t n_obs = perception_clusters_to_obstacles(first, n_clusters, &pose, &out);
+    ASSERT_EQ((int)n_obs, kClusters, "all 50 clusters converted to obstacles without 32 cap");
+    PASS();
+}
+
 int main(void) {
     printf("\n╔══════════════════════════════════════════╗\n");
     printf("║  FlowEngine ADAS Nodes Logic Tests        ║\n");
@@ -2734,6 +2768,7 @@ int main(void) {
     test_hungarian_64_targets_full_capacity();
     test_st_graph_cutin_t_enter_occupancy();
     test_sensor_model_lidar_weather_degradation();
+    test_dbscan_96_clusters_and_sign_enum();
 
     printf("\n═══════════════════════════════════\n");
     printf("  Total: %d  ✅ Passed: %d  ❌ Failed: %d\n",

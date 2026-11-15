@@ -1246,7 +1246,13 @@ export function createRoadView(scene) {
     // 有 lane_data：只画 lanes[].markings（数据即几何）。P2 返回 0
     //（空 markings / 全被路口裁掉）也禁止启发式，否则会按 lanes×width 再发明一套。
     // 无 lane_data：straight_road 等 demo 才走启发式，画在已对齐的 roadMarkSpine 上。
-    if (laneRec) {
+    const isGarageHall = edge.type === EDGE_TYPE.GARAGE_HALL;
+    const isOpenRamp = edge.type === EDGE_TYPE.OPEN_RAMP;
+
+    if (isGarageHall) {
+      // B1 地下车库由 GarageView 统一绘制地坪、车位线、导向箭头与中心黄虚线，
+      // 跳过 RoadView 的双向双黄实线与边线，消除地库内双黄线重叠。
+    } else if (laneRec && !isOpenRamp) {
       buildLaneMarkingsInto(laneRec, edge.id, whiteGeos, yellowGeos, isDistant);
       stats.p2Edges++;
     } else {
@@ -1259,9 +1265,8 @@ export function createRoadView(scene) {
       }
 
       // 标线按 GB 5768 语义生成（与 extract_city_map._markings / json_to_xodr
-      // 一致，单一真相）：对向分隔=双黄实线；同向车道分隔=白色虚线；外缘白实线
-      // 由上方 edgeLine 负责。中心线位置取 k===nPerSide（forward 车道数），对奇数
-      // 车道数（如 2+1 不对称）同样能正确落在两向分界，不再因 lanes%2!=0 丢中心线。
+      // 一致，单一真相）：对向分隔=双黄实线（地库出口坡道采用单黄虚线衔接 B1）；
+      // 同向车道分隔=白色虚线；外缘白实线由上方 edgeLine 负责。
       const oneway = edge.oneway === true;
       const nPerSide = oneway ? lanes : Math.max(1, Math.floor(lanes / 2));
       for (const seg of roadMarkSpine) {
@@ -1269,11 +1274,15 @@ export function createRoadView(scene) {
           const d = -roadHw + k * laneWidth;
           const isCenter = !oneway && k === nPerSide;
           if (isCenter) {
-            const CENTER_GAP = 0.12;
-            const left = solidLine(seg, d - CENTER_GAP);
-            const right = solidLine(seg, d + CENTER_GAP);
-            if (left) yellowGeos.push(left);
-            if (right) yellowGeos.push(right);
+            if (isOpenRamp) {
+              for (const g of dashedLine(seg, d)) yellowGeos.push(g);
+            } else {
+              const CENTER_GAP = 0.12;
+              const left = solidLine(seg, d - CENTER_GAP);
+              const right = solidLine(seg, d + CENTER_GAP);
+              if (left) yellowGeos.push(left);
+              if (right) yellowGeos.push(right);
+            }
           } else {
             for (const g of dashedLine(seg, d)) whiteGeos.push(g);
           }

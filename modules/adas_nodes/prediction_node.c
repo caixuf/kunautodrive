@@ -218,19 +218,23 @@ static void on_ref_path(const Message* msg, void* user_data) {
 
 /* ── 参考线几何与 Frenet 投影查询 (三级回退) ─────────────────── */
 static void query_ref_line(double s, double* out_rx, double* out_ry, double* out_rh) {
-    /* Level 1: road/ref_path 折线样点 */
+    /* Level 1: road/ref_path 折线样点（两端按切线自然外推，禁止钳位堆积在端点） */
     if (g.has_ref_path && g.n_ref_pts >= 2) {
         if (s <= g.ref_pts[0].s) {
-            *out_rx = g.ref_pts[0].x;
-            *out_ry = g.ref_pts[0].y;
-            *out_rh = g.ref_pts[0].h;
+            double h = g.ref_pts[0].h;
+            double ds = s - g.ref_pts[0].s;
+            *out_rx = g.ref_pts[0].x + ds * cos(h);
+            *out_ry = g.ref_pts[0].y + ds * sin(h);
+            *out_rh = h;
             return;
         }
         if (s >= g.ref_pts[g.n_ref_pts - 1].s) {
             int last = g.n_ref_pts - 1;
-            *out_rx = g.ref_pts[last].x;
-            *out_ry = g.ref_pts[last].y;
-            *out_rh = g.ref_pts[last].h;
+            double h = g.ref_pts[last].h;
+            double ds = s - g.ref_pts[last].s;
+            *out_rx = g.ref_pts[last].x + ds * cos(h);
+            *out_ry = g.ref_pts[last].y + ds * sin(h);
+            *out_rh = h;
             return;
         }
         for (int i = 0; i < g.n_ref_pts - 1; i++) {
@@ -274,7 +278,7 @@ static void query_ref_line(double s, double* out_rx, double* out_ry, double* out
     *out_rh = g.ego_heading;
 }
 
-static void cartesian_to_frenet(double wx, double wy, double* out_s, double* out_d, double* out_rh) {
+static int cartesian_to_frenet_corridor(double wx, double wy, double* out_s, double* out_d, double* out_rh) {
     if (g.has_ref_path && g.n_ref_pts >= 2) {
         double min_dist_sq = 1e12;
         double best_s = 0.0;
@@ -304,7 +308,7 @@ static void cartesian_to_frenet(double wx, double wy, double* out_s, double* out
         double dx = wx - best_rx;
         double dy = wy - best_ry;
         *out_d = -dx * sin(best_rh) + dy * cos(best_rh);
-        return;
+        return (min_dist_sq <= 12.0 * 12.0 && fabs(*out_d) <= 12.0) ? 1 : 0;
     }
 
     if (g.has_geom && g.curve_length_m > 1.0) {
@@ -316,7 +320,7 @@ static void cartesian_to_frenet(double wx, double wy, double* out_s, double* out
         double dx = wx - rx;
         double dy = wy - ry;
         *out_d = -dx * sin(rh) + dy * cos(rh);
-        return;
+        return (fabs(*out_d) <= 12.0) ? 1 : 0;
     }
 
     /* Level 3: 切线投影 */
@@ -325,6 +329,7 @@ static void cartesian_to_frenet(double wx, double wy, double* out_s, double* out
     *out_s = dx * cos(g.ego_heading) + dy * sin(g.ego_heading);
     *out_d = -dx * sin(g.ego_heading) + dy * cos(g.ego_heading);
     *out_rh = g.ego_heading;
+    return (fabs(*out_d) <= 12.0) ? 1 : 0;
 }
 
 static void frenet_to_cartesian(double s, double d, double* out_wx, double* out_wy) {
@@ -337,6 +342,7 @@ static void frenet_to_cartesian(double s, double d, double* out_wx, double* out_
 /* ── 动态关键目标排序结构 ─────────────────────────────────────── */
 typedef struct {
     int    object_id;
+    int    is_vehicle;
     double bx, by, bvx, bvy;
     double wx, wy, wvx, wvy;
     double track_age;
@@ -395,7 +401,7 @@ static int prediction_execute(TaskBase* task) {
         const double ch = cos(ego_h_snap);
         const double sh = sin(ego_h_snap);
 
-        /* 过滤静态目标并按距离挑选关键目标 */
+        /* 过滤静态目标/非移动障碍物/交通标志，并按距离挑选关键目标 */
         for (int i = 0; i < n_objects && n_key < 128; i++) {
             cJSON* obj = cJSON_GetArrayItem(j_objects, i);
             if (!obj) continue;
@@ -403,8 +409,17 @@ static int prediction_execute(TaskBase* task) {
             cJSON* j = cJSON_GetObjectItemCaseSensitive(obj, "is_static");
             if (cJSON_IsBool(j) && cJSON_IsTrue(j)) continue;
 
+            cJSON* jtype = cJSON_GetObjectItemCaseSensitive(obj, "type");
+            const char* otype = (jtype && cJSON_IsString(jtype) && jtype->valuestring)
+                              ? jtype->valuestring : "";
+            if (strcmp(otype, "SIGN") == 0 || strcmp(otype, "UNKNOWN") == 0 ||
+                strcmp(otype, "CONSTRUCTION") == 0) {
+                continue;
+            }
+
             KeyObject ko;
             memset(&ko, 0, sizeof(ko));
+            ko.is_vehicle = (strcmp(otype, "PEDESTRIAN") != 0) ? 1 : 0;
 
             j = cJSON_GetObjectItemCaseSensitive(obj, "id");
             ko.object_id = (j && cJSON_IsNumber(j)) ? (int)j->valuedouble : (i + 1);
@@ -441,6 +456,7 @@ static int prediction_execute(TaskBase* task) {
             }
 
             ko.dist = hypot(ko.bx, ko.by);
+            if (ko.dist > 95.0 || hypot(ko.wvx, ko.wvy) < 0.8) continue;
             key_objs[n_key++] = ko;
         }
 
@@ -460,13 +476,60 @@ static int prediction_execute(TaskBase* task) {
         cJSON_AddNumberToObject(out_root, "timestamp_us", (double)clock_now_us());
 
         double ego_s = 0.0, ego_d = 0.0, ego_rh = 0.0;
-        cartesian_to_frenet(ego_x_snap, ego_y_snap, &ego_s, &ego_d, &ego_rh);
+        cartesian_to_frenet_corridor(ego_x_snap, ego_y_snap, &ego_s, &ego_d, &ego_rh);
 
         for (int i = 0; i < n_key; i++) {
             const KeyObject* ko = &key_objs[i];
 
             double s = 0.0, d = 0.0, ref_h = 0.0;
-            cartesian_to_frenet(ko->wx, ko->wy, &s, &d, &ref_h);
+            const int on_corridor = cartesian_to_frenet_corridor(ko->wx, ko->wy, &s, &d, &ref_h);
+
+            cJSON* track_entry = cJSON_CreateObject();
+            cJSON_AddNumberToObject(track_entry, "object_id",  (double)ko->object_id);
+            cJSON_AddNumberToObject(track_entry, "confidence", ko->confidence);
+            cJSON_AddNumberToObject(track_entry, "horizon_s",  (double)PRED_HORIZON_S);
+            cJSON_AddNumberToObject(track_entry, "wx",         ko->wx);
+            cJSON_AddNumberToObject(track_entry, "wy",         ko->wy);
+
+            cJSON* j_trajs = cJSON_AddArrayToObject(track_entry, "trajectories");
+
+            if (!on_corridor) {
+                /* 走廊外/横向交叉路口来车：沿自身速度矢量常量外推，禁止钳位贴回自车参考线 */
+                const double spd_w = hypot(ko->wvx, ko->wvy);
+                cJSON* traj = cJSON_CreateObject();
+                cJSON_AddNumberToObject(traj, "prob", 1.0);
+                cJSON_AddStringToObject(traj, "intent", "lane_keep");
+                cJSON_AddNumberToObject(traj, "t_enter", 0.0);
+
+                cJSON* wps = cJSON_CreateArray();
+                cJSON* world_wps = cJSON_CreateArray();
+                for (unsigned int step = 1; step <= PRED_N_WAYPOINTS; step++) {
+                    double t = (double)step * (double)PRED_WAYPOINT_DT_S;
+                    double wxt = ko->wx + ko->wvx * t;
+                    double wyt = ko->wy + ko->wvy * t;
+                    double dx = wxt - ego_x_snap;
+                    double dy = wyt - ego_y_snap;
+                    double bxt = dx * ch + dy * sh;
+                    double byt = -dx * sh + dy * ch;
+
+                    cJSON* wp = cJSON_CreateArray();
+                    cJSON_AddItemToArray(wp, cJSON_CreateNumber(bxt));
+                    cJSON_AddItemToArray(wp, cJSON_CreateNumber(byt));
+                    cJSON_AddItemToArray(wp, cJSON_CreateNumber(spd_w));
+                    cJSON_AddItemToArray(wps, wp);
+
+                    cJSON* wwp = cJSON_CreateArray();
+                    cJSON_AddItemToArray(wwp, cJSON_CreateNumber(wxt));
+                    cJSON_AddItemToArray(wwp, cJSON_CreateNumber(wyt));
+                    cJSON_AddItemToArray(wwp, cJSON_CreateNumber(spd_w));
+                    cJSON_AddItemToArray(world_wps, wwp);
+                }
+                cJSON_AddItemToObject(traj, "waypoints", wps);
+                cJSON_AddItemToObject(traj, "world_waypoints", world_wps);
+                cJSON_AddItemToArray(j_trajs, traj);
+                cJSON_AddItemToArray(j_tracks, track_entry);
+                continue;
+            }
 
             /* Frenet 纵向与横向速度 */
             double vs = ko->wvx * cos(ref_h) + ko->wvy * sin(ref_h);
@@ -474,21 +537,26 @@ static int prediction_execute(TaskBase* task) {
 
             double delta_s = s - ego_s;
             double delta_v = vs - ego_v_snap;
+            double lat_to_ego = d - ego_d;
 
-            /* 动态贝叶斯多模态概率评估 */
-            const int is_left = (d > 0.0);
+            /* 动态贝叶斯多模态概率评估（仅同向邻车道机动车辆触发 Cut-in 预测） */
+            const int is_left = (lat_to_ego > 0.0);
             const double vd_towards_ego = is_left ? -vd : vd;
+            const int can_cutin = ko->is_vehicle &&
+                                  (vs > 1.0) &&
+                                  (fabs(lat_to_ego) >= 1.2) && (fabs(lat_to_ego) <= 6.5) &&
+                                  (delta_s > -6.0) && (delta_s < 85.0);
 
-            double p_cutin = 0.05;
-            if (fabs(d) >= 1.2) {
+            double p_cutin = 0.0;
+            if (can_cutin) {
                 double z = 4.0 * (vd_towards_ego - 0.25);
                 p_cutin = 1.0 / (1.0 + exp(-fmax(-8.0, fmin(8.0, z))));
+                if (p_cutin < 0.03) p_cutin = 0.03;
+                if (p_cutin > 0.85) p_cutin = 0.85;
             }
-            if (p_cutin < 0.05) p_cutin = 0.05;
-            if (p_cutin > 0.85) p_cutin = 0.85;
 
             double p_yield = 0.05;
-            if (delta_s > 0.0 && delta_s < 35.0 && delta_v < -0.5) {
+            if (delta_s > 0.0 && delta_s < 35.0 && delta_v < -0.5 && vs > 0.5) {
                 p_yield = 0.25 * (1.0 - delta_s / 35.0);
             }
             if (p_yield < 0.05) p_yield = 0.05;
@@ -500,15 +568,6 @@ static int prediction_execute(TaskBase* task) {
             p_lk /= p_sum;
             p_cutin /= p_sum;
             p_yield /= p_sum;
-
-            cJSON* track_entry = cJSON_CreateObject();
-            cJSON_AddNumberToObject(track_entry, "object_id",  (double)ko->object_id);
-            cJSON_AddNumberToObject(track_entry, "confidence", ko->confidence);
-            cJSON_AddNumberToObject(track_entry, "horizon_s",  (double)PRED_HORIZON_S);
-            cJSON_AddNumberToObject(track_entry, "wx",         ko->wx);
-            cJSON_AddNumberToObject(track_entry, "wy",         ko->wy);
-
-            cJSON* j_trajs = cJSON_AddArrayToObject(track_entry, "trajectories");
 
             /* 模态 1: Lane Keeping (沿道路曲率与当前偏移保持) */
             {
@@ -549,8 +608,8 @@ static int prediction_execute(TaskBase* task) {
                 cJSON_AddItemToArray(j_trajs, traj);
             }
 
-            /* 模态 2: Cut-in (切入自车中心线 d -> 0) */
-            {
+            /* 模态 2: Cut-in (切入自车当前横向车道中心线 d -> ego_d) */
+            if (can_cutin && p_cutin > 0.0) {
                 cJSON* traj = cJSON_CreateObject();
                 cJSON_AddNumberToObject(traj, "prob", p_cutin);
                 cJSON_AddStringToObject(traj, "intent", is_left ? "cut_in_left" : "cut_in_right");
@@ -561,10 +620,11 @@ static int prediction_execute(TaskBase* task) {
                 for (unsigned int step = 1; step <= PRED_N_WAYPOINTS; step++) {
                     double t = (double)step * (double)PRED_WAYPOINT_DT_S;
                     double st = s + vs * t;
-                    /* 平滑五次多项式切入到中心线 */
+                    /* 平滑五次多项式从当前偏移切入 ego_d */
                     double tau = fmin(1.0, t / 2.5);
-                    double dt_lat = d * (1.0 - (10.0 * tau * tau * tau - 15.0 * tau * tau * tau * tau + 6.0 * tau * tau * tau * tau * tau));
-                    if (fabs(dt_lat) <= 1.0 && t_enter > 10.0) {
+                    double s5 = 10.0 * tau * tau * tau - 15.0 * tau * tau * tau * tau + 6.0 * tau * tau * tau * tau * tau;
+                    double dt_lat = ego_d + lat_to_ego * (1.0 - s5);
+                    if (fabs(dt_lat - ego_d) <= 1.0 && t_enter > 10.0) {
                         t_enter = t;
                     }
 

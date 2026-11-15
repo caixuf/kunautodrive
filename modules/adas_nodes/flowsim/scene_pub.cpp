@@ -646,20 +646,26 @@ char* build_scene_frame_json(const EntityPool& pool,
 
     if (!cfg.facilities.empty() && pool.size() > 0 && pool[0].active) {
         const Entity& ego_e = pool[0];
+        const double ch_e = std::cos(ego_e.heading);
+        const double sh_e = std::sin(ego_e.heading);
         std::vector<std::pair<double, size_t>> near_facs;
         for (size_t fi = 0; fi < cfg.facilities.size(); ++fi) {
             const auto& f = cfg.facilities[fi];
             if (std::fabs(f.z - ego_e.z) > 12.0) continue;
-            const double d2 = (f.x - ego_e.x) * (f.x - ego_e.x)
-                            + (f.y - ego_e.y) * (f.y - ego_e.y);
+            const double dx = f.x - ego_e.x;
+            const double dy = f.y - ego_e.y;
+            const double d2 = dx * dx + dy * dy;
             if (d2 <= 85.0 * 85.0) {
-                near_facs.emplace_back(d2, fi);
+                const double along = dx * ch_e + dy * sh_e;
+                double score = (d2 > 18.0 * 18.0 && along < -2.0) ? (d2 * 2.5) : d2;
+                if (f.kind == "sign") score *= (along >= -2.0) ? 0.15 : 0.65;
+                near_facs.emplace_back(score, fi);
             }
         }
         std::sort(near_facs.begin(), near_facs.end());
         if (!near_facs.empty()) {
             cJSON* jfacs = cJSON_AddArrayToObject(root, "facilities");
-            const size_t limit = std::min<size_t>(near_facs.size(), 64);
+            const size_t limit = std::min<size_t>(near_facs.size(), 80);
             for (size_t k = 0; k < limit; ++k) {
                 const auto& f = cfg.facilities[near_facs[k].second];
                 cJSON* jf = cJSON_CreateObject();

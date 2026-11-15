@@ -103,14 +103,23 @@ export function createWorldPropsView(scene) {
       if (kind === 'speed_limit') {
         faceTex = makeSpeedSignTexture(s.speed_kph || 60);
         boardGeo = trackGeo(new THREE.CircleGeometry(0.42, 24));
-      } else if (kind === 'stop') {
+      } else if (kind === 'stop' || kind === 'stop_sign') {
         faceTex = makeStopSignTexture(s.label || 'STOP');
         faceColor = SCENE.signRed;
         boardGeo = trackGeo(new THREE.CircleGeometry(0.44, 8));
-      } else if (kind === 'warning') {
-        faceTex = makeWarningSignTexture(s.label || '!');
+      } else if (kind === 'warning' || kind === 'crosswalk_warn' ||
+                 kind === 'curve_warn' || kind === 'slope_warn') {
+        const warnLabel = s.label ||
+          (kind === 'crosswalk_warn' ? 'XING'
+            : kind === 'curve_warn' ? 'CURV'
+            : kind === 'slope_warn' ? 'SLOPE' : '!');
+        faceTex = makeWarningSignTexture(warnLabel);
         faceColor = SCENE.signYellow;
         boardGeo = trackGeo(new THREE.PlaneGeometry(0.76, 0.76));
+      } else if (kind === 'exit_sign') {
+        faceTex = makeSignTexture(s.label || 'EXIT', '#0f766e', '#ffffff', '#ccfbf1');
+        faceColor = '#0f766e';
+        boardGeo = trackGeo(new THREE.PlaneGeometry(0.95, 0.50));
       } else {
         faceTex = makeSignTexture(s.label || 'CITY', '#155799', '#ffffff', '#e2e8f0');
         faceColor = SCENE.signBlueBg;

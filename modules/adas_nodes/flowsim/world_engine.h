@@ -133,6 +133,8 @@ struct WorldPole {
     int side{1};
     bool is_double_arm{false};
     std::string edge_id;
+    bool has_collider{true};
+    bool sensor_visible{true};
 };
 
 struct WorldTree {
@@ -143,6 +145,8 @@ struct WorldTree {
     double crown_scale{1.0};
     int side{1};
     std::string species{"broadleaf"};
+    bool has_collider{true};
+    bool sensor_visible{true};
 };
 
 struct WorldBarrierPost {
@@ -155,6 +159,8 @@ struct WorldBarrierSpan {
     double bx{0.0}, by{0.0}, bz{0.0};
     double mid_x{0.0}, mid_y{0.0}, mid_z{0.0};
     double len{0.0}, heading{0.0};
+    bool has_collider{true};
+    bool sensor_visible{true};
 };
 
 struct WorldPier {
@@ -166,14 +172,21 @@ struct WorldPier {
     double col_offset{0.0};
     double radius{0.75};
     double cap_len{4.0}, cap_w{1.6}, cap_h{0.7};
+    bool has_collider{true};
+    bool sensor_visible{true};
 };
 
 struct WorldSign {
     double x{0.0}, y{0.0}, z{0.0};
     double heading{0.0};
-    std::string kind;   /* stop_sign | speed_limit | crosswalk_warn | curve_warn | ramp_merge */
+    std::string kind;   /* stop_sign | speed_limit | crosswalk_warn | curve_warn | slope_warn | exit_sign */
     std::string label;
     int speed_kph{60};
+    double length{0.55};
+    double width{0.85};
+    double height{2.60};
+    bool has_collider{true};
+    bool sensor_visible{true};
 };
 
 struct WorldFurniture {
@@ -191,6 +204,8 @@ struct WorldBuildingSlot {
     double heading{0.0};
     int layer{0};
     double seed{0.5};
+    bool has_collider{true};
+    bool sensor_visible{true};
 };
 
 struct WorldProp {
@@ -200,7 +215,8 @@ struct WorldProp {
     double x{0.0}, y{0.0}, z{0.0};
     double heading{0.0};
     double length{1.0}, width{1.0}, height{2.5};
-    bool has_collider{false};
+    bool has_collider{true};
+    bool sensor_visible{true};
 };
 
 struct WorldCollider {
@@ -209,6 +225,7 @@ struct WorldCollider {
     double len{0.5}, wid{0.5}, heading{0.0}, height{1.5};
     bool is_cylinder{false};
     bool sensor_visible{true};
+    std::string subkind{};
 };
 
 struct WorldSanityReport {

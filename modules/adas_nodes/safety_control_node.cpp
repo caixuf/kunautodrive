@@ -247,6 +247,7 @@ void on_perception_obstacles(const Message* msg, void*) {
                 case OBJ_TYPE_PEDESTRIAN:   strncpy(state->obs_type[i], "pedestrian", sizeof(state->obs_type[i])-1); break;
                 case OBJ_TYPE_CYCLIST:      strncpy(state->obs_type[i], "cyclist", sizeof(state->obs_type[i])-1); break;
                 case OBJ_TYPE_CONSTRUCTION: strncpy(state->obs_type[i], "construction", sizeof(state->obs_type[i])-1); break;
+                case OBJ_TYPE_SIGN:         strncpy(state->obs_type[i], "sign", sizeof(state->obs_type[i])-1); break;
                 default:                    strncpy(state->obs_type[i], "unknown", sizeof(state->obs_type[i])-1); break;
             }
             if (o->type == OBJ_TYPE_PEDESTRIAN && pf_same_elevation_layer((double)o->z, 0.0)) {
@@ -278,8 +279,10 @@ double nearest_same_lane_gap(const VehicleState& state, const SafetyParams& para
         if (!pf_same_elevation_layer(state.obs_z[i], state.z)) continue;
         if (std::strcmp(state.obs_type[i], "pedestrian") == 0 ||
             std::strcmp(state.obs_type[i], "construction") == 0) continue;
-        const bool is_unknown = (std::strcmp(state.obs_type[i], "unknown") == 0);
+        const bool is_sign = (std::strcmp(state.obs_type[i], "sign") == 0);
+        const bool is_unknown = (std::strcmp(state.obs_type[i], "unknown") == 0) || is_sign;
         if (is_unknown) {
+            if (is_sign && (state.obs_z[i] - state.z) >= 2.1) continue;
             if (pf_is_low_ground_curb(state.obs_len[i], state.obs_wid[i], state.obs_height[i])) {
                 continue;
             }
@@ -326,7 +329,8 @@ double min_vehicle_ttc(const VehicleState& state, double* out_dx = nullptr, doub
         if (!pf_same_elevation_layer(state.obs_z[i], state.z)) continue;
         if (std::strcmp(state.obs_type[i], "pedestrian") == 0 ||
             std::strcmp(state.obs_type[i], "construction") == 0) continue;
-        const bool is_unknown = (std::strcmp(state.obs_type[i], "unknown") == 0);
+        const bool is_sign = (std::strcmp(state.obs_type[i], "sign") == 0);
+        const bool is_unknown = (std::strcmp(state.obs_type[i], "unknown") == 0) || is_sign;
         const double ex = state.obs_x[i] - state.x;
         const double ey = state.obs_y[i] - state.y;
         const double along = ex * fwd_x + ey * fwd_y;      /* 沿车头前方距离 */
@@ -335,6 +339,7 @@ double min_vehicle_ttc(const VehicleState& state, double* out_dx = nullptr, doub
 
         double clearance = 0.0;
         if (is_unknown) {
+            if (is_sign && (state.obs_z[i] - state.z) >= 2.1) continue;
             if (pf_is_low_ground_curb(state.obs_len[i], state.obs_wid[i], state.obs_height[i])) {
                 continue;
             }

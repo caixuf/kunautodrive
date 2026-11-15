@@ -207,7 +207,7 @@ export function createEffectView(scene) {
     const [fx, fy] = forwardENU(heading);
     const rearEnuX = ego.x - fx * BRAKE_REAR_OFFSET_M;
     const rearEnuY = ego.y - fy * BRAKE_REAR_OFFSET_M;
-    const groundZ = (ego.z != null) ? ego.z : roadHeightAt(store, rearEnuX, rearEnuY);
+    const groundZ = (ego.z != null) ? ego.z : roadHeightAt(store, rearEnuX, rearEnuY, ego.z);
     const slopePitch = roadPitchAt(store, rearEnuX, rearEnuY, heading, groundZ);
     const [bx, by, bz] = worldToThree(rearEnuX, rearEnuY, groundZ + BRAKE_LIFT_M);
 
@@ -248,7 +248,7 @@ export function createEffectView(scene) {
       group.add(hazardFlash);
     }
 
-    const groundZ = (ego.z != null) ? ego.z : roadHeightAt(store, ego.x, ego.y);
+    const groundZ = (ego.z != null) ? ego.z : roadHeightAt(store, ego.x, ego.y, ego.z);
     const [tx, ty, tz] = worldToThree(ego.x, ego.y, groundZ + HAZARD_HEIGHT_M);
     hazardFlash.position.set(tx, ty, tz);
     const hs = flashOn ? 1.0 : 0.35;
@@ -324,7 +324,7 @@ export function createEffectView(scene) {
       const cutDirZ = cutSignEgo * egoNormZ;
       const sideSign = (cutDirX * normX + cutDirZ * normZ) >= 0 ? 1 : -1;
 
-      const entGroundZ = (ent.z != null) ? ent.z : roadHeightAt(store, ent.x || 0, ent.y || 0);
+      const entGroundZ = (ent.z != null) ? ent.z : roadHeightAt(store, ent.x || 0, ent.y || 0, ego.z);
       const slopePitch = roadPitchAt(store, ent.x || 0, ent.y || 0, entHeading, entGroundZ);
       const [cx, cy, cz] = worldToThree(ent.x || 0, ent.y || 0, entGroundZ + CUTIN_LIFT_M);
       const halfW = (ent.width || 2.0) * 0.5;
@@ -362,7 +362,7 @@ export function createEffectView(scene) {
     const [fx, fy] = forwardENU(heading);
     const rearEnuX = ego.x - fx * WAKE_REAR_OFFSET_M;
     const rearEnuY = ego.y - fy * WAKE_REAR_OFFSET_M;
-    const groundZ = (ego.z != null) ? ego.z : roadHeightAt(store, rearEnuX, rearEnuY);
+    const groundZ = (ego.z != null) ? ego.z : roadHeightAt(store, rearEnuX, rearEnuY, ego.z);
     const [rx, ry, rz] = worldToThree(rearEnuX, rearEnuY, groundZ + WAKE_LIFT_M);
 
     const [fwdX, , fwdZ] = worldToThree(fx, fy, 0);

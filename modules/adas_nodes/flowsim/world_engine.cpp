@@ -780,9 +780,11 @@ WorldGenConfig parse_world_gen_obj(cJSON* jwg, uint32_t default_seed) {
                 sp.has_collider = cJSON_IsTrue(jcol);
                 sp.collider_explicit = true;
             } else {
-                sp.has_collider = (sp.kind == "bollard" || sp.kind == "ev_charger" ||
-                                   sp.kind == "bus_shelter" || sp.kind == "planter" ||
-                                   sp.kind == "landmark_tower" || sp.kind == "plaza_pavilion");
+                const bool is_overhead =
+                    (sp.kind == "overhead_gantry" || sp.kind == "arch_landmark" ||
+                     sp.kind == "gantry" || sp.kind == "arch" ||
+                     sp.kind == "banner" || sp.kind == "decal");
+                sp.has_collider = !is_overhead;
             }
             cfg.custom_props.push_back(std::move(sp));
             idx++;
@@ -1312,7 +1314,7 @@ void pass_piers(const std::vector<CompiledEdge>& edges,
         for (double s = 12.0; s < ce.total_len; s += step) {
             double cx, cy, cz, hdg;
             ce.sample_at_s(s, cx, cy, cz, hdg);
-            if (cz < 0.8 || (s - last_s) < 19.5) continue;
+            if (cz < 2.2 || (s - last_s) < 19.5) continue;
             if (field.is_excluded(cx, cy, cz, WORLD_MASK_PIER)) {
                 layout.sanity.pruned_excluded++;
                 continue;
@@ -1328,13 +1330,13 @@ void pass_piers(const std::vector<CompiledEdge>& edges,
                     if (!field.hits_lower_asphalt(c1x, c1y, cz, 0.8) &&
                         !field.hits_lower_asphalt(c2x, c2y, cz, 0.8)) {
                         layout.piers.push_back({
-                            cx, cy, 0.0, cz - 0.35, hdg, pier_hw, 2, col_off, 0.72,
+                            cx, cy, 0.0, cz - 0.45, hdg, pier_hw, 2, col_off, 0.72,
                             col_off * 2.2, 1.7, 0.75
                         });
                     }
                 } else {
                     layout.piers.push_back({
-                        cx, cy, 0.0, cz - 0.3, hdg, pier_hw, 1, 0.0, 0.75,
+                        cx, cy, 0.0, cz - 0.45, hdg, pier_hw, 1, 0.0, 0.75,
                         std::max(1.8, pier_hw * 1.4), 1.5, 0.65
                     });
                 }
@@ -1353,7 +1355,7 @@ void pass_piers(const std::vector<CompiledEdge>& edges,
                     }
                 }
                 layout.piers.push_back({
-                    cx, cy, 0.0, cz - 0.4, hdg, pier_hw, 2, col_off, 0.75,
+                    cx, cy, 0.0, cz - 0.45, hdg, pier_hw, 2, col_off, 0.75,
                     std::max(pier_hw * 1.95, col_off * 2.15), 1.9, 0.85
                 });
             }
@@ -1363,11 +1365,13 @@ void pass_piers(const std::vector<CompiledEdge>& edges,
 }
 
 bool spot_clear_for_roadside_prop(const SpatialField& field, double x, double y, double z,
-                                  double asphalt_margin, uint32_t kind_mask) {
+                                  double asphalt_margin, uint32_t kind_mask,
+                                  bool use_tight_asphalt = false,
+                                  bool allow_near_parking = false) {
     if (!is_finite_pos(x, y, z)) return false;
     if (field.in_junction(x, y, 3.0)) return false;
-    if (field.inside_road_band(x, y, z, asphalt_margin, false)) return false;
-    if (field.near_parking_cutout(x, y, z, 1.0)) return false;
+    if (field.inside_road_band(x, y, z, asphalt_margin, use_tight_asphalt)) return false;
+    if (!allow_near_parking && field.near_parking_cutout(x, y, z, 1.0)) return false;
     if (field.near_traffic_light(x, y, z, 7.5)) return false;
     if (field.is_excluded(x, y, z, kind_mask)) return false;
     return true;
@@ -1378,24 +1382,77 @@ void pass_signs(const std::vector<CompiledEdge>& edges,
                 WorldLayout& layout) {
     for (size_t ei = 0; ei < edges.size(); ++ei) {
         const auto& ce = edges[ei];
-        if (!is_surface_corridor_edge(ce) || !ce.gen_signs || ce.is_tunnel || ce.total_len < 24.0) continue;
+        if (!ce.gen_signs || ce.total_len < 24.0) continue;
 
-        /* 1) Speed limit sign near edge start on right shoulder */
+        /* Subsurface garage hall & open ramp signage (B1 speed limit, exit, slope warning) */
+        if (ce.type == "garage_hall") {
+            const double lat = -(ce.half_w + 0.85);
+            const double s_spd = std::min(16.0, ce.total_len * 0.20);
+            {
+                double cx, cy, cz, hdg;
+                ce.sample_at_s(s_spd, cx, cy, cz, hdg);
+                double sc = std::cos(hdg), ss = std::sin(hdg);
+                double sx = cx - ss * lat, sy = cy + sc * lat;
+                if (spot_clear_for_roadside_prop(field, sx, sy, cz, 0.55, WORLD_MASK_SIGN, true, true)) {
+                    layout.signs.push_back({sx, sy, cz, hdg + kPi, "speed_limit", "15", 15});
+                }
+            }
+            if (ce.total_len >= 48.0) {
+                double s_exit = std::max(s_spd + 20.0, ce.total_len - 20.0);
+                double cx, cy, cz, hdg;
+                ce.sample_at_s(s_exit, cx, cy, cz, hdg);
+                double sc = std::cos(hdg), ss = std::sin(hdg);
+                double sx = cx - ss * lat, sy = cy + sc * lat;
+                if (spot_clear_for_roadside_prop(field, sx, sy, cz, 0.55, WORLD_MASK_SIGN, true, true)) {
+                    layout.signs.push_back({sx, sy, cz, hdg + kPi, "exit_sign", "EXIT", 0});
+                }
+            }
+            continue;
+        }
+        if (ce.type == "open_ramp") {
+            const double lat = -(ce.half_w + 1.10);
+            const double s_spd = std::min(18.0, ce.total_len * 0.24);
+            {
+                double cx, cy, cz, hdg;
+                ce.sample_at_s(s_spd, cx, cy, cz, hdg);
+                double sc = std::cos(hdg), ss = std::sin(hdg);
+                double sx = cx - ss * lat, sy = cy + sc * lat;
+                if (spot_clear_for_roadside_prop(field, sx, sy, cz, 0.70, WORLD_MASK_SIGN, true, true)) {
+                    layout.signs.push_back({sx, sy, cz, hdg + kPi, "speed_limit", "25", 25});
+                }
+            }
+            if (ce.total_len >= 50.0) {
+                double s_warn = std::min(ce.total_len * 0.60, 55.0);
+                double cx, cy, cz, hdg;
+                ce.sample_at_s(s_warn, cx, cy, cz, hdg);
+                double sc = std::cos(hdg), ss = std::sin(hdg);
+                double sx = cx - ss * lat, sy = cy + sc * lat;
+                if (spot_clear_for_roadside_prop(field, sx, sy, cz, 0.70, WORLD_MASK_SIGN, true, true)) {
+                    layout.signs.push_back({sx, sy, cz, hdg + kPi, "slope_warn", "SLOPE", 0});
+                }
+            }
+            continue;
+        }
+
+        if (!is_surface_corridor_edge(ce) || ce.is_tunnel) continue;
+
+        /* 1) Speed limit signs: entry sign + periodic repeaters every 120m on long corridors */
+        int raw_kph = static_cast<int>(std::llround(ce.speed_limit_mps * 3.6 / 5.0)) * 5;
+        int kph = std::max(20, std::min(120, raw_kph > 0 ? raw_kph : 60));
         double s_spd = std::min(30.0, ce.total_len * 0.22);
-        {
+        for (double s_cur = s_spd; s_cur <= ce.total_len - 18.0; s_cur += 120.0) {
             double cx, cy, cz, hdg;
-            ce.sample_at_s(s_spd, cx, cy, cz, hdg);
+            ce.sample_at_s(s_cur, cx, cy, cz, hdg);
             double sc = std::cos(hdg), ss = std::sin(hdg);
             double lat = -(ce.half_w + 1.55); /* ENU right side for forward traffic */
             double sx = cx - ss * lat;
             double sy = cy + sc * lat;
             if (spot_clear_for_roadside_prop(field, sx, sy, cz, 0.8, WORLD_MASK_SIGN)) {
-                int raw_kph = static_cast<int>(std::llround(ce.speed_limit_mps * 3.6 / 5.0)) * 5;
-                int kph = std::max(20, std::min(120, raw_kph > 0 ? raw_kph : 60));
                 layout.signs.push_back({
                     sx, sy, cz, hdg + kPi, "speed_limit", std::to_string(kph), kph
                 });
             }
+            if (ce.total_len < 150.0) break;
         }
 
         /* 2) Crosswalk / Junction warning or STOP sign before downstream 3+ arm intersection */
@@ -1459,7 +1516,7 @@ void pass_furniture(const std::vector<CompiledEdge>& edges,
                 double fy = cy + sc * lat;
                 if (spot_clear_for_roadside_prop(field, fx, fy, cz, 1.1, WORLD_MASK_FURNITURE)) {
                     layout.furniture.push_back({
-                        fx, fy, cz, hdg, 0.45, 0.45, 0.95, "hydrant", true, false
+                        fx, fy, cz, hdg, 0.45, 0.45, 0.95, "hydrant", true, true
                     });
                 }
             }
@@ -1625,13 +1682,14 @@ void pass_custom_props(const std::vector<CompiledEdge>& edges,
 }
 
 void prune_and_audit(const SpatialField& field, WorldLayout& layout) {
-    auto prune_list = [&](auto& vec, auto get_z, double extra_margin, double junct_margin) {
+    auto prune_list = [&](auto& vec, auto get_z, double extra_margin, double junct_margin,
+                          bool use_tight = false) {
         vec.erase(std::remove_if(vec.begin(), vec.end(), [&](const auto& item) {
             if (field.in_junction(item.x, item.y, junct_margin)) {
                 layout.sanity.pruned_junction++;
                 return true;
             }
-            if (field.inside_road_band(item.x, item.y, get_z(item), extra_margin, false)) {
+            if (field.inside_road_band(item.x, item.y, get_z(item), extra_margin, use_tight)) {
                 layout.sanity.pruned_asphalt++;
                 return true;
             }
@@ -1641,7 +1699,7 @@ void prune_and_audit(const SpatialField& field, WorldLayout& layout) {
 
     prune_list(layout.poles, [](const WorldPole& p) { return p.z; }, -0.55, 3.0);
     prune_list(layout.trees, [](const WorldTree& t) { return t.z; }, 0.85, 2.0);
-    prune_list(layout.signs, [](const WorldSign& s) { return s.z; }, 0.8, 3.0);
+    prune_list(layout.signs, [](const WorldSign& s) { return s.z; }, 0.35, 3.0, true);
 
     int intrusions = 0;
     for (const auto& p : layout.poles) {
@@ -1686,41 +1744,48 @@ void build_colliders_from_layout(WorldLayout& layout) {
         });
     }
     for (const auto& p : layout.poles) {
+        if (!p.has_collider) continue;
         layout.colliders.push_back({
-            "pole", p.x, p.y, p.z, 0.45, 0.45, p.heading, 6.5, true, true
+            "pole", p.x, p.y, p.z, 0.45, 0.45, p.heading, 6.5, true, p.sensor_visible
         });
     }
     for (const auto& t : layout.trees) {
+        if (!t.has_collider) continue;
         layout.colliders.push_back({
-            "tree", t.x, t.y, t.z, 0.90, 0.90, t.heading, 4.6 * t.height_scale, true, true
+            "tree", t.x, t.y, t.z, 0.90, 0.90, t.heading, 4.6 * t.height_scale, true, t.sensor_visible
         });
     }
     for (const auto& s : layout.signs) {
+        if (!s.has_collider) continue;
         layout.colliders.push_back({
-            "sign", s.x, s.y, s.z, 0.35, 0.35, s.heading, 2.5, true, false
+            "sign", s.x, s.y, s.z,
+            std::max(0.40, s.length), std::max(0.50, s.width), s.heading,
+            std::max(1.80, s.height), false, s.sensor_visible, s.kind
         });
     }
     for (const auto& b : layout.barrier_spans) {
+        if (!b.has_collider) continue;
         layout.colliders.push_back({
-            "barrier", b.mid_x, b.mid_y, b.mid_z, b.len, 0.32, b.heading, 0.85, false, false
+            "barrier", b.mid_x, b.mid_y, b.mid_z, b.len, 0.32, b.heading, 0.85, false, b.sensor_visible
         });
     }
     for (const auto& pr : layout.piers) {
+        if (!pr.has_collider) continue;
         double h = std::max(0.5, pr.z_top - pr.z_ground);
         double dia = pr.radius * 2.0;
         if (pr.columns <= 1) {
             layout.colliders.push_back({
-                "pier", pr.x, pr.y, pr.z_ground, dia, dia, pr.heading, h, true, false
+                "pier", pr.x, pr.y, pr.z_ground, dia, dia, pr.heading, h, true, pr.sensor_visible
             });
         } else {
             double nx = -std::sin(pr.heading), ny = std::cos(pr.heading);
             layout.colliders.push_back({
                 "pier", pr.x - nx * pr.col_offset, pr.y - ny * pr.col_offset, pr.z_ground,
-                dia, dia, pr.heading, h, true, false
+                dia, dia, pr.heading, h, true, pr.sensor_visible
             });
             layout.colliders.push_back({
                 "pier", pr.x + nx * pr.col_offset, pr.y + ny * pr.col_offset, pr.z_ground,
-                dia, dia, pr.heading, h, true, false
+                dia, dia, pr.heading, h, true, pr.sensor_visible
             });
         }
     }
@@ -1729,7 +1794,7 @@ void build_colliders_from_layout(WorldLayout& layout) {
         layout.colliders.push_back({
             cp.kind, cp.x, cp.y, cp.z,
             std::max(0.4, cp.length), std::max(0.4, cp.width),
-            cp.heading, std::max(0.5, cp.height), false, true
+            cp.heading, std::max(0.5, cp.height), false, cp.sensor_visible, cp.label
         });
     }
 
@@ -1995,9 +2060,14 @@ std::string serialize_world_layout_json(const WorldLayout& layout) {
         out += ",\"y\":"; append_f(out, s.y);
         out += ",\"z\":"; append_f(out, s.z);
         out += ",\"heading\":"; append_f(out, s.heading);
+        out += ",\"length\":"; append_f(out, s.length);
+        out += ",\"width\":"; append_f(out, s.width);
+        out += ",\"height\":"; append_f(out, s.height);
         out += ",\"kind\":"; append_str_escaped(out, s.kind);
         out += ",\"label\":"; append_str_escaped(out, s.label);
         out += ",\"speed_kph\":"; append_i(out, s.speed_kph);
+        out += ",\"collider\":"; out += (s.has_collider ? "true" : "false");
+        out += ",\"sensor_visible\":"; out += (s.sensor_visible ? "true" : "false");
         out += "}";
     }
     out += "]";

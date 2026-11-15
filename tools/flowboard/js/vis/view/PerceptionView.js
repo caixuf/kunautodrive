@@ -31,7 +31,7 @@ const FLOATS_PER_CORNER = SEGMENTS_PER_CORNER * VERTS_PER_SEGMENT * COMPS_PER_VE
 const CORNERS = 8;
 const FLOATS_PER_BOX = CORNERS * FLOATS_PER_CORNER; // 144
 const VERTICES_PER_BOX = CORNERS * SEGMENTS_PER_CORNER * VERTS_PER_SEGMENT; // 48
-const MAX_ENTITIES = 96;
+const MAX_ENTITIES = 128;
 
 // ── 传感器前视包络常量 ──
 const SWEEP_SEGMENTS = 32;
@@ -94,7 +94,7 @@ function _createLidarSpriteTexture() {
 }
 
 function _entityDims(ent) {
-  const etype = ent.type || ent.kind || 'car';
+  const etype = (ent.type && ent.type !== 'unknown') ? ent.type : (ent.kind || ent.type || 'car');
   let defLen, defWid, defH;
   switch (etype) {
     case 'pedestrian':
@@ -109,7 +109,7 @@ function _entityDims(ent) {
       defLen = 0.16; defWid = 1.85; defH = 0.18; break;
     case 'bollard':
       defLen = 0.18; defWid = 0.18; defH = 0.78; break;
-    case 'charger':
+    case 'charger': case 'ev_charger':
       defLen = 0.42; defWid = 0.34; defH = 1.55; break;
     case 'pole':
       defLen = 0.45; defWid = 0.45; defH = 6.5; break;
@@ -119,6 +119,22 @@ function _entityDims(ent) {
       defLen = 4.6; defWid = 5.1; defH = 0.7; break;
     case 'gate':
       defLen = 2.0; defWid = 0.35; defH = 1.2; break;
+    case 'sign': case 'speed_limit': case 'stop': case 'stop_sign':
+    case 'warning': case 'crosswalk_warn': case 'curve_warn':
+    case 'slope_warn': case 'height_limit': case 'exit_sign':
+      defLen = 0.55; defWid = 0.85; defH = 2.6; break;
+    case 'barrier':
+      defLen = 4.0; defWid = 0.35; defH = 0.85; break;
+    case 'pier': case 'pillar':
+      defLen = 1.2; defWid = 1.2; defH = 3.2; break;
+    case 'wall':
+      defLen = 4.0; defWid = 0.4; defH = 3.2; break;
+    case 'hydrant':
+      defLen = 0.45; defWid = 0.45; defH = 0.95; break;
+    case 'bus_shelter':
+      defLen = 4.2; defWid = 1.35; defH = 2.5; break;
+    case 'bench':
+      defLen = 1.5; defWid = 0.6; defH = 0.85; break;
     case 'unknown_static': case 'unknown': case 'construction':
       defLen = 0.8; defWid = 0.8; defH = 1.0; break;
     case 'car': default:
@@ -423,8 +439,9 @@ export function createPerceptionView(scene) {
     return { pts: null, hasElevation: false };
   }
 
-  function _sampleBranchPoints(rawPts, store, hasElevation = false) {
+  function _sampleBranchPoints(rawPts, store, hasElevation = false, seedGroundZ = undefined) {
     const raw3d = [];
+    let prevGroundZ = Number.isFinite(Number(seedGroundZ)) ? Number(seedGroundZ) : undefined;
     for (let i = 0; i < rawPts.length; i++) {
       const pt = rawPts[i];
       if (!pt) continue;
@@ -433,7 +450,8 @@ export function createPerceptionView(scene) {
       if (!Number.isFinite(px) || !Number.isFinite(py)) continue;
       const baseZ = (hasElevation && pt.length >= 3 && Number.isFinite(Number(pt[2])))
         ? Number(pt[2])
-        : roadHeightAt(store, px, py);
+        : roadHeightAt(store, px, py, prevGroundZ);
+      prevGroundZ = baseZ;
       const [tx, ty, tz] = worldToThree(px, py, baseZ + PRED_LIFT_M);
       raw3d.push(new THREE.Vector3(tx, ty, tz));
     }
@@ -514,7 +532,10 @@ export function createPerceptionView(scene) {
         const { pts: rawPts, hasElevation } = _extractBranchWorldPoints(pred, br, matchedEnt, store);
         if (!rawPts || rawPts.length < 2) continue;
 
-        const pts = _sampleBranchPoints(rawPts, store, hasElevation);
+        const seedGroundZ = (matchedEnt && matchedEnt.z != null && Number.isFinite(Number(matchedEnt.z)))
+          ? Number(matchedEnt.z)
+          : ((store.ego && Number.isFinite(Number(store.ego.z))) ? Number(store.ego.z) : undefined);
+        const pts = _sampleBranchPoints(rawPts, store, hasElevation, seedGroundZ);
         const n = pts.length;
         if (n < 2) continue;
         if (vCursor + n * 2 > MAX_PRED_VERTS || iCursor + (n - 1) * 6 > MAX_PRED_INDICES) break;
@@ -658,7 +679,7 @@ export function createPerceptionView(scene) {
         if (dist > 75 || dist < 0.3) continue;
 
         const { halfL, halfW, vehH } = _entityDims(ent);
-        const entGroundZ = (ent.z != null) ? ent.z : roadHeightAt(store, ent.x || 0, ent.y || 0);
+        const entGroundZ = (ent.z != null) ? ent.z : roadHeightAt(store, ent.x || 0, ent.y || 0, egoZ);
         const [cx, cy, cz] = worldToThree(ent.x || 0, ent.y || 0, entGroundZ + VEHICLE_GROUND_Y);
 
         const [efx, efy] = forwardENU(ent.heading || 0);
@@ -851,7 +872,7 @@ function _updateBrackets(ego, entities, count, store, positions) {
     const cl = Math.max(0.06, Math.min(CORNER_LEN, minDim * 0.24));
     const clV = Math.max(0.04, Math.min(cl, vehH * 0.45));
 
-    const entZ = (ent.z != null) ? ent.z : roadHeightAt(store, ent.x || 0, ent.y || 0);
+    const entZ = (ent.z != null) ? ent.z : roadHeightAt(store, ent.x || 0, ent.y || 0, ego.z);
     const [cx, cyRaw, cz] = worldToThree(ent.x || 0, ent.y || 0, entZ + VEHICLE_GROUND_Y);
     const bottomY = cyRaw + 0.04;
     const roofY = cyRaw + vehH + 0.04;
@@ -901,7 +922,7 @@ function _updateBrackets(ego, entities, count, store, positions) {
 }
 
 function _updateRays(ego, entities, count, store, positions, colors) {
-  const egoGroundZ = (ego.z != null) ? ego.z : roadHeightAt(store, ego.x, ego.y);
+  const egoGroundZ = (ego.z != null) ? ego.z : roadHeightAt(store, ego.x, ego.y, ego.z);
   const [ex, ey, ez] = worldToThree(ego.x, ego.y, egoGroundZ + VEHICLE_GROUND_Y + RAY_ABOVE_ROAD_M);
   const [efx, efy] = forwardENU(ego.heading || 0);
   const [egoFwdX, , egoFwdZ] = worldToThree(efx, efy, 0);
@@ -918,7 +939,7 @@ function _updateRays(ego, entities, count, store, positions, colors) {
     }
 
     const dist = distanceENU(ego.x, ego.y, ent.x || 0, ent.y || 0);
-    const entGroundZ = (ent.z != null) ? ent.z : roadHeightAt(store, ent.x || 0, ent.y || 0);
+    const entGroundZ = (ent.z != null) ? ent.z : roadHeightAt(store, ent.x || 0, ent.y || 0, egoGroundZ);
     const [tx, ty, tz] = worldToThree(ent.x || 0, ent.y || 0, entGroundZ + VEHICLE_GROUND_Y + RAY_ABOVE_ROAD_M);
 
     const dirX = (tx - ex) / (dist || 1);

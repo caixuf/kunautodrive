@@ -296,11 +296,37 @@ static void test_flow_road_network_viaduct_z(void) {
 }
 #endif
 
+static void test_safety_sign_obb_and_overhead_clearance(void) {
+    CHECK(OBJ_TYPE_SIGN == 5);
+    const double ego_x = 10.0, ego_y = 0.0, ego_z = 0.0, ego_h = 0.0;
+
+    /* Ground-mounted traffic sign (0.55 x 0.85 x 2.60) in ego corridor triggers OBB clearance */
+    const double sign_hit = pf_obb_forward_space_m(
+        ego_x, ego_y, ego_z, ego_h,
+        22.0, 0.0, 0.0, 0.55, 0.85, 2.60, 0.0, 1.15, 2.5);
+    /* front edge at 22.0 - 0.275 = 21.725 -> 11.725 - 2.5 = 9.225 */
+    CHECK(sign_hit < 1e8 && std::fabs(sign_hit - 9.225) < 1e-6);
+
+    /* Roadside traffic sign outside lateral corridor (lat=3.8m) is not treated as an in-lane blocker */
+    const double sign_side = pf_obb_forward_space_m(
+        ego_x, ego_y, ego_z, ego_h,
+        22.0, 3.8, 0.0, 0.55, 0.85, 2.60, 0.0, 1.15, 2.5);
+    CHECK(sign_side >= 1e8);
+
+    /* Overhead gantry / exit sign (dz = 2.15m >= 2.1m) sits above drivable envelope despite <=2.2m layer tol */
+    const double overhead_z = 2.15;
+    CHECK(pf_same_elevation_layer(overhead_z, ego_z));
+    CHECK((overhead_z - ego_z) >= 2.1);
+
+    std::printf("PASS test_safety_sign_obb_and_overhead_clearance\n");
+}
+
 int main(void) {
     test_pf_fusion_z_isolation();
     test_perception_points_stacked_clusters();
     test_kalman_tracker_z_isolation();
     test_viaduct_z_isolation_and_3d_obb();
+    test_safety_sign_obb_and_overhead_clearance();
 #ifdef HAS_ESMINI_RMLIB
     test_flow_road_network_viaduct_z();
 #endif

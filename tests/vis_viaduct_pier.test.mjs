@@ -77,4 +77,43 @@ ok('桥墩沿桥分布（首墩 x≈12, 末墩 x≈78）',
 
 ok('地面路 / 隧道不生成桥墩（立柱仅 4 根）', columns.length === 4);
 
+const fallbackCapMaxY = caps.reduce((m, c) => Math.max(m, c.position.y + c.scale.y * 0.5), -Infinity);
+ok(`回退桥墩盖梁顶面严格 <= 桥面下沿 (${fallbackCapMaxY.toFixed(3)}m <= 5.55m)`,
+   caps.length > 0 && fallbackCapMaxY <= 6.0 - 0.45 + 1e-6);
+
+// 权威 worldLayout.piers 指定 z_top 时，盖梁中心为 z_top - 0.5*cap_h，绝不穿透桥面
+const scene2 = new globalThis.THREE.Scene();
+createConnectorView(scene2).build(
+  { edges: [bridgeEdge, groundEdge, tunnelEdge] },
+  { worldLayout: { piers: [{ x: 30, y: 0, z_ground: 0, z_top: 4.5, heading: 0, columns: 1, radius: 0.55, cap_len: 5.0, cap_w: 1.5, cap_h: 0.85 }] } },
+);
+const dummy2 = new globalThis.THREE.Object3D();
+let authCapMaxY = -Infinity;
+let authCapCount = 0;
+scene2.traverse((ch) => {
+  if (ch.isInstancedMesh && ch.geometry && ch.geometry.type === 'BoxGeometry') {
+    for (let i = 0; i < ch.count; i++) {
+      ch.getMatrixAt(i, dummy2.matrix);
+      dummy2.matrix.decompose(dummy2.position, dummy2.quaternion, dummy2.scale);
+      const topY = dummy2.position.y + dummy2.scale.y * 0.5;
+      if (topY > authCapMaxY) authCapMaxY = topY;
+      authCapCount++;
+    }
+  }
+});
+ok(`权威桥墩盖梁顶面严格 <= z_top (count=${authCapCount}, maxY=${authCapMaxY.toFixed(3)}m <= 4.50m)`,
+   authCapCount > 0 && authCapMaxY <= 4.5 + 1e-6);
+
+// garage_hall 路型不重复绘制 RoadView 双黄中线
+const { createRoadView } = await import('../tools/flowboard/js/vis/view/RoadView.js');
+const roadScene = new globalThis.THREE.Scene();
+const roadView = createRoadView(roadScene);
+roadView.build({
+  edges: [
+    { id: 'b1_hall', name: 'b1_hall', type: 'garage_hall', lanes: 4, lane_width: 3.5, oneway: false,
+      nodes: [[-40, 0, -4.5], [40, 0, -4.5]] },
+  ],
+});
+ok('garage_hall 零 RoadView 重复双黄中线', roadView.getStats().doubleYellowCenterlines === 0);
+
 done();

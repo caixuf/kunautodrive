@@ -153,6 +153,8 @@ static const char* type_to_string(int cls) {
         case 1: return "VEHICLE";
         case 2: return "PEDESTRIAN";
         case 3: return "CYCLIST";
+        case 4: return "CONSTRUCTION";
+        case 5: return "SIGN";
         default: return "UNKNOWN";
     }
 }

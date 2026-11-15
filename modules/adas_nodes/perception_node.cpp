@@ -295,6 +295,14 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
                         g.obs_length[i] = 1.0;
                         g.obs_width[i]  = 1.0;
                         g.obs_height[i] = 1.0;
+                    } else if (strcmp(t, "sign") == 0 || strcmp(t, "speed_limit") == 0 ||
+                               strcmp(t, "stop_sign") == 0 || strcmp(t, "crosswalk_warn") == 0 ||
+                               strcmp(t, "curve_warn") == 0 || strcmp(t, "slope_warn") == 0 ||
+                               strcmp(t, "height_limit") == 0 || strcmp(t, "exit_sign") == 0) {
+                        g.obs_type[i]   = OBJ_TYPE_SIGN;
+                        g.obs_length[i] = 0.55;
+                        g.obs_width[i]  = 0.85;
+                        g.obs_height[i] = 2.60;
                     } else {
                         g.obs_type[i]   = OBJ_TYPE_UNKNOWN;
                         g.obs_length[i] = 0.8;

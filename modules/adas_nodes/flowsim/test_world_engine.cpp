@@ -312,6 +312,112 @@ static void test_ramp_touchdown_and_podium_clearance() {
           footprint_intrusions);
 }
 
+static void test_default_physics_signage_and_pier_clearance() {
+    std::printf("\n=== [Test 5] Default Physics/Sensor Props, B1 Signage & Pier z_top Clearance ===\n");
+    const char* rn = R"({
+      "edges": [
+        { "id": 0, "name": "b1_hall", "type": "garage_hall", "lanes": 2, "lane_width": 3.5,
+          "oneway": false, "nodes": [[-60, 0, -4.5], [0, 0, -4.5]] },
+        { "id": 1, "name": "b1_ramp", "type": "open_ramp", "lanes": 2, "lane_width": 3.5,
+          "oneway": false, "nodes": [[0, 0, -4.5], [70, 0, 0.0]] },
+        { "id": 2, "name": "surface_ave", "type": "urban", "lanes": 2, "lane_width": 3.5,
+          "oneway": false, "speed_limit": 13.89, "nodes": [[70, 0, 0.0], [230, 0, 0.0]] },
+        { "id": 3, "name": "rising_viaduct", "type": "ramp_curve", "lanes": 2, "lane_width": 3.5,
+          "oneway": true, "bridge": true,
+          "nodes": [[230, 0, 0.0], [270, 0, 1.5], [305, 0, 3.2], [410, 0, 5.6]] }
+      ]
+    })";
+    const char* wg = R"({
+      "world_gen": {
+        "preset": "modern_cbd",
+        "seed": 17,
+        "custom_props": [
+          { "id": "default_ev_box", "kind": "ev_charger", "placement": "road_s",
+            "edge": "surface_ave", "s": 60.0, "side": "right", "lateral_offset": 1.2 }
+        ]
+      }
+    })";
+
+    flowsim::WorldEngineInput in;
+    in.road_network_json = rn;
+    in.world_gen_json = wg;
+    auto layout = flowsim::compile_world(in);
+
+    bool all_poles_phys = !layout.poles.empty();
+    for (const auto& p : layout.poles) {
+        if (!p.has_collider || !p.sensor_visible) all_poles_phys = false;
+    }
+    CHECK(all_poles_phys, "All generated poles default to has_collider=true & sensor_visible=true");
+
+    bool all_trees_phys = !layout.trees.empty();
+    for (const auto& t : layout.trees) {
+        if (!t.has_collider || !t.sensor_visible) all_trees_phys = false;
+    }
+    CHECK(all_trees_phys, "All generated trees default to has_collider=true & sensor_visible=true");
+
+    bool all_barriers_phys = !layout.barrier_spans.empty();
+    for (const auto& b : layout.barrier_spans) {
+        if (!b.has_collider || !b.sensor_visible) all_barriers_phys = false;
+    }
+    CHECK(all_barriers_phys, "All generated barriers default to has_collider=true & sensor_visible=true");
+
+    bool all_bldgs_phys = !layout.buildings.empty();
+    for (const auto& b : layout.buildings) {
+        if (!b.has_collider || !b.sensor_visible) all_bldgs_phys = false;
+    }
+    CHECK(all_bldgs_phys, "All generated buildings default to has_collider=true & sensor_visible=true");
+
+    bool all_props_phys = !layout.props.empty();
+    for (const auto& cp : layout.props) {
+        if (!cp.has_collider || !cp.sensor_visible) all_props_phys = false;
+    }
+    CHECK(all_props_phys, "Non-overhead custom_props default to has_collider=true & sensor_visible=true");
+
+    bool all_signs_phys = !layout.signs.empty();
+    bool has_b1_15 = false, has_b1_exit = false, has_ramp_25 = false, has_ramp_slope = false;
+    for (const auto& s : layout.signs) {
+        if (!s.has_collider || !s.sensor_visible ||
+            std::fabs(s.length - 0.55) > 1e-6 || std::fabs(s.width - 0.85) > 1e-6 ||
+            std::fabs(s.height - 2.60) > 1e-6) {
+            all_signs_phys = false;
+        }
+        if (s.kind == "speed_limit" && s.speed_kph == 15) has_b1_15 = true;
+        if (s.kind == "exit_sign") has_b1_exit = true;
+        if (s.kind == "speed_limit" && s.speed_kph == 25) has_ramp_25 = true;
+        if (s.kind == "slope_warn") has_ramp_slope = true;
+    }
+    CHECK(all_signs_phys, "All signs export default physics, visibility & 0.55x0.85x2.60 dimensions");
+    CHECK(has_b1_15 && has_b1_exit, "B1 garage_hall generates 15kph speed_limit & exit_sign");
+    CHECK(has_ramp_25 && has_ramp_slope, "open_ramp generates 25kph speed_limit & slope_warn");
+
+    int sign_colliders = 0;
+    int ev_colliders = 0;
+    bool all_colliders_visible = !layout.colliders.empty();
+    for (const auto& c : layout.colliders) {
+        if (!c.sensor_visible) all_colliders_visible = false;
+        if (c.kind == "sign") {
+            sign_colliders++;
+            CHECK(!c.is_cylinder && !c.subkind.empty(),
+                  "Sign collider uses OBB (is_cylinder=false) and preserves subkind (%s)",
+                  c.subkind.c_str());
+        }
+        if (c.kind == "ev_charger") ev_colliders++;
+    }
+    CHECK(all_colliders_visible, "All world colliders export sensor_visible=true");
+    CHECK(sign_colliders == static_cast<int>(layout.signs.size()),
+          "Every generated sign produces a matching WorldCollider (%d == %zu)",
+          sign_colliders, layout.signs.size());
+    CHECK(ev_colliders == 1, "Default custom_prop ev_charger produces collider (%d == 1)", ev_colliders);
+
+    bool piers_ok = !layout.piers.empty();
+    for (const auto& pr : layout.piers) {
+        if (!pr.has_collider || !pr.sensor_visible || (pr.z_top - pr.z_ground) < (2.2 - 0.45 - 1e-6)) {
+            piers_ok = false;
+        }
+    }
+    CHECK(piers_ok, "Viaduct piers skip cz < 2.2m and set z_top = cz - 0.45 (%zu piers)", layout.piers.size());
+}
+
 int main() {
     test_procedural_corridor_and_overpass();
     test_declarative_world_gen_refinements();
@@ -319,6 +425,7 @@ int main() {
 #if defined(FLOW_HAS_JOLT) && FLOW_HAS_JOLT
     test_jolt_physics_collider_sync();
 #endif
+    test_default_physics_signage_and_pier_clearance();
     std::printf("\nSummary: %d/%d checks passed (%d failed)\n",
                 g_run - g_fail, g_run, g_fail);
     return g_fail == 0 ? 0 : 1;

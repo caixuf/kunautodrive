@@ -81,9 +81,9 @@ export function roadHeightAt(store, x, y, currentZ) {
   const rn = store && store.roadNetwork;
   if (!rn || !rn.edges || !rn.edges.length) return 0;
 
-  let minScore = Infinity;
-  let resultZ = 0;
   const hasCurrentZ = Number.isFinite(currentZ);
+  let sameLayerScore = Infinity;
+  let sameLayerZ = 0;
 
   for (const edge of rn.edges) {
     const nodes = edge.nodes;
@@ -98,22 +98,26 @@ export function roadHeightAt(store, x, y, currentZ) {
         (rn.lane_data[String(edge.id)] && rn.lane_data[String(edge.id)].length))
     );
     const shiftRightM = (edge.oneway === true && !hasLaneData) ? halfWidth : 0;
+    const matchHalfW = (edge.type === 'garage_hall')
+      ? Math.max(halfWidth + 4.0, 13.5)
+      : (halfWidth + 4.0);
 
     const { dist, z } = _closestOnEdge(nodes, x, y, shiftRightM);
-    
-    if (dist <= halfWidth + 4.0) {
-      // 3D 竖向分层匹配：若传入当前车辆高程，优先吸附到同高度层的道路，
-      // 防止桥下地面道路与桥面重叠时车辆在地面和高架间穿梭。
-      const zDiff = hasCurrentZ ? Math.abs(z - currentZ) * 2.0 : 0;
-      const score = dist + zDiff;
-      if (score < minScore) {
-        minScore = score;
-        resultZ = z;
+
+    if (dist <= matchHalfW) {
+      // 3D 竖向分层匹配：若传入当前高程，仅允许同高度层（|z - currentZ| <= 3.2m，
+      // 严格隔离 B1 -4.5m 地库 / 0m 地面 / 6.5m 高架，防止轨迹跃迁到头顶或脚下路层）。
+      const zDiff = hasCurrentZ ? Math.abs(z - currentZ) : 0;
+      if (hasCurrentZ && zDiff > 3.2) continue;
+      const score = dist + zDiff * 2.0;
+      if (score < sameLayerScore) {
+        sameLayerScore = score;
+        sameLayerZ = z;
       }
     }
   }
-  
-  return minScore < Infinity ? resultZ : (hasCurrentZ ? currentZ : 0);
+
+  return sameLayerScore < Infinity ? sameLayerZ : (hasCurrentZ ? currentZ : 0);
 }
 
 /** 简单版本：按 edge 起点到终点的距离比例插值，不做投影 */

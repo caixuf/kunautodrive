@@ -1718,6 +1718,7 @@ static void export_dashboard_json(void) {
     /* 3D 场景（从 vehicle/state 提取） */
     double ego_x = json_extract_double(vehicle_state_snap, "x");
     double ego_y = json_extract_double(vehicle_state_snap, "y");
+    double ego_z = json_extract_double(vehicle_state_snap, "z");
     double hdg   = json_extract_double(vehicle_state_snap, "hdg");
     double steer = json_extract_double(vehicle_state_snap, "st");
 
@@ -1747,6 +1748,7 @@ static void export_dashboard_json(void) {
     cJSON* ego_o = cJSON_AddObjectToObject(scene, "ego");
     cJSON_AddNumberToObject(ego_o, "x", ego_x);
     cJSON_AddNumberToObject(ego_o, "y", ego_y);
+    if (!isnan(ego_z)) cJSON_AddNumberToObject(ego_o, "z", ego_z);
     cJSON_AddNumberToObject(ego_o, "heading", hdg);
     cJSON_AddNumberToObject(ego_o, "speed", spd);
     cJSON_AddNumberToObject(ego_o, "steer", steer);
@@ -1787,7 +1789,7 @@ static void export_dashboard_json(void) {
                 "target_vx", "length", "width", "ai_state",
                 "lateral_offset",
                 "yaw_rate",  /* 前端 heading 外推用（位置/朝向同步，2026-08） */
-                "pitch", "roll", "mu_scale", "road_grade",
+                "pitch", "roll", "mu_scale", "road_grade", "z",
                 NULL
             };
             for (int i = 0; merge_fields[i]; i++) {
@@ -2136,6 +2138,7 @@ static void export_dashboard_json(void) {
                 case OBJ_TYPE_PEDESTRIAN:   tname = "pedestrian";   break;
                 case OBJ_TYPE_CYCLIST:      tname = "cyclist";      break;
                 case OBJ_TYPE_CONSTRUCTION: tname = "construction"; break;
+                case OBJ_TYPE_SIGN:         tname = "sign";         break;
                 case OBJ_TYPE_UNKNOWN:      tname = "unknown";      break;
                 default: break;
             }
@@ -2199,7 +2202,8 @@ static void export_dashboard_json(void) {
 
     /* 障碍物（从 vehicle/state 动态读取） */
     int n_obs = json_extract_int(vehicle_state_snap, "n_obs");
-    if (n_obs < 0 || n_obs > 128) n_obs = 0;
+    if (n_obs < 0) n_obs = 0;
+    if (n_obs > 128) n_obs = 128;
 
 #define MAX_OBS_SCENE 128
 #define OBS_FALLBACK_CAR_LEN   4.6

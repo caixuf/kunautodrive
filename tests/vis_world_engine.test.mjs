@@ -13,6 +13,7 @@ import {
 import { createWorldPropsView } from '../tools/flowboard/js/vis/view/WorldPropsView.js';
 import { createSceneDirector } from '../tools/flowboard/js/vis/director/SceneDirector.js';
 import { worldToThree } from '../tools/flowboard/js/vis/math/Coord.js';
+import { roadHeightAt } from '../tools/flowboard/js/vis/math/RoadHeight.js';
 
 let pass = 0, fail = 0;
 function ok(name, cond, detail = '') {
@@ -148,6 +149,67 @@ try {
 } finally {
   globalThis.fetch = origFetch;
   clearWorldLayoutCache();
+}
+
+// ── 4. B1 地下室标志/高架桥墩 2.2m 门槛 & RoadHeight 竖向分层隔离 ──
+{
+  const rnB1 = {
+    edges: [
+      { id: 0, name: 'b1_hall', type: 'garage_hall', lanes: 2, lane_width: 3.5, oneway: false,
+        nodes: [[-60, 0, -4.5], [0, 0, -4.5]] },
+      { id: 1, name: 'b1_ramp', type: 'open_ramp', lanes: 2, lane_width: 3.5, oneway: false,
+        nodes: [[0, 0, -4.5], [80, 0, 0.0]] },
+      { id: 2, name: 'surface_ave', type: 'urban', lanes: 4, lane_width: 3.5, oneway: false,
+        nodes: [[-60, 0, 0.0], [180, 0, 0.0]] },
+      { id: 3, name: 'rising_viaduct', type: 'ramp_curve', lanes: 2, lane_width: 3.5, oneway: true, bridge: true,
+        nodes: [[180, 0, 0.0], [230, 0, 1.8], [270, 0, 3.6], [360, 0, 5.4]] },
+    ],
+  };
+  const b1Layout = compileWorld(rnB1, { preset: 'modern_cbd', seed: 17 }, 17);
+  ok('WorldCompiler 生成 sign 默认带物理+感知属性与 0.55x0.85x2.60 尺寸',
+     b1Layout.signs.length > 0 && b1Layout.signs.every((s) =>
+       s.has_collider === true && s.sensor_visible === true &&
+       Math.abs(s.length - 0.55) < 1e-6 && Math.abs(s.width - 0.85) < 1e-6 && Math.abs(s.height - 2.60) < 1e-6));
+  ok('WorldCompiler 桥墩跳过 z < 2.2m 并设 z_top = sp.z - 0.45',
+     b1Layout.piers.length > 0 && b1Layout.piers.every((pr) => pr.z_top >= (2.2 - 0.45 - 1e-6)));
+
+  const b1Store = { roadNetwork: rnB1 };
+  const hUnder = roadHeightAt(b1Store, -30, 10.5, -4.5);
+  const hAbove = roadHeightAt(b1Store, -30, 5.0, 0.0);
+  ok(`RoadHeight B1 宽车库横向不跳上 z=0 顶板 (got ${hUnder.toFixed(2)}m, expect -4.50m)`,
+     Math.abs(hUnder - (-4.5)) < 1e-4);
+  ok(`RoadHeight 同点传入 z=0.0m 匹配地面路 (got ${hAbove.toFixed(2)}m, expect 0.00m)`,
+     Math.abs(hAbove - 0.0) < 1e-4);
+
+  // SceneDirector 从默认 init() 地面路切换到 B1 地库时，不得被 init 的 z=0 锁死在顶板上
+  const b1SwitchScene = new THREE.Scene();
+  const b1Director = createSceneDirector(b1SwitchScene);
+  b1Director.init();
+  const b1OnlyRN = { edges: [rnB1.edges[0]] };
+  b1Director.update({
+    metrics: {
+      scene: {
+        road_network: b1OnlyRN,
+        ego: { x: -30, y: 0, heading: 0, speed: 5 },
+        entities: [],
+      },
+    },
+  });
+  ok('SceneDirector 切换路网时即使缺 ego.z 也不被 init z=0 锁死在 B1 顶板',
+     Math.abs((b1Director.getStore().ego?.z ?? 99) - (-4.5)) < 1e-4,
+     `got ego.z=${b1Director.getStore().ego?.z}`);
+  b1Director.update({
+    metrics: {
+      scene: {
+        road_network: b1OnlyRN,
+        ego: { x: -20, y: 0, z: -4.5, heading: 0, speed: 5 },
+        entities: [],
+      },
+    },
+  });
+  ok('SceneDirector 消费权威 ego.z=-4.5m',
+     Math.abs((b1Director.getStore().ego?.z ?? 99) - (-4.5)) < 1e-4);
+  b1Director.dispose();
 }
 
 console.log(`\n--- 总结: ${pass} pass, ${fail} fail ---`);

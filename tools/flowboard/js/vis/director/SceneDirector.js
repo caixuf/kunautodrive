@@ -96,6 +96,7 @@ export function createSceneDirector(scene) {
   let lastWorldKey = '';
   let lastStaticRN = null;
   let requestedLayoutHash = '';
+  let egoLayerReset = false;
   let disposed = false;
 
   /* ── Layer 树（Qt 对象树 + 单向依赖）──────────────────────────
@@ -320,7 +321,10 @@ export function createSceneDirector(scene) {
         lastWorldKey = nextWorldKey;
         store.roadNetwork = rn;
         store.roadHash = hash;
-        if (roadChanged) resetEntities();
+        if (roadChanged) {
+          egoLayerReset = true;
+          resetEntities();
+        }
       };
 
       lastStaticRN = rn;
@@ -340,7 +344,8 @@ export function createSceneDirector(scene) {
       const e = frame.ego;
       const newX = e.x || 0;
       const newY = e.y || 0;
-      const prevZ = store.ego ? store.ego.z : undefined;
+      const prevZ = (!egoLayerReset && store.ego) ? store.ego.z : undefined;
+      egoLayerReset = false;
       const resolvedZ = (typeof e.z === 'number' && isFinite(e.z) && e.z !== 0)
         ? e.z
         : (store.roadNetwork ? roadHeightAt(store, newX, newY, prevZ) : (e.z || 0));
@@ -531,7 +536,7 @@ export function createSceneDirector(scene) {
   function tickAnimation(now) {
     tickDeadReckon();
     if (store.ego && _dr.init) {
-      const egoZ = store.ego.z;
+      const egoZ = egoLayerReset ? undefined : store.ego.z;
       /* 帧率与时钟同步：自车、相机与 NPC 统一按仿真时间轴（_simClock）
        * 60Hz 速度外推与指数平滑（smooth*），消除自车离散阶跃与 NPC 连续插值
        * 之间的相位撕裂，根治超车近距离观察时的相对抖动。 */

@@ -191,4 +191,70 @@ console.log('=== PerceptionView & EffectView 车规级几何契约测试 ===\n')
   eq('EffectView dispose 干净移除分组', scene.children.length, 0);
 }
 
+// ── 3. B1 地下层高程隔离 (z=-4.5m 不跳上 z=0m 顶板) & 交通标志角标框 ──
+{
+  console.log('\n--- 3. B1 预测高程隔离与 sign 感知角标框 ---');
+  const scene = new RealTHREE.Scene();
+  const perc = createPerceptionView(scene);
+  const b1Store = createSceneStore();
+  b1Store.roadNetwork = {
+    edges: [
+      { id: 0, type: 'garage_hall', lanes: 4, lane_width: 3.5, oneway: false,
+        nodes: [[-60, 0, -4.5], [20, 0, -4.5]] },
+      { id: 1, type: 'urban', lanes: 4, lane_width: 3.5, oneway: false,
+        nodes: [[-60, 0, 0.0], [20, 0, 0.0]] },
+    ],
+  };
+  b1Store.ego = { x: -30, y: -1.75, z: -4.5, heading: 0, speed: 6.0, length: 4.6, width: 2.0 };
+  b1Store.entities = [
+    { id: 'b1_car', type: 'car', x: -10, y: -1.75, z: -4.5, heading: 0, speed: 6.0, length: 4.5, width: 2.0 },
+  ];
+  b1Store.predictions = [
+    {
+      obstacle_id: 'b1_car',
+      trajectories: [
+        {
+          intent: 'lane_keep',
+          prob: 0.9,
+          world_waypoints: [[-10, -1.75, 6.0], [0, -1.75, 6.0], [10, -1.75, 6.0]],
+        },
+      ],
+    },
+  ];
+  b1Store.perceived = [
+    { id: 'sign_1', type: 'sign', x: -5, y: 4.2, z: -4.5, heading: 0, length: 0.55, width: 0.85, height: 2.6 },
+  ];
+  b1Store.facilities = [];
+
+  perc.update(b1Store, 1000);
+  const predGroup = scene.children.find(c => c.name === 'predictionTrajectories');
+  const predMesh = predGroup && predGroup.children.find(c => c.isMesh);
+  const predCount = predMesh ? predMesh.geometry.drawRange.count : 0;
+  ok('B1 预测光带非空', predCount > 0);
+  let maxPredY = -Infinity;
+  const pArr = predMesh.geometry.attributes.position.array;
+  const idxArr = predMesh.geometry.index ? predMesh.geometry.index.array : null;
+  for (let i = 0; i < predCount; i++) {
+    const vi = idxArr ? idxArr[i] : i;
+    const yy = pArr[vi * 3 + 1];
+    if (yy > maxPredY) maxPredY = yy;
+  }
+  ok(`B1 预测光带贴合地下层 (maxY=${maxPredY.toFixed(2)}m < -1.0m，未跳上地面)`, maxPredY < -1.0);
+
+  const lineObjs = scene.children.filter(c => c.isLineSegments);
+  const cornerObj = lineObjs[0];
+  const cornerCount = cornerObj ? cornerObj.geometry.drawRange.count : 0;
+  const cArr = cornerObj.geometry.attributes.position.array;
+  let minSignY = Infinity, maxSignY = -Infinity;
+  for (let i = 0; i < cornerCount; i++) {
+    const yy = cArr[i * 3 + 1];
+    if (yy < minSignY) minSignY = yy;
+    if (yy > maxSignY) maxSignY = yy;
+  }
+  ok(`sign 感知角标框渲染非空 (${cornerCount} verts, height=${(maxSignY - minSignY).toFixed(2)}m)`,
+     cornerCount > 0 && Math.abs((maxSignY - minSignY) - 2.6) < 0.25);
+
+  perc.dispose();
+}
+
 done();

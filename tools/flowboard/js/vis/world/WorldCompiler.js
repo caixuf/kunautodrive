@@ -415,11 +415,11 @@ export function compileWorld(roadNetwork, worldGen = null, seedOverride = null) 
       }
     }
 
-    // 4. Elevated Piers (every 30m where elevation >= 2.0m; wide decks use 2-col portal, skip perpendicular crossings)
+    // 4. Elevated Piers (every 30m where elevation >= 2.2m; wide decks use 2-col portal, skip perpendicular crossings)
     if (totalLen > 20) {
       for (let s = 18; s <= totalLen - 18; s += 30) {
         const sp = _sampleSpineAtArc(axis, s);
-        if (!sp || sp.z < 2.0) continue;
+        if (!sp || sp.z < 2.2) continue;
         const [fx, fy] = forwardENU(sp.heading);
         const lx = -fy, ly = fx;
         const wideDeck = halfWidth >= 5.5;
@@ -452,7 +452,7 @@ export function compileWorld(roadNetwork, worldGen = null, seedOverride = null) 
           x: sp.x,
           y: sp.y,
           z_ground: 0.0,
-          z_top: sp.z - 0.35,
+          z_top: sp.z - 0.45,
           heading: sp.heading,
           columns,
           col_offset: columns > 1 ? colOff : 0.0,
@@ -460,6 +460,8 @@ export function compileWorld(roadNetwork, worldGen = null, seedOverride = null) 
           cap_len: columns > 1 ? Math.max(halfWidth * 1.95, colOff * 2.15) : Math.max(2.2, halfWidth * 1.4),
           cap_w: 1.5,
           cap_h: 0.85,
+          has_collider: true,
+          sensor_visible: true,
         });
       }
     }
@@ -487,6 +489,11 @@ export function compileWorld(roadNetwork, worldGen = null, seedOverride = null) 
           kind: s < 35 ? 'speed_limit' : (s > totalLen - 35 ? 'stop' : 'warning'),
           label: s < 35 ? String(speedKph) : (s > totalLen - 35 ? 'STOP' : '!'),
           speed_kph: speedKph,
+          length: 0.55,
+          width: 0.85,
+          height: 2.6,
+          has_collider: true,
+          sensor_visible: true,
         });
       }
     }

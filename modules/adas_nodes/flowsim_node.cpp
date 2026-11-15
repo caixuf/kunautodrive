@@ -1313,8 +1313,10 @@ static void publish_vehicle_state(uint64_t sim_time_us) {
         cJSON_AddNumberToObject(vstate, key, e.heading);
         n_obs++;
     }
-    /* 静态设施障碍物（按距离排序，同层 80m 内注入感知，确保泊车区近邻设施不被远距路灯杆截断） */
+    /* 静态设施障碍物（同层 80m 内优先前向视野与交通标志，确保泊车区近邻与前方标志不被远距侧方围栏挤出 128 上限） */
     {
+        const double ch_e = std::cos(ego.heading);
+        const double sh_e = std::sin(ego.heading);
         std::vector<std::pair<double, size_t>> near_facs;
         for (size_t fi = 0; fi < g.facility_obstacles.size(); ++fi) {
             const auto& f = g.facility_obstacles[fi];
@@ -1322,7 +1324,15 @@ static void publish_vehicle_state(uint64_t sim_time_us) {
             const double dx = f.x - ego.x, dy = f.y - ego.y;
             const double d2 = dx * dx + dy * dy;
             if (d2 > 80.0 * 80.0) continue;
-            near_facs.emplace_back(d2, fi);
+            const double along = dx * ch_e + dy * sh_e;
+            double score = d2;
+            if (d2 > 18.0 * 18.0) {
+                score *= (along >= -2.0) ? 0.35 : 2.5;
+            }
+            if (f.kind == "sign") {
+                score *= (along >= -2.0) ? 0.15 : 0.65;
+            }
+            near_facs.emplace_back(score, fi);
         }
         std::sort(near_facs.begin(), near_facs.end());
         for (size_t k = 0; k < near_facs.size() && n_obs < 128; ++k) {
@@ -3984,10 +3994,16 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
     std::vector<flowsim::StaticBoxObstacle> jolt_obs;
     {
         flowsim::WorldEngineInput wg_in;
-        const char* rn_ptr = (g.scenario && g.scenario->road_network_json)
-            ? g.scenario->road_network_json
-            : flowsim::ensure_road_network_json(g.scene_pub_cfg).c_str();
-        wg_in.road_network_json = (rn_ptr && rn_ptr[0]) ? rn_ptr : nullptr;
+        const char* rn_ptr = nullptr;
+        if (g.roads_loaded) {
+            const std::string& esmini_rn = flowsim::ensure_road_network_json(g.scene_pub_cfg);
+            if (!esmini_rn.empty()) rn_ptr = esmini_rn.c_str();
+        }
+        if (!rn_ptr && g.scenario && g.scenario->road_network_json &&
+            g.scenario->road_network_json[0]) {
+            rn_ptr = g.scenario->road_network_json;
+        }
+        wg_in.road_network_json = rn_ptr;
         wg_in.scenario_file_path = g.scenario_file[0] ? g.scenario_file : nullptr;
         wg_in.random_seed = g.random_seed;
         wg_in.manual_buildings = g.buildings;

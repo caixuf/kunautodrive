@@ -37,7 +37,7 @@ extern "C" {
 
 /* ── 常量 ────────────────────────────────────────────────────── */
 #define DBSCAN_MAX_POINTS      131072 /**< 最大输入点数 (支持 Velodyne HDL-32E 单帧) */
-#define DBSCAN_MAX_CLUSTERS    32     /**< 最大聚类数 */
+#define DBSCAN_MAX_CLUSTERS    96     /**< 最大聚类数 */
 
 /* ── 3D 点 ───────────────────────────────────────────────────── */
 typedef struct {
