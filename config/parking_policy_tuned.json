@@ -1,0 +1,30 @@
+{
+  "schema": "flowengine.parking_policy_tuned.v1",
+  "train_episodes": 21600,
+  "eval_episodes": 5000,
+  "elapsed_s": 20.48,
+  "tuned_params": {
+    "la_rev": 0.3174,
+    "la_fwd": 0.6,
+    "k_heading": 2.0694,
+    "k_cte": 0.409,
+    "k_rec_steer": 2.2695,
+    "v_rev_taper_m": 0.312
+  },
+  "baseline_eval": {
+    "episodes": 5000,
+    "pass_rate": 0.6666,
+    "mean_pos_err_m": 0.1233,
+    "p99_pos_err_m": 0.1824,
+    "mean_heading_err_deg": 2.061,
+    "p99_heading_err_deg": 3.538
+  },
+  "trained_eval": {
+    "episodes": 5000,
+    "pass_rate": 1.0,
+    "mean_pos_err_m": 0.0937,
+    "p99_pos_err_m": 0.1557,
+    "mean_heading_err_deg": 0.942,
+    "p99_heading_err_deg": 1.361
+  }
+}

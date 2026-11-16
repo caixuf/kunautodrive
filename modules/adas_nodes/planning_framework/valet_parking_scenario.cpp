@@ -289,9 +289,18 @@ bool OpenSpaceCruiseStage::PlanTrajectory(FrameContext& context) {
         return true;
     };
 
+    double dh_goal = std::fabs(NormAngle(ego.heading - goal.heading));
+    double dist_to_goal_center = std::hypot(goal.x - ego.x, goal.y - ego.y);
+    if (dist_to_goal_center < 3.0 && dh_goal > 0.035) {
+        // 车位内/近距揉库纠偏：提高网格与航向分辨率，确保能规划出“前进拉正+倒回”轨迹
+        cfg.xy_grid_resolution = 0.18;
+        cfg.phi_grid_resolution = 0.0523599; /* 3 deg */
+        cfg.time_limit_ms = 90.0;
+    }
+
     const double max_steers[3] = {0.50, 0.56, 0.58};
-    const double margins[3] = {0.30, 0.16, 0.10};
-    const double pre_dists[3] = {1.8, 0.9, 0.0};
+    const double margins[4] = {0.30, 0.16, 0.10, 0.06};
+    const double pre_dists[4] = {2.2, 1.4, 0.7, 0.0};
     for (double ms : max_steers) {
         veh.max_steer = ms;
         planner_.SetVehicleParam(veh);
@@ -362,13 +371,16 @@ StageStatus OpenSpaceCruiseStage::Process(FrameContext& context, Trajectory& tra
     double dx_goal = context.parking_goal.x - context.vehicle_state.x;
     double dy_goal = context.parking_goal.y - context.vehicle_state.y;
     double dist_goal = std::hypot(dx_goal, dy_goal);
+    double dh_goal = std::fabs(NormAngle(context.vehicle_state.heading - context.parking_goal.heading));
 
     if (!trajectory_latched_) {
         PlanTrajectory(context);
         stopped_ticks_ = 0;
-    } else if (std::fabs(context.vehicle_state.v) < 0.04 && dist_goal > 0.25) {
+    } else if (std::fabs(context.vehicle_state.v) < 0.04 &&
+               (dist_goal > 0.25 || dh_goal > 0.035)) {
+        // 若停在库内但航向仍偏斜 (>2°)，触发揉库重规划（前拉回正再倒回）
         stopped_ticks_++;
-        if (stopped_ticks_ >= 25 && replan_count_ < 3) {
+        if (stopped_ticks_ >= 20 && replan_count_ < 6) {
             replan_count_++;
             stopped_ticks_ = 0;
             PlanTrajectory(context);

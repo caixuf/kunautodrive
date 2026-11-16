@@ -1,0 +1,47 @@
+{
+  "name": "parallel_parking",
+  "description": "侧方位泊车专项训练场景：前后停放参考车辆之间进行平行倒车入库与姿态拉正。",
+  "random_seed": 23,
+  "duration_s": 40,
+  "odd_tags": {
+    "weather": "clear",
+    "road_topology": "parking",
+    "interaction": ["car_following"],
+    "oracles": ["safety_ttc_drac", "rule_line_cross", "comfort_jerk_lat"]
+  },
+  "ego": {
+    "x": 10.0,
+    "y": -1.75,
+    "heading": 0.0,
+    "init_speed": 4.0,
+    "target_speed": 5.0
+  },
+  "road_network": {
+    "edges": [
+      {
+        "id": 0,
+        "type": "urban",
+        "name": "parallel_parking_street",
+        "length_m": 400,
+        "lanes": 2,
+        "lane_width": 3.5,
+        "speed_limit": 8.0,
+        "nodes": [[0, 0, 0], [400, 0, 0]]
+      }
+    ]
+  },
+  "actors": [
+    {"id": 201, "type": "car", "x": 43.2, "y": -5.25, "vx": 0.0, "vy": 0.0, "len": 4.6, "wid": 2.0},
+    {"id": 202, "type": "car", "x": 56.8, "y": -5.25, "vx": 0.0, "vy": 0.0, "len": 4.6, "wid": 2.0}
+  ],
+  "parking_slots": [
+    {"id": "P_PAR_1", "type": "parallel", "x": 50.0, "y": -5.25, "z": 0.0, "heading": 0.0, "length": 6.8, "width": 2.4}
+  ],
+  "traffic_lights": [],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 40.0,
+    "max_pos_err_m": 0.25,
+    "max_heading_err_deg": 3.0
+  }
+}
