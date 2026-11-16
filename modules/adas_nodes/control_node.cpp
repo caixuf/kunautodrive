@@ -537,6 +537,8 @@ static bool query_ref_at(double ego_x, double ego_y,
 
 /* ── 协程任务 ────────────────────────────────────────────────── */
 
+static ClockLockstepSlot g_lockstep = {-1, 0};
+
 class ControlTask : public CoroutineTask {
 public:
     ControlTask(MessageBus* bus) : CoroutineTask(bus) {}
@@ -553,6 +555,7 @@ protected:
         while (!should_stop()) {
             /* recv_any_for: 等待 fusion 或 planning 消息（消息驱动），
              * 50ms 超时兜底保持 DATA_TIMEOUT fallback 及时性。 */
+            clock_lockstep_sync(&g_lockstep, 100);
             (void)co_await ctrl_bridge.recv_any_for(50000);
             if (should_stop()) break;
 
@@ -1657,6 +1660,7 @@ static int control_init(MessageBus* bus, Transport* transport,
         return -1;
     }
     g.task_wrapper->impl->set_params(transport);
+    clock_lockstep_init(&g_lockstep);
     s_plugin.taskbase = control_get_base(g.task_wrapper);
 
     /* LTV MPC 初始化

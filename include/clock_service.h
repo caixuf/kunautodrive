@@ -151,6 +151,29 @@ bool clock_barrier_wait_tick(uint64_t expected_tick, uint32_t timeout_ms);
 /** 协调器等待所有已注册参与方完成当前 tick，再推进 delta_us。返回就绪方数量。 */
 int clock_barrier_step_all(uint64_t delta_us, uint32_t timeout_ms);
 
+/** 节点侧 Lock-Step 轻量封装：仅在 CLOCK_MODE_LOCK_STEP 下注册与同步。 */
+typedef struct {
+    int      slot;
+    uint64_t tick;
+} ClockLockstepSlot;
+
+static inline void clock_lockstep_init(ClockLockstepSlot* s) {
+    if (!s) return;
+    s->slot = -1;
+    s->tick = 0;
+    if (clock_get_mode() == CLOCK_MODE_LOCK_STEP) {
+        s->slot = clock_barrier_register();
+        s->tick = clock_get_tick_seq();
+    }
+}
+
+static inline void clock_lockstep_sync(ClockLockstepSlot* s, uint32_t timeout_ms) {
+    if (!s || s->slot < 0 || clock_get_mode() != CLOCK_MODE_LOCK_STEP) return;
+    clock_barrier_done_tick(s->slot, s->tick);
+    s->tick++;
+    clock_barrier_wait_tick(s->tick, timeout_ms);
+}
+
 #ifdef __cplusplus
 }
 #endif

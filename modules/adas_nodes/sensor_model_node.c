@@ -481,6 +481,8 @@ static uint32_t estimate_visible_point_count(void) {
     return (uint32_t)(62000 + visible_after_occ * 450 + (g.frame_id % 1024));
 }
 
+static ClockLockstepSlot g_lockstep = {-1, 0};
+
 static int sensor_model_execute(TaskBase* task) {
     pthread_setname_np(pthread_self(), "sensor_model");
 
@@ -587,6 +589,7 @@ static int sensor_model_execute(TaskBase* task) {
         }
 
         g.frame_id++;
+        clock_lockstep_sync(&g_lockstep, 100);
     }
 
     LOG_INFO("sensor_model", "stopped (%u frames)", g.frame_id);
@@ -767,6 +770,7 @@ static int sensor_model_init(MessageBus* bus, Transport* transport,
                  g.lidar_azimuth_rays, g.lidar_channels,
                  g.lidar_vfov_min_deg, g.lidar_vfov_max_deg, g.lidar_height_m);
     }
+    clock_lockstep_init(&g_lockstep);
     return 0;
 }
 

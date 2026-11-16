@@ -447,6 +447,8 @@ static void on_road_geometry(const Message* msg, void* user_data) {
 
 /* ── 协程任务 ────────────────────────────────────────────────── */
 
+static ClockLockstepSlot g_lockstep = {-1, 0};
+
 class PerceptionTask : public CoroutineTask {
 public:
     PerceptionTask(MessageBus* bus) : CoroutineTask(bus) {}
@@ -465,6 +467,7 @@ protected:
             degrade_supervisor_record_heartbeat("perception_node",
                                                 (int64_t)(clock_now_us() / 1000));
             /* 替代 usleep：sleep_us 自动注入 cancel_token_，stop() 可立即唤醒 */
+            clock_lockstep_sync(&g_lockstep, 100);
             co_await sleep_us(period_us_);
             if (should_stop()) break;
 
@@ -798,6 +801,7 @@ static int perception_init(MessageBus* bus, Transport* transport,
         return -1;
     }
     g.task_wrapper->impl->set_params(transport, g.lidar_rate_hz);
+    clock_lockstep_init(&g_lockstep);
     s_plugin.taskbase = perception_get_base(g.task_wrapper);
 
     LOG_INFO("perception", "initialized (FlowCoro, mode=%s, DBSCAN eps=%.1f pts=%d, LiDAR %dHz FOV=%.0fdeg range=%.0fm occ=%d)",

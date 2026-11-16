@@ -159,6 +159,7 @@ struct BehaviorContext {
     double trav_corridor_width_m{0.0};
     double trav_nearest_obs_x{-1.0};
     uint64_t trav_last_us{0};
+    ClockLockstepSlot lockstep{-1, 0};
 
     /* 施工区权威几何（scene/frame）：掉头触发点缩短的第三路事实源。
      * 感知/ tracker 都丢墙时，仍能按施工前缘提前触发，避免开进施工区再掉头。 */
@@ -798,6 +799,7 @@ protected:
             /* 等待感知数据就绪 */
             if (!g.has_fusion || !g.has_obs) {
                 g.seq++;
+            clock_lockstep_sync(&g.lockstep, 100);
                 co_await sleep_us(50000);  /* 未就绪也必须让出，否则忙自旋饿死全管道 */
                 continue;
             }
@@ -1368,6 +1370,18 @@ protected:
                                  best_gap, lead_speed,
                                  (ev == BEH_EV_OVERTAKE_LEFT) ? "LEFT_CHANGE" : "RIGHT_CHANGE",
                                  adj_idx, left_gap, left_rear_safe, right_gap, right_rear_safe);
+                    } else if (g.trav_valid && (t_start - g.trav_last_us < 1000000ULL) &&
+                               g.trav_blocked && g.trav_nearest_obs_x > 0.0 &&
+                               g.trav_nearest_obs_x < 25.0 && adj_idx >= 0 &&
+                               g.cooldown <= 0.0 && !carriageway_ahead_stop_light()) {
+                        ev = (adj_idx < current_idx) ? BEH_EV_OVERTAKE_LEFT : BEH_EV_OVERTAKE_RIGHT;
+                        new_target_lane = adj_idx;
+                        new_target_speed = fmax(adj_speed, g.ego_v);
+                        snprintf(reason, sizeof(reason),
+                                 "traversability blocked (x=%.1fm) → %s lane%d",
+                                 g.trav_nearest_obs_x,
+                                 (ev == BEH_EV_OVERTAKE_LEFT) ? "LEFT_CHANGE" : "RIGHT_CHANGE",
+                                 adj_idx);
                     } else if (blocked) {
                         ev = BEH_EV_BLOCKED;
                         new_target_speed = follow_speed;
@@ -1649,6 +1663,12 @@ protected:
             /* 同步 state 镜像 */
             g.state = beh_state_to_cmd(statem_current(&g.sm));
             /* 应用新速度/车道/跟车目标（状态机转移时计算的新值） */
+            if (g.trav_valid && (t_start - g.trav_last_us < 1000000ULL) &&
+                !g.trav_blocked && g.trav_corridor_width_m >= 2.2 &&
+                g.trav_corridor_width_m < 2.8 &&
+                g.trav_nearest_obs_x > 0.0 && g.trav_nearest_obs_x < 25.0) {
+                new_target_speed = std::min(new_target_speed, 6.0);
+            }
             g.target_speed = new_target_speed;
             g.target_lane_idx = new_target_lane;
             g.follow_obs_id = new_follow_id;
@@ -1740,6 +1760,12 @@ protected:
                     cJSON_AddBoolToObject(root, "right_rear_safe", right_rear_safe);
                     cJSON_AddNumberToObject(root, "adj_idx", adj_idx);
                     cJSON_AddNumberToObject(root, "adj_speed", adj_speed);
+                    if (g.trav_valid) {
+                        cJSON_AddNumberToObject(root, "trav_corridor_width_m", g.trav_corridor_width_m);
+                        cJSON_AddNumberToObject(root, "trav_corridor_center_y",
+                                                0.5 * (g.trav_corridor_left_y + g.trav_corridor_right_y));
+                        cJSON_AddBoolToObject(root, "trav_blocked", g.trav_blocked);
+                    }
                     /* 转移历史：最近 3 条（仅在 50 帧时输出，减少带宽） */
                     if (g.seq % 50 == 0) {
                         cJSON* hist = cJSON_CreateArray();
@@ -1783,6 +1809,7 @@ protected:
             }
 
             g.seq++;
+            clock_lockstep_sync(&g.lockstep, 100);
 
             /* 自适应 sleep：维持稳定 20Hz，减去本帧工作时间 */
             uint64_t t_frame_us = clock_now_us() - t_start;
@@ -1960,6 +1987,7 @@ static int behavior_init(MessageBus* bus, Transport* transport,
         return -1;
     }
     g.task_wrapper->impl->set_params(transport);
+    clock_lockstep_init(&g.lockstep);
     s_plugin.taskbase = behavior_get_base(g.task_wrapper);
 
     LOG_INFO("behavior", "initialized (FlowCoro, target_speed=%.1f m/s, managed mode)", g.target_speed);

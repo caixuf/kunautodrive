@@ -1561,6 +1561,8 @@ static void on_environment_state(const Message* msg, void* user_data) {
 
 /* ── 协程任务 ────────────────────────────────────────────────── */
 
+static ClockLockstepSlot g_lockstep = {-1, 0};
+
 class PlanningTask : public CoroutineTask {
 public:
     PlanningTask(MessageBus* bus) : CoroutineTask(bus) {}
@@ -1622,6 +1624,7 @@ protected:
 
         while (!should_stop()) {
             /* recv_any_for: 等待 fusion、障碍物或道路几何更新触发规划，50ms 超时兜底 */
+            clock_lockstep_sync(&g_lockstep, 100);
             (void)co_await plan_bridge.recv_any_for(50000);
             if (should_stop()) break;
 
@@ -3708,6 +3711,7 @@ static int planning_init(MessageBus* bus, Transport* transport,
         return -1;
     }
     g.task_wrapper->impl->set_params(transport);
+    clock_lockstep_init(&g_lockstep);
     s_plugin.taskbase = planning_get_base(g.task_wrapper);
 
     LOG_INFO("planning", "initialized (FlowCoro, target=%.0f m/s, max=%.0f m/s)",

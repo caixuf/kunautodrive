@@ -141,6 +141,8 @@ static void on_pose(const Message* msg, void* user_data) {
 
 /* ── 协程任务 ────────────────────────────────────────────────── */
 
+static ClockLockstepSlot g_lockstep = {-1, 0};
+
 class FusionTask : public CoroutineTask {
 public:
     FusionTask(MessageBus* bus) : CoroutineTask(bus) {}
@@ -166,6 +168,7 @@ protected:
 
         while (!should_stop()) {
             /* recv_any_for: 100ms 超时作 watchdog，防止 lidar 停发时协程卡死 */
+            clock_lockstep_sync(&g_lockstep, 100);
             (void)co_await fusion_bridge.recv_any_for(100000);
             if (should_stop()) break;
 
@@ -746,6 +749,7 @@ static int fusion_init(MessageBus* bus, Transport* transport,
                                      g.lidar_buf, g.gps_buf, g.pose_buf,
                                      &g.ekf, &g.lat_tracker);
     s_plugin.taskbase = fusion_get_base(g.task_wrapper);
+    clock_lockstep_init(&g_lockstep);
 
     LOG_INFO("fusion", "initialized (FlowCoro, EKF 5D, LiDAR+GPS+SLAM tri-source, managed mode)");
     return 0;
