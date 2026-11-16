@@ -379,10 +379,10 @@ function _build(rn) {
   /** spine 按「本 edge 路口多边形外」拆成若干连续段（路口内不画
    *  标线/侧向元素），并在进出路口边界处二分插值交点，消除采样步长导致的数米断缝
    *  及短连接段仅 1 个外点被整段丢弃的问题。无路口 → [spine]。 */
-  function segmentsOutsideJunctions(edgeId, spine) {
+  function segmentsOutsideJunctions(edgeId, spine, pad = 0) {
     const js = junctionCirclesOfEdge(edgeId);
     if (!js.length || !spine || spine.length < 2) return [spine];
-    const isOut = (x, z) => js.every((j) => !centerContains(j, x, z, 0));
+    const isOut = (x, z) => js.every((j) => !centerContains(j, x, z, pad));
     const interpBorder = (inPt, outPt) => {
       let lo = 0, hi = 1;
       for (let iter = 0; iter < 10; iter++) {

@@ -453,7 +453,7 @@ export function createRoadView(scene) {
     return Math.floor((cx + TILE_ORIGIN) / TILE_SIZE_M) + ':'
       + Math.floor((cz + TILE_ORIGIN) / TILE_SIZE_M);
   }
-  function addMergedByTile(geometries, material) {
+  function addMergedByTile(geometries, material, renderOrder = 0) {
     if (!geometries || !geometries.length) return;
     const buckets = new Map();
     for (const g of geometries) {
@@ -472,6 +472,7 @@ export function createRoadView(scene) {
       const mesh = new THREE.Mesh(merged, material);
       mesh.receiveShadow = true;
       mesh.frustumCulled = true;   // 屏外 tile 自动跳过
+      if (renderOrder) mesh.renderOrder = renderOrder;
       roadGroup.add(mesh);
     }
   }
@@ -1136,7 +1137,7 @@ export function createRoadView(scene) {
         const key = `${mk.type}|${pair}|${q(mx)},${q(mz)}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        for (const seg of filterSpineOutsideJunctions(boundary, edgeId)) {
+        for (const seg of filterSpineOutsideJunctions(boundary, edgeId, 6.0)) {
           if (mk.type === 'dashed_white') {
             for (const g of dashedLine(seg, 0)) { whiteGeos.push(g); made++; }
           } else if (mk.type === 'solid_white') {
@@ -1248,6 +1249,7 @@ export function createRoadView(scene) {
     // 无 lane_data：straight_road 等 demo 才走启发式，画在已对齐的 roadMarkSpine 上。
     const isGarageHall = edge.type === EDGE_TYPE.GARAGE_HALL;
     const isOpenRamp = edge.type === EDGE_TYPE.OPEN_RAMP;
+    const paintMarkSpine = filterSpineOutsideJunctions(roadSpine, edge.id, 6.0);
 
     if (isGarageHall) {
       // B1 地下车库由 GarageView 统一绘制地坪、车位线、导向箭头与中心黄虚线，
@@ -1257,7 +1259,7 @@ export function createRoadView(scene) {
       stats.p2Edges++;
     } else {
       stats.heuristicEdges++;
-      for (const seg of roadMarkSpine) {
+      for (const seg of paintMarkSpine) {
         const edgeL = edgeLine(seg, roadHw - EDGE_INSET);
         if (edgeL) whiteGeos.push(edgeL);
         const edgeR = edgeLine(seg, -(roadHw - EDGE_INSET));
@@ -1269,7 +1271,7 @@ export function createRoadView(scene) {
       // 同向车道分隔=白色虚线；外缘白实线由上方 edgeLine 负责。
       const oneway = edge.oneway === true;
       const nPerSide = oneway ? lanes : Math.max(1, Math.floor(lanes / 2));
-      for (const seg of roadMarkSpine) {
+      for (const seg of paintMarkSpine) {
         for (let k = 1; k < lanes; k++) {
           const d = -roadHw + k * laneWidth;
           const isCenter = !oneway && k === nPerSide;
@@ -1358,9 +1360,9 @@ export function createRoadView(scene) {
   /** 路口边界停：委托 TopologyModel 把 spine 按「到最近 junction 中心 > radius」
    *  拆成若干连续段（路口内不画标线/侧向元素），返回段数组（每段 ≥2 点）。
    *  路面不截断（贯穿路口），只有标线/侧向元素用这些段，避免中心线连桥穿路口。 */
-  function filterSpineOutsideJunctions(spine, edgeId) {
+  function filterSpineOutsideJunctions(spine, edgeId, pad = 0) {
     if (!_topo) return [spine];
-    return _topo.segmentsOutsideJunctions(edgeId, spine);
+    return _topo.segmentsOutsideJunctions(edgeId, spine, pad);
   }
 
   /** 从 edge nodes 构建（兼容三种 edge 格式） */
@@ -1639,10 +1641,11 @@ export function createRoadView(scene) {
         emissive: MARKING.white.emissive,   // 冷白蓝自发光（色值不动 color，绕开测试锁定）
         emissiveIntensity: 0,               // real 风默认关闭，SR/BEV 风由 setter 打开
         side: THREE.DoubleSide,
+        depthWrite: false,
         polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
       });
       _whiteLineMat = mat;
-      addMergedByTile(whiteLineGeos, mat);
+      addMergedByTile(whiteLineGeos, mat, 3);
     }
 
     // 黄色中心线
@@ -1654,10 +1657,11 @@ export function createRoadView(scene) {
         emissive: MARKING.yellow.emissive,   // 黄线自发光，辉光略弱于白线
         emissiveIntensity: 0,
         side: THREE.DoubleSide,
+        depthWrite: false,
         polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
       });
       _yellowLineMat = mat;
-      addMergedByTile(yellowLineGeos, mat);
+      addMergedByTile(yellowLineGeos, mat, 3);
     }
 
     built = true;

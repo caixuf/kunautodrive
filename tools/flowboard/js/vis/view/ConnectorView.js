@@ -72,6 +72,7 @@ export function createConnectorView(scene) {
       color: colorHex,
       roughness: 0.6,
       metalness: 0.0,
+      depthWrite: false,
       polygonOffset: true,
       polygonOffsetFactor: -2.5,
       polygonOffsetUnits: -5,
@@ -797,6 +798,7 @@ export function createConnectorView(scene) {
       const mesh = new THREE.Mesh(geo, sharedPatchMat);
       mesh.receiveShadow = true;
       mesh.frustumCulled = true;
+      mesh.renderOrder = 2;
       group.add(mesh);
     }
 
@@ -804,6 +806,7 @@ export function createConnectorView(scene) {
       const geo = getBox(1, 0.02, 1);
       const mat = _makeMarkMat(CROSSWALK_COLOR);
       const mesh = new THREE.InstancedMesh(geo, mat, crossInstances.length);
+      mesh.renderOrder = 4;
       const dummy = new THREE.Object3D();
       crossInstances.forEach((s, i) => {
         dummy.position.set(s.x, s.y, s.z);
