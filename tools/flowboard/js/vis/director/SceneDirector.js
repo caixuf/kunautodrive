@@ -346,9 +346,22 @@ export function createSceneDirector(scene) {
       const newY = e.y || 0;
       const prevZ = (!egoLayerReset && store.ego) ? store.ego.z : undefined;
       egoLayerReset = false;
-      const resolvedZ = (typeof e.z === 'number' && isFinite(e.z) && e.z !== 0)
-        ? e.z
-        : (store.roadNetwork ? roadHeightAt(store, newX, newY, prevZ) : (e.z || 0));
+      const hasFiniteZ = (typeof e.z === 'number' && isFinite(e.z));
+      let resolvedZ;
+      if (hasFiniteZ && e.z !== 0) {
+        resolvedZ = e.z;
+      } else if (store.roadNetwork) {
+        // e.z === 0 可能是真实地面路高程，也可能是未填 z 的默认 0（如 B1 测试帧）：
+        // 若当前 (x, y) 存在地面路层（z≈0），优先信任 e.z=0；仅当当前位置无 z≈0 路面时才回退 prevZ。
+        const surfaceZ = hasFiniteZ ? roadHeightAt(store, newX, newY, 0) : NaN;
+        if (hasFiniteZ && Math.abs(surfaceZ) <= 1.5 && (prevZ === undefined || Math.abs(prevZ) <= 3.2)) {
+          resolvedZ = surfaceZ;
+        } else {
+          resolvedZ = roadHeightAt(store, newX, newY, prevZ);
+        }
+      } else {
+        resolvedZ = hasFiniteZ ? e.z : 0;
+      }
 
       store.ego = {
         x: newX,

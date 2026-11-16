@@ -84,6 +84,8 @@ export function roadHeightAt(store, x, y, currentZ) {
   const hasCurrentZ = Number.isFinite(currentZ);
   let sameLayerScore = Infinity;
   let sameLayerZ = 0;
+  let anyLayerScore = Infinity;
+  let anyLayerZ = 0;
 
   for (const edge of rn.edges) {
     const nodes = edge.nodes;
@@ -105,8 +107,14 @@ export function roadHeightAt(store, x, y, currentZ) {
     const { dist, z } = _closestOnEdge(nodes, x, y, shiftRightM);
 
     if (dist <= matchHalfW) {
-      // 3D 竖向分层匹配：若传入当前高程，仅允许同高度层（|z - currentZ| <= 3.2m，
-      // 严格隔离 B1 -4.5m 地库 / 0m 地面 / 6.5m 高架，防止轨迹跃迁到头顶或脚下路层）。
+      if (dist < anyLayerScore) {
+        anyLayerScore = dist;
+        anyLayerZ = z;
+      }
+      // 3D 竖向分层匹配：若传入当前高程，优先匹配同高度层（|z - currentZ| <= 3.2m，
+      // 严格隔离 B1 -4.5m 地库 / 0m 地面 / 6.5m 高架）；若当前位置不存在同层道路
+      // （例如从地库驶出到纯地面路段但 prevZ 残留 -4.5m），则回退到最近真实路面 anyLayerZ，
+      // 防止车辆被锁死在地下或半空。
       const zDiff = hasCurrentZ ? Math.abs(z - currentZ) : 0;
       if (hasCurrentZ && zDiff > 3.2) continue;
       const score = dist + zDiff * 2.0;
@@ -117,7 +125,9 @@ export function roadHeightAt(store, x, y, currentZ) {
     }
   }
 
-  return sameLayerScore < Infinity ? sameLayerZ : (hasCurrentZ ? currentZ : 0);
+  if (sameLayerScore < Infinity) return sameLayerZ;
+  if (anyLayerScore < Infinity) return anyLayerZ;
+  return hasCurrentZ ? currentZ : 0;
 }
 
 /** 简单版本：按 edge 起点到终点的距离比例插值，不做投影 */
