@@ -1199,16 +1199,10 @@ export function createRoadView(scene) {
     const roadMarkSpine = (roadSpine === spine) ? markSpine
       : filterSpineOutsideJunctions(roadSpine, edge.id);
 
-    // 路面在路口边界外扩 -1.5m 处精确截断，避免整条路面硬穿路口与 ConnectorView 叠画；
-    // 隧道/地道保留整段穿行路面。
-    const roadAsphaltSpines = isTunnelEdge(edge)
-      ? [roadSpine]
-      : filterSpineOutsideJunctions(roadSpine, edge.id, -1.5);
-    const roadGeos = [];
-    for (const seg of roadAsphaltSpines) {
-      const g = ribbonGeo(seg, roadHw, Y_ROAD);
-      if (g) roadGeos.push(g);
-    }
+    // 路面保持贯穿路口不截断（与 ConnectorView 路口铺装同色沥青无缝衔接，避免外圈留缝）；
+    // 标线（pad=6.0）与路肩/路缘石（pad=0）在路口边界精确收口。
+    const road = ribbonGeo(roadSpine, roadHw, Y_ROAD);
+    const roadGeos = road ? [road] : [];
 
     /* 隧道/地道（2026-08-14）：只铺路面，不画标线/路肩/人行道。
      * 地下段若按地表道路全量渲染，俯视时会斜穿街区形成"假路/假路口"噪声
