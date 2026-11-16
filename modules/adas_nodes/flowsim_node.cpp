@@ -3046,7 +3046,9 @@ protected:
                     e.last_teleport_cycle = g.cycle;
                     e.crash_cooldown = 0.5;
                     if (i == 0) {
-                        LOG_ERROR("flowsim", "COLLISION ego↔facility%d (%s)", (int)fi, f.kind.c_str());
+                        LOG_ERROR("flowsim",
+                                  "COLLISION ego↔facility%d (%s) ego=(%.1f,%.1f,%.1f) fac=(%.1f,%.1f,%.1f)",
+                                  (int)fi, f.kind.c_str(), e.x, e.y, e.z, f.x, f.y, f.z);
                         publish_sim_collision(e, e);
                     }
                     hit = true;
@@ -4112,11 +4114,18 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
 #if defined(FLOW_HAS_JOLT) && FLOW_HAS_JOLT
         jolt_obs.reserve(world_layout.colliders.size());
 #endif
+        auto is_offroad_prop = [](const std::string& kind) {
+            return kind == "pole" || kind == "tree" || kind == "sign" ||
+                   kind == "furniture" || kind == "barrier_span" || kind == "prop";
+        };
         for (const auto& c : world_layout.colliders) {
+            const bool roadside_prop = is_offroad_prop(c.kind);
             if (c.sensor_visible) {
-                g.facility_obstacles.push_back({
-                    c.x, c.y, c.z, c.len, c.wid, c.heading, c.kind, c.height, c.is_cylinder
-                });
+                if (!roadside_prop) {
+                    g.facility_obstacles.push_back({
+                        c.x, c.y, c.z, c.len, c.wid, c.heading, c.kind, c.height, c.is_cylinder
+                    });
+                }
                 flowsim::ScenePubConfig::ScenePubFacility pf;
                 pf.kind = c.kind;
                 pf.x = c.x;
@@ -4129,17 +4138,19 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
                 g.scene_pub_cfg.facilities.push_back(std::move(pf));
             }
 #if defined(FLOW_HAS_JOLT) && FLOW_HAS_JOLT
-            flowsim::StaticBoxObstacle o;
-            o.x = c.x;
-            o.y = c.y;
-            o.z = c.z;
-            o.len = c.len;
-            o.wid = c.wid;
-            o.height = c.height;
-            o.heading = c.heading;
-            o.kind = c.kind;
-            o.is_cylinder = c.is_cylinder;
-            jolt_obs.push_back(std::move(o));
+            if (!roadside_prop || c.kind == "barrier_span") {
+                flowsim::StaticBoxObstacle o;
+                o.x = c.x;
+                o.y = c.y;
+                o.z = c.z;
+                o.len = c.len;
+                o.wid = c.wid;
+                o.height = c.height;
+                o.heading = c.heading;
+                o.kind = c.kind;
+                o.is_cylinder = c.is_cylinder;
+                jolt_obs.push_back(std::move(o));
+            }
 #endif
         }
 

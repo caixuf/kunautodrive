@@ -2632,8 +2632,9 @@ static int monitor_execute(TaskBase* task) {
                 const double sim_t = odd_t_s;
 
                 /* ① ODD 退出/重入（TOR 的**前提**，必须与 TOR 成对可读）*/
-                if (odd_in >= 0 && g.pem_last_odd_in >= 0 &&
-                    odd_in != g.pem_last_odd_in) {
+                if (odd_in >= 0 &&
+                    ((g.pem_last_odd_in >= 0 && odd_in != g.pem_last_odd_in) ||
+                     (g.pem_last_odd_in < 0 && odd_in == 0))) {
                     double vals[8];
                     l3_edr_values_init(vals);
                     vals[0] = odd_in;
