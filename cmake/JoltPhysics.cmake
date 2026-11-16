@@ -14,7 +14,7 @@ function(flow_add_jolt)
 
   set(_JOLT_ROOT "${FLOW_ROOT}/third_party/JoltPhysics")
   if(NOT EXISTS "${_JOLT_ROOT}/Build/CMakeLists.txt")
-    message(WARNING "JoltPhysics not found at ${_JOLT_ROOT} — jolt3d physics backend disabled")
+    message(STATUS "JoltPhysics not found at ${_JOLT_ROOT} — jolt3d physics backend disabled")
     set(FLOW_HAS_JOLT OFF PARENT_SCOPE)
     return()
   endif()
