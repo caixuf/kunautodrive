@@ -269,13 +269,14 @@ export function inferRoadFacilities(roadNetwork, entities, scenarioName = '', op
     );
     addMark(layout, stopCenter.x, stopCenter.y, heading + Math.PI * 0.5, stopLineWidth, 0.38, markZ, 0);
     layout.stopLines++;
+    const apprHeading = laneDirection > 0 ? heading + Math.PI : heading;
     if (light.crosswalk !== false) {
-      addCrosswalk(layout, stopCenter, heading, stopLineWidth, markZ, markPitch);
+      const crossCenter = offsetPoint(stopCenter.x, stopCenter.y, apprHeading, 2.2, 0);
+      addCrosswalk(layout, crossCenter, heading, stopLineWidth, markZ, markPitch);
     }
     // 左转待转区独立箭头：只要箭头落点（stopCenter 后方约 12m）不在交叉口核心铺装内，
     // 即便 stopCenter 距路口几何中心 < 35m 也应绘出左转导流箭头与直行↑组合标线。
     if (light.has_left_arrow) {
-      const apprHeading = laneDirection > 0 ? heading + Math.PI : heading;
       const innerLat = (isOneWay && hasLaneData) ? (lanes * 0.5 - 0.5) * laneWidth : -0.5 * laneWidth;
       const arrowPt = offsetPoint(projection?.refX ?? x, projection?.refY ?? y, apprHeading, -12.0, innerLat);
       const insideHub = junctionHubs.some(

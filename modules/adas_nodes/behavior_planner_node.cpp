@@ -503,9 +503,13 @@ static void on_raw_obstacles(const Message* msg, void* user_data) {
          * 基线里 behavior_state 就是 "NA"）。
          * 修法：空列表 = `obs_count/raw_obs_count 归零 + has_obs=1`，让决策在
          * "无目标"这个真实状态下继续跑。 */
-        g.obs_count = 0;
+        const bool tracker_fresh = (g.last_tracked_obs_us != 0) &&
+            ((clock_now_monotonic_wall_us() - g.last_tracked_obs_us) < 250000ULL);
+        if (!tracker_fresh) {
+            g.obs_count = 0;
+            g.has_obs = 1;
+        }
         g.raw_obs_count = 0;
-        g.has_obs = 1;
         return;
     }
 
@@ -894,7 +898,8 @@ protected:
                         project_to_ref(g.obs_x[i], g.obs_y[i], obs_projection)) {
                         if (!projection_near_road(
                                 g.obs_x[i], g.obs_y[i], obs_projection,
-                                lc, lw)) {
+                                lc, lw) ||
+                            std::fabs(obs_projection.d) >= lc * lw * 0.5 - 0.05) {
                             continue;
                         }
                         along = obs_projection.s - ego_projection.s;
@@ -1028,7 +1033,8 @@ protected:
             auto project_obs_d = [&](double ox, double oy, double& out_d) -> bool {
                 planning_coord::Projection obs_projection;
                 if (project_to_ref(ox, oy, obs_projection) &&
-                    projection_near_road(ox, oy, obs_projection, lc, lw)) {
+                    projection_near_road(ox, oy, obs_projection, lc, lw) &&
+                    std::fabs(obs_projection.d) < lc * lw * 0.5 - 0.05) {
                     out_d = obs_projection.d;
                     return true;
                 }
