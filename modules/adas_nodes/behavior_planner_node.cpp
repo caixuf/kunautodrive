@@ -1029,6 +1029,7 @@ protected:
             gap_cfg.lat_tol = lw * 0.5 + g.same_lane_tol_offset;
             gap_cfg.ego_z = g.ego_z;
             gap_cfg.obs_z = g.obs_z;
+            gap_cfg.road_half_w = lc * lw * 0.5;
 
             auto project_obs_d = [&](double ox, double oy, double& out_d) -> bool {
                 planning_coord::Projection obs_projection;
@@ -1059,6 +1060,36 @@ protected:
                 right_res = behavior_gap::evaluate_target_lane_gap(
                     gap_cfg, tl_y, same_side, has_ego_projection,
                     g.obs_x, g.obs_y, g.obs_vx, g.obs_vy, g.obs_count, project_obs_d);
+                if (!right_res.ok && same_side && has_ego_projection &&
+                    right_res.rear_safe && right_res.front_ttc_safe) {
+                    behavior_gap::CorridorConfig ccfg;
+                    ccfg.ego_x = g.ego_x;
+                    ccfg.ego_y = g.ego_y;
+                    ccfg.ego_z = g.ego_z;
+                    ccfg.ego_heading = g.ego_heading;
+                    ccfg.road_d_min = -lc * lw * 0.5;
+                    ccfg.road_d_max = g.road_oneway ? (lc * lw * 0.5) : 0.0;
+                    ccfg.s_lo = 0.0;
+                    ccfg.s_hi = std::fmax(20.0, min_gap);
+                    ccfg.target_d = tl_y;
+                    ccfg.obs_z = g.obs_z;
+                    auto project_sd = [&](double ox, double oy, double& os, double& od) -> bool {
+                        planning_coord::Projection op;
+                        if (project_to_ref(ox, oy, op) &&
+                            projection_near_road(ox, oy, op, lc, lw)) {
+                            os = op.s - ego_projection.s;
+                            od = op.d;
+                            return true;
+                        }
+                        return false;
+                    };
+                    auto corr = behavior_gap::evaluate_lateral_corridor(
+                        ccfg, g.obs_x, g.obs_y, g.obs_count, project_sd);
+                    if (corr.target_passable) {
+                        right_res.ok = true;
+                        right_res.front_gap = std::fmax(right_res.front_gap, ccfg.s_hi);
+                    }
+                }
             }
 
             double left_gap = left_res.front_gap;

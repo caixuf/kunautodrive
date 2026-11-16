@@ -192,8 +192,10 @@ if (skyBlocked.length) console.log('  skyBlocked:', skyBlocked.slice(0, 10));
 const PAINT_Y = 0.162;
 const facilityView = ViewRegistry.get('roadFacility');
 const facilityStats = facilityView?.getStats?.() || {};
-ok('P0-7: 路口/道路标线已构建 (arrows/stopLines/crosswalks > 0)',
-  (facilityStats.arrows || 0) > 0 && (facilityStats.stopLines || 0) > 0 && (facilityStats.crosswalks || 0) > 0);
+const connectorView = ViewRegistry.get('connector');
+const connectorBuilt = Boolean(connectorView?.isBuilt?.() && connectorView?.getGroup?.()?.children?.length > 0);
+ok('P0-7: 路口/道路标线已构建 (arrows > 0 且路口/路段标线已生成)',
+  (facilityStats.arrows || 0) > 0 && (connectorBuilt || ((facilityStats.stopLines || 0) > 0 && (facilityStats.crosswalks || 0) > 0)));
 
 const markViolations = [];
 const facilityGroup = facilityView?.getGroup?.();

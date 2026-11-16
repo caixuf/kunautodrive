@@ -55,7 +55,8 @@ def _run(pipeline: Path, log_dir: Path, duration: int) -> None:
     env = dict(os.environ)
     env["FLOW_LOG_DIR"] = str(log_dir)
     result = subprocess.run(
-        [str(LAUNCHER), str(pipeline), "--duration", str(duration)],
+        [str(LAUNCHER), str(pipeline), "--duration", str(duration),
+         "--clock-mode", "fast-time", "--step-us", "16666"],
         cwd=ROOT, env=env, text=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120,
     )

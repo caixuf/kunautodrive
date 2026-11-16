@@ -267,12 +267,17 @@ export function inferRoadFacilities(roadNetwork, entities, scenarioName = '', op
       0,
       stopLateral,
     );
-    addMark(layout, stopCenter.x, stopCenter.y, heading + Math.PI * 0.5, stopLineWidth, 0.38, markZ, 0);
-    layout.stopLines++;
+    const nearJunctionHub = junctionHubs.some(
+      (h) => distanceENU(stopCenter.x, stopCenter.y, h.x, h.y) < ((h.radius || 14.0) + 18.0)
+    );
     const apprHeading = laneDirection > 0 ? heading + Math.PI : heading;
-    if (light.crosswalk !== false) {
-      const crossCenter = offsetPoint(stopCenter.x, stopCenter.y, apprHeading, 2.2, 0);
-      addCrosswalk(layout, crossCenter, heading, stopLineWidth, markZ, markPitch);
+    if (!nearJunctionHub) {
+      addMark(layout, stopCenter.x, stopCenter.y, heading + Math.PI * 0.5, stopLineWidth, 0.38, markZ, 0);
+      layout.stopLines++;
+      if (light.crosswalk !== false) {
+        const crossCenter = offsetPoint(stopCenter.x, stopCenter.y, apprHeading, 2.2, 0);
+        addCrosswalk(layout, crossCenter, heading, stopLineWidth, markZ, markPitch);
+      }
     }
     // 左转待转区独立箭头：只要箭头落点（stopCenter 后方约 12m）不在交叉口核心铺装内，
     // 即便 stopCenter 距路口几何中心 < 35m 也应绘出左转导流箭头与直行↑组合标线。

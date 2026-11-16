@@ -109,6 +109,58 @@ void test_behind_ego_curve_lead_rejected() {
     CHECK(behavior_gap::is_valid_forward_lead(25.0, -2.0));
 }
 
+void test_corridor_guardrail_and_ebike_passable() {
+    auto proj_xy = [](double x, double y, double& out_s, double& out_d) -> bool {
+        out_s = x - 100.0;
+        out_d = y;
+        return true;
+    };
+    behavior_gap::CorridorConfig ccfg;
+    ccfg.road_d_min = -3.5;
+    ccfg.road_d_max = 0.0;
+    ccfg.ego_width = 2.0;
+    ccfg.lateral_margin = 0.35;
+    ccfg.s_lo = 0.0;
+    ccfg.s_hi = 30.0;
+    ccfg.target_d = -1.75;
+
+    // Guardrail post outside road (-3.8m) + e-bike riding along right curb (-3.1m, half_w=0.35):
+    // remaining free corridor [-2.75, 0.0] has width 2.75m >= 2.35m -> passable!
+    double ox[] = {105.0, 112.0};
+    double oy[] = {-3.8, -3.1};
+    double hw[] = {0.25, 0.35};
+    ccfg.obs_half_w = hw;
+    auto res = behavior_gap::evaluate_lateral_corridor(ccfg, ox, oy, 2, proj_xy);
+    CHECK(res.passable);
+    CHECK(res.target_passable);
+    CHECK(res.best_width > 2.7 && res.best_width < 2.8);
+}
+
+void test_corridor_narrow_blocked() {
+    auto proj_xy = [](double x, double y, double& out_s, double& out_d) -> bool {
+        out_s = x - 100.0;
+        out_d = y;
+        return true;
+    };
+    behavior_gap::CorridorConfig ccfg;
+    ccfg.road_d_min = -3.5;
+    ccfg.road_d_max = 0.0;
+    ccfg.ego_width = 2.0;
+    ccfg.lateral_margin = 0.35;
+    ccfg.s_lo = 0.0;
+    ccfg.s_hi = 30.0;
+    ccfg.target_d = -1.75;
+
+    // Oncoming car in middle (-1.75, half_w=0.95) leaves [-3.5, -2.7] (0.8m) and [-0.8, 0.0] (0.8m) -> blocked!
+    double ox[] = {115.0};
+    double oy[] = {-1.75};
+    double hw[] = {0.95};
+    ccfg.obs_half_w = hw;
+    auto res = behavior_gap::evaluate_lateral_corridor(ccfg, ox, oy, 1, proj_xy);
+    CHECK(!res.passable);
+    CHECK(!res.target_passable);
+}
+
 }  // namespace
 
 int main() {
@@ -118,6 +170,8 @@ int main() {
     test_safe_front_and_rear_accepted();
     test_wrong_side_rejected();
     test_behind_ego_curve_lead_rejected();
-    std::printf("test_behavior_gap_eval: all 6 tests passed\n");
+    test_corridor_guardrail_and_ebike_passable();
+    test_corridor_narrow_blocked();
+    std::printf("test_behavior_gap_eval: all 8 tests passed\n");
     return 0;
 }
