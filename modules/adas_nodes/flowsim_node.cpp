@@ -4120,12 +4120,10 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
         };
         for (const auto& c : world_layout.colliders) {
             const bool roadside_prop = is_offroad_prop(c.kind);
-            if (c.sensor_visible) {
-                if (!roadside_prop) {
-                    g.facility_obstacles.push_back({
-                        c.x, c.y, c.z, c.len, c.wid, c.heading, c.kind, c.height, c.is_cylinder
-                    });
-                }
+            if (c.sensor_visible && !roadside_prop) {
+                g.facility_obstacles.push_back({
+                    c.x, c.y, c.z, c.len, c.wid, c.heading, c.kind, c.height, c.is_cylinder
+                });
                 flowsim::ScenePubConfig::ScenePubFacility pf;
                 pf.kind = c.kind;
                 pf.x = c.x;
