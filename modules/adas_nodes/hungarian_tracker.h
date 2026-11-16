@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define HUNGARIAN_TRACKER_MAX 64
+#define HUNGARIAN_TRACKER_MAX 128
 
 /* ── Kuhn-Munkres 匈牙利二分图最优匹配算法 (O(N^3)) ──────────
  *

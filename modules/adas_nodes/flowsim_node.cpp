@@ -3878,11 +3878,15 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
         }
     }
 
-    /* 仿真时钟：逻辑时间从 0 开始步进 */
-    clock_set_sim_mode(true);
-    clock_set_sim_time(0);
-    clock_set_step_us(FLOWSIM_DT_US);
-    g.sim_start_us = 0;  /* sim 时间从 0 起，sim_start_us=0 使 sim_time_s = clock_now_us/1e6 */
+    /* 仿真时钟：尊重 flow_launcher 下发的 ClockMode（默认 SOFT_RT 60Hz 实时节拍；
+     * 仅 --clock-mode fast-time / lock-step 时逻辑时间从 0 步进）。 */
+    if (clock_is_sim_mode()) {
+        clock_set_sim_time(0);
+        clock_set_step_us(FLOWSIM_DT_US);
+        g.sim_start_us = 0;  /* sim 时间从 0 起，sim_start_us=0 使 sim_time_s = clock_now_us/1e6 */
+    } else {
+        g.sim_start_us = clock_now_us();
+    }
 
     /* 订阅 control/cmd */
     transport_subscribe(transport, TOPIC_CONTROL_CMD, on_control_cmd, nullptr);

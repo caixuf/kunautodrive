@@ -4,10 +4,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if !defined(_WIN32)
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
 
 typedef struct {
     uint32_t magic;
@@ -52,6 +54,12 @@ static size_t align_up_sz(size_t v, size_t align) {
 }
 
 ShmArena* shm_arena_create(const char* name, uint32_t arena_id, size_t data_capacity) {
+#if defined(_WIN32)
+    (void)name;
+    (void)arena_id;
+    (void)data_capacity;
+    return NULL;
+#else
     if (data_capacity == 0) data_capacity = SHM_ARENA_DEFAULT_CAPACITY;
     data_capacity = align_up_sz(data_capacity, 4096u);
 
@@ -94,16 +102,27 @@ ShmArena* shm_arena_create(const char* name, uint32_t arena_id, size_t data_capa
     a->hdr->data_capacity = (uint64_t)data_capacity;
     atomic_init(&a->hdr->head_seq, 0);
     return a;
+#endif
 }
 
 ShmArena* shm_arena_create_auto(uint32_t arena_id, size_t data_capacity) {
+#if defined(_WIN32)
+    (void)arena_id;
+    (void)data_capacity;
+    return NULL;
+#else
     uint32_t idx = atomic_fetch_add_explicit(&g_auto_arena_seq, 1u, memory_order_relaxed);
     char name[SHM_ARENA_NAME_MAX];
     snprintf(name, sizeof(name), "/flow_arena_%ld_%u", (long)getpid(), idx);
     return shm_arena_create(name, arena_id, data_capacity);
+#endif
 }
 
 ShmArena* shm_arena_open(const char* name) {
+#if defined(_WIN32)
+    (void)name;
+    return NULL;
+#else
     if (!name || !name[0]) return NULL;
     ShmArena* a = (ShmArena*)calloc(1, sizeof(ShmArena));
     if (!a) return NULL;
@@ -145,9 +164,14 @@ ShmArena* shm_arena_open(const char* name) {
 
     a->data = (uint8_t*)a->map_base + sizeof(ShmArenaHeader);
     return a;
+#endif
 }
 
 void shm_arena_destroy(ShmArena* arena, bool unlink_shm) {
+#if defined(_WIN32)
+    (void)unlink_shm;
+    free(arena);
+#else
     if (!arena) return;
     if (arena->map_base) {
         munmap(arena->map_base, arena->map_size);
@@ -159,6 +183,7 @@ void shm_arena_destroy(ShmArena* arena, bool unlink_shm) {
         shm_unlink(arena->shm_name);
     }
     free(arena);
+#endif
 }
 
 const char* shm_arena_name(const ShmArena* arena) {

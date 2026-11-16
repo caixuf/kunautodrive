@@ -139,6 +139,7 @@ struct BehaviorContext {
     uint32_t obs_id[BEH_MAX_OBS]{};
     int obs_count{0};
     volatile int has_obs{0};
+    uint64_t last_tracked_obs_us{0};
 
     /* raw 障碍缓存（on_raw_obstacles 每帧填充，世界坐标）。
      * 用途：掉头触发点缩短时合并 raw+tracked。on_tracked_objects 会整体覆盖
@@ -466,6 +467,7 @@ static void on_tracked_objects(const Message* msg, void* user_data) {
                 g.obs_count++;
             }
             g.has_obs = 1;
+            g.last_tracked_obs_us = clock_now_monotonic_wall_us();
         }
     }
     cJSON_Delete(root);
@@ -511,29 +513,42 @@ static void on_raw_obstacles(const Message* msg, void* user_data) {
     double lw = g.has_road_geometry ? g.lane_width : 3.5;
     double ch = cos(g.ego_heading), sh = sin(g.ego_heading);
     int n = obs_list.count < BEH_MAX_OBS ? (int)obs_list.count : BEH_MAX_OBS;
-    g.obs_count = 0;
+    const bool tracker_fresh = (g.last_tracked_obs_us != 0) &&
+        ((clock_now_monotonic_wall_us() - g.last_tracked_obs_us) < 250000ULL);
+    if (!tracker_fresh) {
+        g.obs_count = 0;
+    }
     g.raw_obs_count = 0;
     for (int i = 0; i < n; i++) {
         const Obstacle* o = &obs_list.obstacles[i];
         /* 车体系 → 世界系（位置和速度都需要旋转） */
-        g.obs_x[i] = g.ego_x + (double)o->x * ch - (double)o->y * sh;
-        g.obs_y[i] = g.ego_y + (double)o->x * sh + (double)o->y * ch;
-        g.obs_z[i] = g.ego_z + (double)o->z;
-        g.obs_height[i] = (double)o->height;
-        g.obs_heading[i] = g.ego_heading + (double)o->heading;
-        g.obs_vx[i] = (double)o->vx * ch - (double)o->vy * sh;
-        g.obs_vy[i] = (double)o->vx * sh + (double)o->vy * ch;
-        g.obs_type[i] = (uint8_t)o->type;
+        const double wx = g.ego_x + (double)o->x * ch - (double)o->y * sh;
+        const double wy = g.ego_y + (double)o->x * sh + (double)o->y * ch;
+        const double wz = g.ego_z + (double)o->z;
+        const double wvx = (double)o->vx * ch - (double)o->vy * sh;
+        const double wvy = (double)o->vx * sh + (double)o->vy * ch;
 
         /* 同步维护 raw 缓存（世界系）——掉头缩短点合并用，独立于 tracked */
-        g.raw_obs_x[i] = g.obs_x[i];
-        g.raw_obs_y[i] = g.obs_y[i];
-        g.raw_obs_z[i] = g.obs_z[i];
-        g.raw_obs_vx[i] = g.obs_vx[i];
-        g.raw_obs_vy[i] = g.obs_vy[i];
+        g.raw_obs_x[i] = wx;
+        g.raw_obs_y[i] = wy;
+        g.raw_obs_z[i] = wz;
+        g.raw_obs_vx[i] = wvx;
+        g.raw_obs_vy[i] = wvy;
         g.raw_obs_count++;
 
-        /* DBG: 346257217 100 3452702473462112233452152603452112153344270252351232234347244231347211251 body=world 345235220346240207345217230346215242357274214347241256350256244344274240346204237346225260346215256345215217350256256 */
+        if (tracker_fresh) {
+            continue;
+        }
+
+        g.obs_x[i] = wx;
+        g.obs_y[i] = wy;
+        g.obs_z[i] = wz;
+        g.obs_height[i] = (double)o->height;
+        g.obs_heading[i] = g.ego_heading + (double)o->heading;
+        g.obs_vx[i] = wvx;
+        g.obs_vy[i] = wvy;
+        g.obs_type[i] = (uint8_t)o->type;
+
         if (i < 3 && g.seq % 100 == 0) {
             LOG_WARN("behavior", "[DBG_OBS] #%d body(x=%.1f y=%.1f vx=%.1f vy=%.1f) "
                      "ego(x=%.1f y=%.1f h=%.3f) world(x=%.1f y=%.1f vx=%.1f) "
@@ -546,7 +561,6 @@ static void on_raw_obstacles(const Message* msg, void* user_data) {
         g.obs_id[i] = o->id;
         /* lane_id（含单向路 side_offset，与 planning/perception 同源） */
         {
-            const double wy = g.obs_y[i];
             g.obs_lane_id[i] = (int8_t)lane_idx_from_y(
                 wy, lc, lw, 0.0, lane_group_side_offset(lc, lw, g.road_oneway));
         }
