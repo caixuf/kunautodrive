@@ -224,7 +224,7 @@ def check_config(path: Path, macros: dict[str, str],
                 )
 
         if profile == "default":
-            missing_in = code_in - json_in
+            missing_in = (code_in - json_in) - set(cfg.get("allow_hung_subs") or [])
             missing_out = code_out - json_out
             if missing_in:
                 errors.append(

@@ -151,6 +151,15 @@ struct BehaviorContext {
     double raw_obs_vx[BEH_MAX_OBS]{}, raw_obs_vy[BEH_MAX_OBS]{};
     int raw_obs_count{0};
 
+    /* P1: perception/traversability 连续可通行走廊摘要 */
+    bool trav_valid{false};
+    bool trav_blocked{false};
+    double trav_corridor_left_y{0.0};
+    double trav_corridor_right_y{0.0};
+    double trav_corridor_width_m{0.0};
+    double trav_nearest_obs_x{-1.0};
+    uint64_t trav_last_us{0};
+
     /* 施工区权威几何（scene/frame）：掉头触发点缩短的第三路事实源。
      * 感知/ tracker 都丢墙时，仍能按施工前缘提前触发，避免开进施工区再掉头。 */
     static constexpr int kMaxCz = 8;
@@ -483,6 +492,27 @@ static void on_tracked_objects(const Message* msg, void* user_data) {
  * g.obs_count 停留在非零值，raw 数据永远无法刷新，障碍物坐标冻结在第一帧。
  * 随着 ego 前进，前车 dx 变为负数（落在后方），best_gap 永远 1e9 → 永不进入
  * FOLLOW，表现为"全速冲向前车直到追尾"。 */
+static void on_traversability(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg || msg->data_size == 0) return;
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
+    if (!root) return;
+    cJSON* j = nullptr;
+    if ((j = cJSON_GetObjectItemCaseSensitive(root, "corridor_left_y")) && cJSON_IsNumber(j))
+        g.trav_corridor_left_y = j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(root, "corridor_right_y")) && cJSON_IsNumber(j))
+        g.trav_corridor_right_y = j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(root, "corridor_width_m")) && cJSON_IsNumber(j))
+        g.trav_corridor_width_m = j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(root, "nearest_obstacle_x")) && cJSON_IsNumber(j))
+        g.trav_nearest_obs_x = j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(root, "blocked")) && cJSON_IsBool(j))
+        g.trav_blocked = cJSON_IsTrue(j);
+    g.trav_valid = true;
+    g.trav_last_us = clock_now_us();
+    cJSON_Delete(root);
+}
+
 static void on_raw_obstacles(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
@@ -1899,6 +1929,7 @@ static int behavior_init(MessageBus* bus, Transport* transport,
     transport_subscribe(transport, TOPIC_VEHICLE_STATE, on_vehicle_state, nullptr);
     transport_subscribe(transport, TOPIC_PERCEPTION_TRACKED_OBJECTS,  on_tracked_objects,    nullptr);
     transport_subscribe(transport, TOPIC_PERCEPTION_OBSTACLES,        on_raw_obstacles,      nullptr);
+    transport_subscribe(transport, "perception/traversability",       on_traversability,       nullptr);
     transport_subscribe(transport, TOPIC_ROAD_GEOMETRY,               on_road_geometry,      nullptr);
     transport_subscribe(transport, TOPIC_ROAD_TRAFFIC_LIGHTS,         on_traffic_lights,     nullptr);
     transport_subscribe(transport, TOPIC_ROAD_REF_PATH,               on_ref_path,           nullptr);
@@ -1907,6 +1938,7 @@ static int behavior_init(MessageBus* bus, Transport* transport,
     discovery_advertise(discovery, TOPIC_FUSION_LOCALIZATION,       0u, CAP_SUBSCRIBER,  0);
     discovery_advertise(discovery, TOPIC_PERCEPTION_TRACKED_OBJECTS, 0u, CAP_SUBSCRIBER,  0);
     discovery_advertise(discovery, TOPIC_PERCEPTION_OBSTACLES,       0x0B5A010Eu, CAP_SUBSCRIBER,  0);
+    discovery_advertise(discovery, "perception/traversability",      0u,          CAP_SUBSCRIBER,  0);
     discovery_advertise(discovery, TOPIC_VEHICLE_STATE,             0x1C0E5A7Eu, CAP_SUBSCRIBER,  0);  /* flowsim 真值优先 */
     discovery_advertise(discovery, TOPIC_ROAD_GEOMETRY,             0x80AD5C12u, CAP_SUBSCRIBER,  0);
     discovery_advertise(discovery, TOPIC_ROAD_TRAFFIC_LIGHTS,       0x7E5C0FFEu, CAP_SUBSCRIBER,  0);  /* 归位决策 */

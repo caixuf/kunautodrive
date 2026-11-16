@@ -4,7 +4,10 @@
   "monitor_interval": 5,
   "enable_monitor": true,
   "_comment_allow_hung_subs": "发布者存在性 gate (ci/gates/topic_contract_check.py) 允许此列表中的订阅无发布者：sensor/pose — 默认 profile 无 slam_node；GPS-only 时 fusion 走 GPS 路径",
-  "allow_hung_subs": ["sensor/pose"],
+  "allow_hung_subs": [
+    "sensor/pose",
+    "sensor/stereo"
+  ],
   "_comment_lane_detection": "lane_detection 是沙箱节点（合成边界，非真实相机检测，见 lane_detection_node.c 头注释）。接入 pipeline 只为可观测性对账：前端把 perception/lanes 画出来与地图/启发式标线比对；规划不消费该话题。",
   "scheduler": {
     "mode": "choreo",
@@ -229,6 +232,22 @@
         }
       ],
       "params": "{\"frequency_hz\":20.0}"
+    },
+    {
+      "name": "traversability",
+      "library_path": "build/lib/libtraversability_node.so",
+      "auto_start": true,
+      "subscribe": [
+        "perception/obstacles",
+        "vehicle/state"
+      ],
+      "publish": [
+        {
+          "topic": "perception/traversability",
+          "type": "text"
+        }
+      ],
+      "params": "{\"enable\":1,\"cell_size_m\":0.25,\"x_range_m\":40.0,\"y_range_m\":7.0,\"min_corridor_width_m\":2.4,\"publish_hz\":10}"
     },
     {
       "name": "behavior_planner",
@@ -551,7 +570,7 @@
           "topic": "odd/state"
         }
       ],
-      "params": "{\"frequency_hz\":10.0,\"odd_min_visibility_m\":150.0,\"loc_max_age_ms\":500.0,\"route_max_age_ms\":2500.0,\"allowed_weather\":\"clear,overcast,cloudy\",\"scenario_file\":\"scenarios/straight_road.json\"}"
+      "params": "{\"frequency_hz\": 10.0, \"odd_min_visibility_m\": 150.0, \"loc_max_age_ms\": 500.0, \"route_max_age_ms\": 2500.0, \"allowed_weather\": \"clear,overcast,cloudy\", \"scenario_file\": \"scenarios/straight_road.json\"}"
     },
     {
       "name": "tor_manager",
@@ -570,7 +589,7 @@
           "topic": "safety/mrm_request"
         }
       ],
-      "params": "{\"frequency_hz\":20.0,\"tor_countdown_s\":10.0,\"tor_odd_exit_dwell_s\":0.5,\"tor_odd_reenter_dwell_s\":1.0,\"mrm_settle_s\":1.0,\"startup_grace_s\":2.0,\"mrm_decel_mps2\":1.5,\"scenario_file\":\"scenarios/straight_road.json\"}"
+      "params": "{\"frequency_hz\": 20.0, \"tor_countdown_s\": 10.0, \"tor_odd_exit_dwell_s\": 0.5, \"tor_odd_reenter_dwell_s\": 1.0, \"mrm_settle_s\": 1.0, \"startup_grace_s\": 2.0, \"mrm_decel_mps2\": 1.5, \"scenario_file\": \"scenarios/straight_road.json\"}"
     }
   ],
   "profile": "default",

@@ -1149,12 +1149,18 @@ protected:
                         heading_term = g.lat_kd_heading * dh_t;
                     }
                     double yaw_damp_term = g.yaw_damping * g.ego_yaw_rate;
-                    double kappa = 0.25 * ref_kappa + 0.75 * g.prev_ref_kappa;
+                    double kappa = 0.50 * ref_kappa + 0.50 * g.prev_ref_kappa;
                     g.prev_ref_kappa = kappa;
                     double ff_weight = 1.0;
-                    if (fabs(kappa) > 1e-9) {
+                    if (fabs(kappa) > 1e-9 && g.curve_ff_boost_radius_m > 1.0) {
                         double R = 1.0 / fabs(kappa);
-                        if (R <= g.curve_ff_boost_radius_m) ff_weight = g.curve_ff_boost_factor;
+                        if (R <= g.curve_ff_boost_radius_m) {
+                            double t = (g.curve_ff_boost_radius_m - R) /
+                                       fmax(15.0, g.curve_ff_boost_radius_m - 20.0);
+                            if (t > 1.0) t = 1.0;
+                            if (t < 0.0) t = 0.0;
+                            ff_weight = 1.0 + (g.curve_ff_boost_factor - 1.0) * t;
+                        }
                     }
                     double ff_term = g.wheelbase * kappa * ff_weight;
 

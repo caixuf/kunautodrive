@@ -139,6 +139,10 @@ static struct {
     /* 最新 StereoFrame（订阅回调写，工作线程读，mutex 保护） */
     StereoFrame last_frame;
     volatile int has_frame;
+    ObstacleList last_obs;
+    volatile int has_obs;
+    EgoState last_ego;
+    volatile int has_ego;
     pthread_mutex_t lock;
 
     /* 统计 */
@@ -171,6 +175,38 @@ static void on_stereo(const Message* msg, void* user_data) {
     g.has_frame = 1;
     g.frames_received++;
     g.last_frame_time = time(NULL);
+    pthread_mutex_unlock(&g.lock);
+}
+
+static void on_obstacles(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg || !g.enabled) return;
+    ObstacleList list;
+    if (ObstacleList_deserialize(&list,
+                                 (const uint8_t*)message_bus_message_data(msg),
+                                 msg->data_size) != 0) {
+        return;
+    }
+    pthread_mutex_lock(&g.lock);
+    g.last_obs = list;
+    g.has_obs = 1;
+    g.frames_received++;
+    g.last_frame_time = time(NULL);
+    pthread_mutex_unlock(&g.lock);
+}
+
+static void on_vehicle_state(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg || !g.enabled) return;
+    EgoState vs;
+    if (EgoState_deserialize(&vs,
+                             (const uint8_t*)message_bus_message_data(msg),
+                             msg->data_size) != 0) {
+        return;
+    }
+    pthread_mutex_lock(&g.lock);
+    g.last_ego = vs;
+    g.has_ego = 1;
     pthread_mutex_unlock(&g.lock);
 }
 
@@ -477,31 +513,74 @@ static int traversability_execute(TaskBase* task) {
         if (task->should_stop) break;
 
         StereoFrame frame;
+        ObstacleList obs_list;
+        int use_stereo = 0;
+        int use_obs = 0;
         pthread_mutex_lock(&g.lock);
-        if (!g.has_frame) {
+        if (g.has_frame) {
+            frame = g.last_frame;
+            g.has_frame = 0;  /* 消费掉，避免重复处理 */
+            use_stereo = 1;
+        } else if (g.has_obs && g.has_ego) {
+            obs_list = g.last_obs;
+            g.has_obs = 0;
+            use_obs = 1;
+        } else {
             pthread_mutex_unlock(&g.lock);
             continue;
         }
-        frame = g.last_frame;
-        g.has_frame = 0;  /* 消费掉，避免重复处理 */
         pthread_mutex_unlock(&g.lock);
 
-        /* 1. 3D 反投影 */
-        int n = depth_to_points_3d(&frame, g.point_buf, g.point_buf_cap);
-        if (n < 4) continue;  /* 点太少，栅格无意义 */
-
-        /* 1b. RANSAC 地面拟合（失败回退高度阈值法 plane=NULL） */
-        Plane plane;
-        int have_plane = (fit_ground_ransac(g.point_buf, n, &plane,
-                                            g.ransac_iters,
-                                            (float)g.ransac_inlier_m) == 0);
-
-        /* 2. 构建占用栅格（时域融合 + 平面距离） */
+        int n = 0;
         int free_cnt = 0, occ_cnt = 0, unknown_cnt = 0;
-        build_grid(g.point_buf, n, grid_w, grid_h,
-                   g.cell_size_m, g.x_range_m, g.y_range_m,
-                   have_plane ? &plane : NULL,
-                   &free_cnt, &occ_cnt, &unknown_cnt);
+        if (use_stereo) {
+            /* 1. 3D 反投影 */
+            n = depth_to_points_3d(&frame, g.point_buf, g.point_buf_cap);
+            if (n < 4) continue;  /* 点太少，栅格无意义 */
+
+            /* 1b. RANSAC 地面拟合（失败回退高度阈值法 plane=NULL） */
+            Plane plane;
+            int have_plane = (fit_ground_ransac(g.point_buf, n, &plane,
+                                                g.ransac_iters,
+                                                (float)g.ransac_inlier_m) == 0);
+
+            /* 2. 构建占用栅格（时域融合 + 平面距离） */
+            build_grid(g.point_buf, n, grid_w, grid_h,
+                       g.cell_size_m, g.x_range_m, g.y_range_m,
+                       have_plane ? &plane : NULL,
+                       &free_cnt, &occ_cnt, &unknown_cnt);
+        } else if (use_obs) {
+            for (int i = 0; i < grid_w * grid_h && i < TV_GRID_MAX_CELLS; i++) {
+                g.grid[i] = TV_CELL_FREE;
+            }
+            for (uint32_t oi = 0; oi < obs_list.count && oi < 128; oi++) {
+                const Obstacle* o = &obs_list.obstacles[oi];
+                double hl = (o->length > 0.2 ? (double)o->length : 1.0) * 0.5;
+                double hw = (o->width  > 0.2 ? (double)o->width  : 1.0) * 0.5;
+                int gx0 = (int)floor(((double)o->x - hl) / g.cell_size_m);
+                int gx1 = (int)floor(((double)o->x + hl) / g.cell_size_m);
+                int gy0 = (int)floor(((double)o->y - hw + g.y_range_m) / g.cell_size_m);
+                int gy1 = (int)floor(((double)o->y + hw + g.y_range_m) / g.cell_size_m);
+                if (gx1 < 0 || gx0 >= grid_w || gy1 < 0 || gy0 >= grid_h) continue;
+                if (gx0 < 0) gx0 = 0;
+                if (gx1 >= grid_w) gx1 = grid_w - 1;
+                if (gy0 < 0) gy0 = 0;
+                if (gy1 >= grid_h) gy1 = grid_h - 1;
+                for (int gx = gx0; gx <= gx1; gx++) {
+                    for (int gy = gy0; gy <= gy1; gy++) {
+                        int idx = gx * grid_h + gy;
+                        if (idx >= 0 && idx < TV_GRID_MAX_CELLS) {
+                            g.grid[idx] = TV_CELL_OCCUPIED;
+                        }
+                    }
+                }
+                n++;
+            }
+            for (int i = 0; i < grid_w * grid_h && i < TV_GRID_MAX_CELLS; i++) {
+                if (g.grid[i] == TV_CELL_OCCUPIED) occ_cnt++;
+                else free_cnt++;
+            }
+        }
 
         /* 3. 走廊提取 */
         double cor_left_y = 0, cor_right_y = 0, cor_width = 0;
@@ -557,7 +636,7 @@ static const TaskInterface traversability_vtable = {
 
 /* ── NodePlugin 实现 ─────────────────────────────────────── */
 
-static const char* s_inputs[]  = { "sensor/stereo", NULL };
+static const char* s_inputs[]  = { "sensor/stereo", "perception/obstacles", "vehicle/state", NULL };
 static const char* s_outputs[] = { "perception/traversability", NULL };
 
 static NodePlugin s_plugin;
@@ -666,9 +745,13 @@ static int traversability_init(MessageBus* bus, Transport* transport,
         return -1;
     }
 
-    /* 订阅 sensor/stereo */
+    /* 订阅 sensor/stereo 及主链路 perception/obstacles + vehicle/state */
     transport_subscribe(transport, "sensor/stereo", on_stereo, NULL);
+    transport_subscribe(transport, "perception/obstacles", on_obstacles, NULL);
+    transport_subscribe(transport, "vehicle/state", on_vehicle_state, NULL);
     discovery_advertise(discovery, "sensor/stereo", STEREOFRAME_TYPE_ID, CAP_SUBSCRIBER, 0);
+    discovery_advertise(discovery, "perception/obstacles", 0x0B5A010Eu, CAP_SUBSCRIBER, 0);
+    discovery_advertise(discovery, "vehicle/state", 0x1C0E5A7Eu, CAP_SUBSCRIBER, 0);
 
     /* 发布 output_topic（text 类型，无 type_id） */
     discovery_advertise(discovery, g.output_topic, 0, CAP_PUBLISHER, (double)g.publish_hz);
