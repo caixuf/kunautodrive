@@ -1120,12 +1120,14 @@ protected:
                     left_rear_safe = right_rear_safe = true;
                 }
             }
+            bool left_turn_ahead = false;
             {
                 planning_coord::Projection ep;
                 if (current_legal && project_to_ref(g.ego_x, g.ego_y, ep) &&
                     traffic_light_detect_left_turn_ahead(
-                        g.ref_x, g.ref_y, g.ref_s, g.ref_count, ep.s, 6.0, 90.0)) {
+                        g.ref_x, g.ref_y, g.ref_s, g.ref_count, ep.s, 6.0, 120.0)) {
                     /* 接近左转路口时禁止向右变道驶离左转车道 */
+                    left_turn_ahead = true;
                     right_ok = false;
                 }
             }
@@ -1142,6 +1144,8 @@ protected:
                 /* 接近前方本向车道缩减区时禁止向右变道驶入即将消失的外侧车道 */
                 right_ok = false;
             }
+            const bool left_turn_merge_needed =
+                current_legal && left_turn_ahead && (current_idx > legal_first);
 
             if (left_ok && right_ok) {
                 adj_idx = (left_gap >= right_gap) ? current_idx - 1 : current_idx + 1;
@@ -1276,6 +1280,19 @@ protected:
                     snprintf(reason, sizeof(reason),
                              "lane drop ahead (%.1fm, own=%d): merge lane%d -> lane%d",
                              g.dist_to_lane_drop_m, g.upcoming_own_lanes,
+                             current_idx, current_idx - 1);
+                } else if (left_turn_merge_needed && !uturn_approach_active && left_ok &&
+                           (!carriageway_ahead_stop_light() || g.ego_v >= 1.5) &&
+                           (cur == BEH_ST_CRUISE || cur == BEH_ST_FOLLOW)) {
+                    /* 接近左转路口且当前在外侧直行车道：提前向左并入最内侧左转车道 */
+                    ev = BEH_EV_OVERTAKE_LEFT;
+                    new_target_lane = current_idx - 1;
+                    new_target_speed = (left_gap >= 1e8)
+                        ? g.cfg_cruise_speed
+                        : std::min(g.cfg_cruise_speed, std::max(left_lead_v, g.ego_v));
+                    new_follow_id = 0;
+                    snprintf(reason, sizeof(reason),
+                             "left turn ahead: merge lane%d -> lane%d",
                              current_idx, current_idx - 1);
                 } else if (cur == BEH_ST_CRUISE) {
                     if (uturn_approach_active) {
