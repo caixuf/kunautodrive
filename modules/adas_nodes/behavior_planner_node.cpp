@@ -159,6 +159,7 @@ struct BehaviorContext {
     double trav_corridor_width_m{0.0};
     double trav_nearest_obs_x{-1.0};
     uint64_t trav_last_us{0};
+    TrafficLightCache tl_cache{};
     ClockLockstepSlot lockstep{-1, 0};
 
     /* 施工区权威几何（scene/frame）：掉头触发点缩短的第三路事实源。
@@ -631,6 +632,7 @@ static void on_traffic_lights(const Message* msg, void* user_data) {
     if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
     TrafficLightCache c;
     traffic_lights_parse((const char*)((const uint8_t*)message_bus_message_data(msg)), &c);
+    g.tl_cache = c;
     g.tl_count = c.count;
     g.has_traffic_lights = c.valid;
     for (int i = 0; i < c.count; i++) {
@@ -1153,14 +1155,24 @@ protected:
                 }
             }
             bool left_turn_ahead = false;
+            bool right_turn_ahead = false;
             {
                 planning_coord::Projection ep;
-                if (current_legal && project_to_ref(g.ego_x, g.ego_y, ep) &&
-                    traffic_light_detect_left_turn_ahead(
-                        g.ref_x, g.ref_y, g.ref_s, g.ref_count, ep.s, 6.0, 120.0)) {
-                    /* 接近左转路口时禁止向右变道驶离左转车道 */
+                int turn_dir = 0;
+                if (current_legal && project_to_ref(g.ego_x, g.ego_y, ep)) {
+                    turn_dir = traffic_light_detect_turn_ahead(
+                        g.ref_x, g.ref_y, g.ref_s, g.ref_count, ep.s, 6.0, 120.0);
+                }
+                if (current_legal &&
+                    (turn_dir > 0 ||
+                     traffic_light_has_left_arrow_ahead(&g.tl_cache, g.ego_x, g.ego_y, g.ego_heading, 120.0))) {
+                    /* 接近左转路口（参考线转向或左转箭头灯拓扑）时禁止向右变道驶离左转车道 */
                     left_turn_ahead = true;
                     right_ok = false;
+                } else if (current_legal && turn_dir < 0) {
+                    /* 接近右转路口时禁止向左变道驶离右转车道 */
+                    right_turn_ahead = true;
+                    left_ok = false;
                 }
             }
 
@@ -1178,6 +1190,8 @@ protected:
             }
             const bool left_turn_merge_needed =
                 current_legal && left_turn_ahead && (current_idx > legal_first);
+            const bool right_turn_merge_needed =
+                current_legal && right_turn_ahead && (current_idx < legal_last);
 
             if (left_ok && right_ok) {
                 adj_idx = (left_gap >= right_gap) ? current_idx - 1 : current_idx + 1;
@@ -1326,6 +1340,19 @@ protected:
                     snprintf(reason, sizeof(reason),
                              "left turn ahead: merge lane%d -> lane%d",
                              current_idx, current_idx - 1);
+                } else if (right_turn_merge_needed && !uturn_approach_active && right_ok &&
+                           (!carriageway_ahead_stop_light() || g.ego_v >= 1.5) &&
+                           (cur == BEH_ST_CRUISE || cur == BEH_ST_FOLLOW)) {
+                    /* 接近右转路口且当前在内侧车道：提前向右并入最外侧右转车道 */
+                    ev = BEH_EV_OVERTAKE_RIGHT;
+                    new_target_lane = current_idx + 1;
+                    new_target_speed = (right_gap >= 1e8)
+                        ? g.cfg_cruise_speed
+                        : std::min(g.cfg_cruise_speed, std::max(right_lead_v, g.ego_v));
+                    new_follow_id = 0;
+                    snprintf(reason, sizeof(reason),
+                             "right turn ahead: merge lane%d -> lane%d",
+                             current_idx, current_idx + 1);
                 } else if (cur == BEH_ST_CRUISE) {
                     if (uturn_approach_active) {
                         if (!at_inner_lane) {

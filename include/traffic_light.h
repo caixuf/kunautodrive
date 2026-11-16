@@ -169,7 +169,7 @@ static inline int traffic_light_matches_route_tangent(
     return traffic_light_controls_direction(tl_lane_offset, on_return);
 }
 
-static inline int traffic_light_detect_left_turn_ahead(
+static inline int traffic_light_detect_turn_ahead(
     const double* rx, const double* ry, const double* rs, int n,
     double ref_s, double look_before_m, double look_after_m) {
     if (!rx || !ry || !rs || n < 3) return 0;
@@ -194,6 +194,31 @@ static inline int traffic_light_detect_left_turn_ahead(
         double hk = atan2(ry[i + 1] - ry[i], rx[i + 1] - rx[i]);
         double dh = atan2(sin(hk - h0), cos(hk - h0));
         if (dh > 0.35 && dh < 2.65) return 1;
+        if (dh < -0.35 && dh > -2.65) return -1;
+    }
+    return 0;
+}
+
+static inline int traffic_light_detect_left_turn_ahead(
+    const double* rx, const double* ry, const double* rs, int n,
+    double ref_s, double look_before_m, double look_after_m) {
+    return traffic_light_detect_turn_ahead(rx, ry, rs, n, ref_s, look_before_m, look_after_m) == 1 ? 1 : 0;
+}
+
+static inline int traffic_light_has_left_arrow_ahead(
+    const TrafficLightCache* tl, double ego_x, double ego_y, double ego_h, double max_dist_m) {
+    if (!tl || !tl->valid) return 0;
+    const double ch = cos(ego_h), sh = sin(ego_h);
+    for (int i = 0; i < tl->count; i++) {
+        if (!tl->has_left_arrow[i]) continue;
+        double dx = tl->x[i] - ego_x, dy = tl->y[i] - ego_y;
+        double along = dx * ch + dy * sh;
+        double lat = fabs(-dx * sh + dy * ch);
+        if (along > 0.0 && along <= max_dist_m && lat <= 18.0) {
+            if (!tl->has_approach_heading[i] || cos(tl->approach_heading[i] - ego_h) > 0.5) {
+                return 1;
+            }
+        }
     }
     return 0;
 }

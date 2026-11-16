@@ -314,6 +314,14 @@ struct PlanningContext {
     Behavior current_behavior{};    /* 最新 behavior 指令 */
     volatile int has_behavior{0};
 
+    /* P1: perception/traversability 连续可通行走廊（车道内微调 Nudge） */
+    bool     trav_valid{false};
+    bool     trav_blocked{false};
+    double   trav_corridor_center_y{0.0};
+    double   trav_corridor_width_m{0.0};
+    double   trav_nearest_obs_x{-1.0};
+    uint64_t trav_last_us{0};
+
     /* UTurn 轨迹缓存：避免每帧重新生成 64 点轨迹（含 LOG 轰炸 + 前向积分）。
      * 首次进入 U-turn 状态时生成一次，后续帧复用。当 ego 偏离首点 > 2m 时重新生成。 */
     TrajectoryPoint uturn_cache[64];
@@ -2280,6 +2288,20 @@ protected:
                         g.target_lane_offset = lane_center_offset(
                             g.committed_lane_idx, n_lanes, lane_w, g.road_oneway);
                     }
+                    /* P1: 车道内微调绕行 (Nudge)：当感知可通行走廊新鲜、未堵死且前方 25m 内
+                     * 存在局部偏置障碍时，在当前车道安全余量内施加连续横向微调。 */
+                    if (g.trav_valid && (now_us - g.trav_last_us < 1000000ULL) &&
+                        !g.trav_blocked && g.trav_corridor_width_m >= 2.2 &&
+                        g.trav_nearest_obs_x > 0.0 && g.trav_nearest_obs_x < 25.0 &&
+                        fabs(g.trav_corridor_center_y) >= 0.25 &&
+                        fabs(g.trav_corridor_center_y) <= 0.75) {
+                        double nudge_d = fmax(-0.55, fmin(0.55, g.trav_corridor_center_y));
+                        double nudged = g.target_lane_offset + nudge_d;
+                        if (planning_coord::is_lane_d_in_legal_band(
+                                nudged, n_lanes, lane_w, side_offset)) {
+                            g.target_lane_offset = nudged;
+                        }
+                    }
                     /* 阶段三硬约束：双向道路非掉头状态下，目标横向偏移严禁贴近或越过中心双黄线（d=0），
                      * 保证左缘（ego_width/2=1.0m + 0.15m 余量）在路口左转出口不压黄线。 */
                     if (!g.road_oneway &&
@@ -3383,6 +3405,34 @@ EXPORT_COROUTINE_TASK(PlanningTask, planning)
 
 /* ── NodePlugin 实现 ─────────────────────────────────────────── */
 
+static void on_traversability(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg || msg->data_size == 0) return;
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
+    if (!root) return;
+    double ly = 0.0, ry = 0.0;
+    bool has_ly = false, has_ry = false;
+    cJSON* j = nullptr;
+    if ((j = cJSON_GetObjectItemCaseSensitive(root, "corridor_left_y")) && cJSON_IsNumber(j)) {
+        ly = j->valuedouble;
+        has_ly = true;
+    }
+    if ((j = cJSON_GetObjectItemCaseSensitive(root, "corridor_right_y")) && cJSON_IsNumber(j)) {
+        ry = j->valuedouble;
+        has_ry = true;
+    }
+    if (has_ly && has_ry) g.trav_corridor_center_y = 0.5 * (ly + ry);
+    if ((j = cJSON_GetObjectItemCaseSensitive(root, "corridor_width_m")) && cJSON_IsNumber(j))
+        g.trav_corridor_width_m = j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(root, "nearest_obstacle_x")) && cJSON_IsNumber(j))
+        g.trav_nearest_obs_x = j->valuedouble;
+    if ((j = cJSON_GetObjectItemCaseSensitive(root, "blocked")) && cJSON_IsBool(j))
+        g.trav_blocked = cJSON_IsTrue(j);
+    g.trav_valid = true;
+    g.trav_last_us = clock_now_us();
+    cJSON_Delete(root);
+}
+
 /* 方向四：模型 → planning 软建议（仅 plan_assist 模式发布；默认关闭）。 */
 static void on_model_assist(const Message* msg, void* user_data) {
     (void)user_data;
@@ -3657,6 +3707,7 @@ static int planning_init(MessageBus* bus, Transport* transport,
     transport_subscribe(transport, TOPIC_NAVIGATION_PATH, on_navigation_path, nullptr);
     transport_subscribe(transport, TOPIC_LOCALIZATION_LANE_MATCH, on_lane_match, nullptr);
     transport_subscribe(transport, "inference/assist", on_model_assist, nullptr);
+    transport_subscribe(transport, "perception/traversability", on_traversability, nullptr);
     transport_subscribe(transport, TOPIC_PREDICTION_TRACKS, on_prediction_tracks, nullptr);
     transport_advertise(transport, TOPIC_PLANNING_TRAJECTORY, 0x3A7B1C2Du);
     transport_advertise(transport, TOPIC_PLANNING_DEBUG, 0u);  /* JSON text */

@@ -161,6 +161,42 @@ void test_corridor_narrow_blocked() {
     CHECK(!res.target_passable);
 }
 
+void test_corridor_partial_nudge_and_narrow_oncoming() {
+    auto proj_xy = [](double x, double y, double& out_s, double& out_d) -> bool {
+        out_s = x - 100.0;
+        out_d = y;
+        return true;
+    };
+    behavior_gap::CorridorConfig ccfg;
+    ccfg.road_d_min = -4.8;
+    ccfg.road_d_max = 0.0;
+    ccfg.ego_width = 2.0;
+    ccfg.lateral_margin = 0.25;
+    ccfg.s_lo = 0.0;
+    ccfg.s_hi = 30.0;
+    ccfg.target_d = -1.75;
+
+    // Double-parked car on right curb (-4.0, half_w=0.90) leaves [-3.1, 0.0] (3.1m free):
+    // passable and free center shifts left toward -1.55m for nudge.
+    double ox[] = {112.0};
+    double oy[] = {-4.0};
+    double hw[] = {0.90};
+    ccfg.obs_half_w = hw;
+    auto res = behavior_gap::evaluate_lateral_corridor(ccfg, ox, oy, 1, proj_xy);
+    CHECK(res.passable);
+    CHECK(res.best_width > 3.0);
+    CHECK(res.best_center > -1.75);
+
+    // Narrow-road oncoming car at +0.75 (half_w=0.90) vs no-lane-line road [-3.5, +2.0]:
+    // free corridor [-3.5, -0.15] has width 3.35m >= 2.25m -> passable!
+    ccfg.road_d_min = -3.5;
+    ccfg.road_d_max = 2.0;
+    oy[0] = 0.75;
+    res = behavior_gap::evaluate_lateral_corridor(ccfg, ox, oy, 1, proj_xy);
+    CHECK(res.passable);
+    CHECK(res.best_width > 3.3);
+}
+
 }  // namespace
 
 int main() {
@@ -172,6 +208,7 @@ int main() {
     test_behind_ego_curve_lead_rejected();
     test_corridor_guardrail_and_ebike_passable();
     test_corridor_narrow_blocked();
-    std::printf("test_behavior_gap_eval: all 8 tests passed\n");
+    test_corridor_partial_nudge_and_narrow_oncoming();
+    std::printf("test_behavior_gap_eval: all 9 tests passed\n");
     return 0;
 }

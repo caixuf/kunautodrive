@@ -3018,6 +3018,7 @@ protected:
                 if (hit) continue;
                 for (size_t fi = 0; fi < g.facility_obstacles.size(); ++fi) {
                     const auto& f = g.facility_obstacles[fi];
+                    if (f.kind == "pier" && e.z > f.z + 1.8) continue;
                     if (std::fabs(e.z - f.z) > 2.5) continue;
                     if (std::fabs(e.x - f.x) > e.length * 0.5 + std::max(f.len, f.wid) + 1.0) continue;
                     if (std::fabs(e.y - f.y) > e.length * 0.5 + std::max(f.len, f.wid) + 1.0) continue;
