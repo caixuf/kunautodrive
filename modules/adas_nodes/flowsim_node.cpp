@@ -3997,7 +3997,9 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
         }
     }
     /* ── WorldEngine: 单一权威程序化 3D/物理/感知世界编译器 ── */
+#if defined(FLOW_HAS_JOLT) && FLOW_HAS_JOLT
     std::vector<flowsim::StaticBoxObstacle> jolt_obs;
+#endif
     {
         flowsim::WorldEngineInput wg_in;
         const char* rn_ptr = nullptr;
@@ -4103,7 +4105,9 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
 
         g.facility_obstacles.clear();
         g.scene_pub_cfg.facilities.clear();
+#if defined(FLOW_HAS_JOLT) && FLOW_HAS_JOLT
         jolt_obs.reserve(world_layout.colliders.size());
+#endif
         for (const auto& c : world_layout.colliders) {
             if (c.sensor_visible) {
                 g.facility_obstacles.push_back({
@@ -4120,6 +4124,7 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
                 pf.heading = c.heading;
                 g.scene_pub_cfg.facilities.push_back(std::move(pf));
             }
+#if defined(FLOW_HAS_JOLT) && FLOW_HAS_JOLT
             flowsim::StaticBoxObstacle o;
             o.x = c.x;
             o.y = c.y;
@@ -4131,6 +4136,7 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
             o.kind = c.kind;
             o.is_cylinder = c.is_cylinder;
             jolt_obs.push_back(std::move(o));
+#endif
         }
 
         LOG_INFO("flowsim",
