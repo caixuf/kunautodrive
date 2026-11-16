@@ -163,12 +163,12 @@ function _buildAsphaltTextures() {
       const xp = (x + 1) & MASK;
       const idx = y * SIZE + x;
       const tl = heightMap[ym * SIZE + xm];
-      const t  = heightMap[ym * SIZE + x];
+      const t = heightMap[ym * SIZE + x];
       const tr = heightMap[ym * SIZE + xp];
-      const l  = heightMap[y * SIZE + xm];
-      const r  = heightMap[y * SIZE + xp];
+      const l = heightMap[y * SIZE + xm];
+      const r = heightMap[y * SIZE + xp];
       const bl = heightMap[yp * SIZE + xm];
-      const b  = heightMap[yp * SIZE + x];
+      const b = heightMap[yp * SIZE + x];
       const br = heightMap[yp * SIZE + xp];
 
       const gx = (tr + 2 * r + br) - (tl + 2 * l + bl);
@@ -180,7 +180,7 @@ function _buildAsphaltTextures() {
       const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
 
       const pi = idx * 4;
-      out[pi]     = Math.round(((nx / len) * 0.5 + 0.5) * 255);
+      out[pi] = Math.round(((nx / len) * 0.5 + 0.5) * 255);
       out[pi + 1] = Math.round(((ny / len) * 0.5 + 0.5) * 255);
       out[pi + 2] = Math.round(((nz / len) * 0.5 + 0.5) * 255);
       out[pi + 3] = 255;
@@ -340,7 +340,7 @@ export function createRoadView(scene) {
         const lx0 = c0.px - c0.nx * totalW, lz0 = c0.pz - c0.nz * totalW;
         const lx1 = c1.px - c1.nx * totalW, lz1 = c1.pz - c1.nz * totalW;
         if (!isClearOfOtherRoads(edgeId, c0.py || 0, lx0, lz0, 0.5) ||
-            !isClearOfOtherRoads(edgeId, c1.py || 0, lx1, lz1, 0.5)) {
+          !isClearOfOtherRoads(edgeId, c1.py || 0, lx1, lz1, 0.5)) {
           allowLeftWall = false;
         }
       }
@@ -348,7 +348,7 @@ export function createRoadView(scene) {
         const rx0 = c0.px + c0.nx * totalW, rz0 = c0.pz + c0.nz * totalW;
         const rx1 = c1.px + c1.nx * totalW, rz1 = c1.pz + c1.nz * totalW;
         if (!isClearOfOtherRoads(edgeId, c0.py || 0, rx0, rz0, 0.5) ||
-            !isClearOfOtherRoads(edgeId, c1.py || 0, rx1, rz1, 0.5)) {
+          !isClearOfOtherRoads(edgeId, c1.py || 0, rx1, rz1, 0.5)) {
           allowRightWall = false;
         }
       }
@@ -706,7 +706,7 @@ export function createRoadView(scene) {
    *  条纹端点挂主路局部切线采样点，弯道上不错位。
    *  旧实现：最多 7 个 spread≤1.25m 的小 V 浮在导流区中央，密度/角度都不对。 */
   function addGoreChevrons(geos, spine, cum, startS, endS, side, edgeOffset,
-      startWidth, endWidth) {
+    startWidth, endWidth) {
     const length = endS - startS;
     if (length < 1) return;
     const STRIPE_W = 0.45;    // GB 5768.3 导流线宽 45cm
@@ -893,7 +893,7 @@ export function createRoadView(scene) {
     const explicitRole = String(rampEdge.ramp_role || rampEdge.layout || '').toLowerCase();
     const role = explicitRole === 'diverge' || explicitRole === 'exit' ? 'diverge'
       : explicitRole === 'merge' || explicitRole === 'entry' ? 'merge'
-      : best.endpoint === 'end' ? 'merge' : 'diverge';
+        : best.endpoint === 'end' ? 'merge' : 'diverge';
     const sideVector = {
       x: best.adjacent.px - best.mainPoint.px,
       z: best.adjacent.pz - best.mainPoint.pz,
@@ -1013,7 +1013,7 @@ export function createRoadView(scene) {
       for (let i = 0; i < _subsurfaceCutouts.length; i++) {
         const [minX, minZ, maxX, maxZ] = _subsurfaceCutouts[i];
         if (x >= minX - clearanceM && x <= maxX + clearanceM
-            && z >= minZ - clearanceM && z <= maxZ + clearanceM) {
+          && z >= minZ - clearanceM && z <= maxZ + clearanceM) {
           return false;
         }
       }
@@ -1028,7 +1028,7 @@ export function createRoadView(scene) {
       if (Math.abs((py || 0) - seg.py) > 2.5) continue;
       const r = seg.hw + clearanceM;
       if (x < seg.minX - clearanceM || x > seg.maxX + clearanceM ||
-          z < seg.minZ - clearanceM || z > seg.maxZ + clearanceM) continue;
+        z < seg.minZ - clearanceM || z > seg.maxZ + clearanceM) continue;
       const abx = seg.x1 - seg.x0, abz = seg.z1 - seg.z0;
       const len2 = abx * abx + abz * abz;
       if (len2 < 1e-6) continue;
@@ -1199,8 +1199,16 @@ export function createRoadView(scene) {
     const roadMarkSpine = (roadSpine === spine) ? markSpine
       : filterSpineOutsideJunctions(roadSpine, edge.id);
 
-    // 路面（不截断，贯穿路口）
-    const road = ribbonGeo(roadSpine, roadHw, Y_ROAD);
+    // 路面在路口边界外扩 -1.5m 处精确截断，避免整条路面硬穿路口与 ConnectorView 叠画；
+    // 隧道/地道保留整段穿行路面。
+    const roadAsphaltSpines = isTunnelEdge(edge)
+      ? [roadSpine]
+      : filterSpineOutsideJunctions(roadSpine, edge.id, -1.5);
+    const roadGeos = [];
+    for (const seg of roadAsphaltSpines) {
+      const g = ribbonGeo(seg, roadHw, Y_ROAD);
+      if (g) roadGeos.push(g);
+    }
 
     /* 隧道/地道（2026-08-14）：只铺路面，不画标线/路肩/人行道。
      * 地下段若按地表道路全量渲染，俯视时会斜穿街区形成"假路/假路口"噪声
@@ -1208,7 +1216,7 @@ export function createRoadView(scene) {
      * 路面保留（车辆仍可能通行），由 build() 归入 tunnelGeos 暗色网格。 */
     if (isTunnelEdge(edge)) {
       return {
-        roadGeos: [road], shoulderGeos: [], curbGeos: [], sidewalkGeos: [],
+        roadGeos, shoulderGeos: [], curbGeos: [], sidewalkGeos: [],
         vergeGeos: [], whiteGeos: [], yellowGeos: [], spine, cum: buildCumulative(spine),
         tunnel: true,
       };
@@ -1222,7 +1230,7 @@ export function createRoadView(scene) {
         else stats.heuristicEdges++;
       }
       return {
-        roadGeos: [road], shoulderGeos: [], curbGeos: [], sidewalkGeos: [],
+        roadGeos, shoulderGeos: [], curbGeos: [], sidewalkGeos: [],
         vergeGeos: [], whiteGeos: [], yellowGeos: [], spine, cum: buildCumulative(spine),
       };
     }
@@ -1352,7 +1360,7 @@ export function createRoadView(scene) {
     }
 
     return {
-      roadGeos: [road], shoulderGeos, curbGeos, sidewalkGeos, vergeGeos,
+      roadGeos, shoulderGeos, curbGeos, sidewalkGeos, vergeGeos,
       whiteGeos, yellowGeos, spine, cum: buildCumulative(spine),
     };
   }
@@ -1467,8 +1475,8 @@ export function createRoadView(scene) {
         if (_totalEdges > 800 && _hasFocus) {
           const mid = sp[sp.length >> 1];
           if (Math.hypot(mid.px - _focusX, mid.pz - _focusZ) > 520 &&
-              Math.hypot(sp[0].px - _focusX, sp[0].pz - _focusZ) > 520 &&
-              Math.hypot(sp[sp.length - 1].px - _focusX, sp[sp.length - 1].pz - _focusZ) > 520) {
+            Math.hypot(sp[0].px - _focusX, sp[0].pz - _focusZ) > 520 &&
+            Math.hypot(sp[sp.length - 1].px - _focusX, sp[sp.length - 1].pz - _focusZ) > 520) {
             continue;
           }
         }
@@ -1577,7 +1585,7 @@ export function createRoadView(scene) {
         polygonOffset: true, polygonOffsetFactor: -0.5, polygonOffsetUnits: -1,
       });
       _asphaltMat = mat;
-      addMergedByTile(roadGeos, mat);
+      addMergedByTile(roadGeos, mat, 1);
     }
 
     // 匝道路面（略浅色）
@@ -1593,7 +1601,7 @@ export function createRoadView(scene) {
         polygonOffset: true, polygonOffsetFactor: -0.5, polygonOffsetUnits: -1,
       });
       _rampMat = mat;
-      addMergedByTile(rampGeos, mat);
+      addMergedByTile(rampGeos, mat, 1);
     }
 
     // 隧道/地道路面（暗色、无标线：俯视读作地下走廊，不斜穿街区抢眼）
@@ -1620,7 +1628,7 @@ export function createRoadView(scene) {
     }
 
     // 城市路缘石、人行道和绿化带分别合批（瓦片化，见 addMergedByTile），静态路网不随帧更新。
-    const addSurface = function(geometries, color, roughness, poFactor = 0.5) {
+    const addSurface = function (geometries, color, roughness, poFactor = 0.5) {
       if (!geometries.length) return;
       addMergedByTile(geometries, new THREE.MeshStandardMaterial({
         color, roughness, metalness: 0, side: THREE.DoubleSide,
