@@ -2277,6 +2277,13 @@ protected:
                         g.target_lane_offset = lane_center_offset(
                             g.committed_lane_idx, n_lanes, lane_w, g.road_oneway);
                     }
+                    /* 阶段三硬约束：双向道路非掉头状态下，目标横向偏移严禁贴近或越过中心双黄线（d=0），
+                     * 保证左缘（ego_width/2=1.0m + 0.15m 余量）在路口左转出口不压黄线。 */
+                    if (!g.road_oneway &&
+                        !(g.has_behavior && g.current_behavior.command == BEH_U_TURN) &&
+                        g.target_lane_offset <= 0.0) {
+                        g.target_lane_offset = std::min(g.target_lane_offset, -1.15);
+                    }
                 }
                 if (g.plan_count % 200 == 0) {
                     LOG_WARN("planning", "[DBG_LC] pc=%d has_beh=%d cmd=%d tgt_lane=%d n_lanes=%d offset=%.2f ego_y=%.2f",
