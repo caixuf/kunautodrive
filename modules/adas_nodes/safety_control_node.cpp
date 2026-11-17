@@ -276,7 +276,10 @@ double nearest_same_lane_gap(const VehicleState& state, const SafetyParams& para
     const double fwd_y = std::sin(state.heading);
     for (int i = 0; i < kMaxObs; ++i) {
         if (!state.obs_valid[i]) continue;
-        if (!pf_same_elevation_layer(state.obs_z[i], state.z)) continue;
+        const double layer_along =
+            (state.obs_x[i] - state.x) * fwd_x +
+            (state.obs_y[i] - state.y) * fwd_y;
+        if (!pf_same_elevation_layer_along(state.obs_z[i], state.z, layer_along)) continue;
         if (std::strcmp(state.obs_type[i], "pedestrian") == 0 ||
             std::strcmp(state.obs_type[i], "construction") == 0) continue;
         const bool is_sign = (std::strcmp(state.obs_type[i], "sign") == 0);
@@ -326,14 +329,14 @@ double min_vehicle_ttc(const VehicleState& state, double* out_dx = nullptr, doub
     const double fwd_y = std::sin(state.heading);
     for (int i = 0; i < kMaxObs; ++i) {
         if (!state.obs_valid[i]) continue;
-        if (!pf_same_elevation_layer(state.obs_z[i], state.z)) continue;
+        const double ex = state.obs_x[i] - state.x;
+        const double ey = state.obs_y[i] - state.y;
+        const double along = ex * fwd_x + ey * fwd_y;      /* 沿车头前方距离 */
+        if (!pf_same_elevation_layer_along(state.obs_z[i], state.z, along)) continue;
         if (std::strcmp(state.obs_type[i], "pedestrian") == 0 ||
             std::strcmp(state.obs_type[i], "construction") == 0) continue;
         const bool is_sign = (std::strcmp(state.obs_type[i], "sign") == 0);
         const bool is_unknown = (std::strcmp(state.obs_type[i], "unknown") == 0) || is_sign;
-        const double ex = state.obs_x[i] - state.x;
-        const double ey = state.obs_y[i] - state.y;
-        const double along = ex * fwd_x + ey * fwd_y;      /* 沿车头前方距离 */
         const double lat = std::fabs(-ex * fwd_y + ey * fwd_x);  /* 横向偏移 */
         if (along < 0.0 || along > 35.0) continue;
 
@@ -393,9 +396,10 @@ double min_oncoming_ttc(const VehicleState& state, double* out_dx = nullptr) {
     const double fwd_y = std::sin(state.heading);
     for (int i = 0; i < kMaxObs; ++i) {
         if (!state.obs_valid[i]) continue;
-        if (!pf_same_elevation_layer(state.obs_z[i], state.z)) continue;
         const double dx = state.obs_x[i] - state.x;
         const double dy = state.obs_y[i] - state.y;
+        const double layer_along = dx * fwd_x + dy * fwd_y;
+        if (!pf_same_elevation_layer_along(state.obs_z[i], state.z, layer_along)) continue;
         /* 2026-08-05 同车道头对头修复：只把**同一条车道**、迎面驶来的车当迎头威胁。
          * 旧逻辑 2.0<|dy|≤6.0 把相邻对向车道（间隔 3.5m 的分隔车道）也当迎头 → 掉头
          * 返程（heading≈π 朝西）每次接近东行对向车 head-on TTC 硬刹 = 幽灵刹车。 */
@@ -429,10 +433,10 @@ double nearest_vehicle_lateral_cross_risk(const VehicleState& state, double* out
     const double fwd_y = std::sin(state.heading);
     for (int i = 0; i < kMaxObs; ++i) {
         if (!state.obs_valid[i]) continue;
-        if (!pf_same_elevation_layer(state.obs_z[i], state.z)) continue;
         const double ex = state.obs_x[i] - state.x;
         const double ey = state.obs_y[i] - state.y;
         const double along = ex * fwd_x + ey * fwd_y;
+        if (!pf_same_elevation_layer_along(state.obs_z[i], state.z, along)) continue;
         const double dy_signed = -ex * fwd_y + ey * fwd_x;
         const double dy = std::fabs(dy_signed);
         if (along < -5.0 || along > 12.0) continue;

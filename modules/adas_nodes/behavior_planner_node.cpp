@@ -954,10 +954,14 @@ protected:
                 const double band_max = oneway_band
                     ? -0.05 : lc * lw * 0.5 - 0.05;
                 for (int i = 0; i < g.obs_count; i++) {
-                    if (!pf_same_elevation_layer(g.obs_z[i], g.ego_z)) continue;
                     const double rx = g.obs_x[i] - g.ego_x;
                     const double ry = g.obs_y[i] - g.ego_y;
                     const double phys_along = rx * fwd_x + ry * fwd_y;
+                    /* On a grade the same-deck height difference grows with
+                     * distance; a fixed 2.2m window hides a lead at ~37m on a
+                     * 6% ramp while ACC needs ~47m. Allow a capped slope term
+                     * (2.2 + 2.0m max); 4.2m still separates 4.5m garage decks. */
+                    if (!pf_same_elevation_layer_along(g.obs_z[i], g.ego_z, phys_along)) continue;
                     planning_coord::Projection obs_projection;
                     double along;
                     double lat;

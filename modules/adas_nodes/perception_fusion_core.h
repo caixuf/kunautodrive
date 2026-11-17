@@ -19,6 +19,21 @@ static inline bool pf_same_elevation_layer(double z_a, double z_b,
     return std::fabs(z_a - z_b) <= tol_m;
 }
 
+/** Layer check with a distance-proportional grade allowance.
+ *
+ * A lead on a 6-9% ramp accumulates 2.2m of height difference at 24-37m,
+ * which made ACC lose it long before the designed following distance. Allow
+ * up to 2m extra (2.2 -> 4.2m) so same-ramp leads remain visible, while a
+ * 4.5m B1/ground deck separation is still isolated at short range.
+ */
+static inline bool pf_same_elevation_layer_along(
+    double z_a, double z_b, double along_m,
+    double tol_m = kSameElevationLayerTolM,
+    double grade = 0.10, double max_extra_m = 2.0) {
+    const double extra = std::min(max_extra_m, grade * std::fabs(along_m));
+    return std::fabs(z_a - z_b) <= tol_m + extra;
+}
+
 typedef struct PfBox2d {
     double cx, cy;
     double half_l, half_w;

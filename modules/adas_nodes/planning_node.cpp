@@ -1952,7 +1952,10 @@ protected:
                     const double obs_fwd_x = std::cos(g.ego_heading);
                     const double obs_fwd_y = std::sin(g.ego_heading);
                     for (int i = 0; i < g.obs_count; i++) {
-                        if (!pf_same_elevation_layer(g.obs_z[i], g.ego_z)) continue;
+                        const double layer_along =
+                            (g.obs_x[i] - g.ego_x) * obs_fwd_x +
+                            (g.obs_y[i] - g.ego_y) * obs_fwd_y;
+                        if (!pf_same_elevation_layer_along(g.obs_z[i], g.ego_z, layer_along)) continue;
                         view[n_view].x = g.obs_x[i];
                         view[n_view].y = g.obs_y[i];
                         view[n_view].vx = g.obs_vx[i];
@@ -2075,10 +2078,10 @@ protected:
                 const double fwd_x = std::cos(g.ego_heading);
                 const double fwd_y = std::sin(g.ego_heading);
                 for (int i = 0; i < g.obs_count; i++) {
-                    if (!pf_same_elevation_layer(g.obs_z[i], g.ego_z)) continue;
                     const double rx = g.obs_x[i] - g.ego_x;
                     const double ry = g.obs_y[i] - g.ego_y;
                     const double along = rx * fwd_x + ry * fwd_y;       /* 沿车头前方 */
+                    if (!pf_same_elevation_layer_along(g.obs_z[i], g.ego_z, along)) continue;
                     const double lat_signed = -rx * fwd_y + ry * fwd_x; /* 左为正 */
 
                     /* 会车检测: 同车道头对头（lat ≤ 0.65×路宽）、迎面驶来
@@ -2138,11 +2141,11 @@ protected:
                 traffic_light_detect_left_turn_ahead(
                     g.map_ref_x, g.map_ref_y, g.map_ref_s, g.map_ref_count, cur_s, 6.0, 42.0);
             for (int i = 0; i < g.obs_count && n_obs < 128; i++) {
-                    if (!pf_same_elevation_layer(g.obs_z[i], g.ego_z)) continue;
                     /* 改用 ego 车体前向/横向过滤：任意 N/S/E/W 与转弯/平移路段不再漏掉障碍物与斑马线行人 */
                     const double rx = g.obs_x[i] - g.ego_x;
                     const double ry = g.obs_y[i] - g.ego_y;
                     const double along = rx * obs_ch + ry * obs_sh;
+                    if (!pf_same_elevation_layer_along(g.obs_z[i], g.ego_z, along)) continue;
                     const double lat = -rx * obs_sh + ry * obs_ch;
                     const double max_lat = (near_turn || g.obs_type[i] == OBJ_TYPE_PEDESTRIAN)
                                                ? 16.0 : OBS_MAX_ABS_Y_M;
@@ -3059,10 +3062,10 @@ protected:
                         const double fwd_y = std::sin(g.ego_heading);
                         const double lane_half = g.lane_width * 0.5;
                         for (int i = 0; i < g.obs_count && stg.n_obstacles < STG_MAX_OBS; i++) {
-                            if (!pf_same_elevation_layer(g.obs_z[i], g.ego_z)) continue;
                             const double rx = g.obs_x[i] - g.ego_x;
                             const double ry = g.obs_y[i] - g.ego_y;
                             const double along = rx * fwd_x + ry * fwd_y;       /* 沿车头前方 */
+                            if (!pf_same_elevation_layer_along(g.obs_z[i], g.ego_z, along)) continue;
                             const double lat = std::fabs(-rx * fwd_y + ry * fwd_x);
                             if (along <= 0.0 || along > 80.0) continue;
                             if (lat > lane_half) continue;                        /* 本车道外 */
