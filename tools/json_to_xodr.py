@@ -326,6 +326,22 @@ def build_polyline_road(rid: int, name: str, nodes: list, lanes: int,
 DEFAULT_LANE_WIDTH = 3.5
 DEFAULT_SPEED = 13.89  # 50 km/h
 
+
+def posted_speed_mps(etype: str, authored: float) -> float:
+    """道路类型巡航限速。与 include/road_speed_policy.h posted_speed_mps 同一张表。"""
+    kind = (etype or "").lower()
+    if kind in ("viaduct_highway", "highway"):
+        return 100.0 / 3.6
+    if kind == "ramp_curve":
+        return 60.0 / 3.6
+    if kind == "urban":
+        if 11.0 <= authored <= 16.7:
+            return authored
+        return 50.0 / 3.6
+    if authored > 0.5:
+        return authored
+    return 50.0 / 3.6
+
 # nodes 折线 Hermite 密采样步长（m）。5m 一段 → 每段 Δh≈κ·5≈0.03 rad
 # （R≈200m），heading 连续无 kink，esmini 位置查询开销可忽略。
 SPLINE_STEP = 5.0
@@ -528,7 +544,7 @@ def roads_from_road_network(rn_cfg: dict) -> tuple[list[Road], list[Junction]]:
         else:
             lanes = int(lane_v)
         lw = float(e.get("lane_width", DEFAULT_LANE_WIDTH))
-        sp = float(e.get("speed_limit", DEFAULT_SPEED))
+        sp = posted_speed_mps(etype, float(e.get("speed_limit", DEFAULT_SPEED)))
         oneway = bool(e.get("oneway", False))
         profile = e.get("curvature_profile")
         nodes = e.get("nodes")

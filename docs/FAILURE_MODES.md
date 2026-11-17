@@ -186,6 +186,7 @@
 
 | 现象 | 根因 | 位置 |
 |------|------|------|
+| `demo.sh` 打印 Pipeline running，随后 `Timeout waiting for /tmp/flow_topology.json`，stderr 停在 `QoS applied`，一个节点都没加载 | WSL2 上 `ss -tlnp` 进 D 状态卡在 `rtnetlink_rcv_msg` 并握着 `rtnl_lock`。`discovery_create` 的 `IP_ADD_MEMBERSHIP` 在同一把锁上永久等待，launcher 主线程不再往下走。修复：`demo.sh` 用 `/proc/net/tcp` 查监听端口，不再调用 `ss`；组播加入改到独立线程，最多等 300ms，锁被占住也继续加载节点 | `scripts/demo.sh` `listener_pid_for_port` / `src/core/discovery.c` `mcast_join_fn` |
 | 场景 JSON 里写了 `odd` / `driver` 注入块，但 ODD 判据从未触发（`l3_odd_exit_*` 场景必 FAIL，`odd.violations` 里只有 `route_stale` 没有 `visibility`） | **`demo.sh` 的 `scenario_file` sed 漏 patch 新节点**：`odd_monitor` / `tor_manager` 的 `params` 被写成 compact 形式 `"scenario_file":"..."`（冒号后**无空格**），而 sed 模式 `\"scenario_file\": \"` 强制要求一个空格 → 这两节点永远拿不到 `--scenario` 指定的场景，注入块静默失效。同一类漏洞也在 `demo_evaluator.pipeline_scenario_override` 的白名单里（只含 flowsim/planning/navigation/control）。修复：sed 改 `\\\": *\\\"`（零或多个空白）+ 白名单补两节点。**通用教训**：给 pipeline 节点加 `scenario_file` 参数时，params 的序列化风格（有无空格）必须与 `demo.sh`/评估器的 patcher 兼容，否则新节点会静默读旧场景 | `scripts/demo.sh` scenario patch sed / `ci/evaluators/demo_evaluator.py` `pipeline_scenario_override` |
 | 8 个节点线程各占满一个核 | 裸 `while(!stop) ex.run();` 忙等；`idle_sleep_us` 只被零调用者的 `run_blocking()` 读取。改用 `node_pump()` | `coroutine_task.h` node_pump |
 | 管道检查 topics 列表缺 perception/obstacles | `monitor_node.c` 的 `TopicStats tstats[16]` 只能装 16 个 topic，第 17 个静默丢弃。扩到 64 | `monitor_node.c:1304` |

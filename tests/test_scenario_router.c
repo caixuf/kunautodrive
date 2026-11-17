@@ -128,6 +128,37 @@ static const char* TWO_ROAD_CHAIN_JSON =
     "{\"id\":\"r1.lane.102\",\"index\":2,\"direction\":-1,\"centerline\":[[100,6.5],[200,6.5]],\"successors\":[]}"
     "]}]}";
 
+/* 场景边只有 lanes 数量和 nodes，没有 lanes[]。相接的边要建出后继，断开的不接。
+ * route_chain 留在原文里，建图不改它。 */
+static const char* ENDPOINT_CHAIN_JSON =
+    "{\"route_chain\":[0,1],\"edges\":["
+    "{\"id\":0,\"lanes\":1,\"oneway\":true,\"nodes\":[[0,0,0],[10,0,0]]},"
+    "{\"id\":1,\"lanes\":1,\"oneway\":true,\"nodes\":[[10,0,0],[30,0,0]]},"
+    "{\"id\":2,\"lanes\":1,\"oneway\":true,\"nodes\":[[80,0,0],[90,0,0]]}"
+    "]}";
+
+static void test_endpoint_successors(void) {
+    TEST("endpoint join builds successors; a gap does not");
+    ASSERT(strstr(ENDPOINT_CHAIN_JSON, "\"route_chain\":[0,1]") != NULL,
+           "route_chain must stay in the source");
+    RouterGraph g;
+    router_graph_init(&g);
+    int lane_count = 0;
+    ASSERT(router_build_from_map_json(&g, ENDPOINT_CHAIN_JSON, 8.0, &lane_count) == 0,
+           "build should succeed");
+    ASSERT(lane_count == 3, "expected 3 lanes, got %d", lane_count);
+    int a = router_lane_id_in_road(&g, 0, 1, 1);
+    int b = router_lane_id_in_road(&g, 1, 1, 1);
+    int c = router_lane_id_in_road(&g, 2, 1, 1);
+    ASSERT(a >= 0 && b >= 0 && c >= 0, "lane lookup failed");
+    RouterPath p;
+    ASSERT(router_astar(&g, a, b, &p) == 0, "joined edges should route");
+    ASSERT(p.count == 2, "joined path should be 2 lanes, got %d", p.count);
+    ASSERT(router_astar(&g, a, c, &p) == -1, "a 70m gap must not become a successor");
+    router_graph_free(&g);
+    PASS();
+}
+
 static void test_map_json_build_and_astar(void) {
     TEST("map json: build graph + A* straight chain");
     RouterGraph g;
@@ -205,6 +236,7 @@ int main(void) {
     test_unreachable();
     test_2d_grid();
     test_xy_length();
+    test_endpoint_successors();
     test_map_json_build_and_astar();
     test_map_json_no_cross_direction_neighbors();
     test_map_json_turn_route();

@@ -1449,6 +1449,34 @@ static RoadGeometrySnapshot infer_road_geometry_snapshot(void) {
     return snap;
 }
 
+/** 当前 esmini road 是否标了测速摄像头。场景边没写 speed_camera 就是没有。 */
+static bool road_has_speed_camera(int road_id) {
+    static int cached_n = -1;
+    static int ids[128];
+    if (cached_n < 0) {
+        if (!g.scenario || !g.scenario->road_network_json) return false;
+        cached_n = 0;
+        cJSON* rn = cJSON_Parse(g.scenario->road_network_json);
+        cJSON* edges = rn ? cJSON_GetObjectItemCaseSensitive(rn, "edges") : nullptr;
+        if (cJSON_IsArray(edges)) {
+            cJSON* edge = nullptr;
+            cJSON_ArrayForEach(edge, edges) {
+                if (cached_n >= 128) break;
+                cJSON* jid = cJSON_GetObjectItemCaseSensitive(edge, "id");
+                cJSON* jcam = cJSON_GetObjectItemCaseSensitive(edge, "speed_camera");
+                const bool on = (cJSON_IsBool(jcam) && cJSON_IsTrue(jcam)) ||
+                                (cJSON_IsNumber(jcam) && jcam->valuedouble != 0.0);
+                if (on && cJSON_IsNumber(jid)) ids[cached_n++] = (int)jid->valuedouble;
+            }
+        }
+        if (rn) cJSON_Delete(rn);
+    }
+    for (int i = 0; i < cached_n; ++i) {
+        if (ids[i] == road_id) return true;
+    }
+    return false;
+}
+
 static void publish_road_geometry(void) {
     cJSON* root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "curve_start_x", g.curve_start_x);
@@ -1466,6 +1494,7 @@ static void publish_road_geometry(void) {
     const double speed_limit = snap.speed_limit;
     cJSON_AddNumberToObject(root, "lane_count", lane_count);
     cJSON_AddNumberToObject(root, "speed_limit", speed_limit);
+    cJSON_AddBoolToObject(root, "speed_camera", road_has_speed_camera(road_id));
     /* 单双向：per-road OpenDRIVE lane_id 推导，确保单向匝道与双向主干道无缝衔接 */
     cJSON_AddNumberToObject(root, "oneway", snap.oneway);
     cJSON_AddNumberToObject(root, "upcoming_own_lanes", snap.upcoming_own_lanes);
@@ -3988,6 +4017,9 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
         g.scene_pub_cfg.park_out.exit_z = g.scenario->park_out.exit_z;
         g.scene_pub_cfg.park_out.exit_heading = g.scenario->park_out.exit_heading;
         g.scene_pub_cfg.park_out.corridor_width = g.scenario->park_out.corridor_width;
+    }
+    if (g.scenario) {
+        g.scene_pub_cfg.commute_return = g.scenario->commute_return;
     }
     if (g.scenario && g.scenario->parking_slot_count > 0) {
         g.scene_pub_cfg.parking_slots.clear();

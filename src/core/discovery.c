@@ -13,6 +13,7 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <time.h>
+#include <stdatomic.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -66,6 +67,13 @@ struct DiscoveryManager {
     /* 线程 */
     pthread_t beacon_thread;
     pthread_t recv_thread;
+    /* 组播加入单独走这条线程。IP_ADD_MEMBERSHIP 要拿 rtnl_lock；
+     * WSL2 上一旦有 ss/ip 卡在 rtnetlink_rcv_msg，调用线程会进 D 状态
+     * 再也不返回，demo.sh 的 flow_launcher 就停在 discovery_create，
+     * 一个节点都加载不了。加入最多少等 300ms，没完成也继续启动。 */
+    pthread_t mcast_thread;
+    int       mcast_thread_live;
+    atomic_int mcast_done;
 
     /* 回调 */
     TopologyChangeCallback change_cb;
@@ -369,6 +377,55 @@ static void* recv_thread_fn(void* arg) {
     return NULL;
 }
 
+/* 组播成员加入 + 出口网卡。这些 setsockopt 会进 rtnl，不能堵在调用线程上。 */
+static void* mcast_join_fn(void* arg) {
+    DiscoveryManager* dm = (DiscoveryManager*)arg;
+
+    struct ip_mreq mreq;
+    mreq.imr_multiaddr.s_addr = inet_addr(DISC_MULTICAST_GROUP);
+    mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+    setsockopt(dm->sock_fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq));
+
+    struct ip_mreq mreq_loop;
+    mreq_loop.imr_multiaddr.s_addr = inet_addr(DISC_MULTICAST_GROUP);
+    mreq_loop.imr_interface.s_addr = inet_addr("127.0.0.1");
+    setsockopt(dm->sock_fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq_loop, sizeof(mreq_loop));
+
+    struct in_addr loop_if;
+    loop_if.s_addr = inet_addr("127.0.0.1");
+    if (setsockopt(dm->sock_fd, IPPROTO_IP, IP_MULTICAST_IF, &loop_if, sizeof(loop_if)) < 0) {
+        loop_if.s_addr = htonl(INADDR_ANY);
+        setsockopt(dm->sock_fd, IPPROTO_IP, IP_MULTICAST_IF, &loop_if, sizeof(loop_if));
+    }
+
+    uint8_t loop = 1;
+    setsockopt(dm->sock_fd, IPPROTO_IP, IP_MULTICAST_LOOP, &loop, sizeof(loop));
+    uint8_t ttl = 1;
+    setsockopt(dm->sock_fd, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl));
+
+    atomic_store(&dm->mcast_done, 1);
+    return NULL;
+}
+
+/* 等组播线程结束。仍卡在 rtnl 时 detach 并泄漏 dm：线程醒来还会写 mcast_done。
+ * 返回 1 表示调用方不得再碰 dm。 */
+static int discovery_reap_mcast(DiscoveryManager* dm) {
+    if (!dm->mcast_thread_live) return 0;
+    for (int i = 0; i < 20 && !atomic_load(&dm->mcast_done); i++)
+        usleep(10000);
+    if (atomic_load(&dm->mcast_done)) {
+        pthread_join(dm->mcast_thread, NULL);
+        dm->mcast_thread_live = 0;
+        return 0;
+    }
+    pthread_detach(dm->mcast_thread);
+    dm->mcast_thread_live = 0;
+    fprintf(stderr,
+            "[discovery:%s] multicast join still blocked; leaving manager until process exit\n",
+            dm->my_name);
+    return 1;
+}
+
 /* ══════════════════════════════════════════════════════════ */
 /* 公开 API                                                    */
 /* ══════════════════════════════════════════════════════════ */
@@ -411,39 +468,30 @@ DiscoveryManager* discovery_create(const char* node_name, uint8_t capabilities) 
     dm->mcast_addr.sin_port        = htons(DISC_MULTICAST_PORT);
     bind(dm->sock_fd, (struct sockaddr*)&dm->mcast_addr, sizeof(dm->mcast_addr));
 
-    /* Join multicast group on INADDR_ANY and 127.0.0.1 */
-    struct ip_mreq mreq;
-    mreq.imr_multiaddr.s_addr = inet_addr(DISC_MULTICAST_GROUP);
-    mreq.imr_interface.s_addr = htonl(INADDR_ANY);
-    setsockopt(dm->sock_fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq));
-
-    struct ip_mreq mreq_loop;
-    mreq_loop.imr_multiaddr.s_addr = inet_addr(DISC_MULTICAST_GROUP);
-    mreq_loop.imr_interface.s_addr = inet_addr("127.0.0.1");
-    setsockopt(dm->sock_fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq_loop, sizeof(mreq_loop));
-
-    /* Set multicast outgoing interface to loopback for isolated/offline containers */
-    struct in_addr loop_if;
-    loop_if.s_addr = inet_addr("127.0.0.1");
-    if (setsockopt(dm->sock_fd, IPPROTO_IP, IP_MULTICAST_IF, &loop_if, sizeof(loop_if)) < 0) {
-        loop_if.s_addr = htonl(INADDR_ANY);
-        setsockopt(dm->sock_fd, IPPROTO_IP, IP_MULTICAST_IF, &loop_if, sizeof(loop_if));
-    }
-
-    /* Enable multicast loopback and set TTL */
-    uint8_t loop = 1;
-    setsockopt(dm->sock_fd, IPPROTO_IP, IP_MULTICAST_LOOP, &loop, sizeof(loop));
-    uint8_t ttl = 1;
-    setsockopt(dm->sock_fd, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl));
-
-    /* Set destination address for sending */
+    /* Set destination address for sending. Membership itself runs off-thread. */
     dm->mcast_addr.sin_addr.s_addr = inet_addr(DISC_MULTICAST_GROUP);
+
+    atomic_init(&dm->mcast_done, 0);
+    if (pthread_create(&dm->mcast_thread, NULL, mcast_join_fn, dm) == 0) {
+        dm->mcast_thread_live = 1;
+        for (int i = 0; i < 30 && !atomic_load(&dm->mcast_done); i++)
+            usleep(10000);
+        if (!atomic_load(&dm->mcast_done)) {
+            fprintf(stderr,
+                    "[discovery:%s] multicast join blocked (rtnl busy); continuing startup\n",
+                    dm->my_name);
+        }
+    } else {
+        mcast_join_fn(dm);
+    }
 
     return dm;
 }
 
 void discovery_destroy(DiscoveryManager* dm) {
     if (!dm) return;
+
+    if (discovery_reap_mcast(dm)) return;
 
     if (dm->running) discovery_stop(dm);
 

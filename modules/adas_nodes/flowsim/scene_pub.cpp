@@ -207,10 +207,14 @@ cJSON* build_road_network_json(ScenePubConfig& cfg) {
                 cJSON_AddNumberToObject(edge, "lane_width",
                                         (road_lw > 0.0) ? road_lw : cfg.lane_width);
             }
-            /* oneway: 匝道(ramp)为单向道路，其余（含双向地库坡道 open_ramp）默认双向对称 */
+            /* oneway: 匝道(ramp)为单向道路，其余（含双向地库坡道 open_ramp）默认双向对称。
+             * 车库出口汇入 / 右转进场是单向喉道，名字即 xodr road name（json_to_xodr 写入 type）。 */
             const std::string& tag = !info.name.empty() ? info.name : info.str_id;
-            bool is_oneway = (tag.find("ramp") != std::string::npos) &&
-                             (tag.find("open_ramp") == std::string::npos);
+            bool is_access = (tag.find("exit_merge") != std::string::npos) ||
+                             (tag.find("right_in") != std::string::npos);
+            bool is_oneway = is_access ||
+                             ((tag.find("ramp") != std::string::npos) &&
+                              (tag.find("open_ramp") == std::string::npos));
             cJSON_AddBoolToObject(edge, "oneway", is_oneway);
             cJSON_AddNumberToObject(edge, "length", info.length);
             /* 道路类型：优先使用 xodr <road name="..."> 推断；若无 name 再由 edge 0 继承 cfg.road_type */
@@ -219,7 +223,11 @@ cJSON* build_road_network_json(ScenePubConfig& cfg) {
             } else {
                 /* 根据 name/str_id 推断类型，与 json_to_xodr.py 的命名约定一致 */
                 const char* etype = "road";
-                if (tag.find("garage") != std::string::npos) {
+                if (tag.find("exit_merge") != std::string::npos) {
+                    etype = "exit_merge";
+                } else if (tag.find("right_in") != std::string::npos) {
+                    etype = "right_in";
+                } else if (tag.find("garage") != std::string::npos) {
                     etype = "garage_hall";
                 } else if (tag.find("open_ramp") != std::string::npos) {
                     etype = "open_ramp";
@@ -627,6 +635,10 @@ char* build_scene_frame_json(const EntityPool& pool,
         cJSON_AddNumberToObject(jpo, "exit_heading", cfg.park_out.exit_heading);
         cJSON_AddNumberToObject(jpo, "corridor_width", cfg.park_out.corridor_width);
         cJSON_AddItemToObject(root, "park_out", jpo);
+    }
+
+    if (cfg.commute_return) {
+        cJSON_AddBoolToObject(root, "commute_return", true);
     }
 
     if (!cfg.parking_slots.empty()) {

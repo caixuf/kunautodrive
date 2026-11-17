@@ -1406,6 +1406,26 @@ add_dependencies(test_scenario_pipeline msg_codegen)
 add_test(NAME scenario_pipeline_tests COMMAND test_scenario_pipeline)
 set_tests_properties(scenario_pipeline_tests PROPERTIES TIMEOUT 10)
 
+add_executable(test_commute_mission tests/test_commute_mission.cpp)
+target_include_directories(test_commute_mission PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/adas_nodes
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/adas_nodes/planning_framework
+    ${CMAKE_BINARY_DIR}/gen
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(test_commute_mission m)
+add_dependencies(test_commute_mission msg_codegen)
+add_test(NAME commute_mission_tests COMMAND test_commute_mission)
+set_tests_properties(commute_mission_tests PROPERTIES TIMEOUT 10)
+
+add_executable(test_road_speed_policy tests/test_road_speed_policy.cpp)
+target_include_directories(test_road_speed_policy PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(test_road_speed_policy m)
+add_test(NAME road_speed_policy_tests COMMAND test_road_speed_policy)
+set_tests_properties(road_speed_policy_tests PROPERTIES TIMEOUT 10)
+
 add_executable(test_park_out_and_slot_search
     tests/test_park_out_and_slot_search.cpp
     modules/adas_nodes/planning_framework/scenario_manager.cpp

@@ -41,7 +41,7 @@ extern "C" {
 #define STG_S_RES           1.0   /* s 分辨率 m */
 #define STG_A_MAX           4.0   /* 最大减速度 m/s² */
 #define STG_A_LAT_MAX       5.0   /* 横向加速度上限 m/s²（与 §8.5 一致） */
-#define STG_V_MAX          20.0   /* 限速 m/s */
+#define STG_V_MAX          36.0   /* 车辆物理顶 m/s；道路限速由 v_target 再收 */
 #define STG_V_CAND_STEP     0.2   /* DP 候选速度离散步长 m/s */
 #define STG_W1              1.0   /* cost: (v-v_target)² */
 #define STG_W2              2.0   /* cost: a² */

@@ -67,7 +67,7 @@ static void build_v_lim(const StgInput* in, int n, const double* s_list,
 
 /* ── DP 状态 ──────────────────────────────────────────────── */
 
-#define STG_MAX_CAND 101  /* 0..20.0 步长 0.2 → 101 候选 */
+#define STG_MAX_CAND 181  /* 0..36.0 步长 0.2 → 181 候选 */
 #define STG_INF 1e18
 
 typedef struct {
@@ -134,6 +134,10 @@ int st_graph_plan(const StgInput* in, StgResult* out)
         double lim = v_lim[i];
         if (lim < 0.0) lim = 0.0;
         if (lim > STG_V_MAX) lim = STG_V_MAX;
+        /* 候选不超过本帧目标。已经比目标快时保留当前速度，才能沿网格减下来。 */
+        double want = in->v_target > 0.0 ? in->v_target : lim;
+        if (in->v0 > want) want = in->v0;
+        if (want < lim) lim = want;
         int m = (int)(lim / STG_V_CAND_STEP) + 1;
         if (m > STG_MAX_CAND) m = STG_MAX_CAND;
         s_cand_n[i] = m;

@@ -999,6 +999,10 @@ ScenarioConfig* scenario_load(const char* path) {
         sc->park_out.corridor_width = (cJSON_IsNumber(j) && j->valuedouble > 0.0) ? j->valuedouble : 6.0;
     }
 
+    /* commute_return（可选）：公司泊入后返程回家。缺省 false。 */
+    cJSON* jcr = cJSON_GetObjectItemCaseSensitive(root, "commute_return");
+    if (cJSON_IsBool(jcr)) sc->commute_return = cJSON_IsTrue(jcr);
+
     /* parking_slots[]（可选，地面停车场多候选车位数组） */
     cJSON* jps = cJSON_GetObjectItemCaseSensitive(root, "parking_slots");
     if (cJSON_IsArray(jps)) {

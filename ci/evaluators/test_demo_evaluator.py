@@ -1450,6 +1450,35 @@ class ParkToParkEvaluatorTest(unittest.TestCase):
         )
         self.assertTrue(any("parking slot selection" in f for f in res_bad["failures"]))
 
+    def test_commute_return_accepts_home_and_the_leg_between(self):
+        evaluator = load_evaluator()
+        office = {"enabled": True, "x": 3225.5, "y": -6.5, "heading": 1.5708}
+        expect = {"max_pos_err_m": 0.45, "max_heading_err_deg": 8.0}
+        home = {"commute_return": True, "x": 12.0, "y": -17.3, "heading": 1.5708}
+        held = [
+            {"x": 3225.5, "y": -6.5, "heading": 1.5708, "speed": 0.0, "selected_slot_index": 2},
+            {"x": 12.0, "y": -17.3, "heading": 1.5708, "speed": 0.0, "selected_slot_index": -1},
+        ]
+        res_home = evaluator._evaluate_parking_goal_expectations(
+            held, office, expect, home_slot=home,
+        )
+        self.assertEqual(res_home["failures"], [])
+
+        driving = [
+            {"x": 3225.5, "y": -6.5, "heading": 1.5708, "speed": 0.0, "selected_slot_index": 2},
+            {"x": 1800.0, "y": 40.0, "heading": 3.14, "speed": 12.0, "selected_slot_index": -1},
+        ]
+        res_leg = evaluator._evaluate_parking_goal_expectations(
+            driving, office, expect, home_slot=home,
+        )
+        self.assertEqual(res_leg["failures"], [])
+
+        missed = [{"x": 100.0, "y": 0.0, "heading": 0.0, "speed": 8.0, "selected_slot_index": -1}]
+        res_miss = evaluator._evaluate_parking_goal_expectations(
+            missed, office, expect, home_slot=home,
+        )
+        self.assertTrue(any("never stopped at the office" in f for f in res_miss["failures"]))
+
     def test_park_out_window_exempts_bays_but_catches_midroute_road_departure(self):
         evaluator = load_evaluator()
         p2p_scenario = {
@@ -1479,6 +1508,46 @@ class ParkToParkEvaluatorTest(unittest.TestCase):
             expected_edges=[],
         )
         self.assertTrue(any("road departure" in f for f in failures), f"expected road departure, got {failures}")
+
+    def test_green_phase_stop_exempts_pedestrian_yield_but_catches_deadlock(self):
+        evaluator = load_evaluator()
+        tl_def = [{"id": 0, "x": 100.0, "y_lane": -1.75}]
+        scenario = {
+            "road_network": {
+                "edges": [{"id": 0, "lanes": 2, "lane_width": 3.5, "speed_limit": 15.0, "nodes": [[0.0, 0.0], [200.0, 0.0]]}]
+            },
+            "traffic_lights": tl_def,
+        }
+
+        def make_frame(t, x, speed, with_ped=False):
+            s = self._make_sample(t, x, -1.75, speed)
+            ents = [{"type": "tl", "scenario_id": 0, "x": 100.0, "y": -1.75, "stop_x": 100.0, "stop_y": -1.75, "state": "green"}]
+            if with_ped:
+                ents.append({"id": 18, "type": "pedestrian", "x": x + 6.0, "y": -1.5, "z": 0.0, "speed": 1.2})
+            s["metrics"]["scene"]["entities"] = ents
+            return s
+
+        # Case 1: yielding to pedestrian on crosswalk for 6s during green -> NOT deadlock
+        yield_samples = [make_frame(k * 0.5, 95.0, 0.0, with_ped=True) for k in range(14)]
+        yield_samples.append(make_frame(7.5, 115.0, 8.0, with_ped=False))
+        f_yield, _, m_yield = evaluator.score(
+            yield_samples, ROOT / "does-not-exist.log",
+            criteria={"min_distance_m": 5.0, "min_avg_speed_mps": 0.0},
+            traffic_lights=tl_def, scenario=scenario, expected_edges=[],
+        )
+        self.assertFalse(any("stuck during green" in f for f in f_yield), f"unexpected deadlock: {f_yield}")
+        self.assertEqual(m_yield.get("green_phase_max_stop_s", 0.0), 0.0)
+
+        # Case 2: stopped 6s during green with NO obstacle ahead -> MUST fail stuck during green
+        deadlock_samples = [make_frame(k * 0.5, 95.0, 0.0, with_ped=False) for k in range(14)]
+        deadlock_samples.append(make_frame(7.5, 115.0, 8.0, with_ped=False))
+        f_dead, _, m_dead = evaluator.score(
+            deadlock_samples, ROOT / "does-not-exist.log",
+            criteria={"min_distance_m": 5.0, "min_avg_speed_mps": 0.0},
+            traffic_lights=tl_def, scenario=scenario, expected_edges=[],
+        )
+        self.assertTrue(any("stuck during green" in f for f in f_dead), f"expected deadlock, got {f_dead}")
+        self.assertGreater(m_dead.get("green_phase_max_stop_s", 0.0), 5.0)
 
 
 if __name__ == "__main__":

@@ -2573,6 +2573,7 @@ def _evaluate_parking_goal_expectations(
     parking_goal_expect: dict,
     collision_count: int = 0,
     parking_slots: list | None = None,
+    home_slot: dict | None = None,
 ) -> dict:
     """Evaluate open-space parking terminal accuracy and constraints (Milestone M3)."""
     failures: list[str] = []
@@ -2623,6 +2624,57 @@ def _evaluate_parking_goal_expectations(
     pos_err = math.hypot(final_x - goal_x, final_y - goal_y)
     heading_err = abs(math.atan2(math.sin(final_h - goal_h), math.cos(final_h - goal_h)))
     heading_err_deg = math.degrees(heading_err)
+
+    # 通勤闭环：终态可以是公司车位（还停着）、家里车位（已经回来），
+    # 或两者之间的返程。短跑没泊进公司仍然失败。
+    commute = isinstance(home_slot, dict) and home_slot.get("commute_return")
+    commute_en_route = False
+    if commute:
+        tol = max(2.5, max_pos_err)
+
+        def _away(frame: dict, x: float, y: float) -> float:
+            return math.hypot(float(frame.get("x", 0.0) or 0.0) - x,
+                               float(frame.get("y", 0.0) or 0.0) - y)
+
+        stopped_office = any(
+            _away(frame, goal_x, goal_y) <= tol
+            and abs(float(frame.get("speed", 0.0) or 0.0)) <= 0.4
+            for frame in series
+        )
+        if not stopped_office:
+            failures.append(
+                f"commute never stopped at the office "
+                f"(goal=({goal_x:.2f}, {goal_y:.2f}))"
+            )
+        else:
+            hx = float(home_slot.get("x", 0.0))
+            hy = float(home_slot.get("y", 0.0))
+            home_err = _away(final_frame, hx, hy)
+            if pos_err <= tol:
+                pass
+            elif home_err <= tol:
+                goal_x, goal_y = hx, hy
+                goal_h = float(home_slot.get("heading", goal_h))
+                pos_err = home_err
+                heading_err = abs(math.atan2(math.sin(final_h - goal_h),
+                                              math.cos(final_h - goal_h)))
+                heading_err_deg = math.degrees(heading_err)
+            else:
+                commute_en_route = True
+
+    if commute_en_route:
+        if collision_count > 0:
+            failures.append(
+                f"parking collision count {collision_count} > 0 (hit boundary or obstacles during maneuver)"
+            )
+        return {
+            "failures": failures,
+            "warnings": warnings,
+            "pos_err": pos_err,
+            "heading_err_deg": heading_err_deg,
+            "final_v": final_v,
+            "selected_slot_index": observed_slot,
+        }
 
     if pos_err > max_pos_err:
         failures.append(
@@ -3528,9 +3580,37 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
                         (stop_x - ego_x_i) * math.cos(tangent_h)
                     ) * travel_sign
                 near_stop_line = -GREEN_STOP_NEAR_M < distance_to_stop <= GREEN_STOP_NEAR_M
+                yielding_ahead = False
                 if (curr_state in ("green", "flashing_green")
                         and in_controlled_lane and near_stop_line
                         and m["speed"] < 0.5):
+                    ch_e = math.cos(m["heading"])
+                    sh_e = math.sin(m["heading"])
+                    ego_z_i = float(m.get("z", 0.0) or 0.0)
+                    for ent in m.get("entities", []):
+                        if not isinstance(ent, dict):
+                            continue
+                        etype = str(ent.get("type", "") or "").lower()
+                        if etype in ("", "ego", "tl", "traffic_light"):
+                            continue
+                        ent_z = float(ent.get("z", ego_z_i) or 0.0)
+                        if abs(ent_z - ego_z_i) > 2.5:
+                            continue
+                        dx = float(ent.get("x", 0.0) or 0.0) - ego_x_i
+                        dy = float(ent.get("y", 0.0) or 0.0) - ego_y_i
+                        lon = dx * ch_e + dy * sh_e
+                        lat = -dx * sh_e + dy * ch_e
+                        if 1.0 <= lon <= 16.0 and abs(lat) <= 4.5:
+                            if etype in ("pedestrian", "cyclist", "bicycle", "motorcycle", "vru"):
+                                yielding_ahead = True
+                                break
+                            if etype in ("car", "truck", "bus", "van", "vehicle"):
+                                if float(ent.get("speed", 0.0) or 0.0) < 3.5:
+                                    yielding_ahead = True
+                                    break
+                if (curr_state in ("green", "flashing_green")
+                        and in_controlled_lane and near_stop_line
+                        and m["speed"] < 0.5 and not yielding_ahead):
                     if green_stop_start_ts is None:
                         green_stop_start_ts = ts_i
                 else:
@@ -4269,12 +4349,22 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     parking_goal_expect = criteria.get("parking_goal_expect") if isinstance(criteria.get("parking_goal_expect"), dict) else {}
     pg_summary = None
     if parking_goal_expect and parking_goal:
+        home_slot = None
+        park_out = scenario.get("park_out") if isinstance(scenario, dict) else None
+        if isinstance(scenario, dict) and scenario.get("commute_return") and isinstance(park_out, dict):
+            home_slot = {
+                "commute_return": True,
+                "x": park_out.get("slot_x", 0.0),
+                "y": park_out.get("slot_y", 0.0),
+                "heading": park_out.get("slot_heading", 0.0),
+            }
         pg_summary = _evaluate_parking_goal_expectations(
             series,
             parking_goal,
             parking_goal_expect,
             collision_count=collision_pub + collision_log_count,
             parking_slots=parking_slots,
+            home_slot=home_slot,
         )
         failures.extend(pg_summary["failures"])
         warnings.extend(pg_summary["warnings"])

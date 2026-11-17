@@ -37,6 +37,7 @@
 #include "degrade_ladder.h"   /* L3-P2 看门狗 */
 #include "planning_coordinates.h"
 #include "construction_zones.h"
+#include "road_speed_policy.h"
 #include <cjson/cJSON.h>
 
 #include <stdlib.h>
@@ -224,7 +225,10 @@ struct BehaviorContext {
     /* 变道目标 */
     int    target_lane_idx{-1};
     double target_speed{10.0};      /* 当前目标速度（FOLLOW会降低，CRUISE应恢复） */
-    double cfg_cruise_speed{15.0};  /* 巡航速度基准（永不被FOLLOW降低，CRUISE恢复用） */
+    double cfg_cruise_speed{15.0};  /* 巡航速度基准（无道路限速时的回退；有限速时被该路限速盖过） */
+    double posted_speed_mps{0.0};   /* flowsim 当前道路限速，0 = 还没收到 */
+    int    speed_camera{0};         /* 当前道路有测速摄像头 */
+    double ahead_kappa{0.0};        /* 前方约 40m 最大曲率 */
     uint32_t follow_obs_id{0};
 
     /* 超车参数 */
@@ -616,6 +620,11 @@ static void on_road_geometry(const Message* msg, void* user_data) {
     if ((item = cJSON_GetObjectItem(root, "lane_count"))) g.lane_count = item->valueint;
     if ((item = cJSON_GetObjectItem(root, "lane_width"))) g.lane_width = item->valuedouble;
     if ((item = cJSON_GetObjectItem(root, "oneway")))     g.road_oneway = item->valueint;
+    item = cJSON_GetObjectItemCaseSensitive(root, "speed_limit");
+    if (cJSON_IsNumber(item) && item->valuedouble > 0.5) g.posted_speed_mps = item->valuedouble;
+    item = cJSON_GetObjectItemCaseSensitive(root, "speed_camera");
+    if (cJSON_IsBool(item)) g.speed_camera = cJSON_IsTrue(item) ? 1 : 0;
+    else if (cJSON_IsNumber(item)) g.speed_camera = item->valuedouble != 0.0 ? 1 : 0;
     item = cJSON_GetObjectItem(root, "upcoming_own_lanes");
     g.upcoming_own_lanes = (item && cJSON_IsNumber(item)) ? item->valueint : -1;
     item = cJSON_GetObjectItem(root, "dist_to_lane_drop_m");
@@ -808,6 +817,12 @@ protected:
 
             /* 参数热重载（三处之三）：漏了这步，注册了也改不动，只能重启。 */
             g.cfg_cruise_speed          = param_get_float("behavior.cruise_speed");
+            g.ahead_kappa = flowengine::polyline_max_kappa(g.ref_x, g.ref_y, g.ref_count, 40.0);
+            if (g.posted_speed_mps > 0.5) {
+                /* 巡航跟当前这条路，不再用管线里的一个 target_speed 跑完全程。 */
+                g.cfg_cruise_speed = flowengine::command_cap_mps(
+                    g.posted_speed_mps, false, g.speed_camera != 0, g.ahead_kappa);
+            }
             g.acc_standoff              = param_get_float("behavior.acc_standoff");
             g.acc_time_headway          = param_get_float("behavior.acc_time_headway");
             g.acc_k_gap                 = param_get_float("behavior.acc_k_gap");
@@ -1391,7 +1406,9 @@ protected:
                         !carriageway_ahead_stop_light()) {
                         ev = (adj_idx < current_idx) ? BEH_EV_OVERTAKE_LEFT : BEH_EV_OVERTAKE_RIGHT;
                         new_target_lane = adj_idx;
-                        new_target_speed = fmax(adj_speed, g.ego_v);
+                        new_target_speed = flowengine::command_cap_mps(
+                            g.posted_speed_mps > 0.5 ? g.posted_speed_mps : g.cfg_cruise_speed,
+                            true, g.speed_camera != 0, g.ahead_kappa);
                         snprintf(reason, sizeof(reason),
                                  "blocked gap=%.1f lead=%.1fm/s → %s lane%d (left_gap=%.1f left_safe=%d right_gap=%.1f right_safe=%d)",
                                  best_gap, lead_speed,
@@ -1403,7 +1420,9 @@ protected:
                                g.cooldown <= 0.0 && !carriageway_ahead_stop_light()) {
                         ev = (adj_idx < current_idx) ? BEH_EV_OVERTAKE_LEFT : BEH_EV_OVERTAKE_RIGHT;
                         new_target_lane = adj_idx;
-                        new_target_speed = fmax(adj_speed, g.ego_v);
+                        new_target_speed = flowengine::command_cap_mps(
+                            g.posted_speed_mps > 0.5 ? g.posted_speed_mps : g.cfg_cruise_speed,
+                            true, g.speed_camera != 0, g.ahead_kappa);
                         snprintf(reason, sizeof(reason),
                                  "traversability blocked (x=%.1fm) → %s lane%d",
                                  g.trav_nearest_obs_x,
@@ -1472,7 +1491,9 @@ protected:
                                !carriageway_ahead_stop_light()) {
                         ev = (adj_idx < current_idx) ? BEH_EV_OVERTAKE_LEFT : BEH_EV_OVERTAKE_RIGHT;
                         new_target_lane = adj_idx;
-                        new_target_speed = fmax(adj_speed, g.ego_v);
+                        new_target_speed = flowengine::command_cap_mps(
+                            g.posted_speed_mps > 0.5 ? g.posted_speed_mps : g.cfg_cruise_speed,
+                            true, g.speed_camera != 0, g.ahead_kappa);
                         snprintf(reason, sizeof(reason),
                                  "follow blocked gap=%.1f → %s lane%d (left_gap=%.1f right_gap=%.1f)",
                                  best_gap,

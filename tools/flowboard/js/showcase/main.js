@@ -73,6 +73,38 @@ function loadSkippedMap(raw) {
   return MAP_SKIP_CACHE[mapFile];
 }
 
+/** ?look=enuX,enuY[,z]&h=&d=&yaw= 把 orbit 相机钉在出入口，不改场景里的 ego。 */
+function applyLook(topo) {
+  const q = new URLSearchParams(location.search);
+  const look = q.get('look');
+  const ego = topo && topo.metrics && topo.metrics.scene && topo.metrics.scene.ego;
+  if (!look || !ego) return false;
+  const parts = look.split(',').map(Number);
+  if (parts.length < 2 || !parts.slice(0, 2).every(Number.isFinite)) return false;
+  ego.map_view_target_x = parts[0];
+  ego.map_view_target_y = parts[1];
+  ego.map_view_target_z = Number.isFinite(parts[2]) ? parts[2] : 0;
+  const h = Number(q.get('h'));
+  const d = Number(q.get('d'));
+  const yaw = Number(q.get('yaw'));
+  ego.map_view_height = Number.isFinite(h) ? h : 28;
+  ego.map_view_dist = Number.isFinite(d) ? d : 36;
+  ego.map_view_yaw = Number.isFinite(yaw) ? yaw : 40;
+  const rn = topo.metrics.scene.road_network;
+  if (rn && q.get('focus') !== 'ego') {
+    rn.focus_x = parts[0];
+    rn.focus_y = parts[1];
+  }
+  return true;
+}
+
+function presentScene(topo) {
+  const framed = applyLook(topo);
+  update3D(topo);
+  if (framed) setCameraMode('orbit');
+  else resetCamera();
+}
+
 /** 选中并渲染第 i 个场景。 */
 function selectScene(i) {
   if (i < 0 || i >= scenarios.length) return;
@@ -98,22 +130,19 @@ function selectScene(i) {
   try {
     if (s.map) {
       // 小地图已内联（scenes.json）
-      update3D(scenarioToTopoData(s.raw, s.map));
-      resetCamera();
+      presentScene(scenarioToTopoData(s.raw, s.map));
       setMsg('');
     } else if (s.map_skipped && s.raw && s.raw.map_file) {
       // 大地图未内联：懒加载 /api/map/preview，加载期间显示进度
       setMsg('加载大地图…');
       loadSkippedMap(s.raw).then((map) => {
         if (activeIndex !== i) return;   // 切换期间已点到别的场景
-        update3D(scenarioToTopoData(s.raw, map));
-        resetCamera();
+        presentScene(scenarioToTopoData(s.raw, map));
         setMsg(map ? '' : '大地图加载失败，请改在仪表盘「地图预览」中查看');
       });
     } else {
       // 无 map_file 的普通场景
-      update3D(scenarioToTopoData(s.raw, null));
-      resetCamera();
+      presentScene(scenarioToTopoData(s.raw, null));
       setMsg('');
     }
   } catch (err) {
@@ -154,7 +183,33 @@ function wireControls() {
   window.addEventListener('resize', () => resize3D());
 }
 
+async function bootFromFile(file) {
+  const resp = await fetch('/' + String(file).replace(/^\/+/, ''), { cache: 'no-cache' });
+  if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + file);
+  const raw = await resp.json();
+  if (els.title) els.title.textContent = raw.name || file;
+  if (els.desc) els.desc.textContent = raw.description || '';
+  presentScene(scenarioToTopoData(raw, null));
+  setMsg('');
+}
+
 async function boot() {
+  const params = new URLSearchParams(location.search);
+  const file = params.get('file');
+  if (file) {
+    setMsg('加载 ' + file + '…');
+    try {
+      init3DScene(els.canvas);
+      resize3D();
+      wireControls();
+      await bootFromFile(file);
+    } catch (err) {
+      console.error('[showcase] 文件预览失败:', err);
+      setMsg('文件预览失败: ' + err.message);
+    }
+    return;
+  }
+
   setMsg('加载场景清单…');
   try {
     init3DScene(els.canvas);

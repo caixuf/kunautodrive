@@ -97,6 +97,29 @@ process_alive() {
   return 0
 }
 
+# 查监听 TCP 端口的 PID。不用 ss：WSL2 上 `ss -tlnp` 会卡在
+# rtnetlink_rcv_msg（D 状态）并一直握着 rtnl_lock，随后 flow_launcher
+# 的 IP_ADD_MEMBERSHIP 也进 D 状态，流水线停在加载节点之前。
+listener_pid_for_port() {
+  local port="$1"
+  local port_hex inode fd target
+  port_hex=$(printf '%04X' "$port")
+  inode=$(awk -v p="$port_hex" '
+    NR > 1 {
+      n = split($2, a, ":")
+      if (n >= 2 && a[n] == p && $4 == "0A") { print $10; exit }
+    }
+  ' /proc/net/tcp /proc/net/tcp6 2>/dev/null || true)
+  [ -n "$inode" ] || return 0
+  for fd in /proc/[0-9]*/fd/*; do
+    target=$(readlink "$fd" 2>/dev/null || true)
+    if [ "$target" = "socket:[$inode]" ]; then
+      printf '%s\n' "$fd" | cut -d/ -f3
+      return 0
+    fi
+  done
+}
+
 record_pid() {
   case "${1:-}" in
     ''|*[!0-9]*) return 0 ;;
@@ -149,10 +172,10 @@ rm -rf "$LOG_DIR" 2>/dev/null || true
 mkdir -p "$LOG_DIR"
 if [ "$SKIP_GLOBAL_CLEANUP" != "1" ]; then
   for port in 8800 8765; do
-    # Linux 优先 ss；macOS 无 ss（也无 /proc）用 lsof 找监听该端口的进程。
-    if command -v ss >/dev/null 2>&1; then
-      pid=$(ss -tlnp "sport = :$port" 2>/dev/null | grep -oP 'pid=\K\d+' | head -1)
-    else
+    pid=""
+    if [ -r /proc/net/tcp ]; then
+      pid=$(listener_pid_for_port "$port")
+    elif command -v lsof >/dev/null 2>&1; then
       pid=$(lsof -ti "tcp:$port" -sTCP:LISTEN 2>/dev/null | head -1)
     fi
     [ -n "$pid" ] && terminate_pids "$pid"
@@ -546,6 +569,16 @@ if [ ! -s "$JSON_FILE" ]; then
   if [ -s "$LAUNCHER_STDERR" ]; then
     echo "    --- $LAUNCHER_STDERR (tail) ---"
     tail -n 40 "$LAUNCHER_STDERR" || true
+  fi
+  # discovery_create 返回后才会打 "scheduler mode"。停在 QoS 那一行，
+  # 就是组播加入卡在 rtnl，不是 monitor 没起来。
+  _DISC_SRC="$LAUNCHER_STDERR"
+  if [ -s "$LOG_DIR/launcher.log" ]; then
+    _DISC_SRC="$LOG_DIR/launcher.log"
+  fi
+  if [ -s "$_DISC_SRC" ] && ! grep -q "scheduler mode" "$_DISC_SRC"; then
+    echo "    launcher 还停在 discovery 之前（rtnl_lock）。别的 ss/ip 可能卡在 rtnetlink。"
+    echo "    进程状态: $(ps -p "$LAUNCHER_PID" -o stat=,wchan= 2>/dev/null || true)"
   fi
   if ! kill -0 "$LAUNCHER_PID" 2>/dev/null; then
     echo "    launcher PID $LAUNCHER_PID already exited"

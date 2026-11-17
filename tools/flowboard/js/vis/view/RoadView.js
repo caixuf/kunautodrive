@@ -1234,9 +1234,13 @@ export function createRoadView(scene) {
       };
     }
 
+    // 车库出入口喉道：单车道沥青，不铺路肩/人行道。出口标线停在主路路缘外，
+    // 不再把双黄线和边线画进四车道中间。
+    const accessKind = accessThroatKind(edge);
+
     // 路肩（路口边界停；>800 边大图仅在焦点 450m 内铺设 3D 路肩，远景省三角面）
     const shoulderGeos = [];
-    if (isNearFocus) {
+    if (isNearFocus && !accessKind) {
       for (const seg of roadMarkSpine) {
         const sL = ribbonGeo(offsetSpine(seg, roadHw + SHOULDER_W * 0.5), SHOULDER_W * 0.5, Y_SHOULDER);
         const sR = ribbonGeo(offsetSpine(seg, -(roadHw + SHOULDER_W * 0.5)), SHOULDER_W * 0.5, Y_SHOULDER);
@@ -1256,7 +1260,10 @@ export function createRoadView(scene) {
     // 无 lane_data：straight_road 等 demo 才走启发式，画在已对齐的 roadMarkSpine 上。
     const isGarageHall = edge.type === EDGE_TYPE.GARAGE_HALL;
     const isOpenRamp = edge.type === EDGE_TYPE.OPEN_RAMP;
-    const paintMarkSpine = filterSpineOutsideJunctions(roadSpine, edge.id, 6.0);
+    let paintMarkSpine = filterSpineOutsideJunctions(roadSpine, edge.id, 6.0);
+    if (accessKind === 'exit_merge') {
+      paintMarkSpine = paintMarkSpine.flatMap((seg) => clipSpineSouthOf(seg, -6.6));
+    }
 
     if (isGarageHall) {
       // B1 地下车库由 GarageView 统一绘制地坪、车位线、导向箭头与中心黄虚线，
@@ -1362,6 +1369,29 @@ export function createRoadView(scene) {
       roadGeos, shoulderGeos, curbGeos, sidewalkGeos, vergeGeos,
       whiteGeos, yellowGeos, spine, cum: buildCumulative(spine),
     };
+  }
+
+  /** 车库出口汇入 / 右转进场。live 拓扑里 xodr road name 就是这个 type。 */
+  function accessThroatKind(edge) {
+    const t = String((edge && edge.type) || '');
+    const n = String((edge && edge.name) || '');
+    if (t === 'exit_merge' || n.indexOf('exit_merge') !== -1) return 'exit_merge';
+    if (t === 'right_in' || n.indexOf('right_in') !== -1) return 'right_in';
+    return '';
+  }
+
+  /** 只保留主路南缘以外的样点（ENU y <= yMax）。出口标线用它停在路缘外。 */
+  function clipSpineSouthOf(spine, yMax) {
+    const runs = [];
+    let cur = [];
+    for (let i = 0; i < spine.length; i++) {
+      const p = spine[i];
+      if (-p.pz <= yMax) cur.push(p);
+      else if (cur.length >= 2) { runs.push(cur); cur = []; }
+      else cur = [];
+    }
+    if (cur.length >= 2) runs.push(cur);
+    return runs;
   }
 
   /** 路口边界停：委托 TopologyModel 把 spine 按「到最近 junction 中心 > radius」

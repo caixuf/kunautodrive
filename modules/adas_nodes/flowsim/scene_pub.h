@@ -168,6 +168,9 @@ struct ScenePubConfig {
         double corridor_width{6.0};
     } park_out;
 
+    /** 场景声明的通勤返程。规划据此在公司车位停留后改回家目标。 */
+    bool commute_return{false};
+
     struct ScenePubParkingSlot {
         int id{0};
         double x{0.0};

@@ -1,4 +1,5 @@
 #include "flowsim/world_engine.h"
+#include "road_speed_policy.h"
 
 #include <cjson/cJSON.h>
 
@@ -833,6 +834,8 @@ std::vector<CompiledEdge> build_compiled_edges(cJSON* rn_root, const WorldGenCon
         if (cJSON_IsNumber(jsl) && jsl->valuedouble > 0.5) {
             ce.speed_limit_mps = jsl->valuedouble;
         }
+        /* 类型表盖过场景里写平的限速。edge_overrides.speed_limit_kph 在后面仍可再盖。 */
+        ce.speed_limit_mps = flowengine::posted_speed_mps(ce.type.c_str(), ce.speed_limit_mps);
         cJSON* jow = cJSON_GetObjectItemCaseSensitive(edge, "oneway");
         ce.is_oneway = cJSON_IsTrue(jow);
 

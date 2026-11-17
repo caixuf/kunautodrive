@@ -25,6 +25,7 @@
 #include "piecewise_jerk_qp.h"
 #include "planning_speed_smooth.h"
 #include "planning_tl_stop.h"
+#include "road_speed_policy.h"
 
 #include "coroutine_task.h"
 #undef LOG_TRACE
@@ -65,6 +66,7 @@
 #include "planning_framework/lane_follow_scenario.h"
 #include "planning_framework/emergency_stop_scenario.h"
 #include "planning_framework/valet_parking_scenario.h"
+#include "planning_framework/commute_mission.h"
 #include "planning_framework/park_out_scenario.h"
 #include "planning_uturn.h"
 
@@ -231,7 +233,9 @@ struct PlanningContext {
     double curve_offset_m{0};
     int    lane_count{2};       /* 从 road/geometry 订阅获取 */
     double lane_width{3.5};     /* 从 road/geometry 订阅获取 */
-    double road_speed_limit{20.0}; /* FlowSim 当前道路限速，规划速度上限 */
+    double road_speed_limit{20.0}; /* FlowSim 当前道路限速 */
+    bool   speed_camera{false};    /* 当前道路有测速摄像头 */
+    double ahead_kappa{0.0};       /* 前方约 40m 最大曲率 */
     int    road_oneway{0};   /* 道路单双向（road/geometry oneway 字段，W1 需要：单向路
                               * 全部车道都是本向，nearest_lane 不得强制右半幅） */
 
@@ -354,6 +358,9 @@ struct PlanningContext {
     size_t                                      parking_slot_count{0};
     int                                         selected_slot_index{-1};
     flowengine::planning::ParkingGoal           active_parking_goal{};
+    flowengine::planning::CommuteMission       commute;
+    flowengine::planning::CommutePhase         commute_logged{flowengine::planning::CommutePhase::Outbound};
+    bool                                        commute_return{false};
     static constexpr int kMaxSceneVeh = 64;
     double scene_veh_x[kMaxSceneVeh]{}, scene_veh_y[kMaxSceneVeh]{}, scene_veh_z[kMaxSceneVeh]{};
     double scene_veh_h[kMaxSceneVeh]{}, scene_veh_vx[kMaxSceneVeh]{}, scene_veh_vy[kMaxSceneVeh]{};
@@ -1114,9 +1121,45 @@ static void sync_parking_metadata_from_json(const cJSON* root) {
         g.parking_slot_count = idx;
     }
 
+    cJSON* jcr = cJSON_GetObjectItemCaseSensitive(root, "commute_return");
+    if (cJSON_IsBool(jcr)) g.commute_return = cJSON_IsTrue(jcr);
+
     if (g.park_out.enabled || g.parking_goal.enabled || g.parking_slot_count > 0) {
         g.scenario_manager.SetDebounceThreshold(1);
     }
+}
+
+/** 返程汇出点：落在当前 route 参考线上，朝向回家方向。 */
+static void commute_exit_pose(double ego_x, double ego_y, double ego_z,
+                              double& exit_x, double& exit_y,
+                              double& exit_z, double& exit_h) {
+    exit_x = ego_x - 6.0;
+    exit_y = 0.0;
+    exit_z = ego_z;
+    exit_h = M_PI;
+    if (g.map_ref_count < 2) return;
+
+    int best = 0;
+    double best_d = 1e18;
+    for (int i = 0; i < g.map_ref_count; ++i) {
+        double dx = g.map_ref_x[i] - ego_x;
+        double dy = g.map_ref_y[i] - ego_y;
+        double d = dx * dx + dy * dy;
+        if (d < best_d) {
+            best_d = d;
+            best = i;
+        }
+    }
+    const int i1 = (best + 1 < g.map_ref_count) ? best + 1 : best;
+    const int i0 = (i1 == best && best > 0) ? best - 1 : best;
+    double h = std::atan2(g.map_ref_y[i1] - g.map_ref_y[i0],
+                          g.map_ref_x[i1] - g.map_ref_x[i0]);
+    if (!g.on_return) h += M_PI;
+    while (h > M_PI) h -= 2.0 * M_PI;
+    while (h < -M_PI) h += 2.0 * M_PI;
+    exit_h = h;
+    exit_x = g.map_ref_x[best] + std::cos(h) * 6.0;
+    exit_y = g.map_ref_y[best] + std::sin(h) * 6.0;
 }
 
 /* ── road/geometry 订阅回调（Phase 2 统一道路几何） ─────────── */
@@ -1146,6 +1189,10 @@ static void on_road_geometry(const Message* msg, void* user_data) {
         if ((item = cJSON_GetObjectItem(root, "speed_limit")) &&
             cJSON_IsNumber(item) && item->valuedouble > 0.0) {
             g.road_speed_limit = item->valuedouble;
+        }
+        if ((item = cJSON_GetObjectItemCaseSensitive(root, "speed_camera"))) {
+            if (cJSON_IsBool(item)) g.speed_camera = cJSON_IsTrue(item);
+            else if (cJSON_IsNumber(item)) g.speed_camera = item->valuedouble != 0.0;
         }
         if ((item = cJSON_GetObjectItem(root, "oneway")) && cJSON_IsNumber(item)) {
             int new_ow = (item->valuedouble != 0.0) ? 1 : 0;
@@ -1754,21 +1801,16 @@ protected:
              * target_speed: 50.0，规划层会原样下发，依赖 safety_control 的 TTC 限幅
              * 兜底——但 safety_control 假定上游 speed 已合理，不做绝对速度上限夹紧。
              * 这是安全分层架构里职责错位（上限夹紧应在最靠近数据源的层做）。 */
-            if (command_speed > g.cfg_max_speed) {
-                static int speed_clamp_warn = 0;
-                if (speed_clamp_warn < 3) {
-                    LOG_WARN("planning", "command_speed clamped %.2f → cfg_max_speed %.2f "
-                             "(scenario target_speed/route_target_speed exceeds safety envelope)",
-                             command_speed, g.cfg_max_speed);
-                    speed_clamp_warn++;
-                }
-                command_speed = g.cfg_max_speed;
-            }
-            if (command_speed > g.road_speed_limit) {
-                command_speed = g.road_speed_limit;
-            }
-            const double environment_max_speed =
-                g.cfg_max_speed * g.environment_speed_factor;
+            /* 上限跟当前道路，不再用管线 max_speed=20 把高架压回 72 km/h。
+             * 不超车夹到该路限速；超车看摄像头（1.2 倍或车技）。天气因子仍乘在顶上。 */
+            g.ahead_kappa = flowengine::polyline_max_kappa(
+                g.map_ref_x, g.map_ref_y, g.map_ref_count, 40.0);
+            const double posted = (g.road_speed_limit > 0.5) ? g.road_speed_limit
+                                                             : g.cfg_max_speed;
+            const bool passing = (g.overtake_state == 1 || g.overtake_state == 2);
+            double environment_max_speed = flowengine::command_cap_mps(
+                posted, passing, g.speed_camera, g.ahead_kappa);
+            environment_max_speed *= g.environment_speed_factor;
             if (command_speed > environment_max_speed) {
                 command_speed = environment_max_speed;
             }
@@ -2340,6 +2382,28 @@ protected:
 
             /* ── Scenario-Stage-Task: 泊出 / 开放空间多车位泊车场景 ── */
             if (g.park_out.enabled || g.parking_goal.enabled || g.parking_slot_count > 0) {
+                g.commute.observe_scenario(g.commute_return, g.parking_goal, g.park_out);
+                double exit_x = 0.0, exit_y = 0.0, exit_z = 0.0, exit_h = M_PI;
+                commute_exit_pose(g.ego_x, g.ego_y, g.ego_z, exit_x, exit_y, exit_z, exit_h);
+                g.commute.apply(clock_now_us() * 1e-6,
+                                g.ego_x, g.ego_y, g.ego_z, g.ego_v,
+                                g.valet_parking_scenario.IsFinished(),
+                                exit_x, exit_y, exit_z, exit_h,
+                                g.parking_goal, g.park_out, g.parking_slot_count);
+                if (g.commute.phase != g.commute_logged) {
+                    LOG_INFO("planning", "commute phase %d -> %d",
+                             (int)g.commute_logged, (int)g.commute.phase);
+                    g.commute_logged = g.commute.phase;
+                }
+                if (g.commute.pulse_reset) {
+                    g.valet_parking_scenario.Reset();
+                    g.park_out_scenario.Reset();
+                    g.park_out_scenario.ClearCompleted();
+                    LOG_INFO("planning",
+                             "commute return: park-out of office (%.1f,%.1f) toward (%.1f,%.1f) h=%.2f",
+                             g.park_out.slot_x, g.park_out.slot_y,
+                             g.park_out.exit_x, g.park_out.exit_y, g.park_out.exit_heading);
+                }
                 flowengine::planning::FrameContext fctx;
                 fctx.seq = g.plan_count;
                 fctx.timestamp_us = clock_now_us();
@@ -3169,7 +3233,8 @@ publish_trajectory:
                         break;
                     }
                     /* 速度合法性 */
-                    if ((double)traj.points[i].v < -0.5 || (double)traj.points[i].v > g.cfg_max_speed * 1.1) {
+                    if ((double)traj.points[i].v < -0.5 ||
+                        (double)traj.points[i].v > flowengine::kVehicleMaxMps * 1.1) {
                         traj.valid = 0;
                         break;
                     }
@@ -3199,7 +3264,7 @@ publish_trajectory:
                     double k = fabs((double)traj.points[i].kappa);
                     double v = (double)traj.points[i].v;
                     double al = v * v * k;
-                    if (k > 0.25 || al > 5.0 || v < -0.5 || v > g.cfg_max_speed * 1.1) {
+                    if (k > 0.25 || al > 5.0 || v < -0.5 || v > flowengine::kVehicleMaxMps * 1.1) {
                         LOG_WARN("planning",
                                  "  feasibility first-violation: pt[%d] s=%.1f kappa=%.3f v=%.1f a_lat=%.2f (lim κ0.25 a5.0)",
                                  i, (double)traj.points[i].s, k, v, al);
@@ -3360,7 +3425,7 @@ publish_trajectory:
                     ref_pts[i].dkappa = 0.0f;
                     ref_pts[i].left_bound = 10.0f;
                     ref_pts[i].right_bound = 10.0f;
-                    ref_pts[i].speed_limit = (float)g.cfg_max_speed;
+                    ref_pts[i].speed_limit = (float)environment_max_speed;
                 }
                 uint8_t ref_buf[4096];
                 uint16_t ref_count = (uint16_t)n_ref;
@@ -3372,9 +3437,12 @@ publish_trajectory:
             }
 
             if (g.plan_count % 25 == 1) {
-                LOG_INFO("planning", "#%d ego@(%.0f,%.1f) v=%.1f → target=%.1f wp=%d",
-                         g.plan_count, g.ego_x, g.ego_y, g.ego_v,
-                         command_speed, n_wp);
+                LOG_INFO("planning",
+                         "#%d ego@(%.0f,%.1f) z=%.1f v=%.1f cmd=%.1f road=%.1f beh=%.1f cap=%.1f",
+                         g.plan_count, g.ego_x, g.ego_y, g.ego_z, g.ego_v, command_speed,
+                         g.road_speed_limit,
+                         g.has_behavior ? (double)g.current_behavior.target_speed : -1.0,
+                         environment_max_speed);
             }
 #ifndef HAVE_FRENET
             /* Repeat this loudly and periodically (not just once at init) so it

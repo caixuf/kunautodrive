@@ -467,6 +467,8 @@ typedef struct {
         double exit_heading;
         double corridor_width;
     } park_out;
+    /** 通勤闭环：公司车位停留后沿 route 返程，泊回 park_out 出发车位。 */
+    bool              commute_return;
     /* ── 多候选目标车位（地面停车场寻位择优）── */
     ScenarioParkingSlot parking_slots[SCENARIO_MAX_PARKING_SLOTS];
     int                 parking_slot_count;

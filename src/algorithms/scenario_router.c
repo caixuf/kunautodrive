@@ -10,6 +10,7 @@
 #include "scenario_router.h"
 #include <cjson/cJSON.h>
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -439,6 +440,120 @@ static int json_pt_xy(cJSON* pt, double* ox, double* oy) {
     return 1;
 }
 
+/* 端点相接（≤3m）才连后继。20m 的路线桥不算接上，不新加节点。 */
+#define ROUTER_ENDPOINT_SNAP_M 3.0
+#define ROUTER_SYNTH_MAX 2048
+
+typedef struct {
+    cJSON* successors;
+    char id[64];
+    int dir;
+    double sx, sy, ex, ey;
+} RouterSynthLane;
+
+static int router_node_xy(cJSON* nodes, int index, double* x, double* y) {
+    if (!cJSON_IsArray(nodes)) return 0;
+    int n = cJSON_GetArraySize(nodes);
+    if (index < 0) index = n - 1;
+    if (n < 2 || index >= n) return 0;
+    return json_pt_xy(cJSON_GetArrayItem(nodes, index), x, y);
+}
+
+static cJSON* router_make_lane(int edge_id, int index, int direction,
+                               double x0, double y0, double x1, double y1) {
+    cJSON* lane = cJSON_CreateObject();
+    char id[64];
+    snprintf(id, sizeof id, "%d.lane.%d", edge_id, direction > 0 ? index : index + 100);
+    cJSON_AddStringToObject(lane, "id", id);
+    cJSON_AddNumberToObject(lane, "index", index);
+    cJSON_AddNumberToObject(lane, "direction", direction);
+    cJSON* cl = cJSON_CreateArray();
+    cJSON* p0 = cJSON_CreateArray();
+    cJSON* p1 = cJSON_CreateArray();
+    cJSON_AddItemToArray(p0, cJSON_CreateNumber(x0));
+    cJSON_AddItemToArray(p0, cJSON_CreateNumber(y0));
+    cJSON_AddItemToArray(p1, cJSON_CreateNumber(x1));
+    cJSON_AddItemToArray(p1, cJSON_CreateNumber(y1));
+    cJSON_AddItemToArray(cl, p0);
+    cJSON_AddItemToArray(cl, p1);
+    cJSON_AddItemToObject(lane, "centerline", cl);
+    cJSON_AddItemToObject(lane, "successors", cJSON_CreateArray());
+    return lane;
+}
+
+/** 没有 lanes[] 的边，用端点把相接的边连成车道后继。已有 lanes[] 的地图不动。 */
+static void router_fill_endpoint_lanes(cJSON* rn) {
+    cJSON* jedges = cJSON_GetObjectItemCaseSensitive(rn, "edges");
+    if (!cJSON_IsArray(jedges)) return;
+
+    RouterSynthLane* synth = (RouterSynthLane*)calloc(ROUTER_SYNTH_MAX, sizeof *synth);
+    if (!synth) return;
+    int ns = 0;
+    int n_edges = cJSON_GetArraySize(jedges);
+    for (int ei = 0; ei < n_edges && ns < ROUTER_SYNTH_MAX; ei++) {
+        cJSON* edge = cJSON_GetArrayItem(jedges, ei);
+        if (!cJSON_IsObject(edge)) continue;
+        cJSON* jlanes = cJSON_GetObjectItemCaseSensitive(edge, "lanes");
+        if (cJSON_IsArray(jlanes)) continue;
+        int n = 1;
+        if (cJSON_IsNumber(jlanes) && jlanes->valuedouble >= 1.0)
+            n = (int)jlanes->valuedouble;
+        cJSON* jnodes = cJSON_GetObjectItemCaseSensitive(edge, "nodes");
+        double x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+        if (!router_node_xy(jnodes, 0, &x0, &y0) || !router_node_xy(jnodes, -1, &x1, &y1))
+            continue;
+        int edge_id = ei;
+        cJSON* jid = cJSON_GetObjectItemCaseSensitive(edge, "id");
+        if (cJSON_IsNumber(jid)) edge_id = (int)jid->valuedouble;
+        int oneway = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(edge, "oneway"));
+        int n_fwd = n;
+        int n_rev = 0;
+        if (!oneway && n >= 2) {
+            n_fwd = n / 2;
+            n_rev = n / 2;
+        }
+        cJSON* arr = cJSON_CreateArray();
+        for (int i = 1; i <= n_fwd && ns < ROUTER_SYNTH_MAX; i++) {
+            cJSON* lane = router_make_lane(edge_id, i, 1, x0, y0, x1, y1);
+            if (!lane) break;
+            cJSON_AddItemToArray(arr, lane);
+            synth[ns].successors = cJSON_GetObjectItemCaseSensitive(lane, "successors");
+            snprintf(synth[ns].id, sizeof synth[ns].id, "%d.lane.%d", edge_id, i);
+            synth[ns].dir = 1;
+            synth[ns].sx = x0; synth[ns].sy = y0;
+            synth[ns].ex = x1; synth[ns].ey = y1;
+            ns++;
+        }
+        for (int i = 1; i <= n_rev && ns < ROUTER_SYNTH_MAX; i++) {
+            cJSON* lane = router_make_lane(edge_id, i, -1, x1, y1, x0, y0);
+            if (!lane) break;
+            cJSON_AddItemToArray(arr, lane);
+            synth[ns].successors = cJSON_GetObjectItemCaseSensitive(lane, "successors");
+            snprintf(synth[ns].id, sizeof synth[ns].id, "%d.lane.%d", edge_id, i + 100);
+            synth[ns].dir = -1;
+            synth[ns].sx = x1; synth[ns].sy = y1;
+            synth[ns].ex = x0; synth[ns].ey = y0;
+            ns++;
+        }
+        cJSON_DeleteItemFromObject(edge, "lanes");
+        cJSON_AddItemToObject(edge, "lanes", arr);
+    }
+    for (int a = 0; a < ns; a++) {
+        for (int b = 0; b < ns; b++) {
+            if (a == b || synth[a].dir != synth[b].dir) continue;
+            double dx = synth[a].ex - synth[b].sx;
+            double dy = synth[a].ey - synth[b].sy;
+            if (dx * dx + dy * dy > ROUTER_ENDPOINT_SNAP_M * ROUTER_ENDPOINT_SNAP_M) continue;
+            /* 同索引才接：.lane.1 只接 .lane.1，不把一条车道接到邻边的每一条上。 */
+            const char* ia = strrchr(synth[a].id, '.');
+            const char* ib = strrchr(synth[b].id, '.');
+            if (!ia || !ib || strcmp(ia, ib) != 0) continue;
+            cJSON_AddItemToArray(synth[a].successors, cJSON_CreateString(synth[b].id));
+        }
+    }
+    free(synth);
+}
+
 int router_build_from_map_json(RouterGraph* g, const char* road_net_json,
                                double lane_change_penalty, int* out_lane_count) {
     if (out_lane_count) *out_lane_count = 0;
@@ -446,6 +561,7 @@ int router_build_from_map_json(RouterGraph* g, const char* road_net_json,
 
     cJSON* rn = cJSON_Parse(road_net_json);
     if (!rn) return -1;
+    router_fill_endpoint_lanes(rn);
     cJSON* jedges = cJSON_GetObjectItemCaseSensitive(rn, "edges");
     if (!cJSON_IsArray(jedges)) { cJSON_Delete(rn); return -1; }
 

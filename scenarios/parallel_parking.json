@@ -35,7 +35,7 @@
     {"id": 202, "type": "car", "x": 56.8, "y": -5.25, "vx": 0.0, "vy": 0.0, "len": 4.6, "wid": 2.0}
   ],
   "parking_slots": [
-    {"id": "P_PAR_1", "type": "parallel", "x": 50.0, "y": -5.25, "z": 0.0, "heading": 0.0, "length": 6.8, "width": 2.4}
+    {"id": 0, "type": "parallel", "x": 50.0, "y": -5.25, "z": 0.0, "heading": 0.0, "length": 6.8, "width": 2.4}
   ],
   "traffic_lights": [],
   "pass_criteria": {

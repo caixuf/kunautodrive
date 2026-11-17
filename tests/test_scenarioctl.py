@@ -65,3 +65,10 @@ class ScenarioCtlTest(unittest.TestCase):
         errors = validate_scenario(bad, Path("bad_p2p.json"))
         self.assertTrue(any("park_out missing" in e for e in errors))
         self.assertTrue(any("parking_slots[0] missing" in e for e in errors))
+
+    def test_parallel_parking_slot_id_is_numeric(self):
+        root = Path(__file__).resolve().parents[1]
+        path = root / "scenarios" / "parallel_parking.json"
+        data = json.loads(path.read_text())
+        self.assertEqual(validate_scenario(data, path), [])
+        self.assertIsInstance(data["parking_slots"][0]["id"], int)
