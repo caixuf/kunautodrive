@@ -1459,6 +1459,13 @@ target_link_libraries(test_network_transport flowengine_core scheduler_cpp pthre
 add_test(NAME network_transport_tests COMMAND test_network_transport)
 set_tests_properties(network_transport_tests PROPERTIES TIMEOUT 20)
 
+add_executable(test_windows_message_capacity tests/test_windows_message_capacity.c)
+target_include_directories(test_windows_message_capacity PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_compile_definitions(test_windows_message_capacity PRIVATE _WIN32)
+add_test(NAME windows_message_capacity_tests COMMAND test_windows_message_capacity)
+
 add_executable(test_park_out_and_slot_search
     tests/test_park_out_and_slot_search.cpp
     modules/adas_nodes/planning_framework/scenario_manager.cpp

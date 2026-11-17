@@ -8,7 +8,7 @@
 ![C++](https://img.shields.io/badge/C++-20-659ad2)
 ![Three.js](https://img.shields.io/badge/Three.js-r160_PBR-049ef4)
 
-**体量速览**：C 内核与节点 ~6.8 万行 · C++ ADAS 节点 ~3.2 万行 · Python 工具链/评估器/生态桥接 ~4.7 万行 · 手写前端 3D 数字孪生 ~2.5 万行（52 个无框架 ES modules）；默认管线 **20 节点**（L3 sensor / 车端编排 19 节点）；**20+ 条**静态/运行时门禁 + **6 组 46 项**前端门禁 + **64 项** CTest + **38 个**仿真场景 / **8 张**高精地图；配套 **7 部 26 章**技术专著（[docs/BOOK.md](docs/BOOK.md)）。
+**体量速览**：C 内核与节点 ~6.8 万行 · C++ ADAS 节点 ~3.2 万行 · Python 工具链/评估器/生态桥接 ~4.7 万行 · 手写前端 3D 数字孪生 ~2.5 万行（52 个无框架 ES modules）；默认管线 **20 节点**（L3 sensor / 车端编排 19 节点）；**20+ 条**静态/运行时门禁 + **6 组 46 项**前端门禁 + **65 项** CTest + **38 个**仿真场景 / **8 张**高精地图；配套 **7 部 26 章**技术专著（[docs/BOOK.md](docs/BOOK.md)）。
 
 ## 实机演示与多场景数字孪生
 
@@ -199,7 +199,7 @@ env -u LD_LIBRARY_PATH ctest --test-dir build --output-on-failure -R pem_runtime
 修改代码后按模块选择对应门禁（完整流水线定义于 `.github/workflows/ci.yml`，共 23 个 CI Job）：
 
 ```bash
-# 1. C/C++ 单元与集成测试（64 项 CTest）
+# 1. C/C++ 单元与集成测试（65 项 CTest）
 env -u LD_LIBRARY_PATH ctest --test-dir build --output-on-failure
 
 # 2. 离线管线契约与架构静态门禁（秒级）
