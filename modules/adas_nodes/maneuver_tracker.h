@@ -41,7 +41,7 @@ struct ManeuverTrackerParams {
                                         // 旧 1.5 会覆盖 v=0 让车停不住）
     double gear_v_threshold    = 0.3;   // 向前扫第一个 |v|>此值 => gear 意图
     double gear_pending_speed  = 0.8;   // |speed|>此值 => 换挡前刹停
-    double lat_gain_dh         = 1.6;   // heading 误差反馈增益
+    double lat_gain_dh         = 2.05;  // heading 误差反馈增益（21.6k-ep 泊车训练调优）
     double lat_gain_elat       = 0.70;  // 车体系横向误差增益
     double max_steer           = 0.60;  // rad 满舵
 };
@@ -242,7 +242,7 @@ private:
     /// 前视点：在同挡段内沿精确弧长 s_ + la_limit 线性插值，消除离散点间距带来的前视阶跃与冻结。
     TrackPoint lookahead(int base_i) {
         bool rev = (gear_ == -1);
-        const double la_limit = std::min(p_.lookahead_m, rev ? 0.65 : 0.8);
+        const double la_limit = std::min(p_.lookahead_m, rev ? 0.45 : 0.75);
         if (n_ <= 0) return TrackPoint{};
         if (n_ == 1 || base_i >= n_ - 1) {
             last_lookahead_ = toTrack(pts_[n_ - 1]);
