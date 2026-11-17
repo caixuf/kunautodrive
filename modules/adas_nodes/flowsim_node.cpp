@@ -1320,6 +1320,7 @@ static void publish_vehicle_state(uint64_t sim_time_us) {
         std::vector<std::pair<double, size_t>> near_facs;
         for (size_t fi = 0; fi < g.facility_obstacles.size(); ++fi) {
             const auto& f = g.facility_obstacles[fi];
+            if (f.kind == "pier" && ego.z > f.z + 1.8) continue;
             if (std::fabs(f.z - ego.z) > 2.5) continue;
             const double dx = f.x - ego.x, dy = f.y - ego.y;
             const double d2 = dx * dx + dy * dy;
@@ -4115,13 +4116,8 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
 #if defined(FLOW_HAS_JOLT) && FLOW_HAS_JOLT
         jolt_obs.reserve(world_layout.colliders.size());
 #endif
-        auto is_offroad_prop = [](const std::string& kind) {
-            return kind == "pole" || kind == "tree" || kind == "sign" ||
-                   kind == "furniture" || kind == "barrier_span" || kind == "prop";
-        };
         for (const auto& c : world_layout.colliders) {
-            const bool roadside_prop = is_offroad_prop(c.kind);
-            if (c.sensor_visible && !roadside_prop) {
+            if (flowsim::is_perception_facility_collider(c)) {
                 g.facility_obstacles.push_back({
                     c.x, c.y, c.z, c.len, c.wid, c.heading, c.kind, c.height, c.is_cylinder
                 });
@@ -4137,7 +4133,7 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
                 g.scene_pub_cfg.facilities.push_back(std::move(pf));
             }
 #if defined(FLOW_HAS_JOLT) && FLOW_HAS_JOLT
-            if (!roadside_prop || c.kind == "barrier_span") {
+            if (flowsim::is_jolt_static_collider(c)) {
                 flowsim::StaticBoxObstacle o;
                 o.x = c.x;
                 o.y = c.y;

@@ -392,6 +392,9 @@ static void test_default_physics_signage_and_pier_clearance() {
 
     int sign_colliders = 0;
     int ev_colliders = 0;
+    int barrier_colliders = 0;
+    bool barrier_role_ok = true;
+    bool offroad_role_ok = true;
     bool all_colliders_visible = !layout.colliders.empty();
     for (const auto& c : layout.colliders) {
         if (!c.sensor_visible) all_colliders_visible = false;
@@ -400,6 +403,24 @@ static void test_default_physics_signage_and_pier_clearance() {
             CHECK(!c.is_cylinder && !c.subkind.empty(),
                   "Sign collider uses OBB (is_cylinder=false) and preserves subkind (%s)",
                   c.subkind.c_str());
+            if (c.role != flowsim::ColliderRole::OffroadProp ||
+                flowsim::is_perception_facility_collider(c)) {
+                offroad_role_ok = false;
+            }
+        }
+        if (c.kind == "barrier") {
+            barrier_colliders++;
+            if (c.role != flowsim::ColliderRole::RoadsideBarrier ||
+                flowsim::is_perception_facility_collider(c) ||
+                !flowsim::is_jolt_static_collider(c)) {
+                barrier_role_ok = false;
+            }
+        }
+        if (c.kind == "pole" || c.kind == "tree") {
+            if (c.role != flowsim::ColliderRole::OffroadProp ||
+                flowsim::is_perception_facility_collider(c)) {
+                offroad_role_ok = false;
+            }
         }
         if (c.kind == "ev_charger") ev_colliders++;
     }
@@ -408,6 +429,10 @@ static void test_default_physics_signage_and_pier_clearance() {
           "Every generated sign produces a matching WorldCollider (%d == %zu)",
           sign_colliders, layout.signs.size());
     CHECK(ev_colliders == 1, "Default custom_prop ev_charger produces collider (%d == 1)", ev_colliders);
+    CHECK(barrier_colliders > 0 && barrier_role_ok,
+          "Barrier spans classify as RoadsideBarrier (Jolt physical only, excluded from perception, count=%d)",
+          barrier_colliders);
+    CHECK(offroad_role_ok, "Poles/trees/signs classify as OffroadProp (excluded from perception)");
 
     bool piers_ok = !layout.piers.empty();
     for (const auto& pr : layout.piers) {

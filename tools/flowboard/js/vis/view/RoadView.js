@@ -313,6 +313,11 @@ export function createRoadView(scene) {
       const c0 = centers[k];
       const c1 = centers[k + 1];
 
+      // 匝道接地过渡段（高程 < 0.35m）不再绘制地下箱梁与防撞侧墙，避免与地面道路/路口穿插
+      if (Math.max(c0.py || 0, c1.py || 0) < 0.35) {
+        continue;
+      }
+
       // 底板 (0-1)
       indices.push(b0 + 0, b1 + 0, b0 + 1);
       indices.push(b0 + 1, b1 + 0, b1 + 1);

@@ -1736,23 +1736,43 @@ void build_colliders_from_layout(WorldLayout& layout) {
         layout.furniture.size() + layout.poles.size() + layout.trees.size() +
         layout.signs.size() + layout.piers.size() + layout.barrier_spans.size() + layout.props.size());
 
+    auto classify_furniture_role = [](const std::string& kind) -> ColliderRole {
+        if (kind == "wall" || kind == "pillar" || kind == "bollard") {
+            return ColliderRole::StructuralObstacle;
+        }
+        if (kind == "barrier") {
+            return ColliderRole::RoadsideBarrier;
+        }
+        return ColliderRole::OffroadProp;
+    };
+    auto classify_prop_role = [](const std::string& kind) -> ColliderRole {
+        if (kind == "bollard" || kind == "wall" || kind == "pillar" ||
+            kind == "barrier_block" || kind == "jersey_barrier") {
+            return ColliderRole::StructuralObstacle;
+        }
+        return ColliderRole::OffroadProp;
+    };
+
     for (const auto& f : layout.furniture) {
         if (!f.has_collider) continue;
         bool cyl = (f.kind == "hydrant" || f.kind == "bollard");
         layout.colliders.push_back({
-            f.kind, f.x, f.y, f.z, f.length, f.width, f.heading, f.height, cyl, f.sensor_visible
+            f.kind, f.x, f.y, f.z, f.length, f.width, f.heading, f.height, cyl, f.sensor_visible,
+            {}, classify_furniture_role(f.kind)
         });
     }
     for (const auto& p : layout.poles) {
         if (!p.has_collider) continue;
         layout.colliders.push_back({
-            "pole", p.x, p.y, p.z, 0.45, 0.45, p.heading, 6.5, true, p.sensor_visible
+            "pole", p.x, p.y, p.z, 0.45, 0.45, p.heading, 6.5, true, p.sensor_visible,
+            {}, ColliderRole::OffroadProp
         });
     }
     for (const auto& t : layout.trees) {
         if (!t.has_collider) continue;
         layout.colliders.push_back({
-            "tree", t.x, t.y, t.z, 0.90, 0.90, t.heading, 4.6 * t.height_scale, true, t.sensor_visible
+            "tree", t.x, t.y, t.z, 0.90, 0.90, t.heading, 4.6 * t.height_scale, true, t.sensor_visible,
+            {}, ColliderRole::OffroadProp
         });
     }
     for (const auto& s : layout.signs) {
@@ -1760,13 +1780,14 @@ void build_colliders_from_layout(WorldLayout& layout) {
         layout.colliders.push_back({
             "sign", s.x, s.y, s.z,
             std::max(0.40, s.length), std::max(0.50, s.width), s.heading,
-            std::max(1.80, s.height), false, s.sensor_visible, s.kind
+            std::max(1.80, s.height), false, s.sensor_visible, s.kind, ColliderRole::OffroadProp
         });
     }
     for (const auto& b : layout.barrier_spans) {
         if (!b.has_collider) continue;
         layout.colliders.push_back({
-            "barrier", b.mid_x, b.mid_y, b.mid_z, b.len, 0.32, b.heading, 0.85, false, b.sensor_visible
+            "barrier", b.mid_x, b.mid_y, b.mid_z, b.len, 0.32, b.heading, 0.85, false, b.sensor_visible,
+            {}, ColliderRole::RoadsideBarrier
         });
     }
     for (const auto& pr : layout.piers) {
@@ -1775,17 +1796,20 @@ void build_colliders_from_layout(WorldLayout& layout) {
         double dia = pr.radius * 2.0;
         if (pr.columns <= 1) {
             layout.colliders.push_back({
-                "pier", pr.x, pr.y, pr.z_ground, dia, dia, pr.heading, h, true, pr.sensor_visible
+                "pier", pr.x, pr.y, pr.z_ground, dia, dia, pr.heading, h, true, pr.sensor_visible,
+                {}, ColliderRole::StructuralObstacle
             });
         } else {
             double nx = -std::sin(pr.heading), ny = std::cos(pr.heading);
             layout.colliders.push_back({
                 "pier", pr.x - nx * pr.col_offset, pr.y - ny * pr.col_offset, pr.z_ground,
-                dia, dia, pr.heading, h, true, pr.sensor_visible
+                dia, dia, pr.heading, h, true, pr.sensor_visible,
+                {}, ColliderRole::StructuralObstacle
             });
             layout.colliders.push_back({
                 "pier", pr.x + nx * pr.col_offset, pr.y + ny * pr.col_offset, pr.z_ground,
-                dia, dia, pr.heading, h, true, pr.sensor_visible
+                dia, dia, pr.heading, h, true, pr.sensor_visible,
+                {}, ColliderRole::StructuralObstacle
             });
         }
     }
@@ -1794,7 +1818,8 @@ void build_colliders_from_layout(WorldLayout& layout) {
         layout.colliders.push_back({
             cp.kind, cp.x, cp.y, cp.z,
             std::max(0.4, cp.length), std::max(0.4, cp.width),
-            cp.heading, std::max(0.5, cp.height), false, cp.sensor_visible, cp.label
+            cp.heading, std::max(0.5, cp.height), false, cp.sensor_visible, cp.label,
+            classify_prop_role(cp.kind)
         });
     }
 

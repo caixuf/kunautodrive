@@ -35,8 +35,8 @@ const MAX_ENTITIES = 128;
 
 // ── 传感器前视包络常量 ──
 const SWEEP_SEGMENTS = 32;
-const SWEEP_RADIUS = 36;
-const BOUNDARY_RAY_LEN = 18;
+const SWEEP_RADIUS = 22;
+const BOUNDARY_RAY_LEN = 14;
 const PULSE_CYCLE_FRAMES = 90;
 const SWEEP_ABOVE_ROAD_M = 0.055;  // 相对路面(VEHICLE_GROUND_Y=0.10m)抬高至 0.155m，防止埋入沥青下方
 const RAY_ABOVE_ROAD_M = 0.06;     // 贴地目标连线抬高至 0.16m
@@ -254,7 +254,7 @@ export function createPerceptionView(scene) {
   const sweepMat = new THREE.MeshBasicMaterial({
     vertexColors: true,
     transparent: true,
-    opacity: 0.20,
+    opacity: 0.14,
     side: THREE.DoubleSide,
     depthTest: true,
     depthWrite: false,
@@ -975,7 +975,7 @@ function _updateRays(ego, entities, count, store, positions, colors) {
 
 function _updateSweep(ego, store, frame, positions, colors, edgePositions, edgeColors) {
   const heading = ego.heading || 0;
-  const halfFov = Math.PI * 55 / 180;
+  const halfFov = Math.PI * 38 / 180;
   const sweepStart = heading - halfFov;
   const sweepEnd = heading + halfFov;
 
@@ -1003,7 +1003,9 @@ function _updateSweep(ego, store, frame, positions, colors, edgePositions, edgeC
     const [fx, fy] = forwardENU(t);
     const tipX = bumperEnuX + fx * SWEEP_RADIUS;
     const tipY = bumperEnuY + fy * SWEEP_RADIUS;
-    const tipZ = roadHeightAt(store, tipX, tipY, egoGroundZ) + sweepZOffset;
+    const rawTipZ = roadHeightAt(store, tipX, tipY, egoGroundZ);
+    const clampedTipZ = Math.abs(rawTipZ - egoGroundZ) <= 1.2 ? rawTipZ : egoGroundZ;
+    const tipZ = clampedTipZ + sweepZOffset;
     const [px, py, pz] = worldToThree(tipX, tipY, tipZ);
     const vi = (i + 1) * 3;
     positions[vi + 0] = px;

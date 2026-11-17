@@ -219,6 +219,12 @@ struct WorldProp {
     bool sensor_visible{true};
 };
 
+enum class ColliderRole {
+    StructuralObstacle = 0, // 桥墩/实体墙/柱/禁行桩/路内可撞障碍：物理碰撞 + 感知障碍物
+    RoadsideBarrier    = 1, // 护栏段：仅 Jolt 3D 物理碰撞，不作为感知障碍物
+    OffroadProp        = 2, // 路灯/树木/标志/路侧家具/止轮器/道闸等：不作为感知障碍物
+};
+
 struct WorldCollider {
     std::string kind;
     double x{0.0}, y{0.0}, z{0.0};
@@ -226,7 +232,16 @@ struct WorldCollider {
     bool is_cylinder{false};
     bool sensor_visible{true};
     std::string subkind{};
+    ColliderRole role{ColliderRole::StructuralObstacle};
 };
+
+inline bool is_perception_facility_collider(const WorldCollider& c) {
+    return c.sensor_visible && c.role == ColliderRole::StructuralObstacle;
+}
+
+inline bool is_jolt_static_collider(const WorldCollider& c) {
+    return c.role != ColliderRole::OffroadProp;
+}
 
 struct WorldSanityReport {
     int poles{0};

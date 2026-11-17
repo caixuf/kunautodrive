@@ -257,4 +257,36 @@ console.log('=== PerceptionView & EffectView 车规级几何契约测试 ===\n')
   perc.dispose();
 }
 
+// ── 4. 匝道/高架前视包络高程钳制（禁止向下拉出切入路边的绿色三角面） ──
+{
+  const scene = new THREE.Scene();
+  const perc = createPerceptionView(scene);
+  const store = createSceneStore();
+  store.roadNetwork = {
+    edges: [
+      {
+        id: 1,
+        type: 'ramp_curve',
+        lanes: 2,
+        lane_width: 3.5,
+        oneway: true,
+        nodes: [[0, 0, 5.0], [40, 0, 0.0]],
+      },
+    ],
+  };
+  store.ego = { x: 10, y: 0, z: 3.75, heading: 0, speed: 12, length: 4.6, width: 2.0 };
+  store.entities = [];
+  perc.update(store, 1200);
+
+  const sweepMesh = scene.children.find(c => c.isMesh && c.geometry?.attributes?.color && c.material?.blending === THREE.AdditiveBlending);
+  ok('前视包络 sweepMesh 存在', !!sweepMesh);
+  const pos = sweepMesh.geometry.attributes.position.array;
+  let minY = Infinity;
+  for (let i = 1; i < pos.length; i += 3) {
+    if (pos[i] < minY) minY = pos[i];
+  }
+  ok(`高架匝道前视包络不跌落至地面 z=0 (minY=${minY.toFixed(2)}m >= 2.5m)`, minY >= 2.5);
+  perc.dispose();
+}
+
 done();
