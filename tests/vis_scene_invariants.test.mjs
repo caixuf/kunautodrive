@@ -165,6 +165,8 @@ if (ramp && ramp.nodes?.length >= 2) {
     const rx = rx0 + (rx1 - rx0) * t;
     const ry = ry0 + (ry1 - ry0) * t;
     const rz = rz0 + (rz1 - rz0) * t;
+    // edge 23 (garage_right_in) 是地面右转进车库联络道，横跨 open_ramp 上方 (x ∈ [174, 186])
+    if (rx >= 174.0 && rx <= 186.0) continue;
     for (const lat of [-2.0, 0, 2.0]) {
       const [wx, wy, wz] = worldToThree(rx, ry + lat, rz + 0.16);
       raycaster.set(new THREE.Vector3(wx, wy, wz), new THREE.Vector3(0, 1, 0));
@@ -239,15 +241,18 @@ if (markViolations.length) console.log('  markViolations:', markViolations.slice
   const missingDeck = [];
   for (const edgeName of ['eastbound_viaduct_entry', 'westbound_viaduct_exit']) {
     const edge = rn.edges.find((e) => e && e.name === edgeName);
-    ok(`P0-8: park_to_park_city 存在单向匝道 ${edgeName}`, Boolean(edge));
+    ok(`P0-8: park_to_park_city 存在匝道 ${edgeName}`, Boolean(edge));
     const ax = computeEdgeAxis(edge, rn.lane_data);
-    ok(`P0-8: ${edgeName} RoadAxis centerOffset ≈ +halfWidth`, Math.abs(ax.centerOffset - ax.halfWidth) < 0.25);
+    const isOneway = Boolean(edge.oneway);
+    const expectedOffset = isOneway ? ax.halfWidth : 0.0;
+    ok(`P0-8: ${edgeName} RoadAxis centerOffset ≈ ${isOneway ? '+halfWidth' : '0'}`, Math.abs(ax.centerOffset - expectedOffset) < 0.25);
     const mid = Math.floor(edge.nodes.length / 2);
     const a = edge.nodes[mid];
     const b = edge.nodes[mid + 1];
     const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy) || 1;
     const lx = -dy / len, ly = dx / len;
-    for (const laneOff of [-1.75, -5.25]) {
+    const laneOffsets = isOneway ? [-1.75, -5.25] : [-1.75, 1.75];
+    for (const laneOff of laneOffsets) {
       const wx = a[0] + lx * laneOff;
       const wy = a[1] + ly * laneOff;
       const tp = worldToThree(wx, wy, (a[2] || 0) + 5.0);

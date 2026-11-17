@@ -260,6 +260,21 @@ class XodrCompatibilityTest(unittest.TestCase):
         road1 = [r for r in root.findall("road") if r.get("id") == "1"][0]
         # open_ramp must stay symmetric (both right -1 and left +1), not forced oneway
         self.assertIsNotNone(road1.find("./lanes/laneSection/left/lane[@id='1']"))
+        r_bi = json_to_xodr.Road(
+            id=3, name="ramp_curve", length=50.0, lane_count=2, lane_width=3.5,
+            speed_limit=16.67, geoms=[json_to_xodr.GeometrySeg(0.0, 0.0, 0.0, 0.0, 50.0, 0.0)],
+            oneway=False,
+        )
+        road_bi = json_to_xodr.road_to_xml(r_bi)
+        self.assertIsNotNone(road_bi.find("./lanes/laneSection/left/lane[@id='1']"))
+        self.assertIsNotNone(road_bi.find("./lanes/laneSection/right/lane[@id='-1']"))
+        r_ow = json_to_xodr.Road(
+            id=4, name="ramp_curve", length=50.0, lane_count=2, lane_width=3.5,
+            speed_limit=16.67, geoms=[json_to_xodr.GeometrySeg(0.0, 0.0, 0.0, 0.0, 50.0, 0.0)],
+            oneway=True,
+        )
+        road_ow = json_to_xodr.road_to_xml(r_ow)
+        self.assertIsNone(road_ow.find("./lanes/laneSection/left/lane[@id='1']"))
         right_l1 = road1.find("./lanes/laneSection/right/lane[@id='-1']")
         self.assertIsNotNone(right_l1.find("./link/predecessor[@id='-1']"))
         self.assertIsNotNone(right_l1.find("./link/successor[@id='-1']"))

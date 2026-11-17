@@ -46,6 +46,7 @@
 #include "planning_ttc_candidate.h"   /* D2-06: TTC follow lead 候选选择 helper */
 #include "planning_model_assist.h"    /* 方向四：模型 → planning 软建议（默认关闭） */
 #include "perception_fusion_core.h"
+#include "route_join_policy.h"
 #ifdef HAVE_FRENET
 #include "frenet_bridge.h"
 #include "st_graph.h"   /* ST 图 + DP 速度规划（planning 重生 M1，替代线性斜坡+override 堆） */
@@ -1241,6 +1242,7 @@ static void on_road_ref_path(const Message* msg, void* user_data) {
         raw_y[raw_n] = jy->valuedouble;
         raw_n++;
     }
+    flowengine::align_ref_path_step(raw_x, raw_y, raw_n, g.ego_x, g.ego_y);
     int out_n = 0;
     if (raw_n >= 4 && raw_n <= 32) {
         /* Catmull-Rom 4x 加密（~5m 采样 → ~1.25m 平滑曲线），消除急弯/匝道折线弦差 */
@@ -3438,10 +3440,11 @@ publish_trajectory:
 
             if (g.plan_count % 25 == 1) {
                 LOG_INFO("planning",
-                         "#%d ego@(%.0f,%.1f) z=%.1f v=%.1f cmd=%.1f road=%.1f beh=%.1f cap=%.1f",
-                         g.plan_count, g.ego_x, g.ego_y, g.ego_z, g.ego_v, command_speed,
-                         g.road_speed_limit,
+                         "#%d ego@(%.0f,%.1f) z=%.1f h=%.2f v=%.1f cmd=%.1f road=%.1f beh_v=%.1f lane=%d cap=%.1f",
+                         g.plan_count, g.ego_x, g.ego_y, g.ego_z, g.ego_heading, g.ego_v,
+                         command_speed, g.road_speed_limit,
                          g.has_behavior ? (double)g.current_behavior.target_speed : -1.0,
+                         g.has_behavior ? (int)g.current_behavior.target_lane_idx : -1,
                          environment_max_speed);
             }
 #ifndef HAVE_FRENET

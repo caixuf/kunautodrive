@@ -1095751,7 +1095751,7 @@
         ],
         "parking_slots": [
           {
-            "id": "P_PAR_1",
+            "id": 0,
             "type": "parallel",
             "x": 50.0,
             "y": -5.25,
@@ -1095773,13 +1095773,14 @@
     {
       "file": "scenarios/park_to_park_city.json",
       "name": "park_to_park_city",
-      "description": "车位到车位全链路默认展示：B1 地下车库泊出 → 敞口坡道抬杆出库(SLAM→GNSS) → 四向十字信控左转路口(含左转箭头灯/待转区/人行横道礼让) → 城市高架巡航 → 地面停车场动态寻位倒库泊入",
-      "duration_s": 410,
+      "description": "通勤闭环：B1 家库泊出 → 坡道出库 → 城市道路与高架 → 公司地面车位泊入停留 → 沿同一条 route 返程回家 → 泊回出发车位",
+      "duration_s": 860,
       "enabled": true,
       "raw": {
         "name": "park_to_park_city",
-        "description": "车位到车位全链路默认展示：B1 地下车库泊出 → 敞口坡道抬杆出库(SLAM→GNSS) → 四向十字信控左转路口(含左转箭头灯/待转区/人行横道礼让) → 城市高架巡航 → 地面停车场动态寻位倒库泊入",
-        "duration_s": 410,
+        "description": "通勤闭环：B1 家库泊出 → 坡道出库 → 城市道路与高架 → 公司地面车位泊入停留 → 沿同一条 route 返程回家 → 泊回出发车位",
+        "duration_s": 860,
+        "commute_return": true,
         "random_seed": 42,
         "enable_poisson_traffic": true,
         "npc_lane_change": true,
@@ -1095923,26 +1095924,82 @@
             },
             {
               "id": 20,
-              "type": "urban",
+              "type": "exit_merge",
               "name": "garage_exit_merge",
-              "lanes": 2,
+              "lanes": 1,
               "lane_width": 3.5,
               "speed_limit": 10.0,
-              "oneway": false,
+              "oneway": true,
               "nodes": [
                 [
-                  250,
+                  250.0,
                   -10.5,
                   0.0
                 ],
                 [
-                  285,
-                  -6.0,
+                  268.0,
+                  -8.4,
                   0.0
                 ],
                 [
-                  315,
-                  0.0,
+                  284.0,
+                  -6.5,
+                  0.0
+                ],
+                [
+                  296.0,
+                  -5.4,
+                  0.0
+                ]
+              ]
+            },
+            {
+              "id": 23,
+              "type": "right_in",
+              "name": "garage_right_in",
+              "lanes": 1,
+              "lane_width": 3.5,
+              "speed_limit": 6.0,
+              "oneway": true,
+              "nodes": [
+                [
+                  176.0,
+                  -5.1,
+                  0.0
+                ],
+                [
+                  177.76,
+                  -5.33,
+                  0.0
+                ],
+                [
+                  179.4,
+                  -6.01,
+                  0.0
+                ],
+                [
+                  180.81,
+                  -7.09,
+                  0.0
+                ],
+                [
+                  181.89,
+                  -8.5,
+                  0.0
+                ],
+                [
+                  182.57,
+                  -10.14,
+                  0.0
+                ],
+                [
+                  182.8,
+                  -11.9,
+                  0.0
+                ],
+                [
+                  182.8,
+                  -13.5,
                   0.0
                 ]
               ]
@@ -1096247,7 +1096304,7 @@
               "lanes": 2,
               "lane_width": 3.5,
               "speed_limit": 15.0,
-              "oneway": true,
+              "oneway": false,
               "elevation_profile": [
                 {
                   "s": 0,
@@ -1096324,38 +1096381,49 @@
                   7.85
                 ],
                 [
-                  1556.179,
-                  227.249,
-                  8.62
+                  1551.414,
+                  226.247,
+                  8.095
                 ],
                 [
-                  1574.302,
-                  233.987,
-                  9.0
+                  1562.465,
+                  231.103,
+                  8.329
                 ],
                 [
-                  1592.648,
-                  240.249,
-                  9.0
+                  1572.545,
+                  234.355,
+                  8.544
                 ],
                 [
-                  1610.95,
-                  246.607,
-                  9.0
+                  1582.496,
+                  236.323,
+                  8.728
                 ],
                 [
-                  1620,
-                  250,
+                  1593.16,
+                  237.33,
+                  8.873
+                ],
+                [
+                  1605.381,
+                  237.699,
+                  8.966
+                ],
+                [
+                  1620.0,
+                  237.75,
                   9.0
                 ]
-              ]
+              ],
+              "accel_length_m": 150
             },
             {
               "id": 5,
               "type": "viaduct_highway",
               "name": "elevated_ring_east",
               "bridge": true,
-              "lanes": 4,
+              "lanes": 8,
               "lane_width": 3.5,
               "speed_limit": 15.5,
               "oneway": false,
@@ -1096399,7 +1096467,7 @@
               "lanes": 2,
               "lane_width": 3.5,
               "speed_limit": 15.0,
-              "oneway": true,
+              "oneway": false,
               "elevation_profile": [
                 {
                   "s": 0,
@@ -1096416,9 +1096484,29 @@
               ],
               "nodes": [
                 [
-                  2350,
-                  210,
+                  2348.637,
+                  197.826,
                   9.0
+                ],
+                [
+                  2354.333,
+                  198.182,
+                  8.966
+                ],
+                [
+                  2358.426,
+                  200.039,
+                  8.873
+                ],
+                [
+                  2361.636,
+                  202.323,
+                  8.736
+                ],
+                [
+                  2364.678,
+                  203.955,
+                  8.571
                 ],
                 [
                   2368.271,
@@ -1096500,7 +1096588,8 @@
                   105,
                   0.0
                 ]
-              ]
+              ],
+              "accel_length_m": 150
             },
             {
               "id": 7,
@@ -1096929,10 +1097018,10 @@
           }
         ],
         "traffic_density": {
-          "cars_per_km": 18,
+          "cars_per_km": 45,
           "spawn_jitter_m": 3.0,
           "lane_spread": true,
-          "max_npcs": 28,
+          "max_npcs": 70,
           "random_seed_offset": 0
         },
         "traffic_lights": [
@@ -1096983,7 +1097072,7 @@
         "route": [],
         "pass_criteria": {
           "no_collision": true,
-          "max_duration_s": 430,
+          "max_duration_s": 900,
           "min_active_duration_s": 180.0,
           "min_avg_speed_mps": 6.0,
           "min_distance_m": 2800,

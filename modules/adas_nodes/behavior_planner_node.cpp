@@ -38,6 +38,7 @@
 #include "planning_coordinates.h"
 #include "construction_zones.h"
 #include "road_speed_policy.h"
+#include "accel_lane_policy.h"
 #include <cjson/cJSON.h>
 
 #include <stdlib.h>
@@ -1205,6 +1206,24 @@ protected:
             }
             const bool left_turn_merge_needed =
                 current_legal && left_turn_ahead && (current_idx > legal_first);
+            flowengine::AccelLaneInput accel_in;
+            accel_in.lane_count = lc;
+            accel_in.oneway = g.road_oneway != 0;
+            accel_in.on_return = g.on_return != 0;
+            accel_in.current_idx = current_idx;
+            accel_in.speed_mps = g.ego_v;
+            accel_in.cruise_mps = g.cfg_cruise_speed;
+            if (g.on_return) {
+                accel_in.inner_lane_empty = right_gap >= 1e8;
+                accel_in.inner_lead_mps = right_lead_v;
+            } else {
+                accel_in.inner_lane_empty = left_gap >= 1e8;
+                accel_in.inner_lead_mps = left_lead_v;
+            }
+            accel_in.carriageway_stop_ahead = carriageway_ahead_stop_light();
+            accel_in.cooldown_active = g.cooldown > 0.0;
+            const flowengine::AccelLaneDecision accel =
+                flowengine::decide_accel_lane(accel_in);
             const bool right_turn_merge_needed =
                 current_legal && right_turn_ahead && (current_idx < legal_last);
 
@@ -1436,7 +1455,22 @@ protected:
                                  "blocked gap=%.1f/%.1f lead=%.1fm/s → FOLLOW id=%u v=%.1f (no adj lane: left_ok=%d right_ok=%d cooldown=%.1f)",
                                  best_gap, desired_gap, lead_speed, lead_id, follow_speed,
                                  left_ok, right_ok, g.cooldown);
-                    } else if (!g.road_oneway && !g.on_return && left_ok &&
+                    } else if (accel.holding) {
+                        new_target_lane = accel.target_lane;
+                        new_target_speed = g.cfg_cruise_speed;
+                        snprintf(reason, sizeof(reason),
+                                 "viaduct accel lane %d hold v=%.1f cruise=%.1f",
+                                 accel.target_lane, g.ego_v, g.cfg_cruise_speed);
+                    } else if (accel.merge_inward) {
+                        ev = accel.target_lane < current_idx
+                                 ? BEH_EV_OVERTAKE_LEFT
+                                 : BEH_EV_OVERTAKE_RIGHT;
+                        new_target_lane = accel.target_lane;
+                        new_target_speed = g.cfg_cruise_speed;
+                        snprintf(reason, sizeof(reason),
+                                 "viaduct merge in lane%d -> %d cruise=%.1f",
+                                 current_idx, accel.target_lane, g.cfg_cruise_speed);
+                    } else if (!accel.active && !g.road_oneway && !g.on_return && left_ok &&
                                current_idx > planning_coord::first_legal_lane(lc, false) && g.cooldown <= 0.0 &&
                                !carriageway_ahead_stop_light() &&
                                (left_gap >= 1e8 ||

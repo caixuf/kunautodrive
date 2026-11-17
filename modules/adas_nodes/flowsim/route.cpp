@@ -3,6 +3,7 @@
  */
 
 #include "route.h"
+#include "route_join_policy.h"
 
 #include "road_network.h"
 
@@ -15,10 +16,7 @@ namespace flowsim {
 namespace {
 /** 归一化到 [0,π] 的航向差绝对值。 */
 double heading_gap(double a, double b) {
-    double d = a - b;
-    while (d > M_PI)  d -= 2.0 * M_PI;
-    while (d < -M_PI) d += 2.0 * M_PI;
-    return std::fabs(d);
+    return flowengine::heading_delta_abs(a, b);
 }
 }  // namespace
 
@@ -143,14 +141,19 @@ bool Route::build_from_chain(FlowRoadNetwork& roads, const int* road_ids, int co
             if (ok_prev && ok_next) {
                 double gap = std::hypot(ns.x - pe.x, ns.y - pe.y);
                 double dh  = heading_gap(pe.h, ns.h);
+                double u0x = std::cos(pe.h), u0y = std::sin(pe.h);
+                double u1x = std::cos(ns.h), u1y = std::sin(ns.h);
+                double dpx = ns.x - pe.x, dpy = ns.y - pe.y;
+                double along = dpx * u1x + dpy * u1y;
+                /* 匝道停在主路右侧车道旁（横向分开、航向接近、仍在端点附近）。
+                 * 这里如果再 Hermite 回中线，车上高架会横切所有车道。
+                 * 参考线保持主路中线，横向由加速车道的车道号负责。 */
+                bool beside_accel_lane = flowengine::beside_accel_join(gap, dh, along);
                 /* 桥接触发：gap>2m 的几何断开，或 dh>10° 的航向跳变（含 gap≈0
                  * 的尖角——roads 在路口盒边界正好相接但方向差 87°，不桥接就是
                  * κ=∞ 折角，planning 可行性必失败）。 */
-                if (gap > 2.0 || dh > 0.17) {
-                    double u0x = std::cos(pe.h), u0y = std::sin(pe.h);
-                    double u1x = std::cos(ns.h), u1y = std::sin(ns.h);
+                if (!beside_accel_lane && (gap > 2.0 || dh > 0.17)) {
                     double cross01 = u0x * u1y - u0y * u1x;
-                    double dpx = ns.x - pe.x, dpy = ns.y - pe.y;
                     /* 交点参数：I = pe + d0·u0 = ns − d1·u1（d0/d1 = 盒内可用直行） */
                     double d0 = -1.0, d1 = -1.0;
                     bool use_arc = (dh > 0.17 && std::fabs(cross01) > 1e-3);

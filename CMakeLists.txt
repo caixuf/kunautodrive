@@ -1340,6 +1340,23 @@ if(ESMINI_RMLIB_TEST)
     add_test(NAME entity_physics_tests COMMAND test_entity_physics)
     set_tests_properties(entity_physics_tests PROPERTIES TIMEOUT 10)
 
+    add_executable(test_viaduct_join
+        tests/test_viaduct_join.cpp
+        modules/adas_nodes/flowsim/route.cpp
+        modules/adas_nodes/flowsim/road_network.cpp
+        modules/adas_nodes/flowsim/road_position.cpp)
+    target_include_directories(test_viaduct_join PRIVATE
+        modules/adas_nodes
+        modules/adas_nodes/flowsim
+        ${CJSON_INCLUDE_DIRS}
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/esmini/EnvironmentSimulator/Libraries/esminiRMLib
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_compile_definitions(test_viaduct_join PRIVATE
+        FLOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    target_link_libraries(test_viaduct_join m ${ESMINI_RMLIB_TEST} ${CJSON_LIBRARIES})
+    add_test(NAME viaduct_join_tests COMMAND test_viaduct_join)
+    set_tests_properties(viaduct_join_tests PROPERTIES TIMEOUT 60)
+
     if(TARGET Jolt)
         add_executable(test_jolt_physics
             modules/adas_nodes/flowsim/test_jolt_physics.cpp
@@ -1425,6 +1442,14 @@ target_include_directories(test_road_speed_policy PRIVATE
 target_link_libraries(test_road_speed_policy m)
 add_test(NAME road_speed_policy_tests COMMAND test_road_speed_policy)
 set_tests_properties(road_speed_policy_tests PROPERTIES TIMEOUT 10)
+
+add_executable(test_accel_lane tests/test_accel_lane.cpp)
+target_include_directories(test_accel_lane PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(test_accel_lane m)
+add_test(NAME accel_lane_tests COMMAND test_accel_lane)
+set_tests_properties(accel_lane_tests PROPERTIES TIMEOUT 10)
 
 add_executable(test_park_out_and_slot_search
     tests/test_park_out_and_slot_search.cpp

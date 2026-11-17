@@ -71,7 +71,7 @@ const RAMP_SHOULDER_W = 0.4; // 匝道路肩略窄
 const TAPER_DEFAULT_M = 90.0;
 const TAPER_MIN_M = 35.0;
 const TAPER_MAX_M = 160.0;
-const RAMP_JOIN_DISTANCE_M = 16.0;
+const RAMP_JOIN_DISTANCE_M = 24.0;
 const OSM_SIDEWALK_W = 1.8;
 const URBAN_OSM_TYPES = new Set([
   'urban', 'primary', 'secondary', 'tertiary',
@@ -872,7 +872,7 @@ export function createRoadView(scene) {
     ];
     let best = null;
     for (const candidate of candidates) {
-      for (let i = 1; i < main.spine.length - 1; i++) {
+      for (let i = 0; i < main.spine.length; i++) {
         const c = main.spine[i];
         const distance = Math.hypot(c.px - candidate.point.px, c.pz - candidate.point.pz);
         if (!best || distance < best.distance) best = { ...candidate, distance, index: i, mainPoint: c };
@@ -881,7 +881,8 @@ export function createRoadView(scene) {
     if (!best || best.distance > RAMP_JOIN_DISTANCE_M) return null;
     const mainTotal = main.cum[main.cum.length - 1];
     const joinS = main.cum[best.index];
-    if (joinS < TAPER_MIN_M || joinS > mainTotal - TAPER_MIN_M) return null;
+    const accel = Math.max(TAPER_MIN_M, Math.min(TAPER_MAX_M,
+      Number(rampEdge.accel_length_m) || TAPER_MAX_M));
 
     const rampForward = best.endpoint === 'end'
       ? { x: best.point.px - best.adjacent.px, z: best.point.pz - best.adjacent.pz }
@@ -895,15 +896,23 @@ export function createRoadView(scene) {
       (rampLength * mainLength);
     if (alignment < 0.65) return null;
 
-    const explicitRole = String(rampEdge.ramp_role || rampEdge.layout || '').toLowerCase();
-    const role = explicitRole === 'diverge' || explicitRole === 'exit' ? 'diverge'
-      : explicitRole === 'merge' || explicitRole === 'entry' ? 'merge'
-        : best.endpoint === 'end' ? 'merge' : 'diverge';
     const sideVector = {
       x: best.adjacent.px - best.mainPoint.px,
       z: best.adjacent.pz - best.mainPoint.pz,
     };
     const side = sideVector.x * best.mainPoint.nx + sideVector.z * best.mainPoint.nz < 0 ? -1 : 1;
+    /* 匝道接在主路端点：加速/减速车道沿主路往里铺，不因为贴着端点就放弃。 */
+    if (joinS < TAPER_MIN_M) {
+      return { role: 'merge', side, joinS: Math.min(mainTotal - TAPER_MIN_M, accel) };
+    }
+    if (joinS > mainTotal - TAPER_MIN_M) {
+      return { role: 'diverge', side, joinS: Math.max(TAPER_MIN_M, mainTotal - accel) };
+    }
+
+    const explicitRole = String(rampEdge.ramp_role || rampEdge.layout || '').toLowerCase();
+    const role = explicitRole === 'diverge' || explicitRole === 'exit' ? 'diverge'
+      : explicitRole === 'merge' || explicitRole === 'entry' ? 'merge'
+        : best.endpoint === 'end' ? 'merge' : 'diverge';
     return { role, side, joinS };
   }
 

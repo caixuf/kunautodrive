@@ -858,11 +858,15 @@ def _lane_roadmark(li: int, n_per_side: int) -> tuple[str, str]:
 
 
 def _effective_oneway(road: Road) -> bool:
-    """仅非 open_ramp 的匝道、单车道或显式 oneway=True 视为全 right 侧单行道。"""
-    lname = road.name.lower()
-    return (("ramp" in lname and "open_ramp" not in lname) or
-            road.lane_count == 1 or
-            bool(getattr(road, "oneway", False)))
+    """单车道，或解析后 oneway=True，才把车道全部铺在 right 侧。
+
+    匝道名字里的 ramp 不再覆盖场景里写明的 oneway=false。双向匝道至少
+    两条车道时留出对向车道，返程才有一条不被顺向 NPC 占住的车道。
+    未写 oneway 的匝道仍由解析器标成 oneway=True。
+    """
+    if road.lane_count <= 1:
+        return True
+    return bool(getattr(road, "oneway", False))
 
 
 def _road_side_counts(road: Road) -> tuple[int, int]:
