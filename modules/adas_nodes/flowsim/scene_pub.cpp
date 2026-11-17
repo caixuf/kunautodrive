@@ -207,14 +207,31 @@ cJSON* build_road_network_json(ScenePubConfig& cfg) {
                 cJSON_AddNumberToObject(edge, "lane_width",
                                         (road_lw > 0.0) ? road_lw : cfg.lane_width);
             }
-            /* oneway: 匝道(ramp)为单向道路，其余（含双向地库坡道 open_ramp）默认双向对称。
-             * 车库出口汇入 / 右转进场是单向喉道，名字即 xodr road name（json_to_xodr 写入 type）。 */
+            /* oneway: derive from the actual OpenDRIVE lane signs whenever
+             * available. A name-based "ramp => oneway" heuristic incorrectly
+             * marks ramp_curve roads that keep an opposing lane for the return
+             * trip; world_engine then shifts the centerline/barriers by half a
+             * road width, placing them in a travel lane. */
             const std::string& tag = !info.name.empty() ? info.name : info.str_id;
             bool is_access = (tag.find("exit_merge") != std::string::npos) ||
                              (tag.find("right_in") != std::string::npos);
             bool is_oneway = is_access ||
                              ((tag.find("ramp") != std::string::npos) &&
                               (tag.find("open_ramp") == std::string::npos));
+            const std::vector<int> lane_ids = cfg.roads
+                ? cfg.roads->drivable_lane_ids(info.id, 0.0)
+                : std::vector<int>{};
+            if (!lane_ids.empty()) {
+                bool has_pos = false, has_neg = false;
+                for (int lid : lane_ids) {
+                    if (lid > 0) has_pos = true;
+                    else if (lid < 0) has_neg = true;
+                }
+                /* Both signs => two-way regardless of the road name. One sign
+                 * => one-way. lane 0 alone is not a travel lane; keep heuristic. */
+                if (has_pos != has_neg) is_oneway = true;
+                else if (has_pos && has_neg) is_oneway = false;
+            }
             cJSON_AddBoolToObject(edge, "oneway", is_oneway);
             cJSON_AddNumberToObject(edge, "length", info.length);
             /* 道路类型：优先使用 xodr <road name="..."> 推断；若无 name 再由 edge 0 继承 cfg.road_type */

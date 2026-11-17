@@ -861,8 +861,8 @@ protected:
             if (g.uturn_cooldown > 0.0) g.uturn_cooldown -= 0.05;
             if (g.prev_lane_count > 0 && g.prev_lane_count <= 2 && g.prev_road_oneway != 0 &&
                 lc >= 4 && !g.road_oneway) {
-                /* 刚从单向出库/匝道汇入双向多车道主路：先在当前外侧车道稳定行驶，避开汇入实线区立刻左变道 */
-                if (g.cooldown < 4.0) g.cooldown = 4.0;
+                /* 刚从单向出库/匝道汇入双向多车道主路：短暂稳定 1.0s 通过虚线汇入口，同时不耽误后续左转提前并线 */
+                if (g.cooldown < 1.0) g.cooldown = 1.0;
             }
             g.prev_lane_count = lc;
             g.prev_road_oneway = g.road_oneway;
@@ -945,6 +945,14 @@ protected:
                 const double fwd_y = std::sin(g.ego_heading);
                 const double current_lane_d =
                     planning_coord::lane_center_d(current_idx, lc, lw, side_offset);
+                /* 单向路车道组整体位于参考线负侧 (side_offset<0)；对称的
+                 * |d|<N*w/2 会把外侧两条车道判成路外。用实际车道组跨度：
+                 * one-way [side_offset, 0]，双向 [-N*w/2, +N*w/2]。 */
+                const bool oneway_band = side_offset < -0.01;
+                const double band_min = oneway_band
+                    ? side_offset + 0.05 : -lc * lw * 0.5 + 0.05;
+                const double band_max = oneway_band
+                    ? -0.05 : lc * lw * 0.5 - 0.05;
                 for (int i = 0; i < g.obs_count; i++) {
                     if (!pf_same_elevation_layer(g.obs_z[i], g.ego_z)) continue;
                     const double rx = g.obs_x[i] - g.ego_x;
@@ -958,7 +966,8 @@ protected:
                         if (!projection_near_road(
                                 g.obs_x[i], g.obs_y[i], obs_projection,
                                 lc, lw) ||
-                            std::fabs(obs_projection.d) >= lc * lw * 0.5 - 0.05) {
+                            obs_projection.d <= band_min ||
+                            obs_projection.d >= band_max) {
                             continue;
                         }
                         along = obs_projection.s - ego_projection.s;
@@ -1089,12 +1098,18 @@ protected:
             gap_cfg.ego_z = g.ego_z;
             gap_cfg.obs_z = g.obs_z;
             gap_cfg.road_half_w = lc * lw * 0.5;
+            const bool oneway_band = side_offset < -0.01;
+            gap_cfg.road_d_min = oneway_band
+                ? side_offset + 0.05 : -lc * lw * 0.5 + 0.05;
+            gap_cfg.road_d_max = oneway_band
+                ? -0.05 : lc * lw * 0.5 - 0.05;
 
             auto project_obs_d = [&](double ox, double oy, double& out_d) -> bool {
                 planning_coord::Projection obs_projection;
                 if (project_to_ref(ox, oy, obs_projection) &&
                     projection_near_road(ox, oy, obs_projection, lc, lw) &&
-                    std::fabs(obs_projection.d) < lc * lw * 0.5 - 0.05) {
+                    obs_projection.d > gap_cfg.road_d_min &&
+                    obs_projection.d < gap_cfg.road_d_max) {
                     out_d = obs_projection.d;
                     return true;
                 }
@@ -1126,8 +1141,13 @@ protected:
                     ccfg.ego_y = g.ego_y;
                     ccfg.ego_z = g.ego_z;
                     ccfg.ego_heading = g.ego_heading;
-                    ccfg.road_d_min = -lc * lw * 0.5;
-                    ccfg.road_d_max = g.road_oneway ? (lc * lw * 0.5) : 0.0;
+                    /* One-way: lane group spans [side_offset, 0] (negative d).
+                     * Two-way: only the ego's own half of the carriageway. */
+                    const bool oneway_corr = side_offset < -0.01;
+                    ccfg.road_d_min = oneway_corr
+                        ? side_offset : (ego_lane_d >= 0.0 ? 0.0 : -lc * lw * 0.5);
+                    ccfg.road_d_max = oneway_corr
+                        ? 0.0 : (ego_lane_d >= 0.0 ? lc * lw * 0.5 : 0.0);
                     ccfg.s_lo = 0.0;
                     ccfg.s_hi = std::fmax(20.0, min_gap);
                     ccfg.target_d = tl_y;
@@ -1186,11 +1206,11 @@ protected:
                 int turn_dir = 0;
                 if (current_legal && project_to_ref(g.ego_x, g.ego_y, ep)) {
                     turn_dir = traffic_light_detect_turn_ahead(
-                        g.ref_x, g.ref_y, g.ref_s, g.ref_count, ep.s, 6.0, 120.0);
+                        g.ref_x, g.ref_y, g.ref_s, g.ref_count, ep.s, 6.0, 180.0);
                 }
                 if (current_legal &&
                     (turn_dir > 0 ||
-                     traffic_light_has_left_arrow_ahead(&g.tl_cache, g.ego_x, g.ego_y, g.ego_heading, 120.0))) {
+                     traffic_light_has_left_arrow_ahead(&g.tl_cache, g.ego_x, g.ego_y, g.ego_heading, 180.0))) {
                     /* 接近左转路口（参考线转向或左转箭头灯拓扑）时禁止向右变道驶离左转车道 */
                     left_turn_ahead = true;
                     right_ok = false;

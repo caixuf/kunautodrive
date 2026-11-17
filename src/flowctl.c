@@ -40,11 +40,30 @@
 static cJSON* read_state_json(void) {
     FILE* f = fopen(flowengine_state_file(), "r");
     if (!f) return NULL;
-    char buf[32768];
-    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return NULL;
+    }
+    long sz = ftell(f);
+    if (sz <= 0) {
+        fclose(f);
+        return NULL;
+    }
+    rewind(f);
+    char* buf = (char*)malloc((size_t)sz + 1);
+    if (!buf) {
+        fclose(f);
+        return NULL;
+    }
+    size_t n = fread(buf, 1, (size_t)sz, f);
     fclose(f);
     buf[n] = '\0';
-    return cJSON_Parse(buf);
+    /* The topology snapshot grows with the scene (currently ~80KB); a fixed
+     * 32KB read made cJSON_Parse fail and every `flowctl list/graph` command
+     * report "no data" even while the pipeline was live. */
+    cJSON* root = cJSON_Parse(buf);
+    free(buf);
+    return root;
 }
 
 static const cJSON* find_topics_array(const cJSON* root) {

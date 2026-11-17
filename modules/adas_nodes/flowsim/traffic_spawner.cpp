@@ -400,12 +400,33 @@ void step_poisson_traffic(TrafficSpawnerContext& ctx,
         if (std::fabs(o.route_s - s_cand) < 25.0) return;
     }
 
-    /* 6. 从路线反算 road_id 与局部坐标 */
+    /* 6. 从路线反算 road_id 与局部坐标。
+     *
+     * 不能在参考线 lane 0 上取点再让 world_to_frenet 选车道：双向路参考线
+     * 位于正负车道之间，esmini 会返回 +1（对向车道）；随后 route_dir 仍
+     * 假设 +1，车会沿 -s 反向行驶且 find_lead 永远看不到前方车辆。
+     * 这里直接按行进方向选真实车道：route 正向走负 lane id，负向走正 lane id。 */
     int rid = 0, ridx = -1;
     double s_local = 0.0;
     ctx.route->locate(s_cand, rid, s_local, ridx);
+    if (rid < 0) return;
+
+    const std::vector<int> lane_ids = ctx.roads->drivable_lane_ids(rid, s_local);
+    int lane_id = 0;
+    for (int lid : lane_ids) {
+        if (lid < 0 && (lane_id == 0 || std::abs(lid) < std::abs(lane_id))) lane_id = lid;
+    }
+    int route_dir = 1;
+    if (lane_id == 0) {
+        for (int lid : lane_ids) {
+            if (lid > 0) { lane_id = lid; break; }
+        }
+        route_dir = -1;  /* 只有正向车道可用时，route 方向与 lane 方向相反 */
+    }
+    if (lane_id == 0) return;
+
     WorldPos wp;
-    if (!ctx.roads->frenet_to_world(rid, 0, s_local, 0.0, wp)) return;
+    if (!ctx.roads->frenet_to_world(rid, lane_id, s_local, 0.0, wp)) return;
     if (is_in_protected_parking_zone(ctx.scenario, wp.x, wp.y, wp.z)) return;
 
     /* 7. 分配实体并初始化 */
@@ -425,24 +446,16 @@ void step_poisson_traffic(TrafficSpawnerContext& ctx,
     e.z = wp.z;
     e.heading = wp.h;
     e.route_s = s_cand;
-    e.route_dir = 1;
+    e.route_dir = route_dir;
     e.last_teleport_cycle = ctx.cycle;
 
-    FrenetPos fp;
-    if (ctx.roads->world_to_frenet(wp.x, wp.y, fp)) {
-        e.road_id = fp.road_id;
-        e.lane_id = fp.lane_id;
-        e.s = fp.s;
-        e.offset = offset_from_lane_internal(
-            *ctx.roads, fp.road_id, fp.lane_id, fp.s, fp.offset);
-        e.target_offset = e.offset;
-    } else {
-        e.road_id = rid;
-        e.lane_id = -1;
-        e.s = s_local;
-        e.offset = 0.0;
-        e.target_offset = 0.0;
-    }
+    /* 已从 route 反算出真实车道，直接使用；不要再让 world_to_frenet 以
+     * 参考线点重新选一次车道（会选到对向 lane）。offset=0 即车道中心。 */
+    e.road_id = rid;
+    e.lane_id = lane_id;
+    e.s = s_local;
+    e.offset = 0.0;
+    e.target_offset = 0.0;
 
     if (e.road_id >= 0) {
         e.road_pos.init(*ctx.roads, e.road_id, e.lane_id, e.s, 0.0);

@@ -203,7 +203,7 @@ def run_scenario(model_path: str, name: str,
         if lead:
             lead["x"] += lead["vx"] * DT
 
-        obs_list = front_obstacles(vehicles, ego.x)
+        obs_list = front_obstacles(vehicles, ego.x, ego.y, ego.heading)
         features = build_features(
             {"x": ego.x, "y": ego.y, "v": ego.v, "heading": ego.heading,
              "yaw_rate": ego.yaw_rate},

@@ -47,6 +47,8 @@ struct EgoState {
 }
 
 struct Localization {
+    uint32   frame_id       # 定位帧号（与 sensor 帧同步）
+    uint64   timestamp_us   # CLOCK_MONOTONIC 时间戳（微秒）
     float    x              # 融合后 X 坐标（米）
     float    y              # 融合后 Y 坐标（米）
     float    v              # 融合速度（m/s）

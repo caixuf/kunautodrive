@@ -113,7 +113,10 @@ static bool decode_frame(const uint8_t* data, size_t len, InboundPub* out) {
     const bool legacy  = (len == sizeof(Message));
     const bool compact = (len == kWireHeaderSize + (size_t)data_size);
     if (!legacy && !compact) return false;
-    if (legacy && kWireHeaderSize + (size_t)data_size > sizeof(Message)) return false;
+    /* data_size is bounded by the bus contract, not by sizeof(Message):
+     * the struct only carries a 4 KB inline buffer on POSIX and large payloads
+     * travel after the wire header. */
+    if (data_size > MSG_BUS_MAX_DATA_SIZE) return false;
 
     memcpy(out->topic, data + offsetof(Message, topic), MSG_BUS_MAX_TOPIC_LEN);
     memcpy(out->sender, data + offsetof(Message, sender), MSG_BUS_MAX_SENDER_LEN);
@@ -272,7 +275,8 @@ static void drain_peer(NetworkTransport* t, PeerConn* peer,
             uint32_t net_len = 0;
             memcpy(&net_len, peer->rx_buffer.data() + consumed, 4);
             uint32_t payload = ntohl(net_len);
-            if (payload < kWireHeaderSize || payload > sizeof(Message)) {
+            if (payload < kWireHeaderSize ||
+                payload > kWireHeaderSize + MSG_BUS_MAX_DATA_SIZE) {
                 close_peer(t, peer);
                 return;
             }

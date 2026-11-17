@@ -91,21 +91,29 @@ def build_features(ego, obstacles, brake, emergency_stop) -> list[float]:
                              fallback_features=[])
 
 
-def front_obstacles(vehicles, ego_x) -> list[dict]:
-    """Two nearest vehicles ahead (x >= ego_x), sorted ascending (matches recorder).
+def front_obstacles(vehicles, ego_x, ego_y=0.0, ego_heading=0.0) -> list[dict]:
+    """Two nearest vehicles ahead, converted to the ego body frame.
 
-    IMPORTANT: the model was trained with 2 obstacles always present (type=1,
-    confidence=1). If only 1 (or none) is provided, the missing front0/front1
-    slot defaults to 0.0, and because the type/confidence dims have norm_scale
-    ~1e-6, the normalized input explodes to ~1e6 → tanh saturates → the model
-    outputs a constant. So we always pad to 2 obstacles with a far placeholder
-    (type=1, conf=1) so the normalization stays in range.
+    Obstacles in e2e_sample/perception are body-frame (msg/perception.msg), so
+    the absolute simulation vehicles must be rotated/translated before being
+    fed to the model. Padding uses body-frame placeholders (500/520 m).
     """
-    ahead = [v for v in vehicles if v["x"] >= ego_x]
-    ahead.sort(key=lambda v: v["x"])
-    out = list(ahead[:2])
+    ch, sh = math.cos(ego_heading), math.sin(ego_heading)
+    body = []
+    for v in vehicles:
+        dx = v["x"] - ego_x
+        dy = v["y"] - ego_y
+        lx = ch * dx + sh * dy
+        ly = -sh * dx + ch * dy
+        if lx < 0.0:
+            continue
+        item = dict(v)
+        item["x"], item["y"] = lx, ly
+        body.append(item)
+    body.sort(key=lambda v: v["x"])
+    out = list(body[:2])
     while len(out) < 2:
-        out.append({"x": ego_x + 500.0, "y": 0.0, "vx": 0.0, "vy": 0.0,
+        out.append({"x": 500.0 if not out else 520.0, "y": 0.0, "vx": 0.0, "vy": 0.0,
                     "type": 1.0, "confidence": 1.0, "length": 4.5, "width": 1.9})
     return out
 
@@ -146,7 +154,7 @@ def run_sim(model_path: str, scenario: str, duration: float, start_v: float,
         if lead:
             lead["x"] += lead["vx"] * DT
 
-        obs_list = front_obstacles(vehicles, ego.x)
+        obs_list = front_obstacles(vehicles, ego.x, ego.y, ego.heading)
         features = build_features(
             {"x": ego.x, "y": ego.y, "v": ego.v, "heading": ego.heading,
              "yaw_rate": ego.yaw_rate},

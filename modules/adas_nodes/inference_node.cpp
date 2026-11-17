@@ -242,8 +242,9 @@ static void on_obstacles(const Message* msg, void* user_data) {
             int n = list.count > 2 ? 2 : list.count;
             int fi = 0;
             for (int i = 0; i < n && fi < 2; i++) {
-                /* 跳过后方障碍物 */
-                if (list.obstacles[i].x - g.ego_x < 0) continue;
+                /* Obstacle.x/y 是车体坐标系（msg/perception.msg），
+                 * 不能再减世界系 ego_x；否则地图原点外几乎全部被当成后方。 */
+                if (list.obstacles[i].x < 0) continue;
                 double type_f = (double)(int)list.obstacles[i].type;
                 if (fi == 0) {
                     g.front0_x = list.obstacles[i].x;
@@ -264,8 +265,8 @@ static void on_obstacles(const Message* msg, void* user_data) {
              * 旧实现 fill 0 → type/confidence 的 norm_scale≈1e-6 时 (0-1)/1e-6≈-1e6
              * → tanh 饱和 → 模型输出冻结成常量（"变死鸭子"）。远处占位 + 前向钳制
              * 双保险。 */
-            if (fi <= 0) { g.front0_x = g.ego_x + 500.0; g.front0_y = 0; g.front0_vx = 0; g.front0_type = 1; g.front0_confidence = 1; }
-            if (fi <= 1) { g.front1_x = g.ego_x + 520.0; g.front1_y = 0; g.front1_vx = 0; g.front1_type = 1; g.front1_confidence = 1; }
+            if (fi <= 0) { g.front0_x = 500.0; g.front0_y = 0; g.front0_vx = 0; g.front0_type = 1; g.front0_confidence = 1; }
+            if (fi <= 1) { g.front1_x = 520.0; g.front1_y = 0; g.front1_vx = 0; g.front1_type = 1; g.front1_confidence = 1; }
             g.has_obstacles = 1;
             return;
         }
@@ -284,8 +285,8 @@ static void on_obstacles(const Message* msg, void* user_data) {
     cJSON_Delete(jroot);
     const char* d = (const char*)((const uint8_t*)message_bus_message_data(msg));
     /* 默认"远处无车"占位（type=1, conf=1），避免未知障碍物 type/conf=0 归一化爆炸 */
-    g.front0_x = g.ego_x + 500.0; g.front0_y = 0; g.front0_vx = 0; g.front0_type = 1; g.front0_confidence = 1;
-    g.front1_x = g.ego_x + 520.0; g.front1_y = 0; g.front1_vx = 0; g.front1_type = 1; g.front1_confidence = 1;
+    g.front0_x = 500.0; g.front0_y = 0; g.front0_vx = 0; g.front0_type = 1; g.front0_confidence = 1;
+    g.front1_x = 520.0; g.front1_y = 0; g.front1_vx = 0; g.front1_type = 1; g.front1_confidence = 1;
     const char* p;
     for (int i = 0; i < 2; i++) {
         char key[16];
@@ -296,8 +297,8 @@ static void on_obstacles(const Message* msg, void* user_data) {
         if (p) sscanf(p + 3, "%lf", ox);
         snprintf(key, sizeof(key), "\"y\":");
         if ((p = strstr(d, key))) sscanf(p + 3, "%lf", oy);
-        /* 跳过后方 */
-        if (*ox - g.ego_x < 0) continue;
+        /* 跳过后方（body-frame x） */
+        if (*ox < 0.0) continue;
     }
     g.has_obstacles = 1;
 }
@@ -765,7 +766,7 @@ static void cortex_build_features(double f[6]) {
     }
 
     /* 前向危险度：TTC（语义同 control_node 跟车） */
-    double dist = g.front0_x - g.ego_x;
+    double dist = g.front0_x;  /* body-frame longitudinal gap */
     double rel_v = g.front0_vx - g.ego_v;
     double ttc = (rel_v < -0.1 && dist > 0.0) ? dist / (-rel_v) : 99.0;
     double danger = 1.0 - fmin(ttc, 10.0) / 10.0;

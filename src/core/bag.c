@@ -481,6 +481,51 @@ void bag_reader_close(BagReader* r) {
 /* ── Read one record ──────────────────────────────────────── */
 
 /**
+ * Load a record payload into a Message.
+ *
+ * Small payloads stay inline. Payloads larger than MSG_INLINE_MAX_SIZE are
+ * heap-allocated and exposed through `_loaned_data`; callers must release them
+ * with release_record_payload() after the message has been delivered. Keeping
+ * the heap allocation out of Message.data[] is required because Message.data
+ * is only MSG_INLINE_MAX_SIZE bytes since the zero-copy refactor.
+ */
+static int attach_record_payload(FILE* fp, uint32_t dsize, Message* msg_out) {
+    if (dsize > MSG_BUS_MAX_DATA_SIZE) return ERR_IO;
+    if (!msg_out) {
+        return (dsize == 0 || fseek(fp, (long)dsize, SEEK_CUR) == 0) ? 0 : ERR_IO;
+    }
+    if (dsize == 0) {
+        msg_out->payload_kind = MSG_PAYLOAD_INLINE;
+        return 0;
+    }
+    if (dsize <= MSG_INLINE_MAX_SIZE) {
+        if (fread(msg_out->data, 1, dsize, fp) != dsize) return ERR_IO;
+        msg_out->payload_kind = MSG_PAYLOAD_INLINE;
+        return 0;
+    }
+    uint8_t* heap = (uint8_t*)malloc(dsize);
+    if (!heap) return ERR_NOMEM;
+    if (fread(heap, 1, dsize, fp) != dsize) {
+        free(heap);
+        return ERR_IO;
+    }
+    msg_out->_loaned_data = heap;
+    msg_out->payload_kind = MSG_PAYLOAD_LOANED;
+    return 0;
+}
+
+/** Release a payload allocated by attach_record_payload(). */
+static void release_record_payload(Message* msg) {
+    if (!msg) return;
+    if (msg->payload_kind == MSG_PAYLOAD_LOANED && msg->_loaned_data) {
+        free((void*)msg->_loaned_data);
+    }
+    msg->_loaned_data = NULL;
+    msg->payload_kind = MSG_PAYLOAD_INLINE;
+    msg->data_size = 0;
+}
+
+/**
  * Read one v2 record.
  * Returns 1 on success, 0 on EOF, -1 on error.
  */
@@ -511,9 +556,6 @@ static int read_record_v3(FILE* fp, uint64_t* ts_out, Message* msg_out) {
     if (fread(&dsize, sizeof(dsize), 1, fp) != 1) return ERR_IO;
     if (dsize > MSG_BUS_MAX_DATA_SIZE) return ERR_IO;
 
-    uint8_t data[MSG_BUS_MAX_DATA_SIZE];
-    if (dsize > 0 && fread(data, 1, dsize, fp) != dsize) return ERR_IO;
-
     if (ts_out)  *ts_out = ts;
     if (msg_out) {
         memset(msg_out, 0, sizeof(*msg_out));
@@ -526,8 +568,9 @@ static int read_record_v3(FILE* fp, uint64_t* ts_out, Message* msg_out) {
         msg_out->schema_hash    = schema_hash;
         msg_out->schema_version = schema_ver;
         msg_out->endian_marker  = endian;
-        if (dsize > 0) memcpy(msg_out->data, data, dsize);
     }
+    int payload_rc = attach_record_payload(fp, dsize, msg_out);
+    if (payload_rc != 0) return payload_rc;
     return 1;
 }
 
@@ -559,9 +602,6 @@ static int read_record_v2(FILE* fp, uint64_t* ts_out, Message* msg_out) {
     if (fread(&dsize, sizeof(dsize), 1, fp) != 1) return ERR_IO;
     if (dsize > MSG_BUS_MAX_DATA_SIZE) return ERR_IO;
 
-    uint8_t data[MSG_BUS_MAX_DATA_SIZE];
-    if (dsize > 0 && fread(data, 1, dsize, fp) != dsize) return ERR_IO;
-
     if (ts_out)  *ts_out = ts;
     if (msg_out) {
         memset(msg_out, 0, sizeof(*msg_out));
@@ -574,8 +614,9 @@ static int read_record_v2(FILE* fp, uint64_t* ts_out, Message* msg_out) {
         msg_out->schema_hash    = 0;  /* v2 file 缺，按 0 处理 */
         msg_out->schema_version = schema_ver;
         msg_out->endian_marker  = endian;
-        if (dsize > 0) memcpy(msg_out->data, data, dsize);
     }
+    int payload_rc = attach_record_payload(fp, dsize, msg_out);
+    if (payload_rc != 0) return payload_rc;
     return 1;
 }
 
@@ -604,9 +645,6 @@ static int read_record_legacy(FILE* fp, uint64_t* ts_out, Message* msg_out) {
 
     if (dsize > MSG_BUS_MAX_DATA_SIZE) return ERR_IO;
 
-    uint8_t data[MSG_BUS_MAX_DATA_SIZE];
-    if (dsize > 0 && fread(data, 1, dsize, fp) != dsize) return ERR_IO;
-
     if (ts_out)  *ts_out = ts;
     if (msg_out) {
         memset(msg_out, 0, sizeof(*msg_out));
@@ -616,8 +654,9 @@ static int read_record_legacy(FILE* fp, uint64_t* ts_out, Message* msg_out) {
         msg_out->type         = MSG_TYPE_PUBLISH;
         msg_out->data_size    = dsize;
         /* Legacy: type_id = 0 (raw) */
-        if (dsize > 0) memcpy(msg_out->data, data, dsize);
     }
+    int payload_rc = attach_record_payload(fp, dsize, msg_out);
+    if (payload_rc != 0) return payload_rc;
     return 1;
 }
 
@@ -703,9 +742,11 @@ int bag_reader_get_time_bounds(BagReader* r, uint64_t* first_ts_us, uint64_t* la
         fseek(r->fp, (long)r->data_start, SEEK_SET);
         int rc = read_record(r, &ts, &msg);
         if (rc != 1) {
+            release_record_payload(&msg);
             fseek(r->fp, saved_pos, SEEK_SET);
             return ERR_IO;
         }
+        release_record_payload(&msg);
         r->first_ts_us = ts;
         r->last_ts_us = ts + r->duration_us;
     } else {
@@ -715,6 +756,7 @@ int bag_reader_get_time_bounds(BagReader* r, uint64_t* first_ts_us, uint64_t* la
         bool first = true;
         int rc = 0;
         while ((rc = read_record(r, &ts, &msg)) == 1) {
+            release_record_payload(&msg);
             if (first) {
                 r->first_ts_us = ts;
                 first = false;
@@ -765,12 +807,19 @@ static int bag_reader_play_absolute_window(BagReader* r,
             if (rc == 0) { rc = ERR_OK; break; }   /* EOF */
             if (rc < 0)  goto done;
 
-            if (start_us > 0 && ts < start_us) continue;
+            if (start_us > 0 && ts < start_us) {
+                release_record_payload(&msg);
+                continue;
+            }
             if (end_us   > 0 && ts > end_us) {
+                release_record_payload(&msg);
                 rc = ERR_OK;
                 break;
             }
-            if (!topic_matches_filter(msg.topic, options->topic_filter)) continue;
+            if (!topic_matches_filter(msg.topic, options->topic_filter)) {
+                release_record_payload(&msg);
+                continue;
+            }
 
             if (first_emitted) {
                 prev_ts = ts;
@@ -783,8 +832,8 @@ static int bag_reader_play_absolute_window(BagReader* r,
                 uint64_t gap_us = (ts > prev_ts) ? (ts - prev_ts) : 0;
                 uint64_t delay = (uint64_t)((double)gap_us / options->speed);
                 rc = sleep_interruptible_us(delay, options);
-                if (rc == ERR_TIMEOUT) { rc = ERR_OK; goto done; }
-                if (rc != ERR_OK) goto done;
+                if (rc == ERR_TIMEOUT) { rc = ERR_OK; release_record_payload(&msg); goto done; }
+                if (rc != ERR_OK) { release_record_payload(&msg); goto done; }
                 prev_ts = ts;
             }
 
@@ -792,6 +841,7 @@ static int bag_reader_play_absolute_window(BagReader* r,
                 clock_set_sim_time(ts);
 
             rc = deliver_replayed_message(options, &msg);
+            release_record_payload(&msg);
             if (rc != ERR_OK) goto done;
             total++;
             emitted_this_pass = true;
@@ -874,6 +924,7 @@ int bag_reader_info(BagReader* r, uint64_t* msg_count, uint64_t* duration_us) {
     Message msg;
 
     while (read_record(r, &ts, &msg) == 1) {
+        release_record_payload(&msg);
         count++;
         if (first) { first_ts = ts; first = false; }
         last_ts = ts;
@@ -917,6 +968,7 @@ int bag_reader_get_topics(BagReader* r, char topics[][64], int max_count,
     Message msg;
 
     while (read_record(r, &ts, &msg) == 1) {
+        release_record_payload(&msg);
         bool found = false;
         for (int i = 0; i < seen_count; i++) {
             if (strcmp(seen_topics[i], msg.topic) == 0) {

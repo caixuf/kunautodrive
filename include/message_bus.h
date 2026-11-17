@@ -34,8 +34,17 @@ extern "C" {
 
 #define MSG_BUS_MAX_TOPIC_LEN       64
 #define MSG_BUS_MAX_SENDER_LEN      64
-#define MSG_INLINE_MAX_SIZE         4096
 #define MSG_BUS_MAX_DATA_SIZE       65536
+/* POSIX uses the ShmArena for payloads above 4 KB to keep Message small.
+ * Win32 has no POSIX shm_arena implementation, so keep the legacy 64 KB
+ * inline payload there. Without this, ipc_channel_publish()/message_bus_publish()
+ * would either overflow Message.data[4 KB] or reject every large dashboard /
+ * stereo / point-cloud payload on Windows. */
+#if defined(_WIN32)
+#define MSG_INLINE_MAX_SIZE         MSG_BUS_MAX_DATA_SIZE
+#else
+#define MSG_INLINE_MAX_SIZE         4096
+#endif
 #define MSG_ARENA_MAX_PAYLOAD_SIZE  (16u * 1024u * 1024u)
 #define MSG_BUS_MAX_TOPICS          64
 #define MSG_BUS_MAX_SUBSCRIBERS     256  /* 全总线扁平表；26 节点 pipeline 实测 >128，见 SUB_OVERFLOW */
@@ -92,20 +101,42 @@ typedef struct Message {
 
 static inline const void* message_bus_message_data(const Message* msg) {
     if (!msg) return NULL;
+    /* LOANED / SHM_REF payloads must never fall back to the 4 KB inline buffer:
+     * data_size can be tens of KB, so a fallback makes every consumer read past
+     * data[] into the rest of Message / adjacent stack memory. If the backing
+     * pointer is unavailable (arena wrap, publisher restart, released loan),
+     * report "no payload" so callers can drop the message instead of parsing
+     * garbage. */
+    if (msg->payload_kind == MSG_PAYLOAD_LOANED) return msg->_loaned_data;
+    if (msg->payload_kind == MSG_PAYLOAD_SHM_REF) return msg->_shm_ptr;
     if (msg->_loaned_data) return msg->_loaned_data;
-    if (msg->payload_kind == MSG_PAYLOAD_SHM_REF && msg->_shm_ptr) return msg->_shm_ptr;
     return msg->data;
 }
 
-/** Materialize a Message for storage beyond the current callback. */
+/** Copy a Message for storage beyond the current callback.
+ *
+ * Inline payloads are copied into dst->data[]. Large LOANED / SHM_REF payloads
+ * are not materialized (there is no owning buffer in Message): the payload
+ * pointer is kept as a borrow, and the caller must consume it before the
+ * producer/arena recycles the backing storage. If the backing pointer is
+ * already gone, the copy is marked empty so consumers cannot read stale bytes.
+ */
 static inline void message_bus_copy_message(Message* dst, const Message* src) {
     if (!dst || !src) return;
     *dst = *src;
-    if (src->_loaned_data && src->data_size <= MSG_INLINE_MAX_SIZE) {
-        memcpy(dst->data, src->_loaned_data, src->data_size);
+    const bool large = src->data_size > MSG_INLINE_MAX_SIZE;
+    const bool has_payload = message_bus_message_data(src) != NULL;
+    if (!has_payload) {
+        dst->data_size = 0;
         dst->payload_kind = MSG_PAYLOAD_INLINE;
+    } else if (src->payload_kind == MSG_PAYLOAD_INLINE ||
+               src->data_size <= MSG_INLINE_MAX_SIZE) {
+        memcpy(dst->data, message_bus_message_data(src), src->data_size);
+        dst->payload_kind = MSG_PAYLOAD_INLINE;
+    } else if (large && src->payload_kind == MSG_PAYLOAD_LOANED) {
+        /* Borrow: the original release callback still owns the buffer. */
+        dst->_loaned_data = src->_loaned_data;
     }
-    dst->_loaned_data = NULL;
     dst->_loaned_release = NULL;
     dst->_loaned_release_ctx = NULL;
 }

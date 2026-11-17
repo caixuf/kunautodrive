@@ -4373,14 +4373,23 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         _sample_time_seconds(s) if "t_demo" in s else float(s.get("timestamp", 0.0) or 0.0)
         for s in samples
     ]
-    active_times = [
-        time_axis[i] for i in range(len(series))
-        if abs(float(series[i].get("speed", 0.0) or 0.0)) > 0.20
-    ]
-    active_duration_s = round(
-        max(0.0, active_times[-1] - active_times[0]) if len(active_times) >= 2 else 0.0,
-        2,
-    )
+    # Sum only intervals where the vehicle is actually moving. The previous
+    # first-to-last moving-frame span counted every stop in between: 1s moving
+    # + 600s stopped + 1s moving reported 601s and passed min_active_duration.
+    active_duration_s = 0.0
+    prev_active_t: float | None = None
+    for i in range(len(series)):
+        speed = abs(float(series[i].get("speed", 0.0) or 0.0))
+        if speed <= 0.20:
+            prev_active_t = None
+            continue
+        t_i = time_axis[i]
+        if prev_active_t is not None:
+            dt = t_i - prev_active_t
+            if 0.0 < dt <= 1.0:
+                active_duration_s += dt
+        prev_active_t = t_i
+    active_duration_s = round(active_duration_s, 2)
 
     summary = {
         "scenario": scenario_name or "(unknown)",

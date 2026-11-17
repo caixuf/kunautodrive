@@ -220,6 +220,7 @@ export function createRoadView(scene) {
   let _roadOccGrid = null;  // 同层相邻机动车道空间占用网格（防分幅路中央路缘石切入邻道）
   let _subsurfaceCutouts = []; // 地库/敞口斜坡挖空包围盒（防止路侧绿篱/人行道凌空封顶）
   let _totalEdges = 0;      // 当前路网总边数（大图细分与侧向几何预算分级）
+  let _accessAnchors = [];  // 出入库/匝道接入口坐标（外缘实线自动留虚线开口）
   let _hasFocus = false;
   let _focusX = 0;
   let _focusZ = 0;
@@ -510,6 +511,52 @@ export function createRoadView(scene) {
   /** 路缘边线（实线，比车道线略宽略高，远距离可见） */
   function edgeLine(spine, d) {
     return ribbonGeo(offsetSpine(spine, d), EDGE_LINE_W / 2, Y_EDGE);
+  }
+
+  /** 外缘边线：若靠近出入库/汇入匝道锚点，则自动将该段改为白色引导虚线开口 */
+  function pushEdgeLineWithAccessOpenings(outGeos, seg, d) {
+    if (_accessAnchors.length > 0 && seg && seg.length >= 2) {
+      const off = offsetSpine(seg, d);
+      const cum = buildCumulative(off);
+      const total = cum[cum.length - 1];
+      const holes = [];
+      for (const a of _accessAnchors) {
+        let bestDist = Infinity, bestS = -1;
+        for (let k = 0; k < off.length; k++) {
+          const dist = Math.hypot(off[k].px - a.px, off[k].pz - a.pz);
+          if (dist < bestDist) { bestDist = dist; bestS = cum[k]; }
+        }
+        if (bestDist < 24.0 && bestS >= 0) {
+          holes.push([Math.max(0, bestS - 22.0), Math.min(total, bestS + 22.0)]);
+        }
+      }
+      if (holes.length > 0) {
+        holes.sort((x, y) => x[0] - y[0]);
+        let cur = 0;
+        for (const [hs, he] of holes) {
+          if (hs > cur + 0.5) {
+            const sub = off.filter((_, idx) => cum[idx] >= cur && cum[idx] <= hs);
+            if (sub.length >= 2) {
+              const g = ribbonGeo(sub, EDGE_LINE_W / 2, Y_EDGE);
+              if (g) outGeos.push(g);
+            }
+          }
+          for (const dg of dashedLineInRange(seg, d, hs, he)) outGeos.push(dg);
+          cur = Math.max(cur, he);
+        }
+        if (cur < total - 0.5) {
+          const sub = off.filter((_, idx) => cum[idx] >= cur);
+          if (sub.length >= 2) {
+            const g = ribbonGeo(sub, EDGE_LINE_W / 2, Y_EDGE);
+            if (g) outGeos.push(g);
+          }
+        }
+        return 1;
+      }
+    }
+    const g = edgeLine(seg, d);
+    if (g) { outGeos.push(g); return 1; }
+    return 0;
   }
 
   /** 虚线：沿偏移中心线按弧长 march，每 (DASH+GAP) 铺一段。
@@ -1157,8 +1204,7 @@ export function createRoadView(scene) {
           if (mk.type === 'dashed_white') {
             for (const g of dashedLine(seg, 0)) { whiteGeos.push(g); made++; }
           } else if (mk.type === 'solid_white') {
-            const g = edgeLine(seg, 0);
-            if (g) { whiteGeos.push(g); made++; }
+            made += pushEdgeLineWithAccessOpenings(whiteGeos, seg, 0);
           } else if (mk.type === 'double_yellow') {
             const CENTER_GAP = 0.12;
             const l = solidLine(seg, -CENTER_GAP);
@@ -1284,62 +1330,9 @@ export function createRoadView(scene) {
       stats.p2Edges++;
     } else {
       stats.heuristicEdges++;
-      const accessAnchors = [];
-      if (roadNetwork && Array.isArray(roadNetwork.edges)) {
-        for (const ae of roadNetwork.edges) {
-          const ak = String(ae.type || '').toLowerCase();
-          if (ak !== 'exit_merge' && ak !== 'right_in') continue;
-          const ans = ae.nodes;
-          if (!ans || ans.length < 2) continue;
-          const pt = (ak === 'exit_merge') ? ans[ans.length - 1] : ans[0];
-          accessAnchors.push({ px: pt[0], pz: -pt[1] });
-        }
-      }
       for (const seg of paintMarkSpine) {
-        const edgeL = edgeLine(seg, roadHw - EDGE_INSET);
-        if (edgeL) whiteGeos.push(edgeL);
-        const dRight = -(roadHw - EDGE_INSET);
-        if (accessAnchors.length > 0 && seg.length >= 2) {
-          const off = offsetSpine(seg, dRight);
-          const cum = buildCumulative(off);
-          const total = cum[cum.length - 1];
-          const holes = [];
-          for (const a of accessAnchors) {
-            let bestDist = Infinity, bestS = -1;
-            for (let k = 0; k < off.length; k++) {
-              const dist = Math.hypot(off[k].px - a.px, off[k].pz - a.pz);
-              if (dist < bestDist) { bestDist = dist; bestS = cum[k]; }
-            }
-            if (bestDist < 24.0 && bestS >= 0) {
-              holes.push([Math.max(0, bestS - 22.0), Math.min(total, bestS + 22.0)]);
-            }
-          }
-          if (holes.length > 0) {
-            holes.sort((x, y) => x[0] - y[0]);
-            let cur = 0;
-            for (const [hs, he] of holes) {
-              if (hs > cur + 0.5) {
-                const sub = off.filter((_, idx) => cum[idx] >= cur && cum[idx] <= hs);
-                if (sub.length >= 2) {
-                  const g = ribbonGeo(sub, EDGE_LINE_W / 2, Y_EDGE);
-                  if (g) whiteGeos.push(g);
-                }
-              }
-              for (const dg of dashedLineInRange(seg, dRight, hs, he)) whiteGeos.push(dg);
-              cur = Math.max(cur, he);
-            }
-            if (cur < total - 0.5) {
-              const sub = off.filter((_, idx) => cum[idx] >= cur);
-              if (sub.length >= 2) {
-                const g = ribbonGeo(sub, EDGE_LINE_W / 2, Y_EDGE);
-                if (g) whiteGeos.push(g);
-              }
-            }
-            continue;
-          }
-        }
-        const edgeR = edgeLine(seg, dRight);
-        if (edgeR) whiteGeos.push(edgeR);
+        pushEdgeLineWithAccessOpenings(whiteGeos, seg, roadHw - EDGE_INSET);
+        pushEdgeLineWithAccessOpenings(whiteGeos, seg, -(roadHw - EDGE_INSET));
       }
 
       // 标线按 GB 5768 语义生成（与 extract_city_map._markings / json_to_xodr
@@ -1509,6 +1502,15 @@ export function createRoadView(scene) {
     setGroundAuthoritativeMode(isAuthoritativeMap(roadNetwork));
 
     _totalEdges = roadNetwork.edges.length;
+    _accessAnchors = [];
+    for (const ae of roadNetwork.edges) {
+      const ak = String(ae.type || '').toLowerCase();
+      if (ak !== 'exit_merge' && ak !== 'right_in') continue;
+      const ans = ae.nodes;
+      if (!ans || ans.length < 2) continue;
+      const pt = (ak === 'exit_merge') ? ans[ans.length - 1] : ans[0];
+      _accessAnchors.push({ px: pt[0], pz: -pt[1] });
+    }
     _hasFocus = false;
     _focusX = 0;
     _focusZ = 0;

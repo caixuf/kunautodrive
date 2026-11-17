@@ -64,21 +64,24 @@ def make_sample(v: float, front_x: float, front_vx: float,
                 speed_limit: float = 30.0, tl_state: float = -1.0,
                 ego_x: float = 0.0, empty_road: bool = False,
                 rollout_id: str | None = None) -> dict:
-    """构造一条 (特征, control) 样本: ego 在 ego_x, 障碍在 ego_x + front_x(世界坐标)。"""
+    """构造一条 (特征, control) 样本: ego 在 ego_x, 障碍在车体系 front_x 处。
+
+    障碍物 x/y 遵循 msg/perception.msg 的车体坐标系约定，不是世界坐标。
+    """
     ego = {"x": ego_x, "y": ego_y, "v": v, "heading": heading, "yaw_rate": 0.0}
     if empty_road:
         obstacles = [
-            {"x": ego_x + 500.0, "y": 0.0, "vx": 0.0, "vy": 0.0,
+            {"x": 500.0, "y": 0.0, "vx": 0.0, "vy": 0.0,
              "type": 1.0, "confidence": 1.0, "length": 4.5, "width": 1.9},
-            {"x": ego_x + 500.0, "y": 0.0, "vx": 0.0, "vy": 0.0,
+            {"x": 520.0, "y": 0.0, "vx": 0.0, "vy": 0.0,
              "type": 1.0, "confidence": 1.0, "length": 4.5, "width": 1.9},
         ]
         gap = 500.0
     else:
         obstacles = [
-            {"x": ego_x + front_x, "y": -1.75, "vx": front_vx, "vy": 0.0,
+            {"x": front_x, "y": -1.75, "vx": front_vx, "vy": 0.0,
              "type": 1.0, "confidence": 1.0, "length": 4.5, "width": 1.9},
-            {"x": ego_x + 500.0, "y": 0.0, "vx": 0.0, "vy": 0.0,
+            {"x": 500.0, "y": 0.0, "vx": 0.0, "vy": 0.0,
              "type": 1.0, "confidence": 1.0, "length": 4.5, "width": 1.9},
         ]
         gap = front_x - 2.25

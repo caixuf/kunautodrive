@@ -133,7 +133,7 @@ def validate_scenario(data: object, path: Path) -> list[str]:
                 errors.append(f"{label} must be an object")
                 continue
             actor_type = str(actor.get("type", "")).strip().lower()
-            if not actor_type or not (actor_type in SCENARIO_TYPES or actor_type.replace("_", "").isalnum()):
+            if not actor_type or actor_type not in SCENARIO_TYPES:
                 errors.append(f"{label}.type '{actor.get('type')}' is unsupported")
             if "x" in actor:
                 _number(actor["x"], f"{label}.x", errors)

@@ -125,13 +125,12 @@ def build_v2_features(ego: object, obstacles: object, control: object, fallback_
             _float(obstacle.get("confidence")),
         ])
     # 未满的 slot 用"远处无车"占位（type=1, conf=1 与训练分布一致）。
-    # 占位 x 与 inference_node / data_recorder 完全一致：front0=ego+500, front1=ego+520。
-    # 旧实现 fill 0 → type/confidence 的 norm_scale≈1e-6 时 (0-1)/1e-6≈-1e6
-    # → tanh 饱和 → 模型输出冻结成常量（"变死鸭子"）。统一占位保证训练/推理一致。
-    ego_x = _float(ego_obj.get("x", 0.0))
+    # 障碍物 x/y 是车体系（msg/perception.msg），占位必须同为车体系：
+    # front0=500m, front1=520m。不要在占位里加世界系 ego_x，否则真实障碍
+    # 与占位落在不同坐标系，模型无法区分"无车"与"世界坐标原点附近的障碍"。
     real = (len(rows) - 4) // 5   # 已填入的真实障碍物数（normalize limit=2 兜底）
     for i in range(real, 2):
-        rows.extend([ego_x + (500.0 if i == 0 else 520.0), 0.0, 0.0, 1.0, 1.0])
+        rows.extend([500.0 if i == 0 else 520.0, 0.0, 0.0, 1.0, 1.0])
 
     rows.append(_float(control_obj.get("brake")))
     rows.append(1.0 if bool(control_obj.get("emergency_stop", False)) else 0.0)

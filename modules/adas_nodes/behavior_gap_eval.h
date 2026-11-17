@@ -25,6 +25,11 @@ struct GapEvalConfig {
     const double* obs_z{nullptr};
     double layer_tol_m{kSameElevationLayerTolM};
     double road_half_w{0.0};
+    /* Valid lateral band in road-reference d coordinates. Defaults are an
+     * open interval; callers with a one-way road set [side_offset, 0] so the
+     * outer lane group (negative d) is not mistaken for off-road. */
+    double road_d_min{-1e9};
+    double road_d_max{1e9};
 };
 
 struct LaneGapResult {
@@ -80,7 +85,10 @@ inline LaneGapResult evaluate_target_lane_gap(
             const double lat_left = -rx * fwd_y + ry * fwd_x;
             obs_d = cfg.ego_lane_d + lat_left;
         }
-        if (cfg.road_half_w > 0.0 && std::fabs(obs_d) >= cfg.road_half_w - 0.05) {
+        if (cfg.road_d_max > cfg.road_d_min) {
+            if (obs_d <= cfg.road_d_min || obs_d >= cfg.road_d_max) continue;
+        } else if (cfg.road_half_w > 0.0 &&
+                   std::fabs(obs_d) >= cfg.road_half_w - 0.05) {
             continue;
         }
         if (std::fabs(obs_d - target_lane_d) > cfg.lat_tol) {

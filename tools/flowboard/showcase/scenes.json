@@ -1097002,9 +1097002,9 @@
         "etc_gates": [
           {
             "id": 1,
-            "x": 243.0,
+            "x": 235.0,
             "y": -12.25,
-            "z": 0.0,
+            "z": -0.56,
             "heading": 0.0,
             "pass_through": true
           },
@@ -1097014,6 +1097014,14 @@
             "y": -1.75,
             "z": 0.0,
             "heading": 0.0,
+            "pass_through": true
+          },
+          {
+            "id": 3,
+            "x": 235.0,
+            "y": -8.75,
+            "z": -0.56,
+            "heading": 3.14159,
             "pass_through": true
           }
         ],
@@ -1097029,15 +1097037,15 @@
             "id": 0,
             "x": 538.5,
             "y_lane": -1.75,
-            "green_s": 13.0,
+            "green_s": 18.0,
             "yellow_s": 2.5,
-            "red_s": 26.5,
+            "red_s": 21.5,
             "phase_offset_s": 0.0,
             "has_left_arrow": true,
-            "left_green_s": 10.5,
+            "left_green_s": 18.0,
             "left_yellow_s": 2.5,
-            "left_red_s": 29.0,
-            "left_phase_offset_s": 25.5
+            "left_red_s": 21.5,
+            "left_phase_offset_s": 0.0
           },
           {
             "id": 1,

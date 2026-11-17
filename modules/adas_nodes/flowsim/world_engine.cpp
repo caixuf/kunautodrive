@@ -1737,7 +1737,8 @@ void build_colliders_from_layout(WorldLayout& layout) {
     layout.colliders.clear();
     layout.colliders.reserve(
         layout.furniture.size() + layout.poles.size() + layout.trees.size() +
-        layout.signs.size() + layout.piers.size() + layout.barrier_spans.size() + layout.props.size());
+        layout.signs.size() + layout.piers.size() + layout.barrier_spans.size() +
+        layout.props.size() + layout.buildings.size());
 
     auto classify_furniture_role = [](const std::string& kind) -> ColliderRole {
         if (kind == "wall" || kind == "pillar" || kind == "bollard") {
@@ -1823,6 +1824,19 @@ void build_colliders_from_layout(WorldLayout& layout) {
             std::max(0.4, cp.length), std::max(0.4, cp.width),
             cp.heading, std::max(0.5, cp.height), false, cp.sensor_visible, cp.label,
             classify_prop_role(cp.kind)
+        });
+    }
+    /* Procedural skyline buildings carry has_collider/sensor_visible flags
+     * just like furniture, but used to be serialized + rendered without ever
+     * reaching Jolt/legacy colliders. When buildings_source=="world_engine"
+     * and the map has no building list, vehicles could drive through them. */
+    for (const auto& b : layout.buildings) {
+        if (!b.has_collider) continue;
+        layout.colliders.push_back({
+            "building", b.x, b.y, b.z,
+            std::max(1.0, b.width), std::max(1.0, b.depth),
+            b.heading, std::max(1.0, b.height), false, b.sensor_visible,
+            {}, ColliderRole::StructuralObstacle
         });
     }
 

@@ -124,6 +124,26 @@ jobs:
       - name: Enforce msg_codegen wire size == C struct size (or documented)
         run: python3 ci/gates/msg_layout_check.py
 
+  # ── frame/unit contract gate ───────────────────────────────
+  # Raw sensor/vehicle messages must carry the timestamp trio + frame_id and
+  # documented units; this was previously only a review checklist.
+  frame-unit-contract-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce raw-message frame/unit contract
+        run: python3 ci/gates/frame_unit_contract_check.py
+
+  # ── virtual clock audit gate ────────────────────────────────
+  # adas_nodes must read time through clock_service.h; direct wall-clock calls
+  # silently make lock-step/fast-time non-deterministic.
+  virtual-clock-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Audit adas_nodes for forbidden wall-clock calls
+        run: python3 ci/gates/virtual_clock_audit.py
+
   # ── sensor-mode wiring gate ────────────────────────────────
   # 真点云链路的三处配置分散在两个节点里，任一处不一致都静默失效、且现象都是
   # "改了没效果"：①perception.mode=sensor 但 sensor_model.lidar_mode!=1（生产者

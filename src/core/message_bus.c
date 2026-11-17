@@ -1040,6 +1040,10 @@ int message_bus_publish_typed(MessageBus* bus, const char* topic, const char* se
     msg->_loaned_release = NULL;
     msg->_loaned_release_ctx = NULL;
     if (!data || size == 0) {
+        /* data==NULL means "no payload", not "a payload of size bytes at
+         * address 0". Keep data_size consistent so consumers don't read the
+         * uninitialized inline buffer. */
+        msg->data_size = 0;
         msg->payload_kind = MSG_PAYLOAD_INLINE;
     } else if (size <= MSG_INLINE_MAX_SIZE) {
         msg->payload_kind = MSG_PAYLOAD_INLINE;

@@ -75,6 +75,17 @@ def _fingerprint(doc: dict) -> str:
     return str(_scene(doc).get("init_fingerprint") or "")
 
 
+def _trajectory(doc: dict) -> list[tuple]:
+    """Ego trajectory from monitor's ring buffer, rounded to 1e-4."""
+    out = []
+    for sample in doc.get("samples") or []:
+        if not isinstance(sample, dict):
+            continue
+        out.append(tuple(round(float(sample.get(k, 0.0) or 0.0), 4)
+                         for k in ("t", "x", "y", "heading", "speed")))
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--scenario",
@@ -131,6 +142,24 @@ def main() -> int:
         td2 = _scene(second).get("traffic_density")
         if td1 != td2:
             errors.append(f"traffic_density init result not deterministic: {td1} != {td2}")
+
+        if args.full_trajectory:
+            traj1 = _trajectory(first)
+            traj2 = _trajectory(second)
+            if len(traj1) < 2:
+                errors.append(
+                    f"full-trajectory: only {len(traj1)} ego samples "
+                    "(monitor samples missing)")
+            elif traj1 != traj2:
+                first_diff = next(
+                    (i for i, (a, b) in enumerate(zip(traj1, traj2)) if a != b),
+                    min(len(traj1), len(traj2)),
+                )
+                errors.append(
+                    "full-trajectory: same seed produced different ego "
+                    f"trajectory at sample {first_diff}: "
+                    f"{traj1[first_diff] if first_diff < len(traj1) else 'EOF'} != "
+                    f"{traj2[first_diff] if first_diff < len(traj2) else 'EOF'}")
         # 指纹只覆盖 seed 派生值；全零 spawn 时它仍会"同 seed 相同、改 seed 不同"。
         # 必须额外断言 spawn 路径真的产出了 NPC，否则门禁对 spawn 回归失明。
         try:

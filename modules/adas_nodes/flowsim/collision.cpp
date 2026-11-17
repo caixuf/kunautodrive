@@ -69,6 +69,46 @@ bool obb_intersect(double cx1, double cy1, double len1, double wid1, double h1,
     return true;  // 4 轴都重叠 → 相交
 }
 
+/* Minimum translation vector for two intersecting OBBs. Returns false when
+ * they are not intersecting; otherwise `out_ax/out_ay` is a unit axis pointing
+ * from box 1 to box 2 and `out_depth` is the smallest overlap on that axis. */
+static bool obb_mtv(double cx1, double cy1, double len1, double wid1, double h1,
+                    double cx2, double cy2, double len2, double wid2, double h2,
+                    double& out_ax, double& out_ay, double& out_depth) {
+    double c1[4][2], c2[4][2];
+    obb_corners(cx1, cy1, len1, wid1, h1, c1);
+    obb_corners(cx2, cy2, len2, wid2, h2, c2);
+    double axes[4][2] = {
+        {std::cos(h1),  std::sin(h1)},
+        {-std::sin(h1), std::cos(h1)},
+        {std::cos(h2),  std::sin(h2)},
+        {-std::sin(h2), std::cos(h2)},
+    };
+    double best_depth = 1e9, best_ax = 1.0, best_ay = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        double min1, max1, min2, max2;
+        project(c1, axes[i][0], axes[i][1], min1, max1);
+        project(c2, axes[i][0], axes[i][1], min2, max2);
+        if (max1 < min2 || max2 < min1) return false;
+        const double depth = std::min(max1, max2) - std::max(min1, min2);
+        if (depth < best_depth) {
+            best_depth = depth;
+            best_ax = axes[i][0];
+            best_ay = axes[i][1];
+        }
+    }
+    /* Orient the axis from box 1 to box 2 so both boxes are pushed apart
+     * in the correct direction. */
+    if ((cx2 - cx1) * best_ax + (cy2 - cy1) * best_ay < 0.0) {
+        best_ax = -best_ax;
+        best_ay = -best_ay;
+    }
+    out_ax = best_ax;
+    out_ay = best_ay;
+    out_depth = best_depth;
+    return true;
+}
+
 int detect_collisions(const EntityPool& pool, std::vector<CollisionPair>& pairs) {
     pairs.clear();
     int n = pool.size();
@@ -151,24 +191,19 @@ void apply_collision_response(EntityPool& pool, const std::vector<CollisionPair>
             // 再通过（沿该轴完全脱开）。若沿中心连线方向推（task 草案写法），
             // 当中心连线方向与 max-overlap 轴对齐时，按 min-overlap 量推送无法
             // 真正脱开 → 下一 tick 仍报碰撞 → cooldown 仍被重置 → 还是卡死。
-            double ax_to_bx = b.x - a.x;
-            double ay_to_by = b.y - a.y;
-            double overlap_x = (a.length + b.length) * 0.5 - std::fabs(ax_to_bx);
-            double overlap_y = (a.width  + b.width ) * 0.5 - std::fabs(ay_to_by);
-            if (overlap_x < 0.0) overlap_x = 0.0;
-            if (overlap_y < 0.0) overlap_y = 0.0;
-            if (overlap_x <= overlap_y) {
-                // 沿 x 轴分离：a 退向 -x，b 进向 +x（按中心连线 x 分量符号）
-                double sign = (ax_to_bx >= 0.0) ? 1.0 : -1.0;
-                double push = overlap_x * 0.5 + 0.01;
-                a.x -= sign * push;
-                b.x += sign * push;
-            } else {
-                // 沿 y 轴分离
-                double sign = (ay_to_by >= 0.0) ? 1.0 : -1.0;
-                double push = overlap_y * 0.5 + 0.01;
-                a.y -= sign * push;
-                b.y += sign * push;
+            /* Use the OBB minimum-translation vector, not unrotated AABB
+             * extents: when two rotated cars intersect at a corner, both
+             * unrotated overlaps can clamp to zero and the pair only moves
+             * 0.01m, re-colliding forever. */
+            double mtv_ax = 1.0, mtv_ay = 0.0, mtv_depth = 0.0;
+            if (obb_mtv(a.x, a.y, a.length, a.width, a.heading,
+                        b.x, b.y, b.length, b.width, b.heading,
+                        mtv_ax, mtv_ay, mtv_depth)) {
+                const double push = mtv_depth * 0.5 + 0.02;
+                a.x -= mtv_ax * push;
+                a.y -= mtv_ay * push;
+                b.x += mtv_ax * push;
+                b.y += mtv_ay * push;
             }
         }
 

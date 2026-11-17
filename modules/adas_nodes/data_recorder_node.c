@@ -287,13 +287,13 @@ static int recorder_execute(TaskBase* task) {
             f0[0] = front0->x; f0[1] = front0->y; f0[2] = front0->vx;
             f0[3] = (double)(int)front0->type; f0[4] = front0->confidence;
         } else {
-            f0[0] = g.ego_x + 500.0; f0[1] = 0.0; f0[2] = 0.0; f0[3] = 1.0; f0[4] = 1.0;
+            f0[0] = 500.0; f0[1] = 0.0; f0[2] = 0.0; f0[3] = 1.0; f0[4] = 1.0;
         }
         if (front1) {
             f1[0] = front1->x; f1[1] = front1->y; f1[2] = front1->vx;
             f1[3] = (double)(int)front1->type; f1[4] = front1->confidence;
         } else {
-            f1[0] = g.ego_x + 520.0; f1[1] = 0.0; f1[2] = 0.0; f1[3] = 1.0; f1[4] = 1.0;
+            f1[0] = 520.0; f1[1] = 0.0; f1[2] = 0.0; f1[3] = 1.0; f1[4] = 1.0;
         }
 
         double control_brake = g.has_control ? g.control.brake : 0.0;

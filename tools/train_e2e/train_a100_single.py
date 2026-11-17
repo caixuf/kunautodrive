@@ -192,32 +192,30 @@ def build_state_vector_59(rec: dict, state_dim: int = 59) -> list[float]:
     ctrl = rec.get("control") if isinstance(rec.get("control"), dict) else {}
     plan = rec.get("planning") if isinstance(rec.get("planning"), dict) else {}
 
-    x0 = float(ego0.get("x", 0.0))
-    y0 = float(ego0.get("y", 0.0))
-    h0 = float(ego0.get("heading", 0.0))
-    ch, sh = math.cos(h0), math.sin(h0)
-
     # 覆盖全局 ego.y，统一使用局部车道横向偏移避免大地图坐标漂移
     lane_off = float(ctx.get("ego_lane_offset", st[22] if state_dim > 22 else 0.0))
     if abs(lane_off) < 50.0 and state_dim > 1:
         st[1] = lane_off
 
     # 槽位 23..46: 最近 4 个障碍物在自车局部坐标系下的 [rel_x, rel_y, rel_vx, rel_vy, type, conf]
+    #
+    # data_recorder/ perception_node already write obstacles in the vehicle body
+    # frame (Obstacle convention), so subtracting world ego.x/ego.y and rotating
+    # again double-transforms them. On a map away from the origin this produced
+    # e.g. ego=(11.98,-17.28) + body obstacle (0,4.6) -> (-11.98,21.88), and
+    # dropped every obstacle when |ego.x| > 150.
     obs_raw = rec.get("obstacles") if isinstance(rec.get("obstacles"), list) else []
     obs_local: list[tuple[float, list[float]]] = []
     for o in obs_raw:
         if not isinstance(o, dict):
             continue
-        dx = float(o.get("x", 0.0)) - x0
-        dy = float(o.get("y", 0.0)) - y0
-        dist = math.hypot(dx, dy)
+        lx = float(o.get("x", 0.0))
+        ly = float(o.get("y", 0.0))
+        dist = math.hypot(lx, ly)
         if dist > 150.0:
             continue
-        lx = ch * dx + sh * dy
-        ly = -sh * dx + ch * dy
-        ovx, ovy = float(o.get("vx", 0.0)), float(o.get("vy", 0.0))
-        lvx = ch * ovx + sh * ovy
-        lvy = -sh * ovx + ch * ovy
+        lvx = float(o.get("vx", 0.0))
+        lvy = float(o.get("vy", 0.0))
         obs_local.append((dist, [lx, ly, lvx, lvy, float(o.get("type", 0.0)), float(o.get("confidence", 1.0))]))
     obs_local.sort(key=lambda item: item[0])
     for idx, (_, feat) in enumerate(obs_local[:4]):

@@ -106,12 +106,13 @@ class TunableParkingTracker(ManeuverTracker):
 
 def _make_crooked_traj(
     start_pose: tuple[float, float, float],
-    target_heading: float,
+    target_pose: tuple[float, float, float],
     k_rec_steer: float,
 ) -> tuple[list[TrajectoryPoint], tuple[float, float, float]]:
     dt = 0.05
     pts: list[TrajectoryPoint] = []
     sx, sy, sh = start_pose
+    goal_x, goal_y, target_heading = target_pose
 
     def step_steer(steer: float, v: float, n: int) -> None:
         nonlocal sx, sy, sh
@@ -128,10 +129,27 @@ def _make_crooked_traj(
         steer = 0.0 if abs(dh) < 0.01 else max(-0.48, min(0.48, dh * k_rec_steer))
         step_steer(steer, 1.0, 1)
     step_steer(0.0, 0.5, 10)
-    pts.append(TrajectoryPoint(sx, sy, sh, kappa=0.0, v=0.0))
-    step_steer(0.0, -0.8, 35)
-    step_steer(0.0, -0.3, 12)
-    pts.append(TrajectoryPoint(sx, sy, sh, kappa=0.0, v=0.0))
+    # Finish heading alignment (the 45-step loop froze steer below 0.01 rad
+    # and often left >3° residual, failing the slot heading gate).
+    for _ in range(60):
+        dh = norm_angle(target_heading - sh)
+        if abs(dh) < 0.002:
+            break
+        step_steer(max(-0.50, min(0.50, dh * k_rec_steer)), 0.35, 1)
+    step_steer(0.0, 0.2, 5)
+    # Drive the reverse leg by the true slot distance instead of a fixed
+    # 35+12 steps (which stopped ~0.87 m short and made the trainer grade
+    # against its own endpoint).
+    dx = goal_x - sx
+    dy = goal_y - sy
+    dist_back = -(dx * math.cos(sh) + dy * math.sin(sh))
+    if dist_back > 0.02:
+        n = max(1, int(round(dist_back / (0.30 * dt))))
+        step_steer(0.0, -0.30, n)
+    elif dist_back < -0.02:
+        n = max(1, int(round(-dist_back / (0.30 * dt))))
+        step_steer(0.0, 0.30, n)
+    pts.append(TrajectoryPoint(goal_x, goal_y, target_heading, kappa=0.0, v=0.0))
     return pts, (sx, sy, sh)
 
 
@@ -147,7 +165,8 @@ def run_episode(mode: int, seed: int, params: np.ndarray) -> tuple[float, float,
         deg = rng.choice([-1.0, 1.0]) * rng.uniform(12.0, 30.0)
         start = (10.0 + rng.uniform(-0.2, 0.2), -5.0 + rng.uniform(-0.2, 0.2),
                  norm_angle(-math.pi * 0.5 + math.radians(deg)))
-        traj, goal = _make_crooked_traj(start, -math.pi * 0.5, float(params[4]))
+        goal = (10.0, -5.0, -math.pi * 0.5)  # true slot, not the generator endpoint
+        traj, _ = _make_crooked_traj(start, goal, float(params[4]))
 
     tracker = TunableParkingTracker(traj, params)
     cx, cy, ch = start

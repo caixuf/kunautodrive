@@ -2155,9 +2155,16 @@ protected:
                 for (int t = 0; t < g.truth_obs_count && n_obs < 128; t++) {
                     if (!g.truth_obs_is_facility[t]) continue;
                     if (!pf_same_elevation_layer(g.truth_obs_z[t], g.ego_z)) continue;
-                    double dx = g.truth_obs_x[t] - g.ego_x;
-                    if (dx < OBS_MIN_DX_M || dx > OBS_MAX_DX_M) continue;
-                    if (fabs(g.truth_obs_y[t] - g.ego_y) > 15.0) continue;
+                    /* Use ego-frame projection like the perception loop above;
+                     * world dx is direction-blind on the return leg (heading≈π)
+                     * and would drop gates/columns ahead while injecting the
+                     * ones behind the car. */
+                    const double fdx = g.truth_obs_x[t] - g.ego_x;
+                    const double fdy = g.truth_obs_y[t] - g.ego_y;
+                    const double along = fdx * obs_ch + fdy * obs_sh;
+                    const double lat = -fdx * obs_sh + fdy * obs_ch;
+                    if (along < OBS_MIN_DX_M || along > OBS_MAX_DX_M) continue;
+                    if (std::fabs(lat) > 15.0) continue;
                     bool dup = false;
                     for (int k = 0; k < n_obs; k++) {
                         if (hypot(ox[k] - g.truth_obs_x[t], oy[k] - g.truth_obs_y[t]) < 0.8) {

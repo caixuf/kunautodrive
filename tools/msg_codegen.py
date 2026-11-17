@@ -906,6 +906,20 @@ class CodeGenerator:
         lines.append(f"        uint8_t* buf, size_t* out_size) {{")
         lines.append(f"    if (!src) return -1;")
         lines.append(f"    size_t total = {total_size};")
+        # Pre-compute payload placement for variable-length fields. The fixed
+        # struct is followed by aligned slices exactly like the builder API.
+        for f in s.fields:
+            if not f.is_varlen:
+                continue
+            elem_ctype, elem_align = self._varlen_elem_type_and_align(f)
+            lines.append(f"    size_t var_off_{f.name} = 0, var_len_{f.name} = 0;")
+            lines.append(f"    if (src->{f.name}.count > 0u && src->{f.name}.offset > 0u) {{")
+            lines.append(f"        size_t pos = (total + {elem_align}u - 1u) & ~(size_t)({elem_align}u - 1u);")
+            lines.append(f"        size_t bytes = (size_t)src->{f.name}.count * sizeof({elem_ctype});")
+            lines.append(f"        total = pos + bytes;")
+            lines.append(f"        var_off_{f.name} = pos;")
+            lines.append(f"        var_len_{f.name} = bytes;")
+            lines.append(f"    }}")
         lines.append(f"    if (out_size) *out_size = total;")
         lines.append(f"    if (!buf) return 0;  /* size query only */")
         lines.append(f"")
@@ -918,7 +932,8 @@ class CodeGenerator:
             _, f, off, elem_size, _, count = slot
             if f.is_varlen:
                 lines.append(f"    if (buf) {{")
-                lines.append(f"        serializer_store_le(buf + {off}, &src->{f.name}.offset, 4);")
+                lines.append(f"        uint32_t v_off = (uint32_t)var_off_{f.name};")
+                lines.append(f"        serializer_store_le(buf + {off}, &v_off, 4);")
                 lines.append(f"        serializer_store_le(buf + {off + 4}, &src->{f.name}.count, 4);")
                 lines.append(f"    }}")
                 continue
@@ -951,6 +966,14 @@ class CodeGenerator:
             if f.array_size > 0:
                 lines.append("    }")
 
+        for f in s.fields:
+            if not f.is_varlen:
+                continue
+            lines.append(f"    if (buf && var_len_{f.name} > 0u && src->{f.name}.offset > 0u) {{")
+            lines.append(f"        memcpy(buf + var_off_{f.name},")
+            lines.append(f"               (const uint8_t*)src + src->{f.name}.offset, var_len_{f.name});")
+            lines.append(f"    }}")
+
         lines.append(f"    return 0;")
         lines.append(f"}}")
         lines.append("")
@@ -964,6 +987,15 @@ class CodeGenerator:
         lines.append(f"        const uint8_t* buf, size_t size) {{")
         lines.append(f"    if (!dst || !buf) return -1;")
         lines.append(f"    if (size < {total_size}) return -1;")
+        if s.has_varlen:
+            # Materialize the whole message (fixed header + aligned varlen
+            # payload) into dst; callers must provide at least `size` bytes.
+            lines.append(f"    /* varlen: dst must point to a buffer of at least `size` bytes */")
+            lines.append(f"    memmove(dst, buf, size);")
+            lines.append(f"    return 0;")
+            lines.append(f"}}")
+            lines.append("")
+            return lines
         lines.append(f"    memset(dst, 0, sizeof(*dst));")
         lines.append(f"")
 

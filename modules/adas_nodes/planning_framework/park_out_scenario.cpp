@@ -178,6 +178,17 @@ bool ParkOutManeuverStage::PlanTrajectory(FrameContext& context) {
                             wh, 0.0, 1, 0.0, 0.0});
     }
 
+    /* Fallback must obey the same collision contract as Hybrid A*. The old
+     * fixed reverse-arc + straight interpolation could latch an 18/64-point
+     * collision path through a garage wall. If it is not collision-free,
+     * refuse to latch and let the next tick replan (the hold fallback below
+     * is collision-checked by construction). */
+    for (const auto& p : fallback) {
+        if (planner_.CheckVehicleCollision(p.x, p.y, p.heading, env)) {
+            return false;
+        }
+    }
+
     latched_trajectory_.seq = context.seq;
     latched_trajectory_.stamp_us = context.timestamp_us;
     OpenSpaceCruiseStage::DownsampleTrajectory(fallback, latched_trajectory_, veh.wheelbase);

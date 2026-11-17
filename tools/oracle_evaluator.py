@@ -43,11 +43,20 @@ def compute_ttc_drac(
     ux, uy = dx / dist_center, dy / dist_center
     # Closing speed (> 0 means approaching)
     v_close = (ego_vx - obs_vx) * ux + (ego_vy - obs_vy) * uy
-    # Lateral separation check (ignore far-away parallel lanes)
-    lat_sep = abs(-(ego_vx - obs_vx) * 0.0 + (-uy * dx + ux * dy))
-    _ = lat_sep
     if v_close <= 0.05:
         return math.inf, 0.0
+    # Lateral separation of the obstacle centre from the relative-motion line.
+    # The old expression was identically zero (it was the perpendicular of the
+    # same vector it was built from), so a car in a parallel lane was scored as
+    # an in-path TTC conflict.
+    rvx = ego_vx - obs_vx
+    rvy = ego_vy - obs_vy
+    rv = math.hypot(rvx, rvy)
+    if rv > 1e-6:
+        vx, vy = rvx / rv, rvy / rv
+        lat_sep = abs(-vy * dx + vx * dy)
+        if lat_sep > 0.5 * (ego_wid + obs_wid) + 0.2:
+            return math.inf, 0.0
     if clearance <= 1e-4:
         return 0.0, 99.0
     ttc = clearance / v_close

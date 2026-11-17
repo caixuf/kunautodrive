@@ -518,8 +518,11 @@ void step_npc_vehicle(Entity& npc, const EntityPool& pool,
          * + frenet_to_world），让被碰撞弹偏的车自动回到车道里。之前直接 return
          * 导致 crash_cooldown 2s 内车停在被推到的错误位置/朝向，冷却结束后
          * 在路外 world_to_frenet 失败 → 飞出路面。 */
-    } else if (npc.state == NpcState::Stopped && !npc.parked_fixed && npc.target_vx > 0.1) {
-        /* 碰撞冷却结束后恢复巡航/跟车（避免动态交通流 NPC 因一次擦碰永久变成路障） */
+    } else if (npc.is_dynamic_traffic && npc.state == NpcState::Stopped &&
+               !npc.parked_fixed && npc.target_vx > 0.1) {
+        /* 碰撞冷却结束后恢复巡航/跟车（避免动态交通流 NPC 因一次擦碰永久变成路障）。
+         * 仅限 Poisson 动态交通：场景脚本显式 ai_state="stop" 的 actor 必须
+         * 能保持停车，不能被下一帧自动改成 Cruise。 */
         npc_request_state(npc, {NpcEvent::LeadLost}, cfg);
     }
 

@@ -208,6 +208,13 @@ int OpenSpaceCruiseStage::DownsampleTrajectory(const std::vector<PathPoint>& raw
 }
 
 bool OpenSpaceCruiseStage::PlanTrajectory(FrameContext& context) {
+    /* A failed 48-trial search costs ~3s and was re-run on every 50ms tick
+     * (latched_trajectory_=false). Back off one second between attempts so the
+     * planning coroutine/lock-step barrier is not monopolized. */
+    if (replan_cooldown_ > 0) {
+        --replan_cooldown_;
+        return false;
+    }
     const auto& ego = context.vehicle_state;
     const auto& goal = context.parking_goal;
 
@@ -329,7 +336,10 @@ bool OpenSpaceCruiseStage::PlanTrajectory(FrameContext& context) {
                 HybridAStarResult result;
                 if (planner_.Plan(start_xr, start_yr, ego.heading, pre_xr, pre_yr, plan_goal_h, env, &result) &&
                     !result.path.empty()) {
-                    append_straight_tail(pre_dist, result.path);
+                    /* The reverse tail into the slot is collision-checked;
+                     * if it collides, try the next pre_dist instead of
+                     * latching a path that stops short of / past the slot. */
+                    if (!append_straight_tail(pre_dist, result.path)) continue;
                     latched_trajectory_.seq = context.seq;
                     latched_trajectory_.stamp_us = context.timestamp_us;
                     DownsampleTrajectory(result.path, latched_trajectory_, veh.wheelbase);
@@ -359,6 +369,7 @@ bool OpenSpaceCruiseStage::PlanTrajectory(FrameContext& context) {
         p.jerk = 0.0f;
     }
     trajectory_latched_ = false;
+    replan_cooldown_ = 20;  /* 20 Hz * 1s */
     return false;
 }
 

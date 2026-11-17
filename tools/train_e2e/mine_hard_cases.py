@@ -26,17 +26,17 @@ def _estimate_v2_ttc(record: dict[str, Any]) -> float | None:
     obs_list = record.get("obstacles")
     if not isinstance(ego, dict) or not isinstance(obs_list, list) or not obs_list:
         return None
-    ex = float(ego.get("x", 0.0))
-    ey = float(ego.get("y", 0.0))
     ev = float(ego.get("v", 0.0))
-    hdg = float(ego.get("heading", 0.0))
-    evx, evy = ev * math.cos(hdg), ev * math.sin(hdg)
+    # e2e_sample.v2 obstacles are already in the vehicle body frame
+    # (data_recorder copies perception/obstacles' Obstacle fields directly).
+    # Do not subtract world ego.x/ego.y or rotate by world heading again.
+    evx, evy = ev, 0.0
     min_ttc: float | None = None
     for obs in obs_list:
         if not isinstance(obs, dict):
             continue
-        dx = float(obs.get("x", 0.0)) - ex
-        dy = float(obs.get("y", 0.0)) - ey
+        dx = float(obs.get("x", 0.0))
+        dy = float(obs.get("y", 0.0))
         dist = math.hypot(dx, dy)
         if dist < 1e-3 or dist > 80.0:
             continue

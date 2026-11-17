@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -51,11 +52,30 @@ def main() -> int:
         if missing:
             errors.append(f"Header missing timestamp-trio/frame fields: {missing}")
 
-    # Check ImageFrame / ChassisState / HmiDecisionState embed Header
+    # Key messages must embed Header or declare frame_id/timestamp_us explicitly.
     for name in ("ImageFrame", "ChassisState", "HmiDecisionState"):
         st = by_name.get(name)
         if st and not any(f.idl_type == "Header" for f in st.fields):
             errors.append(f"`{name}` must embed `Header` for frame_id & timestamp-trio")
+    for name in ("Localization", "LidarPointCloud"):
+        st = by_name.get(name)
+        if not st:
+            continue
+        fields = {f.name for f in st.fields}
+        has_header = any(f.idl_type == "Header" for f in st.fields)
+        if not has_header and not {"frame_id", "timestamp_us"} <= fields:
+            errors.append(
+                f"`{name}` must embed `Header` or declare frame_id+timestamp_us"
+            )
+
+    # Unit suffix contract: time/stamp fields must state their unit.
+    for name, st in by_name.items():
+        for f in st.fields:
+            if re.search(r"(time|stamp)", f.name) and not re.search(r"_(us|ms|s)$", f.name):
+                errors.append(
+                    f"`{name}.{f.name}` has an ambiguous time unit suffix "
+                    "(expected _us/_ms/_s)"
+                )
 
     if errors:
         print("✗ frame_unit_contract_check FAILED:")

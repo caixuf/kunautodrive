@@ -33,12 +33,17 @@ from open_space_parking_sim import (  # noqa: E402
 
 def _generate_crooked_recovery_trajectory(
     start_pose: tuple[float, float, float],
-    target_heading: float,
+    target_pose: tuple[float, float, float],
     dt: float = 0.05,
 ) -> tuple[list[TrajectoryPoint], tuple[float, float, float]]:
-    """生成运动学可行的歪斜车位二次揉库轨迹：弧线前拉回正，再直行倒回库位。"""
+    """生成运动学可行的歪斜车位二次揉库轨迹：弧线前拉回正，再直行倒回库位。
+
+    target_pose 是真实车位中心/朝向；轨迹必须真正收敛到它，而不是把生成器
+    自己的末端当成目标（旧实现会让 0.87m 的车位误差显示成 0.06m）。
+    """
     pts: list[TrajectoryPoint] = []
     sx, sy, sh = start_pose
+    goal_x, goal_y, target_heading = target_pose
 
     def step_steer(steer: float, v: float, n: int) -> None:
         nonlocal sx, sy, sh
@@ -59,12 +64,47 @@ def _generate_crooked_recovery_trajectory(
             steer = max(-0.48, min(0.48, dh * 2.5))
         step_steer(steer, 1.0, 1)
     step_steer(0.0, 0.5, 10)
-    pts.append(TrajectoryPoint(x=sx, y=sy, heading=sh, kappa=0.0, v=0.0))
 
-    # Stage 2: Straight reverse back into slot
-    step_steer(0.0, -0.8, 35)
-    step_steer(0.0, -0.3, 12)
-    pts.append(TrajectoryPoint(x=sx, y=sy, heading=sh, kappa=0.0, v=0.0))
+    # Stage 1.5: finish the heading alignment (the old 45-step loop could stop
+    # with ~3.2° residual because it froze the steer below 0.01 rad).
+    for _ in range(60):
+        dh = norm_angle(target_heading - sh)
+        if abs(dh) < 0.002:
+            break
+        step_steer(max(-0.50, min(0.50, dh * 3.0)), 0.35, 1)
+    step_steer(0.0, 0.2, 5)
+
+    # Stage 2: choose a single constant-steer reverse/forward arc that gets
+    # closest to the true slot centre+heading. Fixed 35+12 steps left ~0.87 m;
+    # a small deterministic search is cheap here (offline trainer) and produces
+    # a kinematically feasible approach to the actual slot.
+    best_pts: list[TrajectoryPoint] = []
+    best_pose = (sx, sy, sh)
+    best_err = float("inf")
+    for v in (-0.25, 0.25):
+        for si in range(-25, 26):
+            steer = si * 0.02
+            kappa = math.tan(steer) / WHEELBASE
+            px, py, ph = sx, sy, sh
+            trial: list[TrajectoryPoint] = []
+            for _ in range(150):
+                yaw = v / WHEELBASE * math.tan(steer)
+                ph = norm_angle(ph + yaw * dt)
+                px += (v * math.cos(ph) - WHEELBASE * 0.5 * math.sin(ph) * yaw) * dt
+                py += (v * math.sin(ph) + WHEELBASE * 0.5 * math.cos(ph) * yaw) * dt
+                trial.append(TrajectoryPoint(x=px, y=py, heading=ph,
+                                             kappa=kappa, v=v))
+                err = math.hypot(goal_x - px, goal_y - py) + \
+                    0.6 * abs(norm_angle(target_heading - ph))
+                if err < best_err:
+                    best_err = err
+                    best_pts = list(trial)
+                    best_pose = (px, py, ph)
+    if best_pts:
+        pts.extend(best_pts)
+        sx, sy, sh = best_pose
+    pts.append(TrajectoryPoint(x=goal_x, y=goal_y, heading=target_heading,
+                               kappa=0.0, v=0.0))
 
     return downsample_trajectory(pts, 64), (sx, sy, sh)
 
@@ -98,8 +138,8 @@ def run_suite(verbose: bool = False) -> dict[str, Any]:
             goal_rec[1] + 0.10,
             norm_angle(goal_rec[2] + math.radians(deg_err)),
         )
-        traj_rec, goal_rec_actual = _generate_crooked_recovery_trajectory(start_rec, goal_rec[2])
-        r_rec = simulate_closed_loop(traj_rec, start_rec, goal_rec_actual, max_ticks=450, verbose=verbose)
+        traj_rec, _ = _generate_crooked_recovery_trajectory(start_rec, goal_rec)
+        r_rec = simulate_closed_loop(traj_rec, start_rec, goal_rec, max_ticks=450, verbose=verbose)
         cases.append({"name": tag, **r_rec})
 
     passed = sum(1 for c in cases if c["passed"])
