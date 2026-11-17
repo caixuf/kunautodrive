@@ -276,7 +276,7 @@ static int recorder_execute(TaskBase* task) {
         const Obstacle* front1 = NULL;
         select_front_obstacles(g.has_obstacles ? &g.obstacles : NULL, &front0, &front1);
 
-        /* 数据质量：缺失障碍物用"远处无车"占位（type=1, conf=1, x=ego+500）。
+        /* 数据质量：缺失障碍物用"远处无车"占位（type=1, conf=1, 车体系 x=500）。
          * 与 inference_node.cpp / feature_schema.py 的占位口径完全一致，保证
          * 训练与推理对"无车"的输入分布相同。旧实现写 type=0/conf=0/x=0，
          * 而 type/confidence 的 norm_scale≈1e-6，训练时 (0-1)/1e-6≈-1e6、
