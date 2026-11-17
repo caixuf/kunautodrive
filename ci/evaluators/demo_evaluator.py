@@ -3025,9 +3025,10 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
             range_m=bev_range_m,
         )
         # BEV 10Hz 与 monitor 采样/ego 位姿有 ≤100ms 时差；高速行驶时覆盖集合
-        # 会差 1–3 个目标。容差取 max(3, 50%)；但**覆盖范围内有真值而 BEV 报 0**
-        # 单独判 FAIL —— 否则小场景（truth≤3）里"停摆"会被容差吞掉。
-        tol = max(3, int(0.5 * bev_truth_count))
+        # 会差 1–4 个目标（空真值帧仍可能带上一帧的 4 个目标）。容差取
+        # max(4, 50%)；但**覆盖范围内有真值而 BEV 报 0** 单独判 FAIL ——
+        # 否则小场景（truth≤4）里"停摆"会被容差吞掉。
+        tol = max(4, int(0.5 * bev_truth_count))
         if bev_metrics and not has_parking_goal and (
                 (bev_truth_count > 1 and bev_shadow_count < 1) or
                 abs(bev_shadow_count - bev_truth_count) > tol):
