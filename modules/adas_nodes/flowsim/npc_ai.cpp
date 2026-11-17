@@ -742,18 +742,17 @@ void step_npc_vehicle(Entity& npc, const EntityPool& pool,
             npc.state == NpcState::LaneChange ||
             npc.state == NpcState::StopForTL ||
             npc.state == NpcState::Yield ||
-            npc.state == NpcState::Stopped ||
-            dist_to_seg_end < 40.0) { goto mobil_done; }
+            dist_to_seg_end < 20.0) { goto mobil_done; }
         if (npc.lane_change_timer > 0.0) {
             npc.lane_change_timer -= dt;
             if (npc.lane_change_timer < 0.0) npc.lane_change_timer = 0.0;
-        } else if (npc.route_dir > 0 && npc.speed > 2.0) {
-            // 避障触发条件：前车太慢且间距不足
+        } else if (npc.route_dir > 0) {
+            // 避障触发条件：前车太慢或已停在队列中且间距不足
             bool blocked = false;
             if (lead != INVALID_ENTITY) {
                 const Entity& lead_e = pool[lead];
-                double trigger_gap = 10.0 + npc.speed * 1.5;
-                if (gap < trigger_gap && lead_e.speed < npc.speed * 0.7) {
+                double trigger_gap = 12.0 + npc.speed * 1.5;
+                if (gap < trigger_gap && (lead_e.speed < npc.speed * 0.7 || lead_e.speed < 2.0)) {
                     blocked = true;
                 }
             }
@@ -795,8 +794,10 @@ void step_npc_vehicle(Entity& npc, const EntityPool& pool,
                     if (cand < -900) continue;
                     if (std::fabs(cand) > 20.0) continue;
                     if (!boundary_permissive(npc, cand, roads)) continue;
+                    double req_front = (npc.speed < 2.0) ? 14.0 : 22.0;
+                    double req_rear  = (npc.speed < 2.0) ? 10.0 : 14.0;
                     if (is_target_lane_safe_for_change(
-                            npc, cand, pool, cfg.same_lane_tol, 22.0, 14.0)) {
+                            npc, cand, pool, cfg.same_lane_tol, req_front, req_rear)) {
                         chosen = cand;
                         break;
                     }
