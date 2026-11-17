@@ -109,7 +109,6 @@ static inline const void* message_bus_message_data(const Message* msg) {
      * garbage. */
     if (msg->payload_kind == MSG_PAYLOAD_LOANED) return msg->_loaned_data;
     if (msg->payload_kind == MSG_PAYLOAD_SHM_REF) return msg->_shm_ptr;
-    if (msg->_loaned_data) return msg->_loaned_data;
     return msg->data;
 }
 
@@ -133,6 +132,7 @@ static inline void message_bus_copy_message(Message* dst, const Message* src) {
                src->data_size <= MSG_INLINE_MAX_SIZE) {
         memcpy(dst->data, message_bus_message_data(src), src->data_size);
         dst->payload_kind = MSG_PAYLOAD_INLINE;
+        dst->_loaned_data = NULL;
     } else if (large && src->payload_kind == MSG_PAYLOAD_LOANED) {
         /* Borrow: the original release callback still owns the buffer. */
         dst->_loaned_data = src->_loaned_data;

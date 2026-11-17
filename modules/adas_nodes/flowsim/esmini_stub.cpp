@@ -13,6 +13,11 @@ id_t RM_GetIdOfRoadFromIndex(unsigned int index) { (void)index; return -1; }
 double RM_GetRoadLength(id_t id) { (void)id; return 0.0; }
 const char* RM_GetRoadIdString(id_t road_id) { (void)road_id; return ""; }
 int RM_GetRoadNumberOfDrivableLanes(id_t roadId, double s) { (void)roadId; (void)s; return 0; }
+int RM_GetDrivableLaneIdByIndex(id_t roadId, int index, double s, int* laneId) {
+    (void)roadId; (void)index; (void)s;
+    if (laneId) *laneId = 0;
+    return -1;
+}
 int RM_SetLanePosition(int handle, id_t roadId, int laneId, double laneOffset, double s, bool align) {
     (void)handle; (void)roadId; (void)laneId; (void)laneOffset; (void)s; (void)align;
     return -1;

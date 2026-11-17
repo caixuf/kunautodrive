@@ -281,11 +281,26 @@ export function createTrafficLightView(scene) {
         rows.push({ prefix: hasLeft ? '●' : '', sec: mSec, color: mCol === 'flashing_green' ? 'green' : mCol });
         const key = `${hasLeft ? 1 : 0}|` + rows.map(r => `${r.prefix}:${r.sec}:${r.color}`).join(';');
         if (key !== entry.cdKey) {
-          const tex = makeSignalCountdownTexture(rows);
+          /* Countdown textures change every second; do not use the global
+           * cache (it would keep up to 300 stale GPU textures) and dispose the
+           * previous map once it is no longer referenced by another light. */
+          const oldMap = entry.countdownMesh.material.map;
+          const tex = makeSignalCountdownTexture(rows, false);
           if (tex) {
             entry.countdownMesh.material.map = tex;
             entry.countdownMesh.material.needsUpdate = true;
             entry.countdownMesh.scale.y = rows.length > 1 ? 1.15 : 0.72;
+            if (oldMap && oldMap !== tex) {
+              let shared = false;
+              for (const [, other] of pool) {
+                if (other !== entry && other.countdownMesh &&
+                    other.countdownMesh.material.map === oldMap) {
+                  shared = true;
+                  break;
+                }
+              }
+              if (!shared) oldMap.dispose();
+            }
           }
           entry.cdKey = key;
         }
@@ -302,8 +317,20 @@ export function createTrafficLightView(scene) {
     const aliveIds = new Set(all.map(e => e.id));
     for (const [id, entry] of pool.entries()) {
       if (!aliveIds.has(id)) {
+        const map = entry.countdownMesh && entry.countdownMesh.material &&
+          entry.countdownMesh.material.map;
         scene.remove(entry.group);
         pool.delete(id);
+        if (map) {
+          let shared = false;
+          for (const [, other] of pool) {
+            if (other.countdownMesh && other.countdownMesh.material.map === map) {
+              shared = true;
+              break;
+            }
+          }
+          if (!shared) map.dispose();
+        }
       }
     }
 
@@ -324,7 +351,12 @@ export function createTrafficLightView(scene) {
   }
 
   function clear() {
-    for (const [, entry] of pool) scene.remove(entry.group);
+    for (const [, entry] of pool) {
+      const map = entry.countdownMesh && entry.countdownMesh.material &&
+        entry.countdownMesh.material.map;
+      if (map) map.dispose();
+      scene.remove(entry.group);
+    }
     pool.clear();
   }
 

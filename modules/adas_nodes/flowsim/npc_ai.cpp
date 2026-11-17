@@ -439,7 +439,14 @@ static void recycle_npc(Entity& npc, const Route& route, double ego_route_s,
                 int fb_lane = (npc.route_dir >= 0) ? -1 : 1;
                 double fb_off = lane_internal_from_offset(
                     *roads, rid, fb_lane, s_local, npc.offset);
-                npc.road_pos.relocate(*roads, rid, fb_lane, s_local, fb_off);
+                if (npc.road_pos.relocate(*roads, rid, fb_lane, s_local, fb_off)) {
+                    /* Keep the fallback lane, otherwise every tick retries the
+                     * stale (possibly -2) lane and esmini logs an error. */
+                    npc.lane_id = fb_lane;
+                    npc.offset = offset_from_lane_internal(
+                        *roads, rid, fb_lane, s_local, fb_off);
+                    npc.target_offset = npc.offset;
+                }
             }
         }
         if (npc.road_pos.ok()) {
@@ -1048,7 +1055,12 @@ mobil_done: ;
                                 int fb_lane = (npc.route_dir >= 0) ? -1 : 1;
                                 double fb_off = lane_internal_from_offset(
                                     *roads, rid, fb_lane, s_local, npc.offset);
-                                npc.road_pos.relocate(*roads, rid, fb_lane, s_local, fb_off);
+                                if (npc.road_pos.relocate(*roads, rid, fb_lane, s_local, fb_off)) {
+                                    npc.lane_id = fb_lane;
+                                    npc.offset = offset_from_lane_internal(
+                                        *roads, rid, fb_lane, s_local, fb_off);
+                                    npc.target_offset = npc.offset;
+                                }
                             }
                             WorldPos wp_sep;
                             if (npc.road_pos.world(wp_sep)) {
@@ -1071,7 +1083,17 @@ mobil_done: ;
                                 npc.x, npc.y, npc.z, own_wp.x, own_wp.y, own_wp.z, own_wp.h);
                             if (proj.valid) {
                                 const double s_sep = std::max(0.0, npc.s + proj.along);
-                                const int sync_lane = (npc.lane_id != 0) ? npc.lane_id : -1;
+                                int sync_lane = (npc.lane_id != 0) ? npc.lane_id : -1;
+                                /* Lane ids belong to the current road; a -2
+                                 * from a wide road is invalid on a 2-lane
+                                 * ramp and spams esmini SetLanePosition. */
+                                const std::vector<int> valid_lanes =
+                                    roads->drivable_lane_ids(npc.road_id, s_sep);
+                                if (!valid_lanes.empty() &&
+                                    std::find(valid_lanes.begin(), valid_lanes.end(), sync_lane) == valid_lanes.end()) {
+                                    sync_lane = (npc.route_dir >= 0) ? -1 : 1;
+                                    npc.lane_id = sync_lane;
+                                }
                                 const double lane_off = lane_internal_from_offset(
                                     *roads, npc.road_id, sync_lane, s_sep, proj.lat);
                                 if (npc.road_pos.relocate(*roads, npc.road_id, sync_lane, s_sep, lane_off)) {

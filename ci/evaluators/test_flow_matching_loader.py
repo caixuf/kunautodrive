@@ -26,8 +26,10 @@ def test_build_state_vector_59_encodes_ego_frame_obstacles() -> None:
         "control": {"throttle": 0.4, "brake": 0.0, "steering": 0.01},
         "planning": {"target_speed": 15.0},
         "scene_context": {"speed_limit": 15.0, "curvature": 0.01, "lane_count": 4, "lane_width": 3.5, "ego_lane_offset": 0.25},
+        # e2e_sample.v2 obstacles are already in the ego body frame
+        # (msg/perception.msg): 20m ahead, 8m/s opening speed.
         "obstacles": [
-            {"x": 100.0, "y": 220.0, "vx": 0.0, "vy": 8.0, "type": 1, "confidence": 0.95},
+            {"x": 20.0, "y": 0.0, "vx": 8.0, "vy": 0.0, "type": 1, "confidence": 0.95},
         ],
     }
     st = build_state_vector_59(rec)

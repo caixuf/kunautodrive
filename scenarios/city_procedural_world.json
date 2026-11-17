@@ -80,10 +80,10 @@
     "exclude_zones": [
       {"x": 200.0, "y": 0.0, "radius": 32.0, "kinds": ["tree", "building", "furniture"]}
     ],
-    "edge_overrides": {
-      "cbd_gateway_avenue": {"speed_limit_kph": 60},
-      "skybridge_overpass": {"trees": false, "speed_limit_kph": 80}
-    },
+    "edge_overrides": [
+      {"edge": "cbd_gateway_avenue", "speed_limit_kph": 60},
+      {"edge": "skybridge_overpass", "trees": false, "speed_limit_kph": 80}
+    ],
     "custom_props": [
       {
         "id": "city_welcome_gantry",

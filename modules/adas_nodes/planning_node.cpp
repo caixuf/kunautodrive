@@ -137,7 +137,7 @@ struct PlanningContext {
     /* 从 fusion/localization 或 vehicle/state 解析的最新状态。
      * vehicle/state（flowsim 真值）优先于 fusion/localization（EKF 估计），
      * 当 vehicle/state 近期到达时 on_fusion 不覆盖，避免 EKF 发散污染 ego 状态。 */
-    double ego_x{0}, ego_y{0}, ego_z{0}, ego_v{0}, ego_heading{0}, road_grade{0};
+    double ego_x{0}, ego_y{0}, ego_z{0}, ego_v{0}, ego_heading{0}, ego_steer{0}, road_grade{0};
     /* 车参单一事实源 = 场景 ego 块（flowsim 随 vehicle/state 广播，on_vehicle_state 同步）。
      * 旧硬编码 2.8 与 physics 2.7 差 3.7% 导致掉头轨迹漂移（2026-08 修复）。 */
     double wheelbase{2.7};
@@ -928,6 +928,12 @@ static void on_vehicle_state(const Message* msg, void* user_data) {
         g.ego_v = j->valuedouble;
     if ((j = cJSON_GetObjectItem(root, "hdg")) && cJSON_IsNumber(j))
         g.ego_heading = j->valuedouble;
+    /* 实际前轮转角（flowsim vehicle/state 用 "st" 广播）。泊车完成判据
+     * IsFinished() 需要它，旧实现从未填 vehicle_state.steering，门禁恒真。 */
+    if ((j = cJSON_GetObjectItem(root, "st")) && cJSON_IsNumber(j))
+        g.ego_steer = j->valuedouble;
+    else if ((j = cJSON_GetObjectItem(root, "steer")) && cJSON_IsNumber(j))
+        g.ego_steer = j->valuedouble;
     /* 车参同步：flowsim 广播（场景 ego 块配置了 wheelbase 才发） */
     if ((j = cJSON_GetObjectItem(root, "wheelbase")) && cJSON_IsNumber(j) && j->valuedouble > 0.0) {
         g.wheelbase = j->valuedouble;
@@ -2421,6 +2427,7 @@ protected:
                 fctx.vehicle_state.z = g.ego_z;
                 fctx.vehicle_state.v = g.ego_v;
                 fctx.vehicle_state.heading = g.ego_heading;
+                fctx.vehicle_state.steering = g.ego_steer;
                 fctx.vehicle_state.wheelbase = g.wheelbase;
                 fctx.parking_goal = g.parking_goal;
                 fctx.park_out = g.park_out;
@@ -2436,6 +2443,11 @@ protected:
                     int match_idx = -1;
                     double best_d2 = 4.0;  /* 2m 匹配半径 */
                     for (int s = 0; s < g.scene_veh_count; ++s) {
+                        /* Only match same-floor scene vehicles. Matching by XY
+                         * first and then dropping the perception obstacle also
+                         * deleted a real same-floor car when a stacked-deck
+                         * vehicle happened to share the same XY. */
+                        if (!pf_same_elevation_layer(g.scene_veh_z[s], g.ego_z)) continue;
                         double dx = g.obs_x[i] - g.scene_veh_x[s];
                         double dy = g.obs_y[i] - g.scene_veh_y[s];
                         double d2 = dx * dx + dy * dy;
@@ -2444,14 +2456,12 @@ protected:
                             match_idx = s;
                         }
                     }
-                    if (match_idx >= 0 && !pf_same_elevation_layer(g.scene_veh_z[match_idx], g.ego_z)) {
-                        continue;  /* 过滤跨楼层幽灵障碍物（如地面车位对 B1 的投影） */
-                    }
 
                     int tmatch_idx = -1;
                     if (match_idx < 0) {
                         double best_td2 = 2.25; /* 1.5m radius */
                         for (int t = 0; t < g.truth_obs_count; ++t) {
+                            if (!pf_same_elevation_layer(g.truth_obs_z[t], g.ego_z)) continue;
                             double dx = g.obs_x[i] - g.truth_obs_x[t];
                             double dy = g.obs_y[i] - g.truth_obs_y[t];
                             double d2 = dx * dx + dy * dy;
@@ -2459,9 +2469,6 @@ protected:
                                 best_td2 = d2;
                                 tmatch_idx = t;
                             }
-                        }
-                        if (tmatch_idx >= 0 && !pf_same_elevation_layer(g.truth_obs_z[tmatch_idx], g.ego_z)) {
-                            continue;
                         }
                     }
 

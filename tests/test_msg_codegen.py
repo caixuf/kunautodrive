@@ -108,6 +108,20 @@ int main(void) {{
 
     /* Truncated buffer must fail checked reader */
     if (NavPath_waypoints_checked(rx, total - 1, &wp_cnt) != NULL) return 106;
+
+    /* Serialize must append the variable-length payload (not just the
+     * FlowSeqRef descriptor), and deserialize_into must materialize it. */
+    uint8_t wire[1024];
+    size_t wire_size = 0;
+    if (NavPath_serialize(rx, wire, &wire_size) != 0 || wire_size < total) return 107;
+    uint8_t dstbuf[1024];
+    NavPath* dst = (NavPath*)dstbuf;
+    if (NavPath_deserialize_into(dst, sizeof(dstbuf), wire, wire_size) != 0) return 108;
+    uint32_t n2 = 0;
+    const char* rn2 = NavPath_route_name_checked(dst, wire_size, &n2);
+    const Point3f* rp2 = NavPath_waypoints_checked(dst, wire_size, &wp_cnt);
+    if (!rn2 || strcmp(rn2, "park_to_park") != 0 || !rp2 || wp_cnt != 3 || rp2[2].z != 9.0f) return 109;
+    if (NavPath_deserialize(dst, wire, wire_size) != -2) return 110;
     return 0;
 }}
 """

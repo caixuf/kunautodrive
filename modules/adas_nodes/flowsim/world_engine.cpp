@@ -1397,7 +1397,7 @@ void pass_signs(const std::vector<CompiledEdge>& edges,
                 double sc = std::cos(hdg), ss = std::sin(hdg);
                 double sx = cx - ss * lat, sy = cy + sc * lat;
                 if (spot_clear_for_roadside_prop(field, sx, sy, cz, 0.55, WORLD_MASK_SIGN, true, true)) {
-                    layout.signs.push_back({sx, sy, cz, hdg + kPi, "speed_limit", "15", 15});
+                    layout.signs.push_back({sx, sy, cz, hdg, "speed_limit", "15", 15});
                 }
             }
             if (ce.total_len >= 48.0) {
@@ -1407,7 +1407,7 @@ void pass_signs(const std::vector<CompiledEdge>& edges,
                 double sc = std::cos(hdg), ss = std::sin(hdg);
                 double sx = cx - ss * lat, sy = cy + sc * lat;
                 if (spot_clear_for_roadside_prop(field, sx, sy, cz, 0.55, WORLD_MASK_SIGN, true, true)) {
-                    layout.signs.push_back({sx, sy, cz, hdg + kPi, "exit_sign", "EXIT", 0});
+                    layout.signs.push_back({sx, sy, cz, hdg, "exit_sign", "EXIT", 0});
                 }
             }
             continue;
@@ -1421,7 +1421,7 @@ void pass_signs(const std::vector<CompiledEdge>& edges,
                 double sc = std::cos(hdg), ss = std::sin(hdg);
                 double sx = cx - ss * lat, sy = cy + sc * lat;
                 if (spot_clear_for_roadside_prop(field, sx, sy, cz, 0.70, WORLD_MASK_SIGN, true, true)) {
-                    layout.signs.push_back({sx, sy, cz, hdg + kPi, "speed_limit", "25", 25});
+                    layout.signs.push_back({sx, sy, cz, hdg, "speed_limit", "25", 25});
                 }
             }
             if (ce.total_len >= 50.0) {
@@ -1431,7 +1431,7 @@ void pass_signs(const std::vector<CompiledEdge>& edges,
                 double sc = std::cos(hdg), ss = std::sin(hdg);
                 double sx = cx - ss * lat, sy = cy + sc * lat;
                 if (spot_clear_for_roadside_prop(field, sx, sy, cz, 0.70, WORLD_MASK_SIGN, true, true)) {
-                    layout.signs.push_back({sx, sy, cz, hdg + kPi, "slope_warn", "SLOPE", 0});
+                    layout.signs.push_back({sx, sy, cz, hdg, "slope_warn", "SLOPE", 0});
                 }
             }
             continue;
@@ -1452,7 +1452,7 @@ void pass_signs(const std::vector<CompiledEdge>& edges,
             double sy = cy + sc * lat;
             if (spot_clear_for_roadside_prop(field, sx, sy, cz, 0.8, WORLD_MASK_SIGN)) {
                 layout.signs.push_back({
-                    sx, sy, cz, hdg + kPi, "speed_limit", std::to_string(kph), kph
+                    sx, sy, cz, hdg, "speed_limit", std::to_string(kph), kph
                 });
             }
             if (ce.total_len < 150.0) break;
@@ -1471,7 +1471,7 @@ void pass_signs(const std::vector<CompiledEdge>& edges,
                 double sy = cy + sc * lat;
                 if (spot_clear_for_roadside_prop(field, sx, sy, cz, 0.8, WORLD_MASK_SIGN)) {
                     std::string kind = (ei % 2 == 0) ? "stop_sign" : "crosswalk_warn";
-                    layout.signs.push_back({sx, sy, cz, hdg + kPi, kind, "", 0});
+                    layout.signs.push_back({sx, sy, cz, hdg, kind, "", 0});
                 }
             }
         }
@@ -1491,7 +1491,7 @@ void pass_signs(const std::vector<CompiledEdge>& edges,
                 double sx = cx - ss * lat;
                 double sy = cy + sc * lat;
                 if (spot_clear_for_roadside_prop(field, sx, sy, cz, 0.8, WORLD_MASK_SIGN)) {
-                    layout.signs.push_back({sx, sy, cz, hdg + kPi, "curve_warn", "", 0});
+                    layout.signs.push_back({sx, sy, cz, hdg, "curve_warn", "", 0});
                 }
             }
         }

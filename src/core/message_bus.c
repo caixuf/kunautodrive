@@ -515,7 +515,7 @@ static Message* rb_pop(RingBuffer* rb, atomic_bool* running) {
 
 /* ── Dispatch message to subscribers ─────────────────── */
 
-static void dispatch_message(MessageBus* bus, const Message* msg, int tid) {
+static void dispatch_message(MessageBus* bus, Message* msg, int tid) {
     int delivered = 0;
 
     /* ── Lifespan check: drop expired messages before dispatching ──
@@ -604,6 +604,14 @@ retry_snapshot:
                      "%d subscribers (cb:%s)", (unsigned long long)n,
                      snap_count, who);
         }
+    }
+
+    /* The zero-copy ring can wrap while a message waits in a busy queue.
+     * Resolve validity once before fan-out; consumers then see NULL from
+     * message_bus_message_data() instead of reading overwritten bytes. */
+    if (msg->payload_kind == MSG_PAYLOAD_SHM_REF &&
+        (!bus->arena || !shm_arena_is_valid(bus->arena, &msg->shm_ref))) {
+        msg->_shm_ptr = NULL;
     }
 
     for (int i = 0; i < snap_count; i++) {

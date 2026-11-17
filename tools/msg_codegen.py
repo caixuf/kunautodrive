@@ -979,7 +979,36 @@ class CodeGenerator:
         lines.append("")
         return lines
 
+    def _gen_varlen_deserialize(self, s: StructDef) -> list[str]:
+        slots, total_size, _ = self._struct_layout(s)
+        lines = []
+        lines.append(f"/** Deserialize {s.name} including its variable-length payload.")
+        lines.append(f" *  dst must point to a writable buffer of at least `size` bytes. */")
+        lines.append(f"static inline int {s.name}_deserialize_into({s.name}* dst, size_t dst_cap,")
+        lines.append(f"        const uint8_t* buf, size_t size) {{")
+        lines.append(f"    if (!dst || !buf) return -1;")
+        lines.append(f"    if (size < {total_size} || dst_cap < size) return -1;")
+        lines.append(f"    memmove(dst, buf, size);")
+        lines.append(f"    return 0;")
+        lines.append(f"}}")
+        lines.append("")
+        lines.append(f"/** Fixed-struct deserialize: fails with -2 when a varlen payload")
+        lines.append(f" *  is present. Use {s.name}_deserialize_into for payload-bearing")
+        lines.append(f" *  messages, or the zero-copy {s.name}_*_checked readers. */")
+        lines.append(f"static inline int {s.name}_deserialize({s.name}* dst,")
+        lines.append(f"        const uint8_t* buf, size_t size) {{")
+        lines.append(f"    if (!dst || !buf) return -1;")
+        lines.append(f"    if (size < {total_size}) return -1;")
+        lines.append(f"    if (size > sizeof(*dst)) return -2;")
+        lines.append(f"    memmove(dst, buf, size);")
+        lines.append(f"    return 0;")
+        lines.append(f"}}")
+        lines.append("")
+        return lines
+
     def _gen_deserialize(self, s: StructDef, type_id: int) -> list[str]:
+        if s.has_varlen:
+            return self._gen_varlen_deserialize(s)
         slots, total_size, _ = self._struct_layout(s)
         lines = []
         lines.append(f"/** Deserialize {s.name} from buffer (endian-aware). */")
@@ -987,15 +1016,6 @@ class CodeGenerator:
         lines.append(f"        const uint8_t* buf, size_t size) {{")
         lines.append(f"    if (!dst || !buf) return -1;")
         lines.append(f"    if (size < {total_size}) return -1;")
-        if s.has_varlen:
-            # Materialize the whole message (fixed header + aligned varlen
-            # payload) into dst; callers must provide at least `size` bytes.
-            lines.append(f"    /* varlen: dst must point to a buffer of at least `size` bytes */")
-            lines.append(f"    memmove(dst, buf, size);")
-            lines.append(f"    return 0;")
-            lines.append(f"}}")
-            lines.append("")
-            return lines
         lines.append(f"    memset(dst, 0, sizeof(*dst));")
         lines.append(f"")
 

@@ -249,6 +249,26 @@ static void test_bus_loaned_async(void) {
     PASS();
 }
 
+static void test_message_data_invalid_shm_ref(void) {
+    TEST("message_data rejects unresolved SHM_REF (no 4KB fallback)");
+    Message m;
+    memset(&m, 0, sizeof(m));
+    m.payload_kind = MSG_PAYLOAD_SHM_REF;
+    m.data_size = 10000;
+    m._shm_ptr = NULL;
+    ASSERT(message_bus_message_data(&m) == NULL,
+           "unresolved SHM_REF must not fall back to the 4KB inline array");
+
+    Message loaned;
+    memset(&loaned, 0, sizeof(loaned));
+    loaned.payload_kind = MSG_PAYLOAD_LOANED;
+    loaned.data_size = 10000;
+    loaned._loaned_data = NULL;
+    ASSERT(message_bus_message_data(&loaned) == NULL,
+           "released LOANED payload must report no payload");
+    PASS();
+}
+
 static void echo_service_handler(const Message* req, Message* reply, void* user_data) {
     (void)user_data;
     snprintf(reply->topic, 64, "%s", req->topic);
@@ -952,6 +972,7 @@ int main(void) {
     test_bus_remap();
     test_bus_zero_copy_basic();
     test_bus_loaned_async();
+    test_message_data_invalid_shm_ref();
     test_bus_req_reply();
 
     /* ── Task Manager ───────────────────────── */

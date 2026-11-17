@@ -24,6 +24,32 @@
 
 namespace flowsim {
 
+/* Lane ids are road-local. A lane held from a wider road (e.g. -2) is invalid
+ * on a 2-lane ramp; clamp it to the same-sign lane nearest the centreline
+ * before handing it to esmini (which otherwise logs an error every tick). */
+static int sanitize_lane_id(int road_id, int lane_id, double s) {
+    if (lane_id == 0) return 0;
+    /* Route s can be a few cm past the road end (esmini warns "s too large"),
+     * in which case the lane query returns 0 and an invalid lane id would leak
+     * through. Query at the clamped s. */
+    const double len = RM_GetRoadLength((id_t)road_id);
+    const double sq = std::max(0.0, std::min(s, len > 0.0 ? len : s));
+    const int n = RM_GetRoadNumberOfDrivableLanes((id_t)road_id, sq);
+    if (n <= 0) return lane_id;
+    int fallback = 0;
+    bool present = false;
+    for (int i = 0; i < n; ++i) {
+        int lid = 0;
+        if (RM_GetDrivableLaneIdByIndex((id_t)road_id, i, sq, &lid) < 0) continue;
+        if (lid == lane_id) { present = true; break; }
+        if ((lane_id < 0 && lid < 0) || (lane_id > 0 && lid > 0)) {
+            if (fallback == 0 || std::abs(lid) < std::abs(fallback)) fallback = lid;
+        }
+    }
+    if (present) return lane_id;
+    return fallback != 0 ? fallback : lane_id;
+}
+
 RoadPosition::~RoadPosition() {
     if (handle_ >= 0) {
         RM_DeletePosition(handle_);
@@ -67,6 +93,7 @@ bool RoadPosition::init(FlowRoadNetwork& roads, int road_id, int lane_id,
 
     /* RM_SetLanePosition(handle, roadId, laneId, laneOffset, s, align)
      * align=true 让航向对齐到车道行驶方向（仅 init 时用） */
+    lane_id = sanitize_lane_id(road_id, lane_id, s);
     int rc = RM_SetLanePosition(handle_, (id_t)road_id, lane_id, offset, s, true);
     if (rc < 0) {
         std::fprintf(stderr, "RoadPosition::init: SetLanePosition failed (rc=%d) "
@@ -86,6 +113,7 @@ bool RoadPosition::relocate(FlowRoadNetwork& roads, int road_id, int lane_id,
      * 这避免了 esmini 内部 handle 数组移位导致其他实体 handle 指向错误位置。 */
     if (handle_ >= 0) {
         if (!roads.loaded()) return false;
+        lane_id = sanitize_lane_id(road_id, lane_id, s);
         int rc = RM_SetLanePosition(handle_, (id_t)road_id, lane_id,
                                     offset, s, true);
         if (rc < 0) {

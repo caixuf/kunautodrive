@@ -1263,7 +1263,11 @@ export function createRoadView(scene) {
 
     // 路面保持贯穿路口不截断（与 ConnectorView 路口铺装同色沥青无缝衔接，避免外圈留缝）；
     // 标线（pad=6.0）与路肩/路缘石（pad=0）在路口边界精确收口。
-    const road = ribbonGeo(roadSpine, roadHw, Y_ROAD);
+    /* GarageView paints the B1 epoxy floor on top (zBase - 0.02) and its aisle
+     * arrows at zBase + 0.005. Keep the RoadView ribbon below that floor or it
+     * hides every B1 marking (0.10 m above the GarageView layer). */
+    const roadY = (edge.type === EDGE_TYPE.GARAGE_HALL) ? Y_ROAD - 0.20 : Y_ROAD;
+    const road = ribbonGeo(roadSpine, roadHw, roadY);
     const roadGeos = road ? [road] : [];
 
     /* 隧道/地道（2026-08-14）：只铺路面，不画标线/路肩/人行道。

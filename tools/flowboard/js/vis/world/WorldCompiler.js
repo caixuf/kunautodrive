@@ -111,11 +111,27 @@ function _parseWorldGen(roadNetwork, rawWorldGen, seedOverride) {
   }
   const obj = (wg && typeof wg === 'object') ? wg : {};
   const preset = PRESET_PROFILES[obj.preset] ? obj.preset : 'urban_arterial';
-  const seed = Number.isFinite(Number(seedOverride))
-    ? (Number(seedOverride) >>> 0)
+  /* Number(null) === 0, so a null override used to force seed 0 and ignore
+   * world_gen.seed entirely. Only a real number-like value may override. */
+  const overrideNum = (seedOverride === null || seedOverride === undefined ||
+                       seedOverride === '') ? NaN : Number(seedOverride);
+  const seed = Number.isFinite(overrideNum)
+    ? (overrideNum >>> 0)
     : (Number.isFinite(Number(obj.seed)) ? (Number(obj.seed) >>> 0) : 20260401);
   const excludeZones = Array.isArray(obj.exclude_zones) ? obj.exclude_zones : [];
-  const edgeOverrides = (obj.edge_overrides && typeof obj.edge_overrides === 'object') ? obj.edge_overrides : {};
+  /* Accept both the engine's array form ([{edge:"..."}]) and the object form
+   * ({edgeName:{...}}); otherwise preview and runtime apply different overrides. */
+  const edgeOverrides = {};
+  const rawOverrides = obj.edge_overrides;
+  if (Array.isArray(rawOverrides)) {
+    for (const ov of rawOverrides) {
+      if (!ov || typeof ov !== 'object') continue;
+      const key = ov.edge != null ? ov.edge : ov.road;
+      if (key != null) edgeOverrides[String(key)] = ov;
+    }
+  } else if (rawOverrides && typeof rawOverrides === 'object') {
+    Object.assign(edgeOverrides, rawOverrides);
+  }
   const customProps = Array.isArray(obj.custom_props) ? obj.custom_props : [];
   return { preset, seed, excludeZones, edgeOverrides, customProps };
 }

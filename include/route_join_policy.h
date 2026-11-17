@@ -18,8 +18,13 @@ inline double heading_delta_abs(double a, double b) {
  * 这种接口不生成横切主路的虚拟桥。
  */
 inline bool beside_accel_join(double gap_m, double heading_delta_rad, double along_m) {
-    return gap_m > 6.0 && gap_m < 24.0 && heading_delta_rad < 0.55 &&
-           std::fabs(along_m) < 35.0;
+    /* Must be predominantly lateral. A 6-24m longitudinal gap (missing OSM
+     * link / ramp stopping short of the mainline) is a bridge case: treating
+     * it as "beside" skips the fillet and makes align_ref_path_step translate
+     * the whole far side by the longitudinal jump. */
+    if (gap_m <= 6.0 || gap_m >= 24.0 || heading_delta_rad >= 0.55) return false;
+    if (std::fabs(along_m) > 0.5 * gap_m) return false;
+    return std::fabs(along_m) < 35.0;
 }
 
 /**

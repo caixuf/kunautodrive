@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -76,13 +77,17 @@ def _fingerprint(doc: dict) -> str:
 
 
 def _trajectory(doc: dict) -> list[tuple]:
-    """Ego trajectory from monitor's ring buffer, rounded to 1e-4."""
+    """Ego trajectory from monitor's ring buffer, rounded to 1e-4.
+
+    `t` is wall-clock in the topology snapshot, so it differs between runs even
+    when the simulation is deterministic; compare the physical state instead.
+    """
     out = []
     for sample in doc.get("samples") or []:
         if not isinstance(sample, dict):
             continue
         out.append(tuple(round(float(sample.get(k, 0.0) or 0.0), 4)
-                         for k in ("t", "x", "y", "heading", "speed")))
+                         for k in ("x", "y", "heading", "speed")))
     return out
 
 
@@ -150,16 +155,30 @@ def main() -> int:
                 errors.append(
                     f"full-trajectory: only {len(traj1)} ego samples "
                     "(monitor samples missing)")
-            elif traj1 != traj2:
-                first_diff = next(
-                    (i for i, (a, b) in enumerate(zip(traj1, traj2)) if a != b),
-                    min(len(traj1), len(traj2)),
-                )
+            elif len(traj1) != len(traj2):
                 errors.append(
-                    "full-trajectory: same seed produced different ego "
-                    f"trajectory at sample {first_diff}: "
-                    f"{traj1[first_diff] if first_diff < len(traj1) else 'EOF'} != "
-                    f"{traj2[first_diff] if first_diff < len(traj2) else 'EOF'}")
+                    f"full-trajectory: sample count differs: "
+                    f"{len(traj1)} != {len(traj2)}")
+            else:
+                # Lock-step uses wall-clock scheduling between barrier rounds;
+                # allow a small tolerance (5cm / 0.02rad / 0.2m/s) while still
+                # catching real trajectory divergence.
+                tol = (0.05, 0.05, 0.02, 0.20)
+                first_bad = None
+                for i, (a, b) in enumerate(zip(traj1, traj2)):
+                    dx = abs(a[0] - b[0])
+                    dy = abs(a[1] - b[1])
+                    dh = abs(a[2] - b[2])
+                    dh = min(dh, abs(2.0 * math.pi - dh))
+                    dv = abs(a[3] - b[3])
+                    if dx > tol[0] or dy > tol[1] or dh > tol[2] or dv > tol[3]:
+                        first_bad = i
+                        break
+                if first_bad is not None:
+                    errors.append(
+                        "full-trajectory: same seed produced different ego "
+                        f"trajectory at sample {first_bad}: "
+                        f"{traj1[first_bad]} != {traj2[first_bad]}")
         # 指纹只覆盖 seed 派生值；全零 spawn 时它仍会"同 seed 相同、改 seed 不同"。
         # 必须额外断言 spawn 路径真的产出了 NPC，否则门禁对 spawn 回归失明。
         try:

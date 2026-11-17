@@ -1485,20 +1485,43 @@ protected:
                                  best_gap, desired_gap, lead_speed, lead_id, follow_speed,
                                  left_ok, right_ok, g.cooldown);
                     } else if (accel.holding) {
-                        new_target_lane = accel.target_lane;
+                        /* Route the outward move through the same lane-change
+                         * event/gates as normal overtaking. This branch used to
+                         * only write target_lane_idx, which planning ignores in
+                         * CRUISE, so the car never moved. */
+                        const bool can_change =
+                            (accel.target_lane < current_idx)
+                                ? (left_ok && left_rear_safe)
+                                : (right_ok && right_rear_safe);
+                        if (accel.target_lane != current_idx && can_change &&
+                            g.cooldown <= 0.0 && !carriageway_ahead_stop_light()) {
+                            ev = accel.target_lane < current_idx
+                                     ? BEH_EV_OVERTAKE_LEFT
+                                     : BEH_EV_OVERTAKE_RIGHT;
+                            new_target_lane = accel.target_lane;
+                        }
                         new_target_speed = g.cfg_cruise_speed;
                         snprintf(reason, sizeof(reason),
-                                 "viaduct accel lane %d hold v=%.1f cruise=%.1f",
-                                 accel.target_lane, g.ego_v, g.cfg_cruise_speed);
+                                 "viaduct accel lane %d hold(%s) v=%.1f cruise=%.1f",
+                                 accel.target_lane, can_change ? "ok" : "blocked",
+                                 g.ego_v, g.cfg_cruise_speed);
                     } else if (accel.merge_inward) {
-                        ev = accel.target_lane < current_idx
-                                 ? BEH_EV_OVERTAKE_LEFT
-                                 : BEH_EV_OVERTAKE_RIGHT;
-                        new_target_lane = accel.target_lane;
+                        const bool can_change =
+                            (accel.target_lane < current_idx)
+                                ? (left_ok && left_rear_safe)
+                                : (right_ok && right_rear_safe);
+                        if (can_change && g.cooldown <= 0.0 &&
+                            !carriageway_ahead_stop_light()) {
+                            ev = accel.target_lane < current_idx
+                                     ? BEH_EV_OVERTAKE_LEFT
+                                     : BEH_EV_OVERTAKE_RIGHT;
+                            new_target_lane = accel.target_lane;
+                        }
                         new_target_speed = g.cfg_cruise_speed;
                         snprintf(reason, sizeof(reason),
-                                 "viaduct merge in lane%d -> %d cruise=%.1f",
-                                 current_idx, accel.target_lane, g.cfg_cruise_speed);
+                                 "viaduct merge in lane%d -> %d(%s) cruise=%.1f",
+                                 current_idx, accel.target_lane,
+                                 can_change ? "ok" : "blocked", g.cfg_cruise_speed);
                     } else if (!accel.active && !g.road_oneway && !g.on_return && left_ok &&
                                current_idx > planning_coord::first_legal_lane(lc, false) && g.cooldown <= 0.0 &&
                                !carriageway_ahead_stop_light() &&

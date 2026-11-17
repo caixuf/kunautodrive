@@ -62,6 +62,7 @@ static void cleanup_artifacts(void) {
     unlink(ARTIFACT_DIR "/timing.bag");
     unlink(ARTIFACT_DIR "/ipc.bag");
     unlink(ARTIFACT_DIR "/nonmono.bag");
+    unlink(ARTIFACT_DIR "/large.bag");
     rmdir(ARTIFACT_DIR);
 }
 
@@ -511,6 +512,74 @@ static void test_flowctl_play_validation(void) {
     PASS();
 }
 
+typedef struct {
+    uint32_t expected_size;
+    int seen;
+    int mismatch;
+} LargePayloadCheck;
+
+static int check_large_payload_cb(const Message* msg, void* user_data) {
+    LargePayloadCheck* check = (LargePayloadCheck*)user_data;
+    if (!msg || msg->data_size != check->expected_size) {
+        check->mismatch = 1;
+        return ERR_INVALID_PARAM;
+    }
+    const uint8_t* data = (const uint8_t*)message_bus_message_data(msg);
+    if (!data) {
+        check->mismatch = 1;
+        return ERR_INVALID_PARAM;
+    }
+    for (uint32_t i = 0; i < check->expected_size; i++) {
+        if (data[i] != (uint8_t)('A' + (i % 26))) {
+            check->mismatch = 1;
+            return ERR_INVALID_PARAM;
+        }
+    }
+    check->seen++;
+    return ERR_OK;
+}
+
+static void test_replay_large_payload(void) {
+    TEST("bag replay >inline payload (Message.data shrink regression)");
+    ensure_artifact_dir();
+    const char* path = ARTIFACT_DIR "/large.bag";
+    const uint32_t size = 10000;
+    uint8_t* payload = (uint8_t*)malloc(size);
+    ASSERT(payload != NULL, "alloc failed");
+    for (uint32_t i = 0; i < size; i++) payload[i] = (uint8_t)('A' + (i % 26));
+
+    BagWriter* writer = bag_writer_open(path);
+    ASSERT(writer != NULL, "open failed");
+    Message msg;
+    memset(&msg, 0, sizeof(msg));
+    snprintf(msg.topic, sizeof(msg.topic), "t/large");
+    snprintf(msg.sender, sizeof(msg.sender), "test_writer");
+    msg.timestamp_us = 1000000ULL;
+    msg.type = MSG_TYPE_PUBLISH;
+    msg.data_size = size;
+    msg.payload_kind = MSG_PAYLOAD_LOANED;
+    msg._loaned_data = payload;
+    ASSERT(bag_writer_write(writer, &msg) == 0, "write failed");
+    bag_writer_close(writer);
+    free(payload);
+
+    BagReader* reader = bag_reader_open(path);
+    ASSERT(reader != NULL, "reader open failed");
+    LargePayloadCheck check = {size, 0, 0};
+    BagReplayOptions options;
+    memset(&options, 0, sizeof(options));
+    options.publish_fn = check_large_payload_cb;
+    options.publish_user_data = &check;
+    uint64_t played = 0;
+    ASSERT(bag_reader_play_with_options(reader, &options, &played) == ERR_OK,
+           "large replay failed");
+    ASSERT(played == 1 && check.seen == 1 && !check.mismatch,
+           "large payload mismatch: played=%llu seen=%d mismatch=%d",
+           (unsigned long long)played, check.seen, check.mismatch);
+    bag_reader_close(reader);
+    PASS();
+}
+
 int main(void) {
     cleanup_artifacts();
     ensure_artifact_dir();
@@ -518,6 +587,7 @@ int main(void) {
     test_replay_loop_order();
     test_replay_rate_timing();
     test_replay_nonmonotonic_ts();
+    test_replay_large_payload();
     test_replay_ipc_transport_boundary();
     test_flowctl_play_validation();
     cleanup_artifacts();

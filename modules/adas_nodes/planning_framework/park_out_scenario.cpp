@@ -184,7 +184,7 @@ bool ParkOutManeuverStage::PlanTrajectory(FrameContext& context) {
      * refuse to latch and let the next tick replan (the hold fallback below
      * is collision-checked by construction). */
     for (const auto& p : fallback) {
-        if (planner_.CheckVehicleCollision(p.x, p.y, p.heading, env)) {
+        if (planner_.CheckVehicleCollision(p.x, p.y, p.phi, env)) {
             return false;
         }
     }

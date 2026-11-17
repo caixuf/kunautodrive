@@ -928,7 +928,7 @@ class E2ETrainingToolsTest(unittest.TestCase):
         """数据一致性门禁：训练侧特征构建与运行时采集器/推理的"无车"占位必须一致。
 
         训练侧 feature_schema.build_v2/v3_features 与运行时 data_recorder_node.c /
-        inference_node.cpp 对缺失障碍物用同一占位（type=1, conf=1, x=ego+500/520）。
+        inference_node.cpp 对缺失障碍物用同一车体系占位（type=1, conf=1, x=500/520）。
         若某侧退回 fill 0（type=0），type/confidence 的 norm_scale≈1e-6 会把
         归一化输入推到 ~1e6 → tanh 饱和 → 模型输出冻结成常量（车"倒车/横漂"）。
         此测试把三处占位口径钉死，防止回归。
@@ -946,8 +946,8 @@ class E2ETrainingToolsTest(unittest.TestCase):
         # 无障碍物：两个 slot 都应为远处占位，type/conf=1
         f = build_v2_features(ego, [], control)
         self.assertEqual(len(f), 16)
-        self.assertAlmostEqual(f[4], ego["x"] + FRONT0_OFFSET, places=3)
-        self.assertAlmostEqual(f[9], ego["x"] + FRONT1_OFFSET, places=3)
+        self.assertAlmostEqual(f[4], FRONT0_OFFSET, places=3)
+        self.assertAlmostEqual(f[9], FRONT1_OFFSET, places=3)
         self.assertEqual(f[7], 1.0)   # front0_type
         self.assertEqual(f[12], 1.0)  # front1_type
         self.assertEqual(f[8], 1.0)   # front0_confidence
@@ -957,7 +957,7 @@ class E2ETrainingToolsTest(unittest.TestCase):
         f1 = build_v2_features(ego, [{"x": 150.0, "y": -1.75, "vx": 5.0,
                                       "type": 1, "confidence": 0.9}], control)
         self.assertAlmostEqual(f1[4], 150.0, places=3)
-        self.assertAlmostEqual(f1[9], ego["x"] + FRONT1_OFFSET, places=3)
+        self.assertAlmostEqual(f1[9], FRONT1_OFFSET, places=3)
         self.assertEqual(f1[12], 1.0)
 
         # 2 个障碍物：都用真实值
@@ -974,8 +974,8 @@ class E2ETrainingToolsTest(unittest.TestCase):
                "ego_lane_offset": -1.75}
         f3 = build_v3_features(ego, [], control, scene_context=ctx)
         self.assertEqual(len(f3), 23)
-        self.assertAlmostEqual(f3[4], ego["x"] + FRONT0_OFFSET, places=3)
-        self.assertAlmostEqual(f3[9], ego["x"] + FRONT1_OFFSET, places=3)
+        self.assertAlmostEqual(f3[4], FRONT0_OFFSET, places=3)
+        self.assertAlmostEqual(f3[9], FRONT1_OFFSET, places=3)
         self.assertEqual(f3[7], 1.0)
         self.assertEqual(f3[12], 1.0)
 

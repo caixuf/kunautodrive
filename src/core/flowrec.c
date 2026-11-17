@@ -686,7 +686,13 @@ static int write_buffered_record(FlowrecCollector* collector,
     message.schema_version = record->schema_version;
     message.endian_marker = record->endian_marker;
     message.data_size = record->data_size;
-    message._loaned_data = record->data;
+    if (record->data_size > 0) {
+        /* The buffered record owns the bytes; expose them as a loaned payload
+         * so message_bus_message_data() returns this pointer instead of the
+         * message's zeroed inline buffer. */
+        message.payload_kind = MSG_PAYLOAD_LOANED;
+        message._loaned_data = record->data;
+    }
     return write_message(collector, &message, now_us);
 }
 

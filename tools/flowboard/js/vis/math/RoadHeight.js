@@ -1,4 +1,4 @@
-import { LANE_WIDTH, DEFAULT_LANES } from '../core/Constants.js';
+import { LANE_WIDTH } from '../core/Constants.js';
 import { forwardENU } from './Coord.js';
 
 /**
@@ -76,6 +76,32 @@ function _closestOnEdge(nodes, px, py, shiftRightM = 0) {
   return { dist: Math.sqrt(minDist), t: minT, z: minZ };
 }
 
+/* Per-road-network edge bounding boxes. roadPitchAt calls roadHeightAt twice
+ * per vehicle per frame; without this, every vehicle scans every OSM edge and
+ * every segment (12k edges -> ~2.2ms/vehicle). */
+const _bboxCache = new WeakMap();
+function _edgeBBoxes(rn) {
+  const cached = _bboxCache.get(rn);
+  if (cached && cached.edges === rn.edges) return cached.boxes;
+  const edges = rn.edges;
+  const boxes = edges.map((edge) => {
+    const nodes = edge.nodes;
+    if (!nodes || nodes.length < 2) return null;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const n of nodes) {
+      const px = Number(n[0]) || 0;
+      const py = Number(n[1]) || 0;
+      if (px < minX) minX = px;
+      if (px > maxX) maxX = px;
+      if (py < minY) minY = py;
+      if (py > maxY) maxY = py;
+    }
+    return { minX, maxX, minY, maxY };
+  });
+  _bboxCache.set(rn, { edges, boxes });
+  return boxes;
+}
+
 /** 路面高度查询主函数（支持 3D 竖向分层匹配） */
 export function roadHeightAt(store, x, y, currentZ) {
   const rn = store && store.roadNetwork;
@@ -86,10 +112,16 @@ export function roadHeightAt(store, x, y, currentZ) {
   let sameLayerZ = 0;
   let anyLayerScore = Infinity;
   let anyLayerZ = 0;
+  const bboxes = _edgeBBoxes(rn);
 
-  for (const edge of rn.edges) {
+  for (let ei = 0; ei < rn.edges.length; ei++) {
+    const edge = rn.edges[ei];
     const nodes = edge.nodes;
     if (!nodes || nodes.length < 2) continue;
+    const bb = bboxes[ei];
+    /* Conservative 24m pad covers half road width + garage threshold. */
+    if (bb && (x < bb.minX - 24 || x > bb.maxX + 24 ||
+               y < bb.minY - 24 || y > bb.maxY + 24)) continue;
 
     const laneWidth = edge.lane_width || LANE_WIDTH;
     const lanes = edge.lanes || 2;

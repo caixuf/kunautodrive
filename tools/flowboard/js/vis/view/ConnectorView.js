@@ -834,6 +834,7 @@ export function createConnectorView(scene) {
       });
       mesh.instanceMatrix.needsUpdate = true;
       mesh.receiveShadow = true;
+      mesh.renderOrder = 3;  /* after asphalt(1)/junction patch(2) */
       group.add(mesh);
     }
 
@@ -852,6 +853,7 @@ export function createConnectorView(scene) {
       });
       mesh.instanceMatrix.needsUpdate = true;
       mesh.receiveShadow = true;
+      mesh.renderOrder = 3;
       group.add(mesh);
     }
 
@@ -871,6 +873,7 @@ export function createConnectorView(scene) {
       mesh.instanceMatrix.needsUpdate = true;
       mesh.receiveShadow = true;
       mesh.frustumCulled = true;
+      mesh.renderOrder = 3;
       group.add(mesh);
     }
 

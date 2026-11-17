@@ -4373,22 +4373,18 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         _sample_time_seconds(s) if "t_demo" in s else float(s.get("timestamp", 0.0) or 0.0)
         for s in samples
     ]
-    # Sum only intervals where the vehicle is actually moving. The previous
+    # Sum only intervals whose two endpoints are both moving. The old
     # first-to-last moving-frame span counted every stop in between: 1s moving
     # + 600s stopped + 1s moving reported 601s and passed min_active_duration.
+    # Both-moving intervals also keep sparse moving samples (10s apart) valid
+    # while excluding long parked tails.
     active_duration_s = 0.0
-    prev_active_t: float | None = None
-    for i in range(len(series)):
-        speed = abs(float(series[i].get("speed", 0.0) or 0.0))
-        if speed <= 0.20:
-            prev_active_t = None
-            continue
-        t_i = time_axis[i]
-        if prev_active_t is not None:
-            dt = t_i - prev_active_t
-            if 0.0 < dt <= 1.0:
+    speeds_all = [abs(float(s.get("speed", 0.0) or 0.0)) for s in series]
+    for i in range(1, len(time_axis)):
+        if speeds_all[i - 1] > 0.20 and speeds_all[i] > 0.20:
+            dt = time_axis[i] - time_axis[i - 1]
+            if dt > 0.0:
                 active_duration_s += dt
-        prev_active_t = t_i
     active_duration_s = round(active_duration_s, 2)
 
     summary = {

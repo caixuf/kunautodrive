@@ -584,7 +584,15 @@ static void test_dashboard_bridge_single_chunk(void) {
     const char* json = "{\"vehicle\":{\"x\":1.5,\"y\":2.0},\"ok\":true}";
     ASSERT(dashboard_bridge_publish(pub, json, strlen(json)) == 0,
            "publish failed");
-    usleep(150000);
+    /* Poll instead of assuming the receiver thread runs within 150ms: under
+     * `ctest -j` scheduling this test occasionally saw 0 snapshots. */
+    for (int i = 0; i < 200; i++) {
+        pthread_mutex_lock(&s.m);
+        int got_now = s.received;
+        pthread_mutex_unlock(&s.m);
+        if (got_now >= 1) break;
+        usleep(10000);
+    }
 
     ipc_channel_stop(sub);
 

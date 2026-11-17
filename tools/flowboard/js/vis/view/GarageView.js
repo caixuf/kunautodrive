@@ -215,8 +215,12 @@ export function createGarageView(scene) {
       lotGroup = null;
     }
     const surfaceSlots = (Array.isArray(slots) ? slots : [])
-      .filter((s) => s && Math.abs(Number(s.z) || 0) < 1.2);
-    if (!surfaceSlots.length) return;
+      .filter((s) => s && Math.abs(Number(s.z) || 0) < 1.2)
+      /* The five-bay surface-lot pad is a park_to_park_city-specific layout.
+       * Applying it to a single parallel-parking slot painted a phantom plaza
+       * and lane arrow across a normal two-lane street. */
+      .filter((s) => String(s.type || '').toLowerCase() !== 'parallel');
+    if (surfaceSlots.length < 2) return;
 
     let minX = Infinity, maxX = -Infinity, minY = Infinity;
     for (const s of surfaceSlots) {

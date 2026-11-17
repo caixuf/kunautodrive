@@ -217,7 +217,9 @@ def _check_large_snapshot_no_truncation(port: int, topo_file: Path, failures: li
     tmp_file.write_bytes(raw)
     os.replace(tmp_file, topo_file)
 
-    deadline = time.time() + 5.0
+    # 15s: the state file is injected by a separate bridge/monitor thread; under
+    # parallel ctest on a 2-core runner the 5s deadline was too tight.
+    deadline = time.time() + 15.0
     observed_live = False
     while time.time() < deadline:
         try:
@@ -247,7 +249,7 @@ def _check_large_snapshot_no_truncation(port: int, topo_file: Path, failures: li
         time.sleep(0.15)
 
     if not observed_live:
-        failures.append("large_snapshot /api/topology: 5s 内未收到文件桥接注入的 >250KB 快照")
+        failures.append("large_snapshot /api/topology: 15s 内未收到文件桥接注入的 >250KB 快照")
         return
 
     declared, topics_body = _get(port, "/api/topics", timeout=5.0)

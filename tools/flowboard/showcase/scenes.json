@@ -703223,15 +703223,17 @@
               ]
             }
           ],
-          "edge_overrides": {
-            "cbd_gateway_avenue": {
+          "edge_overrides": [
+            {
+              "edge": "cbd_gateway_avenue",
               "speed_limit_kph": 60
             },
-            "skybridge_overpass": {
+            {
+              "edge": "skybridge_overpass",
               "trees": false,
               "speed_limit_kph": 80
             }
-          },
+          ],
           "custom_props": [
             {
               "id": "city_welcome_gantry",

@@ -338,11 +338,11 @@ export function makeSignalLensTexture(kind, colorKey, active = true) {
  * 创建 GA/T 508 信号灯数字倒计时牌纹理（支持单相或 ←左 / ↑直 双排显示）。
  * 仅在整数秒或相位变化时刷新 key，复用有界缓存。
  */
-export function makeSignalCountdownTexture(rows) {
+export function makeSignalCountdownTexture(rows, useCache = true) {
   if (typeof document === 'undefined') return null;
   const sig = rows.map(r => `${r.prefix}:${r.sec}:${r.color}`).join(';');
   const key = _cacheKey('sigCd', sig);
-  if (_cache.has(key)) return _cache.get(key);
+  if (useCache && _cache.has(key)) return _cache.get(key);
 
   const w = 128, h = rows.length > 1 ? 160 : 96;
   const c = _createCanvas(w, h);
@@ -376,7 +376,8 @@ export function makeSignalCountdownTexture(rows) {
     ctx.fillText(secTxt, w - 12, cy + 1);
   });
 
-  return _putCachedTex(key, _toTexture(c));
+  const tex = _toTexture(c);
+  return useCache ? _putCachedTex(key, tex) : tex;
 }
 
 // ═══════════════════════════════════════════════════════════

@@ -148,6 +148,28 @@ bool FlowRoadNetwork::road_info(int index, RoadInfo& out) const {
 bool FlowRoadNetwork::frenet_to_world(int road_id, int lane_id, double s, double offset,
                                        WorldPos& out) {
     if (!loaded_ || pos_handle_ < 0) return false;
+    /* Lane ids are road-local. A held/route lane (e.g. -2 from a 4-lane road)
+     * is invalid on a 2-lane ramp; esmini spams "Lane id -2 does not exist"
+     * every tick and the query returns false. Fall back to the lane of the
+     * same sign nearest the centreline. */
+    if (lane_id != 0) {
+        const double rlen = RM_GetRoadLength((id_t)road_id);
+        const double sq = std::max(0.0, std::min(s, rlen > 0.0 ? rlen : s));
+        const std::vector<int> ids = drivable_lane_ids(road_id, sq);
+        bool present = false;
+        for (int lid : ids) {
+            if (lid == lane_id) { present = true; break; }
+        }
+        if (!present && !ids.empty()) {
+            int fallback = 0;
+            for (int lid : ids) {
+                if ((lane_id < 0 && lid < 0) || (lane_id > 0 && lid > 0)) {
+                    if (fallback == 0 || std::abs(lid) < std::abs(fallback)) fallback = lid;
+                }
+            }
+            if (fallback != 0) lane_id = fallback;
+        }
+    }
     // RM_SetLanePosition(handle, roadId, laneId, laneOffset, s, align)
     int rc = RM_SetLanePosition(pos_handle_, (id_t)road_id, lane_id, offset, s, false);
     if (rc < 0) return false;
@@ -212,6 +234,22 @@ bool FlowRoadNetwork::world_to_frenet(double x, double y, FrenetPos& out, double
 double FlowRoadNetwork::speed_limit(int road_id, int lane_id, double s,
                                      double default_value) {
     if (!loaded_ || pos_handle_ < 0) return default_value;
+    /* A held lane id (e.g. -2 from a 4-lane road) can be invalid on a 2-lane
+     * ramp; validate before RM_SetLanePosition to avoid per-tick esmini errors. */
+    if (lane_id != 0) {
+        const double rlen = RM_GetRoadLength((id_t)road_id);
+        const double sq = std::max(0.0, std::min(s, rlen > 0.0 ? rlen : s));
+        const std::vector<int> ids = drivable_lane_ids(road_id, sq);
+        bool present = false;
+        int fallback = 0;
+        for (int lid : ids) {
+            if (lid == lane_id) { present = true; break; }
+            if ((lane_id < 0 && lid < 0) || (lane_id > 0 && lid > 0)) {
+                if (fallback == 0 || std::abs(lid) < std::abs(fallback)) fallback = lid;
+            }
+        }
+        if (!present && fallback != 0) lane_id = fallback;
+    }
     // 把 position 移到目标位置，再查 RM_GetSpeedLimit（它基于当前 position）
     if (RM_SetLanePosition(pos_handle_, (id_t)road_id, lane_id, 0.0, s, false) < 0) {
         return default_value;

@@ -251,6 +251,14 @@ export function scenarioToScene(raw, staticMap) {
     }
   }
 
+  /* world_gen is a top-level scenario field in scenarios/*.json, while
+   * WorldCompiler reads roadNetwork.world_gen. Preserve it across the adapter
+   * or showcase/map preview silently falls back to the default preset. */
+  if (raw.world_gen) {
+    scene.world_gen = raw.world_gen;
+    if (scene.road_network) scene.road_network.world_gen = raw.world_gen;
+  }
+
   if (raw.parking_bay) scene.parking_bay = raw.parking_bay;
   if (raw.parking_goal) scene.parking_goal = raw.parking_goal;
   if (raw.park_out) scene.park_out = raw.park_out;

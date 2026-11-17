@@ -197,6 +197,26 @@ void test_corridor_partial_nudge_and_narrow_oncoming() {
     CHECK(res.best_width > 3.3);
 }
 
+void test_oneway_outer_lane_obstacle_not_dropped() {
+    auto cfg = base_cfg();
+    /* 4-lane one-way: lane centres are -1.75, -5.25, -8.75, -12.25.
+     * The old symmetric |d| < N*w/2 band (7m) dropped lanes 0/1 entirely. */
+    cfg.ego_y = -12.25;
+    cfg.ego_lane_d = -12.25;
+    cfg.road_half_w = 7.0;
+    cfg.road_d_min = -14.0;
+    cfg.road_d_max = 0.0;
+    double ox[] = {155.0};
+    double oy[] = {-12.25};
+    double ovx[] = {12.0};
+    double ovy[] = {0.0};
+    auto res = behavior_gap::evaluate_target_lane_gap(
+        cfg, -12.25, true, true, ox, oy, ovx, ovy, 1, no_proj);
+    CHECK(res.front_gap < 60.0);
+    CHECK(res.front_gap > 50.0);
+    CHECK(res.ok);
+}
+
 }  // namespace
 
 int main() {
@@ -209,6 +229,7 @@ int main() {
     test_corridor_guardrail_and_ebike_passable();
     test_corridor_narrow_blocked();
     test_corridor_partial_nudge_and_narrow_oncoming();
-    std::printf("test_behavior_gap_eval: all 9 tests passed\n");
+    test_oneway_outer_lane_obstacle_not_dropped();
+    std::printf("test_behavior_gap_eval: all 10 tests passed\n");
     return 0;
 }
