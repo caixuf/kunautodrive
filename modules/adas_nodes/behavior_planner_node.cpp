@@ -1242,17 +1242,13 @@ protected:
             flowengine::AccelLaneInput accel_in;
             accel_in.lane_count = lc;
             accel_in.oneway = g.road_oneway != 0;
-            accel_in.on_return = g.on_return != 0;
             accel_in.current_idx = current_idx;
             accel_in.speed_mps = g.ego_v;
             accel_in.cruise_mps = g.cfg_cruise_speed;
-            if (g.on_return) {
-                accel_in.inner_lane_empty = right_gap >= 1e8;
-                accel_in.inner_lead_mps = right_lead_v;
-            } else {
-                accel_in.inner_lane_empty = left_gap >= 1e8;
-                accel_in.inner_lead_mps = left_lead_v;
-            }
+            /* Inward is always the lower lane index in the travel-direction
+             * reference frame (ref_path is reversed on the return leg). */
+            accel_in.inner_lane_empty = left_gap >= 1e8;
+            accel_in.inner_lead_mps = left_lead_v;
             accel_in.carriageway_stop_ahead = carriageway_ahead_stop_light();
             accel_in.cooldown_active = g.cooldown > 0.0;
             const flowengine::AccelLaneDecision accel =

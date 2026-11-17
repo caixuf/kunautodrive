@@ -6,7 +6,12 @@ namespace flowengine {
 struct AccelLaneInput {
     int lane_count{0};
     bool oneway{false};
-    bool on_return{false};
+    /* Lane indices are already expressed in the travel-direction reference
+     * frame (road/ref_path is reversed on the return leg), so there is no
+     * separate return-side mapping: outer is always lane_count-1 and inward
+     * is always current_idx-1. Keeping an on_return switch here was the bug:
+     * the caller clamps current_idx to the same right half on both legs, so
+     * the "return" branch could never be reached. */
     int current_idx{0};
     double speed_mps{0.0};
     double cruise_mps{0.0};          /* 当前这条路生效的巡航，不是管线回退 15 */
@@ -23,9 +28,9 @@ struct AccelLaneDecision {
     int target_lane{-1};
 };
 
-inline int accel_outer_lane(int lane_count, bool on_return) {
+inline int accel_outer_lane(int lane_count) {
     if (lane_count <= 0) return 0;
-    return on_return ? 0 : lane_count - 1;
+    return lane_count - 1;
 }
 
 /**
@@ -37,12 +42,9 @@ inline AccelLaneDecision decide_accel_lane(const AccelLaneInput& in) {
     AccelLaneDecision d;
     if (in.oneway || in.lane_count < 8 || in.cruise_mps <= 0.5) return d;
     const int legal_first = in.lane_count / 2;
-    const bool on_this_side = in.on_return ? (in.current_idx < legal_first)
-                                           : (in.current_idx >= legal_first);
-    if (!on_this_side) return d;
-    if (in.current_idx < 0 || in.current_idx >= in.lane_count) return d;
+    if (in.current_idx < legal_first || in.current_idx >= in.lane_count) return d;
     d.active = true;
-    const int outer = accel_outer_lane(in.lane_count, in.on_return);
+    const int outer = accel_outer_lane(in.lane_count);
     if (in.speed_mps < in.cruise_mps * 0.85) {
         d.holding = true;
         int toward = outer;
@@ -55,12 +57,8 @@ inline AccelLaneDecision decide_accel_lane(const AccelLaneInput& in) {
     const bool gap_ok = in.inner_lane_empty ||
                         (in.inner_lead_mps >= in.cruise_mps * 0.70);
     if (!gap_ok) return d;
-    const int inward = in.on_return ? in.current_idx + 1 : in.current_idx - 1;
-    if (in.on_return) {
-        if (inward >= legal_first || inward >= in.lane_count) return d;
-    } else if (inward < legal_first || inward < 0) {
-        return d;
-    }
+    const int inward = in.current_idx - 1;
+    if (inward < legal_first || inward < 0) return d;
     d.merge_inward = true;
     d.target_lane = inward;
     return d;

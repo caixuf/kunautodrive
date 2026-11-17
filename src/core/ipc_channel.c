@@ -55,6 +55,12 @@ typedef struct {
     Message  msg;
 } WinShmSlot;
 
+/* Windows has no POSIX shm arena: MSG_INLINE_MAX_SIZE is the full 64 KB bus
+ * limit there, so ipc_channel_publish()'s memcpy into slot->msg.data is safe.
+ * This guard catches a future shrink of Message.data on Windows. */
+_Static_assert(sizeof(((Message*)0)->data) >= MSG_BUS_MAX_DATA_SIZE,
+               "Windows IPC requires a full-size inline Message.data");
+
 struct IpcChannel {
     IpcRole role;
     char channel_name[64];

@@ -1451,6 +1451,14 @@ target_link_libraries(test_accel_lane m)
 add_test(NAME accel_lane_tests COMMAND test_accel_lane)
 set_tests_properties(accel_lane_tests PROPERTIES TIMEOUT 10)
 
+add_executable(test_network_transport tests/test_network_transport.cpp)
+target_include_directories(test_network_transport PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(test_network_transport flowengine_core scheduler_cpp pthread)
+add_test(NAME network_transport_tests COMMAND test_network_transport)
+set_tests_properties(network_transport_tests PROPERTIES TIMEOUT 20)
+
 add_executable(test_park_out_and_slot_search
     tests/test_park_out_and_slot_search.cpp
     modules/adas_nodes/planning_framework/scenario_manager.cpp
