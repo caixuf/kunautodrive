@@ -1,0 +1,62 @@
+name: Windows IPC
+
+# windows-latest is the only environment where the Win32 IPC branch in
+# src/core/ipc_channel.c (CreateFileMapping/SetEvent) actually executes.
+# The Linux ctest only covers the POSIX SHM path, so keep this focused job.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'include/message_bus.h'
+      - 'include/dashboard_bridge.h'
+      - 'include/ipc_channel.h'
+      - 'src/core/ipc_channel.c'
+      - 'src/core/dashboard_bridge.c'
+      - 'src/core/message_bus.c'
+      - 'tests/test_windows_ipc_roundtrip.c'
+      - 'tests/test_windows_message_capacity.c'
+      - 'CMakeLists.txt'
+      - '.github/workflows/windows-ipc.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-ipc:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSYS2 (MinGW64)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-python
+
+      - name: Configure (native Win32, no Eigen)
+        shell: msys2 {0}
+        run: |
+          cmake -S . -B build-win -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DFLOWENGINE_ALLOW_NO_EIGEN=ON \
+            -DFLOW_BUILD_BOOK_EXAMPLES=OFF
+
+      - name: Build Win32 IPC tests
+        shell: msys2 {0}
+        run: |
+          cmake --build build-win --target \
+            test_windows_message_capacity test_windows_ipc_roundtrip \
+            -j$(nproc)
+
+      - name: Run 65KB dashboard IPC roundtrip
+        shell: msys2 {0}
+        run: |
+          set -e
+          ./build-win/bin/test_windows_message_capacity.exe
+          ./build-win/bin/test_windows_ipc_roundtrip.exe
