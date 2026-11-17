@@ -381,7 +381,7 @@ jobs:
         # 此步在 CI 上把该类回归拦在集成冒烟之前。
         run: ctest --test-dir build/modules/adas_nodes --output-on-failure -R "esmini|road_network|pem_log_protocol"
       - name: Pipeline stress run (15s)
-        run: timeout 35 ./build/bin/flow_launcher config/pipeline.json --duration 15
+        run: timeout -k 5s 35 ./build/bin/flow_launcher config/pipeline.json --duration 15
       - name: Integration smoke (ctest -L integration)
         run: ctest --test-dir build --output-on-failure -L integration
       # ── 方向五：同 seed 启动期确定性 ──

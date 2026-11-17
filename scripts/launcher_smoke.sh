@@ -47,7 +47,9 @@ LOGDIR="${FLOW_LOG_DIR:-/tmp/flow_logs}"
 loaded_before=$(grep -c "loaded  " "$LOGDIR/launcher.log" 2>/dev/null || true)
 loaded_before=${loaded_before:-0}
 echo "INFO: running flow_launcher (duration=${DURATION}s) ..."
-timeout 90 "$BUILD_DIR/bin/flow_launcher" config/pipeline.json --duration "$DURATION" \
+# -k: launcher's SIGTERM handler may itself block on a wedged node thread;
+# without a hard kill, `timeout` can wait forever and CTest reports Timeout.
+timeout -k 5s 90 "$BUILD_DIR/bin/flow_launcher" config/pipeline.json --duration "$DURATION" \
     > "$LOG" 2>&1
 rc=$?
 

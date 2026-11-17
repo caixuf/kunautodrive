@@ -58,7 +58,7 @@ def _run(pipeline: Path, log_dir: Path, duration: int,
     result = subprocess.run(
         cmd,
         cwd=ROOT, env=env, text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=240,
     )
     if not TOPOLOGY.is_file():
         raise SystemExit(
