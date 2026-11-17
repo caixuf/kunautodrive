@@ -691,7 +691,7 @@ void step_npc_vehicle(Entity& npc, const EntityPool& pool,
                     handled_lane_drop = true;
                     if (is_target_lane_safe_for_change(
                             npc, clamped_off, pool, cfg.same_lane_tol, 6.0, 6.0)) {
-                        step_offset_toward(clamped_off, 2.3, 0.0);
+                        step_offset_toward(clamped_off, 2.3, 0.35);
                     } else if (!approaching_narrower || dist_to_seg_end < 35.0) {
                         lane_drop_yield = true;
                     }

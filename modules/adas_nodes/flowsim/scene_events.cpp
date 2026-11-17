@@ -142,7 +142,7 @@ void tick_etc_gates(EntityPool& pool, const Entity& ego, double dt) {
             const double dist = dx * ch + dy * sh;
             const double lat = -dx * sh + dy * ch;
             const double dz = std::fabs(v.z - gate.z);
-            if (dz < 3.5 && std::fabs(lat) < lat_limit && dist > -4.0 && dist <= 35.0) {
+            if (dz < 3.5 && std::fabs(lat) < lat_limit && std::fabs(dist) <= 35.0) {
                 any_approaching = true;
             }
         };

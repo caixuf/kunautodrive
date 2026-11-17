@@ -87,13 +87,15 @@ inline CrossingYieldResult evaluate_crossing_conflict_yield(
             const double lat = -dx0 * uy + dy0 * ux;
             const double vx2 = other.vx, vy2 = other.vy;
             const double lat_v = -vx2 * uy + vy2 * ux;
+            const double ped_speed = std::hypot(vx2, vy2);
             double min_lat = std::fabs(lat);
             if (std::fabs(lat_v) > 0.1) {
                 double t_zero = -lat / lat_v;
                 if (t_zero >= 0.0 && t_zero <= horizon_s) min_lat = 0.0;
                 min_lat = std::min(min_lat, std::fabs(lat + lat_v * std::clamp(horizon_s, 0.0, 3.0)));
             }
-            if (min_lat > 2.4) continue;
+            const double lat_limit = (ped_speed < 0.1) ? 1.35 : 2.4;
+            if (min_lat > lat_limit) continue;
             const double safe_dist = std::max(0.0, along - 4.5);
             const double cap = std::max(0.0, std::min(npc.target_vx, safe_dist / 1.8));
             if (!res.should_yield || cap < res.speed_cap) {

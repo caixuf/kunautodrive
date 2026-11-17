@@ -1284,10 +1284,61 @@ export function createRoadView(scene) {
       stats.p2Edges++;
     } else {
       stats.heuristicEdges++;
+      const accessAnchors = [];
+      if (roadNetwork && Array.isArray(roadNetwork.edges)) {
+        for (const ae of roadNetwork.edges) {
+          const ak = String(ae.type || '').toLowerCase();
+          if (ak !== 'exit_merge' && ak !== 'right_in') continue;
+          const ans = ae.nodes;
+          if (!ans || ans.length < 2) continue;
+          const pt = (ak === 'exit_merge') ? ans[ans.length - 1] : ans[0];
+          accessAnchors.push({ px: pt[0], pz: -pt[1] });
+        }
+      }
       for (const seg of paintMarkSpine) {
         const edgeL = edgeLine(seg, roadHw - EDGE_INSET);
         if (edgeL) whiteGeos.push(edgeL);
-        const edgeR = edgeLine(seg, -(roadHw - EDGE_INSET));
+        const dRight = -(roadHw - EDGE_INSET);
+        if (accessAnchors.length > 0 && seg.length >= 2) {
+          const off = offsetSpine(seg, dRight);
+          const cum = buildCumulative(off);
+          const total = cum[cum.length - 1];
+          const holes = [];
+          for (const a of accessAnchors) {
+            let bestDist = Infinity, bestS = -1;
+            for (let k = 0; k < off.length; k++) {
+              const dist = Math.hypot(off[k].px - a.px, off[k].pz - a.pz);
+              if (dist < bestDist) { bestDist = dist; bestS = cum[k]; }
+            }
+            if (bestDist < 24.0 && bestS >= 0) {
+              holes.push([Math.max(0, bestS - 22.0), Math.min(total, bestS + 22.0)]);
+            }
+          }
+          if (holes.length > 0) {
+            holes.sort((x, y) => x[0] - y[0]);
+            let cur = 0;
+            for (const [hs, he] of holes) {
+              if (hs > cur + 0.5) {
+                const sub = off.filter((_, idx) => cum[idx] >= cur && cum[idx] <= hs);
+                if (sub.length >= 2) {
+                  const g = ribbonGeo(sub, EDGE_LINE_W / 2, Y_EDGE);
+                  if (g) whiteGeos.push(g);
+                }
+              }
+              for (const dg of dashedLineInRange(seg, dRight, hs, he)) whiteGeos.push(dg);
+              cur = Math.max(cur, he);
+            }
+            if (cur < total - 0.5) {
+              const sub = off.filter((_, idx) => cum[idx] >= cur);
+              if (sub.length >= 2) {
+                const g = ribbonGeo(sub, EDGE_LINE_W / 2, Y_EDGE);
+                if (g) whiteGeos.push(g);
+              }
+            }
+            continue;
+          }
+        }
+        const edgeR = edgeLine(seg, dRight);
         if (edgeR) whiteGeos.push(edgeR);
       }
 
