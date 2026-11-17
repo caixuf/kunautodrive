@@ -90,7 +90,7 @@ export function createComposer(renderer, scene, camera) {
   // 注意：分辨率必须与 renderer 的受限 DPR 对齐（min(dpr,1.5)），否则高分屏下
   // SMAA 在器渲染目标之上更高的原始 DPR 分辨率跑，额外增加整屏开销。
   if (THREE.SMAAPass) {
-    const cappedDpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    const cappedDpr = Math.min(window.devicePixelRatio || 1, 1.0);
     composer.addPass(new THREE.SMAAPass(
       Math.max(1, window.innerWidth * cappedDpr),
       Math.max(1, window.innerHeight * cappedDpr)

@@ -175,6 +175,8 @@ struct BehaviorContext {
     int    lane_count{2};
     double lane_width{3.5};
     int    road_oneway{0};  /* 1=单向（全部车道同向），0=双向（跨中心线=对向） */
+    int    prev_lane_count{0};
+    int    prev_road_oneway{0};
     int    upcoming_own_lanes{-1};      /* 前方缩减后的本向车道数（-1=无缩减） */
     double dist_to_lane_drop_m{-1.0};   /* 距前方车道缩减起点的距离 (m) */
     volatile int has_road_geometry{0};
@@ -857,6 +859,13 @@ protected:
             g.state_timer += 0.05;
             if (g.cooldown > 0.0) g.cooldown -= 0.05;
             if (g.uturn_cooldown > 0.0) g.uturn_cooldown -= 0.05;
+            if (g.prev_lane_count > 0 && g.prev_lane_count <= 2 && g.prev_road_oneway != 0 &&
+                lc >= 4 && !g.road_oneway) {
+                /* 刚从单向出库/匝道汇入双向多车道主路：先在当前外侧车道稳定行驶，避开汇入实线区立刻左变道 */
+                if (g.cooldown < 4.0) g.cooldown = 4.0;
+            }
+            g.prev_lane_count = lc;
+            g.prev_road_oneway = g.road_oneway;
 
             /* ── 当前车道索引：每帧从 ego_y 重算（变道进行中由变道完成检测接管） ──
              *
