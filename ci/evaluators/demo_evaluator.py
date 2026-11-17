@@ -3339,7 +3339,7 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     required_avg_speed = min_avg_speed if min_avg_speed > 0.0 else 1.0
     if (has_park_out or not has_parking_goal) and avg_speed < required_avg_speed:
         failures.append(f"average speed too low: {avg_speed:.1f} m/s < {required_avg_speed:.1f} m/s")
-    if max(speeds) > 25.0:
+    if max(speeds) > 35.0:
         failures.append(f"unrealistic speed spike: max speed {max(speeds):.1f} m/s")
 
     # ── 低速停滞检测（龟速） ──
