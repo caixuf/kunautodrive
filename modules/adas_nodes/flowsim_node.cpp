@@ -1270,7 +1270,7 @@ static void publish_vehicle_state(uint64_t sim_time_us) {
         if (e.type == flowsim::EntityType::TrafficLight ||
             e.type == flowsim::EntityType::StopLine) continue;
         if (e.type == flowsim::EntityType::ETCGate &&
-            (e.phase_state == 2 || e.phase_timer >= 0.75)) continue;
+            (e.phase_state == 2 || e.phase_timer >= 0.85)) continue;
         if (n_obs >= 128) break;
 
         char key[20];
@@ -2520,7 +2520,7 @@ protected:
                     int pool_idx = g.gate_entity_indices[gi];
                     if (pool_idx >= 0 && pool_idx < g.pool.size()) {
                         const flowsim::Entity& ge = g.pool[pool_idx];
-                        bool open = (!ge.active || ge.phase_state == 2 || ge.phase_timer >= 0.75);
+                        bool open = (!ge.active || ge.phase_state == 2 || ge.phase_timer >= 0.85);
                         g.physics_world.set_gate_open(g.gate_physics_handles[gi], open);
                     }
                 }
@@ -2997,7 +2997,7 @@ protected:
                 for (int gi = 0; gi < g.pool.size(); ++gi) {
                     const flowsim::Entity& gate = g.pool[gi];
                     if (!gate.active || gate.type != flowsim::EntityType::ETCGate) continue;
-                    if (gate.phase_state == 2 || gate.phase_timer >= 0.75) continue;
+                    if (gate.phase_state == 2 || gate.phase_timer >= 0.85) continue;
                     if (std::fabs(e.z - gate.z) > 2.0) continue;
                     if (std::hypot(e.x - gate.x, e.y - gate.y) > 8.0) continue;
                     flowsim::BuildingOBB gate_obb{gate.x, gate.y, 0.5, 3.6, gate.heading};
@@ -4180,7 +4180,7 @@ static int flowsim_init(MessageBus* bus, Transport* transport,
         for (int gi = 0; gi < g.pool.size(); ++gi) {
             const flowsim::Entity& ge = g.pool[gi];
             if (!ge.active || ge.type != flowsim::EntityType::ETCGate) continue;
-            bool open = (ge.phase_state == 2 || ge.phase_timer >= 0.75);
+            bool open = (ge.phase_state == 2 || ge.phase_timer >= 0.85);
             int gh = g.physics_world.add_gate_barrier(
                 ge.x, ge.y, ge.z, 0.5, 3.6, 1.3, ge.heading, gi);
             if (gh >= 0 && open) {

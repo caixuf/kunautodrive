@@ -142,7 +142,7 @@ void tick_etc_gates(EntityPool& pool, const Entity& ego, double dt) {
             const double dist = dx * ch + dy * sh;
             const double lat = -dx * sh + dy * ch;
             const double dz = std::fabs(v.z - gate.z);
-            if (dz < 2.5 && std::fabs(lat) < lat_limit && dist > -4.0 && dist <= 28.0) {
+            if (dz < 3.5 && std::fabs(lat) < lat_limit && dist > -4.0 && dist <= 35.0) {
                 any_approaching = true;
             }
         };
@@ -158,9 +158,9 @@ void tick_etc_gates(EntityPool& pool, const Entity& ego, double dt) {
         }
 
         /* ETC/道闸状态用 phase_state：0=关闭 1=抬杆中 2=全开。
-         * 车辆接近 28m 内开始抬杆（约 0.8s 升起），未全开前保持物理障碍判定。 */
+         * 车辆接近 35m 内开始抬杆（约 0.55s 完全升起），全开前保持物理障碍判定。 */
         if (any_approaching) {
-            gate.phase_timer = std::min(1.0, gate.phase_timer + dt * 1.2);
+            gate.phase_timer = std::min(1.0, gate.phase_timer + dt * 1.8);
             gate.phase_state = (gate.phase_timer >= 0.85) ? 2 : 1;
         } else {
             gate.phase_state = 0;

@@ -319,21 +319,24 @@ export function createETCGateView(scene) {
     };
   }
 
-  /** boom 抬起角度：state='open'/1 → 抬起；'opening' → 半抬；'closed'/0 → 0° 落下 */
-  function _setBoomState(entry, state) {
+  /** boom 抬起角度：state='open'/1 → 抬起；'opening' → 按 progress 平滑抬起；'closed'/0 → 0° 落下 */
+  function _setBoomState(entry, state, progress) {
     const isOpen = state === 'open' || state === 1 || state === true;
     const isOpening = state === 'opening';
+    const p = (typeof progress === 'number' && Number.isFinite(progress))
+      ? Math.max(0, Math.min(1, progress))
+      : (isOpen ? 1 : (isOpening ? 0.5 : 0));
     if (entry.isParkingBarrier) {
-      const targetAngle = isOpen ? Math.PI * 0.46 : (isOpening ? Math.PI * 0.22 : 0);
+      const targetAngle = isOpen ? Math.PI * 0.46 : (isOpening ? Math.PI * 0.46 * p : 0);
       for (const boom of entry.booms) {
         boom.rotation.x = targetAngle;
       }
       if (entry.statusLed) {
-        entry.statusLed.material = isOpen ? entry.ledGreenMat : entry.ledRedMat;
+        entry.statusLed.material = (isOpen || p >= 0.85) ? entry.ledGreenMat : entry.ledRedMat;
       }
       return;
     }
-    const targetAngle = isOpen ? -Math.PI / 3 : (isOpening ? -Math.PI / 6 : 0);
+    const targetAngle = isOpen ? -Math.PI / 3 : (isOpening ? (-Math.PI / 3) * p : 0);
     for (const boom of entry.booms) {
       boom.rotation.x = targetAngle;
     }
@@ -368,7 +371,7 @@ export function createETCGateView(scene) {
         : roadHeightAt(store, ent.x, ent.y);
       entry.group.position.set(...worldToThree(ent.x || 0, ent.y || 0, z));
       entry.group.rotation.y = headingToRotationY(ent.heading || 0);
-      _setBoomState(entry, ent.state);
+      _setBoomState(entry, ent.state, ent.progress);
     }
   }
 
