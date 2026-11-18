@@ -309,10 +309,11 @@ static void test_cnn_native_inference(void) {
                         (double)(ts_end.tv_nsec - ts_start.tv_nsec) / 1000000.0) / n_runs;
 
     double max_latency_ms = 10.0;
-#ifdef __SANITIZE_ADDRESS__
+#if defined(__SANITIZE_ADDRESS__) || defined(FLOWENGINE_UBSAN) || \
+    defined(FLOWENGINE_COVERAGE)
     max_latency_ms = 150.0;
 #elif defined(__has_feature)
-#if __has_feature(address_sanitizer)
+#if __has_feature(address_sanitizer) || __has_feature(undefined_behavior_sanitizer)
     max_latency_ms = 150.0;
 #endif
 #endif
