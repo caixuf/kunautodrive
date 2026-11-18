@@ -328,6 +328,52 @@ static void test_guardrail_clamp_lane_drop_and_pedestrian_yield() {
     }
 }
 
+void test_phantom_route_lead_and_low_speed_zipper() {
+    flowsim::EntityPool pool;
+    flowsim::EntityId npc_id = pool.alloc(flowsim::EntityType::Car);
+    flowsim::Entity& npc = pool[npc_id];
+    npc.active = true;
+    npc.id = 74;
+    npc.x = 562.4;
+    npc.y = 150.4;
+    npc.z = 0.0;
+    npc.heading = 1.51;
+    npc.speed = 0.0;
+    npc.length = 4.6;
+    npc.width = 1.9;
+    npc.route_dir = 1;
+    npc.route_s = 700.0;
+    npc.offset = -1.75;
+
+    // Phantom off-route car: nearby route_s (+5m) but 120m away in 3D world space
+    flowsim::EntityId ph_id = pool.alloc(flowsim::EntityType::Car);
+    flowsim::Entity& phantom = pool[ph_id];
+    phantom.active = true;
+    phantom.id = 88;
+    phantom.x = 680.0;
+    phantom.y = 10.0;
+    phantom.z = 0.0;
+    phantom.heading = 0.0;
+    phantom.speed = 0.0;
+    phantom.length = 4.6;
+    phantom.width = 1.9;
+    phantom.route_dir = 1;
+    phantom.route_s = 705.0;
+    phantom.offset = -1.75;
+
+    double gap = 1e9;
+    CHECK(!flowsim::compute_corridor_lead_gap(npc, phantom, true, false, 60.0, gap));
+    CHECK(flowsim::is_target_lane_safe_for_change(npc, -1.75, pool, 1.5, 6.0, 6.0));
+
+    // Low-speed zipper merge: real vehicle 9.6m ahead (5.0m bumper gap) at <3 m/s
+    phantom.x = 562.9;
+    phantom.y = 160.0;
+    phantom.route_s = 709.6;
+    phantom.speed = 0.5;
+    npc.speed = 0.5;
+    CHECK(flowsim::is_target_lane_safe_for_change(npc, -1.75, pool, 1.5, 6.0, 6.0));
+}
+
 }  // namespace
 
 int main() {
@@ -339,6 +385,7 @@ int main() {
     test_offroute_continue_helpers();
     test_surface_recycle_and_lane_change_safety();
     test_guardrail_clamp_lane_drop_and_pedestrian_yield();
-    std::printf("test_npc_yield: all 8 tests passed\n");
+    test_phantom_route_lead_and_low_speed_zipper();
+    std::printf("test_npc_yield: all 9 tests passed\n");
     return 0;
 }

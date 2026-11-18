@@ -169,6 +169,26 @@ inline CrossingYieldResult evaluate_crossing_conflict_yield(
  * `target_offset`, elevation-isolated vehicles, and world-coordinate traffic
  * such as ego or off-route cars).
  */
+/**
+ * Return true when a `route_s`-matched vehicle is physically consistent in
+ * 3D world space (prevents off-route / branch-road / recycled NPCs with nearby
+ * `route_s` from acting as phantom leads hundreds of meters away).
+ */
+inline bool is_route_lead_physically_consistent(
+    const Entity& npc, const Entity& other, double signed_ahead_s)
+{
+    if (std::fabs(other.z - npc.z) > 2.2) return false;
+    const double dx = other.x - npc.x;
+    const double dy = other.y - npc.y;
+    const double dist_2d = std::hypot(dx, dy);
+    if (dist_2d > std::fabs(signed_ahead_s) + 12.0) return false;
+    if (signed_ahead_s > 0.0) {
+        const double proj = dx * std::cos(npc.heading) + dy * std::sin(npc.heading);
+        if (proj < -std::max(other.length, npc.length)) return false;
+    }
+    return true;
+}
+
 inline bool is_target_lane_safe_for_change(
     const Entity& npc,
     double target_offset,
@@ -203,18 +223,24 @@ inline bool is_target_lane_safe_for_change(
                 continue;
             }
             const double ahead = (o.route_s - npc.route_s) * (double)npc.route_dir;
+            if (!is_route_lead_physically_consistent(npc, o, ahead)) {
+                continue;
+            }
             if (std::fabs(ahead) < half_sum + 1.5) {
                 return false;
             }
+            const bool low_speed_zipper = (npc.speed < 3.0 && o.speed < 3.0);
+            const double eff_front = low_speed_zipper ? std::min(min_front_gap, 4.5) : min_front_gap;
+            const double eff_rear  = low_speed_zipper ? std::min(min_rear_gap, 4.5)  : min_rear_gap;
             if (ahead > 0.0) {
                 const double front_gap = ahead - half_sum;
-                const double needed = min_front_gap + std::max(0.0, npc.speed - o.speed) * 1.2;
+                const double needed = eff_front + std::max(0.0, npc.speed - o.speed) * 1.2;
                 if (front_gap < needed) {
                     return false;
                 }
             } else {
                 const double rear_gap = -ahead - half_sum;
-                const double needed = min_rear_gap + std::max(0.0, o.speed - npc.speed) * 1.5;
+                const double needed = eff_rear + std::max(0.0, o.speed - npc.speed) * 1.5;
                 if (rear_gap < needed) {
                     return false;
                 }
@@ -398,12 +424,13 @@ inline bool compute_corridor_lead_gap(
 
     if (is_same_lane) {
         double ahead = proj_ahead;
-        if (npc.route_dir != 0 && other.route_dir != 0) {
+        const bool use_route_s = (npc.route_dir != 0 && other.route_dir != 0);
+        if (use_route_s) {
             ahead = (other.route_s - npc.route_s) * static_cast<double>(npc.route_dir);
+            if (!is_route_lead_physically_consistent(npc, other, ahead)) return false;
         }
         if (ahead <= 0.0 || ahead > look_ahead_m) return false;
-        const double eff_half_long =
-            (npc.route_dir != 0 && other.route_dir != 0) ? (other.length * 0.5) : o_half_long;
+        const double eff_half_long = use_route_s ? (other.length * 0.5) : o_half_long;
         out_gap_m = ahead - (eff_half_long + npc.length * 0.5);
         return true;
     }

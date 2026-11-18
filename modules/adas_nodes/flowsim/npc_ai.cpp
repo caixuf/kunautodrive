@@ -110,8 +110,9 @@ static EntityId find_lead(const Entity& npc, const EntityPool& pool,
 
 /* ── IDM 期望速度 ── */
 static double idm_desired_speed(double v, double gap, double target_v,
-                                const NpcAiConfig& cfg, double dt) {
-    double safe_gap = cfg.idm_safe_gap_base + v * cfg.idm_safe_gap_time;
+                                const NpcAiConfig& cfg, double dt,
+                                double gap_time_scale = 1.0) {
+    double safe_gap = cfg.idm_safe_gap_base + v * (cfg.idm_safe_gap_time * gap_time_scale);
     double gap_error = gap - safe_gap;
     if (gap_error > 0) {
         // 间距充足：平稳加速到 target_v
@@ -139,6 +140,7 @@ static EntityId find_leader_in_lane(const Entity& npc, double lane_offset,
         if (std::fabs(o.offset - lane_offset) >= cfg.same_lane_tol) continue;
         double ahead = (o.route_s - npc.route_s) * (double)npc.route_dir;
         if (ahead <= 0) continue;
+        if (!is_route_lead_physically_consistent(npc, o, ahead)) continue;
         double gap = ahead - (o.length * 0.5 + npc.length * 0.5);
         if (gap < best_gap && gap < cfg.look_ahead) {
             best_gap = gap;
@@ -166,6 +168,7 @@ static EntityId find_follower_in_lane(const Entity& npc, double lane_offset,
         if (std::fabs(o.offset - lane_offset) >= cfg.same_lane_tol) continue;
         double behind = (npc.route_s - o.route_s) * (double)npc.route_dir;
         if (behind <= 0) continue;
+        if (!is_route_lead_physically_consistent(npc, o, -behind)) continue;
         double gap = behind - (o.length * 0.5 + npc.length * 0.5);
         if (gap < best_gap && gap < cfg.mobil_back_look) {
             best_gap = gap;
@@ -870,8 +873,9 @@ mobil_done: ;
             /* 保持 ai_state==LaneChange（MOBIL 横向插值进行中）：
              * 纵向只按 IDM/目标速度推进，不得把状态改回 Follow/Cruise ——
              * 旧实现无条件覆盖，导致变道只横移一帧即中止（2026-11 修复）。 */
+            const double headway_scale = 0.85 + 0.075 * static_cast<double>(npc.id % 5);
             v_desired = (lead != INVALID_ENTITY)
-                ? idm_desired_speed(v, gap, eff_target_vx, cfg, dt)
+                ? idm_desired_speed(v, gap, eff_target_vx, cfg, dt, headway_scale)
                 : eff_target_vx;
         } else if (lead != INVALID_ENTITY) {
             npc.state = NpcState::Follow;
@@ -881,13 +885,20 @@ mobil_done: ;
             if (gap < 2.0 && npc.speed < 0.5 && pool[lead].speed > 0.5) {
                 gap = 10.0;
             }
-            v_desired = idm_desired_speed(v, gap, eff_target_vx, cfg, dt);
+            const double headway_scale = 0.85 + 0.075 * static_cast<double>(npc.id % 5);
+            v_desired = idm_desired_speed(v, gap, eff_target_vx, cfg, dt, headway_scale);
         } else {
             npc.state = NpcState::Cruise;
             v_desired = eff_target_vx;
         }
         if (lane_drop_yield) {
-            v_desired = std::min(v_desired, std::max(0.0, v - cfg.brake_rate * dt));
+            /* 拉链合流防死锁：若前方本身有足够安全距（> 6.5m）却因并排卡在 0 速，
+             * 保持 1.2 m/s 低速蠕行以错开车身、让出/寻找空当，避免两车永远原地互锁。 */
+            if (v < 0.8 && gap > 6.5) {
+                v_desired = std::min(v_desired, 1.2);
+            } else {
+                v_desired = std::min(v_desired, std::max(0.0, v - cfg.brake_rate * dt));
+            }
             if (npc.state == NpcState::Cruise || npc.state == NpcState::Follow) {
                 npc.state = NpcState::Yield;
             }
