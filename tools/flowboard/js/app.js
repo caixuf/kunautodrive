@@ -2054,6 +2054,19 @@ var _lastIncidentTrace = null;
 var _incidentTraceFetching = false;
 var _lastIncidentTraceFetchMs = 0;
 var _INCIDENT_POLL_MS = 3000;
+var _incidentDismissedSig = '';
+
+function _incidentTraceSignature(traceData) {
+  var events = (traceData && traceData.events) || [];
+  var inc = traceData && traceData.incident;
+  return String((inc && inc.type) || '') + ':' + events.length;
+}
+
+function dismissIncidentTimeline() {
+  var timeline = document.getElementById('incident-timeline');
+  if (timeline) timeline.style.display = 'none';
+  if (_lastIncidentTrace) _incidentDismissedSig = _incidentTraceSignature(_lastIncidentTrace);
+}
 
 async function fetchIncidentTrace(force) {
   if (_incidentTraceFetching) return;
@@ -2061,23 +2074,34 @@ async function fetchIncidentTrace(force) {
   if (!force && now - _lastIncidentTraceFetchMs < _INCIDENT_POLL_MS) return;
   _lastIncidentTraceFetchMs = now;
   _incidentTraceFetching = true;
+  var btn = document.getElementById('incident-trace-btn');
+  var statusText = document.getElementById('incident-status-text');
+  if (force) {
+    _incidentDismissedSig = '';
+    if (btn) { btn.disabled = true; btn.textContent = '⟳ 追溯中…'; }
+  }
   try {
     var res = await fetch(serverUrl + '/api/incident/trace');
     if (res.ok) {
       var data = await res.json();
       if (data && data.ok) {
         _lastIncidentTrace = data;
-        renderIncidentTimeline(data);
+        renderIncidentTimeline(data, !!force);
+      } else if (force && statusText) {
+        statusText.textContent = '暂无可用诊断轨迹数据';
       }
+    } else if (force && statusText) {
+      statusText.textContent = '诊断接口返回 HTTP ' + res.status;
     }
   } catch (_) {
-    // 静默降级
+    if (force && statusText) statusText.textContent = '诊断追溯请求失败（服务未就绪）';
   } finally {
     _incidentTraceFetching = false;
+    if (btn) { btn.disabled = false; btn.textContent = '⟳ 诊断追溯'; }
   }
 }
 
-function renderIncidentTimeline(traceData) {
+function renderIncidentTimeline(traceData, forceOpen) {
   var timeline = document.getElementById('incident-timeline');
   if (!timeline) return;
   var events = (traceData && traceData.events) || [];
@@ -2085,6 +2109,10 @@ function renderIncidentTimeline(traceData) {
   if (!events.length && !incident) {
     timeline.style.display = 'none';
     timeline.classList.remove('has-incident');
+    return;
+  }
+  var sig = _incidentTraceSignature(traceData);
+  if (!forceOpen && _incidentDismissedSig && _incidentDismissedSig === sig) {
     return;
   }
   timeline.style.display = '';
@@ -2145,11 +2173,13 @@ function renderIncidentTimeline(traceData) {
     listContainer.innerHTML = '';
     events.slice(0, 4).forEach(function(ev) {
       var tag = document.createElement('span');
+      var rawT = Number(ev.t_s);
+      var evSec = Number.isFinite(rawT) ? rawT : (Number.isFinite(Number(ev.t)) ? Number(ev.t) : 0);
       tag.className = 'dh-chip tone-' + (ev.type === 'l3_collision' || ev.type === 'l3_mrm' ? 'bad' : 'warn');
       tag.textContent = (ev.type === 'l3_tor' ? '⚡ ' + (ev.state || 'TOR')
         : (ev.type === 'l3_mrm' ? '🛑 MRM'
         : (ev.type === 'l3_collision' ? '💥 碰撞'
-        : (ev.type === 'road_departure' ? '🚨 出路沿' : ev.type)))) + ' (' + (Number(ev.t_s || 0)).toFixed(1) + 's)';
+        : (ev.type === 'road_departure' ? '🚨 出路沿' : ev.type)))) + ' (' + evSec.toFixed(1) + 's)';
       listContainer.appendChild(tag);
     });
   }
@@ -3590,6 +3620,7 @@ window.flowboard = {
     }
   },
   refreshIncidentTrace: function() { fetchIncidentTrace(true); },
+  dismissIncidentTimeline: dismissIncidentTimeline,
   clearFrames: clearFrames,
   resetView: resetView,
   // filter

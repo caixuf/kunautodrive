@@ -1376,7 +1376,8 @@ protected:
                     snprintf(reason, sizeof(reason),
                              "wrong carriageway lane%d on_return=%d → recover lane%d",
                              current_idx, g.on_return, recovery_lane);
-                } else if (lane_drop_merge_needed && !uturn_approach_active && left_ok &&
+                } else if (lane_drop_merge_needed && !uturn_approach_active &&
+                           (left_ok || (left_same_side && left_rear_safe && left_gap > 10.0 && g.dist_to_lane_drop_m < 80.0)) &&
                            (cur == BEH_ST_CRUISE || cur == BEH_ST_FOLLOW)) {
                     /* 前方路段发生本向车道缩减：在进入窄路前尽早向内侧车道有序并线，
                      * 避免跨越道路接缝时发生整车宽级的横向阶跃与持续骑线。 */
@@ -1559,7 +1560,10 @@ protected:
                          * 3.8 等，不恢复就会一直低速行驶 + planning 不消费
                          * behavior 的 target_speed（只在 FOLLOW 时消费）。 */
                         new_target_speed = (lane_drop_merge_needed && g.dist_to_lane_drop_m < 65.0)
-                            ? std::min(g.cfg_cruise_speed, std::max(3.0, g.ego_v * 0.75))
+                            ? std::min(g.cfg_cruise_speed,
+                                       g.dist_to_lane_drop_m < 35.0
+                                           ? std::max(1.5, g.ego_v * 0.55)
+                                           : std::max(3.0, g.ego_v * 0.75))
                             : g.cfg_cruise_speed;
                     }
                 } else if (cur == BEH_ST_FOLLOW) {

@@ -948,14 +948,11 @@ export function createRoadView(scene) {
       z: best.adjacent.pz - best.mainPoint.pz,
     };
     const side = sideVector.x * best.mainPoint.nx + sideVector.z * best.mainPoint.nz < 0 ? -1 : 1;
-    /* 匝道接在主路端点：仅当显式声明 accel_length_m 或并排偏离主路中线(>1.5m)时
-     * 沿主路往里铺加速/减速车道；端点直接续接的普通转弯不误绘。 */
+    /* 匝道接在主路端点：若已并排对齐主路最外侧车道（如八车道高架第 4 车道），
+     * 主路本身已包含加减速车道，不在桥体外侧额外悬挑锯齿形导流框；
+     * 端点直接续接的普通转弯同样不误绘。 */
     if (joinS < TAPER_MIN_M || joinS > mainTotal - TAPER_MIN_M) {
-      if (!(Number(rampEdge.accel_length_m) > 0) && best.distance <= 1.5) return null;
-      if (joinS < TAPER_MIN_M) {
-        return { role: 'merge', side, joinS: Math.min(mainTotal - TAPER_MIN_M, accel) };
-      }
-      return { role: 'diverge', side, joinS: Math.max(TAPER_MIN_M, mainTotal - accel) };
+      return null;
     }
 
     const explicitRole = String(rampEdge.ramp_role || rampEdge.layout || '').toLowerCase();

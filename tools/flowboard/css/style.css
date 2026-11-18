@@ -204,7 +204,7 @@ body[data-workspace="perf"] .ws-observe-analyze{display:none!important}
 .incident-marker.ev-departure{background:#e36209;color:#fff;border:1px solid #ff9f1c}
 
 /* ── 驾驶态势 HUD（DrivingStatus.js 纯函数 → app.js 4Hz 渲染；快捷键 I / ?hud=0 关闭）── */
-#drive-hud{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);z-index:28;display:flex;align-items:stretch;gap:0;max-width:calc(100% - 28px);padding:8px 4px;border-radius:14px;background:linear-gradient(180deg,#0b1422e6,#060b14f0);border:1px solid #30363d;box-shadow:0 10px 32px #000c,inset 0 1px 0 #ffffff0d;backdrop-filter:blur(10px);pointer-events:none;font:11px/1.45 system-ui,-apple-system,'Segoe UI',sans-serif;color:#8b949e;contain:layout style;transition:border-color .25s,box-shadow .25s}
+#drive-hud{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);z-index:28;display:flex;align-items:stretch;gap:0;max-width:calc(100% - 28px);padding:8px 4px;border-radius:14px;background:linear-gradient(180deg,#0b1422e6,#060b14f0);border:1px solid #30363d;box-shadow:0 10px 32px #000c,inset 0 1px 0 #ffffff0d;backdrop-filter:blur(10px);pointer-events:none;font:11px/1.45 system-ui,-apple-system,'Segoe UI',sans-serif;color:#8b949e;contain:layout style;overflow:hidden;transition:border-color .25s,box-shadow .25s}
 #drive-hud.hidden,#game-hud.active~#drive-hud{display:none}
 #drive-hud.tone-warn{border-color:#d2992299;box-shadow:0 10px 32px #000c,0 0 0 1px #d2992233,0 0 22px #d2992240}
 #drive-hud.tone-bad{border-color:#f85149;box-shadow:0 10px 32px #000c,0 0 0 1px #f8514966,0 0 26px #f8514966;animation:dh-pulse 1s ease-in-out infinite}
@@ -214,12 +214,12 @@ body[data-workspace="perf"] .ws-observe-analyze{display:none!important}
 #drive-hud .dh-tor-mrm{animation:dh-pulse .3s ease-in-out infinite}
 @keyframes dh-pulse{50%{box-shadow:0 10px 32px #000c,0 0 0 1px #f8514999,0 0 38px #f85149aa}}
 #drive-hud .dh-speed,#drive-hud .dh-col{padding:0 14px;display:flex;flex-direction:column;justify-content:center;gap:5px}
-#drive-hud .dh-col{border-left:1px solid #21262d}
-#drive-hud .dh-speed{min-width:118px;align-items:flex-start;gap:2px}
+#drive-hud .dh-col{border-left:1px solid #21262d;min-width:0}
+#drive-hud .dh-speed{min-width:152px;flex-shrink:0;align-items:flex-start;gap:2px}
 #drive-hud .dh-speed b{font:800 30px/1 'JetBrains Mono',ui-monospace,monospace;color:#f0f6fc;letter-spacing:-1px;font-variant-numeric:tabular-nums}
 #drive-hud .dh-speed>span{position:relative;top:-2px;margin-left:4px;font-size:10px;color:#8b949e}
 #drive-hud .dh-speed b,#drive-hud .dh-speed>span{display:inline}
-#drive-hud em{font-style:normal;font-size:10px;color:#6e7681;font-family:'JetBrains Mono',ui-monospace,monospace}
+#drive-hud em{font-style:normal;font-size:10px;color:#6e7681;font-family:'JetBrains Mono',ui-monospace,monospace;white-space:nowrap}
 #drive-hud .dh-bar{position:relative;height:5px;width:100%;min-width:60px;border-radius:3px;background:#21262d;overflow:hidden}
 #drive-hud .dh-bar>i{position:absolute;left:0;top:0;bottom:0;width:0;border-radius:3px;background:linear-gradient(90deg,#1f6feb,#58a6ff);transition:width .25s ease-out}
 #drive-hud .dh-bar>i.dh-tick{width:2px;left:0;background:#f0f6fc;border-radius:0;transition:left .25s ease-out}
