@@ -389,7 +389,16 @@ static int count_active_subscribers(MessageBus* bus, const char* topic) {
     uint32_t s1;
     int c;
     for (;;) {
-        while ((s1 = atomic_load(&bus->subs_seq)) & 1u) { /* 写者进行中，自旋 */ }
+        s1 = atomic_load(&bus->subs_seq);
+        if (s1 & 1u) {
+            /* A subscribe/unsubscribe writer is active. That writer holds
+             * sub_mutex and update_subscriber_count() takes topic_mutex.
+             * We are called while publish holds topic_mutex, so spinning here
+             * would deadlock (sub_mutex -> topic_mutex vs topic_mutex -> spin).
+             * subscriber_count is advisory; return best-effort and let the
+             * next subscribe/unsubscribe refresh it. */
+            return 0;
+        }
         c = 0;
         for (int i = 0; i < bus->sub_count; i++)
             if (bus->subs[i].active && topic_match(bus->subs[i].topic, topic)) c++;

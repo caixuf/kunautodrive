@@ -269,6 +269,46 @@ static void test_message_data_invalid_shm_ref(void) {
     PASS();
 }
 
+static void race_cb(const Message* msg, void* ud) { (void)msg; (void)ud; }
+
+static void* race_sub_thread(void* arg) {
+    MessageBus* bus = (MessageBus*)arg;
+    for (int i = 0; i < 500; i++) {
+        if (message_bus_subscribe(bus, "race/trigger", race_cb, NULL) == 0)
+            message_bus_unsubscribe(bus, "race/trigger", race_cb);
+    }
+    return NULL;
+}
+
+static void* race_pub_thread(void* arg) {
+    MessageBus* bus = (MessageBus*)arg;
+    int value = 1;
+    for (int i = 0; i < 64; i++) {
+        char topic[MSG_BUS_MAX_TOPIC_LEN];
+        snprintf(topic, sizeof(topic), "race/new/%d", i);
+        message_bus_publish(bus, topic, "race", &value, sizeof(value));
+        message_bus_publish(bus, "race/trigger", "race", &value, sizeof(value));
+    }
+    return NULL;
+}
+
+static void test_bus_subscribe_publish_race(void) {
+    TEST("bus concurrent subscribe + new-topic publish (lock-order deadlock)");
+    MessageBus* bus = message_bus_create("race_bus");
+    ASSERT(bus != NULL, "bus create failed");
+    pthread_t sub_t, pub_t;
+    pthread_create(&sub_t, NULL, race_sub_thread, bus);
+    pthread_create(&pub_t, NULL, race_pub_thread, bus);
+    /* If the old topic_mutex -> subs_seq spin / sub_mutex -> topic_mutex
+     * inversion returns, this alarm turns the hang into a test failure. */
+    alarm(10);
+    pthread_join(sub_t, NULL);
+    pthread_join(pub_t, NULL);
+    alarm(0);
+    message_bus_destroy(bus);
+    PASS();
+}
+
 static void echo_service_handler(const Message* req, Message* reply, void* user_data) {
     (void)user_data;
     snprintf(reply->topic, 64, "%s", req->topic);
@@ -973,6 +1013,7 @@ int main(void) {
     test_bus_zero_copy_basic();
     test_bus_loaned_async();
     test_message_data_invalid_shm_ref();
+    test_bus_subscribe_publish_race();
     test_bus_req_reply();
 
     /* ── Task Manager ───────────────────────── */
