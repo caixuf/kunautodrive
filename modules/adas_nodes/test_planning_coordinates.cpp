@@ -267,5 +267,18 @@ int main() {
                "lane change tilts both start and interior trajectory headings");
     }
 
+    /* 双黄线硬护栏：双向路不得越过中心线闯入对向，单向路不触发。 */
+    {
+        const double fwd_clamped = planning_coord::clamp_double_yellow_lateral(-1.75, 2.5, false);
+        expect(std::fabs((-1.75 + fwd_clamped) - (-0.45)) < 1e-6,
+               "forward lane clamps aggressive +d nudge before double yellow line");
+        const double ret_clamped = planning_coord::clamp_double_yellow_lateral(1.75, -2.5, false);
+        expect(std::fabs((1.75 + ret_clamped) - 0.45) < 1e-6,
+               "return lane clamps aggressive -d nudge before double yellow line");
+        const double oneway_pass = planning_coord::clamp_double_yellow_lateral(-1.75, 2.5, true);
+        expect(std::fabs(oneway_pass - 2.5) < 1e-6,
+               "one-way road does not clamp across center");
+    }
+
     return g_fails == 0 ? 0 : 1;
 }

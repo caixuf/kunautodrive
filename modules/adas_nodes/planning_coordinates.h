@@ -305,6 +305,25 @@ inline void refine_trajectory_headings(const double* x, const double* y,
     }
 }
 
+/**
+ * Clamp lane-relative lateral offset `rel_d` on two-way roads so Frenet
+ * avoidance/nudge trajectories never cross the double-yellow centerline.
+ */
+inline double clamp_double_yellow_lateral(double target_lane_offset,
+                                          double rel_d,
+                                          bool road_oneway,
+                                          double center_guard_m = 0.45) {
+    if (road_oneway) return rel_d;
+    const double abs_d = target_lane_offset + rel_d;
+    if (target_lane_offset < -0.1 && abs_d > -center_guard_m) {
+        return -center_guard_m - target_lane_offset;
+    }
+    if (target_lane_offset > 0.1 && abs_d < center_guard_m) {
+        return center_guard_m - target_lane_offset;
+    }
+    return rel_d;
+}
+
 }  // namespace planning_coord
 
 #endif

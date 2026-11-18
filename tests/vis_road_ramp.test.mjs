@@ -71,4 +71,19 @@ const turnView = build({
 eq('仅在主路端点相接的普通转弯不误绘加速车道',
   turnView.getStats().rampTransitions, 0);
 
+const endpointAlignedView = build({
+  edges: [
+    {
+      id: 'viaduct-8l', type: 'viaduct_highway', lanes: 8, lane_width: 3.5, oneway: false,
+      nodes: [[1620, 250, 9], [1820, 250, 9], [2020, 250, 9]],
+    },
+    {
+      id: 'entry-ramp', type: 'ramp_curve', lanes: 2, lane_width: 3.5, oneway: false, accel_length_m: 150,
+      nodes: [[1500, 210, 5], [1560, 232, 8], [1620, 237.75, 9]],
+    },
+  ],
+});
+eq('主路端点对齐外侧车道的匝道不在桥体外侧悬挑导流框',
+  endpointAlignedView.getStats().rampTransitions, 0);
+
 done();

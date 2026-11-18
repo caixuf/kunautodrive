@@ -2931,16 +2931,12 @@ protected:
                 double ref_h[64] = {};
                 bool ref_valid[64] = {};
                 const int hn = n_pts <= 64 ? n_pts : 64;
-                if (!g.road_oneway && g.lane_ref_count >= 2) {
+                if (g.lane_ref_count >= 2) {
                     /* 双向路双黄线硬护栏：Frenet 横向避让/微调不得越过道路中心线
                      * 闯入对向车道（media_1794984324367_caa80166 复盘）。 */
                     for (int i = 0; i < hn; i++) {
-                        const double abs_d = g.target_lane_offset + (double)points[i].l;
-                        if (g.target_lane_offset < -0.1 && abs_d > -0.45) {
-                            points[i].l = (float)(-0.45 - g.target_lane_offset);
-                        } else if (g.target_lane_offset > 0.1 && abs_d < 0.45) {
-                            points[i].l = (float)(0.45 - g.target_lane_offset);
-                        }
+                        points[i].l = (float)planning_coord::clamp_double_yellow_lateral(
+                            g.target_lane_offset, (double)points[i].l, g.road_oneway != 0);
                     }
                 }
                 for (int i = 0; i < hn; i++) {
