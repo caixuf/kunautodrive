@@ -619,11 +619,30 @@ void step_npc_vehicle(Entity& npc, const EntityPool& pool,
          * 把 state 改回 Follow/Cruise → 只横移一帧即中止。 */
         double remain = std::fabs(npc.target_offset - npc.offset);
         if (remain > 0.01) {
-            double dir = (npc.target_offset > npc.offset) ? 1.0 : -1.0;
-            double lat_scale = std::min(1.0, std::max(0.0, npc.speed) / 3.0);
-            double step = 2.3 * lat_scale * dt;
-            if (step > remain) step = remain;
-            npc.offset += dir * step;
+            /* A lane change started at zero/low speed must still be able to
+             * finish (2.3 * speed/3 would be 0 at v=0 and lock the car in
+             * LaneChange forever). Use a minimum lateral rate instead. */
+            const double lat_scale = std::min(1.0, std::max(0.35, npc.speed / 3.0));
+            const bool target_safe = is_target_lane_safe_for_change(
+                npc, npc.target_offset, pool, cfg.same_lane_tol, 5.0, 5.0);
+            if (!target_safe) {
+                npc.lane_change_blocked_time += dt;
+                if (npc.lane_change_blocked_time > 1.0) {
+                    /* The target lane stayed occupied for >1s (e.g. ego pulled
+                     * alongside while the NPC was creeping). Abort in place:
+                     * the next tick sees remain==0 and returns to Cruise,
+                     * instead of the NPC sitting forever in LaneChange. */
+                    npc.target_offset = npc.offset;
+                    npc.lane_change_blocked_time = 0.0;
+                    npc_request_state(npc, {NpcEvent::LeadLost}, cfg);
+                }
+            } else {
+                npc.lane_change_blocked_time = 0.0;
+                double dir = (npc.target_offset > npc.offset) ? 1.0 : -1.0;
+                double step = 2.3 * lat_scale * dt;
+                if (step > remain) step = remain;
+                npc.offset += dir * step;
+            }
         } else {
             npc.offset = npc.target_offset;
             npc.lane_changes_completed++;
@@ -1423,6 +1442,10 @@ bool npc_request_state(Entity& npc, const NpcTransitionRequest& req,
         if (target == NpcState::LaneChange) {
             npc.lane_change_timer = cfg.mobil_lane_change_cooldown;
             npc.lane_change_from_offset = npc.offset;
+            npc.lane_change_blocked_time = 0.0;
+        }
+        if (old == NpcState::LaneChange && target != NpcState::LaneChange) {
+            npc.lane_change_blocked_time = 0.0;
         }
         /* 离开 LaneChange 但**未完成**（外部事件锁死：红灯/脚本 override 等）→
          * 回到源车道。否则 target_offset=offset 的兜底会把半途的跨线 offset

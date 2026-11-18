@@ -1023,34 +1023,42 @@ static void on_perception_obstacles(const Message* msg, void* user_data) {
         return;
 
     double ch = cos(g.ego_heading), sh = sin(g.ego_heading);
-    g.obs_count = (int)list.count;
-    if (g.obs_count > g.kMaxObs) g.obs_count = g.kMaxObs;  /* 契约上限 */
-    for (int i = 0; i < g.kMaxObs; i++) {
-        if (i < (int)list.count) {
-            const Obstacle* o = &list.obstacles[i];
-            /* 车体坐标系 → 世界坐标 */
-            g.obs_x[i]  = g.ego_x + o->x * ch - o->y * sh;
-            g.obs_y[i]  = g.ego_y + o->x * sh + o->y * ch;
-            g.obs_z[i]  = g.ego_z + (double)o->z;
-            g.obs_vx[i] = o->vx * ch - o->vy * sh;
-            g.obs_vy[i] = o->vx * sh + o->vy * ch;
-            g.obs_lane_id[i] = o->lane_id;  /* 感知已算好的车道归属 */
-            g.obs_type[i]   = (uint8_t)o->type;
-            g.obs_length[i] = (o->length > 0.05f) ? (double)o->length : 0.0;
-            g.obs_width[i]  = (o->width  > 0.05f) ? (double)o->width  : 0.0;
-            g.obs_height[i] = (double)o->height;
-            g.obs_heading[i] = g.ego_heading + (double)o->heading;
-            g.obs_confidence[i] = o->confidence;
-            g.obs_lane_match_hint[i] = o->obs_lane_match_hint;  /* D2-06: fusion 给的同/邻车道提示 */
-        } else {
-            g.obs_x[i] = g.obs_y[i] = g.obs_z[i] = g.obs_vx[i] = g.obs_vy[i] = 0.0;
-            g.obs_length[i] = g.obs_width[i] = g.obs_height[i] = g.obs_heading[i] = 0.0;
-            g.obs_lane_id[i] = -1;
-            g.obs_type[i] = 0;
-            g.obs_confidence[i] = 0.0f;
-            g.obs_lane_match_hint[i] = false;  /* 无效槽清零，避免误入选 */
-        }
+    int n = 0;
+    for (int i = 0; i < (int)list.count && n < g.kMaxObs; i++) {
+        const Obstacle* o = &list.obstacles[i];
+        const double ow = (o->width  > 0.05f) ? (double)o->width  : 0.0;
+        const double ol = (o->length > 0.05f) ? (double)o->length : 0.0;
+        /* A ramp/roadside wall is ~7m x 0.35m. DBSCAN publishes it as a
+         * "car"; treating it as a lead vehicle stopped the ego 7.4m behind
+         * the B1 ramp wall forever (gap never changes, no collision). Real
+         * vehicles in this world are >=1.2m wide; keep pedestrians (short)
+         * for safety/behavior consumers. */
+        if (ow > 0.0 && ow < 0.8 && ol > 2.5) continue;
+        /* 车体坐标系 → 世界坐标 */
+        g.obs_x[n]  = g.ego_x + o->x * ch - o->y * sh;
+        g.obs_y[n]  = g.ego_y + o->x * sh + o->y * ch;
+        g.obs_z[n]  = g.ego_z + (double)o->z;
+        g.obs_vx[n] = o->vx * ch - o->vy * sh;
+        g.obs_vy[n] = o->vx * sh + o->vy * ch;
+        g.obs_lane_id[n] = o->lane_id;
+        g.obs_type[n]   = (uint8_t)o->type;
+        g.obs_length[n] = ol;
+        g.obs_width[n]  = ow;
+        g.obs_height[n] = (double)o->height;
+        g.obs_heading[n] = g.ego_heading + (double)o->heading;
+        g.obs_confidence[n] = o->confidence;
+        g.obs_lane_match_hint[n] = o->obs_lane_match_hint;  /* D2-06 */
+        n++;
     }
+    for (int i = n; i < g.kMaxObs; i++) {
+        g.obs_x[i] = g.obs_y[i] = g.obs_z[i] = g.obs_vx[i] = g.obs_vy[i] = 0.0;
+        g.obs_length[i] = g.obs_width[i] = g.obs_height[i] = g.obs_heading[i] = 0.0;
+        g.obs_lane_id[i] = -1;
+        g.obs_type[i] = 0;
+        g.obs_confidence[i] = 0.0f;
+        g.obs_lane_match_hint[i] = false;
+    }
+    g.obs_count = n;
     g.has_vstate = 1;
 }
 
@@ -1165,8 +1173,14 @@ static void commute_exit_pose(double ego_x, double ego_y, double ego_z,
     while (h > M_PI) h -= 2.0 * M_PI;
     while (h < -M_PI) h += 2.0 * M_PI;
     exit_h = h;
-    exit_x = g.map_ref_x[best] + std::cos(h) * 6.0;
-    exit_y = g.map_ref_y[best] + std::sin(h) * 6.0;
+    /* Exit at the aisle point directly nearest the slot, not 6m down the
+     * aisle. Slots sit side-by-side; an exit point offset along the aisle
+     * makes the park-out arc turn immediately into the adjacent parked car
+     * (observed at the office lot: slot 2 exit target 6m west clipped the
+     * car in slot 1). Driving straight out to the aisle first, then turning
+     * along it, clears the neighbouring bay. */
+    exit_x = g.map_ref_x[best];
+    exit_y = g.map_ref_y[best];
 }
 
 /* ── road/geometry 订阅回调（Phase 2 统一道路几何） ─────────── */
@@ -1248,7 +1262,9 @@ static void on_road_ref_path(const Message* msg, void* user_data) {
         raw_y[raw_n] = jy->valuedouble;
         raw_n++;
     }
-    flowengine::align_ref_path_step(raw_x, raw_y, raw_n, g.ego_x, g.ego_y);
+    flowengine::align_ref_path_step(raw_x, raw_y, raw_n, g.ego_x, g.ego_y,
+                                    /*taper_far_side=*/false,
+                                    /*force_far_side=*/g.on_return != 0);
     int out_n = 0;
     if (raw_n >= 4 && raw_n <= 32) {
         /* Catmull-Rom 4x 加密（~5m 采样 → ~1.25m 平滑曲线），消除急弯/匝道折线弦差 */

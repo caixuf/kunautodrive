@@ -321,6 +321,10 @@ inline bool is_pedestrian_step_blocked_by_vehicle(
     for (const auto& v : pool) {
         if (!v.active || !v.is_vehicle()) continue;
         if (std::fabs(v.z - ped.z) > 2.2) continue;
+        /* A vehicle already stopped and braking to yield (e.g. ego inside the
+         * crosswalk buffer) must not keep the pedestrian frozen: both sides
+         * would wait forever. Parked cars (brake=0) still block. */
+        if (v.speed < 0.2 && v.brake > 0.3) continue;
         const double ch = std::cos(v.heading);
         const double sh = std::sin(v.heading);
         const double hl = 0.5 * (v.length + ped.length) + pad_long;

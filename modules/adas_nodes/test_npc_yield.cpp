@@ -277,6 +277,11 @@ static void test_guardrail_clamp_lane_drop_and_pedestrian_yield() {
     ped.width = 0.5;
     CHECK(flowsim::is_pedestrian_step_blocked_by_vehicle(ped, 578.5, 1.6, pool));
     CHECK(!flowsim::is_pedestrian_step_blocked_by_vehicle(ped, 578.5, 2.0, pool));
+    /* Ego stopped in the crosswalk with brake=1 is yielding; it must not
+     * freeze the pedestrian in a mutual deadlock. */
+    car.brake = 1.0;
+    CHECK(!flowsim::is_pedestrian_step_blocked_by_vehicle(ped, 578.5, 1.6, pool));
+    car.brake = 0.0;
 
     ped.z = -4.5;
     CHECK(!flowsim::is_pedestrian_step_blocked_by_vehicle(ped, 578.5, 1.6, pool));

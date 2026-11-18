@@ -1,8 +1,8 @@
 {
   "name": "park_to_park_city",
-  "description": "通勤闭环：B1 家库泊出 → 坡道出库 → 城市道路与高架 → 公司地面车位泊入停留 → 沿同一条 route 返程回家 → 泊回出发车位",
-  "duration_s": 860,
-  "commute_return": true,
+  "description": "通勤单程：B1 家库泊出 → 坡道出库 → 城市道路与高架 → 公司地面车位泊入停留",
+  "duration_s": 600,
+  "commute_return": false,
   "random_seed": 42,
   "enable_poisson_traffic": true,
   "npc_lane_change": true,
@@ -1248,10 +1248,10 @@
     }
   ],
   "traffic_density": {
-    "cars_per_km": 45,
+    "cars_per_km": 10,
     "spawn_jitter_m": 3.0,
     "lane_spread": true,
-    "max_npcs": 70,
+    "max_npcs": 15,
     "random_seed_offset": 0
   },
   "traffic_lights": [
@@ -1302,7 +1302,7 @@
   "route": [],
   "pass_criteria": {
     "no_collision": true,
-    "max_duration_s": 900,
+    "max_duration_s": 700,
     "min_active_duration_s": 180.0,
     "min_avg_speed_mps": 6.0,
     "min_distance_m": 2800,

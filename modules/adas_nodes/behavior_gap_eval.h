@@ -126,6 +126,21 @@ inline LaneGapResult evaluate_target_lane_gap(
     return res;
 }
 
+/**
+ * Re-check an in-progress lane change on every tick. The entry gate can be
+ * satisfied with a large gap, then a slower/previously undetected vehicle
+ * appears in the target lane while the ego is already crossing. Continuing
+ * the change in that state ends in a sideswipe (observed at ~14 m/s with a
+ * 4m target-lane gap). Abort while still mostly in the source lane.
+ *
+ * The threshold scales with speed: at least 10m, and 1.2s of travel.
+ */
+inline bool lane_change_target_unsafe(double front_gap, bool front_ttc_safe,
+                                      bool rear_safe, double ego_v) {
+    const double abort_gap = std::fmax(10.0, std::fmax(0.0, ego_v) * 1.2);
+    return (!rear_safe) || (!front_ttc_safe) || (front_gap < abort_gap);
+}
+
 /// Returns true when a forward-lane candidate is genuinely ahead along the
 /// route. Within the near curve window (<12m), also requires positive physical
 /// forward projection in ego's frame to reject behind-ego inner-corner hits.

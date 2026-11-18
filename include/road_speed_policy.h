@@ -10,8 +10,9 @@ inline constexpr double kUrbanKph = 50.0;
 inline constexpr double kViaductKph = 100.0;
 inline constexpr double kRampKph = 60.0;
 inline constexpr double kSkillAy = 2.0;       /* 车技能稳住的侧向加速度 m/s² */
-inline constexpr double kSkillMaxMps = 36.0;  /* 无摄像头直道超车顶，约 130 km/h，高于限速的 20% */
+inline constexpr double kSkillMaxMps = 36.0;  /* 车技/车辆绝对上限，约 130 km/h */
 inline constexpr double kVehicleMaxMps = 36.0;
+inline constexpr double kNoCameraOvertakeMult = 1.5; /* 无摄像头超车最多高于限速 50% */
 
 inline double kph_to_mps(double kph) { return kph / 3.6; }
 
@@ -21,10 +22,17 @@ inline bool road_type_is(const char* type, const char* name) {
 
 /** 道路类型的巡航限速（m/s）。authored 是场景里写的值。 */
 inline double posted_speed_mps(const char* type, double authored) {
+    /* Authored limits win. The park_to_park_city viaduct is authored at
+     * 15.5 m/s but the old table forced every viaduct to 100 km/h (27.8 m/s);
+     * ego then entered the 12m-offset exit ramp at 22 m/s, missed the turn and
+     * wedged on the elevated deck. Scenarios are scaled worlds, not real
+     * highways — honor the number the scenario author wrote. */
     if (road_type_is(type, "viaduct_highway") || road_type_is(type, "highway")) {
+        if (authored > 0.5) return authored;
         return kph_to_mps(kViaductKph);
     }
     if (road_type_is(type, "ramp_curve")) {
+        if (authored > 0.5) return authored;
         return kph_to_mps(kRampKph);
     }
     if (road_type_is(type, "urban")) {
@@ -45,14 +53,16 @@ inline double skill_speed_mps(double kappa_abs) {
  * 本帧速度上限。
  * 不超车：该路限速，急弯再被车技按住。
  * 超车且有摄像头：最多 1.2 倍，仍不超车技。
- * 超车且没有摄像头：车技上限，直道可以高于 1.2 倍。
+ * 超车且没有摄像头：最多 1.5 倍。旧实现直接给车技上限（36 m/s），
+ * 在城市 15 m/s 道路上会把 behavior 目标拉到 130 km/h；虽然 planning
+ * 的曲率/限速还会再压，target_speed 本身已经失真。
  */
 inline double command_cap_mps(double posted, bool overtaking, bool speed_camera,
                               double kappa_abs) {
     const double skill = skill_speed_mps(kappa_abs);
     double cap = posted > 0.5 ? posted : kph_to_mps(kUrbanKph);
     if (overtaking) {
-        cap = speed_camera ? cap * 1.2 : skill;
+        cap = speed_camera ? cap * 1.2 : cap * kNoCameraOvertakeMult;
     }
     if (cap > skill) cap = skill;
     if (cap > kVehicleMaxMps) cap = kVehicleMaxMps;

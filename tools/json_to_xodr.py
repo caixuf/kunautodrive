@@ -330,10 +330,13 @@ DEFAULT_SPEED = 13.89  # 50 km/h
 def posted_speed_mps(etype: str, authored: float) -> float:
     """道路类型巡航限速。与 include/road_speed_policy.h posted_speed_mps 同一张表。"""
     kind = (etype or "").lower()
+    # Authored limits win (same table as include/road_speed_policy.h).
+    # Scenarios are scaled worlds: park_to_park_city authors 15.5 m/s on the
+    # viaduct, not a real 100 km/h highway.
     if kind in ("viaduct_highway", "highway"):
-        return 100.0 / 3.6
+        return authored if authored > 0.5 else 100.0 / 3.6
     if kind == "ramp_curve":
-        return 60.0 / 3.6
+        return authored if authored > 0.5 else 60.0 / 3.6
     if kind == "urban":
         if 11.0 <= authored <= 16.7:
             return authored

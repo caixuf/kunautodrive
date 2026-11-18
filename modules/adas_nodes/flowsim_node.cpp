@@ -1852,6 +1852,7 @@ static void publish_ref_path(void) {
     cJSON_AddNumberToObject(root, "t_us", (double)clock_now_us());
 
     cJSON* pts = cJSON_CreateArray();
+    bool reverse_route = false;
     if (g.roads_loaded && g.route.ok()) {
         const flowsim::Entity& ego = g.pool[0];
         /* ego 在 route 上的累计 s：用 compute_ego_route_s 复用 road_pos handle */
@@ -1861,17 +1862,58 @@ static void publish_ref_path(void) {
          * 控制器在高速段（27m/s）每步 1.35m 也有充足前视距离。 */
         std::vector<flowsim::RefPathPoint> samples;
         int n = 0;
-        /* u_turn_active（ego 在对向车道，行进方向 = route_s 递减）时反向采样：
+        /* Decide the sampling direction from the ego's actual heading, not only
+         * from the U-turn state machine. Commute return starts from a parked
+         * pose without a U-turn; u_turn_active stays false, so the old code
+         * kept sampling the outbound route eastward while the ego drove west —
+         * at the viaduct join the ref path pointed back down the ramp and the
+         * ego U-turned in place. heading vs route tangent is the authoritative
+         * signal for "traveling against the authored route". */
+        reverse_route = (g.u_turn_active != 0);
+        /* Commute return latch: after the office parking goal has been held
+         * stationary for >0.2s, the mission is on its way home. Without this,
+         * the return start (still turning out of the slot) can have a heading
+         * within 90° of the outbound route tangent, so the heading check below
+         * samples the outbound path and drives east to the lot exit. */
+        static bool commute_return_latched = false;
+        static uint64_t goal_stopped_since_us = 0;
+        if (g.scenario && g.scenario->parking_goal.enabled) {
+            const double gx = g.scenario->parking_goal.x;
+            const double gy = g.scenario->parking_goal.y;
+            const double goal_dist = std::hypot(ego.x - gx, ego.y - gy);
+            if (goal_dist < 5.0 && std::fabs(ego.speed) < 0.15) {
+                if (goal_stopped_since_us == 0) goal_stopped_since_us = clock_now_us();
+                if (clock_now_us() - goal_stopped_since_us > 200000ULL) {
+                    commute_return_latched = true;
+                }
+            } else if (goal_dist > 40.0) {
+                goal_stopped_since_us = 0;
+                /* Keep the latch for the whole return leg. Clearing it here
+                 * made the ref path flip back to outbound mid-return (the
+                 * viaduct join then pointed east and the ego U-turned). */
+            }
+        }
+        if (commute_return_latched) reverse_route = true;
+        if (!reverse_route) {
+            double rx = 0.0, ry = 0.0, rh = 0.0;
+            if (g.route.sample_pose(g.roads, ego_route_s, rx, ry, rh)) {
+                double dh = ego.heading - rh;
+                while (dh > M_PI) dh -= 2.0 * M_PI;
+                while (dh < -M_PI) dh += 2.0 * M_PI;
+                if (std::fabs(dh) > M_PI * 0.5) reverse_route = true;
+            }
+        }
+        /* reverse_route（ego 行进方向 = route_s 递减）时反向采样：
          * ref_path 始终代表「ego 真实行进方向前方的道路」，heading 已翻转 π。
          * 这样 planning/control 无需知道 +x/-x，把 ref_path 当作前方路径自然跟随。 */
         n = g.route.sample_ahead(g.roads, ego_route_s, 100.0, 5.0, samples,
-                                 /*reverse=*/g.u_turn_active);
+                                 /*reverse=*/reverse_route);
         /* fallback：route 采样失败时再退回当前车道中心线，避免完全断 ref_path。
          * 对向行驶（u_turn_active）时跳过：road_pos.sample_ahead 只能沿 +s 前进采样，
          * 在返程（实际行进方向 = -s）会产出指向车后的坏 ref_path，比空 ref_path 更糟
          * （control 会主动朝错误方向跟）。返程 route 采样失败宁可发空、走 control 的
          * curve_* 兜底。 */
-        if (n == 0 && !g.u_turn_active && ego.road_pos.ok()) {
+        if (n == 0 && !reverse_route && ego.road_pos.ok()) {
             flowsim::FrenetPos saved_fp;
             bool has_saved = ego.road_pos.frenet(saved_fp);
             flowsim::Entity& ego_mut = g.pool[0];
@@ -1897,7 +1939,7 @@ static void publish_ref_path(void) {
     /* 权威行进方向信号：u_turn_active 由 flowsim 掉头状态机在 finalize 时置位、
      * 整个返程保持 true（第二次掉头才复位），永不抖动。navigation 消费此标志作为
      * 唯一权威 travel_dir，取代基于 dx/heading 的猜测（掉头/绕圈时会来回翻）。 */
-    cJSON_AddBoolToObject(root, "reverse", g.u_turn_active ? 1 : 0);
+    cJSON_AddBoolToObject(root, "reverse", reverse_route ? 1 : 0);
     /* 路端位置（单一事实源）：route 总长。behavior 的掉头触发用它做固定
      * 参考（替代"采样末点封顶检测"——低速起步时末点位移小会误判封顶，
      * 导致启动即触发掉头逆行，2026-08-03 实测）。 */

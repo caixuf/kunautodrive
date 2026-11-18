@@ -564,6 +564,12 @@ static void on_raw_obstacles(const Message* msg, void* user_data) {
     g.raw_obs_count = 0;
     for (int i = 0; i < n; i++) {
         const Obstacle* o = &obs_list.obstacles[i];
+        const double ow = (o->width  > 0.05f) ? (double)o->width  : 0.0;
+        const double ol = (o->length > 0.05f) ? (double)o->length : 0.0;
+        /* Thin long facility walls are published as "car" by the clusterer;
+         * a 7m x 0.35m wall in the lateral band was followed as a lead and
+         * froze the ego 7.4m behind it. Real vehicles are >=1.2m wide. */
+        if (ow > 0.0 && ow < 0.8 && ol > 2.5) continue;
         /* 车体系 → 世界系（位置和速度都需要旋转） */
         const double wx = g.ego_x + (double)o->x * ch - (double)o->y * sh;
         const double wy = g.ego_y + (double)o->x * sh + (double)o->y * ch;
@@ -1377,7 +1383,10 @@ protected:
                              "wrong carriageway lane%d on_return=%d → recover lane%d",
                              current_idx, g.on_return, recovery_lane);
                 } else if (lane_drop_merge_needed && !uturn_approach_active &&
-                           (left_ok || (left_same_side && left_rear_safe && left_gap > 10.0 && g.dist_to_lane_drop_m < 80.0)) &&
+                           (left_ok || (left_same_side && left_rear_safe &&
+                                        left_res.front_ttc_safe &&
+                                        left_gap > fmax(25.0, g.ego_v * 1.5) &&
+                                        g.dist_to_lane_drop_m < 80.0)) &&
                            (cur == BEH_ST_CRUISE || cur == BEH_ST_FOLLOW)) {
                     /* 前方路段发生本向车道缩减：在进入窄路前尽早向内侧车道有序并线，
                      * 避免跨越道路接缝时发生整车宽级的横向阶跃与持续骑线。 */
@@ -1627,25 +1636,31 @@ protected:
                         }
                     }
                 } else if (cur == BEH_ST_LEFT_CHANGE || cur == BEH_ST_RIGHT_CHANGE) {
-                    /* 变道进行中：target_speed 保持进入时的超车速度
-                     * (fmax(adj_speed, ego_v))，不跟车限速。
-                     *
-                     * P5 修复（变道中每帧 target=lead_speed 防追尾）2026-07-31 删除——
-                     * 实测它是"减速变道"根因且会锁死：变道转移首帧 blocked=1、
-                     * lead_speed=0（前车停着等红灯）→ target 被设成 0；后续
-                     * blocked=0 的帧无分支重置 → 锁死，planning command_speed=0
-                     * → 全刹（demo 实测 spd=10.7→0.0 brk=1.00），超车失去意义。
-                     * 防追尾改由下层兜底：planning 常规 TTC（gap<~45m 起按
-                     * (gap-5)/4 限速）+ safety_control 近场 TTC（gap 逼近 20m
-                     * 内全刹）。变道横向位移 ~3s 内完成，纵向闭合由 TTC 分层
-                     * 接管，不需要 behavior 在变道中强制跟车。 */
-                    /* 2026-08-04：删除 on_return 立即中止变道分支 —— 返程超车
-                     * 变道必须在 LEFT/RIGHT_CHANGE 中正常走到目标车道才算完成，
-                     * 否则超车一启动就被 COMPLETED 掐掉（配合 worthwhile 的
-                     * !g.on_return 抑制，返程永远无法借道——实测 car14 堵死
-                     * 返程 25s+）。返程变道由 committed_lane 的 on_return 例外
-                     * （变道中跟随 target）配套完成判定。 */
-                    if (uturn_approach_active && g.target_lane_idx != inner_lane) {
+                    /* 变道进行中安全复检：入口帧目标车道有足够 gap，但慢车/
+                     * 感知迟到车辆可能在横移过程中出现在目标车道。此时继续
+                     * 变道会侧碰（实测 14m/s 下目标车道前车 4m）。只要还没
+                     * 被判进目标车道（committed_lane 仍是源车道），目标车道
+                     * 不稳就中止回源车道，下一帧按 FOLLOW/CRUISE 重新决策。 */
+                    const auto& target_res =
+                        (cur == BEH_ST_LEFT_CHANGE) ? left_res : right_res;
+                    const bool target_committed =
+                        g.target_lane_idx >= 0 &&
+                        g.committed_lane_idx == g.target_lane_idx;
+                    if (current_legal && !uturn_approach_active && !target_committed &&
+                        g.target_lane_idx >= 0 &&
+                        behavior_gap::lane_change_target_unsafe(
+                            target_res.front_gap, target_res.front_ttc_safe,
+                            target_res.rear_safe, g.ego_v)) {
+                        ev = BEH_EV_TIMEOUT;
+                        new_target_lane = -1;
+                        g.cooldown = 0.0;
+                        new_target_speed = g.cfg_cruise_speed;
+                        snprintf(reason, sizeof(reason),
+                                 "target lane unsafe mid-change (front=%.1fm ttc_ok=%d rear_ok=%d v=%.1f) → abort",
+                                 target_res.front_gap, target_res.front_ttc_safe,
+                                 target_res.rear_safe, g.ego_v);
+                        LOG_WARN("behavior", "%s", reason);
+                    } else if (uturn_approach_active && g.target_lane_idx != inner_lane) {
                         /* 掉头 approach 区且正在朝外侧道变道（超车方向错）：
                          * 放弃当前变道回 CRUISE，由 CRUISE 分支发起并回内侧道
                          * 的归位变道。旧实现变道中保持超车速度逼近施工区 → 触发
@@ -1767,6 +1782,19 @@ protected:
             if (ev != SM_EVENT_NONE) {
                 if (statem_send_event(&g.sm, ev, nullptr)) {
                     g.state_timer = 0.0;  /* 转移成功 → 计时归零 */
+                    if (ev == BEH_EV_OVERTAKE_LEFT || ev == BEH_EV_OVERTAKE_RIGHT) {
+                        /* Lane-change start evidence: which condition armed the
+                         * move and what gap the target lane actually had. Neede
+                         * to separate a stale decision from a concurrent target-
+                         * lane encroachment when a change ends in a collision. */
+                        LOG_INFO("behavior",
+                                 "[LC-START] %s lane%d -> lane%d v=%.1f pos=(%.1f,%.1f) "
+                                 "L(ok=%d gap=%.1f safe=%d) R(ok=%d gap=%.1f safe=%d) reason=%s",
+                                 ev == BEH_EV_OVERTAKE_LEFT ? "LEFT" : "RIGHT",
+                                 current_idx, new_target_lane, g.ego_v, g.ego_x, g.ego_y,
+                                 left_ok, left_gap, left_rear_safe,
+                                 right_ok, right_gap, right_rear_safe, reason);
+                    }
                 } else {
                     /* 被 guard 拒绝：保留原状态，reason 不用 */
                     reason[0] = '\0';

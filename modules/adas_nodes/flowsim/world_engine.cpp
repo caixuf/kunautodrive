@@ -958,15 +958,39 @@ void pass_subsurface_and_parking(const std::vector<CompiledEdge>& edges,
             }
         } else if (ce.type == "open_ramp" && ce.raw_pts.size() >= 2) {
             double lat_w = ce.lanes * ce.lane_width * 0.5 + 0.45;
+            double raw_total = 0.0;
+            for (size_t k = 1; k < ce.raw_pts.size(); ++k) {
+                const auto& a = ce.raw_pts[k - 1];
+                const auto& b = ce.raw_pts[k];
+                raw_total += std::hypot(b.x - a.x, b.y - a.y);
+            }
+            /* Leave the ramp mouths open: vehicles turning off/onto the
+             * connecting road legitimately cut the corner by ~1m. A wall
+             * segment ending exactly at the junction tip turns that normal
+             * lane-tracking error into a hard facility collision (observed
+             * at the B1 ramp top: ego clipped the last 7m wall at x=250
+             * while returning to the garage and could not recover).
+             * The clearance also has to cover the taper where the urban
+             * lane and ramp meet: a remaining 7m wall at x≈229 was seen as
+             * a "car" 7.4m ahead and planning stopped behind it forever.
+             * Use cumulative distance over the whole ramp, not the last
+             * polyline segment (raw points are ~7m apart). */
+            const double kRampWallEndClearance = std::min(30.0, raw_total * 0.25);
+            double edge_s = 0.0;
             for (size_t k = 1; k < ce.raw_pts.size(); ++k) {
                 const auto& pa = ce.raw_pts[k - 1];
                 const auto& pb = ce.raw_pts[k];
                 double slen = std::hypot(pb.x - pa.x, pb.y - pa.y);
+                const double base_s = edge_s;
+                edge_s += slen;
                 if (slen < 1.0) continue;
                 double shdg = std::atan2(pb.y - pa.y, pb.x - pa.x);
                 double sc = std::cos(shdg), ss = std::sin(shdg);
                 for (double s = 0.0; s < slen; s += 10.0) {
                     double seg = std::min(10.0, slen - s);
+                    const double abs_s = base_s + s;
+                    if (abs_s < kRampWallEndClearance) continue;
+                    if (abs_s + seg > raw_total - kRampWallEndClearance) continue;
                     double sm = s + seg * 0.5;
                     double t = sm / slen;
                     double mz = pa.z + (pb.z - pa.z) * t;
@@ -1254,8 +1278,20 @@ void pass_barriers(const std::vector<CompiledEdge>& edges,
             double side_off = (ce.half_w + post_offset) * side;
             bool has_prev = false;
             Pt3 prev_pt{};
+            /* Leave the ramp mouth open. A ramp side barrier that runs all
+             * the way to the beside-join is exactly the wall the ego must
+             * cross to enter/leave the viaduct; observed return merge at the
+             * elevated deck wedged against the last ramp barrier post. */
+            constexpr double kRampBarrierEndClearance = 12.0;
+            const bool barrier_ramp = (ce.type == "ramp_curve" || ce.type == "open_ramp");
             for (int i = 0; i <= post_count; ++i) {
                 double s = i * post_spacing;
+                if (barrier_ramp &&
+                    (s < kRampBarrierEndClearance ||
+                     s > ce.total_len - kRampBarrierEndClearance)) {
+                    has_prev = false;
+                    continue;
+                }
                 double cx, cy, cz, hdg;
                 ce.sample_at_s(s, cx, cy, cz, hdg);
                 double sc = std::cos(hdg), ss = std::sin(hdg);

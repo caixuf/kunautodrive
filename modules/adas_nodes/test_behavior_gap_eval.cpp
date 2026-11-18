@@ -197,6 +197,19 @@ void test_corridor_partial_nudge_and_narrow_oncoming() {
     CHECK(res.best_width > 3.3);
 }
 
+void test_lane_change_abort_guard() {
+    // 14 m/s: abort gap is 16.8m. A 4m target-lane gap must abort even though
+    // the entry gate may have been satisfied frames earlier.
+    CHECK(behavior_gap::lane_change_target_unsafe(4.0, true, true, 14.0));
+    CHECK(behavior_gap::lane_change_target_unsafe(12.0, true, true, 14.0));
+    CHECK(!behavior_gap::lane_change_target_unsafe(40.0, true, true, 14.0));
+    CHECK(behavior_gap::lane_change_target_unsafe(40.0, false, true, 14.0));
+    CHECK(behavior_gap::lane_change_target_unsafe(40.0, true, false, 14.0));
+    // Low-speed creep keeps the absolute 10m floor.
+    CHECK(!behavior_gap::lane_change_target_unsafe(12.0, true, true, 5.0));
+    CHECK(behavior_gap::lane_change_target_unsafe(9.0, true, true, 5.0));
+}
+
 void test_oneway_outer_lane_obstacle_not_dropped() {
     auto cfg = base_cfg();
     /* 4-lane one-way: lane centres are -1.75, -5.25, -8.75, -12.25.
@@ -229,7 +242,8 @@ int main() {
     test_corridor_guardrail_and_ebike_passable();
     test_corridor_narrow_blocked();
     test_corridor_partial_nudge_and_narrow_oncoming();
+    test_lane_change_abort_guard();
     test_oneway_outer_lane_obstacle_not_dropped();
-    std::printf("test_behavior_gap_eval: all 10 tests passed\n");
+    std::printf("test_behavior_gap_eval: all 11 tests passed\n");
     return 0;
 }

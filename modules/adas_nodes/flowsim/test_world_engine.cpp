@@ -443,6 +443,68 @@ static void test_default_physics_signage_and_pier_clearance() {
     CHECK(piers_ok, "Viaduct piers skip cz < 2.2m and set z_top = cz - 0.45 (%zu piers)", layout.piers.size());
 }
 
+static void test_ramp_barrier_end_clearance() {
+    std::printf("\n=== [Test 7] Ramp Barriers Open at Merge Ends ===\n");
+    const char* rn = R"({
+      "edges": [
+        { "id": 0, "name": "exit_ramp", "type": "ramp_curve", "lanes": 2,
+          "lane_width": 3.5, "oneway": true, "bridge": true,
+          "nodes": [[0, 0, 0], [100, 0, 5], [200, 0, 10]] }
+      ]
+    })";
+
+    flowsim::WorldEngineInput in;
+    in.road_network_json = rn;
+    auto layout = flowsim::compile_world(in);
+
+    int posts = 0, near_start = 0, near_end = 0;
+    for (const auto& p : layout.barrier_posts) {
+        posts++;
+        if (p.x < 11.5) near_start++;
+        if (p.x > 188.5) near_end++;
+    }
+    CHECK(posts > 20, "ramp still generates side barriers away from both ends (%d)", posts);
+    CHECK(near_start == 0, "no barrier post within 12m of the ramp start (%d)", near_start);
+    CHECK(near_end == 0, "no barrier post within 12m of the ramp end (%d)", near_end);
+}
+
+static void test_open_ramp_wall_junction_clearance() {
+    std::printf("\n=== [Test 6] Open Ramp Walls Leave Junction Mouths Clear ===\n");
+    const char* rn = R"({
+      "edges": [
+        { "id": 0, "name": "b1_hall", "type": "garage_hall", "lanes": 2, "lane_width": 3.5,
+          "oneway": false, "nodes": [[-60, 0, -4.5], [0, 0, -4.5]] },
+        { "id": 1, "name": "b1_ramp", "type": "open_ramp", "lanes": 2, "lane_width": 3.5,
+          "oneway": false, "nodes": [[0, 0, -4.5], [70, 0, 0.0]] },
+        { "id": 2, "name": "surface_ave", "type": "urban", "lanes": 2, "lane_width": 3.5,
+          "oneway": false, "nodes": [[70, 0, 0.0], [230, 0, 0.0]] }
+      ]
+    })";
+
+    flowsim::WorldEngineInput in;
+    in.road_network_json = rn;
+    auto layout = flowsim::compile_world(in);
+
+    /* Ramp side walls sit at |y| = lanes*lane_width/2 + 0.45 = 3.95.
+     * A vehicle in the adjacent lane center (|y|=1.75) is 2.2m away; a normal
+     * 1m corner-cutting error must not put the wall tip inside its body. */
+    double min_start = 1e9;
+    double max_end = -1e9;
+    int ramp_walls = 0;
+    for (const auto& f : layout.furniture) {
+        if (f.kind != "wall") continue;
+        if (std::fabs(std::fabs(f.y) - 3.95) > 0.5) continue;
+        ramp_walls++;
+        min_start = std::min(min_start, f.x - 0.5 * f.length);
+        max_end = std::max(max_end, f.x + 0.5 * f.length);
+    }
+    CHECK(ramp_walls >= 4, "Open ramp still has side walls away from both mouths (%d)", ramp_walls);
+    CHECK(min_start >= 7.9,
+          "Ramp wall starts at least 8m after the bottom junction (start=%.2f)", min_start);
+    CHECK(max_end <= 62.1,
+          "Ramp wall ends at least 8m before the top junction (end=%.2f)", max_end);
+}
+
 int main() {
     test_procedural_corridor_and_overpass();
     test_declarative_world_gen_refinements();
@@ -451,6 +513,8 @@ int main() {
     test_jolt_physics_collider_sync();
 #endif
     test_default_physics_signage_and_pier_clearance();
+    test_open_ramp_wall_junction_clearance();
+    test_ramp_barrier_end_clearance();
     std::printf("\nSummary: %d/%d checks passed (%d failed)\n",
                 g_run - g_fail, g_run, g_fail);
     return g_fail == 0 ? 0 : 1;
