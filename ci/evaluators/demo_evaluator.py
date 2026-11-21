@@ -3025,10 +3025,16 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
             range_m=bev_range_m,
         )
         # BEV 10Hz 与 monitor 采样/ego 位姿有 ≤100ms 时差；高速行驶时覆盖集合
-        # 会差 1–4 个目标（空真值帧仍可能带上一帧的 4 个目标）。容差取
-        # max(4, 50%)；但**覆盖范围内有真值而 BEV 报 0** 单独判 FAIL ——
-        # 否则小场景（truth≤4）里"停摆"会被容差吞掉。
-        tol = max(4, int(0.5 * bev_truth_count))
+        # 会差 1–4 个目标（空真值帧仍可能带上一帧的 4 个目标）。路侧静态回波
+        # 还会再加 5–7 个；容差取 max(7, 50%)。但**覆盖范围内有真值而 BEV 报 0**
+        # 单独判 FAIL —— 否则小场景（truth≤4）里"停摆"会被容差吞掉。
+        # BEV shadow includes roadside static returns; keep this in sync with
+        # ci/gates/bev_shadow_check.py so the same run isn't PASS in one gate
+        # and FAIL in the other (11-18 commit widened only the standalone gate).
+        # Static-only scenes (multi_light: 0 truth) observed 7 returns; ±7 is
+        # the measured roadside envelope. The injected-zero A/B check is what
+        # catches a dead/wrong BEV head, not this absolute window.
+        tol = max(7, int(0.5 * bev_truth_count))
         if bev_metrics and not has_parking_goal and (
                 (bev_truth_count > 1 and bev_shadow_count < 1) or
                 abs(bev_shadow_count - bev_truth_count) > tol):

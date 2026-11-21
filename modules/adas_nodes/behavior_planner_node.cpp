@@ -1272,6 +1272,14 @@ protected:
                 adj_idx = current_idx + 1;
                 adj_speed = right_lead_v;
             }
+            /* 邻道不比本车道强就没必要变道：两侧都停着车时切过去只是
+             * 换一条队尾，反而用一次饱和转向换 0 收益。要求目标道前车
+             * 更快，或前方空当至少多出一个车身级安全余量。 */
+            const double adj_gap = (adj_idx == current_idx - 1) ? left_gap : right_gap;
+            const bool adj_better =
+                (adj_idx >= 0) &&
+                ((adj_speed > lead_speed + 0.5) ||
+                 (adj_gap > best_gap + 10.0));
 
             /* ── 事件计算与状态转移 ──
              * 基于当前条件计算该发什么事件给状态机。
@@ -1460,7 +1468,7 @@ protected:
                                      "uturn approach active: hold %.1f m/s (x=%.1f)",
                                      g.uturn_max_trigger_speed, g.ego_x);
                         }
-                    } else if (worthwhile && adj_idx >= 0 &&
+                    } else if (worthwhile && adj_idx >= 0 && adj_better &&
                         !carriageway_ahead_stop_light()) {
                         ev = (adj_idx < current_idx) ? BEH_EV_OVERTAKE_LEFT : BEH_EV_OVERTAKE_RIGHT;
                         new_target_lane = adj_idx;
@@ -1585,7 +1593,7 @@ protected:
                         new_target_speed = g.cfg_cruise_speed;
                         snprintf(reason, sizeof(reason),
                                  "lead lost (gap=%.1f > %.1f) → CRUISE", best_gap, blocked_range);
-                    } else if (worthwhile && adj_idx >= 0 &&
+                    } else if (worthwhile && adj_idx >= 0 && adj_better &&
                                !uturn_approach_active && g.cooldown <= 0.0 &&
                                !carriageway_ahead_stop_light()) {
                         ev = (adj_idx < current_idx) ? BEH_EV_OVERTAKE_LEFT : BEH_EV_OVERTAKE_RIGHT;
