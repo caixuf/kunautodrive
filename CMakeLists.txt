@@ -52,11 +52,13 @@ option(ENABLE_COVERAGE "Enable code coverage" OFF)
 if(ENABLE_ASAN)
     add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
     add_link_options(-fsanitize=address)
+    add_compile_definitions(FLOWENGINE_ASAN=1)
     message(STATUS "ASAN enabled")
 endif()
 if(ENABLE_TSAN)
     add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
     add_link_options(-fsanitize=thread)
+    add_compile_definitions(FLOWENGINE_TSAN=1)
     message(STATUS "TSAN enabled")
 endif()
 if(ENABLE_UBSAN)
@@ -1274,7 +1276,9 @@ target_include_directories(test_bev_pre_post PRIVATE
     ${GEN_DIR}
 )
 add_test(NAME bev_pre_post_tests COMMAND test_bev_pre_post)
-set_tests_properties(bev_pre_post_tests PROPERTIES TIMEOUT 10)
+# Instrumented builds (esp. gcov + -O0) run the CNN benchmark ~60x slower;
+# the wall-clock gate is disabled there but the ctest timeout still needs room.
+set_tests_properties(bev_pre_post_tests PROPERTIES TIMEOUT 60)
 
 # ── EKF 融合 / EKF-SLAM 纯 C 单元测试 ──
 # 这两个测试文件此前存在却未进门禁：test_ekf_slam 只在 adas_nodes 子项目里有

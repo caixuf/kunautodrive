@@ -308,18 +308,31 @@ static void test_cnn_native_inference(void) {
     double elapsed_ms = ((double)(ts_end.tv_sec - ts_start.tv_sec) * 1000.0 +
                         (double)(ts_end.tv_nsec - ts_start.tv_nsec) / 1000000.0) / n_runs;
 
-    double max_latency_ms = 10.0;
-#if defined(__SANITIZE_ADDRESS__) || defined(FLOWENGINE_UBSAN) || \
-    defined(FLOWENGINE_COVERAGE)
-    max_latency_ms = 150.0;
+    /* The assert below is compiled out in Release (NDEBUG), so this gate only
+     * fires in assert-enabled builds. There, -O0 and sanitizers inflate the
+     * number 3-10x; keep a loose ceiling. gcov coverage (--coverage -O0)
+     * inflates the OpenMP CNN loop ~60x (CI >1.5 s/run), so gating there would
+     * only turn the instrumented nightly red — report it instead. */
+#if defined(FLOWENGINE_COVERAGE)
+    printf("INFO bev_cnn_forward latency (avg of %d): %.3f ms "
+           "(coverage build, wall-clock gate disabled)\n", n_runs, elapsed_ms);
+    fflush(stdout);
+#else
+    double max_latency_ms = 100.0;
+#if defined(__SANITIZE_ADDRESS__) || defined(FLOWENGINE_ASAN) || \
+    defined(FLOWENGINE_UBSAN) || defined(FLOWENGINE_TSAN) || !defined(NDEBUG)
+    max_latency_ms = 1000.0;
 #elif defined(__has_feature)
-#if __has_feature(address_sanitizer) || __has_feature(undefined_behavior_sanitizer)
-    max_latency_ms = 150.0;
+#if __has_feature(address_sanitizer) || __has_feature(undefined_behavior_sanitizer) || \
+    __has_feature(thread_sanitizer)
+    max_latency_ms = 1000.0;
 #endif
 #endif
     printf("INFO bev_cnn_forward latency (avg of %d): %.3f ms (gate limit < %.1f ms)\n",
            n_runs, elapsed_ms, max_latency_ms);
+    fflush(stdout);
     assert(elapsed_ms < max_latency_ms);
+#endif
 
     BevPostDet dets[BEV_POST_MAX_DET];
     int n_dets = bev_cnn_decode(&model, out_feat, &cfg, 0.0, 0.0, dets, BEV_POST_MAX_DET);

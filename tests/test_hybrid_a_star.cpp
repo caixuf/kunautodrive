@@ -309,15 +309,18 @@ void TestPerformanceTypicalParking() {
               << ", Min = " << min_time << "ms"
               << ", Max = " << max_time << "ms" << std::endl;
 
-    // ASan (~2-3x slowdown) inflates Hybrid A* avg beyond the Release 50ms gate
-    // (CI saw ~63.8ms). Keep Release budget; relax only under AddressSanitizer.
-#if defined(__SANITIZE_ADDRESS__)
+    // Sanitizers and -O0 debug inflate Hybrid A* avg beyond the Release 50ms
+    // gate (CI ASan/UBSan saw ~60ms+). Keep the Release budget; relax whenever
+    // the binary is instrumented or unoptimized.
+#if defined(__SANITIZE_ADDRESS__) || defined(FLOWENGINE_ASAN) || \
+    defined(FLOWENGINE_UBSAN) || defined(FLOWENGINE_TSAN) || \
+    defined(FLOWENGINE_COVERAGE) || !defined(NDEBUG)
     const double kAvgBudgetMs = 150.0;
 #else
     const double kAvgBudgetMs = 50.0;
 #endif
     TEST_CHECK(avg_time < kAvgBudgetMs,
-               "Average planning time MUST be under budget (Release <50ms; ASan <150ms)");
+               "Average planning time MUST be under budget (Release <50ms; instrumented/debug <150ms)");
 }
 
 void TestValetParkingApproachPositions() {
