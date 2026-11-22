@@ -1,0 +1,81 @@
+{
+  "name": "intersection_fork",
+  "description": "分叉路口几何：4 车道双向主路在 x=0 分出一条向右前方弯曲的支路，route_chain 指定 ego 走支路。验证分叉处参考线连续、右转前靠最右车道与分叉后跟踪（不含通用 branch_select 决策）。",
+  "random_seed": 59,
+  "duration_s": 30,
+  "lighting": "day",
+  "weather": "clear",
+  "visibility_m": 600,
+  "ego": {
+    "x": -100.0,
+    "y": -1.75,
+    "heading": 0.0,
+    "init_speed": 8.0,
+    "target_speed": 10.0,
+    "wheelbase": 2.7,
+    "length": 4.6,
+    "width": 2.0,
+    "max_steer": 0.6
+  },
+  "road_network": {
+    "route_chain": [0, 2],
+    "edges": [
+      {
+        "id": 0,
+        "type": "urban",
+        "name": "fork_approach",
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 12.0,
+        "oneway": false,
+        "length_m": 200.0,
+        "nodes": [[-200.0, 0.0, 0.0], [-100.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
+      },
+      {
+        "id": 1,
+        "type": "urban",
+        "name": "fork_straight",
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 12.0,
+        "oneway": false,
+        "length_m": 200.0,
+        "nodes": [[0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [200.0, 0.0, 0.0]]
+      },
+      {
+        "id": 2,
+        "type": "urban",
+        "name": "fork_right_branch",
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 8.0,
+        "oneway": false,
+        "length_m": 210.0,
+        "nodes": [[0.0, 0.0, 0.0], [35.0, -1.5, 0.0], [70.0, -7.0, 0.0], [105.0, -16.0, 0.0], [145.0, -30.0, 0.0], [190.0, -50.0, 0.0]]
+      }
+    ]
+  },
+  "actors": [],
+  "traffic_lights": [],
+  "stop_lines": [],
+  "construction_zones": [],
+  "route": [],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 30,
+    "min_avg_speed_mps": 4.0,
+    "min_distance_m": 150
+  },
+  "scenarios": [],
+  "choreography": {
+    "loop_period_s": 999,
+    "beats": []
+  },
+  "traffic_density": {
+    "cars_per_km": 0,
+    "spawn_jitter_m": 0.0,
+    "lane_spread": false,
+    "max_npcs": 0,
+    "random_seed_offset": 0
+  }
+}

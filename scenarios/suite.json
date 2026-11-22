@@ -211,6 +211,13 @@
       "max_lane_offset_m": 1.65
     },
     {
+      "file": "scenarios/intersection_fork.json",
+      "duration_s": 30,
+      "enabled": false,
+      "max_lane_offset_m": 1.65,
+      "note": "exploratory: fork reference-frame target off-grid 13% (max phase 0.89m); enable after branch lane-ref alignment"
+    },
+    {
       "file": "scenarios/intersection_right_turn.json",
       "duration_s": 45,
       "enabled": true,
