@@ -2912,6 +2912,47 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         _m = sample_metrics(s, road, scenario_road_network)
         _m["t_demo"] = _sample_time_seconds(s)
         series.append(_m)
+
+    # ── 停止线让行门禁（场景 stop_lines 显式声明时才生效）──
+    # 只认"停在停止线 ±tol 内 + 连续保持 ≥hold_s + 之后继续通过"三件事，
+    # 防止只把 stop_lines 写进场景、车却直接冲过去也算 PASS（假绿）。
+    stop_lines = scenario.get("stop_lines") if isinstance(scenario, dict) else None
+    if isinstance(stop_lines, list) and stop_lines:
+        hold_need = float(criteria.get("stop_line_hold_s", 1.5) or 1.5)
+        tol_m = float(criteria.get("stop_line_tol_m", 4.0) or 4.0)
+        stop_speed = float(criteria.get("stop_line_speed_mps", 0.5) or 0.5)
+        for si, sl in enumerate(stop_lines):
+            if not isinstance(sl, dict):
+                continue
+            sx, sy = sl.get("x"), sl.get("y", 0.0)
+            if not isinstance(sx, (int, float)) or not isinstance(sy, (int, float)):
+                continue
+            stopped_t = [
+                m["t_demo"] for m in series
+                if m.get("t_demo") is not None
+                and abs(m["x"] - float(sx)) <= tol_m
+                and abs(m["y"] - float(sy)) <= 2.5
+                and m["speed"] < stop_speed
+            ]
+            best_hold = 0.0
+            hold = 0.0
+            prev = None
+            for t in sorted(stopped_t):
+                if prev is not None and (t - prev) <= 0.75:
+                    hold += t - prev
+                else:
+                    hold = 0.0
+                best_hold = max(best_hold, hold)
+                prev = t
+            if best_hold < hold_need:
+                failures.append(
+                    f"stop line {si} at x={float(sx):.1f}: held {best_hold:.1f}s "
+                    f"< {hold_need:.1f}s (ego must stop within ±{tol_m:.1f} m)")
+            final_x = series[-1]["x"] if series else 0.0
+            if final_x <= float(sx) + 5.0:
+                failures.append(
+                    f"stop line {si} at x={float(sx):.1f}: ego did not proceed "
+                    f"past the line (final x={final_x:.1f})")
     speeds = [m["speed"] for m in series]
     xs = [m["x"] for m in series]
     ys = [m["y"] for m in series]

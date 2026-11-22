@@ -41,7 +41,6 @@ SRC = ROOT / "modules" / "adas_nodes" / "behavior_planner_node.cpp"
 #    本清单的价值就是让"依赖死状态"变成一件看得见的事。
 ALLOWED_SINK_STATES: dict[str, str] = {
     # state → 原因 / 后续接线计划
-    "BEH_ST_STOP":      "L3-P1 MRM 接管后进入（停车让行目标态）；当前由 safety 兜底刹停，behavior 未接线",
     "BEH_ST_YIELD":     "行人/对向让行目标态；当前遇阻走 FOLLOW，尚未接线",
     "BEH_ST_EMERGENCY": "L3-P1 MRM 目标态（最小风险停车）；当前降级由 degrade_ladder 兜底",
 }

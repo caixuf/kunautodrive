@@ -1502,6 +1502,21 @@ static void publish_road_geometry(void) {
                           g.scenario ? (g.scenario->enable_uturn ? 1 : 0) : 1);
     cJSON_AddNumberToObject(root, "upcoming_own_lanes", snap.upcoming_own_lanes);
     cJSON_AddNumberToObject(root, "dist_to_lane_drop_m", snap.dist_to_lane_drop_m);
+    /* 停止线（场景 stop_lines）：behavior 据此在停止线前停车让行。
+     * 只在场景显式声明时发布，既有场景行为零变化。 */
+    if (g.scenario && g.scenario->stop_line_count > 0) {
+        cJSON* jsl = cJSON_CreateArray();
+        for (int si = 0; si < g.scenario->stop_line_count; ++si) {
+            const auto& sl = g.scenario->stop_lines[si];
+            cJSON* item = cJSON_CreateObject();
+            cJSON_AddNumberToObject(item, "id", sl.id);
+            cJSON_AddNumberToObject(item, "x", sl.x);
+            cJSON_AddNumberToObject(item, "y", sl.y);
+            cJSON_AddNumberToObject(item, "heading", sl.heading);
+            cJSON_AddItemToArray(jsl, item);
+        }
+        cJSON_AddItemToObject(root, "stop_lines", jsl);
+    }
     /* 泊车目标（Milestone M3 开放空间泊车）：透传给 planning_node */
     if (g.scenario && g.scenario->parking_goal.enabled) {
         cJSON* jpg = cJSON_CreateObject();

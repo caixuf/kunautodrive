@@ -1,0 +1,85 @@
+{
+  "name": "stop_sign",
+  "description": "\u505c\u6b62\u7ebf\u8ba9\u884c\uff1a1 \u8f66\u9053\u5355\u5411\u76f4\u8def\uff0cx=100 \u5904\u505c\u6b62\u7ebf\u3002behavior \u5728 14m \u5185\u68c0\u6d4b\u5230\u505c\u6b62\u7ebf \u2192 STOP\uff0c\u505c\u7a33\u4fdd\u6301 2s \u540e\u653e\u884c\uff1b\u95e8\u7981\u65ad\u8a00\u505c\u5728 \u00b14m \u5185 \u22651.5s \u4e14\u7ee7\u7eed\u901a\u8fc7\u3002",
+  "random_seed": 71,
+  "duration_s": 30,
+  "lighting": "day",
+  "weather": "clear",
+  "visibility_m": 600,
+  "enable_uturn": false,
+  "ego": {
+    "x": 20.0,
+    "y": -1.75,
+    "heading": 0.0,
+    "init_speed": 8.0,
+    "target_speed": 8.0,
+    "wheelbase": 2.7,
+    "length": 4.6,
+    "width": 2.0,
+    "max_steer": 0.6
+  },
+  "road_network": {
+    "edges": [
+      {
+        "id": 0,
+        "type": "urban",
+        "name": "stop_sign_straight",
+        "lanes": 1,
+        "lane_width": 3.5,
+        "speed_limit": 9.0,
+        "oneway": true,
+        "length_m": 400.0,
+        "nodes": [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            200.0,
+            0.0,
+            0.0
+          ],
+          [
+            400.0,
+            0.0,
+            0.0
+          ]
+        ]
+      }
+    ]
+  },
+  "actors": [],
+  "traffic_lights": [],
+  "stop_lines": [
+    {
+      "id": 0,
+      "x": 100.0,
+      "y": 0.0,
+      "heading": 0.0
+    }
+  ],
+  "construction_zones": [],
+  "route": [],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 45,
+    "min_avg_speed_mps": 3.0,
+    "min_distance_m": 150,
+    "stop_line_hold_s": 1.5,
+    "stop_line_tol_m": 4.0,
+    "stop_line_speed_mps": 0.5
+  },
+  "scenarios": [],
+  "choreography": {
+    "loop_period_s": 999,
+    "beats": []
+  },
+  "traffic_density": {
+    "cars_per_km": 0,
+    "spawn_jitter_m": 0.0,
+    "lane_spread": false,
+    "max_npcs": 0,
+    "random_seed_offset": 0
+  }
+}

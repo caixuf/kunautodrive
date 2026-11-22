@@ -73,6 +73,8 @@ enum BehEvent {
     BEH_EV_COMPLETED      = 204,  /* 变道完成 */
     BEH_EV_TIMEOUT        = 205,  /* 变道超时回退 */
     BEH_EV_UTURN_TRIGGER  = 206,  /* 到达路端 → 开始掉头 */
+    BEH_EV_STOP_LINE      = 207,  /* 前方停止线 → 停车让行 */
+    BEH_EV_STOP_DONE      = 208,  /* 停稳并保持后放行 */
 };
 
 /* ── 行为状态机转移表 ───────────────────────────────── */
@@ -82,11 +84,14 @@ static const TransitionRule BEH_TRANSITIONS[] = {
     /* 巡航 → 变道（有变道条件时直接跳巡航→变道） */
     { BEH_ST_CRUISE, BEH_EV_OVERTAKE_LEFT,  BEH_ST_LEFT_CHANGE,  "CRUISE + OVERTAKE_LEFT -> LEFT",   false },
     { BEH_ST_CRUISE, BEH_EV_OVERTAKE_RIGHT, BEH_ST_RIGHT_CHANGE, "CRUISE + OVERTAKE_RIGHT -> RIGHT", false },
+    /* 停止线（stop sign / 让行线）：优先于变道，停稳保持后放行 */
+    { BEH_ST_CRUISE, BEH_EV_STOP_LINE,      BEH_ST_STOP,         "CRUISE + STOP_LINE -> STOP",       false },
     /* 跟车 → 巡航（前车消失） */
     { BEH_ST_FOLLOW, BEH_EV_LOST_LEAD,      BEH_ST_CRUISE,       "FOLLOW + LOST_LEAD -> CRUISE",     false },
     /* 跟车 → 变道 */
     { BEH_ST_FOLLOW, BEH_EV_OVERTAKE_LEFT,  BEH_ST_LEFT_CHANGE,  "FOLLOW + OVERTAKE_LEFT -> LEFT",   false },
     { BEH_ST_FOLLOW, BEH_EV_OVERTAKE_RIGHT, BEH_ST_RIGHT_CHANGE, "FOLLOW + OVERTAKE_RIGHT -> RIGHT", false },
+    { BEH_ST_FOLLOW, BEH_EV_STOP_LINE,      BEH_ST_STOP,         "FOLLOW + STOP_LINE -> STOP",       false },
     /* 变道 → 巡航（完成或超时回退） */
     { BEH_ST_LEFT_CHANGE,  BEH_EV_COMPLETED, BEH_ST_CRUISE,      "LEFT + COMPLETED -> CRUISE",       false },
     { BEH_ST_LEFT_CHANGE,  BEH_EV_TIMEOUT,   BEH_ST_CRUISE,      "LEFT + TIMEOUT -> CRUISE",         false },
@@ -99,6 +104,7 @@ static const TransitionRule BEH_TRANSITIONS[] = {
      * 实测：best_gap=2.9 lead=0 FOLLOW v=0 卡死在路端）。 */
     { BEH_ST_FOLLOW, BEH_EV_UTURN_TRIGGER, BEH_ST_U_TURN, "FOLLOW + UTURN_TRIGGER -> U_TURN", false },
     { BEH_ST_STOP,   BEH_EV_UTURN_TRIGGER, BEH_ST_U_TURN, "STOP + UTURN_TRIGGER -> U_TURN",   false },
+    { BEH_ST_STOP,   BEH_EV_STOP_DONE,     BEH_ST_CRUISE, "STOP + STOP_DONE -> CRUISE",       false },
     { BEH_ST_YIELD,  BEH_EV_UTURN_TRIGGER, BEH_ST_U_TURN, "YIELD + UTURN_TRIGGER -> U_TURN",  false },
     /* 变道中 → 掉头：掉头触发计算对"任何状态生效"且优先级最高（抢占 ev），
      * 但旧表缺这两行 → 路端触发区内一旦在变道（如朝施工区变道超车），
@@ -179,6 +185,17 @@ struct BehaviorContext {
     int    road_oneway{0};  /* 1=单向（全部车道同向），0=双向（跨中心线=对向） */
     int    road_id{-1};     /* flowsim 当前 road_id；route 目标只在本路段生效 */
     int    enable_uturn{1}; /* 0=关闭路端自动掉头（路口/环岛/泊车） */
+    /* 停止线（road/geometry.stop_lines）：场景显式声明时在停止线前停车。
+     * 1 车道单向路也支持；横向匹配用 lane_width 半宽 + 1m 容差。 */
+    static constexpr int BEH_MAX_STOP_LINES = 8;
+    int    stop_line_count{0};
+    double stop_x[BEH_MAX_STOP_LINES]{};
+    double stop_y[BEH_MAX_STOP_LINES]{};
+    double stop_heading[BEH_MAX_STOP_LINES]{};
+    double stop_hold_s{0};  /* 停稳保持计时（STOP 状态内累计） */
+    double stop_line_hold_x{0}, stop_line_hold_y{0}; /* 已触发停止线的锁存坐标 */
+    double stop_line_done_x{1e9}, stop_line_done_y{1e9}; /* 已完成保持的线，避免再触发 */
+    int    stop_line_active{0};
     int    prev_lane_count{0};
     int    prev_road_oneway{0};
     int    upcoming_own_lanes{-1};      /* 前方缩减后的本向车道数（-1=无缩减） */
@@ -358,6 +375,8 @@ static const char* beh_event_str(EventId ev) {
         case BEH_EV_COMPLETED:      return "COMPLETED";
         case BEH_EV_TIMEOUT:        return "TIMEOUT";
         case BEH_EV_UTURN_TRIGGER:  return "UTURN_TRIGGER";
+        case BEH_EV_STOP_LINE:      return "STOP_LINE";
+        case BEH_EV_STOP_DONE:      return "STOP_DONE";
         default:                    return "?";
     }
 }
@@ -643,6 +662,23 @@ static void on_road_geometry(const Message* msg, void* user_data) {
     item = cJSON_GetObjectItemCaseSensitive(root, "enable_uturn");
     if (cJSON_IsBool(item)) g.enable_uturn = cJSON_IsTrue(item) ? 1 : 0;
     else if (cJSON_IsNumber(item)) g.enable_uturn = item->valuedouble != 0.0 ? 1 : 0;
+    cJSON* jsl = cJSON_GetObjectItemCaseSensitive(root, "stop_lines");
+    g.stop_line_count = 0;
+    if (cJSON_IsArray(jsl)) {
+        cJSON* js = nullptr;
+        cJSON_ArrayForEach(js, jsl) {
+            if (g.stop_line_count >= BehaviorContext::BEH_MAX_STOP_LINES) break;
+            if (!cJSON_IsObject(js)) continue;
+            cJSON* jx = cJSON_GetObjectItemCaseSensitive(js, "x");
+            cJSON* jy = cJSON_GetObjectItemCaseSensitive(js, "y");
+            if (!cJSON_IsNumber(jx)) continue;
+            const int k = g.stop_line_count++;
+            g.stop_x[k] = jx->valuedouble;
+            g.stop_y[k] = cJSON_IsNumber(jy) ? jy->valuedouble : 0.0;
+            cJSON* jh = cJSON_GetObjectItemCaseSensitive(js, "heading");
+            g.stop_heading[k] = cJSON_IsNumber(jh) ? jh->valuedouble : 0.0;
+        }
+    }
     item = cJSON_GetObjectItemCaseSensitive(root, "speed_limit");
     if (cJSON_IsNumber(item) && item->valuedouble > 0.5) g.posted_speed_mps = item->valuedouble;
     item = cJSON_GetObjectItemCaseSensitive(root, "speed_camera");
@@ -1469,6 +1505,27 @@ protected:
                         snprintf(reason, sizeof(reason), "%s", dec.reason);
                     }
                 }
+                /* 停止线距离（沿 ego 航向，横向在车道带内）。0 条线时保持 1e9，
+                 * 既有场景行为零变化。 */
+                double stop_dist = 1e9;
+                int stop_idx = -1;
+                if (g.stop_line_count > 0) {
+                    const double sch = std::cos(g.ego_heading);
+                    const double ssh = std::sin(g.ego_heading);
+                    for (int si = 0; si < g.stop_line_count; ++si) {
+                        /* 已让行完成的线不再触发（否则 CRUISE 第一帧又 STOP，
+                         * 状态机在 STOP/CRUISE 间抖动、车永久卡在线上）。 */
+                        if (std::hypot(g.stop_x[si] - g.stop_line_done_x,
+                                       g.stop_y[si] - g.stop_line_done_y) < 0.5) continue;
+                        const double rx = g.stop_x[si] - g.ego_x;
+                        const double ry = g.stop_y[si] - g.ego_y;
+                        const double along = rx * sch + ry * ssh;
+                        const double lat = -rx * ssh + ry * sch;
+                        if (along < -1.5 || along > 45.0) continue;
+                        if (std::fabs(lat) > g.lane_width * 0.5 + 1.0) continue;
+                        if (along < stop_dist) { stop_dist = along; stop_idx = si; }
+                    }
+                }
                 if (uturn_trigger) {
                     ev = BEH_EV_UTURN_TRIGGER;
                     new_target_lane = -1;
@@ -1479,6 +1536,49 @@ protected:
                     snprintf(reason, sizeof(reason),
                              "uturn trigger: ego_x=%.1f ref_end=%.1f on_return=%d → U_TURN",
                              g.ego_x, g.ref_path_end_x, g.on_return);
+                } else if (cur == BEH_ST_STOP) {
+                    /* 停止线让行：目标速度 0。进入时锁存停止线坐标，停稳（<0.6m/s）
+                     * 且距线 <6m 时累计 2s 保持；保持完成/超时 → STOP_DONE → CRUISE。
+                     * 用锁存坐标而非"最近线"：车可能停在线上或略过线，最近线会消失。 */
+                    new_target_lane = -1;
+                    new_target_speed = 0.0;
+                    double hold_d = 1e9;
+                    if (g.stop_line_active) {
+                        hold_d = std::hypot(g.stop_line_hold_x - g.ego_x,
+                                            g.stop_line_hold_y - g.ego_y);
+                    }
+                    if (g.ego_v < 0.6 && hold_d < 6.0) {
+                        g.stop_hold_s += 0.05;
+                    } else if (hold_d >= 6.0) {
+                        g.stop_hold_s = 0.0;
+                    }
+                    if (g.stop_hold_s >= 2.0 || g.state_timer > 10.0) {
+                        ev = BEH_EV_STOP_DONE;
+                        snprintf(reason, sizeof(reason),
+                                 "stop line hold %.1fs done -> CRUISE", g.stop_hold_s);
+                        g.stop_hold_s = 0.0;
+                        g.stop_line_active = 0;
+                        g.stop_line_done_x = g.stop_line_hold_x;
+                        g.stop_line_done_y = g.stop_line_hold_y;
+                        new_target_speed = g.cfg_cruise_speed;
+                    } else {
+                        snprintf(reason, sizeof(reason),
+                                 "stop line hold %.1fs (dist %.1fm) -> STOP",
+                                 g.stop_hold_s, hold_d);
+                    }
+                } else if ((cur == BEH_ST_CRUISE || cur == BEH_ST_FOLLOW) &&
+                           stop_dist < 18.0) {
+                    ev = BEH_EV_STOP_LINE;
+                    new_target_lane = -1;
+                    new_target_speed = 0.0;
+                    g.stop_hold_s = 0.0;
+                    if (stop_idx >= 0) {
+                        g.stop_line_hold_x = g.stop_x[stop_idx];
+                        g.stop_line_hold_y = g.stop_y[stop_idx];
+                        g.stop_line_active = 1;
+                    }
+                    snprintf(reason, sizeof(reason),
+                             "stop line ahead %.1fm -> STOP", stop_dist);
                 } else if (!current_legal &&
                            (cur == BEH_ST_CRUISE || cur == BEH_ST_FOLLOW)) {
                     const int recovery_lane = current_idx > legal_last
