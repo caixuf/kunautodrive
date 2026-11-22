@@ -205,11 +205,16 @@
       "enabled": true
     },
     {
-      "file": "scenarios/intersection_right_turn.json",
+      "file": "scenarios/intersection_straight.json",
       "duration_s": 30,
-      "enabled": false,
-      "max_lane_offset_m": 1.65,
-      "note": "exploratory: 90deg corner still cuts road edge by ~0.9m; enable after corner geometry/fillet"
+      "enabled": true,
+      "max_lane_offset_m": 1.65
+    },
+    {
+      "file": "scenarios/intersection_right_turn.json",
+      "duration_s": 45,
+      "enabled": true,
+      "max_lane_offset_m": 1.65
     },
     {
       "file": "scenarios/one_lane_two_way.json",

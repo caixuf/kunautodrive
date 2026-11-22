@@ -1,0 +1,92 @@
+{
+  "name": "intersection_straight",
+  "description": "四向十字路口直行：东西主路（4 车道双向）在原点与南北支路相交，route_chain 指定 ego 走东西直行。验证 junction 几何、跨路口参考线连续性与直行通过性（不含转向/通行权）。",
+  "random_seed": 53,
+  "duration_s": 30,
+  "lighting": "day",
+  "weather": "clear",
+  "visibility_m": 600,
+  "ego": {
+    "x": -100.0,
+    "y": -1.75,
+    "heading": 0.0,
+    "init_speed": 8.0,
+    "target_speed": 12.0,
+    "wheelbase": 2.7,
+    "length": 4.6,
+    "width": 2.0,
+    "max_steer": 0.6
+  },
+  "road_network": {
+    "route_chain": [0, 1],
+    "edges": [
+      {
+        "id": 0,
+        "type": "urban",
+        "name": "west_approach",
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 12.0,
+        "oneway": false,
+        "length_m": 200.0,
+        "nodes": [[-200.0, 0.0, 0.0], [-100.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
+      },
+      {
+        "id": 1,
+        "type": "urban",
+        "name": "east_exit",
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 12.0,
+        "oneway": false,
+        "length_m": 200.0,
+        "nodes": [[0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [200.0, 0.0, 0.0]]
+      },
+      {
+        "id": 2,
+        "type": "urban",
+        "name": "south_arm",
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 12.0,
+        "oneway": false,
+        "length_m": 200.0,
+        "nodes": [[0.0, -200.0, 0.0], [0.0, -100.0, 0.0], [0.0, 0.0, 0.0]]
+      },
+      {
+        "id": 3,
+        "type": "urban",
+        "name": "north_arm",
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 12.0,
+        "oneway": false,
+        "length_m": 200.0,
+        "nodes": [[0.0, 0.0, 0.0], [0.0, 100.0, 0.0], [0.0, 200.0, 0.0]]
+      }
+    ]
+  },
+  "actors": [],
+  "traffic_lights": [],
+  "stop_lines": [],
+  "construction_zones": [],
+  "route": [],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 30,
+    "min_avg_speed_mps": 4.0,
+    "min_distance_m": 150
+  },
+  "scenarios": [],
+  "choreography": {
+    "loop_period_s": 999,
+    "beats": []
+  },
+  "traffic_density": {
+    "cars_per_km": 0,
+    "spawn_jitter_m": 0.0,
+    "lane_spread": false,
+    "max_npcs": 0,
+    "random_seed_offset": 0
+  }
+}

@@ -1,8 +1,8 @@
 {
   "name": "intersection_right_turn",
-  "description": "无保护右转基础场景：4 车道双向东西主路在 x=300 右转进入南北向 4 车道道路（无信号/无对向冲突）。验证 turn-ahead 检测、右转前靠最右车道、90° L 形参考线跟踪。",
+  "description": "\u65e0\u4fdd\u62a4\u53f3\u8f6c\u57fa\u7840\u573a\u666f\uff1a4 \u8f66\u9053\u53cc\u5411\u4e1c\u897f\u4e3b\u8def\u5728 x\u2248250 \u7ecf 25m \u534a\u5f84\u5706\u89d2\u53f3\u8f6c\u8fdb\u5165\u5357\u5317\u5411 4 \u8f66\u9053\u9053\u8def\uff08\u65e0\u4fe1\u53f7/\u65e0\u5bf9\u5411\u51b2\u7a81\uff09\u3002\u9a8c\u8bc1 turn-ahead \u68c0\u6d4b\u3001\u53f3\u8f6c\u524d\u9760\u6700\u53f3\u8f66\u9053\u3001\u5706\u89d2\u53c2\u8003\u7ebf\u8ddf\u8e2a\u4e0e\u8def\u7f18\u4f59\u91cf\u3002",
   "random_seed": 47,
-  "duration_s": 30,
+  "duration_s": 45,
   "lighting": "day",
   "weather": "clear",
   "visibility_m": 600,
@@ -11,14 +11,18 @@
     "y": -1.75,
     "heading": 0.0,
     "init_speed": 8.0,
-    "target_speed": 10.0,
+    "target_speed": 8.0,
     "wheelbase": 2.7,
     "length": 4.6,
     "width": 2.0,
     "max_steer": 0.6
   },
   "road_network": {
-    "route_chain": [0, 1],
+    "route_chain": [
+      0,
+      1,
+      2
+    ],
     "edges": [
       {
         "id": 0,
@@ -26,21 +30,95 @@
         "name": "east_approach",
         "lanes": 4,
         "lane_width": 3.5,
-        "speed_limit": 12.0,
+        "speed_limit": 10.0,
         "oneway": false,
-        "length_m": 300.0,
-        "nodes": [[0.0, 0.0, 0.0], [150.0, 0.0, 0.0], [300.0, 0.0, 0.0]]
+        "length_m": 250.0,
+        "nodes": [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            125.0,
+            0.0,
+            0.0
+          ],
+          [
+            250.0,
+            0.0,
+            0.0
+          ]
+        ]
       },
       {
         "id": 1,
         "type": "urban",
+        "name": "right_turn_fillet",
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 6.0,
+        "oneway": false,
+        "length_m": 35.0,
+        "nodes": [
+          [
+            250.0,
+            0.0,
+            0.0
+          ],
+          [
+            262.0,
+            -2.0,
+            0.0
+          ],
+          [
+            272.0,
+            -7.0,
+            0.0
+          ],
+          [
+            279.0,
+            -14.0,
+            0.0
+          ],
+          [
+            283.0,
+            -23.0,
+            0.0
+          ],
+          [
+            283.0,
+            -30.0,
+            0.0
+          ]
+        ]
+      },
+      {
+        "id": 2,
+        "type": "urban",
         "name": "south_exit",
         "lanes": 4,
         "lane_width": 3.5,
-        "speed_limit": 12.0,
+        "speed_limit": 10.0,
         "oneway": false,
-        "length_m": 300.0,
-        "nodes": [[300.0, 0.0, 0.0], [300.0, -150.0, 0.0], [300.0, -300.0, 0.0]]
+        "length_m": 270.0,
+        "nodes": [
+          [
+            283.0,
+            -30.0,
+            0.0
+          ],
+          [
+            283.0,
+            -165.0,
+            0.0
+          ],
+          [
+            283.0,
+            -300.0,
+            0.0
+          ]
+        ]
       }
     ]
   },
@@ -51,9 +129,9 @@
   "route": [],
   "pass_criteria": {
     "no_collision": true,
-    "max_duration_s": 30,
+    "max_duration_s": 45,
     "min_avg_speed_mps": 4.0,
-    "min_distance_m": 200
+    "min_distance_m": 350
   },
   "scenarios": [],
   "choreography": {
