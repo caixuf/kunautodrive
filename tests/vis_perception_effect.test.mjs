@@ -60,10 +60,13 @@ console.log('=== PerceptionView & EffectView 车规级几何契约测试 ===\n')
   eq('合成车辆轮廓点零亮黄颜色污染', hasBrightYellow, false);
 
   const lineObjs = scene.children.filter(c => c.isLineSegments);
-  ok('包含角标框、贴地关联线与视场脉冲弧 3 组 LineSegments', lineObjs.length === 3);
-  const rayAndSweepLines = lineObjs.filter(c => c.material.vertexColors === true);
+  ok('包含角标框、完整线框、贴地关联线与视场脉冲弧 4 组 LineSegments', lineObjs.length === 4);
+  const wireObj = lineObjs.find(c => c.material.vertexColors === true && c.material.opacity >= 0.5);
+  ok('完整 3D 线框存在且每目标 12 边（24 顶点）',
+    !!wireObj && wireObj.geometry.drawRange.count === 2 * 24);
+  const rayAndSweepLines = lineObjs.filter(c => c.material.vertexColors === true && c.material.opacity <= 0.22);
   eq('传感器关联线与视场线均启用 depthTest 且 opacity <= 0.22',
-    rayAndSweepLines.every(c => c.material.depthTest === true && c.material.opacity <= 0.22), true);
+    rayAndSweepLines.length === 2 && rayAndSweepLines.every(c => c.material.depthTest === true && c.material.opacity <= 0.22), true);
 
   const predGroup = scene.children.find(c => c.name === 'predictionTrajectories');
   ok('predictionTrajectories 分组存在且可见', !!predGroup && predGroup.visible === true);

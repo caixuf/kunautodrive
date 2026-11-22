@@ -39,9 +39,12 @@ sanitize_ld_path() {
 }
 sanitize_ld_path
 
-# 默认场景：车位到车位城市全链路（B1 地下车库泊出 + 敞口坡道 + 城市高架 + 地面寻位倒库）。
-# 可用 --scenario 覆盖；不指定时 patch pipeline.json 指向此场景。
-DEFAULT_SCENARIO="${FLOWENGINE_SCENARIO:-scenarios/park_to_park_city.json}"
+# 默认场景：程序化 CBD 世界（4 车道林荫大道 + 龙门架/地标塔 + 坡道爬升 + 6m 高架桥），
+# 带环境车流与感知线框，用于 demo/CI 行为回归。可用 --scenario 覆盖；
+# 不指定时 patch pipeline.json 指向此场景。
+# 车位到车位全链路（B1 泊出 + 坡道 + 高架 + 地面寻位倒库）仍是独立场景：
+#   bash scripts/demo.sh --scenario scenarios/park_to_park_city.json 90
+DEFAULT_SCENARIO="${FLOWENGINE_SCENARIO:-scenarios/city_procedural_world.json}"
 
 LOG_DIR="${FLOW_LOG_DIR:-/tmp/flow_logs}"
 PID_FILE="${FLOWENGINE_DEMO_PID_FILE:-/tmp/kunautodrive_demo.pids}"
@@ -601,6 +604,10 @@ else
       CHECK=$(curl -s --max-time 3 -o /dev/null -w '%{http_code}' http://127.0.0.1:8800/api/health 2>/dev/null || echo "000")
       if [ "$CHECK" = "200" ]; then
           echo "  ✓ Dashboard at http://localhost:8800"
+          # 一键演示：有图形会话才自动开浏览器（CI/无头环境静默跳过）
+          if $OPEN_BROWSER && { [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ] || [ "$(uname)" = "Darwin" ]; }; then
+              ( xdg-open http://localhost:8800 >/dev/null 2>&1 || open http://localhost:8800 >/dev/null 2>&1 || true ) &
+          fi
       else
           echo "  ✗ Dashboard started but not responding (HTTP $CHECK)"
           echo "  Server log:"
@@ -750,24 +757,45 @@ echo ""
 # ── Print summary ───────────────────────────────────────────
 echo "═══ Pipeline Summary ═══"
 
-# Extract stats from per-module log files (fallback to old stderr file)
-LAUNCHER_LOG="$LOG_DIR/launcher.log"
-STDERR_LOG="$LAUNCHER_STDERR"
-STAT_SRC="${LAUNCHER_LOG}"
-[ -f "$STAT_SRC" ] || STAT_SRC="$STDERR_LOG"
+# 汇总唯一事实源 = /tmp/flow_topology.json（monitor 聚合后的公共数据源）。
+# 旧实现 grep launcher.log 的 "#N" 计数，日志格式一变就打印空值 —— demo 收尾
+# 出现 "  Simulation :  m/s" 这种半截输出。日志只作 JSON 缺失时的兜底。
+python3 - "$JSON_FILE" <<'PY' || true
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    raise SystemExit(1)
+m = d.get("metrics") or {}
+veh = m.get("vehicle") or {}
+loc = m.get("localization") or {}
+plan = m.get("planning_debug") or {}
+ctl = m.get("control_debug") or {}
+beh = m.get("behavior") or {}
+bev = m.get("bev") or {}
+sc = (m.get("scene") or {}).get("ego") or {}
 
-FUSED=$(grep -a "EKF" "$STAT_SRC" 2>/dev/null | tail -1 | grep -oE "#[0-9]+" | tail -1 | tr -d '#' || echo "0")
-CTRL=$(grep -a "control.*#" "$STAT_SRC" 2>/dev/null | tail -1 | grep -oE "#[0-9]+" | tail -1 | tr -d '#' || echo "0")
-PLAN=$(grep -a "planning.*#" "$STAT_SRC" 2>/dev/null | tail -1 | grep -oE "#[0-9]+" | tail -1 | tr -d '#' || echo "0")
-SPEED=$(grep -a "flowsim.*stopped" "$STAT_SRC" 2>/dev/null | grep -oE "speed=[0-9.]+" | head -1 | cut -d= -f2 || echo "?")
+def f(v, nd=1, dash="?"):
+    try:
+        return f"{float(v):.{nd}f}"
+    except (TypeError, ValueError):
+        return dash
 
-echo "  Simulation : $SPEED m/s final speed"
-echo "  Fusion     : $FUSED EKF frames"
-echo "  Planning   : $PLAN trajectories"
-echo "  Control    : $CTRL control cycles"
+print(f"  Simulation : {f(veh.get('speed', sc.get('speed')))} m/s, "
+      f"x={f(sc.get('x', plan.get('ego_x')), 0)}m z={f(sc.get('z'), 1)}m")
+print(f"  Fusion     : {loc.get('loc_mode') or 'n/a'} "
+      f"(innovation {f(loc.get('innovation'), 2)}, "
+      f"{'trustworthy' if loc.get('loc_trustworthy') else 'degraded'})")
+print(f"  Planning   : {plan.get('seq', 0)} cycles, "
+      f"{plan.get('active_scenario', '?')}/{plan.get('active_stage', '?')}, "
+      f"d={f(plan.get('ego_d'), 2)}m")
+print(f"  Control    : {ctl.get('seq', 0)} cycles, {ctl.get('mode', '?')}, "
+      f"lat_err={f(ctl.get('lat_error'), 2)}m")
+print(f"  Behavior   : {beh.get('state', '?')}, lane {beh.get('committed_lane', '?')}, "
+      f"obs {beh.get('obs_count', 0)}, BEV {bev.get('count', 0)}")
+PY
 echo ""
 echo "  Logs       : $LOG_DIR/{launcher,flowsim,planning,control,...}.log"
-
 echo ""
 echo "  Dashboard  : http://localhost:8800"
 echo "  Topology   : tools/topology_viewer.html (standalone)"

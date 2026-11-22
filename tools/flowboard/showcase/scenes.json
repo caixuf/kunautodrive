@@ -3896,6 +3896,360 @@
       }
     },
     {
+      "file": "scenarios/city_procedural_world.json",
+      "name": "city_procedural_world",
+      "description": "程序化世界引擎示范场景：少量道路骨架 + world_gen 风格预设、区域豁免、路段覆写与跨路龙门架/地标拱门精修，C++ WorldEngine 统一驱动物理、感知与 3D 渲染。",
+      "duration_s": 90,
+      "enabled": true,
+      "raw": {
+        "name": "city_procedural_world",
+        "description": "程序化世界引擎示范场景：少量道路骨架 + world_gen 风格预设、区域豁免、路段覆写与跨路龙门架/地标拱门精修，C++ WorldEngine 统一驱动物理、感知与 3D 渲染。",
+        "random_seed": 202611,
+        "duration_s": 90,
+        "lighting": "day",
+        "weather": "clear",
+        "visibility_m": 1500,
+        "enable_uturn": false,
+        "npc_lane_change": true,
+        "enable_poisson_traffic": false,
+        "ego": {
+          "x": 20.0,
+          "y": -1.75,
+          "heading": 0.0,
+          "init_speed": 10.0,
+          "target_speed": 13.5,
+          "wheelbase": 2.7,
+          "length": 4.6,
+          "width": 2.0,
+          "max_steer": 0.6
+        },
+        "road_network": {
+          "route_chain": [
+            0,
+            1,
+            2
+          ],
+          "edges": [
+            {
+              "id": 0,
+              "type": "urban",
+              "name": "cbd_gateway_avenue",
+              "lanes": 4,
+              "lane_width": 3.5,
+              "length_m": 340,
+              "speed_limit": 15.0,
+              "oneway": false,
+              "nodes": [
+                [
+                  0,
+                  0,
+                  0
+                ],
+                [
+                  180,
+                  0,
+                  0
+                ],
+                [
+                  340,
+                  0,
+                  0
+                ]
+              ]
+            },
+            {
+              "id": 1,
+              "type": "urban",
+              "name": "skybridge_ramp_up",
+              "lanes": 4,
+              "lane_width": 3.5,
+              "length_m": 240,
+              "speed_limit": 15.0,
+              "oneway": false,
+              "elevation_profile": [
+                {
+                  "s": 0,
+                  "h": 0
+                },
+                {
+                  "s": 120,
+                  "h": 3.0
+                },
+                {
+                  "s": 240,
+                  "h": 6.0
+                }
+              ],
+              "nodes": [
+                [
+                  340,
+                  0,
+                  0
+                ],
+                [
+                  420,
+                  0,
+                  1.5
+                ],
+                [
+                  500,
+                  0,
+                  4.0
+                ],
+                [
+                  580,
+                  0,
+                  6.0
+                ]
+              ]
+            },
+            {
+              "id": 2,
+              "type": "viaduct_highway",
+              "name": "skybridge_overpass",
+              "bridge": true,
+              "lanes": 4,
+              "lane_width": 3.5,
+              "length_m": 820,
+              "speed_limit": 20.0,
+              "oneway": false,
+              "elevation_profile": [
+                {
+                  "s": 0,
+                  "h": 6.0
+                },
+                {
+                  "s": 820,
+                  "h": 6.0
+                }
+              ],
+              "nodes": [
+                [
+                  580,
+                  0,
+                  6.0
+                ],
+                [
+                  800,
+                  0,
+                  6.0
+                ],
+                [
+                  1100,
+                  0,
+                  6.0
+                ],
+                [
+                  1400,
+                  0,
+                  6.0
+                ]
+              ]
+            },
+            {
+              "id": 3,
+              "type": "urban",
+              "name": "cross_avenue_underpass",
+              "lanes": 4,
+              "lane_width": 3.5,
+              "length_m": 280,
+              "speed_limit": 13.0,
+              "oneway": false,
+              "nodes": [
+                [
+                  750,
+                  -140,
+                  0
+                ],
+                [
+                  750,
+                  0,
+                  0
+                ],
+                [
+                  750,
+                  140,
+                  0
+                ]
+              ]
+            }
+          ],
+          "cross_roads": [
+            {
+              "name": "cbd_plaza_cross",
+              "at_s": 200,
+              "length_m": 200,
+              "lanes": 2,
+              "lane_width": 3.5,
+              "speed_limit": 8.0,
+              "direction": 1
+            }
+          ],
+          "junctions": []
+        },
+        "world_gen": {
+          "preset": "modern_cbd",
+          "seed": 202611,
+          "exclude_zones": [
+            {
+              "x": 200.0,
+              "y": 0.0,
+              "radius": 32.0,
+              "kinds": [
+                "tree",
+                "building",
+                "furniture"
+              ]
+            }
+          ],
+          "edge_overrides": [
+            {
+              "edge": "cbd_gateway_avenue",
+              "speed_limit_kph": 60
+            },
+            {
+              "edge": "skybridge_overpass",
+              "trees": false,
+              "speed_limit_kph": 80
+            }
+          ],
+          "custom_props": [
+            {
+              "id": "city_welcome_gantry",
+              "kind": "welcome_gantry",
+              "label": "FLOWENGINE CITY",
+              "placement": "road_s",
+              "road": "cbd_gateway_avenue",
+              "s": 55.0,
+              "d": 0.0,
+              "length": 1.2,
+              "width": 17.0,
+              "height": 7.2,
+              "collider": false
+            },
+            {
+              "id": "innovation_arch",
+              "kind": "arch_landmark",
+              "label": "INNOVATION GATE",
+              "placement": "road_s",
+              "road": "cbd_gateway_avenue",
+              "s": 280.0,
+              "d": 0.0,
+              "length": 1.4,
+              "width": 18.0,
+              "height": 9.4,
+              "collider": false
+            },
+            {
+              "id": "cbd_landmark_spire",
+              "kind": "landmark_tower",
+              "label": "SKYLINE SPIRE",
+              "placement": "world",
+              "x": 255.0,
+              "y": -26.0,
+              "auto_z": true,
+              "length": 4.4,
+              "width": 4.4,
+              "height": 15.0,
+              "collider": true
+            },
+            {
+              "id": "plaza_west_pavilion",
+              "kind": "plaza_pavilion",
+              "label": "PARK PAVILION",
+              "placement": "world",
+              "x": 145.0,
+              "y": 24.0,
+              "auto_z": true,
+              "length": 6.4,
+              "width": 6.4,
+              "height": 4.0,
+              "collider": true
+            },
+            {
+              "id": "sidewalk_fast_charger",
+              "kind": "ev_charger",
+              "placement": "road_s",
+              "road": "cbd_gateway_avenue",
+              "s": 125.0,
+              "d": -9.8,
+              "length": 0.8,
+              "width": 0.6,
+              "height": 1.8,
+              "collider": true
+            },
+            {
+              "id": "plaza_guard_bollard",
+              "kind": "bollard",
+              "placement": "road_s",
+              "road": "cbd_gateway_avenue",
+              "s": 165.0,
+              "d": -9.4,
+              "length": 0.45,
+              "width": 0.45,
+              "height": 1.15,
+              "collider": true
+            }
+          ]
+        },
+        "actors": [
+          {
+            "id": 1,
+            "type": "car",
+            "segment_id": 0,
+            "s": 145,
+            "l": -5.25,
+            "vx": 11.0,
+            "vy": 0.0,
+            "len": 4.6,
+            "wid": 2.0
+          },
+          {
+            "id": 2,
+            "type": "pedestrian",
+            "x": 110.0,
+            "y": -8.2,
+            "vx": 0.9,
+            "vy": 0.0,
+            "len": 0.5,
+            "wid": 0.5
+          }
+        ],
+        "traffic_density": {
+          "cars_per_km": 14,
+          "spawn_jitter_m": 8.0,
+          "lane_spread": true,
+          "max_npcs": 10,
+          "random_seed_offset": 3
+        },
+        "traffic_lights": [
+          {
+            "id": 0,
+            "x": 188.0,
+            "y_lane": -1.75,
+            "green_s": 28.0,
+            "yellow_s": 3.0,
+            "red_s": 6.0,
+            "phase_offset_s": 0.0
+          }
+        ],
+        "stop_lines": [],
+        "construction_zones": [],
+        "route": [],
+        "pass_criteria": {
+          "no_collision": true,
+          "max_duration_s": 120,
+          "min_avg_speed_mps": 3.0,
+          "min_distance_m": 250
+        },
+        "scenarios": [],
+        "choreography": {
+          "loop_period_s": 999,
+          "beats": []
+        }
+      }
+    },
+    {
       "file": "scenarios/multi_light.json",
       "name": "multi_light",
       "description": "多红灯场景：连续 3 盏错相红绿灯，覆盖红灯闯行 / 停稳不走闭锁 / 绿灯卡死。平路双向 4 车道（Y=0），ego 沿内道行驶，每盏灯周期 25s 错相。故障表中『红灯 override 设 0 未进轨迹 → 闯红灯』与『停稳后 target=0 自维持闭锁』都靠它拦截。",
@@ -703856,346 +704210,6 @@
           "traffic_lights": [],
           "stop_lines": [],
           "construction_zones": []
-        }
-      }
-    },
-    {
-      "file": "scenarios/city_procedural_world.json",
-      "name": "city_procedural_world",
-      "description": "程序化世界引擎示范场景：少量道路骨架 + world_gen 风格预设、区域豁免、路段覆写与跨路龙门架/地标拱门精修，C++ WorldEngine 统一驱动物理、感知与 3D 渲染。",
-      "duration_s": 90,
-      "enabled": true,
-      "raw": {
-        "name": "city_procedural_world",
-        "description": "程序化世界引擎示范场景：少量道路骨架 + world_gen 风格预设、区域豁免、路段覆写与跨路龙门架/地标拱门精修，C++ WorldEngine 统一驱动物理、感知与 3D 渲染。",
-        "random_seed": 202611,
-        "duration_s": 90,
-        "lighting": "day",
-        "weather": "clear",
-        "visibility_m": 1500,
-        "npc_lane_change": true,
-        "enable_poisson_traffic": false,
-        "ego": {
-          "x": 20.0,
-          "y": -1.75,
-          "heading": 0.0,
-          "init_speed": 10.0,
-          "target_speed": 13.5,
-          "wheelbase": 2.7,
-          "length": 4.6,
-          "width": 2.0,
-          "max_steer": 0.6
-        },
-        "road_network": {
-          "edges": [
-            {
-              "id": 0,
-              "type": "urban",
-              "name": "cbd_gateway_avenue",
-              "lanes": 4,
-              "lane_width": 3.5,
-              "length_m": 340,
-              "speed_limit": 15.0,
-              "oneway": false,
-              "nodes": [
-                [
-                  0,
-                  0,
-                  0
-                ],
-                [
-                  180,
-                  0,
-                  0
-                ],
-                [
-                  340,
-                  0,
-                  0
-                ]
-              ]
-            },
-            {
-              "id": 1,
-              "type": "urban",
-              "name": "skybridge_ramp_up",
-              "lanes": 4,
-              "lane_width": 3.5,
-              "length_m": 240,
-              "speed_limit": 15.0,
-              "oneway": false,
-              "elevation_profile": [
-                {
-                  "s": 0,
-                  "h": 0
-                },
-                {
-                  "s": 120,
-                  "h": 3.0
-                },
-                {
-                  "s": 240,
-                  "h": 6.0
-                }
-              ],
-              "nodes": [
-                [
-                  340,
-                  0,
-                  0
-                ],
-                [
-                  420,
-                  0,
-                  1.5
-                ],
-                [
-                  500,
-                  0,
-                  4.0
-                ],
-                [
-                  580,
-                  0,
-                  6.0
-                ]
-              ]
-            },
-            {
-              "id": 2,
-              "type": "viaduct_highway",
-              "name": "skybridge_overpass",
-              "bridge": true,
-              "lanes": 4,
-              "lane_width": 3.5,
-              "length_m": 340,
-              "speed_limit": 20.0,
-              "oneway": false,
-              "elevation_profile": [
-                {
-                  "s": 0,
-                  "h": 6.0
-                },
-                {
-                  "s": 340,
-                  "h": 6.0
-                }
-              ],
-              "nodes": [
-                [
-                  580,
-                  0,
-                  6.0
-                ],
-                [
-                  750,
-                  0,
-                  6.0
-                ],
-                [
-                  920,
-                  0,
-                  6.0
-                ]
-              ]
-            },
-            {
-              "id": 3,
-              "type": "urban",
-              "name": "cross_avenue_underpass",
-              "lanes": 4,
-              "lane_width": 3.5,
-              "length_m": 280,
-              "speed_limit": 13.0,
-              "oneway": false,
-              "nodes": [
-                [
-                  750,
-                  -140,
-                  0
-                ],
-                [
-                  750,
-                  0,
-                  0
-                ],
-                [
-                  750,
-                  140,
-                  0
-                ]
-              ]
-            }
-          ],
-          "cross_roads": [
-            {
-              "name": "cbd_plaza_cross",
-              "at_s": 200,
-              "length_m": 200,
-              "lanes": 2,
-              "lane_width": 3.5,
-              "speed_limit": 8.0,
-              "direction": 1
-            }
-          ],
-          "junctions": []
-        },
-        "world_gen": {
-          "preset": "modern_cbd",
-          "seed": 202611,
-          "exclude_zones": [
-            {
-              "x": 200.0,
-              "y": 0.0,
-              "radius": 32.0,
-              "kinds": [
-                "tree",
-                "building",
-                "furniture"
-              ]
-            }
-          ],
-          "edge_overrides": [
-            {
-              "edge": "cbd_gateway_avenue",
-              "speed_limit_kph": 60
-            },
-            {
-              "edge": "skybridge_overpass",
-              "trees": false,
-              "speed_limit_kph": 80
-            }
-          ],
-          "custom_props": [
-            {
-              "id": "city_welcome_gantry",
-              "kind": "welcome_gantry",
-              "label": "FLOWENGINE CITY",
-              "placement": "road_s",
-              "road": "cbd_gateway_avenue",
-              "s": 55.0,
-              "d": 0.0,
-              "length": 1.2,
-              "width": 17.0,
-              "height": 7.2,
-              "collider": false
-            },
-            {
-              "id": "innovation_arch",
-              "kind": "arch_landmark",
-              "label": "INNOVATION GATE",
-              "placement": "road_s",
-              "road": "cbd_gateway_avenue",
-              "s": 280.0,
-              "d": 0.0,
-              "length": 1.4,
-              "width": 18.0,
-              "height": 9.4,
-              "collider": false
-            },
-            {
-              "id": "cbd_landmark_spire",
-              "kind": "landmark_tower",
-              "label": "SKYLINE SPIRE",
-              "placement": "world",
-              "x": 255.0,
-              "y": -26.0,
-              "auto_z": true,
-              "length": 4.4,
-              "width": 4.4,
-              "height": 15.0,
-              "collider": true
-            },
-            {
-              "id": "plaza_west_pavilion",
-              "kind": "plaza_pavilion",
-              "label": "PARK PAVILION",
-              "placement": "world",
-              "x": 145.0,
-              "y": 24.0,
-              "auto_z": true,
-              "length": 6.4,
-              "width": 6.4,
-              "height": 4.0,
-              "collider": true
-            },
-            {
-              "id": "sidewalk_fast_charger",
-              "kind": "ev_charger",
-              "placement": "road_s",
-              "road": "cbd_gateway_avenue",
-              "s": 125.0,
-              "d": -9.8,
-              "length": 0.8,
-              "width": 0.6,
-              "height": 1.8,
-              "collider": true
-            },
-            {
-              "id": "plaza_guard_bollard",
-              "kind": "bollard",
-              "placement": "road_s",
-              "road": "cbd_gateway_avenue",
-              "s": 165.0,
-              "d": -9.4,
-              "length": 0.45,
-              "width": 0.45,
-              "height": 1.15,
-              "collider": true
-            }
-          ]
-        },
-        "actors": [
-          {
-            "id": 1,
-            "type": "car",
-            "segment_id": 0,
-            "s": 145,
-            "l": -1.75,
-            "vx": 12.0,
-            "vy": 0.0,
-            "len": 4.6,
-            "wid": 2.0
-          },
-          {
-            "id": 2,
-            "type": "pedestrian",
-            "x": 110.0,
-            "y": -8.2,
-            "vx": 0.9,
-            "vy": 0.0,
-            "len": 0.5,
-            "wid": 0.5
-          }
-        ],
-        "traffic_density": {
-          "cars_per_km": 0,
-          "max_npcs": 4
-        },
-        "traffic_lights": [
-          {
-            "id": 0,
-            "x": 188.0,
-            "y_lane": -1.75,
-            "green_s": 28.0,
-            "yellow_s": 3.0,
-            "red_s": 6.0,
-            "phase_offset_s": 0.0
-          }
-        ],
-        "stop_lines": [],
-        "construction_zones": [],
-        "route": [],
-        "pass_criteria": {
-          "no_collision": true,
-          "max_duration_s": 120,
-          "min_avg_speed_mps": 3.0,
-          "min_distance_m": 250
-        },
-        "scenarios": [],
-        "choreography": {
-          "loop_period_s": 999,
-          "beats": []
         }
       }
     },

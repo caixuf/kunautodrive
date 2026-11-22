@@ -42,6 +42,11 @@ export const SCENE = {
   /* 感知 SR / 多模态预测光带 / 动态车周特效配色 */
   percBracket: 0x00e5b0,      // 3D 感知角标框（科技翡翠青）
   percFov: 0x00d8b4,          // 传感器前视包络/地面波束（低透明度科技青）
+  /* 感知线框分类色：与角标区分，车/人/两轮/静态危险物各一色 */
+  percVehicle: 0x22d3ee,      // 车辆（发光青）
+  percPedestrian: 0xffb020,   // 行人（琥珀）
+  percCyclist: 0x7cf28a,      // 两轮（嫩绿）
+  percStatic: 0x94a3b8,       // 静态危险物/未知（石板灰）
   predLaneKeep: 0x00e676,     // 预测模态：车道保持（翡翠绿）
   predCutIn: 0xff9100,        // 预测模态：切入告警（琥珀橙）
   predYield: 0x2979ff,        // 预测模态：减速让行（蔚蓝）

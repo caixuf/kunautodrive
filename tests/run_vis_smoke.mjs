@@ -25,6 +25,7 @@ const REAL_THREE = new Set([
   'vis_trajectory_anchor.test.mjs', // TrajectoryView 真实 CatmullRom 样条与顶点前向锚定守卫
   'vis_scene_invariants.test.mjs', // 3D 场景几何不变量（Raycaster + 俯仰 + 标线贴地）
   'vis_road_facility.test.mjs',    // 路口设施 + 独立左转箭头信号头真实 Three 材质校验
+  'vis_perception_wireframe.test.mjs', // 感知 12 边线框/分类色/建筑排除（需要真实 BufferAttribute）
 ]);
 
 const tests = readdirSync(TESTS)

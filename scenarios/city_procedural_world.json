@@ -6,6 +6,7 @@
   "lighting": "day",
   "weather": "clear",
   "visibility_m": 1500,
+  "enable_uturn": false,
   "npc_lane_change": true,
   "enable_poisson_traffic": false,
   "ego": {
@@ -20,6 +21,7 @@
     "max_steer": 0.6
   },
   "road_network": {
+    "route_chain": [0, 1, 2],
     "edges": [
       {
         "id": 0,
@@ -51,11 +53,11 @@
         "bridge": true,
         "lanes": 4,
         "lane_width": 3.5,
-        "length_m": 340,
+        "length_m": 820,
         "speed_limit": 20.0,
         "oneway": false,
-        "elevation_profile": [{"s": 0, "h": 6.0}, {"s": 340, "h": 6.0}],
-        "nodes": [[580, 0, 6.0], [750, 0, 6.0], [920, 0, 6.0]]
+        "elevation_profile": [{"s": 0, "h": 6.0}, {"s": 820, "h": 6.0}],
+        "nodes": [[580, 0, 6.0], [800, 0, 6.0], [1100, 0, 6.0], [1400, 0, 6.0]]
       },
       {
         "id": 3,
@@ -164,12 +166,15 @@
     ]
   },
   "actors": [
-    {"id": 1, "type": "car", "segment_id": 0, "s": 145, "l": -1.75, "vx": 12.0, "vy": 0.0, "len": 4.6, "wid": 2.0},
+    {"id": 1, "type": "car", "segment_id": 0, "s": 145, "l": -5.25, "vx": 11.0, "vy": 0.0, "len": 4.6, "wid": 2.0},
     {"id": 2, "type": "pedestrian", "x": 110.0, "y": -8.2, "vx": 0.9, "vy": 0.0, "len": 0.5, "wid": 0.5}
   ],
   "traffic_density": {
-    "cars_per_km": 0,
-    "max_npcs": 4
+    "cars_per_km": 14,
+    "spawn_jitter_m": 8.0,
+    "lane_spread": true,
+    "max_npcs": 10,
+    "random_seed_offset": 3
   },
   "traffic_lights": [
     {"id": 0, "x": 188.0, "y_lane": -1.75, "green_s": 28.0, "yellow_s": 3.0, "red_s": 6.0, "phase_offset_s": 0.0}

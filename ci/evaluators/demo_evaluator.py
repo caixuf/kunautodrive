@@ -787,10 +787,11 @@ def load_pipeline_expected_edges() -> list[tuple[str, str, str]]:
 
 
 def _pipeline_flowsim_scenario_file() -> str | None:
-    """Return the scenario_file path configured in config/pipeline.json's
-    flowsim node params (or None if not found). Used to pass the pipeline's
-    default scenario to demo.sh --scenario, so that demo.sh does not override
-    it with its own DEFAULT_SCENARIO (infinite_straight.json, no route)."""
+    """Return config/pipeline.json's flowsim ``scenario_file`` (fallback only).
+
+    demo.sh's DEFAULT_SCENARIO is the authoritative user-facing scene now;
+    pipeline.json keeps straight_road as a neutral bootstrap default and is
+    only consulted when demo.sh is missing/unparsable."""
     pipeline = load_json(runtime_pipeline_path()) or {}
     for node in _pipeline_nodes(pipeline):
         if not isinstance(node, dict) or node.get("name") != "flowsim":
@@ -805,6 +806,36 @@ def _pipeline_flowsim_scenario_file() -> str | None:
             return params.get("scenario_file")
         return None
     return None
+
+
+def _default_demo_scenario_path() -> str | None:
+    """Return demo.sh's DEFAULT_SCENARIO (the scene a user actually sees).
+
+    Handles the shell form ``${FLOWENGINE_SCENARIO:-scenarios/x.json}`` by
+    taking the ``:-`` default. The evaluator used to pass
+    config/pipeline.json's stale flowsim ``scenario_file`` (straight_road)
+    instead, so a no-`--scenario` run loaded pass_criteria from demo.sh's
+    default while executing a different scene. Keep pipeline.json only as a
+    fallback for exotic configs.
+    """
+    demo_sh = ROOT / "scripts" / "demo.sh"
+    if demo_sh.exists():
+        try:
+            for line in demo_sh.read_text().splitlines():
+                if not line.strip().startswith("DEFAULT_SCENARIO="):
+                    continue
+                val = line.split("=", 1)[1].strip()
+                if len(val) >= 2 and val[0] in ("\"", "'") and val[-1] == val[0]:
+                    val = val[1:-1].strip()
+                if val.startswith("${") and val.endswith("}"):
+                    body = val[2:-1]
+                    val = body.split(":-", 1)[1] if ":-" in body else ""
+                val = val.strip().strip('"').strip("'")
+                if val:
+                    return val
+        except OSError:
+            pass
+    return _pipeline_flowsim_scenario_file()
 
 
 def _node_params(pipeline: dict, node_name: str) -> dict:
@@ -973,6 +1004,15 @@ def count_bev_scene_observable_truth(
     for f in (scene_m.get("facilities") or []):
         if not isinstance(f, dict):
             continue
+        # WorldEngine decorative props (building/pier/wall/tree/pole/...) are
+        # rendered and used as colliders, but `sensor_model` explicitly does
+        # NOT raycast world OBBs (see its header) — so no LiDAR point ever
+        # comes back from them and BEV cannot see them. Counting them as
+        # "observable truth" made any built-up scene fail the dead-head check
+        # (truth>1, BEV count 0). Keep legacy kind-less facility records
+        # (static-obstacle mirrors) only.
+        if str(f.get("kind") or "").strip():
+            continue
         if float(f.get("height", 0.0) or 0.0) < 0.4:
             continue
         if ez_f is not None and isinstance(f.get("z"), (int, float)):
@@ -997,18 +1037,12 @@ def count_bev_scene_observable_truth(
 
 def load_scenario_for_duration(scenario_override: str | None = None) -> dict:
     """Load scenario JSON to read duration_s for auto-detection."""
-    scenario_path = scenario_override
-    if not scenario_path:
-        # Read default scenario from demo.sh
-        demo_sh = ROOT / "scripts" / "demo.sh"
-        if demo_sh.exists():
-            text = demo_sh.read_text()
-            for line in text.splitlines():
-                if line.strip().startswith("DEFAULT_SCENARIO="):
-                    scenario_path = line.split("=", 1)[1].strip().strip('"')
-                    break
+    scenario_path = scenario_override or _default_demo_scenario_path()
     if scenario_path:
-        return load_json(ROOT / scenario_path) or {}
+        path = Path(scenario_path)
+        if not path.is_absolute():
+            path = ROOT / path
+        return load_json(path) or {}
     return {}
 
 
@@ -4810,9 +4844,9 @@ def main() -> int:
         # 该场景而非 DEFAULT_SCENARIO。args.scenario 优先级最高（用户显式指定）。
         effective_scenario = args.scenario
         if not effective_scenario:
-            # 从 pipeline.json 读 flowsim.scenario_file 作为默认场景传给 demo.sh，
-            # 避免 demo.sh 用 DEFAULT_SCENARIO（infinite_straight，无 route）覆盖。
-            effective_scenario = _pipeline_flowsim_scenario_file()
+            # 与 demo.sh 的 DEFAULT_SCENARIO 对齐（用户实际看到的场景），
+            # pipeline.json 的旧 scenario_file 仅作兜底。
+            effective_scenario = _default_demo_scenario_path()
         with pipeline_scenario_override(effective_scenario):
             _collect_diag: dict = {}
             samples, returncode = collect_samples(duration, args.json_file, args.interval,
@@ -4861,7 +4895,7 @@ def main() -> int:
     # 场景 actor 清单：识别率判据的前置对照（"本应感知到什么"）。
     # 与 criteria/road 分开加载，避免改动 load_scenario_criteria_from_pipeline
     # 的返回元组形状（三处调用方）。
-    _scn_file = args.scenario or _pipeline_flowsim_scenario_file()
+    _scn_file = args.scenario or _default_demo_scenario_path()
     _scn_dict = None
     if _scn_file:
         _scn_path = Path(_scn_file)

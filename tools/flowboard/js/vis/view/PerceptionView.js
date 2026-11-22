@@ -2,7 +2,7 @@
  * PerceptionView.js — 3D 感知标注与多模态预测光带覆盖层
  *
  * 车规级 SR（Surrounding Reality）视觉元素：
- * - 3D 角标框（8 个三轴短臂角标包围感知目标）
+ * - 完整 3D 线框（12 条边）+ 8 个三轴短臂角标，按类别着色（车/人/两轮/静态）
  * - 精细圆形 LiDAR 点云（真实点云高度渐变 / 目标受照面轮廓扫描点）
  * - 前保险杠传感器视场包络扇区 + 距离脉冲弧 + 贴地弱目标连线
  * - 多模态 Frenet 预测贴地 3D 渐变流光带（主模态 ~0.20m / 次模态 ~0.14m）
@@ -31,6 +31,16 @@ const FLOATS_PER_CORNER = SEGMENTS_PER_CORNER * VERTS_PER_SEGMENT * COMPS_PER_VE
 const CORNERS = 8;
 const FLOATS_PER_BOX = CORNERS * FLOATS_PER_CORNER; // 144
 const VERTICES_PER_BOX = CORNERS * SEGMENTS_PER_CORNER * VERTS_PER_SEGMENT; // 48
+
+// ── 完整 3D 线框：8 顶点 12 边（基础感知框，角标是附加装饰） ──
+const EDGES_PER_BOX = 12;
+const VERTS_PER_WIRE = EDGES_PER_BOX * 2;      // 24
+const FLOATS_PER_WIRE = VERTS_PER_WIRE * 3;    // 72
+const WIRE_EDGES = [
+  [0, 1], [1, 2], [2, 3], [3, 0],   // bottom ring
+  [4, 5], [5, 6], [6, 7], [7, 4],   // top ring
+  [0, 4], [1, 5], [2, 6], [3, 7],   // verticals
+];
 const MAX_ENTITIES = 128;
 
 // ── 传感器前视包络常量 ──
@@ -147,8 +157,32 @@ function _entityDims(ent) {
   };
 }
 
+function _perceptionKind(ent) {
+  const raw = (ent && ent.type && ent.type !== 'unknown') ? ent.type : (ent && ent.kind) || (ent && ent.type) || '';
+  return String(raw).toLowerCase();
+}
+
+const PERCEIVABLE_DYNAMIC = new Set([
+  'car', 'suv', 'truck', 'bus', 'motorcycle', 'bicycle', 'cyclist', 'pedestrian',
+]);
+const PERCEIVABLE_STATIC = new Set([
+  'construction', 'unknown_static', 'unknown', 'bollard', 'wheel_stop', 'barrier', 'cone', 'hydrant',
+  'pole', 'tree', 'sign', 'streetlight', 'speed_limit', 'stop', 'stop_sign', 'warning',
+]);
+
 function _isPerceivableObstacle(ent) {
-  return !!ent && ent.type !== 'ego' && ent.type !== 'tl';
+  if (!ent || ent.type === 'ego' || ent.type === 'tl') return false;
+  const k = _perceptionKind(ent);
+  return PERCEIVABLE_DYNAMIC.has(k) || PERCEIVABLE_STATIC.has(k);
+}
+
+/** 感知线框分类色：车辆青 / 行人琥珀 / 两轮嫩绿 / 静态石板灰 */
+function _perceptionClassColor(ent) {
+  const k = _perceptionKind(ent);
+  if (k === 'pedestrian') return SCENE.percPedestrian;
+  if (k === 'bicycle' || k === 'cyclist' || k === 'motorcycle') return SCENE.percCyclist;
+  if (k === 'car' || k === 'suv' || k === 'truck' || k === 'bus') return SCENE.percVehicle;
+  return SCENE.percStatic;
 }
 
 function _gatherPerceptionTargets(ego, store) {
@@ -217,6 +251,25 @@ export function createPerceptionView(scene) {
   boxMesh.renderOrder = 22;
   boxMesh.frustumCulled = false;
   scene.add(boxMesh);
+
+  // ── 1b. 完整 3D 线框（12 边，按类别着色） ──
+  const wirePositions = new Float32Array(MAX_ENTITIES * FLOATS_PER_WIRE);
+  const wireColors = new Float32Array(MAX_ENTITIES * FLOATS_PER_WIRE);
+  const wireGeo = new THREE.BufferGeometry();
+  wireGeo.setAttribute('position', new THREE.BufferAttribute(wirePositions, 3));
+  wireGeo.setAttribute('color', new THREE.BufferAttribute(wireColors, 3));
+  wireGeo.setDrawRange(0, 0);
+  const wireMat = new THREE.LineBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.78,
+    depthTest: true,
+    depthWrite: false,
+  });
+  const wireMesh = new THREE.LineSegments(wireGeo, wireMat);
+  wireMesh.renderOrder = 23;
+  wireMesh.frustumCulled = false;
+  scene.add(wireMesh);
 
   // ── 2. 贴地感知目标关联线（从自车外廓地面出发，低不透明度，绝不穿自车后挡风玻璃） ──
   const rayPositions = new Float32Array(MAX_ENTITIES * 2 * 3);
@@ -766,6 +819,7 @@ export function createPerceptionView(scene) {
 
     if (!ego || !showPerc) {
       boxMesh.visible = false;
+      wireMesh.visible = false;
       rayMesh.visible = false;
       sweepMesh.visible = false;
       sweepEdgeMesh.visible = false;
@@ -775,6 +829,7 @@ export function createPerceptionView(scene) {
     }
 
     boxMesh.visible = true;
+    wireMesh.visible = true;
     rayMesh.visible = true;
     sweepMesh.visible = true;
     sweepEdgeMesh.visible = true;
@@ -786,10 +841,15 @@ export function createPerceptionView(scene) {
     const entities = _gatherPerceptionTargets(ego, store);
     const count = Math.min(entities.length, MAX_ENTITIES);
 
-    // 2. 更新 3D 感知角标框
+    // 2. 更新 3D 感知角标框 + 完整线框（12 边，按类别着色）
     _updateBrackets(ego, entities, count, store, boxPositions);
     boxGeo.attributes.position.needsUpdate = true;
     boxGeo.setDrawRange(0, count * VERTICES_PER_BOX);
+
+    _updateWireframes(ego, entities, count, store, wirePositions, wireColors);
+    wireGeo.attributes.position.needsUpdate = true;
+    wireGeo.attributes.color.needsUpdate = true;
+    wireGeo.setDrawRange(0, count * VERTS_PER_WIRE);
 
     // 3. 更新贴地传感器目标关联线
     _updateRays(ego, entities, count, store, rayPositions, rayColors);
@@ -810,10 +870,12 @@ export function createPerceptionView(scene) {
 
   function clear() {
     boxGeo.setDrawRange(0, 0);
+    wireGeo.setDrawRange(0, 0);
     rayGeo.setDrawRange(0, 0);
     pointGeo.setDrawRange(0, 0);
     _clearPredictions();
     boxMesh.visible = false;
+    wireMesh.visible = false;
     rayMesh.visible = false;
     sweepMesh.visible = false;
     sweepEdgeMesh.visible = false;
@@ -824,6 +886,7 @@ export function createPerceptionView(scene) {
   function dispose() {
     clear();
     scene.remove(boxMesh);
+    scene.remove(wireMesh);
     scene.remove(rayMesh);
     scene.remove(sweepMesh);
     scene.remove(sweepEdgeMesh);
@@ -831,6 +894,8 @@ export function createPerceptionView(scene) {
     scene.remove(predGroup);
     boxGeo.dispose();
     boxMat.dispose();
+    wireGeo.dispose();
+    wireMat.dispose();
     rayGeo.dispose();
     rayMat.dispose();
     sweepGeo.dispose();
@@ -918,6 +983,61 @@ function _updateBrackets(ego, entities, count, store, positions) {
 
     writeCorners(roofY, true);
     writeCorners(bottomY, false);
+  }
+}
+
+/** 完整 3D 线框：8 顶点 / 12 边，按类别着色，给感知目标一个清晰的立体外框。 */
+const _wireCornerX = new Float64Array(8);
+const _wireCornerZ = new Float64Array(8);
+
+function _updateWireframes(ego, entities, count, store, positions, colors) {
+  const cornerX = _wireCornerX;
+  const cornerZ = _wireCornerZ;
+  for (let i = 0; i < count; i++) {
+    const ent = entities[i];
+    const bi = i * FLOATS_PER_WIRE;
+    if (!_isPerceivableObstacle(ent)) {
+      for (let j = 0; j < FLOATS_PER_WIRE; j++) { positions[bi + j] = 0; colors[bi + j] = 0; }
+      continue;
+    }
+    const dist = distanceENU(ego.x, ego.y, ent.x || 0, ent.y || 0);
+    if (dist > 95 || dist < 0.3) {
+      for (let j = 0; j < FLOATS_PER_WIRE; j++) { positions[bi + j] = 0; colors[bi + j] = 0; }
+      continue;
+    }
+
+    const { halfL, halfW, vehH } = _entityDims(ent);
+    const entZ = (ent.z != null) ? ent.z : roadHeightAt(store, ent.x || 0, ent.y || 0, ego.z);
+    const [cx, cyRaw, cz] = worldToThree(ent.x || 0, ent.y || 0, entZ + VEHICLE_GROUND_Y);
+    const bottomY = cyRaw + 0.05;
+    const roofY = cyRaw + vehH + 0.05;
+
+    const [efx, efy] = forwardENU(ent.heading || 0);
+    const [fwdX, , fwdZ] = worldToThree(efx, efy, 0);
+    const [normX, normZ] = tangentToNormal(fwdX, fwdZ);
+
+    // 底环 0..3（前左/前右/后右/后左），顶环 4..7 同序
+    const offsets = [[halfL, -halfW], [halfL, halfW], [-halfL, halfW], [-halfL, -halfW]];
+    for (let c = 0; c < 4; c++) {
+      const [foff, roff] = offsets[c];
+      const longX = cx + foff * fwdX;
+      const longZ = cz + foff * fwdZ;
+      const [px, , pz] = offsetAlongNormal(longX, longZ, normX, normZ, roff);
+      cornerX[c] = px; cornerZ[c] = pz;
+      cornerX[c + 4] = px; cornerZ[c + 4] = pz;
+    }
+
+    const [r, g, b] = _hexToRgb01(_perceptionClassColor(ent));
+    let idx = 0;
+    for (let e = 0; e < WIRE_EDGES.length; e++) {
+      const [a, bb] = WIRE_EDGES[e];
+      const ay = a < 4 ? bottomY : roofY;
+      const by = bb < 4 ? bottomY : roofY;
+      positions[bi + idx] = cornerX[a]; positions[bi + idx + 1] = ay; positions[bi + idx + 2] = cornerZ[a]; idx += 3;
+      positions[bi + idx] = cornerX[bb]; positions[bi + idx + 1] = by; positions[bi + idx + 2] = cornerZ[bb]; idx += 3;
+      colors[bi + idx - 6] = r; colors[bi + idx - 5] = g; colors[bi + idx - 4] = b;
+      colors[bi + idx - 3] = r; colors[bi + idx - 2] = g; colors[bi + idx - 1] = b;
+    }
   }
 }
 

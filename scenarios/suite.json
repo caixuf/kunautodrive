@@ -85,6 +85,12 @@
       "max_lane_offset_m": 1.65
     },
     {
+      "file": "scenarios/city_procedural_world.json",
+      "duration_s": 90,
+      "enabled": true,
+      "max_lane_offset_m": 1.75
+    },
+    {
       "file": "scenarios/multi_light.json",
       "duration_s": 60,
       "enabled": true,

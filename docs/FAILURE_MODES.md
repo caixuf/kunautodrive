@@ -35,10 +35,10 @@
 | 1 | 控制 / 规划 / 安全层 | 43 |
 | 2 | 感知 / 点云 | 10 |
 | 3 | 仿真 / 几何 / NPC | 11 |
-| 4 | 仪表盘 / 监控 / 前端 | 25 |
-| 5 | 评估器 / 门禁 | 10 |
+| 4 | 仪表盘 / 监控 / 前端 | 27 |
+| 5 | 评估器 / 门禁 | 12 |
 | 6 | 框架 / 工具链 | 5 |
-| | **合计** | **104** |
+| | **合计** | **108** |
 
 ## 1. 控制 / 规划 / 安全层
 
@@ -167,6 +167,8 @@
 | **`/api/topology` 无缓存时的兜底 body 只有 489 字节且缺最后一个 `}`（任何客户端 json.loads 都在 EOF 报 `Expecting ',' delimiter`）；SSE 的 `data:` 帧同因吐非法 JSON** | `build_sse_json()` 收尾那条 `SSE_APPEND` 只闭合到 `metrics`：字面量括号数 16 开 / 15 闭，注释写"close topics + close metrics + top-level"（**少算一层**，实测走字面量顺序的深度收在 1 而非 0）。该函数同时供 `/api/topology` 兜底、`/api/topics` 兜底与 SSE 帧（`ss_frame` 直接 `data: %s`，无人补括号），所以**管线一停、缓存一空，两条路径都吐坏 JSON**。修复：补上根对象的收尾大括号，并把注释改成五层闭合。判据同上（`monitor_http_integrity` 在无缓存条件下断言 body 可解析） | `src/core/monitor_server.c` `build_sse_json` 收尾块 |
 | **大 body（> 内核发送缓冲）在客户端慢读/停读时被静默截断：Content-Length 说 N，客户端只收到 M<N，keep-alive 复用下再把下一个响应的字节读成这次 body 的尾巴** | 发送路径用裸 `write()` 且**把返回值 `(void)` 丢掉**，而 monitor_server 给每个客户端 socket 设了 `SO_SNDTIMEO=5s` —— 带发送超时的阻塞 `write()` 在发送缓冲填满、等对端窗口超时后**返回"已写字节数"**（partial），剩余字节永不发出。SSE 路径一直用 `safe_write`（循环写 + EAGAIN 重试 + EPIPE 正常退出），HTTP 响应路径漏了。修复：`send_response` / `send_response_full_bytes` / CORS 204 三处改走 `safe_write`。判据：`monitor_http_integrity` 起临时 doc root 放 8MB 不可压文件 + 停读 8s 的客户端 —— 旧代码实测丢 6592512 字节（声明 8388608 / 实收 1796096） | `src/core/monitor_server.c` `send_response` / `send_response_full_bytes` |
 | **600s 长跑随机 SIGABRT（`Fatal glibc error: strtod_l.c:1496 assertion failed: numsize == 1 && n < d`），monitor 线程在 planning/behavior debug 更新附近 abort** | 三条 debug JSON 缓存（`behavior_state_json`/`control_debug_json`/`planning_debug_json`）由 transport 回调写、monitor 主循环读，**无锁**：半写 JSON 可能被 `cJSON_Parse` 的 `strtod` 读到畸形数字；subnormal 兜底原来只钳 `e<=-308`，边界值仍可能漏过。full17 在 x≈2091（250s）复现，full15/16 同代码未复现 → 典型时序竞态。修复：`debug_cache_mutex` 保护三缓存，主循环解析前拷贝到栈上局部 buffer；subnormal 阈值放宽到 `e<=-300`。判据：连续 600s 不再出现 SIGABRT（full18） | `modules/adas_nodes/monitor_node.c` `debug_cache_mutex` / `on_planning_debug` / `export_dashboard_json` / `sanitize_subnormal_literals` |
+| **感知覆盖层只画 8 个角标、建筑/桥墩也被当成感知目标画框（画面全是建筑大框，看不到车）** | ① 只有角标臂，没有完整 3D 外框，远看/夜景像碎线；② `_isPerceivableObstacle` 只排除 `ego/tl`，而 `store.facilities` 里的 `building/pier` 也被当目标 → 城市场景几十个大框盖住真实车辆。修复：新增 8 顶点 12 边线框（车青/人琥珀/两轮绿/静态灰分类着色，`percVehicle` 等 token），静态危险物只保留 bollard/barrier/construction 等白名单；新增 `tests/vis_perception_wireframe.test.mjs`（真实 three 几何：12 边/分类色/有限值/建筑不画框），并入 `npm run vis:check` | `tools/flowboard/js/vis/view/PerceptionView.js` `_updateWireframes` / `_isPerceivableObstacle`；`js/vis/theme/tokens.js`；`tests/vis_perception_wireframe.test.mjs`；`package.json` `vis:check` |
+| **`demo.sh` 收尾 Summary 打印空值（`Simulation :  m/s final speed` / `Planning :  trajectories`）** | 汇总从 `launcher.log` grep `#[0-9]+`，而日志格式早已不带这些计数 → 正则全空；CI 与本地 demo 收尾都显示半截。修复：改读唯一公共数据源 `/tmp/flow_topology.json` 的 `metrics.{vehicle,localization,planning_debug,control_debug,behavior,bev}`，输出车速/位置、定位模式+innovation、规划状态、控制模式+横向误差、行为状态+目标数；JSON 缺失才回退日志 | `scripts/demo.sh` Print summary 块 |
 
 ## 5. 评估器 / 门禁
 
@@ -187,6 +189,8 @@
 
 | **`ota push` 直接让模型上车，绕过影子/闭环门禁** | OTA 是部署最后一公里，但 `cmd_ota_push` 只写 `/tmp/flow_ota_cmd.json`，从不调用 `promote_gate` —— 影子评估 PASS/FAIL 根本拦不住它。修复（方向五）：默认要求 path 所在目录是可验证 artifact（有 `manifest.json`）且 `promote_gate` 放行，`--force` 保留人工逃生口（逐条打印被覆盖的原因） | `tools/modelctl.py` `cmd_ota_push` |
 | **promote 只看速度 MAE，转向严重跑偏的模型也能晋级** | `promote_gate` 的 shadow 分支只查 `shadow_speed_mae`，而 sidecar 里有 `shadow_steer_mae` / `shadow_ade` / `shadow_fde`；影子评估 `evaluate_shadow_mode.py` 却按 6.9°/ADE 3m/FDE 5m 判 FAIL —— **两套口径不一致**，影子 FAIL 的模型可被 promote 放行。修复：promote 增加 steer ≤0.12rad（缺字段 = 无法判定 → 拒绝）+ ADE/FDE 阈值（有则判），阈值与 evaluate_shadow_mode 同源；`test_e2e_training_tools.py` 加负例 | `tools/modelctl.py` `promote_gate` / `PROMOTE_SHADOW_STEER_MAE_MAX_RAD` |
+| **CI 的 45s 行为门禁跑的场景和 `demo.sh` 展示的不是同一个：criteria/时长读 `DEFAULT_SCENARIO`，实际 `--scenario` 却传 `config/pipeline.json` 的 `straight_road`** | 无 `--scenario` 时评估器为绕开旧 DEFAULT_SCENARIO（infinite_straight 无 route）改读 pipeline.json 的 flowsim `scenario_file`；DEFAULT_SCENARIO 换成有 route 的旗舰场景后，两边分叉：门禁用城市场景的判据去评直道，demo 本身从未被 CI 覆盖。另 `DEFAULT_SCENARIO="${VAR:-path}"` 的 shell 形式未被解析（旧解析拿到整串 `${...}`，静默回退）。修复：新增 `_default_demo_scenario_path()` 解析 `${VAR:-default}` 并统一 `load_scenario_for_duration`/`collect_samples`/actor 清单三处取场景；pipeline.json 仅作兜底 | `ci/evaluators/demo_evaluator.py` `_default_demo_scenario_path` / `load_scenario_for_duration` / `effective_scenario` |
+| **BEV 影子门禁在城市场景假 FAIL：`count 0 vs truth 5`，车流/行人明明在感知范围内** | 真值统计把 `scene.facilities` 的 WorldEngine 装饰物（building/pier/wall/tree/pole）也算成"BEV 可观测目标"，而 `sensor_model` 明确**不对世界 OBB 投射 LiDAR**（其头注释），BEV 根本收不到这些点。城市场景建筑多 → `truth>1 && count<1` 的死头判据被触发；`park_to_park` 因 NPC 多、中位 count>0 才侥幸通过。修复：真值只统计 `scene.obstacles`（+ 无 `kind` 的旧静态障碍镜像），带 `kind` 的装饰设施一律排除；死头判据仍保留（真值>1 且 BEV 0 必 FAIL） | `ci/evaluators/demo_evaluator.py` `count_bev_scene_observable_truth` |
 
 ## 6. 框架 / 工具链
 

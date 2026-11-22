@@ -151,7 +151,7 @@ sim_world → sensor_model → perception → fusion → planning → control �
 | `include/platform_compat.h` | 跨平台兼容层（macOS⇄Linux，CMake force-include，仅 APPLE 生效）：pthread 命名签名、robust mutex、condvar 时钟降级 |
 | `modules/adas_nodes/flowsim/physics.cpp` | 运动学自行车模型 + 可选线性轮胎二自由度动态模型（pipeline.json `physics_model`，低速<5m/s 退化运动学）；碰撞/护栏/重力见 [FLOWSIM_PHYSICS.md](docs/FLOWSIM_PHYSICS.md)、`/flowsim-physics` |
 | `modules/adas_nodes/flowsim/entity.h` | 仿真实体（含 v_x_body/v_y_body/yaw_rate/F_yf/F_yr、垂直速度 vz、crash_cooldown、route_s；EntityPool 边界检查） |
-| `scenarios/straight_road.json` | 直道导航场景（默认；另含 `wet_road_evasion` 湿滑避险、`bev_shadow` 影子评测、`valet_parking` 代客泊车，以及 curve_road/dense_npc/multi_light/oncoming/城市环线/OSM 城市/驾考科目一~四/`l3_odd_exit_*` 等场景 + `suite.json` 场景矩阵，契约校验 `tools/scenarioctl.py validate`） |
+| `scenarios/city_procedural_world.json` | demo.sh 默认旗舰场景：程序化 CBD（4 车道大道 + 龙门架/地标塔 + 坡道 + 6m 高架桥 + 环境车流），CI 45s 行为回归与 `vis` 感知线框演示都用它。另有 `straight_road`（最小直道）、`park_to_park_city`（B1 泊出→城市→寻位倒库）、`wet_road_evasion`、`bev_shadow`、`valet_parking`，以及 curve_road/dense_npc/multi_light/oncoming/城市环线/OSM 城市/驾考科目一~四/`l3_odd_exit_*` 等场景 + `suite.json` 场景矩阵，契约校验 `tools/scenarioctl.py validate` |
 | `tools/tire_dynamics_sim.py` | 轮胎动力学仿真：对比验证运动学、线性 2-DOF 与非线性 Pacejka 魔术公式及局部摩擦区（`friction_zones`）降级 |
 | `tools/train_bev/train_bev_centernet.py` | CenterPoint-Lite BEV 卷积检测网络训练与 ONNX / 纯 C 紧凑二进制权重导出 |
 | `tools/tracker_prediction_sim.py` | 64 槽匈牙利二分图卡尔曼跟踪与 Frenet 交互式多模态预测算法仿真 |

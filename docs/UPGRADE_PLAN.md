@@ -17,6 +17,20 @@
 
 ---
 
+## 0.1 执行状态（2026-11-26）
+
+| 项 | 状态 | 证据 |
+|---|---|---|
+| demo.sh 旗舰演示场景 | ✅ 已完成 | `DEFAULT_SCENARIO=scenarios/city_procedural_world.json`：4 车道 CBD → 坡道爬升 → 6m 高架桥，环境车流 10 辆；`bash scripts/demo.sh --no-browser 45` PASS（x 1054m / avg 11.8 m/s / min road margin 0.64m） |
+| 感知 3D 线框 | ✅ 已完成 | `PerceptionView` 8 顶点 12 边完整外框 + 分类色（车青/人琥珀/两轮绿/静态灰），装饰建筑/桥墩不再画框；`tests/vis_perception_wireframe.test.mjs` 10 项断言并入 `npm run vis:check` |
+| demo 收尾汇总 | ✅ 已完成 | 改读 `/tmp/flow_topology.json`，输出车速/定位/规划/控制/行为/BEV；不再出现空值行 |
+| BEV 城市场景假 FAIL | ✅ 已完成 | 真值不再统计 WorldEngine 装饰设施（sensor_model 不对其投射 LiDAR）；城市场景 `count 1 vs truth 5` 在容差内 PASS |
+| 感知 GT/Perception/Diff 三态 | ⬜ 未做 | 当前用 `store.perceived` 与真值合并去重；三态开关需要后端 `source` 切换 + UI |
+| merge 1→2 车道模型切换 | ⬜ 未做 | `intersection_merge` 仍 disabled fixture（x≈67 停住、road departure 4.7m） |
+| 环岛 / 停止标志 / 通行权 | ⬜ 未做 | 无 fixture |
+| 动态障碍扫掠 | ⬜ 未做 | 仍为点测，未按 TTC/同车道过滤 |
+| sensor 场景矩阵 | ⬜ 未做 | 仍只有 nightly 三场景 |
+
 ## 1. 差距拆解
 
 ### 1.1 感知 / 渲染
