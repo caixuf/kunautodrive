@@ -12,8 +12,8 @@
 2. **我们现在的短板不是 Three.js 画不出框**，而是：
    - 感知输入只有仿真的 16 线 LiDAR + DBSCAN + BEV-Lite，缺少相机语义、dense occupancy、遮挡/时序融合；
    - 前端 `PerceptionView` 目前是“角标框 + 点云 + 预测光带”，不是参考图那种完整 3D wireframe + ID/速度/车道/TTC；
-   - 规划通用性（2026-11-26 更新）：merge 1→2、环岛几何、停止线让行、sensor 6 场景矩阵已落地；
-     仍差无信号路口通行权/gap acceptance、8→2 车道缩减的 target slew、动态扫掠接入 `traj.valid`（当前只诊断）。
+   - 规划通用性（2026-11-26 更新）：merge 1→2、环岛几何、停止线让行、8→2 缩减、动态扫掠接入、sensor 6 场景矩阵均已落地；
+     唯一剩余 descope 是环道让行/gap acceptance（需要环道内 NPC 路由 + 等待判据）。
 3. **升级顺序**：先把“可见、稳定、可验收”的感知可视化与 merge 1→2 修绿；再做 occupancy/相机融合；最后才做神经世界模型/3DGS 离线管线。
 
 ---
@@ -57,9 +57,9 @@
 
 | # | 现状 | 缺口 |
 |---|---|---|
-| 1 | `ref_path` 逐点 `road_id/lane_id/lane_count/oneway/lane_width`；planning 在**同 lane_count/oneway/width** 时用 ref 模型；route-aware lane_match 已接入 | 1→2 merge 已 PASS（根因是短路段 U_TURN，不是跨模型）；**8→2 车道缩减**仍无 target slew / 迟滞，是下一步 |
+| 1 | `ref_path` 逐点 `road_id/lane_id/lane_count/oneway/lane_width`；planning 在**同 lane_count/oneway/width** 时用 ref 模型；route-aware lane_match 已接入 | 1→2 merge 与 8→2 缩减均已 PASS（`lane_drop_8_to_2` + Rule6 off-grid）；未观察到 target 阶跃，slew 暂不需要 |
 | 2 | behavior 接管 route lane goal，planning 只消费 Behavior | 完成；后续扩展 branch/merge/roundabout 的导航意图 |
-| 3 | 左转/右转/直行/分叉/环岛几何/停止线已可验收（fork/roundabout/stop_sign enabled） | 无信号路口通行权、gap acceptance、环岛让行仍未做 |
+| 3 | 左转/右转/直行/分叉/环岛几何/停止线已可验收（fork/roundabout/stop_sign enabled） | 环道让行/gap acceptance 是唯一 descope（需环道内 NPC 路由 + 等待判据） |
 | 4 | 静态障碍扫掠过滤 + `traj.valid=0` 已接入 | 动态障碍仍点测；raw sweep 命中率高，不能直接拦 |
 | 5 | 4 个新 enabled 门禁 + fork；merge disabled | merge / branch_select / roundabout / sensor 矩阵未覆盖 |
 
