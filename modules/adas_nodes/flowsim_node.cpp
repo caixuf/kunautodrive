@@ -1950,15 +1950,45 @@ static void publish_ref_path(void) {
             cJSON_AddNumberToObject(pt, "h", p.h);
             cJSON_AddNumberToObject(pt, "kappa", p.kappa);
             cJSON_AddNumberToObject(pt, "rs", p.route_s);
-            /* per-point road id：为后续 per-point lane topology 留出契约。
-             * 当前 planning 仍用 road/geometry 的全局 lane_count；跨路段时
-             * 先靠 route_lane_goal_road/lane_match 兜底。 */
             int pt_rid = -1;
             double pt_sl = 0.0;
             int pt_idx = 0;
             g.route.locate(p.route_s, pt_rid, pt_sl, pt_idx);
-            (void)pt_sl; (void)pt_idx;
+            (void)pt_idx;
             cJSON_AddNumberToObject(pt, "road_id", pt_rid);
+            /* per-point lane topology：route 中心线本身是 lane 0；带
+             * lane_count/oneway/lane_width 供 planning 在跨路段/分叉时按点
+             * 选择车道模型，而不是继续用上一段的全局 lane_count。 */
+            cJSON_AddNumberToObject(pt, "lane_id", 0);
+            struct PtTopo { int rid; int lc; int ow; double lw; };
+            static PtTopo cache[16];
+            static int cache_n = 0;
+            static uint64_t cache_stamp = 0;
+            if (cache_stamp != g.cycle) { cache_n = 0; cache_stamp = g.cycle; }
+            int lc = 0, ow = 0;
+            double lw = 0.0;
+            if (pt_rid >= 0) {
+                bool found = false;
+                for (int ci = 0; ci < cache_n; ci++) {
+                    if (cache[ci].rid == pt_rid) {
+                        lc = cache[ci].lc; ow = cache[ci].ow; lw = cache[ci].lw;
+                        found = true; break;
+                    }
+                }
+                if (!found) {
+                    lc = g.roads.drivable_lane_count(pt_rid, pt_sl);
+                    const std::vector<int> ids = g.roads.drivable_lane_ids(pt_rid, pt_sl);
+                    ow = planning_coord::infer_oneway_from_lane_ids(
+                             ids.data(), (int)ids.size(), false) ? 1 : 0;
+                    lw = g.roads.lane_width(pt_rid, 0, pt_sl);
+                    if (cache_n < (int)(sizeof(cache) / sizeof(cache[0]))) {
+                        cache[cache_n++] = {pt_rid, lc, ow, lw};
+                    }
+                }
+            }
+            cJSON_AddNumberToObject(pt, "lane_count", lc);
+            cJSON_AddNumberToObject(pt, "oneway", ow);
+            cJSON_AddNumberToObject(pt, "lane_width", lw);
             cJSON_AddItemToArray(pts, pt);
         }
     }

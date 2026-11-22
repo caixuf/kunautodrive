@@ -208,6 +208,13 @@ struct PlanningContext {
     double        map_ref_y[128]{};
     double        map_ref_s[128]{};
     double        map_ref_kappa[128]{};
+    /* Per-point lane topology（ref_path 逐点携带）。map_ref_* 是规划侧
+     * Catmull-Rom 加密后的点；拓扑取所在原始路段的 road_id/lane_count/
+     * oneway/lane_width，用于跨路段/分叉时选对车道模型与参考线法向。 */
+    int           map_ref_road_id[128]{};
+    int           map_ref_lane_count[128]{};
+    int           map_ref_oneway[128]{};
+    double        map_ref_lane_width[128]{};
     int           map_ref_count{0};
     uint64_t      last_map_ref_us{0};
     int           on_return{0};
@@ -458,6 +465,25 @@ static double lane_center_offset(int lane_idx, int n_lanes, double lane_w,
     const double side_offset = planning_coord::lane_group_side_offset(
         n_lanes, lane_w, road_oneway != 0);
     return planning_coord::lane_center_d(lane_idx, n_lanes, lane_w, side_offset);
+}
+
+/** 按弧长找 ref_path 上最近点的 per-point lane topology 索引。 */
+static int map_ref_topology_index(double s, int n_lanes, double lane_w,
+                                  int *out_lane_count, int *out_oneway,
+                                  double *out_lane_width) {
+    if (g.map_ref_count <= 0) return -1;
+    int best = 0;
+    double best_d = 1e18;
+    for (int i = 0; i < g.map_ref_count; i++) {
+        const double d = std::fabs(g.map_ref_s[i] - s);
+        if (d < best_d) { best_d = d; best = i; }
+    }
+    const int lc = g.map_ref_lane_count[best];
+    const double lw = g.map_ref_lane_width[best];
+    if (out_lane_count) *out_lane_count = (lc > 0) ? lc : n_lanes;
+    if (out_oneway) *out_oneway = g.map_ref_oneway[best];
+    if (out_lane_width) *out_lane_width = (lw > 1.0) ? lw : lane_w;
+    return best;
 }
 
 static bool project_to_reference_path(double x, double y,
@@ -1255,6 +1281,10 @@ static void on_road_ref_path(const Message* msg, void* user_data) {
     if (n > 128) n = 128;
     double raw_x[128]{};
     double raw_y[128]{};
+    int raw_rid[128]{};
+    int raw_lc[128]{};
+    int raw_ow[128]{};
+    double raw_lw[128]{};
     int raw_n = 0;
     double rs0 = -1.0;
     for (int i = 0; i < n; ++i) {
@@ -1269,6 +1299,14 @@ static void on_road_ref_path(const Message* msg, void* user_data) {
         }
         raw_x[raw_n] = jx->valuedouble;
         raw_y[raw_n] = jy->valuedouble;
+        cJSON* jr = cJSON_GetObjectItemCaseSensitive(pt, "road_id");
+        cJSON* jlc = cJSON_GetObjectItemCaseSensitive(pt, "lane_count");
+        cJSON* jow = cJSON_GetObjectItemCaseSensitive(pt, "oneway");
+        cJSON* jlw = cJSON_GetObjectItemCaseSensitive(pt, "lane_width");
+        raw_rid[raw_n] = cJSON_IsNumber(jr) ? (int)jr->valuedouble : -1;
+        raw_lc[raw_n] = cJSON_IsNumber(jlc) ? (int)jlc->valuedouble : 0;
+        raw_ow[raw_n] = cJSON_IsNumber(jow) ? (int)jow->valuedouble : 0;
+        raw_lw[raw_n] = cJSON_IsNumber(jlw) ? jlw->valuedouble : 0.0;
         raw_n++;
     }
     flowengine::align_ref_path_step(raw_x, raw_y, raw_n, g.ego_x, g.ego_y,
@@ -1294,18 +1332,30 @@ static void on_road_ref_path(const Message* msg, void* user_data) {
                 double t = (double)k / (double)sub;
                 g.map_ref_x[out_n] = cr(raw_x[i0], raw_x[i1], raw_x[i2], raw_x[i3], t);
                 g.map_ref_y[out_n] = cr(raw_y[i0], raw_y[i1], raw_y[i2], raw_y[i3], t);
+                g.map_ref_road_id[out_n] = raw_rid[i1];
+                g.map_ref_lane_count[out_n] = raw_lc[i1];
+                g.map_ref_oneway[out_n] = raw_ow[i1];
+                g.map_ref_lane_width[out_n] = raw_lw[i1];
                 out_n++;
             }
         }
         if (out_n < 128) {
             g.map_ref_x[out_n] = raw_x[raw_n - 1];
             g.map_ref_y[out_n] = raw_y[raw_n - 1];
+            g.map_ref_road_id[out_n] = raw_rid[raw_n - 1];
+            g.map_ref_lane_count[out_n] = raw_lc[raw_n - 1];
+            g.map_ref_oneway[out_n] = raw_ow[raw_n - 1];
+            g.map_ref_lane_width[out_n] = raw_lw[raw_n - 1];
             out_n++;
         }
     } else {
         for (int i = 0; i < raw_n && i < 128; ++i) {
             g.map_ref_x[i] = raw_x[i];
             g.map_ref_y[i] = raw_y[i];
+            g.map_ref_road_id[i] = raw_rid[i];
+            g.map_ref_lane_count[i] = raw_lc[i];
+            g.map_ref_oneway[i] = raw_ow[i];
+            g.map_ref_lane_width[i] = raw_lw[i];
         }
         out_n = raw_n;
     }
@@ -2299,6 +2349,45 @@ protected:
                     g.ego_x, g.ego_y, ego_ref_s, ego_lane_d,
                     nullptr, nullptr, &ego_ref_heading);
 
+                /* Per-point lane topology：按 ego 在 ref_path 上的 s 取该点的
+                 * lane_count/oneway/lane_width。分叉/跨路段时 lane_match 仍可能
+                 * 匹配到另一条几何更近的路（fork 实测 current_road_id=1、
+                 * ref_road_id=2），此时必须用 ref_path 自己的车道模型与法向，
+                 * 否则 target 会落到非车道中心（off-grid 0.89m）。 */
+                int ref_lane_count = g.lane_count;
+                int ref_oneway = g.road_oneway;
+                double ref_lane_width = g.lane_width;
+                int ref_topo_idx = -1;
+                bool ref_road_diff = false;
+                if (have_ref) {
+                    ref_topo_idx = map_ref_topology_index(
+                        ego_ref_s, g.lane_count, g.lane_width,
+                        &ref_lane_count, &ref_oneway, &ref_lane_width);
+                    ref_road_diff =
+                        ref_topo_idx >= 0 &&
+                        g.map_ref_road_id[ref_topo_idx] >= 0 &&
+                        g.lane_match.valid &&
+                        g.lane_match.road_id >= 0 &&
+                        g.map_ref_road_id[ref_topo_idx] != g.lane_match.road_id;
+                }
+                /* 第一版 per-point 模型只在「同车道数/同单双向/同宽」时
+                 * 覆盖全局模型：分叉（fork）道路模型相同，可安全用 ref 点；
+                 * 8→2 车道缩减时硬套 ref 模型会让 target 从 -12.25 一帧跳到
+                 * -1.75（viaduct 切片 jerk 52）。跨模型切换需要 target slew，
+                 * 留给下一版；这里保持原 lane_match 行为。 */
+                const bool ref_model_override =
+                    ref_road_diff &&
+                    ref_lane_count == g.lane_count &&
+                    ref_oneway == g.road_oneway &&
+                    std::fabs(ref_lane_width - g.lane_width) < 0.05;
+                const double ref_side_offset =
+                    planning_coord::lane_group_side_offset(
+                        ref_lane_count, ref_lane_width, ref_oneway != 0);
+                auto ref_lane_center = [&](int idx) {
+                    return planning_coord::lane_center_d(
+                        idx, ref_lane_count, ref_lane_width, ref_side_offset);
+                };
+
                 if (g.lane_count < 1 || g.lane_count > 16 || g.lane_width < 1.0 || g.lane_width > 10.0) {
                     LOG_WARN("planning", "lane invariant: lane_count=%d lane_width=%.1f (unreasonable)",
                              g.lane_count, g.lane_width);
@@ -2324,12 +2413,35 @@ protected:
                     (g.current_behavior.command == BEH_LEFT_CHANGE || g.current_behavior.command == BEH_RIGHT_CHANGE)) {
                     /* 显式变道：跟行为目标，并把锁存写成该车道。
                      * 回到巡航后从这里接着滞回，不会在分界上被最近车道立刻拽回去。 */
-                    g.committed_lane_idx = g.current_behavior.target_lane_idx;
-                    g.target_lane_offset = lane_center_offset(
-                        g.committed_lane_idx, n_lanes, lane_w, g.road_oneway);
+                    int target_idx = g.current_behavior.target_lane_idx;
+                    if (ref_model_override) {
+                        const int first = planning_coord::first_legal_lane(
+                            ref_lane_count, ref_oneway != 0);
+                        target_idx = std::max(first, std::min(target_idx, ref_lane_count - 1));
+                        g.committed_lane_idx = target_idx;
+                        g.target_lane_offset = ref_lane_center(target_idx);
+                    } else {
+                        g.committed_lane_idx = target_idx;
+                        g.target_lane_offset = lane_center_offset(
+                            g.committed_lane_idx, n_lanes, lane_w, g.road_oneway);
+                    }
                 } else {
                     /* 巡航/跟车：lateral ref = lane_match.{llt_id, llt_offset, llt_s} */
                     const uint64_t now_us = clock_now_us();
+                    if (ref_model_override) {
+                        /* 分叉/跨路段：lane_match 可能仍匹配到另一条几何更近的
+                         * 路（fork 实测 road1 vs ref road2）。用 ref_path 逐点
+                         * 车道模型把 ego 投到该路段的合法车道中心，禁止混用
+                         * 两条路的横向偏移。 */
+                        const int cand_lane = planning_coord::nearest_lane(
+                            ego_lane_d, ref_lane_count, ref_lane_width,
+                            ref_oneway == 0, ref_side_offset);
+                        g.committed_lane_idx = planning_coord::hold_lane_index(
+                            ego_lane_d, cand_lane, g.committed_lane_idx,
+                            ref_lane_count, ref_lane_width, ref_side_offset);
+                        if (g.committed_lane_idx < 0) g.committed_lane_idx = cand_lane;
+                        g.target_lane_offset = ref_lane_center(g.committed_lane_idx);
+                    } else {
                     const double lw_gate = (g.lane_match.lane_width > 1.0)
                                          ? g.lane_match.lane_width : lane_w;
                     const double max_lane_offset_m = lw_gate * 0.5 - 0.1;
@@ -2379,6 +2491,7 @@ protected:
                         g.target_lane_offset = lane_center_offset(
                             g.committed_lane_idx, n_lanes, lane_w, g.road_oneway);
                     }
+                    }  /* !ref_model_override */
                     /* P1: 车道内微调绕行 (Nudge)：当感知可通行走廊新鲜、未堵死且前方 25m 内
                      * 存在局部偏置障碍时，在当前车道安全余量内施加连续横向微调。 */
                     if (g.trav_valid && (now_us - g.trav_last_us < 1000000ULL) &&
