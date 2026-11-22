@@ -29,7 +29,7 @@
 | merge 1→2 车道模型切换 | ✅ 已完成 | `intersection_merge` 已 enabled + baseline：x 270m / avg 9.08 m/s / min road margin 0.38m / max lane error 0.37m。根因不是跨模型，而是短路段 U_TURN（<360m 从起点就掉头）+ ego 起点偏离匝道车道中心 1m |
 | 环岛 / 停止标志 / 通行权 | 🟡 环岛+停止线已启用 | `roundabout` enabled + baseline（x 315m / avg 7.92 / max lane error 0.76m）；`stop_sign` enabled + baseline（停在 x=97.4m，线前 2.6m，保持 2s 后通过）。无信号路口通行权（gap acceptance / 对向让行）仍未做 |
 | 动态障碍扫掠 | 🟡 诊断完成 | 新增 `traj_swept_dynamic_frames/hits/close_frames`（运动 + 目标车道 + 2s 视界），只计数不拦；全量 38 场景 0 误刹，`r157_cut_in` 100 候选帧/0 命中。接入 `traj.valid` 需先用真实 cut-in 造出 >0 命中 |
-| sensor 场景矩阵 | 🟡 部分 | merge/fork 在 `pipeline_sensor` 下 PASS；`city_procedural_world` sensor 编排 FAIL（ego x 从 364m 反向走到 127m、NPC 单帧瞬移 350m、采样 span 截断），需单独排查后才能进 nightly 矩阵；nightly 仍 3 场景 |
+| sensor 场景矩阵 | ✅ 已完成 | nightly 扩到 6 场景：原 urban_challenge/dense_npc/lane_change_traffic + city_procedural_world/intersection_merge/intersection_fork。city sensor 单跑 90s PASS（x 1016m / avg 11.39）；此前的截断/瞬移是 2-worker 全量 suite 并发时的采样重叠，非场景缺陷 |
 
 ## 1. 差距拆解
 

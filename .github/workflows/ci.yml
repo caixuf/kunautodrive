@@ -597,14 +597,17 @@ jobs:
       # config/pipeline_sensor.json 跑"真点云 → DBSCAN → planning/safety"的
       # sensor 编排，确保"感知可用"这项能力不会悄悄烂掉 —— 2026-09-22 之前
       # sensor 模式的识别率与预警提前量都是结构性 FAIL，却没有任何 CI 覆盖它。
-      # 取三个代表场景（时长沿用 suite.json 的条目）：
+      # 取六个代表场景（时长沿用 suite.json 的条目）：
       #   urban_challenge（车+行人+信号灯）/ dense_npc（多车）/
-      #   lane_change_traffic（42 actor、变道超车）。
+      #   lane_change_traffic（42 actor、变道超车）/
+      #   city_procedural_world（程序化 CBD + 高架）/ intersection_merge /
+      #   intersection_fork（1→2 汇入与分叉支路）。
       # 注意：不传 --baseline —— sensor 编排与 ground_truth 基线的行为差异不该
       # 被当作回归；这条只断言"每个场景自身的行为/感知门禁 PASS"。
       - name: Sensor-mode regression (real point cloud chain)
         run: |
-          for s in urban_challenge dense_npc lane_change_traffic; do
+          for s in urban_challenge dense_npc lane_change_traffic \
+                   city_procedural_world intersection_merge intersection_fork; do
             echo "─── sensor mode: $s ───"
             FLOW_PIPELINE=config/pipeline_sensor.json \
               python3 ci/evaluators/scenario_regression.py --workers 1 --only "$s"
