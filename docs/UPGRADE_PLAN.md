@@ -27,9 +27,9 @@
 | BEV 城市场景假 FAIL | ✅ 已完成 | 真值不再统计 WorldEngine 装饰设施（sensor_model 不对其投射 LiDAR）；城市场景 `count 1 vs truth 5` 在容差内 PASS |
 | 感知 GT/Perception/Diff 三态 | ✅ 已完成 | `store.perceptionMode` + 3D 层栏 `GT / 感知 / Diff` 按钮：GT 只画真值与静态危险物，感知只画 `perception/obstacles`，Diff 合并去重（默认）；`vis_perception_wireframe.test.mjs` 覆盖三态计数 |
 | merge 1→2 车道模型切换 | ✅ 已完成 | `intersection_merge` 已 enabled + baseline：x 270m / avg 9.08 m/s / min road margin 0.38m / max lane error 0.37m。根因不是跨模型，而是短路段 U_TURN（<360m 从起点就掉头）+ ego 起点偏离匝道车道中心 1m |
-| 环岛 / 停止标志 / 通行权 | ⬜ 未做 | 无 fixture |
+| 环岛 / 停止标志 / 通行权 | 🟡 环岛几何已启用 | `roundabout` 已 enabled + baseline（x 315m / avg 7.92 m/s / max lane error 0.76m，切线进出）；停止标志、无信号路口通行权、gap acceptance 仍未做 |
 | 动态障碍扫掠 | 🟡 诊断完成 | 新增 `traj_swept_dynamic_frames/hits/close_frames`（运动 + 目标车道 + 2s 视界），只计数不拦；全量 38 场景 0 误刹，`r157_cut_in` 100 候选帧/0 命中。接入 `traj.valid` 需先用真实 cut-in 造出 >0 命中 |
-| sensor 场景矩阵 | ⬜ 未做 | 仍只有 nightly 三场景 |
+| sensor 场景矩阵 | 🟡 部分 | merge/fork 在 `pipeline_sensor` 下 PASS；`city_procedural_world` sensor 编排 FAIL（ego x 从 364m 反向走到 127m、NPC 单帧瞬移 350m、采样 span 截断），需单独排查后才能进 nightly 矩阵；nightly 仍 3 场景 |
 
 ## 1. 差距拆解
 
@@ -51,7 +51,7 @@
 |---|---|---|
 | 1 | `ref_path` 逐点 `road_id/lane_id/lane_count/oneway/lane_width`；planning 在**同 lane_count/oneway/width** 时用 ref 模型；route-aware lane_match 已接入 | 1→2 merge 已 PASS（根因是短路段 U_TURN，不是跨模型）；**8→2 车道缩减**仍无 target slew / 迟滞，是下一步 |
 | 2 | behavior 接管 route lane goal，planning 只消费 Behavior | 完成；后续扩展 branch/merge/roundabout 的导航意图 |
-| 3 | 左转/右转/直行/分叉已可验收；fork 已 enabled | 环岛、停止标志、无信号路口通行权、gap acceptance、转弯速度/曲率 |
+| 3 | 左转/右转/直行/分叉/环岛几何已可验收（fork/roundabout enabled） | 停止标志、无信号路口通行权、gap acceptance、环岛让行仍未做 |
 | 4 | 静态障碍扫掠过滤 + `traj.valid=0` 已接入 | 动态障碍仍点测；raw sweep 命中率高，不能直接拦 |
 | 5 | 4 个新 enabled 门禁 + fork；merge disabled | merge / branch_select / roundabout / sensor 矩阵未覆盖 |
 

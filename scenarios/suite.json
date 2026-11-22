@@ -235,6 +235,12 @@
       "max_lane_offset_m": 1.65
     },
     {
+      "file": "scenarios/roundabout.json",
+      "duration_s": 40,
+      "enabled": true,
+      "max_lane_offset_m": 1.65
+    },
+    {
       "file": "scenarios/one_lane_two_way.json",
       "duration_s": 30,
       "enabled": true
