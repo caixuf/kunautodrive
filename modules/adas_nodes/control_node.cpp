@@ -1259,7 +1259,14 @@ protected:
              * 机动期豁免：掉头本来就要横穿整条路，y_from_target 必然 >3m，
              * 不豁免则 ROAD_GUARD 抢走执行权（钳 steer=0.16 + 乱设油门），
              * 掉头永不完成（2026-08-03 demo6 实测车被拽出路面到 y=-11）。 */
-            if (y_from_target > ROAD_GUARD_THRESHOLD_M && !g.maneuver_mode) {
+            /* 分叉/急弯时目标车道中心会随 route 快速横移（fork 实测 ego 在
+             * 支路入口横向落后 3.7m，旧 3.0m 阈值直接 ROAD_GUARD 刹车 →
+             * 车停在 gore 上）。转向/分叉窗口放宽到 4.5m（仍在 7m 半幅路面
+             * 内），直线仍用 3.0m 安全冗余。 */
+            const double guard_threshold =
+                (std::fabs(ref_road_heading) > 0.15) ? 4.5
+                                                     : ROAD_GUARD_THRESHOLD_M;
+            if (y_from_target > guard_threshold && !g.maneuver_mode) {
                 double steer_limit = steer_limit_for_speed(fabs(g.current_speed), 2.4);
                 /* 用参考系投影误差 lat_err_n：正误差=左打对前进/返程都成立。
                  * 旧实现用世界系 lat_error，假设车头恒朝 +x，掉头返程时打反

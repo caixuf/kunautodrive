@@ -445,6 +445,7 @@ ScenarioConfig* scenario_load(const char* path) {
 
     ScenarioConfig* sc = (ScenarioConfig*)calloc(1, sizeof(ScenarioConfig));
     if (!sc) { cJSON_Delete(root); return NULL; }
+    sc->enable_uturn = 1;  /* 默认保留既有路端掉头行为 */
 
     /* 保留解析后的 road_network JSON（含 lanes[].successors），供 flowsim
      * 初始化阶段 router_build_from_map_json 建全局车道图。scenario_free 释放。 */
@@ -1054,6 +1055,9 @@ ScenarioConfig* scenario_load(const char* path) {
         jvisibility->valuedouble <= 5000.0) {
         sc->visibility_m = jvisibility->valuedouble;
     }
+    cJSON* juturn = cJSON_GetObjectItemCaseSensitive(root, "enable_uturn");
+    if (cJSON_IsBool(juturn)) sc->enable_uturn = cJSON_IsTrue(juturn) ? 1 : 0;
+    else if (cJSON_IsNumber(juturn)) sc->enable_uturn = juturn->valuedouble != 0.0 ? 1 : 0;
 
     /* scenarios[]（可选，Task 3）：顶层工况脚本数组。
      * 每项含 name / label / trigger{type,value} / actor_overrides[{...}]。
@@ -1276,6 +1280,7 @@ char* scenario_to_json(const ScenarioConfig* scenario) {
         cJSON_AddItemToArray(jroute, jr);
     }
     cJSON_AddItemToObject(root, "route", jroute);
+    cJSON_AddBoolToObject(root, "enable_uturn", scenario->enable_uturn != 0);
 
     /* road */
     cJSON* jroad = cJSON_CreateObject();

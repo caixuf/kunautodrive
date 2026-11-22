@@ -10,8 +10,8 @@
     "x": -100.0,
     "y": -1.75,
     "heading": 0.0,
-    "init_speed": 8.0,
-    "target_speed": 10.0,
+    "init_speed": 6.0,
+    "target_speed": 8.0,
     "wheelbase": 2.7,
     "length": 4.6,
     "width": 2.0,
@@ -29,7 +29,7 @@
         "name": "fork_approach",
         "lanes": 4,
         "lane_width": 3.5,
-        "speed_limit": 12.0,
+        "speed_limit": 8.0,
         "oneway": false,
         "length_m": 200.0,
         "nodes": [
@@ -56,7 +56,7 @@
         "name": "fork_straight",
         "lanes": 4,
         "lane_width": 3.5,
-        "speed_limit": 12.0,
+        "speed_limit": 8.0,
         "oneway": false,
         "length_m": 200.0,
         "nodes": [
@@ -85,7 +85,7 @@
         "lane_width": 3.5,
         "speed_limit": 8.0,
         "oneway": false,
-        "length_m": 430.0,
+        "length_m": 730.0,
         "nodes": [
           [
             0.0,
@@ -93,43 +93,38 @@
             0.0
           ],
           [
-            35.0,
-            -1.5,
+            60.0,
+            -1.0,
             0.0
           ],
           [
-            70.0,
+            120.0,
+            -3.0,
+            0.0
+          ],
+          [
+            200.0,
             -7.0,
             0.0
           ],
           [
-            105.0,
-            -16.0,
+            300.0,
+            -15.0,
             0.0
           ],
           [
-            145.0,
-            -30.0,
+            420.0,
+            -29.0,
             0.0
           ],
           [
-            190.0,
+            560.0,
             -50.0,
             0.0
           ],
           [
-            250.0,
+            700.0,
             -80.0,
-            0.0
-          ],
-          [
-            320.0,
-            -118.0,
-            0.0
-          ],
-          [
-            400.0,
-            -165.0,
             0.0
           ]
         ]
@@ -158,5 +153,6 @@
     "lane_spread": false,
     "max_npcs": 0,
     "random_seed_offset": 0
-  }
+  },
+  "enable_uturn": false
 }

@@ -1498,6 +1498,8 @@ static void publish_road_geometry(void) {
     cJSON_AddBoolToObject(root, "speed_camera", road_has_speed_camera(road_id));
     /* 单双向：per-road OpenDRIVE lane_id 推导，确保单向匝道与双向主干道无缝衔接 */
     cJSON_AddNumberToObject(root, "oneway", snap.oneway);
+    cJSON_AddBoolToObject(root, "enable_uturn",
+                          g.scenario ? (g.scenario->enable_uturn ? 1 : 0) : 1);
     cJSON_AddNumberToObject(root, "upcoming_own_lanes", snap.upcoming_own_lanes);
     cJSON_AddNumberToObject(root, "dist_to_lane_drop_m", snap.dist_to_lane_drop_m);
     /* 泊车目标（Milestone M3 开放空间泊车）：透传给 planning_node */
@@ -1617,6 +1619,69 @@ static bool lane_offset_to_lane(int road_id, int lane_id, double s,
     return true;
 }
 
+/**
+ * route-aware lane_match：分叉/并行路时，world_to_frenet 的 nearest-road 会
+ * 匹配到几何更近的直行路，而 ego 实际按 route 走支路。用 route 的当前 road
+ * 和 s，在**该 road** 上重新求 lane_id/offset；仅当 ego 确实在 route 道路
+ * 半宽内时才覆盖，避免把正常最近的匹配抢走。
+ */
+static bool route_aware_lane_match(double x, double y, double z,
+                                   int* out_road, int* out_lane,
+                                   double* out_s, double* out_offset) {
+    if (!out_road || !out_lane || !out_s || !out_offset) return false;
+    if (!g.route.ok()) return false;
+    double rs = (g.ego_route_s_hint >= 0.0) ? g.ego_route_s_hint
+                                            : compute_ego_route_s();
+    if (rs < 0.0) return false;
+    int rid = -1;
+    double sl = 0.0;
+    int ridx = 0;
+    g.route.locate(rs, rid, sl, ridx);
+    if (rid < 0) return false;
+
+    flowsim::WorldPos c0, c1;
+    if (!g.roads.frenet_to_world(rid, 0, sl, 0.0, c0)) return false;
+    if (!g.roads.frenet_to_world(rid, 0, sl + 0.5, 0.0, c1) &&
+        !g.roads.frenet_to_world(rid, 0, sl - 0.5, 0.0, c1)) return false;
+    const double tx = c1.x - c0.x;
+    const double ty = c1.y - c0.y;
+    const double len = std::hypot(tx, ty);
+    if (len < 1e-6) return false;
+    const double nx = -ty / len;
+    const double ny = tx / len;
+    const double off_center = (x - c0.x) * nx + (y - c0.y) * ny;
+
+    const int lc = g.roads.drivable_lane_count(rid, sl);
+    if (lc <= 0) return false;
+    const std::vector<int> ids = g.roads.drivable_lane_ids(rid, sl);
+    /* lane 0 是 OpenDRIVE 中心线（width=0）；必须用可行驶 lane 查宽度。 */
+    double lw = (!ids.empty()) ? g.roads.lane_width(rid, ids[0], sl) : 0.0;
+    if (!(lw > 0.5)) lw = 3.5;
+    /* route 道路确实在 ego 附近才接管；否则保留 nearest-road。 */
+    if (std::fabs(off_center) > (double)lc * lw * 0.5 + 2.0) return false;
+    int best_lane = 0;
+    double best_abs = 1e18;
+    double best_off = 0.0;
+    for (int lid : ids) {
+        if (lid == 0) continue;
+        flowsim::WorldPos lc0;
+        if (!g.roads.frenet_to_world(rid, lid, sl, 0.0, lc0)) continue;
+        const double off = (x - lc0.x) * nx + (y - lc0.y) * ny;
+        if (std::fabs(off) < best_abs) {
+            best_abs = std::fabs(off);
+            best_lane = lid;
+            best_off = off;
+        }
+    }
+    if (best_lane == 0) return false;
+    *out_road = rid;
+    *out_lane = best_lane;
+    *out_s = sl;
+    *out_offset = best_off;
+    (void)z;
+    return true;
+}
+
 static void compute_lane_match(double x, double y, double z, double ego_heading,
                                uint64_t* out_llt_id, double* out_llt_s,
                                double* out_llt_offset, double* out_heading_err,
@@ -1640,6 +1705,23 @@ static void compute_lane_match(double x, double y, double z, double ego_heading,
         return;
     }
 
+    /* route-aware override：nearest-road 在分叉/并行路可能选错路。route 的
+     * 当前 road 与 nearest 不同且 ego 在该 road 半宽内时，用 route road 的
+     * lane_id/offset 覆盖，避免 lane_match 与 planning 的 ref_path 分属两条路。 */
+    bool route_override = false;
+    {
+        int rr = -1, rl = 0;
+        double rs = 0.0, ro = 0.0;
+        if (route_aware_lane_match(x, y, z, &rr, &rl, &rs, &ro) &&
+            rr != fp.road_id) {
+            fp.road_id = rr;
+            fp.lane_id = rl;
+            fp.s = rs;
+            fp.offset = ro;
+            route_override = true;
+        }
+    }
+
     /* ── 车道归属迟滞（2026-10-22）──
      * world_to_frenet 的 lane_id 是"最近车道中心"的硬判据，自车贴分界时每帧
      * 翻转，llt_offset 随之在 ±半车道宽之间翻转。下游 planning 把 llt_offset
@@ -1648,7 +1730,10 @@ static void compute_lane_match(double x, double y, double z, double ego_heading,
      * 这里锁存车道归属，只有真越过分界 0.25·lane_width 才改判。 */
     int lane_id = fp.lane_id;
     double lane_off = fp.offset;
-    {
+    if (route_override) {
+        g.lm_held_lane = lane_id;
+        g.lm_held_road = fp.road_id;
+    } else {
         const int prev = (g.lm_held_road == fp.road_id) ? g.lm_held_lane : 0;
         if (prev != 0 && prev != lane_id) {
             double off_to_held = 0.0;

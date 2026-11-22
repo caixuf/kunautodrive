@@ -213,9 +213,8 @@
     {
       "file": "scenarios/intersection_fork.json",
       "duration_s": 30,
-      "enabled": false,
-      "max_lane_offset_m": 1.65,
-      "note": "exploratory: per-point topology removes off-grid; still fails lane keeping (lane_match nearest-road) and U-turn at branch end; enable after route-aware lane_match + uturn opt-out"
+      "enabled": true,
+      "max_lane_offset_m": 1.65
     },
     {
       "file": "scenarios/intersection_right_turn.json",

@@ -432,6 +432,7 @@ typedef struct {
     ScenarioRouteStep route[SCENARIO_MAX_ROUTE_STEPS]; /**< 导航路线变道指令（可选，NOA 用） */
     int               route_count;
     ScenarioRoad      road;    /**< 道路几何（可选弯道，默认全零 = 直道） */
+    int               enable_uturn; /**< 1=允许路端自动掉头（默认 1）；0=关闭（路口/环岛/泊车场景） */
     ScenarioTrafficLight traffic_lights[SCENARIO_MAX_TRAFFIC_LIGHTS]; /**< 红绿灯（可选，默认全零 = 无灯） */
     int               traffic_light_count;
     ScenarioETCGate   etc_gates[SCENARIO_MAX_ETC_GATES]; /**< ETC 门架（FlowSim v2 新增） */

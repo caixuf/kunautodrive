@@ -178,6 +178,7 @@ struct BehaviorContext {
     double lane_width{3.5};
     int    road_oneway{0};  /* 1=单向（全部车道同向），0=双向（跨中心线=对向） */
     int    road_id{-1};     /* flowsim 当前 road_id；route 目标只在本路段生效 */
+    int    enable_uturn{1}; /* 0=关闭路端自动掉头（路口/环岛/泊车） */
     int    prev_lane_count{0};
     int    prev_road_oneway{0};
     int    upcoming_own_lanes{-1};      /* 前方缩减后的本向车道数（-1=无缩减） */
@@ -639,6 +640,9 @@ static void on_road_geometry(const Message* msg, void* user_data) {
     if ((item = cJSON_GetObjectItem(root, "oneway")))     g.road_oneway = item->valueint;
     item = cJSON_GetObjectItemCaseSensitive(root, "road_id");
     if (cJSON_IsNumber(item)) g.road_id = (int)item->valuedouble;
+    item = cJSON_GetObjectItemCaseSensitive(root, "enable_uturn");
+    if (cJSON_IsBool(item)) g.enable_uturn = cJSON_IsTrue(item) ? 1 : 0;
+    else if (cJSON_IsNumber(item)) g.enable_uturn = item->valuedouble != 0.0 ? 1 : 0;
     item = cJSON_GetObjectItemCaseSensitive(root, "speed_limit");
     if (cJSON_IsNumber(item) && item->valuedouble > 0.5) g.posted_speed_mps = item->valuedouble;
     item = cJSON_GetObjectItemCaseSensitive(root, "speed_camera");
@@ -1424,7 +1428,8 @@ protected:
                 const bool route_ew = (g.ref_count >= 2) &&
                     std::fabs(g.ref_x[g.ref_count - 1] - g.ref_x[0]) >
                     std::fabs(g.ref_y[g.ref_count - 1] - g.ref_y[0]);
-                if (cur != BEH_ST_U_TURN && route_ew && !g.has_parking_destination) {
+                if (g.enable_uturn && cur != BEH_ST_U_TURN && route_ew &&
+                    !g.has_parking_destination) {
                     behavior_uturn::UturnApproachInput in;
                     in.ego_x = g.ego_x;
                     in.ego_y = g.ego_y;
