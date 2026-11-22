@@ -1215,11 +1215,18 @@ def _road_network_projection(scene: dict, x: float, y: float) -> tuple[float, fl
                 dist, edge_s_base + local_s + t * seg_len, signed_offset,
                 lane_count, lane_width, margin, seg_heading, edge_index,
             )
-            # Road membership is geometric: a narrow ramp must not be
-            # projected onto a farther, wider arterial simply because that
-            # arterial has a larger edge margin. Margin is an output of the
-            # selected road, not the selection criterion.
-            if best is None or dist < best[0] - 1e-9:
+            # Road membership is geometric: prefer an edge whose corridor
+            # actually contains the point over a nearer edge whose corridor
+            # does not. At the viaduct→ramp gore the ego is inside the 8-lane
+            # viaduct but closer to the ramp's start node; picking the ramp
+            # reported a 3.6m "road departure" while the ego was on asphalt.
+            # If several edges contain the point, the nearest still wins; if
+            # none does, fall back to the nearest (genuine off-road frames).
+            contains = margin >= 0.0
+            best_contains = best is not None and best[5] >= 0.0
+            if (best is None
+                    or (contains and not best_contains)
+                    or (contains == best_contains and dist < best[0] - 1e-9)):
                 best = candidate
             local_s += seg_len
         edge_s_base += local_s
@@ -1365,7 +1372,11 @@ def sample_metrics(sample: dict, road: dict | None = None,
             planning_target_offset = None
 
     speed = float(vehicle.get("speed", ego.get("speed", 0.0)) or 0.0)
-    x = float(vehicle.get("x", ego.get("x", 0.0)) or 0.0)
+    # Obstacles in ``scene.obstacles`` are published relative to the monitor's
+    # scene ego (see monitor_node.c: ox - ego_x), so the forward-gap geometry
+    # must use the same pose. ``vehicle.x`` is a different topic sample and can
+    # lag by ~1-2m; mixing the origins moves a building ahead of the ego.
+    x = float(ego.get("x", vehicle.get("x", 0.0)) or 0.0)
     y = float(ego.get("y", 0.0) or 0.0)
     z = float(ego.get("z", 0.0) or 0.0)
     heading = float(ego.get("heading", 0.0) or 0.0)
@@ -1420,6 +1431,20 @@ def sample_metrics(sample: dict, road: dict | None = None,
         rel_y_signed = float(obs.get("y", math.inf))
         if not math.isfinite(rel_x) or not math.isfinite(rel_y_signed):
             continue
+        # ACC headway is about the lead vehicle/VRU, not roadside scenery.
+        # The city scenes publish buildings/walls/bollards in the same list;
+        # a 16m-wide building just behind the ego then projects into the
+        # forward cone and reports a negative gap (city_comprehensive did).
+        obs_type = str(obs.get("type", "")).lower()
+        if obs_type in ("building", "wall", "bollard", "static",
+                        "unknown_static", "sign", "tree", "facility"):
+            continue
+        # Only near-field leads can produce a meaningful ACC headway gap.
+        # On a multi-edge route a far obstacle can project onto another edge
+        # with a small along-s and fake a negative gap; bound the candidate
+        # set to the 80m ACC range (plus margin) before projecting.
+        if abs(rel_x) > 120.0 or abs(rel_y_signed) > 60.0:
+            continue
         rel_y = abs(rel_y_signed)
         length = float(obs.get("len", 4.6) or 4.6)
         width = float(obs.get("wid", 2.0) or 2.0)
@@ -1433,13 +1458,38 @@ def sample_metrics(sample: dict, road: dict | None = None,
         min_abs_gap = min(min_abs_gap, max(gap_x, gap_y))
         if ego_projection is not None:
             obs_projection = _road_network_projection(scene, x + rel_x, y + rel_y_signed)
-            if obs_projection is not None:
+            # Same-edge only: on multi-edge routes two points on different
+            # edges can share an s coordinate (city_comprehensive car id 7
+            # projected to s=501.7 vs ego 501.6 while 43m away) and fake a
+            # -4.5m headway gap. ACC headway is defined within the ego's road.
+            if obs_projection is not None and obs_projection[6] == ego_projection[6]:
                 ego_s, ego_d = ego_projection[0], ego_projection[1]
                 obs_s, obs_d = obs_projection[0], obs_projection[1]
                 route_forward = math.cos(angle_diff(heading, ego_projection[5])) >= 0.0
                 along = (obs_s - ego_s) * (1.0 if route_forward else -1.0)
                 lateral_overlap = abs(obs_d - ego_d) < (2.0 + width) * 0.5
-                if along > 0.0 and lateral_overlap:
+                # Route-s is ambiguous on looped/self-overlapping edges: a car
+                # 43m east can land on s+0.14 on the same edge. An arc length
+                # is never tiny compared with the chord; reject that case so
+                # it cannot fake a negative 4.5m ACC gap.
+                euclid = math.hypot(rel_x, rel_y_signed)
+                # Near-field (route-s <=15m) must agree with the physical
+                # body frame; route-s is ambiguous on looped/curved edges.
+                # Car id 7 was 47m ahead / 0.3m lateral physically but the
+                # loop projected it to along=10m, faking a 5.4m ACC gap.
+                phys_along = (rel_x * math.cos(heading) +
+                              rel_y_signed * math.sin(heading))
+                phys_lat = abs(-rel_x * math.sin(heading) +
+                               rel_y_signed * math.cos(heading))
+                # If the obstacle is physically inside the ego's lane corridor,
+                # use the body-frame forward distance. Route-s is ambiguous on
+                # looped/curved edges: car id 7 was 50m ahead / 0.07m lateral
+                # physically, but the loop projected it to along=17m and faked
+                # a 12.6m ACC gap. A genuinely curved lead sits outside the
+                # 2.5m corridor and falls back to route-s.
+                if phys_lat <= (2.0 + width) * 0.5 + 0.5 and phys_along > 0.0:
+                    along = phys_along
+                if along > 0.0 and lateral_overlap and along >= 0.2 * euclid - 1.0:
                     min_forward_gap = min(
                         min_forward_gap, along - (4.6 + length) * 0.5)
         else:

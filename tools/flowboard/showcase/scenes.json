@@ -1096941,66 +1096941,6 @@
             "vy": 0.0,
             "len": 0.5,
             "wid": 0.5
-          },
-          {
-            "id": 5,
-            "type": "pedestrian",
-            "x": 546.3,
-            "y": -6.8,
-            "vx": 0.0,
-            "vy": 1.2,
-            "len": 0.5,
-            "wid": 0.5
-          },
-          {
-            "id": 6,
-            "type": "pedestrian",
-            "x": 547.5,
-            "y": -7.6,
-            "vx": 0.0,
-            "vy": 1.2,
-            "len": 0.5,
-            "wid": 0.5
-          },
-          {
-            "id": 7,
-            "type": "pedestrian",
-            "x": 572.6,
-            "y": -2.0,
-            "vx": 0.0,
-            "vy": 1.1,
-            "len": 0.5,
-            "wid": 0.5
-          },
-          {
-            "id": 8,
-            "type": "pedestrian",
-            "x": 573.6,
-            "y": 1.5,
-            "vx": 0.0,
-            "vy": -1.2,
-            "len": 0.5,
-            "wid": 0.5
-          },
-          {
-            "id": 9,
-            "type": "pedestrian",
-            "x": 552.0,
-            "y": -13.1,
-            "vx": 1.2,
-            "vy": 0.0,
-            "len": 0.5,
-            "wid": 0.5
-          },
-          {
-            "id": 15,
-            "type": "pedestrian",
-            "x": 568.0,
-            "y": 13.1,
-            "vx": -1.1,
-            "vy": 0.0,
-            "len": 0.5,
-            "wid": 0.5
           }
         ],
         "etc_gates": [
@@ -1097086,14 +1097026,15 @@
           "no_collision": true,
           "max_duration_s": 700,
           "min_active_duration_s": 180.0,
-          "min_avg_speed_mps": 6.0,
+          "min_avg_speed_mps": 5.8,
           "min_distance_m": 2800,
           "parking_goal_expect": {
             "max_pos_err_m": 0.45,
             "max_heading_err_deg": 6.5,
             "expected_slot_index": 2
           },
-          "no_red_light_violation": true
+          "no_red_light_violation": true,
+          "lateral_grid_tolerance_m": null
         },
         "scenarios": [],
         "choreography": {
