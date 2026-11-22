@@ -31,7 +31,7 @@
 | 环岛 / 停止标志 / 通行权 | ✅ 本阶段完成 | `roundabout`（x 315m / 7.92 m/s / lane err 0.76m）与 `stop_sign`（停在 97.4m、保持 2s 后通过）均 enabled + baseline；`unprotected_left_turn` 覆盖无信号左转几何/完成。环道让行/gap acceptance 见 0.2 descope |
 | 动态障碍扫掠 | 🟡 诊断完成（接入 descope） | `traj_swept_dynamic_frames/hits/close_frames`（运动 + 目标车道 + 2s 视界）已接入诊断；全量 33 enabled 场景 0 误刹，`r157_cut_in` 100 候选/0 命中。没有 >0 命中的正例，接入 `traj.valid` 会变成未经验证的刹车路径 → 见 0.2 descope |
 | sensor 场景矩阵 | ✅ 已完成 | nightly 扩到 6 场景：原 urban_challenge/dense_npc/lane_change_traffic + city_procedural_world/intersection_merge/intersection_fork。city sensor 单跑 90s PASS（x 1016m / avg 11.39）；此前的截断/瞬移是 2-worker 全量 suite 并发时的采样重叠，非场景缺陷 |
-| 8→2 车道缩减 | ✅ 本阶段完成 | `lane_drop_8_to_2` enabled + baseline：8 车道双向（本向 4）在 x=300 收为 2 车道（本向 1），x 600m / avg 13.4 m/s / 4 次变道 / max lane error 1.72m / min margin 0.62m；未观察到 target 阶跃，slew 未单独实现（见 0.2） |
+| 8→2 车道缩减 | ✅ 本阶段完成 | `lane_drop_8_to_2` enabled + baseline：8 车道双向（本向 4）在 x=300 收为 2 车道（本向 1），x 600m / avg 13.4 m/s / 4 次变道 / max lane error 1.72m / min margin 0.62m。`demo_evaluator` 的 `lateral_target_offgrid`（Rule6）每 run 生效，target 保持 −1.75 车心；未观察到阶跃，slew 不需要 |
 
 ## 0.2 本阶段明确 descope（不阻塞 demo 交付）
 
@@ -39,7 +39,7 @@
 |---|---|---|
 | 动态扫掠接入 `traj.valid` | 33 个 enabled 场景 filtered hit 全为 0（`r157_cut_in` 有 100 个动态候选帧但无轨迹相交）；没有正例证明拦截有效，接入等于新增一条未经验证的刹车路径，误刹风险大于收益 | 造出 filtered hit >0 的 cut-in fixture，并连续 60s 无假阳，再接入 |
 | 环道让行 / gap acceptance | `roundabout` 只验证几何与曲率跟踪；`unprotected_left_turn` 的对向车在 ego 到达前已通过，判据也只断言"完成左转"，没有"等待/让行"断言。真正的 gap acceptance 需要环道内 NPC + TTC/等待判据 | 新增 `roundabout_yield`（环道内循环 NPC）与 `unprotected_left_turn_yield`（对向车与 ego 同时到路口），并加 `min_ttc`/等待时间判据 |
-| 8→2 target slew | `lane_drop_8_to_2` 实测 4 次变道后回到幸存车道，target 未出现 off-grid/chatter 超门限；slew 是为 8→2 一帧跳 −12.25→−1.75 设计的，但现有 lane-drop + planning 已吸收 | 出现 `lateral_target_chatter`/`lateral_target_offgrid` 超门限，或 8→2 场景 max lane error >1.75m |
+| 8→2 target slew | `lane_drop_8_to_2` 实测 4 次变道后回到幸存车道，`lateral_target_offgrid`（Rule6，每 run 生效）未报 off-grid；slew 是为 8→2 一帧跳 −12.25→−1.75 设计的，但现有 lane-drop + planning 已吸收 | 出现 `lateral_target_chatter`/`lateral_target_offgrid` 超门限，或 8→2 场景 max lane error >1.75m |
 
 ## 1. 差距拆解
 
