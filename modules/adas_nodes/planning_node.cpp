@@ -316,6 +316,14 @@ struct PlanningContext {
     int    overtake_state{0};       /* 0=巡航, 1=左变道, 2=右变道（缓存 behavior.command） */
     double target_lane_offset{0.0}; /* 当前目标车道偏移 (m, 相对于道路中心) */
     int    committed_lane_idx{-1}; /* 巡航车道滞回锁存；-1 = 尚未采纳。变道中写入目标车道 */
+    /* 导航选路目标车道（navigation/path route_step lane_change）。
+     * 与 behavior 的被动超车变道不同：这是路线本身要求的车道（如出口前
+     * 提前移到最右车道）。规划按相邻车道逐条推进，避免 3.5m×N 的横向
+     * 阶跃；仅在 LaneFollowScenario 生效，泊车/掉头不碰。 */
+    int    route_lane_goal{-1};
+    int    route_lane_goal_road{-1}; /* 下发 route 目标时的 lane_match.road_id；
+                                      * road 变了就交回 lane_match 权威，避免用
+                                      * 旧路段车道网格把车拉回上一段中心线。 */
     Behavior current_behavior{};    /* 最新 behavior 指令 */
     volatile int has_behavior{0};
 
@@ -1415,6 +1423,8 @@ static void on_navigation_path(const Message* msg, void* user_data) {
         case ROUTE_BRANCH_SELECT: {
             int lane = (target_lane != 0) ? target_lane : -1;
             g.route_target_lane = lane;
+            g.route_lane_goal = -1;   /* 选路步骤由 ref_path 接管，不做同路段变道 */
+            g.route_lane_goal_road = -1;
             g.current_branch_id = branch_id;
             g.route_target_speed = (target_speed > 0.0) ? target_speed : -1.0;
             update_reference_path(g.ego_x - 5.0, g.ego_lane_id > 0);
@@ -1425,6 +1435,7 @@ static void on_navigation_path(const Message* msg, void* user_data) {
         case ROUTE_MERGE: {
             int lane = (target_lane != 0) ? target_lane : 1;
             g.route_target_lane = lane;
+            g.route_lane_goal = -1;   /* 汇入由 merge_state / gap 门控，不直接压横向 */
             g.merge_hold_lane = lane;
             g.merge_state = 1;
             g.current_branch_id = -1;
@@ -1446,6 +1457,9 @@ static void on_navigation_path(const Message* msg, void* user_data) {
         case ROUTE_LANE_CHANGE:
         default:
             g.route_target_lane = target_lane;
+            g.route_lane_goal = (target_lane >= 0) ? target_lane : -1;
+            g.route_lane_goal_road = (g.route_lane_goal >= 0 && g.lane_match.valid)
+                                   ? g.lane_match.road_id : -1;
             g.current_branch_id = -1;
             if (target_speed >= 0.0) g.route_target_speed = target_speed;
             else                     g.route_target_speed = -1.0;
@@ -2304,7 +2318,69 @@ protected:
                 const bool own_side_only = !g.road_oneway;
                 const double side_offset = planning_coord::lane_group_side_offset(
                     n_lanes, lane_w, g.road_oneway != 0);
-                if (g.has_behavior && g.current_behavior.target_lane_idx >= 0 &&
+                /* 导航选路优先：route_step lane_change 指定的是「路线要求的车道」
+                 * （出口前提前靠右），不是障碍物触发的被动超车。按相邻车道逐条
+                 * 推进，避免一次性横移 N×3.5m 让控制追不上。只在 LaneFollowScenario
+                 * 生效：泊车/掉头由各自场景接管横向。 */
+                const bool route_lane_ok =
+                    g.route_lane_goal >= 0 &&
+                    !g.on_return &&
+                    (g.active_scenario_name == "LaneFollowScenario" ||
+                     g.active_scenario_name == "LANE_FOLLOW") &&
+                    !(g.has_behavior && g.current_behavior.command == BEH_U_TURN) &&
+                    /* 双向路逆行半幅（lane_id>0）时车道索引网格是相对道路
+                     * 前进方向的，不能拿它做「向右第 N 条」；交回 lane_match。 */
+                    !(!g.road_oneway && g.lane_match.valid &&
+                      g.lane_match.lane_id > 0) &&
+                    (g.route_lane_goal_road < 0 || !g.lane_match.valid ||
+                     g.lane_match.road_id == g.route_lane_goal_road);
+                if (route_lane_ok) {
+                    const int legal_min = planning_coord::first_legal_lane(n_lanes, false);
+                    int goal = g.route_lane_goal;
+                    goal = std::max(goal, g.road_oneway ? 0 : legal_min);
+                    goal = std::min(goal, n_lanes - 1);
+
+                    /* 当前车道优先取 lane_match.lane_id（OpenDRIVE：顺向 lane_id<0，
+                     * id 越小越靠右）。这样即使 route 参考线已跨到下一段、n_lanes
+                     * 仍是上一段的车道数，也不会把「已在目标车道」误判成第 4 车道
+                     * 再往右打一把（高架出口实测 target -12.25 → -5.25 振荡）。 */
+                    int cur = -1;
+                    double cur_center_d = 0.0;
+                    const uint64_t lm_now = clock_now_us();
+                    const bool lm_usable =
+                        g.lane_match.valid && g.lane_match.lane_id != 0 &&
+                        g.lane_match.last_us != 0 &&
+                        (lm_now - g.lane_match.last_us < 500000ULL) &&
+                        (g.road_oneway || g.lane_match.lane_id < 0);
+                    if (lm_usable) {
+                        const int abs_lane = std::abs(g.lane_match.lane_id);
+                        const int base = g.road_oneway ? 0 : n_lanes / 2;
+                        const int idx = base + abs_lane - 1;
+                        if (idx >= 0 && idx < n_lanes) {
+                            cur = idx;
+                            cur_center_d = ego_lane_d - g.lane_match.llt_offset;
+                        }
+                    }
+                    if (cur < 0) {
+                        const int cand_lane = planning_coord::nearest_lane(
+                            ego_lane_d, n_lanes, lane_w, own_side_only, side_offset);
+                        g.committed_lane_idx = planning_coord::hold_lane_index(
+                            ego_lane_d, cand_lane, g.committed_lane_idx,
+                            n_lanes, lane_w, side_offset);
+                        cur = (g.committed_lane_idx >= 0)
+                            ? g.committed_lane_idx : cand_lane;
+                        cur_center_d = lane_center_offset(
+                            cur, n_lanes, lane_w, g.road_oneway);
+                    }
+                    g.committed_lane_idx = cur;
+                    if (cur == goal) {
+                        g.target_lane_offset = cur_center_d;
+                    } else if (cur < goal) {
+                        g.target_lane_offset = cur_center_d - lane_w;  /* 向右一条 */
+                    } else {
+                        g.target_lane_offset = cur_center_d + lane_w;  /* 向左一条 */
+                    }
+                } else if (g.has_behavior && g.current_behavior.target_lane_idx >= 0 &&
                     g.current_behavior.target_lane_idx < n_lanes &&
                     (g.current_behavior.command == BEH_LEFT_CHANGE || g.current_behavior.command == BEH_RIGHT_CHANGE)) {
                     /* 显式变道：跟行为目标，并把锁存写成该车道。
@@ -2378,11 +2454,14 @@ protected:
                             g.target_lane_offset = nudged;
                         }
                     }
-                    /* 阶段三硬约束：双向道路非掉头状态下，目标横向偏移严禁贴近或越过中心双黄线（d=0），
-                     * 保证左缘（ego_width/2=1.0m + 0.15m 余量）在路口左转出口不压黄线。 */
+                    /* 阶段三硬约束：双向道路非掉头状态下，目标横向偏移**必须**
+                     * 在右半幅 (d <= -1.15)，禁止进入/贴近中心双黄线的左侧
+                     * （对向车道）。旧实现只在 target<=0 时 clamp；lane_match
+                     * 把 ego 放在左车道时 target=+1.75 直接放行 → 靠右行驶
+                     * 道路上逆行压黄线（600s park_to_park_city 在 riverfront
+                     * 2 车道段实测 ego 在左车道，road departure -2.5m）。 */
                     if (!g.road_oneway &&
-                        !(g.has_behavior && g.current_behavior.command == BEH_U_TURN) &&
-                        g.target_lane_offset <= 0.0) {
+                        !(g.has_behavior && g.current_behavior.command == BEH_U_TURN)) {
                         g.target_lane_offset = std::min(g.target_lane_offset, -1.15);
                     }
                 }
@@ -3693,6 +3772,8 @@ static int planning_init(MessageBus* bus, Transport* transport,
     g.route_count        = 0;
     g.route_next_idx     = 0;
     g.route_target_lane  = -1;  /* N 车道模型：-1=无目标 */
+    g.route_lane_goal    = -1;  /* 导航选路目标车道（route_step 驱动） */
+    g.route_lane_goal_road = -1;
     g.route_target_speed = -1.0;  /* -1=未设置 */
     /* NOA Phase 3.2/3.3: 路线步骤类型默认 lane_change，branch_id 复位 */
     g.route_type         = ROUTE_LANE_CHANGE;

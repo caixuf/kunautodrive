@@ -2822,6 +2822,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
                         DiscoveryManager* discovery, Scheduler* scheduler,
                         const char* params_json) {
     memset(&g, 0, sizeof(g));
+    g.route_lane  = -1;  /* N 车道语义：-1=无导航目标，0=最左车道（有效） */
     g.bus         = bus;
     g.transport   = transport;
     g.discovery   = discovery;

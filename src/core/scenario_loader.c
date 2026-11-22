@@ -665,6 +665,9 @@ ScenarioConfig* scenario_load(const char* path) {
             ScenarioRouteStep* r = &sc->route[i];
             /* 默认 lane_change（向后兼容：无 type 字段的旧场景仍走原变道逻辑） */
             r->type = ROUTE_LANE_CHANGE;
+            /* 未写 target_speed = 不改速度；显式 0 才是停车（auto_parking 等
+             * 用 0 表示到位停车）。旧默认 0 会把「只变道不改速」的步骤误当停车。 */
+            r->target_speed = -1.0;
             cJSON* j;
             j = cJSON_GetObjectItemCaseSensitive(jr, "trigger_x");
             if (cJSON_IsNumber(j)) r->trigger_x = j->valuedouble;

@@ -1186,7 +1186,10 @@ def _road_network_projection(scene: dict, x: float, y: float) -> tuple[float, fl
         if lane_width <= 0.0 or lane_count <= 0:
             continue
         oneway = bool(edge.get("oneway", False))
-        side_offset = -lane_count * lane_width * 0.5 if (oneway and lane_count > 1) else 0.0
+        # One-way lanes sit on the right of the reference line; a single-lane
+        # one-way edge still has its centre at -w/2 (not 0). Keep this in sync
+        # with include/road_geometry.h::lane_group_side_offset.
+        side_offset = -lane_count * lane_width * 0.5 if oneway else 0.0
         local_s = 0.0
         for i in range(len(nodes) - 1):
             a = nodes[i]
@@ -1255,7 +1258,7 @@ def _road_network_cross_track(scene: dict, x: float, y: float) -> tuple[float, f
         edges = road_network.get("edges")
         if isinstance(edges, list) and 0 <= edge_index < len(edges) and isinstance(edges[edge_index], dict):
             edge = edges[edge_index]
-            if edge.get("oneway", False) and lane_count > 1:
+            if edge.get("oneway", False):
                 side_offset = -lane_count * lane_width * 0.5
     return (
         nearest_lane_error(signed_offset, lane_width, lane_count, 0.0, side_offset),
@@ -1319,6 +1322,33 @@ def sample_metrics(sample: dict, road: dict | None = None,
     maneuver_active = any(token in behavior_state_norm for token in (
         "CHANGE", "OVERTAKE", "UTURN", "PARK",
     )) or ("PARK" in active_scenario.upper())
+    # 导航选路变道（planning 按 route_step 提前移到出口车道）不一定经过
+    # behavior 的 LEFT/RIGHT_CHANGE 状态；用 planning/debug 的「目标车道中心
+    # vs 当前车道中心」差值识别机动窗口，否则跨车道本身会被误判成骑线。
+    if isinstance(_pd_early, dict):
+        _route_lane = _pd_early.get("route_lane")
+        _tgt_d = _pd_early.get("target_lane_offset")
+        _ego_d = _pd_early.get("ego_d")
+        _lm_metric = metrics.get("lane_match", {})
+        _lm_off_d = None
+        if isinstance(_lm_metric, dict):
+            _lm_off_d = _lm_metric.get("llt_offset")
+            if _lm_off_d is None:
+                _lm_off_d = _lm_metric.get("offset")
+        if (isinstance(_route_lane, (int, float)) and _route_lane >= 0
+                and all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                        for v in (_tgt_d, _ego_d, _lm_off_d))):
+            _cur_center_d = float(_ego_d) - float(_lm_off_d)
+            if abs(float(_tgt_d) - _cur_center_d) > 0.35:
+                maneuver_active = True
+            # planning/debug 的 lane_match_offset 与门禁判据同源；偏离当前
+            # 车道中心 >0.9m 说明仍在跨车道过程中（lane_match 可能已提前
+            # 切到目标车道，此时 target≈current center，上式看不出机动）。
+            _lm_gate_off = _pd_early.get("lane_match_offset")
+            if (isinstance(_lm_gate_off, (int, float))
+                    and not isinstance(_lm_gate_off, bool)
+                    and abs(float(_lm_gate_off)) > 0.9):
+                maneuver_active = True
 
     # D2-10 Prefer: planning/debug lane_match_offset first; fallback
     # localization/lane_match offset (alias llt_offset). ok=false / missing →
@@ -1573,7 +1603,7 @@ def sample_metrics(sample: dict, road: dict | None = None,
         "obs_world": obs_world,        # 真值障碍（scene.obstacles）：物理安全校验/覆盖率分母
         "perceived_world": perceived_world,  # 感知原始输出：识别率 + 预警提前量用
         "driver_mode": str(metrics.get("driver_mode", "") or ""),
-        "route_lane": int(metrics.get("route_lane", 0) or 0),
+        "route_lane": int(metrics.get("route_lane", -1)),
         "entities": scn_entities if isinstance(scn_entities, list) else [],
         "tp_cycle_by_id": tp_cycle_by_id,
         "behavior_state": behavior_state,
@@ -3491,7 +3521,7 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     # "route_lane 从未被消费"这类功能性回归，因此单独校验驾驶模式序列。
     driver_modes_seen = sorted({m["driver_mode"].split(":")[0] for m in series if m["driver_mode"]})
     reached_noa = "NOA" in driver_modes_seen
-    route_lane_active = any(m["route_lane"] != 0 for m in series)
+    route_lane_active = any(m["route_lane"] >= 0 for m in series)
     if has_noa_route:
         if not reached_noa:
             failures.append(

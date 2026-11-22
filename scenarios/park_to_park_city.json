@@ -169,8 +169,13 @@
             0.0
           ],
           [
-            296.0,
-            -5.4,
+            300.0,
+            -3.4,
+            0.0
+          ],
+          [
+            315.0,
+            0.0,
             0.0
           ]
         ]
@@ -230,7 +235,7 @@
         "id": 2,
         "type": "urban",
         "name": "ground_signal_avenue",
-        "lanes": 4,
+        "lanes": 2,
         "lane_width": 3.5,
         "speed_limit": 14.0,
         "oneway": false,
@@ -707,27 +712,27 @@
         "nodes": [
           [
             2348.637,
-            197.826,
+            199.66,
             9.0
           ],
           [
             2354.333,
-            198.182,
+            199.78,
             8.966
           ],
           [
             2358.426,
-            200.039,
+            201.24,
             8.873
           ],
           [
             2361.636,
-            202.323,
+            202.92,
             8.736
           ],
           [
             2364.678,
-            203.955,
+            204.16,
             8.571
           ],
           [
@@ -1239,7 +1244,14 @@
   ],
   "stop_lines": [],
   "construction_zones": [],
-  "route": [],
+  "route": [
+    {
+      "trigger_x": 2050.0,
+      "type": "lane_change",
+      "target_lane": 7,
+      "label": "prepare_riverfront_exit"
+    }
+  ],
   "pass_criteria": {
     "no_collision": true,
     "max_duration_s": 700,

@@ -29,7 +29,10 @@ int main() {
     assert(nearly_equal(planning_coord::lane_group_side_offset(4, 3.5, true), -7.0));
     assert(nearly_equal(planning_coord::lane_group_side_offset(4, 3.5, false), 0.0));
     assert(nearly_equal(planning_coord::lane_group_side_offset(2, 3.5, true), -3.5));
-    assert(nearly_equal(planning_coord::lane_group_side_offset(1, 3.5, true), 0.0));
+    assert(nearly_equal(planning_coord::lane_group_side_offset(1, 3.5, true), -1.75));
+    /* 1-lane one-way: lane centre is half a lane right of the reference line. */
+    assert(nearly_equal(planning_coord::lane_center_d(0, 1, 3.5, -1.75), -1.75));
+    assert(nearly_equal(::lane_center_y(0, 1, 3.5, 0.0, -1.75), -1.75));
 
     const double so1 = planning_coord::lane_group_side_offset(4, 3.5, true);
     /* 4 车道单向：idx0=-1.75, idx1=-5.25, idx2=-8.75, idx3=-12.25（全在 -y） */

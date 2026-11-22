@@ -145,15 +145,15 @@ static int nav_lane_idx_from_y(double y) {
 
 static int resolve_target_lane(int raw_target_lane, int current_lane) {
     if (g.lane_count <= 0) return -1;
-    if (raw_target_lane >= 0 && raw_target_lane < g.lane_count) return raw_target_lane;
+    /* 新语义：0..N-1 = 目标车道绝对索引。navigation 的 lane_count 来自
+     * 场景级 road.lanes（常为 2），而多车道路段（高架 8 车道）要到运行时
+     * 才由 planning 从 road/geometry 拿到真实车道数。这里不能因为
+     * raw >= 场景默认车道数就把它丢掉，否则「出口前移到最右车道」这类
+     * 导航指令会静默失效。越界值由 planning 按当前路段再 clamp。 */
+    if (raw_target_lane >= 0) return raw_target_lane;
     if (raw_target_lane == -1) {
         int t = current_lane - 1;
         if (t < 0) t = 0;
-        return t;
-    }
-    if (raw_target_lane == 1) {
-        int t = current_lane + 1;
-        if (t >= g.lane_count) t = g.lane_count - 1;
         return t;
     }
     return -1;

@@ -103,7 +103,12 @@ static inline double road_center_curvature(double x,
  */
 static inline double lane_group_side_offset(int lane_count, double lane_width,
                                             int road_oneway) {
-    if (!road_oneway || lane_count <= 1) return 0.0;
+    /* One-way lanes all sit on the right of the OpenDRIVE reference line.
+     * For N=1 the single lane centre is -w/2, not 0: returning 0 made the
+     * planner target the reference line and ride the left lane line at 2→1
+     * merges (park_to_park_city exit_merge: lane_match_offset 1.5m while
+     * planning believed target=0). */
+    if (!road_oneway) return 0.0;
     return -(double)lane_count * lane_width * 0.5;
 }
 
@@ -130,7 +135,7 @@ static inline double lane_group_side_offset(int lane_count, double lane_width,
 static inline double lane_center_y(int lane_idx, int lane_count,
                                     double lane_width, double road_c,
                                     double side_offset) {
-    if (lane_count <= 1) return road_c;
+    if (lane_count <= 1) return road_c + side_offset;
     return road_c + side_offset - (lane_idx - (lane_count - 1) * 0.5) * lane_width;
 }
 

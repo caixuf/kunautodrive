@@ -32,13 +32,13 @@
 
 | # | 分类 | 条数 |
 |---|------|------|
-| 1 | 控制 / 规划 / 安全层 | 36 |
+| 1 | 控制 / 规划 / 安全层 | 38 |
 | 2 | 感知 / 点云 | 10 |
 | 3 | 仿真 / 几何 / NPC | 11 |
 | 4 | 仪表盘 / 监控 / 前端 | 24 |
 | 5 | 评估器 / 门禁 | 10 |
 | 6 | 框架 / 工具链 | 5 |
-| | **合计** | **96** |
+| | **合计** | **98** |
 
 ## 1. 控制 / 规划 / 安全层
 
@@ -89,6 +89,8 @@
 | 同一场景 **ground_truth 编排能跑、sensor 编排（真点云链路）跑不动**（`r157_cut_out`：GT avg 13.63 m/s / x_delta 532m / 变道 4 次 vs sensor avg 0.54 m/s / x_delta 21m / 变道 1 次，behavior 停在 `CRUISE`、`obs_count=1`） | sensor 编排下 ego 背对视锥起步、DBSCAN 聚类出的目标数远少于 ground_truth 直通；`obs_count=1` 时 behavior 的加塞/绕行逻辑缺少可评估的**邻道**目标，可能根本进不了变道评估分支。**排查手法**：对比两种编排的 `metrics.behavior.obs_count` 与 `behavior_state` 序列，而不是只看最终 x_delta。**注意**：既有 sensor 门禁场景（urban_challenge / dense_npc / lane_change_traffic）全 PASS，故这是**新场景超出 sensor 编排现有能力**，不是回归 | `config/pipeline_sensor.json`（sensor 编排）/ `behavior_planner_node.cpp` 左右车道评估分支（依赖邻道目标） |
 
 | **变道途中 TTC 跟车误锁邻道车 → 永久刹停到 0**（`TTC follow: gap=3.06 (src=hint) -> 0.0 m/s (was 20.0)`，同时 behavior 报 `best_gap=-1`（无前车）要 20 m/s —— **两模块对同一目标结论相反**） | planning 的 TTC 横向门限用 `\|obs_lat\|`（**ego 瞬时位置**为零点，`lat=−rx·sin h+ry·cos h`），而 behavior 用 `\|obs_projection.d − current_lane_d\|`（**车道相对**）。变道途中 ego_y 悬在两车道之间（实测 −4.58，源道 −1.75 / 目标道 −5.25），零点随之漂移："离开车道"的邻道车被误判为跟车目标 —— 真值障碍（源车道 y=−1.75）车体系 lat=3.17 恰在门外，而 DBSCAN 只聚到可见近面、感知质心偏向 ego 侧 1.0m 后 lat=2.18 落进门内 → gap≈3m → 刹到 0 且永不恢复（`r157_cut_out` sensor 编排永久卡死）。**同类伪影（GT 编排也中）**：远处同车道真前车在 heading=0.109 时车体系 lat=3.61 > 2.625 被**误拒**（`along·sin h` 项，弯道上更甚）→ **漏掉真前车**（比误收邻道车更危险）。**排查手法**：不要只看 planning 的 `TTC follow` 日志下结论 —— 必须同时看 behavior 的 `best_gap`，两者矛盾即参考系不一致。修复：横向距离改对**应跟随车道中心线**求（Frenet `obs_d − follow_lane_center_d`，变道中取 behavior 下发的目标车道，与 W1 `target_lane_offset` 同源），门限 `0.5·lane_w+0.6` 与 behavior 的 `lead_lat_tol` **同式同值**；真值兜底分支同样改。Python 先行 `tools/ttc_lat_gate_sim.py`（邻道车真值/感知均拒 + 目标道真值/±1m 偏差/40m 远处均收，全 PASS）| `planning_ttc_candidate.h`（`TtcObsView.lat_m`）/ `planning_node.cpp` TTC follow 候选块 + 真值兜底 |
+| **汇入/匝道出口总压线：planning 目标在 1 车道路段落在参考线（d=0），lane_match 却说偏 1.5m** | `lane_group_side_offset` 对 `lane_count<=1` 返回 0，`lane_center_y` 对 N<=1 直接返回 `road_c` —— 把 OpenDRIVE **单向 1 车道**（车道中心 = 参考线 −w/2）误当成"车道中心就在参考线"。`park_to_park_city` 的 `exit_merge` 实测 planning target=0、lane_match offset≈1.5m，ego 骑左车道线；`demo_evaluator` 又复刻了同一公式，门禁看不到。修复：N=1 单向也返回 `−N·w/2`，`lane_center_y` 保留 side_offset；评估器投影/road-edge 同步 | `include/road_geometry.h::lane_group_side_offset/lane_center_y`；`planning_coordinates.h::lane_center_d`；`demo_evaluator.py::_road_network_projection/_road_network_cross_track`；`test_planning_coordinates.cpp` |
+| **高架出口前一直留在最左车道，临近匝道才横跨 3 条车道 → 压线 / OFFRAILS / 撞 NPC** | 场景 `route` 步骤只写进 planning 的 `route_target_lane` 调试字段，从未驱动横向目标；behavior 的变道只由超车触发，不会为出口提前靠右。修复：planning 消费 `route_step lane_change`，用 `lane_match.lane_id` 逐条推进到目标车道（导航选路优先于超车），加 `route_lane_goal_road` 防止跨路段用旧车道网格把车拉回上一段中心线；evaluator 把 route 变道帧计入 maneuver。`park_to_park_city` 增加 `trigger_x=2050, target_lane=7` | `planning_node.cpp` route 分支；`navigation_node.c::resolve_target_lane`；`scenarios/park_to_park_city.json` route；`demo_evaluator.py` maneuver 窗口 |
 
 ## 2. 感知 / 点云
 

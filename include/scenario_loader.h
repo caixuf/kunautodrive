@@ -166,7 +166,7 @@ typedef struct {
      * 新场景应直接写 0..N-1 索引。 */
     int           target_lane;
     int           branch_id;     /**< ROUTE_BRANCH_SELECT: connecting_road 的 id（fork 选路） */
-    double        target_speed;  /**< 目标速度（m/s），0 = 不改变当前目标速度（可选项，用于出口匝道减速等） */
+    double        target_speed;  /**< 目标速度（m/s）；<0 = 不改变当前目标速度，0 = 停车，>0 = 覆盖 */
     char          label[SCENARIO_ROUTE_LABEL_LEN]; /**< 可读描述（可选） */
 } ScenarioRouteStep;
 
