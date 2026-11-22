@@ -1,0 +1,107 @@
+{
+  "name": "lane_drop_merge",
+  "description": "\u672c\u5411\u8f66\u9053\u7f29\u51cf\uff1a4 \u8f66\u9053\u53cc\u5411\uff08\u672c\u5411 2 \u6761\uff09\u5728 x=200 \u6536\u4e3a 2 \u8f66\u9053\u53cc\u5411\uff08\u672c\u5411 1 \u6761\uff09\u3002ego \u4ece\u6700\u5916\u4fa7\u8f66\u9053\u8d77\u6b65\uff0cbehavior \u5e94\u6839\u636e upcoming_own_lanes/dist_to_lane_drop \u63d0\u524d\u5e76\u5165\u5185\u4fa7\u8f66\u9053\uff1b\u9a8c\u8bc1 lane_drop_merge_needed \u4e0e\u8f66\u9053\u6570\u8fc7\u6e21\u3002",
+  "random_seed": 43,
+  "duration_s": 40,
+  "lighting": "day",
+  "weather": "clear",
+  "visibility_m": 600,
+  "ego": {
+    "x": 20.0,
+    "y": -5.25,
+    "heading": 0.0,
+    "init_speed": 8.0,
+    "target_speed": 12.0,
+    "wheelbase": 2.7,
+    "length": 4.6,
+    "width": 2.0,
+    "max_steer": 0.6
+  },
+  "road_network": {
+    "edges": [
+      {
+        "id": 0,
+        "type": "urban",
+        "name": "four_lane_before_drop",
+        "lanes": 4,
+        "lane_width": 3.5,
+        "speed_limit": 14.0,
+        "oneway": false,
+        "nodes": [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            100.0,
+            0.0,
+            0.0
+          ],
+          [
+            200.0,
+            0.0,
+            0.0
+          ],
+          [
+            300.0,
+            0.0,
+            0.0
+          ]
+        ],
+        "length_m": 300.0
+      },
+      {
+        "id": 1,
+        "type": "urban",
+        "name": "two_lane_after_drop",
+        "lanes": 2,
+        "lane_width": 3.5,
+        "speed_limit": 14.0,
+        "oneway": false,
+        "nodes": [
+          [
+            300.0,
+            0.0,
+            0.0
+          ],
+          [
+            650.0,
+            0.0,
+            0.0
+          ],
+          [
+            1000.0,
+            0.0,
+            0.0
+          ]
+        ],
+        "length_m": 700.0
+      }
+    ]
+  },
+  "actors": [],
+  "traffic_lights": [],
+  "stop_lines": [],
+  "construction_zones": [],
+  "route": [],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 40,
+    "min_avg_speed_mps": 6.0,
+    "min_distance_m": 350,
+    "required_lane_changes": 1
+  },
+  "scenarios": [],
+  "choreography": {
+    "loop_period_s": 999,
+    "beats": []
+  },
+  "traffic_density": {
+    "cars_per_km": 0,
+    "spawn_jitter_m": 0.0,
+    "lane_spread": false,
+    "max_npcs": 0,
+    "random_seed_offset": 0
+  }
+}

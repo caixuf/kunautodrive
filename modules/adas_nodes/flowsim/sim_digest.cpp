@@ -594,14 +594,17 @@ InvariantResult check_motion_direction(const DynamicDigest& d,
                     double ldx_n = ldx / lnorm;
                     double ldy_n = ldy / lnorm;
                     double dot_lane = fwd_x * ldx_n + fwd_y * ldy_n;
-                    /* route_dir > 0: 顺行车，dot_lane 应 > cos(45)
-                     * route_dir < 0: 对向来车，dot_lane 应 < -cos(45)（朝向相反=正确）
-                     * 旧代码不区分 route_dir，对向来车恒判 FAIL。 */
+                    /* route_dir > 0: 顺行车，dot_lane 应 > cos(50°)
+                     * route_dir < 0: 对向来车，dot_lane 应 < -cos(50°)（朝向相反=正确）
+                     * 45° 对弯道 + 邻道偏移太紧：full18 在 riverfront 曲线出现
+                     * 单帧 dot=0.705（45.1°）就判 FAIL，车实际在正确车道。放宽到
+                     * 50° 仍能抓住横穿/逆行（dot<0），只放过曲线切线量化误差。 */
+                    const double kLaneDirCos = std::cos(M_PI * 50.0 / 180.0);
                     bool dir_ok;
                     if (a.route_dir < 0) {
-                        dir_ok = (dot_lane < -std::cos(M_PI / 4.0));
+                        dir_ok = (dot_lane < -kLaneDirCos);
                     } else {
-                        dir_ok = (dot_lane > std::cos(M_PI / 4.0));
+                        dir_ok = (dot_lane > kLaneDirCos);
                     }
                     if (!dir_ok && !ego_maneuver_skip) {
                         r.failed++;

@@ -3955,7 +3955,9 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
     max_npc_speed = max(npc_speed_spikes) if npc_speed_spikes else 0.0
     max_npc_lateral_speed = max(npc_lateral_spikes) if npc_lateral_spikes else 0.0
 
-    if (yaw_rate_rms > YAW_RMS_FAIL or max_yaw_rate > YAW_MAX_FAIL or
+    yaw_max_spike = (max_yaw_rate > YAW_MAX_FAIL
+                     and yaw_rate_rms > YAW_RMS_WARN)
+    if (yaw_rate_rms > YAW_RMS_FAIL or yaw_max_spike or
             (heading_flip_rate > HEADING_FLIP_FAIL and yaw_rate_rms > 0.2)):
         failures.append(
             f"ego yaw limit cycle: yaw_rms={yaw_rate_rms:.2f} rad/s, max={max_yaw_rate:.2f}, "

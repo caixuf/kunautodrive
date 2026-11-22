@@ -238,6 +238,7 @@
         "road/geometry",
         "road/traffic_lights",
         "road/ref_path",
+        "navigation/path",
         "scene/frame"
       ],
       "publish": [

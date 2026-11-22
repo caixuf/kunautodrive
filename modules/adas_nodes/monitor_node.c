@@ -85,8 +85,10 @@ static void sanitize_subnormal_literals(char* s) {
             if (ev < 100000) ev = ev * 10 + (*p - '0');
             p++;
         }
-        if (neg && ev >= 308) {
-            /* 数 < 1e-308 = subnormal → 改写为 "0"，尾部左移 */
+        if (neg && ev >= 300) {
+            /* 数 < 1e-300（含 subnormal <~2.2e-308）→ 改写为 "0"。自动驾驶
+             * 量没有 <1e-300 的物理意义；放宽到 300 是为防不同 libc/格式化
+             * 路径把 subnormal 写成 1e-30x 边界值。 */
             size_t tail = strlen(p) + 1;
             *num = '0';
             memmove(num + 1, p, tail);
@@ -265,6 +267,10 @@ static struct {
     char control_debug_json[2048];
     /* 规划层 debug（来自 planning/debug JSON topic，全链路横向调试） */
     char planning_debug_json[2048];
+    /* protects behavior_state_json/control_debug_json/planning_debug_json:
+     * transport 回调写、monitor 主循环读；无锁时半写 JSON 进入 strtod 可触发
+     * glibc strtod_l 断言 abort（full17 长跑实测 SIGABRT）。 */
+    pthread_mutex_t debug_cache_mutex;
     /* 车道级定位（来自 localization/lane_match，诊断透传：权威 Frenet 解算
      * 与 vehicle/state 快照的漂移） */
     char lane_match_json[1024];
@@ -1106,8 +1112,10 @@ static void on_behavior_state(const Message* msg, void* user_data) {
     if (!msg) return;  /* data 是定长数组，永不为 NULL；空载由 data_size 判定 */
     size_t copy = msg->data_size;
     if (copy >= sizeof(g.behavior_state_json)) copy = sizeof(g.behavior_state_json) - 1;
+    pthread_mutex_lock(&g.debug_cache_mutex);
     memcpy(g.behavior_state_json, ((const uint8_t*)message_bus_message_data(msg)), copy);
     g.behavior_state_json[copy] = '\0';
+    pthread_mutex_unlock(&g.debug_cache_mutex);
 }
 
 /* L3-P1：ODD 状态（odd/state）与 TOR 状态（tor/state）——透传到 metrics.odd/tor。 */
@@ -1135,8 +1143,10 @@ static void on_control_debug(const Message* msg, void* user_data) {
     if (!msg) return;
     size_t copy = msg->data_size;
     if (copy >= sizeof(g.control_debug_json)) copy = sizeof(g.control_debug_json) - 1;
+    pthread_mutex_lock(&g.debug_cache_mutex);
     memcpy(g.control_debug_json, ((const uint8_t*)message_bus_message_data(msg)), copy);
     g.control_debug_json[copy] = '\0';
+    pthread_mutex_unlock(&g.debug_cache_mutex);
 }
 
 /* ── planning/debug 订阅 — 缓存规划层横向调试数据 ── */
@@ -1145,10 +1155,14 @@ static void on_planning_debug(const Message* msg, void* user_data) {
     if (!msg) return;
     size_t copy = msg->data_size;
     if (copy >= sizeof(g.planning_debug_json)) copy = sizeof(g.planning_debug_json) - 1;
+    char local[sizeof(g.planning_debug_json)];
+    pthread_mutex_lock(&g.debug_cache_mutex);
     memcpy(g.planning_debug_json, ((const uint8_t*)message_bus_message_data(msg)), copy);
     g.planning_debug_json[copy] = '\0';
+    memcpy(local, g.planning_debug_json, copy + 1);
+    pthread_mutex_unlock(&g.debug_cache_mutex);
 
-    cJSON* pd = monitor_cJSON_Parse(g.planning_debug_json);
+    cJSON* pd = monitor_cJSON_Parse(local);
     if (!pd) return;
     cJSON* item = cJSON_GetObjectItemCaseSensitive(pd, "driver_mode");
     if (cJSON_IsString(item) && item->valuestring) {
@@ -1557,8 +1571,12 @@ static void export_dashboard_json(void) {
     }
 
     /* 行为规划状态 */
-    if (g.behavior_state_json[0]) {
-        cJSON* bs = monitor_cJSON_Parse(g.behavior_state_json);
+    char behavior_buf[sizeof(g.behavior_state_json)];
+    pthread_mutex_lock(&g.debug_cache_mutex);
+    memcpy(behavior_buf, g.behavior_state_json, sizeof(behavior_buf));
+    pthread_mutex_unlock(&g.debug_cache_mutex);
+    if (behavior_buf[0]) {
+        cJSON* bs = monitor_cJSON_Parse(behavior_buf);
         if (bs) {
             cJSON_AddItemToObject(metrics, "behavior", bs);
         } else {
@@ -1566,7 +1584,7 @@ static void export_dashboard_json(void) {
             static int _beh_parse_warn = 0;
             if (_beh_parse_warn < 3) {
                 LOG_WARN("monitor", "behavior_state_json cJSON_Parse failed (first 80: %.80s)",
-                         g.behavior_state_json);
+                         behavior_buf);
                 _beh_parse_warn++;
             }
         }
@@ -1579,16 +1597,24 @@ static void export_dashboard_json(void) {
     }
 
     /* 控制层 debug（横向控制链全链路变量） */
-    if (g.control_debug_json[0]) {
-        cJSON* cd = monitor_cJSON_Parse(g.control_debug_json);
+    char control_buf[sizeof(g.control_debug_json)];
+    pthread_mutex_lock(&g.debug_cache_mutex);
+    memcpy(control_buf, g.control_debug_json, sizeof(control_buf));
+    pthread_mutex_unlock(&g.debug_cache_mutex);
+    if (control_buf[0]) {
+        cJSON* cd = monitor_cJSON_Parse(control_buf);
         if (cd) {
             cJSON_AddItemToObject(metrics, "control_debug", cd);
         }
     }
 
     /* 规划层 debug（Frenet规划全链路变量） */
-    if (g.planning_debug_json[0]) {
-        cJSON* pd = monitor_cJSON_Parse(g.planning_debug_json);
+    char planning_buf[sizeof(g.planning_debug_json)];
+    pthread_mutex_lock(&g.debug_cache_mutex);
+    memcpy(planning_buf, g.planning_debug_json, sizeof(planning_buf));
+    pthread_mutex_unlock(&g.debug_cache_mutex);
+    if (planning_buf[0]) {
+        cJSON* pd = monitor_cJSON_Parse(planning_buf);
         if (pd) {
             cJSON_AddItemToObject(metrics, "planning_debug", pd);
         }
@@ -3025,6 +3051,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
      * ipc_channel_publish 会因无 subscriber 而丢弃早期包（可接受，启动竞态）。 */
     pthread_mutex_init(&g.remote_stats_mutex, NULL);
     pthread_mutex_init(&g.vehicle_state_mutex, NULL);
+    pthread_mutex_init(&g.debug_cache_mutex, NULL);
     pthread_mutex_init(&g.tracked_mutex, NULL);
     pthread_mutex_init(&g.perceived_mutex, NULL);
     pthread_mutex_init(&g.ego_pose_mutex, NULL);

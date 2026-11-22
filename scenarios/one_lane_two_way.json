@@ -1,0 +1,101 @@
+{
+  "name": "one_lane_two_way",
+  "description": "\u5355\u8f66\u9053\u5bf9\u5411\u9053\u8def\uff08\u6bcf\u5411 1 \u6761\uff0c\u5408\u8ba1 2 \u8f66\u9053\uff09\u5de1\u822a\uff1a\u65e0\u5bf9\u5411\u8f66\uff0cego \u5728\u672c\u5411\u53f3\u4fa7\u8f66\u9053 -1.75\u3002\u8986\u76d6\u7a84\u53cc\u8f66\u9053\uff08\u6700\u5c0f\u53ef\u884c\u53cc\u5411\u8def\uff09\u4e0e lane_count=2 \u7684\u8f66\u9053\u4e2d\u5fc3/\u8fb9\u754c\uff0c\u9a8c\u8bc1\u4e0d\u4f1a\u538b\u4e2d\u5fc3\u7ebf\u6216\u8def\u7f18\u3002",
+  "random_seed": 41,
+  "duration_s": 30,
+  "lighting": "day",
+  "weather": "clear",
+  "visibility_m": 600,
+  "ego": {
+    "x": 20.0,
+    "y": -1.75,
+    "heading": 0.0,
+    "init_speed": 5.0,
+    "target_speed": 10.0,
+    "wheelbase": 2.7,
+    "length": 4.6,
+    "width": 2.0,
+    "max_steer": 0.6
+  },
+  "road_network": {
+    "edges": [
+      {
+        "id": 0,
+        "type": "urban",
+        "name": "single_lane_shared_a",
+        "lanes": 2,
+        "lane_width": 3.5,
+        "speed_limit": 10.0,
+        "oneway": false,
+        "length_m": 600.0,
+        "nodes": [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            300.0,
+            0.0,
+            0.0
+          ],
+          [
+            600.0,
+            0.0,
+            0.0
+          ]
+        ]
+      },
+      {
+        "id": 1,
+        "type": "urban",
+        "name": "single_lane_shared_b",
+        "lanes": 2,
+        "lane_width": 3.5,
+        "speed_limit": 10.0,
+        "oneway": false,
+        "length_m": 600.0,
+        "nodes": [
+          [
+            600.0,
+            0.0,
+            0.0
+          ],
+          [
+            900.0,
+            0.0,
+            0.0
+          ],
+          [
+            1200.0,
+            0.0,
+            0.0
+          ]
+        ]
+      }
+    ]
+  },
+  "actors": [],
+  "traffic_lights": [],
+  "stop_lines": [],
+  "construction_zones": [],
+  "route": [],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 30,
+    "min_avg_speed_mps": 5.0,
+    "min_distance_m": 250
+  },
+  "scenarios": [],
+  "choreography": {
+    "loop_period_s": 999,
+    "beats": []
+  },
+  "traffic_density": {
+    "cars_per_km": 0,
+    "spawn_jitter_m": 0.0,
+    "lane_spread": false,
+    "max_npcs": 0,
+    "random_seed_offset": 0
+  }
+}

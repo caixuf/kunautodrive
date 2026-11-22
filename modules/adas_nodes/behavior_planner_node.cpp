@@ -25,6 +25,7 @@
 #include "param_registry.h"
 #include "behavior_gap_eval.h"
 #include "behavior_uturn_approach.h"
+#include "behavior_route_goal.h"
 #include "perception_fusion_core.h"
 #undef LOG_TRACE
 #undef LOG_DEBUG
@@ -45,6 +46,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include <cstdlib>
 #include <unistd.h>
 
 namespace {
@@ -175,11 +177,17 @@ struct BehaviorContext {
     int    lane_count{2};
     double lane_width{3.5};
     int    road_oneway{0};  /* 1=单向（全部车道同向），0=双向（跨中心线=对向） */
+    int    road_id{-1};     /* flowsim 当前 road_id；route 目标只在本路段生效 */
     int    prev_lane_count{0};
     int    prev_road_oneway{0};
     int    upcoming_own_lanes{-1};      /* 前方缩减后的本向车道数（-1=无缩减） */
     double dist_to_lane_drop_m{-1.0};   /* 距前方车道缩减起点的距离 (m) */
     volatile int has_road_geometry{0};
+
+    /* 导航路线目标车道（navigation/path route_step lane_change）。
+     * 由 behavior 拥有变道意图，planning 只跟随 Behavior 指令。 */
+    int    route_lane_goal{-1};
+    int    route_lane_goal_road{-1};
 
     /* 红绿灯缓存（road/traffic_lights 解析走 traffic_light.h 的共享
      * traffic_lights_parse()，此处只存消费视图，TL_CACHE_MAX 即该头
@@ -629,6 +637,8 @@ static void on_road_geometry(const Message* msg, void* user_data) {
     if ((item = cJSON_GetObjectItem(root, "lane_count"))) g.lane_count = item->valueint;
     if ((item = cJSON_GetObjectItem(root, "lane_width"))) g.lane_width = item->valuedouble;
     if ((item = cJSON_GetObjectItem(root, "oneway")))     g.road_oneway = item->valueint;
+    item = cJSON_GetObjectItemCaseSensitive(root, "road_id");
+    if (cJSON_IsNumber(item)) g.road_id = (int)item->valuedouble;
     item = cJSON_GetObjectItemCaseSensitive(root, "speed_limit");
     if (cJSON_IsNumber(item) && item->valuedouble > 0.5) g.posted_speed_mps = item->valuedouble;
     item = cJSON_GetObjectItemCaseSensitive(root, "speed_camera");
@@ -720,6 +730,41 @@ static void on_ref_path(const Message* msg, void* user_data) {
 static bool project_to_ref(double x, double y, planning_coord::Projection& out) {
     return planning_coord::project_to_path(
         x, y, g.ref_x, g.ref_y, g.ref_s, g.ref_count, out);
+}
+
+/* ── navigation/path 订阅 — 路线目标车道 ─────────────────────
+ * 以前 planning 直接消费 route_step 改横向目标，behavior 仍显示 CRUISE/
+ * LEFT_CHANGE。现在 behavior 接管「路线要求变道」的离散意图，planning 只
+ * 跟随 planning/behavior。branch/merge/u_turn 不在这里做同路段变道。 */
+static void on_navigation_path(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg) return;
+    cJSON* root = cJSON_Parse((const char*)((const uint8_t*)message_bus_message_data(msg)));
+    if (!root) return;
+    cJSON* jtype = cJSON_GetObjectItemCaseSensitive(root, "type");
+    if (!cJSON_IsString(jtype) || !jtype->valuestring ||
+        strcmp(jtype->valuestring, "route_step") != 0) {
+        cJSON_Delete(root);
+        return;
+    }
+    cJSON* jstep = cJSON_GetObjectItemCaseSensitive(root, "step_type");
+    cJSON* jlane = cJSON_GetObjectItemCaseSensitive(root, "target_lane");
+    const bool is_lane_change =
+        !cJSON_IsString(jstep) || !jstep->valuestring ||
+        strcmp(jstep->valuestring, "lane_change") == 0;
+    if (is_lane_change && cJSON_IsNumber(jlane)) {
+        const int lane = (int)jlane->valuedouble;
+        g.route_lane_goal = (lane >= 0) ? lane : -1;
+        g.route_lane_goal_road = (lane >= 0 && g.has_road_geometry) ? g.road_id : -1;
+        LOG_INFO("behavior", "route lane goal -> %d (road=%d, lanes=%d, oneway=%d)",
+                 g.route_lane_goal, g.road_id, g.lane_count, g.road_oneway);
+    } else {
+        /* branch_select / merge / u_turn：由 ref_path/planning 专项路径处理，
+         * 不叠加同路段变道。 */
+        g.route_lane_goal = -1;
+        g.route_lane_goal_road = -1;
+    }
+    cJSON_Delete(root);
 }
 
 static bool projection_near_road(double x, double y,
@@ -1248,14 +1293,48 @@ protected:
             const bool lane_drop_ahead = (g.upcoming_own_lanes > 0) &&
                 (g.dist_to_lane_drop_m >= 0.0) &&
                 (g.dist_to_lane_drop_m <= 120.0);
+
+            /* 导航路线目标：只在本路段有效（road/geometry 的 road_id），
+             * 掉头返程/泊车不接管。每次只走相邻一条，完成后再下一帧继续。 */
+            const int route_goal_lane =
+                (g.route_lane_goal >= 0 &&
+                 (g.route_lane_goal_road < 0 || g.road_id < 0 ||
+                  g.route_lane_goal_road == g.road_id))
+                    ? g.route_lane_goal : -1;
+            const behavior_route_goal::Decision route_step =
+                behavior_route_goal::next_lane(
+                    current_idx, route_goal_lane, lc,
+                    g.road_oneway != 0, g.on_return != 0,
+                    /* 泊车仲裁在 planning 的 active_scenario 守卫里；这里若用
+                     * has_parking_destination（只要配置了终点就为 1）会把整段
+                     * 城市/高架路线的出口变道也一起禁掉。 */
+                    false);
+            const bool route_wants_right =
+                route_step.trigger && route_step.lane > current_idx;
+            /* route 目标已到达时保持该车道：不要让「前方曲率像左转」或
+             * 「前方车道缩减」之类启发式把车从导航要求的出口车道拽走
+             * （高架出口实测 ramp 起始先向左弯 + 8→2 车道缩减，旧逻辑
+             * 把 lane7 拉回 lane6）。 */
+            const bool route_holding =
+                route_goal_lane >= 0 && route_goal_lane == current_idx;
+            const bool route_needs_right =
+                route_goal_lane >= 0 && route_goal_lane > current_idx;
+            const bool route_needs_left =
+                route_goal_lane >= 0 && route_goal_lane < current_idx;
+
             const bool lane_drop_merge_needed =
-                current_legal && lane_drop_ahead && (current_idx > max_legal_after_drop);
-            if (lane_drop_ahead && (current_idx + 1) > max_legal_after_drop) {
+                current_legal && lane_drop_ahead &&
+                (current_idx > max_legal_after_drop) &&
+                !route_holding && !route_needs_right;
+            if (lane_drop_ahead && (current_idx + 1) > max_legal_after_drop &&
+                !route_holding && !route_needs_right) {
                 /* 接近前方本向车道缩减区时禁止向右变道驶入即将消失的外侧车道 */
                 right_ok = false;
             }
+
             const bool left_turn_merge_needed =
-                current_legal && left_turn_ahead && (current_idx > legal_first);
+                current_legal && left_turn_ahead && !route_holding &&
+                !route_needs_right && (current_idx > legal_first);
             flowengine::AccelLaneInput accel_in;
             accel_in.lane_count = lc;
             accel_in.oneway = g.road_oneway != 0;
@@ -1271,7 +1350,8 @@ protected:
             const flowengine::AccelLaneDecision accel =
                 flowengine::decide_accel_lane(accel_in);
             const bool right_turn_merge_needed =
-                current_legal && right_turn_ahead && (current_idx < legal_last);
+                current_legal && right_turn_ahead && !route_holding &&
+                !route_needs_left && (current_idx < legal_last);
 
             if (left_ok && right_ok) {
                 adj_idx = (left_gap >= right_gap) ? current_idx - 1 : current_idx + 1;
@@ -1291,6 +1371,12 @@ protected:
                 (adj_idx >= 0) &&
                 ((adj_speed > lead_speed + 0.5) ||
                  (adj_gap > best_gap + 10.0));
+            /* 路线目标存在时，不允许被动超车把车带离目标车道（例如出口在右、
+             * 却为了超前车向左并线）。目标道不安全时宁可跟车等待。 */
+            const bool adj_toward_route =
+                (route_goal_lane < 0 || adj_idx < 0) ||
+                (std::abs(adj_idx - route_goal_lane) <
+                 std::abs(current_idx - route_goal_lane));
 
             /* ── 事件计算与状态转移 ──
              * 基于当前条件计算该发什么事件给状态机。
@@ -1445,6 +1531,27 @@ protected:
                     snprintf(reason, sizeof(reason),
                              "right turn ahead: merge lane%d -> lane%d",
                              current_idx, current_idx + 1);
+                } else if (route_step.trigger && !uturn_approach_active &&
+                           (route_wants_right
+                                ? (right_ok && right_rear_safe && right_res.front_ttc_safe)
+                                : (left_ok && left_rear_safe && left_res.front_ttc_safe)) &&
+                           (cur == BEH_ST_CRUISE || cur == BEH_ST_FOLLOW)) {
+                    /* 导航路线要求的车道（出口前靠右/汇入后靠左）：由 behavior
+                     * 发起，走既有 RIGHT/LEFT_CHANGE 状态与安全复检。每次只走
+                     * 一条，完成后下一帧继续，避免一次跨 3 条车道。 */
+                    const double route_gap = route_wants_right ? right_gap : left_gap;
+                    const double route_lead_v = route_wants_right ? right_lead_v : left_lead_v;
+                    ev = route_wants_right ? BEH_EV_OVERTAKE_RIGHT : BEH_EV_OVERTAKE_LEFT;
+                    new_target_lane = route_step.lane;
+                    new_target_speed = (route_gap >= 1e8)
+                        ? g.cfg_cruise_speed
+                        : std::min(g.cfg_cruise_speed, std::max(route_lead_v, g.ego_v));
+                    new_follow_id = 0;
+                    snprintf(reason, sizeof(reason),
+                             "route lane goal %d: lane%d -> lane%d (gap=%.1f safe=%d)",
+                             route_goal_lane, current_idx, route_step.lane, route_gap,
+                             route_wants_right ? (right_ok && right_rear_safe)
+                                               : (left_ok && left_rear_safe));
                 } else if (cur == BEH_ST_CRUISE) {
                     if (uturn_approach_active) {
                         if (!at_inner_lane) {
@@ -1480,6 +1587,7 @@ protected:
                                      g.uturn_max_trigger_speed, g.ego_x);
                         }
                     } else if (worthwhile && adj_idx >= 0 && adj_better &&
+                        adj_toward_route &&
                         !carriageway_ahead_stop_light()) {
                         ev = (adj_idx < current_idx) ? BEH_EV_OVERTAKE_LEFT : BEH_EV_OVERTAKE_RIGHT;
                         new_target_lane = adj_idx;
@@ -1494,6 +1602,7 @@ protected:
                     } else if (g.trav_valid && (t_start - g.trav_last_us < 1000000ULL) &&
                                g.trav_blocked && g.trav_nearest_obs_x > 0.0 &&
                                g.trav_nearest_obs_x < 25.0 && adj_idx >= 0 &&
+                               adj_toward_route &&
                                g.cooldown <= 0.0 && !carriageway_ahead_stop_light()) {
                         ev = (adj_idx < current_idx) ? BEH_EV_OVERTAKE_LEFT : BEH_EV_OVERTAKE_RIGHT;
                         new_target_lane = adj_idx;
@@ -1518,11 +1627,16 @@ protected:
                          * event/gates as normal overtaking. This branch used to
                          * only write target_lane_idx, which planning ignores in
                          * CRUISE, so the car never moved. */
+                        const bool accel_toward_route =
+                            route_goal_lane < 0 ||
+                            (std::abs(accel.target_lane - route_goal_lane) <
+                             std::abs(current_idx - route_goal_lane));
                         const bool can_change =
                             (accel.target_lane < current_idx)
                                 ? (left_ok && left_rear_safe)
                                 : (right_ok && right_rear_safe);
                         if (accel.target_lane != current_idx && can_change &&
+                            accel_toward_route &&
                             g.cooldown <= 0.0 && !carriageway_ahead_stop_light()) {
                             ev = accel.target_lane < current_idx
                                      ? BEH_EV_OVERTAKE_LEFT
@@ -1922,6 +2036,8 @@ protected:
                     cJSON_AddNumberToObject(root, "lane_width", lw);
                     cJSON_AddNumberToObject(root, "upcoming_own_lanes", g.upcoming_own_lanes);
                     cJSON_AddNumberToObject(root, "dist_to_lane_drop_m", g.dist_to_lane_drop_m);
+                    cJSON_AddNumberToObject(root, "route_lane_goal", g.route_lane_goal);
+                    cJSON_AddNumberToObject(root, "route_lane_goal_road", g.route_lane_goal_road);
                     /* 横向目标/本车道中心用「参考线路面中心 + 车道偏移」算：
                      * 旧实现把 road_c 固定成 0，在 y≠0 的匝道/车库（如
                      * b1_exit_slope 中心 y=-10.5）会把 cte 报成 -10.5m 的
@@ -2033,6 +2149,7 @@ static const char* s_inputs[]  = {
     TOPIC_ROAD_GEOMETRY,
     TOPIC_ROAD_TRAFFIC_LIGHTS,
     TOPIC_ROAD_REF_PATH,       /* reverse / 返程方向 */
+    TOPIC_NAVIGATION_PATH,     /* route_step lane_change → 路线目标车道 */
     TOPIC_SCENE_FRAME,         /* 施工区权威几何 */
     nullptr
 };
@@ -2067,6 +2184,9 @@ static int behavior_init(MessageBus* bus, Transport* transport,
     g.lane_count = 2;
     g.lane_width = 3.5;
     g.road_oneway = 0;
+    g.road_id = -1;
+    g.route_lane_goal = -1;
+    g.route_lane_goal_road = -1;
     g.upcoming_own_lanes = -1;
     g.dist_to_lane_drop_m = -1.0;
 
@@ -2154,6 +2274,7 @@ static int behavior_init(MessageBus* bus, Transport* transport,
     transport_subscribe(transport, TOPIC_ROAD_GEOMETRY,               on_road_geometry,      nullptr);
     transport_subscribe(transport, TOPIC_ROAD_TRAFFIC_LIGHTS,         on_traffic_lights,     nullptr);
     transport_subscribe(transport, TOPIC_ROAD_REF_PATH,               on_ref_path,           nullptr);
+    transport_subscribe(transport, TOPIC_NAVIGATION_PATH,             on_navigation_path,    nullptr);
     transport_subscribe(transport, TOPIC_SCENE_FRAME,                 on_scene_frame,        nullptr);
 
     discovery_advertise(discovery, TOPIC_FUSION_LOCALIZATION,       0u, CAP_SUBSCRIBER,  0);
@@ -2164,6 +2285,7 @@ static int behavior_init(MessageBus* bus, Transport* transport,
     discovery_advertise(discovery, TOPIC_ROAD_GEOMETRY,             0x80AD5C12u, CAP_SUBSCRIBER,  0);
     discovery_advertise(discovery, TOPIC_ROAD_TRAFFIC_LIGHTS,       0x7E5C0FFEu, CAP_SUBSCRIBER,  0);  /* 归位决策 */
     discovery_advertise(discovery, TOPIC_ROAD_REF_PATH,             0u, CAP_SUBSCRIBER,  0);          /* reverse/返程 */
+    discovery_advertise(discovery, TOPIC_NAVIGATION_PATH,           0u, CAP_SUBSCRIBER,  0);          /* route lane goal */
     discovery_advertise(discovery, TOPIC_SCENE_FRAME,               0x5CE4E011u, CAP_SUBSCRIBER,  0);  /* 施工区权威几何 */
     discovery_advertise(discovery, TOPIC_PLANNING_BEHAVIOR,    BEHAVIOR_TYPE_ID, CAP_PUBLISHER, 20.0);
     discovery_advertise(discovery, "behavior/state",            0u, CAP_PUBLISHER, 0.4);  /* 每 2.5s */

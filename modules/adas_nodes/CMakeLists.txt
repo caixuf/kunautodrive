@@ -602,6 +602,10 @@ add_executable(test_behavior_gap_eval test_behavior_gap_eval.cpp)
 target_include_directories(test_behavior_gap_eval PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME behavior_gap_eval COMMAND test_behavior_gap_eval)
 
+add_executable(test_behavior_route_goal test_behavior_route_goal.cpp)
+target_include_directories(test_behavior_route_goal PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME behavior_route_goal COMMAND test_behavior_route_goal)
+
 add_executable(test_planning_speed_smooth test_planning_speed_smooth.cpp)
 target_include_directories(test_planning_speed_smooth PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME planning_speed_smooth COMMAND test_planning_speed_smooth)

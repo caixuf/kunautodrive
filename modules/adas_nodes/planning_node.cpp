@@ -95,6 +95,8 @@ struct PlanningContext {
     /* 导航状态（由 navigation_node 发布 navigation/path 驱动） */
     int               route_count{0};       /* 导航总步骤数（来自 route_status） */
     int               route_next_idx{0};    /* 下一条待触发步骤索引（来自 route_status/route_step） */
+    int               current_road_id{-1};  /* road/geometry 的 road_id（原子车道模型） */
+    int               ref_road_id{-1};      /* road/ref_path 的 road_id（参考线起点所在路段） */
     volatile int      has_navigation{0};
     uint64_t          last_nav_us{0};
     /* 当前路线要求的目标车道索引。
@@ -301,10 +303,13 @@ struct PlanningContext {
      * 注意：这里是**当前**位置，不含 Frenet 内部的 2s 外推 —— 静态障碍（红灯虚拟墙、
      * 施工区）语义与 Frenet 完全一致，运动障碍差一个外推（那是 W4 的范畴）。 */
     double   frenet_obs_x[128], frenet_obs_y[128], frenet_obs_w[128], frenet_obs_l[128];
+    double   frenet_obs_vx[128], frenet_obs_vy[128];
     int      frenet_obs_n;
     uint32_t traj_swept_hits;
     uint32_t traj_swept_hit_frames;
     uint32_t traj_swept_check_frames;   /* 真正执行过检查的帧数（区分"没检查"和"检查了没命中"） */
+    uint32_t traj_swept_static_hits;    /* 只统计"静态 + 目标车道 + 近距"过滤后的命中 */
+    uint32_t traj_swept_reject_frames;  /* 过滤后仍命中 → traj.valid=0 的帧数 */
     Trajectory prev_traj;           /* 上帧发布的轨迹 */
     uint64_t prev_traj_stamp_us;    /* 上帧轨迹发布时间戳 */
     int stitch_skip_count;          /* 连续性跳过次数统计（>5%→FAIL） */
@@ -316,14 +321,6 @@ struct PlanningContext {
     int    overtake_state{0};       /* 0=巡航, 1=左变道, 2=右变道（缓存 behavior.command） */
     double target_lane_offset{0.0}; /* 当前目标车道偏移 (m, 相对于道路中心) */
     int    committed_lane_idx{-1}; /* 巡航车道滞回锁存；-1 = 尚未采纳。变道中写入目标车道 */
-    /* 导航选路目标车道（navigation/path route_step lane_change）。
-     * 与 behavior 的被动超车变道不同：这是路线本身要求的车道（如出口前
-     * 提前移到最右车道）。规划按相邻车道逐条推进，避免 3.5m×N 的横向
-     * 阶跃；仅在 LaneFollowScenario 生效，泊车/掉头不碰。 */
-    int    route_lane_goal{-1};
-    int    route_lane_goal_road{-1}; /* 下发 route 目标时的 lane_match.road_id；
-                                      * road 变了就交回 lane_match 权威，避免用
-                                      * 旧路段车道网格把车拉回上一段中心线。 */
     Behavior current_behavior{};    /* 最新 behavior 指令 */
     volatile int has_behavior{0};
 
@@ -1208,6 +1205,8 @@ static void on_road_geometry(const Message* msg, void* user_data) {
         if ((item = cJSON_GetObjectItem(root, "curve_start_x")))  g.curve_start_x = item->valuedouble;
         if ((item = cJSON_GetObjectItem(root, "curve_length_m"))) g.curve_length_m = item->valuedouble;
         if ((item = cJSON_GetObjectItem(root, "curve_offset_m"))) g.curve_offset_m = item->valuedouble;
+        item = cJSON_GetObjectItemCaseSensitive(root, "road_id");
+        if (cJSON_IsNumber(item)) g.current_road_id = (int)item->valuedouble;
         if ((item = cJSON_GetObjectItem(root, "lane_count"))) {
             int new_lc = item->valueint;
             if (new_lc != g.lane_count)
@@ -1243,6 +1242,8 @@ static void on_road_ref_path(const Message* msg, void* user_data) {
     if (!root) return;
     cJSON* reverse = cJSON_GetObjectItemCaseSensitive(root, "reverse");
     if (cJSON_IsBool(reverse)) g.on_return = cJSON_IsTrue(reverse) ? 1 : 0;
+    cJSON* jroad = cJSON_GetObjectItemCaseSensitive(root, "road_id");
+    if (cJSON_IsNumber(jroad)) g.ref_road_id = (int)jroad->valuedouble;
     cJSON* jend = cJSON_GetObjectItemCaseSensitive(root, "road_end_x");
     if (cJSON_IsNumber(jend)) g.route_total_s = jend->valuedouble;
     cJSON* points = cJSON_GetObjectItemCaseSensitive(root, "points");
@@ -1423,8 +1424,6 @@ static void on_navigation_path(const Message* msg, void* user_data) {
         case ROUTE_BRANCH_SELECT: {
             int lane = (target_lane != 0) ? target_lane : -1;
             g.route_target_lane = lane;
-            g.route_lane_goal = -1;   /* 选路步骤由 ref_path 接管，不做同路段变道 */
-            g.route_lane_goal_road = -1;
             g.current_branch_id = branch_id;
             g.route_target_speed = (target_speed > 0.0) ? target_speed : -1.0;
             update_reference_path(g.ego_x - 5.0, g.ego_lane_id > 0);
@@ -1435,7 +1434,6 @@ static void on_navigation_path(const Message* msg, void* user_data) {
         case ROUTE_MERGE: {
             int lane = (target_lane != 0) ? target_lane : 1;
             g.route_target_lane = lane;
-            g.route_lane_goal = -1;   /* 汇入由 merge_state / gap 门控，不直接压横向 */
             g.merge_hold_lane = lane;
             g.merge_state = 1;
             g.current_branch_id = -1;
@@ -1457,9 +1455,6 @@ static void on_navigation_path(const Message* msg, void* user_data) {
         case ROUTE_LANE_CHANGE:
         default:
             g.route_target_lane = target_lane;
-            g.route_lane_goal = (target_lane >= 0) ? target_lane : -1;
-            g.route_lane_goal_road = (g.route_lane_goal >= 0 && g.lane_match.valid)
-                                   ? g.lane_match.road_id : -1;
             g.current_branch_id = -1;
             if (target_speed >= 0.0) g.route_target_speed = target_speed;
             else                     g.route_target_speed = -1.0;
@@ -2282,6 +2277,8 @@ protected:
                         g.frenet_obs_y[i] = oy[i];
                         g.frenet_obs_w[i] = ow[i];
                         g.frenet_obs_l[i] = ol[i];
+                        g.frenet_obs_vx[i] = ovx[i];
+                        g.frenet_obs_vy[i] = ovy[i];
                     }
                     g.frenet_obs_n = keep;
                 }
@@ -2318,69 +2315,11 @@ protected:
                 const bool own_side_only = !g.road_oneway;
                 const double side_offset = planning_coord::lane_group_side_offset(
                     n_lanes, lane_w, g.road_oneway != 0);
-                /* 导航选路优先：route_step lane_change 指定的是「路线要求的车道」
-                 * （出口前提前靠右），不是障碍物触发的被动超车。按相邻车道逐条
-                 * 推进，避免一次性横移 N×3.5m 让控制追不上。只在 LaneFollowScenario
-                 * 生效：泊车/掉头由各自场景接管横向。 */
-                const bool route_lane_ok =
-                    g.route_lane_goal >= 0 &&
-                    !g.on_return &&
-                    (g.active_scenario_name == "LaneFollowScenario" ||
-                     g.active_scenario_name == "LANE_FOLLOW") &&
-                    !(g.has_behavior && g.current_behavior.command == BEH_U_TURN) &&
-                    /* 双向路逆行半幅（lane_id>0）时车道索引网格是相对道路
-                     * 前进方向的，不能拿它做「向右第 N 条」；交回 lane_match。 */
-                    !(!g.road_oneway && g.lane_match.valid &&
-                      g.lane_match.lane_id > 0) &&
-                    (g.route_lane_goal_road < 0 || !g.lane_match.valid ||
-                     g.lane_match.road_id == g.route_lane_goal_road);
-                if (route_lane_ok) {
-                    const int legal_min = planning_coord::first_legal_lane(n_lanes, false);
-                    int goal = g.route_lane_goal;
-                    goal = std::max(goal, g.road_oneway ? 0 : legal_min);
-                    goal = std::min(goal, n_lanes - 1);
-
-                    /* 当前车道优先取 lane_match.lane_id（OpenDRIVE：顺向 lane_id<0，
-                     * id 越小越靠右）。这样即使 route 参考线已跨到下一段、n_lanes
-                     * 仍是上一段的车道数，也不会把「已在目标车道」误判成第 4 车道
-                     * 再往右打一把（高架出口实测 target -12.25 → -5.25 振荡）。 */
-                    int cur = -1;
-                    double cur_center_d = 0.0;
-                    const uint64_t lm_now = clock_now_us();
-                    const bool lm_usable =
-                        g.lane_match.valid && g.lane_match.lane_id != 0 &&
-                        g.lane_match.last_us != 0 &&
-                        (lm_now - g.lane_match.last_us < 500000ULL) &&
-                        (g.road_oneway || g.lane_match.lane_id < 0);
-                    if (lm_usable) {
-                        const int abs_lane = std::abs(g.lane_match.lane_id);
-                        const int base = g.road_oneway ? 0 : n_lanes / 2;
-                        const int idx = base + abs_lane - 1;
-                        if (idx >= 0 && idx < n_lanes) {
-                            cur = idx;
-                            cur_center_d = ego_lane_d - g.lane_match.llt_offset;
-                        }
-                    }
-                    if (cur < 0) {
-                        const int cand_lane = planning_coord::nearest_lane(
-                            ego_lane_d, n_lanes, lane_w, own_side_only, side_offset);
-                        g.committed_lane_idx = planning_coord::hold_lane_index(
-                            ego_lane_d, cand_lane, g.committed_lane_idx,
-                            n_lanes, lane_w, side_offset);
-                        cur = (g.committed_lane_idx >= 0)
-                            ? g.committed_lane_idx : cand_lane;
-                        cur_center_d = lane_center_offset(
-                            cur, n_lanes, lane_w, g.road_oneway);
-                    }
-                    g.committed_lane_idx = cur;
-                    if (cur == goal) {
-                        g.target_lane_offset = cur_center_d;
-                    } else if (cur < goal) {
-                        g.target_lane_offset = cur_center_d - lane_w;  /* 向右一条 */
-                    } else {
-                        g.target_lane_offset = cur_center_d + lane_w;  /* 向左一条 */
-                    }
-                } else if (g.has_behavior && g.current_behavior.target_lane_idx >= 0 &&
+                /* 横向变道意图唯一归 behavior：规划只消费 Behavior.target_lane_idx。
+                 * 导航 route_step lane_change 已由 behavior_planner 翻译成相邻
+                 * RIGHT/LEFT_CHANGE，规划不再自己改 target_lane_offset——否则
+                 * 会出现「behavior 显示左变道、车却向右靠」的双主人问题。 */
+                if (g.has_behavior && g.current_behavior.target_lane_idx >= 0 &&
                     g.current_behavior.target_lane_idx < n_lanes &&
                     (g.current_behavior.command == BEH_LEFT_CHANGE || g.current_behavior.command == BEH_RIGHT_CHANGE)) {
                     /* 显式变道：跟行为目标，并把锁存写成该车道。
@@ -3311,7 +3250,10 @@ publish_trajectory:
              * 采样间距可达数米；0.5m 的薄障碍（红灯虚拟墙就是 ol=0.5）可能整根落在
              * 两个采样点之间 → 点测放行、实际会撞。这里对**最终发布轨迹**做线段×AABB
              * 扫掠检查，先把"到底会不会发生"量化出来（traj_safety.c + 单测）。
-             * 升级为 `traj.valid = 0` 属于行为变更，等这个计数有统计再定（handoff §17）。 */
+             * 全部障碍物的 raw 计数只做诊断；真正接入可行性判断的是下面的
+             * **静态 + 目标车道 + 60m 视界** 过滤结果，避免邻道静止车/路侧设施误刹。 */
+            bool swept_static_reject = false;
+            int  swept_static_seg = -1;
 #ifdef HAVE_FRENET
             if (n_pts >= 2 && g.frenet_obs_n > 0) {
                 g.traj_swept_check_frames++;
@@ -3334,6 +3276,46 @@ publish_trajectory:
                                  " — Frenet 点测未拦下，详见 traj_safety.h",
                                  g.traj_swept_hit_frames, g.traj_swept_hits,
                                  sw.seg_idx, sw.obs_idx, sw_n, g.frenet_obs_n);
+                    }
+                }
+
+                /* 过滤后的可行性判据：只保留
+                 *   - 静止障碍（|v|<0.5 m/s，含红灯虚拟墙/路侧设施）
+                 *   - 在自车目标车道带内（目标车道中心 ± 半车道 + 障碍半宽）
+                 *   - 自车前方 60m 内
+                 * 任一条件不满足的邻道车/路侧物不参与 traj.valid=0，避免 600s
+                 * 实测 247 帧全量命中把车刹停。 */
+                double fx[128], fy[128], fw[128], fl[128];
+                int fn = 0;
+                const double ch = std::cos(g.ego_heading);
+                const double sh = std::sin(g.ego_heading);
+                const double lane_w = (g.lane_width > 1.0) ? g.lane_width : 3.5;
+                const double target_lat = g.target_lane_offset;
+                for (int i = 0; i < g.frenet_obs_n && fn < 128; i++) {
+                    if (std::hypot(g.frenet_obs_vx[i], g.frenet_obs_vy[i]) > 0.5) continue;
+                    const double rx = g.frenet_obs_x[i] - g.ego_x;
+                    const double ry = g.frenet_obs_y[i] - g.ego_y;
+                    const double along = rx * ch + ry * sh;
+                    const double lat = -rx * sh + ry * ch;
+                    if (along < 0.0 || along > 60.0) continue;
+                    const double margin = lane_w * 0.5 + g.frenet_obs_w[i] * 0.5 + 0.4;
+                    if (std::fabs(lat - target_lat) > margin) continue;
+                    fx[fn] = g.frenet_obs_x[i];
+                    fy[fn] = g.frenet_obs_y[i];
+                    fw[fn] = g.frenet_obs_w[i];
+                    fl[fn] = g.frenet_obs_l[i];
+                    fn++;
+                }
+                if (fn > 0) {
+                    TrajSweptResult sw2 = traj_swept_check(sw_x, sw_y, sw_n,
+                                                           fx, fy, fw, fl, fn);
+                    if (sw2.hits > 0) {
+                        g.traj_swept_static_hits += (uint32_t)sw2.hits;
+                        if (sw2.seg_idx >= 0 && sw2.seg_idx < sw_n &&
+                            (double)points[sw2.seg_idx].t_rel_us < 2500000.0) {
+                            swept_static_reject = true;
+                            swept_static_seg = sw2.seg_idx;
+                        }
                     }
                 }
             }
@@ -3376,6 +3358,33 @@ publish_trajectory:
                     traj.valid = 0;
                     LOG_WARN("planning", "#%d all-zero trajectory (x/y all ==0) — marking invalid",
                              g.plan_count);
+                }
+            }
+            /* W3 接入：静态 + 目标车道 + 2.5s 视界的扫掠命中 → 判不可行。
+             * 变道/掉头/泊车/汇入机动交给各自的安全复检，避免与机动轨迹冲突。 */
+            if (swept_static_reject && traj.valid) {
+                const bool maneuver =
+                    (g.has_behavior &&
+                     (g.current_behavior.command == BEH_LEFT_CHANGE ||
+                      g.current_behavior.command == BEH_RIGHT_CHANGE ||
+                      g.current_behavior.command == BEH_U_TURN)) ||
+                    g.park_out_scenario.IsActive() ||
+                    g.valet_parking_scenario.IsActive() ||
+                    g.route_type == ROUTE_MERGE;
+                /* 3 m/s 门槛：低速排队/红灯前 FOLLOW 已经在处理静止前车，
+                 * 再判 invalid 会触发 control park fallback（full16 实测 24 帧
+                 * reject 全部发生在 0.6~1.9 m/s 的红灯排队段）。扫掠守卫只负责
+                 * 高速下 Frenet 点测漏掉的静止障碍。 */
+                if (!maneuver && g.ego_v > 3.0) {
+                    traj.valid = 0;
+                    g.traj_swept_reject_frames++;
+                    if (g.traj_swept_reject_frames % 10 == 1) {
+                        LOG_WARN("planning",
+                                 "[W3] static swept hit -> traj.valid=0 (seg=%d, reject_frames=%u, "
+                                 "static_hits=%u) — Frenet point test missed a static obstacle",
+                                 swept_static_seg, g.traj_swept_reject_frames,
+                                 g.traj_swept_static_hits);
+                    }
                 }
             }
             if (!traj.valid) {
@@ -3447,6 +3456,8 @@ publish_trajectory:
                 cJSON_AddNumberToObject(dbg, "route_count", g.route_count);
                 cJSON_AddNumberToObject(dbg, "route_next_idx", g.route_next_idx);
                 cJSON_AddNumberToObject(dbg, "road_center_y", dbg_rc_y);
+                cJSON_AddNumberToObject(dbg, "current_road_id", g.current_road_id);
+                cJSON_AddNumberToObject(dbg, "ref_road_id", g.ref_road_id);
                 cJSON_AddNumberToObject(dbg, "ego_d", dbg_ego_d);
                 cJSON_AddNumberToObject(dbg, "ref_s", dbg_ref_s);
                 cJSON_AddNumberToObject(dbg, "ref_x", dbg_ref_x);
@@ -3464,6 +3475,8 @@ publish_trajectory:
                 cJSON_AddNumberToObject(dbg, "traj_swept_hit_frames", (double)g.traj_swept_hit_frames);
                 cJSON_AddNumberToObject(dbg, "traj_swept_hits", (double)g.traj_swept_hits);
                 cJSON_AddNumberToObject(dbg, "traj_swept_check_frames", (double)g.traj_swept_check_frames);
+                cJSON_AddNumberToObject(dbg, "traj_swept_static_hits", (double)g.traj_swept_static_hits);
+                cJSON_AddNumberToObject(dbg, "traj_swept_reject_frames", (double)g.traj_swept_reject_frames);
                 cJSON_AddNumberToObject(dbg, "n_lanes", g.lane_count);
                 cJSON_AddNumberToObject(dbg, "lane_width", g.lane_width);
                 if (g.has_behavior) {
@@ -3771,9 +3784,9 @@ static int planning_init(MessageBus* bus, Transport* transport,
 
     g.route_count        = 0;
     g.route_next_idx     = 0;
+    g.current_road_id    = -1;
+    g.ref_road_id        = -1;
     g.route_target_lane  = -1;  /* N 车道模型：-1=无目标 */
-    g.route_lane_goal    = -1;  /* 导航选路目标车道（route_step 驱动） */
-    g.route_lane_goal_road = -1;
     g.route_target_speed = -1.0;  /* -1=未设置 */
     /* NOA Phase 3.2/3.3: 路线步骤类型默认 lane_change，branch_id 复位 */
     g.route_type         = ROUTE_LANE_CHANGE;

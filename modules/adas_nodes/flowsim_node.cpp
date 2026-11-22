@@ -1493,6 +1493,7 @@ static void publish_road_geometry(void) {
     const int road_id = snap.road_id;
     const double speed_limit = snap.speed_limit;
     cJSON_AddNumberToObject(root, "lane_count", lane_count);
+    cJSON_AddNumberToObject(root, "road_id", road_id);
     cJSON_AddNumberToObject(root, "speed_limit", speed_limit);
     cJSON_AddBoolToObject(root, "speed_camera", road_has_speed_camera(road_id));
     /* 单双向：per-road OpenDRIVE lane_id 推导，确保单向匝道与双向主干道无缝衔接 */
@@ -1853,11 +1854,18 @@ static void publish_ref_path(void) {
 
     cJSON* pts = cJSON_CreateArray();
     bool reverse_route = false;
+    int ego_road_id = -1;
     if (g.roads_loaded && g.route.ok()) {
         const flowsim::Entity& ego = g.pool[0];
         /* ego 在 route 上的累计 s：用 compute_ego_route_s 复用 road_pos handle */
         double ego_route_s = compute_ego_route_s();
         if (ego_route_s < 0.0) ego_route_s = 0.0;  /* 不在 route 上时从起点采样 */
+        {
+            double sl = 0.0;
+            int ridx = 0;
+            g.route.locate(ego_route_s, ego_road_id, sl, ridx);
+            (void)sl; (void)ridx;
+        }
         /* 采样 ego 前方 100m、间距 5m（21 个点）；lookahead 远一些保证
          * 控制器在高速段（27m/s）每步 1.35m 也有充足前视距离。 */
         std::vector<flowsim::RefPathPoint> samples;
@@ -1942,6 +1950,15 @@ static void publish_ref_path(void) {
             cJSON_AddNumberToObject(pt, "h", p.h);
             cJSON_AddNumberToObject(pt, "kappa", p.kappa);
             cJSON_AddNumberToObject(pt, "rs", p.route_s);
+            /* per-point road id：为后续 per-point lane topology 留出契约。
+             * 当前 planning 仍用 road/geometry 的全局 lane_count；跨路段时
+             * 先靠 route_lane_goal_road/lane_match 兜底。 */
+            int pt_rid = -1;
+            double pt_sl = 0.0;
+            int pt_idx = 0;
+            g.route.locate(p.route_s, pt_rid, pt_sl, pt_idx);
+            (void)pt_sl; (void)pt_idx;
+            cJSON_AddNumberToObject(pt, "road_id", pt_rid);
             cJSON_AddItemToArray(pts, pt);
         }
     }
@@ -1950,6 +1967,7 @@ static void publish_ref_path(void) {
      * 整个返程保持 true（第二次掉头才复位），永不抖动。navigation 消费此标志作为
      * 唯一权威 travel_dir，取代基于 dx/heading 的猜测（掉头/绕圈时会来回翻）。 */
     cJSON_AddBoolToObject(root, "reverse", reverse_route ? 1 : 0);
+    cJSON_AddNumberToObject(root, "road_id", ego_road_id);
     /* 路端位置（单一事实源）：route 总长。behavior 的掉头触发用它做固定
      * 参考（替代"采样末点封顶检测"——低速起步时末点位移小会误判封顶，
      * 导致启动即触发掉头逆行，2026-08-03 实测）。 */
