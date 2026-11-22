@@ -66,7 +66,11 @@ inline double pedestrian_stop_gap(double speed_mps) {
  * Minimum distance deficit to hold behind an active crossing pedestrian.
  * At traffic speed the buffer covers the stop line + crosswalk width so the
  * ego stops before the line (observed at 4.2 m/s: old 4.5m buffer let it
- * roll to x=545, on the x≈546 crosswalk). Low-speed creep keeps 4.5m.
+ * roll to x=545, on the x≈546 crosswalk). Low-speed creep now keeps 7m:
+ * the full 600s park_to_park_city run stopped with its nose at x=546.5
+ * (light stop line 538.5, crosswalk ≈544.5..548) and a crossing pedestrian
+ * walked into the front bumper (flowsim OBB invariant). 7m keeps the whole
+ * 4.6m body behind the crosswalk even after a green-light roll-through.
  */
 template <typename StateT, int MaxObs>
 inline double pedestrian_crossing_hold_gap(const StateT& state,
@@ -74,7 +78,7 @@ inline double pedestrian_crossing_hold_gap(const StateT& state,
     double best_gap = 1e9;
     const double fwd_x = std::cos(state.heading);
     const double fwd_y = std::sin(state.heading);
-    const double crossing_buffer_m = (state.speed >= 3.0) ? 10.0 : 4.5;
+    const double crossing_buffer_m = (state.speed >= 3.0) ? 10.0 : 7.0;
 
     for (int i = 0; i < MaxObs; ++i) {
         if (!state.obs_valid[i]) continue;
@@ -84,7 +88,14 @@ inline double pedestrian_crossing_hold_gap(const StateT& state,
         const double ex = state.obs_x[i] - state.x;
         const double ey = state.obs_y[i] - state.y;
         const double along = ex * fwd_x + ey * fwd_y;
-        if (along < -2.0 || along > 35.0) continue;
+        /* Only hold for walkers still ahead of the ego. A walker that is
+         * alongside/behind (along <= 1m) must not freeze the brakes: the
+         * 600s park_to_park_city run stopped with its center at x=547.8
+         * while a crossing pedestrian was at x=546.3, then sat on the
+         * crosswalk with the walker against its rear quarter (OBB
+         * invariant). Ignoring the behind case lets the ego clear the
+         * crossing; the planner/safety still stop for walkers ahead. */
+        if (along < 1.0 || along > 35.0) continue;
 
         const double lat_signed = -ex * fwd_y + ey * fwd_x;
         const double lat = std::fabs(lat_signed);

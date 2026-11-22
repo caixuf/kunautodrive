@@ -1035,11 +1035,17 @@ protected:
              * 表达而非裸 80m：mult× 时距间距在 12 m/s 下约 desired_gap*mult，
              * 会随车速自动伸缩（高速时更早察觉、低速时不误触发）。 */
             double blocked_range = fmax(g.blocked_range_min, desired_gap * g.blocked_range_mult);
-            /* A genuinely stopped lead stays "blocking" out to 80m. The old
-             * range exited FOLLOW at ~40m, ego accelerated back to cruise,
-             * re-acquired the same stopped car, and repeated the 2.7→9.0→3.1
-             * m/s cycle every ~2s on the garage ramp (user-visible hesitation). */
-            if (lead_speed < 0.5) blocked_range = fmax(blocked_range, 80.0);
+            /* A genuinely stopped lead stays "blocking" out to 80m once the ego
+             * is already close enough to be in the stop/re-accelerate cycle.
+             * The old range exited FOLLOW at ~40m, ego accelerated back to
+             * cruise, re-acquired the same stopped car, and repeated the
+             * 2.7→9.0→3.1 m/s cycle every ~2s on the garage ramp.
+             * Cap it to <45m: at 70m the normal desired-gap range is still
+             * below the lead, so the ego keeps cruising instead of crawling
+             * for a closed ETC gate 70m away (the gate only lifts inside 35m,
+             * so an early crawl stretches the wait to ~14s). */
+            if (lead_speed < 0.5 && best_gap < 45.0)
+                blocked_range = fmax(blocked_range, 80.0);
             /* 滞环：已在 FOLLOW 时用 hysteresis× 的退出距离，避免前车在阈值附近
              * 徘徊时 BLOCKED/LOST_LEAD 每帧翻转（实测曾 150ms 一次进出，
              * 跟车律因此从未连续作用）。进入紧、退出松。 */
@@ -1914,13 +1920,22 @@ protected:
                     cJSON_AddNumberToObject(root, "ego_heading", g.ego_heading);
                     cJSON_AddNumberToObject(root, "lane_count", lc);
                     cJSON_AddNumberToObject(root, "lane_width", lw);
-                    /* 横向变道调试：目标车道中心y + 到目标的距离 */
+                    cJSON_AddNumberToObject(root, "upcoming_own_lanes", g.upcoming_own_lanes);
+                    cJSON_AddNumberToObject(root, "dist_to_lane_drop_m", g.dist_to_lane_drop_m);
+                    /* 横向目标/本车道中心用「参考线路面中心 + 车道偏移」算：
+                     * 旧实现把 road_c 固定成 0，在 y≠0 的匝道/车库（如
+                     * b1_exit_slope 中心 y=-10.5）会把 cte 报成 -10.5m 的
+                     * 假偏差。ego_lane_d 已是相对参考线的横向偏移，反推路面
+                     * 中心后加车道偏移即可，与 lead 筛选/规划同参考系。 */
+                    const double ego_ref_y = g.ego_y - ego_lane_d;
                     if (g.target_lane_idx >= 0) {
-                        double tgt_y = lane_center_y(g.target_lane_idx, lc, lw, 0.0, side_offset);
+                        const double tgt_y = ego_ref_y + planning_coord::lane_center_d(
+                            g.target_lane_idx, lc, lw, side_offset);
                         cJSON_AddNumberToObject(root, "target_lane_y", tgt_y);
                         cJSON_AddNumberToObject(root, "dist_to_target_lane", fabs(g.ego_y - tgt_y));
                     }
-                    double cur_lane_y = lane_center_y(g.committed_lane_idx, lc, lw, 0.0, side_offset);
+                    const double cur_lane_y = ego_ref_y + planning_coord::lane_center_d(
+                        g.committed_lane_idx, lc, lw, side_offset);
                     cJSON_AddNumberToObject(root, "current_lane_y", cur_lane_y);
                     cJSON_AddNumberToObject(root, "cte", g.ego_y - cur_lane_y);
                     /* 跟车关键变量 */

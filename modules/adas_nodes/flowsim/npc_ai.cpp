@@ -1156,6 +1156,11 @@ mobil_done: ;
                     if (route && route->ok() && route->index_of(fp.road_id) < 0) {
                         npc.route_dir = 0;
                     }
+                    /* 路口连接段几何可能与主路中心相差数米；road 切换本身是
+                     * 拓扑跳变，不标记会被 temporal invariant 当成物理瞬移
+                     * （600s 场景在 x≈558 左转 NPC 实测 Δpos=10.8m / 1s）。
+                     * 标记为显式传送；真实物理连续性由连接段/road_pos 负责。 */
+                    npc.last_teleport_cycle = cycle;
                 }
                 npc.road_id = fp.road_id;
                 npc.lane_id = fp.lane_id;

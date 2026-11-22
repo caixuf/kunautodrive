@@ -128,11 +128,11 @@ void test_ped_guard_allows_creeping_to_stopline_behind_crosswalk() {
 
     const double gap = adas_safety::pedestrian_collision_gap<FakeSafetyState, 8>(s);
     const double hold = adas_safety::pedestrian_crossing_hold_gap<FakeSafetyState, 8>(s);
-    /* Must see Ped 1 (9.0m / 7.3m), NOT return 1e9 due to Ped 0 behind,
+    /* Must see Ped 1 (9.0m / 4.8m), NOT return 1e9 due to Ped 0 behind,
      * and must NOT engage emergency braking at 11.8m when creeping at 1.2 m/s. */
     CHECK(std::fabs(gap - 9.0) < 1e-6);
     CHECK(gap > adas_safety::pedestrian_stop_gap(s.speed));
-    CHECK(std::fabs(hold - 7.3) < 1e-6);
+    CHECK(std::fabs(hold - 4.8) < 1e-6);
     CHECK(hold > adas_safety::pedestrian_hold_activate_gap(s.speed));
 }
 
