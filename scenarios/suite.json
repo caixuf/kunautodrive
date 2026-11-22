@@ -257,6 +257,12 @@
       "enabled": true
     },
     {
+      "file": "scenarios/lane_drop_8_to_2.json",
+      "duration_s": 45,
+      "enabled": true,
+      "max_lane_offset_m": 1.75
+    },
+    {
       "file": "scenarios/wet_road_evasion.json",
       "duration_s": 35,
       "enabled": true

@@ -1,6 +1,6 @@
 {
   "generated_by": "tools/build_showcase.py",
-  "count": 49,
+  "count": 50,
   "scenarios": [
     {
       "file": "scenarios/straight_road.json",
@@ -236493,6 +236493,120 @@
         "pass_criteria": {
           "no_collision": true,
           "max_duration_s": 40,
+          "min_avg_speed_mps": 6.0,
+          "min_distance_m": 350,
+          "required_lane_changes": 1
+        },
+        "scenarios": [],
+        "choreography": {
+          "loop_period_s": 999,
+          "beats": []
+        },
+        "traffic_density": {
+          "cars_per_km": 0,
+          "spawn_jitter_m": 0.0,
+          "lane_spread": false,
+          "max_npcs": 0,
+          "random_seed_offset": 0
+        }
+      }
+    },
+    {
+      "file": "scenarios/lane_drop_8_to_2.json",
+      "name": "lane_drop_8_to_2",
+      "description": "本向车道缩减 8→2：8 车道双向（本向 4 条）在 x=300 收为 2 车道双向（本向 1 条）。ego 从 y=-5.25（右起第二车道）起步，behavior 应按 upcoming_own_lanes/dist_to_lane_drop 并入唯一幸存车道 y=-1.75；验证 4→1 本向车道模型的 target 不跳变、不压线。",
+      "duration_s": 45,
+      "enabled": true,
+      "raw": {
+        "name": "lane_drop_8_to_2",
+        "description": "本向车道缩减 8→2：8 车道双向（本向 4 条）在 x=300 收为 2 车道双向（本向 1 条）。ego 从 y=-5.25（右起第二车道）起步，behavior 应按 upcoming_own_lanes/dist_to_lane_drop 并入唯一幸存车道 y=-1.75；验证 4→1 本向车道模型的 target 不跳变、不压线。",
+        "random_seed": 47,
+        "duration_s": 45,
+        "lighting": "day",
+        "weather": "clear",
+        "visibility_m": 600,
+        "ego": {
+          "x": 20.0,
+          "y": -5.25,
+          "heading": 0.0,
+          "init_speed": 8.0,
+          "target_speed": 12.0,
+          "wheelbase": 2.7,
+          "length": 4.6,
+          "width": 2.0,
+          "max_steer": 0.6
+        },
+        "road_network": {
+          "edges": [
+            {
+              "id": 0,
+              "type": "urban",
+              "name": "eight_lane_before_drop",
+              "lanes": 8,
+              "lane_width": 3.5,
+              "speed_limit": 14.0,
+              "oneway": false,
+              "nodes": [
+                [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                [
+                  100.0,
+                  0.0,
+                  0.0
+                ],
+                [
+                  200.0,
+                  0.0,
+                  0.0
+                ],
+                [
+                  300.0,
+                  0.0,
+                  0.0
+                ]
+              ],
+              "length_m": 300.0
+            },
+            {
+              "id": 1,
+              "type": "urban",
+              "name": "two_lane_after_drop",
+              "lanes": 2,
+              "lane_width": 3.5,
+              "speed_limit": 14.0,
+              "oneway": false,
+              "nodes": [
+                [
+                  300.0,
+                  0.0,
+                  0.0
+                ],
+                [
+                  650.0,
+                  0.0,
+                  0.0
+                ],
+                [
+                  1000.0,
+                  0.0,
+                  0.0
+                ]
+              ],
+              "length_m": 400.0
+            }
+          ]
+        },
+        "actors": [],
+        "traffic_lights": [],
+        "stop_lines": [],
+        "construction_zones": [],
+        "route": [],
+        "pass_criteria": {
+          "no_collision": true,
+          "max_duration_s": 50,
           "min_avg_speed_mps": 6.0,
           "min_distance_m": 350,
           "required_lane_changes": 1
