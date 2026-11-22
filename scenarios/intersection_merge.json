@@ -1,0 +1,70 @@
+{
+  "name": "intersection_merge",
+  "description": "右侧匝道汇入：1 车道单向匝道从 y=-10.5 渐升到 y=0，汇入 2 车道双向主路（本向 1 条）。验证 1→2 车道模型切换、right-side merge 参考线连续与汇入后车道保持（几何 merge，不含 ROUTE_MERGE gap 协商）。",
+  "random_seed": 61,
+  "duration_s": 30,
+  "lighting": "day",
+  "weather": "clear",
+  "visibility_m": 600,
+  "ego": {
+    "x": 10.0,
+    "y": -10.9,
+    "heading": 0.16,
+    "init_speed": 5.0,
+    "target_speed": 8.0,
+    "wheelbase": 2.7,
+    "length": 4.6,
+    "width": 2.0,
+    "max_steer": 0.6
+  },
+  "road_network": {
+    "route_chain": [0, 1],
+    "edges": [
+      {
+        "id": 0,
+        "type": "exit_merge",
+        "name": "right_side_merge_ramp",
+        "lanes": 1,
+        "lane_width": 3.5,
+        "speed_limit": 8.0,
+        "oneway": true,
+        "length_m": 70.0,
+        "nodes": [[0.0, -10.5, 0.0], [20.0, -8.4, 0.0], [40.0, -6.5, 0.0], [55.0, -3.4, 0.0], [65.0, 0.0, 0.0]]
+      },
+      {
+        "id": 1,
+        "type": "urban",
+        "name": "merge_mainline",
+        "lanes": 2,
+        "lane_width": 3.5,
+        "speed_limit": 10.0,
+        "oneway": false,
+        "length_m": 300.0,
+        "nodes": [[65.0, 0.0, 0.0], [200.0, 0.0, 0.0], [365.0, 0.0, 0.0]]
+      }
+    ]
+  },
+  "actors": [],
+  "traffic_lights": [],
+  "stop_lines": [],
+  "construction_zones": [],
+  "route": [],
+  "pass_criteria": {
+    "no_collision": true,
+    "max_duration_s": 30,
+    "min_avg_speed_mps": 4.0,
+    "min_distance_m": 200
+  },
+  "scenarios": [],
+  "choreography": {
+    "loop_period_s": 999,
+    "beats": []
+  },
+  "traffic_density": {
+    "cars_per_km": 0,
+    "spawn_jitter_m": 0.0,
+    "lane_spread": false,
+    "max_npcs": 0,
+    "random_seed_offset": 0
+  }
+}

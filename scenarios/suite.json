@@ -217,6 +217,13 @@
       "max_lane_offset_m": 1.65
     },
     {
+      "file": "scenarios/intersection_merge.json",
+      "duration_s": 30,
+      "enabled": false,
+      "max_lane_offset_m": 1.65,
+      "note": "exploratory: 1->2 lane merge fails at model switch (stuck x~67, road departure 4.71m, invariant 4); needs route-aware lane-model transition"
+    },
+    {
       "file": "scenarios/intersection_right_turn.json",
       "duration_s": 45,
       "enabled": true,
