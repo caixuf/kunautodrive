@@ -63,8 +63,10 @@ inline double pedestrian_stop_gap(double speed_mps) {
 }
 
 /**
- * Minimum distance deficit to hold behind an active crossing pedestrian
- * (`kCrossingBufferM = 4.5m` aligns with planner crosswalk yield buffer).
+ * Minimum distance deficit to hold behind an active crossing pedestrian.
+ * At traffic speed the buffer covers the stop line + crosswalk width so the
+ * ego stops before the line (observed at 4.2 m/s: old 4.5m buffer let it
+ * roll to x=545, on the x≈546 crosswalk). Low-speed creep keeps 4.5m.
  */
 template <typename StateT, int MaxObs>
 inline double pedestrian_crossing_hold_gap(const StateT& state,
@@ -72,7 +74,7 @@ inline double pedestrian_crossing_hold_gap(const StateT& state,
     double best_gap = 1e9;
     const double fwd_x = std::cos(state.heading);
     const double fwd_y = std::sin(state.heading);
-    constexpr double kCrossingBufferM = 4.5;
+    const double crossing_buffer_m = (state.speed >= 3.0) ? 10.0 : 4.5;
 
     for (int i = 0; i < MaxObs; ++i) {
         if (!state.obs_valid[i]) continue;
@@ -95,7 +97,7 @@ inline double pedestrian_crossing_hold_gap(const StateT& state,
         }
         if (!crossing_active) continue;
 
-        const double gap = along - kCrossingBufferM;
+        const double gap = along - crossing_buffer_m;
         if (gap < best_gap) best_gap = gap;
     }
     return best_gap;
@@ -107,7 +109,12 @@ inline double pedestrian_crossing_hold_gap(const StateT& state,
  * locking brakes 16m back.
  */
 inline double pedestrian_hold_activate_gap(double speed_mps) {
-    return std::max(1.5, std::max(0.0, speed_mps) * 1.2);
+    /* Braking-distance based, not speed*1.2. At 14 m/s the old 16.8m
+     * window engaged long after the 34m stopping distance: the ego
+     * entered the x≈546 crosswalk and stopped at x=548 on top of it
+     * (the original incident frame). Low speed keeps a small window so
+     * creeping traffic still stops for a pedestrian at the line. */
+    return std::max(2.0, pedestrian_stop_gap(speed_mps) - 0.5);
 }
 
 }  // namespace adas_safety

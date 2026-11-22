@@ -1035,6 +1035,11 @@ protected:
              * 表达而非裸 80m：mult× 时距间距在 12 m/s 下约 desired_gap*mult，
              * 会随车速自动伸缩（高速时更早察觉、低速时不误触发）。 */
             double blocked_range = fmax(g.blocked_range_min, desired_gap * g.blocked_range_mult);
+            /* A genuinely stopped lead stays "blocking" out to 80m. The old
+             * range exited FOLLOW at ~40m, ego accelerated back to cruise,
+             * re-acquired the same stopped car, and repeated the 2.7→9.0→3.1
+             * m/s cycle every ~2s on the garage ramp (user-visible hesitation). */
+            if (lead_speed < 0.5) blocked_range = fmax(blocked_range, 80.0);
             /* 滞环：已在 FOLLOW 时用 hysteresis× 的退出距离，避免前车在阈值附近
              * 徘徊时 BLOCKED/LOST_LEAD 每帧翻转（实测曾 150ms 一次进出，
              * 跟车律因此从未连续作用）。进入紧、退出松。 */

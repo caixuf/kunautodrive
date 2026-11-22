@@ -1894,6 +1894,16 @@ static void publish_ref_path(void) {
             }
         }
         if (commute_return_latched) reverse_route = true;
+        /* At the home park-out slot the ego is perpendicular to the lane and
+         * physically reversing; that is not a route-direction reversal. The
+         * old startup path published reverse=1 here, so behavior logged
+         * "wrong carriageway ... on_return=1" and the planner drove the first
+         * seconds as if returning. Keep the outbound route until clear. */
+        if (g.scenario && g.scenario->park_out.enabled) {
+            const double dx = ego.x - g.scenario->park_out.slot_x;
+            const double dy = ego.y - g.scenario->park_out.slot_y;
+            if (std::hypot(dx, dy) < 8.0) reverse_route = false;
+        }
         if (!reverse_route) {
             double rx = 0.0, ry = 0.0, rh = 0.0;
             if (g.route.sample_pose(g.roads, ego_route_s, rx, ry, rh)) {

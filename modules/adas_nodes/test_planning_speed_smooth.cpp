@@ -149,6 +149,11 @@ void test_ped_guard_brakes_at_speed_and_ignores_exiting_curb_walker() {
     const double gap = adas_safety::pedestrian_collision_gap<FakeSafetyState, 8>(s);
     CHECK(gap < adas_safety::pedestrian_stop_gap(s.speed));
 
+    /* At 14 m/s the hold must open beyond the full braking distance, not at
+     * the old 16.8m window that let the ego stop inside the crosswalk. */
+    CHECK(adas_safety::pedestrian_hold_activate_gap(14.0) >= 30.0);
+    CHECK(adas_safety::pedestrian_hold_activate_gap(1.2) < 7.3);
+
     /* Pedestrian already past ego's lane (+3.5m left) and walking away (+1.2 m/s) must clear! */
     s.obs_x[0] = 53.0;
     s.obs_y[0] = 1.75;  /* lat_signed = +3.5m */
