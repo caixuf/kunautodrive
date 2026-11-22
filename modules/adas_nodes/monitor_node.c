@@ -1196,7 +1196,9 @@ static void on_fusion_localization(const Message* msg, void* user_data) {
     }
     char* txt = cJSON_PrintUnformatted(out);
     if (txt) {
+        pthread_mutex_lock(&g.debug_cache_mutex);
         snprintf(g.localization_json, sizeof(g.localization_json), "%s", txt);
+        pthread_mutex_unlock(&g.debug_cache_mutex);
         free(txt);
     }
     cJSON_Delete(out);
@@ -1209,8 +1211,10 @@ static void on_lane_match(const Message* msg, void* user_data) {
     if (!msg) return;
     size_t copy = msg->data_size;
     if (copy >= sizeof(g.lane_match_json)) copy = sizeof(g.lane_match_json) - 1;
+    pthread_mutex_lock(&g.debug_cache_mutex);
     memcpy(g.lane_match_json, ((const uint8_t*)message_bus_message_data(msg)), copy);
     g.lane_match_json[copy] = '\0';
+    pthread_mutex_unlock(&g.debug_cache_mutex);
 }
 
 /* ── perception/lanes 订阅 — 缓存感知车道线（诊断透传） ── */
@@ -1219,8 +1223,10 @@ static void on_perceived_lanes(const Message* msg, void* user_data) {
     if (!msg) return;
     size_t copy = msg->data_size;
     if (copy >= sizeof(g.perceived_lanes_json)) copy = sizeof(g.perceived_lanes_json) - 1;
+    pthread_mutex_lock(&g.debug_cache_mutex);
     memcpy(g.perceived_lanes_json, ((const uint8_t*)message_bus_message_data(msg)), copy);
     g.perceived_lanes_json[copy] = '\0';
+    pthread_mutex_unlock(&g.debug_cache_mutex);
 }
 
 static void on_safety_evidence(const Message* msg, void* user_data) {
@@ -1620,17 +1626,28 @@ static void export_dashboard_json(void) {
         }
     }
 
-    /* 车道级定位（权威 Frenet 解算 vs vehicle/state 快照的漂移，诊断） */
-    if (g.lane_match_json[0]) {
-        cJSON* lm = monitor_cJSON_Parse(g.lane_match_json);
+    /* 车道级定位（权威 Frenet 解算 vs vehicle/state 快照的漂移，诊断）
+     * 下面三个缓存也必须带锁拷贝：回调线程写、主循环读，半写 JSON 会被
+     * cJSON_Parse→strtod 读到畸形数字并触发 glibc SIGABRT
+     * （strtod_l.c:1496 numsize==1 && n<d，城市 12 目标长跑实测）。 */
+    char lm_buf[sizeof(g.lane_match_json)];
+    pthread_mutex_lock(&g.debug_cache_mutex);
+    memcpy(lm_buf, g.lane_match_json, sizeof(lm_buf));
+    pthread_mutex_unlock(&g.debug_cache_mutex);
+    if (lm_buf[0]) {
+        cJSON* lm = monitor_cJSON_Parse(lm_buf);
         if (lm) {
             cJSON_AddItemToObject(metrics, "lane_match", lm);
         }
     }
 
     /* L3-P2：定位完整性（fusion/localization 的 loc_* 诊断量） */
-    if (g.localization_json[0]) {
-        cJSON* lz = monitor_cJSON_Parse(g.localization_json);
+    char lz_buf[sizeof(g.localization_json)];
+    pthread_mutex_lock(&g.debug_cache_mutex);
+    memcpy(lz_buf, g.localization_json, sizeof(lz_buf));
+    pthread_mutex_unlock(&g.debug_cache_mutex);
+    if (lz_buf[0]) {
+        cJSON* lz = monitor_cJSON_Parse(lz_buf);
         if (lz) {
             cJSON_AddItemToObject(metrics, "localization", lz);
         }
@@ -1638,8 +1655,12 @@ static void export_dashboard_json(void) {
 
     /* 感知车道线（沙箱 lane_detection 的合成边界，诊断透传）。
      * 前端用它画"感知实际输出了什么"，与地图/启发式标线对账。 */
-    if (g.perceived_lanes_json[0]) {
-        cJSON* pl = monitor_cJSON_Parse(g.perceived_lanes_json);
+    char pl_buf[sizeof(g.perceived_lanes_json)];
+    pthread_mutex_lock(&g.debug_cache_mutex);
+    memcpy(pl_buf, g.perceived_lanes_json, sizeof(pl_buf));
+    pthread_mutex_unlock(&g.debug_cache_mutex);
+    if (pl_buf[0]) {
+        cJSON* pl = monitor_cJSON_Parse(pl_buf);
         if (pl) {
             cJSON_AddItemToObject(metrics, "perceived_lanes", pl);
         }

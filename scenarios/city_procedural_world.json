@@ -7,7 +7,7 @@
   "weather": "clear",
   "visibility_m": 1500,
   "enable_uturn": false,
-  "npc_lane_change": true,
+  "npc_lane_change": false,
   "enable_poisson_traffic": false,
   "ego": {
     "x": 20.0,
