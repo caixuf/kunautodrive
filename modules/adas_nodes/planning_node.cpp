@@ -319,7 +319,8 @@ struct PlanningContext {
     uint32_t traj_swept_reject_frames;  /* 过滤后仍命中 → traj.valid=0 的帧数 */
     uint32_t traj_swept_dynamic_frames;      /* 有动态候选且执行检查的帧数（诊断） */
     uint32_t traj_swept_dynamic_hits;        /* 动态 + 目标车道 + 2s 视界过滤后的命中次数 */
-    uint32_t traj_swept_dynamic_close_frames;/* 命中段落在 2s 内的帧数（只诊断，不刹车） */
+    uint32_t traj_swept_dynamic_close_frames;/* 命中段落在 2s 内的帧数 */
+    uint32_t traj_swept_dynamic_reject_frames;/* 动态命中 → traj.valid=0 的帧数 */
     Trajectory prev_traj;           /* 上帧发布的轨迹 */
     uint64_t prev_traj_stamp_us;    /* 上帧轨迹发布时间戳 */
     int stitch_skip_count;          /* 连续性跳过次数统计（>5%→FAIL） */
@@ -3370,6 +3371,8 @@ publish_trajectory:
              * **静态 + 目标车道 + 60m 视界** 过滤结果，避免邻道静止车/路侧设施误刹。 */
             bool swept_static_reject = false;
             int  swept_static_seg = -1;
+            bool swept_dynamic_reject = false;
+            int  swept_dynamic_seg = -1;
 #ifdef HAVE_FRENET
             if (n_pts >= 2 && g.frenet_obs_n > 0) {
                 g.traj_swept_check_frames++;
@@ -3466,6 +3469,8 @@ publish_trajectory:
                         if (sw3.seg_idx >= 0 && sw3.seg_idx < sw_n &&
                             (double)points[sw3.seg_idx].t_rel_us < 2000000.0) {
                             g.traj_swept_dynamic_close_frames++;
+                            swept_dynamic_reject = true;
+                            swept_dynamic_seg = sw3.seg_idx;
                         }
                         if (g.traj_swept_dynamic_close_frames > 0 &&
                             g.traj_swept_dynamic_close_frames % 40 == 1) {
@@ -3543,6 +3548,32 @@ publish_trajectory:
                                  "static_hits=%u) — Frenet point test missed a static obstacle",
                                  swept_static_seg, g.traj_swept_reject_frames,
                                  g.traj_swept_static_hits);
+                    }
+                }
+            }
+
+            /* W3 动态接入：运动障碍 + 目标车道 + 2s 内的扫掠命中 → 判不可行。
+             * 变道/掉头/泊车/汇入机动交给各自的安全复检（与静态同豁免）。
+             * 33 个 enabled 场景 filtered hit 全 0，先证明无误刹；核心扫掠的
+             * 正例/负例由 tests/test_adas_nodes_logic.c 覆盖。 */
+            if (swept_dynamic_reject && traj.valid) {
+                const bool maneuver =
+                    (g.has_behavior &&
+                     (g.current_behavior.command == BEH_LEFT_CHANGE ||
+                      g.current_behavior.command == BEH_RIGHT_CHANGE ||
+                      g.current_behavior.command == BEH_U_TURN)) ||
+                    g.park_out_scenario.IsActive() ||
+                    g.valet_parking_scenario.IsActive() ||
+                    g.route_type == ROUTE_MERGE;
+                if (!maneuver) {
+                    traj.valid = 0;
+                    g.traj_swept_dynamic_reject_frames++;
+                    if (g.traj_swept_dynamic_reject_frames % 5 == 1) {
+                        LOG_WARN("planning",
+                                 "[W3dyn] dynamic swept hit -> traj.valid=0 (seg=%d, "
+                                 "reject_frames=%u, close_frames=%u) — cut-in inside 2s",
+                                 swept_dynamic_seg, g.traj_swept_dynamic_reject_frames,
+                                 g.traj_swept_dynamic_close_frames);
                     }
                 }
             }
@@ -3639,6 +3670,7 @@ publish_trajectory:
                 cJSON_AddNumberToObject(dbg, "traj_swept_dynamic_frames", (double)g.traj_swept_dynamic_frames);
                 cJSON_AddNumberToObject(dbg, "traj_swept_dynamic_hits", (double)g.traj_swept_dynamic_hits);
                 cJSON_AddNumberToObject(dbg, "traj_swept_dynamic_close_frames", (double)g.traj_swept_dynamic_close_frames);
+                cJSON_AddNumberToObject(dbg, "traj_swept_dynamic_reject_frames", (double)g.traj_swept_dynamic_reject_frames);
                 cJSON_AddNumberToObject(dbg, "n_lanes", g.lane_count);
                 cJSON_AddNumberToObject(dbg, "lane_width", g.lane_width);
                 if (g.has_behavior) {
