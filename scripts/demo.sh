@@ -11,7 +11,10 @@
 #   bash scripts/demo.sh --multi      # fork+exec 多进程模式
 #   bash scripts/demo.sh --manual     # 游戏模式：终端 WASD 键盘直接驾驶 ego
 #   bash scripts/demo.sh --scenario scenarios/straight_road.json  # 指定场景
+#   bash scripts/demo.sh --scenario scenarios/roundabout.json 40   # 环岛几何
+#   bash scripts/demo.sh --scenario scenarios/stop_sign.json 30    # 停止线让行
 #   bash scripts/demo.sh --scenario scenarios/city_ring_map.json --route main
+#   （3D 层栏右侧 GT / 感知 / Diff 可切换感知覆盖层数据源）
 #   bash scripts/demo.sh --start-s 2700 --start-d -1.75            # 从 route 2700m 起跑
 #   bash scripts/demo.sh --no-browser # 不自动打开浏览器（仅对 --replay 模式生效）
 # =============================================================================
