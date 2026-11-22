@@ -3061,19 +3061,54 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         # 影子精度（passthrough 模式）：BEV 目标数必须与 scene 真值目标数一致。
         # 此前只有频率门禁 —— "在发垃圾"也能绿。允许 ±2 或 20%（模型模式放宽），
         # 直通模式实测应完全相等。
-        bev_metrics = (last.get("metrics") or {}).get("bev") or {}
-        try:
-            bev_shadow_count = int(bev_metrics.get("count", 0) or 0)
-        except (TypeError, ValueError):
-            bev_shadow_count = 0
-        scene_m = (last.get("metrics") or {}).get("scene") or {}
+        # Use the maximum over the sampled window, not the last frame: the
+        # ego's last pose can legitimately see 0 BEV targets while scene truth
+        # has 2 (congestion_merge nightly flapped on that single sample). A
+        # genuinely dead BEV head still has max=0, so the truth>1 && count<1
+        # branch below keeps its teeth.
+        bev_shadow_count = 0
+        bev_truth_count = 0
+        bev_seen = False
+        bev_counts: list[int] = []
+        bev_truths: list[int] = []
         bev_use_sensor, bev_fov_deg, bev_range_m = pipeline_bev_sensor_spec()
-        bev_truth_count = count_bev_scene_observable_truth(
-            scene_m,
-            use_sensor_input=bev_use_sensor,
-            fov_deg=bev_fov_deg,
-            range_m=bev_range_m,
-        )
+        for _s in samples:
+            _m = _s.get("metrics") or {}
+            _bm = _m.get("bev") or {}
+            if not _bm:
+                continue
+            bev_seen = True
+            try:
+                _c = int(_bm.get("count", 0) or 0)
+            except (TypeError, ValueError):
+                _c = 0
+            _t = count_bev_scene_observable_truth(
+                _m.get("scene") or {},
+                use_sensor_input=bev_use_sensor,
+                fov_deg=bev_fov_deg,
+                range_m=bev_range_m,
+            )
+            bev_counts.append(_c)
+            bev_truths.append(_t)
+        if bev_seen:
+            # Median count is robust to both a late empty frame (count 0) and
+            # a static-return spike (count 13); max truth keeps the "dead
+            # head" branch meaningful even when most frames have 0 truth.
+            bev_shadow_count = int(statistics.median(bev_counts))
+            bev_truth_count = max(bev_truths)
+        else:
+            bev_metrics = (last.get("metrics") or {}).get("bev") or {}
+            try:
+                bev_shadow_count = int(bev_metrics.get("count", 0) or 0)
+            except (TypeError, ValueError):
+                bev_shadow_count = 0
+            scene_m = (last.get("metrics") or {}).get("scene") or {}
+            bev_truth_count = count_bev_scene_observable_truth(
+                scene_m,
+                use_sensor_input=bev_use_sensor,
+                fov_deg=bev_fov_deg,
+                range_m=bev_range_m,
+            )
         # BEV 10Hz 与 monitor 采样/ego 位姿有 ≤100ms 时差；高速行驶时覆盖集合
         # 会差 1–4 个目标（空真值帧仍可能带上一帧的 4 个目标）。路侧静态回波
         # 还会再加 5–7 个；容差取 max(7, 50%)。但**覆盖范围内有真值而 BEV 报 0**
@@ -3085,7 +3120,7 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
         # the measured roadside envelope. The injected-zero A/B check is what
         # catches a dead/wrong BEV head, not this absolute window.
         tol = max(7, int(0.5 * bev_truth_count))
-        if bev_metrics and not has_parking_goal and (
+        if bev_seen and not has_parking_goal and (
                 (bev_truth_count > 1 and bev_shadow_count < 1) or
                 abs(bev_shadow_count - bev_truth_count) > tol):
             failures.append(
