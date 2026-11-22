@@ -12,7 +12,8 @@
 2. **我们现在的短板不是 Three.js 画不出框**，而是：
    - 感知输入只有仿真的 16 线 LiDAR + DBSCAN + BEV-Lite，缺少相机语义、dense occupancy、遮挡/时序融合；
    - 前端 `PerceptionView` 目前是“角标框 + 点云 + 预测光带”，不是参考图那种完整 3D wireframe + ID/速度/车道/TTC；
-   - 规划通用性还差跨车道数模型、环岛/停止标志/通行权、动态障碍扫掠、merge/sensor 场景矩阵。
+   - 规划通用性（2026-11-26 更新）：merge 1→2、环岛几何、停止线让行、sensor 6 场景矩阵已落地；
+     仍差无信号路口通行权/gap acceptance、8→2 车道缩减的 target slew、动态扫掠接入 `traj.valid`（当前只诊断）。
 3. **升级顺序**：先把“可见、稳定、可验收”的感知可视化与 merge 1→2 修绿；再做 occupancy/相机融合；最后才做神经世界模型/3DGS 离线管线。
 
 ---
