@@ -25,10 +25,10 @@
 | 感知 3D 线框 | ✅ 已完成 | `PerceptionView` 8 顶点 12 边完整外框 + 分类色（车青/人琥珀/两轮绿/静态灰），装饰建筑/桥墩不再画框；`tests/vis_perception_wireframe.test.mjs` 10 项断言并入 `npm run vis:check` |
 | demo 收尾汇总 | ✅ 已完成 | 改读 `/tmp/flow_topology.json`，输出车速/定位/规划/控制/行为/BEV；不再出现空值行 |
 | BEV 城市场景假 FAIL | ✅ 已完成 | 真值不再统计 WorldEngine 装饰设施（sensor_model 不对其投射 LiDAR）；城市场景 `count 1 vs truth 5` 在容差内 PASS |
-| 感知 GT/Perception/Diff 三态 | ⬜ 未做 | 当前用 `store.perceived` 与真值合并去重；三态开关需要后端 `source` 切换 + UI |
+| 感知 GT/Perception/Diff 三态 | ✅ 已完成 | `store.perceptionMode` + 3D 层栏 `GT / 感知 / Diff` 按钮：GT 只画真值与静态危险物，感知只画 `perception/obstacles`，Diff 合并去重（默认）；`vis_perception_wireframe.test.mjs` 覆盖三态计数 |
 | merge 1→2 车道模型切换 | ✅ 已完成 | `intersection_merge` 已 enabled + baseline：x 270m / avg 9.08 m/s / min road margin 0.38m / max lane error 0.37m。根因不是跨模型，而是短路段 U_TURN（<360m 从起点就掉头）+ ego 起点偏离匝道车道中心 1m |
 | 环岛 / 停止标志 / 通行权 | ⬜ 未做 | 无 fixture |
-| 动态障碍扫掠 | ⬜ 未做 | 仍为点测，未按 TTC/同车道过滤 |
+| 动态障碍扫掠 | 🟡 诊断完成 | 新增 `traj_swept_dynamic_frames/hits/close_frames`（运动 + 目标车道 + 2s 视界），只计数不拦；全量 38 场景 0 误刹，`r157_cut_in` 100 候选帧/0 命中。接入 `traj.valid` 需先用真实 cut-in 造出 >0 命中 |
 | sensor 场景矩阵 | ⬜ 未做 | 仍只有 nightly 三场景 |
 
 ## 1. 差距拆解

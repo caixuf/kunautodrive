@@ -89,6 +89,26 @@ for (let box = 0; box < 3; box++) {
 }
 eq('每框 4 条竖边（12 边完整线框）', verticalEdges, 12);
 
+// ── 感知源三态：GT / Perception / Diff ──
+store.perceptionMode = 'gt';
+view.update(store, 0);
+eq('GT 模式：只画真值 + 静态危险物', wire.geometry.drawRange.count, 3 * 24);
+
+store.perceptionMode = 'perception';
+store.perceived = [
+  { id: 1, type: 'car', x: 12, y: 0, z: 0, heading: 0, length: 4.6, width: 2.0, height: 1.5, vx: 8 },
+  { id: 77, type: 'car', x: 20, y: 3, z: 0, heading: 0, length: 4.6, width: 2.0, height: 1.5, vx: 6 },
+];
+view.update(store, 0);
+eq('Perception 模式：只画感知输出，不画装饰设施', wire.geometry.drawRange.count, 2 * 24);
+
+store.perceptionMode = 'diff';
+view.update(store, 0);
+eq('Diff 模式：真值与感知合并去重（重复车只留一个）', wire.geometry.drawRange.count, 4 * 24);
+
+store.perceived = [];
+store.perceptionMode = 'diff';
+
 // 关闭感知层后线框应隐藏
 store.layerVisibility.perception = false;
 view.update(store, 0);

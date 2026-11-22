@@ -796,10 +796,28 @@ export function getLayerVisibility(key) {
   return true;
 }
 
+/** 感知覆盖层数据源：gt / perception / diff（只影响覆盖层，不改世界真值） */
+export function setPerceptionMode(mode) {
+  if (!_director) return;
+  const store = _director.getStore();
+  if (!store) return;
+  store.perceptionMode = ['gt', 'perception', 'diff'].includes(mode) ? mode : 'diff';
+}
+
+export function getPerceptionMode() {
+  if (_director) {
+    const store = _director.getStore();
+    return (store && store.perceptionMode) || 'diff';
+  }
+  return 'diff';
+}
+
 if (typeof window !== 'undefined') {
   window.visApp = window.visApp || {};
   window.visApp.setLayerVisibility = setLayerVisibility;
   window.visApp.getLayerVisibility = getLayerVisibility;
+  window.visApp.setPerceptionMode = setPerceptionMode;
+  window.visApp.getPerceptionMode = getPerceptionMode;
 }
 
 export { initWorkerBridge, processTopologyAsync, isWorkerSupported };

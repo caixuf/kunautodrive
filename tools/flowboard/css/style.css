@@ -246,6 +246,7 @@ body[data-workspace="perf"] .ws-observe-analyze{display:none!important}
 .vis-layer-btn{border:1px solid #30363d;background:rgba(33,38,45,.6);color:#8b949e;padding:3px 9px;border-radius:12px;cursor:pointer;font:600 11px/1.4 system-ui,-apple-system,sans-serif;transition:all .2s ease;user-select:none}
 .vis-layer-btn:hover{color:#f0f6fc;border-color:#58a6ff}
 .vis-layer-btn.active{background:rgba(31,111,235,.35);border-color:#58a6ff;color:#58a6ff;box-shadow:0 0 8px rgba(88,166,255,.35)}
+.vis-layer-sep{width:1px;height:16px;background:rgba(110,118,129,.45);margin:0 2px}
 
 /* ── M5 驾驶舱 HUD 姿态与附着系数微仪表 ── */
 #dh-att{color:#79c0ff;font:700 11px/1 'JetBrains Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums;white-space:nowrap}

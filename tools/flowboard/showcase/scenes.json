@@ -235782,6 +235782,7 @@
         "lighting": "day",
         "weather": "clear",
         "visibility_m": 600,
+        "enable_uturn": false,
         "ego": {
           "x": 10.0,
           "y": -11.2,
@@ -235887,8 +235888,7 @@
           "lane_spread": false,
           "max_npcs": 0,
           "random_seed_offset": 0
-        },
-        "enable_uturn": false
+        }
       }
     },
     {

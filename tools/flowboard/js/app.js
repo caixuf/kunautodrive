@@ -3619,6 +3619,15 @@ window.flowboard = {
       }
     }
   },
+  setPerceptionMode: function(mode) {
+    ['gt', 'perception', 'diff'].forEach(function (m) {
+      var b = document.getElementById('perc-mode-' + m);
+      if (b) b.classList.toggle('active', m === mode);
+    });
+    if (window.visApp && typeof window.visApp.setPerceptionMode === 'function') {
+      window.visApp.setPerceptionMode(mode);
+    }
+  },
   refreshIncidentTrace: function() { fetchIncidentTrace(true); },
   dismissIncidentTimeline: dismissIncidentTimeline,
   clearFrames: clearFrames,

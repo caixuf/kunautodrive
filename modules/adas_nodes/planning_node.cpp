@@ -317,6 +317,9 @@ struct PlanningContext {
     uint32_t traj_swept_check_frames;   /* 真正执行过检查的帧数（区分"没检查"和"检查了没命中"） */
     uint32_t traj_swept_static_hits;    /* 只统计"静态 + 目标车道 + 近距"过滤后的命中 */
     uint32_t traj_swept_reject_frames;  /* 过滤后仍命中 → traj.valid=0 的帧数 */
+    uint32_t traj_swept_dynamic_frames;      /* 有动态候选且执行检查的帧数（诊断） */
+    uint32_t traj_swept_dynamic_hits;        /* 动态 + 目标车道 + 2s 视界过滤后的命中次数 */
+    uint32_t traj_swept_dynamic_close_frames;/* 命中段落在 2s 内的帧数（只诊断，不刹车） */
     Trajectory prev_traj;           /* 上帧发布的轨迹 */
     uint64_t prev_traj_stamp_us;    /* 上帧轨迹发布时间戳 */
     int stitch_skip_count;          /* 连续性跳过次数统计（>5%→FAIL） */
@@ -3431,6 +3434,49 @@ publish_trajectory:
                         }
                     }
                 }
+
+                /* 动态障碍扫掠诊断（只计数，不参与 traj.valid —— 误刹风险高）。
+                 * 过滤：运动障碍 + 自车目标车道带 + 2s 视界（v·2 + 6m 余量）。
+                 * 目的：先量化"真实切入/加塞"会被扫掠抓到多少帧，再决定是否接入
+                 * 可行性判断；邻道/横穿/远端目标不计入，避免 600s 长跑误刹。 */
+                double dx[128], dy[128], dw[128], dl[128];
+                int dn = 0;
+                const double dyn_horizon = std::max(8.0, g.ego_v * 2.0 + 6.0);
+                for (int i = 0; i < g.frenet_obs_n && dn < 128; i++) {
+                    if (std::hypot(g.frenet_obs_vx[i], g.frenet_obs_vy[i]) <= 0.5) continue;
+                    const double rx = g.frenet_obs_x[i] - g.ego_x;
+                    const double ry = g.frenet_obs_y[i] - g.ego_y;
+                    const double along = rx * ch + ry * sh;
+                    const double lat = -rx * sh + ry * ch;
+                    if (along < 0.0 || along > dyn_horizon) continue;
+                    const double margin = lane_w * 0.5 + g.frenet_obs_w[i] * 0.5 + 0.4;
+                    if (std::fabs(lat - target_lat) > margin) continue;
+                    dx[dn] = g.frenet_obs_x[i];
+                    dy[dn] = g.frenet_obs_y[i];
+                    dw[dn] = g.frenet_obs_w[i];
+                    dl[dn] = g.frenet_obs_l[i];
+                    dn++;
+                }
+                if (dn > 0) {
+                    g.traj_swept_dynamic_frames++;
+                    TrajSweptResult sw3 = traj_swept_check(sw_x, sw_y, sw_n,
+                                                           dx, dy, dw, dl, dn);
+                    if (sw3.hits > 0) {
+                        g.traj_swept_dynamic_hits += (uint32_t)sw3.hits;
+                        if (sw3.seg_idx >= 0 && sw3.seg_idx < sw_n &&
+                            (double)points[sw3.seg_idx].t_rel_us < 2000000.0) {
+                            g.traj_swept_dynamic_close_frames++;
+                        }
+                        if (g.traj_swept_dynamic_close_frames > 0 &&
+                            g.traj_swept_dynamic_close_frames % 40 == 1) {
+                            LOG_INFO("planning",
+                                     "[W3dyn] 动态障碍扫掠命中（诊断，不刹车）：close_frames=%u hits=%u "
+                                     "cand=%d ego_v=%.1f horizon=%.1fm",
+                                     g.traj_swept_dynamic_close_frames,
+                                     g.traj_swept_dynamic_hits, dn, g.ego_v, dyn_horizon);
+                        }
+                    }
+                }
             }
 #endif
 
@@ -3590,6 +3636,9 @@ publish_trajectory:
                 cJSON_AddNumberToObject(dbg, "traj_swept_check_frames", (double)g.traj_swept_check_frames);
                 cJSON_AddNumberToObject(dbg, "traj_swept_static_hits", (double)g.traj_swept_static_hits);
                 cJSON_AddNumberToObject(dbg, "traj_swept_reject_frames", (double)g.traj_swept_reject_frames);
+                cJSON_AddNumberToObject(dbg, "traj_swept_dynamic_frames", (double)g.traj_swept_dynamic_frames);
+                cJSON_AddNumberToObject(dbg, "traj_swept_dynamic_hits", (double)g.traj_swept_dynamic_hits);
+                cJSON_AddNumberToObject(dbg, "traj_swept_dynamic_close_frames", (double)g.traj_swept_dynamic_close_frames);
                 cJSON_AddNumberToObject(dbg, "n_lanes", g.lane_count);
                 cJSON_AddNumberToObject(dbg, "lane_width", g.lane_width);
                 if (g.has_behavior) {

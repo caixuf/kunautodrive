@@ -36,6 +36,8 @@ export class SceneStore {
     this.perceived = [];            // [{ id, type, x, y, vx, vy, length, width, confidence }]
     this.locMode = '';              // 'SLAM_INDOOR' | 'GNSS_FUSION' | ''
     this.bev = null;                // { count, age_ms }
+    // 感知覆盖层数据源：gt=仅真值 / perception=仅感知输出 / diff=合并去重（默认）
+    this.perceptionMode = 'diff';
     this.layerVisibility = {
       predictions: true,
       perception: true,
@@ -69,6 +71,7 @@ export class SceneStore {
     this.perceived = [];
     this.locMode = '';
     this.bev = null;
+    this.perceptionMode = 'diff';
     this.layerVisibility = {
       predictions: true,
       perception: true,

@@ -185,9 +185,16 @@ function _perceptionClassColor(ent) {
   return SCENE.percStatic;
 }
 
+export const PERCEPTION_MODES = ['diff', 'gt', 'perception'];
+
 function _gatherPerceptionTargets(ego, store) {
   const egoZ = Number.isFinite(Number(ego.z)) ? Number(ego.z) : 0;
   const hasRoadNet = Boolean(store?.roadNetwork?.edges?.length);
+  // 数据源三态：gt=仅真值 / perception=仅感知输出 / diff=合并去重（默认）。
+  // 只影响感知覆盖层，不改 base world（VehicleView 仍画真值孪生）。
+  const mode = PERCEPTION_MODES.includes(store?.perceptionMode) ? store.perceptionMode : 'diff';
+  const includeGt = mode !== 'perception';
+  const includePerception = mode !== 'gt';
   const out = [];
   const pushDedup = (item, dedupDistM) => {
     if (!_isPerceivableObstacle(item)) return;
@@ -214,21 +221,26 @@ function _gatherPerceptionTargets(ego, store) {
     out.push({ ...item, _dist: dist });
   };
 
-  for (const e of (store.entities || [])) pushDedup(e, 0);
-  for (const p of (store.perceived || [])) {
-    if (!p) continue;
-    const sp = Math.hypot(Number(p.vx) || 0, Number(p.vy) || 0);
-    const pz = (p.z != null && Number.isFinite(Number(p.z)))
-      ? Number(p.z)
-      : (hasRoadNet ? roadHeightAt(store, p.x || 0, p.y || 0, egoZ) : egoZ);
-    pushDedup({
-      ...p,
-      z: pz,
-      heading: p.heading ?? (sp > 0.25 ? headingBetweenPoints(0, 0, p.vx || 0, p.vy || 0) : (ego.heading || 0)),
-    }, 0.85);
+  if (includeGt) {
+    for (const e of (store.entities || [])) pushDedup(e, 0);
   }
-  for (const f of (store.facilities || [])) {
-    pushDedup(f, 0.85);
+  if (includePerception) {
+    for (const p of (store.perceived || [])) {
+      if (!p) continue;
+      const sp = Math.hypot(Number(p.vx) || 0, Number(p.vy) || 0);
+      const pz = (p.z != null && Number.isFinite(Number(p.z)))
+        ? Number(p.z)
+        : (hasRoadNet ? roadHeightAt(store, p.x || 0, p.y || 0, egoZ) : egoZ);
+      pushDedup({
+        ...p,
+        z: pz,
+        heading: p.heading ?? (sp > 0.25 ? headingBetweenPoints(0, 0, p.vx || 0, p.vy || 0) : (ego.heading || 0)),
+      }, 0.85);
+    }
+  }
+  // 感知模式只看传感器输出：装饰设施是渲染/碰撞体，不是感知目标。
+  if (mode !== 'perception') {
+    for (const f of (store.facilities || [])) pushDedup(f, 0.85);
   }
   out.sort((a, b) => a._dist - b._dist);
   return out.slice(0, MAX_ENTITIES);
