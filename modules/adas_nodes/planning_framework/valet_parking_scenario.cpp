@@ -533,7 +533,15 @@ bool ValetParkingScenario::IsApplicable(const FrameContext& context) const {
     const double dx = target.x - context.vehicle_state.x;
     const double dy = target.y - context.vehicle_state.y;
     const double dist = std::hypot(dx, dy);
-    return dist <= 48.0;
+    /* A fixed 48m trigger is sized for a ~4 m/s approach. At the
+     * park_to_park_city urban/viaduct cruise (15-18 m/s) the ego entered
+     * the 48m window too late and blew past the office slots (full 600s
+     * run: selected_slot_index=None, final at home). Add two seconds of
+     * travel so the 3.2->1.8 m/s approach has braking room; the stage and
+     * slot search remain authoritative once active. */
+    const double trigger_dist_m =
+        48.0 + 2.0 * std::max(0.0, context.vehicle_state.v);
+    return dist <= trigger_dist_m;
 }
 
 void ValetParkingScenario::Reset() {

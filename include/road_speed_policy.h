@@ -36,7 +36,7 @@ inline double posted_speed_mps(const char* type, double authored) {
         return kph_to_mps(kRampKph);
     }
     if (road_type_is(type, "urban")) {
-        if (authored >= 11.0 && authored <= 16.7) return authored;
+        if (authored >= 5.0 && authored <= 16.7) return authored;
         return kph_to_mps(kUrbanKph);
     }
     if (authored > 0.5) return authored;

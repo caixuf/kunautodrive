@@ -338,7 +338,7 @@ def posted_speed_mps(etype: str, authored: float) -> float:
     if kind == "ramp_curve":
         return authored if authored > 0.5 else 60.0 / 3.6
     if kind == "urban":
-        if 11.0 <= authored <= 16.7:
+        if 5.0 <= authored <= 16.7:
             return authored
         return 50.0 / 3.6
     if authored > 0.5:

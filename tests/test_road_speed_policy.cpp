@@ -16,6 +16,9 @@ static int g_fails = 0;
 static void test_posted_table() {
     const double urban = flowengine::posted_speed_mps("urban", 14.0);
     CHECK(std::fabs(urban - 14.0) < 1e-9, "urban 14 m/s stays in the 40-60 band");
+    const double urban_slow = flowengine::posted_speed_mps("urban", 10.0);
+    CHECK(std::fabs(urban_slow - 10.0) < 1e-9,
+          "authored slow urban (36 km/h riverfront curve) is honored");
     const double urban_default = flowengine::posted_speed_mps("urban", 30.0);
     CHECK(std::fabs(urban_default - 50.0 / 3.6) < 1e-9, "urban outside the band falls to 50 km/h");
     const double via = flowengine::posted_speed_mps("viaduct_highway", 15.5);
