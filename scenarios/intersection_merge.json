@@ -6,10 +6,11 @@
   "lighting": "day",
   "weather": "clear",
   "visibility_m": 600,
+  "enable_uturn": false,
   "ego": {
     "x": 10.0,
-    "y": -10.9,
-    "heading": 0.16,
+    "y": -11.2,
+    "heading": 0.105,
     "init_speed": 5.0,
     "target_speed": 8.0,
     "wheelbase": 2.7,

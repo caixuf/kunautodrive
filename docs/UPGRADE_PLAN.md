@@ -26,7 +26,7 @@
 | demo 收尾汇总 | ✅ 已完成 | 改读 `/tmp/flow_topology.json`，输出车速/定位/规划/控制/行为/BEV；不再出现空值行 |
 | BEV 城市场景假 FAIL | ✅ 已完成 | 真值不再统计 WorldEngine 装饰设施（sensor_model 不对其投射 LiDAR）；城市场景 `count 1 vs truth 5` 在容差内 PASS |
 | 感知 GT/Perception/Diff 三态 | ⬜ 未做 | 当前用 `store.perceived` 与真值合并去重；三态开关需要后端 `source` 切换 + UI |
-| merge 1→2 车道模型切换 | ⬜ 未做 | `intersection_merge` 仍 disabled fixture（x≈67 停住、road departure 4.7m） |
+| merge 1→2 车道模型切换 | ✅ 已完成 | `intersection_merge` 已 enabled + baseline：x 270m / avg 9.08 m/s / min road margin 0.38m / max lane error 0.37m。根因不是跨模型，而是短路段 U_TURN（<360m 从起点就掉头）+ ego 起点偏离匝道车道中心 1m |
 | 环岛 / 停止标志 / 通行权 | ⬜ 未做 | 无 fixture |
 | 动态障碍扫掠 | ⬜ 未做 | 仍为点测，未按 TTC/同车道过滤 |
 | sensor 场景矩阵 | ⬜ 未做 | 仍只有 nightly 三场景 |
@@ -49,7 +49,7 @@
 
 | # | 现状 | 缺口 |
 |---|---|---|
-| 1 | `ref_path` 逐点 `road_id/lane_id/lane_count/oneway/lane_width`；planning 在**同 lane_count/oneway/width** 时用 ref 模型；route-aware lane_match 已接入 | 跨 lane_count（1→2、8→2）仍无 target slew / lane_ref 连续切换；`intersection_merge` 失败即此 |
+| 1 | `ref_path` 逐点 `road_id/lane_id/lane_count/oneway/lane_width`；planning 在**同 lane_count/oneway/width** 时用 ref 模型；route-aware lane_match 已接入 | 1→2 merge 已 PASS（根因是短路段 U_TURN，不是跨模型）；**8→2 车道缩减**仍无 target slew / 迟滞，是下一步 |
 | 2 | behavior 接管 route lane goal，planning 只消费 Behavior | 完成；后续扩展 branch/merge/roundabout 的导航意图 |
 | 3 | 左转/右转/直行/分叉已可验收；fork 已 enabled | 环岛、停止标志、无信号路口通行权、gap acceptance、转弯速度/曲率 |
 | 4 | 静态障碍扫掠过滤 + `traj.valid=0` 已接入 | 动态障碍仍点测；raw sweep 命中率高，不能直接拦 |
@@ -156,7 +156,7 @@
 
 1. **不要追实时 3DGS**：3DGS 的训练/渲染成本、动态物体/光照一致性、车端算力都不适合作为 FSD 主渲染；用 map + scene graph + occupancy 做实时，3DGS 做离线重建/数据。
 2. **感知框不是“画出来”就行**：必须有 ID、速度、车道、置信度、遮挡、TTC；否则只是装饰。
-3. **跨 lane_count 是分水岭**：per-point 字段只是数据契约；真正难的是 target/lane_ref 的连续切换。先做 merge 1→2，再做 8→2。
+3. **跨 lane_count 是分水岭**：per-point 字段只是数据契约；真正难的是 target/lane_ref 的连续切换。1→2 已证明几何连续时无需 slew；8→2 的 −12.25→−1.75 阶跃必须做 slew + 迟滞。
 4. **环岛/停止标志不是场景数据问题**：需要行为状态、通行权、gap acceptance、停止线/信号消费；不能靠“参考线能转”冒充。
 5. **门禁必须能抓已知故障**：新场景先复现失败，再修，再 enable；禁止先写 PASS 基线。
 

@@ -235773,7 +235773,7 @@
       "name": "intersection_merge",
       "description": "右侧匝道汇入：1 车道单向匝道从 y=-10.5 渐升到 y=0，汇入 2 车道双向主路（本向 1 条）。验证 1→2 车道模型切换、right-side merge 参考线连续与汇入后车道保持（几何 merge，不含 ROUTE_MERGE gap 协商）。",
       "duration_s": 30,
-      "enabled": false,
+      "enabled": true,
       "raw": {
         "name": "intersection_merge",
         "description": "右侧匝道汇入：1 车道单向匝道从 y=-10.5 渐升到 y=0，汇入 2 车道双向主路（本向 1 条）。验证 1→2 车道模型切换、right-side merge 参考线连续与汇入后车道保持（几何 merge，不含 ROUTE_MERGE gap 协商）。",
@@ -235784,8 +235784,8 @@
         "visibility_m": 600,
         "ego": {
           "x": 10.0,
-          "y": -10.9,
-          "heading": 0.16,
+          "y": -11.2,
+          "heading": 0.105,
           "init_speed": 5.0,
           "target_speed": 8.0,
           "wheelbase": 2.7,
@@ -235887,7 +235887,8 @@
           "lane_spread": false,
           "max_npcs": 0,
           "random_seed_offset": 0
-        }
+        },
+        "enable_uturn": false
       }
     },
     {
