@@ -46,6 +46,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | npc-multi-route-gate | `python3 ci/gates/npc_multi_route_check.py` | 场景声明 `npc_routes` 但 `npc_route_spawned=0`（多 OD 链没建/没分到 NPC）；多 OD 链 spawn 期间 invariant 爆炸或 ego 碰撞 |
 | bev-shadow-gate | `python3 ci/gates/bev_shadow_check.py` | BEV 影子输出 `bev/obstacles` 停摆（频率/计数为 0）或目标数与覆盖范围内真值不符；永久注入丢帧后门禁仍绿（自检失效） |
 | plant-determinism-gate | `python3 ci/gates/plant_determinism_gate.py` | flowsim 单节点同 seed 两次动态轨迹 dump 不一致（随机源/积分仍有非确定性）；改 seed 轨迹不变（dump 恒真） |
+| building-road-overlap-gate | `python3 ci/gates/building_road_overlap_check.py --layout /tmp/flow_world_layout.json --topology /tmp/flow_topology.json --require-buildings` | WorldEngine 建筑压路 / **高楼上穿低桥**（2026-11-23 city 4 栋穿 6m 天桥回归）。复用一次 demo 跑出的 `/tmp/flow_world_layout.json` + 拓扑做几何断言；`--require-buildings` 防无布局时静默假绿。CI `evaluator` job 在 city 45s 后跑 |
 | long-run-lane-keep | `python3 ci/gates/long_run_lane_keep.py --duration 600` | 10min demo.sh soak：巡航压线 / 车心越线 / **横向目标跳变（Rule5：planning target_lane_offset 在车道中心间阶跃）** / **横向目标骑线（Rule6：target 必须落在合法车道中心上，含机动帧）**（长跑才显形的漂移退化；nightly，过渡期 continue-on-error） |
 | lanelet-consistency-gate | `python3 ci/gates/lanelet_consistency_check.py` | `map.json` ↔ `lanelet.osm` Rule 1–5 漂移 |
 | lane-match-schema-gate | `python3 ci/gates/lane_match_schema_check.py` | 车道匹配 schema ↔ codegen 契约不一致（`--self-test`） |

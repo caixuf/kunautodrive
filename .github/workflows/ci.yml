@@ -443,6 +443,10 @@ jobs:
         # 泊车），45s 无法验证——其完整验收在 nightly 的 scenario_regression + 600s 长跑里。
         # 故此处不再依赖 DEFAULT_SCENARIO，显式指定 CI 冒烟场景。
         run: python3 ci/evaluators/demo_evaluator.py --scenario scenarios/city_procedural_world.json --duration 45 --interval 0.5
+      - name: Building-vs-road overlap gate (world layout)
+        # 防 2026-11-23 回归：WorldEngine 曾把高楼放到 6m 天桥上（视觉"楼建在路上"）。
+        # 复用上面 city 45s 跑出的布局与拓扑做几何断言（含"高楼下穿低桥"）。
+        run: python3 ci/gates/building_road_overlap_check.py --layout /tmp/flow_world_layout.json --topology /tmp/flow_topology.json --require-buildings
       - name: Pipeline integrity check
         run: python3 tools/pipeline_check.py --json /tmp/flow_topology.json
       # ── L3-P1（方向六）：ODD / TOR / MRM 行为门禁 ──
