@@ -437,8 +437,12 @@ jobs:
         run: |
           cmake -B build/modules/adas_nodes -S modules/adas_nodes -DFLOWENGINE_BUILD="$PWD/build"
           cmake --build build/modules/adas_nodes -j$(nproc)
-      - name: Regression evaluator (45s demo)
-        run: python3 ci/evaluators/demo_evaluator.py --duration 45 --interval 0.5
+      - name: Regression evaluator (45s city demo)
+        # 显式钉住 city_procedural_world（duration_s=90，45s 达标）。demo.sh 默认已切回
+        # park_to_park_city（600s 长链路：min_active_duration 180s / min_distance 2800m /
+        # 泊车），45s 无法验证——其完整验收在 nightly 的 scenario_regression + 600s 长跑里。
+        # 故此处不再依赖 DEFAULT_SCENARIO，显式指定 CI 冒烟场景。
+        run: python3 ci/evaluators/demo_evaluator.py --scenario scenarios/city_procedural_world.json --duration 45 --interval 0.5
       - name: Pipeline integrity check
         run: python3 tools/pipeline_check.py --json /tmp/flow_topology.json
       # ── L3-P1（方向六）：ODD / TOR / MRM 行为门禁 ──

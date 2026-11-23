@@ -42,12 +42,11 @@ sanitize_ld_path() {
 }
 sanitize_ld_path
 
-# 默认场景：程序化 CBD 世界（4 车道林荫大道 + 龙门架/地标塔 + 坡道爬升 + 6m 高架桥），
-# 带环境车流与感知线框，用于 demo/CI 行为回归。可用 --scenario 覆盖；
-# 不指定时 patch pipeline.json 指向此场景。
-# 车位到车位全链路（B1 泊出 + 坡道 + 高架 + 地面寻位倒库）仍是独立场景：
-#   bash scripts/demo.sh --scenario scenarios/park_to_park_city.json 90
-DEFAULT_SCENARIO="${FLOWENGINE_SCENARIO:-scenarios/city_procedural_world.json}"
+# 默认场景：车位到车位全链路（B1 泊出 + 坡道 + 高架 + 地面寻位倒库），600s 旗舰演示。
+# 程序化 CBD 世界（4 车道林荫大道 + 龙门架/地标塔 + 坡道爬升 + 6m 高架桥）作独立场景，
+# 用于 CI 45s 行为回归与感知线框演示（显式指定）：
+#   bash scripts/demo.sh --scenario scenarios/city_procedural_world.json 45
+DEFAULT_SCENARIO="${FLOWENGINE_SCENARIO:-scenarios/park_to_park_city.json}"
 
 LOG_DIR="${FLOW_LOG_DIR:-/tmp/flow_logs}"
 PID_FILE="${FLOWENGINE_DEMO_PID_FILE:-/tmp/kunautodrive_demo.pids}"
