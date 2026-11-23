@@ -502,7 +502,13 @@ public:
                     if (it == grid_.end()) continue;
                     for (int sid : it->second) {
                         const auto& s = segs_[sid];
-                        if (s.is_bridge && std::min(s.az, s.bz) >= 2.8) continue;
+                        /* 高架/匝道：仅当建筑能完整从桥下通过（桥底净空 >= 楼高+1m）
+                         * 才放行；否则楼体会与桥面相交（实测 CBD 沿地面辅路生成的
+                         * 高楼上穿 6m 天桥 → 视觉"楼建在桥/路上"）。 */
+                        if (s.is_bridge) {
+                            const double deck_z = std::min(s.az, s.bz);
+                            if (deck_z >= height + 1.0) continue;
+                        }
                         double dx = s.bx - s.ax, dy = s.by - s.ay;
                         double l2 = dx * dx + dy * dy;
                         if (l2 < 1e-6) continue;
