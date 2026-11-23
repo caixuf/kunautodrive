@@ -280,7 +280,11 @@ int auto_populate_traffic_density(TrafficSpawnerContext& ctx,
             e.z = wp.z;
             e.heading = wp.h;
             double vx0;
-            {
+            const double cfg_speed = ctx.scenario
+                ? ctx.scenario->traffic_density.npc_speed_mps : 0.0;
+            if (cfg_speed > 0.1) {
+                vx0 = cfg_speed;
+            } else {
                 double r_v = (double)rand_r(&seed) / (double)RAND_MAX;
                 vx0 = 8.0 + r_v * (14.0 - 8.0);
             }
@@ -461,8 +465,12 @@ void step_poisson_traffic(TrafficSpawnerContext& ctx,
         e.road_pos.init(*ctx.roads, e.road_id, e.lane_id, e.s, 0.0);
     }
 
+    const double base_speed =
+        (ctx.scenario && ctx.scenario->traffic_density.npc_speed_mps > 0.1)
+            ? ctx.scenario->traffic_density.npc_speed_mps
+            : ctx.target_speed;
     double speed_var = 0.85 + 0.25 * sim_rng_uniform01(ctx.sim_rng);
-    e.speed = ctx.target_speed * speed_var;
+    e.speed = base_speed * speed_var;
     e.vx = e.speed * std::cos(e.heading);
     e.vy = e.speed * std::sin(e.heading);
     e.target_vx = e.speed;

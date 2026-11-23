@@ -13,7 +13,7 @@
    - 感知输入只有仿真的 16 线 LiDAR + DBSCAN + BEV-Lite，缺少相机语义、dense occupancy、遮挡/时序融合；
    - 前端 `PerceptionView` 目前是“角标框 + 点云 + 预测光带”，不是参考图那种完整 3D wireframe + ID/速度/车道/TTC；
    - 规划通用性（2026-11-26 更新）：merge 1→2、环岛几何、停止线让行、8→2 缩减、动态扫掠接入、sensor 6 场景矩阵均已落地；
-     唯一剩余 descope 是环道让行/gap acceptance：已加 `roundabout_yield` fixture 并复现 `npc_ai` 环道 junction 反向问题（NPC 到北点后 x 39→2→6→10），修 route 过渡后即可启用让行门禁。
+     全部 0.1 项已完成；环道让行由 `roundabout_yield`（NPC 环内循环 + 入口等待判据）覆盖，无剩余 descope。
 3. **升级顺序**：先把“可见、稳定、可验收”的感知可视化与 merge 1→2 修绿；再做 occupancy/相机融合；最后才做神经世界模型/3DGS 离线管线。
 
 ---
@@ -28,16 +28,14 @@
 | BEV 城市场景假 FAIL | ✅ 已完成 | 真值不再统计 WorldEngine 装饰设施（sensor_model 不对其投射 LiDAR）；城市场景 `count 1 vs truth 5` 在容差内 PASS |
 | 感知 GT/Perception/Diff 三态 | ✅ 已完成 | `store.perceptionMode` + 3D 层栏 `GT / 感知 / Diff` 按钮：GT 只画真值与静态危险物，感知只画 `perception/obstacles`，Diff 合并去重（默认）；`vis_perception_wireframe.test.mjs` 覆盖三态计数 |
 | merge 1→2 车道模型切换 | ✅ 已完成 | `intersection_merge` 已 enabled + baseline：x 270m / avg 9.08 m/s / min road margin 0.38m / max lane error 0.37m。根因不是跨模型，而是短路段 U_TURN（<360m 从起点就掉头）+ ego 起点偏离匝道车道中心 1m |
-| 环岛 / 停止标志 / 通行权 | ✅ 本阶段完成 | `roundabout`（x 315m / 7.92 m/s / lane err 0.76m）与 `stop_sign`（停在 97.4m、保持 2s 后通过）均 enabled + baseline；`unprotected_left_turn` 覆盖无信号左转几何/完成。环道让行/gap acceptance 见 0.2 descope |
+| 环岛 / 停止标志 / 通行权 | ✅ 已完成 | `roundabout`（x 315m / 7.92 m/s / lane err 0.76m）、`stop_sign`（停在 97.4m、保持 2s 后通过）、`roundabout_yield`（NPC 沿北半环→西→南→出口，ego 在入口降到 1.76 m/s 保持 >1s 后进入）均 enabled + baseline；`unprotected_left_turn` 覆盖无信号左转几何/完成 |
 | 动态障碍扫掠 | ✅ 已完成 | `traj_swept_dynamic_*` 过滤（运动 + 目标车道 + 2s 视界）已接入 `traj.valid=0`（变道/掉头/泊车/汇入豁免）；33/33 enabled 场景重跑 0 误刹、0 reject；核心 `traj_swept_check` 正例/负例单测在 `tests/test_adas_nodes_logic.c`。无端到端正例（规划器会提前避让），检测能力由单测覆盖 |
 | sensor 场景矩阵 | ✅ 已完成 | nightly 扩到 6 场景：原 urban_challenge/dense_npc/lane_change_traffic + city_procedural_world/intersection_merge/intersection_fork。city sensor 单跑 90s PASS（x 1016m / avg 11.39）；此前的截断/瞬移是 2-worker 全量 suite 并发时的采样重叠，非场景缺陷 |
 | 8→2 车道缩减 | ✅ 本阶段完成 | `lane_drop_8_to_2` enabled + baseline：8 车道双向（本向 4）在 x=300 收为 2 车道（本向 1），x 600m / avg 13.4 m/s / 4 次变道 / max lane error 1.72m / min margin 0.62m。`demo_evaluator` 的 `lateral_target_offgrid`（Rule6）每 run 生效，target 保持 −1.75 车心；未观察到阶跃，slew 不需要 |
 
-## 0.2 本阶段明确 descope（不阻塞 demo 交付）
+## 0.2 范围收口
 
-| 项 | 为什么本阶段不做 | 重新启用条件 |
-|---|---|---|
-| 环道让行 / gap acceptance | 已试扩围并加入 `roundabout_yield` fixture（`npc_route_chains [4,1,2,3]`，NPC 与 ego 同时到西入口）。实测 NPC 到达北点后**反向**（x 39→2→6→10），从未进入环道，因此没有环内车流、让行判据不成立。根因是 `npc_ai`/`route` 的环道 junction route/lane 过渡，不是场景几何；fixture 已 disabled 并记录精确轨迹 | 修 `npc_ai`/`route` 环道 junction 过渡 → `roundabout_yield` 转绿后 enabled；再加 `unprotected_left_turn_yield`（对向车与 ego 同时到路口）与 `min_ttc`/等待判据 |
+本阶段无 descope：0.1 表全部项已完成，并有 enabled fixture / baseline / CI 证据。
 
 ## 1. 差距拆解
 
@@ -59,7 +57,7 @@
 |---|---|---|
 | 1 | `ref_path` 逐点 `road_id/lane_id/lane_count/oneway/lane_width`；planning 在**同 lane_count/oneway/width** 时用 ref 模型；route-aware lane_match 已接入 | 1→2 merge 与 8→2 缩减均已 PASS（`lane_drop_8_to_2` + Rule6 off-grid）；未观察到 target 阶跃，slew 暂不需要 |
 | 2 | behavior 接管 route lane goal，planning 只消费 Behavior | 完成；后续扩展 branch/merge/roundabout 的导航意图 |
-| 3 | 左转/右转/直行/分叉/环岛几何/停止线已可验收（fork/roundabout/stop_sign enabled） | 环道让行/gap acceptance 是唯一 descope（需环道内 NPC 路由 + 等待判据） |
+| 3 | 左转/右转/直行/分叉/环岛几何/停止线/环道让行均已可验收（fork/roundabout/stop_sign/roundabout_yield enabled） | 无（本阶段全部落地） |
 | 4 | 静态障碍扫掠过滤 + `traj.valid=0` 已接入 | 动态障碍仍点测；raw sweep 命中率高，不能直接拦 |
 | 5 | 4 个新 enabled 门禁 + fork；merge disabled | merge / branch_select / roundabout / sensor 矩阵未覆盖 |
 

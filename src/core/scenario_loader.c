@@ -606,6 +606,7 @@ ScenarioConfig* scenario_load(const char* path) {
     sc->traffic_density.lane_spread          = 1;
     sc->traffic_density.max_npcs             = 50;
     sc->traffic_density.random_seed_offset   = 0;
+    sc->traffic_density.npc_speed_mps        = 0.0;
     sc->traffic_density.pedestrian_ratio     = 0.0;
     sc->traffic_density.time_window_count    = 0;
     sc->npc_route_count                      = 0;
@@ -635,6 +636,9 @@ ScenarioConfig* scenario_load(const char* path) {
         if (cJSON_IsNumber(jv) && jv->valueint > 0) sc->traffic_density.max_npcs = jv->valueint;
         jv = cJSON_GetObjectItemCaseSensitive(jtd, "random_seed_offset");
         if (cJSON_IsNumber(jv)) sc->traffic_density.random_seed_offset = jv->valueint;
+        jv = cJSON_GetObjectItemCaseSensitive(jtd, "npc_speed_mps");
+        if (cJSON_IsNumber(jv) && jv->valuedouble > 0.0)
+            sc->traffic_density.npc_speed_mps = jv->valuedouble;
         jv = cJSON_GetObjectItemCaseSensitive(jtd, "pedestrian_ratio");
         if (cJSON_IsNumber(jv)) {
             double pr = jv->valuedouble;
@@ -1390,6 +1394,8 @@ char* scenario_to_json(const ScenarioConfig* scenario) {
         cJSON_AddBoolToObject(jtd,   "lane_spread",        scenario->traffic_density.lane_spread != 0);
         cJSON_AddNumberToObject(jtd, "max_npcs",           scenario->traffic_density.max_npcs);
         cJSON_AddNumberToObject(jtd, "random_seed_offset", scenario->traffic_density.random_seed_offset);
+        if (scenario->traffic_density.npc_speed_mps > 0.0)
+            cJSON_AddNumberToObject(jtd, "npc_speed_mps", scenario->traffic_density.npc_speed_mps);
         if (scenario->traffic_density.pedestrian_ratio > 0.0)
             cJSON_AddNumberToObject(jtd, "pedestrian_ratio",
                                     scenario->traffic_density.pedestrian_ratio);

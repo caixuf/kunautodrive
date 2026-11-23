@@ -2953,6 +2953,39 @@ def score(samples: list[dict], launcher_log: Path, criteria: dict | None = None,
                 failures.append(
                     f"stop line {si} at x={float(sx):.1f}: ego did not proceed "
                     f"past the line (final x={final_x:.1f})")
+    # ── 环道让行门禁（场景显式声明 roundabout_yield 时生效）──
+    # 只看三件事：在入口等待区停/慢（<2 m/s）保持 ≥hold_s、之后真正进入环道。
+    # 防止"没让行直接冲进去"也 PASS（假绿）。
+    yield_cfg = criteria.get("roundabout_yield")
+    if isinstance(yield_cfg, dict):
+        hold_need = float(yield_cfg.get("hold_s", 1.0))
+        zx = float(yield_cfg.get("x", -33.5))
+        zdx = float(yield_cfg.get("dx", 3.0))
+        zy0 = float(yield_cfg.get("y_min", -2.0))
+        zy1 = float(yield_cfg.get("y_max", 18.0))
+        entry_y = float(yield_cfg.get("entry_y", -5.0))
+        best_hold = 0.0
+        hold = 0.0
+        prev_t = None
+        for m in series:
+            if (abs(m["x"] - zx) <= zdx and zy0 <= m["y"] <= zy1
+                    and m["speed"] < 2.0 and m.get("t_demo") is not None):
+                t = m["t_demo"]
+                if prev_t is not None and (t - prev_t) <= 0.5:
+                    hold += t - prev_t
+                else:
+                    hold = 0.0
+                best_hold = max(best_hold, hold)
+                prev_t = t
+        if best_hold < hold_need:
+            failures.append(
+                f"roundabout yield: held {best_hold:.1f}s < {hold_need:.1f}s "
+                f"in entry zone (x {zx:+.1f}±{zdx:.1f}, y {zy0:.1f}..{zy1:.1f})")
+        if series and series[-1]["y"] > entry_y:
+            failures.append(
+                f"roundabout yield: ego did not enter the ring "
+                f"(final y={series[-1]['y']:.1f}, need <{entry_y:.1f})")
+
     speeds = [m["speed"] for m in series]
     xs = [m["x"] for m in series]
     ys = [m["y"] for m in series]

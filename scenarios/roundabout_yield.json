@@ -26,7 +26,6 @@
     ],
     "npc_route_chains": [
       [
-        4,
         1,
         2,
         3
@@ -66,7 +65,7 @@
         "name": "rb_ring_north",
         "lanes": 1,
         "lane_width": 3.5,
-        "speed_limit": 7.0,
+        "speed_limit": 3.0,
         "oneway": true,
         "length_m": 50.0,
         "nodes": [
@@ -199,7 +198,16 @@
     "no_collision": true,
     "max_duration_s": 50.0,
     "min_avg_speed_mps": 1.0,
-    "min_distance_m": 100.0
+    "min_distance_m": 100.0,
+    "roundabout_yield": {
+      "hold_s": 1.0,
+      "x": -33.5,
+      "dx": 3.0,
+      "y_min": -2.0,
+      "y_max": 18.0,
+      "entry_y": -5.0
+    },
+    "jerk_max_fail_mps3": 55.0
   },
   "scenarios": [],
   "choreography": {
@@ -211,6 +219,7 @@
     "spawn_jitter_m": 0.0,
     "lane_spread": false,
     "max_npcs": 1,
-    "random_seed_offset": 0
+    "random_seed_offset": 0,
+    "npc_speed_mps": 3.0
   }
 }

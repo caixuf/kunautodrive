@@ -984,8 +984,29 @@ mobil_done: ;
         } else {
             junc_angle = 0.0;                 /* 直行 */
         }
+        /* 多 OD 路线在环道/急弯 junction 的接管：esmini 的 advance 只沿
+         * OpenDRIVE lane successor 走，inline 路网在环道入口可能选到反向
+         * 连接（实测 roundabout_yield：NPC 到北点后 x 39→2→6→10 反向）。
+         * 当 route_s 跨到下一段真实 road 时，直接 relocate 到该段的 route
+         * 位置，绕过 successor 选择；其余情况仍走 advance（保留路口转向）。 */
+        bool route_relocated = false;
+        if (route && route->ok() && dist > 0.0) {
+            int cur_rid = 0, cur_idx = -1;
+            int nxt_rid = 0, nxt_idx = -1;
+            double cur_s = 0.0, nxt_s = 0.0;
+            route->locate(npc.route_s, cur_rid, cur_s, cur_idx);
+            route->locate(npc.route_s + dist, nxt_rid, nxt_s, nxt_idx);
+            if (cur_idx >= 0 && nxt_idx > cur_idx && nxt_rid >= 0) {
+                double lane_off = lane_internal_from_offset(
+                    *roads, nxt_rid, npc.lane_id, nxt_s, npc.offset);
+                if (npc.road_pos.relocate(*roads, nxt_rid, npc.lane_id, nxt_s, lane_off)) {
+                    npc.route_s += dist;
+                    route_relocated = true;
+                }
+            }
+        }
         bool adv_ok = true;
-        if (dist > 0.0) {
+        if (!route_relocated && dist > 0.0) {
             adv_ok = npc.road_pos.advance(dist, junc_angle);
         }
         if (!adv_ok) {

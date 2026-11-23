@@ -408,6 +408,7 @@ typedef struct {
     int    lane_spread;          /* 是否跨多车道 spawn（0/1，默认 1） */
     int    max_npcs;             /* 上限（默认 50） */
     int    random_seed_offset;   /* RNG 偏置（默认 0） */
+    double npc_speed_mps;        /* 自动补给 NPC 初始/巡航速度（0 = 用 target_speed） */
     /* 方向三：行人占比 [0,1]。0 = 只生成车辆（默认，既有场景零变化）；
      * >0 时按确定性哈希把一部分 spawn 槽位改成路边行人（0.5m 尺寸、
      * 沿车道边缘 0.8m/s 步行，不横穿以避免 NPC 车流直接撞人）。 */
