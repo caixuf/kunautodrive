@@ -157,6 +157,52 @@ int main(void) {
         CHECK(near_mid, "T5 reprojected point X near depth (2.0m)");
     }
 
+    /* ── T6: 速度自适应衰减 — 车越快旧 log-odds 衰减越多（无重采样）── */
+    {
+        int fc, oc, uc;
+        g.grid_decay_speed_k = 0.02;
+        /* 静止：decay = base(0.9) */
+        memset(g.grid_log, 0, sizeof g.grid_log);
+        g.has_ego = 0;
+        g.grid_log[0] = 50;
+        build_grid(NULL, 0, GW, GH, CELL, g.x_range_m, YR, NULL, &fc, &oc, &uc);
+        int slow = g.grid_log[0];
+        /* 10 m/s：decay = 0.9*exp(-0.02*10) ≈ 0.737 */
+        memset(g.grid_log, 0, sizeof g.grid_log);
+        g.has_ego = 1;
+        g.last_ego.speed_mps = 10.0f;
+        g.grid_log[0] = 50;
+        build_grid(NULL, 0, GW, GH, CELL, g.x_range_m, YR, NULL, &fc, &oc, &uc);
+        int fast = g.grid_log[0];
+        CHECK(slow == 45, "T6 stationary decay = base*50 = 45");
+        CHECK(fast < slow, "T6 higher ego speed => faster log-odds decay");
+        CHECK(fast >= 30, "T6 fast decay retains history (>= 0.3 floor)");
+        g.has_ego = 0;
+        g.last_ego.speed_mps = 0.0f;
+    }
+
+    /* ── T7: 速度自适应衰减边界 — k=0 关闭；极高速触 0.3 下界 ── */
+    {
+        int fc, oc, uc;
+        /* k=0 → 恒定 base 0.9（与速度无关）*/
+        g.grid_decay_speed_k = 0.0;
+        memset(g.grid_log, 0, sizeof g.grid_log);
+        g.has_ego = 1;
+        g.last_ego.speed_mps = 50.0f;
+        g.grid_log[0] = 50;
+        build_grid(NULL, 0, GW, GH, CELL, g.x_range_m, YR, NULL, &fc, &oc, &uc);
+        CHECK(g.grid_log[0] == 45, "T7 k=0 disables speed adaptation (decay=base=0.9)");
+        /* 极高速 + 大 k → decay 触 0.3 下界 → 50*0.3=15 */
+        g.grid_decay_speed_k = 0.5;
+        memset(g.grid_log, 0, sizeof g.grid_log);
+        g.last_ego.speed_mps = 50.0f;
+        g.grid_log[0] = 50;
+        build_grid(NULL, 0, GW, GH, CELL, g.x_range_m, YR, NULL, &fc, &oc, &uc);
+        CHECK(g.grid_log[0] == 15, "T7 very fast decay clamps to 0.3 floor (50*0.3=15)");
+        g.has_ego = 0;
+        g.last_ego.speed_mps = 0.0f;
+    }
+
     if (g_fail) { printf("\n%d CHECK(s) FAILED\n", g_fail); return 1; }
     printf("\nall traversability checks passed\n");
     return 0;

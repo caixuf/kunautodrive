@@ -282,6 +282,10 @@ static struct {
     /* 感知车道线（来自 perception/lanes，诊断透传：沙箱合成边界 + 世界坐标
      * 折线 pts）。boundaries ≤ 8 条 × 17 点 × 2 坐标，故留 8KB。 */
     char perceived_lanes_json[8192];
+    /* 占用栅格（来自 perception/traversability 的 text JSON，含 cells_b64：
+     * 4096 cell 的 uint8 base64 ≈5.5KB + 摘要字段，留 8KB）。诊断透传，
+     * 前端画 mini BEV；无消费者时也不逃税于 lock。 */
+    char traversability_json[8192];
     /* M2: 运动预测 (来自 prediction/tracks，透传至 metrics.scene.predictions) */
     char prediction_tracks_json[65536];
     volatile int has_prediction_tracks;
@@ -1229,6 +1233,18 @@ static void on_perceived_lanes(const Message* msg, void* user_data) {
     pthread_mutex_unlock(&g.debug_cache_mutex);
 }
 
+/* ── perception/traversability 订阅 — 缓存占用栅格（诊断透传 → scene.occupancy） ── */
+static void on_traversability(const Message* msg, void* user_data) {
+    (void)user_data;
+    if (!msg) return;
+    size_t copy = msg->data_size;
+    if (copy >= sizeof(g.traversability_json)) copy = sizeof(g.traversability_json) - 1;
+    pthread_mutex_lock(&g.debug_cache_mutex);
+    memcpy(g.traversability_json, ((const uint8_t*)message_bus_message_data(msg)), copy);
+    g.traversability_json[copy] = '\0';
+    pthread_mutex_unlock(&g.debug_cache_mutex);
+}
+
 static void on_safety_evidence(const Message* msg, void* user_data) {
     (void)user_data;
     if (!msg || msg->data_size == 0) return;
@@ -1663,6 +1679,19 @@ static void export_dashboard_json(void) {
         cJSON* pl = monitor_cJSON_Parse(pl_buf);
         if (pl) {
             cJSON_AddItemToObject(metrics, "perceived_lanes", pl);
+        }
+    }
+
+    /* 占用栅格（traversability 真 FREE/OCCUPIED/UNKNOWN，诊断透传）。
+     * 带锁拷贝再解析，避免半写 JSON 进 strtod（同 lane_match 教训）。 */
+    char tv_buf[sizeof(g.traversability_json)];
+    pthread_mutex_lock(&g.debug_cache_mutex);
+    memcpy(tv_buf, g.traversability_json, sizeof(tv_buf));
+    pthread_mutex_unlock(&g.debug_cache_mutex);
+    if (tv_buf[0]) {
+        cJSON* tv = monitor_cJSON_Parse(tv_buf);
+        if (tv) {
+            cJSON_AddItemToObject(metrics, "occupancy", tv);
         }
     }
 
@@ -2890,6 +2919,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     g.planning_debug_json[0] = '\0';
     g.lane_match_json[0] = '\0';
     g.localization_json[0] = '\0';
+    g.traversability_json[0] = '\0';
     g.safety_evidence_json[0] = '\0';
 
     /* samples 环形缓冲初始态 */
@@ -2997,6 +3027,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     transport_subscribe(transport, TOPIC_PERCEPTION_OBSTACLES, on_obstacles, NULL);
     transport_subscribe(transport, "bev/obstacles", on_bev_obstacles, NULL);
     transport_subscribe(transport, TOPIC_PERCEPTION_TRACKED_OBJECTS, on_tracked_objects, NULL);
+    transport_subscribe(transport, "perception/traversability", on_traversability, NULL);
     transport_subscribe(transport, TOPIC_VEHICLE_STATE, on_vehicle_state, NULL);
     transport_subscribe(transport, TOPIC_PLANNING_TRAJECTORY, on_planning_trajectory, NULL);
     transport_subscribe(transport, TOPIC_CONTROL_CTE, on_control_cte, NULL);
@@ -3035,6 +3066,7 @@ static int monitor_init(MessageBus* bus, Transport* transport,
     discovery_advertise(discovery, TOPIC_SCENE_FRAME,          0x5CE4E011u, CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, TOPIC_FLOWENGINE_NODE_INFO, 0xF10E10F0u, CAP_SUBSCRIBER, 0);
     discovery_advertise(discovery, TOPIC_PREDICTION_TRACKS,    0u,          CAP_SUBSCRIBER, 0);
+    discovery_advertise(discovery, "perception/traversability", 0u,         CAP_SUBSCRIBER, 0);
 
     if (g.embedded_mode) {
         transport_advertise(transport, "pem/degrade_event", 0u);

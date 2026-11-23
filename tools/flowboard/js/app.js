@@ -10,6 +10,8 @@ import { selectCurrentMotionSegment } from './vis/math/Trajectory.js';
 import { mapToRoadNetwork } from './showcase/sceneAdapter.js';
 import { toTopo } from './mapPreview.js';
 import { computeDrivingStatus } from './vis/hud/DrivingStatus.js';
+import { buildHmiState } from './vis/hud/HmiModel.js';
+import { initHmiPanel, updateHmiPanel } from './vis/hud/HmiPanel.js';
 
 var userEnv = { lighting: null, weather: null, visibility_m: null };
 try {
@@ -1776,6 +1778,24 @@ function updateLaneDiagHud(force) {
 var driveHudOn = true;
 var _lastDriveHudMs = 0;
 var _DRIVE_HUD_MS = 250;         // 4Hz：与车道诊断 HUD 同频，DOM 写入可忽略
+
+/* HMI 专区（#hmi-card）：4Hz 限流，折叠时零开销；逻辑在 HmiModel/HmiPanel。 */
+var _lastHmiMs = 0;
+var _HMI_MS = 250;
+function updateHmi(force) {
+  var body = document.getElementById('hmi-body');
+  if (!body) return;
+  var card = document.getElementById('hmi-card');
+  if (card && card.classList.contains('collapsed')) return;
+  var now = performance.now();
+  if (!force && now - _lastHmiMs < _HMI_MS) return;
+  _lastHmiMs = now;
+  try {
+    updateHmiPanel(body, buildHmiState(topoData));
+  } catch (e) {
+    reportDiag('hmi', e);
+  }
+}
 var _DH_TTC_FULL_S = 6;          // TTC 风险条满格对应的秒数
 
 function setDriveHud(on, opts) {
@@ -2210,6 +2230,8 @@ function updateAll() {
   updateLaneDiagHud(false);
   /* 驾驶态势 HUD：同样 4Hz 限流 */
   updateDriveHud(false);
+  /* HMI 专区：同样 4Hz 限流，折叠时零开销 */
+  updateHmi(false);
   /* 周期性拉取 /api/incident/trace 事故摘要（节流 3s） */
   fetchIncidentTrace(false);
 
@@ -3290,6 +3312,14 @@ function toggleCard(hdr) {
   }, 50);
 }
 
+/* 折叠/展开 HMI 专区卡片（快捷键 T）。折叠态由 saveState 持久化。 */
+function toggleHmiCard() {
+  var card = document.getElementById('hmi-card');
+  if (!card) return;
+  card.classList.toggle('collapsed');
+  saveState();
+}
+
 function resetView() {
   var svg = document.querySelector('#topo svg');
   if (!svg) return;
@@ -3312,6 +3342,7 @@ document.addEventListener('keydown', function(e) {
       d3.select('#topo svg').transition().duration(500).call(d3.zoom().transform, d3.zoomIdentity.translate(tw/2, th/2).scale(0.8));
     }
   }
+  if (e.key === 't' || e.key === 'T') { e.preventDefault(); toggleHmiCard(); }
   if (e.key === 'Escape') {
     e.preventDefault();
     selectedNode = null;
@@ -3352,6 +3383,8 @@ function initAll() {
 
   // 3b. HUD 高度 → CSS 变量（事故时间轴据此避让，见 _initHudHeightObserver）
   _initHudHeightObserver();
+  var hmiBody = document.getElementById('hmi-body');
+  if (hmiBody) { initHmiPanel(hmiBody); updateHmi(true); }
 
   // 5. Restore saved UI state
   setTimeout(function() {
@@ -3699,6 +3732,7 @@ window.flowboard = {
   clearDiag: clearDiag,
   // card collapse
   toggleCard: toggleCard,
+  toggleHmi: toggleHmiCard,
   switchWorkspace: switchWorkspace,
   // charts
   onChartTopicChange: function () { /* delegated via charts.js */ },

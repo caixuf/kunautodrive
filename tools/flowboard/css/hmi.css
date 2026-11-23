@@ -1,0 +1,171 @@
+/* ── HMI 专区（#hmi-card）——面向人看的驾驶界面，联动仿真、四分区 ──
+ * 逻辑在 js/vis/hud/HmiModel.js（可单测），DOM 在 HmiPanel.js。
+ * 颜色/间距复用 css/style.css :root token，不新增裸色值。 */
+
+#hmi-card .card-body{padding:12px 14px}
+
+.hmi-grid{
+  display:grid;
+  grid-template-columns:repeat(4, minmax(0, 1fr));
+  gap:10px;
+}
+@media (max-width:1100px){ .hmi-grid{grid-template-columns:repeat(2, minmax(0,1fr))} }
+@media (max-width:640px){ .hmi-grid{grid-template-columns:1fr} }
+
+/* 顶部告警横幅（安全 HMI）：按最高严重度着色 */
+.hmi-alerts{
+  display:flex;flex-wrap:wrap;gap:6px;align-items:center;
+  padding:6px 10px;border-radius:var(--radius-sm);
+  border:1px solid var(--border);background:var(--bg-raised);
+  margin-bottom:10px;font-size:11px;min-height:26px;
+}
+.hmi-alerts.tone-ok{border-color:#2ea04366;background:#0d3320}
+.hmi-alerts.tone-warn{border-color:#d2992288;background:#4d2a0a}
+.hmi-alerts.tone-bad{border-color:var(--danger);background:#5a1616;animation:hmi-pulse 1s ease-in-out infinite}
+@keyframes hmi-pulse{0%,100%{box-shadow:0 0 0 1px #f8514933}50%{box-shadow:0 0 0 2px #f8514999}}
+.hmi-alert-chip{
+  font-size:11px;padding:1px 8px;border-radius:var(--radius-sm);
+  border:1px solid var(--border);background:var(--bg-inset);color:var(--text-dim);white-space:nowrap;
+}
+.hmi-alert-chip.tone-ok{color:var(--success);border-color:#2ea04366}
+.hmi-alert-chip.tone-warn{color:#ffa94d;border-color:#d2992288}
+.hmi-alert-chip.tone-bad{color:#ffdcd7;border-color:var(--danger);background:#5a1616}
+.hmi-alert-chip.tone-info{color:#79c0ff;border-color:#388bfd66}
+
+.hmi-occ-legend{display:flex;gap:8px;align-items:center;font-size:9px;color:var(--text-dim);flex-wrap:wrap}
+.hmi-occ-legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:2px;vertical-align:-1px}
+.hmi-occ-legend .lg-free{background:rgba(63,185,80,0.6)}
+.hmi-occ-legend .lg-occ{background:rgba(248,81,73,0.85)}
+.hmi-occ-legend .lg-ego{background:rgba(88,166,255,0.95)}
+
+.hmi-sec{
+  background:var(--bg-inset);
+  border:1px solid var(--border-soft);
+  border-radius:var(--radius-md);
+  padding:10px 12px;
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  min-width:0;
+  overflow:hidden;
+}
+.hmi-sec-title{
+  font-size:var(--font-xs);
+  font-weight:600;
+  color:var(--text-dim);
+  letter-spacing:.5px;
+  display:flex;
+  align-items:center;
+  gap:6px;
+  border-bottom:1px solid var(--border-soft);
+  padding-bottom:5px;
+}
+.hmi-tag{
+  font-style:normal;
+  font-weight:400;
+  font-size:10px;
+  color:var(--text-faint);
+  margin-left:auto;
+}
+
+/* 速度大字 */
+.hmi-speed{display:flex;align-items:baseline;gap:6px;min-width:0}
+.hmi-speed b{
+  font-size:34px;
+  line-height:1.0;
+  font-weight:700;
+  color:var(--text-bright);
+  font-variant-numeric:tabular-nums;
+}
+.hmi-speed .hmi-unit{font-size:var(--font-xs);color:var(--text-dim)}
+.hmi-speed em{font-size:var(--font-xs);color:var(--text-dim);font-style:normal;margin-left:auto;font-variant-numeric:tabular-nums}
+
+.hmi-row{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:var(--font-xs);color:var(--text-dim);min-width:0}
+.hmi-row b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.hmi-chips{display:flex;flex-wrap:wrap;gap:4px}
+.hmi-chip{
+  font-size:10px;
+  line-height:1.4;
+  padding:1px 7px;
+  border-radius:var(--radius-sm);
+  border:1px solid var(--border);
+  background:var(--bg-raised);
+  color:var(--text-dim);
+  white-space:nowrap;
+}
+.hmi-chip.tone-ok{background:#0d3320;border-color:#2ea04366;color:var(--success)}
+.hmi-chip.tone-info{background:#0c2d6b;border-color:#388bfd66;color:#79c0ff}
+.hmi-chip.tone-warn{background:#4d2a0a;border-color:#d2992288;color:#ffa94d}
+.hmi-chip.tone-bad{background:#5a1616;border-color:var(--danger);color:#ffdcd7}
+.hmi-chip.tone-idle{background:var(--bg-raised);border-color:var(--border);color:#6e7681}
+
+.hmi-bars{
+  display:grid;
+  grid-template-columns:auto 1fr auto 1fr auto auto;
+  align-items:center;
+  gap:3px 6px;
+  font-size:10px;
+  color:var(--text-dim);
+}
+.hmi-bars b{color:var(--text);font-variant-numeric:tabular-nums}
+.hmi-bar{height:6px;background:#161b22;border-radius:3px;overflow:hidden;min-width:0}
+.hmi-bar i{display:block;height:100%;width:0;background:var(--success);transition:width .12s linear}
+.hmi-bar.hmi-brk i{background:var(--danger)}
+
+.hmi-lead{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:10px;color:var(--text-dim);margin-top:2px}
+.hmi-lead b{color:var(--text);font-variant-numeric:tabular-nums}
+
+.hmi-intent{
+  font-size:var(--font-lg);
+  font-weight:700;
+  color:var(--accent);
+  font-variant-numeric:tabular-nums;
+  letter-spacing:.5px;
+}
+
+/* 目标车道梯（规划意图）：当前蓝、目标琥珀 */
+.hmi-lanes{display:flex;gap:4px;align-items:flex-end;height:16px}
+.hmi-lane-box{flex:1 1 0;min-width:0;height:9px;border-radius:3px;background:#161b22;border:1px solid var(--border)}
+.hmi-lane-box.is-current{background:#0c2d6b;border-color:#388bfd;height:14px}
+.hmi-lane-box.is-target{background:#4d2a0a;border-color:var(--warn);height:14px}
+.hmi-lane-cap{font-size:10px;color:var(--text-dim);font-variant-numeric:tabular-nums}
+
+/* 规划轨迹片段（ego 相对，前向上） */
+.hmi-traj-canvas{
+  width:100%;
+  height:auto;
+  max-height:96px;
+  align-self:center;
+  background:var(--bg-inset);
+  border:1px solid var(--border);
+  border-radius:var(--radius-sm);
+  image-rendering:auto;
+}
+
+.hmi-occ{
+  font-size:10px;
+  color:var(--text-faint);
+  border:1px dashed var(--border);
+  border-radius:var(--radius-sm);
+  padding:6px 8px;
+  text-align:center;
+}
+.hmi-occwrap{display:flex;flex-direction:column;gap:5px}
+.hmi-occ-canvas{
+  width:100%;
+  max-width:200px;
+  height:auto;
+  align-self:center;
+  background:var(--bg-inset);
+  border:1px solid var(--border);
+  border-radius:var(--radius-sm);
+  image-rendering:pixelated;
+}
+
+.hmi-empty{
+  font-size:var(--font-xs);
+  color:var(--text-faint);
+  text-align:center;
+  padding:4px;
+}

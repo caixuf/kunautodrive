@@ -124,6 +124,7 @@ static struct {
     float  ransac_inlier_m;     /* inlier 距离阈值(m)，默认 0.05 */
     /* 时域融合参数（log-odds 占用栅格） */
     double grid_decay;          /* 帧间衰减系数(0~1)，默认 0.9 */
+    double grid_decay_speed_k;  /* 速度自适应衰减斜率(1/(m/s))，默认 0.02；0=关闭 */
     int    occ_log_step;        /* 障碍 log-odds 步长，默认 8 */
     int    free_log_step;       /* 地面 log-odds 步长，默认 4 */
     int    occ_log_thr;         /* 占用判定阈值，默认 6 */
@@ -326,10 +327,21 @@ static void build_grid(const Point3D* pts, int n,
     int total = grid_w * grid_h;
     if (total > TV_GRID_MAX_CELLS) total = TV_GRID_MAX_CELLS;
 
-    /* 时域融合：帧间衰减持久 log-odds 栅格。不做世界系运动补偿
-     * （需订阅 vehicle/state 平移旋转 grid，留后续）；车大幅移动时旧
-     * 观测会滞留衰减，但短时保持 + 多帧去噪已显著优于每帧重置。 */
-    double decay = (g.grid_decay > 0.0 && g.grid_decay < 1.0) ? g.grid_decay : 0.9;
+    /* 时域融合：帧间衰减持久 log-odds 栅格。
+     * 运动鲁棒性用「速度自适应遗忘率」而非栅格重采样（旋转补偿在粗栅格上会糊）：
+     *   decay = base * exp(-k * v)，v = ego 速度；k=0 退化为恒定 base。
+     * 车越快旧观测衰减越快，减少前向拖影；clamp 到 [0.3, 0.995] 防过度/不衰减。
+     * 注意：只作用于 stereo log-odds 路径（obstacle-only 路径每帧重建、不走这里）。 */
+    double base_decay = (g.grid_decay > 0.0 && g.grid_decay < 1.0) ? g.grid_decay : 0.9;
+    double speed = 0.0;
+    if (g.has_ego) {
+        double v = fabs((double)g.last_ego.speed_mps);
+        if (v >= 0.0 && v < 60.0) speed = v;   /* NaN/异常兜底 */
+    }
+    double decay = base_decay * exp(-g.grid_decay_speed_k * speed);
+    if (!(decay > 0.0)) decay = base_decay;    /* exp 异常兜底 */
+    if (decay < 0.3) decay = 0.3;
+    else if (decay > 0.995) decay = 0.995;
     for (int i = 0; i < total; i++) {
         int v = (int)(g.grid_log[i] * decay);
         if (v > 100) v = 100; else if (v < -100) v = -100;
@@ -489,6 +501,38 @@ static double nearest_obstacle_x(int grid_w, int grid_h, double cell_size) {
  * task_thread_fn 调用本函数一次（完整主循环），循环中检查 task->should_stop
  * 退出；task_stop() 置 should_stop=true 并 join 本线程。这与原先自管 pthread
  * 的 traversability_thread 行为等价，只是 should_stop 改由 TaskBase 提供。 */
+/* ── 极简 base64：把占用栅格 uint8[] 压成 ASCII 透传给前端 ──
+ * 4096 cells → ~5.5 KB，远低于总线 64KB；前端解码画 mini BEV。
+ * g.grid 索引 = gx*grid_h + gy（gx 前向 0→x_range，gy 横向 0→2*y_range）。 */
+static const char TV_B64[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+static void tv_b64_encode(const uint8_t* in, int len, char* out) {
+    int i = 0, o = 0;
+    for (; i + 2 < len; i += 3) {
+        uint32_t v = ((uint32_t)in[i] << 16) | ((uint32_t)in[i + 1] << 8) | in[i + 2];
+        out[o++] = TV_B64[(v >> 18) & 0x3F];
+        out[o++] = TV_B64[(v >> 12) & 0x3F];
+        out[o++] = TV_B64[(v >> 6) & 0x3F];
+        out[o++] = TV_B64[v & 0x3F];
+    }
+    if (i < len) {
+        uint32_t v = (uint32_t)in[i] << 16;
+        out[o++] = TV_B64[(v >> 18) & 0x3F];
+        if (i + 1 < len) {
+            v |= (uint32_t)in[i + 1] << 8;
+            out[o++] = TV_B64[(v >> 12) & 0x3F];
+            out[o++] = TV_B64[(v >> 6) & 0x3F];
+            out[o++] = '=';
+        } else {
+            out[o++] = TV_B64[(v >> 12) & 0x3F];
+            out[o++] = '=';
+            out[o++] = '=';
+        }
+    }
+    out[o] = '\0';
+}
+
 static int traversability_execute(TaskBase* task) {
     pthread_setname_np(pthread_self(), "traversable");
 
@@ -608,6 +652,21 @@ static int traversability_execute(TaskBase* task) {
         cJSON_AddNumberToObject(t_root, "corridor_right_y", cor_right_y);
         cJSON_AddNumberToObject(t_root, "corridor_width_m", cor_width);
         cJSON_AddBoolToObject(t_root, "blocked", blocked ? 1 : 0);
+        /* 真占用栅格透传：index = gx*grid_h + gy；原点 x=0, y=-y_range（车身系）。 */
+        cJSON_AddNumberToObject(t_root, "origin_x", 0.0);
+        cJSON_AddNumberToObject(t_root, "origin_y", -g.y_range_m);
+        cJSON_AddStringToObject(t_root, "frame", "body");
+        {
+            int n_cells = grid_w * grid_h;
+            if (n_cells > TV_GRID_MAX_CELLS) n_cells = TV_GRID_MAX_CELLS;
+            size_t b64_cap = ((size_t)n_cells + 2) / 3 * 4 + 1;
+            char* b64 = (char*)malloc(b64_cap);
+            if (b64) {
+                tv_b64_encode(g.grid, n_cells, b64);
+                cJSON_AddStringToObject(t_root, "cells_b64", b64);
+                free(b64);
+            }
+        }
         char* text = cJSON_PrintUnformatted(t_root);
         transport_publish(g.transport, g.output_topic,
                           (const uint8_t*)text, (uint32_t)strlen(text) + 1);
@@ -671,6 +730,7 @@ static int traversability_init(MessageBus* bus, Transport* transport,
     g.ransac_iters         = 50;
     g.ransac_inlier_m      = 0.05;
     g.grid_decay           = 0.9;
+    g.grid_decay_speed_k   = 0.02;
     g.occ_log_step         = 8;
     g.free_log_step        = 4;
     g.occ_log_thr          = 6;
@@ -720,6 +780,8 @@ static int traversability_init(MessageBus* bus, Transport* transport,
             if (cJSON_IsNumber(j)) g.ransac_inlier_m = j->valuedouble;
             j = cJSON_GetObjectItemCaseSensitive(p, "grid_decay");
             if (cJSON_IsNumber(j)) g.grid_decay = j->valuedouble;
+            j = cJSON_GetObjectItemCaseSensitive(p, "grid_decay_speed_k");
+            if (cJSON_IsNumber(j)) g.grid_decay_speed_k = j->valuedouble;
             j = cJSON_GetObjectItemCaseSensitive(p, "occ_log_step");
             if (cJSON_IsNumber(j)) g.occ_log_step = j->valueint;
             j = cJSON_GetObjectItemCaseSensitive(p, "free_log_step");
