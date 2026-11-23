@@ -241,6 +241,12 @@
       "max_lane_offset_m": 1.65
     },
     {
+      "file": "scenarios/roundabout_yield.json",
+      "duration_s": 40,
+      "enabled": false,
+      "note": "exploratory: npc_route_chains [4,1,2,3] builds but NPC reverses at the north point (x 39->2->6->10) instead of entering the ring; needs npc_ai ring-junction route/lane fix before yield can be validated"
+    },
+    {
       "file": "scenarios/stop_sign.json",
       "duration_s": 30,
       "enabled": true,

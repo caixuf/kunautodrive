@@ -13,7 +13,7 @@
    - 感知输入只有仿真的 16 线 LiDAR + DBSCAN + BEV-Lite，缺少相机语义、dense occupancy、遮挡/时序融合；
    - 前端 `PerceptionView` 目前是“角标框 + 点云 + 预测光带”，不是参考图那种完整 3D wireframe + ID/速度/车道/TTC；
    - 规划通用性（2026-11-26 更新）：merge 1→2、环岛几何、停止线让行、8→2 缩减、动态扫掠接入、sensor 6 场景矩阵均已落地；
-     唯一剩余 descope 是环道让行/gap acceptance（需要环道内 NPC 路由 + 等待判据）。
+     唯一剩余 descope 是环道让行/gap acceptance：已加 `roundabout_yield` fixture 并复现 `npc_ai` 环道 junction 反向问题（NPC 到北点后 x 39→2→6→10），修 route 过渡后即可启用让行门禁。
 3. **升级顺序**：先把“可见、稳定、可验收”的感知可视化与 merge 1→2 修绿；再做 occupancy/相机融合；最后才做神经世界模型/3DGS 离线管线。
 
 ---
@@ -37,7 +37,7 @@
 
 | 项 | 为什么本阶段不做 | 重新启用条件 |
 |---|---|---|
-| 环道让行 / gap acceptance | `roundabout` 只验证几何与曲率跟踪；`unprotected_left_turn` 的对向车在 ego 到达前已通过，判据也只断言"完成左转"，没有"等待/让行"断言。真正的 gap acceptance 需要环道内 NPC + TTC/等待判据 | 新增 `roundabout_yield`（环道内循环 NPC）与 `unprotected_left_turn_yield`（对向车与 ego 同时到路口），并加 `min_ttc`/等待时间判据 |
+| 环道让行 / gap acceptance | 已试扩围并加入 `roundabout_yield` fixture（`npc_route_chains [4,1,2,3]`，NPC 与 ego 同时到西入口）。实测 NPC 到达北点后**反向**（x 39→2→6→10），从未进入环道，因此没有环内车流、让行判据不成立。根因是 `npc_ai`/`route` 的环道 junction route/lane 过渡，不是场景几何；fixture 已 disabled 并记录精确轨迹 | 修 `npc_ai`/`route` 环道 junction 过渡 → `roundabout_yield` 转绿后 enabled；再加 `unprotected_left_turn_yield`（对向车与 ego 同时到路口）与 `min_ttc`/等待判据 |
 
 ## 1. 差距拆解
 
