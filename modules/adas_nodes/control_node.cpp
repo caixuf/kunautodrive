@@ -56,6 +56,13 @@ namespace {
  * 平滑过渡, 牺牲少量相位裕度换取稳定性。yaw_damping 配合抑制高频。 */
 #define STEER_FILTER_NEW   0.30    /* 低通滤波新值权重（抑制高频摆头） */
 #define STEER_FILTER_PREV  0.70    /* 低通滤波旧值权重 */
+/* 出弯阻尼速度调度（2026-11 修「转弯后横向摆」）：heading 阻尼 kd 随车速线性升，
+ * kd(v)=clamp(base + slope*(|v|-9), base, max)，base=g.lat_kd_heading（热调）。
+ * 低速紧弯要小 kd、高速宽弯要大 kd，固定 kd 高速欠阻尼 → 出弯过冲随速度上升
+ * （control_sim 出弯场景实测 kd=1.5：R48@12=0.31m、R50@14=0.59m；调度后 ~0.1-0.2m）。 */
+#define LAT_KD_SPEED_SLOPE 0.25
+#define LAT_KD_SPEED_REF   9.0
+#define LAT_KD_MAX         3.0
 /* 轴距 (m)：真车默认 2.7，RC 小车在 pipeline_car.json 里通过 params.wheelbase
  * 覆盖为 0.25-0.4。这个宏只作为 g.wheelbase 的初值，运行时由配置注入。 */
 #define CONTROL_WHEELBASE_DEFAULT_M 2.7
@@ -1149,7 +1156,14 @@ protected:
                         double dh_t = g.ego_heading - ref_h_eff;
                         while (dh_t >  M_PI) dh_t -= 2.0 * M_PI;
                         while (dh_t < -M_PI) dh_t += 2.0 * M_PI;
-                        heading_term = g.lat_kd_heading * dh_t;
+                        /* 速度调度阻尼：kd 随车速升，压高速出弯过冲（见 LAT_KD_SPEED_* 注释） */
+                        double kd = g.lat_kd_heading;
+                        if (LAT_KD_SPEED_SLOPE > 0.0) {
+                            kd = g.lat_kd_heading + LAT_KD_SPEED_SLOPE * (abs_speed - LAT_KD_SPEED_REF);
+                            if (kd > LAT_KD_MAX) kd = LAT_KD_MAX;
+                            if (kd < g.lat_kd_heading) kd = g.lat_kd_heading;
+                        }
+                        heading_term = kd * dh_t;
                     }
                     double yaw_damp_term = g.yaw_damping * g.ego_yaw_rate;
                     double kappa = 0.50 * ref_kappa + 0.50 * g.prev_ref_kappa;

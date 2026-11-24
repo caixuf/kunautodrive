@@ -30,13 +30,13 @@ import re
 import argparse
 
 # ── 常量（与C代码严格一致）──────────────────────────────────
-DT               = 0.05    # 控制周期 20Hz
+DT               = 0.025   # 控制周期 40Hz（对齐 control_node.cpp 实跑 40Hz）
 WHEELBASE        = 2.7     # 轴距 m
 CRUISE_SPEED     = 12.0    # 默认巡航速度 m/s
 SIM_DURATION     = 20.0    # 仿真时长 s
-STEER_FILTER_ALPHA = 0.5   # 低通滤波新值权重
+STEER_FILTER_ALPHA = 0.30  # 低通滤波新值权重（对齐 control_node.cpp STEER_FILTER_NEW=0.30）
 STEER_DEADBAND   = 0.005   # 转向死区 rad
-MAX_LATERAL_ACCEL = 1.4    # 转向限幅最大横向加速度 m/s²
+MAX_LATERAL_ACCEL = 4.0    # 巡航转向限幅横向加速度权限（对齐 control_node.cpp:1180 的 4.0）
 STEER_LIMIT_MIN  = 0.016   # 最小转向限幅 rad
 STEER_LIMIT_MAX  = 0.16    # 最大转向限幅 rad
 STEER_FULL_LOCK  = 0.60    # 物理满舵角 rad（entity.h steer_override=true 的限幅）
@@ -288,13 +288,22 @@ def mpc_steer_step(mpc, e_y, e_psi, prev_steer, speed, v_ref, kappa_ref):
 
 class StanleyParams:
     def __init__(self):
-        self.lat_kp         = 0.5
-        self.lat_kd_heading = 2.0
-        self.yaw_damping    = 0.28
-        self.k_vy           = 0.35
-        self.k_vy_damp      = 0.6
+        # 默认增益取 config/pipeline.json:353 的实跑覆盖值（单一事实源），
+        # 不是 control_node.cpp 的内置默认（0.5/2.0/0.28/0.35/0.6）——两者不同，
+        # 旧默认会让仿真测另一组增益（A0 对齐项之一）。
+        self.lat_kp         = 0.6
+        self.lat_kd_heading = 1.5
+        self.yaw_damping    = 0.35
+        self.k_vy           = 0.4
+        self.k_vy_damp      = 0.4
         self.curve_ff_boost_radius = 60.0
         self.curve_ff_boost_factor = 1.5
+        # 出弯阻尼速度调度：kd(v)=clamp(base + slope*(|v|-9), base, kd_max)。
+        # 低速紧弯用小 kd、高速宽弯要大 kd，单一 kd 两头不讨好（A1 实测，2026-11）。
+        self.lat_kd_speed_slope = 0.25
+        self.lat_kd_max         = 3.0
+        # 上一周期滤波后曲率（两点平均状态，对齐 control_node.cpp prev_ref_kappa）
+        self.prev_ref_kappa = 0.0
 
 def steer_limit_for_speed(speed_mps, max_lat_accel=MAX_LATERAL_ACCEL):
     speed = speed_mps if speed_mps >= 2.0 else 2.0
@@ -305,51 +314,69 @@ def steer_limit_for_speed(speed_mps, max_lat_accel=MAX_LATERAL_ACCEL):
 
 def stanley_control(lat_error, heading_error, yaw_rate, speed, ref_kappa, prev_steer, params):
     """
-    改进版 Stanley 控制（完全对齐 control_node.cpp 562-605 行）
+    改进版 Stanley 控制（逐项对齐 control_node.cpp:1116-1192 的 C 巡航律）。
     输入符号约定（C代码）：
       lat_error = target_y - ego_y  (右侧为正)
       heading_error = ego_heading - ref_heading  (左侧为正)
+    params.prev_ref_kappa 保存上一周期滤波后曲率，实现 C 的两点平均
+    kappa = 0.5*ref + 0.5*prev_ref_kappa（A0 对齐项：旧仿真直接用瞬时 κ）。
     """
-    speed_eff = max(speed, 3.0)
-    v_lat_actual = speed * math.sin(heading_error)
+    speed_eff = max(abs(speed), 3.0)
+    v_lat_actual = abs(speed) * math.sin(heading_error)
 
     v_y_des = params.k_vy * lat_error - params.k_vy_damp * v_lat_actual
 
-    psi_des = 0.0
     vy_ratio = v_y_des / speed_eff
     if vy_ratio > 0.5: vy_ratio = 0.5
     if vy_ratio < -0.5: vy_ratio = -0.5
-    psi_des = math.asin(vy_ratio)  # ref_heading = 0, 所以psi_des直接是修正量
+    psi_des = math.asin(vy_ratio)  # 相对参考航向的修正量（C: ref_road_heading + asin，此处 ref_road=0）
 
     delta_ff = math.atan(WHEELBASE * v_y_des / (speed_eff * speed_eff + 1e-6))
 
+    # ref_h_eff clamp（对齐 C:1189-1143：dh = ref_h_eff - ego_heading，|dh|>0.5 → 退回 ego_heading）。
+    # 此处 heading_error = ego_heading - ref_road，故绝对差 = psi_des - heading_error。
     ref_h_eff = psi_des
-    if abs(ref_h_eff - 0.0) > 0.5:  # 相对ref_heading=0
-        ref_h_eff = 0.0
+    if abs(ref_h_eff - heading_error) > 0.5:
+        ref_h_eff = heading_error  # → heading_term 归零，等价 C 退回 ego_heading
 
     cte_term     = math.atan2(params.lat_kp * lat_error, speed_eff)
-    heading_term = params.lat_kd_heading * heading_error  # ego_heading - ref_h_eff = heading_error - psi_des? 不，C代码这里是ego_heading - ref_h_eff
-    # 注意：C代码中heading_term是 g.lat_kd_heading * (g.ego_heading - ref_h_eff)
-    # ref_h_eff = psi_des（相对road heading的修正），而road heading是ref_heading，
-    # 在我们仿真里ref_heading=0，所以heading输入就是ego_heading
-    heading_term = params.lat_kd_heading * (heading_error - ref_h_eff)
+    # 速度调度 heading 阻尼（出弯过冲随速度上升；固定 kd 高速欠阻尼/低速过阻尼）
+    kd = params.lat_kd_heading
+    if getattr(params, "lat_kd_speed_slope", 0.0) > 0.0:
+        kd = params.lat_kd_heading + params.lat_kd_speed_slope * (abs(speed) - 9.0)
+        if kd > params.lat_kd_max: kd = params.lat_kd_max
+        if kd < params.lat_kd_heading: kd = params.lat_kd_heading
+    heading_term = kd * (heading_error - ref_h_eff)
 
     yaw_damp_term = params.yaw_damping * yaw_rate
-    kappa = ref_kappa
+
+    # 曲率两点平均（对齐 C:1155-1156）
+    kappa = 0.5 * ref_kappa + 0.5 * params.prev_ref_kappa
+    params.prev_ref_kappa = kappa
+
+    # 曲率前馈 + 半径线性 boost（对齐 C:1157-1168：t=(radius-R)/max(15,radius-20)，clamp[0,1]）
     ff_weight = 1.0
-    if abs(kappa) > 1e-9:
+    if abs(kappa) > 1e-9 and params.curve_ff_boost_radius > 1.0:
         R = 1.0 / abs(kappa)
         if R <= params.curve_ff_boost_radius:
-            ff_weight = params.curve_ff_boost_factor
+            t = (params.curve_ff_boost_radius - R) / max(15.0, params.curve_ff_boost_radius - 20.0)
+            if t > 1.0: t = 1.0
+            if t < 0.0: t = 0.0
+            ff_weight = 1.0 + (params.curve_ff_boost_factor - 1.0) * t
     ff_term = WHEELBASE * kappa * ff_weight
 
     steer = cte_term - heading_term - yaw_damp_term + ff_term + delta_ff
 
-    steer_limit = steer_limit_for_speed(speed)
+    # 巡航横向加速度权限 4.0（对齐 C:1180 steer_limit_for_speed(abs_speed, 4.0)）
+    steer_limit = steer_limit_for_speed(abs(speed), 4.0)
     if steer >  steer_limit: steer =  steer_limit
     if steer < -steer_limit: steer = -steer_limit
 
     steer = STEER_FILTER_ALPHA * steer + (1.0 - STEER_FILTER_ALPHA) * prev_steer
+    # 转向速率限幅（对齐 C:1185-1188 非机动 max_dsteer=0.035/周期，防摆头）
+    ds = steer - prev_steer
+    if ds >  0.035: steer = prev_steer + 0.035
+    if ds < -0.035: steer = prev_steer - 0.035
     if abs(steer) < STEER_DEADBAND: steer = 0.0
 
     return steer
@@ -2427,6 +2454,165 @@ def print_scene_result(result, label):
 
 
 # ══════════════════════════════════════════════════════════════
+#  场景 1b: 出弯横摆（curve exit）——抓"转弯后横向摆动"
+#  直道→R=1/κ 弯→直道，测出弯后横向误差峰值 / 巡航段纹波 p-p / 转向前后翻号。
+#  这是 lateral_settle_gate 的测量核心（40Hz 全速率、确定性、无墙钟依赖）。
+# ══════════════════════════════════════════════════════════════
+
+# 阈值（A0-4 红灯基线标定后固定；初值按历史 ±0.055m 抖动与健康 steer_flip≈0.06/s 放大取值）
+CURVE_EXIT_OVERSHOOT_FAIL = 0.25   # m，出弯后横向误差峰值（现网 kd=1.5 在 R48@12=0.31、R50@14=0.59 → 红）
+CURVE_EXIT_YPP_FAIL       = 0.12   # m，巡航段横向误差 peak-to-peak
+CURVE_EXIT_FLIPS_FAIL     = 0.8    # /s，出弯后转向翻号率
+
+
+def build_curve_exit_path(kappa=0.02, straight_in=45.0, arc_len=60.0,
+                          straight_out=70.0, ds=0.5):
+    """生成 straight→arc→straight 参考中心线 polyline。
+    返回 (pts, s_exit)；pts=[(x, y, heading, kappa, s)]，s_exit=弧段结束里程。"""
+    pts = []
+    x = y = heading = s = 0.0
+    n = max(1, int(round(straight_in / ds)))
+    for _ in range(n):
+        pts.append((x, y, heading, 0.0, s))
+        x += ds * math.cos(heading); y += ds * math.sin(heading); s += ds
+    n = max(1, int(round(arc_len / ds)))
+    for _ in range(n):
+        pts.append((x, y, heading, kappa, s))
+        heading += kappa * ds
+        x += ds * math.cos(heading); y += ds * math.sin(heading); s += ds
+    s_exit = s
+    n = max(1, int(round(straight_out / ds)))
+    for _ in range(n):
+        pts.append((x, y, heading, 0.0, s))
+        x += ds * math.cos(heading); y += ds * math.sin(heading); s += ds
+    pts.append((x, y, heading, 0.0, s))
+    return pts, s_exit
+
+
+def _nearest_on_path(pts, ex, ey, hint_idx, window=80):
+    """局部窗口最近点 + 段内插值，返回 (ref_x, ref_y, ref_h, ref_kappa, ref_s, idx)。"""
+    n = len(pts)
+    lo = max(0, hint_idx - window)
+    hi = min(n - 1, hint_idx + window)
+    best = lo; best_d2 = 1e18
+    for i in range(lo, hi + 1):
+        dx = pts[i][0] - ex; dy = pts[i][1] - ey
+        d2 = dx * dx + dy * dy
+        if d2 < best_d2:
+            best_d2 = d2; best = i
+    i = best
+    j = i + 1 if i + 1 < n else i
+    ax, ay, ah, ak, as_ = pts[i]
+    bx, by, bh, bk, bs = pts[j]
+    tx = bx - ax; ty = by - ay
+    L = math.hypot(tx, ty)
+    if L < 1e-9:
+        return ax, ay, ah, ak, as_, i
+    tx /= L; ty /= L
+    along = (ex - ax) * tx + (ey - ay) * ty
+    if along < 0.0: along = 0.0
+    if along > L: along = L
+    ref_kappa = ak if along <= L * 0.5 else bk
+    return ax + along * tx, ay + along * ty, ah, ref_kappa, as_ + along, i
+
+
+def run_curve_exit_scenario(kappa=0.02, target_speed=12.0,
+                            straight_in=45.0, arc_len=60.0, straight_out=70.0,
+                            stanley_params=None, settle_window_s=4.0):
+    """出弯横摆仿真（40Hz）。返回 metrics dict：
+      overshoot_m / y_pp_m / steer_flips_per_s / exit_time / off_road / result。
+    """
+    path, s_exit = build_curve_exit_path(kappa, straight_in, arc_len, straight_out)
+    ego = VehicleState(x0=0.0, y0=0.0, v0=target_speed, heading0=0.0)
+    lane_ctrl = stanley_params if stanley_params else StanleyParams()
+    lon_ctrl = LongitudinalController(target_speed=target_speed)
+    result = ScenarioResult()
+
+    total_len = straight_in + arc_len + straight_out
+    n_steps = int(total_len / max(target_speed, 1.0) / DT) + int(8.0 / DT)
+    prev_steer = 0.0
+    hint = 0
+    exit_time = None
+    lat_t, lat_e, st, ref_s_list = [], [], [], []
+    for _ in range(n_steps):
+        t = len(lat_t) * DT
+        rx, ry, ref_h, ref_kappa, ref_s, hint = _nearest_on_path(path, ego.x, ego.y, hint)
+        lx, ly = -math.sin(ref_h), math.cos(ref_h)             # 左法线（heading 左侧）
+        # 与 run_curve_scenario 的 lat_error = target_y - ego_y 同号约定（target-ego）
+        lat_error = (rx - ego.x) * lx + (ry - ego.y) * ly
+        heading_error = ego.heading - ref_h
+        steer_cmd = stanley_control(lat_error, heading_error, ego.yaw_rate,
+                                    ego.v, ref_kappa, prev_steer, lane_ctrl)
+        prev_steer = steer_cmd
+        throttle, brake = lon_ctrl.compute(ego.v)
+        result.t.append(t); result.x.append(ego.x); result.y.append(ego.y)
+        result.v.append(ego.v); result.heading.append(ego.heading); result.steer.append(steer_cmd)
+        result.throttle.append(throttle); result.brake.append(brake)
+        lat_t.append(t); lat_e.append(lat_error); st.append(steer_cmd); ref_s_list.append(ref_s)
+        if exit_time is None and ref_s >= s_exit:
+            exit_time = t
+        ego.step(steer_cmd, throttle, brake)
+        if abs(lat_error) > N_LANES * LANE_WIDTH / 2 + 1.0:
+            result.off_road = True
+            break
+
+    # ── 指标 ──
+    entry_end = min(straight_in / max(target_speed, 1.0), 4.0)
+    t0e, t1e = 1.5, max(2.5, entry_end - 0.25)
+    entry_win = [e for (tt, e) in zip(lat_t, lat_e) if t0e <= tt <= t1e]
+    if len(entry_win) < 3:
+        entry_win = lat_e[:20]
+    y_pp = (max(entry_win) - min(entry_win)) if entry_win else 99.0
+
+    # 弯中稳态横向误差（「转弯压线」判据）：弧段内 |lat_err| 峰值
+    arc_pts = [abs(e) for (rs, e) in zip(ref_s_list, lat_e) if straight_in <= rs <= s_exit]
+    curve_max_lat = max(arc_pts) if arc_pts else 0.0
+
+    if exit_time is None:
+        overshoot = 99.0
+        flips_per_s = 99.0
+    else:
+        t0x, t1x = exit_time, exit_time + settle_window_s
+        idxs = [k for k, tt in enumerate(lat_t) if t0x <= tt < t1x]
+        post = [abs(lat_e[k]) for k in idxs]
+        overshoot = max(post) if post else 99.0
+        flips = 0
+        for a, b in zip(idxs, idxs[1:]):
+            if (st[a] > 0.03 and st[b] < -0.03) or (st[a] < -0.03 and st[b] > 0.03):
+                flips += 1
+        dur = max(settle_window_s, 1e-3)
+        flips_per_s = flips / dur
+
+    result.summary = (f"curve-exit κ={kappa:.3f}(R={1.0/abs(kappa):.0f}m)@{target_speed:.0f}m/s "
+                      f"overshoot={overshoot:.3f}m y_pp={y_pp:.3f}m curve_lat={curve_max_lat:.3f}m "
+                      f"flips={flips_per_s:.2f}/s exit_t={'?' if exit_time is None else f'{exit_time:.1f}s'}")
+    return {
+        "overshoot_m": overshoot,
+        "y_pp_m": y_pp,
+        "curve_max_lat_m": curve_max_lat,
+        "steer_flips_per_s": flips_per_s,
+        "exit_time": exit_time,
+        "off_road": result.off_road,
+        "result": result,
+    }
+
+
+def evaluate_curve_exit(**kw):
+    """跑出弯场景并按阈值判定。返回 (ok, metrics, fails)。gate 复用此函数。"""
+    m = run_curve_exit_scenario(**kw)
+    fails = []
+    if m["off_road"]:
+        fails.append("off_road（出弯冲出路面）")
+    if m["overshoot_m"] > CURVE_EXIT_OVERSHOOT_FAIL:
+        fails.append(f"overshoot={m['overshoot_m']:.3f}m > {CURVE_EXIT_OVERSHOOT_FAIL}m")
+    if m["y_pp_m"] > CURVE_EXIT_YPP_FAIL:
+        fails.append(f"y_pp={m['y_pp_m']:.3f}m > {CURVE_EXIT_YPP_FAIL}m")
+    if m["steer_flips_per_s"] > CURVE_EXIT_FLIPS_FAIL:
+        fails.append(f"steer_flips={m['steer_flips_per_s']:.2f}/s > {CURVE_EXIT_FLIPS_FAIL}/s")
+    return (not fails), m, fails
+
+
+# ══════════════════════════════════════════════════════════════
 #  主入口
 # ══════════════════════════════════════════════════════════════
 
@@ -2457,6 +2643,9 @@ def main():
     parser.add_argument("--scene-merge", action="store_true", help="场景5: 匝道汇入")
     parser.add_argument("--scene-cutin", action="store_true", help="场景6: 加塞处理")
     parser.add_argument("--run-all", action="store_true", help="全量执行所有6个场景")
+    parser.add_argument("--scene-curve-exit", action="store_true", help="场景1b: 出弯横摆（转弯后横向摆动）")
+    parser.add_argument("--assert-curve-settle", action="store_true",
+                        help="跑出弯横摆场景并按阈值断言（FAIL 时非零退出，供 lateral_settle_gate 复用）")
     # 场景调参
     parser.add_argument("--tune-curve", action="store_true", help="扫描曲线跟随最优参数")
     parser.add_argument("--tune-emergency", action="store_true", help="扫描紧急制动参数")
@@ -2533,6 +2722,18 @@ def main():
         return
 
     # ── 单场景执行 ──
+    if args.assert_curve_settle:
+        ok, m, fails = evaluate_curve_exit(target_speed=CRUISE_SPEED)
+        m["result"].print_trajectory(stride=100)
+        print(f"\n  出弯横摆: {m['result'].summary}")
+        for f in fails:
+            print(f"  ❌ {f}")
+        print(f"  => {'PASS' if ok else 'FAIL'}")
+        sys.exit(0 if ok else 1)
+    if args.scene_curve_exit:
+        m = run_curve_exit_scenario(target_speed=CRUISE_SPEED)
+        print_scene_result(m["result"], "出弯横摆")
+        return
     if args.scene_curve:
         r = run_curve_scenario(kappa=0.005, target_speed=args.speed, duration=args.duration)
         print_scene_result(r, f"曲线跟随 @ {args.speed:.0f}m/s")

@@ -192,6 +192,17 @@ jobs:
       - name: Enforce behavior FSM transition-table completeness
         run: python3 ci/gates/behavior_fsm_check.py
 
+  # ── lateral settle gate (转弯后横向摆 / 出弯过冲) ──────────────
+  # 横向晃在 45s@5Hz demo 评估器里被混叠测不到（历史"修6次不收敛"根因）。
+  # 本 gate 用 tools/control_sim.py 的 40Hz 确定性闭环（与 control_node.cpp
+  # 横向律逐项对齐）测出弯过冲/纹波/翻号。纯 Python、秒级、无需构建。
+  lateral-settle-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce lateral curve-exit settling (40Hz offline closed-loop)
+        run: python3 ci/gates/lateral_settle_gate.py
+
   # ── model takeover boundary gate (方向四: 规则主干 vs 模型层) ──
   # 规则层是最低安全护栏。除 pipeline_cortex.json（experimental）外，
   # 任何管线把 inference.control_mode 接成 direct_ctrl 都阻断；同时断言

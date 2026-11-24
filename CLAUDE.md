@@ -41,6 +41,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | ci-eigen-gate | `python3 ci/gates/ci_eigen_check.py` | 会跑 `cmake -S` 的 CI job 漏装 `libeigen3-dev` → configure 退到联网 git clone Eigen，网络一抖整片红（2026-10-22 三个 job 齐红）；豁免只认显式 `-DFLOWENGINE_ALLOW_NO_EIGEN=ON` |
 | book-guard-gate | `python3 ci/gates/book_guard.py` | `docs/book/` 掉回"按源码逐条重建"（行数上限 / 行号密度 / 突变） |
 | behavior-fsm-gate | `python3 ci/gates/behavior_fsm_check.py` | `behavior_planner` 转移表死状态 / 死事件 / 变道缺超时回退 |
+| lateral-settle-gate | `python3 ci/gates/lateral_settle_gate.py` | 转弯后横向摆 / 出弯过冲（40Hz 离线闭环，45s@5Hz 评估器测不到）：R48@12 / R50@14 / R75@15 出弯过冲 ≤0.25m、巡航纹波、转向翻号率。现网 kd=1.5 红、速度调度 kd 后绿；复用 `tools/control_sim.py` 对齐 C 横向律 |
 | model-takeover-boundary-gate | `python3 ci/gates/model_takeover_boundary_check.py` | 非实验管线把 `inference.control_mode` 接成 `direct_ctrl`（绕过影子评估）/ `safety_arbiter_apply` 从控制链被移除（规则主干失去护栏） |
 | determinism-gate | `python3 ci/gates/determinism_gate.py` | 同 scenario+seed 两次启动的 `scene.init_fingerprint` 不一致（flowsim/NPC 随机源被其他节点 `srand()` 污染）；改 seed 指纹不变（指纹恒真、不是 seed 派生量） |
 | npc-multi-route-gate | `python3 ci/gates/npc_multi_route_check.py` | 场景声明 `npc_routes` 但 `npc_route_spawned=0`（多 OD 链没建/没分到 NPC）；多 OD 链 spawn 期间 invariant 爆炸或 ego 碰撞 |
